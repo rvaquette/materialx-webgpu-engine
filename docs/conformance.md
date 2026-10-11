@@ -112,6 +112,36 @@ garantit que cette matrice et les fixtures restent cohérentes.
 | --- | --- | --- | --- |
 | `fractal3d` | StandardSurface | supported | supported |
 
+## Fermetures raster : de stub à évaluation physique (P8)
+
+Jusqu'au correctif P8 (plan §9.5), les nœuds de fermeture (`closure` :
+BSDF/EDF/VDF et surfaces) marqués `supported` l'étaient par un **stub non
+physique** `Closure(color·weight, weight)` : la couleur était propagée sans
+aucune BRDF, la validation device comparant ce stub à un oracle qui reproduisait
+la même formule (comparaison circulaire).
+
+P8 remplace ces stubs par une **évaluation physique réelle** dans les deux
+chemins WGSL — le corpus par nœud ([`src/compiler/nodes.ts`](../src/compiler/nodes.ts))
+et le backend raster exécutable ([`src/render/raster/shaders.ts`](../src/render/raster/shaders.ts),
+`openPbrSurfaceWgsl`/`mx_openpbr_surface`, T045) — validée contre une **référence
+analytique indépendante** fp64 ([`src/render/bsdf/reference.ts`](../src/render/bsdf/reference.ts),
+T041) qui n'est pas dérivée du WGSL.
+
+| Fermeture | Avant P8 | Après P8 (raster) | Tâche |
+| --- | --- | --- | --- |
+| `oren_nayar_diffuse_bsdf`, `burley_diffuse_bsdf` | stub `color·weight` | diffus rugueux `1/π` | T039 |
+| `dielectric_bsdf`, `conductor_bsdf`, `generalized_schlick_bsdf`, `sheen_bsdf` | stub | microfacette GGX + Smith + Fresnel | T040 |
+| `translucent_bsdf`, `subsurface_bsdf`, `uniform_edf`, `generalized_schlick_edf`, `anisotropic_vdf` | stub | transmission / repli diffus / émission / single-scatter | T040 |
+| `mx_layer`, `mix`/`add`/`multiply` de closures | passe-plat | composition énergétique réelle | T041 |
+| Surfaces (`standard_surface`, `open_pbr_surface`, …) | stub | composition OpenPBR exécutable (5 lobes + 3 ops) | T043/T045 |
+
+Les formules exactes, limites par lobe et tolérances par cible GPU sont décrites
+dans [docs/validation.md](validation.md) (sections « Tolérances des fermetures
+physiques (P8) » et « Évaluation physique des fermetures (P8) »). Les lobes
+`subsurface_bsdf` (repli diffus raster), l'ambiant d'environnement et
+`chiang_hair_bsdf` restent des **approximations raster déclarées** ; leur forme
+exacte est réservée au path tracing.
+
 ## Effets à approximation déclarée (raster)
 
 Conformément au plan 9.1, les effets suivants sont **exacts en path tracing** et

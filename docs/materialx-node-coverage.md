@@ -137,6 +137,19 @@ The BSDF/EDF/VDF leaves (`dielectric_bsdf`, `conductor_bsdf`,
 physically-based building blocks the PBR root shaders compose, so they are the
 highest-value WGSL targets.
 
+> **P8 status — closures now physically evaluated.** These BSDF/EDF/VDF leaves
+> and the surface composition (`layer`, closure `mix`/`add`/`multiply`) were
+> initially lowered as non-physical stubs `Closure(color·weight, weight)` (T014).
+> The P8 fix (plan §9.5) replaces them with real evaluations — rough diffuse
+> (T039), GGX/Smith/Fresnel microfacet and transport lobes (T040), energetic
+> composition (T041), composed OpenPBR surfaces (T043) and the executable raster
+> surface (T045) — plus consistent `eval`/`pdf`/`sample` triples for the path
+> tracer (T044). Each is validated against an **independent** fp64 analytic
+> oracle, [src/render/bsdf/reference.ts](../src/render/bsdf/reference.ts), that is
+> not derived from the WGSL, ending the earlier circular validation. Formulas,
+> limits and per-target GPU tolerances: [docs/validation.md](validation.md);
+> raster/path-tracing support matrix: [docs/conformance.md](conformance.md).
+
 ## 4. The 57 WGSL leaves (T014 work list)
 
 Complete source-code leaf set, sorted; each needs a WGSL implementation (T014)
