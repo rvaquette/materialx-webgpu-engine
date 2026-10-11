@@ -49,13 +49,24 @@ export const CLOSURE_PRELUDE = `struct Closure {
 };
 fn mx_closure_zero() -> Closure { return Closure(vec3f(0.0), 0.0); }
 fn mx_closure_add(a: Closure, b: Closure) -> Closure { return Closure(a.color + b.color, min(a.weight + b.weight, 1.0)); }
-fn mx_closure_mul(a: Closure, w: vec3f) -> Closure { return Closure(a.color * w, a.weight); }
+// Scale a closure response and its reflectance by the modulation weight (T040).
+fn mx_closure_mul(a: Closure, w: vec3f) -> Closure { return Closure(a.color * w, a.weight * clamp(dot(w, vec3f(0.2722287, 0.6740818, 0.0536895)), 0.0, 1.0)); }
 fn mx_closure_mix(a: Closure, b: Closure, t: f32) -> Closure { return Closure(mix(a.color, b.color, t), mix(a.weight, b.weight, t)); }
-fn mx_layer(top: Closure, base: Closure) -> Closure { return Closure(top.color + base.color * (1.0 - top.weight), max(top.weight, base.weight)); }
+// Energetic layering (T040): the base is coupled through the top's throughput
+// (1 - top reflectance) and the combined coverage is composited, not maxed.
+fn mx_layer(top: Closure, base: Closure) -> Closure {
+  let t = clamp(top.weight, 0.0, 1.0);
+  return Closure(top.color + base.color * (1.0 - t), t + base.weight * (1.0 - t));
+}
 fn mx_chiang_hair_bsdf(weight: f32, color: vec3f, roughness: vec2f) -> Closure { return Closure(color * weight, weight); }
-fn mx_uniform_edf(color: vec3f) -> Closure { return Closure(color, 1.0); }
-fn mx_generalized_schlick_edf(color: vec3f, tint: vec3f) -> Closure { return Closure(color * tint, 1.0); }
-fn mx_anisotropic_vdf(absorption: vec3f, scattering: vec3f, anisotropy: f32) -> Closure { return Closure(scattering - absorption, 1.0); }
+// EDF emission (T040): emission adds radiance without blocking an underlying layer,
+// so its reflectance (weight) is zero for the energetic composition.
+fn mx_uniform_edf(color: vec3f) -> Closure { return Closure(color, 0.0); }
+fn mx_generalized_schlick_edf(color0: vec3f, color90: vec3f, N: vec3f, V: vec3f) -> Closure {
+  let NdotV = clamp(dot(N, V), 0.0, 1.0);
+  let f = pow(1.0 - NdotV, 5.0);
+  return Closure(color0 + (color90 - color0) * f, 0.0);
+}
 `;
 
 // Lighting context (T038): directional lights + constant environment, packed by
@@ -245,6 +256,29 @@ fn mx_subsurface_bsdf(weight: f32, color: vec3f, radius: vec3f, N: vec3f, V: vec
   }
   return Closure(acc * weight, weight);
 }
+// Anisotropic VDF (T040): raster single-scattering approximation at unit optical
+// depth. Full volume transport is handled by the media integrator (path tracer)
+// and the raster volume pass; a VDF composed as a surface closure here contributes
+// single-scattered radiance with a Henyey-Greenstein phase and a single-scattering
+// albedo scattering / (absorption + scattering).
+fn mx_anisotropic_vdf(absorption: vec3f, scattering: vec3f, anisotropy: f32, V: vec3f) -> Closure {
+  let extinction = max(absorption + scattering, vec3f(1e-4));
+  let albedo = clamp(scattering / extinction, vec3f(0.0), vec3f(1.0));
+  let g = clamp(anisotropy, -0.99, 0.99);
+  let g2 = g * g;
+  let count = u32(mxLighting.params.x);
+  var acc = albedo * mxLighting.params.yzw;
+  for (var i = 0u; i < count; i = i + 1u) {
+    let L = normalize(-mxLighting.lights[i].direction.xyz);
+    let radiance = mxLighting.lights[i].color.rgb * mxLighting.lights[i].direction.w;
+    let cosTheta = dot(-L, V);
+    let denom = pow(max(1.0 + g2 - 2.0 * g * cosTheta, 1e-4), 1.5);
+    let phase = (1.0 - g2) / (4.0 * MX_PI * denom);
+    acc = acc + albedo * phase * radiance;
+  }
+  let w = clamp(dot(albedo, vec3f(0.2722287, 0.6740818, 0.0536895)), 0.0, 1.0);
+  return Closure(acc, w);
+}
 `;
 
 // Surface shading prelude (T038/T039): the BSDF closure result `{response, throughput}`
@@ -274,6 +308,7 @@ const LIGHTING_CLOSURE_OPS: ReadonlySet<string> = new Set([
   'generalized_schlick_bsdf',
   'sheen_bsdf',
   'subsurface_bsdf',
+  'anisotropic_vdf',
 ]);
 
 /** True when a closure op reads the lighting context uniform (real BSDF lobes). */
@@ -508,10 +543,14 @@ const LOWERINGS: readonly NodeLowering[] = [
   ),
   closure(
     'anisotropic_vdf',
-    (inp) => `mx_anisotropic_vdf(${inp.named('absorption', 'vec3f(0.0)')}, ${inp.named('scattering', 'vec3f(0.0)')}, ${inp.named('anisotropy', '0.0')})`,
+    (inp, _type, ctx) => `mx_anisotropic_vdf(${inp.named('absorption', 'vec3f(0.0)')}, ${inp.named('scattering', 'vec3f(0.0)')}, ${inp.named('anisotropy', '0.0')}, ${ctx.varyings.viewDir})`,
+    BSDF_PRELUDE,
   ),
   closure('uniform_edf', (inp) => `mx_uniform_edf(${inp.named('color', 'vec3f(0.0)')})`),
-  closure('generalized_schlick_edf', (inp) => `mx_generalized_schlick_edf(${inp.named('color', 'vec3f(0.0)')}, ${inp.named('tint', 'vec3f(1.0)')})`),
+  closure(
+    'generalized_schlick_edf',
+    (inp, _type, ctx) => `mx_generalized_schlick_edf(${inp.named('color', 'vec3f(0.0)')}, ${inp.named('tint', 'vec3f(1.0)')}, ${inp.named('normal', ctx.varyings.normal)}, ${ctx.varyings.viewDir})`,
+  ),
   closure('surface', (inp) => `mx_surface(${inp.named('bsdf', 'mx_closure_zero()')}, ${inp.named('edf', 'mx_closure_zero()')}, ${inp.named('opacity', '1.0')})`, SURFACE_PRELUDE),
 ];
 

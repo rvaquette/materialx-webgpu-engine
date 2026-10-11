@@ -172,3 +172,59 @@ describe('real BSDF lobes (T039)', () => {
     }
   });
 });
+
+describe('EDF/VDF and energetic composition (T040)', () => {
+  it('emits a view-dependent generalized Schlick EDF', () => {
+    const b = new IrModuleBuilder();
+    const c0 = b.constant(COLOR3, [0.2, 0.2, 0.2]);
+    const c90 = b.constant(COLOR3, [0.8, 0.8, 0.8]);
+    const edf = b.add({ kind: 'closure', type: closureType('edf'), closure: 'edf', op: 'generalized_schlick_edf', params: { color: c0, tint: c90 } });
+    const surface = b.add({ kind: 'closure', type: shaderType('surface'), closure: 'bsdf', op: 'surface', params: { edf } });
+    b.output({ name: 'surfaceshader', type: shaderType('surface'), ref: surface });
+    const m = emitWgsl(b.build());
+    expect(m.code).toContain('fn mx_generalized_schlick_edf(color0: vec3f, color90: vec3f, N: vec3f, V: vec3f)');
+    // View-dependent Schlick factor, not a constant tint multiply.
+    expect(m.code).toContain('pow(1.0 - NdotV, 5.0)');
+    // Emission receives the shading normal and view direction from the varyings.
+    expect(m.code).toContain('vary.normal, vary.viewDir)');
+  });
+
+  it('emits uniform EDF emission with zero blocking reflectance', () => {
+    const b = new IrModuleBuilder();
+    const c = b.constant(COLOR3, [1, 1, 1]);
+    const edf = b.add({ kind: 'closure', type: closureType('edf'), closure: 'edf', op: 'uniform_edf', params: { color: c } });
+    b.output({ name: 'out', type: closureType('edf'), ref: edf });
+    const m = emitWgsl(b.build());
+    expect(m.code).toContain('fn mx_uniform_edf(color: vec3f) -> Closure { return Closure(color, 0.0); }');
+  });
+
+  it('integrates the anisotropic VDF over the lighting context with a Henyey-Greenstein phase', () => {
+    const b = new IrModuleBuilder();
+    const vdf = b.add({ kind: 'closure', type: closureType('vdf'), closure: 'vdf', op: 'anisotropic_vdf', params: {} });
+    b.output({ name: 'vol', type: closureType('vdf'), ref: vdf });
+    const m = emitWgsl(b.build());
+    expect(m.lighting).toEqual({ group: 0, binding: 1 });
+    expect(m.code).toContain('fn mx_anisotropic_vdf(absorption: vec3f, scattering: vec3f, anisotropy: f32, V: vec3f)');
+    // Single-scattering albedo + HG phase, not a scattering - absorption stub.
+    expect(m.code).toContain('let albedo = clamp(scattering / extinction');
+    expect(m.code).toContain('let phase = (1.0 - g2) / (4.0 * MX_PI * denom);');
+    expect(m.code).toContain('mxLighting.lights[i]');
+  });
+
+  it('couples the base through the top throughput when layering closures', () => {
+    const b = new IrModuleBuilder();
+    const top = b.add({ kind: 'closure', type: closureType('bsdf'), closure: 'bsdf', op: 'dielectric_bsdf', params: {} });
+    const base = b.add({ kind: 'closure', type: closureType('bsdf'), closure: 'bsdf', op: 'oren_nayar_diffuse_bsdf', params: {} });
+    const layered = b.add({ kind: 'combine', type: closureType('bsdf'), op: 'layer', operands: [top, base] });
+    const surface = b.add({ kind: 'closure', type: shaderType('surface'), closure: 'bsdf', op: 'surface', params: { bsdf: layered } });
+    b.output({ name: 'surfaceshader', type: shaderType('surface'), ref: surface });
+    const m = emitWgsl(b.build());
+    expect(m.code).toContain('mx_layer(');
+    // Energetic coupling: base attenuated by the top throughput, coverage composited.
+    expect(m.code).toContain('top.color + base.color * (1.0 - t)');
+    expect(m.code).toContain('t + base.weight * (1.0 - t)');
+    // Closure multiply scales the reflectance, not only the response.
+    expect(m.code).toContain('a.weight * clamp(dot(w,');
+  });
+});
+
