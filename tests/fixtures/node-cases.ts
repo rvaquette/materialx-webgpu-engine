@@ -424,3 +424,127 @@ export const CLOSURE_LOBE_CASES: readonly ClosureLobeCase[] = [
 export const CLOSURE_LOBE_CASES_BY_CATEGORY: ReadonlyMap<string, ClosureLobeCase> = new Map(
   CLOSURE_LOBE_CASES.map((c) => [c.category, c]),
 );
+
+// --- Surface graph corpus (T043) ---------------------------------------------
+//
+// The six surface nodedefs (standard_surface, open_pbr_surface, disney_principled,
+// gltf_pbr, UsdPreviewSurface, simple_hair) are declared as `graphCase` entries in
+// NODE_CASES and were previously checked for RESOLUTION / IR / WGSL structure only.
+// This dedicated corpus executes them numerically: each PBR family is pinned with
+// the seven canonical parameters (the same ones scripts/build-scene-materials.mjs
+// extracts from the .mtlx surface shaders) and an oracle produced by the INDEPENDENT
+// analytic composition (src/render/bsdf/reference.ts evaluateSurface, T043). The
+// matching WGSL surface graph is assembled by tests/fixtures/node-ir.ts
+// buildSurfaceIr from the already-validated per-lobe closures + composition ops, so
+// the device read-back (corpus-device) can be compared to `expected` without
+// circularity. simple_hair has no analytic lobe -- it expands to the chiang_hair
+// stub Closure(color * weight, weight) -- so its oracle is that documented stub,
+// pending a real Chiang hair BSDF (same limitation as the T047 pathtracing-only
+// hair scene).
+
+export type SurfaceModel = 'pbr' | 'hair';
+
+export interface SurfaceGraphCase {
+  readonly category: string;
+  readonly family: string;
+  readonly model: SurfaceModel;
+  /** Seven canonical surface parameters (the PBR families share one model). */
+  readonly params: ref.CanonicalSurfaceParams;
+  /** simple_hair stub weight (ignored by the PBR families). */
+  readonly hairWeight: number;
+  /** simple_hair stub roughness (longitudinal, azimuthal). */
+  readonly hairRoughness: readonly [number, number];
+  /** Oracle [r, g, b, weight] from the independent analytic reference (T043). */
+  readonly expected: Vec;
+  readonly note: string;
+}
+
+// Head-on frame + default lighting, shared with the per-lobe corpus so the device
+// harness (DEFAULT_VARYINGS / DEFAULT_LIGHTING) and the reference agree exactly.
+export const SURFACE_GRAPH_GEOM: ref.ShadingGeometry = CLOSURE_LOBE_GEOM;
+export const SURFACE_GRAPH_LIGHTING: ref.ReferenceLighting = CLOSURE_LOBE_LIGHTING;
+
+/** Compose the analytic oracle for a surface case (PBR composition or hair stub). */
+export function surfaceOracle(
+  model: SurfaceModel,
+  params: ref.CanonicalSurfaceParams,
+  hairWeight: number,
+): ref.ReferenceClosure {
+  if (model === 'hair') {
+    const [r, g, b] = params.baseColor;
+    return { color: [r * hairWeight, g * hairWeight, b * hairWeight], weight: 1 };
+  }
+  return ref.evaluateSurface(params, SURFACE_GRAPH_GEOM, SURFACE_GRAPH_LIGHTING);
+}
+
+function surface(
+  category: string,
+  family: string,
+  model: SurfaceModel,
+  params: ref.CanonicalSurfaceParams,
+  note: string,
+  hair?: { weight: number; roughness: readonly [number, number] },
+): SurfaceGraphCase {
+  const hairWeight = hair?.weight ?? 0;
+  const c = surfaceOracle(model, params, hairWeight);
+  return {
+    category,
+    family,
+    model,
+    params,
+    hairWeight,
+    hairRoughness: hair?.roughness ?? [0, 0],
+    expected: [c.color[0], c.color[1], c.color[2], c.weight],
+    note,
+  };
+}
+
+export const SURFACE_GRAPH_CASES: readonly SurfaceGraphCase[] = [
+  surface(
+    'standard_surface',
+    'StandardSurface',
+    'pbr',
+    { baseColor: [0.9, 0.7, 0.33], metalness: 1, roughness: 0.25, transmission: 0, subsurface: 0, ior: 1.5, specular: 0 },
+    'Brass-like conductor (metalness 1): the generalized-Schlick metal lobe dominates (F0 = baseColor)',
+  ),
+  surface(
+    'open_pbr_surface',
+    'OpenPBR',
+    'pbr',
+    { baseColor: [0.2, 0.4, 0.8], metalness: 0, roughness: 0.3, transmission: 0, subsurface: 0, ior: 1.5, specular: 1 },
+    'Glossy dielectric plastic: dielectric specular layered over a Burley diffuse base',
+  ),
+  surface(
+    'disney_principled',
+    'DisneyPrincipled',
+    'pbr',
+    { baseColor: [0.8, 0.5, 0.4], metalness: 0, roughness: 0.5, transmission: 0, subsurface: 0.6, ior: 1.4, specular: 0.5 },
+    'Subsurface-dominant skin: diffuse mixed toward the wrap-diffuse subsurface lobe',
+  ),
+  surface(
+    'gltf_pbr',
+    'GltfPbr',
+    'pbr',
+    { baseColor: [0.7, 0.7, 0.72], metalness: 0.5, roughness: 0.6, transmission: 0, subsurface: 0, ior: 1.5, specular: 1 },
+    'Half-metallic rough surface: metal/dielectric mix at metalness 0.5',
+  ),
+  surface(
+    'UsdPreviewSurface',
+    'UsdPreviewSurface',
+    'pbr',
+    { baseColor: [0.8, 0.9, 0.85], metalness: 0, roughness: 0.1, transmission: 0.8, subsurface: 0, ior: 1.5, specular: 1 },
+    'Transmissive glass: diffuse base mixed toward the translucent lobe (front-lit -> ambient only)',
+  ),
+  surface(
+    'simple_hair',
+    'SimpleHair',
+    'hair',
+    { baseColor: [0.35, 0.22, 0.12], metalness: 0, roughness: 0, transmission: 0, subsurface: 0, ior: 1.5, specular: 0 },
+    'SimpleHair expands to the chiang_hair stub Closure(tint * weight, weight); no analytic lobe yet',
+    { weight: 0.8, roughness: [0.1, 0.3] },
+  ),
+];
+
+export const SURFACE_GRAPH_CASES_BY_CATEGORY: ReadonlyMap<string, SurfaceGraphCase> = new Map(
+  SURFACE_GRAPH_CASES.map((c) => [c.category, c]),
+);

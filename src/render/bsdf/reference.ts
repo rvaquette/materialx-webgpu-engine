@@ -327,3 +327,52 @@ export function layer(top: ReferenceClosure, base: ReferenceClosure): ReferenceC
   const t = clampScalar(top.weight, 0, 1);
   return { color: add(top.color, scale(base.color, 1 - t)), weight: t + base.weight * (1 - t) };
 }
+
+// --- surface composition (T043) ----------------------------------------------
+//
+// Canonical surface model shared by the MaterialX surface nodedefs
+// (standard_surface, open_pbr_surface, disney_principled, gltf_pbr,
+// UsdPreviewSurface). Each nodedef maps its family-specific inputs to the seven
+// canonical parameters produced by scripts/build-scene-materials.mjs, so a single
+// analytic composition of the already-validated per-lobe closures (T041/T042)
+// serves as the reference for every PBR family. The composition is deliberately
+// explicit -- a metallic workflow (F0 = baseColor through a generalized-Schlick
+// lobe) layered under a dielectric specular over a diffuse / transmission /
+// subsurface base -- and it mirrors exactly the WGSL surface graph assembled by
+// tests/fixtures/node-ir.ts buildSurfaceIr. The two sides therefore share only the
+// material model; the lobe and composition math are implemented independently (TS
+// here, WGSL there), so a device read-back of the composed surface is a genuine,
+// non-circular numeric check of the whole surface graph. mx_surface(bsdf, edf,
+// opacity) carries the opacity as the closure weight, so the surface color is the
+// composed bsdf radiance and the weight is the opacity (1 here).
+
+export interface CanonicalSurfaceParams {
+  readonly baseColor: Vec3;
+  readonly metalness: number;
+  readonly roughness: number;
+  readonly transmission: number;
+  readonly subsurface: number;
+  readonly ior: number;
+  readonly specular: number;
+}
+
+export function evaluateSurface(
+  params: CanonicalSurfaceParams,
+  geom: ShadingGeometry,
+  lighting: ReferenceLighting,
+): ReferenceClosure {
+  const white: Vec3 = [1, 1, 1];
+  const diffuseWeight = (1 - params.metalness) * (1 - params.transmission);
+  const diffuse = burleyDiffuse(diffuseWeight, params.baseColor, params.roughness, geom, lighting);
+  const trans = translucent(params.transmission, params.baseColor, geom, lighting);
+  const subs = subsurface(params.subsurface, params.baseColor, white, geom, lighting);
+  const spec = dielectric(params.specular, white, params.ior, params.roughness, geom, lighting);
+  const metal = generalizedSchlick(params.metalness, params.baseColor, white, params.roughness, geom, lighting);
+
+  const base1 = closureMix(diffuse, trans, params.transmission);
+  const base2 = closureMix(base1, subs, params.subsurface);
+  const dielectricSurface = layer(spec, base2);
+  const bsdf = closureMix(dielectricSurface, metal, params.metalness);
+  // mx_surface(bsdf, edf = 0, opacity = 1): color = bsdf.color, weight = opacity.
+  return { color: bsdf.color, weight: 1 };
+}

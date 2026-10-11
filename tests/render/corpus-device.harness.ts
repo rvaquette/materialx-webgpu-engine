@@ -5,8 +5,8 @@
 // POSTed to the orchestration collector (T034g) and compared against the CPU
 // oracle (T034f). Nothing here runs under Node: it is served to the device.
 
-import { NODE_CASES, CLOSURE_LOBE_CASES, type NodeCase, type ClosureLobeCase } from '../fixtures/node-cases.ts';
-import { buildNodeIr, buildLobeIr, isRunnableOnGpu } from '../fixtures/node-ir.ts';
+import { NODE_CASES, CLOSURE_LOBE_CASES, SURFACE_GRAPH_CASES, type NodeCase, type ClosureLobeCase } from '../fixtures/node-cases.ts';
+import { buildNodeIr, buildLobeIr, buildSurfaceIr, isRunnableOnGpu } from '../fixtures/node-ir.ts';
 import { runNodeOnGpu, type NodeExecInputs } from '../../src/gpu/exec.ts';
 import { PipelineCache } from '../../src/gpu/pipelines.ts';
 
@@ -25,11 +25,19 @@ export interface DeviceLobeResult {
   readonly error?: string;
 }
 
+export interface DeviceSurfaceResult {
+  readonly category: string;
+  readonly family: string;
+  readonly output: readonly number[] | null;
+  readonly error?: string;
+}
+
 export interface DeviceReport {
   readonly userAgent: string;
   readonly adapter: Record<string, string>;
   readonly results: readonly DeviceNodeResult[];
   readonly lobes?: readonly DeviceLobeResult[];
+  readonly surfaces?: readonly DeviceSurfaceResult[];
 }
 
 /** Bind the deterministic 1x1 texel (opaque) for texture cases; nothing otherwise. */
@@ -80,6 +88,25 @@ export async function runLobesOnDevice(device: GPUDevice): Promise<DeviceLobeRes
   return results;
 }
 
+/** Run every surface-graph case (T043) on the device: the full surface composition
+ * (per-lobe closures + composition ops + surface node) is dispatched once so the
+ * read-back can be compared to the analytic surface reference oracle. */
+export async function runSurfacesOnDevice(device: GPUDevice): Promise<DeviceSurfaceResult[]> {
+  const cache = new PipelineCache<GPUComputePipeline>();
+  const results: DeviceSurfaceResult[] = [];
+  for (const c of SURFACE_GRAPH_CASES) {
+    const head = { category: c.category, family: c.family };
+    try {
+      const ir = buildSurfaceIr(c);
+      const { output } = await runNodeOnGpu(device, ir, {}, cache);
+      results.push({ ...head, output: Array.from(output) });
+    } catch (err) {
+      results.push({ ...head, output: null, error: err instanceof Error ? err.message : String(err) });
+    }
+  }
+  return results;
+}
+
 function adapterFields(adapter: GPUAdapter): Record<string, string> {
   const info = adapter.info;
   if (!info) return {};
@@ -121,13 +148,17 @@ export async function bootstrap(): Promise<DeviceReport> {
   const results = await runCorpusOnDevice(device);
   line('Execution des lobes closure sur le GPU...');
   const lobes = await runLobesOnDevice(device);
-  const report: DeviceReport = { userAgent: ua(), adapter: adapterFields(adapter), results, lobes };
+  line('Execution des surfaces sur le GPU...');
+  const surfaces = await runSurfacesOnDevice(device);
+  const report: DeviceReport = { userAgent: ua(), adapter: adapterFields(adapter), results, lobes, surfaces };
 
   renderTable(root, results);
   renderLobeTable(root, lobes);
+  renderSurfaceTable(root, surfaces);
   const ok = results.filter((r) => r.output && !r.error).length;
   const lobeOk = lobes.filter((r) => r.output && !r.error).length;
-  line(`${ok}/${results.length} noeuds, ${lobeOk}/${lobes.length} lobes executes, envoi du rapport...`);
+  const surfaceOk = surfaces.filter((r) => r.output && !r.error).length;
+  line(`${ok}/${results.length} noeuds, ${lobeOk}/${lobes.length} lobes, ${surfaceOk}/${surfaces.length} surfaces executes, envoi du rapport...`);
   (globalThis as { __MX_REPORT__?: DeviceReport }).__MX_REPORT__ = report;
   await post(report);
   line('Rapport envoye.');
@@ -160,6 +191,21 @@ function renderLobeTable(root: HTMLElement | undefined, lobes: readonly DeviceLo
   for (const r of lobes) {
     const row = table.insertRow();
     row.insertCell().textContent = `${r.category} (${r.kind})`;
+    row.insertCell().textContent = r.error ? `ERR: ${r.error}` : (r.output ?? []).map((n) => n.toFixed(4)).join(', ');
+  }
+  root.appendChild(table);
+}
+
+function renderSurfaceTable(root: HTMLElement | undefined, surfaces: readonly DeviceSurfaceResult[]): void {
+  if (!root) return;
+  const heading = document.createElement('h2');
+  heading.textContent = 'Surfaces (T043)';
+  root.appendChild(heading);
+  const table = document.createElement('table');
+  table.border = '1';
+  for (const r of surfaces) {
+    const row = table.insertRow();
+    row.insertCell().textContent = `${r.category} (${r.family})`;
     row.insertCell().textContent = r.error ? `ERR: ${r.error}` : (r.output ?? []).map((n) => n.toFixed(4)).join(', ');
   }
   root.appendChild(table);

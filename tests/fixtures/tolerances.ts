@@ -60,6 +60,22 @@ export function closureTargetTolerance(adapter?: { vendor?: string; architecture
   return CLOSURE_TARGET_TOLERANCE[deviceTargetOf(adapter)];
 }
 
+// Per-device-target tolerance for the composed surface-graph comparison (T043). A
+// surface runs five per-lobe microfacet/diffuse evaluations and three composition
+// ops (two closure mixes + one energetic layer) in fp32 before the read-back, so
+// the accumulated rounding is looser than a single lobe (T042): the desktop
+// validation GPU stays near 3e-3, the mobile Adreno target is given 6e-3 for the
+// extra pow/division rounding compounded across the composition.
+export const SURFACE_TARGET_TOLERANCE: Readonly<Record<DeviceTarget, number>> = {
+  local: 3e-3,
+  mobile: 6e-3,
+};
+
+/** Per-component surface tolerance for the target that produced a device report. */
+export function surfaceTargetTolerance(adapter?: { vendor?: string; architecture?: string }): number {
+  return SURFACE_TARGET_TOLERANCE[deviceTargetOf(adapter)];
+}
+
 // Scene-level tolerances by material focus (T035c4). The raster mirror and the
 // path-traced reference share one diffuse albedo, so their only systematic
 // difference is the raster's flat ambient (0.03) versus the integrator's
