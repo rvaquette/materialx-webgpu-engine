@@ -1,0 +1,2158 @@
+{
+  "generatedAt": "2026-10-10T19:56:11.252Z",
+  "wasm": "D:/WebGL2/MaterialX/MaterialX-rva/javascript/build/installed/JavaScript/MaterialX/JsMaterialXCore.js",
+  "examplesRoot": "D:/WebGL2/MaterialX/MaterialX-rva/resources/Materials/Examples",
+  "librariesRoot": "D:/WebGL2/MaterialX/MaterialX-rva/libraries",
+  "libraryFilesLoaded": 56,
+  "libraryFilesTotal": 56,
+  "nodeDefsIndexed": 818,
+  "fileCount": 50,
+  "categoryCount": 40,
+  "unresolvedCategories": [],
+  "byGroup": {
+    "math": [
+      "add",
+      "clamp",
+      "divide",
+      "dotproduct",
+      "max",
+      "multiply",
+      "normalmap",
+      "place2d",
+      "power",
+      "sin",
+      "subtract"
+    ],
+    "pbr": [
+      "chiang_hair_absorption_from_color",
+      "chiang_hair_bsdf",
+      "chiang_hair_roughness",
+      "deon_hair_absorption_from_melanin",
+      "disney_principled",
+      "gltf_pbr",
+      "open_pbr_surface",
+      "simple_hair",
+      "standard_surface",
+      "surface",
+      "UsdPreviewSurface"
+    ],
+    "channel": [
+      "combine3",
+      "convert",
+      "extract",
+      "separate3"
+    ],
+    "procedural": [
+      "constant"
+    ],
+    "procedural3d": [
+      "fractal3d"
+    ],
+    "texture2d": [
+      "gltf_colorimage",
+      "gltf_image",
+      "gltf_normalmap",
+      "hextiledimage",
+      "image",
+      "tiledimage"
+    ],
+    "adjustment": [
+      "hsvtorgb",
+      "rgbtohsv"
+    ],
+    "compositing": [
+      "mix"
+    ],
+    "geometric": [
+      "position",
+      "texcoord"
+    ],
+    "material": [
+      "surfacematerial"
+    ]
+  },
+  "closureCategoryCount": 75,
+  "closureLeafCount": 57,
+  "closure": [
+    {
+      "category": "absval",
+      "implKind": "sourcecode",
+      "directlyUsed": false
+    },
+    {
+      "category": "add",
+      "implKind": "sourcecode",
+      "directlyUsed": true
+    },
+    {
+      "category": "anisotropic_vdf",
+      "implKind": "sourcecode",
+      "directlyUsed": false
+    },
+    {
+      "category": "artistic_ior",
+      "implKind": "sourcecode",
+      "directlyUsed": false
+    },
+    {
+      "category": "burley_diffuse_bsdf",
+      "implKind": "sourcecode",
+      "directlyUsed": false
+    },
+    {
+      "category": "chiang_hair_absorption_from_color",
+      "implKind": "sourcecode",
+      "directlyUsed": true
+    },
+    {
+      "category": "chiang_hair_bsdf",
+      "implKind": "sourcecode",
+      "directlyUsed": true
+    },
+    {
+      "category": "chiang_hair_roughness",
+      "implKind": "sourcecode",
+      "directlyUsed": true
+    },
+    {
+      "category": "clamp",
+      "implKind": "sourcecode",
+      "directlyUsed": true
+    },
+    {
+      "category": "combine2",
+      "implKind": "sourcecode",
+      "directlyUsed": false
+    },
+    {
+      "category": "combine3",
+      "implKind": "sourcecode",
+      "directlyUsed": true
+    },
+    {
+      "category": "conductor_bsdf",
+      "implKind": "sourcecode",
+      "directlyUsed": false
+    },
+    {
+      "category": "constant",
+      "implKind": "sourcecode",
+      "directlyUsed": true
+    },
+    {
+      "category": "convert",
+      "implKind": "nodegraph",
+      "directlyUsed": true
+    },
+    {
+      "category": "deon_hair_absorption_from_melanin",
+      "implKind": "sourcecode",
+      "directlyUsed": true
+    },
+    {
+      "category": "dielectric_bsdf",
+      "implKind": "sourcecode",
+      "directlyUsed": false
+    },
+    {
+      "category": "disney_principled",
+      "implKind": "nodegraph",
+      "directlyUsed": true
+    },
+    {
+      "category": "divide",
+      "implKind": "sourcecode",
+      "directlyUsed": true
+    },
+    {
+      "category": "dot",
+      "implKind": "sourcecode",
+      "directlyUsed": false
+    },
+    {
+      "category": "dotproduct",
+      "implKind": "sourcecode",
+      "directlyUsed": true
+    },
+    {
+      "category": "extract",
+      "implKind": "sourcecode",
+      "directlyUsed": true
+    },
+    {
+      "category": "fractal3d",
+      "implKind": "sourcecode",
+      "directlyUsed": true
+    },
+    {
+      "category": "generalized_schlick_bsdf",
+      "implKind": "sourcecode",
+      "directlyUsed": false
+    },
+    {
+      "category": "generalized_schlick_edf",
+      "implKind": "sourcecode",
+      "directlyUsed": false
+    },
+    {
+      "category": "gltf_colorimage",
+      "implKind": "nodegraph",
+      "directlyUsed": true
+    },
+    {
+      "category": "gltf_image",
+      "implKind": "nodegraph",
+      "directlyUsed": true
+    },
+    {
+      "category": "gltf_normalmap",
+      "implKind": "nodegraph",
+      "directlyUsed": true
+    },
+    {
+      "category": "gltf_pbr",
+      "implKind": "nodegraph",
+      "directlyUsed": true
+    },
+    {
+      "category": "hextiledimage",
+      "implKind": "sourcecode",
+      "directlyUsed": true
+    },
+    {
+      "category": "hsvtorgb",
+      "implKind": "sourcecode",
+      "directlyUsed": true
+    },
+    {
+      "category": "ifequal",
+      "implKind": "sourcecode",
+      "directlyUsed": false
+    },
+    {
+      "category": "ifgreater",
+      "implKind": "sourcecode",
+      "directlyUsed": false
+    },
+    {
+      "category": "ifgreatereq",
+      "implKind": "sourcecode",
+      "directlyUsed": false
+    },
+    {
+      "category": "image",
+      "implKind": "sourcecode",
+      "directlyUsed": true
+    },
+    {
+      "category": "invert",
+      "implKind": "sourcecode",
+      "directlyUsed": false
+    },
+    {
+      "category": "layer",
+      "implKind": "sourcecode",
+      "directlyUsed": false
+    },
+    {
+      "category": "ln",
+      "implKind": "sourcecode",
+      "directlyUsed": false
+    },
+    {
+      "category": "luminance",
+      "implKind": "sourcecode",
+      "directlyUsed": false
+    },
+    {
+      "category": "max",
+      "implKind": "sourcecode",
+      "directlyUsed": true
+    },
+    {
+      "category": "maxcomponent",
+      "implKind": "nodegraph",
+      "directlyUsed": false
+    },
+    {
+      "category": "min",
+      "implKind": "sourcecode",
+      "directlyUsed": false
+    },
+    {
+      "category": "mincomponent",
+      "implKind": "nodegraph",
+      "directlyUsed": false
+    },
+    {
+      "category": "mix",
+      "implKind": "sourcecode",
+      "directlyUsed": true
+    },
+    {
+      "category": "multiply",
+      "implKind": "sourcecode",
+      "directlyUsed": true
+    },
+    {
+      "category": "normalize",
+      "implKind": "sourcecode",
+      "directlyUsed": false
+    },
+    {
+      "category": "normalmap",
+      "implKind": "sourcecode",
+      "directlyUsed": true
+    },
+    {
+      "category": "open_pbr_anisotropy",
+      "implKind": "nodegraph",
+      "directlyUsed": false
+    },
+    {
+      "category": "open_pbr_surface",
+      "implKind": "nodegraph",
+      "directlyUsed": true
+    },
+    {
+      "category": "oren_nayar_diffuse_bsdf",
+      "implKind": "sourcecode",
+      "directlyUsed": false
+    },
+    {
+      "category": "place2d",
+      "implKind": "nodegraph",
+      "directlyUsed": true
+    },
+    {
+      "category": "position",
+      "implKind": "sourcecode",
+      "directlyUsed": true
+    },
+    {
+      "category": "power",
+      "implKind": "sourcecode",
+      "directlyUsed": true
+    },
+    {
+      "category": "rgbtohsv",
+      "implKind": "sourcecode",
+      "directlyUsed": true
+    },
+    {
+      "category": "rotate2d",
+      "implKind": "sourcecode",
+      "directlyUsed": false
+    },
+    {
+      "category": "rotate3d",
+      "implKind": "sourcecode",
+      "directlyUsed": false
+    },
+    {
+      "category": "roughness_anisotropy",
+      "implKind": "sourcecode",
+      "directlyUsed": false
+    },
+    {
+      "category": "roughness_dual",
+      "implKind": "sourcecode",
+      "directlyUsed": false
+    },
+    {
+      "category": "separate3",
+      "implKind": "nodegraph",
+      "directlyUsed": true
+    },
+    {
+      "category": "separate4",
+      "implKind": "nodegraph",
+      "directlyUsed": false
+    },
+    {
+      "category": "sheen_bsdf",
+      "implKind": "sourcecode",
+      "directlyUsed": false
+    },
+    {
+      "category": "sign",
+      "implKind": "sourcecode",
+      "directlyUsed": false
+    },
+    {
+      "category": "simple_hair",
+      "implKind": "nodegraph",
+      "directlyUsed": true
+    },
+    {
+      "category": "sin",
+      "implKind": "sourcecode",
+      "directlyUsed": true
+    },
+    {
+      "category": "sqrt",
+      "implKind": "sourcecode",
+      "directlyUsed": false
+    },
+    {
+      "category": "standard_surface",
+      "implKind": "nodegraph",
+      "directlyUsed": true
+    },
+    {
+      "category": "subsurface_bsdf",
+      "implKind": "sourcecode",
+      "directlyUsed": false
+    },
+    {
+      "category": "subtract",
+      "implKind": "sourcecode",
+      "directlyUsed": true
+    },
+    {
+      "category": "surface",
+      "implKind": "sourcecode",
+      "directlyUsed": true
+    },
+    {
+      "category": "surfacematerial",
+      "implKind": "sourcecode",
+      "directlyUsed": true
+    },
+    {
+      "category": "switch",
+      "implKind": "nodegraph",
+      "directlyUsed": false
+    },
+    {
+      "category": "texcoord",
+      "implKind": "sourcecode",
+      "directlyUsed": true
+    },
+    {
+      "category": "tiledimage",
+      "implKind": "nodegraph",
+      "directlyUsed": true
+    },
+    {
+      "category": "translucent_bsdf",
+      "implKind": "sourcecode",
+      "directlyUsed": false
+    },
+    {
+      "category": "uniform_edf",
+      "implKind": "sourcecode",
+      "directlyUsed": false
+    },
+    {
+      "category": "UsdPreviewSurface",
+      "implKind": "nodegraph",
+      "directlyUsed": true
+    }
+  ],
+  "categories": [
+    {
+      "category": "add",
+      "types": [
+        "color3",
+        "float"
+      ],
+      "count": 4,
+      "fileCount": 2,
+      "group": "math",
+      "implKind": "sourcecode",
+      "nodeDef": "ND_add_color3",
+      "source": "stdlib"
+    },
+    {
+      "category": "chiang_hair_absorption_from_color",
+      "types": [
+        "vector3"
+      ],
+      "count": 1,
+      "fileCount": 1,
+      "group": "pbr",
+      "implKind": "sourcecode",
+      "nodeDef": "ND_chiang_hair_absorption_from_color",
+      "source": "stdlib"
+    },
+    {
+      "category": "chiang_hair_bsdf",
+      "types": [
+        "BSDF"
+      ],
+      "count": 1,
+      "fileCount": 1,
+      "group": "pbr",
+      "implKind": "sourcecode",
+      "nodeDef": "ND_chiang_hair_bsdf",
+      "source": "stdlib"
+    },
+    {
+      "category": "chiang_hair_roughness",
+      "types": [
+        "multioutput"
+      ],
+      "count": 1,
+      "fileCount": 1,
+      "group": "pbr",
+      "implKind": "sourcecode",
+      "nodeDef": "ND_chiang_hair_roughness",
+      "source": "stdlib"
+    },
+    {
+      "category": "clamp",
+      "types": [
+        "color3"
+      ],
+      "count": 1,
+      "fileCount": 1,
+      "group": "math",
+      "implKind": "sourcecode",
+      "nodeDef": "ND_clamp_color3",
+      "source": "stdlib"
+    },
+    {
+      "category": "combine3",
+      "types": [
+        "color3"
+      ],
+      "count": 1,
+      "fileCount": 1,
+      "group": "channel",
+      "implKind": "sourcecode",
+      "nodeDef": "ND_combine3_color3",
+      "source": "stdlib"
+    },
+    {
+      "category": "constant",
+      "types": [
+        "color3"
+      ],
+      "count": 1,
+      "fileCount": 1,
+      "group": "procedural",
+      "implKind": "sourcecode",
+      "nodeDef": "ND_constant_color3",
+      "source": "stdlib"
+    },
+    {
+      "category": "convert",
+      "types": [
+        "vector2"
+      ],
+      "count": 2,
+      "fileCount": 2,
+      "group": "channel",
+      "implKind": "nodegraph",
+      "nodeDef": "ND_convert_float_vector2",
+      "source": "stdlib"
+    },
+    {
+      "category": "deon_hair_absorption_from_melanin",
+      "types": [
+        "vector3"
+      ],
+      "count": 1,
+      "fileCount": 1,
+      "group": "pbr",
+      "implKind": "sourcecode",
+      "nodeDef": "ND_deon_hair_absorption_from_melanin",
+      "source": "stdlib"
+    },
+    {
+      "category": "disney_principled",
+      "types": [
+        "surfaceshader"
+      ],
+      "count": 5,
+      "fileCount": 5,
+      "group": "pbr",
+      "implKind": "nodegraph",
+      "nodeDef": "ND_disney_principled",
+      "source": "stdlib"
+    },
+    {
+      "category": "divide",
+      "types": [
+        "float"
+      ],
+      "count": 1,
+      "fileCount": 1,
+      "group": "math",
+      "implKind": "sourcecode",
+      "nodeDef": "ND_divide_float",
+      "source": "stdlib"
+    },
+    {
+      "category": "dotproduct",
+      "types": [
+        "float"
+      ],
+      "count": 1,
+      "fileCount": 1,
+      "group": "math",
+      "implKind": "sourcecode",
+      "nodeDef": "ND_dotproduct_vector2",
+      "source": "stdlib"
+    },
+    {
+      "category": "extract",
+      "types": [
+        "float"
+      ],
+      "count": 1,
+      "fileCount": 1,
+      "group": "channel",
+      "implKind": "sourcecode",
+      "nodeDef": "ND_extract_color3",
+      "source": "stdlib"
+    },
+    {
+      "category": "fractal3d",
+      "types": [
+        "float"
+      ],
+      "count": 1,
+      "fileCount": 1,
+      "group": "procedural3d",
+      "implKind": "sourcecode",
+      "nodeDef": "ND_fractal3d_float",
+      "source": "stdlib"
+    },
+    {
+      "category": "gltf_colorimage",
+      "types": [
+        "multioutput"
+      ],
+      "count": 1,
+      "fileCount": 1,
+      "group": "texture2d",
+      "implKind": "nodegraph",
+      "nodeDef": "ND_gltf_colorimage",
+      "source": "stdlib"
+    },
+    {
+      "category": "gltf_image",
+      "types": [
+        "color3",
+        "vector3"
+      ],
+      "count": 2,
+      "fileCount": 1,
+      "group": "texture2d",
+      "implKind": "nodegraph",
+      "nodeDef": "ND_gltf_image_vector3_vector3_1_0",
+      "source": "stdlib"
+    },
+    {
+      "category": "gltf_normalmap",
+      "types": [
+        "vector3"
+      ],
+      "count": 1,
+      "fileCount": 1,
+      "group": "texture2d",
+      "implKind": "nodegraph",
+      "nodeDef": "ND_gltf_normalmap_vector3_1_0",
+      "source": "stdlib"
+    },
+    {
+      "category": "gltf_pbr",
+      "types": [
+        "surfaceshader"
+      ],
+      "count": 6,
+      "fileCount": 6,
+      "group": "pbr",
+      "implKind": "nodegraph",
+      "nodeDef": "ND_gltf_pbr_surfaceshader",
+      "source": "stdlib"
+    },
+    {
+      "category": "hextiledimage",
+      "types": [
+        "color3"
+      ],
+      "count": 2,
+      "fileCount": 1,
+      "group": "texture2d",
+      "implKind": "sourcecode",
+      "nodeDef": "ND_hextiledimage_color3",
+      "source": "stdlib"
+    },
+    {
+      "category": "hsvtorgb",
+      "types": [
+        "color3"
+      ],
+      "count": 1,
+      "fileCount": 1,
+      "group": "adjustment",
+      "implKind": "sourcecode",
+      "nodeDef": "ND_hsvtorgb_color3",
+      "source": "stdlib"
+    },
+    {
+      "category": "image",
+      "types": [
+        "color3",
+        "float",
+        "vector3"
+      ],
+      "count": 59,
+      "fileCount": 2,
+      "group": "texture2d",
+      "implKind": "sourcecode",
+      "nodeDef": "ND_image_color3",
+      "source": "stdlib"
+    },
+    {
+      "category": "max",
+      "types": [
+        "float"
+      ],
+      "count": 1,
+      "fileCount": 1,
+      "group": "math",
+      "implKind": "sourcecode",
+      "nodeDef": "ND_max_float",
+      "source": "stdlib"
+    },
+    {
+      "category": "mix",
+      "types": [
+        "color3",
+        "vector3"
+      ],
+      "count": 4,
+      "fileCount": 3,
+      "group": "compositing",
+      "implKind": "sourcecode",
+      "nodeDef": "ND_mix_vector3",
+      "source": "stdlib"
+    },
+    {
+      "category": "multiply",
+      "types": [
+        "color3",
+        "float",
+        "vector3"
+      ],
+      "count": 12,
+      "fileCount": 2,
+      "group": "math",
+      "implKind": "sourcecode",
+      "nodeDef": "ND_multiply_color3",
+      "source": "stdlib"
+    },
+    {
+      "category": "normalmap",
+      "types": [
+        "vector3"
+      ],
+      "count": 16,
+      "fileCount": 2,
+      "group": "math",
+      "implKind": "sourcecode",
+      "nodeDef": "ND_normalmap_float",
+      "source": "stdlib"
+    },
+    {
+      "category": "open_pbr_surface",
+      "types": [
+        "surfaceshader"
+      ],
+      "count": 10,
+      "fileCount": 10,
+      "group": "pbr",
+      "implKind": "nodegraph",
+      "nodeDef": "ND_open_pbr_surface_surfaceshader",
+      "source": "stdlib"
+    },
+    {
+      "category": "place2d",
+      "types": [
+        "vector2"
+      ],
+      "count": 1,
+      "fileCount": 1,
+      "group": "math",
+      "implKind": "nodegraph",
+      "nodeDef": "ND_place2d_vector2",
+      "source": "stdlib"
+    },
+    {
+      "category": "position",
+      "types": [
+        "vector3"
+      ],
+      "count": 1,
+      "fileCount": 1,
+      "group": "geometric",
+      "implKind": "sourcecode",
+      "nodeDef": "ND_position_vector3",
+      "source": "stdlib"
+    },
+    {
+      "category": "power",
+      "types": [
+        "float"
+      ],
+      "count": 1,
+      "fileCount": 1,
+      "group": "math",
+      "implKind": "sourcecode",
+      "nodeDef": "ND_power_float",
+      "source": "stdlib"
+    },
+    {
+      "category": "rgbtohsv",
+      "types": [
+        "color3"
+      ],
+      "count": 1,
+      "fileCount": 1,
+      "group": "adjustment",
+      "implKind": "sourcecode",
+      "nodeDef": "ND_rgbtohsv_color3",
+      "source": "stdlib"
+    },
+    {
+      "category": "separate3",
+      "types": [
+        "multioutput"
+      ],
+      "count": 1,
+      "fileCount": 1,
+      "group": "channel",
+      "implKind": "nodegraph",
+      "nodeDef": "ND_separate3_color3",
+      "source": "stdlib"
+    },
+    {
+      "category": "simple_hair",
+      "types": [
+        "surfaceshader"
+      ],
+      "count": 1,
+      "fileCount": 1,
+      "group": "pbr",
+      "implKind": "nodegraph",
+      "nodeDef": "ND_simple_hair_shader",
+      "source": "corpus"
+    },
+    {
+      "category": "sin",
+      "types": [
+        "float"
+      ],
+      "count": 1,
+      "fileCount": 1,
+      "group": "math",
+      "implKind": "sourcecode",
+      "nodeDef": "ND_sin_float",
+      "source": "stdlib"
+    },
+    {
+      "category": "standard_surface",
+      "types": [
+        "surfaceshader"
+      ],
+      "count": 34,
+      "fileCount": 20,
+      "group": "pbr",
+      "implKind": "nodegraph",
+      "nodeDef": "ND_standard_surface_surfaceshader",
+      "source": "stdlib"
+    },
+    {
+      "category": "subtract",
+      "types": [
+        "float"
+      ],
+      "count": 1,
+      "fileCount": 1,
+      "group": "math",
+      "implKind": "sourcecode",
+      "nodeDef": "ND_subtract_float",
+      "source": "stdlib"
+    },
+    {
+      "category": "surface",
+      "types": [
+        "surfaceshader"
+      ],
+      "count": 1,
+      "fileCount": 1,
+      "group": "pbr",
+      "implKind": "sourcecode",
+      "nodeDef": "ND_surface",
+      "source": "stdlib"
+    },
+    {
+      "category": "surfacematerial",
+      "types": [
+        "material"
+      ],
+      "count": 62,
+      "fileCount": 48,
+      "group": "material",
+      "implKind": "sourcecode",
+      "nodeDef": "ND_surfacematerial",
+      "source": "stdlib"
+    },
+    {
+      "category": "texcoord",
+      "types": [
+        "vector2"
+      ],
+      "count": 1,
+      "fileCount": 1,
+      "group": "geometric",
+      "implKind": "sourcecode",
+      "nodeDef": "ND_texcoord_vector2",
+      "source": "stdlib"
+    },
+    {
+      "category": "tiledimage",
+      "types": [
+        "color3",
+        "float",
+        "vector3"
+      ],
+      "count": 12,
+      "fileCount": 4,
+      "group": "texture2d",
+      "implKind": "nodegraph",
+      "nodeDef": "ND_tiledimage_color3",
+      "source": "stdlib"
+    },
+    {
+      "category": "UsdPreviewSurface",
+      "types": [
+        "surfaceshader"
+      ],
+      "count": 6,
+      "fileCount": 6,
+      "group": "pbr",
+      "implKind": "nodegraph",
+      "nodeDef": "ND_UsdPreviewSurface_surfaceshader",
+      "source": "stdlib"
+    }
+  ],
+  "files": [
+    {
+      "file": "DisneyPrincipled/disney_principled_carpaint.mtlx",
+      "materials": [
+        "DisneyPrincipled_Carpaint"
+      ],
+      "shaders": [
+        {
+          "name": "SR_carpaint",
+          "category": "disney_principled",
+          "type": "surfaceshader"
+        }
+      ],
+      "nodeCount": 2,
+      "categories": [
+        "disney_principled",
+        "surfacematerial"
+      ],
+      "textures": [],
+      "nodegraphs": []
+    },
+    {
+      "file": "DisneyPrincipled/disney_principled_default.mtlx",
+      "materials": [
+        "DisneyPrincipled_Default"
+      ],
+      "shaders": [
+        {
+          "name": "SR_default",
+          "category": "disney_principled",
+          "type": "surfaceshader"
+        }
+      ],
+      "nodeCount": 2,
+      "categories": [
+        "disney_principled",
+        "surfacematerial"
+      ],
+      "textures": [],
+      "nodegraphs": []
+    },
+    {
+      "file": "DisneyPrincipled/disney_principled_glass.mtlx",
+      "materials": [
+        "DisneyPrincipled_Glass"
+      ],
+      "shaders": [
+        {
+          "name": "SR_glass",
+          "category": "disney_principled",
+          "type": "surfaceshader"
+        }
+      ],
+      "nodeCount": 2,
+      "categories": [
+        "disney_principled",
+        "surfacematerial"
+      ],
+      "textures": [],
+      "nodegraphs": []
+    },
+    {
+      "file": "DisneyPrincipled/disney_principled_gold.mtlx",
+      "materials": [
+        "DisneyPrincipled_Gold"
+      ],
+      "shaders": [
+        {
+          "name": "SR_gold",
+          "category": "disney_principled",
+          "type": "surfaceshader"
+        }
+      ],
+      "nodeCount": 2,
+      "categories": [
+        "disney_principled",
+        "surfacematerial"
+      ],
+      "textures": [],
+      "nodegraphs": []
+    },
+    {
+      "file": "DisneyPrincipled/disney_principled_plastic.mtlx",
+      "materials": [
+        "DisneyPrincipled_Plastic"
+      ],
+      "shaders": [
+        {
+          "name": "SR_plastic",
+          "category": "disney_principled",
+          "type": "surfaceshader"
+        }
+      ],
+      "nodeCount": 2,
+      "categories": [
+        "disney_principled",
+        "surfacematerial"
+      ],
+      "textures": [],
+      "nodegraphs": []
+    },
+    {
+      "file": "GltfPbr/gltf_pbr_boombox.mtlx",
+      "materials": [
+        "Material_boombox"
+      ],
+      "shaders": [
+        {
+          "name": "SR_boombox",
+          "category": "gltf_pbr",
+          "type": "surfaceshader"
+        }
+      ],
+      "nodeCount": 7,
+      "categories": [
+        "gltf_colorimage",
+        "gltf_image",
+        "gltf_normalmap",
+        "gltf_pbr",
+        "separate3",
+        "surfacematerial"
+      ],
+      "textures": [
+        "BoomBox_baseColor.png",
+        "BoomBox_occlusionRoughnessMetallic.png",
+        "BoomBox_normal.png",
+        "BoomBox_emissive.png"
+      ],
+      "nodegraphs": []
+    },
+    {
+      "file": "GltfPbr/gltf_pbr_carpaint.mtlx",
+      "materials": [
+        "PBR_Car_Paint"
+      ],
+      "shaders": [
+        {
+          "name": "SR_carpaint",
+          "category": "gltf_pbr",
+          "type": "surfaceshader"
+        }
+      ],
+      "nodeCount": 2,
+      "categories": [
+        "gltf_pbr",
+        "surfacematerial"
+      ],
+      "textures": [],
+      "nodegraphs": []
+    },
+    {
+      "file": "GltfPbr/gltf_pbr_default.mtlx",
+      "materials": [
+        "Default"
+      ],
+      "shaders": [
+        {
+          "name": "SR_default",
+          "category": "gltf_pbr",
+          "type": "surfaceshader"
+        }
+      ],
+      "nodeCount": 2,
+      "categories": [
+        "gltf_pbr",
+        "surfacematerial"
+      ],
+      "textures": [],
+      "nodegraphs": []
+    },
+    {
+      "file": "GltfPbr/gltf_pbr_glass.mtlx",
+      "materials": [
+        "PBR_Glass"
+      ],
+      "shaders": [
+        {
+          "name": "SR_glass",
+          "category": "gltf_pbr",
+          "type": "surfaceshader"
+        }
+      ],
+      "nodeCount": 2,
+      "categories": [
+        "gltf_pbr",
+        "surfacematerial"
+      ],
+      "textures": [],
+      "nodegraphs": []
+    },
+    {
+      "file": "GltfPbr/gltf_pbr_gold.mtlx",
+      "materials": [
+        "PBR_Gold"
+      ],
+      "shaders": [
+        {
+          "name": "SR_gold",
+          "category": "gltf_pbr",
+          "type": "surfaceshader"
+        }
+      ],
+      "nodeCount": 2,
+      "categories": [
+        "gltf_pbr",
+        "surfacematerial"
+      ],
+      "textures": [],
+      "nodegraphs": []
+    },
+    {
+      "file": "GltfPbr/gltf_pbr_plastic.mtlx",
+      "materials": [
+        "PBR_Plastic"
+      ],
+      "shaders": [
+        {
+          "name": "SR_plastic",
+          "category": "gltf_pbr",
+          "type": "surfaceshader"
+        }
+      ],
+      "nodeCount": 2,
+      "categories": [
+        "gltf_pbr",
+        "surfacematerial"
+      ],
+      "textures": [],
+      "nodegraphs": []
+    },
+    {
+      "file": "OpenPbr/open_pbr_aluminum_brushed.mtlx",
+      "materials": [
+        "Aluminum_Brushed"
+      ],
+      "shaders": [
+        {
+          "name": "open_pbr_surface_surfaceshader",
+          "category": "open_pbr_surface",
+          "type": "surfaceshader"
+        }
+      ],
+      "nodeCount": 2,
+      "categories": [
+        "open_pbr_surface",
+        "surfacematerial"
+      ],
+      "textures": [],
+      "nodegraphs": []
+    },
+    {
+      "file": "OpenPbr/open_pbr_carpaint.mtlx",
+      "materials": [
+        "Car_Paint"
+      ],
+      "shaders": [
+        {
+          "name": "open_pbr_surface_surfaceshader",
+          "category": "open_pbr_surface",
+          "type": "surfaceshader"
+        }
+      ],
+      "nodeCount": 2,
+      "categories": [
+        "open_pbr_surface",
+        "surfacematerial"
+      ],
+      "textures": [],
+      "nodegraphs": []
+    },
+    {
+      "file": "OpenPbr/open_pbr_default.mtlx",
+      "materials": [
+        "Default"
+      ],
+      "shaders": [
+        {
+          "name": "open_pbr_surface_surfaceshader",
+          "category": "open_pbr_surface",
+          "type": "surfaceshader"
+        }
+      ],
+      "nodeCount": 2,
+      "categories": [
+        "open_pbr_surface",
+        "surfacematerial"
+      ],
+      "textures": [],
+      "nodegraphs": []
+    },
+    {
+      "file": "OpenPbr/open_pbr_glass.mtlx",
+      "materials": [
+        "Glass"
+      ],
+      "shaders": [
+        {
+          "name": "open_pbr_surface_surfaceshader",
+          "category": "open_pbr_surface",
+          "type": "surfaceshader"
+        }
+      ],
+      "nodeCount": 2,
+      "categories": [
+        "open_pbr_surface",
+        "surfacematerial"
+      ],
+      "textures": [],
+      "nodegraphs": []
+    },
+    {
+      "file": "OpenPbr/open_pbr_honey.mtlx",
+      "materials": [
+        "Honey"
+      ],
+      "shaders": [
+        {
+          "name": "open_pbr_surface_surfaceshader",
+          "category": "open_pbr_surface",
+          "type": "surfaceshader"
+        }
+      ],
+      "nodeCount": 2,
+      "categories": [
+        "open_pbr_surface",
+        "surfacematerial"
+      ],
+      "textures": [],
+      "nodegraphs": []
+    },
+    {
+      "file": "OpenPbr/open_pbr_ketchup.mtlx",
+      "materials": [
+        "Ketchup"
+      ],
+      "shaders": [
+        {
+          "name": "open_pbr_surface_surfaceshader",
+          "category": "open_pbr_surface",
+          "type": "surfaceshader"
+        }
+      ],
+      "nodeCount": 2,
+      "categories": [
+        "open_pbr_surface",
+        "surfacematerial"
+      ],
+      "textures": [],
+      "nodegraphs": []
+    },
+    {
+      "file": "OpenPbr/open_pbr_lightbulb.mtlx",
+      "materials": [
+        "Light_Bulb"
+      ],
+      "shaders": [
+        {
+          "name": "open_pbr_surface_surfaceshader",
+          "category": "open_pbr_surface",
+          "type": "surfaceshader"
+        }
+      ],
+      "nodeCount": 2,
+      "categories": [
+        "open_pbr_surface",
+        "surfacematerial"
+      ],
+      "textures": [],
+      "nodegraphs": []
+    },
+    {
+      "file": "OpenPbr/open_pbr_pearl.mtlx",
+      "materials": [
+        "Pearl"
+      ],
+      "shaders": [
+        {
+          "name": "open_pbr_surface_surfaceshader",
+          "category": "open_pbr_surface",
+          "type": "surfaceshader"
+        }
+      ],
+      "nodeCount": 2,
+      "categories": [
+        "open_pbr_surface",
+        "surfacematerial"
+      ],
+      "textures": [],
+      "nodegraphs": []
+    },
+    {
+      "file": "OpenPbr/open_pbr_soapbubble.mtlx",
+      "materials": [
+        "Soap_Bubble"
+      ],
+      "shaders": [
+        {
+          "name": "open_pbr_surface_surfaceshader",
+          "category": "open_pbr_surface",
+          "type": "surfaceshader"
+        }
+      ],
+      "nodeCount": 2,
+      "categories": [
+        "open_pbr_surface",
+        "surfacematerial"
+      ],
+      "textures": [],
+      "nodegraphs": []
+    },
+    {
+      "file": "OpenPbr/open_pbr_velvet.mtlx",
+      "materials": [
+        "Velvet"
+      ],
+      "shaders": [
+        {
+          "name": "open_pbr_surface_surfaceshader",
+          "category": "open_pbr_surface",
+          "type": "surfaceshader"
+        }
+      ],
+      "nodeCount": 2,
+      "categories": [
+        "open_pbr_surface",
+        "surfacematerial"
+      ],
+      "textures": [],
+      "nodegraphs": []
+    },
+    {
+      "file": "SimpleHair/simple_hair_default.mtlx",
+      "materials": [
+        "simple_hair_default"
+      ],
+      "shaders": [
+        {
+          "name": "SR_default",
+          "category": "simple_hair",
+          "type": "surfaceshader"
+        },
+        {
+          "name": "surface_shader",
+          "category": "surface",
+          "type": "surfaceshader"
+        }
+      ],
+      "nodeCount": 8,
+      "categories": [
+        "chiang_hair_absorption_from_color",
+        "chiang_hair_bsdf",
+        "chiang_hair_roughness",
+        "deon_hair_absorption_from_melanin",
+        "mix",
+        "simple_hair",
+        "surface",
+        "surfacematerial"
+      ],
+      "textures": [],
+      "nodegraphs": [
+        "NG_simple_hair_shader"
+      ]
+    },
+    {
+      "file": "StandardSurface/standard_surface_brass_tiled.mtlx",
+      "materials": [
+        "Tiled_Brass"
+      ],
+      "shaders": [
+        {
+          "name": "SR_brass1",
+          "category": "standard_surface",
+          "type": "surfaceshader"
+        }
+      ],
+      "nodeCount": 4,
+      "categories": [
+        "standard_surface",
+        "surfacematerial",
+        "tiledimage"
+      ],
+      "textures": [
+        "brass_color.jpg",
+        "brass_roughness.jpg"
+      ],
+      "nodegraphs": [
+        "NG_brass1"
+      ]
+    },
+    {
+      "file": "StandardSurface/standard_surface_brick_procedural.mtlx",
+      "materials": [
+        "M_BrickPattern"
+      ],
+      "shaders": [
+        {
+          "name": "N_StandardSurface",
+          "category": "standard_surface",
+          "type": "surfaceshader"
+        }
+      ],
+      "nodeCount": 30,
+      "categories": [
+        "add",
+        "clamp",
+        "combine3",
+        "constant",
+        "convert",
+        "divide",
+        "hsvtorgb",
+        "max",
+        "mix",
+        "multiply",
+        "normalmap",
+        "rgbtohsv",
+        "standard_surface",
+        "subtract",
+        "surfacematerial",
+        "tiledimage"
+      ],
+      "textures": [
+        "brick_normal.jpg",
+        "brick_roughness.jpg",
+        "brick_mask.jpg",
+        "brick_base_gray.jpg",
+        "brick_variation_mask.jpg",
+        "brick_dirt_mask.jpg"
+      ],
+      "nodegraphs": [
+        "NG_BrickPattern"
+      ]
+    },
+    {
+      "file": "StandardSurface/standard_surface_carpaint.mtlx",
+      "materials": [
+        "Car_Paint"
+      ],
+      "shaders": [
+        {
+          "name": "SR_carpaint",
+          "category": "standard_surface",
+          "type": "surfaceshader"
+        }
+      ],
+      "nodeCount": 2,
+      "categories": [
+        "standard_surface",
+        "surfacematerial"
+      ],
+      "textures": [],
+      "nodegraphs": []
+    },
+    {
+      "file": "StandardSurface/standard_surface_chess_set.mtlx",
+      "materials": [
+        "M_Bishop_B",
+        "M_Bishop_W",
+        "M_Castle_B",
+        "M_Castle_W",
+        "M_Chessboard",
+        "M_King_B",
+        "M_King_W",
+        "M_Knight_B",
+        "M_Knight_W",
+        "M_Pawn_Body_B",
+        "M_Pawn_Body_W",
+        "M_Pawn_Top_B",
+        "M_Pawn_Top_W",
+        "M_Queen_B",
+        "M_Queen_W"
+      ],
+      "shaders": [
+        {
+          "name": "Bishop_B",
+          "category": "standard_surface",
+          "type": "surfaceshader"
+        },
+        {
+          "name": "Bishop_W",
+          "category": "standard_surface",
+          "type": "surfaceshader"
+        },
+        {
+          "name": "Castle_B",
+          "category": "standard_surface",
+          "type": "surfaceshader"
+        },
+        {
+          "name": "Castle_W",
+          "category": "standard_surface",
+          "type": "surfaceshader"
+        },
+        {
+          "name": "Chessboard",
+          "category": "standard_surface",
+          "type": "surfaceshader"
+        },
+        {
+          "name": "King_B",
+          "category": "standard_surface",
+          "type": "surfaceshader"
+        },
+        {
+          "name": "King_W",
+          "category": "standard_surface",
+          "type": "surfaceshader"
+        },
+        {
+          "name": "Knight_B",
+          "category": "standard_surface",
+          "type": "surfaceshader"
+        },
+        {
+          "name": "Knight_W",
+          "category": "standard_surface",
+          "type": "surfaceshader"
+        },
+        {
+          "name": "Pawn_Body_B",
+          "category": "standard_surface",
+          "type": "surfaceshader"
+        },
+        {
+          "name": "Pawn_Body_W",
+          "category": "standard_surface",
+          "type": "surfaceshader"
+        },
+        {
+          "name": "Pawn_Top_B",
+          "category": "standard_surface",
+          "type": "surfaceshader"
+        },
+        {
+          "name": "Pawn_Top_W",
+          "category": "standard_surface",
+          "type": "surfaceshader"
+        },
+        {
+          "name": "Queen_B",
+          "category": "standard_surface",
+          "type": "surfaceshader"
+        },
+        {
+          "name": "Queen_W",
+          "category": "standard_surface",
+          "type": "surfaceshader"
+        }
+      ],
+      "nodeCount": 103,
+      "categories": [
+        "image",
+        "normalmap",
+        "standard_surface",
+        "surfacematerial"
+      ],
+      "textures": [
+        "chess_set/bishop_black_base_color.jpg",
+        "chess_set/bishop_shared_metallic.jpg",
+        "chess_set/bishop_black_roughness.jpg",
+        "chess_set/bishop_black_normal.jpg",
+        "chess_set/bishop_white_base_color.jpg",
+        "chess_set/bishop_white_roughness.jpg",
+        "chess_set/bishop_white_normal.jpg",
+        "chess_set/castle_black_base_color.jpg",
+        "chess_set/castle_shared_metallic.jpg",
+        "chess_set/castle_shared_roughness.jpg",
+        "chess_set/castle_shared_normal.jpg",
+        "chess_set/castle_white_base_color.jpg",
+        "chess_set/chessboard_base_color.jpg",
+        "chess_set/chessboard_metallic.jpg",
+        "chess_set/chessboard_roughness.jpg",
+        "chess_set/chessboard_normal.jpg",
+        "chess_set/king_black_base_color.jpg",
+        "chess_set/king_shared_metallic.jpg",
+        "chess_set/king_black_roughness.jpg",
+        "chess_set/king_shared_scattering.jpg",
+        "chess_set/king_black_normal.jpg",
+        "chess_set/king_white_base_color.jpg",
+        "chess_set/king_white_roughness.jpg",
+        "chess_set/king_white_normal.jpg",
+        "chess_set/knight_black_base_color.jpg",
+        "chess_set/knight_black_roughness.jpg",
+        "chess_set/knight_black_normal.jpg",
+        "chess_set/knight_white_base_color.jpg",
+        "chess_set/knight_white_roughness.jpg",
+        "chess_set/knight_white_normal.jpg",
+        "chess_set/pawn_black_base_color.jpg",
+        "chess_set/pawn_shared_metallic.jpg",
+        "chess_set/pawn_shared_roughness.jpg",
+        "chess_set/pawn_shared_normal.jpg",
+        "chess_set/pawn_white_base_color.jpg",
+        "chess_set/queen_black_base_color.jpg",
+        "chess_set/queen_shared_metallic.jpg",
+        "chess_set/queen_black_roughness.jpg",
+        "chess_set/queen_shared_scattering.jpg",
+        "chess_set/queen_black_normal.jpg",
+        "chess_set/queen_white_base_color.jpg",
+        "chess_set/queen_white_roughness.jpg",
+        "chess_set/queen_white_normal.jpg"
+      ],
+      "nodegraphs": [
+        "NG_BishopBlack",
+        "NG_BishopWhite",
+        "NG_CastleBlack",
+        "NG_CastleWhite",
+        "NG_ChessBoard",
+        "NG_KingBlack",
+        "NG_KingWhite",
+        "NG_KnightBlack",
+        "NG_KnightWhite",
+        "NG_PawnBodyBlack",
+        "NG_PawnBodyWhite",
+        "NG_PawnTopBlack",
+        "NG_PawnTopWhite",
+        "NG_QueenBlack",
+        "NG_QueenWhite"
+      ]
+    },
+    {
+      "file": "StandardSurface/standard_surface_chrome.mtlx",
+      "materials": [
+        "Chrome"
+      ],
+      "shaders": [
+        {
+          "name": "SR_chrome",
+          "category": "standard_surface",
+          "type": "surfaceshader"
+        }
+      ],
+      "nodeCount": 2,
+      "categories": [
+        "standard_surface",
+        "surfacematerial"
+      ],
+      "textures": [],
+      "nodegraphs": []
+    },
+    {
+      "file": "StandardSurface/standard_surface_copper.mtlx",
+      "materials": [
+        "Copper"
+      ],
+      "shaders": [
+        {
+          "name": "SR_copper",
+          "category": "standard_surface",
+          "type": "surfaceshader"
+        }
+      ],
+      "nodeCount": 2,
+      "categories": [
+        "standard_surface",
+        "surfacematerial"
+      ],
+      "textures": [],
+      "nodegraphs": []
+    },
+    {
+      "file": "StandardSurface/standard_surface_default.mtlx",
+      "materials": [
+        "Default"
+      ],
+      "shaders": [
+        {
+          "name": "SR_default",
+          "category": "standard_surface",
+          "type": "surfaceshader"
+        }
+      ],
+      "nodeCount": 2,
+      "categories": [
+        "standard_surface",
+        "surfacematerial"
+      ],
+      "textures": [],
+      "nodegraphs": []
+    },
+    {
+      "file": "StandardSurface/standard_surface_glass.mtlx",
+      "materials": [
+        "Glass"
+      ],
+      "shaders": [
+        {
+          "name": "SR_glass",
+          "category": "standard_surface",
+          "type": "surfaceshader"
+        }
+      ],
+      "nodeCount": 2,
+      "categories": [
+        "standard_surface",
+        "surfacematerial"
+      ],
+      "textures": [],
+      "nodegraphs": []
+    },
+    {
+      "file": "StandardSurface/standard_surface_glass_tinted.mtlx",
+      "materials": [
+        "GlassTinted"
+      ],
+      "shaders": [
+        {
+          "name": "SR_glass_tinted",
+          "category": "standard_surface",
+          "type": "surfaceshader"
+        }
+      ],
+      "nodeCount": 2,
+      "categories": [
+        "standard_surface",
+        "surfacematerial"
+      ],
+      "textures": [],
+      "nodegraphs": []
+    },
+    {
+      "file": "StandardSurface/standard_surface_gold.mtlx",
+      "materials": [
+        "Gold"
+      ],
+      "shaders": [
+        {
+          "name": "SR_gold",
+          "category": "standard_surface",
+          "type": "surfaceshader"
+        }
+      ],
+      "nodeCount": 2,
+      "categories": [
+        "standard_surface",
+        "surfacematerial"
+      ],
+      "textures": [],
+      "nodegraphs": []
+    },
+    {
+      "file": "StandardSurface/standard_surface_greysphere.mtlx",
+      "materials": [
+        "Greysphere"
+      ],
+      "shaders": [
+        {
+          "name": "SR_greysphere",
+          "category": "standard_surface",
+          "type": "surfaceshader"
+        }
+      ],
+      "nodeCount": 2,
+      "categories": [
+        "standard_surface",
+        "surfacematerial"
+      ],
+      "textures": [],
+      "nodegraphs": []
+    },
+    {
+      "file": "StandardSurface/standard_surface_greysphere_calibration.mtlx",
+      "materials": [
+        "Greysphere_Calibration"
+      ],
+      "shaders": [
+        {
+          "name": "SR_Greysphere_Calibration",
+          "category": "standard_surface",
+          "type": "surfaceshader"
+        }
+      ],
+      "nodeCount": 5,
+      "categories": [
+        "image",
+        "place2d",
+        "standard_surface",
+        "surfacematerial",
+        "texcoord"
+      ],
+      "textures": [
+        "greysphere_calibration.png"
+      ],
+      "nodegraphs": [
+        "NG_Greysphere_Calibration"
+      ]
+    },
+    {
+      "file": "StandardSurface/standard_surface_jade.mtlx",
+      "materials": [
+        "Jade"
+      ],
+      "shaders": [
+        {
+          "name": "SR_jade",
+          "category": "standard_surface",
+          "type": "surfaceshader"
+        }
+      ],
+      "nodeCount": 2,
+      "categories": [
+        "standard_surface",
+        "surfacematerial"
+      ],
+      "textures": [],
+      "nodegraphs": []
+    },
+    {
+      "file": "StandardSurface/standard_surface_look_brass_tiled.mtlx",
+      "materials": [],
+      "shaders": [],
+      "nodeCount": 0,
+      "categories": [],
+      "textures": [],
+      "nodegraphs": []
+    },
+    {
+      "file": "StandardSurface/standard_surface_look_wood_tiled.mtlx",
+      "materials": [],
+      "shaders": [],
+      "nodeCount": 0,
+      "categories": [],
+      "textures": [],
+      "nodegraphs": []
+    },
+    {
+      "file": "StandardSurface/standard_surface_marble_solid.mtlx",
+      "materials": [
+        "Marble_3D"
+      ],
+      "shaders": [
+        {
+          "name": "SR_marble1",
+          "category": "standard_surface",
+          "type": "surfaceshader"
+        }
+      ],
+      "nodeCount": 14,
+      "categories": [
+        "add",
+        "dotproduct",
+        "fractal3d",
+        "mix",
+        "multiply",
+        "position",
+        "power",
+        "sin",
+        "standard_surface",
+        "surfacematerial"
+      ],
+      "textures": [],
+      "nodegraphs": [
+        "NG_marble1"
+      ]
+    },
+    {
+      "file": "StandardSurface/standard_surface_metal_brushed.mtlx",
+      "materials": [
+        "Metal_Brushed"
+      ],
+      "shaders": [
+        {
+          "name": "SR_metal_brushed",
+          "category": "standard_surface",
+          "type": "surfaceshader"
+        }
+      ],
+      "nodeCount": 2,
+      "categories": [
+        "standard_surface",
+        "surfacematerial"
+      ],
+      "textures": [],
+      "nodegraphs": []
+    },
+    {
+      "file": "StandardSurface/standard_surface_onyx_hextiled.mtlx",
+      "materials": [
+        "M_OnyxHextiled"
+      ],
+      "shaders": [
+        {
+          "name": "N_StandardSurface",
+          "category": "standard_surface",
+          "type": "surfaceshader"
+        }
+      ],
+      "nodeCount": 6,
+      "categories": [
+        "convert",
+        "extract",
+        "hextiledimage",
+        "standard_surface",
+        "surfacematerial"
+      ],
+      "textures": [
+        "onyx_color.jpg",
+        "onyx_roughness.jpg"
+      ],
+      "nodegraphs": [
+        "NG_OnyxHextiled"
+      ]
+    },
+    {
+      "file": "StandardSurface/standard_surface_plastic.mtlx",
+      "materials": [
+        "Plastic"
+      ],
+      "shaders": [
+        {
+          "name": "SR_plastic",
+          "category": "standard_surface",
+          "type": "surfaceshader"
+        }
+      ],
+      "nodeCount": 2,
+      "categories": [
+        "standard_surface",
+        "surfacematerial"
+      ],
+      "textures": [],
+      "nodegraphs": []
+    },
+    {
+      "file": "StandardSurface/standard_surface_thin_film.mtlx",
+      "materials": [
+        "ThinFilm"
+      ],
+      "shaders": [
+        {
+          "name": "SR_thin_film",
+          "category": "standard_surface",
+          "type": "surfaceshader"
+        }
+      ],
+      "nodeCount": 2,
+      "categories": [
+        "standard_surface",
+        "surfacematerial"
+      ],
+      "textures": [],
+      "nodegraphs": []
+    },
+    {
+      "file": "StandardSurface/standard_surface_velvet.mtlx",
+      "materials": [
+        "Velvet"
+      ],
+      "shaders": [
+        {
+          "name": "SR_velvet",
+          "category": "standard_surface",
+          "type": "surfaceshader"
+        }
+      ],
+      "nodeCount": 2,
+      "categories": [
+        "standard_surface",
+        "surfacematerial"
+      ],
+      "textures": [],
+      "nodegraphs": []
+    },
+    {
+      "file": "StandardSurface/standard_surface_wood_tiled.mtlx",
+      "materials": [
+        "Tiled_Wood"
+      ],
+      "shaders": [
+        {
+          "name": "SR_wood1",
+          "category": "standard_surface",
+          "type": "surfaceshader"
+        }
+      ],
+      "nodeCount": 4,
+      "categories": [
+        "standard_surface",
+        "surfacematerial",
+        "tiledimage"
+      ],
+      "textures": [
+        "wood_color.jpg",
+        "wood_roughness.jpg"
+      ],
+      "nodegraphs": [
+        "NG_wood1"
+      ]
+    },
+    {
+      "file": "UsdPreviewSurface/usd_preview_surface_brass_tiled.mtlx",
+      "materials": [
+        "USD_Tiled_Brass"
+      ],
+      "shaders": [
+        {
+          "name": "SR_brass1",
+          "category": "UsdPreviewSurface",
+          "type": "surfaceshader"
+        }
+      ],
+      "nodeCount": 4,
+      "categories": [
+        "UsdPreviewSurface",
+        "surfacematerial",
+        "tiledimage"
+      ],
+      "textures": [
+        "brass_color.jpg",
+        "brass_roughness.jpg"
+      ],
+      "nodegraphs": [
+        "NG_brass1"
+      ]
+    },
+    {
+      "file": "UsdPreviewSurface/usd_preview_surface_carpaint.mtlx",
+      "materials": [
+        "USD_Car_Paint"
+      ],
+      "shaders": [
+        {
+          "name": "SR_carpaint",
+          "category": "UsdPreviewSurface",
+          "type": "surfaceshader"
+        }
+      ],
+      "nodeCount": 2,
+      "categories": [
+        "UsdPreviewSurface",
+        "surfacematerial"
+      ],
+      "textures": [],
+      "nodegraphs": []
+    },
+    {
+      "file": "UsdPreviewSurface/usd_preview_surface_default.mtlx",
+      "materials": [
+        "USD_Default"
+      ],
+      "shaders": [
+        {
+          "name": "SR_default",
+          "category": "UsdPreviewSurface",
+          "type": "surfaceshader"
+        }
+      ],
+      "nodeCount": 2,
+      "categories": [
+        "UsdPreviewSurface",
+        "surfacematerial"
+      ],
+      "textures": [],
+      "nodegraphs": []
+    },
+    {
+      "file": "UsdPreviewSurface/usd_preview_surface_glass.mtlx",
+      "materials": [
+        "USD_Glass"
+      ],
+      "shaders": [
+        {
+          "name": "SR_glass",
+          "category": "UsdPreviewSurface",
+          "type": "surfaceshader"
+        }
+      ],
+      "nodeCount": 2,
+      "categories": [
+        "UsdPreviewSurface",
+        "surfacematerial"
+      ],
+      "textures": [],
+      "nodegraphs": []
+    },
+    {
+      "file": "UsdPreviewSurface/usd_preview_surface_gold.mtlx",
+      "materials": [
+        "USD_Gold"
+      ],
+      "shaders": [
+        {
+          "name": "SR_gold",
+          "category": "UsdPreviewSurface",
+          "type": "surfaceshader"
+        }
+      ],
+      "nodeCount": 2,
+      "categories": [
+        "UsdPreviewSurface",
+        "surfacematerial"
+      ],
+      "textures": [],
+      "nodegraphs": []
+    },
+    {
+      "file": "UsdPreviewSurface/usd_preview_surface_plastic.mtlx",
+      "materials": [
+        "USD_Plastic"
+      ],
+      "shaders": [
+        {
+          "name": "SR_plastic",
+          "category": "UsdPreviewSurface",
+          "type": "surfaceshader"
+        }
+      ],
+      "nodeCount": 2,
+      "categories": [
+        "UsdPreviewSurface",
+        "surfacematerial"
+      ],
+      "textures": [],
+      "nodegraphs": []
+    }
+  ]
+}

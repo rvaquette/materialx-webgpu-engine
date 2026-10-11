@@ -313,52 +313,60 @@ Les chemins ci-dessous sont des destinations proposees, pas des fichiers existan
 Le projet doit rester independant des sources et assets de reference.
 
 ### P1. Qualification des dependances [REQ-002,003,004,013]
-- [ ] T001 [Plan:P1] Qualifier le WASM Core et consigner ses APIs dans docs/dependencies.md.
-- [ ] T002 [Plan:P1] Inventorier le corpus USD, materiaux, textures et tous les noeuds declares/utilises dans les fichiers .mtlx sous D:\WebGL2\MaterialX\MaterialX-rva\resources\Materials\Examples ; consigner les documents, NodeDefs, implementations et dependances dans docs/scene-inventory.md et docs/materialx-node-coverage.md.
-- [ ] T003 [Plan:P1] Comparer les loaders sur sublayers, references, inherits, payloads, bindings et references .mtlx ; choisir un loader ou un adaptateur de repli et consigner les preuves dans docs/usd-import.md.
-- [ ] T004 [Plan:P1] Qualifier BVH, subdivision, TIFF, EXR et volumes dans docs/dependencies.md.
+- [x] T001 [Plan:P1] Qualifier le WASM Core et consigner ses APIs dans docs/dependencies.md.
+- [x] T002 [Plan:P1] Inventorier le corpus USD, materiaux, textures et tous les noeuds declares/utilises dans les fichiers .mtlx sous D:\WebGL2\MaterialX\MaterialX-rva\resources\Materials\Examples ; consigner les documents, NodeDefs, implementations et dependances dans docs/scene-inventory.md et docs/materialx-node-coverage.md.
+- [x] T003 [Plan:P1] Comparer les loaders sur sublayers, references, inherits, payloads, bindings et references .mtlx ; choisir un loader ou un adaptateur de repli et consigner les preuves dans docs/usd-import.md.
+- [x] T004 [Plan:P1] Qualifier BVH, subdivision, TIFF, EXR et volumes dans docs/dependencies.md.
 
 ### P2. Socle et assets [REQ-001,003,004,011,012]
-- [ ] T005 [Plan:P2] Initialiser TypeScript et le build navigateur avec package.json et tsconfig.json.
-- [ ] T006 [Plan:P2] Implementer initialisation/device lifecycle dans src/gpu/device.ts.
-- [ ] T007 [Plan:P2] Implementer resolver et cache d'assets dans src/assets/resolver.ts et src/assets/cache.ts.
-- [ ] T008 [Plan:P2] Encapsuler MaterialX Core dans src/materialx/wasm.ts et src/materialx/libraries.ts.
-- [ ] T009 [Plan:P2] Adapter les decodeurs dans src/assets/images.ts et src/assets/volumes.ts.
+- [x] T005 [Plan:P2] Initialiser TypeScript et le build navigateur avec package.json et tsconfig.json.
+- [x] T006 [Plan:P2] Implementer initialisation/device lifecycle dans src/gpu/device.ts.
+- [x] T007 [Plan:P2] Implementer resolver et cache d'assets dans src/assets/resolver.ts et src/assets/cache.ts.
+- [x] T008 [Plan:P2] Encapsuler MaterialX Core dans src/materialx/wasm.ts et src/materialx/libraries.ts.
+- [x] T009 [Plan:P2] Adapter les decodeurs dans src/assets/images.ts et src/assets/volumes.ts.
 
 ### P3. Compilateur MaterialX TypeScript [REQ-004,005,006,007,008,011]
-- [ ] T010 [Plan:P3] Resoudre les graphes et leur provenance dans src/materialx/graph.ts.
-- [ ] T011 [Plan:P3] Definir IR type et closures dans src/compiler/ir.ts.
-- [ ] T012 [Plan:P3] Implementer les optimisations dans src/compiler/optimize.ts.
-- [ ] T013 [Plan:P3] Extraire features, layouts et passes dans src/compiler/features.ts.
-- [ ] T014 [Plan:P3] Implementer un lowering WGSL TypeScript et une emission pour chaque noeud de docs/materialx-node-coverage.md dans src/compiler/nodes.ts et src/compiler/wgsl.ts.
-- [ ] T015 [Plan:P3] Implementer pipelines/caches dans src/gpu/pipelines.ts et src/compiler/cache.ts.
-- [ ] T016 [Plan:P3] Implementer les instances et leurs mises a jour dans src/materials/instance.ts.
+- [x] T010 [Plan:P3] Resoudre les graphes et leur provenance dans src/materialx/graph.ts.
+- [x] T011 [Plan:P3] Definir IR type et closures dans src/compiler/ir.ts.
+- [x] T012 [Plan:P3] Implementer les optimisations dans src/compiler/optimize.ts.
+- [x] T013 [Plan:P3] Extraire features, layouts et passes dans src/compiler/features.ts.
+- [x] T014 [Plan:P3] Implementer un lowering WGSL TypeScript et une emission pour chaque noeud de docs/materialx-node-coverage.md dans src/compiler/nodes.ts et src/compiler/wgsl.ts.
+- [x] T015 [Plan:P3] Implementer pipelines/caches dans src/gpu/pipelines.ts et src/compiler/cache.ts.
+- [x] T016 [Plan:P3] Implementer les instances et leurs mises a jour dans src/materials/instance.ts.
 
 ### P4. Scene OpenUSD et geometrie [REQ-002,003,006,011,012]
-- [ ] T017 [Plan:P4] Definir SceneAsset dans src/scene/types.ts et l'adaptateur d'import dans src/usd/importer.ts.
-- [ ] T018 [Plan:P4] Relier composition/bindings et references MaterialX dans src/usd/materials.ts.
-- [ ] T019 [Plan:P4] Integrer subdivision/displacement et primvars dans src/geometry/prepare.ts.
-- [ ] T020 [Plan:P4] Integrer prototypes, instances et BVH dans src/scene/instances.ts et src/geometry/bvh.ts.
-- [ ] T021 [Plan:P4] Integrer cameras, lumieres et transformations statiques dans src/usd/cameras.ts, src/usd/lights.ts et src/scene/transforms.ts.
+- [x] T017 [Plan:P4] Definir SceneAsset dans src/scene/types.ts et l'adaptateur d'import dans src/usd/importer.ts.
+- [x] T018 [Plan:P4] Relier composition/bindings et references MaterialX dans src/usd/materials.ts.
+- [x] T019 [Plan:P4] Integrer subdivision/displacement et primvars dans src/geometry/prepare.ts.
+- [x] T020 [Plan:P4] Integrer prototypes, instances et BVH dans src/scene/instances.ts et src/geometry/bvh.ts.
+- [x] T021 [Plan:P4] Integrer cameras, lumieres et transformations statiques dans src/usd/cameras.ts, src/usd/lights.ts et src/scene/transforms.ts.
 
 ### P5. Raster complet [REQ-006,007,008,009,011,012]
-- [ ] T022 [Plan:P5] Implementer orchestration des passes dans src/render/raster/renderer.ts.
-- [ ] T023 [Plan:P5] Implementer Forward+, environnement et ombres dans src/render/raster/lighting.ts.
-- [ ] T024 [Plan:P5] Implementer transparence/transmission dans src/render/raster/transmission.ts.
-- [ ] T025 [Plan:P5] Implementer subsurface et volumes dans src/render/raster/subsurface.ts et src/render/raster/volume.ts.
-- [ ] T026 [Plan:P5] Implementer sortie HDR et antialiasing dans src/render/output.ts.
+- [x] T022 [Plan:P5] Implementer orchestration des passes dans src/render/raster/renderer.ts.
+- [x] T023 [Plan:P5] Implementer Forward+, environnement et ombres dans src/render/raster/lighting.ts.
+- [x] T024 [Plan:P5] Implementer transparence/transmission dans src/render/raster/transmission.ts.
+- [x] T025 [Plan:P5] Implementer subsurface et volumes dans src/render/raster/subsurface.ts et src/render/raster/volume.ts.
+- [x] T026 [Plan:P5] Implementer sortie HDR et antialiasing dans src/render/output.ts.
+- [x] T026b [Plan:P5] Implementer un backend raster WebGPU executable : shaders WGSL de passe (vertex/fragment) et resolve tonemap dans src/render/raster/shaders.ts, pipelines et enregistrement de frame reels dans src/render/raster/backend.ts, et cablage dans src/main.ts.
 
 ### P6. Transport de reference et hybride [REQ-006,007,008,010,011]
-- [ ] T027 [Plan:P6] Implementer integrateur, lumieres et accumulation dans src/render/pathtracing/integrator.ts.
-- [ ] T028 [Plan:P6] Implementer milieux et tracking dans src/render/pathtracing/media.ts.
-- [ ] T029 [Plan:P6] Implementer BSSRDF/random walk dans src/render/pathtracing/subsurface.ts.
-- [ ] T030 [Plan:P6] Implementer traitement spectral et thin film dans src/render/pathtracing/spectrum.ts.
-- [ ] T031 [Plan:P6] Integrer les effets hybrides dans src/render/hybrid/renderer.ts.
-- [ ] T032 [Plan:P6] Permettre changement de backend sans reimport dans src/render/engine.ts.
+- [x] T027 [Plan:P6] Implementer integrateur, lumieres et accumulation dans src/render/pathtracing/integrator.ts.
+- [x] T028 [Plan:P6] Implementer milieux et tracking dans src/render/pathtracing/media.ts.
+- [x] T029 [Plan:P6] Implementer BSSRDF/random walk dans src/render/pathtracing/subsurface.ts.
+- [x] T030 [Plan:P6] Implementer traitement spectral et thin film dans src/render/pathtracing/spectrum.ts.
+- [x] T031 [Plan:P6] Integrer les effets hybrides dans src/render/hybrid/renderer.ts.
+- [x] T032 [Plan:P6] Permettre changement de backend sans reimport dans src/render/engine.ts.
 
 ### P7. Fidelite, echelle et robustesse [REQ-001,002,005,006,007,008,009,010,011,012,013]
-- [ ] T033 [Plan:P7] Etablir matrice de conformite de tous les noeuds MaterialX du corpus et scenes de controle dans docs/conformance.md et tests/fixtures/.
+- [x] T033 [Plan:P7] Etablir matrice de conformite de tous les noeuds MaterialX du corpus et scenes de controle dans docs/conformance.md et tests/fixtures/.
 - [ ] T034 [Plan:P7] Tester en JavaScript la resolution, l'IR et le lowering, puis executer chaque noeud du corpus sur WebGPU avec des entrees deterministes et verifier ses sorties dans tests/compiler/ et tests/render/ ; un test de compilation seule ne suffit pas.
+  - [x] T034a [Plan:P7] Definir pour chaque noeud du corpus (matrice T033) un cas deterministe entrees fixes + sorties CPU de reference dans tests/fixtures/node-cases.ts, reutilisable par les tests JS et GPU.
+  - [x] T034b [Plan:P7] Tester en JS resolution + construction IR de chaque noeud du corpus dans tests/compiler/corpus-resolve.test.ts : graphe resolu (materialx/graph.ts) et IR type correct (compiler/ir.ts), sans GPU.
+  - [x] T034c [Plan:P7] Tester en JS le lowering WGSL de chaque noeud dans tests/compiler/corpus-wgsl.test.ts : module emis (compiler/wgsl.ts) avec uniforms/bindings/outputs attendus et validation structurelle du WGSL, pas seulement l'absence d'erreur.
+  - [ ] T034d [Plan:P7] Ecrire un harnais d'execution compute reutilisable dans src/gpu/exec.ts : a partir d'un module WGSL de noeud, construire le pipeline (gpu/pipelines.ts), binder les entrees deterministes, dispatcher et relire les sorties en buffer.
+  - [ ] T034e [Plan:P7] Servir le harnais au mobile connecte (SM-F731B) via D:\platform-tools\adb.exe (adb reverse + Chrome Android), executer tous les noeuds du corpus sur le GPU reel et collecter les sorties dans tests/render/corpus-device.harness.ts.
+  - [ ] T034f [Plan:P7] Comparer sorties GPU du mobile vs oracle CPU (T034a) avec tolerances par type dans tests/render/corpus-device.test.ts ; echec si un noeud s'ecarte, skip propre documente si aucun mobile autorise.
+  - [ ] T034g [Plan:P7] Orchestrer le flux build harnais -> adb reverse -> run device -> collecte -> assertions via un script npm (scripts/run-device-corpus.mjs) avec rapport par noeud.
 - [ ] T035 [Plan:P7] Comparer les rendus et documenter les tolerances dans docs/validation.md.
 - [ ] T036 [Plan:P7] Integrer budgets, streaming et profiling sur le mobile Android cible (via D:\platform-tools\adb.exe) dans src/assets/streaming.ts et src/diagnostics/metrics.ts.
 - [ ] T037 [Plan:P7] Verifier annulation, liberation et perte du device dans tests/lifecycle/.

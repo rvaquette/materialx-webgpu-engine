@@ -1,0 +1,35 @@
+{
+  "description": "Deterministic control scenes for backend conformance validation (T033). Each scene fixes the camera, a single directional light, resolution and sampler seed so raster, path tracing and hybrid renders are reproducible and comparable (T034/T035). Material paths are relative to MaterialX-rva/resources/Materials/Examples.",
+  "camera": {
+    "eye": [0, 0, 3],
+    "target": [0, 0, 0],
+    "up": [0, 1, 0],
+    "fovYRadians": 0.7853981633974483,
+    "aspect": 1
+  },
+  "light": {
+    "type": "directional",
+    "direction": [-0.3, -0.5, -0.8],
+    "color": [1, 1, 1],
+    "intensity": 3.141592653589793
+  },
+  "environment": { "colorSpace": "lin_rec709", "constantRadiance": [0.05, 0.05, 0.05] },
+  "resolution": { "width": 256, "height": 256 },
+  "sampler": { "seed": 1337, "samplesPerPixel": 64 },
+  "scenes": [
+    { "id": "standard_surface_default", "family": "StandardSurface", "material": "StandardSurface/standard_surface_default.mtlx", "backends": ["raster", "pathtracing", "hybrid"], "focus": ["base"] },
+    { "id": "standard_surface_thin_film", "family": "StandardSurface", "material": "StandardSurface/standard_surface_thin_film.mtlx", "backends": ["pathtracing"], "focus": ["thin_film", "spectral"] },
+    { "id": "standard_surface_glass", "family": "StandardSurface", "material": "StandardSurface/standard_surface_glass.mtlx", "backends": ["raster", "pathtracing"], "focus": ["transmission"] },
+    { "id": "standard_surface_jade", "family": "StandardSurface", "material": "StandardSurface/standard_surface_jade.mtlx", "backends": ["raster", "pathtracing"], "focus": ["subsurface"] },
+    { "id": "open_pbr_default", "family": "OpenPbr", "material": "OpenPbr/open_pbr_default.mtlx", "backends": ["raster", "pathtracing", "hybrid"], "focus": ["base"] },
+    { "id": "open_pbr_soapbubble", "family": "OpenPbr", "material": "OpenPbr/open_pbr_soapbubble.mtlx", "backends": ["pathtracing"], "focus": ["thin_film", "spectral"] },
+    { "id": "open_pbr_glass", "family": "OpenPbr", "material": "OpenPbr/open_pbr_glass.mtlx", "backends": ["raster", "pathtracing"], "focus": ["transmission"] },
+    { "id": "open_pbr_honey", "family": "OpenPbr", "material": "OpenPbr/open_pbr_honey.mtlx", "backends": ["pathtracing"], "focus": ["volume", "subsurface"] },
+    { "id": "disney_principled_default", "family": "DisneyPrincipled", "material": "DisneyPrincipled/disney_principled_default.mtlx", "backends": ["raster", "pathtracing"], "focus": ["base"] },
+    { "id": "disney_principled_glass", "family": "DisneyPrincipled", "material": "DisneyPrincipled/disney_principled_glass.mtlx", "backends": ["raster", "pathtracing"], "focus": ["transmission"] },
+    { "id": "gltf_pbr_default", "family": "GltfPbr", "material": "GltfPbr/gltf_pbr_default.mtlx", "backends": ["raster", "pathtracing"], "focus": ["base"] },
+    { "id": "gltf_pbr_glass", "family": "GltfPbr", "material": "GltfPbr/gltf_pbr_glass.mtlx", "backends": ["raster", "pathtracing"], "focus": ["transmission"] },
+    { "id": "usd_preview_surface_default", "family": "UsdPreviewSurface", "material": "UsdPreviewSurface/usd_preview_surface_default.mtlx", "backends": ["raster", "pathtracing"], "focus": ["base"] },
+    { "id": "simple_hair_default", "family": "SimpleHair", "material": "SimpleHair/simple_hair_default.mtlx", "backends": ["pathtracing"], "focus": ["hair"] }
+  ]
+}
