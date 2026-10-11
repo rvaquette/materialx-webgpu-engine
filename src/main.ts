@@ -22,13 +22,18 @@ const INDICES = new Uint32Array([0, 1, 2]);
 
 function buildForwardUniforms(aspect: number): Float32Array {
   const proj = perspective4(Math.PI / 3, aspect, 0.1, 100);
-  const view = lookAt4([0, 0, 2], [0, 0, 0], [0, 1, 0]);
+  const eye: [number, number, number] = [0, 0, 2];
+  const view = lookAt4(eye, [0, 0, 0], [0, 1, 0]);
   const viewProj = multiply4(proj, view);
   const data = new Float32Array(FORWARD_UNIFORM_SIZE / 4);
   data.set(viewProj, 0);
-  data.set([0.3, 0.5, 0.8, 0], 16); // lightDir
-  data.set([1, 1, 1, 0], 20); // lightColor
-  data.set([1.0, 0.5, 0.2, 1], 24); // baseColor
+  data.set([eye[0], eye[1], eye[2], 0], 16); // eye
+  data.set([0.3, 0.5, 0.8, 0], 20); // lightDir (scene-convention travel direction)
+  data.set([1, 1, 1, 1], 24); // lightColor (rgb) + intensity (w)
+  data.set([1.0, 0.5, 0.2, 1], 28); // baseColor
+  data.set([0.0, 0.4, 0.0, 0.0], 32); // material: metalness, roughness, transmission, subsurface
+  data.set([1.5, 1.0, 0, 0], 36); // coat: ior, specular
+  data.set([0.03, 0.03, 0.03, 0], 40); // environment
   return data;
 }
 

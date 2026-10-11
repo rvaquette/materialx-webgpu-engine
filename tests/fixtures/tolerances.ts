@@ -76,6 +76,25 @@ export function surfaceTargetTolerance(adapter?: { vendor?: string; architecture
   return SURFACE_TARGET_TOLERANCE[deviceTargetOf(adapter)];
 }
 
+// Per-device-target tolerance for the executable OpenPBR raster surface compared
+// at scene level (T045). This is a wider axis than the single surface-graph node
+// of T043: every control-scene material is shaded over the shared visibility
+// samples and the sharp, low-roughness metallic scenes (brass, brushed aluminium)
+// drive the composed GGX specular lobe into its peak, where the fp32 division by
+// NdotV and the Schlick pow compound more than on the corpus surface node. The
+// desktop validation GPU (Intel gen-12lp) needs 4e-3 for those peaks and the
+// mobile Adreno target is given 7e-3 for the extra specular rounding; all other
+// scenes stay well under the single-surface bound.
+export const SCENE_SURFACE_TARGET_TOLERANCE: Readonly<Record<DeviceTarget, number>> = {
+  local: 4e-3,
+  mobile: 7e-3,
+};
+
+/** Per-component OpenPBR scene-surface tolerance for the target that produced a device report. */
+export function sceneSurfaceTargetTolerance(adapter?: { vendor?: string; architecture?: string }): number {
+  return SCENE_SURFACE_TARGET_TOLERANCE[deviceTargetOf(adapter)];
+}
+
 // Scene-level tolerances by material focus (T035c4). The raster mirror and the
 // path-traced reference share one diffuse albedo, so their only systematic
 // difference is the raster's flat ambient (0.03) versus the integrator's

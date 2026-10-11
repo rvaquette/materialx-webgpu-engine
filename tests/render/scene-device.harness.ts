@@ -1,15 +1,18 @@
-// T035d device harness: evaluate the raster shading model on the real mobile GPU
+// T035d/T045 device harness: evaluate the real OpenPBR raster surface on the GPU
 // over the shared visibility samples (T035c2) and report the shaded colours so
-// the CPU oracle (rasterShade, T035c3) can be compared at scene level. It mirrors
-// the forward opaque fragment math (Lambert + ambient) in a compute dispatch so
-// the comparison isolates GPU fp32 arithmetic from rasterisation/visibility (the
-// samples are shared with the oracle). Nothing here runs under Node: it is served
-// to the device exactly like the corpus harness (T034e).
+// the independent analytic reference (src/render/bsdf/reference.ts evaluateSurface)
+// can be compared at scene level. It embeds the same shared OpenPBR WGSL the
+// executable forward fragment uses (src/render/raster/shaders.ts openPbrSurfaceWgsl)
+// in a compute dispatch so the comparison isolates GPU fp32 arithmetic from
+// rasterisation/visibility (the samples are shared with the oracle). Nothing here
+// runs under Node: it is served to the device exactly like the corpus harness
+// (T034e).
 import fixture from '../fixtures/shader-ball.json' with { type: 'json' };
 import scenes from '../fixtures/control-scenes.json' with { type: 'json' };
 import materials from '../fixtures/scene-materials.json' with { type: 'json' };
 import { fitShaderBall, sampleSurface, type CameraParams } from './scene-samples.ts';
-import { effectiveAlbedo, type CanonMaterial } from './scene-shade.ts';
+import type { CanonMaterial } from './scene-shade.ts';
+import { openPbrSurfaceWgsl } from '../../src/render/raster/shaders.ts';
 
 export interface SceneDeviceResult {
   readonly id: string;
@@ -28,28 +31,45 @@ export interface SceneDeviceReport {
 
 const RES = 32;
 
-const SHADE_WGSL = `struct P {
+const SHADE_WGSL = `${openPbrSurfaceWgsl()}
+
+struct P {
+  baseColor : vec4<f32>,
+  material : vec4<f32>,
+  coat : vec4<f32>,
   lightDir : vec4<f32>,
   lightColor : vec4<f32>,
-  baseColor : vec4<f32>,
-  ambient : f32,
+  environment : vec4<f32>,
   count : u32,
 };
 @group(0) @binding(0) var<storage, read> inN : array<f32>;
-@group(0) @binding(1) var<storage, read_write> outC : array<f32>;
-@group(0) @binding(2) var<uniform> u : P;
+@group(0) @binding(1) var<storage, read> inV : array<f32>;
+@group(0) @binding(2) var<storage, read_write> outC : array<f32>;
+@group(0) @binding(3) var<uniform> u : P;
 @compute @workgroup_size(64)
 fn main(@builtin(global_invocation_id) gid : vec3<u32>) {
   let i = gid.x;
   if (i >= u.count) { return; }
   let b = i * 3u;
   let n = normalize(vec3<f32>(inN[b], inN[b + 1u], inN[b + 2u]));
-  let l = normalize(u.lightDir.xyz);
-  let ndotl = max(dot(n, l), 0.0);
-  let lit = u.baseColor.rgb * (u.ambient + u.lightColor.rgb * ndotl);
-  outC[b] = lit.x;
-  outC[b + 1u] = lit.y;
-  outC[b + 2u] = lit.z;
+  let v = normalize(vec3<f32>(inV[b], inV[b + 1u], inV[b + 2u]));
+  var m : MxSurface;
+  m.baseColor = u.baseColor.rgb;
+  m.metalness = u.material.x;
+  m.roughness = u.material.y;
+  m.transmission = u.material.z;
+  m.subsurface = u.material.w;
+  m.ior = u.coat.x;
+  m.specular = u.coat.y;
+  var lit : MxLight;
+  lit.direction = u.lightDir.xyz;
+  lit.color = u.lightColor.rgb;
+  lit.intensity = u.lightColor.w;
+  lit.environment = u.environment.rgb;
+  let c = mx_openpbr_surface(m, n, v, lit);
+  outC[b] = c.x;
+  outC[b + 1u] = c.y;
+  outC[b + 2u] = c.z;
 }`;
 
 function material(id: string): CanonMaterial {
@@ -74,39 +94,51 @@ function material(id: string): CanonMaterial {
 async function shadeOnDevice(
   device: GPUDevice,
   pipeline: GPUComputePipeline,
-  inBuffer: GPUBuffer,
-  normals: Float32Array,
-  baseColor: readonly number[],
+  normalBuffer: GPUBuffer,
+  viewBuffer: GPUBuffer,
+  count: number,
+  bytes: number,
+  mat: CanonMaterial,
   lightDir: readonly number[],
   lightColor: readonly number[],
+  intensity: number,
+  environment: readonly number[],
 ): Promise<Float32Array> {
-  const count = normals.length / 3;
-  const bytes = normals.byteLength;
   const outBuffer = device.createBuffer({ size: bytes, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC });
   const readBuffer = device.createBuffer({ size: bytes, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
 
-  const params = new ArrayBuffer(64);
+  const params = new ArrayBuffer(112);
   const dv = new DataView(params);
-  dv.setFloat32(0, lightDir[0]!, true);
-  dv.setFloat32(4, lightDir[1]!, true);
-  dv.setFloat32(8, lightDir[2]!, true);
-  dv.setFloat32(16, lightColor[0]!, true);
-  dv.setFloat32(20, lightColor[1]!, true);
-  dv.setFloat32(24, lightColor[2]!, true);
-  dv.setFloat32(32, baseColor[0]!, true);
-  dv.setFloat32(36, baseColor[1]!, true);
-  dv.setFloat32(40, baseColor[2]!, true);
-  dv.setFloat32(48, 0.03, true);
-  dv.setUint32(52, count, true);
-  const uniform = device.createBuffer({ size: 64, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+  dv.setFloat32(0, mat.baseColor[0]!, true);
+  dv.setFloat32(4, mat.baseColor[1]!, true);
+  dv.setFloat32(8, mat.baseColor[2]!, true);
+  dv.setFloat32(16, mat.metalness, true);
+  dv.setFloat32(20, mat.roughness, true);
+  dv.setFloat32(24, mat.transmission, true);
+  dv.setFloat32(28, mat.subsurface, true);
+  dv.setFloat32(32, mat.ior, true);
+  dv.setFloat32(36, mat.specular, true);
+  dv.setFloat32(48, lightDir[0]!, true);
+  dv.setFloat32(52, lightDir[1]!, true);
+  dv.setFloat32(56, lightDir[2]!, true);
+  dv.setFloat32(64, lightColor[0]!, true);
+  dv.setFloat32(68, lightColor[1]!, true);
+  dv.setFloat32(72, lightColor[2]!, true);
+  dv.setFloat32(76, intensity, true);
+  dv.setFloat32(80, environment[0]!, true);
+  dv.setFloat32(84, environment[1]!, true);
+  dv.setFloat32(88, environment[2]!, true);
+  dv.setUint32(96, count, true);
+  const uniform = device.createBuffer({ size: 112, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
   device.queue.writeBuffer(uniform, 0, params);
 
   const bindGroup = device.createBindGroup({
     layout: pipeline.getBindGroupLayout(0),
     entries: [
-      { binding: 0, resource: { buffer: inBuffer } },
-      { binding: 1, resource: { buffer: outBuffer } },
-      { binding: 2, resource: { buffer: uniform } },
+      { binding: 0, resource: { buffer: normalBuffer } },
+      { binding: 1, resource: { buffer: viewBuffer } },
+      { binding: 2, resource: { buffer: outBuffer } },
+      { binding: 3, resource: { buffer: uniform } },
     ],
   });
 
@@ -143,29 +175,45 @@ export async function runScenesOnDevice(device: GPUDevice): Promise<Omit<SceneDe
   const surface = fitShaderBall(fixture);
   const grid = sampleSurface(surface, cameraParams(), RES, RES);
   const hitNormals: number[] = [];
+  const hitViews: number[] = [];
   for (const s of grid.samples) {
     if (!s.hit) continue;
     hitNormals.push(s.normal[0], s.normal[1], s.normal[2]);
+    hitViews.push(s.viewDir[0], s.viewDir[1], s.viewDir[2]);
   }
   const normals = new Float32Array(hitNormals);
-  const inBuffer = device.createBuffer({ size: normals.byteLength, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
-  device.queue.writeBuffer(inBuffer, 0, normals);
+  const views = new Float32Array(hitViews);
+  const count = normals.length / 3;
+  const bytes = normals.byteLength;
+  const normalBuffer = device.createBuffer({ size: bytes, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
+  const viewBuffer = device.createBuffer({ size: bytes, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
+  device.queue.writeBuffer(normalBuffer, 0, normals);
+  device.queue.writeBuffer(viewBuffer, 0, views);
 
   const module = device.createShaderModule({ code: SHADE_WGSL });
   const pipeline = device.createComputePipeline({ layout: 'auto', compute: { module, entryPoint: 'main' } });
 
-  const lightDir = [-scenes.light.direction[0]!, -scenes.light.direction[1]!, -scenes.light.direction[2]!];
-  const inv = scenes.light.intensity / Math.PI;
-  const lightColor = [scenes.light.color[0]! * inv, scenes.light.color[1]! * inv, scenes.light.color[2]! * inv];
+  // Reference semantics (src/render/bsdf/reference.ts): L = normalize(-direction),
+  // radiance = color * intensity, environment added once per lobe.
+  const lightDir = [scenes.light.direction[0]!, scenes.light.direction[1]!, scenes.light.direction[2]!];
+  const lightColor = [scenes.light.color[0]!, scenes.light.color[1]!, scenes.light.color[2]!];
+  const intensity = scenes.light.intensity;
+  const environment = [
+    scenes.environment.constantRadiance[0]!,
+    scenes.environment.constantRadiance[1]!,
+    scenes.environment.constantRadiance[2]!,
+  ];
 
   const results: SceneDeviceResult[] = [];
   for (const id of Object.keys(materials.scenes)) {
-    const albedo = effectiveAlbedo(material(id));
-    const shaded = await shadeOnDevice(device, pipeline, inBuffer, normals, albedo, lightDir, lightColor);
+    const shaded = await shadeOnDevice(
+      device, pipeline, normalBuffer, viewBuffer, count, bytes, material(id), lightDir, lightColor, intensity, environment,
+    );
     results.push({ id, shaded: Array.from(shaded) });
   }
-  inBuffer.destroy();
-  return { width: RES, height: RES, hitCount: normals.length / 3, scenes: results };
+  normalBuffer.destroy();
+  viewBuffer.destroy();
+  return { width: RES, height: RES, hitCount: count, scenes: results };
 }
 
 function adapterFields(adapter: GPUAdapter): Record<string, string> {

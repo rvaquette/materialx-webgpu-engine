@@ -10,8 +10,13 @@ import { forwardOpaqueWgsl, tonemapResolveWgsl } from './shaders.ts';
 
 /** Interleaved position(3) + normal(3) float32 vertex, 24 bytes. */
 export const FORWARD_VERTEX_STRIDE = 24;
-/** viewProj(64) + lightDir(16) + lightColor(16) + baseColor(16). */
-export const FORWARD_UNIFORM_SIZE = 112;
+/**
+ * Forward OpenPBR uniform (T045): viewProj(64) + eye(16) + lightDir(16) +
+ * lightColor(16, rgb color + w intensity) + baseColor(16) + material(16:
+ * metalness, roughness, transmission, subsurface) + coat(16: ior, specular) +
+ * environment(16) = 176 bytes.
+ */
+export const FORWARD_UNIFORM_SIZE = 176;
 /** exposure(4) padded to the 16-byte uniform alignment. */
 export const RESOLVE_UNIFORM_SIZE = 16;
 
