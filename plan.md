@@ -33,6 +33,10 @@ Contraintes fermes :
 - Tous les noeuds declares ou utilises dans les fichiers .mtlx de
   D:\WebGL2\MaterialX\MaterialX-rva\resources\Materials\Examples doivent etre
   supportes par le compilateur TypeScript, avec leurs dependances necessaires.
+- Chaque document .mtlx sous Materials/Examples est rendu et teste dans les deux
+  modes raster ET pathtracing ; aucun exemple n'est valide sur un seul backend.
+  Les divergences raster (thin film, hair, volume, subsurface) restent des
+  approximations explicites et documentees, pas des omissions.
 - Ne pas supposer de ray tracing materiel ni de bindless universel en WebGPU.
 
 ## 2. Sources locales
@@ -414,18 +418,22 @@ Le projet doit rester independant des sources et assets de reference.
 ### P8. Evaluation physique des closures BSDF/EDF/VDF [REQ-006,007,008,009,010,011,014]
 
 Correctif de l'evaluation physique des closures (voir section 9.5). Chaque tache
-se valide par typecheck + tests Node et, le cas echeant, execution sur le mobile
-cible ; aucune closure ne reste un stub `color * weight`.
+se valide par typecheck + tests Node, puis par execution GPU reelle d'abord sur
+le GPU local (poste de dev, Chrome WebGPU via CDP sans adb) et ensuite sur le
+mobile cible ; aucune closure ne reste un stub `color * weight`. L'execution
+locale est le pendant GPU des tests CPU locaux : elle tourne a chaque run, le
+mobile confirme sur le GPU cible reel.
 
 - [ ] T038 [Plan:P8] Etendre le modele de closure dans l'IR et le backend : struct WGSL `BSDF { response, throughput }`, contexte d'eclairage (lumieres directionnelles + environnement + vue) injecte dans le shader genere, et accumulation de radiance par boucle sur les lumieres dans le noeud `surface`. src/compiler/ir.ts, src/compiler/wgsl.ts, src/gpu/exec.ts ; tests JS de composition dans tests/compiler/ et tests/gpu/.
 - [ ] T039 [Plan:P8] Implementer les lobes BSDF reels en WGSL (fonctions `_reflection` / `_transmission` prenant L, V, N) dans src/compiler/nodes.ts : diffus Oren-Nayar et Burley ; GGX diielectrique (distribution GGX, Smith, Fresnel dielectrique) ; GGX conducteur (Fresnel complexe ior/extinction) ; sheen ; subsurface (approximation raster declaree) ; translucent. Remplacer les stubs du prelude.
 - [ ] T040 [Plan:P8] Implementer EDF (uniform_edf, generalized_schlick_edf) et VDF (anisotropic_vdf) reels, et la composition energetique des closures (layer avec couplage par throughput, add, mix, multiply) dans src/compiler/nodes.ts et src/compiler/wgsl.ts.
 - [ ] T041 [Plan:P8] Ecrire une reference analytique CPU independante de chaque lobe/EDF/VDF (memes formules, implementation separee des stubs et du WGSL) dans src/render/bsdf/ ; tests unitaires JS dans tests/render/bsdf/.
-- [ ] T042 [Plan:P8] Remplacer les oracles closure circulaires de tests/fixtures/node-cases.ts par la reference analytique (T041) ; mettre a jour tests/fixtures/tolerances.ts ; tests JS numeriques dans tests/compiler/ et execution device par lobe dans tests/render/corpus-device.test.ts avec tolerances documentees.
+- [ ] T042 [Plan:P8] Remplacer les oracles closure circulaires de tests/fixtures/node-cases.ts par la reference analytique (T041) ; mettre a jour tests/fixtures/tolerances.ts ; tests JS numeriques dans tests/compiler/ et execution device par lobe dans tests/render/corpus-device.test.ts, exercee sur le GPU local (poste de dev, Chrome WebGPU) puis confirmee sur le mobile cible, avec tolerances documentees par cible.
 - [ ] T043 [Plan:P8] Executer numeriquement les surfaces graphCase (standard_surface, open_pbr_surface, disney_principled, gltf_pbr, UsdPreviewSurface, simple_hair) vs la reference analytique, pas seulement une validation structurelle ; tests dans tests/compiler/ et tests/render/.
 - [ ] T044 [Plan:P8] Implementer evaluation + PDF + echantillonnage coherents par lobe pour le path tracer dans src/render/pathtracing/ ; tests de coherence dans tests/render/pathtracing/ : conservation d'energie (white furnace), accord eval vs PDF, estimateur non biaise.
-- [ ] T045 [Plan:P8] Integrer l'evaluation OpenPBR reelle (shader materiau genere) au backend raster WebGPU dans src/render/raster/shaders.ts et src/render/raster/backend.ts, en remplacant le Lambert+ambient ; re-valider par scene sur le mobile cible.
-- [ ] T046 [Plan:P8] Mettre a jour docs/conformance.md, docs/materialx-node-coverage.md et docs/validation.md : closures passees de stub a evaluation reelle, formules, limites et tolerances ; re-executer le run device reel et consigner les resultats.
+- [ ] T045 [Plan:P8] Integrer l'evaluation OpenPBR reelle (shader materiau genere) au backend raster WebGPU dans src/render/raster/shaders.ts et src/render/raster/backend.ts, en remplacant le Lambert+ambient ; re-valider par scene sur le GPU local (poste de dev, Chrome WebGPU) puis sur le mobile cible.
+- [ ] T046 [Plan:P8] Mettre a jour docs/conformance.md, docs/materialx-node-coverage.md et docs/validation.md : closures passees de stub a evaluation reelle, formules, limites et tolerances ; re-executer le run GPU local puis le run mobile et consigner les resultats des deux cibles (adapter, navigateur, OS).
+- [x] T047 [Plan:P8] Couvrir le corpus Materials/Examples (source docs/scene-inventory.md) comme scenes de controle rendues dans les DEUX modes raster ET pathtracing sur le shader ball standard : tests/fixtures/control-scenes.json declare les 47 documents a shader de surface des 5 familles analytiques (standard_surface, open_pbr_surface, disney_principled, gltf_pbr, UsdPreviewSurface) avec `backends: ["raster", "pathtracing"]`, et tests/fixtures/scene-materials.json est regenere depuis les .mtlx reels via scripts/build-scene-materials.mjs. tests/render/scene-compare.test.ts compare les deux rendus par exemple via compare.ts (T035b) avec tolerances par focus documentees dans tests/fixtures/tolerances.ts (base strictes ; transmission/subsurface plus larges, justifiees comme approximations raster). Exceptions hors pipeline analytique, documentees dans control-scenes.json : SimpleHair/simple_hair_default (pas de miroir raster analytique du modele hair ; pathtracing seul) et les 2 documents StandardSurface look/material-assignment (standard_surface_look_brass_tiled, standard_surface_look_wood_tiled) sans noeuds de shading. Echec si un exemple manque un backend ou diverge hors tolerance.
 
 P1 decide les dependances avant de figer leurs adaptateurs. Une premiere tranche
 verticale P2/P3/P4 avec une surface texturée doit alimenter P5 et P6 rapidement.
@@ -445,6 +453,12 @@ accompagne chaque phase ; P7 consolide les gates et n'est pas son point de depar
   contre des resultats de reference, avec tolerances documentees ; aucun noeud
   n'est valide par la seule compilation WGSL.
 - Raster et path tracing fonctionnent sur les memes assets et instances.
+- Chaque document .mtlx a shader de surface sous Materials/Examples (les 47 des
+  5 familles analytiques) est rendu et compare dans les deux modes raster ET
+  pathtracing ; aucun de ces exemples n'est couvert par un seul backend, et les
+  ecarts raster sont documentes comme approximations explicites. Les exceptions
+  (simple_hair_default sans miroir raster analytique, et les 2 documents look
+  sans noeuds de shading) sont declarees et justifiees dans control-scenes.json.
 - Le path tracer ne tronque pas les chemins de facon biaisee et ne substitue
   aucun modele approximatif ; les strategies de subsurface et transmission
   proposent plusieurs presets de convergence sans changer le modele physique.
