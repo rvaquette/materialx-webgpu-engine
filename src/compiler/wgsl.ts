@@ -48,6 +48,8 @@ export interface WgslModule {
   textures: WgslBinding[];
   samplers: WgslBinding[];
   outputs: WgslOutput[];
+  /** Present when the module declares the lighting context uniform (surface node). */
+  lighting?: { group: number; binding: number };
 }
 
 const ENTRY_POINT = 'mx_shade';
@@ -228,6 +230,7 @@ export function emitWgsl(ir: ShaderIr): WgslModule {
   const extraInputs = new Map<string, IrType>();
   const primvarFields = new Map<string, IrType>();
   const body: string[] = [];
+  let usesLighting = false;
 
   for (const ref of order) {
     const expr = ir.exprs.get(ref)!;
@@ -269,6 +272,7 @@ export function emitWgsl(ir: ShaderIr): WgslModule {
         const lowering = getNodeLowering(expr.op);
         if (!lowering) throw new WgslEmitError(`no WGSL lowering for closure '${expr.op}'`);
         if (lowering.prelude) preludes.add(lowering.prelude);
+        if (expr.op === 'surface') usesLighting = true;
         const named: Record<string, string> = {};
         for (const [k, v] of Object.entries(expr.params)) named[k] = varName(v);
         rhs = lowering.emit(makeInputs([], named), expr.type, ctx);
@@ -297,7 +301,15 @@ export function emitWgsl(ir: ShaderIr): WgslModule {
 
   const outputAssigns = ir.outputs.map((o, i) => ({ field: outputs[i]!.field, ref: o.ref }));
   const code = assembleModule({ uniforms, textures, samplers, outputs, outputAssigns, preludes, primvarFields, extraInputs, body });
-  return { code, entryPoint: ENTRY_POINT, uniforms, textures, samplers, outputs };
+  return {
+    code,
+    entryPoint: ENTRY_POINT,
+    uniforms,
+    textures,
+    samplers,
+    outputs,
+    ...(usesLighting ? { lighting: { group: 0, binding: 1 } } : {}),
+  };
 }
 
 function emitCombine(expr: Extract<IrExpr, { kind: 'combine' }>, varName: (r: IrRef) => string): string {

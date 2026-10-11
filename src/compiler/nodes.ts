@@ -68,7 +68,47 @@ fn mx_chiang_hair_bsdf(weight: f32, color: vec3f, roughness: vec2f) -> Closure {
 fn mx_uniform_edf(color: vec3f) -> Closure { return Closure(color, 1.0); }
 fn mx_generalized_schlick_edf(color: vec3f, tint: vec3f) -> Closure { return Closure(color * tint, 1.0); }
 fn mx_anisotropic_vdf(absorption: vec3f, scattering: vec3f, anisotropy: f32) -> Closure { return Closure(scattering - absorption, 1.0); }
-fn mx_surface(bsdf: Closure, edf: Closure, opacity: f32) -> Closure { return Closure(bsdf.color + edf.color, opacity); }
+`;
+
+// Surface shading prelude (T038): the BSDF closure result `{response, throughput}`,
+// the lighting context (directional lights + constant environment + view) injected
+// as a module-scope uniform, and the `surface` node that accumulates radiance by
+// looping over the lights. The per-lobe response here is a documented Lambert
+// foundation; T039 replaces it with the real microfacet _reflection/_transmission
+// evaluation and T040 adds EDF/VDF energetic composition.
+const SURFACE_PRELUDE = `const MX_MAX_LIGHTS: u32 = 4u;
+struct BSDF {
+  response: vec3f,
+  throughput: vec3f,
+};
+struct MxLight {
+  direction: vec4f,
+  color: vec4f,
+};
+struct MxLighting {
+  params: vec4f,
+  lights: array<MxLight, MX_MAX_LIGHTS>,
+};
+@group(0) @binding(1) var<uniform> mxLighting: MxLighting;
+fn mx_bsdf_response(albedo: vec3f, N: vec3f, L: vec3f) -> vec3f {
+  return albedo * max(dot(N, L), 0.0);
+}
+fn mx_surface(bsdf: Closure, edf: Closure, opacity: f32, N: vec3f, V: vec3f) -> Closure {
+  let albedo = bsdf.color * bsdf.weight;
+  let count = u32(mxLighting.params.x);
+  var acc = albedo * mxLighting.params.yzw;
+  for (var i = 0u; i < count; i = i + 1u) {
+    let dir = mxLighting.lights[i].direction.xyz;
+    let intensity = mxLighting.lights[i].direction.w;
+    let radiance = mxLighting.lights[i].color.rgb * intensity;
+    let L = normalize(-dir);
+    acc = acc + mx_bsdf_response(albedo, N, L) * radiance;
+  }
+  var result: BSDF;
+  result.response = acc + edf.color;
+  result.throughput = max(vec3f(1.0) - vec3f(bsdf.weight), vec3f(0.0));
+  return Closure(result.response, opacity);
+}
 `;
 
 const LUMINANCE_PRELUDE = `fn mx_luminance(c: vec3f) -> vec3f {
@@ -194,8 +234,8 @@ const fn2 = (name: string): NodeEmit => (inp) => `${name}(${inp.at(0)}, ${inp.at
 function expr(category: string, emit: NodeEmit, prelude?: string): NodeLowering {
   return prelude !== undefined ? { category, kind: 'expr', emit, prelude } : { category, kind: 'expr', emit };
 }
-function closure(category: string, emit: NodeEmit): NodeLowering {
-  return { category, kind: 'closure', emit };
+function closure(category: string, emit: NodeEmit, prelude?: string): NodeLowering {
+  return prelude !== undefined ? { category, kind: 'closure', emit, prelude } : { category, kind: 'closure', emit };
 }
 
 const LOWERINGS: readonly NodeLowering[] = [
@@ -294,7 +334,7 @@ const LOWERINGS: readonly NodeLowering[] = [
   ),
   closure('uniform_edf', (inp) => `mx_uniform_edf(${inp.named('color', 'vec3f(0.0)')})`),
   closure('generalized_schlick_edf', (inp) => `mx_generalized_schlick_edf(${inp.named('color', 'vec3f(0.0)')}, ${inp.named('tint', 'vec3f(1.0)')})`),
-  closure('surface', (inp) => `mx_surface(${inp.named('bsdf', 'mx_closure_zero()')}, ${inp.named('edf', 'mx_closure_zero()')}, ${inp.named('opacity', '1.0')})`),
+  closure('surface', (inp, _type, ctx) => `mx_surface(${inp.named('bsdf', 'mx_closure_zero()')}, ${inp.named('edf', 'mx_closure_zero()')}, ${inp.named('opacity', '1.0')}, ${ctx.varyings.normal}, ${ctx.varyings.viewDir})`, SURFACE_PRELUDE),
 ];
 
 export const NODE_REGISTRY: ReadonlyMap<string, NodeLowering> = new Map(LOWERINGS.map((l) => [l.category, l]));

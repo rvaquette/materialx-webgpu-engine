@@ -185,6 +185,54 @@ export interface NodeExecInputs extends ExecOverrides {
   params?: Readonly<Record<string, number | readonly number[]>>;
   /** One texel (RGBA) per declared texture, sampled as a 1x1 image. */
   textures?: Readonly<Record<string, readonly [number, number, number, number]>>;
+  /** Lighting context for surface nodes (directional lights + environment). */
+  lighting?: LightingInput;
+}
+
+export interface LightInput {
+  /** Direction the light travels (scene convention); L = normalize(-direction). */
+  direction: readonly [number, number, number];
+  color: readonly [number, number, number];
+  intensity: number;
+}
+
+export interface LightingInput {
+  /** Constant environment/ambient radiance. */
+  environment?: readonly [number, number, number];
+  lights?: readonly LightInput[];
+}
+
+/** Mirror of MX_MAX_LIGHTS in the WGSL surface prelude. */
+export const MX_MAX_LIGHTS = 4;
+
+export const DEFAULT_LIGHTING: Required<LightingInput> = {
+  environment: [0.03, 0.03, 0.03],
+  lights: [{ direction: [0, 0, -1], color: [1, 1, 1], intensity: 1 }],
+};
+
+/** Pack a LightingInput into the std140 MxLighting layout (params vec4 + MX_MAX_LIGHTS * MxLight). */
+export function packLighting(input: LightingInput = {}): ArrayBuffer {
+  const environment = input.environment ?? DEFAULT_LIGHTING.environment;
+  const lights = input.lights ?? DEFAULT_LIGHTING.lights;
+  const count = Math.min(lights.length, MX_MAX_LIGHTS);
+  const data = new Float32Array(4 + MX_MAX_LIGHTS * 8);
+  data[0] = count;
+  data[1] = environment[0];
+  data[2] = environment[1];
+  data[3] = environment[2];
+  for (let i = 0; i < count; i++) {
+    const base = 4 + i * 8;
+    const l = lights[i]!;
+    data[base] = l.direction[0];
+    data[base + 1] = l.direction[1];
+    data[base + 2] = l.direction[2];
+    data[base + 3] = l.intensity;
+    data[base + 4] = l.color[0];
+    data[base + 5] = l.color[1];
+    data[base + 6] = l.color[2];
+    data[base + 7] = 0;
+  }
+  return data.buffer;
 }
 
 const STD140_ALIGN: Readonly<Record<string, number>> = { f32: 4, i32: 4, vec2f: 8, vec3f: 16, vec4f: 16 };
@@ -247,16 +295,23 @@ export async function runNodeOnGpu(
   const cleanup: GPUTexture[] = [];
   const bindGroups: { index: number; group: GPUBindGroup }[] = [];
 
-  if (module.uniforms.length > 0) {
-    const data = packParams(module, inputs.params ?? {});
-    const ubo = device.createBuffer({ size: data.byteLength, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
-    device.queue.writeBuffer(ubo, 0, data);
+  if (module.uniforms.length > 0 || module.lighting) {
+    const entries: GPUBindGroupEntry[] = [];
+    if (module.uniforms.length > 0) {
+      const data = packParams(module, inputs.params ?? {});
+      const ubo = device.createBuffer({ size: data.byteLength, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+      device.queue.writeBuffer(ubo, 0, data);
+      entries.push({ binding: 0, resource: { buffer: ubo } });
+    }
+    if (module.lighting) {
+      const data = packLighting(inputs.lighting);
+      const lbo = device.createBuffer({ size: data.byteLength, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+      device.queue.writeBuffer(lbo, 0, data);
+      entries.push({ binding: module.lighting.binding, resource: { buffer: lbo } });
+    }
     bindGroups.push({
       index: 0,
-      group: device.createBindGroup({
-        layout: pipeline.getBindGroupLayout(0),
-        entries: [{ binding: 0, resource: { buffer: ubo } }],
-      }),
+      group: device.createBindGroup({ layout: pipeline.getBindGroupLayout(0), entries }),
     });
   }
   if (module.textures.length > 0) {

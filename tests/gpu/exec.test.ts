@@ -7,6 +7,9 @@ import {
   collectVaryingFields,
   composeComputeModule,
   outputComponentCount,
+  packLighting,
+  DEFAULT_LIGHTING,
+  MX_MAX_LIGHTS,
 } from '../../src/gpu/exec.ts';
 
 function countChar(s: string, c: string): number {
@@ -83,5 +86,40 @@ describe('composeComputeModule', () => {
     const code = composeComputeModule(emitWgsl(ir), collectVaryingFields(ir));
     expect(code).toContain('mxResult[0] = mxOut.out.color.x;');
     expect(code).toContain('mxResult[3] = mxOut.out.weight;');
+  });
+});
+
+describe('packLighting (T038)', () => {
+  it('packs the default directional light and environment into std140 layout', () => {
+    const data = new Float32Array(packLighting());
+    // params.x = light count, params.yzw = environment.
+    expect(data[0]).toBe(1);
+    expect(data[1]).toBeCloseTo(DEFAULT_LIGHTING.environment[0]!, 6);
+    expect(data[2]).toBeCloseTo(DEFAULT_LIGHTING.environment[1]!, 6);
+    expect(data[3]).toBeCloseTo(DEFAULT_LIGHTING.environment[2]!, 6);
+    // First light: direction.xyz, direction.w = intensity, color.rgb.
+    expect([data[4], data[5], data[6]]).toEqual([0, 0, -1]);
+    expect(data[7]).toBe(1);
+    expect([data[8], data[9], data[10]]).toEqual([1, 1, 1]);
+  });
+
+  it('allocates a fixed MX_MAX_LIGHTS array and clamps overflow', () => {
+    const many = Array.from({ length: MX_MAX_LIGHTS + 3 }, () => ({
+      direction: [0, -1, 0] as const,
+      color: [1, 1, 1] as const,
+      intensity: 2,
+    }));
+    const data = new Float32Array(packLighting({ lights: many }));
+    expect(data.length).toBe(4 + MX_MAX_LIGHTS * 8);
+    expect(data[0]).toBe(MX_MAX_LIGHTS);
+  });
+
+  it('exposes the lighting binding for a surface module', () => {
+    const ir = buildNodeIr(NODE_CASES.find((c) => c.category === 'surface')!);
+    const module = emitWgsl(ir);
+    expect(module.lighting).toEqual({ group: 0, binding: 1 });
+    const code = composeComputeModule(module, collectVaryingFields(ir));
+    expect(code).toContain('struct MxLighting');
+    expect(code).toContain(`fn ${COMPUTE_ENTRY}()`);
   });
 });

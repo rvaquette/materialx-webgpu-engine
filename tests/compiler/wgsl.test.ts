@@ -87,3 +87,33 @@ describe('emitWgsl', () => {
     expect(emitWgsl(b.build()).code).toContain('vec3f(1.0, 0.25, 0.0)');
   });
 });
+
+describe('surface closure model (T038)', () => {
+  it('injects the BSDF struct and lighting context and loops over lights', () => {
+    const m = emitWgsl(sampleIr());
+    // BSDF closure result + lighting context are declared in the shader.
+    expect(m.code).toContain('struct BSDF');
+    expect(m.code).toContain('response: vec3f');
+    expect(m.code).toContain('throughput: vec3f');
+    expect(m.code).toContain('struct MxLighting');
+    expect(m.code).toContain('@group(0) @binding(1) var<uniform> mxLighting: MxLighting;');
+    // The surface node accumulates radiance by looping over the lights.
+    expect(m.code).toContain('for (var i = 0u; i < count; i = i + 1u)');
+    expect(m.code).toContain('mx_bsdf_response(');
+    // The surface node receives the view and normal from the varyings.
+    expect(m.code).toContain('mx_surface(');
+    expect(m.code).toContain('vary.normal, vary.viewDir)');
+    // Lighting metadata is reported for the binder.
+    expect(m.lighting).toEqual({ group: 0, binding: 1 });
+  });
+
+  it('omits the lighting context for shaders without a surface node', () => {
+    const b = new IrModuleBuilder();
+    const c = b.constant(COLOR3, [0.5, 0.5, 0.5]);
+    b.output({ name: 'out', type: COLOR3, ref: c });
+    const m = emitWgsl(b.build());
+    expect(m.lighting).toBeUndefined();
+    expect(m.code).not.toContain('mxLighting');
+    expect(m.code).not.toContain('struct BSDF');
+  });
+});

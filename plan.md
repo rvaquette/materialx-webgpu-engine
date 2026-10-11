@@ -422,9 +422,11 @@ se valide par typecheck + tests Node, puis par execution GPU reelle d'abord sur
 le GPU local (poste de dev, Chrome WebGPU via CDP sans adb) et ensuite sur le
 mobile cible ; aucune closure ne reste un stub `color * weight`. L'execution
 locale est le pendant GPU des tests CPU locaux : elle tourne a chaque run, le
-mobile confirme sur le GPU cible reel.
+mobile confirme sur le GPU cible reel. Le run local sans adb passe par
+scripts/run-local-corpus.mjs (npm run test:local-gpu : Chrome + CDP port 9222)
+et le run mobile par scripts/run-device-corpus.mjs (npm run test:device).
 
-- [ ] T038 [Plan:P8] Etendre le modele de closure dans l'IR et le backend : struct WGSL `BSDF { response, throughput }`, contexte d'eclairage (lumieres directionnelles + environnement + vue) injecte dans le shader genere, et accumulation de radiance par boucle sur les lumieres dans le noeud `surface`. src/compiler/ir.ts, src/compiler/wgsl.ts, src/gpu/exec.ts ; tests JS de composition dans tests/compiler/ et tests/gpu/.
+- [x] T038 [Plan:P8] Etendre le modele de closure dans l'IR et le backend : struct WGSL `BSDF { response, throughput }`, contexte d'eclairage (lumieres directionnelles + environnement + vue) injecte dans le shader genere, et accumulation de radiance par boucle sur les lumieres dans le noeud `surface`. src/compiler/ir.ts, src/compiler/wgsl.ts, src/gpu/exec.ts ; tests JS de composition dans tests/compiler/ et tests/gpu/. Valide GPU reel : local Intel gen-12lp 27/27 + mobile Adreno 7xx 27/27, oracle 29/29 sur les deux (surface -> 0,0,0,1, binding mxLighting OK).
 - [ ] T039 [Plan:P8] Implementer les lobes BSDF reels en WGSL (fonctions `_reflection` / `_transmission` prenant L, V, N) dans src/compiler/nodes.ts : diffus Oren-Nayar et Burley ; GGX diielectrique (distribution GGX, Smith, Fresnel dielectrique) ; GGX conducteur (Fresnel complexe ior/extinction) ; sheen ; subsurface (approximation raster declaree) ; translucent. Remplacer les stubs du prelude.
 - [ ] T040 [Plan:P8] Implementer EDF (uniform_edf, generalized_schlick_edf) et VDF (anisotropic_vdf) reels, et la composition energetique des closures (layer avec couplage par throughput, add, mix, multiply) dans src/compiler/nodes.ts et src/compiler/wgsl.ts.
 - [ ] T041 [Plan:P8] Ecrire une reference analytique CPU independante de chaque lobe/EDF/VDF (memes formules, implementation separee des stubs et du WGSL) dans src/render/bsdf/ ; tests unitaires JS dans tests/render/bsdf/.

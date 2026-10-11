@@ -14,6 +14,7 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:local-gpu": "node scripts/run-local-corpus.mjs",
     "test:device": "node scripts/run-device-corpus.mjs",
     "test:scene-device": "node scripts/run-scene-device.mjs",
     "build:fixtures": "node scripts/build-shaderball-fixture.mjs && node scripts/build-scene-materials.mjs",
