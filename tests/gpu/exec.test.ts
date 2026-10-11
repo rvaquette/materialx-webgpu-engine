@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { NODE_CASES } from '../fixtures/node-cases.ts';
 import { buildNodeIr, isRunnableOnGpu } from '../fixtures/node-ir.ts';
 import { emitWgsl } from '../../src/compiler/wgsl.ts';
+import { IrModuleBuilder, closureType, shaderType } from '../../src/compiler/ir.ts';
 import {
   COMPUTE_ENTRY,
   collectVaryingFields,
@@ -114,8 +115,24 @@ describe('packLighting (T038)', () => {
     expect(data[0]).toBe(MX_MAX_LIGHTS);
   });
 
-  it('exposes the lighting binding for a surface module', () => {
-    const ir = buildNodeIr(NODE_CASES.find((c) => c.category === 'surface')!);
+  it('exposes the lighting binding for a surface with a real BSDF lobe', () => {
+    const b = new IrModuleBuilder();
+    const diffuse = b.add({
+      kind: 'closure',
+      type: closureType('bsdf'),
+      closure: 'bsdf',
+      op: 'oren_nayar_diffuse_bsdf',
+      params: {},
+    });
+    const surface = b.add({
+      kind: 'closure',
+      type: shaderType('surface'),
+      closure: 'bsdf',
+      op: 'surface',
+      params: { bsdf: diffuse },
+    });
+    b.output({ name: 'surfaceshader', type: shaderType('surface'), ref: surface });
+    const ir = b.build();
     const module = emitWgsl(ir);
     expect(module.lighting).toEqual({ group: 0, binding: 1 });
     const code = composeComputeModule(module, collectVaryingFields(ir));

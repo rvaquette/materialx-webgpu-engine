@@ -52,35 +52,16 @@ fn mx_closure_add(a: Closure, b: Closure) -> Closure { return Closure(a.color + 
 fn mx_closure_mul(a: Closure, w: vec3f) -> Closure { return Closure(a.color * w, a.weight); }
 fn mx_closure_mix(a: Closure, b: Closure, t: f32) -> Closure { return Closure(mix(a.color, b.color, t), mix(a.weight, b.weight, t)); }
 fn mx_layer(top: Closure, base: Closure) -> Closure { return Closure(top.color + base.color * (1.0 - top.weight), max(top.weight, base.weight)); }
-fn mx_oren_nayar_diffuse_bsdf(weight: f32, color: vec3f, roughness: f32, normal: vec3f) -> Closure { return Closure(color * weight, weight); }
-fn mx_burley_diffuse_bsdf(weight: f32, color: vec3f, roughness: f32, normal: vec3f) -> Closure { return Closure(color * weight, weight); }
-fn mx_translucent_bsdf(weight: f32, color: vec3f, normal: vec3f) -> Closure { return Closure(color * weight, weight); }
-fn mx_dielectric_bsdf(weight: f32, tint: vec3f, ior: f32, roughness: f32, normal: vec3f) -> Closure {
-  let r = (ior - 1.0) / (ior + 1.0);
-  let f = clamp(r * r, 0.0, 1.0);
-  return Closure(tint * (weight * f), weight * f);
-}
-fn mx_conductor_bsdf(weight: f32, ior: vec3f, extinction: vec3f, roughness: f32, normal: vec3f) -> Closure { return Closure(ior * weight, weight); }
-fn mx_generalized_schlick_bsdf(weight: f32, color0: vec3f, color90: vec3f, roughness: f32, normal: vec3f) -> Closure { return Closure(mix(color0, color90, roughness) * weight, weight); }
-fn mx_sheen_bsdf(weight: f32, color: vec3f, roughness: f32, normal: vec3f) -> Closure { return Closure(color * weight, weight); }
-fn mx_subsurface_bsdf(weight: f32, color: vec3f, radius: vec3f, normal: vec3f) -> Closure { return Closure(color * weight, weight); }
 fn mx_chiang_hair_bsdf(weight: f32, color: vec3f, roughness: vec2f) -> Closure { return Closure(color * weight, weight); }
 fn mx_uniform_edf(color: vec3f) -> Closure { return Closure(color, 1.0); }
 fn mx_generalized_schlick_edf(color: vec3f, tint: vec3f) -> Closure { return Closure(color * tint, 1.0); }
 fn mx_anisotropic_vdf(absorption: vec3f, scattering: vec3f, anisotropy: f32) -> Closure { return Closure(scattering - absorption, 1.0); }
 `;
 
-// Surface shading prelude (T038): the BSDF closure result `{response, throughput}`,
-// the lighting context (directional lights + constant environment + view) injected
-// as a module-scope uniform, and the `surface` node that accumulates radiance by
-// looping over the lights. The per-lobe response here is a documented Lambert
-// foundation; T039 replaces it with the real microfacet _reflection/_transmission
-// evaluation and T040 adds EDF/VDF energetic composition.
-const SURFACE_PRELUDE = `const MX_MAX_LIGHTS: u32 = 4u;
-struct BSDF {
-  response: vec3f,
-  throughput: vec3f,
-};
+// Lighting context (T038): directional lights + constant environment, packed by
+// src/gpu/exec.ts and bound at group(0) binding(1). Shared by the real BSDF lobes
+// (which integrate radiance over the lights, T039) and emitted once per module.
+export const LIGHTING_PRELUDE = `const MX_MAX_LIGHTS: u32 = 4u;
 struct MxLight {
   direction: vec4f,
   color: vec4f,
@@ -90,26 +71,215 @@ struct MxLighting {
   lights: array<MxLight, MX_MAX_LIGHTS>,
 };
 @group(0) @binding(1) var<uniform> mxLighting: MxLighting;
-fn mx_bsdf_response(albedo: vec3f, N: vec3f, L: vec3f) -> vec3f {
-  return albedo * max(dot(N, L), 0.0);
+`;
+
+// Real microfacet/diffuse BSDF lobes (T039). Each lobe evaluates its physical
+// reflection (or transmission) response integrated over the lighting context plus
+// a constant-environment ambient term, and returns a Closure whose `color` is the
+// integrated outgoing radiance and `weight` the lobe reflectance used for
+// layering/compositing. The microfacet model is GGX (Trowbridge-Reitz) with the
+// Smith separable masking-shadowing term; dielectric and generalized-Schlick use a
+// Schlick Fresnel, the conductor uses the unpolarized Fresnel for n/k. Subsurface
+// is a declared raster wrap-diffuse approximation; translucent is diffuse
+// transmission. Depends on CLOSURE_PRELUDE (Closure) and LIGHTING_PRELUDE.
+const BSDF_PRELUDE = `const MX_PI: f32 = 3.14159265359;
+fn mx_ggx_ndf(NdotH: f32, a: f32) -> f32 {
+  let a2 = a * a;
+  let d = NdotH * NdotH * (a2 - 1.0) + 1.0;
+  return a2 / max(MX_PI * d * d, 1e-7);
 }
-fn mx_surface(bsdf: Closure, edf: Closure, opacity: f32, N: vec3f, V: vec3f) -> Closure {
-  let albedo = bsdf.color * bsdf.weight;
+fn mx_smith_g1(NdotX: f32, a: f32) -> f32 {
+  let a2 = a * a;
+  return 2.0 * NdotX / max(NdotX + sqrt(a2 + (1.0 - a2) * NdotX * NdotX), 1e-7);
+}
+fn mx_fresnel_schlick(F0: vec3f, cosTheta: f32) -> vec3f {
+  return F0 + (vec3f(1.0) - F0) * pow(clamp(1.0 - cosTheta, 0.0, 1.0), 5.0);
+}
+fn mx_fresnel_schlick_f90(F0: vec3f, F90: vec3f, cosTheta: f32) -> vec3f {
+  return F0 + (F90 - F0) * pow(clamp(1.0 - cosTheta, 0.0, 1.0), 5.0);
+}
+fn mx_fresnel_conductor(n: vec3f, k: vec3f, cosTheta: f32) -> vec3f {
+  let c = clamp(cosTheta, 0.0, 1.0);
+  let c2 = c * c;
+  let n2k2 = n * n + k * k;
+  let two_nc = 2.0 * n * c;
+  let rs = (n2k2 - two_nc + c2) / (n2k2 + two_nc + c2);
+  let rp = (n2k2 * c2 - two_nc + 1.0) / (n2k2 * c2 + two_nc + 1.0);
+  return clamp(0.5 * (rs + rp), vec3f(0.0), vec3f(1.0));
+}
+fn mx_sheen_ndf(NdotH: f32, r: f32) -> f32 {
+  let inv = 1.0 / max(r, 1e-3);
+  let sin2 = max(1.0 - NdotH * NdotH, 0.0);
+  return (2.0 + inv) * pow(sin2, inv * 0.5) / (2.0 * MX_PI);
+}
+// GGX specular reflection integrand (f_r * NdotL, with NdotL folded against the 1/NdotL in f_r).
+fn mx_ggx_reflection(F: vec3f, a: f32, N: vec3f, V: vec3f, L: vec3f) -> vec3f {
+  let NdotL = max(dot(N, L), 0.0);
+  let NdotV = max(dot(N, V), 0.0);
+  if (NdotL <= 0.0 || NdotV <= 0.0) { return vec3f(0.0); }
+  let H = normalize(L + V);
+  let NdotH = max(dot(N, H), 0.0);
+  let D = mx_ggx_ndf(NdotH, a);
+  let G = mx_smith_g1(NdotL, a) * mx_smith_g1(NdotV, a);
+  return F * (D * G / (4.0 * NdotV));
+}
+fn mx_oren_nayar_diffuse_bsdf(weight: f32, color: vec3f, roughness: f32, N: vec3f, V: vec3f) -> Closure {
+  let sigma2 = clamp(roughness, 0.0, 1.0) * clamp(roughness, 0.0, 1.0);
+  let A = 1.0 - 0.5 * sigma2 / (sigma2 + 0.33);
+  let B = 0.45 * sigma2 / (sigma2 + 0.09);
+  let NdotV = max(dot(N, V), 1e-4);
   let count = u32(mxLighting.params.x);
-  var acc = albedo * mxLighting.params.yzw;
+  var acc = color * mxLighting.params.yzw;
   for (var i = 0u; i < count; i = i + 1u) {
-    let dir = mxLighting.lights[i].direction.xyz;
-    let intensity = mxLighting.lights[i].direction.w;
-    let radiance = mxLighting.lights[i].color.rgb * intensity;
-    let L = normalize(-dir);
-    acc = acc + mx_bsdf_response(albedo, N, L) * radiance;
+    let L = normalize(-mxLighting.lights[i].direction.xyz);
+    let radiance = mxLighting.lights[i].color.rgb * mxLighting.lights[i].direction.w;
+    let NdotL = max(dot(N, L), 0.0);
+    if (NdotL <= 0.0) { continue; }
+    let s = dot(L, V) - dot(N, L) * dot(N, V);
+    let t = select(1.0, max(NdotL, NdotV), s > 0.0);
+    acc = acc + color * ((A + B * s / t) * NdotL / MX_PI) * radiance;
   }
+  return Closure(acc * weight, weight);
+}
+fn mx_burley_diffuse_bsdf(weight: f32, color: vec3f, roughness: f32, N: vec3f, V: vec3f) -> Closure {
+  let NdotV = max(dot(N, V), 1e-4);
+  let count = u32(mxLighting.params.x);
+  var acc = color * mxLighting.params.yzw;
+  for (var i = 0u; i < count; i = i + 1u) {
+    let L = normalize(-mxLighting.lights[i].direction.xyz);
+    let radiance = mxLighting.lights[i].color.rgb * mxLighting.lights[i].direction.w;
+    let NdotL = max(dot(N, L), 0.0);
+    if (NdotL <= 0.0) { continue; }
+    let H = normalize(L + V);
+    let LdotH = max(dot(L, H), 0.0);
+    let fd90 = 0.5 + 2.0 * roughness * LdotH * LdotH;
+    let fl = pow(1.0 - NdotL, 5.0);
+    let fv = pow(1.0 - NdotV, 5.0);
+    let fd = (1.0 + (fd90 - 1.0) * fl) * (1.0 + (fd90 - 1.0) * fv);
+    acc = acc + color * (fd * NdotL / MX_PI) * radiance;
+  }
+  return Closure(acc * weight, weight);
+}
+fn mx_translucent_bsdf(weight: f32, color: vec3f, N: vec3f, V: vec3f) -> Closure {
+  let count = u32(mxLighting.params.x);
+  var acc = color * mxLighting.params.yzw;
+  for (var i = 0u; i < count; i = i + 1u) {
+    let L = normalize(-mxLighting.lights[i].direction.xyz);
+    let radiance = mxLighting.lights[i].color.rgb * mxLighting.lights[i].direction.w;
+    let NdotL = max(dot(-N, L), 0.0);
+    acc = acc + color * (NdotL / MX_PI) * radiance;
+  }
+  return Closure(acc * weight, weight);
+}
+fn mx_dielectric_bsdf(weight: f32, tint: vec3f, ior: f32, roughness: f32, N: vec3f, V: vec3f) -> Closure {
+  let a = max(roughness * roughness, 1e-3);
+  let r = (ior - 1.0) / (ior + 1.0);
+  let F0 = vec3f(clamp(r * r, 0.0, 1.0));
+  let count = u32(mxLighting.params.x);
+  var acc = tint * F0 * mxLighting.params.yzw;
+  for (var i = 0u; i < count; i = i + 1u) {
+    let L = normalize(-mxLighting.lights[i].direction.xyz);
+    let radiance = mxLighting.lights[i].color.rgb * mxLighting.lights[i].direction.w;
+    let H = normalize(L + V);
+    let VdotH = max(dot(V, H), 0.0);
+    let F = mx_fresnel_schlick(F0, VdotH);
+    acc = acc + tint * mx_ggx_reflection(F, a, N, V, L) * radiance;
+  }
+  return Closure(acc * weight, weight);
+}
+fn mx_conductor_bsdf(weight: f32, ior: vec3f, extinction: vec3f, roughness: f32, N: vec3f, V: vec3f) -> Closure {
+  let a = max(roughness * roughness, 1e-3);
+  let count = u32(mxLighting.params.x);
+  var acc = mx_fresnel_conductor(ior, extinction, 1.0) * mxLighting.params.yzw;
+  for (var i = 0u; i < count; i = i + 1u) {
+    let L = normalize(-mxLighting.lights[i].direction.xyz);
+    let radiance = mxLighting.lights[i].color.rgb * mxLighting.lights[i].direction.w;
+    let H = normalize(L + V);
+    let VdotH = max(dot(V, H), 0.0);
+    let F = mx_fresnel_conductor(ior, extinction, VdotH);
+    acc = acc + mx_ggx_reflection(F, a, N, V, L) * radiance;
+  }
+  return Closure(acc * weight, weight);
+}
+fn mx_generalized_schlick_bsdf(weight: f32, color0: vec3f, color90: vec3f, roughness: f32, N: vec3f, V: vec3f) -> Closure {
+  let a = max(roughness * roughness, 1e-3);
+  let count = u32(mxLighting.params.x);
+  var acc = color0 * mxLighting.params.yzw;
+  for (var i = 0u; i < count; i = i + 1u) {
+    let L = normalize(-mxLighting.lights[i].direction.xyz);
+    let radiance = mxLighting.lights[i].color.rgb * mxLighting.lights[i].direction.w;
+    let H = normalize(L + V);
+    let VdotH = max(dot(V, H), 0.0);
+    let F = mx_fresnel_schlick_f90(color0, color90, VdotH);
+    acc = acc + mx_ggx_reflection(F, a, N, V, L) * radiance;
+  }
+  return Closure(acc * weight, weight);
+}
+fn mx_sheen_bsdf(weight: f32, color: vec3f, roughness: f32, N: vec3f, V: vec3f) -> Closure {
+  let r = clamp(roughness, 1e-3, 1.0);
+  let NdotV = max(dot(N, V), 1e-4);
+  let count = u32(mxLighting.params.x);
+  var acc = color * mxLighting.params.yzw;
+  for (var i = 0u; i < count; i = i + 1u) {
+    let L = normalize(-mxLighting.lights[i].direction.xyz);
+    let radiance = mxLighting.lights[i].color.rgb * mxLighting.lights[i].direction.w;
+    let NdotL = max(dot(N, L), 0.0);
+    if (NdotL <= 0.0) { continue; }
+    let H = normalize(L + V);
+    let NdotH = max(dot(N, H), 0.0);
+    let D = mx_sheen_ndf(NdotH, r);
+    let vis = 1.0 / (4.0 * (NdotL + NdotV - NdotL * NdotV));
+    acc = acc + color * (D * vis * NdotL) * radiance;
+  }
+  return Closure(acc * weight, weight);
+}
+fn mx_subsurface_bsdf(weight: f32, color: vec3f, radius: vec3f, N: vec3f, V: vec3f) -> Closure {
+  let wrap = 0.5;
+  let count = u32(mxLighting.params.x);
+  var acc = color * mxLighting.params.yzw;
+  for (var i = 0u; i < count; i = i + 1u) {
+    let L = normalize(-mxLighting.lights[i].direction.xyz);
+    let radiance = mxLighting.lights[i].color.rgb * mxLighting.lights[i].direction.w;
+    let wrapped = max((dot(N, L) + wrap) / (1.0 + wrap), 0.0);
+    acc = acc + color * (wrapped / MX_PI) * radiance;
+  }
+  return Closure(acc * weight, weight);
+}
+`;
+
+// Surface shading prelude (T038/T039): the BSDF closure result `{response, throughput}`
+// and the `surface` node. The real lobes (BSDF_PRELUDE) already integrate radiance
+// over the lights, so `surface` composes the accumulated reflection with the EDF
+// emission and carries opacity; T040 adds EDF/VDF energetic composition.
+const SURFACE_PRELUDE = `struct BSDF {
+  response: vec3f,
+  throughput: vec3f,
+};
+fn mx_surface(bsdf: Closure, edf: Closure, opacity: f32) -> Closure {
   var result: BSDF;
-  result.response = acc + edf.color;
+  result.response = bsdf.color + edf.color;
   result.throughput = max(vec3f(1.0) - vec3f(bsdf.weight), vec3f(0.0));
   return Closure(result.response, opacity);
 }
 `;
+
+// Closure ops that read the lighting context (and therefore require LIGHTING_PRELUDE
+// plus the group(0) binding(1) uniform): the real BSDF lobes that integrate over lights.
+const LIGHTING_CLOSURE_OPS: ReadonlySet<string> = new Set([
+  'oren_nayar_diffuse_bsdf',
+  'burley_diffuse_bsdf',
+  'translucent_bsdf',
+  'dielectric_bsdf',
+  'conductor_bsdf',
+  'generalized_schlick_bsdf',
+  'sheen_bsdf',
+  'subsurface_bsdf',
+]);
+
+/** True when a closure op reads the lighting context uniform (real BSDF lobes). */
+export function closureUsesLighting(op: string): boolean {
+  return LIGHTING_CLOSURE_OPS.has(op);
+}
 
 const LUMINANCE_PRELUDE = `fn mx_luminance(c: vec3f) -> vec3f {
   let l = dot(c, vec3f(0.2722287, 0.6740818, 0.0536895));
@@ -294,35 +464,43 @@ const LOWERINGS: readonly NodeLowering[] = [
   // closures (BSDF / EDF / VDF / surface)
   closure(
     'oren_nayar_diffuse_bsdf',
-    (inp, _type, ctx) => `mx_oren_nayar_diffuse_bsdf(${inp.named('weight', '1.0')}, ${inp.named('color', 'vec3f(0.18)')}, ${inp.named('roughness', '0.0')}, ${inp.named('normal', ctx.varyings.normal)})`,
+    (inp, _type, ctx) => `mx_oren_nayar_diffuse_bsdf(${inp.named('weight', '1.0')}, ${inp.named('color', 'vec3f(0.18)')}, ${inp.named('roughness', '0.0')}, ${inp.named('normal', ctx.varyings.normal)}, ${ctx.varyings.viewDir})`,
+    BSDF_PRELUDE,
   ),
   closure(
     'burley_diffuse_bsdf',
-    (inp, _type, ctx) => `mx_burley_diffuse_bsdf(${inp.named('weight', '1.0')}, ${inp.named('color', 'vec3f(0.18)')}, ${inp.named('roughness', '0.0')}, ${inp.named('normal', ctx.varyings.normal)})`,
+    (inp, _type, ctx) => `mx_burley_diffuse_bsdf(${inp.named('weight', '1.0')}, ${inp.named('color', 'vec3f(0.18)')}, ${inp.named('roughness', '0.0')}, ${inp.named('normal', ctx.varyings.normal)}, ${ctx.varyings.viewDir})`,
+    BSDF_PRELUDE,
   ),
   closure(
     'translucent_bsdf',
-    (inp, _type, ctx) => `mx_translucent_bsdf(${inp.named('weight', '1.0')}, ${inp.named('color', 'vec3f(1.0)')}, ${inp.named('normal', ctx.varyings.normal)})`,
+    (inp, _type, ctx) => `mx_translucent_bsdf(${inp.named('weight', '1.0')}, ${inp.named('color', 'vec3f(1.0)')}, ${inp.named('normal', ctx.varyings.normal)}, ${ctx.varyings.viewDir})`,
+    BSDF_PRELUDE,
   ),
   closure(
     'dielectric_bsdf',
-    (inp, _type, ctx) => `mx_dielectric_bsdf(${inp.named('weight', '1.0')}, ${inp.named('tint', 'vec3f(1.0)')}, ${inp.named('ior', '1.5')}, ${inp.named('roughness', '0.0')}, ${inp.named('normal', ctx.varyings.normal)})`,
+    (inp, _type, ctx) => `mx_dielectric_bsdf(${inp.named('weight', '1.0')}, ${inp.named('tint', 'vec3f(1.0)')}, ${inp.named('ior', '1.5')}, ${inp.named('roughness', '0.0')}, ${inp.named('normal', ctx.varyings.normal)}, ${ctx.varyings.viewDir})`,
+    BSDF_PRELUDE,
   ),
   closure(
     'conductor_bsdf',
-    (inp, _type, ctx) => `mx_conductor_bsdf(${inp.named('weight', '1.0')}, ${inp.named('ior', 'vec3f(0.18)')}, ${inp.named('extinction', 'vec3f(3.0)')}, ${inp.named('roughness', '0.0')}, ${inp.named('normal', ctx.varyings.normal)})`,
+    (inp, _type, ctx) => `mx_conductor_bsdf(${inp.named('weight', '1.0')}, ${inp.named('ior', 'vec3f(0.18)')}, ${inp.named('extinction', 'vec3f(3.0)')}, ${inp.named('roughness', '0.0')}, ${inp.named('normal', ctx.varyings.normal)}, ${ctx.varyings.viewDir})`,
+    BSDF_PRELUDE,
   ),
   closure(
     'generalized_schlick_bsdf',
-    (inp, _type, ctx) => `mx_generalized_schlick_bsdf(${inp.named('weight', '1.0')}, ${inp.named('color0', 'vec3f(1.0)')}, ${inp.named('color90', 'vec3f(1.0)')}, ${inp.named('roughness', '0.0')}, ${inp.named('normal', ctx.varyings.normal)})`,
+    (inp, _type, ctx) => `mx_generalized_schlick_bsdf(${inp.named('weight', '1.0')}, ${inp.named('color0', 'vec3f(1.0)')}, ${inp.named('color90', 'vec3f(1.0)')}, ${inp.named('roughness', '0.0')}, ${inp.named('normal', ctx.varyings.normal)}, ${ctx.varyings.viewDir})`,
+    BSDF_PRELUDE,
   ),
   closure(
     'sheen_bsdf',
-    (inp, _type, ctx) => `mx_sheen_bsdf(${inp.named('weight', '1.0')}, ${inp.named('color', 'vec3f(1.0)')}, ${inp.named('roughness', '0.3')}, ${inp.named('normal', ctx.varyings.normal)})`,
+    (inp, _type, ctx) => `mx_sheen_bsdf(${inp.named('weight', '1.0')}, ${inp.named('color', 'vec3f(1.0)')}, ${inp.named('roughness', '0.3')}, ${inp.named('normal', ctx.varyings.normal)}, ${ctx.varyings.viewDir})`,
+    BSDF_PRELUDE,
   ),
   closure(
     'subsurface_bsdf',
-    (inp, _type, ctx) => `mx_subsurface_bsdf(${inp.named('weight', '1.0')}, ${inp.named('color', 'vec3f(1.0)')}, ${inp.named('radius', 'vec3f(1.0)')}, ${inp.named('normal', ctx.varyings.normal)})`,
+    (inp, _type, ctx) => `mx_subsurface_bsdf(${inp.named('weight', '1.0')}, ${inp.named('color', 'vec3f(1.0)')}, ${inp.named('radius', 'vec3f(1.0)')}, ${inp.named('normal', ctx.varyings.normal)}, ${ctx.varyings.viewDir})`,
+    BSDF_PRELUDE,
   ),
   closure(
     'chiang_hair_bsdf',
@@ -334,7 +512,7 @@ const LOWERINGS: readonly NodeLowering[] = [
   ),
   closure('uniform_edf', (inp) => `mx_uniform_edf(${inp.named('color', 'vec3f(0.0)')})`),
   closure('generalized_schlick_edf', (inp) => `mx_generalized_schlick_edf(${inp.named('color', 'vec3f(0.0)')}, ${inp.named('tint', 'vec3f(1.0)')})`),
-  closure('surface', (inp, _type, ctx) => `mx_surface(${inp.named('bsdf', 'mx_closure_zero()')}, ${inp.named('edf', 'mx_closure_zero()')}, ${inp.named('opacity', '1.0')}, ${ctx.varyings.normal}, ${ctx.varyings.viewDir})`, SURFACE_PRELUDE),
+  closure('surface', (inp) => `mx_surface(${inp.named('bsdf', 'mx_closure_zero()')}, ${inp.named('edf', 'mx_closure_zero()')}, ${inp.named('opacity', '1.0')})`, SURFACE_PRELUDE),
 ];
 
 export const NODE_REGISTRY: ReadonlyMap<string, NodeLowering> = new Map(LOWERINGS.map((l) => [l.category, l]));

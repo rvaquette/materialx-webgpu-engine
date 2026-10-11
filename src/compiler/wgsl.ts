@@ -13,6 +13,8 @@ import type {
 } from './ir.ts';
 import {
   CLOSURE_PRELUDE,
+  LIGHTING_PRELUDE,
+  closureUsesLighting,
   getNodeLowering,
   type NodeEmitContext,
   type NodeInputs,
@@ -271,8 +273,11 @@ export function emitWgsl(ir: ShaderIr): WgslModule {
       case 'closure': {
         const lowering = getNodeLowering(expr.op);
         if (!lowering) throw new WgslEmitError(`no WGSL lowering for closure '${expr.op}'`);
+        if (closureUsesLighting(expr.op)) {
+          preludes.add(LIGHTING_PRELUDE);
+          usesLighting = true;
+        }
         if (lowering.prelude) preludes.add(lowering.prelude);
-        if (expr.op === 'surface') usesLighting = true;
         const named: Record<string, string> = {};
         for (const [k, v] of Object.entries(expr.params)) named[k] = varName(v);
         rhs = lowering.emit(makeInputs([], named), expr.type, ctx);
