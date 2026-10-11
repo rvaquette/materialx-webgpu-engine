@@ -61,13 +61,15 @@ function wgslOf(type: IrType): string {
 
 /** Collect the dynamic MxVaryings fields (primvars + non-varying inputs) the emitter adds. */
 export function collectVaryingFields(ir: ShaderIr): VaryingFields {
-  const primvars: VaryingField[] = ir.primvars.map((p) => ({
-    name: p.name,
-    wgslType: wgslOf(p.type),
-    width: widthOf(p.type),
-  }));
+  // Mirror emitWgsl: v_<name> comes from 'primvar' expr nodes, in_<name> from non-varying 'input' nodes.
+  const primvars: VaryingField[] = [];
   const inputs: VaryingField[] = [];
   for (const expr of ir.exprs.values()) {
+    if (expr.kind === 'primvar') {
+      if (primvars.some((p) => p.name === expr.name)) continue;
+      primvars.push({ name: expr.name, wgslType: wgslOf(expr.type), width: widthOf(expr.type) });
+      continue;
+    }
     if (expr.kind !== 'input') continue;
     const lower = expr.name.toLowerCase();
     if (KNOWN_VARYINGS.has(lower) || isViewName(lower)) continue;
@@ -260,12 +262,14 @@ export async function runNodeOnGpu(
   if (module.textures.length > 0) {
     const entries: GPUBindGroupEntry[] = module.textures.map((t) => {
       const texel = inputs.textures?.[t.name] ?? [0, 0, 0, 1];
+      // rgba8unorm is filterable on every device; rgba32float needs float32-filterable (absent on most mobile GPUs).
       const texture = device.createTexture({
         size: [1, 1],
-        format: 'rgba32float',
+        format: 'rgba8unorm',
         usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
       });
-      device.queue.writeTexture({ texture }, new Float32Array(texel), { bytesPerRow: 16 }, [1, 1]);
+      const bytes = Uint8Array.from(texel, (c) => Math.round(Math.min(Math.max(c, 0), 1) * 255));
+      device.queue.writeTexture({ texture }, bytes, { bytesPerRow: 4 }, [1, 1]);
       cleanup.push(texture);
       return { binding: t.binding, resource: texture.createView() };
     });

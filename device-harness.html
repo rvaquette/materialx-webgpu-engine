@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>MaterialX corpus - harnais GPU device</title>
+    <style>
+      body { font-family: system-ui, sans-serif; margin: 1rem; }
+      table { border-collapse: collapse; font-family: monospace; font-size: 12px; }
+      td { padding: 2px 6px; }
+    </style>
+  </head>
+  <body>
+    <h1>Harnais GPU device (corpus MaterialX)</h1>
+    <div id="log"></div>
+    <script type="module">
+      import { bootstrap } from '/tests/render/corpus-device.harness.ts';
+      bootstrap().catch((e) => {
+        const p = document.createElement('p');
+        p.textContent = 'Echec: ' + (e && e.message ? e.message : e);
+        document.body.appendChild(p);
+      });
+    </script>
+  </body>
+</html>

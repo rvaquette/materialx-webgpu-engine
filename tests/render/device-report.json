@@ -1,0 +1,275 @@
+{
+  "userAgent": "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Mobile Safari/537.36",
+  "adapter": {
+    "vendor": "qualcomm",
+    "architecture": "adreno-7xx",
+    "device": "",
+    "description": ""
+  },
+  "results": [
+    {
+      "category": "add",
+      "exec": "expr",
+      "out": "vec3f",
+      "output": [
+        0.30000001192092896,
+        0.8999999761581421,
+        1.0499999523162842
+      ]
+    },
+    {
+      "category": "subtract",
+      "exec": "expr",
+      "out": "vec3f",
+      "output": [
+        0.10000000149011612,
+        0.09999999403953552,
+        0.550000011920929
+      ]
+    },
+    {
+      "category": "multiply",
+      "exec": "expr",
+      "out": "vec3f",
+      "output": [
+        0.020000001415610313,
+        0.20000000298023224,
+        0.20000000298023224
+      ]
+    },
+    {
+      "category": "divide",
+      "exec": "expr",
+      "out": "vec3f",
+      "output": [
+        2,
+        1.25,
+        3.200000047683716
+      ]
+    },
+    {
+      "category": "power",
+      "exec": "expr",
+      "out": "vec3f",
+      "output": [
+        0.8513399362564087,
+        0.7578582763671875,
+        0.945741593837738
+      ]
+    },
+    {
+      "category": "max",
+      "exec": "expr",
+      "out": "vec3f",
+      "output": [
+        0.20000000298023224,
+        0.5,
+        0.800000011920929
+      ]
+    },
+    {
+      "category": "clamp",
+      "exec": "expr",
+      "out": "vec3f",
+      "output": [
+        0.20000000298023224,
+        0.5,
+        0.6000000238418579
+      ]
+    },
+    {
+      "category": "sin",
+      "exec": "expr",
+      "out": "vec3f",
+      "output": [
+        0.19866932928562164,
+        0.4794255495071411,
+        0.7173560857772827
+      ]
+    },
+    {
+      "category": "dotproduct",
+      "exec": "expr",
+      "out": "f32",
+      "output": [
+        0.42000001668930054
+      ]
+    },
+    {
+      "category": "mix",
+      "exec": "expr",
+      "out": "vec3f",
+      "output": [
+        0.125,
+        0.42500001192092896,
+        0.38749998807907104
+      ]
+    },
+    {
+      "category": "extract",
+      "exec": "expr",
+      "out": "f32",
+      "output": [
+        0.5
+      ]
+    },
+    {
+      "category": "combine3",
+      "exec": "expr",
+      "out": "vec3f",
+      "output": [
+        0.20000000298023224,
+        0.5,
+        0.800000011920929
+      ]
+    },
+    {
+      "category": "constant",
+      "exec": "expr",
+      "out": "vec3f",
+      "output": [
+        0.20000000298023224,
+        0.5,
+        0.800000011920929
+      ]
+    },
+    {
+      "category": "rgbtohsv",
+      "exec": "expr",
+      "out": "vec3f",
+      "output": [
+        0.5833333730697632,
+        0.75,
+        0.800000011920929
+      ]
+    },
+    {
+      "category": "hsvtorgb",
+      "exec": "expr",
+      "out": "vec3f",
+      "output": [
+        0.800000011920929,
+        0.6079999804496765,
+        0.3199999928474426
+      ]
+    },
+    {
+      "category": "position",
+      "exec": "expr",
+      "out": "vec3f",
+      "output": [
+        0.25,
+        -0.5,
+        0.75
+      ]
+    },
+    {
+      "category": "texcoord",
+      "exec": "expr",
+      "out": "vec2f",
+      "output": [
+        0.30000001192092896,
+        0.699999988079071
+      ]
+    },
+    {
+      "category": "normalmap",
+      "exec": "expr",
+      "out": "vec3f",
+      "output": [
+        0,
+        0,
+        1
+      ]
+    },
+    {
+      "category": "fractal3d",
+      "exec": "expr",
+      "out": "f32",
+      "output": [
+        1.666015625
+      ]
+    },
+    {
+      "category": "chiang_hair_absorption_from_color",
+      "exec": "expr",
+      "out": "vec3f",
+      "output": [
+        2.590290069580078,
+        0.4804530143737793,
+        0.04979303106665611
+      ]
+    },
+    {
+      "category": "chiang_hair_roughness",
+      "exec": "expr",
+      "out": "vec2f",
+      "output": [
+        0.09000000357627869,
+        0.25
+      ]
+    },
+    {
+      "category": "deon_hair_absorption_from_melanin",
+      "exec": "expr",
+      "out": "vec3f",
+      "output": [
+        0.20500001311302185,
+        0.3588000237941742,
+        0.7580000162124634
+      ]
+    },
+    {
+      "category": "image",
+      "exec": "texture",
+      "out": "vec3f",
+      "output": [
+        0.20000000298023224,
+        0.501960813999176,
+        0.800000011920929
+      ]
+    },
+    {
+      "category": "tiledimage",
+      "exec": "texture",
+      "out": "vec3f",
+      "output": [
+        0.20000000298023224,
+        0.501960813999176,
+        0.800000011920929
+      ]
+    },
+    {
+      "category": "hextiledimage",
+      "exec": "texture",
+      "out": "vec3f",
+      "output": [
+        0.20000000298023224,
+        0.501960813999176,
+        0.800000011920929
+      ]
+    },
+    {
+      "category": "chiang_hair_bsdf",
+      "exec": "closure",
+      "out": "vec4f",
+      "output": [
+        0.48000001907348633,
+        0.24000000953674316,
+        0.08000000566244125,
+        0.800000011920929
+      ]
+    },
+    {
+      "category": "surface",
+      "exec": "closure",
+      "out": "vec4f",
+      "output": [
+        0,
+        0,
+        0,
+        1
+      ]
+    }
+  ]
+}

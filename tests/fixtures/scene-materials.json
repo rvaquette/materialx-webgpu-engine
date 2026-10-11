@@ -1,0 +1,175 @@
+{
+  "source": "MaterialX-rva/resources/Materials/Examples",
+  "scenes": {
+    "standard_surface_default": {
+      "family": "StandardSurface",
+      "focus": [
+        "base"
+      ],
+      "baseColor": [
+        0.8,
+        0.8,
+        0.8
+      ],
+      "metalness": 0,
+      "roughness": 0.2,
+      "transmission": 0,
+      "subsurface": 0,
+      "ior": 1.5,
+      "specular": 1
+    },
+    "standard_surface_glass": {
+      "family": "StandardSurface",
+      "focus": [
+        "transmission"
+      ],
+      "baseColor": [
+        0,
+        0,
+        0
+      ],
+      "metalness": 0,
+      "roughness": 0.01,
+      "transmission": 1,
+      "subsurface": 0,
+      "ior": 1.52,
+      "specular": 1
+    },
+    "standard_surface_jade": {
+      "family": "StandardSurface",
+      "focus": [
+        "subsurface"
+      ],
+      "baseColor": [
+        0.03015,
+        0.2199,
+        0.0958
+      ],
+      "metalness": 0,
+      "roughness": 0.25,
+      "transmission": 0,
+      "subsurface": 0.4,
+      "ior": 2.418,
+      "specular": 1
+    },
+    "open_pbr_default": {
+      "family": "OpenPbr",
+      "focus": [
+        "base"
+      ],
+      "baseColor": [
+        0.8,
+        0.8,
+        0.8
+      ],
+      "metalness": 0,
+      "roughness": 0.3,
+      "transmission": 0,
+      "subsurface": 0,
+      "ior": 1.5,
+      "specular": 1
+    },
+    "open_pbr_glass": {
+      "family": "OpenPbr",
+      "focus": [
+        "transmission"
+      ],
+      "baseColor": [
+        0.8,
+        0.8,
+        0.8
+      ],
+      "metalness": 0,
+      "roughness": 0,
+      "transmission": 1,
+      "subsurface": 0,
+      "ior": 1.52,
+      "specular": 1
+    },
+    "disney_principled_default": {
+      "family": "DisneyPrincipled",
+      "focus": [
+        "base"
+      ],
+      "baseColor": [
+        0.16,
+        0.16,
+        0.16
+      ],
+      "metalness": 0,
+      "roughness": 0.5,
+      "transmission": 0,
+      "subsurface": 0,
+      "ior": 1.5,
+      "specular": 1
+    },
+    "disney_principled_glass": {
+      "family": "DisneyPrincipled",
+      "focus": [
+        "transmission"
+      ],
+      "baseColor": [
+        1,
+        1,
+        1
+      ],
+      "metalness": 0,
+      "roughness": 0.01,
+      "transmission": 1,
+      "subsurface": 0,
+      "ior": 1.52,
+      "specular": 1
+    },
+    "gltf_pbr_default": {
+      "family": "GltfPbr",
+      "focus": [
+        "base"
+      ],
+      "baseColor": [
+        1,
+        1,
+        1
+      ],
+      "metalness": 1,
+      "roughness": 1,
+      "transmission": 0,
+      "subsurface": 0,
+      "ior": 1.5,
+      "specular": 1
+    },
+    "gltf_pbr_glass": {
+      "family": "GltfPbr",
+      "focus": [
+        "transmission"
+      ],
+      "baseColor": [
+        1,
+        1,
+        1
+      ],
+      "metalness": 0,
+      "roughness": 0.01,
+      "transmission": 1,
+      "subsurface": 0,
+      "ior": 1.52,
+      "specular": 1
+    },
+    "usd_preview_surface_default": {
+      "family": "UsdPreviewSurface",
+      "focus": [
+        "base"
+      ],
+      "baseColor": [
+        0.18,
+        0.18,
+        0.18
+      ],
+      "metalness": 0,
+      "roughness": 0.5,
+      "transmission": 0,
+      "subsurface": 0,
+      "ior": 1.5,
+      "specular": 1
+    }
+  }
+}

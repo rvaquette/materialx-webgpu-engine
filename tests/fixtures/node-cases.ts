@@ -26,6 +26,11 @@ export interface NodeCase {
   readonly expected: Vec | null; // CPU reference; null when not a single-leaf scalar run.
   readonly usesVaryings?: boolean;
   readonly note?: string;
+  // false when the lowering is a chaotic fp hash (fract(sin(x)*k)): fp32 GPU and
+  // fp64 CPU cannot match bit-for-bit, so the GPU run is checked by envelope only.
+  readonly reproducible?: boolean;
+  // Inclusive [min, max] envelope for every component when reproducible === false.
+  readonly envelope?: readonly [number, number];
 }
 
 // Fixed geometric frame used by geometry/procedural nodes (matches NodeEmitContext varyings).
@@ -194,7 +199,7 @@ export const NODE_CASES: readonly NodeCase[] = [
     usesVaryings: true,
   },
   // --- procedural leaf (reads position varying) ---
-  { ...exprCase('fractal3d', 'f32', [[1.0], [3]], [fractal3d(VARYINGS.position, 1.0, 3)]), usesVaryings: true },
+  { ...exprCase('fractal3d', 'f32', [[1.0], [3]], [fractal3d(VARYINGS.position, 1.0, 3)]), usesVaryings: true, reproducible: false, envelope: [0, 1.75], note: 'fract(sin)-hash noise: fp32 GPU vs fp64 CPU not bit-reproducible; checked by [0, sum amplitudes] envelope' },
   // --- hair utility leaves ---
   exprCase('chiang_hair_absorption_from_color', 'vec3f', [A3], hairAbsorptionFromColor(A3)),
   exprCase('chiang_hair_roughness', 'vec2f', [[0.3], [0.5]], hairRoughness(0.3, 0.5)),
