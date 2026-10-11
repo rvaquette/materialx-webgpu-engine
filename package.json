@@ -15,8 +15,10 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:device": "node scripts/run-device-corpus.mjs",
+    "test:scene-device": "node scripts/run-scene-device.mjs",
     "build:fixtures": "node scripts/build-shaderball-fixture.mjs && node scripts/build-scene-materials.mjs",
-    "build:materials": "node scripts/build-scene-materials.mjs"
+    "build:materials": "node scripts/build-scene-materials.mjs",
+    "render:scenes": "node scripts/render-scenes.ts"
   },
   "dependencies": {
     "comlink": "4.4.2",

@@ -292,6 +292,37 @@ Le tonemapping reste distinct du transport lumineux.
 Qualifier lumieres USD ponctuelles, distantes, surfaciques, dome, leurs unites,
 normalisation, formes, textures et profils photometriques lorsqu'ils sont utilises.
 
+### 9.5 Evaluation physique des closures (correctif)
+
+Constat : le lowering initial (T014) a emis des closures factices
+(`Closure(color * weight, weight)`, et `ior * weight` pour le conducteur)
+ignorant la direction de lumiere L, la vue V, la normale N, la distribution
+microfacette, le Fresnel et le terme geometrique. Les cas de test closure
+(T034a) utilisaient ces memes formules comme oracle, rendant la validation
+circulaire ; les surfaces (disney_principled, standard_surface, open_pbr_surface,
+gltf_pbr, UsdPreviewSurface, simple_hair) n'etaient verifiees que
+structurellement (graphCase, jamais executees numeriquement). Cela ne satisfait
+ni le lowering explicite exige en 7.1, ni l'evaluation OpenPBR exigee en 9.1,
+ni l'evaluation/PDF/echantillonnage coherents exiges en 9.2.
+
+Decisions (correctif, phase P8) :
+- Modele fidele MaterialX : une closure est un `BSDF { response, throughput }` ;
+  chaque lobe fournit des fonctions `_reflection` et `_transmission` prenant
+  (L, V, N, parametres) ; le noeud `surface` boucle sur les lumieres et accumule
+  la radiance ; EDF ajoute l'emission ; VDF alimente les milieux.
+- Perimetre : tous les lobes du corpus (oren_nayar, burley, dielectric,
+  conductor, sheen, subsurface, translucent) plus EDF et VDF, pas seulement les
+  lobes de disney_principled.
+- Path tracer : evaluation, PDF et echantillonnage coherents par lobe, livres
+  des ce correctif (pas seulement l'evaluation directe raster).
+- Oracle : une reference analytique CPU independante (memes formules, mais
+  implementation separee) remplace les oracles circulaires ; comparaison
+  device/CPU avec tolerances documentees.
+
+Les approximations restantes (subsurface raster, eclairage indirect /
+environnement) demeurent explicites et documentees ; aucune ne se reduit a
+`color * weight`.
+
 ## 10. Passage a l'echelle et robustesse
 
 Partager geometries, prototypes, textures et pipelines ; BLAS par geometrie
@@ -330,7 +361,7 @@ Le projet doit rester independant des sources et assets de reference.
 - [x] T011 [Plan:P3] Definir IR type et closures dans src/compiler/ir.ts.
 - [x] T012 [Plan:P3] Implementer les optimisations dans src/compiler/optimize.ts.
 - [x] T013 [Plan:P3] Extraire features, layouts et passes dans src/compiler/features.ts.
-- [x] T014 [Plan:P3] Implementer un lowering WGSL TypeScript et une emission pour chaque noeud de docs/materialx-node-coverage.md dans src/compiler/nodes.ts et src/compiler/wgsl.ts.
+- [x] T014 [Plan:P3] Implementer un lowering WGSL TypeScript et une emission pour chaque noeud de docs/materialx-node-coverage.md dans src/compiler/nodes.ts et src/compiler/wgsl.ts. (Note : le lowering des noeuds expr/texture est reel ; les closures BSDF/EDF/VDF ont ete emises en stubs non physiques -- evaluation physique livree par P8, voir section 9.5.)
 - [x] T015 [Plan:P3] Implementer pipelines/caches dans src/gpu/pipelines.ts et src/compiler/cache.ts.
 - [x] T016 [Plan:P3] Implementer les instances et leurs mises a jour dans src/materials/instance.ts.
 
@@ -360,25 +391,41 @@ Le projet doit rester independant des sources et assets de reference.
 ### P7. Fidelite, echelle et robustesse [REQ-001,002,005,006,007,008,009,010,011,012,013]
 - [x] T033 [Plan:P7] Etablir matrice de conformite de tous les noeuds MaterialX du corpus et scenes de controle dans docs/conformance.md et tests/fixtures/.
 - [x] T034 [Plan:P7] Tester en JavaScript la resolution, l'IR et le lowering, puis executer chaque noeud du corpus sur WebGPU avec des entrees deterministes et verifier ses sorties dans tests/compiler/ et tests/render/ ; un test de compilation seule ne suffit pas.
-  - [x] T034a [Plan:P7] Definir pour chaque noeud du corpus (matrice T033) un cas deterministe entrees fixes + sorties CPU de reference dans tests/fixtures/node-cases.ts, reutilisable par les tests JS et GPU.
+  - [x] T034a [Plan:P7] Definir pour chaque noeud du corpus (matrice T033) un cas deterministe entrees fixes + sorties CPU de reference dans tests/fixtures/node-cases.ts, reutilisable par les tests JS et GPU. (Note : les oracles closure refletaient les stubs de T014 -- remplaces par une reference analytique independante en P8.)
   - [x] T034b [Plan:P7] Tester en JS resolution + construction IR de chaque noeud du corpus dans tests/compiler/corpus-resolve.test.ts : graphe resolu (materialx/graph.ts) et IR type correct (compiler/ir.ts), sans GPU.
   - [x] T034c [Plan:P7] Tester en JS le lowering WGSL de chaque noeud dans tests/compiler/corpus-wgsl.test.ts : module emis (compiler/wgsl.ts) avec uniforms/bindings/outputs attendus et validation structurelle du WGSL, pas seulement l'absence d'erreur.
   - [x] T034d [Plan:P7] Ecrire un harnais d'execution compute reutilisable dans src/gpu/exec.ts : a partir d'un module WGSL de noeud, construire le pipeline (gpu/pipelines.ts), binder les entrees deterministes, dispatcher et relire les sorties en buffer.
   - [x] T034e [Plan:P7] Servir le harnais au mobile connecte (SM-F731B) via D:\platform-tools\adb.exe (adb reverse + Chrome Android), executer tous les noeuds du corpus sur le GPU reel et collecter les sorties dans tests/render/corpus-device.harness.ts.
-  - [x] T034f [Plan:P7] Comparer sorties GPU du mobile vs oracle CPU (T034a) avec tolerances par type dans tests/render/corpus-device.test.ts ; echec si un noeud s'ecarte, skip propre documente si aucun mobile autorise.
+  - [x] T034f [Plan:P7] Comparer sorties GPU du mobile vs oracle CPU (T034a) avec tolerances par type dans tests/render/corpus-device.test.ts ; echec si un noeud s'ecarte, skip propre documente si aucun mobile autorise. (Note : la comparaison closure etait circulaire tant que l'oracle refletait les stubs -- corrigee en P8.)
   - [x] T034g [Plan:P7] Orchestrer le flux build harnais -> adb reverse -> run device -> collecte -> assertions via un script npm (scripts/run-device-corpus.mjs) avec rapport par noeud.
-- [ ] T035 [Plan:P7] Comparer les rendus et documenter les tolerances dans docs/validation.md.
+- [x] T035 [Plan:P7] Comparer les rendus et documenter les tolerances dans docs/validation.md.
   - [x] T035a [Plan:P7] Centraliser les tolerances par type/par noeud (deduites de T034f : expr, closure, texture rgba8unorm, cas non reproductibles comme fractal3d) dans une source declarative unique tests/fixtures/tolerances.ts, et refactorer tests/render/corpus-device.test.ts pour la consommer.
   - [x] T035b [Plan:P7] Ecrire un utilitaire de comparaison d'images/signaux reutilisable dans tests/render/compare.ts : diff absolu max, RMSE, erreur relative par canal, verdict pass/echec selon une tolerance fournie, avec tests unitaires JS dans tests/render/compare.test.ts.
-  - [ ] T035c [Plan:P7] Rendre toutes les scenes de controle (T033) declarant backends raster ET pathtracing sur le shader ball standard (neutral_objects.glb, charge via three.js GLTFLoader, textures texel constant rgba8unorm comme T034), et comparer les deux rendus via T035b avec tolerances de scene documentees dans tests/render/scene-compare.test.ts.
+  - [x] T035c [Plan:P7] Rendre toutes les scenes de controle (T033) declarant backends raster ET pathtracing sur le shader ball standard (neutral_objects.glb, charge via three.js GLTFLoader, textures texel constant rgba8unorm comme T034), et comparer les deux rendus via T035b avec tolerances de scene documentees dans tests/render/scene-compare.test.ts.
     - [x] T035c1 [Plan:P7] Charger le shader ball standard (tests/fixtures/standard-shader-ball/neutral_objects.glb) via three.js GLTFLoader dans un prebuild (scripts/build-shaderball-fixture.mjs) emettant un fixture deterministe (tests/fixtures/shader-ball.json), adapte en RawMesh pour prepare.ts dans src/geometry/shaderball.ts, avec tests CPU dans tests/geometry/shaderball.test.ts : comptes sommets/indices, normales normalisees, uv dans [0,1], tangentes generees finies, bornes d'indices.
     - [x] T035c2 [Plan:P7] Calculer la visibilite deterministe du shader ball depuis la camera des scenes de controle (rayons primaires pinhole, mesh recadre pour tenir dans le champ, traversee BVH geometry/bvh.ts + Moller-Trumbore) en un jeu d'echantillons de shading (masque hit + position/normale/uv/viewDir par pixel) dans tests/render/scene-samples.ts, la traversee BVH etant validee contre un balayage exhaustif des triangles (reference).
     - [x] T035c3 [Plan:P7] Rendre chaque scene raster+pathtracing sur ces echantillons en deux buffers HDR lineaires : (a) modele analytique raster (miroir CPU de raster/shaders.ts) et (b) integrateur de reference path tracing (pathtracing/integrator.ts via SceneSampler analytique, lumiere directionnelle + environnement constant, seed 1337), parametres materiau partages extraits du .mtlx.
-    - [ ] T035c4 [Plan:P7] Comparer les deux buffers par scene via compare.ts (T035b) avec tolerances par focus documentees (base strictes ; transmission/subsurface plus larges et justifiees) dans tests/render/scene-compare.test.ts ; echec si divergence hors tolerance, couverture de toutes les scenes raster+pathtracing.
-  - [ ] T035d [Plan:P7] Comparer le rendu raster du mobile (device GPU) vs l'oracle CPU au niveau scene (pas seulement par noeud) via le harnais device et T035b, avec skip propre si aucun mobile autorise.
-  - [ ] T035e [Plan:P7] Rediger docs/validation.md : methodologie, sources d'oracle, table des tolerances par type de noeud et par scene, cas non reproductibles (fractal3d et son enveloppe), et procedure d'execution (npm run test:device).
-- [ ] T036 [Plan:P7] Integrer budgets, streaming et profiling sur le mobile Android cible (via D:\platform-tools\adb.exe) dans src/assets/streaming.ts et src/diagnostics/metrics.ts.
-- [ ] T037 [Plan:P7] Verifier annulation, liberation et perte du device dans tests/lifecycle/.
+    - [x] T035c4 [Plan:P7] Comparer les deux buffers par scene via compare.ts (T035b) avec tolerances par focus documentees (base strictes ; transmission/subsurface plus larges et justifiees) dans tests/render/scene-compare.test.ts ; echec si divergence hors tolerance, couverture de toutes les scenes raster+pathtracing.
+  - [x] T035d [Plan:P7] Comparer le rendu raster du mobile (device GPU) vs l'oracle CPU au niveau scene (pas seulement par noeud) via le harnais device et T035b, avec skip propre si aucun mobile autorise.
+  - [x] T035e [Plan:P7] Rediger docs/validation.md : methodologie, sources d'oracle, table des tolerances par type de noeud et par scene, cas non reproductibles (fractal3d et son enveloppe), et procedure d'execution (npm run test:device).
+- [x] T036 [Plan:P7] Integrer budgets, streaming et profiling sur le mobile Android cible (via D:\platform-tools\adb.exe) dans src/assets/streaming.ts et src/diagnostics/metrics.ts.
+- [x] T037 [Plan:P7] Verifier annulation, liberation et perte du device dans tests/lifecycle/.
+
+### P8. Evaluation physique des closures BSDF/EDF/VDF [REQ-006,007,008,009,010,011,014]
+
+Correctif de l'evaluation physique des closures (voir section 9.5). Chaque tache
+se valide par typecheck + tests Node et, le cas echeant, execution sur le mobile
+cible ; aucune closure ne reste un stub `color * weight`.
+
+- [ ] T038 [Plan:P8] Etendre le modele de closure dans l'IR et le backend : struct WGSL `BSDF { response, throughput }`, contexte d'eclairage (lumieres directionnelles + environnement + vue) injecte dans le shader genere, et accumulation de radiance par boucle sur les lumieres dans le noeud `surface`. src/compiler/ir.ts, src/compiler/wgsl.ts, src/gpu/exec.ts ; tests JS de composition dans tests/compiler/ et tests/gpu/.
+- [ ] T039 [Plan:P8] Implementer les lobes BSDF reels en WGSL (fonctions `_reflection` / `_transmission` prenant L, V, N) dans src/compiler/nodes.ts : diffus Oren-Nayar et Burley ; GGX diielectrique (distribution GGX, Smith, Fresnel dielectrique) ; GGX conducteur (Fresnel complexe ior/extinction) ; sheen ; subsurface (approximation raster declaree) ; translucent. Remplacer les stubs du prelude.
+- [ ] T040 [Plan:P8] Implementer EDF (uniform_edf, generalized_schlick_edf) et VDF (anisotropic_vdf) reels, et la composition energetique des closures (layer avec couplage par throughput, add, mix, multiply) dans src/compiler/nodes.ts et src/compiler/wgsl.ts.
+- [ ] T041 [Plan:P8] Ecrire une reference analytique CPU independante de chaque lobe/EDF/VDF (memes formules, implementation separee des stubs et du WGSL) dans src/render/bsdf/ ; tests unitaires JS dans tests/render/bsdf/.
+- [ ] T042 [Plan:P8] Remplacer les oracles closure circulaires de tests/fixtures/node-cases.ts par la reference analytique (T041) ; mettre a jour tests/fixtures/tolerances.ts ; tests JS numeriques dans tests/compiler/ et execution device par lobe dans tests/render/corpus-device.test.ts avec tolerances documentees.
+- [ ] T043 [Plan:P8] Executer numeriquement les surfaces graphCase (standard_surface, open_pbr_surface, disney_principled, gltf_pbr, UsdPreviewSurface, simple_hair) vs la reference analytique, pas seulement une validation structurelle ; tests dans tests/compiler/ et tests/render/.
+- [ ] T044 [Plan:P8] Implementer evaluation + PDF + echantillonnage coherents par lobe pour le path tracer dans src/render/pathtracing/ ; tests de coherence dans tests/render/pathtracing/ : conservation d'energie (white furnace), accord eval vs PDF, estimateur non biaise.
+- [ ] T045 [Plan:P8] Integrer l'evaluation OpenPBR reelle (shader materiau genere) au backend raster WebGPU dans src/render/raster/shaders.ts et src/render/raster/backend.ts, en remplacant le Lambert+ambient ; re-valider par scene sur le mobile cible.
+- [ ] T046 [Plan:P8] Mettre a jour docs/conformance.md, docs/materialx-node-coverage.md et docs/validation.md : closures passees de stub a evaluation reelle, formules, limites et tolerances ; re-executer le run device reel et consigner les resultats.
 
 P1 decide les dependances avant de figer leurs adaptateurs. Une premiere tranche
 verticale P2/P3/P4 avec une surface texturée doit alimenter P5 et P6 rapidement.
@@ -432,15 +479,15 @@ accompagne chaque phase ; P7 consolide les gates et n'est pas son point de depar
 | REQ-003 | P1, P2, P4 | Dependances qualifiees et adaptateurs |
 | REQ-004 | P1, P2, P3 | WASM Core sans appel a un generateur |
 | REQ-005 | P3, P7 | Chaine de compilation, caches et instances |
-| REQ-006 | P3, P4, P5, P6, P7 | OpenPBR et comparaisons de reference |
-| REQ-007 | P3, P5, P6, P7 | Subsurface raster et transport physique |
-| REQ-008 | P3, P5, P6, P7 | Volumes homogenes/heterogenes |
-| REQ-009 | P5, P7 | Raster complet et approximations declarees |
-| REQ-010 | P6, P7 | Path tracing et hybride |
-| REQ-011 | P2, P3, P4, P5, P6, P7 | Images, UDIM et couleur |
+| REQ-006 | P3, P4, P5, P6, P7, P8 | OpenPBR et comparaisons de reference |
+| REQ-007 | P3, P5, P6, P7, P8 | Subsurface raster et transport physique |
+| REQ-008 | P3, P5, P6, P7, P8 | Volumes homogenes/heterogenes |
+| REQ-009 | P5, P7, P8 | Raster complet et approximations declarees |
+| REQ-010 | P6, P7, P8 | Path tracing et hybride |
+| REQ-011 | P2, P3, P4, P5, P6, P7, P8 | Images, UDIM et couleur |
 | REQ-012 | P2, P4, P5, P7 | Instanciation, BVH, clustering et budgets |
 | REQ-013 | P1, P7 | Conformite, diagnostics et gates |
-| REQ-014 | P1, P3, P7 | Inventaire exhaustif, lowering TypeScript et tests de chaque noeud du corpus |
+| REQ-014 | P1, P3, P7, P8 | Inventaire exhaustif, lowering TypeScript et tests de chaque noeud du corpus |
 
 ## 14. Decisions encore ouvertes
 
