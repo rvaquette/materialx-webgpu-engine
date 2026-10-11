@@ -33,6 +33,33 @@ export function isEnvelopeCase(c: NodeCase): boolean {
   return c.reproducible === false;
 }
 
+// Per-device-target tolerance for the real per-lobe closure comparison (T042).
+// The BSDF/EDF/VDF lobes run a GGX/Fresnel microfacet evaluation in fp32 on the
+// device and are checked against the fp64 analytic reference
+// (src/render/bsdf/reference.ts). The desktop validation GPU (Intel gen-12lp via
+// Chrome WebGPU) stays near 2e-3 after a single compute dispatch; the mobile
+// target (Qualcomm Adreno 7xx, SM-F731B) is given a slightly wider 4e-3 for the
+// extra pow/division rounding on the specular lobes. Each run is validated with
+// the bound of the target that actually produced the report (selected by adapter).
+export type DeviceTarget = 'local' | 'mobile';
+
+export const CLOSURE_TARGET_TOLERANCE: Readonly<Record<DeviceTarget, number>> = {
+  local: 2e-3,
+  mobile: 4e-3,
+};
+
+/** Classify a device report adapter as the mobile target (Adreno/Mali/ARM) or local. */
+export function deviceTargetOf(adapter?: { vendor?: string; architecture?: string }): DeviceTarget {
+  const tag = `${adapter?.vendor ?? ''} ${adapter?.architecture ?? ''}`.toLowerCase();
+  const mobile = /qualcomm|adreno|mali|\barm\b|apple|powervr/.test(tag);
+  return mobile ? 'mobile' : 'local';
+}
+
+/** Per-component closure tolerance for the target that produced a device report. */
+export function closureTargetTolerance(adapter?: { vendor?: string; architecture?: string }): number {
+  return CLOSURE_TARGET_TOLERANCE[deviceTargetOf(adapter)];
+}
+
 // Scene-level tolerances by material focus (T035c4). The raster mirror and the
 // path-traced reference share one diffuse albedo, so their only systematic
 // difference is the raster's flat ambient (0.03) versus the integrator's

@@ -17,7 +17,7 @@ import {
   type IrRef,
   type ShaderIr,
 } from '../../src/compiler/ir.ts';
-import type { NodeCase } from './node-cases.ts';
+import type { NodeCase, ClosureLobeCase } from './node-cases.ts';
 
 const irTypeByLen = (n: number): IrType =>
   n === 1 ? FLOAT : n === 2 ? vector(2, 'float') : n === 3 ? COLOR3 : vector(4, 'float');
@@ -69,4 +69,20 @@ export function buildNodeIr(c: NodeCase): ShaderIr {
 /** The corpus cases that run as a single GPU dispatch (expr/texture/closure). */
 export function isRunnableOnGpu(c: NodeCase): boolean {
   return c.exec === 'expr' || c.exec === 'texture' || c.exec === 'closure';
+}
+
+/** Build a single-leaf closure ShaderIr for a per-lobe case (T042). The named
+ * params become inlined constants wired to the lobe's WGSL lowering; the lighting
+ * context (for the real BSDF/VDF lobes) is bound by the exec harness. */
+export function buildLobeIr(c: ClosureLobeCase): ShaderIr {
+  const b = new IrModuleBuilder();
+  const params: Record<string, IrRef> = {};
+  for (const [name, v] of Object.entries(c.params)) {
+    const t = v.length === 1 ? FLOAT : v.length === 2 ? vector(2, 'float') : COLOR3;
+    params[name] = b.constant(t, v.length === 1 ? v[0]! : [...v]);
+  }
+  const type = closureType(c.kind);
+  const leaf = b.add({ kind: 'closure', type, closure: c.kind, op: c.category, params });
+  b.output({ name: 'out', type, ref: leaf });
+  return b.build();
 }
