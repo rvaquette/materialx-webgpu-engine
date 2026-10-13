@@ -563,11 +563,36 @@ supportee produit un diagnostic. Le rendu reste statique (pas d'animation).
   et extension de tests/render/raster/backend.test.ts (5 cas : pipeline opaque vs
   transmission, recordScenePass multi-objets, clear/load, erreur si pipeline
   absent). Valide : typecheck + 768 tests Node.
-- [ ] T052 [Plan:P9] Porter l'integrateur de reference path tracing en compute
+- [x] T052 [Plan:P9] Porter l'integrateur de reference path tracing en compute
   WebGPU alimente par la meme scene (traversal BVH + fermetures eval/PDF/sample
   de src/render/pathtracing/bsdf.ts), accumulation progressive, et commutation de
   backend sans reimport via src/render/engine.ts ; comparer un rendu raster et un
   rendu pathtracing de la scene sur les memes assets.
+  Fait : src/render/pathtracing/scene-buffers.ts empaquette les SceneResources en
+  buffers de stockage GPU (noeuds BVH monde, soupe de triangles monde, materiaux
+  OpenPBR) en reutilisant buildSceneFrame -- donc exactement les memes assets que
+  le raster -- et expose createSceneSampler qui fait le pont vers l'integrateur de
+  reference (traversal BVH iteratif, Moller-Trumbore, NEE lumiere distante,
+  occlusion) ainsi que readSurfaceParams/directLighting. src/render/pathtracing/
+  compute.ts genere le shader compute WGSL (mx_path_trace) qui reflete
+  integratePath : traversal BVH, portage de surfaceBsdf (GGX/Smith/Fresnel +
+  echantillonnage cosinus), NEE sans MIS sur la lumiere distante, miss
+  environnement, Russian roulette apres 3 rebonds, accumulation progressive en
+  moyenne glissante dans accum[pixel] (prev.w = compteur) ; PathTraceBackend gere
+  le pipeline (layout 'auto'), le compteur de frames et buildPathTraceUniform.
+  src/render/compare-backends.ts prouve que raster et pathtracing partagent
+  camera/lumiere/materiaux et donne la meme reponse diffuse (sonde Lambert a
+  incidence normale). src/main.ts cable la commutation sans reimport via
+  RenderEngine ([r] raster / [p] path tracing) : le path tracer tourne sur les
+  memes buffers, dispatch compute + passe plein-ecran qui tonemappe l'accumulation
+  vers le canvas. Frontiere honnete : le WGSL est valide structurellement (Node ne
+  dispose pas de WebGPU), createSceneSampler est l'oracle teste cote Node.
+  Valide : typecheck + 787 tests Node (768 base + 19 nouveaux). Tests :
+  tests/render/pathtracing/scene-buffers.test.ts (8 cas : empaquetage, round-trip
+  materiau OpenPBR, invViewProj, intersection, miss, occlusion, directLighting,
+  integratePath), tests/render/pathtracing/compute.test.ts (marqueurs WGSL, layout
+  uniforme, creation de pipeline mock, compteur de frames, workgroupCount),
+  tests/render/compare-backends.test.ts (sonde diffuse, parite des backends).
 - [ ] T053 [Plan:P9] Valider bout-en-bout sur la scene de reference
   (ShdrPlygrnd_OpenPBR.usda) et au moins une scene OpenUSD tierce : chargement
   compose, diagnostics des features non supportees, rendu des deux backends, et
