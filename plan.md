@@ -327,6 +327,81 @@ Les approximations restantes (subsurface raster, eclairage indirect /
 environnement) demeurent explicites et documentees ; aucune ne se reduit a
 `color * weight`.
 
+### 9.6 Couverture complete des BxDF MaterialX (modele de surface en couches)
+
+Constat (ecart runtime, ouvert par P10). Deux systemes de surface coexistent et
+ne sont PAS unifies :
+
+1. Systeme compilateur/IR (src/compiler/nodes.ts -> src/compiler/wgsl.ts) :
+   vrais lobes MaterialX (oren_nayar, burley, dielectric, conductor,
+   generalized_schlick, sheen, subsurface, translucent ; EDF uniform /
+   generalized_schlick ; VDF anisotropic) plus aplatissement des nodegraphs.
+   Valide numeriquement par lobe (T042) et par graphe de surface (T043) contre
+   l'oracle CPU independant src/render/bsdf/reference.ts. MAIS il n'alimente PAS
+   les backends de rendu de scene.
+2. Systeme de rendu (path tracer src/render/pathtracing/compute.ts +
+   src/render/pathtracing/bsdf.ts surfaceBsdf ; raster
+   src/render/raster/shaders.ts mx_openpbr_surface ; oracle
+   reference.ts evaluateSurface) : un modele canonique REDUIT a sept parametres
+   `{baseColor, metalness, roughness, transmission, subsurface, ior, specular}`.
+
+La reduction (scripts/build-scene-materials.mjs toCanonical, et parseOpenPbr du
+harnais USD) ecrase toutes les familles (standard_surface, open_pbr_surface,
+disney_principled, gltf_pbr, UsdPreviewSurface) vers ces 7 scalaires/couleurs.
+Sont perdus : coat (poids/couleur/rugosite/ior/anisotropie/darkening),
+sheen / fuzz, thin film (poids/epaisseur/ior), anisotropie speculaire, teinte
+speculaire (specular_color), transmission color/depth/scatter/dispersion,
+subsurface color/radius/scale/anisotropy, emission (luminance/couleur),
+diffuse_roughness, thin_walled, normales/tangentes separees coat. "Tous les
+modeles mtlx" sont donc aujourd'hui rendus avec le MEME melange 7-parametres :
+non fidele, et non conforme a REQ-013 (perte silencieuse) ni au perimetre 9.1/9.2.
+
+Decision d'architecture (P10, strategie IR source unique). Unifier les deux
+backends sur l'IR du compilateur comme SOURCE UNIQUE de shading, au lieu
+d'etendre le modele canonique ecrit a la main. Le compilateur abaisse le
+nodegraph de surface de CHAQUE materiau -- entrees constantes, texturees ET
+procedurales (reseaux de noeuds) -- vers une pile de fermetures runtime
+parametree (la "LayeredClosure"), et le raster comme le path tracer appellent la
+MEME fonction de shading generee. C'est la seule voie qui rend fidelement un mtlx
+quelconque (REQ-006/013), pas seulement les 5 familles a entrees scalaires.
+
+L'obstacle a lever : les fermetures IR de P8 n'exposent que l'evaluation directe
+(response/throughput sous lumiere), sans PDF ni echantillonnage ; inaptes telles
+quelles a piloter un path tracer MIS non biaise. P10 etend donc le modele de
+fermeture IR avec pdf + sample par lobe et un echantillonnage de pile (selection
+ponderee + PDF combinee), de sorte que la sortie du compilateur alimente
+directement l'integrateur. La pile cible miroir la composition open_pbr_surface :
+fuzz/sheen -> coat dielectrique -> base (metal conducteur | specular dielectrique
+| diffus/subsurface/translucent), thin film module sur le Fresnel speculaire ;
+chaque lobe reste un des lobes deja valides (T041/T042).
+
+Principes :
+- Source unique : le lowering nodegraph -> IR -> WGSL (src/compiler/ir.ts,
+  nodes.ts, wgsl.ts) remplit les champs d'une LayeredClosure runtime ; une
+  bibliotheque WGSL de fermetures PARTAGEE implemente eval/pdf/sample et est
+  consommee a l'identique par le raster et le path tracer. Fin de la double
+  implementation (closures compilateur vs closures renderer).
+- Nodegraph arbitraire fidele : les entrees texturees/procedurales (image,
+  noise, mix, normalmap, ...) sont abaissees dans le shader genere, pas aplaties
+  en constantes. toCanonical (build-scene-materials.mjs), parseOpenPbr (harnais
+  USD) et findShader (nodegraph-eval.ts) cessent d'etre le chemin de rendu.
+- Familles couvertes : standard_surface, open_pbr_surface, disney_principled,
+  gltf_pbr, UsdPreviewSurface, plus les briques lama_*, via leurs nodedef
+  resolus (interfacename, noeuds connectes, heritage de version, alias, defauts
+  MaterialX officiels). Toute entree ou noeud non supporte produit un diagnostic.
+- Variant par materiau : chaque materiau compile un variant WGSL (raster :
+  pipeline existant createMaterialVariant/computePipelineKey ; path tracer :
+  pipeline/dispatcher compute par variant ou megakernel parametre -- decision
+  ouverte, section 14) ; deux instances compatibles partagent leur pipeline.
+- Path tracer sans approximation de modele : eval + PDF + sample coherents par
+  lobe, energie conservee, PDF de pile par heuristique de puissance.
+- Raster : memes fermetures generees, approximations explicites et documentees
+  (eclairage indirect, thin film tabule, subsurface enveloppe) ; aucune omission
+  silencieuse.
+- Oracle : src/render/bsdf/reference.ts etendu avec pdf + sample reste la verite
+  numerique CPU, et doit concorder avec les fermetures generees par l'IR dans les
+  deux modes.
+
 ## 10. Passage a l'echelle et robustesse
 
 Partager geometries, prototypes, textures et pipelines ; BLAS par geometrie
@@ -625,12 +700,100 @@ supportee produit un diagnostic. Le rendu reste statique (pas d'animation).
   mesures (temps de chargement/compilation/rendu, memoire) sur le GPU local puis
   sur le mobile cible (D:\platform-tools\adb.exe). Consigner dans docs/validation.md.
 
+### P10. Couverture complete des BxDF MaterialX [REQ-006,007,008,009,010,011,013,014]
+
+Objectif : rendre fidelement TOUTES les familles de surface mtlx
+(open_pbr_surface, standard_surface, disney_principled, gltf_pbr,
+UsdPreviewSurface, briques lama_*) ET tout nodegraph de surface arbitraire, dans
+les deux backends, en faisant de l'IR du compilateur la SOURCE UNIQUE de shading
+(voir 9.6). Reference bxdf locale :
+D:\WebGL2\MaterialX\MaterialX-rva\libraries\bxdf. Le raster et le path tracer
+appellent la meme fonction de shading generee par l'IR ; le path tracer
+n'introduit aucune approximation de modele ; le raster declare et documente les
+siennes ; toute entree ou noeud non supporte produit un diagnostic (REQ-013).
+
+- [ ] T054 [Plan:P10] Etendre le modele de fermeture IR (P8) avec
+  echantillonnage : definir l'interface runtime LayeredClosure (pile de lobes
+  avec poids, plus couches coat/sheen/fuzz/thin film/emission) cible du lowering,
+  et doter CHAQUE lobe BSDF, en plus de response/throughput (P8), de pdf(wo,wi)
+  et sample(wo,xi)->(wi,weight,pdf) ; la surface expose un echantillonnage de
+  pile (selection ponderee + PDF combinee par heuristique de puissance). Types et
+  helpers dans src/compiler/ir.ts (+ exec.ts si besoin). Etendre l'oracle
+  src/render/bsdf/reference.ts avec pdf + sample pour chaque lobe et la pile.
+  Tests : accord eval/pdf, non-biais par lobe et pile, reductions connues
+  (pile a coat/sheen/thin film nuls == resultat actuel -> non-regression).
+  Valide : typecheck + suite Node.
+
+- [ ] T055 [Plan:P10] Abaissement nodegraph de surface -> LayeredClosure dans le
+  compilateur : etendre le lowering (src/compiler/nodes.ts, wgsl.ts, ir.ts ;
+  src/materialx/nodegraph-eval.ts) pour aplatir le nodegraph de chaque famille
+  (standard_surface, open_pbr_surface, disney_principled, gltf_pbr,
+  UsdPreviewSurface, assemblages lama_*) ET ses entrees texturees/procedurales
+  (image, noise, mix, normalmap, ...) en code qui remplit les champs
+  LayeredClosure dans le shader genere. Resoudre interfacename, noeuds connectes,
+  heritage de version, alias et defauts officiels de chaque nodedef bxdf. Toute
+  entree/noeud non supporte -> diagnostic (REQ-013). Retirer toCanonical
+  (scripts/build-scene-materials.mjs), parseOpenPbr (harnais USD) et la reduction
+  7-parametres du chemin de rendu. Tests : lowering par famille contre les .mtlx
+  de reference bxdf, entree connectee/procedurale vs litterale, heritage de
+  version, diagnostics d'entrees non supportees. Valide : typecheck + suite Node.
+
+- [ ] T056 [Plan:P10] Bibliotheque WGSL de fermetures PARTAGEE eval/pdf/sample :
+  completer les lobes manquants (sheen Charlie, coat dielectrique layered avec
+  darkening/absorption, GGX ANISOTROPE alpha_u/alpha_v + rotation, transmission
+  dielectrique / BTDF avec refraction et thin_walled, thin film Airy/tabule
+  module sur le speculaire, hook subsurface BSSRDF T029) en une bibliotheque WGSL
+  unique emise/consommee par le compilateur et appelee a l'identique par les deux
+  backends. Chaque lobe conserve l'energie (reflectance <= 1) et reste non biaise
+  (accord eval/sample, furnace). Tests intrinseques comme T044 (furnace par lobe,
+  accord PDF/valeur, non-biais a N echantillons, anisotropie -> isotrope quand
+  aniso=0). Valide : typecheck + suite Node.
+
+- [ ] T057 [Plan:P10] Cabler le path tracer sur l'IR : src/render/pathtracing/
+  compute.ts appelle la fonction de shading generee (LayeredClosure +
+  bibliotheque partagee T056) au lieu de surface_eval/surface_sample 7-parametres,
+  et src/render/pathtracing/scene-buffers.ts cesse de packer les 7 parametres
+  OpenPBR au profit du variant de materiau compile. NEE + MIS sur la pile generee.
+  Decision ouverte (section 14) : pipeline compute par variant de materiau vs
+  megakernel parametre dispatchant sur l'id de materiau ; trancher et consigner.
+  Marqueurs WGSL testables en Node (pas de WebGPU cote Node), oracle Node =
+  createSceneSampler aligne sur reference.ts etendu. Valide : typecheck + suite
+  Node ; run device local sans regression.
+
+- [ ] T058 [Plan:P10] Cabler le raster sur l'IR : src/render/raster/backend.ts,
+  shaders.ts et src/main.ts rendent via le variant WGSL compile du materiau
+  (createMaterialVariant / computePipelineKey / instance.ts) au lieu du
+  sceneForwardWgsl / openPbrSurfaceWgsl ecrits a la main ; memes fermetures
+  generees que le path tracer, approximations raster explicites et documentees.
+  Mettre a jour les tolerances device (tests/fixtures/tolerances.ts) si le layout
+  change. Verifier que raster et path tracer produisent la meme reponse directe
+  sur les memes materiaux (parite de source IR). Valide : typecheck + suite Node ;
+  run device local + mobile sans regression.
+
+- [ ] T059 [Plan:P10] Validation device de la couverture BxDF via l'IR : rendre
+  chaque famille bxdf (open_pbr_surface, standard_surface, disney_principled,
+  gltf_pbr, UsdPreviewSurface, un assemblage lama_*) ET au moins un nodegraph de
+  surface procedural arbitraire (entree pilotee par un reseau de noeuds) dans les
+  DEUX backends via la sortie du compilateur, sur GPU local puis mobile
+  (D:\platform-tools\adb.exe), compares a l'oracle reference.ts etendu avec
+  tolerances documentees. Verifier qu'un materiau a coat/sheen/thin film/
+  anisotropie/transmission visibles differe nettement du rendu 7-parametres
+  anterieur (preuve de fidelite) et que les deux modes partagent la sortie IR.
+  Documenter dans docs/conformance.md, docs/materialx-node-coverage.md et
+  docs/validation.md ; consigner les approximations raster restantes. Valide :
+  typecheck + suite Node complete + rapports device committes, 0 erreur.
+
 P1 decide les dependances avant de figer leurs adaptateurs. Une premiere tranche
 verticale P2/P3/P4 avec une surface texturée doit alimenter P5 et P6 rapidement.
 Developper ensuite les combinaisons OpenPBR, subsurface et volumes. La validation
 accompagne chaque phase ; P7 consolide les gates et n'est pas son point de depart.
 P9 cable enfin le flux runtime complet (crate binaire + scene -> backends GPU ->
 canvas) pour rendre une scene OpenUSD quelconque, au-dela des scenes de controle.
+P10 fait ensuite de l'IR du compilateur la source unique de shading (9.6) :
+raster et path tracer appellent la meme fonction generee, rendant fidelement
+toutes les familles bxdf (open_pbr_surface, standard_surface, disney_principled,
+gltf_pbr, UsdPreviewSurface, lama_*) et tout nodegraph arbitraire, en remplacant
+le modele canonique reduit a 7 parametres.
 
 ## 12. Criteres d'acceptation
 
@@ -660,6 +823,15 @@ canvas) pour rendre une scene OpenUSD quelconque, au-dela des scenes de controle
   parametre dynamique n'entraine aucune recompilation.
 - OpenPBR couvre les noeuds/parametres du corpus et leurs interactions, pas
   seulement des demonstrations isolees de chaque feature.
+- Toutes les familles de surface mtlx (open_pbr_surface, standard_surface,
+  disney_principled, gltf_pbr, UsdPreviewSurface, briques lama_*) ET tout
+  nodegraph de surface arbitraire sont rendus via l'IR du compilateur comme
+  source unique (9.6) : raster et path tracer appellent la meme fonction de
+  shading generee. Coat, sheen/fuzz, thin film, anisotropie, transmission
+  color/depth/scatter, subsurface radius, emission et specular_color ne sont plus
+  ecrases par la reduction 7-parametres. Le path tracer evalue sans approximation
+  (eval/pdf/sample par lobe) ; les approximations raster sont documentees ; toute
+  entree ou noeud non supporte produit un diagnostic.
 - Conservation d'energie et coherence evaluation/PDF/echantillonnage verifiees.
 - Volumes et subsurface valides sur des scenes dediees si le corpus ne les
   exerce pas suffisamment ; thin film compare a des references adaptees.
@@ -685,15 +857,15 @@ canvas) pour rendre une scene OpenUSD quelconque, au-dela des scenes de controle
 | REQ-003 | P1, P2, P4, P9 | Dependances qualifiees et adaptateurs |
 | REQ-004 | P1, P2, P3 | WASM Core sans appel a un generateur |
 | REQ-005 | P3, P7 | Chaine de compilation, caches et instances |
-| REQ-006 | P3, P4, P5, P6, P7, P8 | OpenPBR et comparaisons de reference |
-| REQ-007 | P3, P5, P6, P7, P8 | Subsurface raster et transport physique |
+| REQ-006 | P3, P4, P5, P6, P7, P8, P10 | OpenPBR et comparaisons de reference |
+| REQ-007 | P3, P5, P6, P7, P8, P10 | Subsurface raster et transport physique |
 | REQ-008 | P3, P5, P6, P7, P8 | Volumes homogenes/heterogenes |
-| REQ-009 | P5, P7, P8, P9 | Raster complet et approximations declarees |
-| REQ-010 | P6, P7, P8, P9 | Path tracing et hybride |
-| REQ-011 | P2, P3, P4, P5, P6, P7, P8, P9 | Images, UDIM et couleur |
+| REQ-009 | P5, P7, P8, P9, P10 | Raster complet et approximations declarees |
+| REQ-010 | P6, P7, P8, P9, P10 | Path tracing et hybride |
+| REQ-011 | P2, P3, P4, P5, P6, P7, P8, P9, P10 | Images, UDIM et couleur |
 | REQ-012 | P2, P4, P5, P7, P9 | Instanciation, BVH, clustering et budgets |
-| REQ-013 | P1, P7, P9 | Conformite, diagnostics et gates |
-| REQ-014 | P1, P3, P7, P8 | Inventaire exhaustif, lowering TypeScript et tests de chaque noeud du corpus |
+| REQ-013 | P1, P7, P9, P10 | Conformite, diagnostics et gates |
+| REQ-014 | P1, P3, P7, P8, P10 | Inventaire exhaustif, lowering TypeScript et tests de chaque noeud du corpus |
 
 ## 14. Decisions encore ouvertes
 
@@ -703,6 +875,10 @@ canvas) pour rendre une scene OpenUSD quelconque, au-dela des scenes de controle
 - Bibliotheques de subdivision et de volumes compatibles navigateur.
 - Formats de volume requis et eventuels effets spectraux hors thin film/dispersion du corpus.
 - Renderer(s) de reference et tolerances physiques/numeriques.
+- Path tracer sur IR (P10/T057) : pipeline compute par variant de materiau vs
+  megakernel unique parametre dispatchant sur l'id de materiau (accumulation
+  progressive en une passe). A trancher a l'implementation selon le cout de
+  compilation, le nombre de materiaux par scene et les limites du device.
 
 Ces points se resolvent en qualification. La qualite reste l'objectif final,
 mais aucune promesse de support universel MaterialX/OpenUSD ou de performance
