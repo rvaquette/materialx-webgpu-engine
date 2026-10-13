@@ -501,11 +501,33 @@ supportee produit un diagnostic. Le rendu reste statique (pas d'animation).
   a un chemin cible, violation de politique asset-root -> diagnostic + couche
   ignoree sans remap, reader crate sans loader -> erreur). Valide : typecheck +
   753 tests Node.
-- [ ] T050 [Plan:P9] Construire le pont SceneAsset -> ressources GPU : upload des
+- [x] T050 [Plan:P9] Construire le pont SceneAsset -> ressources GPU : upload des
   geometries preparees (src/geometry/prepare.ts) en vertex/index buffers, BVH et
   hierarchie d'instances (src/scene/instances.ts, src/geometry/bvh.ts), et
   compilation des materiaux references via la chaine MaterialX (graph -> IR ->
   WGSL -> pipeline/instance) pour chaque binding de la scene.
+  Fait : (1) Nouveau module src/render/scene-resources.ts. buildSceneResources
+  (async, testable en Node) assemble SceneResources a partir d'un SceneAsset :
+  par prototype il recupere le RawMesh via un MeshSource injecte puis
+  prepareMesh + buildBvh produisent les flux de sommets (position/normal/uv/
+  tangent + attributs) et le BLAS ; buildSceneInstances fournit la hierarchie
+  d'instances, transformBounds place chaque AABB en monde et buildTlas construit
+  le TLAS ; resolveSceneMaterials donne les unites, chaque unite unique est
+  compilee via un MaterialCompiler injecte (ir + module WGSL) puis extractFeatures
+  + computePipelineKey + createMaterialVariant ferment la chaine
+  graph -> IR -> WGSL -> pipeline/instance. Les geometries et materiaux manquants
+  sont signales (pendingGeometry / pendingMaterials / unboundGprims) et non
+  silencieusement abandonnes (REQ-013). (2) uploadGeometry(device, ...) cree les
+  vertex/index GPUBuffer (helper navigateur ; GPUBufferUsage non reference au
+  chargement du module donc l'import reste sur en Node). (3) Decision
+  d'architecture : l'abaissement ResolvedGraph -> ShaderIr n'existe pas encore
+  comme fonction de bibliotheque (IR construit a la main via IrModuleBuilder dans
+  les tests) et les octets de geometrie vivent dans les payloads crate ; le pont
+  injecte donc MeshSource et MaterialCompiler pour rester honnete et testable
+  hors navigateur. Tests tests/render/scene-resources.test.ts (3 cas : upload +
+  instances/TLAS + materiaux lies, materiau pending quand le compilateur ne rend
+  rien, uploadGeometry ecrit chaque flux + l'index buffer sur un device factice).
+  Valide : typecheck + 756 tests Node.
 - [ ] T051 [Plan:P9] Cabler le backend raster executable sur la scene reelle :
   src/main.ts et src/render/raster/backend.ts consomment SceneAsset + instances
   materiau (cameras et lumieres USD reelles, environnement), remplacant le

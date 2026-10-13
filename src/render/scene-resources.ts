@@ -1,0 +1,302 @@
+// SceneAsset -> GPU resource bridge (plan sections 8, 10, T050). Turns a composed
+// SceneAsset into renderer-neutral GPU resources: prepared geometry uploaded as
+// vertex/index streams with a per-prototype BLAS, an instance list with world
+// transforms and a TLAS over instance bounds, and -- for every scene material
+// binding -- a compiled MaterialX variant (graph -> IR -> WGSL -> pipeline key /
+// instance). Geometry bytes live in the crate payloads (T048) and the MaterialX
+// graph->IR lowering live outside this module, so both are injected: a MeshSource
+// supplies a RawMesh per prototype and a MaterialCompiler supplies the shader IR /
+// WGSL per unit. Missing geometry or materials are reported as pending rather than
+// silently dropped (REQ-013). The pure plan is device-free and Node-testable;
+// uploadGeometry performs the actual GPUBuffer writes in the browser.
+
+import { hashString, computePipelineKey, type PipelineKeyParts } from '../compiler/cache.ts';
+import { extractFeatures, type ShaderFeatures } from '../compiler/features.ts';
+import { typeToString, type ShaderIr } from '../compiler/ir.ts';
+import type { WgslModule } from '../compiler/wgsl.ts';
+import type { Diagnostic, DiagnosticSink } from '../core/diagnostics.ts';
+import { buildBvh, buildTlas, type Aabb, type Bvh, type Tlas } from '../geometry/bvh.ts';
+import { prepareMesh, type PrepareMeshOptions, type PreparedSubset, type RawMesh, type DisplacementPlan, type SubdivisionPlan } from '../geometry/prepare.ts';
+import { createMaterialVariant, type MaterialVariant } from '../materials/instance.ts';
+import { buildSceneInstances, type Mat4 } from '../scene/instances.ts';
+import { transformPoint } from '../scene/transforms.ts';
+import type { SceneAsset, ScenePrim } from '../scene/types.ts';
+import { resolveSceneMaterials, type MaterialCompileUnit } from '../usd/materials.ts';
+
+/** Supplies the geometry cage for a prototype prim (crate payload bridge). */
+export interface MeshSource {
+  meshFor(prototypePrimPath: string): RawMesh | undefined;
+}
+
+/** Output of the MaterialX graph -> IR -> WGSL chain for one material unit. */
+export interface MaterialBuild {
+  ir: ShaderIr;
+  module: WgslModule;
+}
+
+/** Runs the MaterialX chain for a unique material unit (dedup already applied). */
+export interface MaterialCompiler {
+  compile(unit: MaterialCompileUnit): MaterialBuild | undefined | Promise<MaterialBuild | undefined>;
+}
+
+/** A single interleaved-free vertex stream ready for upload. */
+export interface VertexStream {
+  name: string;
+  data: Float32Array;
+  /** Scalar components per vertex (position/normal -> 3, uv -> 2). */
+  components: number;
+}
+
+export interface GeometryResource {
+  prototypeId: string;
+  primPath: string;
+  streams: readonly VertexStream[];
+  indices: Uint32Array;
+  vertexCount: number;
+  triangleCount: number;
+  bounds: Aabb;
+  blas: Bvh;
+  subsets: readonly PreparedSubset[];
+  subdivision: SubdivisionPlan;
+  displacement: DisplacementPlan;
+}
+
+export interface MaterialResource {
+  unitKey: string;
+  materialName: string;
+  features: ShaderFeatures;
+  variant: MaterialVariant;
+  boundPrims: readonly string[];
+}
+
+export interface InstanceResource {
+  id: string;
+  prototypeId: string;
+  primPath: string;
+  transform: Mat4;
+  /** True when the prototype has an uploaded GeometryResource. */
+  hasGeometry: boolean;
+  /** Compiled material unit key, when a material is bound and compiled. */
+  materialKey?: string;
+  materialPath?: string;
+}
+
+export interface SceneResources {
+  /** Geometry by prototype id. */
+  geometries: ReadonlyMap<string, GeometryResource>;
+  /** Compiled material by unit key. */
+  materials: ReadonlyMap<string, MaterialResource>;
+  instances: readonly InstanceResource[];
+  tlas: Tlas;
+  /** Prototype ids whose mesh source was unavailable. */
+  pendingGeometry: readonly string[];
+  /** Material unit keys whose compilation returned no build. */
+  pendingMaterials: readonly string[];
+  /** Gprims with no effective material binding. */
+  unboundGprims: readonly string[];
+}
+
+export interface BuildSceneResourcesOptions {
+  meshSource: MeshSource;
+  materialCompiler: MaterialCompiler;
+  sink?: DiagnosticSink;
+  prepareOptions?: PrepareMeshOptions;
+  isRenderable?: (prim: ScenePrim) => boolean;
+  /** Pipeline-key fields describing the render target (defaults to a raster pass). */
+  backend?: string;
+  compilerVersion?: string;
+  colorFormats?: readonly string[];
+  depthFormat?: string;
+  sampleCount?: number;
+}
+
+function unitKey(assetPath: string, referencedPrimPath: string): string {
+  return `${assetPath}::${referencedPrimPath}`;
+}
+
+function pipelineKeyFor(
+  features: ShaderFeatures,
+  module: WgslModule,
+  options: BuildSceneResourcesOptions,
+): string {
+  const parts: PipelineKeyParts = {
+    shaderHash: hashString(module.code),
+    compilerVersion: options.compilerVersion ?? '0',
+    backend: options.backend ?? 'raster',
+    pass: features.passes.map((p) => p.kind).sort().join('+') || 'opaque',
+    layouts: [features.variantKey],
+    vertexAttributes: features.attributes.map((a) => `${a.semantic}:${a.name}:${typeToString(a.type)}`),
+    colorFormats: options.colorFormats ?? ['rgba16float'],
+    ...(options.depthFormat !== undefined ? { depthFormat: options.depthFormat } : {}),
+    sampleCount: options.sampleCount ?? 1,
+  };
+  return computePipelineKey(parts);
+}
+
+function cornersOf(bounds: Aabb): [number, number, number][] {
+  const { min, max } = bounds;
+  const corners: [number, number, number][] = [];
+  for (let i = 0; i < 8; i++) {
+    corners.push([
+      (i & 1) ? max[0] : min[0],
+      (i & 2) ? max[1] : min[1],
+      (i & 4) ? max[2] : min[2],
+    ]);
+  }
+  return corners;
+}
+
+/** World-space AABB of a local AABB transformed by a column-major matrix. */
+function transformBounds(bounds: Aabb, transform: Mat4): Aabb {
+  const min: [number, number, number] = [Infinity, Infinity, Infinity];
+  const max: [number, number, number] = [-Infinity, -Infinity, -Infinity];
+  for (const corner of cornersOf(bounds)) {
+    const p = transformPoint(transform, corner);
+    for (let k = 0; k < 3; k++) {
+      if (p[k]! < min[k]!) min[k] = p[k]!;
+      if (p[k]! > max[k]!) max[k] = p[k]!;
+    }
+  }
+  return { min, max };
+}
+
+function pointBounds(transform: Mat4): Aabb {
+  const p = transformPoint(transform, [0, 0, 0]);
+  return { min: [p[0], p[1], p[2]], max: [p[0], p[1], p[2]] };
+}
+
+function buildGeometry(prototypeId: string, primPath: string, raw: RawMesh, options: PrepareMeshOptions): GeometryResource {
+  const mesh = prepareMesh(raw, options);
+  const streams: VertexStream[] = [
+    { name: 'position', data: mesh.positions, components: 3 },
+    { name: 'normal', data: mesh.normals, components: 3 },
+  ];
+  if (mesh.uvs) streams.push({ name: 'uv', data: mesh.uvs, components: 2 });
+  if (mesh.tangents) streams.push({ name: 'tangent', data: mesh.tangents, components: 4 });
+  for (const [name, attr] of mesh.attributes) {
+    streams.push({ name, data: attr.values, components: attr.elementSize });
+  }
+  const blas = buildBvh(mesh.positions, mesh.indices);
+  return {
+    prototypeId,
+    primPath,
+    streams,
+    indices: mesh.indices,
+    vertexCount: mesh.positions.length / 3,
+    triangleCount: mesh.indices.length / 3,
+    bounds: blas.bounds,
+    blas,
+    subsets: mesh.subsets,
+    subdivision: mesh.subdivision,
+    displacement: mesh.displacement,
+  };
+}
+
+/**
+ * Build the complete GPU resource plan for a scene: geometry + BLAS per prototype,
+ * instances + TLAS, and a compiled MaterialX variant per bound material.
+ */
+export async function buildSceneResources(
+  scene: SceneAsset,
+  options: BuildSceneResourcesOptions,
+): Promise<SceneResources> {
+  const emit: (d: Diagnostic) => void = options.sink ?? (() => undefined);
+  const sceneMaterials = resolveSceneMaterials(scene, {
+    ...(options.sink ? { sink: options.sink } : {}),
+    ...(options.isRenderable ? { isRenderable: options.isRenderable } : {}),
+  });
+  const sceneInstances = buildSceneInstances(scene, {
+    ...(options.sink ? { sink: options.sink } : {}),
+    materials: sceneMaterials,
+    ...(options.isRenderable ? { isRenderable: options.isRenderable } : {}),
+  });
+
+  // Geometry per prototype.
+  const geometries = new Map<string, GeometryResource>();
+  const pendingGeometry: string[] = [];
+  for (const proto of sceneInstances.prototypes) {
+    const raw = options.meshSource.meshFor(proto.primPath);
+    if (!raw) {
+      pendingGeometry.push(proto.id);
+      emit({ level: 'warning', message: `Geometry pending: no mesh source for prototype ${proto.primPath}`, detail: { prim: proto.primPath } });
+      continue;
+    }
+    geometries.set(proto.id, buildGeometry(proto.id, proto.primPath, raw, options.prepareOptions ?? {}));
+  }
+
+  // Materials per unique unit via the injected MaterialX chain.
+  const materials = new Map<string, MaterialResource>();
+  const pendingMaterials: string[] = [];
+  for (const unit of sceneMaterials.units) {
+    const key = unitKey(unit.assetPath, unit.referencedPrimPath);
+    const build = await options.materialCompiler.compile(unit);
+    if (!build) {
+      pendingMaterials.push(key);
+      emit({ level: 'warning', message: `Material pending: compiler produced no build for ${unit.materialName}`, detail: { material: key } });
+      continue;
+    }
+    const features = extractFeatures(build.ir);
+    const variant = createMaterialVariant(build.module, pipelineKeyFor(features, build.module, options));
+    materials.set(key, { unitKey: key, materialName: unit.materialName, features, variant, boundPrims: unit.boundPrims });
+  }
+
+  // Instances + TLAS.
+  const instances: InstanceResource[] = [];
+  const tlasBounds: Aabb[] = [];
+  for (const inst of sceneInstances.instances) {
+    const geometry = geometries.get(inst.prototypeId);
+    const binding = sceneMaterials.bindings.get(inst.primPath) ?? sceneMaterials.bindings.get(inst.prototypeId);
+    const materialKey = binding?.materialX
+      ? unitKey(binding.materialX.assetPath, binding.materialX.referencedPrimPath)
+      : undefined;
+    instances.push({
+      id: inst.id,
+      prototypeId: inst.prototypeId,
+      primPath: inst.primPath,
+      transform: inst.transform,
+      hasGeometry: geometry !== undefined,
+      ...(materialKey !== undefined && materials.has(materialKey) ? { materialKey } : {}),
+      ...(inst.materialPath !== undefined ? { materialPath: inst.materialPath } : {}),
+    });
+    tlasBounds.push(geometry ? transformBounds(geometry.bounds, inst.transform) : pointBounds(inst.transform));
+  }
+
+  const tlas = buildTlas(tlasBounds);
+
+  return {
+    geometries,
+    materials,
+    instances,
+    tlas,
+    pendingGeometry,
+    pendingMaterials,
+    unboundGprims: sceneMaterials.unbound,
+  };
+}
+
+export interface GeometryGpuBuffers {
+  vertexBuffers: Map<string, GPUBuffer>;
+  indexBuffer: GPUBuffer;
+  indexCount: number;
+}
+
+/** Upload a prepared geometry's streams and index buffer to the GPU. */
+export function uploadGeometry(device: GPUDevice, resource: GeometryResource, label?: string): GeometryGpuBuffers {
+  const vertexBuffers = new Map<string, GPUBuffer>();
+  for (const stream of resource.streams) {
+    const buffer = device.createBuffer({
+      size: stream.data.byteLength,
+      usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+      ...(label ? { label: `${label}:${stream.name}` } : {}),
+    });
+    device.queue.writeBuffer(buffer, 0, stream.data);
+    vertexBuffers.set(stream.name, buffer);
+  }
+  const indexBuffer = device.createBuffer({
+    size: resource.indices.byteLength,
+    usage: GPUBufferUsage.INDEX | GPUBufferUsage.COPY_DST,
+    ...(label ? { label: `${label}:index` } : {}),
+  });
+  device.queue.writeBuffer(indexBuffer, 0, resource.indices);
+  return { vertexBuffers, indexBuffer, indexCount: resource.indices.length };
+}
