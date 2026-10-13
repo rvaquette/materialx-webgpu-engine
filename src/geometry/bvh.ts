@@ -82,19 +82,24 @@ function buildCore(primitives: Primitive[], maxLeaf: number): { nodes: BvhNode[]
       expand(centroidBounds, it.centroid);
     }
 
+    // Reserve this node's slot before recursing so the root lands at index 0;
+    // both path-tracer traversals (CPU and WGSL) start from node 0.
+    const self = nodes.length;
+    const node: BvhNode = {
+      min: bounds.min as [number, number, number],
+      max: bounds.max as [number, number, number],
+      left: -1,
+      right: -1,
+      start: 0,
+      count: 0,
+    };
+    nodes.push(node);
+
     if (items.length <= maxLeaf) {
-      const start = order.length;
+      node.start = order.length;
+      node.count = items.length;
       for (const it of items) order.push(it.index);
-      const node: BvhNode = {
-        min: bounds.min as [number, number, number],
-        max: bounds.max as [number, number, number],
-        left: -1,
-        right: -1,
-        start,
-        count: items.length,
-      };
-      nodes.push(node);
-      return nodes.length - 1;
+      return self;
     }
 
     // Split along the widest centroid axis at the median.
@@ -109,21 +114,9 @@ function buildCore(primitives: Primitive[], maxLeaf: number): { nodes: BvhNode[]
     }
     items.sort((p, q) => p.centroid[axis]! - q.centroid[axis]!);
     const mid = items.length >> 1;
-    const leftItems = items.slice(0, mid);
-    const rightItems = items.slice(mid);
-
-    const left = recurse(leftItems);
-    const right = recurse(rightItems);
-    const node: BvhNode = {
-      min: bounds.min as [number, number, number],
-      max: bounds.max as [number, number, number],
-      left,
-      right,
-      start: 0,
-      count: 0,
-    };
-    nodes.push(node);
-    return nodes.length - 1;
+    node.left = recurse(items.slice(0, mid));
+    node.right = recurse(items.slice(mid));
+    return self;
   };
 
   if (primitives.length > 0) recurse(primitives);
@@ -160,14 +153,15 @@ export function buildBvh(positions: Float32Array, indices: Uint32Array, options:
     primitives.push({ index: tri, min: tb.min, max: tb.max, centroid: tb.centroid });
   }
   const { nodes, order } = buildCore(primitives, maxLeaf);
-  const rootBounds: Aabb = nodes.length > 0 ? { min: nodes[nodes.length - 1]!.min, max: nodes[nodes.length - 1]!.max } : { min: [0, 0, 0], max: [0, 0, 0] };
+  const rootBounds: Aabb = nodes.length > 0 ? { min: nodes[0]!.min, max: nodes[0]!.max } : { min: [0, 0, 0], max: [0, 0, 0] };
   return { nodes, triangleOrder: order, bounds: rootBounds };
 }
 
 /** Recompute node bounds in place after vertices move; topology is unchanged. */
 export function refitBvh(bvh: Bvh, positions: Float32Array, indices: Uint32Array): void {
-  // Children were pushed before parents, so an ascending pass sees them first.
-  for (const node of bvh.nodes) {
+  // Parents precede their children, so a descending pass refits children first.
+  for (let n = bvh.nodes.length - 1; n >= 0; n--) {
+    const node = bvh.nodes[n]!;
     const b = emptyBounds();
     if (node.left < 0) {
       for (let i = 0; i < node.count; i++) {
@@ -185,7 +179,7 @@ export function refitBvh(bvh: Bvh, positions: Float32Array, indices: Uint32Array
     node.min = b.min as [number, number, number];
     node.max = b.max as [number, number, number];
   }
-  const root = bvh.nodes[bvh.nodes.length - 1];
+  const root = bvh.nodes[0];
   if (root) bvh.bounds = { min: root.min, max: root.max };
 }
 
@@ -202,13 +196,15 @@ export function buildTlas(instanceBounds: readonly Aabb[], options: BuildBvhOpti
     ],
   }));
   const { nodes, order } = buildCore(primitives, maxLeaf);
-  const rootBounds: Aabb = nodes.length > 0 ? { min: nodes[nodes.length - 1]!.min, max: nodes[nodes.length - 1]!.max } : { min: [0, 0, 0], max: [0, 0, 0] };
+  const rootBounds: Aabb = nodes.length > 0 ? { min: nodes[0]!.min, max: nodes[0]!.max } : { min: [0, 0, 0], max: [0, 0, 0] };
   return { nodes, instanceOrder: order, bounds: rootBounds };
 }
 
 /** Refit a TLAS after instance transforms change; topology is unchanged. */
 export function refitTlas(tlas: Tlas, instanceBounds: readonly Aabb[]): void {
-  for (const node of tlas.nodes) {
+  // Parents precede their children, so a descending pass refits children first.
+  for (let n = tlas.nodes.length - 1; n >= 0; n--) {
+    const node = tlas.nodes[n]!;
     const b = emptyBounds();
     if (node.left < 0) {
       for (let i = 0; i < node.count; i++) {
@@ -222,7 +218,7 @@ export function refitTlas(tlas: Tlas, instanceBounds: readonly Aabb[]): void {
     node.min = b.min as [number, number, number];
     node.max = b.max as [number, number, number];
   }
-  const root = tlas.nodes[tlas.nodes.length - 1];
+  const root = tlas.nodes[0];
   if (root) tlas.bounds = { min: root.min, max: root.max };
 }
 

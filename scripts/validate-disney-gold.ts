@@ -8,11 +8,16 @@
 //   4. Node-measurable proxies for load / compile / render time and memory
 //      (buffer byte sizes + heap), since Node has no WebGPU -- the real GPU-local
 //      timings come from the browser device harness (T053).
+//   5. a CPU path-traced preview PNG (renders/, gitignored) of the real scene
+//      geometry using the reference integrator -- the same packed BVH/triangles
+//      the WGSL compute shader reads, with its exact camera-ray unprojection.
 // Not part of the test suite. Run with: node scripts/validate-disney-gold.ts
 // (Node >=23.6 strips the TypeScript types natively, so no build step is needed).
-// Emits a JSON report under docs/generated/ and prints a French summary.
+// Optional args: [resolution] [spp]. Emits a JSON report under docs/generated/,
+// a PNG under renders/, and prints a French summary.
 
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
+import { deflateSync } from 'node:zlib';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve, join } from 'node:path';
 import { emitWgsl } from '../src/compiler/wgsl.ts';
@@ -27,15 +32,24 @@ import {
   type MaterialResource,
   type MeshSource,
 } from '../src/render/scene-resources.ts';
-import { buildPathTraceScene } from '../src/render/pathtracing/scene-buffers.ts';
+import {
+  buildPathTraceScene,
+  createSceneSampler,
+  type PathTraceCamera,
+} from '../src/render/pathtracing/scene-buffers.ts';
 import { compareSceneBackends } from '../src/render/compare-backends.ts';
+import { integratePath, createPcg32, type Ray } from '../src/render/pathtracing/integrator.ts';
+import { applyExposure, tonemap, encodeOutput } from '../src/render/output.ts';
+import { lookAt4, multiply4, perspective4 } from '../src/scene/transforms.ts';
 import {
   NEUTRAL_SURFACE,
   type BuildSceneFrameOptions,
+  type FrameCamera,
   type RasterSurface,
 } from '../src/render/raster/scene-frame.ts';
 import type { RawMesh } from '../src/geometry/prepare.ts';
 import type { Diagnostic } from '../src/core/diagnostics.ts';
+import type { Vec3 } from '../src/scene/transforms.ts';
 import type { SceneAsset, ScenePrim } from '../src/scene/types.ts';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -43,6 +57,10 @@ const SCENE_DIR = resolve(here, '../scenes/test_material_disney_gold');
 const ENTRY = join(SCENE_DIR, 'test_material_disney_gold.usda');
 const OUT_DIR = resolve(here, '../docs/generated');
 const OUT_FILE = join(OUT_DIR, 't053a-disney-gold.json');
+const RENDERS_DIR = resolve(here, '../renders');
+const PNG_FILE = join(RENDERS_DIR, 't053a-disney-gold.png');
+const RES = Math.max(16, Number.parseInt(process.argv[2] ?? '256', 10) || 256);
+const SPP = Math.max(1, Number.parseInt(process.argv[3] ?? '32', 10) || 32);
 
 /** Reads USD/MaterialX layers off disk, resolving relative paths against the scene dir. */
 function fsReader(sceneDir: string): UsdLayerReader {
@@ -113,6 +131,72 @@ function parseOpenPbr(text: string): RasterSurface {
     ior: num('specular_ior', 1.5),
     specular: num('specular_weight', 1),
   };
+}
+
+// --- CPU preview PNG ---------------------------------------------------------
+
+const CRC_TABLE = (() => {
+  const t = new Uint32Array(256);
+  for (let n = 0; n < 256; n++) {
+    let c = n;
+    for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+    t[n] = c >>> 0;
+  }
+  return t;
+})();
+
+function crc32(buf: Buffer): number {
+  let c = 0xffffffff;
+  for (let i = 0; i < buf.length; i++) c = CRC_TABLE[(c ^ buf[i]!) & 0xff]! ^ (c >>> 8);
+  return (c ^ 0xffffffff) >>> 0;
+}
+
+function pngChunk(type: string, data: Buffer): Buffer {
+  const len = Buffer.alloc(4);
+  len.writeUInt32BE(data.length, 0);
+  const typeData = Buffer.concat([Buffer.from(type, 'ascii'), data]);
+  const crc = Buffer.alloc(4);
+  crc.writeUInt32BE(crc32(typeData), 0);
+  return Buffer.concat([len, typeData, crc]);
+}
+
+function encodePng(width: number, height: number, rgba: Uint8Array): Buffer {
+  const stride = width * 4;
+  const raw = Buffer.alloc((stride + 1) * height);
+  for (let y = 0; y < height; y++) {
+    raw[y * (stride + 1)] = 0; // filter type 0 (None)
+    Buffer.from(rgba.buffer, rgba.byteOffset + y * stride, stride).copy(raw, y * (stride + 1) + 1);
+  }
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(width, 0);
+  ihdr.writeUInt32BE(height, 4);
+  ihdr[8] = 8; // bit depth
+  ihdr[9] = 6; // colour type RGBA
+  const sig = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
+  return Buffer.concat([sig, pngChunk('IHDR', ihdr), pngChunk('IDAT', deflateSync(raw)), pngChunk('IEND', Buffer.alloc(0))]);
+}
+
+/** Primary ray for pixel (px,py) -- byte-for-byte the WGSL camera_ray unprojection. */
+function cameraRay(cam: PathTraceCamera, px: number, py: number, w: number, h: number, jx: number, jy: number): Ray {
+  const ndcX = ((px + jx) / w) * 2 - 1;
+  const ndcY = 1 - ((py + jy) / h) * 2;
+  const m = cam.invViewProj;
+  const fx = m[0]! * ndcX + m[4]! * ndcY + m[8]! + m[12]!;
+  const fy = m[1]! * ndcX + m[5]! * ndcY + m[9]! + m[13]!;
+  const fz = m[2]! * ndcX + m[6]! * ndcY + m[10]! + m[14]!;
+  const fw = m[3]! * ndcX + m[7]! * ndcY + m[11]! + m[15]!;
+  const dx = fx / fw - cam.eye[0];
+  const dy = fy / fw - cam.eye[1];
+  const dz = fz / fw - cam.eye[2];
+  const len = Math.hypot(dx, dy, dz) || 1;
+  return { origin: cam.eye, direction: [dx / len, dy / len, dz / len] };
+}
+
+/** Resolve one linear HDR pixel to 8-bit sRGB via the shared output pipeline. */
+function resolvePixel(c: Vec3, exposure: number): [number, number, number] {
+  const enc = encodeOutput(tonemap(applyExposure(c, exposure), 'acesFilmic'), 'lin_rec709').color;
+  const q = (x: number): number => Math.round(Math.min(Math.max(x, 0), 1) * 255);
+  return [q(enc[0]), q(enc[1]), q(enc[2])];
 }
 
 /** Minimal opaque material compiler: the surface params come from the .mtlx files;
@@ -198,6 +282,65 @@ async function main(): Promise<void> {
   const pt = buildPathTraceScene(resources, frameOpts);
   const tRender = performance.now();
 
+  // 4. CPU path-traced preview of the REAL scene geometry (renders/, gitignored).
+  // The gold material is a pure metal (metalness=1, roughness=0.02): it only
+  // reflects the environment, and the two area lights are approximated as a single
+  // directional light (see diagnostics) that grazes the up-facing ground. Under
+  // the scene's near-black default environment the result is faithfully almost
+  // black. For a LEGIBLE thumbnail we render against a neutral constant
+  // environment (studio fill) that still goes through the real BSDF, from a
+  // preview camera framed on the cube+sphere cluster (the authored scene camera
+  // is pulled far back behind a 20x20 ground plane). Both overrides are
+  // preview-only; the validation numbers above use the scene's own camera and
+  // environment. Real lighting/framing fidelity on the GPU is T053.
+  const previewEnv: Vec3 = [0.6, 0.6, 0.6];
+  const target: Vec3 = [0, 0.3, 0];
+  const dir: Vec3 = [0.657, 0.438, 0.613]; // normalized authored-camera view axis
+  const dist = 7;
+  const eye: Vec3 = [target[0] + dir[0] * dist, target[1] + dir[1] * dist, target[2] + dir[2] * dist];
+  const previewCamera: FrameCamera = {
+    viewProj: multiply4(perspective4(0.62, 1, 0.1, 100), lookAt4(eye, target, [0, 1, 0])),
+    eye,
+    exposure: camera?.exposure ?? 0,
+  };
+  const ptPreview = buildPathTraceScene(resources, {
+    ...frameOpts,
+    frameCamera: previewCamera,
+    environment: { radiance: previewEnv },
+  });
+  const sampler = createSceneSampler(ptPreview);
+  const rgba = new Uint8Array(RES * RES * 4);
+  let primaryHits = 0;
+  const tImg0 = performance.now();
+  for (let py = 0; py < RES; py++) {
+    for (let px = 0; px < RES; px++) {
+      const idx = (py * RES + px) * 4;
+      if (!sampler.intersect(cameraRay(ptPreview.camera, px, py, RES, RES, 0.5, 0.5))) continue; // transparent miss
+      primaryHits += 1;
+      let r = 0;
+      let g = 0;
+      let b = 0;
+      for (let s = 0; s < SPP; s++) {
+        const rng = createPcg32((py * RES + px) * SPP + s + 1);
+        const jx = rng();
+        const jy = rng();
+        const L = integratePath(sampler, cameraRay(ptPreview.camera, px, py, RES, RES, jx, jy), rng);
+        r += L[0];
+        g += L[1];
+        b += L[2];
+      }
+      const mean: Vec3 = [r / SPP, g / SPP, b / SPP];
+      const [cr, cg, cb] = resolvePixel(mean, ptPreview.camera.exposure);
+      rgba[idx] = cr;
+      rgba[idx + 1] = cg;
+      rgba[idx + 2] = cb;
+      rgba[idx + 3] = 255;
+    }
+  }
+  const tImg = performance.now();
+  mkdirSync(RENDERS_DIR, { recursive: true });
+  writeFileSync(PNG_FILE, encodePng(RES, RES, rgba));
+
   const triangleTotal = [...resources.geometries.values()].reduce((s, g) => s + g.triangleCount, 0);
   const ptNodesBytes = pt.nodes.byteLength;
   const ptTrianglesBytes = pt.triangles.byteLength;
@@ -239,12 +382,24 @@ async function main(): Promise<void> {
       ptTotalBytes: ptNodesBytes + ptTrianglesBytes + ptMaterialsBytes,
       heapUsedBytes,
     },
+    image: {
+      path: 'renders/t053a-disney-gold.png',
+      width: RES,
+      height: RES,
+      spp: SPP,
+      primaryHits,
+      pixels: RES * RES,
+      coverage: primaryHits / (RES * RES),
+      previewEnvironment: previewEnv,
+      renderMs: tImg - tImg0,
+    },
     timings: {
       loadMs: tLoad - t0,
       importMs: tImport - tLoad,
       resourcesMs: tResources - tImport,
-      renderMs: tRender - tResources,
-      totalMs: tRender - t0,
+      backendsMs: tRender - tResources,
+      imageMs: tImg - tImg0,
+      totalMs: tImg - t0,
     },
     diagnostics: diagnostics.map((d) => ({ level: d.level, message: d.message })),
   };
@@ -268,9 +423,11 @@ async function main(): Promise<void> {
     `probeDiffuse=${report.backends.diffuseProbe.agree} (maxAbs=${report.backends.diffuseProbe.maxAbsDiff.toExponential(2)})`);
   console.log(`[t053a] Memoire buffers PT : noeuds=${kb(ptNodesBytes)}, triangles=${kb(ptTrianglesBytes)}, ` +
     `materiaux=${kb(ptMaterialsBytes)}, total=${kb(report.memory.ptTotalBytes)} ; heap=${kb(heapUsedBytes)}`);
+  console.log(`[t053a] Rendu CPU : ${RES}x${RES}, ${SPP} spp, couverture=${(report.image.coverage * 100).toFixed(1)}% ` +
+    `(${primaryHits}/${RES * RES} px) -> ${PNG_FILE}`);
   console.log(`[t053a] Temps : load=${ms(report.timings.loadMs)}, import=${ms(report.timings.importMs)}, ` +
-    `ressources=${ms(report.timings.resourcesMs)}, rendu(CPU)=${ms(report.timings.renderMs)}, ` +
-    `total=${ms(report.timings.totalMs)}`);
+    `ressources=${ms(report.timings.resourcesMs)}, backends=${ms(report.timings.backendsMs)}, ` +
+    `image(CPU)=${ms(report.timings.imageMs)}, total=${ms(report.timings.totalMs)}`);
   console.log(`[t053a] Diagnostics (${diagnostics.length}) :`);
   for (const d of diagnostics) console.log(`[t053a]   - [${d.level}] ${d.message}`);
   console.log(`[t053a] Rapport JSON : ${OUT_FILE}`);

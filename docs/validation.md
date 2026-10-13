@@ -333,3 +333,45 @@ mêmes surfaces OpenPBR — sans ré-import. Le recoupement Lambert à incidence
 > d'occupation VRAM **réels sur le GPU local** passent par le harnais device
 > navigateur ([`scene-device-harness.html`](../scene-device-harness.html),
 > `npm run test:scene-device`) et sont couverts par la validation complète T053.
+
+### Aperçu CPU path-tracé (PNG)
+
+Pour disposer d'un **aperçu visuel immédiat** sans attendre le GPU, le run écrit
+aussi une image PNG path-tracée sur CPU dans `renders/t053a-disney-gold.png`
+(artefact local non versionné, comme la scène). Elle rejoue la géométrie, les
+matériaux OpenPBR et la soupe de triangles **réels** de la scène via le même
+intégrateur que le path tracer (`integratePath` + `createSceneSampler`), avec une
+génération de rayon caméra **identique à la fonction WGSL** `camera_ray`
+(dé-projection `invViewProj` colonne-major, NDC WebGPU `z ∈ [0,1]`).
+
+Deux ajustements **propres à l'aperçu** (ils ne modifient pas la chaîne de
+validation ni le recoupement des backends) assurent la lisibilité :
+
+- une **caméra d'aperçu** cadrée sur le sujet (œil à ~7 u, cible `(0, 0.3, 0)`) ;
+- un **environnement neutre** `[0.6, 0.6, 0.6]` en remplacement de l'environnement
+  quasi-noir de la scène, afin que l'or métallique pur réfléchisse un studio
+  visible plutôt qu'un fond noir.
+
+La fidélité réelle (compilation de shader, rendu et VRAM sur le GPU) reste couverte
+par le harnais device T053.
+
+### Correctif moteur : racine BVH à l'index 0
+
+L'aperçu a révélé un **bug de corrélation d'index** latent dans le constructeur
+BVH ([`src/geometry/bvh.ts`](../src/geometry/bvh.ts)) : `buildCore` allouait les
+nœuds en **post-ordre**, plaçant la racine en **dernière** position du tableau,
+alors que **les deux traversées** (CPU `scene-buffers.ts` et WGSL `compute.ts`)
+démarrent la pile au nœud **0**. Sur les scènes à un seul nœud (≤ 4 triangles,
+utilisées par les tests CPU unitaires) la racine était fortuitement à l'index 0,
+masquant le défaut ; dès que la scène produisait un BVH multi-nœuds (comme les
+974 triangles de disney gold), la traversée partait d'un nœud feuille arbitraire
+et manquait la majorité de la géométrie.
+
+Le correctif réalloue les nœuds en **pré-ordre** (réservation du slot parent avant
+la récursion des enfants) pour que la **racine soit toujours à l'index 0**, et
+inverse les passes de `refit` (ordre descendant : les enfants, d'index supérieur,
+sont rafraîchis avant leurs parents). Il corrige **simultanément** les chemins CPU
+et GPU. Les 787 tests restent verts (`tests/geometry/bvh.test.ts` n'assertait que
+`nodes.length`, l'ordre des triangles et les bornes, jamais l'index racine ; le
+helper de traversée `tests/render/scene-samples.ts` démarre désormais au nœud 0).
+

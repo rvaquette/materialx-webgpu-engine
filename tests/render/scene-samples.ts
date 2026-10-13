@@ -198,7 +198,7 @@ export function intersectBvh(surface: FittedSurface, ray: Ray): TriHit | null {
   const inv: V3 = [1 / d[0], 1 / d[1], 1 / d[2]];
   let best: TriHit | null = null;
   let bestT = Infinity;
-  const stack = [bvh.nodes.length - 1];
+  const stack = [0];
   while (stack.length > 0) {
     const ni = stack.pop()!;
     const node = bvh.nodes[ni]!;
