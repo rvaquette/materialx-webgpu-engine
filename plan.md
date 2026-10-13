@@ -528,11 +528,41 @@ supportee produit un diagnostic. Le rendu reste statique (pas d'animation).
   instances/TLAS + materiaux lies, materiau pending quand le compilateur ne rend
   rien, uploadGeometry ecrit chaque flux + l'index buffer sur un device factice).
   Valide : typecheck + 756 tests Node.
-- [ ] T051 [Plan:P9] Cabler le backend raster executable sur la scene reelle :
+- [x] T051 [Plan:P9] Cabler le backend raster executable sur la scene reelle :
   src/main.ts et src/render/raster/backend.ts consomment SceneAsset + instances
   materiau (cameras et lumieres USD reelles, environnement), remplacant le
   triangle et les uniformes codes en dur ; rendu multi-objets avec les passes
   effectivement actives (opaque, transmission, etc.).
+  Fait : (1) Nouveau chemin forward "scene" dans src/render/raster/shaders.ts
+  (sceneForwardWgsl) : matrice modele par instance, deux buffers de sommets
+  separes position/normal alignes sur les flux de T050, et la meme evaluation
+  OpenPBR analytique que forwardOpaqueWgsl mais avec sortie alpha pour la
+  transmission. (2) src/render/raster/backend.ts : SCENE_FORWARD_UNIFORM_SIZE=240,
+  SCENE_VERTEX_LAYOUTS (2 buffers float32x3), createSceneForwardPipeline(pass)
+  (opaque -> ecriture profondeur + cull back ; transmission -> alpha-blend,
+  depthWriteEnabled false, cull none) et recordScenePass qui boucle sur les draws
+  multi-objets (bind group + 2 vertex buffers + index + drawIndexed) avec clear
+  sur la premiere passe puis load. Le chemin legacy triangle unique (forward/
+  resolve) reste intact pour les tests existants. (3) Nouveau module pur
+  src/render/raster/scene-frame.ts (testable en Node) : cameraFrom (viewProj =
+  projection*view, oeil depuis la transform USD), directionalLightFrom (prefere
+  une DistantLight, direction locale -Z en monde, intensite*2^exposure),
+  environmentFrom (DomeLight sinon ambiant), buildSceneFrame (une draw par
+  instance avec geometrie, instances sans geometrie reportees dans skipped,
+  routage opaque/transmission selon les passes effectives du materiau ou la
+  transmission de la surface) et buildSceneUniform (60 floats au layout de
+  sceneForwardWgsl). (4) src/main.ts recable sur la vraie chaine : SceneAsset
+  compose -> importLights/importCameras -> buildSceneResources -> buildSceneFrame
+  -> upload geometrie par prototype -> une passe GPU par passe active -> resolve
+  tonemap vers le canvas ; plus aucun triangle ni uniforme code en dur. Decision :
+  main.ts fournit une SceneAsset de demonstration (deux mesh + une DistantLight)
+  via un MeshSource/MaterialCompiler injectes, en attendant le loader crate reel ;
+  le flux d'execution est le vrai, documente dans l'en-tete du fichier. Tests
+  tests/render/raster/scene-frame.test.ts (7 cas : camera/lumiere/environnement,
+  routage des passes, surface qui transmet, camera par defaut, layout uniforme)
+  et extension de tests/render/raster/backend.test.ts (5 cas : pipeline opaque vs
+  transmission, recordScenePass multi-objets, clear/load, erreur si pipeline
+  absent). Valide : typecheck + 768 tests Node.
 - [ ] T052 [Plan:P9] Porter l'integrateur de reference path tracing en compute
   WebGPU alimente par la meme scene (traversal BVH + fermetures eval/PDF/sample
   de src/render/pathtracing/bsdf.ts), accumulation progressive, et commutation de

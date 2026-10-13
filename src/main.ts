@@ -1,40 +1,120 @@
-// Browser entry point (T026b). Verifies WebGPU, then drives the executable raster
-// backend: it builds an HDR colour target plus depth, uploads a small lit
-// triangle, records a forward opaque pass and a tonemap resolve to the canvas,
-// and submits one static frame. The real device lifecycle lives in
-// src/gpu/device.ts; this bootstrap wires a minimal end-to-end render.
+// Browser entry point (T026b, T051). Drives the executable raster backend on a
+// real scene: it builds a composed SceneAsset, resolves its USD lights (and
+// camera when present), turns it into GPU resources through the SceneAsset -> GPU
+// bridge (src/render/scene-resources.ts), assembles a multi-object render plan
+// with the effectively-active passes (src/render/raster/scene-frame.ts), uploads
+// every prototype's geometry, records one scene forward pass per active pass into
+// an HDR target, and resolves it to the canvas. The demo SceneAsset stands in for
+// the crate/USD loader (T048 follow-up) that will supply real assets; the runtime
+// flow -- scene -> camera/lights -> resources -> frame -> GPU passes -- is the real
+// path, no longer a hard-coded triangle with hard-coded uniforms.
 
-import { RasterBackend, FORWARD_UNIFORM_SIZE, RESOLVE_UNIFORM_SIZE } from './render/raster/backend.ts';
+import { emitWgsl } from './compiler/wgsl.ts';
+import { FLOAT, IrModuleBuilder, shaderType } from './compiler/ir.ts';
+import { RasterBackend, RESOLVE_UNIFORM_SIZE, SCENE_FORWARD_UNIFORM_SIZE, type ScenePassKind, type SceneDrawCall } from './render/raster/backend.ts';
+import { buildSceneFrame, buildSceneUniform, type FrameCamera } from './render/raster/scene-frame.ts';
+import { buildSceneResources, uploadGeometry, type MaterialBuild, type MaterialCompiler, type MeshSource } from './render/scene-resources.ts';
 import { lookAt4, multiply4, perspective4 } from './scene/transforms.ts';
+import type { RawMesh } from './geometry/prepare.ts';
+import type { MaterialXReference, SceneAsset, ScenePrim, XformOp } from './scene/types.ts';
+import { importCameras } from './usd/cameras.ts';
+import { importLights } from './usd/lights.ts';
 
 function setStatus(text: string): void {
   const el = document.getElementById('status');
   if (el) el.textContent = text;
 }
 
-// Interleaved position(xyz) + normal(xyz); a single camera-facing triangle.
-const VERTICES = new Float32Array([
-  -0.6, -0.5, 0, 0, 0, 1,
-  0.6, -0.5, 0, 0, 0, 1,
-  0.0, 0.6, 0, 0, 0, 1,
-]);
-const INDICES = new Uint32Array([0, 1, 2]);
+function prim(path: string, overrides: Partial<ScenePrim> = {}): ScenePrim {
+  const name = path.split('/').filter(Boolean).pop() ?? '';
+  return {
+    path,
+    name,
+    specifier: 'def',
+    apiSchemas: [],
+    inherits: [],
+    references: [],
+    payloads: [],
+    attributes: new Map(),
+    relationships: new Map(),
+    xformOps: [],
+    children: [],
+    ...overrides,
+  };
+}
 
-function buildForwardUniforms(aspect: number): Float32Array {
+const translate = (x: number, y: number, z: number): XformOp => ({
+  op: 'xformOp:translate',
+  typeName: 'double3',
+  value: [x, y, z],
+  invert: false,
+});
+
+const SURF_MTLX: MaterialXReference = {
+  primPath: '/World/Looks/surf',
+  assetPath: './demo.mtlx',
+  referencedPrimPath: '/MaterialX/Materials/surf',
+  materialName: 'surf',
+};
+
+/** Minimal composed scene: two lit meshes bound to one material + a key light. */
+function buildDemoScene(): SceneAsset {
+  const world = prim('/World', { children: ['/World/tri', '/World/quad', '/World/Looks', '/World/key'] });
+  const binding = { target: '/World/Looks/surf', strength: 'weakerThanDescendants' as const };
+  const tri = prim('/World/tri', { typeName: 'Mesh', mesh: { primvars: [] }, xformOps: [translate(-0.7, 0, 0)], materialBinding: binding });
+  const quad = prim('/World/quad', { typeName: 'Mesh', mesh: { primvars: [] }, xformOps: [translate(0.7, 0, 0)], materialBinding: binding });
+  const looks = prim('/World/Looks', { children: ['/World/Looks/surf'] });
+  const surf = prim('/World/Looks/surf', { typeName: 'Material' });
+  const key = prim('/World/key', {
+    typeName: 'DistantLight',
+    attributes: new Map([
+      ['inputs:intensity', { name: 'inputs:intensity', typeName: 'float', value: 3 }],
+      ['inputs:color', { name: 'inputs:color', typeName: 'color3f', value: [1, 0.96, 0.9] }],
+    ]),
+  });
+  const prims = [world, tri, quad, looks, surf, key];
+  return {
+    entry: 'demo.usda',
+    stage: { subLayers: [] },
+    prims: new Map(prims.map((p) => [p.path, p])),
+    roots: ['/World'],
+    materials: [SURF_MTLX],
+  };
+}
+
+function demoMeshSource(): MeshSource {
+  const tri: RawMesh = {
+    points: [-0.5, -0.4, 0, 0.5, -0.4, 0, 0, 0.5, 0],
+    faceVertexCounts: [3],
+    faceVertexIndices: [0, 1, 2],
+  };
+  const quad: RawMesh = {
+    points: [-0.45, -0.45, 0, 0.45, -0.45, 0, 0.45, 0.45, 0, -0.45, 0.45, 0],
+    faceVertexCounts: [4],
+    faceVertexIndices: [0, 1, 2, 3],
+  };
+  const map: Record<string, RawMesh> = { '/World/tri': tri, '/World/quad': quad };
+  return { meshFor: (path) => map[path] };
+}
+
+function demoMaterialCompiler(): MaterialCompiler {
+  return {
+    compile(): MaterialBuild {
+      const b = new IrModuleBuilder();
+      const opacity = b.constant(FLOAT, 1);
+      const ref = b.add({ kind: 'closure', type: shaderType('surface'), closure: 'bsdf', op: 'surface', params: { opacity } });
+      b.output({ name: 'surfaceshader', type: shaderType('surface'), ref });
+      const ir = b.build();
+      return { ir, module: emitWgsl(ir) };
+    },
+  };
+}
+
+function cameraForCanvas(aspect: number): FrameCamera {
   const proj = perspective4(Math.PI / 3, aspect, 0.1, 100);
-  const eye: [number, number, number] = [0, 0, 2];
+  const eye: [number, number, number] = [0, 0, 2.6];
   const view = lookAt4(eye, [0, 0, 0], [0, 1, 0]);
-  const viewProj = multiply4(proj, view);
-  const data = new Float32Array(FORWARD_UNIFORM_SIZE / 4);
-  data.set(viewProj, 0);
-  data.set([eye[0], eye[1], eye[2], 0], 16); // eye
-  data.set([0.3, 0.5, 0.8, 0], 20); // lightDir (scene-convention travel direction)
-  data.set([1, 1, 1, 1], 24); // lightColor (rgb) + intensity (w)
-  data.set([1.0, 0.5, 0.2, 1], 28); // baseColor
-  data.set([0.0, 0.4, 0.0, 0.0], 32); // material: metalness, roughness, transmission, subsurface
-  data.set([1.5, 1.0, 0, 0], 36); // coat: ior, specular
-  data.set([0.03, 0.03, 0.03, 0], 40); // environment
-  return data;
+  return { viewProj: multiply4(proj, view), eye, exposure: 0 };
 }
 
 async function main(): Promise<void> {
@@ -57,11 +137,29 @@ async function main(): Promise<void> {
 
   const outputFormat = navigator.gpu.getPreferredCanvasFormat();
   context.configure({ device, format: outputFormat, alphaMode: 'opaque' });
-
   const width = canvas.width;
   const height = canvas.height;
+
+  // Scene -> resources -> frame (the real runtime chain).
+  const scene = buildDemoScene();
+  const warnings: string[] = [];
+  const sink = (d: { level: string; message: string }): void => {
+    if (d.level === 'warning' || d.level === 'error') warnings.push(d.message);
+  };
+  const resources = await buildSceneResources(scene, {
+    meshSource: demoMeshSource(),
+    materialCompiler: demoMaterialCompiler(),
+    sink,
+  });
+  const lights = importLights(scene, { sink });
+  const cameras = importCameras(scene, { sink });
+  const frame = buildSceneFrame(resources, {
+    lights,
+    ...(cameras[0] ? { camera: cameras[0] } : { frameCamera: cameraForCanvas(width / height) }),
+  });
+
   const backend = new RasterBackend({ device, outputFormat, tonemap: 'acesFilmic' });
-  backend.createForwardPipeline();
+  for (const pass of frame.passes) backend.createSceneForwardPipeline(pass);
   backend.createResolvePipeline();
 
   const hdrTexture = device.createTexture({
@@ -74,43 +172,49 @@ async function main(): Promise<void> {
     format: backend.depthFormat,
     usage: GPUTextureUsage.RENDER_ATTACHMENT,
   });
+  const hdrView = hdrTexture.createView();
+  const depthView = depthTexture.createView();
 
-  const vertexBuffer = device.createBuffer({
-    size: VERTICES.byteLength,
-    usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
-  });
-  device.queue.writeBuffer(vertexBuffer, 0, VERTICES);
-  const indexBuffer = device.createBuffer({
-    size: INDICES.byteLength,
-    usage: GPUBufferUsage.INDEX | GPUBufferUsage.COPY_DST,
-  });
-  device.queue.writeBuffer(indexBuffer, 0, INDICES);
+  // Upload geometry once per prototype.
+  const uploaded = new Map<string, ReturnType<typeof uploadGeometry>>();
+  for (const [id, geometry] of resources.geometries) {
+    uploaded.set(id, uploadGeometry(device, geometry, id));
+  }
 
-  const forwardUniform = device.createBuffer({
-    size: FORWARD_UNIFORM_SIZE,
-    usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-  });
-  device.queue.writeBuffer(forwardUniform, 0, buildForwardUniforms(width / height));
+  // One draw call per instance, grouped by its active pass.
+  const drawsByPass = new Map<ScenePassKind, SceneDrawCall[]>();
+  for (const draw of frame.draws) {
+    const buffers = uploaded.get(draw.prototypeId);
+    const position = buffers?.vertexBuffers.get('position');
+    const normal = buffers?.vertexBuffers.get('normal');
+    if (!buffers || !position || !normal) continue;
+    const pipeline = backend.scenePipeline(draw.pass);
+    if (!pipeline) continue;
+    const uniform = device.createBuffer({
+      size: SCENE_FORWARD_UNIFORM_SIZE,
+      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+    });
+    device.queue.writeBuffer(uniform, 0, buildSceneUniform(frame, draw));
+    const bindGroup = device.createBindGroup({
+      layout: pipeline.getBindGroupLayout(0),
+      entries: [{ binding: 0, resource: { buffer: uniform } }],
+    });
+    const list = drawsByPass.get(draw.pass) ?? [];
+    list.push({ bindGroup, positionBuffer: position, normalBuffer: normal, indexBuffer: buffers.indexBuffer, indexCount: buffers.indexCount });
+    drawsByPass.set(draw.pass, list);
+  }
 
   const resolveUniform = device.createBuffer({
     size: RESOLVE_UNIFORM_SIZE,
     usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
   });
-  device.queue.writeBuffer(resolveUniform, 0, new Float32Array([0])); // exposure EV
-
-  const forwardPipeline = backend.forwardPipeline;
+  device.queue.writeBuffer(resolveUniform, 0, new Float32Array([frame.camera.exposure]));
+  const sampler = device.createSampler({ magFilter: 'linear', minFilter: 'linear' });
   const resolvePipeline = backend.resolvePipeline;
-  if (!forwardPipeline || !resolvePipeline) {
-    setStatus('Pipeline creation failed.');
+  if (!resolvePipeline) {
+    setStatus('Resolve pipeline creation failed.');
     return;
   }
-
-  const forwardBindGroup = device.createBindGroup({
-    layout: forwardPipeline.getBindGroupLayout(0),
-    entries: [{ binding: 0, resource: { buffer: forwardUniform } }],
-  });
-  const sampler = device.createSampler({ magFilter: 'linear', minFilter: 'linear' });
-  const hdrView = hdrTexture.createView();
   const resolveBindGroup = device.createBindGroup({
     layout: resolvePipeline.getBindGroupLayout(0),
     entries: [
@@ -121,19 +225,18 @@ async function main(): Promise<void> {
   });
 
   const encoder = device.createCommandEncoder();
-  backend.recordFrame(
-    encoder,
-    {
-      hdrView,
-      depthView: depthTexture.createView(),
-      bindGroup: forwardBindGroup,
-      geometry: { vertexBuffer, indexBuffer, indexCount: INDICES.length },
-    },
-    { outputView: context.getCurrentTexture().createView(), bindGroup: resolveBindGroup },
-  );
+  let first = true;
+  for (const pass of frame.passes) {
+    const draws = drawsByPass.get(pass) ?? [];
+    if (draws.length === 0) continue;
+    backend.recordScenePass(encoder, { pass, hdrView, depthView, draws, clear: first });
+    first = false;
+  }
+  backend.recordResolvePass(encoder, { outputView: context.getCurrentTexture().createView(), bindGroup: resolveBindGroup });
   device.queue.submit([encoder.finish()]);
 
-  setStatus(`WebGPU raster frame submitted (${adapter.info?.vendor || 'unknown vendor'}).`);
+  const note = warnings.length ? ` (${warnings.length} diagnostic(s))` : '';
+  setStatus(`WebGPU scene frame: ${frame.draws.length} object(s), passes [${frame.passes.join(', ')}]${note}.`);
 }
 
 void main();

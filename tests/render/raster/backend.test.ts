@@ -114,3 +114,78 @@ describe('RasterBackend frame recording', () => {
     expect(pass.draw).toHaveBeenCalledWith(3);
   });
 });
+
+describe('RasterBackend scene forward path', () => {
+  it('compiles an opaque scene pipeline with depth write and split vertex buffers', () => {
+    const { device, backend } = makeBackend();
+    const pipeline = backend.createSceneForwardPipeline('opaque');
+    const desc = device.createRenderPipeline.mock.calls[0]![0] as any;
+    expect(desc.vertex.buffers).toHaveLength(2);
+    expect(desc.vertex.buffers[0].attributes[0].shaderLocation).toBe(0);
+    expect(desc.vertex.buffers[1].attributes[0].shaderLocation).toBe(1);
+    expect(desc.depthStencil.depthWriteEnabled).toBe(true);
+    expect(desc.primitive.cullMode).toBe('back');
+    expect(desc.fragment.targets[0].blend).toBeUndefined();
+    expect(backend.scenePipeline('opaque')).toBe(pipeline);
+  });
+
+  it('compiles a transmission scene pipeline that alpha-blends without depth write', () => {
+    const { device, backend } = makeBackend();
+    backend.createSceneForwardPipeline('transmission');
+    const desc = device.createRenderPipeline.mock.calls[0]![0] as any;
+    expect(desc.fragment.targets[0].blend.color.srcFactor).toBe('src-alpha');
+    expect(desc.depthStencil.depthWriteEnabled).toBe(false);
+    expect(desc.primitive.cullMode).toBe('none');
+  });
+
+  it('records a scene pass drawing every instance with two vertex buffers', () => {
+    const { backend } = makeBackend();
+    backend.createSceneForwardPipeline('opaque');
+    const draws = [
+      { bindGroup: {} as GPUBindGroup, positionBuffer: { id: 'pa' } as unknown as GPUBuffer, normalBuffer: { id: 'na' } as unknown as GPUBuffer, indexBuffer: {} as GPUBuffer, indexCount: 3 },
+      { bindGroup: {} as GPUBindGroup, positionBuffer: { id: 'pb' } as unknown as GPUBuffer, normalBuffer: { id: 'nb' } as unknown as GPUBuffer, indexBuffer: {} as GPUBuffer, indexCount: 6 },
+    ];
+    const pass = mockPass();
+    const encoder = { beginRenderPass: vi.fn(() => pass) };
+    backend.recordScenePass(encoder as unknown as GPUCommandEncoder, {
+      pass: 'opaque',
+      hdrView: {} as GPUTextureView,
+      depthView: {} as GPUTextureView,
+      draws,
+    });
+    expect(pass.setVertexBuffer).toHaveBeenCalledWith(0, draws[0]!.positionBuffer);
+    expect(pass.setVertexBuffer).toHaveBeenCalledWith(1, draws[0]!.normalBuffer);
+    expect(pass.drawIndexed).toHaveBeenCalledWith(3);
+    expect(pass.drawIndexed).toHaveBeenCalledWith(6);
+    expect(pass.drawIndexed).toHaveBeenCalledTimes(2);
+    expect(pass.end).toHaveBeenCalledOnce();
+  });
+
+  it('clears on the first pass and loads on subsequent passes', () => {
+    const { backend } = makeBackend();
+    backend.createSceneForwardPipeline('opaque');
+    const base = { pass: 'opaque' as const, hdrView: {} as GPUTextureView, depthView: {} as GPUTextureView, draws: [] };
+    const clearEncoder = { beginRenderPass: vi.fn((_desc: any) => mockPass()) };
+    backend.recordScenePass(clearEncoder as unknown as GPUCommandEncoder, { ...base, clear: true });
+    const clearDesc = clearEncoder.beginRenderPass.mock.calls[0]![0] as any;
+    expect(clearDesc.colorAttachments[0].loadOp).toBe('clear');
+    const loadEncoder = { beginRenderPass: vi.fn((_desc: any) => mockPass()) };
+    backend.recordScenePass(loadEncoder as unknown as GPUCommandEncoder, { ...base, clear: false });
+    const loadDesc = loadEncoder.beginRenderPass.mock.calls[0]![0] as any;
+    expect(loadDesc.colorAttachments[0].loadOp).toBe('load');
+    expect(loadDesc.depthStencilAttachment.depthLoadOp).toBe('load');
+  });
+
+  it('throws when a scene pass is recorded before its pipeline exists', () => {
+    const { backend } = makeBackend();
+    const encoder = { beginRenderPass: vi.fn(() => mockPass()) };
+    expect(() =>
+      backend.recordScenePass(encoder as unknown as GPUCommandEncoder, {
+        pass: 'opaque',
+        hdrView: {} as GPUTextureView,
+        depthView: {} as GPUTextureView,
+        draws: [],
+      }),
+    ).toThrow();
+  });
+});

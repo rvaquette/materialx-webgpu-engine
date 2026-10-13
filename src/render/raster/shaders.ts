@@ -233,6 +233,70 @@ fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
 }`;
 }
 
+/**
+ * Scene forward pass (T051). The multi-object variant of forwardOpaqueWgsl: each
+ * instance carries its own model matrix so one pipeline renders every scene
+ * object, and position/normal arrive in two separate vertex buffers to match the
+ * un-interleaved streams produced by the SceneAsset -> GPU bridge (T050,
+ * src/render/scene-resources.ts). The vertex stage transforms position and
+ * normal to world space; the fragment stage evaluates the same canonical OpenPBR
+ * surface (openPbrSurfaceWgsl) as the single-object forward path. The uniform
+ * adds the model matrix ahead of the shared camera/light/surface block.
+ */
+export function sceneForwardWgsl(): string {
+  return `struct Uniforms {
+  model : mat4x4<f32>,
+  viewProj : mat4x4<f32>,
+  eye : vec4<f32>,
+  lightDir : vec4<f32>,
+  lightColor : vec4<f32>,
+  baseColor : vec4<f32>,
+  material : vec4<f32>,
+  coat : vec4<f32>,
+  environment : vec4<f32>,
+};
+@group(0) @binding(0) var<uniform> u : Uniforms;
+
+${openPbrSurfaceWgsl()}
+
+struct VsOut {
+  @builtin(position) clip : vec4<f32>,
+  @location(0) normal : vec3<f32>,
+  @location(1) worldPos : vec3<f32>,
+};
+
+@vertex
+fn vs_main(@location(0) position : vec3<f32>, @location(1) normal : vec3<f32>) -> VsOut {
+  var out : VsOut;
+  let world = u.model * vec4<f32>(position, 1.0);
+  out.clip = u.viewProj * world;
+  out.normal = (u.model * vec4<f32>(normal, 0.0)).xyz;
+  out.worldPos = world.xyz;
+  return out;
+}
+
+@fragment
+fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
+  let n = normalize(in.normal);
+  let v = normalize(u.eye.xyz - in.worldPos);
+  var m : MxSurface;
+  m.baseColor = u.baseColor.rgb;
+  m.metalness = u.material.x;
+  m.roughness = u.material.y;
+  m.transmission = u.material.z;
+  m.subsurface = u.material.w;
+  m.ior = u.coat.x;
+  m.specular = u.coat.y;
+  var lit : MxLight;
+  lit.direction = u.lightDir.xyz;
+  lit.color = u.lightColor.rgb;
+  lit.intensity = u.lightColor.w;
+  lit.environment = u.environment.rgb;
+  let radiance = mx_openpbr_surface(m, n, v, lit);
+  return vec4<f32>(radiance, u.baseColor.a);
+}`;
+}
+
 function tonemapExpr(op: Tonemap): string {
   switch (op) {
     case 'none':
