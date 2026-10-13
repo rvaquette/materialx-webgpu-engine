@@ -12,6 +12,7 @@
 // here is the rough-surface diffuse-transmission lobe (translucent_bsdf).
 
 import type { Vec3 } from '../../scene/transforms.ts';
+import type { LayeredBsdfLobe, LayeredClosure } from '../../compiler/ir.ts';
 
 const PI = Math.PI;
 const INV_PI = 1 / Math.PI;
@@ -207,25 +208,15 @@ interface WeightedLobe {
 }
 
 /**
- * One-sample multi-lobe surface BSDF built from the already-validated lobes. The
- * lobe weights partition unity (metal + dielectric-with-transmission + diffuse),
- * and each lobe conserves energy, so the surface stays energy-conserving while
- * the combined pdf = sum(selectProb_k * pdf_k) keeps sampling coherent with
- * evaluation. The specular dielectric is a coat over the diffuse base; the
- * subsurface weight folds into the diffuse base (documented raster-grade
- * approximation -- true BSSRDF sampling lives in subsurface.ts, T029).
+ * Compose a set of weighted lobes into a single one-sample multi-lobe BSDF. Each
+ * lobe conserves energy and the weights partition the surface, so the combined
+ * reflectance stays bounded while the combined pdf = sum(selectProb_k * pdf_k)
+ * keeps importance sampling coherent with evaluation (one-sample MIS). This is
+ * the shared stack sampler used by both the fixed seven-parameter surface and
+ * the layered closure (T054).
  */
-export function surfaceBsdf(params: SurfaceParams): Lobe {
-  const metal = clamp01(params.metalness);
-  const trans = clamp01(params.transmission);
-  const specStrength = clamp01(params.specular);
-  const dielectricShare = (1 - metal) * (1 - trans);
-  const entries: WeightedLobe[] = [
-    { weight: metal, lobe: conductorLobe(params.baseColor, params.roughness) },
-    { weight: (1 - metal) * trans, lobe: translucentLobe(params.baseColor) },
-    { weight: dielectricShare * specStrength, lobe: dielectricLobe(params.ior, params.roughness) },
-    { weight: dielectricShare * (1 - specStrength), lobe: lambertLobe(params.baseColor) },
-  ].filter((e) => e.weight > 0);
+export function composeLobes(input: readonly WeightedLobe[]): Lobe {
+  const entries = input.filter((e) => e.weight > 0);
   const total = entries.reduce((s, e) => s + e.weight, 0);
 
   function combinedEval(wo: V, wi: V): BsdfEval {
@@ -260,6 +251,74 @@ export function surfaceBsdf(params: SurfaceParams): Lobe {
       return { wi: s.wi, value, pdf, specular: false };
     },
   };
+}
+
+/**
+ * One-sample multi-lobe surface BSDF built from the already-validated lobes. The
+ * lobe weights partition unity (metal + dielectric-with-transmission + diffuse),
+ * and each lobe conserves energy, so the surface stays energy-conserving while
+ * the combined pdf = sum(selectProb_k * pdf_k) keeps sampling coherent with
+ * evaluation. The specular dielectric is a coat over the diffuse base; the
+ * subsurface weight folds into the diffuse base (documented raster-grade
+ * approximation -- true BSSRDF sampling lives in subsurface.ts, T029).
+ */
+export function surfaceBsdf(params: SurfaceParams): Lobe {
+  const metal = clamp01(params.metalness);
+  const trans = clamp01(params.transmission);
+  const specStrength = clamp01(params.specular);
+  const dielectricShare = (1 - metal) * (1 - trans);
+  return composeLobes([
+    { weight: metal, lobe: conductorLobe(params.baseColor, params.roughness) },
+    { weight: (1 - metal) * trans, lobe: translucentLobe(params.baseColor) },
+    { weight: dielectricShare * specStrength, lobe: dielectricLobe(params.ior, params.roughness) },
+    { weight: dielectricShare * (1 - specStrength), lobe: lambertLobe(params.baseColor) },
+  ]);
+}
+
+/**
+ * Build the sample-capable lobe for one layered-closure BSDF lobe, or null when
+ * the lobe has no importance sampler yet. The diffuse families share the cosine
+ * sampler (their directional Burley / Oren-Nayar detail is a T056 refinement);
+ * conductor and generalized-schlick use coloured-F0 GGX reflection; the
+ * dielectric reflection uses achromatic GGX from the index of refraction;
+ * translucent is the diffuse-transmission lobe. Sheen and subsurface return null
+ * here -- their physically sampled lobes land in T056 -- so a closure that uses
+ * them must keep those slots empty until then.
+ */
+export function lobeFromLayered(l: LayeredBsdfLobe): Lobe | null {
+  const roughness = l.roughness ?? 0;
+  switch (l.kind) {
+    case 'oren_nayar_diffuse':
+    case 'burley_diffuse':
+      return lambertLobe(l.color);
+    case 'translucent':
+      return translucentLobe(l.color);
+    case 'conductor':
+    case 'generalized_schlick':
+      return conductorLobe(l.color, roughness);
+    case 'dielectric_reflection':
+      return dielectricLobe(l.ior ?? 1.5, roughness);
+    case 'sheen':
+    case 'subsurface':
+      return null;
+  }
+}
+
+/**
+ * Sample-capable surface BSDF for a lowered LayeredClosure (T054). The base lobe
+ * stack is composed with the shared one-sample MIS sampler; coat, sheen, fuzz and
+ * thin-film layers are carried on the closure but not yet active here (their
+ * lobes land in T056). A closure produced by canonicalSurfaceToLayered therefore
+ * reproduces surfaceBsdf exactly -- the non-regression anchor for the layered
+ * model.
+ */
+export function layeredSurfaceBsdf(closure: LayeredClosure): Lobe {
+  const entries: WeightedLobe[] = [];
+  for (const l of closure.lobes) {
+    const lobe = lobeFromLayered(l);
+    if (lobe) entries.push({ weight: l.weight, lobe });
+  }
+  return composeLobes(entries);
 }
 
 // --- hemispherical reflectance (energy / unbiasedness checks) ----------------

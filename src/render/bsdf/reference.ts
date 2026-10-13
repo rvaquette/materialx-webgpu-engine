@@ -13,6 +13,8 @@
 // a color (radiance = color * intensity); `environment` is a constant ambient
 // radiance added once per lobe.
 
+import type { LayeredBsdfLobe, LayeredClosure } from '../../compiler/ir.ts';
+
 export type Vec3 = readonly [number, number, number];
 
 export interface ReferenceLight {
@@ -375,4 +377,69 @@ export function evaluateSurface(
   const bsdf = closureMix(dielectricSurface, metal, params.metalness);
   // mx_surface(bsdf, edf = 0, opacity = 1): color = bsdf.color, weight = opacity.
   return { color: bsdf.color, weight: 1 };
+}
+
+// --- layered-closure direct evaluation (plan section 9.6, T054) --------------
+//
+// Raster/CPU direct-light evaluation of a lowered LayeredClosure (src/compiler/
+// ir.ts). This is the raster counterpart of the path-tracer stack sampler
+// (layeredSurfaceBsdf in src/render/pathtracing/bsdf.ts): both consume the SAME
+// closure contract so the IR becomes the single shading source for both backends
+// (Strategy 2). The stack is additive -- each lobe's weighted direct response is
+// summed via closureAdd -- which is the direct-light form of the path tracer's
+// one-sample MIS stack; the mix/layer composition of evaluateSurface is the
+// legacy seven-parameter path and is kept separate. Coat and sheen are evaluated
+// as additive layers over the base stack when present; thin film is carried but
+// not yet applied (its Fresnel modulation lands in T056), and subsurface reuses
+// the wrap-diffuse approximation.
+
+function evalLayeredLobe(lobe: LayeredBsdfLobe, geom: ShadingGeometry, lighting: ReferenceLighting): ReferenceClosure {
+  const white: Vec3 = [1, 1, 1];
+  const roughness = lobe.roughness ?? 0;
+  switch (lobe.kind) {
+    case 'oren_nayar_diffuse':
+      return orenNayarDiffuse(lobe.weight, lobe.color, roughness, geom, lighting);
+    case 'burley_diffuse':
+      return burleyDiffuse(lobe.weight, lobe.color, roughness, geom, lighting);
+    case 'translucent':
+      return translucent(lobe.weight, lobe.color, geom, lighting);
+    case 'dielectric_reflection':
+      return dielectric(lobe.weight, lobe.color, lobe.ior ?? 1.5, roughness, geom, lighting);
+    case 'conductor':
+      return generalizedSchlick(lobe.weight, lobe.color, white, roughness, geom, lighting);
+    case 'generalized_schlick':
+      return generalizedSchlick(lobe.weight, lobe.color, lobe.color90 ?? lobe.color, roughness, geom, lighting);
+    case 'sheen':
+      return sheen(lobe.weight, lobe.color, Math.max(roughness, 1e-3), geom, lighting);
+    case 'subsurface':
+      return subsurface(lobe.weight, lobe.color, white, geom, lighting);
+  }
+}
+
+export function evaluateLayeredSurface(
+  closure: LayeredClosure,
+  geom: ShadingGeometry,
+  lighting: ReferenceLighting,
+): ReferenceClosure {
+  let acc = closureZero();
+  for (const lobe of closure.lobes) {
+    if (lobe.weight <= 0) continue;
+    acc = closureAdd(acc, evalLayeredLobe(lobe, geom, lighting));
+  }
+  if (closure.coat && closure.coat.weight > 0) {
+    const coat = dielectric(closure.coat.weight, closure.coat.color, closure.coat.ior, closure.coat.roughness, geom, lighting);
+    acc = layer(coat, acc);
+  }
+  if (closure.sheen && closure.sheen.weight > 0) {
+    const s = sheen(closure.sheen.weight, closure.sheen.color, Math.max(closure.sheen.roughness, 1e-3), geom, lighting);
+    acc = layer(s, acc);
+  }
+  if (closure.fuzz && closure.fuzz.weight > 0) {
+    const f = sheen(closure.fuzz.weight, closure.fuzz.color, Math.max(closure.fuzz.roughness, 1e-3), geom, lighting);
+    acc = layer(f, acc);
+  }
+  let color = acc.color;
+  if (closure.emission) color = add(color, closure.emission);
+  // mx_surface(bsdf, edf, opacity): color = composed radiance, weight = opacity.
+  return { color, weight: clampScalar(closure.opacity, 0, 1) };
 }

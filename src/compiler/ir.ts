@@ -275,3 +275,148 @@ export class IrModuleBuilder {
     };
   }
 }
+
+// ---------------------------------------------------------------------------
+// Runtime layered-closure model (plan section 9.6, phase P10 / T054).
+//
+// LayeredClosure is the lowering TARGET of a surface nodegraph: the flattened,
+// renderer-independent description a surface evaluates to after the IR has
+// resolved its constant, textured AND procedural inputs. It is the single
+// shading contract both backends consume -- the path tracer samples it
+// (src/render/pathtracing/bsdf.ts) and the raster/CPU oracle evaluates it under
+// direct lighting (src/render/bsdf/reference.ts) -- so the same material renders
+// identically in both. The lowering that produces it from a nodegraph lands in
+// T055; the shared WGSL library that evaluates it on device lands in T056. Here
+// we only define the data contract and the canonical bridge used until the full
+// lowering exists.
+//
+// A surface is a weighted STACK of BSDF lobes plus optional layer slots (coat,
+// sheen, fuzz, thin film) and an emission term. Each lobe carries the numeric
+// parameters its model needs; absent slots contribute nothing, so a closure with
+// only base lobes reduces exactly to the current seven-parameter surface.
+
+/** Linear RGB triple used by the layered-closure parameters. */
+export type Rgb = readonly [number, number, number];
+
+/** BSDF lobe families covered by the MaterialX surface nodedefs. */
+export type BsdfLobeKind =
+  | 'oren_nayar_diffuse'
+  | 'burley_diffuse'
+  | 'translucent'
+  | 'dielectric_reflection'
+  | 'conductor'
+  | 'generalized_schlick'
+  | 'sheen'
+  | 'subsurface';
+
+/** One weighted BSDF lobe in the surface stack. */
+export interface LayeredBsdfLobe {
+  kind: BsdfLobeKind;
+  /** Selection / composition weight; the stack need not sum to one. */
+  weight: number;
+  /** Base reflectance / tint (F0 for conductor and generalized-schlick color0). */
+  color: Rgb;
+  /** Grazing reflectance (generalized-schlick color90); defaults to color. */
+  color90?: Rgb;
+  /** Perceptual roughness in [0,1]; microfacet alpha = roughness^2. */
+  roughness?: number;
+  /** Anisotropy in [0,1] (GGX alpha_u/alpha_v split); 0 = isotropic. */
+  anisotropy?: number;
+  /** Tangent-frame rotation in turns [0,1) for the anisotropic lobe. */
+  rotation?: number;
+  /** Index of refraction for the dielectric reflection lobe. */
+  ior?: number;
+  /** Conductor extinction coefficient k (per channel). */
+  extinction?: Rgb;
+}
+
+/** Dielectric coat layered over the base stack (clearcoat). */
+export interface CoatLayer {
+  weight: number;
+  color: Rgb;
+  roughness: number;
+  ior: number;
+}
+
+/** Charlie-sheen retro-reflective layer over the base stack. */
+export interface SheenLayer {
+  weight: number;
+  color: Rgb;
+  roughness: number;
+}
+
+/** Microfiber fuzz layer (open_pbr fuzz), modelled like sheen with its own tint. */
+export interface FuzzLayer {
+  weight: number;
+  color: Rgb;
+  roughness: number;
+}
+
+/** Thin-film interference layer modulating the specular Fresnel. */
+export interface ThinFilmLayer {
+  weight: number;
+  /** Film thickness in nanometres. */
+  thickness: number;
+  /** Film index of refraction. */
+  ior: number;
+}
+
+/** A surface lowered to its runtime closure stack. */
+export interface LayeredClosure {
+  lobes: readonly LayeredBsdfLobe[];
+  coat?: CoatLayer;
+  sheen?: SheenLayer;
+  fuzz?: FuzzLayer;
+  thinFilm?: ThinFilmLayer;
+  /** Uniform emitted radiance (EDF); omitted when the surface does not emit. */
+  emission?: Rgb;
+  /** Surface opacity carried as the closure weight (mx_surface). */
+  opacity: number;
+}
+
+/** An empty, fully transparent closure (no lobes, no layers). */
+export function emptyLayeredClosure(): LayeredClosure {
+  return { lobes: [], opacity: 1 };
+}
+
+/**
+ * The canonical seven-parameter surface shared by every PBR family today
+ * (baseColor, metalness, roughness, transmission, subsurface, ior, specular).
+ * This is the bridge the renderers use until the full nodegraph lowering (T055)
+ * produces LayeredClosure directly; it exists so T057/T058 can route both
+ * backends through the layered model without yet depending on the lowering.
+ */
+export interface CanonicalSurfaceInputs {
+  readonly baseColor: Rgb;
+  readonly metalness: number;
+  readonly roughness: number;
+  readonly transmission: number;
+  readonly subsurface: number;
+  readonly ior: number;
+  readonly specular: number;
+}
+
+const clamp01 = (x: number): number => (x < 0 ? 0 : x > 1 ? 1 : x);
+
+/**
+ * Lower the canonical seven parameters to the equivalent LayeredClosure. The
+ * weights reproduce exactly the current path-tracer stack (metal conductor +
+ * dielectric transmission + dielectric specular over a diffuse base, with
+ * subsurface folded into the diffuse base), so sampling or evaluating the
+ * resulting closure matches the pre-P10 surface -- the non-regression anchor for
+ * T054. Coat, sheen, fuzz and thin film stay absent here; families that use them
+ * populate those slots once the lowering lands.
+ */
+export function canonicalSurfaceToLayered(p: CanonicalSurfaceInputs): LayeredClosure {
+  const metal = clamp01(p.metalness);
+  const trans = clamp01(p.transmission);
+  const spec = clamp01(p.specular);
+  const dielectricShare = (1 - metal) * (1 - trans);
+  const lobes: LayeredBsdfLobe[] = [
+    { kind: 'conductor', weight: metal, color: p.baseColor, roughness: p.roughness },
+    { kind: 'translucent', weight: (1 - metal) * trans, color: p.baseColor },
+    { kind: 'dielectric_reflection', weight: dielectricShare * spec, color: [1, 1, 1], roughness: p.roughness, ior: p.ior },
+    { kind: 'burley_diffuse', weight: dielectricShare * (1 - spec), color: p.baseColor, roughness: p.roughness },
+  ];
+  return { lobes: lobes.filter((l) => l.weight > 0), opacity: 1 };
+}
