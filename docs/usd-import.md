@@ -100,6 +100,20 @@ Adopt a **decoupled, three-part import pipeline**:
    reused; it supplies mesh attributes/primvars/xforms/camera/light params and
    does **not** drive composition or materials itself.
 
+**Unified compose stage** (T049, `src/usd/compose.ts`): parts 1 and 3 are driven
+from a single entry point. `composeStage()` builds a **crate-aware reader**
+(`createCrateAwareReader`) that resolves every layer URI through the
+`AssetResolver` (part / asset-root policy below), fetches its bytes, and
+transparently flattens binary crates (`PXR-USDC`) to USDA before handing the text
+to the USDA adapter. The adapter composes with `resolveArcs: true`, so subLayers,
+**payloads** and non-MaterialX **references that point at crate prims** are
+followed through the same reader and grafted into one composed SceneAsset
+(payload/reference opinions are grafted *weaker* than local opinions). MaterialX
+`.mtlx` references stay on the Core-WASM path (§1.2) and are never followed as
+layers. The reader never exposes a crate to the text parser, and the resolver
+rejects out-of-policy paths (e.g. `D:\` / local-absolute) with an explicit
+diagnostic instead of silently remapping them (REQ-011/REQ-013).
+
 **Fallback:** if the custom adapter meets an unsupported corpus construct, fall
 back to **OpenUSD-wasm + `usdMtlx`** as a full-composition oracle for that case
 and to cross-validate the adapter's output.
@@ -120,9 +134,12 @@ silent path repair).
 - **Node coverage gap** (§1.3): add `geompropvalue` and `<UDIM>` handling to
   T014/REQ-014 and the texture system (T004); update
   [materialx-node-coverage.md](materialx-node-coverage.md).
-- **Asset-root policy** (plan §8): `textures/...` + `<UDIM>` paths require an
-  explicit asset root served over HTTP(S) or via local selection; the browser
-  cannot open `D:\` paths. No silent remapping.
+- **Asset-root policy** (plan §8, T049 done): `textures/...` + `<UDIM>` paths and
+  every composed layer require an explicit asset root served over HTTP(S) or via
+  local selection; the browser cannot open `D:\` paths. The `AssetResolver` is
+  now wired into the compose stage (`src/usd/compose.ts`) so layer resolution
+  enforces the same policy as texture resolution: out-of-policy paths raise an
+  explicit diagnostic and the layer is dropped, with no silent remapping.
 - **Dangling inherits**: `</__class_mtl__/...>` resolves to nothing; the adapter
   must ignore it without dropping real opinions (REQ-013).
 - **Binding strength / subdivision**: preserve `weakerThanDescendants` and

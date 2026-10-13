@@ -37,6 +37,12 @@ export interface UsdImportOptions {
   sink?: DiagnosticSink;
   /** Guards against pathological subLayer/reference cycles. */
   maxDepth?: number;
+  /**
+   * Follow payload and non-MaterialX reference arcs through the reader and graft
+   * the composed external prims under the referencing prim (T049). When false
+   * (default) these arcs are only recorded and reported as deferred.
+   */
+  resolveArcs?: boolean;
 }
 
 // --- Scanner -----------------------------------------------------------------
@@ -578,10 +584,22 @@ interface MutablePrim {
   mesh?: MeshInfo;
 }
 
+/** A payload/reference arc recorded for optional T049 graft resolution. */
+interface ArcSource {
+  kind: 'reference' | 'payload';
+  /** Layer that authored the arc, for relative asset resolution. */
+  layerUri: string;
+  assetPath: string;
+  /** Target prim path inside the external layer; defaults to its defaultPrim. */
+  primPath?: string;
+}
+
 interface Composition {
   prims: Map<string, MutablePrim>;
   roots: string[];
   materials: MaterialXReference[];
+  /** Non-MaterialX payload/reference arcs by referencing prim path. */
+  arcs: Map<string, ArcSource[]>;
 }
 
 function buildXformOps(spec: PrimSpec): XformOp[] {
@@ -641,9 +659,12 @@ function materialBindingOf(spec: PrimSpec): MaterialBinding | undefined {
 }
 
 class Composer {
-  readonly comp: Composition = { prims: new Map(), roots: [], materials: [] };
+  readonly comp: Composition = { prims: new Map(), roots: [], materials: [], arcs: new Map() };
 
-  constructor(private readonly emit: (d: Diagnostic) => void) {}
+  constructor(
+    private readonly emit: (d: Diagnostic) => void,
+    private readonly resolveArcsFlag: boolean,
+  ) {}
 
   mergeLayer(layer: LayerSpec): void {
     for (const spec of layer.prims) {
@@ -683,8 +704,8 @@ class Composer {
     for (const s of spec.apiSchemas) if (!prim.apiSchemas.includes(s)) prim.apiSchemas.push(s);
     for (const s of spec.inherits) if (!prim.inherits.includes(s)) prim.inherits.push(s);
 
-    for (const ref of spec.references) this.addReference(prim, prim.references, ref, path);
-    for (const pl of spec.payloads) this.addPayload(prim.payloads, pl, layerUri);
+    for (const ref of spec.references) this.addReference(prim, prim.references, ref, path, layerUri);
+    for (const pl of spec.payloads) this.addPayload(prim.payloads, pl, layerUri, path);
 
     for (const [name, attr] of spec.attributes) if (!prim.attributes.has(name)) prim.attributes.set(name, attr);
     for (const [name, rel] of spec.relationships) {
@@ -718,6 +739,7 @@ class Composer {
     bucket: PrimReference[],
     ref: PrimReference,
     path: string,
+    layerUri: string,
   ): void {
     bucket.push(ref);
     if (ref.isMaterialX && ref.assetPath !== undefined && ref.primPath !== undefined) {
@@ -730,36 +752,74 @@ class Composer {
         materialName,
       });
     } else if (ref.assetPath !== undefined) {
-      this.emit({
-        level: 'info',
-        message: `Non-MaterialX reference deferred to crate reader: ${ref.assetPath}`,
-        detail: { prim: prim.path },
+      this.recordArc(path, {
+        kind: 'reference',
+        layerUri,
+        assetPath: ref.assetPath,
+        ...(ref.primPath !== undefined ? { primPath: ref.primPath } : {}),
       });
+      if (!this.resolveArcsFlag) {
+        this.emit({
+          level: 'info',
+          message: `Non-MaterialX reference deferred to crate reader: ${ref.assetPath}`,
+          detail: { prim: prim.path },
+        });
+      }
     }
   }
 
-  private addPayload(bucket: PrimReference[], payload: PrimReference, layerUri: string): void {
+  private addPayload(
+    bucket: PrimReference[],
+    payload: PrimReference,
+    layerUri: string,
+    path: string,
+  ): void {
     bucket.push(payload);
     if (payload.assetPath !== undefined) {
-      this.emit({
-        level: 'info',
-        message: `Payload deferred (loaded on demand): ${resolveRelative(layerUri, payload.assetPath)}`,
+      this.recordArc(path, {
+        kind: 'payload',
+        layerUri,
+        assetPath: payload.assetPath,
+        ...(payload.primPath !== undefined ? { primPath: payload.primPath } : {}),
       });
+      if (!this.resolveArcsFlag) {
+        this.emit({
+          level: 'info',
+          message: `Payload deferred (loaded on demand): ${resolveRelative(layerUri, payload.assetPath)}`,
+        });
+      }
     }
+  }
+
+  private recordArc(primPath: string, arc: ArcSource): void {
+    const list = this.comp.arcs.get(primPath);
+    if (list) list.push(arc);
+    else this.comp.arcs.set(primPath, [arc]);
   }
 }
 
 // --- Public entry ------------------------------------------------------------
 
-export async function importUsdStage(entryUri: string, options: UsdImportOptions): Promise<SceneAsset> {
-  const emit = options.sink ?? (() => undefined);
-  const maxDepth = options.maxDepth ?? 32;
-  const composer = new Composer(emit);
+interface ComposedTree {
+  composition: Composition;
+  metadata: LayerMetadata;
+  /** Entry subLayer URIs resolved in strength order (strongest first). */
+  resolvedSubLayers: string[];
+}
 
-  const visited = new Set<string>();
+/** Compose a layer and its subLayers (no arc following) into one Composition. */
+async function composeLayerTree(
+  entryUri: string,
+  reader: UsdLayerReader,
+  emit: (d: Diagnostic) => void,
+  maxDepth: number,
+  visited: Set<string>,
+  resolveArcsFlag: boolean,
+): Promise<ComposedTree> {
+  const composer = new Composer(emit, resolveArcsFlag);
 
   // Depth-first over subLayers yields strongest-first order; merge accordingly.
-  const visit = async (uri: string, depth: number, subLayers: string[] | undefined): Promise<void> => {
+  const visit = async (uri: string, depth: number): Promise<void> => {
     if (visited.has(uri)) {
       emit({ level: 'warning', message: `Skipping already-composed layer (cycle guard): ${uri}` });
       return;
@@ -771,16 +831,13 @@ export async function importUsdStage(entryUri: string, options: UsdImportOptions
 
     let text: string;
     try {
-      text = await options.reader.read(uri);
+      text = await reader.read(uri);
     } catch (cause) {
       emit({ level: 'error', message: `Cannot read USD layer: ${uri}`, detail: cause });
       return;
     }
     if (text.startsWith('PXR-USDC')) {
-      emit({
-        level: 'info',
-        message: `Binary crate layer deferred to crate reader: ${uri}`,
-      });
+      emit({ level: 'info', message: `Binary crate layer deferred to crate reader: ${uri}` });
       return;
     }
 
@@ -793,17 +850,14 @@ export async function importUsdStage(entryUri: string, options: UsdImportOptions
     }
 
     composer.mergeLayer(layer);
-    if (subLayers) subLayers.push(...layer.metadata.subLayers.map((p) => resolveRelative(uri, p)));
-
     for (const rel of layer.metadata.subLayers) {
-      await visit(resolveRelative(uri, rel), depth + 1, undefined);
+      await visit(resolveRelative(uri, rel), depth + 1);
     }
   };
 
-  const rootSubLayers: string[] = [];
-  let rootLayer: LayerSpec | undefined;
+  let rootLayer: LayerSpec;
   try {
-    const text = await options.reader.read(entryUri);
+    const text = await reader.read(entryUri);
     if (text.startsWith('PXR-USDC')) {
       throw new UsdImportError(`Entry stage must be a text USDA layer, got binary crate: ${entryUri}.`);
     }
@@ -815,22 +869,165 @@ export async function importUsdStage(entryUri: string, options: UsdImportOptions
 
   visited.add(entryUri);
   composer.mergeLayer(rootLayer);
-  rootSubLayers.push(...rootLayer.metadata.subLayers.map((p) => resolveRelative(entryUri, p)));
+  const resolvedSubLayers = rootLayer.metadata.subLayers.map((p) => resolveRelative(entryUri, p));
   for (const rel of rootLayer.metadata.subLayers) {
-    await visit(resolveRelative(entryUri, rel), 1, undefined);
+    await visit(resolveRelative(entryUri, rel), 1);
+  }
+
+  return { composition: composer.comp, metadata: rootLayer.metadata, resolvedSubLayers };
+}
+
+/** Fill only the gaps of `dst` from `src` (graft arcs are weaker than local opinions). */
+function mergeWeakPrim(dst: MutablePrim, src: MutablePrim): void {
+  if (dst.typeName === undefined && src.typeName !== undefined) dst.typeName = src.typeName;
+  if (dst.kind === undefined && src.kind !== undefined) dst.kind = src.kind;
+  for (const s of src.apiSchemas) if (!dst.apiSchemas.includes(s)) dst.apiSchemas.push(s);
+  for (const s of src.inherits) if (!dst.inherits.includes(s)) dst.inherits.push(s);
+  for (const [name, attr] of src.attributes) if (!dst.attributes.has(name)) dst.attributes.set(name, attr);
+  for (const [name, rel] of src.relationships) if (!dst.relationships.has(name)) dst.relationships.set(name, rel);
+  if (dst.xformOps.length === 0 && src.xformOps.length > 0) dst.xformOps = [...src.xformOps];
+  if (dst.materialBinding === undefined && src.materialBinding !== undefined) dst.materialBinding = src.materialBinding;
+  if (dst.mesh === undefined && src.mesh !== undefined) dst.mesh = src.mesh;
+}
+
+/** Clone `src` at `newPath`; children are re-attached by the graft traversal. */
+function cloneRebasedPrim(src: MutablePrim, newPath: string): MutablePrim {
+  return {
+    path: newPath,
+    name: src.name,
+    specifier: src.specifier,
+    ...(src.typeName !== undefined ? { typeName: src.typeName } : {}),
+    ...(src.kind !== undefined ? { kind: src.kind } : {}),
+    apiSchemas: [...src.apiSchemas],
+    inherits: [...src.inherits],
+    references: [...src.references],
+    payloads: [...src.payloads],
+    attributes: new Map(src.attributes),
+    relationships: new Map(src.relationships),
+    xformOps: [...src.xformOps],
+    children: [],
+    ...(src.materialBinding !== undefined ? { materialBinding: src.materialBinding } : {}),
+    ...(src.mesh !== undefined ? { mesh: src.mesh } : {}),
+  };
+}
+
+/** Graft the `srcRootPath` subtree of `src` under `targetPrim` in `dst`. */
+function graftComposition(
+  dst: Composition,
+  targetPrim: MutablePrim,
+  src: Composition,
+  srcRootPath: string,
+  emit: (d: Diagnostic) => void,
+): void {
+  const srcRoot = src.prims.get(srcRootPath);
+  if (!srcRoot) {
+    emit({ level: 'warning', message: `Arc target prim not found: ${srcRootPath}` });
+    return;
+  }
+  const rebase = (p: string): string => targetPrim.path + p.slice(srcRootPath.length);
+  const stack: string[] = [srcRootPath];
+  while (stack.length > 0) {
+    const sp = stack.pop()!;
+    const sPrim = src.prims.get(sp);
+    if (!sPrim) continue;
+    const dp = rebase(sp);
+    let dPrim: MutablePrim;
+    if (sp === srcRootPath) {
+      dPrim = targetPrim;
+      mergeWeakPrim(dPrim, sPrim);
+    } else {
+      const existing = dst.prims.get(dp);
+      if (existing) {
+        dPrim = existing;
+        mergeWeakPrim(dPrim, sPrim);
+      } else {
+        dPrim = cloneRebasedPrim(sPrim, dp);
+        dst.prims.set(dp, dPrim);
+      }
+    }
+    for (const cp of sPrim.children) {
+      const dcp = rebase(cp);
+      if (!dPrim.children.includes(dcp)) dPrim.children.push(dcp);
+      stack.push(cp);
+    }
+  }
+  for (const m of src.materials) {
+    if (m.primPath === srcRootPath || m.primPath.startsWith(`${srcRootPath}/`)) {
+      dst.materials.push({ ...m, primPath: targetPrim.path + m.primPath.slice(srcRootPath.length) });
+    }
+  }
+}
+
+/** Resolve payload/reference arcs by composing their layers and grafting them. */
+async function resolveArcGraph(
+  root: Composition,
+  reader: UsdLayerReader,
+  emit: (d: Diagnostic) => void,
+  maxDepth: number,
+  chain: Set<string>,
+): Promise<void> {
+  for (const [primPath, arcs] of [...root.arcs]) {
+    const target = root.prims.get(primPath);
+    if (!target) continue;
+    // References are stronger than payloads: graft references first.
+    const ordered = [...arcs].sort((a, b) => (a.kind === 'reference' ? 0 : 1) - (b.kind === 'reference' ? 0 : 1));
+    for (const arc of ordered) {
+      const layerUri = resolveRelative(arc.layerUri, arc.assetPath);
+      if (chain.has(layerUri)) {
+        emit({
+          level: 'warning',
+          message: `Arc cycle guard: skipping ${arc.kind} to ${layerUri}`,
+          detail: { prim: primPath },
+        });
+        continue;
+      }
+      let sub: ComposedTree;
+      try {
+        sub = await composeLayerTree(layerUri, reader, emit, maxDepth, new Set(), true);
+      } catch (cause) {
+        emit({ level: 'warning', message: `Arc layer unavailable (${arc.kind}): ${layerUri}`, detail: cause });
+        continue;
+      }
+      await resolveArcGraph(sub.composition, reader, emit, maxDepth, new Set([...chain, layerUri]));
+      const srcRootPath =
+        arc.primPath ??
+        (sub.metadata.defaultPrim !== undefined ? `/${sub.metadata.defaultPrim}` : sub.composition.roots[0]);
+      if (srcRootPath === undefined) {
+        emit({ level: 'warning', message: `Arc target has no default prim: ${layerUri}`, detail: { prim: primPath } });
+        continue;
+      }
+      graftComposition(root, target, sub.composition, srcRootPath, emit);
+      emit({
+        level: 'info',
+        message: `Composed ${arc.kind} arc: ${layerUri}${arc.primPath ?? ''} -> ${primPath}`,
+      });
+    }
+  }
+}
+
+export async function importUsdStage(entryUri: string, options: UsdImportOptions): Promise<SceneAsset> {
+  const emit = options.sink ?? (() => undefined);
+  const maxDepth = options.maxDepth ?? 32;
+  const resolveArcsFlag = options.resolveArcs ?? false;
+  const visited = new Set<string>();
+
+  const tree = await composeLayerTree(entryUri, options.reader, emit, maxDepth, visited, resolveArcsFlag);
+
+  if (resolveArcsFlag) {
+    await resolveArcGraph(tree.composition, options.reader, emit, maxDepth, new Set([entryUri]));
   }
 
   const stage: StageInfo = {
-    ...(rootLayer.metadata.defaultPrim !== undefined ? { defaultPrim: rootLayer.metadata.defaultPrim } : {}),
-    ...(rootLayer.metadata.upAxis !== undefined ? { upAxis: rootLayer.metadata.upAxis } : {}),
-    ...(rootLayer.metadata.metersPerUnit !== undefined ? { metersPerUnit: rootLayer.metadata.metersPerUnit } : {}),
-    subLayers: rootSubLayers,
+    ...(tree.metadata.defaultPrim !== undefined ? { defaultPrim: tree.metadata.defaultPrim } : {}),
+    ...(tree.metadata.upAxis !== undefined ? { upAxis: tree.metadata.upAxis } : {}),
+    ...(tree.metadata.metersPerUnit !== undefined ? { metersPerUnit: tree.metadata.metersPerUnit } : {}),
+    subLayers: tree.resolvedSubLayers,
   };
 
   // Report dangling inherits (e.g. the undefined __class_mtl__ classes): tolerated.
-  for (const prim of composer.comp.prims.values()) {
+  for (const prim of tree.composition.prims.values()) {
     for (const target of prim.inherits) {
-      if (!composer.comp.prims.has(target)) {
+      if (!tree.composition.prims.has(target)) {
         emit({
           level: 'info',
           message: `Dangling inherit ignored: ${target}`,
@@ -843,8 +1040,8 @@ export async function importUsdStage(entryUri: string, options: UsdImportOptions
   return {
     entry: entryUri,
     stage,
-    prims: composer.comp.prims,
-    roots: composer.comp.roots,
-    materials: composer.comp.materials,
+    prims: tree.composition.prims,
+    roots: tree.composition.roots,
+    materials: tree.composition.materials,
   };
 }

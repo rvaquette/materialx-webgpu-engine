@@ -472,11 +472,35 @@ supportee produit un diagnostic. Le rendu reste statique (pas d'animation).
   PolyForm-Noncommercial-1.0.0 notee comme contrainte produit, preuves de
   qualification 57 MB/0 erreur/8 cameras/6 lumieres). Valide : typecheck + 747
   tests Node. Restent (T048/T049) : loader navigateur et pont mesh->RawMesh.
-- [ ] T049 [Plan:P9] Unifier composition USDA (texte, src/usd/importer.ts) et
+- [x] T049 [Plan:P9] Unifier composition USDA (texte, src/usd/importer.ts) et
   payloads crate (T048) dans un stage compose unique : resolution des references,
   payloads, sublayers et bindings pointant vers des prims de crate ; brancher le
   resolver d'assets (src/assets/resolver.ts) sur un asset root explicite servi par
   HTTP(S) ou selection locale (REQ-011, pas de remap silencieux des chemins D:\).
+  Fait : (1) importateur (src/usd/importer.ts) etendu d'un drapeau
+  UsdImportOptions.resolveArcs (defaut false, comportement historique preserve :
+  les arcs non-MaterialX restent differes/signales). Quand actif, les references
+  non-MaterialX et les payloads sont enregistres comme ArcSource (kind, layerUri,
+  assetPath, primPath) dans Composition.arcs plutot que seulement reportes.
+  importUsdStage refactore en composeLayerTree (DFS entry+subLayers, garde cycle
+  /maxDepth/magic PXR-USDC) puis resolveArcGraph (suit references avant payloads,
+  resout le chemin relatif a la couche auteur, compose la sous-couche via le meme
+  reader, greffe l'arbre externe sous le prim referent). Greffe =
+  graftComposition (BFS depuis srcRootPath = primPath ou defaultPrim ou racine ;
+  cloneRebasedPrim rebase les chemins, mergeWeakPrim ne comble que les trous donc
+  les opinions locales gagnent ; materiaux correspondants rebasses/ajoutes).
+  (2) Nouveau module src/usd/compose.ts : createCrateAwareReader resout chaque URI
+  de couche via AssetResolver (politique asset-root : rejet explicite des chemins
+  locaux/absolus hors fileMap, pas de remap D:\), recupere les octets via un
+  AssetByteSource injecte, et aplatit a la volee les crates (PXR-USDC) en USDA via
+  flattenCrate (T048) avant de passer le texte au parseur ; composeStage appelle
+  importUsdStage avec resolveArcs: true. Comme OpenUSD ExportToString rend un USDA
+  deja aplati, la recursion d'arcs sur un crate se termine immediatement.
+  (3) Tests tests/usd/compose.test.ts (6 cas : subLayer texte via rootUrl,
+  subLayer crate aplati, payload crate greffe sous le prim, reference crate greffee
+  a un chemin cible, violation de politique asset-root -> diagnostic + couche
+  ignoree sans remap, reader crate sans loader -> erreur). Valide : typecheck +
+  753 tests Node.
 - [ ] T050 [Plan:P9] Construire le pont SceneAsset -> ressources GPU : upload des
   geometries preparees (src/geometry/prepare.ts) en vertex/index buffers, BVH et
   hierarchie d'instances (src/scene/instances.ts, src/geometry/bvh.ts), et
