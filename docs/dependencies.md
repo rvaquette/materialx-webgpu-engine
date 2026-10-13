@@ -171,3 +171,38 @@ dependency is added and version-locked.
   from the scene assets during that smoke test; this section records the
   requirement (full precision, no silent downconvert) rather than assuming a
   value.
+
+## USDC crate reader (OpenUSD-wasm) — T048
+
+- **Locked dependency:** `@needle-tools/usd@1.1.2` (devDependency), an Emscripten
+  build of **OpenUSD 0.26.5** (`pxr` 2605) bundled with MaterialX 1.39.5. WASM
+  payload `node_modules/@needle-tools/usd/src/bindings/emHdBindings.wasm`
+  (~34.5 MB) plus the `emHdBindings.js` glue. It is the **sole binary `.usd`
+  crate reader**; tinyusdz-wasm was evaluated and **dropped** (could not read the
+  reference crate — OOM then indexed-normal / `elementSize 8196` parse failures
+  across 0.9.1 and 0.9.10).
+- **License:** PolyForm-Noncommercial-1.0.0. This is a **product constraint**: the
+  crate reader may not be used in a commercial distribution under this license.
+  Flagged for the shipping decision; a commercially-licensed crate reader (or a
+  self-built OpenUSD/alternative) would be required before any commercial release.
+- **Role:** data extractor only. The reader writes the crate into the module's
+  in-memory FS (`FS_createDataFile`), opens the stage (`OpenStage`), flattens the
+  composed stage to USDA text (`stage.ExportToString()`), then composes that text
+  through the existing custom USDA adapter (`src/usd/importer.ts`) into a
+  `SceneAsset`. Composition errors (`stage.GetCompositionErrors()`) are forwarded
+  as diagnostics. It does **not** drive materials or composition itself.
+- **Code:** `src/usd/crate.ts` (`flattenCrate`, `importCrate`, injected
+  `OpenUsdModule`), unit-tested with a fake module in `tests/usd/crate.test.ts`.
+  The default Node loader is `scripts/openusd-loader.ts` (resolves the package
+  main, then imports the internal `bindings/index.js` directly to bypass the
+  package `exports` map and the transitive `three` peer). The Node-only loader is
+  kept under `scripts/` because `src/` stays browser-typed.
+- **Qualification evidence (end-to-end):** reads the 57 MB
+  `ShdrPlygrnd_Geo.usd` in ~1.5 s with **0 composition errors** (default memory),
+  including indexed normals (`elementSize 8196`) and indexed `st`; plus
+  `renderCams.usd` (8 cameras) and `lightRig.usd` (6 lights: 4 RectLight,
+  1 SphereLight, 1 DomeLight). Reproduce with `node scripts/qualify-crate.ts`.
+- **Follow-ups:** a browser-side loader (the current loader is Node-only) and a
+  mesh->RawMesh bridge from the composed `SceneAsset` attributes
+  (points / faceVertexCounts / faceVertexIndices / primvars:normals / primvars:st /
+  GeomSubset) within the browser memory budget (REQ-012).

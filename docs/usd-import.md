@@ -64,8 +64,8 @@ Rated against the six blocking criteria plus crate (binary `.usd`) support.
 | Loader | subLayers | references | inherits | payloads | bindings | `.mtlx` refs | crate `.usdc` | Verdict |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | **Three.js `USDZLoader`** | No | No | No | No | UsdPreviewSurface only | No | Flattened crate inside USDZ only | **Reject** — flat-crate AR reader, no composition, no MaterialX. |
-| **tinyusdz (wasm)** | Partial | Partial | Partial | Partial | Read OK | **Immature** | Good | Future candidate; `.mtlx` (blocking criterion) not reliable today. |
-| **OpenUSD (wasm) + `usdMtlx`** | Yes | Yes | Yes | Yes | Yes | **Yes** (plugin) | Yes | Functionally complete but very large binary, fragile browser Ar-resolver + plugin registration, heavy distribution. Keep as oracle/fallback. |
+| **tinyusdz (wasm)** | Partial | Partial | Partial | Partial | Read OK | **Immature** | **Fails** | **Dropped** — cannot reconstruct the reference crate (OOM, then indexed-normal / `elementSize 8196` parse failures) in any tested version (0.9.1, 0.9.10). |
+| **OpenUSD (wasm) + `usdMtlx`** | Yes | Yes | Yes | Yes | Yes | **Yes** (plugin) | **Yes** | **Chosen crate reader** — qualified end-to-end against the reference crate (57 MB, 0 composition errors, meshes/indexed normals/UV/8 cameras/6 lights). Used as a data extractor only (see §3). |
 | **Custom USDA adapter + MaterialX Core WASM** | Yes (scope of corpus) | Yes (to `.mtlx` prim path) | Yes (tolerant) | Yes | Yes (+ strength) | **Yes** (via Core WASM mapping §1.2) | **No** (text only) | **Chosen** for composition + materials; pair with a crate reader for binary geometry. |
 
 Notes:
@@ -92,10 +92,13 @@ Adopt a **decoupled, three-part import pipeline**:
    `file.mtlx` and selecting the `surfacematerial` named `name` (§1.2). USD never
    needs to understand MaterialX internals.
 3. **Qualified USDC crate reader** as a **data extractor only** for the binary
-   `.usd` geometry/camera/light payloads — primary candidate **tinyusdz-wasm**
-   (smaller, strong crate support), fallback **OpenUSD-wasm**. It supplies mesh
-   attributes/primvars/xforms/camera/light params; it does **not** drive
-   composition or materials.
+   `.usd` geometry/camera/light payloads — **OpenUSD-wasm is the sole reader**
+   (`@needle-tools/usd`, see [dependencies.md](dependencies.md)); tinyusdz-wasm
+   was dropped after failing to read the reference crate. The reader flattens the
+   crate to USDA via `stage.ExportToString()` and pipes that text through the
+   custom USDA adapter (part 1), so composition/camera/light/material logic is
+   reused; it supplies mesh attributes/primvars/xforms/camera/light params and
+   does **not** drive composition or materials itself.
 
 **Fallback:** if the custom adapter meets an unsupported corpus construct, fall
 back to **OpenUSD-wasm + `usdMtlx`** as a full-composition oracle for that case
@@ -108,9 +111,12 @@ silent path repair).
 
 ## 4. Risks and follow-ups
 
-- **Crate reader qualification** (new, feeds T004/P4): confirm tinyusdz-wasm reads
-  the 57.5 MB `ShdrPlygrnd_Geo.usd` (meshes, primvars incl. `st`, subdivision
-  tags, instancing) within the browser memory budget (REQ-012); else OpenUSD-wasm.
+- **Crate reader qualification** (T048, done): OpenUSD-wasm reads the 57.5 MB
+  `ShdrPlygrnd_Geo.usd` (meshes, indexed normals, primvars incl. `st`, subdivision
+  tags) with 0 composition errors; tinyusdz-wasm failed and was dropped. The
+  current loader (`scripts/openusd-loader.ts`) is Node-only; a browser-side loader
+  and a mesh->RawMesh bridge within the browser memory budget (REQ-012) remain
+  follow-ups.
 - **Node coverage gap** (§1.3): add `geompropvalue` and `<UDIM>` handling to
   T014/REQ-014 and the texture system (T004); update
   [materialx-node-coverage.md](materialx-node-coverage.md).

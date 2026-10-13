@@ -28,6 +28,7 @@
     "wgpu-matrix": "3.4.0"
   },
   "devDependencies": {
+    "@needle-tools/usd": "^1.1.2",
     "@types/three": "^0.186.0",
     "@webgpu/types": "0.1.60",
     "three": "^0.186.1",

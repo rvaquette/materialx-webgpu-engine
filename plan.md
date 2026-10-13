@@ -437,10 +437,73 @@ et le run mobile par scripts/run-device-corpus.mjs (npm run test:device).
 - [x] T046 [Plan:P8] Mettre a jour docs/conformance.md, docs/materialx-node-coverage.md et docs/validation.md : closures passees de stub a evaluation reelle, formules, limites et tolerances ; re-executer le run GPU local puis le run mobile et consigner les resultats des deux cibles (adapter, navigateur, OS). Fait : docs/validation.md -- table des sources d'oracle refaite (fermetures par lobe / surface composee / OpenPBR raster par scene pointent vers src/render/bsdf/reference.ts, note "fin des oracles circulaires"), 2 nouvelles sections "Tolerances des fermetures physiques (P8)" (CLOSURE 2e-3/4e-3, SURFACE 3e-3/6e-3, SCENE_SURFACE 4e-3/7e-3 avec justification) et "Evaluation physique des fermetures (P8)" (conventions d'eclairage, table modele+limites par lobe, composition energetique, triplet eval/pdf/sample du path tracer), procedure d'execution enrichie (test:local-gpu/test:local-scene) et section "Resultats des runs GPU" consignant les deux cibles. docs/conformance.md -- nouvelle section "Fermetures raster : de stub a evaluation physique (P8)" (table avant/apres par tache T039-T045, approximations raster declarees restantes). docs/materialx-node-coverage.md -- encart "P8 status" sous les feuilles BSDF/EDF/VDF (stub -> evaluation reelle, oracle independant reference.ts, liens croises). Re-execution GPU des deux cibles (0 erreur) : LOCAL Intel gen-12lp, Chrome 154 WebGPU, Windows NT 10.0 x64 -- 27/27 noeuds + 11/11 lobes @2e-3 + 6/6 surfaces @3e-3 + 47/47 scenes OpenPBR @4e-3 ; MOBILE Qualcomm adreno-7xx (SM-F731B, R5CW900CHQD), Chrome 154 Mobile, Android 10 -- 27/27 noeuds + 11/11 lobes @4e-3 + 6/6 surfaces @6e-3 + 47/47 scenes OpenPBR @7e-3 (rapports committes). Gate : typecheck + 743 tests Node.
 - [x] T047 [Plan:P8] Couvrir le corpus Materials/Examples (source docs/scene-inventory.md) comme scenes de controle rendues dans les DEUX modes raster ET pathtracing sur le shader ball standard : tests/fixtures/control-scenes.json declare les 47 documents a shader de surface des 5 familles analytiques (standard_surface, open_pbr_surface, disney_principled, gltf_pbr, UsdPreviewSurface) avec `backends: ["raster", "pathtracing"]`, et tests/fixtures/scene-materials.json est regenere depuis les .mtlx reels via scripts/build-scene-materials.mjs. tests/render/scene-compare.test.ts compare les deux rendus par exemple via compare.ts (T035b) avec tolerances par focus documentees dans tests/fixtures/tolerances.ts (base strictes ; transmission/subsurface plus larges, justifiees comme approximations raster). Exceptions hors pipeline analytique, documentees dans control-scenes.json : SimpleHair/simple_hair_default (pas de miroir raster analytique du modele hair ; pathtracing seul) et les 2 documents StandardSurface look/material-assignment (standard_surface_look_brass_tiled, standard_surface_look_wood_tiled) sans noeuds de shading. Echec si un exemple manque un backend ou diverge hors tolerance.
 
+### P9. Rendu bout-en-bout d'une scene OpenUSD arbitraire [REQ-002,003,009,010,011,012,013]
+
+Les phases P1-P8 ont valide la chaine de compilation MaterialX et l'evaluation
+physique des fermetures (raster + pathtracing) au niveau noeud / lobe / surface /
+scene de controle sur un shader ball de reference. Elles n'ont PAS cable le flux
+runtime complet : src/main.ts rend un triangle code en dur, l'importateur USDA ne
+decode pas le crate binaire (.usdc), et le path tracer n'existe qu'en reference
+CPU. P9 livre le chaine import -> scene -> backends GPU -> canvas pour une scene
+OpenUSD quelconque. Aucune perte silencieuse (REQ-013) : toute feature non
+supportee produit un diagnostic. Le rendu reste statique (pas d'animation).
+
+- [x] T048 [Plan:P9] Qualifier et integrer un lecteur de crate binaire `.usdc`
+  (PXR-USDC) en extracteur de donnees seul (pas de generation de code) :
+  OpenUSD-wasm (`@needle-tools/usd`) comme unique lecteur, tinyusdz-wasm abandonne
+  (incapable de lire le crate de reference) (docs/usd-import.md section 3).
+  Decoder meshes (points, faceVertexCounts/Indices, normales, primvars/UV),
+  transformations, cameras et lumieres du crate et les mapper vers SceneAsset.
+  Consigner la revision verrouillee dans docs/dependencies.md. Fait : lecteur
+  src/usd/crate.ts (flattenCrate/importCrate avec OpenUsdModule injecte) qui ecrit
+  le crate dans le FS du module, ouvre le stage, l'aplatit en USDA via
+  stage.ExportToString() et le compose a travers l'importateur USDA existant
+  (src/usd/importer.ts) -> SceneAsset (meshes/primvars/xforms/cameras/lumieres),
+  diagnostics de composition (GetCompositionErrors) transmis au sink. Loader Node
+  par defaut scripts/openusd-loader.ts (resout le main du paquet puis importe
+  bindings/index.js direct pour contourner la map exports + le peer three ;
+  garde sous scripts/ car src/ reste type navigateur). tinyusdz retire
+  (devDependency + lock). Tests tests/usd/crate.test.ts (module factice, 4 cas :
+  cycle FS, decodage mesh/camera/lumiere, erreurs de composition au sink,
+  FS_unlink meme en erreur). Harness end-to-end scripts/qualify-crate.ts
+  (importCrate + loadOpenUsd sur les 3 crates de reference). Revision verrouillee
+  dans docs/dependencies.md (section "USDC crate reader (OpenUSD-wasm) — T048" :
+  @needle-tools/usd@1.1.2 = OpenUSD 0.26.5 pxr 2605, licence
+  PolyForm-Noncommercial-1.0.0 notee comme contrainte produit, preuves de
+  qualification 57 MB/0 erreur/8 cameras/6 lumieres). Valide : typecheck + 747
+  tests Node. Restent (T048/T049) : loader navigateur et pont mesh->RawMesh.
+- [ ] T049 [Plan:P9] Unifier composition USDA (texte, src/usd/importer.ts) et
+  payloads crate (T048) dans un stage compose unique : resolution des references,
+  payloads, sublayers et bindings pointant vers des prims de crate ; brancher le
+  resolver d'assets (src/assets/resolver.ts) sur un asset root explicite servi par
+  HTTP(S) ou selection locale (REQ-011, pas de remap silencieux des chemins D:\).
+- [ ] T050 [Plan:P9] Construire le pont SceneAsset -> ressources GPU : upload des
+  geometries preparees (src/geometry/prepare.ts) en vertex/index buffers, BVH et
+  hierarchie d'instances (src/scene/instances.ts, src/geometry/bvh.ts), et
+  compilation des materiaux references via la chaine MaterialX (graph -> IR ->
+  WGSL -> pipeline/instance) pour chaque binding de la scene.
+- [ ] T051 [Plan:P9] Cabler le backend raster executable sur la scene reelle :
+  src/main.ts et src/render/raster/backend.ts consomment SceneAsset + instances
+  materiau (cameras et lumieres USD reelles, environnement), remplacant le
+  triangle et les uniformes codes en dur ; rendu multi-objets avec les passes
+  effectivement actives (opaque, transmission, etc.).
+- [ ] T052 [Plan:P9] Porter l'integrateur de reference path tracing en compute
+  WebGPU alimente par la meme scene (traversal BVH + fermetures eval/PDF/sample
+  de src/render/pathtracing/bsdf.ts), accumulation progressive, et commutation de
+  backend sans reimport via src/render/engine.ts ; comparer un rendu raster et un
+  rendu pathtracing de la scene sur les memes assets.
+- [ ] T053 [Plan:P9] Valider bout-en-bout sur la scene de reference
+  (ShdrPlygrnd_OpenPBR.usda) et au moins une scene OpenUSD tierce : chargement
+  compose, diagnostics des features non supportees, rendu des deux backends, et
+  mesures (temps de chargement/compilation/rendu, memoire) sur le GPU local puis
+  sur le mobile cible (D:\platform-tools\adb.exe). Consigner dans docs/validation.md.
+
 P1 decide les dependances avant de figer leurs adaptateurs. Une premiere tranche
 verticale P2/P3/P4 avec une surface texturée doit alimenter P5 et P6 rapidement.
 Developper ensuite les combinaisons OpenPBR, subsurface et volumes. La validation
 accompagne chaque phase ; P7 consolide les gates et n'est pas son point de depart.
+P9 cable enfin le flux runtime complet (crate binaire + scene -> backends GPU ->
+canvas) pour rendre une scene OpenUSD quelconque, au-dela des scenes de controle.
 
 ## 12. Criteres d'acceptation
 
@@ -491,18 +554,18 @@ accompagne chaque phase ; P7 consolide les gates et n'est pas son point de depar
 | Exigence | Phases | Preuves attendues |
 | --- | --- | --- |
 | REQ-001 | P2, P7 | Device lifecycle, TypeScript, ressources |
-| REQ-002 | P1, P4, P7 | Import compose, cameras, scene statique et inventaire |
-| REQ-003 | P1, P2, P4 | Dependances qualifiees et adaptateurs |
+| REQ-002 | P1, P4, P7, P9 | Import compose, cameras, scene statique et inventaire |
+| REQ-003 | P1, P2, P4, P9 | Dependances qualifiees et adaptateurs |
 | REQ-004 | P1, P2, P3 | WASM Core sans appel a un generateur |
 | REQ-005 | P3, P7 | Chaine de compilation, caches et instances |
 | REQ-006 | P3, P4, P5, P6, P7, P8 | OpenPBR et comparaisons de reference |
 | REQ-007 | P3, P5, P6, P7, P8 | Subsurface raster et transport physique |
 | REQ-008 | P3, P5, P6, P7, P8 | Volumes homogenes/heterogenes |
-| REQ-009 | P5, P7, P8 | Raster complet et approximations declarees |
-| REQ-010 | P6, P7, P8 | Path tracing et hybride |
-| REQ-011 | P2, P3, P4, P5, P6, P7, P8 | Images, UDIM et couleur |
-| REQ-012 | P2, P4, P5, P7 | Instanciation, BVH, clustering et budgets |
-| REQ-013 | P1, P7 | Conformite, diagnostics et gates |
+| REQ-009 | P5, P7, P8, P9 | Raster complet et approximations declarees |
+| REQ-010 | P6, P7, P8, P9 | Path tracing et hybride |
+| REQ-011 | P2, P3, P4, P5, P6, P7, P8, P9 | Images, UDIM et couleur |
+| REQ-012 | P2, P4, P5, P7, P9 | Instanciation, BVH, clustering et budgets |
+| REQ-013 | P1, P7, P9 | Conformite, diagnostics et gates |
 | REQ-014 | P1, P3, P7, P8 | Inventaire exhaustif, lowering TypeScript et tests de chaque noeud du corpus |
 
 ## 14. Decisions encore ouvertes
