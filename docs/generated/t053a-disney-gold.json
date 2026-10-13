@@ -1,0 +1,79 @@
+{
+  "scene": "scenes/test_material_disney_gold/test_material_disney_gold.usda",
+  "timestamp": "2026-10-13T14:15:04.697Z",
+  "node": "v25.2.1",
+  "loading": {
+    "prims": 13,
+    "roots": 1,
+    "materials": [
+      "gold",
+      "ground"
+    ],
+    "meshes": [
+      "/World/Geometry/cube",
+      "/World/Geometry/sphere",
+      "/World/Geometry/ground"
+    ],
+    "lights": [
+      {
+        "path": "/World/Lights/light_0",
+        "type": "sphere",
+        "usdType": "SphereLight"
+      },
+      {
+        "path": "/World/Lights/light_1",
+        "type": "rect",
+        "usdType": "RectLight"
+      }
+    ],
+    "cameras": [
+      {
+        "path": "/World/Cameras/mainCamera",
+        "projection": "perspective"
+      }
+    ]
+  },
+  "resources": {
+    "geometries": 3,
+    "instances": 3,
+    "triangles": 974,
+    "pendingGeometry": [],
+    "pendingMaterials": [],
+    "unboundGprims": []
+  },
+  "backends": {
+    "rasterDraws": 3,
+    "pathTraceTriangles": 974,
+    "materialCount": 2,
+    "sharedCamera": true,
+    "sharedLight": true,
+    "diffuseProbe": {
+      "maxAbsDiff": 0,
+      "agree": true
+    }
+  },
+  "memory": {
+    "ptNodesBytes": 24528,
+    "ptTrianglesBytes": 93504,
+    "ptMaterialsBytes": 96,
+    "ptTotalBytes": 118128,
+    "heapUsedBytes": 11825512
+  },
+  "timings": {
+    "loadMs": 50.097299999999905,
+    "importMs": 4.115500000000111,
+    "resourcesMs": 67.07150000000001,
+    "renderMs": 52.33850000000007,
+    "totalMs": 173.6228000000001
+  },
+  "diagnostics": [
+    {
+      "level": "info",
+      "message": "Lumiere de surface SphereLight (/World/Lights/light_0) approximee en lumiere directionnelle par le backend executable."
+    },
+    {
+      "level": "info",
+      "message": "Lumiere de surface RectLight (/World/Lights/light_1) approximee en lumiere directionnelle par le backend executable."
+    }
+  ]
+}

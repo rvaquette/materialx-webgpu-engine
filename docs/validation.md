@@ -232,3 +232,104 @@ vide pour garder `npm test` déterministe.
 - Mobile avec débogage USB autorisé et un navigateur WebGPU (Chrome).
 - ADB disponible (par défaut `D:\platform-tools\adb.exe`, surchargé par `MX_ADB`).
 - Port du serveur Vite surchargé par `MX_PORT` (défaut `5173`).
+
+## Validation bout-en-bout par scène (T053a)
+
+Première passe de validation de bout en bout sur **une seule scène réelle**,
+`scenes/test_material_disney_gold/test_material_disney_gold.usda` (OpenPBR
+MaterialX, convertie depuis le corpus GLSL-PathTracer). Elle prépare le terrain
+pour la validation complète T053 (scène de référence + scène tierce + mobile).
+
+Le run est piloté par
+[`scripts/validate-disney-gold.ts`](../scripts/validate-disney-gold.ts) et rejoue
+la chaîne d'exécution réelle sur les **mêmes assets** :
+`importUsdStage` (chargement composé) → `importLights`/`importCameras` →
+`buildSceneResources` (géométrie + BLAS, instances + TLAS, surfaces MaterialX) →
+`buildSceneFrame` (raster) **et** `buildPathTraceScene` (path tracing) dérivés
+d'un **unique** `SceneResources`, recoupés par `compareSceneBackends`. La scène
+étant un artefact local non versionné, ce run n'est pas un test committé : il
+s'exécute à la demande et écrit un rapport JSON sous
+[`docs/generated/t053a-disney-gold.json`](generated/t053a-disney-gold.json).
+
+```powershell
+# Node >=23.6 ne supporte pas les parameter properties de l'importateur en mode
+# strip-only ; le run passe par vite-node (transpilation complète, fournie par vitest).
+npm run validate:scene
+```
+
+### Chargement composé
+
+| Mesure | Valeur |
+| --- | --- |
+| Prims composés | 13 (1 racine `/World`) |
+| Meshes | 3 — `cube`, `sphere`, `ground` |
+| Matériaux MaterialX | 2 — `gold`, `ground` (OpenPBR, liés sans résidu) |
+| Caméra | 1 — `mainCamera` (perspective) |
+| Lumières | 2 — `SphereLight` + `RectLight` |
+
+Le stage composé expose les 3 meshes avec leur géométrie inline (points /
+`faceVertexCounts` / `faceVertexIndices`), les deux matériaux OpenPBR résolus
+depuis `gold.mtlx` / `ground.mtlx`, la caméra et les deux lumières. Aucune
+géométrie ni aucun matériau n'est resté en attente, et aucun gprim n'est non lié.
+
+### Diagnostics des fonctionnalités non prises en charge
+
+Rien n'est abandonné en silence (REQ-013). Pour cette scène :
+
+| Niveau | Diagnostic |
+| --- | --- |
+| info | `SphereLight` (`/World/Lights/light_0`) approximée en lumière directionnelle par le backend exécutable. |
+| info | `RectLight` (`/World/Lights/light_1`) approximée en lumière directionnelle par le backend exécutable. |
+
+Les lumières d'aire sont **reconnues et importées** (`importLights` les mappe en
+`sphere`/`rect` avec leur transform et leurs paramètres de forme), mais les deux
+backends exécutables en ligne (`directionalLightFrom`) les réduisent pour l'instant
+à une unique lumière directionnelle dominante. L'échantillonnage de surface des
+lumières d'aire relève du path tracer complet (P9+). Les autres arcs non pris en
+charge (payloads/crate binaires) ne concernent pas cette scène 100 % USDA + MaterialX.
+
+### Rendu des deux backends sur les mêmes assets
+
+| Mesure | Valeur |
+| --- | --- |
+| Géométries / instances | 3 / 3 |
+| Triangles (géométrie préparée) | 974 |
+| Draws raster | 3 |
+| Triangles path tracing | 974 |
+| Surfaces OpenPBR partagées | 2 |
+| Caméra partagée (viewProj + eye) | oui |
+| Lumière dominante partagée | oui |
+| Accord vérité-terrain diffuse (probe) | oui (`maxAbs = 0`) |
+
+Les deux backends consomment le **même** `SceneResources` : ils voient le même
+nombre de triangles (974), la même caméra, la même lumière dominante, et les deux
+mêmes surfaces OpenPBR — sans ré-import. Le recoupement Lambert à incidence normale
+(référence raster `src/render/bsdf/reference.ts` vs fermeture du path tracer
+`src/render/pathtracing/bsdf.ts`) coïncide exactement (`maxAbs = 0`).
+
+### Mesures (poste local)
+
+| Étape | Temps indicatif |
+| --- | --- |
+| Chargement composé (`importUsdStage`) | ~60 ms |
+| Import lumières + caméras | ~4 ms |
+| `buildSceneResources` (géo + BLAS + TLAS + matériaux) | ~91 ms |
+| Rendu CPU (frame raster + scène PT + recoupement) | ~60 ms |
+| **Total** | **~216 ms** |
+
+| Mémoire (buffers path tracing) | Taille |
+| --- | --- |
+| Nœuds BVH | 24,0 Kio |
+| Soupe de triangles | 91,3 Kio |
+| Matériaux | 0,1 Kio |
+| **Total GPU-upload PT** | **115,4 Kio** |
+
+> **Frontière Node vs GPU (honnête).** Node n'expose pas WebGPU : ce run mesure la
+> chaîne **CPU** (parsing, composition, construction des ressources, oracle de
+> rendu) et la **taille des buffers** qui seraient téléversés au GPU. Les temps
+> sont indicatifs (ils incluent la transpilation à froid de vite-node) et la
+> mesure de tas (`heapUsed`) est bruitée par le GC — la métrique mémoire fiable est
+> la taille des buffers. Les temps de compilation de shader, de rendu et
+> d'occupation VRAM **réels sur le GPU local** passent par le harnais device
+> navigateur ([`scene-device-harness.html`](../scene-device-harness.html),
+> `npm run test:scene-device`) et sont couverts par la validation complète T053.

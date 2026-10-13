@@ -593,6 +593,32 @@ supportee produit un diagnostic. Le rendu reste statique (pas d'animation).
   integratePath), tests/render/pathtracing/compute.test.ts (marqueurs WGSL, layout
   uniforme, creation de pipeline mock, compteur de frames, workgroupCount),
   tests/render/compare-backends.test.ts (sonde diffuse, parite des backends).
+- [x] T053a [Plan:P9] Valider bout-en-bout dans un premier temps sur la seule
+  scene scenes/test_material_disney_gold/test_material_disney_gold.usda :
+  chargement compose, diagnostics des features non supportees, rendu des deux
+  backends (raster + path tracing) sur les memes assets, et mesures (temps de
+  chargement/compilation/rendu, memoire) sur le GPU local. Consigner dans
+  docs/validation.md. Prepare le terrain pour T053 (scene de reference + scene
+  tierce + mobile).
+  Fait : (1) Nouveau script scripts/validate-disney-gold.ts (hors suite, lance
+  par `npm run validate:scene` via vite-node car l'importateur USDA utilise des
+  parameter properties non supportees par le strip-only de Node). Il rejoue la
+  chaine runtime reelle sur les memes assets : importUsdStage (chargement
+  compose) -> importLights/importCameras -> buildSceneResources (geo+BLAS,
+  instances+TLAS, surfaces OpenPBR lues depuis gold.mtlx/ground.mtlx) ->
+  buildSceneFrame (raster) ET buildPathTraceScene (path tracing) derives d'un
+  unique SceneResources, recoupes par compareSceneBackends. (2) Resultats :
+  13 prims, 3 meshes (cube/sphere/ground), 2 materiaux OpenPBR, 1 camera,
+  2 lumieres ; 974 triangles ; aucune geo/materiau en attente, aucun gprim non
+  lie ; backends partages (cameraPartagee=true, lumierePartagee=true, probe
+  diffuse maxAbs=0) ; buffers PT 115,4 Kio. (3) Diagnostics : les lumieres d'aire
+  SphereLight/RectLight sont importees mais approximees en lumiere directionnelle
+  par le backend executable (signale, non abandonne). (4) Frontiere honnete
+  Node vs GPU : Node n'a pas WebGPU -> mesure de la chaine CPU + taille des
+  buffers ; les temps/compil/VRAM reels sur GPU passent par le harnais device
+  (scene-device-harness.html) et relevent de T053. Rapport JSON :
+  docs/generated/t053a-disney-gold.json. Section dediee ajoutee a
+  docs/validation.md. Valide : typecheck + 787 tests Node.
 - [ ] T053 [Plan:P9] Valider bout-en-bout sur la scene de reference
   (ShdrPlygrnd_OpenPBR.usda) et au moins une scene OpenUSD tierce : chargement
   compose, diagnostics des features non supportees, rendu des deux backends, et
