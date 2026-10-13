@@ -13,6 +13,7 @@ import materials from '../fixtures/scene-materials.json' with { type: 'json' };
 import { fitShaderBall, sampleSurface, type CameraParams } from './scene-samples.ts';
 import type { CanonMaterial } from './scene-shade.ts';
 import { openPbrSurfaceWgsl } from '../../src/render/raster/shaders.ts';
+import { resolvePixel } from '../../src/render/output.ts';
 
 export interface SceneDeviceResult {
   readonly id: string;
@@ -214,6 +215,136 @@ export async function runScenesOnDevice(device: GPUDevice): Promise<Omit<SceneDe
   normalBuffer.destroy();
   viewBuffer.destroy();
   return { width: RES, height: RES, hitCount: count, scenes: results };
+}
+
+export interface SceneDeviceImage {
+  readonly id: string;
+  readonly width: number;
+  readonly height: number;
+  /** PNG data URL produced on the device from the GPU-shaded frame. */
+  readonly dataUrl: string;
+}
+
+/**
+ * Render a full raster frame of the shader ball for one scene on the device GPU
+ * and return it as an RGBA8 buffer (row-major, length res*res*4). Visibility is
+ * sampled on the CPU exactly like the oracle grid (scene-samples.ts) but at full
+ * image resolution; every hit is shaded by the same OpenPBR WGSL the oracle uses,
+ * so the pixels come straight off the mobile GPU.
+ */
+export async function renderSceneImageOnDevice(
+  device: GPUDevice,
+  sceneId: string,
+  res: number,
+): Promise<Uint8ClampedArray> {
+  const surface = fitShaderBall(fixture);
+  const grid = sampleSurface(surface, cameraParams(), res, res);
+  const hitNormals: number[] = [];
+  const hitViews: number[] = [];
+  const hitIndex: number[] = [];
+  grid.samples.forEach((s, i) => {
+    if (!s.hit) return;
+    hitNormals.push(s.normal[0], s.normal[1], s.normal[2]);
+    hitViews.push(s.viewDir[0], s.viewDir[1], s.viewDir[2]);
+    hitIndex.push(i);
+  });
+  const normals = new Float32Array(hitNormals);
+  const views = new Float32Array(hitViews);
+  const count = normals.length / 3;
+  const bytes = Math.max(normals.byteLength, 4);
+  const normalBuffer = device.createBuffer({ size: bytes, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
+  const viewBuffer = device.createBuffer({ size: bytes, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
+  device.queue.writeBuffer(normalBuffer, 0, normals);
+  device.queue.writeBuffer(viewBuffer, 0, views);
+
+  const module = device.createShaderModule({ code: SHADE_WGSL });
+  const pipeline = device.createComputePipeline({ layout: 'auto', compute: { module, entryPoint: 'main' } });
+
+  const lightDir = [scenes.light.direction[0]!, scenes.light.direction[1]!, scenes.light.direction[2]!];
+  const lightColor = [scenes.light.color[0]!, scenes.light.color[1]!, scenes.light.color[2]!];
+  const intensity = scenes.light.intensity;
+  const environment = [
+    scenes.environment.constantRadiance[0]!,
+    scenes.environment.constantRadiance[1]!,
+    scenes.environment.constantRadiance[2]!,
+  ];
+
+  const shaded = count > 0
+    ? await shadeOnDevice(
+        device, pipeline, normalBuffer, viewBuffer, count, bytes, material(sceneId),
+        lightDir, lightColor, intensity, environment,
+      )
+    : new Float32Array(0);
+  normalBuffer.destroy();
+  viewBuffer.destroy();
+
+  const rgba = new Uint8ClampedArray(res * res * 4);
+  for (let p = 0; p < res * res; p++) {
+    rgba[p * 4 + 3] = 255; // opaque dark background
+  }
+  for (let h = 0; h < count; h++) {
+    const px = hitIndex[h]!;
+    const b = h * 3;
+    const enc = resolvePixel([[shaded[b]!, shaded[b + 1]!, shaded[b + 2]!]]);
+    const o = px * 4;
+    rgba[o] = Math.round(enc.color[0] * 255);
+    rgba[o + 1] = Math.round(enc.color[1] * 255);
+    rgba[o + 2] = Math.round(enc.color[2] * 255);
+    rgba[o + 3] = 255;
+  }
+  return rgba;
+}
+
+/** Browser entry: render one scene's raster frame on the device and publish a PNG data URL. */
+export async function bootstrapImage(
+  sceneId = 'standard_surface_carpaint',
+  res = 256,
+): Promise<SceneDeviceImage | null> {
+  const root = typeof document !== 'undefined' ? document.getElementById('log') ?? document.body : undefined;
+  const line = (msg: string): void => {
+    if (!root) return;
+    const p = document.createElement('p');
+    p.textContent = msg;
+    root.appendChild(p);
+  };
+
+  if (typeof navigator === 'undefined' || !navigator.gpu) {
+    line('WebGPU indisponible sur cet appareil.');
+    (globalThis as { __MX_IMAGE__?: SceneDeviceImage | null }).__MX_IMAGE__ = null;
+    return null;
+  }
+  const adapter = await navigator.gpu.requestAdapter();
+  if (!adapter) {
+    line('Aucun adaptateur WebGPU.');
+    (globalThis as { __MX_IMAGE__?: SceneDeviceImage | null }).__MX_IMAGE__ = null;
+    return null;
+  }
+  const device = await adapter.requestDevice();
+
+  line(`Rendu raster de ${sceneId} (${res}x${res}) sur le GPU...`);
+  const rgba = await renderSceneImageOnDevice(device, sceneId, res);
+
+  const canvas = document.createElement('canvas');
+  canvas.width = res;
+  canvas.height = res;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) {
+    line('Canvas 2D indisponible.');
+    (globalThis as { __MX_IMAGE__?: SceneDeviceImage | null }).__MX_IMAGE__ = null;
+    return null;
+  }
+  ctx.putImageData(new ImageData(rgba, res, res), 0, 0);
+  const dataUrl = canvas.toDataURL('image/png');
+
+  const img = document.createElement('img');
+  img.src = dataUrl;
+  img.width = Math.min(512, res * 2);
+  if (root) root.appendChild(img);
+
+  const image: SceneDeviceImage = { id: sceneId, width: res, height: res, dataUrl };
+  (globalThis as { __MX_IMAGE__?: SceneDeviceImage | null }).__MX_IMAGE__ = image;
+  line(`${adapterFields(adapter).vendor ?? 'gpu'} / ${adapterFields(adapter).architecture ?? '?'} - image prete.`);
+  return image;
 }
 
 function adapterFields(adapter: GPUAdapter): Record<string, string> {

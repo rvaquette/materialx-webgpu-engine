@@ -59,6 +59,10 @@ export interface PathTraceScene {
   /** Packed OpenPBR surfaces (PT_MATERIAL_FLOATS each). */
   materials: Float32Array;
   materialCount: number;
+  /** Per-triangle UVs (6 floats: u0,v0,u1,v1,u2,v2) in triangle-soup order; 0 when unauthored. */
+  triangleUv: Float32Array;
+  /** Dedup material keys in material-index order (lets callers map textures per material). */
+  materialKeys: string[];
   camera: PathTraceCamera;
   light: FrameLight;
   environment: FrameEnvironment;
@@ -101,12 +105,14 @@ export function buildPathTraceScene(
   // Dedup material surfaces in first-seen draw order.
   const materialIndex = new Map<string, number>();
   const surfaces: RasterSurface[] = [];
+  const materialKeys: string[] = [];
   const indexFor = (key: string, surface: RasterSurface): number => {
     const existing = materialIndex.get(key);
     if (existing !== undefined) return existing;
     const idx = surfaces.length;
     materialIndex.set(key, idx);
     surfaces.push(surface);
+    materialKeys.push(key);
     return idx;
   };
 
@@ -114,6 +120,7 @@ export function buildPathTraceScene(
   // records (positions + normals + material index) in matching original order.
   const soup: number[] = [];
   const triFloats: number[] = [];
+  const uvFloats: number[] = [];
   let triCount = 0;
 
   for (const draw of frame.draws) {
@@ -122,6 +129,7 @@ export function buildPathTraceScene(
     const position = geom.streams.find((s) => s.name === 'position');
     if (!position) continue;
     const normal = geom.streams.find((s) => s.name === 'normal');
+    const uv = geom.streams.find((s) => s.name === 'uv');
     const matIdx = indexFor(materialKeyOf(draw.materialKey), draw.surface);
     const model = draw.model;
     const idx = geom.indices;
@@ -155,6 +163,17 @@ export function buildPathTraceScene(
       triFloats[base + 15] = nc[0]; triFloats[base + 16] = nc[1]; triFloats[base + 17] = nc[2];
       triFloats[base + 18] = matIdx;
       for (let p = 19; p < PT_TRIANGLE_FLOATS; p++) triFloats[base + p] = 0;
+      const ub = triCount * 6;
+      if (uv) {
+        const ua = readVec2(uv.data, ia);
+        const uvb = readVec2(uv.data, ib);
+        const uc = readVec2(uv.data, ic);
+        uvFloats[ub] = ua[0]; uvFloats[ub + 1] = ua[1];
+        uvFloats[ub + 2] = uvb[0]; uvFloats[ub + 3] = uvb[1];
+        uvFloats[ub + 4] = uc[0]; uvFloats[ub + 5] = uc[1];
+      } else {
+        for (let p = 0; p < 6; p++) uvFloats[ub + p] = 0;
+      }
       triCount++;
     }
   }
@@ -175,6 +194,8 @@ export function buildPathTraceScene(
     triangleCount: triCount,
     materials,
     materialCount: surfaces.length,
+    triangleUv: new Float32Array(uvFloats),
+    materialKeys,
     camera: {
       viewProj: frame.camera.viewProj,
       invViewProj: inverse4(frame.camera.viewProj),
@@ -190,6 +211,11 @@ export function buildPathTraceScene(
 function readVec3(data: Float32Array, vertex: number): V3 {
   const o = vertex * 3;
   return [data[o]!, data[o + 1]!, data[o + 2]!];
+}
+
+function readVec2(data: Float32Array, vertex: number): [number, number] {
+  const o = vertex * 2;
+  return [data[o]!, data[o + 1]!];
 }
 
 function packNodes(bvh: Bvh): Float32Array {

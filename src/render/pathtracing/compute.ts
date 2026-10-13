@@ -24,7 +24,16 @@ export const PT_UNIFORM_SIZE = PT_UNIFORM_FLOATS * 4;
 
 // --- WGSL generator ----------------------------------------------------------
 
-function wgslStructsAndBindings(): string {
+function wgslStructsAndBindings(textures: boolean): string {
+  const texBindings = textures
+    ? /* wgsl */ `
+@group(0) @binding(6) var<storage, read> triUv : array<f32>;
+@group(0) @binding(7) var<storage, read> matLayer : array<i32>;
+@group(0) @binding(8) var bakedTex : texture_2d_array<f32>;
+@group(0) @binding(9) var bakedSampler : sampler;
+const UV_STRIDE : u32 = 6u;
+`
+    : '';
   return /* wgsl */ `
 struct Uniforms {
   invViewProj : mat4x4<f32>,
@@ -41,7 +50,7 @@ struct Uniforms {
 @group(0) @binding(3) var<storage, read> triOrder : array<u32>;
 @group(0) @binding(4) var<storage, read> materials : array<f32>;
 @group(0) @binding(5) var<storage, read_write> accum : array<vec4<f32>>;
-
+${texBindings}
 const PI : f32 = 3.14159265358979;
 const NODE_STRIDE : u32 = 12u;
 const TRI_STRIDE : u32 = 24u;
@@ -233,7 +242,11 @@ fn surface_eval(s : Surface, wo : vec3<f32>, wi : vec3<f32>) -> vec4<f32> {
   let trans = clamp(s.transmission, 0.0, 1.0);
   let spec = clamp(s.specular, 0.0, 1.0);
   let dielectricShare = (1.0 - metal) * (1.0 - trans);
-  let wLambert = dielectricShare * (1.0 - spec);
+  // The dielectric specular is a Fresnel coat layered OVER the diffuse base: the
+  // specular weight scales the highlight, it does not remove the diffuse albedo
+  // (only Fresnel, ~F0, attenuates it). Keeping the diffuse at full dielectric
+  // share is what lets a brick read as its base color instead of a gray coat.
+  let wLambert = dielectricShare;
   let wDielectric = dielectricShare * spec;
   let total = max(metal + wDielectric + wLambert, 1.0e-6);
 
@@ -278,7 +291,7 @@ fn surface_sample(s : Surface, wo : vec3<f32>, state : ptr<function, u32>) -> Su
   let trans = clamp(s.transmission, 0.0, 1.0);
   let spec = clamp(s.specular, 0.0, 1.0);
   let dielectricShare = (1.0 - metal) * (1.0 - trans);
-  let wLambert = dielectricShare * (1.0 - spec);
+  let wLambert = dielectricShare;
   let specularWeight = metal + dielectricShare * spec;
   let total = max(specularWeight + wLambert, 1.0e-6);
 
@@ -307,7 +320,29 @@ fn surface_sample(s : Surface, wo : vec3<f32>, state : ptr<function, u32>) -> Su
 `;
 }
 
-function wgslIntegrator(): string {
+function wgslIntegrator(textures: boolean): string {
+  const texOverride = textures
+    ? /* wgsl */ `
+    let layer = matLayer[tri_material(hit.tri)];
+    if (layer >= 0) {
+      let uv = surface_hit_uv(hit);
+      let tx = textureSampleLevel(bakedTex, bakedSampler, uv, layer, 0.0);
+      s.baseColor = tx.rgb;
+      s.roughness = clamp(tx.a, 0.03, 1.0);
+    }`
+    : '';
+  const texHelpers = textures
+    ? /* wgsl */ `
+fn tri_uv(tri : u32, slot : u32) -> vec2<f32> {
+  let b = tri * UV_STRIDE + slot * 2u;
+  return vec2<f32>(triUv[b], triUv[b + 1u]);
+}
+
+fn surface_hit_uv(h : Hit) -> vec2<f32> {
+  let w = 1.0 - h.u - h.v;
+  return tri_uv(h.tri, 0u) * w + tri_uv(h.tri, 1u) * h.u + tri_uv(h.tri, 2u) * h.v;
+}`
+    : '';
   return /* wgsl */ `
 fn power_heuristic(nf : f32, fp : f32, ng : f32, gp : f32) -> f32 {
   let f = nf * fp;
@@ -323,6 +358,7 @@ fn surface_hit_normal(h : Hit) -> vec3<f32> {
   let n = tri_normal(h.tri, 0u) * w + tri_normal(h.tri, 1u) * h.u + tri_normal(h.tri, 2u) * h.v;
   return normalize(n);
 }
+${texHelpers}
 
 fn integrate(ro0 : vec3<f32>, rd0 : vec3<f32>, state : ptr<function, u32>) -> vec3<f32> {
   var radiance = vec3<f32>(0.0);
@@ -341,7 +377,7 @@ fn integrate(ro0 : vec3<f32>, rd0 : vec3<f32>, state : ptr<function, u32>) -> ve
     }
     let pos = ro + rd * hit.t;
     let n = surface_hit_normal(hit);
-    let s = load_surface(tri_material(hit.tri));
+    var s = load_surface(tri_material(hit.tri));${texOverride}
     let frame = basis(n);
     let wo = transpose(frame) * (-rd);
 
@@ -414,13 +450,14 @@ fn ${PT_COMPUTE_ENTRY}(@builtin(global_invocation_id) gid : vec3<u32>) {
 }
 
 /** Full WGSL source of the compute path tracer. */
-export function pathTraceComputeWgsl(): string {
+export function pathTraceComputeWgsl(options: { textures?: boolean } = {}): string {
+  const textures = options.textures ?? false;
   return [
-    wgslStructsAndBindings(),
+    wgslStructsAndBindings(textures),
     wgslRng(),
     wgslTraversal(),
     wgslSurface(),
-    wgslIntegrator(),
+    wgslIntegrator(textures),
     wgslEntry(),
   ].join('\n');
 }
@@ -463,11 +500,13 @@ export interface PathTracePipeline {
  */
 export class PathTraceBackend {
   readonly #device: GPUDevice;
+  readonly #textures: boolean;
   #pipeline: PathTracePipeline | null = null;
   #frameIndex = 0;
 
-  constructor(device: GPUDevice) {
+  constructor(device: GPUDevice, options: { textures?: boolean } = {}) {
     this.#device = device;
+    this.#textures = options.textures ?? false;
   }
 
   get frameIndex(): number {
@@ -489,7 +528,7 @@ export class PathTraceBackend {
   /** Create (once) the compute pipeline from the generated WGSL. */
   createPipeline(): PathTracePipeline {
     if (this.#pipeline) return this.#pipeline;
-    const module = this.#device.createShaderModule({ code: pathTraceComputeWgsl() });
+    const module = this.#device.createShaderModule({ code: pathTraceComputeWgsl({ textures: this.#textures }) });
     const pipeline = this.#device.createComputePipeline({
       layout: 'auto',
       compute: { module, entryPoint: PT_COMPUTE_ENTRY },
