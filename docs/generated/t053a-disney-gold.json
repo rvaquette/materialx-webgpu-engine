@@ -1,6 +1,6 @@
 {
   "scene": "scenes/test_material_disney_gold/test_material_disney_gold.usda",
-  "timestamp": "2026-10-13T15:12:48.642Z",
+  "timestamp": "2026-10-13T15:31:18.656Z",
   "node": "v25.2.1",
   "loading": {
     "prims": 13,
@@ -57,7 +57,7 @@
     "ptTrianglesBytes": 93504,
     "ptMaterialsBytes": 96,
     "ptTotalBytes": 118128,
-    "heapUsedBytes": 13241976
+    "heapUsedBytes": 7277416
   },
   "image": {
     "path": "renders/t053a-disney-gold.png",
@@ -72,15 +72,30 @@
       0.6,
       0.6
     ],
-    "renderMs": 38283.7213
+    "renderMs": 40400.593
+  },
+  "imageRaster": {
+    "path": "renders/t053a-disney-gold-raster.png",
+    "width": 256,
+    "height": 256,
+    "covered": 61237,
+    "pixels": 65536,
+    "coverage": 0.9344024658203125,
+    "previewEnvironment": [
+      0.6,
+      0.6,
+      0.6
+    ],
+    "renderMs": 254.08699999999953
   },
   "timings": {
-    "loadMs": 37.280899999999974,
-    "importMs": 4.233999999999924,
-    "resourcesMs": 38.45440000000008,
-    "backendsMs": 27.83770000000004,
-    "imageMs": 38283.7213,
-    "totalMs": 38406.4218
+    "loadMs": 24.469100000000026,
+    "importMs": 2.9337000000000444,
+    "resourcesMs": 40.301299999999856,
+    "backendsMs": 28.09970000000021,
+    "imageMs": 40400.593,
+    "rasterMs": 254.08699999999953,
+    "totalMs": 40784.8854
   },
   "diagnostics": [
     {

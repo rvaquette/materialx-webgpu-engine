@@ -355,6 +355,33 @@ validation ni le recoupement des backends) assurent la lisibilité :
 La fidélité réelle (compilation de shader, rendu et VRAM sur le GPU) reste couverte
 par le harnais device T053.
 
+### Aperçu raster CPU (PNG)
+
+Le backend raster est **GPU uniquement** dans le navigateur ; pour qu'il produise
+néanmoins **sa propre image** sous Node, le run écrit un second PNG
+`renders/t053a-disney-gold-raster.png` (artefact local non versionné) via un
+**rasteriseur logiciel CPU** ([`src/render/raster/cpu-raster.ts`](../src/render/raster/cpu-raster.ts)).
+Il consomme **exactement le même plan de frame** (`buildSceneFrame`) que le backend
+GPU — mêmes `SceneResources`, même caméra, même lumière dominante, même
+environnement — et transforme les triangles **comme le path tracer** (`transformPoint`
+pour les positions, `transformDirection` + normalisation pour les normales). Le
+pipeline est un rasteriseur classique à **fonctions d'arête** avec **tampon de
+profondeur** et interpolation d'attributs **corrigée par la perspective** (transform
+de clip colonne-major, NDC WebGPU `z ∈ [0,1]`) ; chaque pixel couvert est ombré par
+**le même BSDF OpenPBR de référence** (`evaluateSurface`) sous la lumière
+directionnelle et l'environnement de la frame.
+
+Pour une comparaison directe **raster CPU vs path-trace CPU**, l'aperçu raster
+réutilise la **même caméra d'aperçu** et le **même environnement neutre**
+`[0.6, 0.6, 0.6]` : les deux PNG cadrent et éclairent le sujet à l'identique. Le
+raster affiche l'ombrage **analytique direct** (lumière + ambiant, sans réflexions),
+là où le path tracer ajoute les réflexions multi-rebonds — chaque méthode est
+correcte pour son modèle. Le module est pur et testé sous Node
+([`tests/render/cpu-raster.test.ts`](../tests/render/cpu-raster.test.ts) : projection,
+couverture, ombrage de référence au centre, déterminisme, tampon de profondeur).
+
+La fidélité raster réelle sur le GPU reste couverte par le harnais device T053.
+
 ### Correctif moteur : racine BVH à l'index 0
 
 L'aperçu a révélé un **bug de corrélation d'index** latent dans le constructeur

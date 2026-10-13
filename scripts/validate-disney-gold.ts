@@ -11,6 +11,9 @@
 //   5. a CPU path-traced preview PNG (renders/, gitignored) of the real scene
 //      geometry using the reference integrator -- the same packed BVH/triangles
 //      the WGSL compute shader reads, with its exact camera-ray unprojection.
+//   6. a CPU software-rasterized preview PNG (renders/, gitignored) of the SAME
+//      scene-frame plan the GPU raster backend consumes, shaded with the same
+//      reference BSDF -- so the raster backend also renders an image under Node.
 // Not part of the test suite. Run with: node scripts/validate-disney-gold.ts
 // (Node >=23.6 strips the TypeScript types natively, so no build step is needed).
 // Optional args: [resolution] [spp]. Emits a JSON report under docs/generated/,
@@ -42,11 +45,13 @@ import { integratePath, createPcg32, type Ray } from '../src/render/pathtracing/
 import { applyExposure, tonemap, encodeOutput } from '../src/render/output.ts';
 import { lookAt4, multiply4, perspective4 } from '../src/scene/transforms.ts';
 import {
+  buildSceneFrame,
   NEUTRAL_SURFACE,
   type BuildSceneFrameOptions,
   type FrameCamera,
   type RasterSurface,
 } from '../src/render/raster/scene-frame.ts';
+import { rasterizeScene } from '../src/render/raster/cpu-raster.ts';
 import type { RawMesh } from '../src/geometry/prepare.ts';
 import type { Diagnostic } from '../src/core/diagnostics.ts';
 import type { Vec3 } from '../src/scene/transforms.ts';
@@ -59,6 +64,7 @@ const OUT_DIR = resolve(here, '../docs/generated');
 const OUT_FILE = join(OUT_DIR, 't053a-disney-gold.json');
 const RENDERS_DIR = resolve(here, '../renders');
 const PNG_FILE = join(RENDERS_DIR, 't053a-disney-gold.png');
+const RASTER_PNG_FILE = join(RENDERS_DIR, 't053a-disney-gold-raster.png');
 const RES = Math.max(16, Number.parseInt(process.argv[2] ?? '256', 10) || 256);
 const SPP = Math.max(1, Number.parseInt(process.argv[3] ?? '32', 10) || 32);
 
@@ -341,6 +347,37 @@ async function main(): Promise<void> {
   mkdirSync(RENDERS_DIR, { recursive: true });
   writeFileSync(PNG_FILE, encodePng(RES, RES, rgba));
 
+  // 5. CPU software-rasterized preview (renders/, gitignored). The raster backend
+  // is GPU-only in the browser, so here we scan-convert the SAME SceneResources
+  // through the SAME scene-frame plan the GPU backend consumes, shading every
+  // covered pixel with the SAME reference OpenPBR BSDF. We reuse the path tracer's
+  // preview camera and neutral environment so the two PNGs frame and light the
+  // subject identically -- a direct CPU raster vs CPU path-trace comparison. Real
+  // GPU raster fidelity is T053.
+  const rasterFrame = buildSceneFrame(resources, {
+    ...frameOpts,
+    frameCamera: previewCamera,
+    environment: { radiance: previewEnv },
+  });
+  const tRast0 = performance.now();
+  const raster = rasterizeScene(resources, rasterFrame, { width: RES, height: RES });
+  const rgbaRaster = new Uint8Array(RES * RES * 4);
+  for (let p = 0; p < RES * RES; p++) {
+    if (raster.coverage[p] === 0) continue; // transparent background
+    const o = p * 3;
+    const [cr, cg, cb] = resolvePixel(
+      [raster.hdr[o]!, raster.hdr[o + 1]!, raster.hdr[o + 2]!],
+      rasterFrame.camera.exposure,
+    );
+    const idx = p * 4;
+    rgbaRaster[idx] = cr;
+    rgbaRaster[idx + 1] = cg;
+    rgbaRaster[idx + 2] = cb;
+    rgbaRaster[idx + 3] = 255;
+  }
+  const tRast = performance.now();
+  writeFileSync(RASTER_PNG_FILE, encodePng(RES, RES, rgbaRaster));
+
   const triangleTotal = [...resources.geometries.values()].reduce((s, g) => s + g.triangleCount, 0);
   const ptNodesBytes = pt.nodes.byteLength;
   const ptTrianglesBytes = pt.triangles.byteLength;
@@ -393,13 +430,24 @@ async function main(): Promise<void> {
       previewEnvironment: previewEnv,
       renderMs: tImg - tImg0,
     },
+    imageRaster: {
+      path: 'renders/t053a-disney-gold-raster.png',
+      width: RES,
+      height: RES,
+      covered: raster.covered,
+      pixels: RES * RES,
+      coverage: raster.covered / (RES * RES),
+      previewEnvironment: previewEnv,
+      renderMs: tRast - tRast0,
+    },
     timings: {
       loadMs: tLoad - t0,
       importMs: tImport - tLoad,
       resourcesMs: tResources - tImport,
       backendsMs: tRender - tResources,
       imageMs: tImg - tImg0,
-      totalMs: tImg - t0,
+      rasterMs: tRast - tRast0,
+      totalMs: tRast - t0,
     },
     diagnostics: diagnostics.map((d) => ({ level: d.level, message: d.message })),
   };
@@ -425,9 +473,11 @@ async function main(): Promise<void> {
     `materiaux=${kb(ptMaterialsBytes)}, total=${kb(report.memory.ptTotalBytes)} ; heap=${kb(heapUsedBytes)}`);
   console.log(`[t053a] Rendu CPU : ${RES}x${RES}, ${SPP} spp, couverture=${(report.image.coverage * 100).toFixed(1)}% ` +
     `(${primaryHits}/${RES * RES} px) -> ${PNG_FILE}`);
+  console.log(`[t053a] Rendu raster CPU : ${RES}x${RES}, couverture=${(report.imageRaster.coverage * 100).toFixed(1)}% ` +
+    `(${raster.covered}/${RES * RES} px) -> ${RASTER_PNG_FILE}`);
   console.log(`[t053a] Temps : load=${ms(report.timings.loadMs)}, import=${ms(report.timings.importMs)}, ` +
     `ressources=${ms(report.timings.resourcesMs)}, backends=${ms(report.timings.backendsMs)}, ` +
-    `image(CPU)=${ms(report.timings.imageMs)}, total=${ms(report.timings.totalMs)}`);
+    `image(CPU)=${ms(report.timings.imageMs)}, raster(CPU)=${ms(report.timings.rasterMs)}, total=${ms(report.timings.totalMs)}`);
   console.log(`[t053a] Diagnostics (${diagnostics.length}) :`);
   for (const d of diagnostics) console.log(`[t053a]   - [${d.level}] ${d.message}`);
   console.log(`[t053a] Rapport JSON : ${OUT_FILE}`);
