@@ -1,0 +1,433 @@
+// T055d: emit a WGSL `LayeredClosure` struct and a generated
+// `mx_surface_layered(vary) -> LayeredClosure` fill function for a resolved
+// surface. The per-input IR expressions from T055c (lowerSurfaceInputsToIr) back
+// the struct fields, so textured/procedural inputs flow into the shader as node
+// sub-graphs (texture binding / node call) while literal inputs fold to IR
+// constants. The family weight/colour assembly mirrors the CPU lowering
+// surfaceGraphToLayered (T055b) but is re-expressed here as WGSL that references
+// the lowered input refs, so weights stay dynamic (a textured metalness is not
+// flattened). Unsupported upstream nodes are diagnosed by the T055c pass (REQ-013).
+// The shared runtime closure library (T056) consumes the emitted LayeredClosure.
+
+import { defaultDiagnosticSink, type DiagnosticSink } from '../core/diagnostics.ts';
+import type { ResolvedGraph } from '../materialx/graph.ts';
+import type {
+  NormalizedSurfaceInput,
+  ResolvedSurface,
+  SurfaceFamily,
+} from '../materialx/surface-graph.ts';
+import { FLOAT, IrModuleBuilder, type IrRef } from './ir.ts';
+import { lowerSurfaceInputsToIr } from './surface-ir.ts';
+import {
+  emitVaryingsStruct,
+  litFloat,
+  lowerExprs,
+  type WgslBinding,
+  type WgslUniformField,
+} from './wgsl.ts';
+
+const SURFACE_ENTRY = 'mx_surface_layered';
+const SURFACE_RETURN = 'LayeredClosure';
+
+/** The eight BSDF lobe kinds of the layered model (ir.ts), as WGSL u32 constants. */
+type LobeKind =
+  | 'oren_nayar_diffuse'
+  | 'burley_diffuse'
+  | 'translucent'
+  | 'dielectric_reflection'
+  | 'conductor'
+  | 'generalized_schlick'
+  | 'sheen'
+  | 'subsurface';
+
+const LOBE_KIND_CONST: Readonly<Record<LobeKind, string>> = {
+  oren_nayar_diffuse: 'MX_LOBE_OREN_NAYAR_DIFFUSE',
+  burley_diffuse: 'MX_LOBE_BURLEY_DIFFUSE',
+  translucent: 'MX_LOBE_TRANSLUCENT',
+  dielectric_reflection: 'MX_LOBE_DIELECTRIC_REFLECTION',
+  conductor: 'MX_LOBE_CONDUCTOR',
+  generalized_schlick: 'MX_LOBE_GENERALIZED_SCHLICK',
+  sheen: 'MX_LOBE_SHEEN',
+  subsurface: 'MX_LOBE_SUBSURFACE',
+};
+
+/** WGSL prelude: the layered-closure struct family consumed by the runtime eval
+ *  library (T056). A fixed lobe array keeps the type host-shareable; `lobeCount`
+ *  and the `has*` flags gate which members the evaluator reads. */
+export const LAYERED_CLOSURE_PRELUDE = `const MX_MAX_LOBES: u32 = 8u;
+const MX_LOBE_OREN_NAYAR_DIFFUSE: u32 = 0u;
+const MX_LOBE_BURLEY_DIFFUSE: u32 = 1u;
+const MX_LOBE_TRANSLUCENT: u32 = 2u;
+const MX_LOBE_DIELECTRIC_REFLECTION: u32 = 3u;
+const MX_LOBE_CONDUCTOR: u32 = 4u;
+const MX_LOBE_GENERALIZED_SCHLICK: u32 = 5u;
+const MX_LOBE_SHEEN: u32 = 6u;
+const MX_LOBE_SUBSURFACE: u32 = 7u;
+struct MxBsdfLobe {
+  kind: u32,
+  weight: f32,
+  color: vec3f,
+  color90: vec3f,
+  roughness: f32,
+  anisotropy: f32,
+  rotation: f32,
+  ior: f32,
+  extinction: vec3f,
+};
+struct MxCoatLayer { weight: f32, color: vec3f, roughness: f32, ior: f32 };
+struct MxSheenLayer { weight: f32, color: vec3f, roughness: f32 };
+struct MxFuzzLayer { weight: f32, color: vec3f, roughness: f32 };
+struct MxThinFilmLayer { weight: f32, thickness: f32, ior: f32 };
+struct LayeredClosure {
+  lobes: array<MxBsdfLobe, MX_MAX_LOBES>,
+  lobeCount: u32,
+  coat: MxCoatLayer,
+  sheen: MxSheenLayer,
+  fuzz: MxFuzzLayer,
+  thinFilm: MxThinFilmLayer,
+  emission: vec3f,
+  opacity: f32,
+  hasCoat: u32,
+  hasSheen: u32,
+  hasFuzz: u32,
+  hasThinFilm: u32,
+  hasEmission: u32,
+};`;
+
+/** One BSDF lobe to assign into `c.lobes[i]`; fields are WGSL expression strings. */
+interface LobeWgsl {
+  kind: LobeKind;
+  weight: string;
+  color: string;
+  color90?: string;
+  roughness?: string;
+  anisotropy?: string;
+  rotation?: string;
+  ior?: string;
+  extinction?: string;
+}
+
+interface FamilyWgsl {
+  /** Extra `let mx_* = ...;` helper statements emitted before the assignments. */
+  locals: string[];
+  lobes: LobeWgsl[];
+  coat?: { weight: string; color: string; roughness: string; ior: string };
+  sheen?: { weight: string; color: string; roughness: string };
+  fuzz?: { weight: string; color: string; roughness: string };
+  thinFilm?: { weight: string; thickness: string; ior: string };
+  emission?: string;
+  opacity: string;
+}
+
+export interface LayeredSurfaceModule {
+  code: string;
+  entryPoint: string;
+  returnType: string;
+  family: SurfaceFamily;
+  uniforms: WgslUniformField[];
+  textures: WgslBinding[];
+  samplers: WgslBinding[];
+  /** Present iff the module declares the lighting uniform. Closure construction
+   *  never evaluates lighting, so this stays absent (evaluation lands in T056). */
+  lighting?: { group: number; binding: number };
+}
+
+/** Build the WGSL expression helpers for one surface. `s`/`col` resolve an input
+ *  to the T055c IR ref (recording it so lowerExprs emits it) or to a literal
+ *  fallback; `lit`/`dyn` read the normalized source for topology decisions. */
+function makeCtx(surface: ResolvedSurface, inputs: ReadonlyMap<string, IrRef>, used: Set<IrRef>) {
+  const refOf = (name: string): IrRef | undefined => {
+    const ref = inputs.get(name);
+    if (ref !== undefined) used.add(ref);
+    return ref;
+  };
+  const source = (name: string): NormalizedSurfaceInput['source'] | undefined => surface.inputs.get(name)?.source;
+  return {
+    s(name: string, fallback: number): string {
+      const ref = refOf(name);
+      return ref ?? litFloat(fallback);
+    },
+    col(name: string, fallback: readonly [number, number, number]): string {
+      const ref = refOf(name);
+      return ref ?? `vec3f(${fallback.map(litFloat).join(', ')})`;
+    },
+    lit(name: string, fallback: number): number {
+      const src = source(name);
+      if (src && (src.kind === 'value' || src.kind === 'default')) {
+        const x = src.value[0];
+        return x !== undefined && Number.isFinite(x) ? x : fallback;
+      }
+      return fallback;
+    },
+    litRgb(name: string, fallback: readonly [number, number, number]): [number, number, number] {
+      const src = source(name);
+      if (src && (src.kind === 'value' || src.kind === 'default') && src.value.length >= 3) {
+        return [src.value[0] ?? 0, src.value[1] ?? 0, src.value[2] ?? 0];
+      }
+      return [fallback[0], fallback[1], fallback[2]];
+    },
+    dyn(name: string): boolean {
+      return source(name)?.kind === 'connection';
+    },
+  };
+}
+
+type Ctx = ReturnType<typeof makeCtx>;
+
+/** Average a vec3 opacity input down to a scalar (matches surface-lower.ts). */
+function avgOpacity(expr: string): string {
+  return `((${expr}).x + (${expr}).y + (${expr}).z) / 3.0`;
+}
+
+function clampExpr(expr: string): string {
+  return `clamp(${expr}, 0.0, 1.0)`;
+}
+
+function presentWeighted(c: Ctx, name: string, threshold = 0): boolean {
+  return c.lit(name, 0) > threshold || c.dyn(name);
+}
+
+// --- standard_surface --------------------------------------------------------
+
+function standardSurface(c: Ctx): FamilyWgsl {
+  const specRough = c.s('specular_roughness', 0.2);
+  const diffRough = c.s('diffuse_roughness', 0);
+  const aniso = c.s('specular_anisotropy', 0);
+  const rot = c.s('specular_rotation', 0);
+  const ior = c.s('specular_IOR', 1.5);
+  const baseColor = c.col('base_color', [1, 1, 1]);
+  const specColor = c.col('specular_color', [1, 1, 1]);
+  const transColor = c.col('transmission_color', [1, 1, 1]);
+  const sssColor = c.col('subsurface_color', [1, 1, 1]);
+  const locals = [
+    `  let mx_base = ${c.s('base', 1)};`,
+    `  let mx_metal = ${clampExpr(c.s('metalness', 0))};`,
+    `  let mx_trans = ${clampExpr(c.s('transmission', 0))};`,
+    `  let mx_spec = ${clampExpr(c.s('specular', 1))};`,
+    `  let mx_sss = ${clampExpr(c.s('subsurface', 0))};`,
+    `  let mx_diel = (1.0 - mx_metal) * (1.0 - mx_trans);`,
+  ];
+  const lobes: LobeWgsl[] = [
+    { kind: 'conductor', weight: 'mx_metal', color: baseColor, roughness: specRough, anisotropy: aniso, rotation: rot },
+    { kind: 'translucent', weight: '((1.0 - mx_metal) * mx_trans)', color: transColor },
+    { kind: 'dielectric_reflection', weight: '(mx_diel * mx_spec)', color: specColor, roughness: specRough, ior, anisotropy: aniso, rotation: rot },
+    { kind: 'burley_diffuse', weight: '(mx_diel * (1.0 - mx_spec) * mx_base)', color: baseColor, roughness: diffRough },
+    { kind: 'subsurface', weight: '(mx_diel * mx_sss)', color: sssColor },
+  ];
+  const out: FamilyWgsl = { locals, lobes, opacity: avgOpacity(c.col('opacity', [1, 1, 1])) };
+  if (presentWeighted(c, 'coat')) out.coat = { weight: clampExpr(c.s('coat', 0)), color: c.col('coat_color', [1, 1, 1]), roughness: c.s('coat_roughness', 0.1), ior: c.s('coat_IOR', 1.5) };
+  if (presentWeighted(c, 'sheen')) out.sheen = { weight: clampExpr(c.s('sheen', 0)), color: c.col('sheen_color', [1, 1, 1]), roughness: c.s('sheen_roughness', 0.3) };
+  if (presentWeighted(c, 'thin_film_thickness')) out.thinFilm = { weight: '1.0', thickness: c.s('thin_film_thickness', 0), ior: c.s('thin_film_IOR', 1.5) };
+  if (presentWeighted(c, 'emission')) out.emission = `(${c.col('emission_color', [1, 1, 1])} * ${c.s('emission', 0)})`;
+  return out;
+}
+
+// --- open_pbr_surface --------------------------------------------------------
+
+function openPbrSurface(c: Ctx): FamilyWgsl {
+  const specRough = c.s('specular_roughness', 0.3);
+  const diffRough = c.s('base_diffuse_roughness', 0);
+  const aniso = c.s('specular_roughness_anisotropy', 0);
+  const ior = c.s('specular_ior', 1.5);
+  const baseColor = c.col('base_color', [0.8, 0.8, 0.8]);
+  const specColor = c.col('specular_color', [1, 1, 1]);
+  const transColor = c.col('transmission_color', [1, 1, 1]);
+  const sssColor = c.col('subsurface_color', [0.8, 0.8, 0.8]);
+  const locals = [
+    `  let mx_baseW = ${clampExpr(c.s('base_weight', 1))};`,
+    `  let mx_metal = ${clampExpr(c.s('base_metalness', 0))};`,
+    `  let mx_specW = ${clampExpr(c.s('specular_weight', 1))};`,
+    `  let mx_trans = ${clampExpr(c.s('transmission_weight', 0))};`,
+    `  let mx_sss = ${clampExpr(c.s('subsurface_weight', 0))};`,
+    `  let mx_diel = (1.0 - mx_metal) * (1.0 - mx_trans);`,
+  ];
+  const lobes: LobeWgsl[] = [
+    { kind: 'conductor', weight: 'mx_metal', color: baseColor, roughness: specRough, anisotropy: aniso },
+    { kind: 'translucent', weight: '((1.0 - mx_metal) * mx_trans)', color: transColor },
+    { kind: 'dielectric_reflection', weight: '(mx_diel * mx_specW)', color: specColor, roughness: specRough, ior, anisotropy: aniso },
+    { kind: 'burley_diffuse', weight: '(mx_diel * mx_baseW)', color: baseColor, roughness: diffRough },
+    { kind: 'subsurface', weight: '(mx_diel * mx_sss)', color: sssColor },
+  ];
+  const out: FamilyWgsl = { locals, lobes, opacity: c.s('geometry_opacity', 1) };
+  if (presentWeighted(c, 'coat_weight')) out.coat = { weight: clampExpr(c.s('coat_weight', 0)), color: c.col('coat_color', [1, 1, 1]), roughness: c.s('coat_roughness', 0), ior: c.s('coat_ior', 1.6) };
+  if (presentWeighted(c, 'fuzz_weight')) out.fuzz = { weight: clampExpr(c.s('fuzz_weight', 0)), color: c.col('fuzz_color', [1, 1, 1]), roughness: c.s('fuzz_roughness', 0.5) };
+  if (presentWeighted(c, 'thin_film_weight')) out.thinFilm = { weight: clampExpr(c.s('thin_film_weight', 0)), thickness: c.s('thin_film_thickness', 0.5), ior: c.s('thin_film_ior', 1.4) };
+  if (presentWeighted(c, 'emission_luminance')) out.emission = `(${c.col('emission_color', [1, 1, 1])} * ${c.s('emission_luminance', 0)})`;
+  return out;
+}
+
+// --- gltf_pbr ----------------------------------------------------------------
+
+function gltfPbr(c: Ctx): FamilyWgsl {
+  const rough = c.s('roughness', 1);
+  const aniso = c.s('anisotropy_strength', 0);
+  const rot = c.s('anisotropy_rotation', 0);
+  const baseColor = c.col('base_color', [1, 1, 1]);
+  const specColor = c.col('specular_color', [1, 1, 1]);
+  const locals = [
+    `  let mx_metal = ${clampExpr(c.s('metallic', 1))};`,
+    `  let mx_trans = ${clampExpr(c.s('transmission', 0))};`,
+    `  let mx_spec = ${clampExpr(c.s('specular', 1))};`,
+    `  let mx_diel = (1.0 - mx_metal) * (1.0 - mx_trans);`,
+  ];
+  const lobes: LobeWgsl[] = [
+    { kind: 'conductor', weight: 'mx_metal', color: baseColor, roughness: rough, anisotropy: aniso, rotation: rot },
+    { kind: 'translucent', weight: '((1.0 - mx_metal) * mx_trans)', color: baseColor },
+    { kind: 'dielectric_reflection', weight: '(mx_diel * mx_spec)', color: specColor, roughness: rough, ior: '1.5', anisotropy: aniso, rotation: rot },
+    { kind: 'burley_diffuse', weight: 'mx_diel', color: baseColor, roughness: rough },
+  ];
+  const out: FamilyWgsl = { locals, lobes, opacity: c.s('alpha', 1) };
+  if (presentWeighted(c, 'clearcoat')) out.coat = { weight: clampExpr(c.s('clearcoat', 0)), color: 'vec3f(1.0)', roughness: c.s('clearcoat_roughness', 0), ior: '1.5' };
+  const sheenRgb = c.litRgb('sheen_color', [0, 0, 0]);
+  if (Math.max(sheenRgb[0], sheenRgb[1], sheenRgb[2]) > 0 || c.dyn('sheen_color')) {
+    const sc = c.col('sheen_color', [0, 0, 0]);
+    out.sheen = { weight: `max(max((${sc}).x, (${sc}).y), (${sc}).z)`, color: sc, roughness: c.s('sheen_roughness', 0) };
+  }
+  if (presentWeighted(c, 'iridescence')) out.thinFilm = { weight: clampExpr(c.s('iridescence', 0)), thickness: c.s('iridescence_thickness', 100), ior: '1.3' };
+  const emRgb = c.litRgb('emissive', [0, 0, 0]);
+  if (emRgb[0] > 0 || emRgb[1] > 0 || emRgb[2] > 0 || c.dyn('emissive')) out.emission = c.col('emissive', [0, 0, 0]);
+  return out;
+}
+
+// --- UsdPreviewSurface -------------------------------------------------------
+
+function usdPreviewSurface(c: Ctx): FamilyWgsl {
+  const rough = c.s('roughness', 0.5);
+  const ior = c.s('ior', 1.5);
+  const diffuse = c.col('diffuseColor', [0.18, 0.18, 0.18]);
+  const useSpecular = c.lit('useSpecularWorkflow', 0) >= 0.5;
+  const specColor = useSpecular ? c.col('specularColor', [0, 0, 0]) : 'vec3f(1.0)';
+  const locals = [
+    `  let mx_metal = ${clampExpr(c.s('metallic', 0))};`,
+    `  let mx_diel = 1.0 - mx_metal;`,
+  ];
+  const lobes: LobeWgsl[] = [
+    { kind: 'conductor', weight: 'mx_metal', color: diffuse, roughness: rough },
+    { kind: 'dielectric_reflection', weight: 'mx_diel', color: specColor, roughness: rough, ior },
+    { kind: 'burley_diffuse', weight: 'mx_diel', color: diffuse, roughness: rough },
+  ];
+  const out: FamilyWgsl = { locals, lobes, opacity: c.s('opacity', 1) };
+  if (presentWeighted(c, 'clearcoat')) out.coat = { weight: clampExpr(c.s('clearcoat', 0)), color: 'vec3f(1.0)', roughness: c.s('clearcoatRoughness', 0.01), ior: '1.5' };
+  const emRgb = c.litRgb('emissiveColor', [0, 0, 0]);
+  if (emRgb[0] > 0 || emRgb[1] > 0 || emRgb[2] > 0 || c.dyn('emissiveColor')) out.emission = c.col('emissiveColor', [0, 0, 0]);
+  return out;
+}
+
+// --- disney_principled -------------------------------------------------------
+
+function disneyPrincipled(c: Ctx): FamilyWgsl {
+  const rough = c.s('roughness', 0.5);
+  const aniso = c.s('anisotropic', 0);
+  const ior = c.s('ior', 1.5);
+  const baseColor = c.col('baseColor', [0.16, 0.16, 0.16]);
+  const specColor = `mix(vec3f(1.0), ${baseColor}, ${clampExpr(c.s('specularTint', 0))})`;
+  const locals = [
+    `  let mx_metal = ${clampExpr(c.s('metallic', 0))};`,
+    `  let mx_trans = ${clampExpr(c.s('specTrans', 0))};`,
+    `  let mx_spec = ${clampExpr(c.s('specular', 0.5))};`,
+    `  let mx_sss = ${clampExpr(c.s('subsurface', 0))};`,
+    `  let mx_diel = (1.0 - mx_metal) * (1.0 - mx_trans);`,
+  ];
+  const lobes: LobeWgsl[] = [
+    { kind: 'conductor', weight: 'mx_metal', color: baseColor, roughness: rough, anisotropy: aniso },
+    { kind: 'translucent', weight: '((1.0 - mx_metal) * mx_trans)', color: baseColor },
+    { kind: 'dielectric_reflection', weight: '(mx_diel * mx_spec)', color: specColor, roughness: rough, ior, anisotropy: aniso },
+    { kind: 'burley_diffuse', weight: 'mx_diel', color: baseColor, roughness: rough },
+    { kind: 'subsurface', weight: '(mx_diel * mx_sss)', color: baseColor },
+  ];
+  const out: FamilyWgsl = { locals, lobes, opacity: '1.0' };
+  if (presentWeighted(c, 'sheen')) out.sheen = { weight: clampExpr(c.s('sheen', 0)), color: `mix(vec3f(1.0), ${baseColor}, ${clampExpr(c.s('sheenTint', 0.5))})`, roughness: '0.3' };
+  if (presentWeighted(c, 'clearcoat')) out.coat = { weight: clampExpr(c.s('clearcoat', 0)), color: 'vec3f(1.0)', roughness: `(1.0 - ${clampExpr(c.s('clearcoatGloss', 1))})`, ior: '1.5' };
+  return out;
+}
+
+function lowerFamily(family: SurfaceFamily, c: Ctx): FamilyWgsl {
+  switch (family) {
+    case 'standard_surface':
+      return standardSurface(c);
+    case 'open_pbr_surface':
+      return openPbrSurface(c);
+    case 'gltf_pbr':
+      return gltfPbr(c);
+    case 'UsdPreviewSurface':
+      return usdPreviewSurface(c);
+    case 'disney_principled':
+      return disneyPrincipled(c);
+  }
+}
+
+function lobeAssign(index: number, lobe: LobeWgsl): string {
+  const fields = [
+    LOBE_KIND_CONST[lobe.kind],
+    lobe.weight,
+    lobe.color,
+    lobe.color90 ?? lobe.color,
+    lobe.roughness ?? '0.0',
+    lobe.anisotropy ?? '0.0',
+    lobe.rotation ?? '0.0',
+    lobe.ior ?? '1.5',
+    lobe.extinction ?? 'vec3f(0.0)',
+  ];
+  return `  c.lobes[${index}] = MxBsdfLobe(${fields.join(', ')});`;
+}
+
+/**
+ * Emit the WGSL layered-surface module for a resolved surface (T055a/T055b/T055c).
+ * Returns the module source plus its uniform/texture/sampler bindings. The entry
+ * function `mx_surface_layered(vary) -> LayeredClosure` assigns every struct field
+ * from the lowered input expressions.
+ */
+export function emitLayeredSurface(
+  graph: ResolvedGraph,
+  surface: ResolvedSurface,
+  sink: DiagnosticSink = defaultDiagnosticSink,
+): LayeredSurfaceModule {
+  const builder = new IrModuleBuilder();
+  const lowered = lowerSurfaceInputsToIr(graph, surface, builder, sink);
+
+  const used = new Set<IrRef>();
+  const ctx = makeCtx(surface, lowered.inputs, used);
+  const fam = lowerFamily(surface.family, ctx);
+
+  // Declare every referenced input ref as an output so lowerExprs emits its
+  // sub-graph (topo order). The output name/type are irrelevant here.
+  for (const ref of used) builder.output({ name: ref, type: FLOAT, ref });
+
+  const ir = builder.build();
+  const exprs = lowerExprs(ir);
+
+  const assigns: string[] = [`  c.lobeCount = ${fam.lobes.length}u;`];
+  fam.lobes.forEach((lobe, i) => assigns.push(lobeAssign(i, lobe)));
+  if (fam.coat) assigns.push(`  c.hasCoat = 1u;`, `  c.coat = MxCoatLayer(${fam.coat.weight}, ${fam.coat.color}, ${fam.coat.roughness}, ${fam.coat.ior});`);
+  if (fam.sheen) assigns.push(`  c.hasSheen = 1u;`, `  c.sheen = MxSheenLayer(${fam.sheen.weight}, ${fam.sheen.color}, ${fam.sheen.roughness});`);
+  if (fam.fuzz) assigns.push(`  c.hasFuzz = 1u;`, `  c.fuzz = MxFuzzLayer(${fam.fuzz.weight}, ${fam.fuzz.color}, ${fam.fuzz.roughness});`);
+  if (fam.thinFilm) assigns.push(`  c.hasThinFilm = 1u;`, `  c.thinFilm = MxThinFilmLayer(${fam.thinFilm.weight}, ${fam.thinFilm.thickness}, ${fam.thinFilm.ior});`);
+  if (fam.emission) assigns.push(`  c.hasEmission = 1u;`, `  c.emission = ${fam.emission};`);
+  assigns.push(`  c.opacity = ${fam.opacity};`);
+
+  const parts: string[] = [];
+  parts.push([...exprs.preludes].join('\n'));
+  parts.push(LAYERED_CLOSURE_PRELUDE);
+  if (exprs.uniforms.length > 0) {
+    parts.push(
+      `struct MxUniforms {\n${exprs.uniforms.map((u) => `  ${u.field}: ${u.wgslType},`).join('\n')}\n};\n@group(0) @binding(0) var<uniform> u: MxUniforms;`,
+    );
+  }
+  for (const t of exprs.textures) parts.push(`@group(${t.group}) @binding(${t.binding}) var ${t.handle}: texture_2d<f32>;`);
+  for (const s of exprs.samplers) parts.push(`@group(${s.group}) @binding(${s.binding}) var ${s.handle}: sampler;`);
+  parts.push(emitVaryingsStruct(exprs.primvarFields, exprs.extraInputs));
+  parts.push(
+    `fn ${SURFACE_ENTRY}(vary: MxVaryings) -> ${SURFACE_RETURN} {\n${exprs.body.join('\n')}\n${fam.locals.join('\n')}\n  var c: ${SURFACE_RETURN};\n${assigns.join('\n')}\n  return c;\n}`,
+  );
+
+  return {
+    code: parts.join('\n\n') + '\n',
+    entryPoint: SURFACE_ENTRY,
+    returnType: SURFACE_RETURN,
+    family: surface.family,
+    uniforms: exprs.uniforms,
+    textures: exprs.textures,
+    samplers: exprs.samplers,
+    ...(exprs.usesLighting ? { lighting: { group: 0, binding: 1 } } : {}),
+  };
+}

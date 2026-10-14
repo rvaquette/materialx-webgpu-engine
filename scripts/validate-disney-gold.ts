@@ -51,6 +51,10 @@ import {
   type FrameCamera,
   type RasterSurface,
 } from '../src/render/raster/scene-frame.ts';
+import {
+  parseSurfaceInputsFromMtlx,
+  parsedSurfaceToCanonical,
+} from '../src/materialx/surface-from-inputs.ts';
 import { rasterizeScene } from '../src/render/raster/cpu-raster.ts';
 import type { RawMesh } from '../src/geometry/prepare.ts';
 import type { Diagnostic } from '../src/core/diagnostics.ts';
@@ -108,34 +112,23 @@ function meshSourceFromScene(scene: SceneAsset): MeshSource {
   };
 }
 
-/** Parse an OpenPBR MaterialX shader's inputs into the canonical raster surface. */
-function parseOpenPbr(text: string): RasterSurface {
-  const inputs: Record<string, number | number[]> = {};
-  const re = /<input\s+name="([^"]+)"\s+type="([^"]+)"\s+value="([^"]*)"/g;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(text)) !== null) {
-    const name = m[1]!;
-    const type = m[2]!;
-    const value = m[3]!;
-    if (type === 'color3' || type === 'vector3') {
-      inputs[name] = value.split(',').map((v) => Number.parseFloat(v.trim()));
-    } else if (type === 'float' || type === 'integer') {
-      inputs[name] = Number.parseFloat(value);
-    }
-  }
-  const num = (k: string, d: number): number => (typeof inputs[k] === 'number' ? (inputs[k] as number) : d);
-  const col = (k: string, d: [number, number, number]): [number, number, number] => {
-    const v = inputs[k];
-    return Array.isArray(v) && v.length >= 3 ? [v[0]!, v[1]!, v[2]!] : d;
-  };
+/** Resolve a .mtlx surface to the canonical raster surface via the shared bridge.
+ *  T055e5: the regex parseOpenPbr is gone -- the raw text is parsed into a
+ *  ParsedSurfaceInputs (parseSurfaceInputsFromMtlx) then reduced to the shared
+ *  seven-parameter anchor (parsedSurfaceToCanonical), the same path the fixture
+ *  builder uses, until the path tracer is wired on the LayeredClosure (T057). */
+function surfaceFromMtlx(text: string): RasterSurface {
+  const spec = parseSurfaceInputsFromMtlx(text);
+  if (!spec) return { ...NEUTRAL_SURFACE, baseColor: [...NEUTRAL_SURFACE.baseColor] };
+  const c = parsedSurfaceToCanonical(spec);
   return {
-    baseColor: col('base_color', [0.8, 0.8, 0.8]),
-    metalness: num('base_metalness', 0),
-    roughness: num('specular_roughness', 0.3),
-    transmission: num('transmission_weight', 0),
-    subsurface: num('subsurface_weight', 0),
-    ior: num('specular_ior', 1.5),
-    specular: num('specular_weight', 1),
+    baseColor: [c.baseColor[0], c.baseColor[1], c.baseColor[2]],
+    metalness: c.metalness,
+    roughness: c.roughness,
+    transmission: c.transmission,
+    subsurface: c.subsurface,
+    ior: c.ior,
+    specular: c.specular,
   };
 }
 
@@ -257,12 +250,12 @@ async function main(): Promise<void> {
     }
   }
 
-  // Parse the OpenPBR surfaces straight off the referenced .mtlx files.
+  // Parse the surfaces straight off the referenced .mtlx files (shared bridge).
   const surfaces = new Map<string, RasterSurface>();
   for (const ref of scene.materials) {
     const mtlxPath = resolve(SCENE_DIR, ref.assetPath);
     if (existsSync(mtlxPath)) {
-      surfaces.set(ref.materialName, parseOpenPbr(readFileSync(mtlxPath, 'utf8')));
+      surfaces.set(ref.materialName, surfaceFromMtlx(readFileSync(mtlxPath, 'utf8')));
     } else {
       diagnostics.push({ level: 'warning', message: `MaterialX introuvable: ${ref.assetPath}`, detail: { material: ref.materialName } });
     }

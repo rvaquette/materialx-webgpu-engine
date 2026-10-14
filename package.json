@@ -18,8 +18,8 @@
     "test:local-scene": "node scripts/run-local-scene.mjs",
     "test:device": "node scripts/run-device-corpus.mjs",
     "test:scene-device": "node scripts/run-scene-device.mjs",
-    "build:fixtures": "node scripts/build-shaderball-fixture.mjs && node scripts/build-scene-materials.mjs",
-    "build:materials": "node scripts/build-scene-materials.mjs",
+    "build:fixtures": "node scripts/build-shaderball-fixture.mjs && node scripts/build-scene-materials.ts",
+    "build:materials": "node scripts/build-scene-materials.ts",
     "render:scenes": "node scripts/render-scenes.ts",
     "validate:scene": "vite-node scripts/validate-disney-gold.ts"
   },

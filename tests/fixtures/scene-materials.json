@@ -16,7 +16,32 @@
       "transmission": 0,
       "subsurface": 0,
       "ior": 1.5,
-      "specular": 0
+      "specular": 0,
+      "closure": {
+        "lobes": [
+          {
+            "kind": "conductor",
+            "weight": 1,
+            "color": [
+              1,
+              1,
+              1
+            ],
+            "roughness": 0.2
+          }
+        ],
+        "opacity": 1,
+        "coat": {
+          "weight": 1,
+          "color": [
+            1,
+            1,
+            1
+          ],
+          "roughness": 0.1,
+          "ior": 1.5
+        }
+      }
     },
     "standard_surface_brick_procedural": {
       "family": "StandardSurface",
@@ -33,7 +58,23 @@
       "transmission": 0,
       "subsurface": 0,
       "ior": 1.5,
-      "specular": 1
+      "specular": 1,
+      "closure": {
+        "lobes": [
+          {
+            "kind": "dielectric_reflection",
+            "weight": 1,
+            "color": [
+              1,
+              1,
+              1
+            ],
+            "roughness": 0.2,
+            "ior": 1.5
+          }
+        ],
+        "opacity": 1
+      }
     },
     "standard_surface_carpaint": {
       "family": "StandardSurface",
@@ -50,7 +91,34 @@
       "transmission": 0,
       "subsurface": 0,
       "ior": 1.5,
-      "specular": 1
+      "specular": 1,
+      "closure": {
+        "lobes": [
+          {
+            "kind": "dielectric_reflection",
+            "weight": 1,
+            "color": [
+              1,
+              1,
+              1
+            ],
+            "roughness": 0.4,
+            "anisotropy": 0.5,
+            "ior": 1.5
+          }
+        ],
+        "opacity": 1,
+        "coat": {
+          "weight": 1,
+          "color": [
+            1,
+            1,
+            1
+          ],
+          "roughness": 0,
+          "ior": 1.5
+        }
+      }
     },
     "standard_surface_chess_set": {
       "family": "StandardSurface",
@@ -67,7 +135,23 @@
       "transmission": 0,
       "subsurface": 0,
       "ior": 1.5,
-      "specular": 1
+      "specular": 1,
+      "closure": {
+        "lobes": [
+          {
+            "kind": "dielectric_reflection",
+            "weight": 1,
+            "color": [
+              1,
+              1,
+              1
+            ],
+            "roughness": 0.2,
+            "ior": 1.5
+          }
+        ],
+        "opacity": 1
+      }
     },
     "standard_surface_chrome": {
       "family": "StandardSurface",
@@ -84,7 +168,22 @@
       "transmission": 0,
       "subsurface": 0,
       "ior": 1.5,
-      "specular": 1
+      "specular": 1,
+      "closure": {
+        "lobes": [
+          {
+            "kind": "conductor",
+            "weight": 1,
+            "color": [
+              1,
+              1,
+              1
+            ],
+            "roughness": 0
+          }
+        ],
+        "opacity": 1
+      }
     },
     "standard_surface_copper": {
       "family": "StandardSurface",
@@ -101,7 +200,32 @@
       "transmission": 0,
       "subsurface": 0,
       "ior": 1.5,
-      "specular": 0
+      "specular": 0,
+      "closure": {
+        "lobes": [
+          {
+            "kind": "conductor",
+            "weight": 1,
+            "color": [
+              1,
+              1,
+              1
+            ],
+            "roughness": 0.25
+          }
+        ],
+        "opacity": 1,
+        "coat": {
+          "weight": 1,
+          "color": [
+            0.96468,
+            0.376263,
+            0.258183
+          ],
+          "roughness": 0.2,
+          "ior": 1.5
+        }
+      }
     },
     "standard_surface_default": {
       "family": "StandardSurface",
@@ -118,7 +242,23 @@
       "transmission": 0,
       "subsurface": 0,
       "ior": 1.5,
-      "specular": 1
+      "specular": 1,
+      "closure": {
+        "lobes": [
+          {
+            "kind": "dielectric_reflection",
+            "weight": 1,
+            "color": [
+              1,
+              1,
+              1
+            ],
+            "roughness": 0.2,
+            "ior": 1.5
+          }
+        ],
+        "opacity": 1
+      }
     },
     "standard_surface_glass": {
       "family": "StandardSurface",
@@ -135,7 +275,21 @@
       "transmission": 1,
       "subsurface": 0,
       "ior": 1.52,
-      "specular": 1
+      "specular": 1,
+      "closure": {
+        "lobes": [
+          {
+            "kind": "translucent",
+            "weight": 1,
+            "color": [
+              1,
+              1,
+              1
+            ]
+          }
+        ],
+        "opacity": 1
+      }
     },
     "standard_surface_glass_tinted": {
       "family": "StandardSurface",
@@ -152,7 +306,21 @@
       "transmission": 1,
       "subsurface": 0,
       "ior": 1.54,
-      "specular": 1
+      "specular": 1,
+      "closure": {
+        "lobes": [
+          {
+            "kind": "translucent",
+            "weight": 1,
+            "color": [
+              0.2,
+              0.1,
+              1
+            ]
+          }
+        ],
+        "opacity": 1
+      }
     },
     "standard_surface_gold": {
       "family": "StandardSurface",
@@ -169,7 +337,22 @@
       "transmission": 0,
       "subsurface": 0,
       "ior": 1.5,
-      "specular": 1
+      "specular": 1,
+      "closure": {
+        "lobes": [
+          {
+            "kind": "conductor",
+            "weight": 1,
+            "color": [
+              0.944,
+              0.776,
+              0.373
+            ],
+            "roughness": 0.02
+          }
+        ],
+        "opacity": 1
+      }
     },
     "standard_surface_greysphere": {
       "family": "StandardSurface",
@@ -186,7 +369,23 @@
       "transmission": 0,
       "subsurface": 0,
       "ior": 1.5,
-      "specular": 1
+      "specular": 1,
+      "closure": {
+        "lobes": [
+          {
+            "kind": "dielectric_reflection",
+            "weight": 1,
+            "color": [
+              1,
+              1,
+              1
+            ],
+            "roughness": 0.7,
+            "ior": 1.5
+          }
+        ],
+        "opacity": 1
+      }
     },
     "standard_surface_greysphere_calibration": {
       "family": "StandardSurface",
@@ -203,7 +402,23 @@
       "transmission": 0,
       "subsurface": 0,
       "ior": 1.5,
-      "specular": 1
+      "specular": 1,
+      "closure": {
+        "lobes": [
+          {
+            "kind": "dielectric_reflection",
+            "weight": 1,
+            "color": [
+              1,
+              1,
+              1
+            ],
+            "roughness": 0.7,
+            "ior": 1.5
+          }
+        ],
+        "opacity": 1
+      }
     },
     "standard_surface_jade": {
       "family": "StandardSurface",
@@ -220,7 +435,33 @@
       "transmission": 0,
       "subsurface": 0.4,
       "ior": 2.418,
-      "specular": 1
+      "specular": 1,
+      "closure": {
+        "lobes": [
+          {
+            "kind": "dielectric_reflection",
+            "weight": 1,
+            "color": [
+              1,
+              1,
+              1
+            ],
+            "roughness": 0.25,
+            "anisotropy": 0.5,
+            "ior": 2.418
+          },
+          {
+            "kind": "subsurface",
+            "weight": 0.4,
+            "color": [
+              0.0603,
+              0.4398,
+              0.1916
+            ]
+          }
+        ],
+        "opacity": 1
+      }
     },
     "standard_surface_marble_solid": {
       "family": "StandardSurface",
@@ -237,7 +478,32 @@
       "transmission": 0,
       "subsurface": 0.4,
       "ior": 1.5,
-      "specular": 1
+      "specular": 1,
+      "closure": {
+        "lobes": [
+          {
+            "kind": "dielectric_reflection",
+            "weight": 1,
+            "color": [
+              1,
+              1,
+              1
+            ],
+            "roughness": 0.1,
+            "ior": 1.5
+          },
+          {
+            "kind": "subsurface",
+            "weight": 0.4,
+            "color": [
+              1,
+              1,
+              1
+            ]
+          }
+        ],
+        "opacity": 1
+      }
     },
     "standard_surface_metal_brushed": {
       "family": "StandardSurface",
@@ -254,7 +520,23 @@
       "transmission": 0,
       "subsurface": 0,
       "ior": 1.52,
-      "specular": 0
+      "specular": 0,
+      "closure": {
+        "lobes": [
+          {
+            "kind": "conductor",
+            "weight": 1,
+            "color": [
+              0.5,
+              0.5,
+              0.5
+            ],
+            "roughness": 0.25,
+            "anisotropy": 0.65
+          }
+        ],
+        "opacity": 1
+      }
     },
     "standard_surface_onyx_hextiled": {
       "family": "StandardSurface",
@@ -271,7 +553,23 @@
       "transmission": 0,
       "subsurface": 0,
       "ior": 1.5,
-      "specular": 1
+      "specular": 1,
+      "closure": {
+        "lobes": [
+          {
+            "kind": "dielectric_reflection",
+            "weight": 1,
+            "color": [
+              1,
+              1,
+              1
+            ],
+            "roughness": 0.2,
+            "ior": 1.5
+          }
+        ],
+        "opacity": 1
+      }
     },
     "standard_surface_plastic": {
       "family": "StandardSurface",
@@ -288,7 +586,23 @@
       "transmission": 0,
       "subsurface": 0,
       "ior": 1.5,
-      "specular": 1
+      "specular": 1,
+      "closure": {
+        "lobes": [
+          {
+            "kind": "dielectric_reflection",
+            "weight": 1,
+            "color": [
+              1,
+              1,
+              1
+            ],
+            "roughness": 0.324675,
+            "ior": 1.5
+          }
+        ],
+        "opacity": 1
+      }
     },
     "standard_surface_thin_film": {
       "family": "StandardSurface",
@@ -305,7 +619,28 @@
       "transmission": 0,
       "subsurface": 0,
       "ior": 2.5,
-      "specular": 1
+      "specular": 1,
+      "closure": {
+        "lobes": [
+          {
+            "kind": "dielectric_reflection",
+            "weight": 1,
+            "color": [
+              1,
+              1,
+              1
+            ],
+            "roughness": 0.02,
+            "ior": 2.5
+          }
+        ],
+        "opacity": 1,
+        "thinFilm": {
+          "weight": 1,
+          "thickness": 550,
+          "ior": 1.5
+        }
+      }
     },
     "standard_surface_velvet": {
       "family": "StandardSurface",
@@ -322,7 +657,31 @@
       "transmission": 0,
       "subsurface": 0,
       "ior": 0,
-      "specular": 0
+      "specular": 0,
+      "closure": {
+        "lobes": [
+          {
+            "kind": "burley_diffuse",
+            "weight": 0.8,
+            "color": [
+              0.029,
+              0,
+              0.047
+            ],
+            "roughness": 0
+          }
+        ],
+        "opacity": 1,
+        "sheen": {
+          "weight": 1,
+          "color": [
+            0.404,
+            0.058,
+            1
+          ],
+          "roughness": 0.3
+        }
+      }
     },
     "standard_surface_wood_tiled": {
       "family": "StandardSurface",
@@ -339,7 +698,44 @@
       "transmission": 0,
       "subsurface": 0,
       "ior": 1.5,
-      "specular": 0.4
+      "specular": 0.4,
+      "closure": {
+        "lobes": [
+          {
+            "kind": "dielectric_reflection",
+            "weight": 0.4,
+            "color": [
+              1,
+              1,
+              1
+            ],
+            "roughness": 0.2,
+            "anisotropy": 0.5,
+            "ior": 1.5
+          },
+          {
+            "kind": "burley_diffuse",
+            "weight": 0.6,
+            "color": [
+              0.8,
+              0.8,
+              0.8
+            ],
+            "roughness": 0
+          }
+        ],
+        "opacity": 1,
+        "coat": {
+          "weight": 0.1,
+          "color": [
+            1,
+            1,
+            1
+          ],
+          "roughness": 0.2,
+          "ior": 1.5
+        }
+      }
     },
     "open_pbr_aluminum_brushed": {
       "family": "OpenPbr",
@@ -356,7 +752,23 @@
       "transmission": 0,
       "subsurface": 0,
       "ior": 1.5,
-      "specular": 1
+      "specular": 1,
+      "closure": {
+        "lobes": [
+          {
+            "kind": "conductor",
+            "weight": 1,
+            "color": [
+              0.912,
+              0.914,
+              0.92
+            ],
+            "roughness": 0.2,
+            "anisotropy": 0.9
+          }
+        ],
+        "opacity": 1
+      }
     },
     "open_pbr_carpaint": {
       "family": "OpenPbr",
@@ -373,7 +785,43 @@
       "transmission": 0,
       "subsurface": 0,
       "ior": 1.6,
-      "specular": 1
+      "specular": 1,
+      "closure": {
+        "lobes": [
+          {
+            "kind": "dielectric_reflection",
+            "weight": 1,
+            "color": [
+              1,
+              1,
+              1
+            ],
+            "roughness": 0.3,
+            "ior": 1.6
+          },
+          {
+            "kind": "burley_diffuse",
+            "weight": 1,
+            "color": [
+              0.1,
+              0.6,
+              0.9
+            ],
+            "roughness": 0
+          }
+        ],
+        "opacity": 1,
+        "coat": {
+          "weight": 1,
+          "color": [
+            1,
+            1,
+            1
+          ],
+          "roughness": 0.02,
+          "ior": 1.6
+        }
+      }
     },
     "open_pbr_default": {
       "family": "OpenPbr",
@@ -390,7 +838,33 @@
       "transmission": 0,
       "subsurface": 0,
       "ior": 1.5,
-      "specular": 1
+      "specular": 1,
+      "closure": {
+        "lobes": [
+          {
+            "kind": "dielectric_reflection",
+            "weight": 1,
+            "color": [
+              1,
+              1,
+              1
+            ],
+            "roughness": 0.3,
+            "ior": 1.5
+          },
+          {
+            "kind": "burley_diffuse",
+            "weight": 1,
+            "color": [
+              0.8,
+              0.8,
+              0.8
+            ],
+            "roughness": 0
+          }
+        ],
+        "opacity": 1
+      }
     },
     "open_pbr_glass": {
       "family": "OpenPbr",
@@ -407,7 +881,21 @@
       "transmission": 1,
       "subsurface": 0,
       "ior": 1.52,
-      "specular": 1
+      "specular": 1,
+      "closure": {
+        "lobes": [
+          {
+            "kind": "translucent",
+            "weight": 1,
+            "color": [
+              1,
+              1,
+              1
+            ]
+          }
+        ],
+        "opacity": 1
+      }
     },
     "open_pbr_honey": {
       "family": "OpenPbr",
@@ -424,7 +912,21 @@
       "transmission": 1,
       "subsurface": 0,
       "ior": 1.504,
-      "specular": 1
+      "specular": 1,
+      "closure": {
+        "lobes": [
+          {
+            "kind": "translucent",
+            "weight": 1,
+            "color": [
+              0.83,
+              0.4,
+              0.04
+            ]
+          }
+        ],
+        "opacity": 1
+      }
     },
     "open_pbr_ketchup": {
       "family": "OpenPbr",
@@ -441,7 +943,42 @@
       "transmission": 0,
       "subsurface": 1,
       "ior": 1.3,
-      "specular": 1
+      "specular": 1,
+      "closure": {
+        "lobes": [
+          {
+            "kind": "dielectric_reflection",
+            "weight": 1,
+            "color": [
+              1,
+              1,
+              1
+            ],
+            "roughness": 0,
+            "ior": 1.3
+          },
+          {
+            "kind": "burley_diffuse",
+            "weight": 1,
+            "color": [
+              0.164,
+              0.006,
+              0.002
+            ],
+            "roughness": 0
+          },
+          {
+            "kind": "subsurface",
+            "weight": 1,
+            "color": [
+              0.164,
+              0.006,
+              0.002
+            ]
+          }
+        ],
+        "opacity": 1
+      }
     },
     "open_pbr_lightbulb": {
       "family": "OpenPbr",
@@ -458,7 +995,38 @@
       "transmission": 0,
       "subsurface": 0,
       "ior": 1.5,
-      "specular": 1
+      "specular": 1,
+      "closure": {
+        "lobes": [
+          {
+            "kind": "dielectric_reflection",
+            "weight": 1,
+            "color": [
+              1,
+              1,
+              1
+            ],
+            "roughness": 0.3,
+            "ior": 1.5
+          },
+          {
+            "kind": "burley_diffuse",
+            "weight": 1,
+            "color": [
+              0.8,
+              0.8,
+              0.8
+            ],
+            "roughness": 0
+          }
+        ],
+        "opacity": 1,
+        "emission": [
+          10000,
+          4150,
+          990
+        ]
+      }
     },
     "open_pbr_pearl": {
       "family": "OpenPbr",
@@ -475,7 +1043,57 @@
       "transmission": 0,
       "subsurface": 1,
       "ior": 1.5,
-      "specular": 1
+      "specular": 1,
+      "closure": {
+        "lobes": [
+          {
+            "kind": "dielectric_reflection",
+            "weight": 1,
+            "color": [
+              1,
+              1,
+              1
+            ],
+            "roughness": 0.35,
+            "ior": 1.5
+          },
+          {
+            "kind": "burley_diffuse",
+            "weight": 1,
+            "color": [
+              0.8,
+              0.75,
+              0.7
+            ],
+            "roughness": 0
+          },
+          {
+            "kind": "subsurface",
+            "weight": 1,
+            "color": [
+              0.8,
+              0.75,
+              0.7
+            ]
+          }
+        ],
+        "opacity": 1,
+        "coat": {
+          "weight": 1,
+          "color": [
+            1,
+            1,
+            1
+          ],
+          "roughness": 0.15,
+          "ior": 1.68
+        },
+        "thinFilm": {
+          "weight": 1,
+          "thickness": 0.42,
+          "ior": 2
+        }
+      }
     },
     "open_pbr_soapbubble": {
       "family": "OpenPbr",
@@ -492,7 +1110,26 @@
       "transmission": 1,
       "subsurface": 0,
       "ior": 1,
-      "specular": 1
+      "specular": 1,
+      "closure": {
+        "lobes": [
+          {
+            "kind": "translucent",
+            "weight": 1,
+            "color": [
+              1,
+              1,
+              1
+            ]
+          }
+        ],
+        "opacity": 1,
+        "thinFilm": {
+          "weight": 1,
+          "thickness": 0.5,
+          "ior": 1.4
+        }
+      }
     },
     "open_pbr_velvet": {
       "family": "OpenPbr",
@@ -509,7 +1146,42 @@
       "transmission": 0,
       "subsurface": 0,
       "ior": 1.5,
-      "specular": 1
+      "specular": 1,
+      "closure": {
+        "lobes": [
+          {
+            "kind": "dielectric_reflection",
+            "weight": 1,
+            "color": [
+              1,
+              1,
+              1
+            ],
+            "roughness": 0.8,
+            "ior": 1.5
+          },
+          {
+            "kind": "burley_diffuse",
+            "weight": 1,
+            "color": [
+              0.02,
+              0.02,
+              0.02
+            ],
+            "roughness": 0
+          }
+        ],
+        "opacity": 1,
+        "fuzz": {
+          "weight": 1,
+          "color": [
+            0.4,
+            0.4,
+            0.4
+          ],
+          "roughness": 0.5
+        }
+      }
     },
     "disney_principled_carpaint": {
       "family": "DisneyPrincipled",
@@ -526,7 +1198,44 @@
       "transmission": 0,
       "subsurface": 0,
       "ior": 1.5,
-      "specular": 1
+      "specular": 1,
+      "closure": {
+        "lobes": [
+          {
+            "kind": "dielectric_reflection",
+            "weight": 0.5,
+            "color": [
+              1,
+              1,
+              1
+            ],
+            "roughness": 0.4,
+            "anisotropy": 0.5,
+            "ior": 1.5
+          },
+          {
+            "kind": "burley_diffuse",
+            "weight": 1,
+            "color": [
+              0.051889,
+              0.29606,
+              0.425324
+            ],
+            "roughness": 0.4
+          }
+        ],
+        "opacity": 1,
+        "coat": {
+          "weight": 1,
+          "color": [
+            1,
+            1,
+            1
+          ],
+          "roughness": 0,
+          "ior": 1.5
+        }
+      }
     },
     "disney_principled_default": {
       "family": "DisneyPrincipled",
@@ -543,7 +1252,33 @@
       "transmission": 0,
       "subsurface": 0,
       "ior": 1.5,
-      "specular": 1
+      "specular": 1,
+      "closure": {
+        "lobes": [
+          {
+            "kind": "dielectric_reflection",
+            "weight": 0.5,
+            "color": [
+              1,
+              1,
+              1
+            ],
+            "roughness": 0.5,
+            "ior": 1.5
+          },
+          {
+            "kind": "burley_diffuse",
+            "weight": 1,
+            "color": [
+              0.16,
+              0.16,
+              0.16
+            ],
+            "roughness": 0.5
+          }
+        ],
+        "opacity": 1
+      }
     },
     "disney_principled_glass": {
       "family": "DisneyPrincipled",
@@ -560,7 +1295,21 @@
       "transmission": 1,
       "subsurface": 0,
       "ior": 1.52,
-      "specular": 1
+      "specular": 1,
+      "closure": {
+        "lobes": [
+          {
+            "kind": "translucent",
+            "weight": 1,
+            "color": [
+              1,
+              1,
+              1
+            ]
+          }
+        ],
+        "opacity": 1
+      }
     },
     "disney_principled_gold": {
       "family": "DisneyPrincipled",
@@ -577,7 +1326,22 @@
       "transmission": 0,
       "subsurface": 0,
       "ior": 1.5,
-      "specular": 1
+      "specular": 1,
+      "closure": {
+        "lobes": [
+          {
+            "kind": "conductor",
+            "weight": 1,
+            "color": [
+              0.944,
+              0.776,
+              0.373
+            ],
+            "roughness": 0.02
+          }
+        ],
+        "opacity": 1
+      }
     },
     "disney_principled_plastic": {
       "family": "DisneyPrincipled",
@@ -594,7 +1358,33 @@
       "transmission": 0,
       "subsurface": 0,
       "ior": 1.5,
-      "specular": 1
+      "specular": 1,
+      "closure": {
+        "lobes": [
+          {
+            "kind": "dielectric_reflection",
+            "weight": 0.5,
+            "color": [
+              1,
+              1,
+              1
+            ],
+            "roughness": 0.324675,
+            "ior": 1.5
+          },
+          {
+            "kind": "burley_diffuse",
+            "weight": 1,
+            "color": [
+              0.104704,
+              0.241883,
+              0.818
+            ],
+            "roughness": 0.324675
+          }
+        ],
+        "opacity": 1
+      }
     },
     "gltf_pbr_boombox": {
       "family": "GltfPbr",
@@ -611,7 +1401,22 @@
       "transmission": 0,
       "subsurface": 0,
       "ior": 1.5,
-      "specular": 1
+      "specular": 1,
+      "closure": {
+        "lobes": [
+          {
+            "kind": "conductor",
+            "weight": 1,
+            "color": [
+              1,
+              1,
+              1
+            ],
+            "roughness": 1
+          }
+        ],
+        "opacity": 1
+      }
     },
     "gltf_pbr_carpaint": {
       "family": "GltfPbr",
@@ -628,7 +1433,43 @@
       "transmission": 0,
       "subsurface": 0,
       "ior": 1.5,
-      "specular": 1
+      "specular": 1,
+      "closure": {
+        "lobes": [
+          {
+            "kind": "dielectric_reflection",
+            "weight": 1,
+            "color": [
+              1,
+              1,
+              1
+            ],
+            "roughness": 0.4,
+            "ior": 1.5
+          },
+          {
+            "kind": "burley_diffuse",
+            "weight": 1,
+            "color": [
+              0.051889,
+              0.29606,
+              0.425324
+            ],
+            "roughness": 0.4
+          }
+        ],
+        "opacity": 1,
+        "coat": {
+          "weight": 1,
+          "color": [
+            1,
+            1,
+            1
+          ],
+          "roughness": 0,
+          "ior": 1.5
+        }
+      }
     },
     "gltf_pbr_default": {
       "family": "GltfPbr",
@@ -645,7 +1486,22 @@
       "transmission": 0,
       "subsurface": 0,
       "ior": 1.5,
-      "specular": 1
+      "specular": 1,
+      "closure": {
+        "lobes": [
+          {
+            "kind": "conductor",
+            "weight": 1,
+            "color": [
+              1,
+              1,
+              1
+            ],
+            "roughness": 1
+          }
+        ],
+        "opacity": 1
+      }
     },
     "gltf_pbr_glass": {
       "family": "GltfPbr",
@@ -662,7 +1518,21 @@
       "transmission": 1,
       "subsurface": 0,
       "ior": 1.52,
-      "specular": 1
+      "specular": 1,
+      "closure": {
+        "lobes": [
+          {
+            "kind": "translucent",
+            "weight": 1,
+            "color": [
+              1,
+              1,
+              1
+            ]
+          }
+        ],
+        "opacity": 1
+      }
     },
     "gltf_pbr_gold": {
       "family": "GltfPbr",
@@ -679,7 +1549,22 @@
       "transmission": 0,
       "subsurface": 0,
       "ior": 1.5,
-      "specular": 1
+      "specular": 1,
+      "closure": {
+        "lobes": [
+          {
+            "kind": "conductor",
+            "weight": 1,
+            "color": [
+              0.944,
+              0.776,
+              0.373
+            ],
+            "roughness": 0.02
+          }
+        ],
+        "opacity": 1
+      }
     },
     "gltf_pbr_plastic": {
       "family": "GltfPbr",
@@ -696,7 +1581,33 @@
       "transmission": 0,
       "subsurface": 0,
       "ior": 1.5,
-      "specular": 1
+      "specular": 1,
+      "closure": {
+        "lobes": [
+          {
+            "kind": "dielectric_reflection",
+            "weight": 1,
+            "color": [
+              1,
+              1,
+              1
+            ],
+            "roughness": 0.324675,
+            "ior": 1.5
+          },
+          {
+            "kind": "burley_diffuse",
+            "weight": 1,
+            "color": [
+              0.104704,
+              0.241883,
+              0.818
+            ],
+            "roughness": 0.324675
+          }
+        ],
+        "opacity": 1
+      }
     },
     "usd_preview_surface_brass_tiled": {
       "family": "UsdPreviewSurface",
@@ -713,7 +1624,22 @@
       "transmission": 0,
       "subsurface": 0,
       "ior": 1.5,
-      "specular": 1
+      "specular": 1,
+      "closure": {
+        "lobes": [
+          {
+            "kind": "conductor",
+            "weight": 1,
+            "color": [
+              0.18,
+              0.18,
+              0.18
+            ],
+            "roughness": 0.5
+          }
+        ],
+        "opacity": 1
+      }
     },
     "usd_preview_surface_carpaint": {
       "family": "UsdPreviewSurface",
@@ -730,7 +1656,43 @@
       "transmission": 0,
       "subsurface": 0,
       "ior": 1.5,
-      "specular": 1
+      "specular": 1,
+      "closure": {
+        "lobes": [
+          {
+            "kind": "dielectric_reflection",
+            "weight": 1,
+            "color": [
+              1,
+              1,
+              1
+            ],
+            "roughness": 0.4,
+            "ior": 1.5
+          },
+          {
+            "kind": "burley_diffuse",
+            "weight": 1,
+            "color": [
+              0.051889,
+              0.29606,
+              0.425324
+            ],
+            "roughness": 0.4
+          }
+        ],
+        "opacity": 1,
+        "coat": {
+          "weight": 1,
+          "color": [
+            1,
+            1,
+            1
+          ],
+          "roughness": 0,
+          "ior": 1.5
+        }
+      }
     },
     "usd_preview_surface_default": {
       "family": "UsdPreviewSurface",
@@ -747,7 +1709,33 @@
       "transmission": 0,
       "subsurface": 0,
       "ior": 1.5,
-      "specular": 1
+      "specular": 1,
+      "closure": {
+        "lobes": [
+          {
+            "kind": "dielectric_reflection",
+            "weight": 1,
+            "color": [
+              1,
+              1,
+              1
+            ],
+            "roughness": 0.5,
+            "ior": 1.5
+          },
+          {
+            "kind": "burley_diffuse",
+            "weight": 1,
+            "color": [
+              0.18,
+              0.18,
+              0.18
+            ],
+            "roughness": 0.5
+          }
+        ],
+        "opacity": 1
+      }
     },
     "usd_preview_surface_glass": {
       "family": "UsdPreviewSurface",
@@ -764,7 +1752,33 @@
       "transmission": 0,
       "subsurface": 0,
       "ior": 1.52,
-      "specular": 1
+      "specular": 1,
+      "closure": {
+        "lobes": [
+          {
+            "kind": "dielectric_reflection",
+            "weight": 1,
+            "color": [
+              1,
+              1,
+              1
+            ],
+            "roughness": 0.01,
+            "ior": 1.52
+          },
+          {
+            "kind": "burley_diffuse",
+            "weight": 1,
+            "color": [
+              0,
+              0,
+              0
+            ],
+            "roughness": 0.01
+          }
+        ],
+        "opacity": 0
+      }
     },
     "usd_preview_surface_gold": {
       "family": "UsdPreviewSurface",
@@ -781,7 +1795,22 @@
       "transmission": 0,
       "subsurface": 0,
       "ior": 1.5,
-      "specular": 1
+      "specular": 1,
+      "closure": {
+        "lobes": [
+          {
+            "kind": "conductor",
+            "weight": 1,
+            "color": [
+              0.944,
+              0.776,
+              0.373
+            ],
+            "roughness": 0.02
+          }
+        ],
+        "opacity": 1
+      }
     },
     "usd_preview_surface_plastic": {
       "family": "UsdPreviewSurface",
@@ -798,7 +1827,33 @@
       "transmission": 0,
       "subsurface": 0,
       "ior": 1.5,
-      "specular": 1
+      "specular": 1,
+      "closure": {
+        "lobes": [
+          {
+            "kind": "dielectric_reflection",
+            "weight": 1,
+            "color": [
+              1,
+              1,
+              1
+            ],
+            "roughness": 0.324675,
+            "ior": 1.5
+          },
+          {
+            "kind": "burley_diffuse",
+            "weight": 1,
+            "color": [
+              0.104704,
+              0.241883,
+              0.818
+            ],
+            "roughness": 0.324675
+          }
+        ],
+        "opacity": 1
+      }
     }
   }
 }

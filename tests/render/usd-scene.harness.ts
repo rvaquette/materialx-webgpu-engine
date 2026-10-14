@@ -30,10 +30,9 @@ import {
 import { buildPathTraceScene } from '../../src/render/pathtracing/scene-buffers.ts';
 import { buildPathTraceUniform, PathTraceBackend, PT_UNIFORM_SIZE } from '../../src/render/pathtracing/compute.ts';
 import {
-  bakeNodegraphSurface,
-  collectTextureFiles,
-  type DecodedTexture,
-} from '../../src/materialx/nodegraph-eval.ts';
+  parseSurfaceInputsFromMtlx,
+  parsedSurfaceToCanonical,
+} from '../../src/materialx/surface-from-inputs.ts';
 import { resolvePixel } from '../../src/render/output.ts';
 import { importCameras } from '../../src/usd/cameras.ts';
 import { importLights } from '../../src/usd/lights.ts';
@@ -75,25 +74,9 @@ function httpReader(entry: string): UsdLayerReader {
   };
 }
 
-/** Baked nodegraph map edge length (texels). */
+/** Placeholder baked-map texture edge length (texels); the GPU keeps a single
+ *  unused layer now that the CPU nodegraph bake path is retired (T055e5). */
 const BAKE_SIZE = 256;
-
-/** Decode an image URL to RGBA8 pixels via the browser bitmap + OffscreenCanvas path. */
-async function loadTexture(url: string): Promise<DecodedTexture> {
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`HTTP ${res.status} for ${url}`);
-  const bitmap = await createImageBitmap(await res.blob());
-  // Capture dimensions before close(): a closed ImageBitmap reports width/height as 0.
-  const width = bitmap.width;
-  const height = bitmap.height;
-  const canvas = new OffscreenCanvas(width, height);
-  const ctx = canvas.getContext('2d');
-  if (!ctx) throw new Error('2D context unavailable');
-  ctx.drawImage(bitmap, 0, 0);
-  const img = ctx.getImageData(0, 0, width, height);
-  bitmap.close();
-  return { width, height, data: new Uint8Array(img.data.buffer.slice(0)) };
-}
 
 /** Flat numeric attribute array (point3f[]/int[] flatten to number[]). */
 function numArray(prim: ScenePrim, name: string): number[] {
@@ -143,45 +126,23 @@ function meshSourceFromScene(scene: SceneAsset): MeshSource {
   };
 }
 
-/** Parse an OpenPBR MaterialX shader's inputs into the canonical raster surface. */
-function parseOpenPbr(text: string): RasterSurface {
-  const inputs: Record<string, number | number[]> = {};
-  const re = /<input\s+name="([^"]+)"\s+type="([^"]+)"\s+value="([^"]*)"/g;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(text)) !== null) {
-    const name = m[1]!;
-    const type = m[2]!;
-    const value = m[3]!;
-    if (type === 'color3' || type === 'vector3') {
-      inputs[name] = value.split(',').map((v) => Number.parseFloat(v.trim()));
-    } else if (type === 'float' || type === 'integer') {
-      inputs[name] = Number.parseFloat(value);
-    }
-  }
-  const num = (k: string, d: number): number => (typeof inputs[k] === 'number' ? (inputs[k] as number) : d);
-  // Accept either an OpenPBR key or a standard_surface alias (first present wins).
-  const numAny = (keys: string[], d: number): number => {
-    for (const k of keys) if (typeof inputs[k] === 'number') return inputs[k] as number;
-    return d;
-  };
-  const col = (k: string, d: [number, number, number]): [number, number, number] => {
-    const v = inputs[k];
-    return Array.isArray(v) && v.length >= 3 ? [v[0]!, v[1]!, v[2]!] : d;
-  };
-  // Literal (constant) surface only. Nodegraph-driven base_color / specular_roughness
-  // are evaluated and baked to a texture elsewhere (nodegraph-eval.ts) and override
-  // these fields per hit on the GPU, so their literal defaults here are placeholders.
-  const baseColor = col('base_color', [0.8, 0.8, 0.8]);
-  const roughness = num('specular_roughness', 0.3);
-  const baseWeight = num('base', 1); // standard_surface base weight scales base_color
+/** Resolve a .mtlx surface to the canonical raster surface via the shared bridge.
+ *  T055e5: the regex parseOpenPbr is gone -- the raw text is parsed into a
+ *  ParsedSurfaceInputs (parseSurfaceInputsFromMtlx) then reduced to the shared
+ *  seven-parameter anchor (parsedSurfaceToCanonical), the same path the fixture
+ *  builder uses, until the path tracer is wired on the LayeredClosure (T057). */
+function surfaceFromMtlx(text: string): RasterSurface {
+  const spec = parseSurfaceInputsFromMtlx(text);
+  if (!spec) return { ...NEUTRAL_SURFACE, baseColor: [...NEUTRAL_SURFACE.baseColor] };
+  const c = parsedSurfaceToCanonical(spec);
   return {
-    baseColor: [baseColor[0] * baseWeight, baseColor[1] * baseWeight, baseColor[2] * baseWeight],
-    metalness: numAny(['base_metalness', 'metalness'], 0),
-    roughness,
-    transmission: numAny(['transmission_weight', 'transmission'], 0),
-    subsurface: numAny(['subsurface_weight', 'subsurface'], 0),
-    ior: numAny(['specular_ior', 'specular_IOR'], 1.5),
-    specular: numAny(['specular_weight', 'specular'], 1),
+    baseColor: [c.baseColor[0], c.baseColor[1], c.baseColor[2]],
+    metalness: c.metalness,
+    roughness: c.roughness,
+    transmission: c.transmission,
+    subsurface: c.subsurface,
+    ior: c.ior,
+    specular: c.specular,
   };
 }
 
@@ -227,10 +188,11 @@ async function renderUsdOnDevice(
   const lights = importLights(scene, { sink });
   const cameras = importCameras(scene, { sink });
 
-  // Parse the OpenPBR surfaces straight off the referenced .mtlx layers. Materials
-  // whose base_color / specular_roughness are nodegraph-driven are evaluated for real
-  // (textures + noise) and baked into a per-material RGBA map (RGB = base color,
-  // A = roughness) that the path tracer samples per hit.
+  // Resolve the OpenPBR/standard_surface surfaces straight off the referenced
+  // .mtlx layers through the shared bridge. The CPU nodegraph bake path is retired
+  // (T055e5): textured base_color / specular_roughness fall back to their literal
+  // anchor until the path tracer samples the compiled shader directly (T057), so
+  // bakedByName stays empty and the GPU keeps a single unused placeholder layer.
   const baseDir = dirOf(entry);
   const surfaces = new Map<string, RasterSurface>();
   const bakedByName = new Map<string, { size: number; rgba: Uint8Array }>();
@@ -238,32 +200,7 @@ async function renderUsdOnDevice(
     const url = joinUrl(baseDir, ref.assetPath);
     try {
       const text = await (await fetch(url)).text();
-      surfaces.set(ref.materialName, parseOpenPbr(text));
-      const files = collectTextureFiles(text);
-      if (files.length > 0) {
-        const texBase = dirOf(url);
-        const textures = new Map<string, DecodedTexture>();
-        for (const f of files) {
-          try {
-            const tex = await loadTexture(joinUrl(texBase, f));
-            textures.set(f, tex);
-            let sum = 0;
-            let mx = 0;
-            for (let i = 0; i < tex.data.length; i++) {
-              sum += tex.data[i]!;
-              if (tex.data[i]! > mx) mx = tex.data[i]!;
-            }
-            line(`diag tex ${f} ${tex.width}x${tex.height} mean=${(sum / tex.data.length).toFixed(1)} max=${mx}`);
-          } catch {
-            line(`Texture introuvable: ${f}`);
-          }
-        }
-        const baked = bakeNodegraphSurface({ mtlx: text, textures, size: BAKE_SIZE });
-        if (baked) {
-          bakedByName.set(ref.materialName, baked);
-          line(`nodegraph evalue+bake: ${ref.materialName} (${textures.size}/${files.length} tex)`);
-        }
-      }
+      surfaces.set(ref.materialName, surfaceFromMtlx(text));
     } catch {
       line(`MaterialX introuvable: ${ref.assetPath}`);
     }

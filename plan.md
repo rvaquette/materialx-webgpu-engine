@@ -712,7 +712,7 @@ appellent la meme fonction de shading generee par l'IR ; le path tracer
 n'introduit aucune approximation de modele ; le raster declare et documente les
 siennes ; toute entree ou noeud non supporte produit un diagnostic (REQ-013).
 
-- [ ] T054 [Plan:P10] Etendre le modele de fermeture IR (P8) avec
+- [x] T054 [Plan:P10] Etendre le modele de fermeture IR (P8) avec
   echantillonnage : definir l'interface runtime LayeredClosure (pile de lobes
   avec poids, plus couches coat/sheen/fuzz/thin film/emission) cible du lowering,
   et doter CHAQUE lobe BSDF, en plus de response/throughput (P8), de pdf(wo,wi)
@@ -722,7 +722,26 @@ siennes ; toute entree ou noeud non supporte produit un diagnostic (REQ-013).
   src/render/bsdf/reference.ts avec pdf + sample pour chaque lobe et la pile.
   Tests : accord eval/pdf, non-biais par lobe et pile, reductions connues
   (pile a coat/sheen/thin film nuls == resultat actuel -> non-regression).
-  Valide : typecheck + suite Node.
+  Fait (commit f41bc69) : src/compiler/ir.ts definit le contrat LayeredClosure
+  (Rgb, BsdfLobeKind des 8 familles, LayeredBsdfLobe {kind, weight, color,
+  color90?, roughness?, anisotropy?, rotation?, ior?, extinction?}, couches
+  CoatLayer/SheenLayer/FuzzLayer/ThinFilmLayer, LayeredClosure {lobes, coat?,
+  sheen?, fuzz?, thinFilm?, emission?, opacity}), emptyLayeredClosure() et le pont
+  de non-regression canonicalSurfaceToLayered (7 parametres -> pile exacte de
+  surfaceBsdf). src/render/pathtracing/bsdf.ts : composeLobes extrait (MIS
+  one-sample, pdf combinee = somme(selProb_k*pdf_k)), surfaceBsdf refactore
+  dessus, lobeFromLayered + layeredSurfaceBsdf (eval/pdf/sample de pile ;
+  sheen/subsurface renvoient null en attendant leur lobe echantillonnable T056).
+  src/render/bsdf/reference.ts : evaluateLayeredSurface, oracle direct-light
+  additif de la pile + coat/sheen/fuzz appliques en layer (thinFilm porte mais
+  inactif, T056). tests/render/layered-closure.test.ts (13 tests) : non-regression
+  exacte layeredSurfaceBsdf(canonicalSurfaceToLayered(p)) == surfaceBsdf(p) en
+  eval et sample (meme seed PCG32), accord eval/pdf au point echantillonne,
+  non-biais IS vs hemisphere uniforme (|diff| < 0.02, 200k), conservation
+  d'energie (rho <= 1.001), reductions de l'oracle (lobe diffus unique ==
+  burleyDiffuse, opacity -> poids, coat weight 0 no-op / weight 1 occlut la base,
+  emission additive). CPU-only (pas de shader GPU nouveau). Valide : typecheck +
+  804 tests Node.
 
 - [ ] T055 [Plan:P10] Abaissement nodegraph de surface -> LayeredClosure dans le
   compilateur : etendre le lowering (src/compiler/nodes.ts, wgsl.ts, ir.ts ;
@@ -737,6 +756,265 @@ siennes ; toute entree ou noeud non supporte produit un diagnostic (REQ-013).
   7-parametres du chemin de rendu. Tests : lowering par famille contre les .mtlx
   de reference bxdf, entree connectee/procedurale vs litterale, heritage de
   version, diagnostics d'entrees non supportees. Valide : typecheck + suite Node.
+  Decoupe en sous-taches T055a-T055e :
+
+  - [x] T055a [Plan:P10] Resoudre et parcourir le nodegraph de surface :
+    a partir du terminal surfaceshader du ResolvedGraph (src/materialx/graph.ts),
+    resoudre le nodedef (interfacename, heritage de version, alias, defauts
+    officiels MaterialX) et DEPLIER les familles implementees en nodegraph
+    (standard_surface NG_standard_surface_surfaceshader_100, open_pbr_surface
+    NG_open_pbr_surface_surfaceshader) en parcourant leurs sous-graphes ; produire
+    une carte d'entrees normalisee par famille (source value | connection |
+    default). Les familles implementees en sourcecode seul (disney_principled,
+    gltf_pbr, UsdPreviewSurface) passent par un mapping d'entrees documente. Tout
+    noeud ou entree non supporte -> diagnostic (REQ-013). Module dedie
+    src/materialx/surface-graph.ts (ou extension de nodegraph-eval.ts). Tests JS :
+    resolution par famille, entree connectee vs litterale vs defaut, heritage de
+    version, diagnostics. Fait : src/materialx/surface-graph.ts expose
+    resolveSurface(graph, options) -> ResolvedSurface { family, nodeId,
+    nodeDefName?, version?, inputs: Map<name, NormalizedSurfaceInput> }. Les 5
+    familles sont classees depuis nodeDef.nodeString/category ; tables d'interface
+    codees depuis les nodedefs bxdf de reference (standard_surface 42 entrees,
+    open_pbr_surface 41, gltf_pbr 21, UsdPreviewSurface 14, disney_principled 14)
+    avec defaults officiels. NormalizedSurfaceSource = value (litteral parse par
+    type) | connection (nodeId/output conserves pour T055c) | default (defaut
+    nodedef) | geomprop (normal/tangent via defaultgeomprop). Heritage de version
+    standard_surface : table 1.0.0 (base=0.8, base_color=1,1,1) + overrides 1.0.1
+    par defaut (base=1.0, base_color=0.8,0.8,0.8). Inputs interface resolus via
+    options.interface ; connexion vers categorie hors DEFAULT_SUPPORTED_UPSTREAM,
+    input interface non resolu, input hors nodedef, famille inconnue et terminal
+    surfaceshader absent -> diagnostics REQ-013. tests/materialx/surface-graph.test.ts
+    (11 tests). Valide : typecheck + 815 tests Node.
+
+  - [x] T055b [Plan:P10] Mapper chaque famille resolue -> LayeredClosure (CPU) :
+    fonction surfaceGraphToLayered (src/compiler/surface-lower.ts ou ir.ts) qui
+    remplit lobes + coat/sheen/fuzz/thinFilm/emission/opacity a partir de la carte
+    d'entrees T055a, en capturant ce que les 7 parametres ecrasaient : coat
+    (poids/couleur/rugosite/ior), sheen/fuzz, thin film (poids/epaisseur/ior),
+    anisotropie speculaire + rotation, teinte speculaire (specular_color),
+    transmission color/depth, subsurface color/radius, emission
+    (luminance/couleur). Oracle = evaluateLayeredSurface (reference.ts, T054).
+    Tests JS : chaque famille produit les lobes/couches attendus, reduction
+    diffus-pur coherente, open_pbr_surface complet remplit coat/sheen/thinFilm,
+    non-regression vs canonicalSurfaceToLayered sur un materiau 7-parametres.
+    Valide : typecheck + suite Node. Fait : src/compiler/surface-lower.ts expose
+    surfaceGraphToLayered(ResolvedSurface) -> LayeredClosure, dispatch par famille
+    (5 lowerings). Chaque lowering lit les sources value/default via helpers
+    scalarOf/rgbOf ; les sources connection/geomprop (texture/procedural) tombent
+    sur le defaut CPU et seront emises dans le shader en T055c. Lobes de base
+    conductor/translucent/dielectric_reflection/burley_diffuse/subsurface ;
+    standard_surface reproduit EXACTEMENT les poids de canonicalSurfaceToLayered
+    quand base=1 et couches a zero (ancre non-regression). Capture coat/sheen
+    (standard_surface), coat/fuzz (open_pbr), coat/sheen (gltf, disney), thin film
+    (standard_surface/open_pbr epaisseur+ior, gltf iridescence), anisotropie +
+    rotation speculaires, teinte specular_color, transmission_color, subsurface
+    color, emission (emission*color, emission_luminance, emissive). Les champs sans
+    slot dans le contrat LayeredClosure T054 (transmission depth, subsurface radius)
+    attendent l'extension des lobes en T056. tests/compiler/surface-lower.test.ts
+    (9 tests). Valide : typecheck + 824 tests Node.
+
+  - [x] T055c [Plan:P10] Entrees texturees/procedurales abaissees dans le shader
+    (pas aplaties en constantes) : etendre l'emission IR/WGSL
+    (src/compiler/nodes.ts, wgsl.ts, ir.ts) pour qu'un champ LayeredClosure
+    alimente par un reseau de noeuds (image, tiledimage, noise, mix, normalmap,
+    combine, convert, ...) emette le sous-graphe dans le shader genere qui remplit
+    ce champ, au lieu d'une constante bakee. Reutiliser le registre de lowering
+    expr/texture existant (deja reel depuis T014). Tests JS : une entree connectee
+    ou procedurale produit du WGSL referencant le sous-graphe (binding texture /
+    appel de noeud) la ou une entree litterale produit une constante. Valide :
+    typecheck + suite Node.
+    Fait : nouveau module src/compiler/surface-ir.ts expose
+    lowerSurfaceInputsToIr(graph, surface, builder, sink) qui abaisse chaque
+    entree de surface resolue en IR : value/default -> constante, geomprop ->
+    input normal/tangent, connection -> sous-graphe amont lowered (image/
+    tiledimage/hextiledimage -> IR texture avec primvar UV st ; convert -> IR
+    convert ; categories du registre expr -> IR call ordonne via
+    CATEGORY_INPUT_ORDER avec repli sur l'ordre auteur). Partage CSE par nodeId.
+    Noeud amont non lowerable -> diagnostic REQ-013 + constante neutre. Reutilise
+    le registre nodes.ts (T014) via emitWgsl. tests/compiler/surface-ir.test.ts
+    (6 cas) : couleur connectee -> binding textureSample ; litteral -> constante
+    sans binding ; mix procedural -> appel mix( ; convert -> conversion IR ;
+    partage CSE ; noeud non supporte -> warning + constante. Struct WGSL
+    LayeredClosure + fonction mx_surface_layered restent pour T055d. Valide :
+    typecheck OK ; suite 830 (etait 824, +6).
+
+  - [x] T055d [Plan:P10] Struct WGSL LayeredClosure + fonction de remplissage
+    generee : declarer dans un prelude la struct WGSL LayeredClosure et ses lobes,
+    et faire emettre par le noeud surface une fonction mx_surface_layered(...) ->
+    LayeredClosure (en plus / au lieu du Closure{color,weight} actuel), dont les
+    champs sont affectes depuis les expressions IR (T055c). wgsl.ts expose la
+    LayeredClosure comme sortie du module de surface. Tests JS structurels :
+    struct presente, champs lobes/coat/sheen/fuzz/thinFilm/emission/opacity
+    affectes, binding mxLighting present ssi necessaire, diagnostic sur entree non
+    supportee. Valide : typecheck + suite Node.
+    Fait : wgsl.ts refactore pour exporter lowerExprs (abaisse un ShaderIr en
+    lignes WGSL let + bindings/preludes/varyings, partage par emitWgsl) et
+    emitVaryingsStruct/litFloat. Nouveau module src/compiler/surface-wgsl.ts
+    expose LAYERED_CLOSURE_PRELUDE (struct MxBsdfLobe/MxCoatLayer/MxSheenLayer/
+    MxFuzzLayer/MxThinFilmLayer/LayeredClosure avec tableau lobes fixe + drapeaux
+    has*) et emitLayeredSurface(graph, surface, sink) -> { code, entryPoint
+    mx_surface_layered, returnType LayeredClosure, family, uniforms, textures,
+    samplers, lighting? }. Il appelle lowerSurfaceInputsToIr (T055c) pour les refs
+    IR par entree, assemble les lobes/couches par famille (les 5 familles,
+    miroir de surface-lower.ts T055b) en WGSL referencant ces refs -> les poids
+    restent dynamiques (une metalness texturee n'est pas aplatie), topologie des
+    couches optionnelles decidee par presence litterale OU connexion. Les refs
+    utilisees sont declarees en sorties IR pour forcer leur emission par
+    lowerExprs. Construction pure sans eval d'eclairage -> pas de binding
+    mxLighting (eval en T056). tests/compiler/surface-wgsl.test.ts (8 cas) :
+    struct + fn presentes ; lobes/coat/sheen/thinFilm/emission/opacity affectes ;
+    couches absentes omises ; couleur texturee -> sous-graphe dans un lobe ;
+    metalness texturee -> poids dynamique ; pas de mxLighting ; dispatch famille
+    (UsdPreviewSurface -> 3 lobes) ; noeud amont non supporte -> warning +
+    constante neutre. Valide : typecheck OK ; suite 838 (etait 830, +8).
+
+
+  - [ ] T055e [Plan:P10] Fin de la reduction 7-parametres cote fixtures/harnais :
+    scripts/build-scene-materials.mjs emet la LayeredClosure riche dans
+    tests/fixtures/scene-materials.json (le legacy 7-parametres reste derivable
+    via canonicalSurfaceToLayered pour les consommateurs non encore migres) ;
+    retirer toCanonical (build-scene-materials.mjs), parseOpenPbr
+    (tests/render/usd-scene.harness.ts, scripts/validate-disney-gold.ts) et le
+    bake findShader (nodegraph-eval.ts) du chemin de rendu -- le cablage effectif
+    des backends sur la LayeredClosure est fait en T057 (path tracer) et T058
+    (raster). Tests JS : fixture regeneree, parite entre la LayeredClosure du
+    compilateur (T055b/T055d) et l'oracle reference.ts par famille. Valide :
+    typecheck + suite Node.
+    Decoupe en T055e1..T055e5 (ordre de dependance e1 -> e2 -> e3 ; e4 depend de
+    e1/e2 ; e5 depend de e1/e4). Principe : additif et non cassant d'abord (les
+    consommateurs GPU restent sur le 7-parametres jusqu'a T057/T058), puis
+    suppression des chemins dupliques une fois le chemin unique en place.
+
+    - [x] T055e1 [Plan:P10] Infra : serialisation LayeredClosure + resolution de
+      scene partagee. Objectif : offrir au builder de fixtures et aux harnais un
+      chemin unique "entrees de shader parsees -> ResolvedGraph minimal ->
+      resolveSurface (T055a) -> surfaceGraphToLayered (T055b)". Ajouter un helper
+      de (de)serialisation STABLE (arrondi deterministe) d'une LayeredClosure
+      vers/depuis JSON (lobes + coat/sheen/fuzz/thinFilm/emission/opacity), et un
+      pont "inputs parses -> ResolvedGraph" reutilisant le patron plain-data des
+      tests. Rendre scripts/build-scene-materials capable d'importer depuis src/
+      (le passer en .ts execute par le meme runner que scripts/render-scenes.ts,
+      ou extraire un module helper partage sous src/). Aucun changement de forme
+      de scene-materials.json ni des consommateurs a ce stade. Tests JS :
+      round-trip de serialisation closure ; le pont produit une ResolvedSurface
+      correcte par famille. Valide : typecheck + suite Node.
+      Fait : src/compiler/layered-serialize.ts expose roundTo (arrondi stable, -0
+      normalise en 0) + serializeLayeredClosure/deserializeLayeredClosure (lobes
+      et champs optionnels coat/sheen/fuzz/thinFilm/emission omis quand absents,
+      round-trip deep-equal, JSON deterministe). src/materialx/surface-from-inputs.ts
+      ponte des inputs litteraux vers un ResolvedGraph mono-noeud puis
+      resolveSurface (T055a) et surfaceGraphToLayered (T055b) :
+      resolvedGraphFromParsedSurface, surfaceFromParsedInputs, parsedInputsToLayered
+      (gere l'heritage de version standard_surface et renvoie null + diagnostic
+      pour famille inconnue). scripts/build-scene-materials.mjs porte en .ts
+      (execute par `node`, importe roundTo), package.json build:fixtures/build:materials
+      pointent le .ts ; toCanonical conserve, fixture scene-materials.json
+      regeneree et byte-identique (aucun diff de contenu). Nouveaux tests :
+      tests/compiler/layered-serialize.test.ts, tests/materialx/surface-from-inputs.test.ts.
+      Gate : typecheck OK, 850 tests sur 74 fichiers (838 -> 850).
+
+    - [x] T055e2 [Plan:P10] Builder emet la LayeredClosure riche (additif) +
+      regeneration de la fixture. Objectif : build-scene-materials appelle
+      surfaceGraphToLayered (T055b) sur la surface resolue et ecrit un champ
+      `closure` (LayeredClosure serialisee via T055e1) par materiau dans
+      scene-materials.json, EN CONSERVANT les 7 champs plats actuels + family +
+      focus (consommateurs non encore migres -> T057/T058). Regenerer la fixture.
+      Tests JS : chaque materiau porte un `closure` valide (schema
+      lobes/coat/sheen/fuzz/thinFilm/emission/opacity) ; les 7 champs plats
+      restent inchanges (non-regression scene-compare/scene-shade/scene-device/
+      render-scenes). Valide : typecheck + suite Node.
+      Fait : build-scene-materials.ts importe parsedInputsToLayered (pont T055e1)
+      + serializeLayeredClosure ; la boucle appelle parsedInputsToLayered({category:
+      tag, inputs}) sur les memes inputs parses que toCanonical et ajoute le champ
+      `closure` APRES les 7 champs plats (ordre stable). Fixture regeneree : 47
+      scenes, chacune porte family/focus/baseColor/metalness/roughness/transmission/
+      subsurface/ior/specular INCHANGES + closure. Avertissements benins gltf_pbr
+      (ior/alpha_mode/iridescence_ior/thickness/attenuation_* hors interface
+      nodedef T055a -> ignores, champ plat non affecte ; l'ior gltf authored n'est
+      pas repris dans le closure, a corriger cote table T055a ulterieurement).
+      Nouveau test tests/fixtures/scene-materials.test.ts (4 cas : corpus >=40,
+      7 champs plats bien types, closure schema-valide par materiau -- kind connu,
+      weight>0, color rgb, slots optionnels bien formes --, round-trip codec
+      identique). Non-regression des 7 champs confirmee par les tests scene-*
+      existants (toujours verts). Gate : typecheck OK, 854 tests sur 75 fichiers
+      (850 -> +4).
+
+    - [x] T055e3 [Plan:P10] Test de parite compilateur LayeredClosure vs oracle,
+      par famille. Objectif : nouveau test qui, par scene/famille, (a) reconstruit
+      la surface resolue et compare surfaceGraphToLayered au `closure` serialise
+      de la fixture ; (b) evalue evaluateLayeredSurface(closure) (reference.ts,
+      T054) sous defaultLighting + quelques geometries et verifie la parite avec
+      l'ancre 7-parametres canonicalSurfaceToLayered sur les lobes de base
+      (non-regression) dans les tolerances (fixtures/tolerances.ts) ; (c) verifie
+      que emitLayeredSurface (T055d) produit un module structurellement coherent
+      par famille. Valide : typecheck + suite Node.
+      Fait : nouveau test tests/fixtures/scene-parity.test.ts. Les inputs bruts
+      par scene ne sont PAS persistes (fixture = closure derive + 7 champs plats),
+      donc (a)/(c) reconstruisent depuis un representant base-only par famille
+      (5 familles) et (b) relie chaque closure stocke a l'ancre batie sur ses
+      champs plats. (a) : surfaceFromParsedInputs resout la bonne SurfaceFamily,
+      surfaceGraphToLayered deterministe = chemin bridge parsedInputsToLayered,
+      et chaque closure de la fixture est round-trip stable via le codec
+      serialize/deserialize (meme pipeline que la fixture). (b) : sous
+      defaultLighting x 3 geometries, parite stricte (<= tolerances.ts closure
+      2e-3) la ou le representant se reduit exactement a l'ancre (standard_surface
+      garanti, compteur strict > 0) ; evaluation finie et in-range [0,1] pour tous
+      les representants + chaque scene (closure stocke ET ancre). Les 7 champs
+      plats etant une reduction lossy (toCanonical, retire en T055e4), pas de
+      parite byte exigee corpus-wide. (c) : emitLayeredSurface donne family/
+      entryPoint mx_surface_layered/returnType LayeredClosure corrects, code avec
+      fn mx_surface_layered/c.lobeCount/c.opacity, uniforms/textures/samplers
+      tableaux. Note : diffuse_roughness aligne sur l'ancre pour standard_surface
+      (l'ancre met burley.roughness = roughness). Gate : typecheck OK, 868 tests
+      sur 76 fichiers (854 -> +14).
+
+    - [x] T055e4 [Plan:P10] Retirer toCanonical en derivant le 7-parametres depuis
+      la surface resolue. Objectif : supprimer la logique par-famille dupliquee
+      toCanonical de build-scene-materials ; les 7 champs plats (laisses pour les
+      consommateurs non migres) sont desormais derives du chemin unique (surface
+      resolue / LayeredClosure) via une reduction documentee -> plus de mapping
+      parallele a la main dans le script. Regenerer la fixture (7 champs plats
+      identiques aux valeurs actuelles a l'arrondi pres ; tout ecart inevitable
+      documente). Tests JS : fixture stable ; consommateurs existants verts.
+      Valide : typecheck + suite Node.
+      Fait : toCanonical retire du script ; reduction partagee parsedSurfaceToCanonical
+      ajoutee dans src/materialx/surface-from-inputs.ts, alimentee par le MEME spec
+      parse unique que parsedInputsToLayered (plus de double-parse ni de switch
+      par-famille dans le script). Note de conception : une reduction depuis le
+      LayeredClosure a ete prototypee puis ecartee car le closure est lossy pour le
+      rendu courant (le lobe translucent ne porte ni roughness ni ior -> verre
+      casse, et disney specular vaut reellement 0.5 vs 1 hardcode) : elle cassait
+      11 comparaisons de scene-device.test.ts dont la baseline mobile n'est pas
+      regenerable ici. La surface resolue est elle aussi lossy pour l'ior gltf
+      (absent du nodedef interface) ; la reduction lit donc les inputs parses
+      (meme source que le closure) pour reproduire les valeurs a l'identique.
+      Fixture regeneree : 7 champs plats inchanges (seul specular gagne une virgule
+      car le closure le suit). Test unitaire parsedSurfaceToCanonical ajoute
+      (defauts, base folde, conventions specular disney/usd, ior gltf parse).
+      Gate : typecheck OK + 873 tests / 76 fichiers.
+
+    - [x] T055e5 [Plan:P10] Retirer parseOpenPbr et le bake findShader du chemin
+      de rendu. Objectif : remplacer les parseurs regex parseOpenPbr
+      (tests/render/usd-scene.harness.ts, scripts/validate-disney-gold.ts) par la
+      resolution de surface partagee (T055e1) -> LayeredClosure ; tant que le path
+      tracer n'est pas cable sur la closure (T057), deriver l'ancre 7-parametres
+      via la reduction T055e4 pour conserver le comportement courant. Retirer
+      findShader et le chemin de bake (bakeNodegraphSurface, nodegraph-eval.ts) de
+      la trajectoire de rendu -- l'isoler en diagnostic pur ou le supprimer s'il
+      n'y est plus consomme. Tests JS : harnais/scripts compilent et, s'ils sont
+      dans la suite, restent verts. Valide : typecheck + suite Node.
+      Fait : parseur texte partage parseSurfaceInputsFromMtlx ajoute dans
+      src/materialx/surface-from-inputs.ts (shaderBlock + parseInputs factorises) ;
+      les deux copies parseOpenPbr (harnais USD, script disney) remplacees par
+      parseSurfaceInputsFromMtlx -> parsedSurfaceToCanonical (ancre 7-parametres,
+      T055e4) ; build-scene-materials.ts utilise aussi le parseur partage (plus de
+      copie locale) et le fixture reste identique (gate device vert). Bake retire
+      de la trajectoire de rendu : import nodegraph-eval et appels
+      collectTextureFiles/bakeNodegraphSurface/loadTexture supprimes du harnais
+      (bakedByName reste vide, couche GPU factice conservee) ; nodegraph-eval.ts
+      (findShader + bakeNodegraphSurface) supprime car plus aucun consommateur.
+      Gate : typecheck OK + 873 tests / 76 fichiers.
+
 
 - [ ] T056 [Plan:P10] Bibliotheque WGSL de fermetures PARTAGEE eval/pdf/sample :
   completer les lobes manquants (sheen Charlie, coat dielectrique layered avec

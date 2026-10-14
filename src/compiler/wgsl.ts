@@ -80,7 +80,7 @@ export function wgslType(type: IrType): string {
   }
 }
 
-function litFloat(n: number): string {
+export function litFloat(n: number): string {
   if (!Number.isFinite(n)) throw new WgslEmitError(`non-finite float literal ${n}`);
   return Number.isInteger(n) ? `${n}.0` : `${n}`;
 }
@@ -213,7 +213,28 @@ function inputRef(name: string): string {
   return `vary.in_${ident(name)}`;
 }
 
-export function emitWgsl(ir: ShaderIr): WgslModule {
+/** Result of lowering a ShaderIr's expressions to WGSL `let` statements plus the
+ *  bindings/preludes/varyings metadata needed to assemble a module. Shared by the
+ *  entry-point emitter (emitWgsl) and the layered-surface emitter (surface-wgsl.ts,
+ *  T055d). */
+export interface LoweredExprs {
+  order: IrRef[];
+  /** `  let eN = <rhs>;` lines, one per reachable expression in topo order. */
+  body: string[];
+  preludes: Set<string>;
+  extraInputs: Map<string, IrType>;
+  primvarFields: Map<string, IrType>;
+  usesLighting: boolean;
+  uniforms: WgslUniformField[];
+  textures: WgslBinding[];
+  samplers: WgslBinding[];
+}
+
+/** Walk a ShaderIr and emit one `let` statement per reachable expression (topo
+ *  order, CSE already applied upstream), collecting the uniform/texture/sampler
+ *  bindings, required preludes and varying fields. The refs are used verbatim as
+ *  WGSL variable names. */
+export function lowerExprs(ir: ShaderIr): LoweredExprs {
   const ctx: NodeEmitContext = {
     varyings: {
       position: 'vary.position',
@@ -295,6 +316,13 @@ export function emitWgsl(ir: ShaderIr): WgslModule {
   // Bindings.
   const textures: WgslBinding[] = ir.textures.map((t, i) => ({ name: t.name, handle: `tex_${ident(t.name)}`, group: 1, binding: i }));
   const samplers: WgslBinding[] = ir.samplers.map((s, i) => ({ name: s.name, handle: `samp_${ident(s.name)}`, group: 2, binding: i }));
+  return { order, body, preludes, extraInputs, primvarFields, usesLighting, uniforms, textures, samplers };
+}
+
+export function emitWgsl(ir: ShaderIr): WgslModule {
+  const lowered = lowerExprs(ir);
+  const { uniforms, textures, samplers, preludes, primvarFields, extraInputs, body, usesLighting } = lowered;
+
   // Outputs.
   const seenFields = new Set<string>();
   const outputs: WgslOutput[] = ir.outputs.map((o) => {
@@ -358,6 +386,23 @@ interface AssembleArgs {
   body: string[];
 }
 
+/** The standard varyings struct (position/normal/tangent/bitangent/texcoord/viewDir)
+ *  plus any primvar (`v_*`) and extra input (`in_*`) fields. Shared by the entry
+ *  module and the layered-surface module (T055d). */
+export function emitVaryingsStruct(primvarFields: Map<string, IrType>, extraInputs: Map<string, IrType>): string {
+  const varyingFields = [
+    '  position: vec3f,',
+    '  normal: vec3f,',
+    '  tangent: vec3f,',
+    '  bitangent: vec3f,',
+    '  texcoord: vec2f,',
+    '  viewDir: vec3f,',
+  ];
+  for (const [name, type] of primvarFields) varyingFields.push(`  v_${ident(name)}: ${wgslType(type)},`);
+  for (const [name, type] of extraInputs) varyingFields.push(`  in_${ident(name)}: ${wgslType(type)},`);
+  return `struct MxVaryings {\n${varyingFields.join('\n')}\n};`;
+}
+
 function assembleModule(a: AssembleArgs): string {
   const parts: string[] = [];
   parts.push([...a.preludes].join('\n'));
@@ -371,17 +416,7 @@ function assembleModule(a: AssembleArgs): string {
   for (const t of a.textures) parts.push(`@group(${t.group}) @binding(${t.binding}) var ${t.handle}: texture_2d<f32>;`);
   for (const s of a.samplers) parts.push(`@group(${s.group}) @binding(${s.binding}) var ${s.handle}: sampler;`);
 
-  const varyingFields = [
-    '  position: vec3f,',
-    '  normal: vec3f,',
-    '  tangent: vec3f,',
-    '  bitangent: vec3f,',
-    '  texcoord: vec2f,',
-    '  viewDir: vec3f,',
-  ];
-  for (const [name, type] of a.primvarFields) varyingFields.push(`  v_${ident(name)}: ${wgslType(type)},`);
-  for (const [name, type] of a.extraInputs) varyingFields.push(`  in_${ident(name)}: ${wgslType(type)},`);
-  parts.push(`struct MxVaryings {\n${varyingFields.join('\n')}\n};`);
+  parts.push(emitVaryingsStruct(a.primvarFields, a.extraInputs));
 
   parts.push(`struct MxOutputs {\n${a.outputs.map((o) => `  ${o.field}: ${o.wgslType},`).join('\n')}\n};`);
 
