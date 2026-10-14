@@ -1461,11 +1461,25 @@ siennes ; toute entree ou noeud non supporte produit un diagnostic (REQ-013).
       memoisee, param+defaut, convert broadcast, throw closure+op inconnu). Gate
       1020/90.
 
-    - [ ] T057i3 [Plan:P10] Composer l'oracle : valeurs IR evaluees (i2) ->
+    - [x] T057i3 [Plan:P10] Composer l'oracle : valeurs IR evaluees (i2) ->
       surfaceGraphToLayered avec overrides -> LayeredClosure + builder de valeurs
       MxUniforms (layout WgslUniformField). createSceneSampler evalue le graphe sur
       CPU pour les variantSources. Tests JS : parite closure graphe vs attendu.
       Valide : typecheck + suite Node.
+      Fait : nouveau module src/compiler/surface-eval.ts (prepareSurface lowering
+      une fois, composeSurfaceLayered qui override seulement les inputs 'connection'
+      par leur valeur IR evaluee puis surfaceGraphToLayered, evaluateSurfaceToLayered
+      raccourci). Non-regression : surface constante -> closure byte-identique a
+      surfaceGraphToLayered (connected.size===0 renvoie direct). createSceneSampler
+      prepare chaque variantSource une fois et evalue la closure par-hit (texcoord
+      interpolee depuis triangleUv, stride 6) ; PtHit porte triangle/u/v. Fallback
+      record constant packe pour les draws non-variant. MxUniforms laisse vide :
+      lowerSurfaceInputsToIr bake les constantes (aucune expr 'param'), donc le
+      builder serait un no-op premature -> reporte a T057i4 si une variante declare
+      des uniforms. Tests : tests/compiler/surface-eval.test.ts (base_color procedural
+      brique, non-regression constante, prepare-une-fois multi-points) +
+      tests/render/pathtracing/scene-buffers.test.ts (sampler utilise la closure
+      graphe evaluee, pas le record constant). Gate 1024/92.
 
     - [ ] T057i4 [Plan:P10] Cabler le megakernel : emettre les variantes
       (buildMaterialDispatch) dans pathTraceComputeWgsl via l'option varyings, binder

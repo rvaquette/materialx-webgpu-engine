@@ -24,6 +24,8 @@ import {
 } from '../raster/scene-frame.ts';
 import { evalWorld, layeredSurfaceBsdf, sampleWorld } from './bsdf.ts';
 import { canonicalSurfaceToLayered, type LayeredClosure } from '../../compiler/ir.ts';
+import { composeSurfaceLayered, prepareSurface, type PreparedSurface } from '../../compiler/surface-eval.ts';
+import type { IrEvalVaryings } from '../../compiler/ir-eval.ts';
 import { packLayeredMaterial, unpackLayeredMaterial, PT_MATERIAL_RECORD_FLOATS } from './material-record.ts';
 import type { PtVariantSource } from './material-variant.ts';
 import type {
@@ -274,7 +276,14 @@ export function readLayeredClosure(scene: PathTraceScene, materialIndex: number)
 
 interface PtHit extends SurfaceHit {
   materialIndex: number;
+  /** Soup triangle ordinal + barycentric coords, for per-hit UV interpolation (T057i3). */
+  triangle: number;
+  u: number;
+  v: number;
 }
+
+/** Floats per triangle in triangleUv: u0,v0,u1,v1,u2,v2. */
+const PT_UV_STRIDE = 6;
 
 interface TriHit {
   t: number;
@@ -378,7 +387,17 @@ function hitSurface(scene: PathTraceScene, hit: TriHit, ray: Ray): PtHit {
     ray.origin[1] + ray.direction[1] * hit.t,
     ray.origin[2] + ray.direction[2] * hit.t,
   ];
-  return { position, normal, materialIndex: d[b + 18]! };
+  return { position, normal, materialIndex: d[b + 18]!, triangle: hit.triangle, u: hit.u, v: hit.v };
+}
+
+/** Interpolate the hit's shading varyings for the procedural surface oracle (T057i3). */
+function hitVaryings(scene: PathTraceScene, hit: PtHit): IrEvalVaryings {
+  const uv = scene.triangleUv;
+  const b = hit.triangle * PT_UV_STRIDE;
+  const w = 1 - hit.u - hit.v;
+  const s = (uv[b] ?? 0) * w + (uv[b + 2] ?? 0) * hit.u + (uv[b + 4] ?? 0) * hit.v;
+  const t = (uv[b + 1] ?? 0) * w + (uv[b + 3] ?? 0) * hit.u + (uv[b + 5] ?? 0) * hit.v;
+  return { position: hit.position, normal: hit.normal, texcoord: [s, t] };
 }
 
 /**
@@ -400,8 +419,19 @@ export function createSceneSampler(scene: PathTraceScene): SceneSampler {
   const env = scene.environment.radiance;
   const hasEnv = env[0] > 0 || env[1] > 0 || env[2] > 0;
 
+  // Prepare the procedural surface oracle once per variant material (T057i3): its
+  // connected inputs are evaluated at the hit varyings instead of the packed
+  // constant record. Constant-only materials keep the packed record fallback.
+  const prepared = new Map<number, PreparedSurface>();
+  for (const v of scene.variantSources) prepared.set(v.materialIndex, prepareSurface(v.graph, v.surface));
+
+  function closureFor(hit: PtHit): LayeredClosure {
+    const variant = prepared.get(hit.materialIndex);
+    return variant ? composeSurfaceLayered(variant, hitVaryings(scene, hit)) : readLayeredClosure(scene, hit.materialIndex);
+  }
+
   function lobeFor(hit: SurfaceHit) {
-    return layeredSurfaceBsdf(readLayeredClosure(scene, (hit as PtHit).materialIndex));
+    return layeredSurfaceBsdf(closureFor(hit as PtHit));
   }
 
   const sampler: SceneSampler = {

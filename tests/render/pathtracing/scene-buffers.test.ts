@@ -12,8 +12,9 @@ import type { GeometryResource, MaterialResource, SceneResources } from '../../.
 import type { RasterSurface } from '../../../src/render/raster/scene-frame.ts';
 import type { SceneLight } from '../../../src/usd/lights.ts';
 import { createPcg32, integratePath, type Ray } from '../../../src/render/pathtracing/integrator.ts';
-import { evalWorld, surfaceBsdf } from '../../../src/render/pathtracing/bsdf.ts';
+import { evalWorld, layeredSurfaceBsdf, surfaceBsdf } from '../../../src/render/pathtracing/bsdf.ts';
 import { canonicalSurfaceToLayered } from '../../../src/compiler/ir.ts';
+import { evaluateSurfaceToLayered } from '../../../src/compiler/surface-eval.ts';
 import { IDENTITY4 } from '../../../src/scene/transforms.ts';
 import { resolveSurface, type ResolvedSurface } from '../../../src/materialx/surface-graph.ts';
 import type { ResolvedGraph, ResolvedNode } from '../../../src/materialx/graph.ts';
@@ -185,6 +186,27 @@ describe('variantSources classification (T057i1)', () => {
     expect(scene.variantSources).toEqual([]);
   });
 });
+
+describe('createSceneSampler procedural oracle (T057i3)', () => {
+  it('shades a variant material with its evaluated graph, not the packed constant', () => {
+    const { graph, surface } = brickGraph();
+    const { resources, lights } = sceneWith({ surfaceGraph: graph, resolvedSurface: surface });
+    const scene = buildPathTraceScene(resources, { lights });
+    const sampler = createSceneSampler(scene);
+    const hit = sampler.intersect({ origin: [0, 0, 2], direction: [0, 0, -1] })!;
+    expect(hit).not.toBeNull();
+    const wo: [number, number, number] = [0, 0, 1];
+    const wi: [number, number, number] = [0, 0, 1];
+    const got = sampler.evalBsdf(hit, wo, wi);
+    // The sampler must use the evaluated graph closure (brick base_color)...
+    const variant = evalWorld(layeredSurfaceBsdf(evaluateSurfaceToLayered(graph, surface)), hit.normal, wo, wi);
+    for (let k = 0; k < 3; k++) expect(got.value[k]!).toBeCloseTo(variant.value[k]!, 6);
+    // ...not the packed constant record it falls back to for non-variant draws.
+    const constant = evalWorld(layeredSurfaceBsdf(readLayeredClosure(scene, 0)), hit.normal, wo, wi);
+    expect(Math.abs(got.value[0]! - constant.value[0]!)).toBeGreaterThan(0.01);
+  });
+});
+
 
 describe('createSceneSampler traversal', () => {
   it('intersects the quad along a -Z camera ray', () => {
