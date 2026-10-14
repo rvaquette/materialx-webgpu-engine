@@ -13,13 +13,13 @@
 // runtime flow -- scene -> camera/lights -> resources -> frame -> GPU passes -- is
 // the real path, no longer a hard-coded triangle with hard-coded uniforms.
 
-import { emitWgsl } from './compiler/wgsl.ts';
-import { emitLayeredSurface } from './compiler/surface-wgsl.ts';
-import { FLOAT, IrModuleBuilder, shaderType } from './compiler/ir.ts';
-import { resolvedGraphFromParsedSurface, surfaceFromParsedInputs, type ParsedSurfaceInputs } from './materialx/surface-from-inputs.ts';
 import { RasterBackend, RESOLVE_UNIFORM_SIZE, SCENE_FRAME_UNIFORM_SIZE, SCENE_MATERIAL_UNIFORM_SIZE, type ScenePassKind, type SceneDrawCall } from './render/raster/backend.ts';
 import { buildSceneFrame, buildSceneFrameUniform, buildSceneMaterialUniform, type FrameCamera } from './render/raster/scene-frame.ts';
-import { buildSceneResources, createSceneBindGroups, uploadGeometry, type MaterialBuild, type MaterialCompiler, type MeshSource } from './render/scene-resources.ts';
+import { buildSceneResources, createSceneBindGroups, uploadGeometry, type MeshSource } from './render/scene-resources.ts';
+import { createGraphMaterialCompiler } from './render/graph-material-compiler.ts';
+import { loadMaterialXDocuments } from './materialx/document-source.ts';
+import { loadMaterialXCore } from './materialx/wasm.ts';
+import { MaterialXLibraries, defaultLibrarySources } from './materialx/libraries.ts';
 import { buildPathTraceScene } from './render/pathtracing/scene-buffers.ts';
 import { buildPathTraceUniform, PathTraceBackend, PT_UNIFORM_SIZE } from './render/pathtracing/compute.ts';
 import { RenderEngine, type BackendKind } from './render/engine.ts';
@@ -66,6 +66,27 @@ const SURF_MTLX: MaterialXReference = {
   materialName: 'surf',
 };
 
+// Served dev-server paths for the MaterialX Core WASM and standard libraries the
+// graph material compiler consumes (T057m3c), mirroring the USD device harness.
+const MATERIALX_CORE_URL = '/materialx/JsMaterialXCore.js';
+const MATERIALX_WASM_DIR = '/materialx/';
+const MATERIALX_LIBRARIES_ROOT = '/materialx/libraries';
+
+// Inline MaterialX document for the demo material: a constant standard_surface
+// resolved through the same graph path the USD scenes use (no baked compiler).
+const DEMO_MTLX = `<?xml version="1.0"?>
+<materialx version="1.39" colorspace="lin_rec709">
+  <standard_surface name="SR_surf" type="surfaceshader">
+    <input name="base" type="float" value="1.0" />
+    <input name="base_color" type="color3" value="0.82, 0.67, 0.49" />
+    <input name="metalness" type="float" value="0" />
+    <input name="specular_roughness" type="float" value="0.4" />
+  </standard_surface>
+  <surfacematerial name="surf" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="SR_surf" />
+  </surfacematerial>
+</materialx>`;
+
 /** Minimal composed scene: two lit meshes bound to one material + a key light. */
 function buildDemoScene(): SceneAsset {
   const world = prim('/World', { children: ['/World/tri', '/World/quad', '/World/Looks', '/World/key'] });
@@ -106,28 +127,6 @@ function demoMeshSource(): MeshSource {
   return { meshFor: (path) => map[path] };
 }
 
-function demoMaterialCompiler(): MaterialCompiler {
-  return {
-    compile(): MaterialBuild {
-      const b = new IrModuleBuilder();
-      const opacity = b.constant(FLOAT, 1);
-      const ref = b.add({ kind: 'closure', type: shaderType('surface'), closure: 'bsdf', op: 'surface', params: { opacity } });
-      b.output({ name: 'surfaceshader', type: shaderType('surface'), ref });
-      const ir = b.build();
-      // Assemble the layered surface module so scene-resources emits the IR
-      // scene-forward shader (T058e): a constant standard_surface the raster
-      // variant and the path tracer both lower through mx_surface_layered.
-      const spec: ParsedSurfaceInputs = {
-        category: 'standard_surface',
-        inputs: { base_color: [0.82, 0.67, 0.49], metalness: 0, specular_roughness: 0.4 },
-      };
-      const surface = surfaceFromParsedInputs(spec);
-      const layered = surface ? emitLayeredSurface(resolvedGraphFromParsedSurface(spec), surface) : undefined;
-      return { ir, module: emitWgsl(ir), ...(layered ? { layered } : {}) };
-    },
-  };
-}
-
 function cameraForCanvas(aspect: number): FrameCamera {
   const proj = perspective4(Math.PI / 3, aspect, 0.1, 100);
   const eye: [number, number, number] = [0, 0, 2.6];
@@ -165,9 +164,25 @@ async function main(): Promise<void> {
   const sink = (d: { level: string; message: string }): void => {
     if (d.level === 'warning' || d.level === 'error') warnings.push(d.message);
   };
+  // Resolve the demo material through the shared graph path (T057m3c): load the
+  // MaterialX Core WASM + standard libraries, pre-read the inline document, and
+  // feed the graph material compiler the same way the USD device harness does.
+  const core = await loadMaterialXCore({
+    moduleUrl: MATERIALX_CORE_URL,
+    locateFile: (path) => MATERIALX_WASM_DIR + path,
+    onDiagnostic: sink,
+  });
+  const libraries = new MaterialXLibraries(core);
+  await libraries.load({
+    sources: defaultLibrarySources(MATERIALX_LIBRARIES_ROOT),
+    fetchText: async (url) => (await fetch(url)).text(),
+    onDiagnostic: sink,
+  });
+  const texts = new Map<string, string>([[SURF_MTLX.assetPath, DEMO_MTLX]]);
+  const documents = await loadMaterialXDocuments({ core, libraries, texts, sink });
   const resources = await buildSceneResources(scene, {
     meshSource: demoMeshSource(),
-    materialCompiler: demoMaterialCompiler(),
+    materialCompiler: createGraphMaterialCompiler({ documents, sink }),
     sink,
   });
   const lights = importLights(scene, { sink });

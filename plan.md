@@ -1701,9 +1701,22 @@ siennes ; toute entree ou noeud non supporte produit un diagnostic (REQ-013).
         matLayerBuffer/bakedTex/bakedSampler). Harnais typecheck-only (pas execute par
         vitest). Gate vert 1063 passed +1 skipped / 97 fichiers.
 
-      - [ ] T057m3c [Plan:P10] Router src/main.ts (demo vivante) sur le compilateur
+      - [x] T057m3c [Plan:P10] Router src/main.ts (demo vivante) sur le compilateur
         graphe via la meme source de documents (m3a). Device-only (typecheck). Valide :
         typecheck + suite Node.
+        Fait : demoMaterialCompiler (compilateur baked constant) retire de main.ts ;
+        la demo charge le Core WASM (loadMaterialXCore) + les bibliotheques standard
+        (MaterialXLibraries.load/defaultLibrarySources) et pre-lit un document MaterialX
+        inline DEMO_MTLX (standard_surface constant base_color 0.82,0.67,0.49 metalness 0
+        specular_roughness 0.4) via loadMaterialXDocuments (m3a), clee par
+        SURF_MTLX.assetPath. buildSceneResources recoit createGraphMaterialCompiler
+        ({documents,sink}) au lieu du stub -> MaterialResource.sceneShader (raster) +
+        variantSources (PT) peuples par le chemin graphe. Constantes servies
+        MATERIALX_CORE_URL / MATERIALX_WASM_DIR / MATERIALX_LIBRARIES_ROOT (service
+        statique reel = m4). Imports morts retires (emitWgsl, emitLayeredSurface, FLOAT/
+        IrModuleBuilder/shaderType, resolvedGraphFromParsedSurface/surfaceFromParsed
+        Inputs/ParsedSurfaceInputs, types MaterialBuild/MaterialCompiler). Device-only
+        (typecheck ; main.ts pas execute par vitest). Gate 1063/97 +1skip (inchange).
 
     - [ ] T057m4 [Plan:P10] Smoke device, re-render matrice, docs et cloture T057. Run
       device local du path tracer sur brick (node scripts/run-usd-matrix-local.mjs) :
