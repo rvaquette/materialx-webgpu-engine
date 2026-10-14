@@ -137,6 +137,51 @@ describe('buildPathTraceScene packing', () => {
   });
 });
 
+// A quad carrying a per-vertex tangent stream (vec4: xyz + handedness).
+function quadGeometryTangent(prototypeId: string, tangent: readonly number[]): GeometryResource {
+  const base = quadGeometry(prototypeId) as unknown as { streams: { name: string; data: Float32Array; components: number }[] };
+  const data = new Float32Array([...tangent, ...tangent, ...tangent, ...tangent]);
+  base.streams.push({ name: 'tangent', data, components: 4 });
+  return base as unknown as GeometryResource;
+}
+
+function sceneWithTangents(tangent: readonly number[]): { resources: SceneResources; lights: SceneLight[] } {
+  const scene = sceneWith();
+  (scene.resources.geometries as Map<string, GeometryResource>).set('/proto', quadGeometryTangent('/proto', tangent));
+  return scene;
+}
+
+describe('buildPathTraceScene tangent packing (T057l)', () => {
+  it('packs per-triangle world tangents (9 floats/tri) when a tangent stream exists', () => {
+    const { resources, lights } = sceneWithTangents([1, 0, 0, 1]);
+    const scene = buildPathTraceScene(resources, { lights });
+    expect(scene.triangleTangent.length).toBe(scene.triangleCount * 9);
+    // Identity transform: the +X tangent round-trips to each of the 3 vertex slots.
+    for (let tri = 0; tri < scene.triangleCount; tri++) {
+      for (let slot = 0; slot < 3; slot++) {
+        const b = tri * 9 + slot * 3;
+        expect(scene.triangleTangent[b]!).toBeCloseTo(1, 6);
+        expect(scene.triangleTangent[b + 1]!).toBeCloseTo(0, 6);
+        expect(scene.triangleTangent[b + 2]!).toBeCloseTo(0, 6);
+      }
+    }
+  });
+
+  it('normalizes packed tangents to unit length', () => {
+    const { resources, lights } = sceneWithTangents([0, 3, 0, 1]);
+    const scene = buildPathTraceScene(resources, { lights });
+    const b = 0;
+    const len = Math.hypot(scene.triangleTangent[b]!, scene.triangleTangent[b + 1]!, scene.triangleTangent[b + 2]!);
+    expect(len).toBeCloseTo(1, 6);
+    expect(scene.triangleTangent[b + 1]!).toBeCloseTo(1, 6);
+  });
+
+  it('leaves the tangent buffer empty when no geometry authored tangents', () => {
+    const scene = build();
+    expect(scene.triangleTangent.length).toBe(0);
+  });
+});
+
 /** A standard_surface whose base_color is driven by a connected constant node:
  *  a minimal graph-backed material (not a flat constant surface). */
 function brickGraph(): { graph: ResolvedGraph; surface: ResolvedSurface } {

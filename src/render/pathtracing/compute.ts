@@ -51,7 +51,9 @@ const UV_STRIDE : u32 = 6u;
     : varyings
       ? /* wgsl */ `
 @group(0) @binding(6) var<storage, read> triUv : array<f32>;
+@group(0) @binding(7) var<storage, read> triTangent : array<f32>;
 const UV_STRIDE : u32 = 6u;
+const TAN_STRIDE : u32 = 9u;
 `
       : '';
   return /* wgsl */ `
@@ -262,18 +264,35 @@ fn mx_hit_uv(h : Hit) -> vec2<f32> {
   return mx_tri_uv(h.tri, 0u) * w + mx_tri_uv(h.tri, 1u) * h.u + mx_tri_uv(h.tri, 2u) * h.v;
 }
 
+fn mx_tri_tangent(tri : u32, slot : u32) -> vec3<f32> {
+  let b = tri * TAN_STRIDE + slot * 3u;
+  return vec3<f32>(triTangent[b], triTangent[b + 1u], triTangent[b + 2u]);
+}
+
+// Barycentric-interpolated per-triangle tangent; zero when no tangent stream was
+// packed (empty buffer), so the caller keeps the branchless basis tangent.
+fn mx_hit_tangent(h : Hit) -> vec3<f32> {
+  if (arrayLength(&triTangent) < TAN_STRIDE) { return vec3<f32>(0.0); }
+  let w = 1.0 - h.u - h.v;
+  return mx_tri_tangent(h.tri, 0u) * w + mx_tri_tangent(h.tri, 1u) * h.u + mx_tri_tangent(h.tri, 2u) * h.v;
+}
+
 // Build the MxVaryings the layered-surface variants consume from a hit: the
 // interpolated position/normal come from the integrator, the texcoord from the
-// per-triangle UVs, and the tangent frame from the branchless basis (replaced by
-// per-triangle tangents in T057l). Primvar/extra-input fields default to zero.
+// per-triangle UVs, and the tangent frame from the authored per-triangle
+// tangents when present, else the branchless basis (anisotropy/normalmap safe,
+// T057l). Primvar/extra-input fields default to zero.
 fn mx_hit_varyings(h : Hit, pos : vec3<f32>, n : vec3<f32>, viewDir : vec3<f32>) -> MxVaryings {
   var vary : MxVaryings;
   let uv = mx_hit_uv(h);
   let f = basis(n);
+  let tRaw = mx_hit_tangent(h);
+  let hasT = dot(tRaw, tRaw) > 1.0e-10;
+  let tang = select(f[0], normalize(tRaw - n * dot(n, tRaw)), hasT);
   vary.position = pos;
   vary.normal = n;
-  vary.tangent = f[0];
-  vary.bitangent = f[1];
+  vary.tangent = tang;
+  vary.bitangent = select(f[1], normalize(cross(n, tang)), hasT);
   vary.texcoord = uv;
   vary.viewDir = viewDir;
 ${assigns.join('\n')}
@@ -481,10 +500,11 @@ function wgslDispatch(dispatch: PtMaterialDispatch): string {
   if (dispatch.preludes.length > 0) parts.push(dispatch.preludes.join('\n'));
   // Editable params become a MxUniforms block the variants read as `u.<field>`.
   // Current surface lowering bakes constants, so this stays empty for now (T057i3
-  // note); the binding sits past the scene buffers (0..6) in the graph path.
+  // note); the binding sits past the scene buffers (0..7, incl. triTangent) in the
+  // graph path.
   if (dispatch.uniforms.length > 0) {
     parts.push(
-      `struct MxUniforms {\n${dispatch.uniforms.map((u) => `  ${u.field}: ${u.wgslType},`).join('\n')}\n};\n@group(0) @binding(7) var<uniform> u: MxUniforms;`,
+      `struct MxUniforms {\n${dispatch.uniforms.map((u) => `  ${u.field}: ${u.wgslType},`).join('\n')}\n};\n@group(0) @binding(8) var<uniform> u: MxUniforms;`,
     );
   }
   // Texture/sampler bindings for graph variants: the dedup registry (T057j)

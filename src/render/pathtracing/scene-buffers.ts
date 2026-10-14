@@ -66,6 +66,9 @@ export interface PathTraceScene {
   materialCount: number;
   /** Per-triangle UVs (6 floats: u0,v0,u1,v1,u2,v2) in triangle-soup order; 0 when unauthored. */
   triangleUv: Float32Array;
+  /** Per-triangle world tangents (9 floats: t0,t1,t2 as vec3) in triangle-soup order;
+   *  empty when no geometry authored a tangent stream (normalmap falls back, T057l). */
+  triangleTangent: Float32Array;
   /** Dedup material keys in material-index order (lets callers map textures per material). */
   materialKeys: string[];
   /** Materials backed by a resolved surface graph, in material-index order (T057i1):
@@ -138,7 +141,9 @@ export function buildPathTraceScene(
   const soup: number[] = [];
   const triFloats: number[] = [];
   const uvFloats: number[] = [];
+  const tanFloats: number[] = [];
   let triCount = 0;
+  let hasTangents = false;
 
   for (const draw of frame.draws) {
     const geom = resources.geometries.get(draw.prototypeId);
@@ -147,6 +152,8 @@ export function buildPathTraceScene(
     if (!position) continue;
     const normal = geom.streams.find((s) => s.name === 'normal');
     const uv = geom.streams.find((s) => s.name === 'uv');
+    const tangent = geom.streams.find((s) => s.name === 'tangent');
+    if (tangent) hasTangents = true;
     const matIdx = indexFor(materialKeyOf(draw.materialKey), draw.surface, draw.materialKey);
     const model = draw.model;
     const idx = geom.indices;
@@ -191,6 +198,17 @@ export function buildPathTraceScene(
       } else {
         for (let p = 0; p < 6; p++) uvFloats[ub + p] = 0;
       }
+      const tb = triCount * PT_TAN_STRIDE;
+      if (tangent) {
+        const ta = normalize3(transformDirection(model, readVec3Strided(tangent.data, ia, tangent.components)));
+        const tbb = normalize3(transformDirection(model, readVec3Strided(tangent.data, ib, tangent.components)));
+        const tc = normalize3(transformDirection(model, readVec3Strided(tangent.data, ic, tangent.components)));
+        tanFloats[tb] = ta[0]; tanFloats[tb + 1] = ta[1]; tanFloats[tb + 2] = ta[2];
+        tanFloats[tb + 3] = tbb[0]; tanFloats[tb + 4] = tbb[1]; tanFloats[tb + 5] = tbb[2];
+        tanFloats[tb + 6] = tc[0]; tanFloats[tb + 7] = tc[1]; tanFloats[tb + 8] = tc[2];
+      } else if (hasTangents) {
+        for (let p = 0; p < PT_TAN_STRIDE; p++) tanFloats[tb + p] = 0;
+      }
       triCount++;
     }
   }
@@ -212,6 +230,7 @@ export function buildPathTraceScene(
     materials,
     materialCount: surfaces.length,
     triangleUv: new Float32Array(uvFloats),
+    triangleTangent: hasTangents ? new Float32Array(tanFloats) : new Float32Array(0),
     materialKeys,
     variantSources,
     camera: {
@@ -228,6 +247,12 @@ export function buildPathTraceScene(
 
 function readVec3(data: Float32Array, vertex: number): V3 {
   const o = vertex * 3;
+  return [data[o]!, data[o + 1]!, data[o + 2]!];
+}
+
+/** Read the first three components of a packed vertex stream with any stride (tangents are vec4). */
+function readVec3Strided(data: Float32Array, vertex: number, components: number): V3 {
+  const o = vertex * components;
   return [data[o]!, data[o + 1]!, data[o + 2]!];
 }
 
@@ -284,6 +309,8 @@ interface PtHit extends SurfaceHit {
 
 /** Floats per triangle in triangleUv: u0,v0,u1,v1,u2,v2. */
 const PT_UV_STRIDE = 6;
+/** Floats per triangle in triangleTangent: t0,t1,t2 as vec3 (bitangent derived, T057l). */
+const PT_TAN_STRIDE = 9;
 
 interface TriHit {
   t: number;
@@ -397,7 +424,35 @@ function hitVaryings(scene: PathTraceScene, hit: PtHit): IrEvalVaryings {
   const w = 1 - hit.u - hit.v;
   const s = (uv[b] ?? 0) * w + (uv[b + 2] ?? 0) * hit.u + (uv[b + 4] ?? 0) * hit.v;
   const t = (uv[b + 1] ?? 0) * w + (uv[b + 3] ?? 0) * hit.u + (uv[b + 5] ?? 0) * hit.v;
-  return { position: hit.position, normal: hit.normal, texcoord: [s, t] };
+  // Per-triangle tangent (T057l): barycentric-interpolate the packed vertex
+  // tangents so normalmap/anisotropy read the authored frame; absent when no
+  // geometry supplied a tangent stream, letting ir-eval fall back gracefully.
+  const tan = scene.triangleTangent;
+  const tangent = packedTangent(tan, hit.triangle, hit.u, hit.v, w);
+  return {
+    position: hit.position,
+    normal: hit.normal,
+    texcoord: [s, t],
+    ...(tangent !== undefined ? { tangent } : {}),
+  };
+}
+
+/** Barycentric-interpolate a packed per-triangle tangent, or undefined when unauthored. */
+function packedTangent(
+  tan: Float32Array,
+  triangle: number,
+  u: number,
+  v: number,
+  w: number,
+): V3 | undefined {
+  const b = triangle * PT_TAN_STRIDE;
+  if (b + 8 >= tan.length) return undefined;
+  const raw: V3 = [
+    tan[b]! * w + tan[b + 3]! * u + tan[b + 6]! * v,
+    tan[b + 1]! * w + tan[b + 4]! * u + tan[b + 7]! * v,
+    tan[b + 2]! * w + tan[b + 5]! * u + tan[b + 8]! * v,
+  ];
+  return dot3(raw, raw) > 1e-12 ? normalize3(raw) : undefined;
 }
 
 /**

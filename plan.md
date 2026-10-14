@@ -1550,11 +1550,27 @@ siennes ; toute entree ou noeud non supporte produit un diagnostic (REQ-013).
     echecs = charge systeme, pas de regression). DECISION : wiring scene-buffers (images
     decodees reelles) reporte a T057m (pas d'images chargees avant le harnais USD).
 
-  - [ ] T057l [Plan:P10] Tangentes par triangle + support normalmap. Packer les
+  - [x] T057l [Plan:P10] Tangentes par triangle + support normalmap. Packer les
     tangentes par triangle (comme les normales), threader vary.tangent ; evaluer le
     noeud normalmap. Delivre : la normal map de brick fidele. Saut gracieux si aucun
     materiau n'utilise normalmap. Tests JS : round-trip packing tangente + marqueurs
     WGSL (tangent frame, normalmap). Valide : typecheck + suite Node.
+    Fait : scene-buffers.ts PathTraceScene += triangleTangent (9 flottants/tri t0t1t2
+    vec3, buffer parallele comme triangleUv car le record triangle n'a que 5 pad) ; le
+    packing lit le stream tangent (vec4, readVec3Strided prend xyz) transforme par le
+    modele + normalise, buffer vide si aucune geometrie n'a de tangentes (hasTangents).
+    hitVaryings (oracle CPU) interpole barycentriquement la tangente packee et la thread
+    dans env.tangent (spread conditionnel si non degeneree). compute.ts : nouveau binding
+    @group(0) @binding(7) triTangent + TAN_STRIDE=9 dans la branche varyings, helpers
+    mx_tri_tangent/mx_hit_tangent (garde arrayLength -> vec3(0) si buffer vide),
+    mx_hit_varyings utilise la tangente interpolee (re-orthogonalisee tRaw-n*dot) avec
+    repli gracieux sur la base branchless f[0]/f[1] (hasT) ; MxUniforms deplace a binding
+    8. Le noeud normalmap evalue DEJA (ir-eval normalMap + nodes mx_normalmap, bitangente
+    derivee cross(N,t)) : T057l l'alimente en tangente authoree. Tests : scene-buffers.test
+    +3 (packing 9 flottants/tri, normalisation, buffer vide sans tangentes) ; compute.test
+    +1 (marqueurs binding triTangent/TAN_STRIDE/mx_hit_tangent/select repli) + maj assert
+    vary.tangent=tang. Gate 1051/95 +1skip (+4). DECISION : wiring buffer triTangent cote
+    device (bind group harness) reporte a T057m (graph path non execute device avant T057m).
 
   - [ ] T057m [Plan:P10] Harnais USD sur ResolvedSurface + smoke device + cloture
     T057. Le harnais USD resout le ResolvedGraph/ResolvedSurface complet (au lieu du

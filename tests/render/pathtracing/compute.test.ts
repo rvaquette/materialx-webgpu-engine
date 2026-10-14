@@ -52,6 +52,7 @@ function fakeScene(): PathTraceScene {
     materials: new Float32Array(),
     materialCount: 0,
     triangleUv: new Float32Array(),
+    triangleTangent: new Float32Array(),
     materialKeys: [],
     variantSources: [],
     camera: { viewProj: IDENTITY4, invViewProj: IDENTITY4, eye: [1, 2, 3], exposure: 0 },
@@ -138,7 +139,7 @@ describe('pathTraceComputeWgsl varyings (T057h)', () => {
     expect(src).toContain('fn mx_hit_varyings(h : Hit, pos : vec3<f32>, n : vec3<f32>, viewDir : vec3<f32>) -> MxVaryings');
     expect(src).toContain('vary.texcoord = uv;');
     expect(src).toContain('vary.v_st = uv;');
-    expect(src).toContain('vary.tangent = f[0];');
+    expect(src).toContain('vary.tangent = tang;');
   });
 
   it('keeps constant shading until T057i wires the dispatcher', () => {
@@ -146,6 +147,21 @@ describe('pathTraceComputeWgsl varyings (T057h)', () => {
     const src = pathTraceComputeWgsl({ varyings: { primvarFields, extraInputs: new Map() } });
     expect(src).toContain('fn mx_material_closure(');
     expect(src).not.toContain('mx_eval_material');
+  });
+});
+
+describe('pathTraceComputeWgsl tangent frame (T057l)', () => {
+  it('binds the per-triangle tangent buffer and interpolates the hit tangent', () => {
+    const primvarFields = new Map<string, IrType>([['st', vector(2)]]);
+    const src = pathTraceComputeWgsl({ varyings: { primvarFields, extraInputs: new Map() } });
+    expect(src).toContain('@group(0) @binding(7) var<storage, read> triTangent : array<f32>;');
+    expect(src).toContain('const TAN_STRIDE : u32 = 9u;');
+    expect(src).toContain('fn mx_tri_tangent(tri : u32, slot : u32) -> vec3<f32>');
+    expect(src).toContain('fn mx_hit_tangent(h : Hit) -> vec3<f32>');
+    // Empty buffer -> keep the branchless basis tangent (graceful fallback).
+    expect(src).toContain('if (arrayLength(&triTangent) < TAN_STRIDE)');
+    expect(src).toContain('let tang = select(f[0], normalize(tRaw - n * dot(n, tRaw)), hasT);');
+    expect(src).toContain('vary.bitangent = select(f[1], normalize(cross(n, tang)), hasT);');
   });
 });
 
