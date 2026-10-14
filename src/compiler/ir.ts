@@ -304,6 +304,7 @@ export type BsdfLobeKind =
   | 'burley_diffuse'
   | 'translucent'
   | 'dielectric_reflection'
+  | 'dielectric_transmission'
   | 'conductor'
   | 'generalized_schlick'
   | 'sheen'
@@ -324,10 +325,12 @@ export interface LayeredBsdfLobe {
   anisotropy?: number;
   /** Tangent-frame rotation in turns [0,1) for the anisotropic lobe. */
   rotation?: number;
-  /** Index of refraction for the dielectric reflection lobe. */
+  /** Index of refraction for the dielectric reflection/transmission lobe. */
   ior?: number;
   /** Conductor extinction coefficient k (per channel). */
   extinction?: Rgb;
+  /** Thin-walled transmission: straight-through, no refraction bending. */
+  thinWalled?: boolean;
 }
 
 /** Dielectric coat layered over the base stack (clearcoat). */

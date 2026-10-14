@@ -35,6 +35,7 @@ export interface SerializedBsdfLobe {
   rotation?: number;
   ior?: number;
   extinction?: Rgb3;
+  thinWalled?: boolean;
 }
 
 export interface SerializedCoatLayer {
@@ -80,6 +81,7 @@ function serializeLobe(l: LayeredBsdfLobe, d: number): SerializedBsdfLobe {
   if (l.rotation !== undefined) out.rotation = roundTo(l.rotation, d);
   if (l.ior !== undefined) out.ior = roundTo(l.ior, d);
   if (l.extinction) out.extinction = rgb(l.extinction, d);
+  if (l.thinWalled) out.thinWalled = true;
   return out;
 }
 
@@ -130,6 +132,7 @@ function deserializeLobe(l: SerializedBsdfLobe): LayeredBsdfLobe {
   if (l.rotation !== undefined) out.rotation = l.rotation;
   if (l.ior !== undefined) out.ior = l.ior;
   if (l.extinction) out.extinction = tuple(l.extinction);
+  if (l.thinWalled) out.thinWalled = true;
   return out;
 }
 

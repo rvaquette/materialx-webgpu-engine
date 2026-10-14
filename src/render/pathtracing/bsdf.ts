@@ -12,7 +12,8 @@
 // here is the rough-surface diffuse-transmission lobe (translucent_bsdf).
 
 import type { Vec3 } from '../../scene/transforms.ts';
-import type { LayeredBsdfLobe, LayeredClosure } from '../../compiler/ir.ts';
+import type { CoatLayer, LayeredBsdfLobe, LayeredClosure, ThinFilmLayer } from '../../compiler/ir.ts';
+import { thinFilmTint } from './spectrum.ts';
 
 const PI = Math.PI;
 const INV_PI = 1 / Math.PI;
@@ -142,6 +143,31 @@ export function translucentLobe(albedo: Vec3): Lobe {
   };
 }
 
+/**
+ * Subsurface scattering as a local shading lobe (T056g). The non-local BSSRDF
+ * random walk in subsurface.ts (T029) exits the medium diffusely, and under the
+ * Chiang et al. 2016 albedo inversion the directional-hemispherical reflectance
+ * of the optically-thick (radius -> 0) medium equals the artist diffuse albedo.
+ * The sampled lobe is therefore the cosine-hemisphere response with that albedo,
+ * replacing the former null fallback: it keeps the estimator unbiased and matches
+ * the diffuse lobe exactly in the radius -> 0 limit (the spatial profile stays in
+ * subsurface.ts for the integrator wiring in T057).
+ */
+export function subsurfaceLobe(albedo: Vec3): Lobe {
+  const f: V = scale(albedo, INV_PI);
+  return {
+    eval(wo, wi) {
+      if (wo[2] <= 0 || wi[2] <= 0) return { value: [0, 0, 0], pdf: 0 };
+      return { value: [...f], pdf: wi[2] * INV_PI };
+    },
+    sample(wo, rng) {
+      if (wo[2] <= 0) return null;
+      const wi = cosineHemisphere(rng(), rng());
+      return { wi, value: [...f], pdf: wi[2] * INV_PI, specular: false };
+    },
+  };
+}
+
 // --- microfacet reflection lobes --------------------------------------------
 
 function microfacetEval(wo: V, wi: V, a: number, fresnel: (cosVH: number) => V): BsdfEval {
@@ -187,6 +213,333 @@ export function dielectricLobe(ior: number, roughness: number): Lobe {
   return {
     eval: (wo, wi) => microfacetEval(wo as V, wi as V, a, fresnel),
     sample: (wo, rng) => microfacetSample(wo as V, a, fresnel, rng),
+  };
+}
+
+// --- anisotropic microfacet reflection (GGX alpha_u/alpha_v + rotation) ------
+// anisotropy 0 gives aspect 1 so alphaU = alphaV = alphaOf(roughness) and every
+// formula collapses to the isotropic core above; lobeFromLayered keeps the
+// isotropic path for anisotropy <= 0 so the existing lobes stay byte-identical.
+
+/** Split the GGX alpha into (alphaU, alphaV) from roughness and anisotropy. */
+function anisoAlphas(roughness: number, anisotropy: number): [number, number] {
+  const base = alphaOf(roughness);
+  const aspect = Math.sqrt(1 - Math.min(Math.max(anisotropy, 0), 0.98));
+  return [Math.min(base / aspect, 1), base * aspect];
+}
+
+/** Rotate a local-frame direction by `rotation` turns about +Z. */
+function rotateTangent(w: V, rotation: number): V {
+  if (rotation === 0) return w;
+  const ang = 2 * PI * rotation;
+  const c = Math.cos(ang);
+  const s = Math.sin(ang);
+  return [w[0] * c + w[1] * s, -w[0] * s + w[1] * c, w[2]];
+}
+
+function ggxNdfAniso(wm: V, au: number, av: number): number {
+  const t = (wm[0] * wm[0]) / (au * au) + (wm[1] * wm[1]) / (av * av) + wm[2] * wm[2];
+  return 1 / Math.max(PI * au * av * t * t, 1e-7);
+}
+
+function smithG1Aniso(w: V, au: number, av: number): number {
+  const lam = Math.sqrt(au * au * w[0] * w[0] + av * av * w[1] * w[1] + w[2] * w[2]);
+  return (2 * w[2]) / Math.max(w[2] + lam, 1e-7);
+}
+
+/** Sample an anisotropic GGX microfacet normal (full NDF, around +Z). */
+function sampleGgxNormalAniso(au: number, av: number, u1: number, u2: number): V {
+  const phi = Math.atan2(av * Math.sin(2 * PI * u1), au * Math.cos(2 * PI * u1));
+  const cosP = Math.cos(phi);
+  const sinP = Math.sin(phi);
+  const a2 = 1 / ((cosP * cosP) / (au * au) + (sinP * sinP) / (av * av));
+  const tan2 = (a2 * u2) / Math.max(1 - u2, 1e-7);
+  const cosT = 1 / Math.sqrt(1 + tan2);
+  const sinT = Math.sqrt(Math.max(0, 1 - cosT * cosT));
+  return [sinT * cosP, sinT * sinP, cosT];
+}
+
+function microfacetEvalAniso(
+  wo: V,
+  wi: V,
+  au: number,
+  av: number,
+  rotation: number,
+  fresnel: (cosVH: number) => V,
+): BsdfEval {
+  if (wo[2] <= 0 || wi[2] <= 0) return { value: [0, 0, 0], pdf: 0 };
+  const wor = rotateTangent(wo, rotation);
+  const wir = rotateTangent(wi, rotation);
+  const wm0 = add(wor, wir);
+  if (wm0[0] === 0 && wm0[1] === 0 && wm0[2] === 0) return { value: [0, 0, 0], pdf: 0 };
+  const wm = normalize(wm0);
+  const cosVH = dot(wor, wm);
+  if (cosVH <= 0) return { value: [0, 0, 0], pdf: 0 };
+  const D = ggxNdfAniso(wm, au, av);
+  const G = smithG1Aniso(wor, au, av) * smithG1Aniso(wir, au, av);
+  const F = fresnel(cosVH);
+  const value = scale(F, (D * G) / (4 * wor[2] * wir[2]));
+  const pdf = (D * wm[2]) / (4 * cosVH);
+  return { value, pdf };
+}
+
+function microfacetSampleAniso(
+  wo: V,
+  au: number,
+  av: number,
+  rotation: number,
+  fresnel: (cosVH: number) => V,
+  rng: Rng,
+): BsdfSampleLocal | null {
+  if (wo[2] <= 0) return null;
+  const wor = rotateTangent(wo, rotation);
+  const wm = sampleGgxNormalAniso(au, av, rng(), rng());
+  const wir = reflectAbout(wor, wm);
+  if (wir[2] <= 0) return null;
+  const wi = rotateTangent(wir, -rotation);
+  const { value, pdf } = microfacetEvalAniso(wo, wi, au, av, rotation, fresnel);
+  if (pdf <= 0) return null;
+  return { wi, value, pdf, specular: false };
+}
+
+/** Anisotropic conductor GGX reflection (coloured F0). */
+export function conductorAnisoLobe(f0: Vec3, roughness: number, anisotropy: number, rotation: number): Lobe {
+  const [au, av] = anisoAlphas(roughness, anisotropy);
+  const fresnel = (cosVH: number): V => fresnelSchlick(f0, cosVH);
+  return {
+    eval: (wo, wi) => microfacetEvalAniso(wo as V, wi as V, au, av, rotation, fresnel),
+    sample: (wo, rng) => microfacetSampleAniso(wo as V, au, av, rotation, fresnel, rng),
+  };
+}
+
+/** Anisotropic dielectric GGX reflection; achromatic F0 from the index of refraction. */
+export function dielectricAnisoLobe(ior: number, roughness: number, anisotropy: number, rotation: number): Lobe {
+  const [au, av] = anisoAlphas(roughness, anisotropy);
+  const f0v: V = [dielectricF0(ior), dielectricF0(ior), dielectricF0(ior)];
+  const fresnel = (cosVH: number): V => fresnelSchlick(f0v, cosVH);
+  return {
+    eval: (wo, wi) => microfacetEvalAniso(wo as V, wi as V, au, av, rotation, fresnel),
+    sample: (wo, rng) => microfacetSampleAniso(wo as V, au, av, rotation, fresnel, rng),
+  };
+}
+
+// --- thin film (Airy interference on the specular Fresnel, T056f) ------------
+// A thin dielectric film over the specular interface produces view- and
+// wavelength-dependent interference (iridescence). thinFilmTint (spectrum.ts)
+// returns the exact angle-correct Airy reflectance per RGB channel over a
+// substrate reproducing the lobe's F0; here it replaces the specular Fresnel,
+// blended by the film weight. The guard (weight 0 or thickness 0) returns the
+// nominal Schlick Fresnel byte-for-byte, so a closure without an active film
+// reproduces the plain conductor/dielectric lobe exactly (non-regression).
+
+/** Modulate a Schlick Fresnel by thin-film interference over a substrate F0. */
+function thinFilmFresnel(baseFresnel: V, baseF0: V, cosVH: number, film: ThinFilmLayer): V {
+  if (film.weight <= 0 || film.thickness <= 0) return baseFresnel;
+  const iris = thinFilmTint(film.thickness, cosVH, film.ior, baseF0);
+  const w = clamp01(film.weight);
+  return [
+    baseFresnel[0] + (iris[0] - baseFresnel[0]) * w,
+    baseFresnel[1] + (iris[1] - baseFresnel[1]) * w,
+    baseFresnel[2] + (iris[2] - baseFresnel[2]) * w,
+  ];
+}
+
+/** Build the specular Fresnel closure, optionally modulated by a thin film. */
+function specularFresnel(f0v: V, film: ThinFilmLayer | undefined): (cosVH: number) => V {
+  if (!film || film.weight <= 0 || film.thickness <= 0) return (c) => fresnelSchlick(f0v, c);
+  return (c) => thinFilmFresnel(fresnelSchlick(f0v, c), f0v, c, film);
+}
+
+/** Conductor GGX reflection with a thin-film-modulated Fresnel (iso or aniso). */
+export function conductorThinFilmLobe(
+  f0: Vec3,
+  roughness: number,
+  anisotropy: number,
+  rotation: number,
+  film: ThinFilmLayer,
+): Lobe {
+  const fresnel = specularFresnel([...f0] as V, film);
+  if (anisotropy > 0) {
+    const [au, av] = anisoAlphas(roughness, anisotropy);
+    return {
+      eval: (wo, wi) => microfacetEvalAniso(wo as V, wi as V, au, av, rotation, fresnel),
+      sample: (wo, rng) => microfacetSampleAniso(wo as V, au, av, rotation, fresnel, rng),
+    };
+  }
+  const a = alphaOf(roughness);
+  return {
+    eval: (wo, wi) => microfacetEval(wo as V, wi as V, a, fresnel),
+    sample: (wo, rng) => microfacetSample(wo as V, a, fresnel, rng),
+  };
+}
+
+/** Dielectric GGX reflection with a thin-film-modulated Fresnel (iso or aniso). */
+export function dielectricThinFilmLobe(
+  ior: number,
+  roughness: number,
+  anisotropy: number,
+  rotation: number,
+  film: ThinFilmLayer,
+): Lobe {
+  const f0v: V = [dielectricF0(ior), dielectricF0(ior), dielectricF0(ior)];
+  const fresnel = specularFresnel(f0v, film);
+  if (anisotropy > 0) {
+    const [au, av] = anisoAlphas(roughness, anisotropy);
+    return {
+      eval: (wo, wi) => microfacetEvalAniso(wo as V, wi as V, au, av, rotation, fresnel),
+      sample: (wo, rng) => microfacetSampleAniso(wo as V, au, av, rotation, fresnel, rng),
+    };
+  }
+  const a = alphaOf(roughness);
+  return {
+    eval: (wo, wi) => microfacetEval(wo as V, wi as V, a, fresnel),
+    sample: (wo, rng) => microfacetSample(wo as V, a, fresnel, rng),
+  };
+}
+
+// --- sheen -------------------------------------------------------------------
+
+/** Charlie sheen distribution (Estevez/Kulla). */
+function charlieSheenNdf(cosH: number, roughness: number): number {
+  const inv = 1 / Math.max(roughness, 1e-3);
+  const sin2 = Math.max(1 - cosH * cosH, 0);
+  return ((2 + inv) * Math.pow(sin2, inv * 0.5)) / (2 * PI);
+}
+
+function sheenEval(color: V, roughness: number, wo: V, wi: V): BsdfEval {
+  if (wo[2] <= 0 || wi[2] <= 0) return { value: [0, 0, 0], pdf: 0 };
+  const wm0 = add(wo, wi);
+  if (wm0[0] === 0 && wm0[1] === 0 && wm0[2] === 0) return { value: [0, 0, 0], pdf: 0 };
+  const wm = normalize(wm0);
+  const D = charlieSheenNdf(wm[2], roughness);
+  const vis = 1 / (4 * (wi[2] + wo[2] - wi[2] * wo[2]));
+  return { value: scale(color, D * vis), pdf: wi[2] * INV_PI };
+}
+
+/** Charlie sheen reflection (Ashikhmin visibility); cosine-sampled layer lobe. */
+export function sheenLobe(color: Vec3, roughness: number): Lobe {
+  return {
+    eval: (wo, wi) => sheenEval(color, roughness, wo as V, wi as V),
+    sample(wo, rng) {
+      if ((wo as V)[2] <= 0) return null;
+      const wi = cosineHemisphere(rng(), rng());
+      const { value, pdf } = sheenEval(color, roughness, wo as V, wi);
+      if (pdf <= 0) return null;
+      return { wi, value, pdf, specular: false };
+    },
+  };
+}
+
+// --- dielectric transmission (BTDF): refraction + thin-walled ----------------
+// Rough dielectric transmission from the Walter et al. 2007 microfacet BTDF. The
+// refractive variant bends the transmitted ray by Snell's law and carries the
+// 1/eta^2 radiance compression on the refraction side (the eta^2 half-vector
+// Jacobian in the pdf is not matched in the radiance-mode value, so the sampled
+// throughput is compressed by 1/eta^2). The thin-walled variant skips refraction
+// (straight-through, both sides) by mirroring the microfacet reflection into the
+// opposite hemisphere. Both weight by the dielectric Fresnel transmittance
+// (1 - F) and a transmission tint. lobeFromLayered only builds these when a
+// dielectric_transmission lobe is present, so an opaque stack is unchanged.
+
+/** Unpolarized dielectric Fresnel reflectance; eta = n_t / n_i, any-sign cosI. */
+export function fresnelDielectric(cosI: number, eta: number): number {
+  const c = Math.abs(cosI);
+  const sin2t = (1 - c * c) / (eta * eta);
+  if (sin2t >= 1) return 1; // total internal reflection
+  const cosT = Math.sqrt(1 - sin2t);
+  const rs = (c - eta * cosT) / (c + eta * cosT);
+  const rp = (eta * c - cosT) / (eta * c + cosT);
+  return 0.5 * (rs * rs + rp * rp);
+}
+
+/** Refract wo about the microfacet normal wm; invEta = n_i / n_t. Null on TIR. */
+function refractAboutMicrofacet(wo: V, wm: V, invEta: number): V | null {
+  const cosI = dot(wo, wm);
+  const sin2t = invEta * invEta * Math.max(0, 1 - cosI * cosI);
+  if (sin2t >= 1) return null;
+  const cosT = Math.sqrt(1 - sin2t);
+  return normalize(add(scale(wo, -invEta), scale(wm, invEta * cosI - cosT)));
+}
+
+function transmissionEval(wo: V, wi: V, a: number, ior: number, tint: V): BsdfEval {
+  if (wo[2] === 0 || wi[2] === 0 || wo[2] * wi[2] > 0) return { value: [0, 0, 0], pdf: 0 };
+  const eta = wo[2] > 0 ? ior : 1 / ior; // n_t / n_i across the crossing
+  let wm = normalize(add(wo, scale(wi, eta)));
+  if (wm[2] < 0) wm = scale(wm, -1);
+  const dotO = dot(wo, wm);
+  const dotI = dot(wi, wm);
+  const denom = dotO + eta * dotI;
+  if (Math.abs(denom) < 1e-7) return { value: [0, 0, 0], pdf: 0 };
+  const F = fresnelDielectric(dotO, eta);
+  const D = ggxNdf(Math.abs(wm[2]), a);
+  const G = smithG1(Math.abs(wo[2]), a) * smithG1(Math.abs(wi[2]), a);
+  // Radiance-mode BTDF value: the eta^2 of the Jacobian is absent here so that
+  // value / pdf carries the 1/eta^2 compression on the refracted radiance.
+  const common = (Math.abs(dotO) * Math.abs(dotI)) / (Math.abs(wo[2]) * Math.abs(wi[2]));
+  const scalar = ((1 - F) * common * D * G) / (denom * denom);
+  const pdf = (D * Math.abs(wm[2]) * eta * eta * Math.abs(dotI)) / (denom * denom);
+  return { value: scale(tint, scalar), pdf };
+}
+
+/** Refractive dielectric transmission (glass): Snell + 1/eta^2 compression. */
+export function dielectricTransmissionLobe(tint: Vec3, roughness: number, ior: number): Lobe {
+  const a = alphaOf(roughness);
+  const t: V = [...tint];
+  return {
+    eval: (wo, wi) => transmissionEval(wo as V, wi as V, a, ior, t),
+    sample(wo, rng) {
+      const w = wo as V;
+      if (w[2] === 0) return null;
+      let wm = sampleGgxNormal(a, rng(), rng());
+      if (w[2] < 0) wm = scale(wm, -1); // face the incident side
+      if (dot(w, wm) <= 0) return null;
+      const invEta = w[2] > 0 ? 1 / ior : ior; // n_i / n_t
+      const wi = refractAboutMicrofacet(w, wm, invEta);
+      if (!wi || w[2] * wi[2] > 0) return null; // TIR or no crossing
+      const { value, pdf } = transmissionEval(w, wi, a, ior, t);
+      if (pdf <= 0) return null;
+      return { wi, value, pdf, specular: false };
+    },
+  };
+}
+
+function thinWalledEval(wo: V, wi: V, a: number, ior: number, tint: V): BsdfEval {
+  if (wo[2] === 0 || wi[2] === 0 || wo[2] * wi[2] > 0) return { value: [0, 0, 0], pdf: 0 };
+  const s = wo[2] > 0 ? 1 : -1;
+  const woU: V = [wo[0], wo[1], s * wo[2]];
+  const wiU: V = [wi[0], wi[1], -s * wi[2]]; // mirror wi into wo's hemisphere
+  const wm0 = add(woU, wiU);
+  if (wm0[0] === 0 && wm0[1] === 0 && wm0[2] === 0) return { value: [0, 0, 0], pdf: 0 };
+  const wm = normalize(wm0);
+  const cosVH = dot(woU, wm);
+  if (cosVH <= 0) return { value: [0, 0, 0], pdf: 0 };
+  const F = fresnelDielectric(cosVH, ior);
+  const D = ggxNdf(wm[2], a);
+  const G = smithG1(woU[2], a) * smithG1(wiU[2], a);
+  const scalar = ((1 - F) * D * G) / (4 * woU[2] * wiU[2]);
+  const pdf = (D * wm[2]) / (4 * cosVH);
+  return { value: scale(tint, scalar), pdf };
+}
+
+/** Thin-walled transmission: no refraction, transmits from both sides. */
+export function thinWalledTransmissionLobe(tint: Vec3, roughness: number, ior: number): Lobe {
+  const a = alphaOf(roughness);
+  const t: V = [...tint];
+  return {
+    eval: (wo, wi) => thinWalledEval(wo as V, wi as V, a, ior, t),
+    sample(wo, rng) {
+      const w = wo as V;
+      if (w[2] === 0) return null;
+      const s = w[2] > 0 ? 1 : -1;
+      const woU: V = [w[0], w[1], s * w[2]];
+      const wm = sampleGgxNormal(a, rng(), rng());
+      const wrU = reflectAbout(woU, wm);
+      if (wrU[2] <= 0) return null;
+      const wi: V = [wrU[0], wrU[1], -s * wrU[2]]; // mirror to the far hemisphere
+      const { value, pdf } = thinWalledEval(w, wi, a, ior, t);
+      if (pdf <= 0) return null;
+      return { wi, value, pdf, specular: false };
+    },
   };
 }
 
@@ -280,13 +633,20 @@ export function surfaceBsdf(params: SurfaceParams): Lobe {
  * the lobe has no importance sampler yet. The diffuse families share the cosine
  * sampler (their directional Burley / Oren-Nayar detail is a T056 refinement);
  * conductor and generalized-schlick use coloured-F0 GGX reflection; the
- * dielectric reflection uses achromatic GGX from the index of refraction;
- * translucent is the diffuse-transmission lobe. Sheen and subsurface return null
- * here -- their physically sampled lobes land in T056 -- so a closure that uses
- * them must keep those slots empty until then.
+ * dielectric reflection uses achromatic GGX from the index of refraction; both
+ * switch to the anisotropic GGX core when the lobe carries anisotropy > 0
+ * (T056c). When a thin-film layer is supplied, the conductor and dielectric
+ * specular lobes use the Airy-modulated Fresnel instead (T056f); an inactive film
+ * (weight 0 or thickness 0) yields the nominal lobe byte-for-byte. translucent is
+ * the diffuse-transmission lobe; dielectric_transmission is the specular glass
+ * BTDF (refractive, or thin-walled when l.thinWalled is set, T056e). Sheen uses
+ * the Charlie lobe (T056b); subsurface uses the BSSRDF diffuse lobe wired on the
+ * random walk of subsurface.ts (T056g).
  */
-export function lobeFromLayered(l: LayeredBsdfLobe): Lobe | null {
+export function lobeFromLayered(l: LayeredBsdfLobe, film?: ThinFilmLayer): Lobe | null {
   const roughness = l.roughness ?? 0;
+  const aniso = l.anisotropy ?? 0;
+  const rotation = l.rotation ?? 0;
   switch (l.kind) {
     case 'oren_nayar_diffuse':
     case 'burley_diffuse':
@@ -295,30 +655,103 @@ export function lobeFromLayered(l: LayeredBsdfLobe): Lobe | null {
       return translucentLobe(l.color);
     case 'conductor':
     case 'generalized_schlick':
-      return conductorLobe(l.color, roughness);
+      return film
+        ? conductorThinFilmLobe(l.color, roughness, aniso, rotation, film)
+        : aniso > 0
+          ? conductorAnisoLobe(l.color, roughness, aniso, rotation)
+          : conductorLobe(l.color, roughness);
     case 'dielectric_reflection':
-      return dielectricLobe(l.ior ?? 1.5, roughness);
+      return film
+        ? dielectricThinFilmLobe(l.ior ?? 1.5, roughness, aniso, rotation, film)
+        : aniso > 0
+          ? dielectricAnisoLobe(l.ior ?? 1.5, roughness, aniso, rotation)
+          : dielectricLobe(l.ior ?? 1.5, roughness);
+    case 'dielectric_transmission':
+      return l.thinWalled
+        ? thinWalledTransmissionLobe(l.color, roughness, l.ior ?? 1.5)
+        : dielectricTransmissionLobe(l.color, roughness, l.ior ?? 1.5);
     case 'sheen':
+      return sheenLobe(l.color, l.roughness ?? 0.3);
     case 'subsurface':
-      return null;
+      return subsurfaceLobe(l.color);
   }
 }
 
 /**
+ * Layer a dielectric coat over an already-composed base lobe (T056d). The coat
+ * reflects via the dielectric GGX lobe weighted by its presence; the base is
+ * attenuated by the two Fresnel crossings and a coloured, view-dependent
+ * absorption through the coat medium (grazing angles darken more). Coat weight 0
+ * returns the base untouched -- the non-regression anchor. Sampling is a two-way
+ * one-sample MIS (coat vs base) whose selection probability matches the composed
+ * pdf, so the estimator stays unbiased.
+ */
+function coatOverBase(coat: CoatLayer, base: Lobe): Lobe {
+  const coatW = clamp01(coat.weight);
+  if (coatW <= 0) return base;
+  const coatLobe = dielectricLobe(coat.ior, coat.roughness);
+  const f0 = dielectricF0(coat.ior);
+  const pCoat = Math.min(coatW, 0.95);
+  const schlick = (c: number): number => f0 + (1 - f0) * Math.pow(clamp01(1 - c), 5);
+  const attenuation = (wo: V, wi: V): V => {
+    const att = (1 - coatW * schlick(wo[2])) * (1 - coatW * schlick(wi[2]));
+    const pathLen = 0.5 * (1 / Math.max(wo[2], 1e-3) + 1 / Math.max(wi[2], 1e-3));
+    return [
+      att * (1 - coatW + coatW * Math.pow(coat.color[0], pathLen)),
+      att * (1 - coatW + coatW * Math.pow(coat.color[1], pathLen)),
+      att * (1 - coatW + coatW * Math.pow(coat.color[2], pathLen)),
+    ];
+  };
+  function ev(wo: V, wi: V): BsdfEval {
+    const b = base.eval(wo, wi);
+    const c = coatLobe.eval(wo, wi);
+    const t = attenuation(wo, wi);
+    const value: V = [
+      coatW * c.value[0] + t[0] * b.value[0],
+      coatW * c.value[1] + t[1] * b.value[1],
+      coatW * c.value[2] + t[2] * b.value[2],
+    ];
+    return { value, pdf: pCoat * c.pdf + (1 - pCoat) * b.pdf };
+  }
+  return {
+    eval: (wo, wi) => ev(wo as V, wi as V),
+    sample(wo, rng) {
+      const w = wo as V;
+      if (w[2] <= 0) return null;
+      const s = rng() < pCoat ? coatLobe.sample(w, rng) : base.sample(w, rng);
+      if (!s) return null;
+      const { value, pdf } = ev(w, s.wi as V);
+      if (pdf <= 0) return null;
+      return { wi: s.wi, value, pdf, specular: false };
+    },
+  };
+}
+
+/**
  * Sample-capable surface BSDF for a lowered LayeredClosure (T054). The base lobe
- * stack is composed with the shared one-sample MIS sampler; coat, sheen, fuzz and
- * thin-film layers are carried on the closure but not yet active here (their
- * lobes land in T056). A closure produced by canonicalSurfaceToLayered therefore
- * reproduces surfaceBsdf exactly -- the non-regression anchor for the layered
- * model.
+ * stack is composed with the shared one-sample MIS sampler; a thin-film layer
+ * (T056f) modulates the specular lobes' Fresnel with Airy interference; sheen and
+ * fuzz layers (T056h) ride in the stack as extra grazing-retroreflective lobes;
+ * the coat layer (T056d) wraps the result as a dielectric clearcoat when present.
+ * A closure produced by canonicalSurfaceToLayered has no coat, sheen, fuzz or thin
+ * film, so it reproduces surfaceBsdf exactly -- the non-regression anchor for the
+ * layered model.
  */
 export function layeredSurfaceBsdf(closure: LayeredClosure): Lobe {
+  const film = closure.thinFilm;
   const entries: WeightedLobe[] = [];
   for (const l of closure.lobes) {
-    const lobe = lobeFromLayered(l);
+    const lobe = lobeFromLayered(l, film);
     if (lobe) entries.push({ weight: l.weight, lobe });
   }
-  return composeLobes(entries);
+  if (closure.sheen && closure.sheen.weight > 0) {
+    entries.push({ weight: closure.sheen.weight, lobe: sheenLobe(closure.sheen.color, closure.sheen.roughness) });
+  }
+  if (closure.fuzz && closure.fuzz.weight > 0) {
+    entries.push({ weight: closure.fuzz.weight, lobe: sheenLobe(closure.fuzz.color, closure.fuzz.roughness) });
+  }
+  const base = composeLobes(entries);
+  return closure.coat ? coatOverBase(closure.coat, base) : base;
 }
 
 // --- hemispherical reflectance (energy / unbiasedness checks) ----------------

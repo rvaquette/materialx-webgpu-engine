@@ -1026,6 +1026,187 @@ siennes ; toute entree ou noeud non supporte produit un diagnostic (REQ-013).
   (accord eval/sample, furnace). Tests intrinseques comme T044 (furnace par lobe,
   accord PDF/valeur, non-biais a N echantillons, anisotropie -> isotrope quand
   aniso=0). Valide : typecheck + suite Node.
+  Decoupe en sous-taches T056a-T056h (chacune : typecheck + suite Node ; pas de
+  cablage backend, reserve a T057/T058) :
+
+  - [x] T056a [Plan:P10] Socle de la bibliotheque de fermetures PARTAGEE + portage
+    des lobes isotropes existants : nouveau module src/compiler/closure-library.ts
+    exposant une chaine WGSL CLOSURE_LIBRARY_PRELUDE qui definit, par lobe, le trio
+    mx_<lobe>_eval(ctx) -> BsdfEval {value:vec3f, pdf:f32} / mx_<lobe>_pdf(ctx,wi)
+    / mx_<lobe>_sample(ctx, u2) -> BsdfSample {wi, value, pdf, valid} et le type
+    de contexte partage (N, V, T, geom). Porter les lobes DEJA presents
+    (burley/oren-nayar diffuse, dielectric_reflection GGX isotrope, conductor GGX,
+    translucent) depuis nodes.ts/compute.ts/shaders.ts dans CETTE bibliotheque
+    unique, source de verite consommee ensuite par les deux backends. Etendre
+    l'oracle CPU src/render/bsdf/reference.ts et/ou pathtracing/bsdf.ts pour
+    refleter exactement les memes formules (lobeFromLayered). Tests JS :
+    presence structurelle des fn par lobe ; parite exacte eval/pdf/sample de la
+    bibliotheque vs les lobes CPU existants (non-regression numerique, meme seed
+    PCG32). Pas de nouveau lobe ici.
+    Fait : src/compiler/closure-library.ts expose CLOSURE_LIBRARY_PRELUDE (WGSL)
+    avec les types partages MxBsdfEval {value,pdf} / MxBsdfSample {wi,value,pdf,
+    valid} / MxLobeCtx {wo,color,roughness,ior} (repere local +Z = normale), les
+    helpers mx_ggx_ndf/mx_smith_g1/mx_fresnel_schlick/mx_alpha_of/mx_dielectric_f0/
+    mx_cosine_hemisphere/mx_sample_ggx_normal/mx_microfacet_eval|pdf|sample, et les
+    4 triplets isotropes mx_diffuse_* (Lambert, partage par oren_nayar/burley),
+    mx_translucent_*, mx_dielectric_reflection_* (GGX achromatique via ior),
+    mx_conductor_* (GGX colore via color=F0) transcrits VERBATIM des formules de
+    l'oracle CPU pathtracing/bsdf.ts. Exports CLOSURE_LIBRARY_LOBES/HELPERS +
+    lobeFns() pour partage test/emetteur. Prelude autonome (MX_PI interne,
+    builtins WGSL only) non encore cable (consommation en T057/T058). La
+    composition de pile (qui, elle, divergeait entre les 3 copies) reste hors
+    scope -> T056h. tests/compiler/closure-library.test.ts : presence structurelle
+    des 4 triplets + structs + helpers, fragments de formule distinctifs partages
+    verbatim avec l'oracle (Schlick pow5, F0 (ior-1)/(ior+1), alpha clamp,
+    denominateurs microfacette), et ancrage numerique de l'oracle CPU transcrit
+    (diffus value/pdf, translucent hemisphere lointain, F0 dielectrique, accord
+    sample/eval pdf+value conductor/dielectrique a seed PCG32 fixe). Gate :
+    typecheck OK + 881 tests / 77 fichiers (etait 873/76).
+
+  - [x] T056b [Plan:P10] Lobe sheen Charlie (eval/pdf/sample) : ajouter dans la
+    bibliotheque T056a le lobe sheen (distribution Charlie + visibilite, applique
+    en couche sur la base via SheenLayer du contrat T054), avec son
+    echantillonnage et sa pdf. Conservation d'energie (reflectance <= 1) et
+    non-biais. Tests intrinseques T044 : furnace sheen, accord eval/pdf au point
+    echantillonne, non-biais a N echantillons, poids 0 -> no-op. Retirer le
+    renvoi null de sheen dans layeredSurfaceBsdf (bsdf.ts) une fois echantillonnable.
+    Fait: closure-library.ts ajoute le helper WGSL mx_sheen_ndf (Charlie
+    Estevez/Kulla) et le triplet mx_sheen_eval/pdf/sample (visibilite Ashikhmin,
+    echantillonnage cosinus, pdf = wi.z / PI), plus 'sheen' dans le registre des
+    lobes. bsdf.ts ajoute l'oracle CPU charlieSheenNdf + sheenEval + sheenLobe
+    (exporte) et lobeFromLayered mappe desormais 'sheen' -> sheenLobe (plus de
+    null ; seul subsurface reste null jusqu'a T056g). Tests : assert structurel
+    sheen dans closure-library.test.ts + nouveau tests/render/pathtracing/sheen.test.ts
+    (accord eval/pdf, pdf cosinus, energie bornee <= 1.05, poids 0 no-op,
+    lobeFromLayered sheen non null). La composition en COUCHE sheen dans
+    layeredSurfaceBsdf reste pour l'assemblage full-stack T056h (canonical ->
+    layered n'emet pas de couche sheen, donc T054 non regressif).
+    Gate: typecheck OK + 886 tests / 78 fichiers (etait 881/77).
+
+  - [x] T056c [Plan:P10] GGX ANISOTROPE (alpha_u/alpha_v + rotation) : etendre les
+    lobes speculaires (dielectric_reflection, conductor) de T056a a l'anisotropie
+    via une base tangente/bitangente pivotee (anisotropy + rotation du contrat
+    LayeredBsdfLobe), NDF/visibilite GGX anisotropes, eval/pdf/sample coherents.
+    Reduction : aniso=0 redonne EXACTEMENT le lobe isotrope T056a (test de
+    non-regression). Tests : furnace, accord eval/sample, anisotropie -> isotrope.
+    Fait: closure-library.ts etend MxLobeCtx (champs anisotropy, rotation) et
+    ajoute le coeur WGSL anisotrope (mx_aniso_alphas aspect=sqrt(1-clamp(aniso,
+    0,0.98)) alpha_u=min(base/aspect,1) alpha_v=base*aspect, mx_rotate_tangent
+    rotation en tours autour de +Z, mx_ggx_ndf_aniso, mx_smith_g1_aniso,
+    mx_sample_ggx_normal_aniso via atan2, mx_microfacet_eval/pdf/sample_aniso) ;
+    mx_dielectric_reflection_* et mx_conductor_* dispatchent (anisotropy<=0 ->
+    chemin isotrope T056a inchange, sinon chemin aniso). Oracle CPU bsdf.ts :
+    anisoAlphas, rotateTangent, ggxNdfAniso, smithG1Aniso, sampleGgxNormalAniso,
+    microfacetEval/SampleAniso, lobes exportes conductorAnisoLobe /
+    dielectricAnisoLobe ; lobeFromLayered aiguille conductor/generalized_schlick
+    et dielectric_reflection vers la variante aniso quand anisotropy>0. Tests :
+    tests/render/pathtracing/anisotropy.test.ts (reduction aniso=0 ==
+    isotrope a 1e-10, accord eval/sample, reflectance hemispherique bornee,
+    anisotropie et rotation faconnent le lobe, dispatch lobeFromLayered) +
+    asserts structurels aniso dans closure-library.test.ts.
+    Gate: typecheck OK + 892 tests / 79 fichiers (etait 886/78).
+
+  - [x] T056d [Plan:P10] Coat dielectrique layered (darkening/absorption) :
+    implementer la couche coat (CoatLayer du contrat T054) comme reflexion
+    dielectrique GGX par-dessus la base, avec darkening dependant de la vue
+    (re-reflexions internes) et absorption coloree a la traversee du coat
+    (couleur/epaisseur). Composition eval/pdf/sample avec la pile sous-jacente,
+    conservation d'energie (coat poids 1 occulte partiellement la base selon
+    Fresnel). Tests : furnace, coat poids 0 -> base inchangee (non-regression),
+    accord eval/sample.
+    Fait: closure-library.ts ajoute les helpers WGSL mx_coat_fresnel (Schlick
+    scalaire avec F0 dielectrique) et mx_coat_attenuation (facteur applique a la
+    base = deux traversees Fresnel (1-w*F(cosWo))*(1-w*F(cosWi)) * absorption
+    coloree dependant du chemin pow(color, pathLen), coatW<=0 -> vec3f(1.0)) ; la
+    composition coat-sur-base complete reste pour l'assembleur T056h. Oracle CPU
+    bsdf.ts : coatOverBase (coat = dielectricLobe(ior,roughness) pondere par le
+    poids ; base attenuee par mx_coat_attenuation ; MIS a deux voies coat/base
+    pCoat=min(coatW,0.95) ; coatW<=0 renvoie la base telle quelle) ;
+    layeredSurfaceBsdf enveloppe la base avec coatOverBase quand closure.coat est
+    present (canonicalSurfaceToLayered n'emet pas de coat -> T054 non regressif).
+    Tests : tests/render/pathtracing/coat.test.ts (coat poids 0 == base a 1e-12,
+    le coat modifie et assombrit la base, accord eval/sample, reflectance
+    hemispherique bornee) + asserts structurels coat dans closure-library.test.ts.
+    Gate: typecheck OK + 896 tests / 80 fichiers (etait 892/79).
+
+  - [x] T056e [Plan:P10] Transmission dielectrique / BTDF (refraction +
+    thin_walled) : lobe de transmission avec refraction (loi de Snell, Fresnel
+    dielectrique, facteur de compression de radiance 1/eta^2 cote refraction) et
+    variante thin_walled (pas de deviation, transmission des deux cotes). Branche
+    sur transmission color/depth captures en T055b. eval/pdf/sample non biaises,
+    energie (R+T <= 1). Tests : furnace reflexion+transmission, accord eval/sample,
+    thin_walled vs refractif, transmission 0 -> opaque.
+    Fait: contrat IR (ir.ts) etendu avec le kind dielectric_transmission et le
+    flag thinWalled sur LayeredBsdfLobe ; codec layered-serialize propage
+    thinWalled (additif, inerte tant que la lowering emet translucent). Oracle CPU
+    bsdf.ts : fresnelDielectric (Fresnel dielectrique non polarise, TIR ->1),
+    refractAboutMicrofacet (refraction de Snell autour du micro-normal, null en
+    TIR), dielectricTransmissionLobe (BTDF microfacette Walter : wm=normalize(wo+
+    eta*wi), value radiance-mode sans eta^2 et pdf avec eta^2 -> compression
+    1/eta^2 sur value/pdf) et thinWalledTransmissionLobe (miroir de la reflexion
+    microfacette vers l'hemisphere oppose, transmission des deux cotes). Cablage
+    lobeFromLayered: dielectric_transmission -> thinWalled ? thin : refractif ;
+    reference.ts (oracle raster direct) approxime le cas en translucent (la
+    refraction reste en screen-space). WGSL closure-library.ts : lobe registre
+    dielectric_transmission (triplet eval/pdf/sample), helpers mx_fresnel_dielectric
+    et mx_refract_microfacet, champ ctx.thin, branche thin/refractif identiques au
+    CPU. Tests : tests/render/pathtracing/transmission.test.ts (Fresnel==F0 a
+    l'incidence normale + TIR, accord eval/sample refractif et thin, refraction
+    plie vers la normale vs miroir thin a 36.87 deg, coincidence a l'incidence
+    normale, furnace R+T<=1, transmission poids 0 -> base opaque inchangee a 1e-12)
+    + asserts structurels transmission dans closure-library.test.ts.
+    Gate: typecheck OK + 903 tests / 81 fichiers (etait 896/80).
+
+  - [x] T056f [Plan:P10] Thin film (Airy/tabule) module sur le speculaire :
+    interference en couche mince (ThinFilmLayer du contrat T054 : epaisseur, ior)
+    modulant le terme de Fresnel speculaire (modele Airy ou table precalculee).
+    Reduction : epaisseur 0 ou poids 0 -> Fresnel nominal (no-op, non-regression).
+    Tests : no-op a epaisseur nulle, variation chromatique attendue a epaisseur
+    non nulle, energie conservee.
+    Fait: thinFilmTint ajoute dans spectrum.ts (Airy exact angle-correct par canal
+    RGB, substrat reconstruit depuis F0, reutilise thinFilmReflectance T030). bsdf.ts
+    ajoute thinFilmFresnel + specularFresnel + conductorThinFilmLobe /
+    dielectricThinFilmLobe (iso et aniso), cables dans lobeFromLayered(l, film?) et
+    layeredSurfaceBsdf (closure.thinFilm). Guard poids 0 ou epaisseur 0 -> Fresnel
+    Schlick nominal byte-identique. closure-library.ts : helpers WGSL mx_fresnel_s/p,
+    mx_airy, mx_thin_film_reflectance/channel/tint/fresnel (structurels, parite T059).
+    Tests tests/render/pathtracing/thinfilm.test.ts (6) + fragments distinctifs dans
+    closure-library.test.ts. Gate vert 909 tests / 82 fichiers. Pas de recablage
+    surface-lower (emission compilateur = T056h).
+
+  - [x] T056g [Plan:P10] Hook subsurface BSSRDF (T029) : cabler le lobe subsurface
+    (SubsurfaceLobe) sur le chemin BSSRDF existant (src/render/pathtracing/
+    subsurface.ts, T029) comme lobe echantillonnable (rayon/couleur captures en
+    T055b), au lieu du repli diffus. Retirer le renvoi null de subsurface dans
+    layeredSurfaceBsdf. Tests : accord avec l'oracle subsurface T029, non-biais,
+    reduction rayon -> 0 coherente avec le diffus.
+    Fait: subsurfaceLobe(albedo) ajoute dans bsdf.ts (lobe cosine-diffus = reponse
+    directionnelle-hemispherique du BSSRDF optiquement epais, limite rayon -> 0 de
+    subsurface.ts) ; lobeFromLayered renvoie maintenant subsurfaceLobe(l.color) au
+    lieu de null. Triplet WGSL mx_subsurface_eval/pdf/sample ajoute au prelude
+    partage + 'subsurface' enregistre dans CLOSURE_LIBRARY_LOBES ; en-tete et
+    marqueur de test closure-library mis a jour. Nouveau tests/render/pathtracing/
+    subsurface-lobe.test.ts (7 tests : cablage lobeFromLayered, reflectance = albedo,
+    accord eval/sample, reduction vers lambertLobe a flux PCG partage, accord avec
+    le slab epais T029, monotonie rayon). Gate 915/83.
+
+  - [x] T056h [Plan:P10] Assemblage pile complet + emission compilateur : fonctions
+    mx_closure_eval/mx_closure_pdf/mx_closure_sample operant sur la LayeredClosure
+    complete (selection ponderee des lobes + couches coat/sheen/fuzz/thinFilm, pdf
+    combinee par heuristique de puissance, miroir WGSL de composeLobes T054) ;
+    faire emettre CLOSURE_LIBRARY_PRELUDE par le module de surface du compilateur
+    (surface-wgsl.ts) pour qu'il soit l'unique source appelee a l'identique par
+    les deux backends (cablage effectif en T057/T058). Tests intrinseques sur la
+    pile : furnace globale, accord eval/pdf, non-biais a N echantillons, pile a
+    coat/sheen/thinFilm/aniso/transmission nuls == resultat 7-parametres actuel
+    (non-regression). Marqueurs WGSL structurels (prelude emis, fn pile presentes).
+    Fait: CPU oracle layeredSurfaceBsdf (bsdf.ts) replie sheen+fuzz dans la pile
+    ponderee (lobes sheen), coat/thinFilm deja actifs ; assembleur WGSL mx_closure_*
+    (+ mx_microfacet_eval_tf/_aniso_tf) ajoute a CLOSURE_LIBRARY_PRELUDE, miroir de
+    composeLobes (MIS une passe) + coatOverBase ; surface-wgsl.ts emet maintenant
+    CLOSURE_LIBRARY_PRELUDE apres LAYERED_CLOSURE_PRELUDE. Tests: closure-stack.test.ts
+    (furnace, coherence eval/pdf, non-biais, sheen/fuzz actifs, couches nulles inertes),
+    marqueurs structurels closure-library.test.ts + surface-wgsl.test.ts. Gate 921/84.
 
 - [ ] T057 [Plan:P10] Cabler le path tracer sur l'IR : src/render/pathtracing/
   compute.ts appelle la fonction de shading generee (LayeredClosure +

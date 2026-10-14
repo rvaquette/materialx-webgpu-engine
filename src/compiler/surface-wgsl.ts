@@ -16,6 +16,7 @@ import type {
   ResolvedSurface,
   SurfaceFamily,
 } from '../materialx/surface-graph.ts';
+import { CLOSURE_LIBRARY_PRELUDE } from './closure-library.ts';
 import { FLOAT, IrModuleBuilder, type IrRef } from './ir.ts';
 import { lowerSurfaceInputsToIr } from './surface-ir.ts';
 import {
@@ -408,6 +409,10 @@ export function emitLayeredSurface(
   const parts: string[] = [];
   parts.push([...exprs.preludes].join('\n'));
   parts.push(LAYERED_CLOSURE_PRELUDE);
+  // T056h: emit the shared runtime closure library so the surface module is the
+  // single source both backends call. It references LayeredClosure, so it must
+  // follow LAYERED_CLOSURE_PRELUDE. Effective eval wiring lands in T057/T058.
+  parts.push(CLOSURE_LIBRARY_PRELUDE);
   if (exprs.uniforms.length > 0) {
     parts.push(
       `struct MxUniforms {\n${exprs.uniforms.map((u) => `  ${u.field}: ${u.wgslType},`).join('\n')}\n};\n@group(0) @binding(0) var<uniform> u: MxUniforms;`,

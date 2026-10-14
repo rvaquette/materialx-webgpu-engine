@@ -166,3 +166,26 @@ export function thinFilmColor(
 ): Vec3 {
   return spectrumToLinearSrgb((l) => thinFilmReflectance(l, thicknessNm, cosTheta0, n0, n1, n2).reflectance, step);
 }
+
+// sRGB primary-ish wavelengths used to collapse the spectral Airy response into
+// an RGB Fresnel modulation without a full spectral integral (T056f).
+const RGB_LAMBDA: Vec3 = [612, 549, 465];
+
+/**
+ * RGB thin-film reflectance over a substrate whose air-interface Fresnel at
+ * normal incidence is `substrateF0` (per channel). Each channel derives the real
+ * substrate index that reproduces its F0, then evaluates the exact angle-correct
+ * Airy reflectance at the matching sRGB primary wavelength. As thickness -> 0 the
+ * Airy stack collapses to the bare substrate Fresnel, so this reduces to the
+ * nominal dielectric/conductor reflectance; non-zero thickness introduces the
+ * chromatic interference. Used to modulate the specular Fresnel term (T056f).
+ */
+export function thinFilmTint(thicknessNm: number, cosTheta0: number, filmIor: number, substrateF0: Vec3): Vec3 {
+  const channel = (c: 0 | 1 | 2): number => {
+    const f0 = Math.min(Math.max(substrateF0[c], 0), 0.9999);
+    const s = Math.sqrt(f0);
+    const n2 = (1 + s) / (1 - s);
+    return thinFilmReflectance(RGB_LAMBDA[c], thicknessNm, cosTheta0, 1, filmIor, n2).reflectance;
+  };
+  return [channel(0), channel(1), channel(2)];
+}

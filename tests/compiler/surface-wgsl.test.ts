@@ -67,6 +67,17 @@ describe('emitLayeredSurface (T055d)', () => {
     expect(mod.code).toContain('return c;');
   });
 
+  it('emits the shared runtime closure library so the stack is one identical source (T056h)', () => {
+    const mod = emit(surfaceGraph('standard_surface', [value('base_color', 'color3', '0.8, 0.1, 0.1')]));
+    // The lobe triplets and the full-stack assembler ride in the surface module.
+    expect(mod.code).toContain('fn mx_diffuse_eval(ctx: MxLobeCtx, wi: vec3f) -> MxBsdfEval');
+    expect(mod.code).toContain('fn mx_closure_eval(c: LayeredClosure, wo: vec3f, wi: vec3f) -> MxBsdfEval');
+    expect(mod.code).toContain('fn mx_closure_pdf(c: LayeredClosure, wo: vec3f, wi: vec3f) -> f32');
+    expect(mod.code).toContain('fn mx_closure_sample(c: LayeredClosure, wo: vec3f, u: vec3f) -> MxBsdfSample');
+    // The struct it operates on is emitted before the library.
+    expect(mod.code.indexOf('struct LayeredClosure {')).toBeLessThan(mod.code.indexOf('fn mx_closure_eval'));
+  });
+
   it('assigns the lobe array and every optional layer field when present', () => {
     const mod = emit(
       surfaceGraph('standard_surface', [

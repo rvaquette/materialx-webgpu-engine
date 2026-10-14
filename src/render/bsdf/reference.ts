@@ -405,6 +405,10 @@ function evalLayeredLobe(lobe: LayeredBsdfLobe, geom: ShadingGeometry, lighting:
       return translucent(lobe.weight, lobe.color, geom, lighting);
     case 'dielectric_reflection':
       return dielectric(lobe.weight, lobe.color, lobe.ior ?? 1.5, roughness, geom, lighting);
+    case 'dielectric_transmission':
+      // Raster direct light sees refraction via screen-space transmission, not
+      // this additive stack; approximate the back-lit response as translucent.
+      return translucent(lobe.weight, lobe.color, geom, lighting);
     case 'conductor':
       return generalizedSchlick(lobe.weight, lobe.color, white, roughness, geom, lighting);
     case 'generalized_schlick':
