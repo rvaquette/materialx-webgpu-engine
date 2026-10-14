@@ -18,6 +18,7 @@ import { CLOSURE_LIBRARY_PRELUDE } from '../../compiler/closure-library.ts';
 import { emitVaryingsStruct } from '../../compiler/wgsl.ts';
 import type { IrType } from '../../compiler/ir.ts';
 import { materialClosureReaderWgsl } from './material-record.ts';
+import { PT_MATERIAL_DISPATCH_ENTRY, type PtMaterialDispatch } from './material-variant.ts';
 
 /** Compute workgroup tile edge (threads per dimension). */
 export const PT_WORKGROUP_SIZE = 8;
@@ -281,7 +282,7 @@ ${assigns.join('\n')}
   ].join('\n');
 }
 
-function wgslIntegrator(textures: boolean): string {
+function wgslIntegrator(textures: boolean, dispatch: boolean): string {
   const texOverride = textures
     ? /* wgsl */ `
     let layer = matLayer[tri_material(hit.tri)];
@@ -291,6 +292,13 @@ function wgslIntegrator(textures: boolean): string {
       mx_apply_baked(&c, tx.rgb, clamp(tx.a, 0.03, 1.0));
     }`
     : '';
+  // Graph path (T057i): evaluate the hit's material graph through the megakernel
+  // dispatcher at the interpolated varyings instead of unpacking the constant
+  // record. Falls back to mx_material_closure internally for non-graph materials.
+  const closureBuild = dispatch
+    ? /* wgsl */ `    let vary = mx_hit_varyings(hit, pos, n, normalize(-rd));
+    var c = ${PT_MATERIAL_DISPATCH_ENTRY}(tri_material(hit.tri), vary);`
+    : /* wgsl */ `    var c = mx_material_closure(tri_material(hit.tri));${texOverride}`;
   const texHelpers = textures
     ? /* wgsl */ `
 fn tri_uv(tri : u32, slot : u32) -> vec2<f32> {
@@ -351,7 +359,7 @@ fn integrate(ro0 : vec3<f32>, rd0 : vec3<f32>, state : ptr<function, u32>) -> ve
     }
     let pos = ro + rd * hit.t;
     let n = surface_hit_normal(hit);
-    var c = mx_material_closure(tri_material(hit.tri));${texOverride}
+${closureBuild}
     let frame = basis(n);
     let wo = transpose(frame) * (-rd);
 
@@ -446,18 +454,42 @@ fn ${PT_COMPUTE_ENTRY}(@builtin(global_invocation_id) gid : vec3<u32>) {
 }
 
 /** Full WGSL source of the compute path tracer. */
-export function pathTraceComputeWgsl(options: { textures?: boolean; varyings?: PtVaryings } = {}): string {
+export function pathTraceComputeWgsl(
+  options: { textures?: boolean; varyings?: PtVaryings; dispatch?: PtMaterialDispatch } = {},
+): string {
   const textures = options.textures ?? false;
-  const varyings = options.varyings;
+  const dispatch = options.dispatch;
+  // The dispatcher's merged MxVaryings fields drive the varyings struct, so a
+  // graph path always emits the varyings machinery it consumes.
+  const varyings = dispatch
+    ? { primvarFields: dispatch.primvarFields, extraInputs: dispatch.extraInputs }
+    : options.varyings;
   return [
     wgslStructsAndBindings(textures, varyings !== undefined),
     wgslRng(),
     wgslTraversal(),
     wgslClosureSurface(textures),
     ...(varyings !== undefined ? [wgslVaryings(varyings)] : []),
-    wgslIntegrator(textures),
+    ...(dispatch !== undefined ? [wgslDispatch(dispatch)] : []),
+    wgslIntegrator(textures, dispatch !== undefined),
     wgslEntry(),
   ].join('\n');
+}
+
+function wgslDispatch(dispatch: PtMaterialDispatch): string {
+  const parts: string[] = [];
+  if (dispatch.preludes.length > 0) parts.push(dispatch.preludes.join('\n'));
+  // Editable params become a MxUniforms block the variants read as `u.<field>`.
+  // Current surface lowering bakes constants, so this stays empty for now (T057i3
+  // note); the binding sits past the scene buffers (0..6) in the graph path.
+  if (dispatch.uniforms.length > 0) {
+    parts.push(
+      `struct MxUniforms {\n${dispatch.uniforms.map((u) => `  ${u.field}: ${u.wgslType},`).join('\n')}\n};\n@group(0) @binding(7) var<uniform> u: MxUniforms;`,
+    );
+  }
+  // Texture/sampler bindings for graph variants land with the registry (T057j/k).
+  parts.push(dispatch.dispatcherWgsl);
+  return parts.join('\n\n');
 }
 
 // --- uniform packing ---------------------------------------------------------
@@ -499,12 +531,14 @@ export interface PathTracePipeline {
 export class PathTraceBackend {
   readonly #device: GPUDevice;
   readonly #textures: boolean;
+  readonly #dispatch: PtMaterialDispatch | undefined;
   #pipeline: PathTracePipeline | null = null;
   #frameIndex = 0;
 
-  constructor(device: GPUDevice, options: { textures?: boolean } = {}) {
+  constructor(device: GPUDevice, options: { textures?: boolean; dispatch?: PtMaterialDispatch } = {}) {
     this.#device = device;
     this.#textures = options.textures ?? false;
+    this.#dispatch = options.dispatch;
   }
 
   get frameIndex(): number {
@@ -526,7 +560,11 @@ export class PathTraceBackend {
   /** Create (once) the compute pipeline from the generated WGSL. */
   createPipeline(): PathTracePipeline {
     if (this.#pipeline) return this.#pipeline;
-    const module = this.#device.createShaderModule({ code: pathTraceComputeWgsl({ textures: this.#textures }) });
+    const code = pathTraceComputeWgsl({
+      textures: this.#textures,
+      ...(this.#dispatch ? { dispatch: this.#dispatch } : {}),
+    });
+    const module = this.#device.createShaderModule({ code });
     const pipeline = this.#device.createComputePipeline({
       layout: 'auto',
       compute: { module, entryPoint: PT_COMPUTE_ENTRY },

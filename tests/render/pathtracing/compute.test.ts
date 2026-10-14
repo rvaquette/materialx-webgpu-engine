@@ -10,6 +10,37 @@ import {
 import type { PathTraceScene } from '../../../src/render/pathtracing/scene-buffers.ts';
 import { IDENTITY4 } from '../../../src/scene/transforms.ts';
 import { vector, type IrType } from '../../../src/compiler/ir.ts';
+import { buildMaterialDispatch } from '../../../src/render/pathtracing/material-variant.ts';
+import { evaluateSurfaceToLayered } from '../../../src/compiler/surface-eval.ts';
+import { resolveSurface } from '../../../src/materialx/surface-graph.ts';
+import type { ResolvedGraph, ResolvedNode } from '../../../src/materialx/graph.ts';
+
+/** standard_surface whose base_color is driven by a connected constant node. */
+function brickGraph(): ResolvedGraph {
+  const surfaceNode: ResolvedNode = {
+    id: 'SR',
+    category: 'standard_surface',
+    type: 'surfaceshader',
+    inputs: [
+      { name: 'base_color', type: 'color3', source: { kind: 'connection', nodeId: 'brick' }, provenance: { namePath: '/mat/base_color' } },
+    ],
+    provenance: { namePath: '/mat/SR' },
+  };
+  const brick: ResolvedNode = {
+    id: 'brick',
+    category: 'constant',
+    type: 'color3',
+    inputs: [
+      { name: 'value', type: 'color3', source: { kind: 'value', value: '0.661876, 0.19088, 0', type: 'color3' }, provenance: { namePath: '/mat/brick/value' } },
+    ],
+    provenance: { namePath: '/mat/brick' },
+  };
+  return {
+    terminals: [{ name: 'surfaceshader', type: 'surfaceshader', nodeId: 'SR', provenance: { namePath: '/mat/SR' } }],
+    nodes: new Map<string, ResolvedNode>([['SR', surfaceNode], ['brick', brick]]),
+  };
+}
+
 
 function fakeScene(): PathTraceScene {
   return {
@@ -117,6 +148,56 @@ describe('pathTraceComputeWgsl varyings (T057h)', () => {
     expect(src).not.toContain('mx_eval_material');
   });
 });
+
+describe('pathTraceComputeWgsl material dispatcher (T057i4)', () => {
+  function brickDispatch() {
+    const graph = brickGraph();
+    const surface = resolveSurface(graph, {})!;
+    expect(surface).not.toBeNull();
+    return { graph, surface, dispatch: buildMaterialDispatch([{ materialIndex: 0, graph, surface }]) };
+  }
+
+  it('emits the variant fill function and the mx_eval_material switch', () => {
+    const { dispatch } = brickDispatch();
+    const src = pathTraceComputeWgsl({ dispatch });
+    expect(src).toContain('fn mx_surface_layered_0(vary: MxVaryings)');
+    expect(src).toContain('fn mx_eval_material(matId: u32, vary: MxVaryings) -> LayeredClosure');
+    expect(src).toContain('case 0u: { return mx_surface_layered_0(vary); }');
+    // Non-graph materials fall back to the packed constant record.
+    expect(src).toContain('default: { return mx_material_closure(matId); }');
+  });
+
+  it('switches the integrator onto mx_eval_material at the interpolated varyings', () => {
+    const { dispatch } = brickDispatch();
+    const src = pathTraceComputeWgsl({ dispatch });
+    expect(src).toContain('let vary = mx_hit_varyings(hit, pos, n, normalize(-rd));');
+    expect(src).toContain('var c = mx_eval_material(tri_material(hit.tri), vary);');
+    // The dispatch path always emits the varyings machinery it consumes.
+    expect(src).toContain('struct MxVaryings');
+    expect(src).toContain('@group(0) @binding(6) var<storage, read> triUv : array<f32>;');
+  });
+
+  it('bakes the evaluated brick base_color so device matches the CPU oracle', () => {
+    const { graph, surface, dispatch } = brickDispatch();
+    const src = pathTraceComputeWgsl({ dispatch });
+    // The procedural brick_color folds to a constant in the variant WGSL...
+    expect(src).toContain('0.661876');
+    expect(src).toContain('0.19088');
+    // ...matching the CPU oracle's evaluated diffuse base_color.
+    const closure = evaluateSurfaceToLayered(graph, surface);
+    const diffuse = closure.lobes.find((l) => l.kind === 'burley_diffuse')!;
+    expect(diffuse.color[0]).toBeCloseTo(0.661876, 5);
+    expect(diffuse.color[1]).toBeCloseTo(0.19088, 5);
+  });
+
+  it('declares no MxUniforms block while surface lowering bakes constants (T057i3 note)', () => {
+    const { dispatch } = brickDispatch();
+    expect(dispatch.uniforms).toEqual([]);
+    const src = pathTraceComputeWgsl({ dispatch });
+    expect(src).not.toContain('struct MxUniforms');
+  });
+});
+
 
 describe('buildPathTraceUniform layout', () => {
   it('packs invViewProj, eye, light, environment and frame counters', () => {

@@ -1481,13 +1481,30 @@ siennes ; toute entree ou noeud non supporte produit un diagnostic (REQ-013).
       tests/render/pathtracing/scene-buffers.test.ts (sampler utilise la closure
       graphe evaluee, pas le record constant). Gate 1024/92.
 
-    - [ ] T057i4 [Plan:P10] Cabler le megakernel : emettre les variantes
+    - [x] T057i4 [Plan:P10] Cabler le megakernel : emettre les variantes
       (buildMaterialDispatch) dans pathTraceComputeWgsl via l'option varyings, binder
       les MxUniforms, basculer l'integrateur sur mx_eval_material, parite CPU/device.
       Delivre : la base_color de brick issue de brick_color a travers la chaine
       rgbtohsv/mix enfin evaluee (teinte rouge-brique, sans detail texture). Tests JS :
       marqueurs WGSL (mx_eval_material, uniforms) + parite oracle CPU graphe. Valide :
       typecheck + suite Node.
+      Fait : compute.ts option dispatch?:PtMaterialDispatch. pathTraceComputeWgsl derive
+      les varyings du dispatch (primvarFields/extraInputs) et insere wgslDispatch
+      (preludes + MxUniforms optionnel @binding(7) + dispatcherWgsl) entre wgslVaryings
+      et wgslIntegrator. wgslIntegrator(textures,dispatch) : en mode dispatch l'integrateur
+      construit vary=mx_hit_varyings(hit,pos,n,normalize(-rd)) puis c=mx_eval_material(
+      tri_material(hit.tri),vary) au lieu de mx_material_closure direct (fallback interne
+      pour les materiaux sans graphe). PathTraceBackend accepte {dispatch} et le passe a
+      createPipeline. MxUniforms RESTE vide (surface-ir bake les constantes, aucune expr
+      param) -> pas de bloc struct MxUniforms emis ; le binding 7 est pret si une variante
+      en declare (T057i3 note). base_color brique folde en litteral WGSL (litFloat =>
+      0.661876) == oracle CPU evaluateSurfaceToLayered. Tests compute.test.ts +4 (fn
+      variante + switch mx_eval_material + fallback ; integrateur sur mx_eval_material +
+      varyings ; litteral brique == oracle CPU ; pas de MxUniforms). Gate 1028/92.
+      NOTE : aucun flux ne peuple encore build.graph/build.surface (ni demo main.ts ni
+      harnais stubCompiler/layeredStandardCompiler) -> variantSources vide partout, donc
+      le re-render device visible rouge-brique passe par le cablage du harnais USD
+      (compilateur emettant graph+surface + bind group + bascule hors baked) = T057m.
 
   - [ ] T057j [Plan:P10] Registre de textures PT : binder simultanement toutes les
     textures de tous les materiaux. Nouveau registre deduplique les images entre
