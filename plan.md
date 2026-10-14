@@ -1578,6 +1578,141 @@ siennes ; toute entree ou noeud non supporte produit un diagnostic (REQ-013).
     brick ; run device du brick (rouge-brique, texture). Mettre a jour
     docs/validation.md + paragraphe 9.6 ; re-render de la matrice. Marquer le parent
     T057 [x]. Valide : typecheck + suite Node ; run device local sans regression.
+    DECOUPE en T057m1-T057m4 (l'exploration a confirme le blocker : aucun flux ne
+    peuple build.graph/build.surface -- demoMaterialCompiler/stubCompiler/
+    layeredStandardCompiler n'emettent que des entrees scalaires parsees via
+    surfaceFromParsedInputs, jamais resolveGraph complet ; donc variantSources vide
+    partout et brick rend gris plat). resolveGraph (src/materialx/graph.ts) marche
+    DEJA sous Node via des fakes Embind (corpus-resolve.test.ts). Parent clos quand
+    m1..m4 tous [x]. Chacune : typecheck + suite Node ; le run device reste la recette
+    d'acceptation du parent, smoke en m4.
+
+    - [x] T057m1 [Plan:P10] Compilateur de materiau "graphe complet" peuplant
+      build.graph/build.surface (Node-testable, additif). Nouveau MaterialCompiler
+      partage qui, a partir d'un document MaterialX charge + un nom de materiau,
+      enchaine materialGraphRoots (src/usd/materials.ts) -> resolveGraph
+      (src/materialx/graph.ts) -> resolveSurface (src/materialx/surface-graph.ts) et
+      retourne MaterialBuild { ir, module, layered, graph, surface } (au lieu des
+      entrees scalaires parsees). scene-buffers.ts peuple alors variantSources depuis
+      MaterialResource.surfaceGraph/resolvedSurface (deja cable en T057i1) et
+      buildMaterialDispatch produit le dispatcher du graphe procedural. Diagnostic
+      (REQ-013) si la resolution echoue, repli record constant. Tests JS (fakes Embind
+      facon corpus-resolve) : un graphe procedural type brick (image/mix/normalmap) ->
+      build.graph/surface non vides -> variantSource present + dispatch assemble.
+      Valide : typecheck + suite Node.
+      Fait : src/render/graph-material-compiler.ts expose MaterialDocumentSource
+      (documentFor(unit) -> MtlxDocumentView|undefined injecte par le harnais/l'app)
+      et createGraphMaterialCompiler(options) : par unit, charge le document,
+      materialGraphRoots(doc, materialName) -> resolveGraph({roots,onDiagnostic,
+      target?}) -> resolveSurface(graph, surfaceOptions?) ; emitLayeredSurface(graph,
+      surface) pour le raster scene-forward + neutralSurfaceIr (closure opacite=1
+      pour extractFeatures/clef pipeline) ; retourne {ir, module, layered, graph,
+      surface}. Replis sans build (undefined) + diagnostic quand document absent,
+      terminal surfaceshader non connecte (roots vide), ou surface non resolue ; le
+      cablage MaterialResource.surfaceGraph/resolvedSurface (T057i1) et le peuplement
+      variantSources (scene-buffers) etaient deja en place -- seul le compilateur
+      manquait. tests/render/graph-material-compiler.test.ts (+4) : reseau image->
+      base_color conserve dans build.graph (noeud /mat/image present), famille
+      standard_surface, layered mx_surface_layered, buildMaterialDispatch -> 1 variant
+      + 1 texture group1 + 1 sampler group2, et les deux replis undefined. Gate 1055
+      passed +1 skipped / 95 fichiers (T057l 1051 -> +4).
+
+    - [x] T057m2 [Plan:P10] Decodage des textures + assemblage des liaisons device du
+      path tracer graphe (builder Node-testable + upload device-only). Fonction pure
+      buildPtDeviceBindings(dispatch, scene, imageProvider) qui, depuis
+      dispatch.textureRegistry (images uniques dedupliquees par fileRef, T057j) et un
+      fournisseur d'images decodees (src/assets/resolver.ts + images.ts ->
+      DecodedPixelImage), associe chaque slot group1/group2 a son image decodee et aux
+      parametres d'echantillonneur, et ordonne les entrees des buffers storage
+      (nodes/tris/triOrder/materials/accum + triUv binding6 + triTangent binding7). Le
+      mapping slot->image et la deduplication (un seul upload par fichier partage) sont
+      Node-testables ; les appels device.createTexture/createBindGroup restent au
+      harnais (m3). Tests JS : mapping registre->entrees, dedup fichier partage = un
+      upload, pas d'image -> pas de slot. Valide : typecheck + suite Node.
+      Fait : src/render/pathtracing/device-bindings.ts expose PtImageProvider
+      (decode(fileRef) -> DecodedPixelImage|undefined, sync ou async, injecte par le
+      harnais avec la politique colorspace), les types PtBufferSlot/PtBufferRole,
+      PtSamplerDescriptor (repeat+linear, miroir du CPU oracle createImageSampler
+      T057k), PtTextureBinding/PtSamplerBinding/PtDeviceBindings, et
+      buildPtDeviceBindings(dispatch, scene, provider, {sink?}) : decode chaque image
+      unique de registry.images une seule fois (dedup deja applique par fileRef),
+      mappe registry.textures->group1 (binding, handle, imageIndex via textureImage)
+      et registry.samplers->group2, et ordonne group0 (0 uniform, 1 nodes, 2 tris, 3
+      triOrder, 4 materials, 5 accum read_write, 6 triUv, 7 triTangent ; 8 mxUniforms
+      si dispatch.uniforms non vide). uniform+accum sans data (dimensionnes par le
+      harnais) ; diagnostic (REQ-013) + image undefined quand un fichier echoue au
+      decode. tests/render/pathtracing/device-bindings.test.ts (+4) : ordre group0 et
+      payloads par identite, deux materiaux partageant un fichier -> 1 decode + 1
+      image + 2 slots imageIndex 0, materiau constant -> 0 texture/sampler/image,
+      echec de decode -> warning + image undefined. Gate 1059 passed +1 skipped / 96
+      fichiers (T057m1 1055 -> +4).
+
+    - [ ] T057m3 [Plan:P10] Cabler le harnais USD sur le chemin graphe + main.ts.
+      DECOUPE en T057m3a-T057m3c (le chargement de documents MaterialX est la piece
+      reutilisable Node-testable ; le cablage harnais et main.ts sont device-only,
+      typecheck). Parent clos quand m3a..m3c tous [x].
+
+      - [x] T057m3a [Plan:P10] Source de documents MaterialX pour le compilateur
+        graphe (Node-testable). Nouveau helper qui, depuis un MaterialXCore charge +
+        les bibliotheques standard + une carte assetPath->texte .mtlx, lit chaque
+        document (createDocument + readXmlString + importInto libraries) et expose un
+        MaterialDocumentSource { documentFor(unit) -> MtlxDocumentView|undefined } (m1)
+        keye par unit.assetPath, plus delete() liberant les documents. C'est la
+        primitive qui branche createGraphMaterialCompiler sur de vrais documents WASM
+        (le compilateur m1 n'etait teste qu'avec des fakes Embind). Tests JS avec un
+        faux MaterialXCore (createDocument/readXmlString/importLibrary mockes) :
+        documentFor par assetPath, importInto appele, unit inconnu -> undefined,
+        delete libere. Valide : typecheck + suite Node.
+        Fait : src/materialx/document-source.ts (loadMaterialXDocuments ->
+        MaterialXDocumentSource ; DocumentLibraryImporter structurel pour decoupler de
+        la classe MaterialXLibraries ; cast via unknown car MtlxDocumentView est un
+        type faible). tests/materialx/document-source.test.ts (+4). Gate vert 1063
+        (97 fichiers).
+
+      - [x] T057m3b [Plan:P10] Cabler le harnais USD (chemin path tracer) sur le
+        graphe. tests/render/usd-scene.harness.ts charge le Core WASM + bibliotheques,
+        construit la source de documents (m3a) depuis les .mtlx deja fetchees, passe
+        createGraphMaterialCompiler (m1) a buildSceneResources, bascule le
+        PathTraceBackend du chemin baked ({textures:true}) vers le chemin graphe
+        ({dispatch: buildMaterialDispatch(ptScene.variantSources)}), assemble les
+        liaisons via buildPtDeviceBindings (m2) avec un PtImageProvider qui decode les
+        textures de brick (fetch + createImageBitmap -> pixels), cree les GPUBuffers/
+        textures/samplers group0 (dont triTangent binding7) + group1/group2, et retire
+        le scaffolding baked (bakedByName/matLayer/bakedTex). Device-only (typecheck).
+        Valide : typecheck + suite Node.
+        Fait : renderUsdOnDevice reecrit dans tests/render/usd-scene.harness.ts. La
+        boucle materiaux remplit maintenant texts (clee par ref.assetPath, meme clef que
+        MaterialCompileUnit.assetPath) en plus de surfaces (fallback 7-param conserve via
+        surfaceFor). loadMaterialXCore({moduleUrl, locateFile}) + MaterialXLibraries.load
+        (defaultLibrarySources) + loadMaterialXDocuments (m3a) -> documents ; constantes
+        servies MATERIALX_CORE_URL / MATERIALX_WASM_DIR / MATERIALX_LIBRARIES_ROOT (le
+        service statique reel est fourni par m4). buildSceneResources utilise
+        createGraphMaterialCompiler({documents, sink}). dispatch =
+        buildMaterialDispatch(ptScene.variantSources) ; PathTraceBackend({dispatch}).
+        PtImageProvider.decode(fileRef) essaie chaque dir de materiau (fetch +
+        createImageBitmap + canvas getImageData -> DecodedPixelImage uint8 rgba,
+        colorSpace lin_rec709). buildPtDeviceBindings(dispatch, ptScene, provider) ->
+        group0 construit par role (uniform=uniform buffer, accum=storage read_write,
+        mxUniforms=placeholder uniform 256o, reste=storageData avec fallback 1 element
+        pour les flux vides triUv/triTangent), group1 textures (rgba8unorm writeTexture),
+        group2 samplers (repeat/linear) ; group1/group2 seulement si non vides, et
+        setBindGroup(1/2) conditionnel dans la boucle. Scaffolding baked supprime
+        (stubCompiler, BAKE_SIZE, bakedByName/bakedLayers/layerForName/matLayer/
+        matLayerBuffer/bakedTex/bakedSampler). Harnais typecheck-only (pas execute par
+        vitest). Gate vert 1063 passed +1 skipped / 97 fichiers.
+
+      - [ ] T057m3c [Plan:P10] Router src/main.ts (demo vivante) sur le compilateur
+        graphe via la meme source de documents (m3a). Device-only (typecheck). Valide :
+        typecheck + suite Node.
+
+    - [ ] T057m4 [Plan:P10] Smoke device, re-render matrice, docs et cloture T057. Run
+      device local du path tracer sur brick (node scripts/run-usd-matrix-local.mjs) :
+      brick rend rouge-brique + detail texture (motif, normal map), sans regression
+      visible sur disney_gold/velvet/metal_brushed. Mettre a jour docs/validation.md
+      (le path tracer rend un nodegraph procedural/texture arbitraire fidele via le
+      megakernel) + paragraphe 9.6. Re-render de la matrice sous renders/. Marquer le
+      parent T057 [x]. Valide : typecheck + suite Node ; run device local sans
+      regression.
 
 - [x] T058 [Plan:P10] Cabler le raster sur l'IR : src/render/raster/backend.ts,
   shaders.ts et src/main.ts rendent via le variant WGSL compile du materiau

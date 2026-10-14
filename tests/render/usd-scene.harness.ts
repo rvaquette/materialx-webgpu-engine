@@ -43,6 +43,13 @@ import {
 } from '../../src/render/scene-resources.ts';
 import { buildPathTraceScene } from '../../src/render/pathtracing/scene-buffers.ts';
 import { buildPathTraceUniform, PathTraceBackend, PT_UNIFORM_SIZE } from '../../src/render/pathtracing/compute.ts';
+import { buildMaterialDispatch } from '../../src/render/pathtracing/material-variant.ts';
+import { buildPtDeviceBindings, type PtImageProvider } from '../../src/render/pathtracing/device-bindings.ts';
+import { createGraphMaterialCompiler } from '../../src/render/graph-material-compiler.ts';
+import { loadMaterialXDocuments } from '../../src/materialx/document-source.ts';
+import { loadMaterialXCore } from '../../src/materialx/wasm.ts';
+import { MaterialXLibraries, defaultLibrarySources } from '../../src/materialx/libraries.ts';
+import type { DecodedPixelImage } from '../../src/assets/images.ts';
 import {
   parseSurfaceInputsFromMtlx,
   parsedSurfaceToCanonical,
@@ -94,10 +101,6 @@ function httpReader(entry: string): UsdLayerReader {
     },
   };
 }
-
-/** Placeholder baked-map texture edge length (texels); the GPU keeps a single
- *  unused layer now that the CPU nodegraph bake path is retired (T055e5). */
-const BAKE_SIZE = 256;
 
 /** Flat numeric attribute array (point3f[]/int[] flatten to number[]). */
 function numArray(prim: ScenePrim, name: string): number[] {
@@ -167,20 +170,6 @@ function surfaceFromMtlx(text: string): RasterSurface {
   };
 }
 
-/** Minimal opaque material compiler (surface params come from the .mtlx files). */
-function stubCompiler(): MaterialCompiler {
-  return {
-    compile(): MaterialBuild {
-      const b = new IrModuleBuilder();
-      const opacity = b.constant(FLOAT, 1);
-      const ref = b.add({ kind: 'closure', type: shaderType('surface'), closure: 'bsdf', op: 'surface', params: { opacity } });
-      b.output({ name: 'surfaceshader', type: shaderType('surface'), ref });
-      const ir = b.build();
-      return { ir, module: emitWgsl(ir) };
-    },
-  };
-}
-
 /** Preview camera + fill that frame the cube/sphere cluster legibly (validate-disney-gold). */
 function previewCamera(exposure: number): FrameCamera {
   const target: Vec3 = [0, 0.3, 0];
@@ -191,6 +180,13 @@ function previewCamera(exposure: number): FrameCamera {
 }
 
 const PREVIEW_ENV: Vec3 = [0.65, 0.68, 0.72];
+
+// Served dev-server paths for the MaterialX Core WASM and standard libraries the
+// graph material compiler path consumes (T057m3b). The device matrix run (T057m4)
+// provides the static serving; the module and libraries roots are overridable here.
+const MATERIALX_CORE_URL = '/materialx/JsMaterialXCore.js';
+const MATERIALX_WASM_DIR = '/materialx/';
+const MATERIALX_LIBRARIES_ROOT = '/materialx/libraries';
 
 /** Canonical standard_surface layered compiler: the raster scene-forward shader
  *  binds a fixed 48-byte MxUniforms (SCENE_MATERIAL_UNIFORM), so every material
@@ -398,18 +394,22 @@ async function renderUsdOnDevice(
   const lights = importLights(scene, { sink });
   const cameras = importCameras(scene, { sink });
 
-  // Resolve the OpenPBR/standard_surface surfaces straight off the referenced
-  // .mtlx layers through the shared bridge. The CPU nodegraph bake path is retired
-  // (T055e5): textured base_color / specular_roughness fall back to their literal
-  // anchor until the path tracer samples the compiled shader directly (T057), so
-  // bakedByName stays empty and the GPU keeps a single unused placeholder layer.
+  // Load the MaterialX Core WASM and standard libraries once, read every
+  // referenced .mtlx into a document source (T057m3a), and feed the graph material
+  // compiler (T057m1) so the path tracer builds a megakernel variant per
+  // procedural/textured material instead of the retired CPU bake path. Constant
+  // materials keep the seven-parameter packed record through surfaceFor.
   const baseDir = dirOf(entry);
   const surfaces = new Map<string, RasterSurface>();
-  const bakedByName = new Map<string, { size: number; rgba: Uint8Array }>();
+  const texts = new Map<string, string>();
+  const materialDirs: string[] = [];
   for (const ref of scene.materials) {
     const url = joinUrl(baseDir, ref.assetPath);
+    const dir = dirOf(url);
+    if (!materialDirs.includes(dir)) materialDirs.push(dir);
     try {
       const text = await (await fetch(url)).text();
+      texts.set(ref.assetPath, text);
       surfaces.set(ref.materialName, surfaceFromMtlx(text));
     } catch {
       line(`MaterialX introuvable: ${ref.assetPath}`);
@@ -418,9 +418,22 @@ async function renderUsdOnDevice(
   const surfaceFor = (material: MaterialResource): RasterSurface =>
     surfaces.get(material.materialName) ?? NEUTRAL_SURFACE;
 
+  const core = await loadMaterialXCore({
+    moduleUrl: MATERIALX_CORE_URL,
+    locateFile: (path) => MATERIALX_WASM_DIR + path,
+    onDiagnostic: sink,
+  });
+  const libraries = new MaterialXLibraries(core);
+  await libraries.load({
+    sources: defaultLibrarySources(MATERIALX_LIBRARIES_ROOT),
+    fetchText: async (url) => (await fetch(url)).text(),
+    onDiagnostic: sink,
+  });
+  const documents = await loadMaterialXDocuments({ core, libraries, texts, sink });
+
   const resources = await buildSceneResources(scene, {
     meshSource: meshSourceFromScene(scene),
-    materialCompiler: stubCompiler(),
+    materialCompiler: createGraphMaterialCompiler({ documents, sink }),
     sink,
   });
 
@@ -444,80 +457,60 @@ async function renderUsdOnDevice(
       `env=[${ptScene.environment.radiance.map((x) => x.toFixed(2)).join(',')}]`,
   );
 
+  // Build the megakernel dispatch from the resolved variant sources and the device
+  // bindings plan (T057m2); decode textures through a provider that fetches each
+  // file once and reads its pixels back off a 2D canvas.
+  const dispatch = buildMaterialDispatch(ptScene.variantSources);
+  const imageProvider: PtImageProvider = {
+    async decode(fileRef: string): Promise<DecodedPixelImage | undefined> {
+      for (const dir of materialDirs) {
+        try {
+          const resp = await fetch(joinUrl(dir, fileRef));
+          if (!resp.ok) continue;
+          const bitmap = await createImageBitmap(await resp.blob());
+          const canvas = document.createElement('canvas');
+          canvas.width = bitmap.width;
+          canvas.height = bitmap.height;
+          const ctx = canvas.getContext('2d');
+          if (!ctx) {
+            bitmap.close();
+            return undefined;
+          }
+          ctx.drawImage(bitmap, 0, 0);
+          const pixels = ctx.getImageData(0, 0, bitmap.width, bitmap.height);
+          bitmap.close();
+          return {
+            kind: 'pixels',
+            data: new Uint8Array(pixels.data),
+            componentType: 'uint8',
+            channels: 4,
+            width: pixels.width,
+            height: pixels.height,
+            colorSpace: 'lin_rec709',
+          };
+        } catch {
+          // try the next candidate material directory
+        }
+      }
+      line(`Texture introuvable: ${fileRef}`);
+      return undefined;
+    },
+  };
+  const bindings = await buildPtDeviceBindings(dispatch, ptScene, imageProvider, { sink });
+  line(`diag variants=${dispatch.variants.length} textures=${bindings.textures.length} exposure=${exposure}`);
+
   // Compute path tracer on the packed scene buffers, progressive accumulation.
-  const backend = new PathTraceBackend(device, { textures: true });
+  const backend = new PathTraceBackend(device, { dispatch });
   const { pipeline } = backend.createPipeline();
   const storage = (data: Float32Array | Uint32Array | Int32Array): GPUBuffer => {
     const buf = device.createBuffer({ size: data.byteLength, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
     device.queue.writeBuffer(buf, 0, data);
     return buf;
   };
-  const nodesBuffer = storage(ptScene.nodes);
-  const trisBuffer = storage(ptScene.triangles);
-  const triOrderBuffer = storage(ptScene.triangleOrder);
-  const materialsBuffer = storage(ptScene.materials);
-  const triUvBuffer = storage(ptScene.triangleUv.length > 0 ? ptScene.triangleUv : new Float32Array(6));
-
-  // Map each packed material (keyed by instance material key) to a baked texture layer.
-  const bakedLayers: Array<{ size: number; rgba: Uint8Array }> = [];
-  const layerForName = new Map<string, number>();
-  for (const [name, baked] of bakedByName) {
-    layerForName.set(name, bakedLayers.length);
-    bakedLayers.push(baked);
-  }
-  const matLayer = new Int32Array(Math.max(ptScene.materialCount, 1)).fill(-1);
-  for (let i = 0; i < ptScene.materialCount; i++) {
-    const key = ptScene.materialKeys[i];
-    const mat = key !== undefined ? resources.materials.get(key) : undefined;
-    const layer = mat ? layerForName.get(mat.materialName) : undefined;
-    if (layer !== undefined) matLayer[i] = layer;
-  }
-  const matLayerBuffer = storage(matLayer);
-
-  // Diagnostics: surface why a scene renders black (black bake vs -1 layer vs UVs).
-  line(`diag matLayer=[${Array.from(matLayer).join(',')}] layers=${bakedLayers.length} exposure=${exposure}`);
-  for (let l = 0; l < bakedLayers.length; l++) {
-    const px = bakedLayers[l]!.rgba;
-    let r = 0;
-    let g = 0;
-    let b = 0;
-    let a = 0;
-    const n = px.length / 4;
-    for (let i = 0; i < px.length; i += 4) {
-      r += px[i]!;
-      g += px[i + 1]!;
-      b += px[i + 2]!;
-      a += px[i + 3]!;
-    }
-    line(`diag bake[${l}] mean rgba=${(r / n).toFixed(1)},${(g / n).toFixed(1)},${(b / n).toFixed(1)},${(a / n).toFixed(1)}`);
-  }
-  let uvNonZero = 0;
-  for (let i = 0; i < ptScene.triangleUv.length; i++) if (ptScene.triangleUv[i] !== 0) uvNonZero++;
-  line(`diag uv: ${uvNonZero}/${ptScene.triangleUv.length} nonzero`);
-
-  // Baked nodegraph maps as a 2D texture array (RGB = base color, A = roughness).
-  const layerCount = Math.max(bakedLayers.length, 1);
-  const bakedTex = device.createTexture({
-    size: [BAKE_SIZE, BAKE_SIZE, layerCount],
-    format: 'rgba8unorm',
-    usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
-    dimension: '2d',
-  });
-  for (let l = 0; l < bakedLayers.length; l++) {
-    const baked = bakedLayers[l]!;
-    device.queue.writeTexture(
-      { texture: bakedTex, origin: [0, 0, l] },
-      baked.rgba,
-      { bytesPerRow: baked.size * 4, rowsPerImage: baked.size },
-      [baked.size, baked.size, 1],
-    );
-  }
-  const bakedSampler = device.createSampler({
-    addressModeU: 'clamp-to-edge',
-    addressModeV: 'clamp-to-edge',
-    magFilter: 'linear',
-    minFilter: 'linear',
-  });
+  // Zero-length scene streams (no UVs / tangents) would create an invalid empty
+  // buffer, so substitute a single-element array of the matching type.
+  const storageData = (data: Float32Array | Uint32Array): GPUBuffer =>
+    storage(data.byteLength > 0 ? data : data instanceof Uint32Array ? new Uint32Array(1) : new Float32Array(1));
 
   const accumBytes = res * res * 16;
   const accumBuffer = device.createBuffer({
@@ -526,21 +519,65 @@ async function renderUsdOnDevice(
   });
   device.queue.writeBuffer(accumBuffer, 0, new Float32Array(res * res * 4));
   const uniform = device.createBuffer({ size: PT_UNIFORM_SIZE, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
-  const bindGroup = device.createBindGroup({
-    layout: pipeline.getBindGroupLayout(0),
-    entries: [
-      { binding: 0, resource: { buffer: uniform } },
-      { binding: 1, resource: { buffer: nodesBuffer } },
-      { binding: 2, resource: { buffer: trisBuffer } },
-      { binding: 3, resource: { buffer: triOrderBuffer } },
-      { binding: 4, resource: { buffer: materialsBuffer } },
-      { binding: 5, resource: { buffer: accumBuffer } },
-      { binding: 6, resource: { buffer: triUvBuffer } },
-      { binding: 7, resource: { buffer: matLayerBuffer } },
-      { binding: 8, resource: bakedTex.createView({ dimension: '2d-array' }) },
-      { binding: 9, resource: bakedSampler },
-    ],
+
+  // group-0: the per-frame uniform and accumulation buffers are data-less in the
+  // plan (harness-sized), every other slot carries packed scene storage data.
+  const group0Entries: GPUBindGroupEntry[] = bindings.group0.map((slot) => {
+    if (slot.role === 'uniform') return { binding: slot.binding, resource: { buffer: uniform } };
+    if (slot.role === 'accum') return { binding: slot.binding, resource: { buffer: accumBuffer } };
+    if (slot.role === 'mxUniforms') {
+      // MxUniforms packing is not emitted yet (surface-ir folds constants); bind a
+      // zeroed placeholder so the layout stays valid if a variant ever needs it.
+      const mx = device.createBuffer({ size: 256, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+      return { binding: slot.binding, resource: { buffer: mx } };
+    }
+    return { binding: slot.binding, resource: { buffer: storageData(slot.data ?? new Float32Array(1)) } };
   });
+  const group0 = device.createBindGroup({ layout: pipeline.getBindGroupLayout(0), entries: group0Entries });
+
+  // group-1 textures + group-2 samplers (only bound when a material samples any).
+  const textureViews = new Map<number, GPUTextureView>();
+  for (const tex of bindings.textures) {
+    const image = bindings.images[tex.imageIndex];
+    const width = image?.width ?? 1;
+    const height = image?.height ?? 1;
+    const gpuTex = device.createTexture({
+      size: [width, height],
+      format: 'rgba8unorm',
+      usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
+    });
+    if (image && image.componentType === 'uint8' && image.channels === 4) {
+      device.queue.writeTexture(
+        { texture: gpuTex },
+        image.data,
+        { bytesPerRow: width * 4, rowsPerImage: height },
+        [width, height, 1],
+      );
+    }
+    textureViews.set(tex.binding, gpuTex.createView());
+  }
+  const group1 =
+    bindings.textures.length > 0
+      ? device.createBindGroup({
+          layout: pipeline.getBindGroupLayout(1),
+          entries: bindings.textures.map((tex) => ({ binding: tex.binding, resource: textureViews.get(tex.binding)! })),
+        })
+      : undefined;
+  const group2 =
+    bindings.samplers.length > 0
+      ? device.createBindGroup({
+          layout: pipeline.getBindGroupLayout(2),
+          entries: bindings.samplers.map((s) => ({
+            binding: s.binding,
+            resource: device.createSampler({
+              addressModeU: s.descriptor.addressModeU,
+              addressModeV: s.descriptor.addressModeV,
+              magFilter: s.descriptor.magFilter,
+              minFilter: s.descriptor.minFilter,
+            }),
+          })),
+        })
+      : undefined;
   const [wgX, wgY] = PathTraceBackend.workgroupCount(res, res);
 
   backend.resetAccumulation();
@@ -551,7 +588,9 @@ async function renderUsdOnDevice(
     const encoder = device.createCommandEncoder();
     const compute = encoder.beginComputePass();
     compute.setPipeline(pipeline);
-    compute.setBindGroup(0, bindGroup);
+    compute.setBindGroup(0, group0);
+    if (group1) compute.setBindGroup(1, group1);
+    if (group2) compute.setBindGroup(2, group2);
     compute.dispatchWorkgroups(wgX, wgY, 1);
     compute.end();
     device.queue.submit([encoder.finish()]);
