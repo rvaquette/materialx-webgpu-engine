@@ -4,9 +4,9 @@
 // mirror procedural/textured surface graphs (T057i3) before the megakernel wires
 // the same graph on device (T057i4). The numeric semantics mirror the WGSL
 // lowerings in nodes.ts / wgsl.ts (and the CPU reference math in
-// tests/fixtures/node-cases.ts) so CPU and device agree. Textures resolve to a
-// neutral value here; real sampling lands in T057k. Closure/matrix/string
-// expressions are not value-evaluable and throw.
+// tests/fixtures/node-cases.ts) so CPU and device agree. Textures sample a
+// caller-supplied bilinear image sampler (T057k, env.textures) or fall back to a
+// neutral value. Closure/matrix/string expressions are not value-evaluable and throw.
 
 import type {
   IrConstValue,
@@ -33,7 +33,9 @@ export interface IrEvalVaryings {
   readonly primvars?: Readonly<Record<string, IrValue>>;
   /** Editable params (uniform-backed); override a param's declared default. */
   readonly params?: Readonly<Record<string, IrValue>>;
-  /** Value returned for texture leaves until real sampling (T057k); default zero. */
+  /** Bilinear RGBA samplers addressed by texture name; mirrors textureSample (T057k). */
+  readonly textures?: Readonly<Record<string, (u: number, v: number) => IrValue>>;
+  /** Value returned for texture leaves without a sampler; default zero. */
   readonly textureNeutral?: IrValue;
 }
 
@@ -394,7 +396,7 @@ function evalExpr(ir: ShaderIr, expr: IrExpr, env: IrEvalVaryings, cache: Map<Ir
     case 'swizzle':
       return swizzle(evaluateIrRef(ir, expr.source, env, cache), expr.pattern);
     case 'texture':
-      return env.textureNeutral ?? zeros(typeSize(expr.type));
+      return sampleTexture(ir, expr, env, cache);
     case 'call':
       return evalCall(expr.op, expr.args.map((a) => evaluateIrRef(ir, a, env, cache)), env, expr.type);
     case 'combine':
@@ -402,6 +404,22 @@ function evalExpr(ir: ShaderIr, expr: IrExpr, env: IrEvalVaryings, cache: Map<Ir
     case 'closure':
       throw new IrEvalError(`closure '${expr.op}' is not value-evaluable (composition lands in T057i3)`);
   }
+}
+
+function sampleTexture(
+  ir: ShaderIr,
+  expr: Extract<IrExpr, { kind: 'texture' }>,
+  env: IrEvalVaryings,
+  cache: Map<IrRef, IrValue>,
+): IrValue {
+  const n = typeSize(expr.type);
+  const sampler = env.textures?.[expr.texture];
+  if (!sampler) return env.textureNeutral ?? zeros(n);
+  const uv = evaluateIrRef(ir, expr.uv, env, cache);
+  const rgba = sampler(uv[0] ?? 0, uv[1] ?? 0);
+  const out = rgba.slice(0, n);
+  while (out.length < n) out.push(0);
+  return out;
 }
 
 function evalValueCombine(

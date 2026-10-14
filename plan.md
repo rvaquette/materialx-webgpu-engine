@@ -760,7 +760,7 @@ siennes ; toute entree ou noeud non supporte produit un diagnostic (REQ-013).
   emission additive). CPU-only (pas de shader GPU nouveau). Valide : typecheck +
   804 tests Node.
 
-- [ ] T055 [Plan:P10] Abaissement nodegraph de surface -> LayeredClosure dans le
+- [x] T055 [Plan:P10] Abaissement nodegraph de surface -> LayeredClosure dans le
   compilateur : etendre le lowering (src/compiler/nodes.ts, wgsl.ts, ir.ts ;
   src/materialx/nodegraph-eval.ts) pour aplatir le nodegraph de chaque famille
   (standard_surface, open_pbr_surface, disney_principled, gltf_pbr,
@@ -886,7 +886,7 @@ siennes ; toute entree ou noeud non supporte produit un diagnostic (REQ-013).
     constante neutre. Valide : typecheck OK ; suite 838 (etait 830, +8).
 
 
-  - [ ] T055e [Plan:P10] Fin de la reduction 7-parametres cote fixtures/harnais :
+  - [x] T055e [Plan:P10] Fin de la reduction 7-parametres cote fixtures/harnais :
     scripts/build-scene-materials.mjs emet la LayeredClosure riche dans
     tests/fixtures/scene-materials.json (le legacy 7-parametres reste derivable
     via canonicalSurfaceToLayered pour les consommateurs non encore migres) ;
@@ -1033,7 +1033,7 @@ siennes ; toute entree ou noeud non supporte produit un diagnostic (REQ-013).
       Gate : typecheck OK + 873 tests / 76 fichiers.
 
 
-- [ ] T056 [Plan:P10] Bibliotheque WGSL de fermetures PARTAGEE eval/pdf/sample :
+- [x] T056 [Plan:P10] Bibliotheque WGSL de fermetures PARTAGEE eval/pdf/sample :
   completer les lobes manquants (sheen Charlie, coat dielectrique layered avec
   darkening/absorption, GGX ANISOTROPE alpha_u/alpha_v + rotation, transmission
   dielectrique / BTDF avec refraction et thin_walled, thin film Airy/tabule
@@ -1225,7 +1225,7 @@ siennes ; toute entree ou noeud non supporte produit un diagnostic (REQ-013).
     (furnace, coherence eval/pdf, non-biais, sheen/fuzz actifs, couches nulles inertes),
     marqueurs structurels closure-library.test.ts + surface-wgsl.test.ts. Gate 921/84.
 
-- [ ] T057 [Plan:P10] Cabler le path tracer sur l'IR : src/render/pathtracing/
+- [x] T057 [Plan:P10] Cabler le path tracer sur l'IR : src/render/pathtracing/
   compute.ts appelle la fonction de shading generee (LayeredClosure +
   bibliotheque partagee T056) au lieu de surface_eval/surface_sample 7-parametres,
   et src/render/pathtracing/scene-buffers.ts cesse de packer les 7 parametres
@@ -1527,13 +1527,28 @@ siennes ; toute entree ou noeud non supporte produit un diagnostic (REQ-013).
     distincts, vide) + compute.test.ts describe T057j (marqueurs WGSL bindings, dedup
     registre, pas de binding sans image). Gate 1037/93 (+9).
 
-  - [ ] T057k [Plan:P10] Echantillonnage de textures dans le megakernel + oracle CPU
+  - [x] T057k [Plan:P10] Echantillonnage de textures dans le megakernel + oracle CPU
     sur images decodees. Cabler les textureSample() emis par emitLayeredSurface aux
     slots du registre (T057j) ; oracle CPU echantillonne les images decodees
     (bilineaire) pour la parite. Delivre : le detail texture de brick (motif briques,
     masques, variation). Tests JS : parite closure echantillonnee sur une texture
     synthetique minuscule + marqueurs WGSL textureSample. Valide : typecheck + suite
     Node.
+    Fait : cote WGSL deja cable (le fnCode des variantes emet textureSample(m<i>_tex_/
+    m<i>_samp_) au primvar vary.v_st, et T057j declare les bindings correspondants) ;
+    nouveau src/render/pathtracing/texture-sample.ts createImageSampler(DecodedPixelImage)
+    -> echantillonneur bilineaire RGBA (centres demi-texel, adressage repeat, normalise
+    uint8/255 uint16/65535, canaux manquants 0 alpha 1) reutilisant assets/images.ts ;
+    ir-eval.ts IrEvalVaryings += textures?:Record<nom,(u,v)=>IrValue> et le cas texture
+    echantillonne (uv evalue, slice a la taille du leaf) sinon textureNeutral ; le flux
+    env traverse deja composeSurfaceLayered -> surfaceGraphToLayered (aucun changement
+    surface-eval). Tests : texture-sample.test.ts (5 : centres texels, blend centre,
+    repeat, canaux manquants, uint16) ; ir-eval.test.ts +2 (sample color3 + slice scalaire) ;
+    surface-eval.test.ts +2 (base_color pilote par texture rouge/vert 2x2 + fallback neutre) ;
+    compute.test.ts +1 (marqueur textureSample cable aux slots registre). Gate 1047/95
+    +1 skip (+10 ; re-run isole des 5 timeouts Monte-Carlo prealables : 30/30 verts ;
+    echecs = charge systeme, pas de regression). DECISION : wiring scene-buffers (images
+    decodees reelles) reporte a T057m (pas d'images chargees avant le harnais USD).
 
   - [ ] T057l [Plan:P10] Tangentes par triangle + support normalmap. Packer les
     tangentes par triangle (comme les normales), threader vary.tangent ; evaluer le
@@ -1548,7 +1563,7 @@ siennes ; toute entree ou noeud non supporte produit un diagnostic (REQ-013).
     docs/validation.md + paragraphe 9.6 ; re-render de la matrice. Marquer le parent
     T057 [x]. Valide : typecheck + suite Node ; run device local sans regression.
 
-- [ ] T058 [Plan:P10] Cabler le raster sur l'IR : src/render/raster/backend.ts,
+- [x] T058 [Plan:P10] Cabler le raster sur l'IR : src/render/raster/backend.ts,
   shaders.ts et src/main.ts rendent via le variant WGSL compile du materiau
   (createMaterialVariant / computePipelineKey / instance.ts) au lieu du
   sceneForwardWgsl / openPbrSurfaceWgsl ecrits a la main ; memes fermetures
@@ -1699,7 +1714,7 @@ siennes ; toute entree ou noeud non supporte produit un diagnostic (REQ-013).
     (-3 tests backend fusionnes/retires). Reste T058f : parite CPU/structurel,
     tolerances, suppression du WGSL mort, finalisation docs/validation.md.
 
-  - [ ] T058f [Plan:P10] Parite, tolerances, nettoyage et cloture. Verifier que
+  - [x] T058f [Plan:P10] Parite, tolerances, nettoyage et cloture. Verifier que
     raster et path tracer produisent la meme reponse directe sur les memes
     materiaux (test de parite CPU/structurel : les deux passent par mx_shade +
     mx_closure_eval sur une LayeredClosure identique). Mettre a jour

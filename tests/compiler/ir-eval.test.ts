@@ -38,6 +38,28 @@ describe('evaluateShaderIr (T057i2)', () => {
     expect([...evaluateIrRef(ir, ref, { textureNeutral: [0.5, 0.5, 0.5] })]).toEqual([0.5, 0.5, 0.5]);
   });
 
+  it('samples a texture through a caller-supplied image sampler (T057k)', () => {
+    const b = new IrModuleBuilder();
+    const uv = b.add({ kind: 'primvar', type: vector(2, 'float', 'texcoord'), name: 'st' });
+    const ref = b.add({ kind: 'texture', type: COLOR3, texture: 'tex', uv, sampler: 'samp' });
+    b.output({ name: 'out', type: COLOR3, ref });
+    const ir = b.build();
+    // The sampler receives the interpolated uv (st falls back to texcoord) and its
+    // RGBA result is sliced to the texture's channel count.
+    const env = { texcoord: [0.3, 0.7] as const, textures: { tex: (u: number, v: number) => [u, v, 0.25, 1] } };
+    expect([...evaluateIrRef(ir, ref, env)]).toEqual([0.3, 0.7, 0.25]);
+  });
+
+  it('slices a sampled texture to a scalar leaf (T057k)', () => {
+    const b = new IrModuleBuilder();
+    const uv = b.add({ kind: 'primvar', type: vector(2, 'float', 'texcoord'), name: 'st' });
+    const ref = b.add({ kind: 'texture', type: FLOAT, texture: 'mask', uv, sampler: 'samp' });
+    b.output({ name: 'out', type: FLOAT, ref });
+    const ir = b.build();
+    const env = { texcoord: [0.8, 0.1] as const, textures: { mask: (u: number) => [u, 0, 0, 1] } };
+    expect([...evaluateIrRef(ir, ref, env)]).toEqual([0.8]);
+  });
+
   it('evaluates a procedural chain (rgbtohsv -> mix) with shared memoization', () => {
     // Mirrors the brick_color shape: shift a base colour in HSV then blend it.
     const b = new IrModuleBuilder();

@@ -3,6 +3,8 @@ import { composeSurfaceLayered, evaluateSurfaceToLayered, prepareSurface } from 
 import { surfaceGraphToLayered } from '../../src/compiler/surface-lower.ts';
 import { resolveSurface } from '../../src/materialx/surface-graph.ts';
 import type { ResolvedGraph, ResolvedNode } from '../../src/materialx/graph.ts';
+import { createImageSampler } from '../../src/render/pathtracing/texture-sample.ts';
+import type { DecodedPixelImage } from '../../src/assets/images.ts';
 
 const BRICK: [number, number, number] = [0.661876, 0.19088, 0];
 
@@ -82,5 +84,74 @@ describe('evaluateSurfaceToLayered (T057i3)', () => {
     // base_color is constant math here, so the two points agree.
     expect(diffuse(a).color).toEqual(diffuse(b).color);
     expect(diffuse(a).color[0]).toBeCloseTo(BRICK[0], 5);
+  });
+});
+
+/** standard_surface whose base_color samples an image node reading `file`. */
+function imageGraph(): ResolvedGraph {
+  const tex: ResolvedNode = {
+    id: 'tex',
+    category: 'image',
+    type: 'color3',
+    inputs: [
+      { name: 'file', type: 'filename', source: { kind: 'value', value: 'brick.png', type: 'filename' }, provenance: { namePath: '/mat/tex/file' } },
+    ],
+    provenance: { namePath: '/mat/tex' },
+  };
+  const surfaceNode: ResolvedNode = {
+    id: 'SR',
+    category: 'standard_surface',
+    type: 'surfaceshader',
+    inputs: [
+      { name: 'base_color', type: 'color3', source: { kind: 'connection', nodeId: 'tex' }, provenance: { namePath: '/mat/base_color' } },
+    ],
+    provenance: { namePath: '/mat/SR' },
+  };
+  return {
+    terminals: [{ name: 'surfaceshader', type: 'surfaceshader', nodeId: 'SR', provenance: { namePath: '/mat/SR' } }],
+    nodes: new Map<string, ResolvedNode>([['SR', surfaceNode], ['tex', tex]]),
+  };
+}
+
+/** 2x2 RGB image: red, green, blue, white (row-major). */
+function checker(): DecodedPixelImage {
+  return {
+    kind: 'pixels',
+    data: new Uint8Array([255, 0, 0, 0, 255, 0, 0, 0, 255, 255, 255, 255]),
+    componentType: 'uint8',
+    channels: 3,
+    width: 2,
+    height: 2,
+    colorSpace: 'lin_rec709',
+  };
+}
+
+describe('composeSurfaceLayered texture sampling (T057k)', () => {
+  it('drives base_color from a decoded texture sampled at the shading point', () => {
+    const graph = imageGraph();
+    const surface = resolveSurface(graph, {})!;
+    expect(surface).not.toBeNull();
+    const prepared = prepareSurface(graph, surface);
+    const sampler = createImageSampler(checker());
+    // The (0,0) texel center samples pure red into base_color.
+    const red = composeSurfaceLayered(prepared, { texcoord: [0.25, 0.25], textures: { tex: sampler } });
+    expect(diffuse(red).color[0]).toBeCloseTo(1, 5);
+    expect(diffuse(red).color[1]).toBeCloseTo(0, 5);
+    expect(diffuse(red).color[2]).toBeCloseTo(0, 5);
+    // A different texcoord samples a different texel -> a different base_color.
+    const green = composeSurfaceLayered(prepared, { texcoord: [0.75, 0.25], textures: { tex: sampler } });
+    expect(diffuse(green).color[0]).toBeCloseTo(0, 5);
+    expect(diffuse(green).color[1]).toBeCloseTo(1, 5);
+  });
+
+  it('falls back to the neutral value when no sampler is bound', () => {
+    const graph = imageGraph();
+    const surface = resolveSurface(graph, {})!;
+    const prepared = prepareSurface(graph, surface);
+    // Without a bound texture the sampled base_color collapses to zero (black).
+    const closure = composeSurfaceLayered(prepared, { texcoord: [0.25, 0.25] });
+    expect(diffuse(closure).color[0]).toBeCloseTo(0, 5);
+    expect(diffuse(closure).color[1]).toBeCloseTo(0, 5);
+    expect(diffuse(closure).color[2]).toBeCloseTo(0, 5);
   });
 });
