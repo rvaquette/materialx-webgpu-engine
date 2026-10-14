@@ -22,6 +22,7 @@ function fakeScene(): PathTraceScene {
     materialCount: 0,
     triangleUv: new Float32Array(),
     materialKeys: [],
+    variantSources: [],
     camera: { viewProj: IDENTITY4, invViewProj: IDENTITY4, eye: [1, 2, 3], exposure: 0 },
     light: { direction: [0, 0, -1], color: [1, 0.5, 0.25], intensity: 4 },
     environment: { radiance: [0.1, 0.2, 0.3] },

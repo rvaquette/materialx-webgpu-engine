@@ -1420,14 +1420,43 @@ siennes ; toute entree ou noeud non supporte produit un diagnostic (REQ-013).
     1012/90.
 
   - [ ] T057i [Plan:P10] Cabler le dispatcher pour les graphes SANS texture (math
-    procedural pur) + oracle CPU miroir. compute.ts appelle mx_eval_material(matId,
-    vary) pour les materiaux graphe sans noeud texture ; les constants gardent le
-    record. Oracle CPU (createSceneSampler) : evaluer le meme graphe sur CPU (via
-    l'interprete IR de cpu-raster.ts ou un evaluateur du subset texture-free de
-    lowerSurfaceInputsToIr) vers une LayeredClosure. Delivre : la base_color de brick
-    issue de brick_color a travers la chaine rgbtohsv/mix est enfin evaluee (teinte
-    rouge-brique, sans detail texture). Tests JS : parite oracle CPU graphe vs
-    marqueurs WGSL ; scene temoin a graphe math-only. Valide : typecheck + suite Node.
+    procedural pur) + oracle CPU miroir. DECOUPE en T057i1-i4 (l'exploration a montre
+    3-4 sous-systemes manquants : le ResolvedGraph n'atteint pas le PT ; aucun
+    interprete IR CPU ; aucun builder de valeurs MxUniforms ; l'eval des familles est
+    WGSL-only). Parent clos quand i1..i4 tous [x].
+
+    - [x] T057i1 [Plan:P10] Threader ResolvedGraph + ResolvedSurface jusqu'au PT
+      (classer graphe vs constant, sans encore de shader). MaterialBuild gagne
+      graph?/surface? ; MaterialResource gagne surfaceGraph?/resolvedSurface? (thread
+      depuis le build, spread conditionnel exactOptionalPropertyTypes) ; scene-
+      buffers.ts classe chaque materiau dedup : si la MaterialResource expose
+      graph+surface -> PtVariantSource {materialIndex, graph, surface}, sinon record
+      constant. PathTraceScene gagne variantSources: PtVariantSource[] (en ordre
+      d'index materiau). Plomberie pure Node-testable, pas de cablage megakernel (i4).
+      Fait : tests scene-buffers.test.ts (2 : variant source pour materiau graphe +
+      record toujours packe ; vide pour materiau constant). Gate 1014/90.
+
+    - [ ] T057i2 [Plan:P10] Interprete IR CPU : evaluateShaderIr(ir, varyings) qui
+      parcourt ShaderIr.exprs (memoise) et evalue les refs de sortie a des varyings
+      donnes ; texture -> neutre pour l'instant. Couvre le sous-ensemble d'ops du
+      corpus texture-free (const/param/input/primvar/convert/swizzle/call[add,
+      multiply,mix,clamp,rgbtohsv,hsvtorgb,...]/combine), extensible a la demande.
+      Pur, teste contre les fixtures de noeuds existantes. La primitive manquante
+      centrale (oracle). Tests JS. Valide : typecheck + suite Node.
+
+    - [ ] T057i3 [Plan:P10] Composer l'oracle : valeurs IR evaluees (i2) ->
+      surfaceGraphToLayered avec overrides -> LayeredClosure + builder de valeurs
+      MxUniforms (layout WgslUniformField). createSceneSampler evalue le graphe sur
+      CPU pour les variantSources. Tests JS : parite closure graphe vs attendu.
+      Valide : typecheck + suite Node.
+
+    - [ ] T057i4 [Plan:P10] Cabler le megakernel : emettre les variantes
+      (buildMaterialDispatch) dans pathTraceComputeWgsl via l'option varyings, binder
+      les MxUniforms, basculer l'integrateur sur mx_eval_material, parite CPU/device.
+      Delivre : la base_color de brick issue de brick_color a travers la chaine
+      rgbtohsv/mix enfin evaluee (teinte rouge-brique, sans detail texture). Tests JS :
+      marqueurs WGSL (mx_eval_material, uniforms) + parite oracle CPU graphe. Valide :
+      typecheck + suite Node.
 
   - [ ] T057j [Plan:P10] Registre de textures PT : binder simultanement toutes les
     textures de tous les materiaux. Nouveau registre deduplique les images entre

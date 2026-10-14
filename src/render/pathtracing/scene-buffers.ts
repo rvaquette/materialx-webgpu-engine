@@ -25,6 +25,7 @@ import {
 import { evalWorld, layeredSurfaceBsdf, sampleWorld } from './bsdf.ts';
 import { canonicalSurfaceToLayered, type LayeredClosure } from '../../compiler/ir.ts';
 import { packLayeredMaterial, unpackLayeredMaterial, PT_MATERIAL_RECORD_FLOATS } from './material-record.ts';
+import type { PtVariantSource } from './material-variant.ts';
 import type {
   BsdfSample,
   LightSample,
@@ -65,6 +66,10 @@ export interface PathTraceScene {
   triangleUv: Float32Array;
   /** Dedup material keys in material-index order (lets callers map textures per material). */
   materialKeys: string[];
+  /** Materials backed by a resolved surface graph, in material-index order (T057i1):
+   *  the megakernel variant sources for buildMaterialDispatch. Constant-only
+   *  materials are absent (they keep the packed record fallback). */
+  variantSources: PtVariantSource[];
   camera: PathTraceCamera;
   light: FrameLight;
   environment: FrameEnvironment;
@@ -108,13 +113,21 @@ export function buildPathTraceScene(
   const materialIndex = new Map<string, number>();
   const surfaces: RasterSurface[] = [];
   const materialKeys: string[] = [];
-  const indexFor = (key: string, surface: RasterSurface): number => {
+  const variantSources: PtVariantSource[] = [];
+  const indexFor = (key: string, surface: RasterSurface, materialKey: string | undefined): number => {
     const existing = materialIndex.get(key);
     if (existing !== undefined) return existing;
     const idx = surfaces.length;
     materialIndex.set(key, idx);
     surfaces.push(surface);
     materialKeys.push(key);
+    // Classify: a material whose compiled resource exposes a resolved surface
+    // graph becomes a megakernel variant source (T057i1); constant-only or
+    // neutral materials keep the packed constant record.
+    const material = materialKey !== undefined ? resources.materials.get(materialKey) : undefined;
+    if (material?.surfaceGraph && material.resolvedSurface) {
+      variantSources.push({ materialIndex: idx, graph: material.surfaceGraph, surface: material.resolvedSurface });
+    }
     return idx;
   };
 
@@ -132,7 +145,7 @@ export function buildPathTraceScene(
     if (!position) continue;
     const normal = geom.streams.find((s) => s.name === 'normal');
     const uv = geom.streams.find((s) => s.name === 'uv');
-    const matIdx = indexFor(materialKeyOf(draw.materialKey), draw.surface);
+    const matIdx = indexFor(materialKeyOf(draw.materialKey), draw.surface, draw.materialKey);
     const model = draw.model;
     const idx = geom.indices;
     for (let t = 0; t + 2 < idx.length; t += 3) {
@@ -198,6 +211,7 @@ export function buildPathTraceScene(
     materialCount: surfaces.length,
     triangleUv: new Float32Array(uvFloats),
     materialKeys,
+    variantSources,
     camera: {
       viewProj: frame.camera.viewProj,
       invViewProj: inverse4(frame.camera.viewProj),

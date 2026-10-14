@@ -15,6 +15,8 @@ import { extractFeatures, type ShaderFeatures } from '../compiler/features.ts';
 import { typeToString, type ShaderIr } from '../compiler/ir.ts';
 import type { WgslModule } from '../compiler/wgsl.ts';
 import type { LayeredSurfaceModule } from '../compiler/surface-wgsl.ts';
+import type { ResolvedGraph } from '../materialx/graph.ts';
+import type { ResolvedSurface } from '../materialx/surface-graph.ts';
 import type { Diagnostic, DiagnosticSink } from '../core/diagnostics.ts';
 import { buildBvh, buildTlas, type Aabb, type Bvh, type Tlas } from '../geometry/bvh.ts';
 import { prepareMesh, type PrepareMeshOptions, type PreparedSubset, type RawMesh, type DisplacementPlan, type SubdivisionPlan } from '../geometry/prepare.ts';
@@ -38,6 +40,12 @@ export interface MaterialBuild {
    *  shading source the IR scene-forward shader is assembled from (T058b/T058d).
    *  Absent for legacy mx_shade-only builds, which keep the hand-written pass. */
   layered?: LayeredSurfaceModule;
+  /** The resolved surface graph + per-family surface the layered module was
+   *  lowered from (T057i1): retained so the path tracer can rebuild a megakernel
+   *  variant for materials with a procedural/textured graph. Absent for
+   *  constant-only or legacy builds, which keep the packed constant record. */
+  graph?: ResolvedGraph;
+  surface?: ResolvedSurface;
 }
 
 /** Runs the MaterialX chain for a unique material unit (dedup already applied). */
@@ -80,6 +88,11 @@ export interface MaterialResource {
   /** The compiled layered surface module backing sceneShader: retained so the
    *  scene bind groups can resolve its texture/sampler group/binding slots. */
   surfaceModule?: LayeredSurfaceModule;
+  /** The resolved surface graph + surface the material was lowered from (T057i1):
+   *  threaded from the build so the path tracer can classify this material as a
+   *  megakernel variant source. Present iff the build exposed them. */
+  surfaceGraph?: ResolvedGraph;
+  resolvedSurface?: ResolvedSurface;
 }
 
 export interface InstanceResource {
@@ -259,6 +272,8 @@ export async function buildSceneResources(
       boundPrims: unit.boundPrims,
       ...(sceneShader ? { sceneShader } : {}),
       ...(build.layered ? { surfaceModule: build.layered } : {}),
+      ...(build.graph ? { surfaceGraph: build.graph } : {}),
+      ...(build.surface ? { resolvedSurface: build.surface } : {}),
     });
   }
 

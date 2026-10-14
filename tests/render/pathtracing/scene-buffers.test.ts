@@ -15,6 +15,8 @@ import { createPcg32, integratePath, type Ray } from '../../../src/render/pathtr
 import { evalWorld, surfaceBsdf } from '../../../src/render/pathtracing/bsdf.ts';
 import { canonicalSurfaceToLayered } from '../../../src/compiler/ir.ts';
 import { IDENTITY4 } from '../../../src/scene/transforms.ts';
+import { resolveSurface, type ResolvedSurface } from '../../../src/materialx/surface-graph.ts';
+import type { ResolvedGraph, ResolvedNode } from '../../../src/materialx/graph.ts';
 
 // A 2x2 quad in the z=0 plane facing +Z, split into two triangles.
 function quadGeometry(prototypeId: string): GeometryResource {
@@ -44,11 +46,11 @@ function quadGeometry(prototypeId: string): GeometryResource {
   } as unknown as GeometryResource;
 }
 
-function sceneWith(): { resources: SceneResources; lights: SceneLight[] } {
+function sceneWith(materialExtra: Partial<MaterialResource> = {}): { resources: SceneResources; lights: SceneLight[] } {
   const geometries = new Map<string, GeometryResource>([['/proto', quadGeometry('/proto')]]);
   const resources = {
     geometries,
-    materials: new Map<string, MaterialResource>([['mat', { unitKey: 'mat', features: { passes: [] } } as unknown as MaterialResource]]),
+    materials: new Map<string, MaterialResource>([['mat', { unitKey: 'mat', features: { passes: [] }, ...materialExtra } as unknown as MaterialResource]]),
     instances: [
       { id: '/quad', prototypeId: '/proto', primPath: '/quad', transform: IDENTITY4, hasGeometry: true, materialKey: 'mat' },
     ],
@@ -131,6 +133,56 @@ describe('buildPathTraceScene packing', () => {
   it('derives the inverse view-projection from the shared camera', () => {
     const scene = build();
     expect(scene.camera.invViewProj.length).toBe(16);
+  });
+});
+
+/** A standard_surface whose base_color is driven by a connected constant node:
+ *  a minimal graph-backed material (not a flat constant surface). */
+function brickGraph(): { graph: ResolvedGraph; surface: ResolvedSurface } {
+  const surfaceNode: ResolvedNode = {
+    id: 'SR',
+    category: 'standard_surface',
+    type: 'surfaceshader',
+    inputs: [
+      { name: 'base_color', type: 'color3', source: { kind: 'connection', nodeId: 'brick' }, provenance: { namePath: '/mat/base_color' } },
+    ],
+    provenance: { namePath: '/mat/SR' },
+  };
+  const brick: ResolvedNode = {
+    id: 'brick',
+    category: 'constant',
+    type: 'color3',
+    inputs: [
+      { name: 'value', type: 'color3', source: { kind: 'value', value: '0.661876, 0.19088, 0', type: 'color3' }, provenance: { namePath: '/mat/brick/value' } },
+    ],
+    provenance: { namePath: '/mat/brick' },
+  };
+  const graph: ResolvedGraph = {
+    terminals: [{ name: 'surfaceshader', type: 'surfaceshader', nodeId: 'SR', provenance: { namePath: '/mat/SR' } }],
+    nodes: new Map<string, ResolvedNode>([['SR', surfaceNode], ['brick', brick]]),
+  };
+  const surface = resolveSurface(graph, {});
+  expect(surface).not.toBeNull();
+  return { graph, surface: surface! };
+}
+
+describe('variantSources classification (T057i1)', () => {
+  it('records a variant source for a material backed by a resolved surface graph', () => {
+    const { graph, surface } = brickGraph();
+    const { resources, lights } = sceneWith({ surfaceGraph: graph, resolvedSurface: surface });
+    const scene = buildPathTraceScene(resources, { lights });
+    expect(scene.variantSources.length).toBe(1);
+    expect(scene.variantSources[0]!.materialIndex).toBe(0);
+    expect(scene.variantSources[0]!.graph).toBe(graph);
+    expect(scene.variantSources[0]!.surface).toBe(surface);
+    // The constant record is still packed alongside (fallback for non-variant draws).
+    expect(scene.materialCount).toBe(1);
+    expect(scene.materials.length).toBe(PT_MATERIAL_FLOATS);
+  });
+
+  it('leaves variantSources empty for a constant-only material', () => {
+    const scene = build();
+    expect(scene.variantSources).toEqual([]);
   });
 });
 
