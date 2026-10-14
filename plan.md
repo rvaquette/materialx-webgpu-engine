@@ -1436,13 +1436,30 @@ siennes ; toute entree ou noeud non supporte produit un diagnostic (REQ-013).
       Fait : tests scene-buffers.test.ts (2 : variant source pour materiau graphe +
       record toujours packe ; vide pour materiau constant). Gate 1014/90.
 
-    - [ ] T057i2 [Plan:P10] Interprete IR CPU : evaluateShaderIr(ir, varyings) qui
+    - [x] T057i2 [Plan:P10] Interprete IR CPU : evaluateShaderIr(ir, varyings) qui
       parcourt ShaderIr.exprs (memoise) et evalue les refs de sortie a des varyings
       donnes ; texture -> neutre pour l'instant. Couvre le sous-ensemble d'ops du
       corpus texture-free (const/param/input/primvar/convert/swizzle/call[add,
       multiply,mix,clamp,rgbtohsv,hsvtorgb,...]/combine), extensible a la demande.
       Pur, teste contre les fixtures de noeuds existantes. La primitive manquante
       centrale (oracle). Tests JS. Valide : typecheck + suite Node.
+      Fait : src/compiler/ir-eval.ts -- evaluateIrRef(ir, ref, env, cache) +
+      evaluateShaderIr(ir, env) retournant Map<nom sortie, IrValue>. IrValue =
+      number[] (scalaire len1, vecteur 2/3/4, bool 0/1). Semantique numerique
+      miroir de nodes.ts/wgsl.ts : const, param (env.params puis defaut declare),
+      input (mapping inputRef: position/normal/tangent/bitangent/texcoord/viewDir
+      sinon vary.in_<name>), primvar (st retombe sur texcoord), convert (broadcast
+      scalaire->vecteur, troncature, pad 1.0), swizzle (xyzw/rgba), texture ->
+      textureNeutral (defaut zero, T057k), call (absval/add/subtract/multiply/divide/
+      power/sin/sqrt/ln/sign/normalize/min/max/clamp/dotproduct/dot/invert/mix/extract/
+      combine2-4/constant/ifequal/ifgreater/ifgreatereq/luminance/rgbtohsv/hsvtorgb/
+      position/texcoord/normalmap/rotate2d/rotate3d/fractal3d/artistic_ior/
+      roughness_anisotropy/roughness_dual/chiang_hair_*/deon_hair_*). Combine valeur
+      (add/multiply/mix/layer) ; closure/op inconnu -> IrEvalError (extensible).
+      Tests tests/compiler/ir-eval.test.ts (6 : parite sur tous les cas expr du corpus
+      NODE_CASES via buildNodeIr, texture neutre, chaine procedurale rgbtohsv->mix
+      memoisee, param+defaut, convert broadcast, throw closure+op inconnu). Gate
+      1020/90.
 
     - [ ] T057i3 [Plan:P10] Composer l'oracle : valeurs IR evaluees (i2) ->
       surfaceGraphToLayered avec overrides -> LayeredClosure + builder de valeurs
