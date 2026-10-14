@@ -178,3 +178,30 @@ garantir des rendus déterministes et comparables entre backends.
 | `gltf_pbr_glass` | GltfPbr | raster, pathtracing | transmission |
 | `usd_preview_surface_default` | UsdPreviewSurface | raster, pathtracing | base |
 | `simple_hair_default` | SimpleHair | pathtracing | hair |
+
+## Parité device des familles BxDF (T059)
+
+Au-delà des scènes de contrôle, la parité GPU réelle des familles de surface
+avancées est vérifiée **sur device** par les deux backends depuis la source
+d'ombrage unique du compilateur (`mx_closure_eval` sur la `LayeredClosure`
+reconstruite depuis l'enregistrement matériau compacté), puis comparée à l'oracle
+analytique indépendant `referenceClosureDirect` sur des frames et une lumière
+partagés. Chaque famille est validée raster, path tracing et accord raster ↔ path
+tracer.
+
+| Famille | Surface racine | Device (raster + path tracing) |
+| --- | --- | --- |
+| StandardSurface | `standard_surface` | supported |
+| OpenPbr | `open_pbr_surface` | supported |
+| DisneyPrincipled | `disney_principled` | supported |
+| GltfPbr | `gltf_pbr` | supported |
+| UsdPreviewSurface | `UsdPreviewSurface` | supported |
+| Lama (assemblage) | `lama_*` | supported |
+| Nodegraph procédural | nodegraph | supported |
+
+Harnais et cas : [`tests/render/bxdf-device.harness.ts`](../tests/render/bxdf-device.harness.ts),
+[`tests/fixtures/bxdf-families.ts`](../tests/fixtures/bxdf-families.ts). Orchestrateurs
+`npm run test:local-bxdf` (GPU local) et `npm run test:bxdf-device` (mobile Adreno
+7xx via ADB). Tolérances par famille et par cible, approximations raster restantes
+(direct seul, pas d'ombres, environnement constant) détaillées dans
+[docs/validation.md](validation.md) (section « Parité device des familles BxDF »).

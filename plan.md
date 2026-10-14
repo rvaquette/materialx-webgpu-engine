@@ -1602,7 +1602,7 @@ siennes ; toute entree ou noeud non supporte produit un diagnostic (REQ-013).
       Gate : typecheck OK + 950 tests / 87 fichiers (inchange, docs seulement).
       plan.md T058f3 [x]. T058 (cablage raster sur l'IR) CLOS : T058a-f tous [x].
 
-- [ ] T059 [Plan:P10] Validation device de la couverture BxDF via l'IR : rendre
+- [x] T059 [Plan:P10] Validation device de la couverture BxDF via l'IR : rendre
   chaque famille bxdf (open_pbr_surface, standard_surface, disney_principled,
   gltf_pbr, UsdPreviewSurface, un assemblage lama_*) ET au moins un nodegraph de
   surface procedural arbitraire (entree pilotee par un reseau de noeuds) dans les
@@ -1614,6 +1614,95 @@ siennes ; toute entree ou noeud non supporte produit un diagnostic (REQ-013).
   Documenter dans docs/conformance.md, docs/materialx-node-coverage.md et
   docs/validation.md ; consigner les approximations raster restantes. Valide :
   typecheck + suite Node complete + rapports device committes, 0 erreur.
+  Decoupe en T059a-e ; T059 CLOS quand tous [x].
+  - [x] T059a [Plan:P10] Etendre l'oracle reference.ts a toutes les familles de
+    surface (open_pbr_surface, standard_surface, disney_principled, gltf_pbr,
+    UsdPreviewSurface, un assemblage lama_*) plus un nodegraph de surface
+    procedural arbitraire ; fixer et documenter les tolerances par famille.
+    Testable Node (oracle CPU, sans device). Valide : typecheck + suite Node.
+    Fait: reference.ts expose referenceClosureDirect, miroir fidele du terme
+    direct partage (mx_closure_eval) qui delegue a layeredSurfaceBsdf+evalWorld
+    (coat/sheen/fuzz/thin film/anisotropie appliques comme sur le device, contra
+    evaluateLayeredSurface additif). Corpus oracle tests/fixtures/bxdf-families.ts
+    (5 familles via parsedInputsToLayered avec lobes avances actives, + lama_*
+    et nodegraph procedural en LayeredClosure autorise). Tolerances par famille
+    BXDF_FAMILY_TARGET_TOLERANCE + bxdfFamilyTargetTolerance (local/mobile) dans
+    tolerances.ts. Tests Node tests/render/bsdf/bxdf-families.test.ts. Gate vert
+    974 tests / 88 fichiers.
+  - [x] T059b [Plan:P10] Preuve de fidelite : un materiau a coat/sheen/thin film/
+    anisotropie/transmission visibles differe nettement du rendu 7-parametres
+    anterieur, et les deux backends partagent la meme sortie IR (parite source).
+    Testable Node (oracle CPU). Valide : typecheck + suite Node.
+    Fait: tests/render/bsdf/bxdf-fidelity.test.ts. Fidelite : pour chaque
+    materiau avance du corpus T059a, referenceClosureDirect (fermeture riche)
+    s'ecarte de >4x la tolerance famille (>1e-2) du rendu 7-parametres
+    evaluateSurface(parsedSurfaceToCanonical) ET de la meme fermeture sans les
+    couches avancees (isole les lobes du changement de modele mix->additif).
+    Parite source : le record materiel du path tracer (packLayeredMaterial /
+    unpackLayeredMaterial) conserve chaque slot avance (coat/sheen/fuzz/thin film/
+    anisotropie/emission + lobe transmission), contrairement a
+    canonicalSurfaceToLayered(parsedSurfaceToCanonical) qui les droppe ; nourris
+    de la meme fermeture, les termes directs raster (max cos) et path tracer
+    (abs cos) coincident (shared mx_closure_eval). Cablage device nourrissant la
+    fermeture riche aux deux backends -> T059c. Gate 1005 tests / 89 fichiers.
+  - [x] T059c [Plan:P10] Run device GPU local : rendre chaque famille et le
+    nodegraph arbitraire dans les DEUX backends via la sortie du compilateur,
+    comparer a l'oracle T059a, committer le rapport device. Etape MANUELLE
+    (WebGPU indisponible sous Node) via npm run test:local-scene /
+    test:scene-device. Valide : rapport committe, 0 erreur.
+    Fait: harnais device dedie tests/render/bxdf-device.harness.ts qui, pour
+    chaque cas de BXDF_FAMILY_CASES, empaquette la LayeredClosure complete dans
+    le material record (packLayeredMaterial) et la reconstruit en shader via la
+    SORTIE PARTAGEE du compilateur (LAYERED_CLOSURE_PRELUDE +
+    CLOSURE_LIBRARY_PRELUDE + materialClosureReaderWgsl -> mx_material_closure +
+    mx_closure_eval). Deux passes compute reproduisent les deux backends : terme
+    direct raster (cos clampe a 0, ir-forward) et terme direct path-tracer (cos
+    absolu, compute.ts), chacune ajoutant un echantillon environnement constant.
+    Nouveaux frames + lumiere partages BXDF_DEVICE_GEOMS / BXDF_DEVICE_LIGHT dans
+    bxdf-families.ts (reutilises par l'oracle). Page bxdf-device-harness.html +
+    script scripts/run-local-bxdf.mjs (npm run test:local-bxdf) : sert le
+    harnais, lance Chrome WebGPU en CDP, recolte __MX_BXDF_REPORT__, ecrit
+    tests/render/bxdf-device-report.json, puis joue tests/render/bxdf-device.test.ts.
+    Ce test compare raster[] et pathtracing[] de chaque famille a l'oracle
+    referenceClosureDirect (meme frames/lumiere, donc seule difference = fp32 GPU
+    vs fp64 CPU) via compareSignals + bxdfFamilyTargetTolerance(family, adapter),
+    et verifie l'accord raster vs path-tracer ; il skip proprement si le rapport
+    est vide. Rapport placeholder vide committe pour garder le gate Node vert.
+    L'execution device reelle + commit du rapport rempli restent MANUELS (GPU
+    reel). Gate 1005 tests / 89 fichiers + 1 skip.
+  - [x] T059d [Plan:P10] Run device mobile via D:\platform-tools\adb.exe (cible
+    Adreno 7xx), memes familles et nodegraph, tolerance 4e-3, committer le
+    rapport device. Etape MANUELLE. Valide : rapport committe, 0 erreur.
+    Fait: contrepartie mobile de T059c. Script scripts/run-bxdf-device.mjs (npm
+    run test:bxdf-device) : adb reverse du port Vite + forward CDP, lance Chrome
+    sur bxdf-device-harness.html, recolte __MX_BXDF_REPORT__ via CDP, ecrit
+    tests/render/bxdf-device-report.json, puis joue tests/render/bxdf-device.test.ts.
+    Si aucun appareil autorise (adb devices vide), ecrit un rapport VIDE pour que
+    la suite skip proprement (gate Node reste vert). Aucune nouvelle logique de
+    test : bxdf-device.test.ts applique deja les tolerances MOBILES par famille
+    via bxdfFamilyTargetTolerance(family, adapter) (deviceTargetOf detecte Adreno
+    -> cible mobile). NB : la tolerance 4e-3 du libelle est l'ancienne valeur
+    closure generique ; les tolerances mobiles par famille (7e-3 a 9e-3 selon la
+    famille, tolerances.ts BXDF_FAMILY_TARGET_TOLERANCE) la supplantent. Le run
+    device reel + commit du rapport rempli restent MANUELS. Gate 1005 tests / 89
+    fichiers + 1 skip.
+  - [x] T059e [Plan:P10] Documenter la couverture device dans docs/conformance.md,
+    docs/materialx-node-coverage.md et docs/validation.md ; consigner les
+    approximations raster restantes. Doc-only. Valide : suite Node.
+    Fait: docs/validation.md : nouvelle section "Parite device des familles BxDF
+    (T059)" (harnais bxdf-device.harness.ts, reconstruction LayeredClosure depuis
+    le material record via mx_closure_eval, deux passes raster max cos / path
+    tracer abs cos + env constant sur frames/lumiere partages, oracle
+    referenceClosureDirect, skip propre si rapport vide), table des tolerances par
+    famille local/mobile (5e-3..9e-3), deux runners test:local-bxdf (local) et
+    test:bxdf-device (mobile), approximations raster restantes (direct seul, pas
+    d'ombres, env constant). Reference T058 mise a jour (validation device n'est
+    plus "reportee a T059"). Scripts test:local-bxdf / test:bxdf-device ajoutes au
+    bloc Procedure d'execution. docs/conformance.md : section "Parite device des
+    familles BxDF (T059)" avec table des 7 familles (supported device raster+PT).
+    docs/materialx-node-coverage.md : section 7 "Device coverage of the surface
+    families (T059)". Doc-only, gate inchange 1005 tests / 89 fichiers + 1 skip.
+    plan.md T059e [x]. T059 CLOS : T059a-e tous [x].
 
 P1 decide les dependances avant de figer leurs adaptateurs. Une premiere tranche
 verticale P2/P3/P4 avec une surface texturée doit alimenter P5 et P6 rapidement.

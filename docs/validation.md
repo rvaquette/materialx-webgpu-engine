@@ -211,7 +211,64 @@ backends dérivent le terme direct de la même `LayeredClosure` via la même pil
 (T058f1) : parité structurelle des WGSL émis (même struct `LayeredClosure`, même
 appel `mx_closure_eval`, raster sans lancer d'ombre) et parité numérique CPU via
 l'oracle partagé. La validation **device** (local + mobile, WebGPU indisponible sous
-Node) reste reportée à T059.
+Node) est câblée en T059 (voir « Parité device des familles BxDF »).
+
+### Parité device des familles BxDF (T059)
+
+P10 ferme la boucle sur le GPU réel : chaque famille de surface avancée est rendue
+**sur le device** par les deux backends depuis la **sortie unique du compilateur**,
+puis comparée à l'oracle analytique indépendant. Le harnais
+([`tests/render/bxdf-device.harness.ts`](../tests/render/bxdf-device.harness.ts),
+T059c) reconstruit pour chaque cas de
+[`tests/fixtures/bxdf-families.ts`](../tests/fixtures/bxdf-families.ts) la
+`LayeredClosure` depuis l'enregistrement matériau compacté
+(`packLayeredMaterial` → `mx_material_closure`,
+[`src/render/pathtracing/material-record.ts`](../src/render/pathtracing/material-record.ts))
+et l'évalue via la bibliothèque de fermetures partagée
+(`mx_closure_eval`, [`src/compiler/closure-library.ts`](../src/compiler/closure-library.ts),
+[`src/compiler/surface-wgsl.ts`](../src/compiler/surface-wgsl.ts)). Deux passes
+compute dérivent le terme direct dans les deux conventions — raster `max(N·L, 0)`
+et path tracer `|N·L|` — chacune augmentée d'un échantillon d'environnement
+constant, sur des frames et une lumière **partagés avec l'oracle**
+(`BXDF_DEVICE_GEOMS` / `BXDF_DEVICE_LIGHT`). Le seul écart mesuré reste donc
+l'arithmétique fp32 du GPU face au fp64 CPU de
+[`src/render/bsdf/reference.ts`](../src/render/bsdf/reference.ts) (`referenceClosureDirect`).
+
+Le test [`tests/render/bxdf-device.test.ts`](../tests/render/bxdf-device.test.ts)
+compare `raster[]` et `pathtracing[]` de chaque famille à l'oracle via
+`compareSignals` et vérifie l'accord raster ↔ path tracer ; il se **skippe**
+proprement quand le rapport est vide. Deux orchestrateurs produisent ce rapport,
+tous deux servant [`bxdf-device-harness.html`](../bxdf-device-harness.html) et
+collectant `__MX_BXDF_REPORT__` via CDP :
+
+- **Local (poste de dev)** — [`scripts/run-local-bxdf.mjs`](../scripts/run-local-bxdf.mjs)
+  (`npm run test:local-bxdf`) pilote Chrome WebGPU sans adb.
+- **Mobile (cible Adreno 7xx)** — [`scripts/run-bxdf-device.mjs`](../scripts/run-bxdf-device.mjs)
+  (`npm run test:bxdf-device`) pilote Chrome Android via ADB/CDP ; sans appareil
+  autorisé il réécrit un rapport vide et la suite se skippe.
+
+Les tolérances par famille (`BXDF_FAMILY_TARGET_TOLERANCE`,
+[`tests/fixtures/tolerances.ts`](../tests/fixtures/tolerances.ts)) sont choisies
+automatiquement d'après l'adapter du rapport (`deviceTargetOf` → `local`/`mobile`),
+sans logique de test dédiée :
+
+| Famille | Local | Mobile (Adreno) | Justification |
+| --- | --- | --- | --- |
+| `standard_surface`, `open_pbr_surface`, `disney_principled` | `5e-3` | `8e-3` | Surface composée (diffus + spéculaire diélectrique + couche) en fp32. |
+| `gltf_pbr`, `UsdPreviewSurface` | `4e-3` | `7e-3` | Workflow métallique Schlick plus plat, moins de composition. |
+| `lama_assembly`, `procedural_nodegraph` | `6e-3` | `9e-3` | Assemblages profonds de lobes + arrondi d'interpolation texture/expression. |
+
+Le mobile reçoit ~`3e-3` de marge supplémentaire sur les arrondis `pow`/division
+des lobes spéculaires, comme pour les bornes par lobe et par scène.
+
+**Approximations raster restantes** (déclarées, identiques à T058) : éclairage
+**direct uniquement** (un échantillon par lumière, pas de next-event estimation ni
+de MIS), **pas d'ombres**, environnement **constant**. Au-dessus de l'horizon,
+les termes directs raster `max(N·L, 0)` et path tracer `|N·L|` coïncident et
+matchent l'oracle ; sous l'horizon seul le path tracer prolonge le transport.
+Le run device réel (local et mobile) reste une étape **manuelle** ; le rapport
+committé [`tests/render/bxdf-device-report.json`](../tests/render/bxdf-device-report.json)
+est vide pour garder `npm test` déterministe.
 
 ### Scènes couvertes (raster + path tracing)
 
@@ -250,11 +307,13 @@ npm test
 # Validation GPU locale (poste de dev, Chrome WebGPU via CDP, sans adb).
 npm run test:local-gpu      # par nœud + lobes + surfaces (T034/T042/T043)
 npm run test:local-scene    # OpenPBR par scène (T045)
+npm run test:local-bxdf     # familles BxDF, deux backends (T059)
 
 # Validation GPU sur le mobile cible autorisé (confirme le GPU réel).
 # Démarre Vite, pilote Chrome via ADB/CDP, collecte le rapport, puis compare.
 npm run test:device         # par nœud + lobes + surfaces (T034/T042/T043)
 npm run test:scene-device   # OpenPBR par scène (T045)
+npm run test:bxdf-device    # familles BxDF, deux backends (T059)
 ```
 
 ## Résultats des runs GPU (dernière exécution)

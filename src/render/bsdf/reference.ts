@@ -14,6 +14,7 @@
 // radiance added once per lobe.
 
 import type { LayeredBsdfLobe, LayeredClosure } from '../../compiler/ir.ts';
+import { evalWorld, layeredSurfaceBsdf } from '../pathtracing/bsdf.ts';
 
 export type Vec3 = readonly [number, number, number];
 
@@ -445,5 +446,48 @@ export function evaluateLayeredSurface(
   let color = acc.color;
   if (closure.emission) color = add(color, closure.emission);
   // mx_surface(bsdf, edf, opacity): color = composed radiance, weight = opacity.
+  return { color, weight: clampScalar(closure.opacity, 0, 1) };
+}
+
+// --- shared-IR direct-light oracle (T059a) -----------------------------------
+//
+// Faithful CPU oracle of the direct-light term BOTH backends evaluate on the
+// device through the shared WGSL closure assembler mx_closure_eval (closure-
+// library.ts, T056h): the raster forward fragment (ir-forward.ts) and the path-
+// tracer megakernel (compute.ts) build a LayeredClosure and shade it with one
+// delta light plus one constant-environment sample. Unlike evaluateLayeredSurface
+// above -- an additive raster approximation that predates thin film, anisotropy
+// and the coat attenuation model -- this mirror reuses layeredSurfaceBsdf
+// (src/render/pathtracing/bsdf.ts), the TS transcription of the same closure
+// library, so coat, sheen, fuzz, anisotropy and thin film are applied EXACTLY as
+// the device shader applies them. It is therefore the device-comparison oracle
+// for every bxdf family, a lama_* assembly and an arbitrary surface nodegraph in
+// T059c/d. It stays an independent implementation: it never parses the generated
+// WGSL, only the shared closure contract. The formula mirrors the harness term:
+//   radiance = sum_lights f(wo,wi) * (color*intensity) * max(dot(N,wiWorld),0)
+//            + f(wo,+Z) * environment * PI   (one-sample constant-env estimate)
+//            + emission.
+export function referenceClosureDirect(
+  closure: LayeredClosure,
+  geom: ShadingGeometry,
+  lighting: ReferenceLighting,
+): ReferenceClosure {
+  const bsdf = layeredSurfaceBsdf(closure);
+  const n = normalize(geom.normal);
+  const v = normalize(geom.view);
+  let color: Vec3 = [0, 0, 0];
+  for (const light of lighting.lights) {
+    const toLight = normalize(scale(light.direction, -1));
+    const ev = evalWorld(bsdf, n, v, toLight);
+    const cosL = Math.max(dot(n, toLight), 0);
+    const radiance = scale(light.color, light.intensity);
+    color = add(color, scale(mulv(ev.value, radiance), cosL));
+  }
+  // Constant environment: one sample along the normal (wi = local +Z, so wiWorld
+  // = N), scaled by PI -- the single-sample estimate of the cosine-weighted
+  // hemisphere integral the forward fragment and harness both use.
+  const evEnv = evalWorld(bsdf, n, v, n);
+  color = add(color, scale(mulv(evEnv.value, lighting.environment), MX_PI));
+  if (closure.emission) color = add(color, closure.emission);
   return { color, weight: clampScalar(closure.opacity, 0, 1) };
 }

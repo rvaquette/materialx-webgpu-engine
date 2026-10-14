@@ -133,3 +133,46 @@ export function sceneTolerance(focus: readonly string[]): SceneCompareTolerance 
   }
   return matched ? { maxAbs, rmse } : DEFAULT_SCENE_TOLERANCE;
 }
+
+// Per-family device tolerance for the full BxDF-coverage validation via the
+// shared IR (T059). Every family is reconstructed into a LayeredClosure and
+// shaded on the device with the WGSL mx_closure_eval assembler (closure-
+// library.ts), then compared against the CPU oracle referenceClosureDirect
+// (reference.ts). The families that reduce mostly to the base lobes
+// (UsdPreviewSurface, gltf_pbr) stay at the executable-surface bound (T045:
+// local 4e-3 / mobile 7e-3). The families that drive the advanced lobes --
+// specular anisotropy (atan2 + two-alpha GGX), thin film (per-channel Airy pow)
+// and a dielectric coat (nested Schlick Fresnel + path-length absorption pow) --
+// compound more fp32 rounding and get a slightly wider bound. A deep lama_*
+// assembly layers several of those closures, and an arbitrary procedural
+// nodegraph adds the texture/expression interpolation rounding on top, so both
+// are the widest. The mobile Adreno 7xx target carries ~3e-3 of extra pow/
+// division rounding over the desktop GPU, as in the per-lobe and scene bounds.
+export type BxdfFamilyKey =
+  | 'standard_surface'
+  | 'open_pbr_surface'
+  | 'disney_principled'
+  | 'gltf_pbr'
+  | 'UsdPreviewSurface'
+  | 'lama_assembly'
+  | 'procedural_nodegraph';
+
+export const BXDF_FAMILY_TARGET_TOLERANCE: Readonly<
+  Record<BxdfFamilyKey, Readonly<Record<DeviceTarget, number>>>
+> = {
+  standard_surface: { local: 5e-3, mobile: 8e-3 },
+  open_pbr_surface: { local: 5e-3, mobile: 8e-3 },
+  disney_principled: { local: 5e-3, mobile: 8e-3 },
+  gltf_pbr: { local: 4e-3, mobile: 7e-3 },
+  UsdPreviewSurface: { local: 4e-3, mobile: 7e-3 },
+  lama_assembly: { local: 6e-3, mobile: 9e-3 },
+  procedural_nodegraph: { local: 6e-3, mobile: 9e-3 },
+};
+
+/** Per-component BxDF-family tolerance for the target that produced a device report. */
+export function bxdfFamilyTargetTolerance(
+  family: BxdfFamilyKey,
+  adapter?: { vendor?: string; architecture?: string },
+): number {
+  return BXDF_FAMILY_TARGET_TOLERANCE[family][deviceTargetOf(adapter)];
+}

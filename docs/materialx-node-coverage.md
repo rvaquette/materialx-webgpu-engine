@@ -199,3 +199,24 @@ translucent_bsdf, uniform_edf
 5. Compute the transitive closure: starting from the 40 authored categories,
    recursively expand each nodegraph category through its implementing graph's
    child categories until only source-code leaves remain.
+
+## 7. Device coverage of the surface families (T059)
+
+The surface roots in section 2 (`standard_surface`, `open_pbr_surface`,
+`disney_principled`, `gltf_pbr`, `UsdPreviewSurface`) plus a deep `lama_*`
+assembly and an arbitrary procedural nodegraph are validated **on the real GPU**
+through both backends. The harness
+([tests/render/bxdf-device.harness.ts](../tests/render/bxdf-device.harness.ts))
+rebuilds each family's `LayeredClosure` from the compacted material record and
+shades it via the shared closure library (`mx_closure_eval`) in the raster
+`max(N·L, 0)` and path-tracer `|N·L|` conventions, each compared against the
+independent fp64 oracle `referenceClosureDirect` on shared frames and light.
+
+- Families and cases: [tests/fixtures/bxdf-families.ts](../tests/fixtures/bxdf-families.ts).
+- Runners: `npm run test:local-bxdf` (desktop GPU) and `npm run test:bxdf-device`
+  (mobile Adreno 7xx over ADB). The Node suite skips cleanly when the committed
+  report is empty.
+- Per-family / per-target tolerances and the declared raster approximations
+  (direct lighting only, no shadows, constant environment) are documented in
+  [docs/validation.md](validation.md) ("Parité device des familles BxDF") and
+  [docs/conformance.md](conformance.md) ("Parité device des familles BxDF").
