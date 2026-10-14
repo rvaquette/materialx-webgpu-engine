@@ -1,12 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildSceneFrame,
-  buildSceneUniform,
+  buildSceneFrameUniform,
+  buildSceneMaterialUniform,
   cameraFrom,
   directionalLightFrom,
   environmentFrom,
   NEUTRAL_SURFACE,
-  SCENE_FORWARD_UNIFORM_FLOATS,
+  SCENE_FRAME_UNIFORM_FLOATS,
+  SCENE_MATERIAL_UNIFORM_FLOATS,
   type RasterSurface,
 } from '../../../src/render/raster/scene-frame.ts';
 import type { MaterialResource, SceneResources } from '../../../src/render/scene-resources.ts';
@@ -109,27 +111,38 @@ describe('buildSceneFrame', () => {
   });
 });
 
-describe('buildSceneUniform', () => {
-  it('packs model, camera, light, surface and environment at the WGSL offsets', () => {
+describe('buildSceneFrameUniform / buildSceneMaterialUniform', () => {
+  it('packs the frame block (model, camera, light, environment) at the WGSL offsets', () => {
     const frame = buildSceneFrame(
       resources(new Map(), [{ id: '/a', prototypeId: '/pa', primPath: '/a', transform: IDENTITY4, hasGeometry: true }]),
       { frameCamera: { viewProj: IDENTITY4, eye: [1, 2, 3], exposure: 0 }, environment: { radiance: [0.1, 0.2, 0.3] } },
     );
     const draw = frame.draws[0]!;
-    const u = buildSceneUniform(frame, draw);
-    expect(u.length).toBe(SCENE_FORWARD_UNIFORM_FLOATS);
+    const u = buildSceneFrameUniform(frame, draw);
+    expect(u.length).toBe(SCENE_FRAME_UNIFORM_FLOATS);
     expect(u[0]).toBe(1); // model[0]
     expect(u[16]).toBe(1); // viewProj[0]
     expect([u[32], u[33], u[34]]).toEqual([1, 2, 3]); // eye
     expect(u[43]).toBe(frame.light.intensity); // lightColor.w
-    expect(u[47]).toBe(1); // baseColor.a
-    expect(u[44]).toBeCloseTo(NEUTRAL_SURFACE.baseColor[0]);
-    expect(u[45]).toBeCloseTo(NEUTRAL_SURFACE.baseColor[1]);
-    expect(u[46]).toBeCloseTo(NEUTRAL_SURFACE.baseColor[2]);
-    expect(u[48]).toBe(NEUTRAL_SURFACE.metalness);
-    expect(u[52]).toBe(NEUTRAL_SURFACE.ior);
-    expect(u[56]).toBeCloseTo(0.1); // environment.r
-    expect(u[57]).toBeCloseTo(0.2);
-    expect(u[58]).toBeCloseTo(0.3);
+    expect(u[44]).toBeCloseTo(0.1); // environment.r
+    expect(u[45]).toBeCloseTo(0.2);
+    expect(u[46]).toBeCloseTo(0.3);
+  });
+
+  it('packs the material block (baseColor, params, coat) at the WGSL offsets', () => {
+    const frame = buildSceneFrame(
+      resources(new Map(), [{ id: '/a', prototypeId: '/pa', primPath: '/a', transform: IDENTITY4, hasGeometry: true }]),
+      {},
+    );
+    const draw = frame.draws[0]!;
+    const u = buildSceneMaterialUniform(draw);
+    expect(u.length).toBe(SCENE_MATERIAL_UNIFORM_FLOATS);
+    expect(u[0]).toBeCloseTo(NEUTRAL_SURFACE.baseColor[0]);
+    expect(u[1]).toBeCloseTo(NEUTRAL_SURFACE.baseColor[1]);
+    expect(u[2]).toBeCloseTo(NEUTRAL_SURFACE.baseColor[2]);
+    expect(u[3]).toBe(1); // baseColor.a
+    expect(u[4]).toBe(NEUTRAL_SURFACE.metalness);
+    expect(u[8]).toBe(NEUTRAL_SURFACE.ior);
+    expect(u[9]).toBe(NEUTRAL_SURFACE.specular);
   });
 });

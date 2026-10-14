@@ -184,25 +184,39 @@ export function buildSceneFrame(resources: SceneResources, options: BuildSceneFr
   return { camera, light, environment, draws, passes, skipped };
 }
 
-/** Floats in a scene forward uniform (SCENE_FORWARD_UNIFORM_SIZE / 4). */
-export const SCENE_FORWARD_UNIFORM_FLOATS = 60;
+/** Floats in a scene forward frame uniform (SCENE_FRAME_UNIFORM_SIZE / 4). */
+export const SCENE_FRAME_UNIFORM_FLOATS = 48;
+/** Floats in a scene forward material uniform (SCENE_MATERIAL_UNIFORM_SIZE / 4). */
+export const SCENE_MATERIAL_UNIFORM_FLOATS = 12;
 
 /**
- * Pack one instance's scene forward uniform: model, camera view-projection + eye,
- * the dominant light, the resolved OpenPBR surface and the environment radiance.
- * Layout matches sceneForwardWgsl's Uniforms struct and SCENE_FORWARD_UNIFORM_SIZE.
+ * Pack one instance's per-frame uniform (T058c): model, camera view-projection +
+ * eye, the dominant light and the constant environment radiance. Layout matches
+ * the IR forward shader's Frame struct (ir-forward.ts) and SCENE_FRAME_UNIFORM_SIZE.
+ * The model matrix is per-draw; the remaining blocks are shared by every instance.
  */
-export function buildSceneUniform(frame: SceneFramePlan, draw: SceneDraw): Float32Array {
-  const d = new Float32Array(SCENE_FORWARD_UNIFORM_FLOATS);
+export function buildSceneFrameUniform(frame: SceneFramePlan, draw: SceneDraw): Float32Array {
+  const d = new Float32Array(SCENE_FRAME_UNIFORM_FLOATS);
   d.set(draw.model, 0);
   d.set(frame.camera.viewProj, 16);
   d.set([frame.camera.eye[0], frame.camera.eye[1], frame.camera.eye[2], 0], 32);
   d.set([frame.light.direction[0], frame.light.direction[1], frame.light.direction[2], 0], 36);
   d.set([frame.light.color[0], frame.light.color[1], frame.light.color[2], frame.light.intensity], 40);
+  d.set([frame.environment.radiance[0], frame.environment.radiance[1], frame.environment.radiance[2], 0], 44);
+  return d;
+}
+
+/**
+ * Pack one draw's material uniform (T058c): the resolved OpenPBR surface at the
+ * @group(0) @binding(0) slot a compiled variant's MxUniforms will later occupy.
+ * Layout matches the IR forward shader's Material struct (ir-forward.ts) and
+ * SCENE_MATERIAL_UNIFORM_SIZE.
+ */
+export function buildSceneMaterialUniform(draw: SceneDraw): Float32Array {
+  const d = new Float32Array(SCENE_MATERIAL_UNIFORM_FLOATS);
   const s = draw.surface;
-  d.set([s.baseColor[0], s.baseColor[1], s.baseColor[2], 1], 44);
-  d.set([s.metalness, s.roughness, s.transmission, s.subsurface], 48);
-  d.set([s.ior, s.specular, 0, 0], 52);
-  d.set([frame.environment.radiance[0], frame.environment.radiance[1], frame.environment.radiance[2], 0], 56);
+  d.set([s.baseColor[0], s.baseColor[1], s.baseColor[2], 1], 0);
+  d.set([s.metalness, s.roughness, s.transmission, s.subsurface], 4);
+  d.set([s.ior, s.specular, 0, 0], 8);
   return d;
 }

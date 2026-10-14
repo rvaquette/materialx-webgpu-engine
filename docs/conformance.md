@@ -122,8 +122,8 @@ la même formule (comparaison circulaire).
 
 P8 remplace ces stubs par une **évaluation physique réelle** dans les deux
 chemins WGSL — le corpus par nœud ([`src/compiler/nodes.ts`](../src/compiler/nodes.ts))
-et le backend raster exécutable ([`src/render/raster/shaders.ts`](../src/render/raster/shaders.ts),
-`openPbrSurfaceWgsl`/`mx_openpbr_surface`, T045) — validée contre une **référence
+et le backend raster exécutable (bloc OpenPBR analytique T045, unifié depuis sur
+l'IR partagé `mx_closure_eval` en T056/T058) — validée contre une **référence
 analytique indépendante** fp64 ([`src/render/bsdf/reference.ts`](../src/render/bsdf/reference.ts),
 T041) qui n'est pas dérivée du WGSL.
 

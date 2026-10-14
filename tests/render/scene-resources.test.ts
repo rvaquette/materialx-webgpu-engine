@@ -2,11 +2,16 @@ import { describe, expect, it } from 'vitest';
 import type { Diagnostic } from '../../src/core/diagnostics.ts';
 import { IrModuleBuilder, FLOAT, shaderType } from '../../src/compiler/ir.ts';
 import { emitWgsl } from '../../src/compiler/wgsl.ts';
+import { emitLayeredSurface } from '../../src/compiler/surface-wgsl.ts';
+import { resolveSurface } from '../../src/materialx/surface-graph.ts';
+import type { ResolvedGraph, ResolvedInput, ResolvedNode, ResolvedValueSource } from '../../src/materialx/graph.ts';
+import { IR_FORWARD_FRAME_GROUP } from '../../src/render/raster/ir-forward.ts';
 import type { RawMesh } from '../../src/geometry/prepare.ts';
 import type { MaterialXReference, SceneAsset, ScenePrim, XformOp } from '../../src/scene/types.ts';
 import type { MaterialCompileUnit } from '../../src/usd/materials.ts';
 import {
   buildSceneResources,
+  createSceneBindGroups,
   uploadGeometry,
   type MaterialBuild,
   type MaterialCompiler,
@@ -87,6 +92,42 @@ function surfaceCompiler(): MaterialCompiler {
       b.output({ name: 'surfaceshader', type: shaderType('surface'), ref });
       const ir = b.build();
       return { ir, module: emitWgsl(ir) };
+    },
+  };
+}
+
+function value(name: string, type: string, raw: string): ResolvedInput {
+  const source: ResolvedValueSource = { kind: 'value', value: raw, type };
+  return { name, type, source, provenance: { namePath: `/mat/${name}` } };
+}
+
+function surfaceGraph(): ResolvedGraph {
+  const surface: ResolvedNode = {
+    id: 'SR',
+    category: 'standard_surface',
+    type: 'surfaceshader',
+    inputs: [value('base_color', 'color3', '0.8, 0.1, 0.1')],
+    provenance: { namePath: '/mat/SR' },
+  };
+  return {
+    terminals: [{ name: 'surfaceshader', type: 'surfaceshader', nodeId: 'SR', provenance: { namePath: '/mat/SR' } }],
+    nodes: new Map<string, ResolvedNode>([['SR', surface]]),
+  };
+}
+
+/** A compiler that also returns a compiled layered surface module, so the scene
+ *  carries the IR scene-forward shader per material (T058d). */
+function layeredCompiler(): MaterialCompiler {
+  return {
+    compile(_unit: MaterialCompileUnit): MaterialBuild {
+      const b = new IrModuleBuilder();
+      const opacity = b.constant(FLOAT, 1);
+      const ref = b.add({ kind: 'closure', type: shaderType('surface'), closure: 'bsdf', op: 'surface', params: { opacity } });
+      b.output({ name: 'surfaceshader', type: shaderType('surface'), ref });
+      const ir = b.build();
+      const graph = surfaceGraph();
+      const resolved = resolveSurface(graph, {})!;
+      return { ir, module: emitWgsl(ir), layered: emitLayeredSurface(graph, resolved) };
     },
   };
 }
@@ -178,5 +219,52 @@ describe('buildSceneResources (T050)', () => {
       if (hadUsage) g.GPUBufferUsage = hadUsage;
       else delete g.GPUBufferUsage;
     }
+  });
+
+  it('assembles the IR scene-forward shader per material when the build is layered (T058d)', async () => {
+    const resources = await buildSceneResources(demoScene(), {
+      meshSource: meshSource({ '/World/floor': quad() }),
+      materialCompiler: layeredCompiler(),
+    });
+    const mat = resources.materials.get(FLOOR_KEY)!;
+    expect(mat.sceneShader).toBeDefined();
+    expect(mat.sceneShader!.frameGroup).toBe(IR_FORWARD_FRAME_GROUP);
+    expect(mat.sceneShader!.code).toContain('fn mx_surface_layered(vary: MxVaryings) -> LayeredClosure {');
+    expect(mat.sceneShader!.code).toContain('let c = mx_surface_layered(vary);');
+    expect(mat.surfaceModule).toBeDefined();
+  });
+
+  it('leaves sceneShader absent for a legacy mx_shade-only build', async () => {
+    const resources = await buildSceneResources(demoScene(), {
+      meshSource: meshSource({ '/World/floor': quad() }),
+      materialCompiler: surfaceCompiler(),
+    });
+    const mat = resources.materials.get(FLOOR_KEY)!;
+    expect(mat.sceneShader).toBeUndefined();
+    expect(mat.surfaceModule).toBeUndefined();
+  });
+
+  it('createSceneBindGroups builds the material (group 0) and frame bind groups', async () => {
+    const resources = await buildSceneResources(demoScene(), {
+      meshSource: meshSource({ '/World/floor': quad() }),
+      materialCompiler: layeredCompiler(),
+    });
+    const mat = resources.materials.get(FLOOR_KEY)!;
+
+    const groups: number[] = [];
+    const device = {
+      createBindGroup: (d: { layout: { group: number } }) => ({ group: d.layout.group }),
+    } as unknown as GPUDevice;
+    const layout = (group: number) => ({ group } as unknown as GPUBindGroupLayout);
+    const buffers = { frame: { id: 'f' } as unknown as GPUBuffer, material: { id: 'm' } as unknown as GPUBuffer };
+    const bind = createSceneBindGroups(device, mat, buffers, (g) => {
+      groups.push(g);
+      return layout(g);
+    });
+    expect(groups).toContain(0);
+    expect(groups).toContain(IR_FORWARD_FRAME_GROUP);
+    expect((bind.materialBindGroup as unknown as { group: number }).group).toBe(0);
+    expect((bind.frameBindGroup as unknown as { group: number }).group).toBe(IR_FORWARD_FRAME_GROUP);
+    expect(bind.byGroup.get(0)).toBe(bind.materialBindGroup);
   });
 });

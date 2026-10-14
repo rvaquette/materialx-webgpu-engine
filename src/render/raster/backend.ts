@@ -6,41 +6,37 @@
 // command sequence can be verified without a physical GPU.
 
 import type { Tonemap } from '../output.ts';
-import { forwardOpaqueWgsl, sceneForwardWgsl, tonemapResolveWgsl } from './shaders.ts';
+import { tonemapResolveWgsl } from './shaders.ts';
+import { IR_FORWARD_FRAME_GROUP, IR_FORWARD_VERTEX_ENTRY, IR_FORWARD_FRAGMENT_ENTRY } from './ir-forward.ts';
 
-/** Interleaved position(3) + normal(3) float32 vertex, 24 bytes. */
-export const FORWARD_VERTEX_STRIDE = 24;
-/**
- * Forward OpenPBR uniform (T045): viewProj(64) + eye(16) + lightDir(16) +
- * lightColor(16, rgb color + w intensity) + baseColor(16) + material(16:
- * metalness, roughness, transmission, subsurface) + coat(16: ior, specular) +
- * environment(16) = 176 bytes.
- */
-export const FORWARD_UNIFORM_SIZE = 176;
 /** exposure(4) padded to the 16-byte uniform alignment. */
 export const RESOLVE_UNIFORM_SIZE = 16;
 
 /**
- * Scene forward uniform (T051): the single-object forward uniform prefixed with a
- * per-instance model(64) matrix: model(64) + viewProj(64) + eye(16) + lightDir(16)
- * + lightColor(16) + baseColor(16) + material(16) + coat(16) + environment(16) =
- * 240 bytes. Kept in sync with sceneForwardWgsl's Uniforms struct and the frame
- * assembler in scene-frame.ts.
+ * Scene forward frame uniform (T058c): a per-instance model(64) matrix followed
+ * by viewProj(64) + eye(16) + lightDir(16) + lightColor(16) + environment(16) =
+ * 192 bytes. Kept in sync with the IR forward shader's Frame struct
+ * (ir-forward.ts) and buildSceneFrameUniform in scene-frame.ts.
  */
-export const SCENE_FORWARD_UNIFORM_SIZE = 240;
+export const SCENE_FRAME_UNIFORM_SIZE = 192;
+/**
+ * Scene forward material uniform: baseColor(16) + params(16: metalness,
+ * roughness, transmission, subsurface) + coat(16: ior, specular) = 48 bytes, at
+ * the @group(0) @binding(0) slot a compiled variant's MxUniforms occupies.
+ */
+export const SCENE_MATERIAL_UNIFORM_SIZE = 48;
 
-export const FORWARD_VERTEX_LAYOUT: GPUVertexBufferLayout = {
-  arrayStride: FORWARD_VERTEX_STRIDE,
-  attributes: [
-    { shaderLocation: 0, offset: 0, format: 'float32x3' },
-    { shaderLocation: 1, offset: 12, format: 'float32x3' },
-  ],
-};
+/** Bind group index of the dedicated per-frame uniform (distinct from the
+ *  material MxUniforms at group 0), shared with the IR-forward shader (T058b). */
+export const FRAME_BIND_GROUP = IR_FORWARD_FRAME_GROUP;
 
-/** Separate position(loc 0) and normal(loc 1) buffers for the scene forward pass. */
-export const SCENE_VERTEX_LAYOUTS: GPUVertexBufferLayout[] = [
+/** Position(loc 0) + normal(loc 1) + texcoord(loc 2) buffers for the per-variant
+ *  IR scene forward pipeline: the assembled IR shader (ir-forward.ts) reads a
+ *  texcoord input at location 2 for the MxVaryings the surface closure consumes. */
+export const SCENE_IR_VERTEX_LAYOUTS: GPUVertexBufferLayout[] = [
   { arrayStride: 12, attributes: [{ shaderLocation: 0, offset: 0, format: 'float32x3' }] },
   { arrayStride: 12, attributes: [{ shaderLocation: 1, offset: 0, format: 'float32x3' }] },
+  { arrayStride: 8, attributes: [{ shaderLocation: 2, offset: 0, format: 'float32x2' }] },
 ];
 
 /** Active raster pass kinds driven by a material's effective render passes. */
@@ -55,8 +51,12 @@ export interface RasterBackendOptions {
   tonemap?: Tonemap;
 }
 
+/** Single-object forward geometry: position(loc 0) + normal(loc 1) + texcoord
+ *  (loc 2) streams the IR-assembled shader reads, like the scene variant path. */
 export interface ForwardGeometry {
-  vertexBuffer: GPUBuffer;
+  positionBuffer: GPUBuffer;
+  normalBuffer: GPUBuffer;
+  texcoordBuffer: GPUBuffer;
   indexBuffer: GPUBuffer;
   indexCount: number;
 }
@@ -64,7 +64,9 @@ export interface ForwardGeometry {
 export interface OpaquePassTargets {
   hdrView: GPUTextureView;
   depthView: GPUTextureView;
-  bindGroup: GPUBindGroup;
+  /** Material MxUniforms at group 0; per-frame uniform at the IR frame group. */
+  materialBindGroup: GPUBindGroup;
+  frameBindGroup: GPUBindGroup;
   geometry: ForwardGeometry;
 }
 
@@ -73,13 +75,22 @@ export interface ResolvePassTargets {
   bindGroup: GPUBindGroup;
 }
 
-/** One instance draw in the scene forward pass: its bind group + split streams. */
+/** One instance draw in the scene forward pass: its bind groups + split streams.
+ *  The material uniform binds at group 0, the per-frame uniform at the dedicated
+ *  frame bind group (FRAME_BIND_GROUP). */
 export interface SceneDrawCall {
-  bindGroup: GPUBindGroup;
+  materialBindGroup: GPUBindGroup;
+  frameBindGroup: GPUBindGroup;
   positionBuffer: GPUBuffer;
   normalBuffer: GPUBuffer;
   indexBuffer: GPUBuffer;
   indexCount: number;
+  /** Variant pipeline key (variant.pipelineKey): selects the per-material IR
+   *  pipeline compiled via createSceneVariantPipeline. Every scene draw routes
+   *  through its variant pipeline (T058e, no hand-written fallback). */
+  pipelineKey: string;
+  /** Texcoord stream (loc 2) consumed by the IR variant pipeline, if available. */
+  texcoordBuffer?: GPUBuffer;
 }
 
 export interface ScenePassTargets {
@@ -101,8 +112,8 @@ export class RasterBackend {
   private readonly device: GPUDevice;
   private forward: GPURenderPipeline | undefined;
   private resolve: GPURenderPipeline | undefined;
-  private sceneOpaque: GPURenderPipeline | undefined;
-  private sceneTransmission: GPURenderPipeline | undefined;
+  /** Per-material scene pipelines keyed by `${pass}:${variant.pipelineKey}`. */
+  private readonly sceneVariants = new Map<string, GPURenderPipeline>();
 
   constructor(options: RasterBackendOptions) {
     this.device = options.device;
@@ -118,17 +129,22 @@ export class RasterBackend {
   get resolvePipeline(): GPURenderPipeline | undefined {
     return this.resolve;
   }
-  scenePipeline(pass: ScenePassKind): GPURenderPipeline | undefined {
-    return pass === 'transmission' ? this.sceneTransmission : this.sceneOpaque;
+
+  /** Per-material scene pipeline compiled by createSceneVariantPipeline, if any. */
+  sceneVariantPipeline(pass: ScenePassKind, pipelineKey: string): GPURenderPipeline | undefined {
+    return this.sceneVariants.get(`${pass}:${pipelineKey}`);
   }
 
-  /** Compiles and caches the forward opaque pipeline (HDR target + depth). */
-  createForwardPipeline(): GPURenderPipeline {
-    const module = this.device.createShaderModule({ code: forwardOpaqueWgsl() });
+  /** Compiles and caches the single-object forward pipeline from an IR-assembled
+   *  shader (T058e): `code` is the ir-forward.ts WGSL for one material, using the
+   *  vs_forward/fs_forward entry points over the position/normal/texcoord streams,
+   *  into the HDR target with depth write. */
+  createForwardPipeline(code: string): GPURenderPipeline {
+    const module = this.device.createShaderModule({ code });
     this.forward = this.device.createRenderPipeline({
       layout: 'auto',
-      vertex: { module, entryPoint: 'vs_main', buffers: [FORWARD_VERTEX_LAYOUT] },
-      fragment: { module, entryPoint: 'fs_main', targets: [{ format: this.hdrFormat }] },
+      vertex: { module, entryPoint: IR_FORWARD_VERTEX_ENTRY, buffers: SCENE_IR_VERTEX_LAYOUTS },
+      fragment: { module, entryPoint: IR_FORWARD_FRAGMENT_ENTRY, targets: [{ format: this.hdrFormat }] },
       primitive: { topology: 'triangle-list', cullMode: 'back' },
       depthStencil: { format: this.depthFormat, depthWriteEnabled: true, depthCompare: 'less' },
     });
@@ -148,14 +164,35 @@ export class RasterBackend {
   }
 
   /**
-   * Compiles and caches a scene forward pipeline for the given pass. The opaque
-   * variant writes depth; the transmission variant alpha-blends over the opaque
-   * result and leaves depth read-only so overlapping transparent objects accrue.
+   * Compiles and caches one scene forward pipeline per material variant (T058d).
+   * `code` is the IR-assembled scene-forward WGSL (ir-forward.ts, provided by
+   * scene-resources per material); `pipelineKey` is variant.pipelineKey, so two
+   * materials that lower to the same shader share a single pipeline. The IR
+   * shader uses the vs_forward/fs_forward entry points and reads position/normal/
+   * texcoord vertex buffers; blend and depth match the hand-written pass.
    */
-  createSceneForwardPipeline(pass: ScenePassKind): GPURenderPipeline {
-    const module = this.device.createShaderModule({ code: sceneForwardWgsl() });
+  createSceneVariantPipeline(pass: ScenePassKind, pipelineKey: string, code: string): GPURenderPipeline {
+    const cacheKey = `${pass}:${pipelineKey}`;
+    const cached = this.sceneVariants.get(cacheKey);
+    if (cached) return cached;
+    const module = this.device.createShaderModule({ code });
     const transparent = pass === 'transmission';
-    const target: GPUColorTargetState = transparent
+    const pipeline = this.device.createRenderPipeline({
+      layout: 'auto',
+      vertex: { module, entryPoint: IR_FORWARD_VERTEX_ENTRY, buffers: SCENE_IR_VERTEX_LAYOUTS },
+      fragment: { module, entryPoint: IR_FORWARD_FRAGMENT_ENTRY, targets: [this.sceneColorTarget(transparent)] },
+      primitive: { topology: 'triangle-list', cullMode: transparent ? 'none' : 'back' },
+      depthStencil: { format: this.depthFormat, depthWriteEnabled: !transparent, depthCompare: 'less' },
+    });
+    this.sceneVariants.set(cacheKey, pipeline);
+    return pipeline;
+  }
+
+  /** Color target for a scene forward pass: opaque writes direct, transmission
+   *  alpha-blends over the opaque result. Shared by the hand-written and the
+   *  per-variant IR pipelines so both pass kinds composite identically. */
+  private sceneColorTarget(transparent: boolean): GPUColorTargetState {
+    return transparent
       ? {
           format: this.hdrFormat,
           blend: {
@@ -164,22 +201,11 @@ export class RasterBackend {
           },
         }
       : { format: this.hdrFormat };
-    const pipeline = this.device.createRenderPipeline({
-      layout: 'auto',
-      vertex: { module, entryPoint: 'vs_main', buffers: SCENE_VERTEX_LAYOUTS },
-      fragment: { module, entryPoint: 'fs_main', targets: [target] },
-      primitive: { topology: 'triangle-list', cullMode: transparent ? 'none' : 'back' },
-      depthStencil: { format: this.depthFormat, depthWriteEnabled: !transparent, depthCompare: 'less' },
-    });
-    if (transparent) this.sceneTransmission = pipeline;
-    else this.sceneOpaque = pipeline;
-    return pipeline;
   }
 
-  /** Records a scene forward pass that draws every instance of a pass kind. */
+  /** Records a scene forward pass that draws every instance of a pass kind.
+   *  Each draw routes through its per-material IR variant pipeline (T058e). */
   recordScenePass(encoder: GPUCommandEncoder, targets: ScenePassTargets): void {
-    const pipeline = this.scenePipeline(targets.pass);
-    if (!pipeline) throw new Error(`scene ${targets.pass} pipeline not created`);
     const clear = targets.clear ?? true;
     const pass = encoder.beginRenderPass({
       colorAttachments: [
@@ -197,11 +223,19 @@ export class RasterBackend {
         depthStoreOp: 'store',
       },
     });
-    pass.setPipeline(pipeline);
+    let current: GPURenderPipeline | undefined;
     for (const draw of targets.draws) {
-      pass.setBindGroup(0, draw.bindGroup);
+      const pipeline = this.sceneVariantPipeline(targets.pass, draw.pipelineKey);
+      if (!pipeline) throw new Error(`scene ${targets.pass} variant pipeline not created: ${draw.pipelineKey}`);
+      if (pipeline !== current) {
+        pass.setPipeline(pipeline);
+        current = pipeline;
+      }
+      pass.setBindGroup(0, draw.materialBindGroup);
+      pass.setBindGroup(FRAME_BIND_GROUP, draw.frameBindGroup);
       pass.setVertexBuffer(0, draw.positionBuffer);
       pass.setVertexBuffer(1, draw.normalBuffer);
+      if (draw.texcoordBuffer) pass.setVertexBuffer(2, draw.texcoordBuffer);
       pass.setIndexBuffer(draw.indexBuffer, 'uint32');
       pass.drawIndexed(draw.indexCount);
     }
@@ -222,8 +256,11 @@ export class RasterBackend {
       },
     });
     pass.setPipeline(this.forward);
-    pass.setBindGroup(0, targets.bindGroup);
-    pass.setVertexBuffer(0, targets.geometry.vertexBuffer);
+    pass.setBindGroup(0, targets.materialBindGroup);
+    pass.setBindGroup(FRAME_BIND_GROUP, targets.frameBindGroup);
+    pass.setVertexBuffer(0, targets.geometry.positionBuffer);
+    pass.setVertexBuffer(1, targets.geometry.normalBuffer);
+    pass.setVertexBuffer(2, targets.geometry.texcoordBuffer);
     pass.setIndexBuffer(targets.geometry.indexBuffer, 'uint32');
     pass.drawIndexed(targets.geometry.indexCount);
     pass.end();

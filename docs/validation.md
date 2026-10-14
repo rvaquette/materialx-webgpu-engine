@@ -57,9 +57,10 @@ diffus unique** (`effectiveAlbedo = baseColor·(1−metalness)·(1−transmissio
 une lumière normalisée par `π`, si bien que leurs termes directs coïncident : leur
 seule différence systématique est l'ambiant plat du raster (`0.03`) face à
 l'environnement constant intégré par le path tracer (`0.05`). Ce miroir Lambert
-simplifié reste distinct du backend raster exécutable, dont le fragment
-`forwardOpaqueWgsl` évalue désormais la composition OpenPBR complète (T045),
-validée séparément contre `ref.evaluateSurface`.
+simplifié reste distinct du backend raster exécutable, dont le fragment exécute le
+variant WGSL compilé du matériau et évalue sa `LayeredClosure` via la bibliothèque
+de fermetures partagée (`mx_closure_eval`, T058), validée séparément contre
+`ref.evaluateSurface`.
 
 ## Tolérances par type de nœud
 
@@ -146,10 +147,10 @@ par lobe.
 
 Composition énergétique : `mx_layer` couple la base par le throughput du dessus
 (`1 − reflectance`) et composite la couverture ; `mx_closure_mix`/`add`/`multiply`
-émettent la réflectance pondérée. La surface composée `mx_openpbr_surface` assemble
-un workflow métallique (`F0 = baseColor` via Schlick) et un spéculaire diélectrique
-en couche sur une base diffus/transmission/subsurface, en miroir exact de
-`ref.evaluateSurface`.
+émettent la réflectance pondérée. La surface composée assemble un workflow
+métallique (`F0 = baseColor` via Schlick) et un spéculaire diélectrique en couche
+sur une base diffus/transmission/subsurface : construite par la `LayeredClosure`
+de l'IR et évaluée via `mx_closure_eval`, en miroir exact de `ref.evaluateSurface`.
 
 Le path tracer ajoute pour chaque lobe un triplet cohérent `eval`/`pdf`/`sample`
 ([`src/render/pathtracing/bsdf.ts`](../src/render/pathtracing/bsdf.ts), T044),
@@ -177,6 +178,40 @@ sans contrepartie BSDF), tandis que l'environnement constant combine une
 next-event estimation en cosinus et la capture par échantillonnage BSDF via la
 pondération `power_heuristic` (T057e). La parité numérique cross-backend du
 mégakernel reste couverte par le harnais device (T059).
+
+### Backend raster : ombrage sur l'IR (T058)
+
+Le backend raster converge vers la même source d'ombrage que le path tracer :
+plutôt qu'un bloc OpenPBR écrit à la main (retiré en T058f), le fragment
+exécute le variant WGSL compilé du matériau — `mx_shade` (IR → `LayeredClosure`,
+[`src/compiler/wgsl.ts`](../src/compiler/wgsl.ts),
+[`src/compiler/surface-wgsl.ts`](../src/compiler/surface-wgsl.ts)) — puis évalue
+la fermeture obtenue contre l'unique lumière directionnelle et l'environnement
+constant via la **bibliothèque de fermetures partagée** (`mx_closure_eval`,
+[`src/compiler/closure-library.ts`](../src/compiler/closure-library.ts), T056),
+c'est-à-dire exactement le terme direct que le mégakernel path tracer calcule par
+rebond. L'IR du compilateur devient ainsi la source d'ombrage unique des deux
+backends.
+
+Approximations raster déclarées : éclairage **direct uniquement** (un échantillon
+par lumière, pas de next-event estimation ni de MIS multi-rebonds), **pas
+d'ombres**, environnement **constant**. Côté uniformes, le bloc frame
+(`model`/`viewProj`/`eye`/lumière/environnement) est séparé des `MxUniforms`
+matériau émis par le variant (`@group(0) @binding(0)`) et déplacé sur son propre
+binding ; un pipeline est compilé par variant de matériau (clé `pipelineKey`).
+
+Le bloc OpenPBR écrit à la main (`openPbrSurfaceWgsl`/`forwardOpaqueWgsl`/
+`sceneForwardWgsl`) a été **retiré** en T058f2 : l'oracle analytique du raster est
+désormais directement `ref.evaluateSurface`
+([`src/render/bsdf/reference.ts`](../src/render/bsdf/reference.ts)). Le câblage est
+livré par la série T058b-e. La **parité source-IR raster ↔ path tracer** — les deux
+backends dérivent le terme direct de la même `LayeredClosure` via la même pile
+`mx_closure_eval` — est prouvée par
+[`tests/render/raster/ir-parity.test.ts`](../tests/render/raster/ir-parity.test.ts)
+(T058f1) : parité structurelle des WGSL émis (même struct `LayeredClosure`, même
+appel `mx_closure_eval`, raster sans lancer d'ombre) et parité numérique CPU via
+l'oracle partagé. La validation **device** (local + mobile, WebGPU indisponible sous
+Node) reste reportée à T059.
 
 ### Scènes couvertes (raster + path tracing)
 

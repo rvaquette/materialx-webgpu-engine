@@ -1,18 +1,22 @@
 // T035d/T045 device harness: evaluate the real OpenPBR raster surface on the GPU
 // over the shared visibility samples (T035c2) and report the shaded colours so
 // the independent analytic reference (src/render/bsdf/reference.ts evaluateSurface)
-// can be compared at scene level. It embeds the same shared OpenPBR WGSL the
-// executable forward fragment uses (src/render/raster/shaders.ts openPbrSurfaceWgsl)
-// in a compute dispatch so the comparison isolates GPU fp32 arithmetic from
-// rasterisation/visibility (the samples are shared with the oracle). Nothing here
-// runs under Node: it is served to the device exactly like the corpus harness
-// (T034e).
+// can be compared at scene level. T058d: the device shading now runs through the
+// SAME shared IR source the raster/path-tracer backends use -- a compiled layered
+// surface module (emitLayeredSurface) reconstructed into a LayeredClosure and
+// evaluated with mx_closure_eval, mirroring the forward fragment's direct term
+// (ir-forward.ts) -- so the comparison isolates GPU fp32 arithmetic of the IR
+// closure from rasterisation/visibility (the samples are shared with the oracle).
+// Nothing here runs under Node: it is served to the device exactly like the
+// corpus harness (T034e).
 import fixture from '../fixtures/shader-ball.json' with { type: 'json' };
 import scenes from '../fixtures/control-scenes.json' with { type: 'json' };
 import materials from '../fixtures/scene-materials.json' with { type: 'json' };
 import { fitShaderBall, sampleSurface, type CameraParams } from './scene-samples.ts';
 import type { CanonMaterial } from './scene-shade.ts';
-import { openPbrSurfaceWgsl } from '../../src/render/raster/shaders.ts';
+import { emitLayeredSurface } from '../../src/compiler/surface-wgsl.ts';
+import { resolveSurface } from '../../src/materialx/surface-graph.ts';
+import type { ResolvedGraph, ResolvedInput, ResolvedNode, ResolvedValueSource } from '../../src/materialx/graph.ts';
 import { resolvePixel } from '../../src/render/output.ts';
 
 export interface SceneDeviceResult {
@@ -32,7 +36,49 @@ export interface SceneDeviceReport {
 
 const RES = 32;
 
-const SHADE_WGSL = `${openPbrSurfaceWgsl()}
+/** A folded standard_surface input literal for the canonical material value. */
+function value(name: string, type: string, raw: string): ResolvedInput {
+  const source: ResolvedValueSource = { kind: 'value', value: raw, type };
+  return { name, type, source, provenance: { namePath: `/mat/${name}` } };
+}
+
+/** Build a standard_surface graph from the canonical scene material: every input
+ *  is a literal, so emitLayeredSurface folds them into the shader (no uniforms). */
+function surfaceGraphFor(mat: CanonMaterial): ResolvedGraph {
+  const inputs: ResolvedInput[] = [
+    value('base_color', 'color3', `${mat.baseColor[0]}, ${mat.baseColor[1]}, ${mat.baseColor[2]}`),
+    value('metalness', 'float', `${mat.metalness}`),
+    value('specular', 'float', `${mat.specular}`),
+    value('specular_roughness', 'float', `${mat.roughness}`),
+    value('specular_IOR', 'float', `${mat.ior}`),
+    value('transmission', 'float', `${mat.transmission}`),
+    value('subsurface', 'float', `${mat.subsurface}`),
+  ];
+  const surface: ResolvedNode = {
+    id: 'SR',
+    category: 'standard_surface',
+    type: 'surfaceshader',
+    inputs,
+    provenance: { namePath: '/mat/SR' },
+  };
+  return {
+    terminals: [{ name: 'surfaceshader', type: 'surfaceshader', nodeId: 'SR', provenance: { namePath: '/mat/SR' } }],
+    nodes: new Map<string, ResolvedNode>([['SR', surface]]),
+  };
+}
+
+/**
+ * Compose the compute shade shader from the compiled layered surface module: the
+ * module carries the shared closure library + mx_surface_layered; this wrapper
+ * reconstructs the LayeredClosure per sample and evaluates the same direct term
+ * as the forward fragment (delta light, no shadow, one constant-env sample). The
+ * material constants are folded into the module, so the uniform only carries the
+ * light and environment (the baseColor/material/coat slots stay for layout parity
+ * with the oracle packing but are unread).
+ */
+function irShadeWgsl(mat: CanonMaterial): string {
+  const module = emitLayeredSurface(surfaceGraphFor(mat), resolveSurface(surfaceGraphFor(mat), {})!);
+  return `${module.code}
 
 struct P {
   baseColor : vec4<f32>,
@@ -47,31 +93,45 @@ struct P {
 @group(0) @binding(1) var<storage, read> inV : array<f32>;
 @group(0) @binding(2) var<storage, read_write> outC : array<f32>;
 @group(0) @binding(3) var<uniform> u : P;
+
+fn basis(n : vec3<f32>) -> mat3x3<f32> {
+  let s = select(-1.0, 1.0, n.z >= 0.0);
+  let a = -1.0 / (s + n.z);
+  let b = n.x * n.y * a;
+  let t = vec3<f32>(1.0 + s * n.x * n.x * a, s * b, -s * n.x);
+  let bt = vec3<f32>(b, s + n.y * n.y * a, -n.y);
+  return mat3x3<f32>(t, bt, n);
+}
+
 @compute @workgroup_size(64)
 fn main(@builtin(global_invocation_id) gid : vec3<u32>) {
   let i = gid.x;
   if (i >= u.count) { return; }
-  let b = i * 3u;
-  let n = normalize(vec3<f32>(inN[b], inN[b + 1u], inN[b + 2u]));
-  let v = normalize(vec3<f32>(inV[b], inV[b + 1u], inV[b + 2u]));
-  var m : MxSurface;
-  m.baseColor = u.baseColor.rgb;
-  m.metalness = u.material.x;
-  m.roughness = u.material.y;
-  m.transmission = u.material.z;
-  m.subsurface = u.material.w;
-  m.ior = u.coat.x;
-  m.specular = u.coat.y;
-  var lit : MxLight;
-  lit.direction = u.lightDir.xyz;
-  lit.color = u.lightColor.rgb;
-  lit.intensity = u.lightColor.w;
-  lit.environment = u.environment.rgb;
-  let c = mx_openpbr_surface(m, n, v, lit);
-  outC[b] = c.x;
-  outC[b + 1u] = c.y;
-  outC[b + 2u] = c.z;
+  let bi = i * 3u;
+  let n = normalize(vec3<f32>(inN[bi], inN[bi + 1u], inN[bi + 2u]));
+  let v = normalize(vec3<f32>(inV[bi], inV[bi + 1u], inV[bi + 2u]));
+  var vary : MxVaryings;
+  vary.position = vec3<f32>(0.0);
+  vary.normal = n;
+  vary.viewDir = v;
+  vary.texcoord = vec2<f32>(0.0);
+  let c = mx_surface_layered(vary);
+  let sframe = basis(n);
+  let wo = transpose(sframe) * v;
+  let toLight = normalize(-u.lightDir.xyz);
+  let wiLight = transpose(sframe) * toLight;
+  let ev = mx_closure_eval(c, wo, wiLight);
+  let cosL = max(dot(n, toLight), 0.0);
+  var radiance = ev.value * (u.lightColor.xyz * u.lightColor.w) * cosL;
+  let wiEnv = vec3<f32>(0.0, 0.0, 1.0);
+  let evEnv = mx_closure_eval(c, wo, wiEnv);
+  radiance = radiance + evEnv.value * u.environment.xyz * MX_PI;
+  if (c.hasEmission != 0u) { radiance = radiance + c.emission; }
+  outC[bi] = radiance.x;
+  outC[bi + 1u] = radiance.y;
+  outC[bi + 2u] = radiance.z;
 }`;
+}
 
 function material(id: string): CanonMaterial {
   const m = (materials.scenes as Record<string, {
@@ -191,9 +251,6 @@ export async function runScenesOnDevice(device: GPUDevice): Promise<Omit<SceneDe
   device.queue.writeBuffer(normalBuffer, 0, normals);
   device.queue.writeBuffer(viewBuffer, 0, views);
 
-  const module = device.createShaderModule({ code: SHADE_WGSL });
-  const pipeline = device.createComputePipeline({ layout: 'auto', compute: { module, entryPoint: 'main' } });
-
   // Reference semantics (src/render/bsdf/reference.ts): L = normalize(-direction),
   // radiance = color * intensity, environment added once per lobe.
   const lightDir = [scenes.light.direction[0]!, scenes.light.direction[1]!, scenes.light.direction[2]!];
@@ -207,8 +264,12 @@ export async function runScenesOnDevice(device: GPUDevice): Promise<Omit<SceneDe
 
   const results: SceneDeviceResult[] = [];
   for (const id of Object.keys(materials.scenes)) {
+    const mat = material(id);
+    // One pipeline per material: constants are folded into the IR shader.
+    const module = device.createShaderModule({ code: irShadeWgsl(mat) });
+    const pipeline = device.createComputePipeline({ layout: 'auto', compute: { module, entryPoint: 'main' } });
     const shaded = await shadeOnDevice(
-      device, pipeline, normalBuffer, viewBuffer, count, bytes, material(id), lightDir, lightColor, intensity, environment,
+      device, pipeline, normalBuffer, viewBuffer, count, bytes, mat, lightDir, lightColor, intensity, environment,
     );
     results.push({ id, shaded: Array.from(shaded) });
   }
@@ -257,7 +318,8 @@ export async function renderSceneImageOnDevice(
   device.queue.writeBuffer(normalBuffer, 0, normals);
   device.queue.writeBuffer(viewBuffer, 0, views);
 
-  const module = device.createShaderModule({ code: SHADE_WGSL });
+  const mat = material(sceneId);
+  const module = device.createShaderModule({ code: irShadeWgsl(mat) });
   const pipeline = device.createComputePipeline({ layout: 'auto', compute: { module, entryPoint: 'main' } });
 
   const lightDir = [scenes.light.direction[0]!, scenes.light.direction[1]!, scenes.light.direction[2]!];
@@ -271,7 +333,7 @@ export async function renderSceneImageOnDevice(
 
   const shaded = count > 0
     ? await shadeOnDevice(
-        device, pipeline, normalBuffer, viewBuffer, count, bytes, material(sceneId),
+        device, pipeline, normalBuffer, viewBuffer, count, bytes, mat,
         lightDir, lightColor, intensity, environment,
       )
     : new Float32Array(0);

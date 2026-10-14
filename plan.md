@@ -256,6 +256,17 @@ et estimation d'epaisseur, sans la confondre avec transmission ou volume.
 Volumes : integration par ray marching, transmittance, eclairage et ombres,
 avec qualite d'integration et approximations de diffusion declarees.
 
+Source d'ombrage [T058] : l'evaluation OpenPBR du raster passe par le variant
+WGSL compile du materiau (IR -> mx_shade -> LayeredClosure) evalue contre la
+lumiere directionnelle et l'environnement constant via la bibliotheque de
+fermetures partagee (closure-library.ts, mx_closure_eval), exactement la meme
+pile que le path tracer (9.6) ; l'IR du compilateur est la source d'ombrage
+unique des deux backends. Le bloc openPbrSurfaceWgsl ecrit a la main est
+retrograde en oracle analytique (reference.ts) et ne pilote plus le rendu.
+Approximations raster explicites : eclairage direct uniquement (un echantillon
+par lumiere), pas de NEE/MIS multi-rebonds ni d'ombres, environnement constant.
+Cablage livre en T058b-e, parite device cross-backend en T059.
+
 ### 9.2 Path tracing de reference
 
 Integrateur compute pour surfaces, milieux et subsurface : BSDF/phase/BSSRDF,
@@ -292,6 +303,9 @@ et textures de couleur. Qualifier les transformations de cmlib et les espaces
 requis, avec une solution OCIO si le perimetre l'exige.
 Un espace Raw inconnu ne doit pas etre interprete silencieusement comme sRGB.
 Partager gestion colorimetrique, exposition et sortie entre les backends.
+Partager aussi la source d'ombrage : raster et path tracer evaluent la meme
+fermeture generee depuis l'IR via la bibliotheque de closures partagee (9.1/9.6),
+seules les approximations de transport different [T058].
 Le tonemapping reste distinct du transport lumineux.
 Qualifier lumieres USD ponctuelles, distantes, surfaciques, dome, leurs unites,
 normalisation, formes, textures et profils photometriques lorsqu'ils sont utilises.
@@ -1353,6 +1367,240 @@ siennes ; toute entree ou noeud non supporte produit un diagnostic (REQ-013).
   change. Verifier que raster et path tracer produisent la meme reponse directe
   sur les memes materiaux (parite de source IR). Valide : typecheck + suite Node ;
   run device local + mobile sans regression.
+  Decoupe en sous-taches T058a-T058f (chacune : typecheck + suite Node ; le run
+  device local + mobile reste la recette d'acceptation du parent, smoke en T058f ;
+  parite cross-backend complete en T059) :
+
+  - [x] T058a [Plan:P10] Tracer et consigner l'architecture raster-sur-IR
+    (doc-only, aucun code shader). Le raster evalue le meme ombrage que le path
+    tracer : il execute mx_shade (IR compile, emitWgsl) pour obtenir la fermeture
+    de surface (LayeredClosure, surface-wgsl.ts) puis l'evalue contre l'unique
+    lumiere directionnelle + l'environnement constant via la pile partagee
+    mx_closure_eval (closure-library.ts, T056) -- meme terme direct que
+    compute.ts, SANS NEE/MIS multi-rebonds ni ombres. Consigner les approximations
+    raster explicites (direct uniquement, un echantillon, pas d'ombre, env
+    constant) et le decoupage des uniformes : bloc frame (model/viewProj/eye/
+    lumiere/env) separe des MxUniforms materiau (group0 binding0 emis par
+    assembleModule). Mettre a jour docs/validation.md (sous-section raster-sur-IR)
+    et le paragraphe 9.1/9.4 du plan (le raster consomme l'IR, openPbrSurfaceWgsl
+    retrograde en oracle analytique). Valide : relecture + typecheck + suite Node
+    (inchanges).
+    Fait : §9.1 du plan complete (paragraphe "Source d'ombrage [T058]" : raster
+    via variant WGSL compile mx_shade -> LayeredClosure evalue par
+    mx_closure_eval partage, openPbrSurfaceWgsl retrograde en oracle analytique,
+    approximations direct/un echantillon/pas d'ombre/env constant) ; §9.4 note la
+    source d'ombrage partagee entre backends [T058]. docs/validation.md : nouvelle
+    sous-section "### Backend raster : ombrage sur l'IR (T058)" apres le mégakernel
+    PT (avant "Scenes couvertes") -- source d'ombrage unique, approximations
+    declarees, decoupage frame-uniform vs MxUniforms group0 binding0 + pipeline par
+    variant (pipelineKey), cablage en T058b-e, parite device T058f/T059. Doc-only,
+    aucun code shader. Gate 937/85 inchange.
+
+  - [x] T058b [Plan:P10] Module d'assemblage du shader raster depuis un WgslModule
+    compile, additif (pas de cablage backend). Nouvelle fonction qui prend le
+    module materiau (mx_shade + MxUniforms + preludes LAYERED_CLOSURE/CLOSURE_
+    LIBRARY) et emet un WGSL scene-forward complet : etage vertex (transforme
+    position/normale par model puis viewProj, remplit MxVaryings dont viewDir =
+    normalize(eye - worldPos)), etage fragment (appelle mx_shade, extrait la sortie
+    surface, reconstruit la LayeredClosure et l'evalue contre la lumiere
+    directionnelle + env constant via mx_closure_eval -- miroir exact du terme
+    direct de compute.ts), ecrit la radiance HDR lineaire. Bloc uniforme frame
+    dedie sur un binding distinct des MxUniforms. Tests JS structurels (toContain) :
+    embarque CLOSURE_LIBRARY_PRELUDE, appelle mx_shade et mx_closure_eval, struct
+    frame presente, terme env present ; parite structurelle avec le terme direct
+    PT. Non consomme par le backend. Valide : typecheck + suite Node.
+    Fait : nouveau module src/render/raster/ir-forward.ts, fonction
+    assembleIrForwardShader(surface: LayeredSurfaceModule) -> IrForwardShader. La
+    couture reelle part du module de surface en couches (emitLayeredSurface) qui
+    porte deja LAYERED_CLOSURE + CLOSURE_LIBRARY (dont mx_closure_eval) + MxUniforms
+    group0 + MxVaryings + mx_surface_layered ; le "mx_shade" du libelle = l'entree
+    surface du materiau (surface.entryPoint, ici mx_surface_layered) qui rend
+    directement la LayeredClosure. Le builder ajoute : bloc frame MxFrame
+    (model/viewProj/eye/lightDir/lightColor/env) a @group(3) @binding(0) distinct de
+    group0/1/2 ; helper basis() identique a compute.ts ; etage vertex vs_forward
+    (world = model*pos, clip = viewProj*world, worldNormal, viewDir = eye-worldPos) ;
+    etage fragment fs_forward (reconstruit var vary: MxVaryings, c =
+    mx_surface_layered(vary), wo = transpose(basis(n))*viewDir, terme delta direct
+    ev=mx_closure_eval sans ombre -- miroir exact de compute.ts --, env constant via
+    un echantillon deterministe wi=+Z evEnv*env*MX_PI, emission si hasEmission).
+    6 tests structurels tests/render/raster/ir-forward.test.ts (biblio partagee +
+    LayeredClosure, frame distinct group3, stages vertex/fragment, terme direct ==
+    PT sans traverse(), terme env, emission). Additif, aucun backend ne le consomme
+    (cablage T058c-e, parite device T058f/T059). Gate 943/86 (+6 tests, +1 fichier).
+
+  - [x] T058c [Plan:P10] Restructurer les uniformes raster : separer le bloc frame
+    (model/viewProj/eye/lightDir/lightColor/environment) des MxUniforms materiau
+    emis par assembleModule a group0 binding0. Deplacer le frame sur son propre
+    bind group, adapter le packing scene-frame.ts et les constantes de layout de
+    backend.ts (SCENE_FORWARD_UNIFORM_SIZE / FORWARD_UNIFORM_SIZE) + la description
+    des bind-group layouts. Mettre a jour les tests scene-frame et backend
+    impactes. Pas encore de pipeline par variant (T058d). Valide : typecheck +
+    suite Node.
+    Fait : les deux shaders forward (forwardOpaqueWgsl mono-objet, sceneForwardWgsl
+    scene) scindent desormais la struct Uniforms en struct Material (baseColor/
+    params/coat) a @group(0) @binding(0) -- le slot des futures MxUniforms -- et
+    struct Frame a @group(3) @binding(0) via IR_FORWARD_FRAME_GROUP/BINDING partage
+    avec ir-forward.ts ; variables WGSL renommees matU/frameU. backend.ts : les
+    constantes monolithiques FORWARD_UNIFORM_SIZE=176 / SCENE_FORWARD_UNIFORM_SIZE=
+    240 remplacees par FORWARD_FRAME_UNIFORM_SIZE=128 + FORWARD_MATERIAL_UNIFORM_
+    SIZE=48 et SCENE_FRAME_UNIFORM_SIZE=192 + SCENE_MATERIAL_UNIFORM_SIZE=48, export
+    FRAME_BIND_GROUP ; SceneDrawCall.bindGroup scinde en materialBindGroup +
+    frameBindGroup ; recordScenePass pose setBindGroup(0, material) et setBindGroup
+    (FRAME_BIND_GROUP, frame). scene-frame.ts : buildSceneUniform (60 floats)
+    remplace par buildSceneFrameUniform (48) + buildSceneMaterialUniform (12).
+    main.ts cree deux buffers + deux bind groups par draw (material via
+    getBindGroupLayout(0), frame via getBindGroupLayout(FRAME_BIND_GROUP)). Tests
+    scene-frame/backend/shaders mis a jour (packers scindes, mocks a deux bind
+    groups, assertions matU/frameU/group3). Pas de pipeline par variant (T058d).
+    Gate 944/86 (+1 test : le test packer scene scinde en deux).
+
+  - [x] T058d [Plan:P10] Cabler la passe scene forward du RasterBackend sur les
+    variants assembles par materiau. backend.ts compile un pipeline par variant
+    (cle = variant.pipelineKey deja calcule dans scene-resources.ts), avec cache de
+    pipelines, au lieu de l'unique sceneForwardWgsl. scene-resources fournit le
+    module scene-forward assemble (T058b) par materiau et construit les bind groups
+    (frame + materiau + textures/samplers). Mettre a jour la harness device de
+    scene (tests/render/scene-device.harness.ts) pour embarquer le shader IR, et
+    les tests backend/scene-resources. Valide : typecheck + suite Node.
+    Fait : backend.ts ajoute SCENE_IR_VERTEX_LAYOUTS (3 buffers pos/normal/texcoord
+    aux locations 0/1/2), SceneDrawCall.pipelineKey?/texcoordBuffer? optionnels, un
+    cache sceneVariants (cle ${pass}:${pipelineKey}) avec createSceneVariantPipeline
+    / sceneVariantPipeline, sceneColorTarget partage, et recordScenePass selectionne
+    le pipeline par draw (fallback sur l'unique pipeline ecrit a la main quand
+    pipelineKey absent, pour ne pas casser main.ts avant T058e). scene-resources
+    ajoute MaterialBuild.layered?, assemble MaterialResource.sceneShader via
+    assembleIrForwardShader (+ surfaceModule retenu), et expose createSceneBindGroups
+    (materiau group 0 -- groupe vide si constantes foldees --, frame au frameGroup IR,
+    textures/samplers aux slots du module). Harness device : irShadeWgsl(mat)
+    reconstruit une LayeredClosure depuis emitLayeredSurface(standard_surface folde)
+    et evalue le terme direct (mx_closure_eval, lumiere delta + env constant) comme
+    le fragment IR ; un pipeline compute par materiau remplace l'unique SHADE_WGSL
+    OpenPBR. Tests : +3 scene-resources (sceneShader present/absent, bind groups),
+    +3 backend (compile/cache variant, selection par draw + texcoord buffer, throw
+    sur variant manquant). Gate : typecheck OK, 950 tests / 86 fichiers. Reste
+    T058e : brancher main.ts/mono-objet sur le variant IR et retirer
+    sceneForwardWgsl/openPbrSurfaceWgsl du chemin de rendu.
+
+  - [x] T058e [Plan:P10] Cabler la passe mono-objet (forwardOpaqueWgsl) et
+    src/main.ts sur le variant IR : main.ts route via le shader assemble depuis
+    l'IR plutot que les fonctions ecrites a la main. Retirer sceneForwardWgsl /
+    openPbrSurfaceWgsl du chemin de rendu (conserves uniquement s'ils servent
+    encore d'oracle analytique a la harness/reference). Mettre a jour main et les
+    tests concernes. Valide : typecheck + suite Node.
+    Fait : main.ts assemble desormais un module layered (emitLayeredSurface sur un
+    standard_surface constant) dans demoMaterialCompiler, compile un pipeline IR
+    par (passe, materiau) via createSceneVariantPipeline(material.sceneShader.code),
+    construit les bind groups via createSceneBindGroups et pousse chaque SceneDrawCall
+    avec pipelineKey + texcoordBuffer (flux uv uploade sinon flux zero par prototype
+    pour alimenter l'entree loc2 du stage vertex IR). Plus aucun appel a
+    createSceneForwardPipeline/scenePipeline dans main. backend.ts : createForwardPipeline
+    (mono-objet) prend maintenant le code IR et utilise les entry points vs_forward/
+    fs_forward + SCENE_IR_VERTEX_LAYOUTS vers la cible HDR ; recordOpaquePass lie
+    material/frame (group0 + FRAME_BIND_GROUP) et trois flux pos/normal/texcoord ;
+    OpaquePassTargets/ForwardGeometry adaptes. createSceneForwardPipeline,
+    scenePipeline, sceneOpaque/sceneTransmission et le fallback de recordScenePass
+    supprimes (SceneDrawCall.pipelineKey devient requis ; chaque draw passe par son
+    variant, draws vides = passe clear/load sans pipeline). Imports forwardOpaqueWgsl/
+    sceneForwardWgsl retires de backend.ts (fonctions WGSL encore definies dans
+    shaders.ts, suppression du code mort en T058f). Tests backend : pipeline forward
+    IR (entry points + 3 buffers), opaque pass a deux bind groups + 3 flux, scene
+    pass multi-draw par variant ; retrait des deux tests createSceneForwardPipeline
+    et du test throw sur draws vides. Gate : typecheck OK, 947 tests / 86 fichiers
+    (-3 tests backend fusionnes/retires). Reste T058f : parite CPU/structurel,
+    tolerances, suppression du WGSL mort, finalisation docs/validation.md.
+
+  - [ ] T058f [Plan:P10] Parite, tolerances, nettoyage et cloture. Verifier que
+    raster et path tracer produisent la meme reponse directe sur les memes
+    materiaux (test de parite CPU/structurel : les deux passent par mx_shade +
+    mx_closure_eval sur une LayeredClosure identique). Mettre a jour
+    tests/fixtures/tolerances.ts si le layout a change, retirer le WGSL mort
+    devenu inutilise, finaliser docs/validation.md. Run device local + mobile =
+    etape MANUELLE (WebGPU indisponible sous Node) via npm run test:local-scene /
+    test:scene-device ; parite device complete cote T059. Valide : typecheck +
+    suite Node.
+    Decoupe en sous-taches T058f1-T058f3 (chacune : typecheck + suite Node ; le
+    run device local + mobile reste MANUEL, parite cross-backend device complete
+    en T059) :
+
+    - [x] T058f1 [Plan:P10] Test de parite source-IR raster vs path tracer. Nouveau
+      test Node prouvant que le terme direct du raster-sur-IR (ir-forward.ts
+      assembleIrForwardShader) et celui du megakernel path tracer (compute.ts)
+      derivent de la MEME LayeredClosure evaluee par la MEME pile partagee
+      mx_closure_eval (closure-library.ts, T056) : parite structurelle (les deux
+      WGSL embarquent CLOSURE_LIBRARY_PRELUDE, appellent mx_closure_eval, meme
+      forme de terme delta direct + env constant, sans ombre/NEE/MIS cote raster) ET
+      parite numerique CPU via l'oracle (evaluateLayeredSurface / layeredSurfaceBsdf
+      reference partagee) sur quelques materiaux temoins + geometries. Documente les
+      approximations raster (direct uniquement, un echantillon, pas d'ombre, env
+      constant) comme ecart assume vs le path tracer multi-rebonds. Additif, aucun
+      code de rendu modifie. Valide : typecheck + suite Node.
+      Fait: tests/render/raster/ir-parity.test.ts (additif, aucun code de rendu
+      touche). (1) Parite structurelle : raster (assembleIrForwardShader sur
+      emitLayeredSurface) et pt (pathTraceComputeWgsl) embarquent tous deux struct
+      LayeredClosure + fn mx_closure_eval, appellent mx_closure_eval(c, wo, wiLight)
+      dans un repere local Duff ; le raster n'a pas de traverse( (pas d'ombre), le pt
+      si. (2) Parite numerique CPU : sur l'ancre T055b standard_surface (base=1,
+      specular_color blanc, diffuse_roughness=specular_roughness, pas de
+      coat/sheen/film, transmission/subsurface=0) le lowering raster
+      (parsedInputsToLayered) et le packing canonique 7-param du pt
+      (canonicalSurfaceToLayered o parsedSurfaceToCanonical) donnent la MEME
+      LayeredClosure (serializeLayeredClosure egal) et le MEME terme delta direct
+      via evalWorld/layeredSurfaceBsdf (tol closure 2e-3), temoins diffus+specular et
+      metal. Env constant raster documente comme terme additif raster-only (fini,
+      non negatif). Un temoin coat montre que le chemin IR raster conserve des
+      couches que le packing canonique du pt laisse tomber aujourd'hui (comble cote
+      GPU en T059). Gate : typecheck OK + 953 tests / 87 fichiers (+6 tests,
+      +1 fichier).
+
+    - [x] T058f2 [Plan:P10] Retrait du WGSL mort devenu inutilise. Supprimer de
+      src/render/raster/shaders.ts les fonctions ecrites a la main sorties du
+      chemin de rendu en T058d/T058e : forwardOpaqueWgsl, sceneForwardWgsl et
+      l'oracle analytique openPbrSurfaceWgsl (conserve uniquement si encore
+      consomme comme oracle par une harness/reference -- sinon migre vers
+      reference.ts / scene-device.harness.ts). Retirer les exports backend.ts
+      devenus orphelins (FORWARD_VERTEX_LAYOUT, FORWARD_VERTEX_STRIDE,
+      SCENE_VERTEX_LAYOUTS, FORWARD_MATERIAL_UNIFORM_SIZE, FORWARD_FRAME_UNIFORM_SIZE)
+      et nettoyer tests/render/raster/shaders.test.ts (tests qui importaient ces
+      fonctions). Verifier via recherche qu'aucun consommateur runtime ne subsiste.
+      Valide : typecheck + suite Node.
+      Fait: recherche prealable -> openPbrSurfaceWgsl/forwardOpaqueWgsl/
+      sceneForwardWgsl n'avaient plus AUCUN consommateur runtime (la harness
+      scene-device.harness.ts passe par mx_closure_eval depuis T056, plus par
+      mx_openpbr_surface) ; seuls shaders.test.ts les importait. Les trois fonctions
+      retirees de shaders.ts (reste tonemapExpr + tonemapResolveWgsl ; import
+      ir-forward.ts et entete reecrits). Exports backend.ts orphelins supprimes
+      (FORWARD_VERTEX_STRIDE/LAYOUT, SCENE_VERTEX_LAYOUTS, FORWARD_MATERIAL_UNIFORM_
+      SIZE, FORWARD_FRAME_UNIFORM_SIZE) ; SCENE_MATERIAL_UNIFORM_SIZE inline a 48 (ne
+      reference plus FORWARD_MATERIAL_UNIFORM_SIZE, encore utilise par main.ts).
+      Commentaires sceneForwardWgsl mis a jour -> IR forward shader dans
+      scene-frame.ts et backend.ts. shaders.test.ts : blocs forwardOpaqueWgsl +
+      openPbrSurfaceWgsl retires (-3 tests), bloc tonemapResolveWgsl conserve.
+      Gate : typecheck OK + 950 tests / 87 fichiers (-3 tests). plan.md T058f2 [x].
+
+    - [x] T058f3 [Plan:P10] Tolerances, docs et cloture T058. Mettre a jour
+      tests/fixtures/tolerances.ts si le layout materiau/frame a change (sinon
+      consigner qu'elles restent inchangees), finaliser docs/validation.md
+      (sous-section raster-sur-IR : source d'ombrage unique partagee avec le path
+      tracer, approximations raster declarees, parite device reportee a T059) et
+      aligner docs/conformance.md / docs/materialx-node-coverage.md la ou ils
+      referencent openPbrSurfaceWgsl/forwardOpaqueWgsl/sceneForwardWgsl. Run device
+      local + mobile = etape MANUELLE (WebGPU indisponible sous Node) via
+      npm run test:local-scene / test:scene-device ; parite device complete cote
+      T059. Valide : typecheck + suite Node.
+      Fait: tolerances.ts INCHANGE (T058f n'a modifie aucun layout materiau/frame :
+      SCENE_MATERIAL_UNIFORM_SIZE=48 et SCENE_FRAME_UNIFORM_SIZE=192 conserves, seule
+      une constante dupliquee a ete inlinee ; NODE_TOLERANCE.closure reste 2e-3).
+      docs/validation.md : miroir Lambert scene-compare et section fermetures P8
+      ne nomment plus mx_openpbr_surface/forwardOpaqueWgsl (ombrage sur variant IR +
+      mx_closure_eval) ; sous-section raster-sur-IR finalisee -> bloc OpenPBR a la
+      main retire en T058f2, oracle analytique = ref.evaluateSurface, parite
+      source-IR raster<->path tracer prouvee par ir-parity.test.ts (T058f1), device
+      reportee a T059. docs/conformance.md : parenthese P8 backend raster ne pointe
+      plus openPbrSurfaceWgsl/mx_openpbr_surface (bloc T045 unifie sur l'IR partage
+      en T056/T058). docs/materialx-node-coverage.md : aucune reference a aligner
+      (recherche vide). Run device local+mobile = MANUEL (hors Node), couvert T059.
+      Gate : typecheck OK + 950 tests / 87 fichiers (inchange, docs seulement).
+      plan.md T058f3 [x]. T058 (cablage raster sur l'IR) CLOS : T058a-f tous [x].
 
 - [ ] T059 [Plan:P10] Validation device de la couverture BxDF via l'IR : rendre
   chaque famille bxdf (open_pbr_surface, standard_surface, disney_principled,

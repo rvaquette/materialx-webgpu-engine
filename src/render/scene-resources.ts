@@ -14,10 +14,12 @@ import { hashString, computePipelineKey, type PipelineKeyParts } from '../compil
 import { extractFeatures, type ShaderFeatures } from '../compiler/features.ts';
 import { typeToString, type ShaderIr } from '../compiler/ir.ts';
 import type { WgslModule } from '../compiler/wgsl.ts';
+import type { LayeredSurfaceModule } from '../compiler/surface-wgsl.ts';
 import type { Diagnostic, DiagnosticSink } from '../core/diagnostics.ts';
 import { buildBvh, buildTlas, type Aabb, type Bvh, type Tlas } from '../geometry/bvh.ts';
 import { prepareMesh, type PrepareMeshOptions, type PreparedSubset, type RawMesh, type DisplacementPlan, type SubdivisionPlan } from '../geometry/prepare.ts';
 import { createMaterialVariant, type MaterialVariant } from '../materials/instance.ts';
+import { assembleIrForwardShader, IR_FORWARD_FRAME_GROUP, type IrForwardShader } from './raster/ir-forward.ts';
 import { buildSceneInstances, type Mat4 } from '../scene/instances.ts';
 import { transformPoint } from '../scene/transforms.ts';
 import type { SceneAsset, ScenePrim } from '../scene/types.ts';
@@ -32,6 +34,10 @@ export interface MeshSource {
 export interface MaterialBuild {
   ir: ShaderIr;
   module: WgslModule;
+  /** The compiled layered surface module (emitLayeredSurface, T055d): the shared
+   *  shading source the IR scene-forward shader is assembled from (T058b/T058d).
+   *  Absent for legacy mx_shade-only builds, which keep the hand-written pass. */
+  layered?: LayeredSurfaceModule;
 }
 
 /** Runs the MaterialX chain for a unique material unit (dedup already applied). */
@@ -67,6 +73,13 @@ export interface MaterialResource {
   features: ShaderFeatures;
   variant: MaterialVariant;
   boundPrims: readonly string[];
+  /** The scene-forward WGSL assembled from the layered surface module (T058b),
+   *  present iff the build produced a layered module. backend.createSceneVariant
+   *  Pipeline compiles it, keyed by variant.pipelineKey. */
+  sceneShader?: IrForwardShader;
+  /** The compiled layered surface module backing sceneShader: retained so the
+   *  scene bind groups can resolve its texture/sampler group/binding slots. */
+  surfaceModule?: LayeredSurfaceModule;
 }
 
 export interface InstanceResource {
@@ -237,7 +250,16 @@ export async function buildSceneResources(
     }
     const features = extractFeatures(build.ir);
     const variant = createMaterialVariant(build.module, pipelineKeyFor(features, build.module, options));
-    materials.set(key, { unitKey: key, materialName: unit.materialName, features, variant, boundPrims: unit.boundPrims });
+    const sceneShader = build.layered ? assembleIrForwardShader(build.layered) : undefined;
+    materials.set(key, {
+      unitKey: key,
+      materialName: unit.materialName,
+      features,
+      variant,
+      boundPrims: unit.boundPrims,
+      ...(sceneShader ? { sceneShader } : {}),
+      ...(build.layered ? { surfaceModule: build.layered } : {}),
+    });
   }
 
   // Instances + TLAS.
@@ -299,4 +321,74 @@ export function uploadGeometry(device: GPUDevice, resource: GeometryResource, la
   });
   device.queue.writeBuffer(indexBuffer, 0, resource.indices);
   return { vertexBuffers, indexBuffer, indexCount: resource.indices.length };
+}
+
+/** Per-draw GPU buffers the scene bind groups bind for one instance. */
+export interface SceneDrawBuffers {
+  /** Per-frame uniform (model + camera + light + environment), bound at the
+   *  frame bind group, binding 0. */
+  frame: GPUBuffer;
+  /** Material MxUniforms buffer, bound at group 0 binding 0. */
+  material: GPUBuffer;
+  /** Resolved texture views by MaterialX texture handle name. */
+  textureViews?: ReadonlyMap<string, GPUTextureView>;
+  /** Resolved samplers by MaterialX sampler handle name. */
+  samplers?: ReadonlyMap<string, GPUSampler>;
+}
+
+export interface SceneBindGroups {
+  materialBindGroup: GPUBindGroup;
+  frameBindGroup: GPUBindGroup;
+  /** Every bind group built, keyed by its group index (includes texture/sampler
+   *  groups when the surface module declares them). */
+  byGroup: ReadonlyMap<number, GPUBindGroup>;
+}
+
+/**
+ * Build the scene-forward bind groups for one material draw (T058d): the material
+ * MxUniforms at group 0, the per-frame uniform at the IR frame bind group, and a
+ * bind group per texture/sampler group the compiled surface module declares.
+ * `layout` resolves each group's layout from the variant pipeline. Pure device
+ * calls -- no validation under Node (served to the GPU like uploadGeometry).
+ */
+export function createSceneBindGroups(
+  device: GPUDevice,
+  material: MaterialResource,
+  buffers: SceneDrawBuffers,
+  layout: (group: number) => GPUBindGroupLayout,
+): SceneBindGroups {
+  const module = material.surfaceModule;
+  const frameGroup = material.sceneShader?.frameGroup ?? IR_FORWARD_FRAME_GROUP;
+  const entriesByGroup = new Map<number, GPUBindGroupEntry[]>();
+  const push = (group: number, entry: GPUBindGroupEntry): void => {
+    const list = entriesByGroup.get(group) ?? [];
+    list.push(entry);
+    entriesByGroup.set(group, list);
+  };
+  // Material MxUniforms at group 0 binding 0 (only when the module declares them).
+  if (!module || module.uniforms.length > 0) push(0, { binding: 0, resource: { buffer: buffers.material } });
+  // Textures and samplers at their module-declared group/binding slots.
+  if (module) {
+    for (const t of module.textures) {
+      const view = buffers.textureViews?.get(t.name);
+      if (view) push(t.group, { binding: t.binding, resource: view });
+    }
+    for (const s of module.samplers) {
+      const sampler = buffers.samplers?.get(s.name);
+      if (sampler) push(s.group, { binding: s.binding, resource: sampler });
+    }
+  }
+  // Per-frame uniform at the dedicated frame bind group, binding 0.
+  push(frameGroup, { binding: 0, resource: { buffer: buffers.frame } });
+
+  const byGroup = new Map<number, GPUBindGroup>();
+  for (const [group, entries] of entriesByGroup) {
+    byGroup.set(group, device.createBindGroup({ layout: layout(group), entries }));
+  }
+  // Group 0 (material) always exists in the pipeline layout: bind an empty group
+  // when the surface folds every input to a constant (no MxUniforms).
+  if (!byGroup.has(0)) byGroup.set(0, device.createBindGroup({ layout: layout(0), entries: [] }));
+  const materialBindGroup = byGroup.get(0)!;
+  const frameBindGroup = byGroup.get(frameGroup)!;
+  return { materialBindGroup, frameBindGroup, byGroup };
 }

@@ -14,10 +14,12 @@
 // the real path, no longer a hard-coded triangle with hard-coded uniforms.
 
 import { emitWgsl } from './compiler/wgsl.ts';
+import { emitLayeredSurface } from './compiler/surface-wgsl.ts';
 import { FLOAT, IrModuleBuilder, shaderType } from './compiler/ir.ts';
-import { RasterBackend, RESOLVE_UNIFORM_SIZE, SCENE_FORWARD_UNIFORM_SIZE, type ScenePassKind, type SceneDrawCall } from './render/raster/backend.ts';
-import { buildSceneFrame, buildSceneUniform, type FrameCamera } from './render/raster/scene-frame.ts';
-import { buildSceneResources, uploadGeometry, type MaterialBuild, type MaterialCompiler, type MeshSource } from './render/scene-resources.ts';
+import { resolvedGraphFromParsedSurface, surfaceFromParsedInputs, type ParsedSurfaceInputs } from './materialx/surface-from-inputs.ts';
+import { RasterBackend, RESOLVE_UNIFORM_SIZE, SCENE_FRAME_UNIFORM_SIZE, SCENE_MATERIAL_UNIFORM_SIZE, type ScenePassKind, type SceneDrawCall } from './render/raster/backend.ts';
+import { buildSceneFrame, buildSceneFrameUniform, buildSceneMaterialUniform, type FrameCamera } from './render/raster/scene-frame.ts';
+import { buildSceneResources, createSceneBindGroups, uploadGeometry, type MaterialBuild, type MaterialCompiler, type MeshSource } from './render/scene-resources.ts';
 import { buildPathTraceScene } from './render/pathtracing/scene-buffers.ts';
 import { buildPathTraceUniform, PathTraceBackend, PT_UNIFORM_SIZE } from './render/pathtracing/compute.ts';
 import { RenderEngine, type BackendKind } from './render/engine.ts';
@@ -112,7 +114,16 @@ function demoMaterialCompiler(): MaterialCompiler {
       const ref = b.add({ kind: 'closure', type: shaderType('surface'), closure: 'bsdf', op: 'surface', params: { opacity } });
       b.output({ name: 'surfaceshader', type: shaderType('surface'), ref });
       const ir = b.build();
-      return { ir, module: emitWgsl(ir) };
+      // Assemble the layered surface module so scene-resources emits the IR
+      // scene-forward shader (T058e): a constant standard_surface the raster
+      // variant and the path tracer both lower through mx_surface_layered.
+      const spec: ParsedSurfaceInputs = {
+        category: 'standard_surface',
+        inputs: { base_color: [0.82, 0.67, 0.49], metalness: 0, specular_roughness: 0.4 },
+      };
+      const surface = surfaceFromParsedInputs(spec);
+      const layered = surface ? emitLayeredSurface(resolvedGraphFromParsedSurface(spec), surface) : undefined;
+      return { ir, module: emitWgsl(ir), ...(layered ? { layered } : {}) };
     },
   };
 }
@@ -167,7 +178,13 @@ async function main(): Promise<void> {
   });
 
   const backend = new RasterBackend({ device, outputFormat, tonemap: 'acesFilmic' });
-  for (const pass of frame.passes) backend.createSceneForwardPipeline(pass);
+  // Compile one IR variant pipeline per (pass, material) present in the frame.
+  for (const draw of frame.draws) {
+    const material = draw.materialKey ? resources.materials.get(draw.materialKey) : undefined;
+    if (material?.sceneShader) {
+      backend.createSceneVariantPipeline(draw.pass, material.variant.pipelineKey, material.sceneShader.code);
+    }
+  }
   backend.createResolvePipeline();
 
   const hdrTexture = device.createTexture({
@@ -189,26 +206,58 @@ async function main(): Promise<void> {
     uploaded.set(id, uploadGeometry(device, geometry, id));
   }
 
-  // One draw call per instance, grouped by its active pass.
+  // One draw call per instance, grouped by its active pass, each routed through
+  // its per-material IR variant pipeline (T058e).
   const drawsByPass = new Map<ScenePassKind, SceneDrawCall[]>();
+  const zeroTexcoords = new Map<string, GPUBuffer>();
   for (const draw of frame.draws) {
     const buffers = uploaded.get(draw.prototypeId);
+    const geometry = resources.geometries.get(draw.prototypeId);
     const position = buffers?.vertexBuffers.get('position');
     const normal = buffers?.vertexBuffers.get('normal');
-    if (!buffers || !position || !normal) continue;
-    const pipeline = backend.scenePipeline(draw.pass);
+    if (!buffers || !geometry || !position || !normal) continue;
+    const material = draw.materialKey ? resources.materials.get(draw.materialKey) : undefined;
+    if (!material?.sceneShader) continue;
+    const pipeline = backend.sceneVariantPipeline(draw.pass, material.variant.pipelineKey);
     if (!pipeline) continue;
-    const uniform = device.createBuffer({
-      size: SCENE_FORWARD_UNIFORM_SIZE,
+    // Texcoord stream (loc 2): the uploaded uv stream, else a per-prototype zero
+    // stream so the IR vertex stage always has its texcoord input bound.
+    let texcoord = buffers.vertexBuffers.get('uv');
+    if (!texcoord) {
+      texcoord = zeroTexcoords.get(draw.prototypeId);
+      if (!texcoord) {
+        texcoord = device.createBuffer({ size: geometry.vertexCount * 8, usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST });
+        device.queue.writeBuffer(texcoord, 0, new Float32Array(geometry.vertexCount * 2));
+        zeroTexcoords.set(draw.prototypeId, texcoord);
+      }
+    }
+    const frameUniform = device.createBuffer({
+      size: SCENE_FRAME_UNIFORM_SIZE,
       usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
     });
-    device.queue.writeBuffer(uniform, 0, buildSceneUniform(frame, draw));
-    const bindGroup = device.createBindGroup({
-      layout: pipeline.getBindGroupLayout(0),
-      entries: [{ binding: 0, resource: { buffer: uniform } }],
+    device.queue.writeBuffer(frameUniform, 0, buildSceneFrameUniform(frame, draw));
+    const materialUniform = device.createBuffer({
+      size: SCENE_MATERIAL_UNIFORM_SIZE,
+      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
     });
+    device.queue.writeBuffer(materialUniform, 0, buildSceneMaterialUniform(draw));
+    const bindGroups = createSceneBindGroups(
+      device,
+      material,
+      { frame: frameUniform, material: materialUniform },
+      (group) => pipeline.getBindGroupLayout(group),
+    );
     const list = drawsByPass.get(draw.pass) ?? [];
-    list.push({ bindGroup, positionBuffer: position, normalBuffer: normal, indexBuffer: buffers.indexBuffer, indexCount: buffers.indexCount });
+    list.push({
+      materialBindGroup: bindGroups.materialBindGroup,
+      frameBindGroup: bindGroups.frameBindGroup,
+      positionBuffer: position,
+      normalBuffer: normal,
+      texcoordBuffer: texcoord,
+      indexBuffer: buffers.indexBuffer,
+      indexCount: buffers.indexCount,
+      pipelineKey: material.variant.pipelineKey,
+    });
     drawsByPass.set(draw.pass, list);
   }
 
