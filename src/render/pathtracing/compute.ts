@@ -487,7 +487,15 @@ function wgslDispatch(dispatch: PtMaterialDispatch): string {
       `struct MxUniforms {\n${dispatch.uniforms.map((u) => `  ${u.field}: ${u.wgslType},`).join('\n')}\n};\n@group(0) @binding(7) var<uniform> u: MxUniforms;`,
     );
   }
-  // Texture/sampler bindings for graph variants land with the registry (T057j/k).
+  // Texture/sampler bindings for graph variants: the dedup registry (T057j)
+  // lays textures in group 1 and samplers in group 2 so the megakernel binds
+  // every material's textures at once. Sampling is wired in T057k.
+  for (const t of dispatch.textures) {
+    parts.push(`@group(${t.group}) @binding(${t.binding}) var ${t.handle}: texture_2d<f32>;`);
+  }
+  for (const s of dispatch.samplers) {
+    parts.push(`@group(${s.group}) @binding(${s.binding}) var ${s.handle}: sampler;`);
+  }
   parts.push(dispatch.dispatcherWgsl);
   return parts.join('\n\n');
 }

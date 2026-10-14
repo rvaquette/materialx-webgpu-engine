@@ -1506,13 +1506,26 @@ siennes ; toute entree ou noeud non supporte produit un diagnostic (REQ-013).
       le re-render device visible rouge-brique passe par le cablage du harnais USD
       (compilateur emettant graph+surface + bind group + bascule hors baked) = T057m.
 
-  - [ ] T057j [Plan:P10] Registre de textures PT : binder simultanement toutes les
+  - [x] T057j [Plan:P10] Registre de textures PT : binder simultanement toutes les
     textures de tous les materiaux. Nouveau registre deduplique les images entre
     materiaux et alloue des slots (group1, bindings sequentiels tex_<name>/
     samp_<name>) ; compute.ts emet les bindings dimensionnes au registre ; scene-
     buffers/harnais decodent les images (reuse assets/images.ts) et construisent le
     bind group (upload device-only). Tests JS : dedup du registre (unitaire) +
     marqueurs WGSL des bindings. Valide : typecheck + suite Node.
+    Fait : surface-ir.ts peuple TextureResource.fileRef depuis l'input file des
+    noeuds image ; WgslBinding porte fileRef optionnel (lowerExprs le propage sur les
+    textures) ; nouveau src/render/pathtracing/texture-registry.ts
+    (buildTextureRegistry) collecte toutes les textures/samplers des variants en une
+    disposition sequentielle (textures group1, samplers group2) et deduplique les
+    images par fileRef (images[] uniques + textureImage[] -> slot partage) ; handles
+    restent namespaces m<index>_ (seul le decode/upload device est partage) ;
+    material-variant.ts remplace dedupBindings par le registre et expose
+    textureRegistry dans PtMaterialDispatch ; compute.ts wgslDispatch emet les
+    declarations @group(1)/@group(2) des bindings. Tests : texture-registry.test.ts
+    (dispositions sequentielles, pairage samplers, dedup fichier partage, slots
+    distincts, vide) + compute.test.ts describe T057j (marqueurs WGSL bindings, dedup
+    registre, pas de binding sans image). Gate 1037/93 (+9).
 
   - [ ] T057k [Plan:P10] Echantillonnage de textures dans le megakernel + oracle CPU
     sur images decodees. Cabler les textureSample() emis par emitLayeredSurface aux

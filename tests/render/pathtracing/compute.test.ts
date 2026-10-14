@@ -199,6 +199,76 @@ describe('pathTraceComputeWgsl material dispatcher (T057i4)', () => {
 });
 
 
+describe('pathTraceComputeWgsl texture registry (T057j)', () => {
+  /** standard_surface whose base_color samples an image node reading `file`. */
+  function imageGraph(file: string): ResolvedGraph {
+    const tex: ResolvedNode = {
+      id: 'tex',
+      category: 'image',
+      type: 'color3',
+      inputs: [
+        { name: 'file', type: 'filename', source: { kind: 'value', value: file, type: 'filename' }, provenance: { namePath: '/mat/tex/file' } },
+      ],
+      provenance: { namePath: '/mat/tex' },
+    };
+    const surfaceNode: ResolvedNode = {
+      id: 'SR',
+      category: 'standard_surface',
+      type: 'surfaceshader',
+      inputs: [
+        { name: 'base_color', type: 'color3', source: { kind: 'connection', nodeId: 'tex' }, provenance: { namePath: '/mat/base_color' } },
+      ],
+      provenance: { namePath: '/mat/SR' },
+    };
+    return {
+      terminals: [{ name: 'surfaceshader', type: 'surfaceshader', nodeId: 'SR', provenance: { namePath: '/mat/SR' } }],
+      nodes: new Map<string, ResolvedNode>([['SR', surfaceNode], ['tex', tex]]),
+    };
+  }
+
+  function imageDispatch(files: readonly string[]) {
+    const sources = files.map((file, i) => {
+      const graph = imageGraph(file);
+      const surface = resolveSurface(graph, {})!;
+      expect(surface).not.toBeNull();
+      return { materialIndex: i, graph, surface };
+    });
+    return buildMaterialDispatch(sources);
+  }
+
+  it('emits the registry texture and sampler binding declarations', () => {
+    const dispatch = imageDispatch(['brick.png']);
+    const src = pathTraceComputeWgsl({ dispatch });
+    expect(src).toContain('@group(1) @binding(0) var m0_tex_tex: texture_2d<f32>;');
+    expect(src).toContain('@group(2) @binding(0) var m0_samp_tex: sampler;');
+  });
+
+  it('dimensions the bindings to every material at once', () => {
+    const dispatch = imageDispatch(['brick.png', 'wood.png']);
+    const src = pathTraceComputeWgsl({ dispatch });
+    expect(src).toContain('@group(1) @binding(0) var m0_tex_tex: texture_2d<f32>;');
+    expect(src).toContain('@group(1) @binding(1) var m1_tex_tex: texture_2d<f32>;');
+    expect(src).toContain('@group(2) @binding(1) var m1_samp_tex: sampler;');
+  });
+
+  it('deduplicates shared images in the registry while keeping both bindings', () => {
+    const dispatch = imageDispatch(['brick.png', 'brick.png']);
+    expect(dispatch.textureRegistry.images).toEqual(['brick.png']);
+    expect(dispatch.textureRegistry.textureImage).toEqual([0, 0]);
+    expect(dispatch.textures).toHaveLength(2);
+  });
+
+  it('emits no texture bindings when no material samples an image', () => {
+    const graph = brickGraph();
+    const surface = resolveSurface(graph, {})!;
+    const dispatch = buildMaterialDispatch([{ materialIndex: 0, graph, surface }]);
+    const src = pathTraceComputeWgsl({ dispatch });
+    expect(dispatch.textures).toEqual([]);
+    expect(src).not.toContain('texture_2d<f32>');
+  });
+});
+
+
 describe('buildPathTraceUniform layout', () => {
   it('packs invViewProj, eye, light, environment and frame counters', () => {
     const u = buildPathTraceUniform(fakeScene(), 7, 2, 320, 180);

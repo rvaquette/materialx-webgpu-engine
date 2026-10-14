@@ -35,6 +35,8 @@ export interface WgslBinding {
   handle: string;
   group: number;
   binding: number;
+  /** Image reference (textures only); the PT registry dedups shared files. */
+  fileRef?: string;
 }
 
 export interface WgslOutput {
@@ -316,7 +318,7 @@ export function lowerExprs(ir: ShaderIr, handlePrefix = ''): LoweredExprs {
   // Uniforms.
   const uniforms: WgslUniformField[] = ir.params.map((p) => ({ name: p.name, field: ident(p.name), wgslType: wgslType(p.type) }));
   // Bindings.
-  const textures: WgslBinding[] = ir.textures.map((t, i) => ({ name: t.name, handle: `${handlePrefix}tex_${ident(t.name)}`, group: 1, binding: i }));
+  const textures: WgslBinding[] = ir.textures.map((t, i) => ({ name: t.name, handle: `${handlePrefix}tex_${ident(t.name)}`, group: 1, binding: i, ...(t.fileRef !== undefined ? { fileRef: t.fileRef } : {}) }));
   const samplers: WgslBinding[] = ir.samplers.map((s, i) => ({ name: s.name, handle: `${handlePrefix}samp_${ident(s.name)}`, group: 2, binding: i }));
   return { order, body, preludes, extraInputs, primvarFields, usesLighting, uniforms, textures, samplers };
 }

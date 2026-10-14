@@ -166,11 +166,15 @@ export function lowerSurfaceInputsToIr(
     const node = graph.nodes.get(nodeId)!;
     const valueType = irTypeFromMaterialX(node.type) ?? COLOR3;
     const file = node.inputs.find((i) => i.name === 'file');
-    builder.declareTexture(
-      file?.colorSpace !== undefined
-        ? { name: nodeId, valueType, colorSpace: file.colorSpace }
-        : { name: nodeId, valueType },
-    );
+    // Record the image reference so the PT texture registry can dedup shared
+    // files across materials (T057j).
+    const fileRef = file?.source.kind === 'value' ? file.source.value : undefined;
+    builder.declareTexture({
+      name: nodeId,
+      valueType,
+      ...(file?.colorSpace !== undefined ? { colorSpace: file.colorSpace } : {}),
+      ...(fileRef !== undefined ? { fileRef } : {}),
+    });
     builder.declareSampler({ name: nodeId });
     const texcoord = node.inputs.find((i) => i.name === 'texcoord');
     const uv = (texcoord ? lowerInput(texcoord) : undefined) ?? ensureUv();

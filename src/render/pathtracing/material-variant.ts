@@ -16,6 +16,7 @@ import type { ResolvedSurface } from '../../materialx/surface-graph.ts';
 import { emitSurfaceVariant, type SurfaceVariantModule } from '../../compiler/surface-wgsl.ts';
 import type { IrType } from '../../compiler/ir.ts';
 import type { WgslBinding, WgslUniformField } from '../../compiler/wgsl.ts';
+import { buildTextureRegistry, type PtTextureRegistry } from './texture-registry.ts';
 
 /** Dispatcher entry assembled into the megakernel. */
 export const PT_MATERIAL_DISPATCH_ENTRY = 'mx_eval_material';
@@ -43,18 +44,14 @@ export interface PtMaterialDispatch {
   textures: WgslBinding[];
   /** Sampler bindings across all variants, renumbered to a global binding layout. */
   samplers: WgslBinding[];
+  /** Deduplicated texture registry (shared images across materials, T057j). */
+  textureRegistry: PtTextureRegistry;
   /** Uniform fields across all variants, deduplicated by field name. */
   uniforms: WgslUniformField[];
   /** MxVaryings primvar fields merged across variants. */
   primvarFields: Map<string, IrType>;
   /** MxVaryings extra input fields merged across variants. */
   extraInputs: Map<string, IrType>;
-}
-
-function dedupBindings(items: readonly WgslBinding[], group: number): WgslBinding[] {
-  const seen = new Map<string, WgslBinding>();
-  for (const b of items) if (!seen.has(b.handle)) seen.set(b.handle, b);
-  return [...seen.values()].map((b, i) => ({ name: b.name, handle: b.handle, group, binding: i }));
 }
 
 function dedupUniforms(items: readonly WgslUniformField[]): WgslUniformField[] {
@@ -76,8 +73,9 @@ export function buildMaterialDispatch(sources: readonly PtVariantSource[]): PtMa
     .map((s) => emitSurfaceVariant(s.graph, s.surface, s.materialIndex));
 
   const preludes = [...new Set(variants.flatMap((v) => v.preludes))];
-  const textures = dedupBindings(variants.flatMap((v) => v.textures), 1);
-  const samplers = dedupBindings(variants.flatMap((v) => v.samplers), 2);
+  const textureRegistry = buildTextureRegistry(variants);
+  const textures = textureRegistry.textures;
+  const samplers = textureRegistry.samplers;
   const uniforms = dedupUniforms(variants.flatMap((v) => v.uniforms));
   const primvarFields = mergeMaps(variants.map((v) => v.primvarFields));
   const extraInputs = mergeMaps(variants.map((v) => v.extraInputs));
@@ -89,5 +87,5 @@ export function buildMaterialDispatch(sources: readonly PtVariantSource[]): PtMa
   const fns = variants.map((v) => v.fnCode).join('\n\n');
   const dispatcherWgsl = `${fns ? fns + '\n\n' : ''}fn ${PT_MATERIAL_DISPATCH_ENTRY}(matId: u32, vary: MxVaryings) -> LayeredClosure {\n  switch matId {\n${switchBody}\n  }\n}`;
 
-  return { variants, dispatcherWgsl, preludes, textures, samplers, uniforms, primvarFields, extraInputs };
+  return { variants, dispatcherWgsl, preludes, textures, samplers, textureRegistry, uniforms, primvarFields, extraInputs };
 }
