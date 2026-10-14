@@ -22,7 +22,9 @@ import {
   type FrameLight,
   type RasterSurface,
 } from '../raster/scene-frame.ts';
-import { evalWorld, sampleWorld, surfaceBsdf, type SurfaceParams } from './bsdf.ts';
+import { evalWorld, layeredSurfaceBsdf, sampleWorld } from './bsdf.ts';
+import { canonicalSurfaceToLayered, type LayeredClosure } from '../../compiler/ir.ts';
+import { packLayeredMaterial, unpackLayeredMaterial, PT_MATERIAL_RECORD_FLOATS } from './material-record.ts';
 import type {
   BsdfSample,
   LightSample,
@@ -36,8 +38,8 @@ import type {
 export const PT_NODE_FLOATS = 12;
 /** Floats per packed triangle: v0,v1,v2, n0,n1,n2 (18) + materialIndex + 5 pad. */
 export const PT_TRIANGLE_FLOATS = 24;
-/** Floats per packed material: baseColor(3), metalness, roughness, transmission, subsurface, ior, specular, 3 pad. */
-export const PT_MATERIAL_FLOATS = 12;
+/** Floats per packed material: the flat LayeredClosure record (T057b, megakernel-ready). */
+export const PT_MATERIAL_FLOATS = PT_MATERIAL_RECORD_FLOATS;
 
 export interface PathTraceCamera {
   viewProj: Mat4;
@@ -56,7 +58,7 @@ export interface PathTraceScene {
   /** BVH leaf-order permutation of triangle ordinals (node start/count index this). */
   triangleOrder: Uint32Array;
   triangleCount: number;
-  /** Packed OpenPBR surfaces (PT_MATERIAL_FLOATS each). */
+  /** Packed LayeredClosure records (PT_MATERIAL_FLOATS each, T057b). */
   materials: Float32Array;
   materialCount: number;
   /** Per-triangle UVs (6 floats: u0,v0,u1,v1,u2,v2) in triangle-soup order; 0 when unauthored. */
@@ -238,35 +240,20 @@ function packNodes(bvh: Bvh): Float32Array {
 function packMaterials(surfaces: readonly RasterSurface[]): Float32Array {
   const out = new Float32Array(Math.max(surfaces.length, 1) * PT_MATERIAL_FLOATS);
   for (let i = 0; i < surfaces.length; i++) {
-    const s = surfaces[i]!;
-    const b = i * PT_MATERIAL_FLOATS;
-    out[b + 0] = s.baseColor[0]; out[b + 1] = s.baseColor[1]; out[b + 2] = s.baseColor[2];
-    out[b + 3] = s.metalness;
-    out[b + 4] = s.roughness;
-    out[b + 5] = s.transmission;
-    out[b + 6] = s.subsurface;
-    out[b + 7] = s.ior;
-    out[b + 8] = s.specular;
+    // Lower the constant surface to a LayeredClosure and pack the flat record.
+    // canonicalSurfaceToLayered is the T054 non-regression anchor, so the packed
+    // record evaluates byte-for-byte like the former seven-parameter surface.
+    out.set(packLayeredMaterial(canonicalSurfaceToLayered(surfaces[i]!)), i * PT_MATERIAL_FLOATS);
   }
   return out;
 }
 
-/** Read a packed material back into OpenPBR surface params (round-trips the buffer). */
-export function readSurfaceParams(scene: PathTraceScene, materialIndex: number): SurfaceParams {
+/** Read a packed material back into its LayeredClosure (round-trips the buffer, T057b). */
+export function readLayeredClosure(scene: PathTraceScene, materialIndex: number): LayeredClosure {
   if (materialIndex < 0 || materialIndex >= scene.materialCount) {
-    return { ...NEUTRAL_SURFACE };
+    return canonicalSurfaceToLayered(NEUTRAL_SURFACE);
   }
-  const b = materialIndex * PT_MATERIAL_FLOATS;
-  const m = scene.materials;
-  return {
-    baseColor: [m[b]!, m[b + 1]!, m[b + 2]!],
-    metalness: m[b + 3]!,
-    roughness: m[b + 4]!,
-    transmission: m[b + 5]!,
-    subsurface: m[b + 6]!,
-    ior: m[b + 7]!,
-    specular: m[b + 8]!,
-  };
+  return unpackLayeredMaterial(scene.materials, materialIndex);
 }
 
 // --- reference sampler over the packed buffers --------------------------------
@@ -382,9 +369,10 @@ function hitSurface(scene: PathTraceScene, hit: TriHit, ray: Ray): PtHit {
 
 /**
  * Expose the packed scene as the reference integrator's SceneSampler. BVH
- * traversal, ray/triangle math, surface closures (surfaceBsdf) and the directional
- * light all read the exact buffers the WGSL compute shader consumes, so the CPU
- * integrator is a faithful, non-circular oracle for the GPU port.
+ * traversal, ray/triangle math, surface closures (layeredSurfaceBsdf over the
+ * unpacked LayeredClosure record) and the directional light all read the exact
+ * buffers the WGSL compute shader consumes, so the CPU integrator is a faithful,
+ * non-circular oracle for the GPU port.
  */
 export function createSceneSampler(scene: PathTraceScene): SceneSampler {
   const lightDir = normalize3(scene.light.direction);
@@ -399,8 +387,7 @@ export function createSceneSampler(scene: PathTraceScene): SceneSampler {
   const hasEnv = env[0] > 0 || env[1] > 0 || env[2] > 0;
 
   function lobeFor(hit: SurfaceHit) {
-    const params = readSurfaceParams(scene, (hit as PtHit).materialIndex);
-    return surfaceBsdf(params);
+    return layeredSurfaceBsdf(readLayeredClosure(scene, (hit as PtHit).materialIndex));
   }
 
   const sampler: SceneSampler = {

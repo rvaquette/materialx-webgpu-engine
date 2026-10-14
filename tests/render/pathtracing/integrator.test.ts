@@ -113,3 +113,127 @@ describe('integratePath', () => {
     expect(result[1]).toBeCloseTo(expected);
   });
 });
+
+describe('integratePath MIS on a surface light (T057e)', () => {
+  // A diffuse surface lit by a spherical-cap area light centred on the normal.
+  // Both next-event estimation (uniform cone sampling) and BSDF sampling (cosine
+  // hemisphere) can reach the light, so MIS combines them with the power
+  // heuristic. The three estimators share one analytic integral:
+  //   Lo = f * Le * integral_cone(cos) dw = a * Le * sin^2(alpha).
+  const albedo = 0.8;
+  const Le = 8;
+  const alpha = 0.25; // small, bright light: NEE converges fast, BSDF sampling does not.
+  const cosHalf = Math.cos(alpha);
+  const omega = 2 * Math.PI * (1 - cosHalf); // cone solid angle
+  const f = albedo / Math.PI;
+  const Lo = albedo * Le * Math.sin(alpha) ** 2;
+
+  const scaleV = (a: readonly [number, number, number], s: number): [number, number, number] => [
+    a[0] * s,
+    a[1] * s,
+    a[2] * s,
+  ];
+  const negV = (a: readonly [number, number, number]): [number, number, number] => [-a[0], -a[1], -a[2]];
+
+  function sampleCone(rng: () => number): [number, number, number] {
+    const z = 1 - rng() * (1 - cosHalf);
+    const r = Math.sqrt(Math.max(0, 1 - z * z));
+    const phi = 2 * Math.PI * rng();
+    return [r * Math.cos(phi), r * Math.sin(phi), z];
+  }
+
+  function cosineHemisphere(rng: () => number): [number, number, number] {
+    const u1 = rng();
+    const r = Math.sqrt(u1);
+    const phi = 2 * Math.PI * rng();
+    return [r * Math.cos(phi), r * Math.sin(phi), Math.sqrt(Math.max(0, 1 - u1))];
+  }
+
+  const inCone = (dir: readonly [number, number, number]): boolean => dir[2] >= cosHalf;
+
+  const shadingPoint: SurfaceHit = { position: [0, 0, 0], normal: [0, 0, 1] };
+  const misScene: SceneSampler = {
+    intersect: (ray) => {
+      // Camera ray enters from above and lands on the shading point.
+      if (ray.origin[2] > 0.5 && ray.direction[2] < 0) return shadingPoint;
+      // Continuation rays reach the light only inside the cone.
+      if (ray.direction[2] >= cosHalf) {
+        return { position: scaleV(ray.direction, 100), normal: negV(ray.direction), emission: [Le, Le, Le] };
+      }
+      return null;
+    },
+    sampleBsdf: (hit, _wo, rng) => {
+      if (hit.emission) return null;
+      const dir = cosineHemisphere(rng);
+      return { direction: dir, value: [f, f, f], pdf: dir[2] / Math.PI };
+    },
+    evalBsdf: (hit, _wo, wi) => {
+      if (hit.emission || wi[2] <= 0) return { value: [0, 0, 0], pdf: 0 };
+      return { value: [f, f, f], pdf: wi[2] / Math.PI };
+    },
+    sampleLight: (hit, rng) => {
+      if (hit.emission) return null;
+      return { direction: sampleCone(rng), radiance: [Le, Le, Le], pdf: 1 / omega, distance: 100 };
+    },
+    occluded: () => false,
+    lightPdf: (_from, wi) => (inCone(wi) ? 1 / omega : 0),
+  };
+
+  function stats(sample: (rng: () => number) => number, seed: number, n: number) {
+    const rng = createPcg32(seed);
+    let sum = 0;
+    let sumSq = 0;
+    for (let i = 0; i < n; i++) {
+      const v = sample(rng);
+      sum += v;
+      sumSq += v * v;
+    }
+    const mean = sum / n;
+    return { mean, variance: Math.max(0, sumSq / n - mean * mean) };
+  }
+
+  const N = 50000;
+  const mis = stats(
+    (rng) => integratePath(misScene, cameraRay, rng, { minBounces: 1000 })[0],
+    11,
+    N,
+  );
+  // Light sampling only (unit MIS weight): f * Le * cos / lightPdf.
+  const neeOnly = stats((rng) => {
+    const dir = sampleCone(rng);
+    return (f * Le * Math.max(dir[2], 0)) / (1 / omega);
+  }, 22, N);
+  // BSDF sampling only (unit MIS weight): f * Le * cos / bsdfPdf when it hits.
+  const bsdfOnly = stats((rng) => {
+    const dir = cosineHemisphere(rng);
+    if (!inCone(dir)) return 0;
+    return (f * Le * dir[2]) / (dir[2] / Math.PI);
+  }, 33, N);
+
+  it('is unbiased: the MIS estimator converges to NEE-only and BSDF-only', () => {
+    expect(Math.abs(mis.mean - Lo)).toBeLessThan(Lo * 0.03);
+    expect(Math.abs(neeOnly.mean - Lo)).toBeLessThan(Lo * 0.03);
+    expect(Math.abs(bsdfOnly.mean - Lo)).toBeLessThan(Lo * 0.06);
+    expect(mis.mean).toBeCloseTo(neeOnly.mean, 1);
+    expect(mis.mean).toBeCloseTo(bsdfOnly.mean, 1);
+  });
+
+  it('reduces variance at equal budget versus the poorly matched strategy', () => {
+    expect(mis.variance).toBeLessThan(bsdfOnly.variance);
+    expect(mis.variance).toBeLessThan(bsdfOnly.variance * 0.1);
+  });
+
+  it('keeps the power-heuristic MIS weights within [0,1]', () => {
+    const rng = createPcg32(99);
+    for (let i = 0; i < 2000; i++) {
+      const a = rng() * 10;
+      const b = rng() * 10;
+      const w = powerHeuristic(1, a, 1, b);
+      expect(w).toBeGreaterThanOrEqual(0);
+      expect(w).toBeLessThanOrEqual(1);
+      // Both strategies weight to a partition of unity.
+      const wOther = powerHeuristic(1, b, 1, a);
+      if (a + b > 0) expect(w + wOther).toBeCloseTo(1, 6);
+    }
+  });
+});

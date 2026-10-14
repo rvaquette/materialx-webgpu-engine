@@ -3,7 +3,7 @@ import {
   buildPathTraceScene,
   createSceneSampler,
   directLighting,
-  readSurfaceParams,
+  readLayeredClosure,
   PT_TRIANGLE_FLOATS,
   PT_MATERIAL_FLOATS,
   type PathTraceScene,
@@ -12,6 +12,8 @@ import type { GeometryResource, MaterialResource, SceneResources } from '../../.
 import type { RasterSurface } from '../../../src/render/raster/scene-frame.ts';
 import type { SceneLight } from '../../../src/usd/lights.ts';
 import { createPcg32, integratePath, type Ray } from '../../../src/render/pathtracing/integrator.ts';
+import { evalWorld, surfaceBsdf } from '../../../src/render/pathtracing/bsdf.ts';
+import { canonicalSurfaceToLayered } from '../../../src/compiler/ir.ts';
 import { IDENTITY4 } from '../../../src/scene/transforms.ts';
 
 // A 2x2 quad in the z=0 plane facing +Z, split into two triangles.
@@ -81,7 +83,7 @@ describe('buildPathTraceScene packing', () => {
     expect(scene.materials.length).toBe(PT_MATERIAL_FLOATS);
   });
 
-  it('round-trips a custom OpenPBR surface through the material buffer', () => {
+  it('round-trips a custom OpenPBR surface as a LayeredClosure record', () => {
     const surface: RasterSurface = {
       baseColor: [0.2, 0.4, 0.6],
       metalness: 1,
@@ -92,13 +94,38 @@ describe('buildPathTraceScene packing', () => {
       specular: 0.5,
     };
     const scene = build(surface);
-    const read = readSurfaceParams(scene, 0);
-    expect(read.baseColor[0]).toBeCloseTo(0.2);
-    expect(read.baseColor[2]).toBeCloseTo(0.6);
-    expect(read.metalness).toBeCloseTo(1);
-    expect(read.roughness).toBeCloseTo(0.25);
-    expect(read.ior).toBeCloseTo(1.4);
-    expect(read.specular).toBeCloseTo(0.5);
+    const closure = readLayeredClosure(scene, 0);
+    const expected = canonicalSurfaceToLayered(surface);
+    expect(closure.lobes.length).toBe(expected.lobes.length);
+    expect(closure.lobes[0]!.kind).toBe('conductor'); // pure metal -> single conductor lobe
+    expect(closure.lobes[0]!.weight).toBeCloseTo(1, 5);
+    expect(closure.lobes[0]!.color[0]!).toBeCloseTo(0.2, 5);
+    expect(closure.lobes[0]!.color[2]!).toBeCloseTo(0.6, 5);
+    expect(closure.lobes[0]!.roughness!).toBeCloseTo(0.25, 5);
+    expect(closure.opacity).toBeCloseTo(1, 5);
+  });
+
+  it('sampler BSDF matches the former 7-parameter surface (non-regression)', () => {
+    const surface: RasterSurface = {
+      baseColor: [0.3, 0.5, 0.7],
+      metalness: 0,
+      roughness: 0.3,
+      transmission: 0,
+      subsurface: 0,
+      ior: 1.5,
+      specular: 0.5,
+    };
+    const scene = build(surface);
+    const sampler = createSceneSampler(scene);
+    const hit = sampler.intersect({ origin: [0, 0, 2], direction: [0, 0, -1] })!;
+    expect(hit).not.toBeNull();
+    const wo: [number, number, number] = [0, 0, 1];
+    const n = Math.hypot(0.3, 0.1, 0.9);
+    const wi: [number, number, number] = [0.3 / n, 0.1 / n, 0.9 / n];
+    const ref = evalWorld(surfaceBsdf(surface), hit.normal, wo, wi);
+    const got = sampler.evalBsdf(hit, wo, wi);
+    for (let k = 0; k < 3; k++) expect(got.value[k]!).toBeCloseTo(ref.value[k]!, 6);
+    expect(got.pdf).toBeCloseTo(ref.pdf, 6);
   });
 
   it('derives the inverse view-projection from the shared camera', () => {

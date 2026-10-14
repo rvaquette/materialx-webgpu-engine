@@ -2,8 +2,9 @@
 // path integrator (src/render/pathtracing/integrator.ts) to a WebGPU compute
 // shader fed by the packed scene buffers (scene-buffers.ts): it unprojects a
 // camera ray per pixel, traverses the world BVH with Moller-Trumbore triangle
-// tests, evaluates the OpenPBR surface closures (mirroring surfaceBsdf in
-// bsdf.ts), does next-event estimation against the single distant light plus the
+// tests, rebuilds each hit's LayeredClosure from the packed material record
+// (material-record.ts) and evaluates it through the shared closure library
+// (closure-library.ts, T056), does next-event estimation against the single distant light plus the
 // constant environment, continues by BSDF sampling with power-heuristic MIS, and
 // terminates with Russian roulette. Samples are accumulated progressively into a
 // storage buffer keyed by frame index, so the image refines over frames without
@@ -12,6 +13,9 @@
 // uploads and dispatch run in the browser (src/main.ts) and are device-only.
 
 import type { PathTraceScene } from './scene-buffers.ts';
+import { LAYERED_CLOSURE_PRELUDE } from '../../compiler/surface-wgsl.ts';
+import { CLOSURE_LIBRARY_PRELUDE } from '../../compiler/closure-library.ts';
+import { materialClosureReaderWgsl } from './material-record.ts';
 
 /** Compute workgroup tile edge (threads per dimension). */
 export const PT_WORKGROUP_SIZE = 8;
@@ -54,7 +58,6 @@ ${texBindings}
 const PI : f32 = 3.14159265358979;
 const NODE_STRIDE : u32 = 12u;
 const TRI_STRIDE : u32 = 24u;
-const MAT_STRIDE : u32 = 12u;
 const RAY_EPS : f32 = 1.0e-4;
 `;
 }
@@ -181,50 +184,36 @@ fn traverse(ro : vec3<f32>, rd : vec3<f32>, tMax : f32, anyHit : bool) -> Hit {
 `;
 }
 
-function wgslSurface(): string {
-  // Combined OpenPBR surface, mirroring surfaceBsdf in bsdf.ts: a metal conductor
-  // lobe, a dielectric specular coat and a Lambert diffuse base, weighted to a
-  // partition of unity. GGX NDF + separable Smith masking + Schlick Fresnel.
-  return /* wgsl */ `
-struct Surface {
-  baseColor : vec3<f32>,
-  metalness : f32,
-  roughness : f32,
-  transmission : f32,
-  subsurface : f32,
-  ior : f32,
-  specular : f32,
-};
-
-fn load_surface(idx : u32) -> Surface {
-  let b = idx * MAT_STRIDE;
-  var s : Surface;
-  s.baseColor = vec3<f32>(materials[b], materials[b + 1u], materials[b + 2u]);
-  s.metalness = materials[b + 3u];
-  s.roughness = materials[b + 4u];
-  s.transmission = materials[b + 5u];
-  s.subsurface = materials[b + 6u];
-  s.ior = materials[b + 7u];
-  s.specular = materials[b + 8u];
-  return s;
-}
-
-fn ggx_ndf(cosH : f32, a : f32) -> f32 {
-  let a2 = a * a;
-  let d = cosH * cosH * (a2 - 1.0) + 1.0;
-  return a2 / max(PI * d * d, 1.0e-7);
-}
-
-fn smith_g1(cosX : f32, a : f32) -> f32 {
-  let a2 = a * a;
-  return (2.0 * cosX) / max(cosX + sqrt(a2 + (1.0 - a2) * cosX * cosX), 1.0e-7);
-}
-
-fn fresnel_schlick(f0 : vec3<f32>, cosT : f32) -> vec3<f32> {
-  let f = pow(clamp(1.0 - cosT, 0.0, 1.0), 5.0);
-  return f0 + (vec3<f32>(1.0) - f0) * f;
-}
-
+function wgslClosureSurface(textures: boolean): string {
+  // Shared layered-closure shading: the struct family (LAYERED_CLOSURE_PRELUDE),
+  // the runtime lobe library plus the mx_closure_eval/pdf/sample assembler
+  // (CLOSURE_LIBRARY_PRELUDE, T056) and the megakernel material-record reader
+  // (materialClosureReaderWgsl, T057b). The integrator rebuilds the hit's
+  // LayeredClosure from the packed materials buffer and evaluates it here, so the
+  // path tracer and raster backend share one identical shading source.
+  const bakedApply = textures
+    ? /* wgsl */ `
+// Apply a baked albedo + roughness texel onto the reconstructed closure. The
+// albedo rides the colour-carrying lobes (diffuse, conductor, translucent); the
+// achromatic dielectric specular keeps its white tint. Roughness updates every
+// lobe, matching the former seven-parameter baseColor/roughness override.
+fn mx_apply_baked(c : ptr<function, LayeredClosure>, albedo : vec3<f32>, rough : f32) {
+  for (var i : u32 = 0u; i < (*c).lobeCount; i = i + 1u) {
+    let k = (*c).lobes[i].kind;
+    if (k != MX_LOBE_DIELECTRIC_REFLECTION && k != MX_LOBE_SHEEN) {
+      (*c).lobes[i].color = albedo;
+    }
+    (*c).lobes[i].roughness = rough;
+  }
+}`
+    : '';
+  return [
+    LAYERED_CLOSURE_PRELUDE,
+    CLOSURE_LIBRARY_PRELUDE,
+    materialClosureReaderWgsl(),
+    /* wgsl */ `
+// Branchless orthonormal basis (Duff et al. 2017) around a unit normal; matches
+// shadingFrame in bsdf.ts. Columns (t, bt, n) map local +Z to the world normal.
 fn basis(n : vec3<f32>) -> mat3x3<f32> {
   let s = select(-1.0, 1.0, n.z >= 0.0);
   let a = -1.0 / (s + n.z);
@@ -232,92 +221,9 @@ fn basis(n : vec3<f32>) -> mat3x3<f32> {
   let t = vec3<f32>(1.0 + s * n.x * n.x * a, s * b, -s * n.x);
   let bt = vec3<f32>(b, s + n.y * n.y * a, -n.y);
   return mat3x3<f32>(t, bt, n);
-}
-
-// Local-frame (+Z = normal) combined BSDF value f(wo, wi) and its pdf.
-fn surface_eval(s : Surface, wo : vec3<f32>, wi : vec3<f32>) -> vec4<f32> {
-  if (wo.z <= 0.0 || wi.z <= 0.0) { return vec4<f32>(0.0); }
-  let a = max(s.roughness * s.roughness, 1.0e-3);
-  let metal = clamp(s.metalness, 0.0, 1.0);
-  let trans = clamp(s.transmission, 0.0, 1.0);
-  let spec = clamp(s.specular, 0.0, 1.0);
-  let dielectricShare = (1.0 - metal) * (1.0 - trans);
-  // The dielectric specular is a Fresnel coat layered OVER the diffuse base: the
-  // specular weight scales the highlight, it does not remove the diffuse albedo
-  // (only Fresnel, ~F0, attenuates it). Keeping the diffuse at full dielectric
-  // share is what lets a brick read as its base color instead of a gray coat.
-  let wLambert = dielectricShare;
-  let wDielectric = dielectricShare * spec;
-  let total = max(metal + wDielectric + wLambert, 1.0e-6);
-
-  let h = normalize(wo + wi);
-  let ndf = ggx_ndf(max(h.z, 0.0), a);
-  let g = smith_g1(wo.z, a) * smith_g1(wi.z, a);
-  let specTerm = ndf * g / max(4.0 * wo.z * wi.z, 1.0e-7);
-  let r = (s.ior - 1.0) / (s.ior + 1.0);
-  let f0 = clamp(r * r, 0.0, 1.0);
-  let fDielectric = fresnel_schlick(vec3<f32>(f0), max(dot(wo, h), 0.0));
-  let fMetal = fresnel_schlick(s.baseColor, max(dot(wo, h), 0.0));
-
-  var value = vec3<f32>(0.0);
-  value = value + metal * fMetal * specTerm;
-  value = value + wDielectric * fDielectric * specTerm;
-  value = value + wLambert * s.baseColor / PI;
-
-  // Combined one-sample pdf: diffuse cosine + specular NDF, selection-weighted.
-  let diffusePdf = wi.z / PI;
-  let specPdf = ndf * max(h.z, 0.0) / max(4.0 * max(dot(wo, h), 1.0e-4), 1.0e-4);
-  var pdf = 0.0;
-  pdf = pdf + (metal / total) * specPdf;
-  pdf = pdf + (wDielectric / total) * specPdf;
-  pdf = pdf + (wLambert / total) * diffusePdf;
-  return vec4<f32>(value, pdf);
-}
-
-struct SurfaceSample { wi : vec3<f32>, value : vec3<f32>, pdf : f32 };
-
-fn cosine_hemisphere(u1 : f32, u2 : f32) -> vec3<f32> {
-  let r = sqrt(u1);
-  let phi = 2.0 * PI * u2;
-  return vec3<f32>(r * cos(phi), r * sin(phi), sqrt(max(0.0, 1.0 - u1)));
-}
-
-fn surface_sample(s : Surface, wo : vec3<f32>, state : ptr<function, u32>) -> SurfaceSample {
-  var out : SurfaceSample;
-  out.pdf = 0.0;
-  if (wo.z <= 0.0) { return out; }
-  let a = max(s.roughness * s.roughness, 1.0e-3);
-  let metal = clamp(s.metalness, 0.0, 1.0);
-  let trans = clamp(s.transmission, 0.0, 1.0);
-  let spec = clamp(s.specular, 0.0, 1.0);
-  let dielectricShare = (1.0 - metal) * (1.0 - trans);
-  let wLambert = dielectricShare;
-  let specularWeight = metal + dielectricShare * spec;
-  let total = max(specularWeight + wLambert, 1.0e-6);
-
-  let pick = rng_next(state) * total;
-  var wi : vec3<f32>;
-  if (pick < specularWeight) {
-    // Sample a GGX half vector and reflect.
-    let u1 = rng_next(state);
-    let u2 = rng_next(state);
-    let phi = 2.0 * PI * u1;
-    let cosTheta = sqrt((1.0 - u2) / (1.0 + (a * a - 1.0) * u2));
-    let sinTheta = sqrt(max(0.0, 1.0 - cosTheta * cosTheta));
-    let hLocal = vec3<f32>(sinTheta * cos(phi), sinTheta * sin(phi), cosTheta);
-    wi = reflect(-wo, hLocal);
-  } else {
-    wi = cosine_hemisphere(rng_next(state), rng_next(state));
-  }
-  if (wi.z <= 0.0) { return out; }
-  let ev = surface_eval(s, wo, wi);
-  if (ev.w <= 0.0) { return out; }
-  out.wi = wi;
-  out.value = ev.xyz;
-  out.pdf = ev.w;
-  return out;
-}
-`;
+}`,
+    bakedApply,
+  ].join('\n');
 }
 
 function wgslIntegrator(textures: boolean): string {
@@ -327,8 +233,7 @@ function wgslIntegrator(textures: boolean): string {
     if (layer >= 0) {
       let uv = surface_hit_uv(hit);
       let tx = textureSampleLevel(bakedTex, bakedSampler, uv, layer, 0.0);
-      s.baseColor = tx.rgb;
-      s.roughness = clamp(tx.a, 0.03, 1.0);
+      mx_apply_baked(&c, tx.rgb, clamp(tx.a, 0.03, 1.0));
     }`
     : '';
   const texHelpers = textures
@@ -368,33 +273,69 @@ fn integrate(ro0 : vec3<f32>, rd0 : vec3<f32>, state : ptr<function, u32>) -> ve
   let toLight = normalize(-U.lightDir.xyz);
   let lightRadiance = U.lightColor.xyz * U.lightColor.w;
   let hasEnv = dot(U.env.xyz, vec3<f32>(1.0)) > 0.0;
+  // MIS state carried across bounces (mirrors integratePath in integrator.ts).
+  var specularBounce = true;
+  var bsdfPdf = 0.0;
+  var lastN = vec3<f32>(0.0, 0.0, 1.0);
 
   for (var bounce = 0; bounce < 64; bounce = bounce + 1) {
     let hit = traverse(ro, rd, 1.0e30, false);
     if (!hit.hitAny) {
-      if (hasEnv) { radiance = radiance + beta * U.env.xyz; }
+      // Constant environment reached by BSDF sampling; MIS-weight it against the
+      // environment next-event strategy unless the previous bounce was specular.
+      if (hasEnv) {
+        if (specularBounce) {
+          radiance = radiance + beta * U.env.xyz;
+        } else {
+          let envPdf = max(dot(lastN, rd), 0.0) / PI;
+          let w = power_heuristic(1.0, bsdfPdf, 1.0, envPdf);
+          radiance = radiance + beta * U.env.xyz * w;
+        }
+      }
       break;
     }
     let pos = ro + rd * hit.t;
     let n = surface_hit_normal(hit);
-    var s = load_surface(tri_material(hit.tri));${texOverride}
+    var c = mx_material_closure(tri_material(hit.tri));${texOverride}
     let frame = basis(n);
     let wo = transpose(frame) * (-rd);
 
-    // Next-event estimation for the distant (delta) light; unit pdf, no MIS.
+    // Next-event estimation for the distant (delta) light: a delta direction has
+    // no BSDF-sampling counterpart, so its MIS weight is 1 (no power heuristic).
     let shadow = traverse(pos + toLight * RAY_EPS, toLight, 1.0e30, true);
     if (!shadow.hitAny) {
       let wiLight = transpose(frame) * toLight;
-      let ev = surface_eval(s, wo, wiLight);
+      let ev = mx_closure_eval(c, wo, wiLight);
       let cosL = abs(dot(n, toLight));
-      radiance = radiance + beta * ev.xyz * lightRadiance * cosL;
+      radiance = radiance + beta * ev.value * lightRadiance * cosL;
     }
 
-    let bs = surface_sample(s, wo, state);
-    if (bs.pdf <= 0.0) { break; }
+    // Environment next-event estimation (constant env): cosine-sampled direction,
+    // MIS-weighted against BSDF sampling via the power heuristic.
+    if (hasEnv) {
+      let eu = vec2<f32>(rng_next(state), rng_next(state));
+      let wiLocal = mx_cosine_hemisphere(eu);
+      let envPdf = wiLocal.z / PI;
+      if (envPdf > 0.0) {
+        let wiW = frame * wiLocal;
+        let shadowE = traverse(pos + wiW * RAY_EPS, wiW, 1.0e30, true);
+        if (!shadowE.hitAny) {
+          let ev = mx_closure_eval(c, wo, wiLocal);
+          let w = power_heuristic(1.0, envPdf, 1.0, ev.pdf);
+          radiance = radiance + beta * ev.value * U.env.xyz * (w * wiLocal.z / envPdf);
+        }
+      }
+    }
+
+    let u = vec3<f32>(rng_next(state), rng_next(state), rng_next(state));
+    let bs = mx_closure_sample(c, wo, u);
+    if (!bs.valid || bs.pdf <= 0.0) { break; }
     let wiWorld = frame * bs.wi;
     let cosS = abs(dot(n, wiWorld));
     beta = beta * bs.value * cosS / bs.pdf;
+    bsdfPdf = bs.pdf;
+    specularBounce = false;
+    lastN = n;
     ro = pos + wiWorld * RAY_EPS;
     rd = wiWorld;
 
@@ -456,7 +397,7 @@ export function pathTraceComputeWgsl(options: { textures?: boolean } = {}): stri
     wgslStructsAndBindings(textures),
     wgslRng(),
     wgslTraversal(),
-    wgslSurface(),
+    wgslClosureSurface(textures),
     wgslIntegrator(textures),
     wgslEntry(),
   ].join('\n');

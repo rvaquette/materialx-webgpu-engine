@@ -37,14 +37,35 @@ describe('pathTraceComputeWgsl', () => {
     expect(src).toContain('@compute');
   });
 
-  it('includes BVH traversal, surface closures and the integrator', () => {
+  it('includes BVH traversal, the shared closure library and the integrator', () => {
     expect(src).toContain('fn traverse(');
     expect(src).toContain('fn intersect_tri(');
-    expect(src).toContain('fn surface_eval(');
-    expect(src).toContain('fn surface_sample(');
+    // T057d: the inline seven-parameter surface block is gone; the megakernel
+    // rebuilds the LayeredClosure and calls the shared closure library.
+    expect(src).not.toContain('fn surface_eval(');
+    expect(src).not.toContain('fn surface_sample(');
+    expect(src).not.toContain('fn load_surface(');
+    expect(src).not.toContain('struct Surface {');
+    expect(src).toContain('struct LayeredClosure {');
+    expect(src).toContain('fn mx_material_closure(');
+    expect(src).toContain('fn mx_closure_eval(');
+    expect(src).toContain('fn mx_closure_pdf(');
+    expect(src).toContain('fn mx_closure_sample(');
     expect(src).toContain('fn integrate(');
     expect(src).toContain('fn power_heuristic(');
     expect(src).toContain('fn pcg_hash(');
+  });
+
+  it('wires NEE + MIS on the generated stack (environment next-event estimation)', () => {
+    // T057e: the integrator mirrors integratePath -- it carries the MIS state and
+    // weights the environment via the power heuristic instead of "no MIS".
+    expect(src).not.toContain('unit pdf, no MIS');
+    expect(src).toContain('var specularBounce');
+    expect(src).toContain('var bsdfPdf');
+    expect(src).toContain('mx_cosine_hemisphere(');
+    // Both strategies feed the power heuristic (NEE direction and BSDF continuation).
+    expect(src).toContain('power_heuristic(1.0, envPdf, 1.0, ev.pdf)');
+    expect(src).toContain('power_heuristic(1.0, bsdfPdf, 1.0, envPdf)');
   });
 
   it('binds the scene storage buffers and the accumulation buffer', () => {

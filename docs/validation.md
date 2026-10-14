@@ -156,6 +156,28 @@ Le path tracer ajoute pour chaque lobe un triplet cohérent `eval`/`pdf`/`sample
 validé par des tests intrinsèques (white furnace, accord eval/pdf, estimateur non
 biaisé) sans réutiliser l'oracle raster.
 
+### Backend path tracer : mégakernel sur l'IR (T057)
+
+Le backend path tracer GPU ([`src/render/pathtracing/compute.ts`](../src/render/pathtracing/compute.ts))
+ne porte plus de bloc de surface « sept paramètres » en dur. Le mégakernel
+reconstruit à chaque impact la `LayeredClosure` depuis l'enregistrement matériau
+compacté (157 floats, [`src/render/pathtracing/material-record.ts`](../src/render/pathtracing/material-record.ts),
+T057b/c) puis l'évalue via la **bibliothèque de fermetures partagée**
+([`src/compiler/closure-library.ts`](../src/compiler/closure-library.ts),
+[`src/compiler/surface-wgsl.ts`](../src/compiler/surface-wgsl.ts), T056) —
+exactement la même pile que le raster, l'IR du compilateur étant la source
+d'ombrage unique. Le packing CPU (`createSceneSampler` ré-évalue
+`layeredSurfaceBsdf`) et le lecteur WGSL partagent le même layout, de sorte que
+l'oracle CPU et le shader device ne divergent que par l'arithmétique fp32.
+
+L'intégrateur applique le MIS complet (heuristique de puissance) entre
+l'échantillonnage de lumière et l'échantillonnage BSDF, en miroir de
+`integratePath` : la lumière distante directionnelle reste une **delta** (poids 1,
+sans contrepartie BSDF), tandis que l'environnement constant combine une
+next-event estimation en cosinus et la capture par échantillonnage BSDF via la
+pondération `power_heuristic` (T057e). La parité numérique cross-backend du
+mégakernel reste couverte par le harnais device (T059).
+
 ### Scènes couvertes (raster + path tracing)
 
 `standard_surface_default`, `standard_surface_glass`, `standard_surface_jade`,

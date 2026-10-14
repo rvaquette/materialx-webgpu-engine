@@ -390,9 +390,12 @@ Principes :
   resolus (interfacename, noeuds connectes, heritage de version, alias, defauts
   MaterialX officiels). Toute entree ou noeud non supporte produit un diagnostic.
 - Variant par materiau : chaque materiau compile un variant WGSL (raster :
-  pipeline existant createMaterialVariant/computePipelineKey ; path tracer :
-  pipeline/dispatcher compute par variant ou megakernel parametre -- decision
-  ouverte, section 14) ; deux instances compatibles partagent leur pipeline.
+  pipeline existant createMaterialVariant/computePipelineKey). Le path tracer
+  utilise un megakernel unique dispatchant sur l'id de materiau (decision
+  tranchee T057a, section 14) : les rayons secondaires d'un chemin touchent des
+  materiaux arbitraires, qu'un seul kernel resout en lisant l'enregistrement
+  LayeredClosure packe par materiau. En raster, deux instances compatibles
+  partagent leur pipeline.
 - Path tracer sans approximation de modele : eval + PDF + sample coherents par
   lobe, energie conservee, PDF de pile par heuristique de puissance.
 - Raster : memes fermetures generees, approximations explicites et documentees
@@ -1218,6 +1221,128 @@ siennes ; toute entree ou noeud non supporte produit un diagnostic (REQ-013).
   Marqueurs WGSL testables en Node (pas de WebGPU cote Node), oracle Node =
   createSceneSampler aligne sur reference.ts etendu. Valide : typecheck + suite
   Node ; run device local sans regression.
+  Decoupe en sous-taches T057a-T057f (chacune : typecheck + suite Node ; le run
+  device local reste la recette d'acceptation du parent, smoke en T057f ; parite
+  cross-backend complete en T059) :
+
+  - [x] T057a [Plan:P10] Trancher et consigner la decision d'architecture ouverte
+    (section 14). Choix : megakernel unique parametre dispatchant sur l'id de
+    materiau (une passe, accumulation progressive), PAS un pipeline compute par
+    variant. Justification : le long d'un chemin, les rayons secondaires touchent
+    des materiaux arbitraires ; un pipeline par variant est inapplicable aux
+    rebonds (il faudrait relier/relancer un pipeline par hit). Le megakernel lit un
+    enregistrement matiere = serialisation d'une LayeredClosure et appelle la pile
+    partagee mx_closure_eval/pdf/sample (T056). Mettre a jour la section 14
+    (decision tranchee + justification) et le paragraphe 9.6 (le megakernel est
+    l'unique consommateur path tracer de l'IR). Doc-only, pas de code shader.
+    Valide : relecture + typecheck + suite Node (inchanges).
+    Fait : section 14 bullet marque [Tranchee T057a] (megakernel + justification
+    cout/scene/device) ; §9.6 bullet "Variant par materiau" reecrit (raster =
+    variant par draw, path tracer = megakernel sur id materiau). Doc-only, aucun
+    code modifie.
+
+  - [x] T057b [Plan:P10] Codec d'enregistrement matiere LayeredClosure (CPU) +
+    lecteur WGSL, additif (pas de cablage). Nouveau packing float remplacant a
+    terme les 7 floats : tableau de lobes (kind u32, weight, color, color90,
+    roughness, anisotropy, rotation, ior) + couches coat/sheen/fuzz/thinFilm +
+    flags has*, aligne EXACTEMENT sur la struct LAYERED_CLOSURE_PRELUDE (T055d,
+    surface-wgsl.ts). Fonctions CPU packLayeredMaterial(closure) -> Float32Array et
+    unpackLayeredMaterial(buf, i) -> LayeredClosure (miroir) ; chaine WGSL
+    mx_material_closure(matIndex) -> LayeredClosure lisant le buffer materiaux.
+    Tests JS : round-trip pack/unpack (closures canoniques + a coat/sheen/thinFilm/
+    aniso) ; marqueurs structurels du lecteur WGSL. Non consomme encore par
+    l'integrateur. Valide : typecheck + suite Node.
+    Fait : nouveau src/render/pathtracing/material-record.ts (en-tete 29 floats +
+    8 lobes x 16 = 157 floats/materiau ; bitmask de presence par lobe pour un
+    round-trip fidele des champs optionnels ; enum kind 0u-7u aligne sur le
+    prelude, dielectric_transmission = index CPU 8 en attente du cablage BTDF
+    WGSL). materialClosureReaderWgsl() emet mx_material_lobe + mx_material_closure
+    lisant materials : array<f32>. tests/render/pathtracing/material-record.test.ts
+    (11 : round-trip canonique/metal/pile riche, idempotence byte-a-byte, index
+    arbitraire, cap MX_MAX_LOBES, marqueurs WGSL). Non cable (scene-buffers =
+    T057c, compute = T057d). Gate 932/85.
+
+  - [x] T057c [Plan:P10] Basculer scene-buffers.ts et l'oracle CPU sur la pile en
+    couches. scene-buffers.ts packe desormais l'enregistrement LayeredClosure
+    (T057b, via canonicalSurfaceToLayered pour le corpus a materiaux constants) au
+    lieu des 7 floats ; createSceneSampler construit layeredSurfaceBsdf (bsdf.ts)
+    depuis la closure depaquetee au lieu de surfaceBsdf 7-parametres. Ancre de
+    non-regression : pour les materiaux OpenPBR constants actuels, pack -> unpack ->
+    layeredSurfaceBsdf == surfaceBsdf(params) a l'identique (garanti par l'ancre
+    T054), donc l'integrateur CPU rend bit-a-bit comme avant. Tests JS : round-trip
+    scene-buffers, parite sampler (eval/sample) vs sortie 7-parametres anterieure,
+    integrateur CPU inchange sur une scene temoin. Valide : typecheck + suite Node.
+    Fait : packMaterials packe canonicalSurfaceToLayered(surface) via
+    packLayeredMaterial (stride PT_MATERIAL_FLOATS = PT_MATERIAL_RECORD_FLOATS=157) ;
+    readSurfaceParams remplace par readLayeredClosure (unpackLayeredMaterial) ;
+    lobeFor appelle layeredSurfaceBsdf. Tests scene-buffers.test.ts : round-trip
+    closure (metal -> lobe conductor unique) + parite sampler.evalBsdf vs
+    evalWorld(surfaceBsdf(surface)) a 6 decimales. compute.ts garde MAT_STRIDE=12u
+    en dur (swap WGSL = T057d), device non impacte en Node. Gate 933/85.
+
+  - [x] T057d [Plan:P10] compute.ts : remplacer surface_eval/surface_sample inline
+    par la bibliotheque partagee. Le shader emet LAYERED_CLOSURE_PRELUDE +
+    CLOSURE_LIBRARY_PRELUDE (T056) + le lecteur mx_material_closure (T057b) ;
+    l'integrateur reconstruit la LayeredClosure du hit et appelle mx_closure_eval/
+    mx_closure_pdf/mx_closure_sample au lieu du bloc wgslSurface() 7-parametres, qui
+    est supprime. Megakernel : dispatch sur materialIndex via le lecteur (pas de
+    variant). Tests JS structurels (pas de WebGPU cote Node) : prelude emis,
+    surface_eval/_sample 7-param absents, appels mx_closure_* presents, entree
+    mx_path_trace intacte. Valide : typecheck + suite Node.
+    Fait : wgslSurface() supprime, remplace par wgslClosureSurface(textures) qui
+    emet LAYERED_CLOSURE_PRELUDE + CLOSURE_LIBRARY_PRELUDE + materialClosureReaderWgsl()
+    + basis() ; MAT_STRIDE=12u retire (le lecteur declare MX_MATERIAL_RECORD_FLOATS=157u).
+    Integrateur : var c = mx_material_closure(tri_material(hit.tri)) ; NEE via
+    mx_closure_eval(c,wo,wiLight).value ; continuation via mx_closure_sample(c,wo,
+    vec3 rng) avec garde bs.valid. Override texture baked re-cable sur mx_apply_baked
+    (albedo sur lobes colores, dielectric/sheen gardent leur teinte, roughness sur
+    tous). Tests compute.test.ts mis a jour (surface_eval/_sample/load_surface/struct
+    Surface absents ; LayeredClosure + mx_material_closure + mx_closure_eval/pdf/sample
+    presents). Gate 933/85.
+
+  - [x] T057e [Plan:P10] NEE + MIS sur la pile generee. Implementer le MIS complet
+    (heuristique de puissance a 2 strategies) entre l'echantillonnage de lumiere
+    (NEE) et l'echantillonnage BSDF de la pile, cote integrateur CPU (integrator.ts,
+    via mx_closure_pdf / la pdf de layeredSurfaceBsdf) ET cote WGSL (miroir
+    structurel). Remplacer le "unit pdf, no MIS" actuel du rebond NEE. Tests JS
+    numeriques : non-biais (convergence de l'estimateur MIS vers l'estimateur BSDF
+    seul et NEE seul sur une scene a lumiere de surface), poids MIS dans [0,1],
+    reduction de variance a budget egal ; marqueurs WGSL. Valide : typecheck +
+    suite Node.
+    Fait : integrator.ts (CPU) faisait deja le MIS power-heuristic complet (NEE vs
+    BSDF + branche emissive/environnement). Cote WGSL (compute.ts wgslIntegrator) le
+    rebond NEE "unit pdf, no MIS" est remplace : etat MIS porte entre rebonds
+    (specularBounce, bsdfPdf, lastN), NEE environnement constant par mx_cosine_hemisphere
+    pondere via power_heuristic(1,envPdf,1,ev.pdf), capture env par BSDF ponderee via
+    power_heuristic(1,bsdfPdf,1,envPdf) ; la lumiere distante reste delta (poids 1,
+    pas de MIS, correct). Tests : integrator.test.ts nouveau bloc T057e (scene a
+    lumiere surfacique en calotte spherique, l'estimateur MIS converge vers NEE-seul
+    et BSDF-seul vers Lo=a*Le*sin^2(alpha), reduction de variance vs strategie mal
+    adaptee, poids MIS dans [0,1] + partition d'unite) ; compute.test.ts marqueurs
+    WGSL (specularBounce/bsdfPdf/mx_cosine_hemisphere, les deux appels power_heuristic,
+    "unit pdf, no MIS" absent). Gate 937/85.
+
+  - [x] T057f [Plan:P10] Nettoyage, smoke device et cloture. Retirer les chemins
+    morts 7-parametres (packing, uniformes, wgslSurface residuel), mettre a jour
+    docs/validation.md (le path tracer consomme l'IR via le megakernel) et les
+    tolerances device si le layout materiau a change. Run device local du path
+    tracer sur une scene temoin : aucune regression visible vs la sortie 7-param
+    anterieure (parite cross-backend complete reportee a T059). Valide : typecheck +
+    suite Node ; run device local sans regression.
+    Fait : nettoyage deja realise en T057c (packing -> packLayeredMaterial 157
+    floats) et T057d (bloc wgslSurface/load_surface/surface_eval/_sample/MAT_STRIDE
+    supprime, uniforme PT sans champ surface) ; verification : aucun symbole mort
+    7-param dans compute.ts/scene-buffers.ts (seules subsistent des mentions en
+    commentaire). docs/validation.md : nouvelle sous-section "Backend path tracer :
+    megakernel sur l'IR (T057)" (reconstruit la LayeredClosure depuis
+    l'enregistrement 157 floats et evalue via la biblio de fermetures partagee,
+    IR = source d'ombrage unique ; MIS environnement + delta decrit) et ligne
+    oracle PT mise a jour (NEE + MIS). Tolerances device inchangees : celles de
+    tolerances.ts couvrent node/lobe/surface/scene RASTER (T034/042/043/045), non
+    impactees par le layout materiau PT ; la parite device PT complete est reportee
+    a T059. Run device local : etape MANUELLE (WebGPU indisponible sous Node) via
+    npm run test:local-scene / test:scene-device ; ancre anti-regression cote Node =
+    layeredSurfaceBsdf == surfaceBsdf au niveau BSDF (T054). Gate 937/85 (inchange).
 
 - [ ] T058 [Plan:P10] Cabler le raster sur l'IR : src/render/raster/backend.ts,
   shaders.ts et src/main.ts rendent via le variant WGSL compile du materiau
@@ -1334,10 +1459,17 @@ le modele canonique reduit a 7 parametres.
 - Bibliotheques de subdivision et de volumes compatibles navigateur.
 - Formats de volume requis et eventuels effets spectraux hors thin film/dispersion du corpus.
 - Renderer(s) de reference et tolerances physiques/numeriques.
-- Path tracer sur IR (P10/T057) : pipeline compute par variant de materiau vs
-  megakernel unique parametre dispatchant sur l'id de materiau (accumulation
-  progressive en une passe). A trancher a l'implementation selon le cout de
-  compilation, le nombre de materiaux par scene et les limites du device.
+- [Tranchee T057a] Path tracer sur IR (P10/T057) : megakernel unique
+  dispatchant sur l'id de materiau (accumulation progressive en une passe),
+  PAS un pipeline compute par variant. Justification : le long d'un chemin, les
+  rayons secondaires touchent des materiaux arbitraires ; relier/relancer un
+  pipeline par hit est impraticable. Le megakernel lit un enregistrement matiere
+  = serialisation d'une LayeredClosure et appelle la pile partagee
+  mx_closure_eval/pdf/sample (T056). Cout de compilation borne (un seul
+  pipeline), nombre de materiaux par scene gere par le buffer materiaux, limites
+  device respectees (une passe). Le raster conserve un variant WGSL par materiau
+  (createMaterialVariant/computePipelineKey) car chaque draw ne shade qu'un seul
+  materiau.
 
 Ces points se resolvent en qualification. La qualite reste l'objectif final,
 mais aucune promesse de support universel MaterialX/OpenUSD ou de performance
