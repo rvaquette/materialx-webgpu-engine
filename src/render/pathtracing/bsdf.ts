@@ -624,7 +624,7 @@ export function surfaceBsdf(params: SurfaceParams): Lobe {
     { weight: metal, lobe: conductorLobe(params.baseColor, params.roughness) },
     { weight: (1 - metal) * trans, lobe: translucentLobe(params.baseColor) },
     { weight: dielectricShare * specStrength, lobe: dielectricLobe(params.ior, params.roughness) },
-    { weight: dielectricShare * (1 - specStrength), lobe: lambertLobe(params.baseColor) },
+    { weight: dielectricShare, lobe: lambertLobe(params.baseColor) },
   ]);
 }
 

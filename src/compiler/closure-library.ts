@@ -440,8 +440,8 @@ fn mx_transmission_refractive_eval(ctx: MxLobeCtx, wi: vec3f) -> MxBsdfEval {
   let f = mx_fresnel_dielectric(dotO, eta);
   let d = mx_ggx_ndf(abs(wm.z), a);
   let g = mx_smith_g1(abs(ctx.wo.z), a) * mx_smith_g1(abs(wi.z), a);
-  let common = (abs(dotO) * abs(dotI)) / (abs(ctx.wo.z) * abs(wi.z));
-  let scalar = (1.0 - f) * common * d * g / (denom * denom);
+  let geomFactor = (abs(dotO) * abs(dotI)) / (abs(ctx.wo.z) * abs(wi.z));
+  let scalar = (1.0 - f) * geomFactor * d * g / (denom * denom);
   let pdf = d * abs(wm.z) * eta * eta * abs(dotI) / (denom * denom);
   return MxBsdfEval(ctx.color * scalar, pdf);
 }

@@ -1358,6 +1358,106 @@ siennes ; toute entree ou noeud non supporte produit un diagnostic (REQ-013).
     npm run test:local-scene / test:scene-device ; ancre anti-regression cote Node =
     layeredSurfaceBsdf == surfaceBsdf au niveau BSDF (T054). Gate 937/85 (inchange).
 
+  Deuxieme vague T057g-T057m (nodegraph arbitraire fidele, exigence 9.6) : les
+  sous-taches T057a-T057f n'ont cable le megakernel que sur le corpus a materiaux
+  CONSTANTS (scene-buffers.packMaterials via canonicalSurfaceToLayered 7-param).
+  Les entrees texturees/procedurales (image/tiledimage, mix, rgbtohsv, normalmap)
+  restent aplaties en constantes, donc un materiau comme brick_procedural rend gris
+  plat [0.8,0.8,0.8]. Cette vague abaisse le nodegraph de surface dans le megakernel
+  via emitLayeredSurface (surface-wgsl.ts, deja consomme par le raster), dispatche
+  sur l'id de materiau (decision T057a) et echantillonne les textures de TOUS les
+  materiaux liees simultanement. Chaque sous-tache : typecheck + suite Node (oracle
+  CPU + marqueurs WGSL, pas de WebGPU) ; le run device local reste la recette
+  d'acceptation du parent, smoke en T057m ; parite cross-backend complete en T059.
+
+  - [x] T057g [Plan:P10] Descripteur de materiau PT "graphe" vs "constant" +
+    emission du module surface par materiau (additif, NON cable). Nouveau builder
+    cote PT qui, pour chaque materiau exposant un ResolvedGraph + ResolvedSurface,
+    appelle emitLayeredSurface (surface-wgsl.ts) pour obtenir le module
+    mx_surface_layered et lui attribue un index de variant ; assemble un dispatcher
+    WGSL mx_eval_material(matId, vary) -> LayeredClosure qui switch sur matId vers
+    les fonctions renommees mx_surface_layered_<k>, avec repli sur mx_material_closure
+    (record 157 floats, T057b) pour les materiaux constants. Pure chaine (Node-
+    testable). Pas encore consomme par compute.ts. Tests JS : marqueurs WGSL du
+    dispatcher (noms de fonctions par variant, switch, repli), descripteur
+    (classification graphe/constant, allocation d'index). Valide : typecheck + suite
+    Node.
+    Fait : surface-wgsl.ts refactore -- primitive partagee buildSurfaceFn(graph,
+    surface, entryName, sink, handlePrefix) qui abaisse une surface en une seule
+    fonction renommable `fn <entryName>(vary) -> LayeredClosure` + metadonnees
+    (preludes, uniforms, textures, samplers, primvarFields, extraInputs) ; sortie de
+    emitLayeredSurface byte-identique (preludes '' par defaut, tests raster verts).
+    Nouveau emitSurfaceVariant(graph, surface, index) -> SurfaceVariantModule
+    (fn renommee mx_surface_layered_<index>, handles textures/samplers prefixes
+    m<index>_ pour unicite inter-materiaux). lowerExprs(ir, handlePrefix='') threade
+    le prefixe dans emitTexture + le layout des bindings (defaut vide = chemin
+    existant inchange). Nouveau src/render/pathtracing/material-variant.ts :
+    buildMaterialDispatch(sources) emet le dispatcher mx_eval_material(matId, vary)
+    (switch sur l'id materiau -> mx_surface_layered_<k>, default -> repli constant
+    mx_material_closure) + preludes/textures/samplers/primvarFields fusionnes.
+    Tests tests/render/pathtracing/material-variant.test.ts (4 : renommage+preludes
+    exclus, switch+repli, repli seul si aucun graphe, namespacing handles). Non cable
+    (compute.ts = T057i). Gate 1009/90.
+
+  - [x] T057h [Plan:P10] Interpolation UV/position/normale au hit + construction de
+    MxVaryings dans le megakernel (WGSL), toujours sur le chemin constant. compute.ts
+    integrate() : interpolation barycentrique de triUv (deja packe, UV_STRIDE=6) et
+    assemblage d'un MxVaryings (position, normal, texcoord, viewDir ; tangent en
+    espace reserve T057l). L'ombrage reste mx_material_closure constant (aucun
+    changement de sortie). Tests JS : marqueurs WGSL (interpolation barycentrique,
+    champ texcoord threade) ; ancres de parite inchangees. Valide : typecheck + suite
+    Node.
+    Fait : option opt-in pathTraceComputeWgsl({varyings:{primvarFields,extraInputs}})
+    (defaut absent -> sortie byte-identique, callers device inchanges). Nouveau
+    wgslVaryings() emet la struct MxVaryings (emitVaryingsStruct partage avec le
+    raster), les helpers mx_tri_uv/mx_hit_uv (interpolation barycentrique
+    1-u-v/u/v) et le builder mx_hit_varyings(h,pos,n,viewDir)->MxVaryings
+    (position/normal/texcoord/viewDir + tangent/bitangent via basis(), v_st=uv ;
+    autres primvars/in_ a zero). wgslStructsAndBindings lie triUv+UV_STRIDE quand
+    varyings (bloc baked existant intact). Integrateur toujours mx_material_closure
+    (bascule = T057i). Export PtVaryings. Tests compute.test.ts (3 : absent par
+    defaut, struct+binding+builder barycentrique, ombrage encore constant). Gate
+    1012/90.
+
+  - [ ] T057i [Plan:P10] Cabler le dispatcher pour les graphes SANS texture (math
+    procedural pur) + oracle CPU miroir. compute.ts appelle mx_eval_material(matId,
+    vary) pour les materiaux graphe sans noeud texture ; les constants gardent le
+    record. Oracle CPU (createSceneSampler) : evaluer le meme graphe sur CPU (via
+    l'interprete IR de cpu-raster.ts ou un evaluateur du subset texture-free de
+    lowerSurfaceInputsToIr) vers une LayeredClosure. Delivre : la base_color de brick
+    issue de brick_color a travers la chaine rgbtohsv/mix est enfin evaluee (teinte
+    rouge-brique, sans detail texture). Tests JS : parite oracle CPU graphe vs
+    marqueurs WGSL ; scene temoin a graphe math-only. Valide : typecheck + suite Node.
+
+  - [ ] T057j [Plan:P10] Registre de textures PT : binder simultanement toutes les
+    textures de tous les materiaux. Nouveau registre deduplique les images entre
+    materiaux et alloue des slots (group1, bindings sequentiels tex_<name>/
+    samp_<name>) ; compute.ts emet les bindings dimensionnes au registre ; scene-
+    buffers/harnais decodent les images (reuse assets/images.ts) et construisent le
+    bind group (upload device-only). Tests JS : dedup du registre (unitaire) +
+    marqueurs WGSL des bindings. Valide : typecheck + suite Node.
+
+  - [ ] T057k [Plan:P10] Echantillonnage de textures dans le megakernel + oracle CPU
+    sur images decodees. Cabler les textureSample() emis par emitLayeredSurface aux
+    slots du registre (T057j) ; oracle CPU echantillonne les images decodees
+    (bilineaire) pour la parite. Delivre : le detail texture de brick (motif briques,
+    masques, variation). Tests JS : parite closure echantillonnee sur une texture
+    synthetique minuscule + marqueurs WGSL textureSample. Valide : typecheck + suite
+    Node.
+
+  - [ ] T057l [Plan:P10] Tangentes par triangle + support normalmap. Packer les
+    tangentes par triangle (comme les normales), threader vary.tangent ; evaluer le
+    noeud normalmap. Delivre : la normal map de brick fidele. Saut gracieux si aucun
+    materiau n'utilise normalmap. Tests JS : round-trip packing tangente + marqueurs
+    WGSL (tangent frame, normalmap). Valide : typecheck + suite Node.
+
+  - [ ] T057m [Plan:P10] Harnais USD sur ResolvedSurface + smoke device + cloture
+    T057. Le harnais USD resout le ResolvedGraph/ResolvedSurface complet (au lieu du
+    RasterSurface 7-param) et le passe a buildPathTraceScene ; charge les textures de
+    brick ; run device du brick (rouge-brique, texture). Mettre a jour
+    docs/validation.md + paragraphe 9.6 ; re-render de la matrice. Marquer le parent
+    T057 [x]. Valide : typecheck + suite Node ; run device local sans regression.
+
 - [ ] T058 [Plan:P10] Cabler le raster sur l'IR : src/render/raster/backend.ts,
   shaders.ts et src/main.ts rendent via le variant WGSL compile du materiau
   (createMaterialVariant / computePipelineKey / instance.ts) au lieu du

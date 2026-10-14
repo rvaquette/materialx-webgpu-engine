@@ -3,14 +3,14 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>MaterialX - rendu raster USD sur GPU device</title>
+    <title>MaterialX - rendu raster/path-trace USD sur GPU device</title>
     <style>
       body { font-family: system-ui, sans-serif; margin: 1rem; background: #111; color: #eee; }
       img { image-rendering: pixelated; border: 1px solid #333; }
     </style>
   </head>
   <body>
-    <h1>Scene USD rendue en raster sur le GPU du mobile</h1>
+    <h1>Scene USD rendue sur le GPU (raster ou path-trace)</h1>
     <div id="log"></div>
     <script type="module">
       import { bootstrapUsdImage } from '/tests/render/usd-scene.harness.ts';
@@ -18,7 +18,8 @@
       const entry = params.get('entry') ?? '/scenes/test_material_disney_gold/test_material_disney_gold.usda';
       const res = Number(params.get('res') ?? 256);
       const spp = Number(params.get('spp') ?? 192);
-      bootstrapUsdImage(entry, res, spp).catch((e) => {
+      const backend = params.get('backend') === 'raster' ? 'raster' : 'pathtracing';
+      bootstrapUsdImage(entry, res, spp, backend).catch((e) => {
         const p = document.createElement('p');
         p.textContent = 'Echec: ' + (e && e.message ? e.message : e);
         document.body.appendChild(p);

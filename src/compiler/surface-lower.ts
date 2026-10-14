@@ -98,7 +98,7 @@ function lowerStandardSurface(m: Inputs): LayeredClosure {
     { kind: 'conductor', weight: metal, color: baseColor, roughness: specRough, ...extras },
     { kind: 'translucent', weight: (1 - metal) * trans, color: transColor },
     { kind: 'dielectric_reflection', weight: dielectricShare * spec, color: specColor, roughness: specRough, ior, ...extras },
-    { kind: 'burley_diffuse', weight: dielectricShare * (1 - spec) * base, color: baseColor, roughness: diffRough },
+    { kind: 'burley_diffuse', weight: dielectricShare * base, color: baseColor, roughness: diffRough },
     { kind: 'subsurface', weight: dielectricShare * sss, color: sssColor },
   ];
   const slots: Slots = {};

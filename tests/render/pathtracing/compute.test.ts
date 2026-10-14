@@ -9,6 +9,7 @@ import {
 } from '../../../src/render/pathtracing/compute.ts';
 import type { PathTraceScene } from '../../../src/render/pathtracing/scene-buffers.ts';
 import { IDENTITY4 } from '../../../src/scene/transforms.ts';
+import { vector, type IrType } from '../../../src/compiler/ir.ts';
 
 function fakeScene(): PathTraceScene {
   return {
@@ -79,6 +80,40 @@ describe('pathTraceComputeWgsl', () => {
   it('accumulates progressively with a running mean keyed by frame', () => {
     expect(src).toContain('accum[pixel]');
     expect(src).toContain('prev.w');
+  });
+});
+
+describe('pathTraceComputeWgsl varyings (T057h)', () => {
+  it('omits the varyings machinery by default', () => {
+    const src = pathTraceComputeWgsl();
+    expect(src).not.toContain('struct MxVaryings');
+    expect(src).not.toContain('fn mx_hit_varyings(');
+    expect(src).not.toContain('var<storage, read> triUv');
+  });
+
+  it('emits the MxVaryings struct, UV binding and the barycentric hit builder', () => {
+    const primvarFields = new Map<string, IrType>([['st', vector(2)]]);
+    const src = pathTraceComputeWgsl({ varyings: { primvarFields, extraInputs: new Map() } });
+    // Struct and the UV source it interpolates from.
+    expect(src).toContain('struct MxVaryings');
+    expect(src).toContain('v_st: vec2f,');
+    expect(src).toContain('@group(0) @binding(6) var<storage, read> triUv : array<f32>;');
+    expect(src).toContain('const UV_STRIDE : u32 = 6u;');
+    // Barycentric interpolation of the per-triangle UVs.
+    expect(src).toContain('fn mx_hit_uv(');
+    expect(src).toContain('let w = 1.0 - h.u - h.v;');
+    // Builder fills the standard fields and mirrors st onto the interpolated UV.
+    expect(src).toContain('fn mx_hit_varyings(h : Hit, pos : vec3<f32>, n : vec3<f32>, viewDir : vec3<f32>) -> MxVaryings');
+    expect(src).toContain('vary.texcoord = uv;');
+    expect(src).toContain('vary.v_st = uv;');
+    expect(src).toContain('vary.tangent = f[0];');
+  });
+
+  it('keeps constant shading until T057i wires the dispatcher', () => {
+    const primvarFields = new Map<string, IrType>([['st', vector(2)]]);
+    const src = pathTraceComputeWgsl({ varyings: { primvarFields, extraInputs: new Map() } });
+    expect(src).toContain('fn mx_material_closure(');
+    expect(src).not.toContain('mx_eval_material');
   });
 });
 

@@ -20,6 +20,7 @@
     "test:device": "node scripts/run-device-corpus.mjs",
     "test:scene-device": "node scripts/run-scene-device.mjs",
     "test:bxdf-device": "node scripts/run-bxdf-device.mjs",
+    "render:usd-matrix": "node scripts/run-usd-matrix-local.mjs",
     "build:fixtures": "node scripts/build-shaderball-fixture.mjs && node scripts/build-scene-materials.ts",
     "build:materials": "node scripts/build-scene-materials.ts",
     "render:scenes": "node scripts/render-scenes.ts",

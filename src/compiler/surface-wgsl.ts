@@ -17,7 +17,7 @@ import type {
   SurfaceFamily,
 } from '../materialx/surface-graph.ts';
 import { CLOSURE_LIBRARY_PRELUDE } from './closure-library.ts';
-import { FLOAT, IrModuleBuilder, type IrRef } from './ir.ts';
+import { FLOAT, IrModuleBuilder, type IrRef, type IrType } from './ir.ts';
 import { lowerSurfaceInputsToIr } from './surface-ir.ts';
 import {
   emitVaryingsStruct,
@@ -212,7 +212,7 @@ function standardSurface(c: Ctx): FamilyWgsl {
     { kind: 'conductor', weight: 'mx_metal', color: baseColor, roughness: specRough, anisotropy: aniso, rotation: rot },
     { kind: 'translucent', weight: '((1.0 - mx_metal) * mx_trans)', color: transColor },
     { kind: 'dielectric_reflection', weight: '(mx_diel * mx_spec)', color: specColor, roughness: specRough, ior, anisotropy: aniso, rotation: rot },
-    { kind: 'burley_diffuse', weight: '(mx_diel * (1.0 - mx_spec) * mx_base)', color: baseColor, roughness: diffRough },
+    { kind: 'burley_diffuse', weight: '(mx_diel * mx_base)', color: baseColor, roughness: diffRough },
     { kind: 'subsurface', weight: '(mx_diel * mx_sss)', color: sssColor },
   ];
   const out: FamilyWgsl = { locals, lobes, opacity: avgOpacity(c.col('opacity', [1, 1, 1])) };
@@ -372,17 +372,33 @@ function lobeAssign(index: number, lobe: LobeWgsl): string {
   return `  c.lobes[${index}] = MxBsdfLobe(${fields.join(', ')});`;
 }
 
-/**
- * Emit the WGSL layered-surface module for a resolved surface (T055a/T055b/T055c).
- * Returns the module source plus its uniform/texture/sampler bindings. The entry
- * function `mx_surface_layered(vary) -> LayeredClosure` assigns every struct field
- * from the lowered input expressions.
- */
-export function emitLayeredSurface(
+/** The composable parts of one lowered surface: the renamable fill function plus
+ *  the bindings/varyings metadata, WITHOUT the shared preludes or binding
+ *  declarations. emitLayeredSurface wraps these into the raster module; the path
+ *  tracer megakernel composes many under one dispatcher (T057g). */
+interface SurfaceFnParts {
+  fnName: string;
+  fnCode: string;
+  family: SurfaceFamily;
+  preludes: string[];
+  uniforms: WgslUniformField[];
+  textures: WgslBinding[];
+  samplers: WgslBinding[];
+  primvarFields: Map<string, IrType>;
+  extraInputs: Map<string, IrType>;
+  usesLighting: boolean;
+}
+
+/** Lower a resolved surface to a single `fn <entryName>(vary) -> LayeredClosure`
+ *  plus its binding metadata, shared by emitLayeredSurface (raster module) and
+ *  emitSurfaceVariant (path tracer megakernel). */
+function buildSurfaceFn(
   graph: ResolvedGraph,
   surface: ResolvedSurface,
-  sink: DiagnosticSink = defaultDiagnosticSink,
-): LayeredSurfaceModule {
+  entryName: string,
+  sink: DiagnosticSink,
+  handlePrefix = '',
+): SurfaceFnParts {
   const builder = new IrModuleBuilder();
   const lowered = lowerSurfaceInputsToIr(graph, surface, builder, sink);
 
@@ -395,7 +411,7 @@ export function emitLayeredSurface(
   for (const ref of used) builder.output({ name: ref, type: FLOAT, ref });
 
   const ir = builder.build();
-  const exprs = lowerExprs(ir);
+  const exprs = lowerExprs(ir, handlePrefix);
 
   const assigns: string[] = [`  c.lobeCount = ${fam.lobes.length}u;`];
   fam.lobes.forEach((lobe, i) => assigns.push(lobeAssign(i, lobe)));
@@ -406,33 +422,101 @@ export function emitLayeredSurface(
   if (fam.emission) assigns.push(`  c.hasEmission = 1u;`, `  c.emission = ${fam.emission};`);
   assigns.push(`  c.opacity = ${fam.opacity};`);
 
+  const fnCode = `fn ${entryName}(vary: MxVaryings) -> ${SURFACE_RETURN} {\n${exprs.body.join('\n')}\n${fam.locals.join('\n')}\n  var c: ${SURFACE_RETURN};\n${assigns.join('\n')}\n  return c;\n}`;
+
+  return {
+    fnName: entryName,
+    fnCode,
+    family: surface.family,
+    preludes: [...exprs.preludes],
+    uniforms: exprs.uniforms,
+    textures: exprs.textures,
+    samplers: exprs.samplers,
+    primvarFields: exprs.primvarFields,
+    extraInputs: exprs.extraInputs,
+    usesLighting: exprs.usesLighting,
+  };
+}
+
+/**
+ * Emit the WGSL layered-surface module for a resolved surface (T055a/T055b/T055c).
+ * Returns the module source plus its uniform/texture/sampler bindings. The entry
+ * function `mx_surface_layered(vary) -> LayeredClosure` assigns every struct field
+ * from the lowered input expressions.
+ */
+export function emitLayeredSurface(
+  graph: ResolvedGraph,
+  surface: ResolvedSurface,
+  sink: DiagnosticSink = defaultDiagnosticSink,
+): LayeredSurfaceModule {
+  const fn = buildSurfaceFn(graph, surface, SURFACE_ENTRY, sink);
+
   const parts: string[] = [];
-  parts.push([...exprs.preludes].join('\n'));
+  parts.push(fn.preludes.join('\n'));
   parts.push(LAYERED_CLOSURE_PRELUDE);
   // T056h: emit the shared runtime closure library so the surface module is the
   // single source both backends call. It references LayeredClosure, so it must
   // follow LAYERED_CLOSURE_PRELUDE. Effective eval wiring lands in T057/T058.
   parts.push(CLOSURE_LIBRARY_PRELUDE);
-  if (exprs.uniforms.length > 0) {
+  if (fn.uniforms.length > 0) {
     parts.push(
-      `struct MxUniforms {\n${exprs.uniforms.map((u) => `  ${u.field}: ${u.wgslType},`).join('\n')}\n};\n@group(0) @binding(0) var<uniform> u: MxUniforms;`,
+      `struct MxUniforms {\n${fn.uniforms.map((u) => `  ${u.field}: ${u.wgslType},`).join('\n')}\n};\n@group(0) @binding(0) var<uniform> u: MxUniforms;`,
     );
   }
-  for (const t of exprs.textures) parts.push(`@group(${t.group}) @binding(${t.binding}) var ${t.handle}: texture_2d<f32>;`);
-  for (const s of exprs.samplers) parts.push(`@group(${s.group}) @binding(${s.binding}) var ${s.handle}: sampler;`);
-  parts.push(emitVaryingsStruct(exprs.primvarFields, exprs.extraInputs));
-  parts.push(
-    `fn ${SURFACE_ENTRY}(vary: MxVaryings) -> ${SURFACE_RETURN} {\n${exprs.body.join('\n')}\n${fam.locals.join('\n')}\n  var c: ${SURFACE_RETURN};\n${assigns.join('\n')}\n  return c;\n}`,
-  );
+  for (const t of fn.textures) parts.push(`@group(${t.group}) @binding(${t.binding}) var ${t.handle}: texture_2d<f32>;`);
+  for (const s of fn.samplers) parts.push(`@group(${s.group}) @binding(${s.binding}) var ${s.handle}: sampler;`);
+  parts.push(emitVaryingsStruct(fn.primvarFields, fn.extraInputs));
+  parts.push(fn.fnCode);
 
   return {
     code: parts.join('\n\n') + '\n',
     entryPoint: SURFACE_ENTRY,
     returnType: SURFACE_RETURN,
-    family: surface.family,
-    uniforms: exprs.uniforms,
-    textures: exprs.textures,
-    samplers: exprs.samplers,
-    ...(exprs.usesLighting ? { lighting: { group: 0, binding: 1 } } : {}),
+    family: fn.family,
+    uniforms: fn.uniforms,
+    textures: fn.textures,
+    samplers: fn.samplers,
+    ...(fn.usesLighting ? { lighting: { group: 0, binding: 1 } } : {}),
+  };
+}
+
+/** One surface compiled as a path tracer megakernel variant: the fill function is
+ *  renamed `mx_surface_layered_<index>` so many materials coexist in a single
+ *  kernel dispatching on material id (T057g). Preludes/bindings/varyings are
+ *  merged by the dispatcher builder (pathtracing/material-variant.ts). */
+export interface SurfaceVariantModule {
+  index: number;
+  family: SurfaceFamily;
+  fnName: string;
+  fnCode: string;
+  preludes: string[];
+  uniforms: WgslUniformField[];
+  textures: WgslBinding[];
+  samplers: WgslBinding[];
+  primvarFields: Map<string, IrType>;
+  extraInputs: Map<string, IrType>;
+}
+
+/** Lower a resolved surface to a megakernel variant keyed by its scene material
+ *  index (T057g). Additive: no backend consumes it until T057i wires the
+ *  dispatcher into compute.ts. */
+export function emitSurfaceVariant(
+  graph: ResolvedGraph,
+  surface: ResolvedSurface,
+  index: number,
+  sink: DiagnosticSink = defaultDiagnosticSink,
+): SurfaceVariantModule {
+  const fn = buildSurfaceFn(graph, surface, `${SURFACE_ENTRY}_${index}`, sink, `m${index}_`);
+  return {
+    index,
+    family: fn.family,
+    fnName: fn.fnName,
+    fnCode: fn.fnCode,
+    preludes: fn.preludes,
+    uniforms: fn.uniforms,
+    textures: fn.textures,
+    samplers: fn.samplers,
+    primvarFields: fn.primvarFields,
+    extraInputs: fn.extraInputs,
   };
 }

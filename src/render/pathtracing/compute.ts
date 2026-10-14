@@ -15,6 +15,8 @@
 import type { PathTraceScene } from './scene-buffers.ts';
 import { LAYERED_CLOSURE_PRELUDE } from '../../compiler/surface-wgsl.ts';
 import { CLOSURE_LIBRARY_PRELUDE } from '../../compiler/closure-library.ts';
+import { emitVaryingsStruct } from '../../compiler/wgsl.ts';
+import type { IrType } from '../../compiler/ir.ts';
 import { materialClosureReaderWgsl } from './material-record.ts';
 
 /** Compute workgroup tile edge (threads per dimension). */
@@ -28,7 +30,15 @@ export const PT_UNIFORM_SIZE = PT_UNIFORM_FLOATS * 4;
 
 // --- WGSL generator ----------------------------------------------------------
 
-function wgslStructsAndBindings(textures: boolean): string {
+/** Merged MxVaryings fields the layered-surface variants consume (T057h). */
+export interface PtVaryings {
+  primvarFields: Map<string, IrType>;
+  extraInputs: Map<string, IrType>;
+}
+
+function wgslStructsAndBindings(textures: boolean, varyings: boolean): string {
+  // The baked path binds the full UV + baked-texture group; a graph path only
+  // needs the per-triangle UVs (binding 6) to interpolate texcoords.
   const texBindings = textures
     ? /* wgsl */ `
 @group(0) @binding(6) var<storage, read> triUv : array<f32>;
@@ -37,7 +47,12 @@ function wgslStructsAndBindings(textures: boolean): string {
 @group(0) @binding(9) var bakedSampler : sampler;
 const UV_STRIDE : u32 = 6u;
 `
-    : '';
+    : varyings
+      ? /* wgsl */ `
+@group(0) @binding(6) var<storage, read> triUv : array<f32>;
+const UV_STRIDE : u32 = 6u;
+`
+      : '';
   return /* wgsl */ `
 struct Uniforms {
   invViewProj : mat4x4<f32>,
@@ -226,6 +241,46 @@ fn basis(n : vec3<f32>) -> mat3x3<f32> {
   ].join('\n');
 }
 
+function wgslVaryings(varyings: PtVaryings): string {
+  // 'st' is the default MaterialX texcoord set, so it mirrors the interpolated UV;
+  // other primvar/extra-input fields default to zero until later tasks feed them.
+  const assigns: string[] = [];
+  for (const [name] of varyings.primvarFields) {
+    if (name === 'st') assigns.push('  vary.v_st = uv;');
+  }
+  return [
+    emitVaryingsStruct(varyings.primvarFields, varyings.extraInputs),
+    /* wgsl */ `
+fn mx_tri_uv(tri : u32, slot : u32) -> vec2<f32> {
+  let b = tri * UV_STRIDE + slot * 2u;
+  return vec2<f32>(triUv[b], triUv[b + 1u]);
+}
+
+fn mx_hit_uv(h : Hit) -> vec2<f32> {
+  let w = 1.0 - h.u - h.v;
+  return mx_tri_uv(h.tri, 0u) * w + mx_tri_uv(h.tri, 1u) * h.u + mx_tri_uv(h.tri, 2u) * h.v;
+}
+
+// Build the MxVaryings the layered-surface variants consume from a hit: the
+// interpolated position/normal come from the integrator, the texcoord from the
+// per-triangle UVs, and the tangent frame from the branchless basis (replaced by
+// per-triangle tangents in T057l). Primvar/extra-input fields default to zero.
+fn mx_hit_varyings(h : Hit, pos : vec3<f32>, n : vec3<f32>, viewDir : vec3<f32>) -> MxVaryings {
+  var vary : MxVaryings;
+  let uv = mx_hit_uv(h);
+  let f = basis(n);
+  vary.position = pos;
+  vary.normal = n;
+  vary.tangent = f[0];
+  vary.bitangent = f[1];
+  vary.texcoord = uv;
+  vary.viewDir = viewDir;
+${assigns.join('\n')}
+  return vary;
+}`,
+  ].join('\n');
+}
+
 function wgslIntegrator(textures: boolean): string {
   const texOverride = textures
     ? /* wgsl */ `
@@ -391,13 +446,15 @@ fn ${PT_COMPUTE_ENTRY}(@builtin(global_invocation_id) gid : vec3<u32>) {
 }
 
 /** Full WGSL source of the compute path tracer. */
-export function pathTraceComputeWgsl(options: { textures?: boolean } = {}): string {
+export function pathTraceComputeWgsl(options: { textures?: boolean; varyings?: PtVaryings } = {}): string {
   const textures = options.textures ?? false;
+  const varyings = options.varyings;
   return [
-    wgslStructsAndBindings(textures),
+    wgslStructsAndBindings(textures, varyings !== undefined),
     wgslRng(),
     wgslTraversal(),
     wgslClosureSurface(textures),
+    ...(varyings !== undefined ? [wgslVaryings(varyings)] : []),
     wgslIntegrator(textures),
     wgslEntry(),
   ].join('\n');

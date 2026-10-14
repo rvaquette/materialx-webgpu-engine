@@ -419,7 +419,7 @@ export function canonicalSurfaceToLayered(p: CanonicalSurfaceInputs): LayeredClo
     { kind: 'conductor', weight: metal, color: p.baseColor, roughness: p.roughness },
     { kind: 'translucent', weight: (1 - metal) * trans, color: p.baseColor },
     { kind: 'dielectric_reflection', weight: dielectricShare * spec, color: [1, 1, 1], roughness: p.roughness, ior: p.ior },
-    { kind: 'burley_diffuse', weight: dielectricShare * (1 - spec), color: p.baseColor, roughness: p.roughness },
+    { kind: 'burley_diffuse', weight: dielectricShare, color: p.baseColor, roughness: p.roughness },
   ];
   return { lobes: lobes.filter((l) => l.weight > 0), opacity: 1 };
 }

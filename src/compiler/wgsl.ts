@@ -183,9 +183,9 @@ function emitConvert(src: string, from: IrType, to: IrType): string {
   return src;
 }
 
-function emitTexture(expr: Extract<IrExpr, { kind: 'texture' }>, varName: (r: IrRef) => string): string {
-  const tex = `tex_${ident(expr.texture)}`;
-  const samp = `samp_${ident(expr.sampler)}`;
+function emitTexture(expr: Extract<IrExpr, { kind: 'texture' }>, varName: (r: IrRef) => string, prefix: string): string {
+  const tex = `${prefix}tex_${ident(expr.texture)}`;
+  const samp = `${prefix}samp_${ident(expr.sampler)}`;
   const uv = varName(expr.uv);
   let sample: string;
   if (expr.gradient) {
@@ -233,8 +233,10 @@ export interface LoweredExprs {
 /** Walk a ShaderIr and emit one `let` statement per reachable expression (topo
  *  order, CSE already applied upstream), collecting the uniform/texture/sampler
  *  bindings, required preludes and varying fields. The refs are used verbatim as
- *  WGSL variable names. */
-export function lowerExprs(ir: ShaderIr): LoweredExprs {
+ *  WGSL variable names. `handlePrefix` namespaces the texture/sampler handles so
+ *  several lowered surfaces can share one module (path tracer megakernel, T057g);
+ *  it defaults to empty for single-surface modules. */
+export function lowerExprs(ir: ShaderIr, handlePrefix = ''): LoweredExprs {
   const ctx: NodeEmitContext = {
     varyings: {
       position: 'vary.position',
@@ -282,7 +284,7 @@ export function lowerExprs(ir: ShaderIr): LoweredExprs {
         rhs = `${varName(expr.source)}.${expr.pattern}`;
         break;
       case 'texture':
-        rhs = emitTexture(expr, varName);
+        rhs = emitTexture(expr, varName, handlePrefix);
         break;
       case 'call': {
         const lowering = getNodeLowering(expr.op);
@@ -314,8 +316,8 @@ export function lowerExprs(ir: ShaderIr): LoweredExprs {
   // Uniforms.
   const uniforms: WgslUniformField[] = ir.params.map((p) => ({ name: p.name, field: ident(p.name), wgslType: wgslType(p.type) }));
   // Bindings.
-  const textures: WgslBinding[] = ir.textures.map((t, i) => ({ name: t.name, handle: `tex_${ident(t.name)}`, group: 1, binding: i }));
-  const samplers: WgslBinding[] = ir.samplers.map((s, i) => ({ name: s.name, handle: `samp_${ident(s.name)}`, group: 2, binding: i }));
+  const textures: WgslBinding[] = ir.textures.map((t, i) => ({ name: t.name, handle: `${handlePrefix}tex_${ident(t.name)}`, group: 1, binding: i }));
+  const samplers: WgslBinding[] = ir.samplers.map((s, i) => ({ name: s.name, handle: `${handlePrefix}samp_${ident(s.name)}`, group: 2, binding: i }));
   return { order, body, preludes, extraInputs, primvarFields, usesLighting, uniforms, textures, samplers };
 }
 
