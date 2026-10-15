@@ -398,6 +398,7 @@ function buildSurfaceFn(
   entryName: string,
   sink: DiagnosticSink,
   handlePrefix = '',
+  computeStage = false,
 ): SurfaceFnParts {
   const builder = new IrModuleBuilder();
   const lowered = lowerSurfaceInputsToIr(graph, surface, builder, sink);
@@ -411,7 +412,7 @@ function buildSurfaceFn(
   for (const ref of used) builder.output({ name: ref, type: FLOAT, ref });
 
   const ir = builder.build();
-  const exprs = lowerExprs(ir, handlePrefix);
+  const exprs = lowerExprs(ir, handlePrefix, computeStage);
 
   const assigns: string[] = [`  c.lobeCount = ${fam.lobes.length}u;`];
   fam.lobes.forEach((lobe, i) => assigns.push(lobeAssign(i, lobe)));
@@ -506,7 +507,7 @@ export function emitSurfaceVariant(
   index: number,
   sink: DiagnosticSink = defaultDiagnosticSink,
 ): SurfaceVariantModule {
-  const fn = buildSurfaceFn(graph, surface, `${SURFACE_ENTRY}_${index}`, sink, `m${index}_`);
+  const fn = buildSurfaceFn(graph, surface, `${SURFACE_ENTRY}_${index}`, sink, `m${index}_`, true);
   return {
     index,
     family: fn.family,

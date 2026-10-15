@@ -24,6 +24,7 @@ export interface MxInput extends MxElement {
   hasValue?(): boolean;
   getInterfaceName?(): string;
   getConnectedNode?(): MxNode | null;
+  getInterfaceInput?(): MxInput | null;
   getOutputString?(): string;
   getColorSpace?(): string;
   getUnit?(): string;
@@ -174,7 +175,27 @@ function resolveInput(input: MxInput): { resolved: ResolvedInput; connected: MxN
   const hasValue = input.hasValue ? input.hasValue() : valueString !== '';
 
   if (interfaceName !== undefined) {
-    source = { kind: 'interface', name: interfaceName };
+    // Resolve the nodegraph interface binding to the concrete value/connection
+    // it forwards (Core exposes Input::getInterfaceInput) so inner nodes never
+    // carry an unresolved 'interface' source into IR lowering. Fall back to the
+    // interface marker when the binding can't be read (e.g. mocked inputs).
+    const iface = input.getInterfaceInput?.() ?? null;
+    const ifaceConnected = iface?.getConnectedNode?.() ?? null;
+    if (ifaceConnected) {
+      connected = ifaceConnected;
+      const output = nonEmpty(iface?.getOutputString?.());
+      source = output !== undefined
+        ? { kind: 'connection', nodeId: ifaceConnected.getNamePath(), output }
+        : { kind: 'connection', nodeId: ifaceConnected.getNamePath() };
+    } else if (iface) {
+      const ifaceValue = iface.getValueString();
+      const ifaceHasValue = iface.hasValue ? iface.hasValue() : ifaceValue !== '';
+      source = ifaceHasValue
+        ? { kind: 'value', value: ifaceValue, type }
+        : { kind: 'interface', name: interfaceName };
+    } else {
+      source = { kind: 'interface', name: interfaceName };
+    }
   } else if (connectedNode) {
     connected = connectedNode;
     const output = nonEmpty(input.getOutputString?.());

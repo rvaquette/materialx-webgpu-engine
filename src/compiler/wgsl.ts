@@ -185,7 +185,12 @@ function emitConvert(src: string, from: IrType, to: IrType): string {
   return src;
 }
 
-function emitTexture(expr: Extract<IrExpr, { kind: 'texture' }>, varName: (r: IrRef) => string, prefix: string): string {
+function emitTexture(
+  expr: Extract<IrExpr, { kind: 'texture' }>,
+  varName: (r: IrRef) => string,
+  prefix: string,
+  computeStage: boolean,
+): string {
   const tex = `${prefix}tex_${ident(expr.texture)}`;
   const samp = `${prefix}samp_${ident(expr.sampler)}`;
   const uv = varName(expr.uv);
@@ -196,6 +201,11 @@ function emitTexture(expr: Extract<IrExpr, { kind: 'texture' }>, varName: (r: Ir
     sample = `textureSampleLevel(${tex}, ${samp}, ${uv}, ${varName(expr.lod)})`;
   } else if (expr.bias) {
     sample = `textureSampleBias(${tex}, ${samp}, ${uv}, ${varName(expr.bias)})`;
+  } else if (computeStage) {
+    // textureSample computes implicit derivatives and is only valid in a fragment
+    // stage; the path tracer megakernel runs in a compute pipeline, so sample the
+    // base level explicitly (mip LOD 0).
+    sample = `textureSampleLevel(${tex}, ${samp}, ${uv}, 0.0)`;
   } else {
     sample = `textureSample(${tex}, ${samp}, ${uv})`;
   }
@@ -237,8 +247,10 @@ export interface LoweredExprs {
  *  bindings, required preludes and varying fields. The refs are used verbatim as
  *  WGSL variable names. `handlePrefix` namespaces the texture/sampler handles so
  *  several lowered surfaces can share one module (path tracer megakernel, T057g);
- *  it defaults to empty for single-surface modules. */
-export function lowerExprs(ir: ShaderIr, handlePrefix = ''): LoweredExprs {
+ *  it defaults to empty for single-surface modules. `computeStage` forces explicit
+ *  LOD-0 texture sampling (textureSample is fragment-only; the PT megakernel runs
+ *  in a compute pipeline). */
+export function lowerExprs(ir: ShaderIr, handlePrefix = '', computeStage = false): LoweredExprs {
   const ctx: NodeEmitContext = {
     varyings: {
       position: 'vary.position',
@@ -254,6 +266,13 @@ export function lowerExprs(ir: ShaderIr, handlePrefix = ''): LoweredExprs {
   const order = topoOrder(ir);
   const varName = (r: IrRef): string => r;
   const preludes = new Set<string>([CLOSURE_PRELUDE]);
+  // Texture/sampler handles actually sampled by the emitted body. A declared but
+  // unreachable texture (e.g. an input the surface family never reads) would add
+  // a WGSL binding the shader never uses, which auto-layout prunes -- leaving the
+  // device bind group one entry longer than the pipeline layout. Only emit the
+  // bindings the body references.
+  const usedTextures = new Set<string>();
+  const usedSamplers = new Set<string>();
   const extraInputs = new Map<string, IrType>();
   const primvarFields = new Map<string, IrType>();
   const body: string[] = [];
@@ -286,7 +305,9 @@ export function lowerExprs(ir: ShaderIr, handlePrefix = ''): LoweredExprs {
         rhs = `${varName(expr.source)}.${expr.pattern}`;
         break;
       case 'texture':
-        rhs = emitTexture(expr, varName, handlePrefix);
+        rhs = emitTexture(expr, varName, handlePrefix, computeStage);
+        usedTextures.add(expr.texture);
+        usedSamplers.add(expr.sampler);
         break;
       case 'call': {
         const lowering = getNodeLowering(expr.op);
@@ -317,9 +338,12 @@ export function lowerExprs(ir: ShaderIr, handlePrefix = ''): LoweredExprs {
 
   // Uniforms.
   const uniforms: WgslUniformField[] = ir.params.map((p) => ({ name: p.name, field: ident(p.name), wgslType: wgslType(p.type) }));
-  // Bindings.
-  const textures: WgslBinding[] = ir.textures.map((t, i) => ({ name: t.name, handle: `${handlePrefix}tex_${ident(t.name)}`, group: 1, binding: i, ...(t.fileRef !== undefined ? { fileRef: t.fileRef } : {}) }));
-  const samplers: WgslBinding[] = ir.samplers.map((s, i) => ({ name: s.name, handle: `${handlePrefix}samp_${ident(s.name)}`, group: 2, binding: i }));
+  // Bindings. Only expose textures/samplers the body actually samples so the
+  // declared WGSL bindings match what auto-layout keeps (and the device plan).
+  const usedTex = ir.textures.filter((t) => usedTextures.has(t.name));
+  const usedSamp = ir.samplers.filter((s) => usedSamplers.has(s.name));
+  const textures: WgslBinding[] = usedTex.map((t, i) => ({ name: t.name, handle: `${handlePrefix}tex_${ident(t.name)}`, group: 1, binding: i, ...(t.fileRef !== undefined ? { fileRef: t.fileRef } : {}) }));
+  const samplers: WgslBinding[] = usedSamp.map((s, i) => ({ name: s.name, handle: `${handlePrefix}samp_${ident(s.name)}`, group: 2, binding: i }));
   return { order, body, preludes, extraInputs, primvarFields, usesLighting, uniforms, textures, samplers };
 }
 

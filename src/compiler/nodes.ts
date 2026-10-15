@@ -458,7 +458,12 @@ const LOWERINGS: readonly NodeLowering[] = [
   expr('normalize', fn1('normalize')),
   expr('min', fn2('min')),
   expr('max', fn2('max')),
-  expr('clamp', (inp) => `clamp(${inp.at(0)}, ${inp.at(1, '0.0')}, ${inp.at(2, '1.0')})`),
+  expr('clamp', (inp, type, ctx) => {
+    // clamp is a builtin (no scalar->vector broadcast); splat the default bounds
+    // to the node type so a color3/vector clamp gets vecN bounds, not scalars.
+    const t = ctx.wgslType(type);
+    return `clamp(${inp.at(0)}, ${inp.at(1, `${t}(0.0)`)}, ${inp.at(2, `${t}(1.0)`)})`;
+  }),
   expr('dotproduct', fn2('dot')),
   expr('dot', (inp) => inp.at(0)),
   expr('invert', (inp) => `(${inp.at(1, '1.0')} - ${inp.at(0)})`),

@@ -283,11 +283,13 @@ describe('pathTraceComputeWgsl texture registry (T057j)', () => {
     expect(src).not.toContain('texture_2d<f32>');
   });
 
-  it('wires the variant textureSample to the registry texture/sampler slots (T057k)', () => {
+  it('wires the variant texture sampling to the registry texture/sampler slots (T057k)', () => {
     const dispatch = imageDispatch(['brick.png']);
     const src = pathTraceComputeWgsl({ dispatch });
     // The lowered image node samples its own slot at the interpolated st primvar.
-    expect(src).toContain('textureSample(m0_tex_tex, m0_samp_tex');
+    // The megakernel is a compute pipeline, so it must sample an explicit LOD
+    // (textureSample is fragment-only).
+    expect(src).toContain('textureSampleLevel(m0_tex_tex, m0_samp_tex');
     expect(src).toContain('vary.v_st');
   });
 });
