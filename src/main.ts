@@ -23,7 +23,8 @@ import { MaterialXLibraries, defaultLibrarySources } from './materialx/libraries
 import { buildPathTraceScene } from './render/pathtracing/scene-buffers.ts';
 import { buildPathTraceUniform, PathTraceBackend, PT_UNIFORM_SIZE } from './render/pathtracing/compute.ts';
 import { RenderEngine, type BackendKind } from './render/engine.ts';
-import { lookAt4, multiply4, perspective4 } from './scene/transforms.ts';
+import { inverse4, lookAt4, multiply4, perspective4 } from './scene/transforms.ts';
+import { OrbitCamera, attachOrbitControls } from './scene/orbit-camera.ts';
 import type { RawMesh } from './geometry/prepare.ts';
 import type { MaterialXReference, SceneAsset, ScenePrim, XformOp } from './scene/types.ts';
 import { importCameras } from './usd/cameras.ts';
@@ -225,6 +226,9 @@ async function main(): Promise<void> {
   // its per-material IR variant pipeline (T058e).
   const drawsByPass = new Map<ScenePassKind, SceneDrawCall[]>();
   const zeroTexcoords = new Map<string, GPUBuffer>();
+  // Per-draw frame uniforms, retained so the interactive camera can re-upload the
+  // shared view-projection + eye block without rebuilding the draw list.
+  const frameUniforms: GPUBuffer[] = [];
   for (const draw of frame.draws) {
     const buffers = uploaded.get(draw.prototypeId);
     const geometry = resources.geometries.get(draw.prototypeId);
@@ -251,6 +255,7 @@ async function main(): Promise<void> {
       usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
     });
     device.queue.writeBuffer(frameUniform, 0, buildSceneFrameUniform(frame, draw));
+    frameUniforms.push(frameUniform);
     const materialUniform = device.createBuffer({
       size: SCENE_MATERIAL_UNIFORM_SIZE,
       usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
@@ -419,29 +424,59 @@ fn tonemap(c: vec3<f32>) -> vec3<f32> {
   function status(): void {
     const kind = engine.backend;
     const extra = kind === 'pathtracing' ? `, ${engine.accumulatedFrames} spp` : '';
-    setStatus(`Backend ${kind}: ${frame.draws.length} object(s), passes [${frame.passes.join(', ')}]${extra}${note}. [r]aster / [p]athtracing`);
+    setStatus(`Backend ${kind}: ${frame.draws.length} object(s), passes [${frame.passes.join(', ')}]${extra}${note}. [r]aster / [p]athtracing - drag to orbit, wheel to zoom`);
   }
 
-  let raf = 0;
+  // Interactive orbit camera: seeded from the initial framing (eye) and the scene
+  // bounds center so the first frame matches the import, then driven by the mouse.
+  const boundsCenter: [number, number, number] = [
+    (ptScene.bounds.min[0] + ptScene.bounds.max[0]) / 2,
+    (ptScene.bounds.min[1] + ptScene.bounds.max[1]) / 2,
+    (ptScene.bounds.min[2] + ptScene.bounds.max[2]) / 2,
+  ];
+  const orbit = OrbitCamera.fromEyeTarget(frame.camera.eye, boundsCenter, width / height);
+
+  // Re-upload the shared camera block into every raster frame uniform (viewProj at
+  // float offset 16, eye at float offset 32) and into the path-tracing scene, then
+  // mark raster dirty and restart path-tracing accumulation so both modes follow.
+  let rasterDirty = true;
+  function applyCamera(): void {
+    const viewProj = orbit.viewProj();
+    const eye = orbit.eye;
+    const viewProjArray = new Float32Array(viewProj);
+    const eyeArray = new Float32Array([eye[0], eye[1], eye[2], 0]);
+    for (const buf of frameUniforms) {
+      device.queue.writeBuffer(buf, 16 * 4, viewProjArray);
+      device.queue.writeBuffer(buf, 32 * 4, eyeArray);
+    }
+    ptScene.camera.viewProj = viewProj;
+    ptScene.camera.invViewProj = inverse4(viewProj);
+    ptScene.camera.eye = eye;
+    rasterDirty = true;
+    if (engine.backend === 'pathtracing') resetPathTrace();
+  }
+  applyCamera();
+  attachOrbitControls(canvas, orbit, applyCamera);
+
   function loop(): void {
     const targetView = ctx.getCurrentTexture().createView();
     if (engine.backend === 'pathtracing') {
       renderPathTrace(targetView);
       engine.renderFrame();
       status();
-      raf = requestAnimationFrame(loop);
-    } else {
+    } else if (rasterDirty) {
+      rasterDirty = false;
       renderRaster(targetView);
       status();
     }
+    requestAnimationFrame(loop);
   }
 
   function selectBackend(kind: BackendKind): void {
     if (kind === engine.backend) return;
-    cancelAnimationFrame(raf);
     engine.setBackend(kind);
     if (kind === 'pathtracing') resetPathTrace();
-    loop();
+    else rasterDirty = true;
   }
 
   window.addEventListener('keydown', (e) => {
