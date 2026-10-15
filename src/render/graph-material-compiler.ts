@@ -51,21 +51,28 @@ export function createGraphMaterialCompiler(options: GraphMaterialCompilerOption
         emit({ level: 'warning', message: `No MaterialX document for material ${unit.materialName}`, detail: { material: unit.materialName } });
         return undefined;
       }
-      const roots = materialGraphRoots(doc, unit.materialName, { sink: emit });
-      if (roots.length === 0) return undefined;
-      const graph = resolveGraph({
-        roots,
-        onDiagnostic: emit,
-        ...(options.target !== undefined ? { target: options.target } : {}),
-      });
-      const surface = resolveSurface(graph, options.surfaceOptions ?? {});
-      if (!surface) {
-        emit({ level: 'warning', message: `Unresolved surface for material ${unit.materialName}`, detail: { material: unit.materialName } });
+      try {
+        const roots = materialGraphRoots(doc, unit.materialName, { sink: emit });
+        if (roots.length === 0) return undefined;
+        const graph = resolveGraph({
+          roots,
+          onDiagnostic: emit,
+          ...(options.target !== undefined ? { target: options.target } : {}),
+        });
+        const surface = resolveSurface(graph, options.surfaceOptions ?? {});
+        if (!surface) {
+          emit({ level: 'warning', message: `Unresolved surface for material ${unit.materialName}`, detail: { material: unit.materialName } });
+          return undefined;
+        }
+        const layered = emitLayeredSurface(graph, surface, emit);
+        const ir = neutralSurfaceIr();
+        return { ir, module: emitWgsl(ir), layered, graph, surface };
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        const stack = error instanceof Error ? (error.stack ?? '') : '';
+        emit({ level: 'error', message: `Material compile failed for ${unit.materialName}: ${message}`, detail: { material: unit.materialName, stack } });
         return undefined;
       }
-      const layered = emitLayeredSurface(graph, surface, emit);
-      const ir = neutralSurfaceIr();
-      return { ir, module: emitWgsl(ir), layered, graph, surface };
     },
   };
 }

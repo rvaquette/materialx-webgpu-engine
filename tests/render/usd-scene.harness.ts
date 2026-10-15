@@ -385,8 +385,12 @@ async function renderUsdOnDevice(
   samples: number,
   line: (m: string) => void,
 ): Promise<{ rgba: Uint8ClampedArray; renderMs: number }> {
-  const sink = (d: { level: string; message: string }): void => {
-    if (d.level === 'warning' || d.level === 'error') line(`diag: ${d.message}`);
+  const sink = (d: { level: string; message: string; detail?: unknown }): void => {
+    if (d.level === 'warning' || d.level === 'error') {
+      line(`diag: ${d.message}`);
+      const stack = (d.detail as { stack?: string } | undefined)?.stack;
+      if (stack) for (const l of stack.split('\n').slice(0, 6)) if (l.trim()) line(`  at ${l.trim()}`);
+    }
   };
 
   const reader = httpReader(entry);
@@ -423,19 +427,23 @@ async function renderUsdOnDevice(
     locateFile: (path) => MATERIALX_WASM_DIR + path,
     onDiagnostic: sink,
   });
+  line('diag step: core loaded');
   const libraries = new MaterialXLibraries(core);
   await libraries.load({
     sources: defaultLibrarySources(MATERIALX_LIBRARIES_ROOT),
     fetchText: async (url) => (await fetch(url)).text(),
     onDiagnostic: sink,
   });
+  line('diag step: libraries loaded');
   const documents = await loadMaterialXDocuments({ core, libraries, texts, sink });
+  line('diag step: documents loaded');
 
   const resources = await buildSceneResources(scene, {
     meshSource: meshSourceFromScene(scene),
     materialCompiler: createGraphMaterialCompiler({ documents, sink }),
     sink,
   });
+  line('diag step: scene resources built');
 
   const camera = cameras[0];
   const exposure = camera?.exposure ?? 0;
@@ -501,7 +509,19 @@ async function renderUsdOnDevice(
 
   // Compute path tracer on the packed scene buffers, progressive accumulation.
   const backend = new PathTraceBackend(device, { dispatch });
-  const { pipeline } = backend.createPipeline();
+  device.pushErrorScope('validation');
+  const { pipeline, module } = backend.createPipeline();
+  const pipelineError = await device.popErrorScope();
+  if (pipelineError) line(`diag pipeline validation error: ${pipelineError.message}`);
+  if (typeof module.getCompilationInfo === 'function') {
+    const info = await module.getCompilationInfo();
+    for (const m of info.messages) {
+      if (m.type === 'error' || m.type === 'warning') {
+        line(`diag wgsl ${m.type} L${m.lineNum}:${m.linePos} ${m.message}`);
+      }
+    }
+    line(`diag wgsl messages=${info.messages.length}`);
+  }
   const storage = (data: Float32Array | Uint32Array | Int32Array): GPUBuffer => {
     const buf = device.createBuffer({ size: data.byteLength, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
     device.queue.writeBuffer(buf, 0, data);
@@ -582,6 +602,8 @@ async function renderUsdOnDevice(
 
   backend.resetAccumulation();
   const renderStart = performance.now();
+  device.pushErrorScope('validation');
+  const batch = 8;
   for (let f = 0; f < samples; f++) {
     const frameIndex = backend.advanceFrame();
     device.queue.writeBuffer(uniform, 0, buildPathTraceUniform(ptScene, frameIndex, 1, res, res));
@@ -594,8 +616,15 @@ async function renderUsdOnDevice(
     compute.dispatchWorkgroups(wgX, wgY, 1);
     compute.end();
     device.queue.submit([encoder.finish()]);
+    // Flush each batch so a GPU hang/TDR is localized instead of silently
+    // stalling the whole accumulation behind one trailing onSubmittedWorkDone.
+    if ((f + 1) % batch === 0 || f === samples - 1) {
+      await device.queue.onSubmittedWorkDone();
+      line(`diag pt frame ${f + 1}/${samples} @ ${(performance.now() - renderStart).toFixed(0)} ms`);
+    }
   }
-  await device.queue.onSubmittedWorkDone();
+  const frameError = await device.popErrorScope();
+  if (frameError) line(`diag dispatch validation error: ${frameError.message}`);
   const renderMs = performance.now() - renderStart;
 
   // Read the accumulated mean back and tonemap through the shared output pipeline.
@@ -668,6 +697,10 @@ export async function bootstrapUsdImage(
     return fail();
   }
   const device = await adapter.requestDevice();
+  // Surface a GPU device loss (e.g. a Windows TDR watchdog reset after a long
+  // megakernel dispatch) instead of hanging silently on onSubmittedWorkDone.
+  device.lost.then((info) => line(`diag device lost: ${info.reason} ${info.message}`)).catch(() => undefined);
+  device.onuncapturederror = (event) => line(`diag uncaptured error: ${event.error.message}`);
 
   let rgba: Uint8ClampedArray;
   let renderMs: number;

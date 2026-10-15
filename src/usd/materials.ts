@@ -161,6 +161,8 @@ export interface MtlxMaterialNode extends MxElement {
 export interface MtlxDocumentView {
   getMaterialNode?(name: string): MtlxMaterialNode | null;
   getChild?(name: string): MtlxMaterialNode | null;
+  /** Enumerates the document's surfacematerial nodes (robust-name fallback). */
+  getMaterialNodes?(): MxVector<MtlxMaterialNode> | MtlxMaterialNode[];
 }
 
 export interface MaterialGraphRootsOptions {
@@ -178,6 +180,38 @@ function toArray<T>(v: MxVector<T> | T[]): T[] {
 }
 
 /**
+ * Resolve a material node by name, tolerating USD/MaterialX naming drift: the USD
+ * reference target (e.g. .../velvet) often differs in case from the authored
+ * surfacematerial (Velvet) or carries a USD-side name (brick_procedural) unrelated
+ * to the mtlx node (M_BrickPattern). Try the exact name, then a case-insensitive
+ * enumeration match, then fall back to the document's sole material node.
+ */
+function findMaterialNode(
+  doc: MtlxDocumentView,
+  materialName: string,
+  emit: (d: Diagnostic) => void,
+): MtlxMaterialNode | null {
+  const exact = doc.getMaterialNode?.(materialName) ?? doc.getChild?.(materialName) ?? null;
+  if (exact) return exact;
+
+  const materials = doc.getMaterialNodes ? toArray(doc.getMaterialNodes()) : [];
+  if (materials.length === 0) return null;
+
+  const wanted = materialName.toLowerCase();
+  const ci = materials.find((m) => m.getName().toLowerCase() === wanted);
+  if (ci) {
+    emit({ level: 'info', message: `MaterialX material matched case-insensitively: ${materialName} -> ${ci.getName()}` });
+    return ci;
+  }
+  if (materials.length === 1) {
+    const sole = materials[0]!;
+    emit({ level: 'info', message: `MaterialX material ${materialName} not found; using sole material ${sole.getName()}` });
+    return sole;
+  }
+  return null;
+}
+
+/**
  * Build the GraphRoots (shader terminals) of a MaterialX material by name, ready
  * for resolveGraph. The caller injects the loaded document; this stays a pure
  * structural bridge so it is node-testable without the Core WASM module.
@@ -188,7 +222,7 @@ export function materialGraphRoots(
   options: MaterialGraphRootsOptions = {},
 ): GraphRoot[] {
   const emit: (d: Diagnostic) => void = options.sink ?? (() => undefined);
-  const material = doc.getMaterialNode?.(materialName) ?? doc.getChild?.(materialName) ?? null;
+  const material = findMaterialNode(doc, materialName, emit);
   if (!material) {
     emit({ level: 'error', message: `MaterialX material not found: ${materialName}` });
     return [];

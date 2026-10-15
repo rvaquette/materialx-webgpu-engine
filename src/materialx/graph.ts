@@ -202,7 +202,10 @@ function resolveInput(input: MxInput): { resolved: ResolvedInput; connected: MxN
 }
 
 function resolveNodeDef(node: MxNode, target: string | undefined, diag: DiagnosticSink): ResolvedNodeDefRef | undefined {
-  const nodeDef = node.getNodeDef?.(target) ?? null;
+  // The Core Embind binding types target as std::string; passing undefined trips
+  // "Cannot pass non-string to std::string". MaterialX treats "" as "any target".
+  const targetArg = target ?? '';
+  const nodeDef = node.getNodeDef?.(targetArg) ?? null;
   if (!nodeDef) {
     diag({
       level: 'warning',
@@ -212,7 +215,7 @@ function resolveNodeDef(node: MxNode, target: string | undefined, diag: Diagnost
     return undefined;
   }
 
-  const impl = nodeDef.getImplementation?.(target) ?? null;
+  const impl = nodeDef.getImplementation?.(targetArg) ?? null;
   const implementation: ResolvedImplementation = impl
     ? classifyImplementation(impl)
     : { kind: 'unresolved' };

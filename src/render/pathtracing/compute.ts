@@ -547,6 +547,8 @@ export function buildPathTraceUniform(
 
 export interface PathTracePipeline {
   pipeline: GPUComputePipeline;
+  /** The compiled WGSL module, exposed for getCompilationInfo diagnostics. */
+  module: GPUShaderModule;
 }
 
 /**
@@ -597,7 +599,7 @@ export class PathTraceBackend {
       layout: 'auto',
       compute: { module, entryPoint: PT_COMPUTE_ENTRY },
     });
-    this.#pipeline = { pipeline };
+    this.#pipeline = { pipeline, module };
     return this.#pipeline;
   }
 

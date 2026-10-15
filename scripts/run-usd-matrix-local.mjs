@@ -22,13 +22,16 @@ const LOCAL_URL = `http://127.0.0.1:${PORT}${HARNESS_PATH}`;
 const CDP = 'http://127.0.0.1:9222';
 const OUT_DIR = new URL('../renders/', import.meta.url);
 
-const SCENES = [
+const ALL_SCENES = [
   'test_material_disney_gold',
   'test_material_velvet',
   'test_material_metal_brushed',
   'test_material_brick_procedural',
 ];
-const BACKENDS = ['raster', 'pathtracing'];
+// MX_SCENES=brick,velvet renders only the matching subset (substring match).
+const SCENE_FILTER = (process.env.MX_SCENES ?? '').split(',').map((s) => s.trim()).filter(Boolean);
+const SCENES = SCENE_FILTER.length > 0 ? ALL_SCENES.filter((s) => SCENE_FILTER.some((f) => s.includes(f))) : ALL_SCENES;
+const BACKENDS = (process.env.MX_BACKENDS ?? 'raster,pathtracing').split(',').map((s) => s.trim()).filter(Boolean);
 
 const log = (m) => console.log(`[usd-matrix-local] ${m}`);
 
@@ -88,6 +91,7 @@ async function renderOne(send, entry, backend) {
   const started = Date.now();
   let status = null;
   let lastLog = '';
+  let printedLines = 0;
   while (Date.now() - started < DEADLINE_MS) {
     const raw = await evalExpr(
       "JSON.stringify((() => { const i = globalThis.__MX_IMAGE__; return { e: i ? i.entry : null, b: i ? i.backend : null, ms: i ? i.renderMs : null, failed: ('__MX_IMAGE__' in globalThis) && i === null }; })())",
@@ -98,6 +102,13 @@ async function renderOne(send, entry, backend) {
       status = null;
     }
     lastLog = (await evalExpr("(document.body && document.body.innerText) || ''")) || lastLog;
+    if (process.env.MX_VERBOSE) {
+      const lines = lastLog.split('\n');
+      for (let i = printedLines; i < lines.length; i++) {
+        if (lines[i].trim()) console.log(`    [live] ${lines[i].trim()}`);
+      }
+      printedLines = lines.length;
+    }
     if (status && status.e === entry && status.b === backend) break;
     if (status && status.failed) break;
     await sleep(500);
