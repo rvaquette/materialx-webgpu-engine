@@ -92,6 +92,14 @@ def Xform "World"
 
     def Scope "Lights"
     {
+        def DomeLight "env"
+        {
+            asset inputs:texture:file = @./photo_studio_01_1k.hdr@
+            color3f inputs:color = (1, 1, 1)
+            float inputs:intensity = 1
+            float inputs:exposure = 0
+            token inputs:texture:format = "latlong"
+        }
         def SphereLight "light_0"
         {
             color3f inputs:color = (1, 1, 1)

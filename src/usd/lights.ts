@@ -31,6 +31,8 @@ export interface SceneLight {
   treatAsPoint?: boolean;
   /** Recorded asset path; not loaded. */
   textureFile?: string;
+  /** Optional pre-convolved diffuse irradiance map (non-standard dome input). */
+  irradianceFile?: string;
   /** Recorded IES photometric profile path; not loaded. */
   iesFile?: string;
   coneAngle?: number;
@@ -100,6 +102,7 @@ export function importLights(scene: SceneAsset, options: ImportLightsOptions = {
     const angle = readNumber(prim, 'inputs:angle');
     const treatAsPoint = readBool(prim, 'treatAsPoint');
     const textureFile = readString(prim, 'inputs:texture:file');
+    const irradianceFile = readString(prim, 'inputs:texture:irradianceFile');
     const iesFile = readString(prim, 'inputs:shaping:ies:file');
     const coneAngle = readNumber(prim, 'inputs:shaping:cone:angle');
     const coneSoftness = readNumber(prim, 'inputs:shaping:cone:softness');
@@ -127,6 +130,7 @@ export function importLights(scene: SceneAsset, options: ImportLightsOptions = {
       ...(angle !== undefined ? { angle } : {}),
       ...(treatAsPoint !== undefined ? { treatAsPoint } : {}),
       ...(textureFile !== undefined ? { textureFile } : {}),
+      ...(irradianceFile !== undefined ? { irradianceFile } : {}),
       ...(iesFile !== undefined ? { iesFile } : {}),
       ...(coneAngle !== undefined ? { coneAngle } : {}),
       ...(coneSoftness !== undefined ? { coneSoftness } : {}),

@@ -37,7 +37,7 @@ export interface PtVaryings {
   extraInputs: Map<string, IrType>;
 }
 
-function wgslStructsAndBindings(textures: boolean, varyings: boolean): string {
+function wgslStructsAndBindings(textures: boolean, varyings: boolean, environment: boolean): string {
   // The baked path binds the full UV + baked-texture group; a graph path only
   // needs the per-triangle UVs (binding 6) to interpolate texcoords.
   const texBindings = textures
@@ -77,6 +77,30 @@ const PI : f32 = 3.14159265358979;
 const NODE_STRIDE : u32 = 12u;
 const TRI_STRIDE : u32 = 24u;
 const RAY_EPS : f32 = 1.0e-4;
+${environment ? envBindings() : ''}`;
+}
+
+/** Equirectangular environment map (UsdLuxDomeLight) bound as its own group so it
+ *  stays independent of the per-material texture registry (groups 1/2). env.w in
+ *  the uniform carries the dome intensity: > 0 selects the textured path, 0 keeps
+ *  the constant env.xyz the non-environment megakernel uses. */
+function envBindings(): string {
+  return /* wgsl */ `
+@group(3) @binding(0) var envTex : texture_2d<f32>;
+@group(3) @binding(1) var envSampler : sampler;
+fn env_dir_to_uv(d : vec3<f32>) -> vec2<f32> {
+  let n = normalize(d);
+  let u = atan2(n.z, n.x) * (0.5 / PI) + 0.5;
+  let v = acos(clamp(n.y, -1.0, 1.0)) / PI;
+  return vec2<f32>(u, v);
+}
+fn env_radiance(d : vec3<f32>) -> vec3<f32> {
+  if (U.env.w > 0.0) {
+    let c = textureSampleLevel(envTex, envSampler, env_dir_to_uv(d), 0.0).xyz;
+    return c * U.env.xyz * U.env.w;
+  }
+  return U.env.xyz;
+}
 `;
 }
 
@@ -301,7 +325,9 @@ ${assigns.join('\n')}
   ].join('\n');
 }
 
-function wgslIntegrator(textures: boolean, dispatch: boolean): string {
+function wgslIntegrator(textures: boolean, dispatch: boolean, environment: boolean): string {
+  const envMiss = environment ? 'env_radiance(rd)' : 'U.env.xyz';
+  const envNee = environment ? 'env_radiance(wiW)' : 'U.env.xyz';
   const texOverride = textures
     ? /* wgsl */ `
     let layer = matLayer[tri_material(hit.tri)];
@@ -354,7 +380,7 @@ fn integrate(ro0 : vec3<f32>, rd0 : vec3<f32>, state : ptr<function, u32>) -> ve
   var rd = rd0;
   let toLight = normalize(-U.lightDir.xyz);
   let lightRadiance = U.lightColor.xyz * U.lightColor.w;
-  let hasEnv = dot(U.env.xyz, vec3<f32>(1.0)) > 0.0;
+  let hasEnv = U.env.w > 0.0 || dot(U.env.xyz, vec3<f32>(1.0)) > 0.0;
   // MIS state carried across bounces (mirrors integratePath in integrator.ts).
   var specularBounce = true;
   var bsdfPdf = 0.0;
@@ -367,11 +393,11 @@ fn integrate(ro0 : vec3<f32>, rd0 : vec3<f32>, state : ptr<function, u32>) -> ve
       // environment next-event strategy unless the previous bounce was specular.
       if (hasEnv) {
         if (specularBounce) {
-          radiance = radiance + beta * U.env.xyz;
+          radiance = radiance + beta * ${envMiss};
         } else {
           let envPdf = max(dot(lastN, rd), 0.0) / PI;
           let w = power_heuristic(1.0, bsdfPdf, 1.0, envPdf);
-          radiance = radiance + beta * U.env.xyz * w;
+          radiance = radiance + beta * ${envMiss} * w;
         }
       }
       break;
@@ -404,7 +430,7 @@ ${closureBuild}
         if (!shadowE.hitAny) {
           let ev = mx_closure_eval(c, wo, wiLocal);
           let w = power_heuristic(1.0, envPdf, 1.0, ev.pdf);
-          radiance = radiance + beta * ev.value * U.env.xyz * (w * wiLocal.z / envPdf);
+          radiance = radiance + beta * ev.value * ${envNee} * (w * wiLocal.z / envPdf);
         }
       }
     }
@@ -474,9 +500,10 @@ fn ${PT_COMPUTE_ENTRY}(@builtin(global_invocation_id) gid : vec3<u32>) {
 
 /** Full WGSL source of the compute path tracer. */
 export function pathTraceComputeWgsl(
-  options: { textures?: boolean; varyings?: PtVaryings; dispatch?: PtMaterialDispatch } = {},
+  options: { textures?: boolean; varyings?: PtVaryings; dispatch?: PtMaterialDispatch; environment?: boolean } = {},
 ): string {
   const textures = options.textures ?? false;
+  const environment = options.environment ?? false;
   const dispatch = options.dispatch;
   // The dispatcher's merged MxVaryings fields drive the varyings struct, so a
   // graph path always emits the varyings machinery it consumes.
@@ -484,13 +511,13 @@ export function pathTraceComputeWgsl(
     ? { primvarFields: dispatch.primvarFields, extraInputs: dispatch.extraInputs }
     : options.varyings;
   return [
-    wgslStructsAndBindings(textures, varyings !== undefined),
+    wgslStructsAndBindings(textures, varyings !== undefined, environment),
     wgslRng(),
     wgslTraversal(),
     wgslClosureSurface(textures),
     ...(varyings !== undefined ? [wgslVaryings(varyings)] : []),
     ...(dispatch !== undefined ? [wgslDispatch(dispatch)] : []),
-    wgslIntegrator(textures, dispatch !== undefined),
+    wgslIntegrator(textures, dispatch !== undefined, environment),
     wgslEntry(),
   ].join('\n');
 }
@@ -538,7 +565,13 @@ export function buildPathTraceUniform(
   d.set([scene.camera.eye[0], scene.camera.eye[1], scene.camera.eye[2], 0], 16);
   d.set([scene.light.direction[0], scene.light.direction[1], scene.light.direction[2], 0], 20);
   d.set([scene.light.color[0], scene.light.color[1], scene.light.color[2], scene.light.intensity], 24);
-  d.set([scene.environment.radiance[0], scene.environment.radiance[1], scene.environment.radiance[2], 0], 28);
+  const env = scene.environment;
+  if (env.hasTexture) {
+    const tint = env.tint ?? [1, 1, 1];
+    d.set([tint[0], tint[1], tint[2], env.intensity ?? 1], 28);
+  } else {
+    d.set([env.radiance[0], env.radiance[1], env.radiance[2], 0], 28);
+  }
   d.set([frameIndex, samplesPerFrame, width, height], 32);
   return d;
 }
@@ -561,13 +594,15 @@ export interface PathTracePipeline {
 export class PathTraceBackend {
   readonly #device: GPUDevice;
   readonly #textures: boolean;
+  readonly #environment: boolean;
   readonly #dispatch: PtMaterialDispatch | undefined;
   #pipeline: PathTracePipeline | null = null;
   #frameIndex = 0;
 
-  constructor(device: GPUDevice, options: { textures?: boolean; dispatch?: PtMaterialDispatch } = {}) {
+  constructor(device: GPUDevice, options: { textures?: boolean; dispatch?: PtMaterialDispatch; environment?: boolean } = {}) {
     this.#device = device;
     this.#textures = options.textures ?? false;
+    this.#environment = options.environment ?? false;
     this.#dispatch = options.dispatch;
   }
 
@@ -592,6 +627,7 @@ export class PathTraceBackend {
     if (this.#pipeline) return this.#pipeline;
     const code = pathTraceComputeWgsl({
       textures: this.#textures,
+      environment: this.#environment,
       ...(this.#dispatch ? { dispatch: this.#dispatch } : {}),
     });
     const module = this.#device.createShaderModule({ code });

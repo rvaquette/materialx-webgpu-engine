@@ -53,7 +53,15 @@ export interface FrameLight {
 }
 
 export interface FrameEnvironment {
+  /** Flat ambient radiance (DC term): the average env colour when textured, or a
+   *  dim constant otherwise. The analytic raster forward shader reflects this. */
   radiance: Vec3;
+  /** Dome tint applied to the sampled envmap (defaults to white). */
+  tint?: Vec3;
+  /** Dome intensity * 2^exposure; folded into env.w for the textured path. */
+  intensity?: number;
+  /** True when an equirectangular envmap texture backs this environment. */
+  hasTexture?: boolean;
 }
 
 export interface SceneDraw {

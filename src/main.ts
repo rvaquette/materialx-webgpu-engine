@@ -1,138 +1,32 @@
-// Browser entry point (T026b, T051, T052). Drives the executable raster backend
-// on a real scene: it builds a composed SceneAsset, resolves its USD lights (and
-// camera when present), turns it into GPU resources through the SceneAsset -> GPU
-// bridge (src/render/scene-resources.ts), assembles a multi-object render plan
-// with the effectively-active passes (src/render/raster/scene-frame.ts), uploads
-// every prototype's geometry, records one scene forward pass per active pass into
-// an HDR target, and resolves it to the canvas. T052 adds a WebGPU compute path
-// tracer fed by the SAME resources (src/render/pathtracing/scene-buffers.ts +
-// compute.ts) with progressive accumulation, and wires backend switching through
-// the RenderEngine (src/render/engine.ts) so raster and path tracing render the
-// same assets with no reimport ([r] raster / [p] path tracing). The demo
-// SceneAsset stands in for the crate/USD loader that will supply real assets; the
-// runtime flow -- scene -> camera/lights -> resources -> frame -> GPU passes -- is
-// the real path, no longer a hard-coded triangle with hard-coded uniforms.
+// Browser entry point. Drives the interactive on-canvas viewer (src/render/
+// viewer.ts) on real USD scenes: a scene selector in index.html lets the user
+// pick which .usda to load, and the viewer renders it with an orbit camera in
+// either backend -- raster forward [r] or the WebGPU compute path tracer [p] --
+// on the SAME imported resources (no reimport on backend switch). Loading a new
+// scene disposes the previous GPU state and rebuilds both backends.
 
-import { RasterBackend, RESOLVE_UNIFORM_SIZE, SCENE_FRAME_UNIFORM_SIZE, SCENE_MATERIAL_UNIFORM_SIZE, type ScenePassKind, type SceneDrawCall } from './render/raster/backend.ts';
-import { buildSceneFrame, buildSceneFrameUniform, buildSceneMaterialUniform, type FrameCamera } from './render/raster/scene-frame.ts';
-import { buildSceneResources, createSceneBindGroups, uploadGeometry, type MeshSource } from './render/scene-resources.ts';
-import { createGraphMaterialCompiler } from './render/graph-material-compiler.ts';
-import { loadMaterialXDocuments } from './materialx/document-source.ts';
-import { loadMaterialXCore } from './materialx/wasm.ts';
-import { MaterialXLibraries, defaultLibrarySources } from './materialx/libraries.ts';
-import { buildPathTraceScene } from './render/pathtracing/scene-buffers.ts';
-import { buildPathTraceUniform, PathTraceBackend, PT_UNIFORM_SIZE } from './render/pathtracing/compute.ts';
-import { RenderEngine, type BackendKind } from './render/engine.ts';
-import { inverse4, lookAt4, multiply4, perspective4 } from './scene/transforms.ts';
-import { OrbitCamera, attachOrbitControls } from './scene/orbit-camera.ts';
-import type { RawMesh } from './geometry/prepare.ts';
-import type { MaterialXReference, SceneAsset, ScenePrim, XformOp } from './scene/types.ts';
-import { importCameras } from './usd/cameras.ts';
-import { importLights } from './usd/lights.ts';
+import { InteractiveViewer, type ViewerStatus } from './render/viewer.ts';
+import { SCENE_CATALOG } from './scene/scene-catalog.ts';
 
 function setStatus(text: string): void {
   const el = document.getElementById('status');
   if (el) el.textContent = text;
 }
 
-function prim(path: string, overrides: Partial<ScenePrim> = {}): ScenePrim {
-  const name = path.split('/').filter(Boolean).pop() ?? '';
-  return {
-    path,
-    name,
-    specifier: 'def',
-    apiSchemas: [],
-    inherits: [],
-    references: [],
-    payloads: [],
-    attributes: new Map(),
-    relationships: new Map(),
-    xformOps: [],
-    children: [],
-    ...overrides,
-  };
+function formatStatus(s: ViewerStatus): string {
+  const extra = s.backend === 'pathtracing' ? `, ${s.samples} spp` : '';
+  const note = s.warnings ? ` (${s.warnings} diagnostic(s))` : '';
+  return `Backend ${s.backend}: ${s.drawCount} object(s), passes [${s.passes.join(', ')}]${extra}${note}. ` +
+    `[r]aster / [p]athtracing - glisser pour orbiter, molette pour zoomer`;
 }
 
-const translate = (x: number, y: number, z: number): XformOp => ({
-  op: 'xformOp:translate',
-  typeName: 'double3',
-  value: [x, y, z],
-  invert: false,
-});
-
-const SURF_MTLX: MaterialXReference = {
-  primPath: '/World/Looks/surf',
-  assetPath: './demo.mtlx',
-  referencedPrimPath: '/MaterialX/Materials/surf',
-  materialName: 'surf',
-};
-
-// Served dev-server paths for the MaterialX Core WASM and standard libraries the
-// graph material compiler consumes (T057m3c), mirroring the USD device harness.
-const MATERIALX_CORE_URL = '/materialx/JsMaterialXCore.js';
-const MATERIALX_WASM_DIR = '/materialx/';
-const MATERIALX_LIBRARIES_ROOT = '/materialx/libraries';
-
-// Inline MaterialX document for the demo material: a constant standard_surface
-// resolved through the same graph path the USD scenes use (no baked compiler).
-const DEMO_MTLX = `<?xml version="1.0"?>
-<materialx version="1.39" colorspace="lin_rec709">
-  <standard_surface name="SR_surf" type="surfaceshader">
-    <input name="base" type="float" value="1.0" />
-    <input name="base_color" type="color3" value="0.82, 0.67, 0.49" />
-    <input name="metalness" type="float" value="0" />
-    <input name="specular_roughness" type="float" value="0.4" />
-  </standard_surface>
-  <surfacematerial name="surf" type="material">
-    <input name="surfaceshader" type="surfaceshader" nodename="SR_surf" />
-  </surfacematerial>
-</materialx>`;
-
-/** Minimal composed scene: two lit meshes bound to one material + a key light. */
-function buildDemoScene(): SceneAsset {
-  const world = prim('/World', { children: ['/World/tri', '/World/quad', '/World/Looks', '/World/key'] });
-  const binding = { target: '/World/Looks/surf', strength: 'weakerThanDescendants' as const };
-  const tri = prim('/World/tri', { typeName: 'Mesh', mesh: { primvars: [] }, xformOps: [translate(-0.7, 0, 0)], materialBinding: binding });
-  const quad = prim('/World/quad', { typeName: 'Mesh', mesh: { primvars: [] }, xformOps: [translate(0.7, 0, 0)], materialBinding: binding });
-  const looks = prim('/World/Looks', { children: ['/World/Looks/surf'] });
-  const surf = prim('/World/Looks/surf', { typeName: 'Material' });
-  const key = prim('/World/key', {
-    typeName: 'DistantLight',
-    attributes: new Map([
-      ['inputs:intensity', { name: 'inputs:intensity', typeName: 'float', value: 3 }],
-      ['inputs:color', { name: 'inputs:color', typeName: 'color3f', value: [1, 0.96, 0.9] }],
-    ]),
-  });
-  const prims = [world, tri, quad, looks, surf, key];
-  return {
-    entry: 'demo.usda',
-    stage: { subLayers: [] },
-    prims: new Map(prims.map((p) => [p.path, p])),
-    roots: ['/World'],
-    materials: [SURF_MTLX],
-  };
-}
-
-function demoMeshSource(): MeshSource {
-  const tri: RawMesh = {
-    points: [-0.5, -0.4, 0, 0.5, -0.4, 0, 0, 0.5, 0],
-    faceVertexCounts: [3],
-    faceVertexIndices: [0, 1, 2],
-  };
-  const quad: RawMesh = {
-    points: [-0.45, -0.45, 0, 0.45, -0.45, 0, 0.45, 0.45, 0, -0.45, 0.45, 0],
-    faceVertexCounts: [4],
-    faceVertexIndices: [0, 1, 2, 3],
-  };
-  const map: Record<string, RawMesh> = { '/World/tri': tri, '/World/quad': quad };
-  return { meshFor: (path) => map[path] };
-}
-
-function cameraForCanvas(aspect: number): FrameCamera {
-  const proj = perspective4(Math.PI / 3, aspect, 0.1, 100);
-  const eye: [number, number, number] = [0, 0, 2.6];
-  const view = lookAt4(eye, [0, 0, 0], [0, 1, 0]);
-  return { viewProj: multiply4(proj, view), eye, exposure: 0 };
+function populateSelector(select: HTMLSelectElement): void {
+  for (const { label, entry } of SCENE_CATALOG) {
+    const opt = document.createElement('option');
+    opt.value = entry;
+    opt.textContent = label;
+    select.appendChild(opt);
+  }
 }
 
 async function main(): Promise<void> {
@@ -140,7 +34,7 @@ async function main(): Promise<void> {
     setStatus('WebGPU is not available in this browser.');
     return;
   }
-  const adapter = await navigator.gpu.requestAdapter();
+  const adapter = await navigator.gpu.requestAdapter({ powerPreference: 'high-performance' });
   if (!adapter) {
     setStatus('No WebGPU adapter found.');
     return;
@@ -152,339 +46,36 @@ async function main(): Promise<void> {
     setStatus('WebGPU adapter ready; no canvas context.');
     return;
   }
-
   const outputFormat = navigator.gpu.getPreferredCanvasFormat();
   context.configure({ device, format: outputFormat, alphaMode: 'opaque' });
-  const ctx = context;
-  const width = canvas.width;
-  const height = canvas.height;
 
-  // Scene -> resources -> frame (the real runtime chain).
-  const scene = buildDemoScene();
-  const warnings: string[] = [];
-  const sink = (d: { level: string; message: string }): void => {
-    if (d.level === 'warning' || d.level === 'error') warnings.push(d.message);
-  };
-  // Resolve the demo material through the shared graph path (T057m3c): load the
-  // MaterialX Core WASM + standard libraries, pre-read the inline document, and
-  // feed the graph material compiler the same way the USD device harness does.
-  const core = await loadMaterialXCore({
-    moduleUrl: MATERIALX_CORE_URL,
-    locateFile: (path) => MATERIALX_WASM_DIR + path,
-    onDiagnostic: sink,
-  });
-  const libraries = new MaterialXLibraries(core);
-  await libraries.load({
-    sources: defaultLibrarySources(MATERIALX_LIBRARIES_ROOT),
-    fetchText: async (url) => (await fetch(url)).text(),
-    onDiagnostic: sink,
-  });
-  const texts = new Map<string, string>([[SURF_MTLX.assetPath, DEMO_MTLX]]);
-  const documents = await loadMaterialXDocuments({ core, libraries, texts, sink });
-  const resources = await buildSceneResources(scene, {
-    meshSource: demoMeshSource(),
-    materialCompiler: createGraphMaterialCompiler({ documents, sink }),
-    sink,
-  });
-  const lights = importLights(scene, { sink });
-  const cameras = importCameras(scene, { sink });
-  const frame = buildSceneFrame(resources, {
-    lights,
-    ...(cameras[0] ? { camera: cameras[0] } : { frameCamera: cameraForCanvas(width / height) }),
+  const select = document.getElementById('scene') as HTMLSelectElement | null;
+  if (select) populateSelector(select);
+
+  const viewer = new InteractiveViewer({
+    device,
+    context,
+    outputFormat,
+    canvas,
+    onStatus: (s) => setStatus(formatStatus(s)),
   });
 
-  const backend = new RasterBackend({ device, outputFormat, tonemap: 'acesFilmic' });
-  // Compile one IR variant pipeline per (pass, material) present in the frame.
-  for (const draw of frame.draws) {
-    const material = draw.materialKey ? resources.materials.get(draw.materialKey) : undefined;
-    if (material?.sceneShader) {
-      backend.createSceneVariantPipeline(draw.pass, material.variant.pipelineKey, material.sceneShader.code);
+  async function loadEntry(entry: string): Promise<void> {
+    setStatus(`Chargement de ${entry}...`);
+    try {
+      await viewer.load(entry);
+    } catch (e) {
+      setStatus(`Echec du chargement: ${(e as Error)?.message ?? e}`);
     }
   }
-  backend.createResolvePipeline();
 
-  const hdrTexture = device.createTexture({
-    size: [width, height],
-    format: backend.hdrFormat,
-    usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
-  });
-  const depthTexture = device.createTexture({
-    size: [width, height],
-    format: backend.depthFormat,
-    usage: GPUTextureUsage.RENDER_ATTACHMENT,
-  });
-  const hdrView = hdrTexture.createView();
-  const depthView = depthTexture.createView();
-
-  // Upload geometry once per prototype.
-  const uploaded = new Map<string, ReturnType<typeof uploadGeometry>>();
-  for (const [id, geometry] of resources.geometries) {
-    uploaded.set(id, uploadGeometry(device, geometry, id));
-  }
-
-  // One draw call per instance, grouped by its active pass, each routed through
-  // its per-material IR variant pipeline (T058e).
-  const drawsByPass = new Map<ScenePassKind, SceneDrawCall[]>();
-  const zeroTexcoords = new Map<string, GPUBuffer>();
-  // Per-draw frame uniforms, retained so the interactive camera can re-upload the
-  // shared view-projection + eye block without rebuilding the draw list.
-  const frameUniforms: GPUBuffer[] = [];
-  for (const draw of frame.draws) {
-    const buffers = uploaded.get(draw.prototypeId);
-    const geometry = resources.geometries.get(draw.prototypeId);
-    const position = buffers?.vertexBuffers.get('position');
-    const normal = buffers?.vertexBuffers.get('normal');
-    if (!buffers || !geometry || !position || !normal) continue;
-    const material = draw.materialKey ? resources.materials.get(draw.materialKey) : undefined;
-    if (!material?.sceneShader) continue;
-    const pipeline = backend.sceneVariantPipeline(draw.pass, material.variant.pipelineKey);
-    if (!pipeline) continue;
-    // Texcoord stream (loc 2): the uploaded uv stream, else a per-prototype zero
-    // stream so the IR vertex stage always has its texcoord input bound.
-    let texcoord = buffers.vertexBuffers.get('uv');
-    if (!texcoord) {
-      texcoord = zeroTexcoords.get(draw.prototypeId);
-      if (!texcoord) {
-        texcoord = device.createBuffer({ size: geometry.vertexCount * 8, usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST });
-        device.queue.writeBuffer(texcoord, 0, new Float32Array(geometry.vertexCount * 2));
-        zeroTexcoords.set(draw.prototypeId, texcoord);
-      }
-    }
-    const frameUniform = device.createBuffer({
-      size: SCENE_FRAME_UNIFORM_SIZE,
-      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-    });
-    device.queue.writeBuffer(frameUniform, 0, buildSceneFrameUniform(frame, draw));
-    frameUniforms.push(frameUniform);
-    const materialUniform = device.createBuffer({
-      size: SCENE_MATERIAL_UNIFORM_SIZE,
-      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-    });
-    device.queue.writeBuffer(materialUniform, 0, buildSceneMaterialUniform(draw));
-    const bindGroups = createSceneBindGroups(
-      device,
-      material,
-      { frame: frameUniform, material: materialUniform },
-      (group) => pipeline.getBindGroupLayout(group),
-    );
-    const list = drawsByPass.get(draw.pass) ?? [];
-    list.push({
-      materialBindGroup: bindGroups.materialBindGroup,
-      frameBindGroup: bindGroups.frameBindGroup,
-      positionBuffer: position,
-      normalBuffer: normal,
-      texcoordBuffer: texcoord,
-      indexBuffer: buffers.indexBuffer,
-      indexCount: buffers.indexCount,
-      pipelineKey: material.variant.pipelineKey,
-    });
-    drawsByPass.set(draw.pass, list);
-  }
-
-  const resolveUniform = device.createBuffer({
-    size: RESOLVE_UNIFORM_SIZE,
-    usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-  });
-  device.queue.writeBuffer(resolveUniform, 0, new Float32Array([frame.camera.exposure]));
-  const sampler = device.createSampler({ magFilter: 'linear', minFilter: 'linear' });
-  const resolvePipeline = backend.resolvePipeline;
-  if (!resolvePipeline) {
-    setStatus('Resolve pipeline creation failed.');
-    return;
-  }
-  const resolveBindGroup = device.createBindGroup({
-    layout: resolvePipeline.getBindGroupLayout(0),
-    entries: [
-      { binding: 0, resource: hdrView },
-      { binding: 1, resource: sampler },
-      { binding: 2, resource: { buffer: resolveUniform } },
-    ],
-  });
-
-  // Background matches the path tracer's env miss: clear the raster HDR target to
-  // the scene environment radiance instead of black.
-  const rasterBackground = frame.environment.radiance;
-  function renderRaster(targetView: GPUTextureView): void {
-    const encoder = device.createCommandEncoder();
-    let first = true;
-    for (const pass of frame.passes) {
-      const draws = drawsByPass.get(pass) ?? [];
-      if (draws.length === 0) continue;
-      backend.recordScenePass(encoder, { pass, hdrView, depthView, draws, clear: first, clearColor: rasterBackground });
-      first = false;
-    }
-    backend.recordResolvePass(encoder, { outputView: targetView, bindGroup: resolveBindGroup });
-    device.queue.submit([encoder.finish()]);
-  }
-
-  // Path tracing backend on the SAME resources (no reimport): pack the scene
-  // into GPU storage buffers, build the compute pipeline, and accumulate into a
-  // per-pixel storage buffer that a fullscreen pass tonemaps to the canvas.
-  const ptScene = buildPathTraceScene(resources, {
-    lights,
-    ...(cameras[0] ? { camera: cameras[0] } : { frameCamera: cameraForCanvas(width / height) }),
-  });
-  const ptBackend = new PathTraceBackend(device);
-  const { pipeline: ptPipeline } = ptBackend.createPipeline();
-  const storage = (data: Float32Array | Uint32Array): GPUBuffer => {
-    const buf = device.createBuffer({ size: data.byteLength, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
-    device.queue.writeBuffer(buf, 0, data);
-    return buf;
-  };
-  const nodesBuffer = storage(ptScene.nodes);
-  const trisBuffer = storage(ptScene.triangles);
-  const triOrderBuffer = storage(ptScene.triangleOrder);
-  const materialsBuffer = storage(ptScene.materials);
-  const accumFloats = new Float32Array(width * height * 4);
-  const accumBuffer = device.createBuffer({ size: accumFloats.byteLength, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
-  const ptUniform = device.createBuffer({ size: PT_UNIFORM_SIZE, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
-  const ptBindGroup = device.createBindGroup({
-    layout: ptPipeline.getBindGroupLayout(0),
-    entries: [
-      { binding: 0, resource: { buffer: ptUniform } },
-      { binding: 1, resource: { buffer: nodesBuffer } },
-      { binding: 2, resource: { buffer: trisBuffer } },
-      { binding: 3, resource: { buffer: triOrderBuffer } },
-      { binding: 4, resource: { buffer: materialsBuffer } },
-      { binding: 5, resource: { buffer: accumBuffer } },
-    ],
-  });
-
-  // Fullscreen pass that tonemaps the accumulated mean to the swap chain.
-  const ptDisplayModule = device.createShaderModule({
-    code: `
-struct Info { width: u32, height: u32, exposure: f32, pad: u32 };
-@group(0) @binding(0) var<storage, read> accum : array<vec4<f32>>;
-@group(0) @binding(1) var<uniform> info : Info;
-@vertex fn vs(@builtin(vertex_index) i: u32) -> @builtin(position) vec4<f32> {
-  var p = array<vec2<f32>, 3>(vec2<f32>(-1.0, -3.0), vec2<f32>(-1.0, 1.0), vec2<f32>(3.0, 1.0));
-  return vec4<f32>(p[i], 0.0, 1.0);
-}
-fn tonemap(c: vec3<f32>) -> vec3<f32> {
-  let x = c * exp2(info.exposure);
-  return x / (x + vec3<f32>(1.0));
-}
-@fragment fn fs(@builtin(position) frag: vec4<f32>) -> @location(0) vec4<f32> {
-  let idx = u32(frag.y) * info.width + u32(frag.x);
-  return vec4<f32>(tonemap(accum[idx].xyz), 1.0);
-}
-`,
-  });
-  const ptDisplayPipeline = device.createRenderPipeline({
-    layout: 'auto',
-    vertex: { module: ptDisplayModule, entryPoint: 'vs' },
-    fragment: { module: ptDisplayModule, entryPoint: 'fs', targets: [{ format: outputFormat }] },
-    primitive: { topology: 'triangle-list' },
-  });
-  const ptInfo = device.createBuffer({ size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
-  device.queue.writeBuffer(ptInfo, 0, new Uint32Array([width, height, 0, 0]));
-  device.queue.writeBuffer(ptInfo, 8, new Float32Array([frame.camera.exposure]));
-  const ptDisplayBindGroup = device.createBindGroup({
-    layout: ptDisplayPipeline.getBindGroupLayout(0),
-    entries: [
-      { binding: 0, resource: { buffer: accumBuffer } },
-      { binding: 1, resource: { buffer: ptInfo } },
-    ],
-  });
-  const [wgX, wgY] = PathTraceBackend.workgroupCount(width, height);
-
-  function resetPathTrace(): void {
-    ptBackend.resetAccumulation();
-    device.queue.writeBuffer(accumBuffer, 0, accumFloats);
-  }
-
-  function renderPathTrace(targetView: GPUTextureView): void {
-    const frameIndex = ptBackend.advanceFrame();
-    device.queue.writeBuffer(ptUniform, 0, buildPathTraceUniform(ptScene, frameIndex, 1, width, height));
-    const encoder = device.createCommandEncoder();
-    const compute = encoder.beginComputePass();
-    compute.setPipeline(ptPipeline);
-    compute.setBindGroup(0, ptBindGroup);
-    compute.dispatchWorkgroups(wgX, wgY, 1);
-    compute.end();
-    const render = encoder.beginRenderPass({
-      colorAttachments: [{ view: targetView, loadOp: 'clear', storeOp: 'store', clearValue: { r: 0, g: 0, b: 0, a: 1 } }],
-    });
-    render.setPipeline(ptDisplayPipeline);
-    render.setBindGroup(0, ptDisplayBindGroup);
-    render.draw(3);
-    render.end();
-    device.queue.submit([encoder.finish()]);
-  }
-
-  // The engine owns the shared scene and arbitrates backend switching without
-  // reimporting it. Press "r" for raster and "p" for path tracing.
-  const engine = new RenderEngine();
-  engine.loadScene(scene);
-  engine.prepareBackend('raster');
-  engine.prepareBackend('pathtracing');
-  engine.setBackend('raster');
-
-  const note = warnings.length ? ` (${warnings.length} diagnostic(s))` : '';
-  function status(): void {
-    const kind = engine.backend;
-    const extra = kind === 'pathtracing' ? `, ${engine.accumulatedFrames} spp` : '';
-    setStatus(`Backend ${kind}: ${frame.draws.length} object(s), passes [${frame.passes.join(', ')}]${extra}${note}. [r]aster / [p]athtracing - drag to orbit, wheel to zoom`);
-  }
-
-  // Interactive orbit camera: seeded from the initial framing (eye) and the scene
-  // bounds center so the first frame matches the import, then driven by the mouse.
-  const boundsCenter: [number, number, number] = [
-    (ptScene.bounds.min[0] + ptScene.bounds.max[0]) / 2,
-    (ptScene.bounds.min[1] + ptScene.bounds.max[1]) / 2,
-    (ptScene.bounds.min[2] + ptScene.bounds.max[2]) / 2,
-  ];
-  const orbit = OrbitCamera.fromEyeTarget(frame.camera.eye, boundsCenter, width / height);
-
-  // Re-upload the shared camera block into every raster frame uniform (viewProj at
-  // float offset 16, eye at float offset 32) and into the path-tracing scene, then
-  // mark raster dirty and restart path-tracing accumulation so both modes follow.
-  let rasterDirty = true;
-  function applyCamera(): void {
-    const viewProj = orbit.viewProj();
-    const eye = orbit.eye;
-    const viewProjArray = new Float32Array(viewProj);
-    const eyeArray = new Float32Array([eye[0], eye[1], eye[2], 0]);
-    for (const buf of frameUniforms) {
-      device.queue.writeBuffer(buf, 16 * 4, viewProjArray);
-      device.queue.writeBuffer(buf, 32 * 4, eyeArray);
-    }
-    ptScene.camera.viewProj = viewProj;
-    ptScene.camera.invViewProj = inverse4(viewProj);
-    ptScene.camera.eye = eye;
-    rasterDirty = true;
-    if (engine.backend === 'pathtracing') resetPathTrace();
-  }
-  applyCamera();
-  attachOrbitControls(canvas, orbit, applyCamera);
-
-  function loop(): void {
-    const targetView = ctx.getCurrentTexture().createView();
-    if (engine.backend === 'pathtracing') {
-      renderPathTrace(targetView);
-      engine.renderFrame();
-      status();
-    } else if (rasterDirty) {
-      rasterDirty = false;
-      renderRaster(targetView);
-      status();
-    }
-    requestAnimationFrame(loop);
-  }
-
-  function selectBackend(kind: BackendKind): void {
-    if (kind === engine.backend) return;
-    engine.setBackend(kind);
-    if (kind === 'pathtracing') resetPathTrace();
-    else rasterDirty = true;
-  }
-
+  select?.addEventListener('change', () => void loadEntry(select.value));
   window.addEventListener('keydown', (e) => {
-    if (e.key === 'r') selectBackend('raster');
-    else if (e.key === 'p') selectBackend('pathtracing');
+    if (e.key === 'r') viewer.setBackend('raster');
+    else if (e.key === 'p') viewer.setBackend('pathtracing');
   });
 
-  loop();
+  await loadEntry(SCENE_CATALOG[0]!.entry);
 }
 
 void main();

@@ -5,7 +5,7 @@
 // the first frame matches the imported framing, then mouse drag/wheel update it
 // for interactive viewpoint control shared by both render modes.
 
-import { lookAt4, multiply4, perspective4, type Mat4, type Vec3 } from './transforms.ts';
+import { lookAt4, multiply4, orthographic4, type Mat4, type Vec3 } from './transforms.ts';
 
 const clamp = (v: number, lo: number, hi: number): number => (v < lo ? lo : v > hi ? hi : v);
 const PITCH_LIMIT = Math.PI / 2 - 0.01;
@@ -77,7 +77,12 @@ export class OrbitCamera {
   }
 
   viewProj(): Mat4 {
-    return multiply4(perspective4(this.fovY, this.aspect, this.near, this.far), this.view());
+    // Orthographic framing: half-extents derived from distance/fovY so the
+    // on-screen scale matches the former perspective at the target plane, and
+    // dolly (distance) still zooms while pan stays pixel-accurate.
+    const halfH = this.distance * Math.tan(this.fovY / 2);
+    const halfW = halfH * this.aspect;
+    return multiply4(orthographic4(-halfW, halfW, -halfH, halfH, this.near, this.far), this.view());
   }
 
   /** Rotate the viewpoint; deltas are in radians. */
