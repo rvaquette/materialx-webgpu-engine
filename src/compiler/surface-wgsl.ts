@@ -128,6 +128,12 @@ export interface LayeredSurfaceModule {
   uniforms: WgslUniformField[];
   textures: WgslBinding[];
   samplers: WgslBinding[];
+  /** MxVaryings primvar (`v_*`) fields the surface fn reads; a raster/forward
+   *  host must feed these (e.g. map `st` to the texcoord stream like the path
+   *  tracer megakernel does) or they default to zero. */
+  primvarFields: Map<string, IrType>;
+  /** MxVaryings extra input (`in_*`) fields the surface fn reads. */
+  extraInputs: Map<string, IrType>;
   /** Present iff the module declares the lighting uniform. Closure construction
    *  never evaluates lighting, so this stays absent (evaluation lands in T056). */
   lighting?: { group: number; binding: number };
@@ -477,6 +483,8 @@ export function emitLayeredSurface(
     uniforms: fn.uniforms,
     textures: fn.textures,
     samplers: fn.samplers,
+    primvarFields: fn.primvarFields,
+    extraInputs: fn.extraInputs,
     ...(fn.usesLighting ? { lighting: { group: 0, binding: 1 } } : {}),
   };
 }

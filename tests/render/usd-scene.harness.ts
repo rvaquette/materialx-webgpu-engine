@@ -13,9 +13,6 @@
 // subject is legible. The accumulated mean is read back, tonemapped through the
 // shared output pipeline, and exposed as a PNG data URL on globalThis.__MX_IMAGE__.
 
-import { emitWgsl } from '../../src/compiler/wgsl.ts';
-import { emitLayeredSurface } from '../../src/compiler/surface-wgsl.ts';
-import { FLOAT, IrModuleBuilder, shaderType } from '../../src/compiler/ir.ts';
 import {
   NEUTRAL_SURFACE,
   buildSceneFrame,
@@ -36,8 +33,6 @@ import {
   buildSceneResources,
   createSceneBindGroups,
   uploadGeometry,
-  type MaterialBuild,
-  type MaterialCompiler,
   type MaterialResource,
   type MeshSource,
 } from '../../src/render/scene-resources.ts';
@@ -53,9 +48,6 @@ import type { DecodedPixelImage } from '../../src/assets/images.ts';
 import {
   parseSurfaceInputsFromMtlx,
   parsedSurfaceToCanonical,
-  resolvedGraphFromParsedSurface,
-  surfaceFromParsedInputs,
-  type ParsedSurfaceInputs,
 } from '../../src/materialx/surface-from-inputs.ts';
 import { resolvePixel } from '../../src/render/output.ts';
 import { importCameras } from '../../src/usd/cameras.ts';
@@ -188,28 +180,130 @@ const MATERIALX_CORE_URL = '/materialx/JsMaterialXCore.js';
 const MATERIALX_WASM_DIR = '/materialx/';
 const MATERIALX_LIBRARIES_ROOT = '/materialx/libraries';
 
-/** Canonical standard_surface layered compiler: the raster scene-forward shader
- *  binds a fixed 48-byte MxUniforms (SCENE_MATERIAL_UNIFORM), so every material
- *  reuses the same layered module and receives its seven-parameter surface
- *  constants through buildSceneMaterialUniform (per-draw), the same approximation
- *  main.ts renders. Advanced lobes (sheen, anisotropy) are not represented. */
-function layeredStandardCompiler(): MaterialCompiler {
-  const spec: ParsedSurfaceInputs = {
-    category: 'standard_surface',
-    inputs: { base_color: [0.8, 0.8, 0.8], metalness: 0, specular_roughness: 0.4 },
-  };
-  return {
-    compile(): MaterialBuild {
-      const b = new IrModuleBuilder();
-      const opacity = b.constant(FLOAT, 1);
-      const ref = b.add({ kind: 'closure', type: shaderType('surface'), closure: 'bsdf', op: 'surface', params: { opacity } });
-      b.output({ name: 'surfaceshader', type: shaderType('surface'), ref });
-      const ir = b.build();
-      const surface = surfaceFromParsedInputs(spec);
-      const layered = surface ? emitLayeredSurface(resolvedGraphFromParsedSurface(spec), surface) : undefined;
-      return { ir, module: emitWgsl(ir), ...(layered ? { layered } : {}) };
+interface MtlxSceneContext {
+  documents: Awaited<ReturnType<typeof loadMaterialXDocuments>>;
+  imageProvider: PtImageProvider;
+  surfaceFor: (material: MaterialResource) => RasterSurface;
+}
+
+/** Load the MaterialX Core WASM + standard libraries, read every referenced .mtlx
+ *  into a document source, and return the graph-compiler document set plus an image
+ *  provider that decodes texture files off a 2D canvas. Shared by both backends so
+ *  raster and the path tracer compile the SAME procedural/textured materials. */
+async function loadMtlxSceneContext(
+  scene: SceneAsset,
+  entry: string,
+  line: (m: string) => void,
+  sink: (d: { level: string; message: string; detail?: unknown }) => void,
+): Promise<MtlxSceneContext> {
+  const baseDir = dirOf(entry);
+  const surfaces = new Map<string, RasterSurface>();
+  const texts = new Map<string, string>();
+  const materialDirs: string[] = [];
+  for (const ref of scene.materials) {
+    const url = joinUrl(baseDir, ref.assetPath);
+    const dir = dirOf(url);
+    if (!materialDirs.includes(dir)) materialDirs.push(dir);
+    try {
+      const text = await (await fetch(url)).text();
+      texts.set(ref.assetPath, text);
+      surfaces.set(ref.materialName, surfaceFromMtlx(text));
+    } catch {
+      line(`MaterialX introuvable: ${ref.assetPath}`);
+    }
+  }
+  const core = await loadMaterialXCore({
+    moduleUrl: MATERIALX_CORE_URL,
+    locateFile: (path) => MATERIALX_WASM_DIR + path,
+    onDiagnostic: sink,
+  });
+  line('diag step: core loaded');
+  const libraries = new MaterialXLibraries(core);
+  await libraries.load({
+    sources: defaultLibrarySources(MATERIALX_LIBRARIES_ROOT),
+    fetchText: async (url) => (await fetch(url)).text(),
+    onDiagnostic: sink,
+  });
+  line('diag step: libraries loaded');
+  const documents = await loadMaterialXDocuments({ core, libraries, texts, sink });
+  line('diag step: documents loaded');
+  const imageProvider: PtImageProvider = {
+    async decode(fileRef: string): Promise<DecodedPixelImage | undefined> {
+      for (const dir of materialDirs) {
+        try {
+          const resp = await fetch(joinUrl(dir, fileRef));
+          if (!resp.ok) continue;
+          const bitmap = await createImageBitmap(await resp.blob());
+          const canvas = document.createElement('canvas');
+          canvas.width = bitmap.width;
+          canvas.height = bitmap.height;
+          const ctx = canvas.getContext('2d');
+          if (!ctx) {
+            bitmap.close();
+            return undefined;
+          }
+          ctx.drawImage(bitmap, 0, 0);
+          const pixels = ctx.getImageData(0, 0, bitmap.width, bitmap.height);
+          bitmap.close();
+          return {
+            kind: 'pixels',
+            data: new Uint8Array(pixels.data),
+            componentType: 'uint8',
+            channels: 4,
+            width: pixels.width,
+            height: pixels.height,
+            colorSpace: 'lin_rec709',
+          };
+        } catch {
+          // try the next candidate material directory
+        }
+      }
+      line(`Texture introuvable: ${fileRef}`);
+      return undefined;
     },
   };
+  const surfaceFor = (material: MaterialResource): RasterSurface => surfaces.get(material.materialName) ?? NEUTRAL_SURFACE;
+  return { documents, imageProvider, surfaceFor };
+}
+
+/** Decode + upload every texture a compiled surface module samples and key the GPU
+ *  views/samplers by the module binding name so createSceneBindGroups can wire
+ *  them (T058 raster-sur-IR, textured path). Decoded images are cached by file
+ *  reference across materials; the sampler matches the CPU oracle (repeat/linear). */
+async function uploadMaterialTextures(
+  device: GPUDevice,
+  material: MaterialResource,
+  imageProvider: PtImageProvider,
+  cache: Map<string, DecodedPixelImage | undefined>,
+): Promise<{ textureViews: Map<string, GPUTextureView>; samplers: Map<string, GPUSampler> }> {
+  const textureViews = new Map<string, GPUTextureView>();
+  const samplers = new Map<string, GPUSampler>();
+  const module = material.surfaceModule;
+  if (!module) return { textureViews, samplers };
+  for (const t of module.textures) {
+    const fileRef = t.fileRef;
+    if (fileRef === undefined) continue;
+    let image = cache.get(fileRef);
+    if (!cache.has(fileRef)) {
+      image = (await imageProvider.decode(fileRef)) ?? undefined;
+      cache.set(fileRef, image);
+    }
+    const width = image?.width ?? 1;
+    const height = image?.height ?? 1;
+    const gpuTex = device.createTexture({
+      size: [width, height],
+      format: 'rgba8unorm',
+      usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
+    });
+    if (image && image.componentType === 'uint8' && image.channels === 4) {
+      device.queue.writeTexture({ texture: gpuTex }, image.data, { bytesPerRow: width * 4, rowsPerImage: height }, [width, height, 1]);
+    }
+    textureViews.set(t.name, gpuTex.createView());
+  }
+  for (const s of module.samplers) {
+    samplers.set(s.name, device.createSampler({ addressModeU: 'repeat', addressModeV: 'repeat', magFilter: 'linear', minFilter: 'linear' }));
+  }
+  return { textureViews, samplers };
 }
 
 /** Raster-renders the real USDA geometry offscreen on the device GPU (T058 path)
@@ -229,24 +323,18 @@ async function renderUsdRasterOnDevice(
   const lights = importLights(scene, { sink });
   const cameras = importCameras(scene, { sink });
 
-  const baseDir = dirOf(entry);
-  const surfaces = new Map<string, RasterSurface>();
-  for (const ref of scene.materials) {
-    const url = joinUrl(baseDir, ref.assetPath);
-    try {
-      surfaces.set(ref.materialName, surfaceFromMtlx(await (await fetch(url)).text()));
-    } catch {
-      line(`MaterialX introuvable: ${ref.assetPath}`);
-    }
-  }
-  const surfaceFor = (material: MaterialResource): RasterSurface =>
-    surfaces.get(material.materialName) ?? NEUTRAL_SURFACE;
+  // Compile every material through the real graph material compiler (same path as
+  // the path tracer, T057m1): constant, procedural AND textured nodegraphs lower
+  // to the shared LayeredClosure, so the raster forward pass shades an arbitrary
+  // mtlx faithfully instead of the retired fixed 7-parameter standard_surface.
+  const { documents, imageProvider, surfaceFor } = await loadMtlxSceneContext(scene, entry, line, sink);
 
   const resources = await buildSceneResources(scene, {
     meshSource: meshSourceFromScene(scene),
-    materialCompiler: layeredStandardCompiler(),
+    materialCompiler: createGraphMaterialCompiler({ documents, sink }),
     sink,
   });
+  line('diag step: scene resources built');
 
   const camera = cameras[0];
   const exposure = camera?.exposure ?? 0;
@@ -267,6 +355,15 @@ async function renderUsdRasterOnDevice(
     }
   }
   const resolvePipeline = backend.createResolvePipeline();
+
+  // Decode + upload each material's sampled textures once, keyed by material unit.
+  const imageCache = new Map<string, DecodedPixelImage | undefined>();
+  const materialTextures = new Map<string, { textureViews: Map<string, GPUTextureView>; samplers: Map<string, GPUSampler> }>();
+  for (const [key, material] of resources.materials) {
+    if (material.surfaceModule && material.surfaceModule.textures.length > 0) {
+      materialTextures.set(key, await uploadMaterialTextures(device, material, imageProvider, imageCache));
+    }
+  }
 
   const hdrTexture = device.createTexture({
     size: [res, res],
@@ -315,13 +412,26 @@ async function renderUsdRasterOnDevice(
     device.queue.writeBuffer(frameUniform, 0, buildSceneFrameUniform(frame, draw));
     const materialUniform = device.createBuffer({ size: SCENE_MATERIAL_UNIFORM_SIZE, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
     device.queue.writeBuffer(materialUniform, 0, buildSceneMaterialUniform(draw));
+    const textures = draw.materialKey ? materialTextures.get(draw.materialKey) : undefined;
     const bindGroups = createSceneBindGroups(
       device,
       material,
-      { frame: frameUniform, material: materialUniform },
+      {
+        frame: frameUniform,
+        material: materialUniform,
+        ...(textures ? { textureViews: textures.textureViews, samplers: textures.samplers } : {}),
+      },
       (group) => pipeline.getBindGroupLayout(group),
     );
     const list = drawsByPass.get(draw.pass) ?? [];
+    // Collect the texture/sampler groups (everything beyond material 0 and frame)
+    // so recordScenePass can bind them alongside the material and frame groups.
+    const textureBindGroups = new Map<number, GPUBindGroup>();
+    for (const [group, bindGroup] of bindGroups.byGroup) {
+      if (bindGroup !== bindGroups.materialBindGroup && bindGroup !== bindGroups.frameBindGroup) {
+        textureBindGroups.set(group, bindGroup);
+      }
+    }
     list.push({
       materialBindGroup: bindGroups.materialBindGroup,
       frameBindGroup: bindGroups.frameBindGroup,
@@ -331,6 +441,7 @@ async function renderUsdRasterOnDevice(
       indexBuffer: buffers.indexBuffer,
       indexCount: buffers.indexCount,
       pipelineKey: material.variant.pipelineKey,
+      ...(textureBindGroups.size > 0 ? { textureBindGroups } : {}),
     });
     drawsByPass.set(draw.pass, list);
   }
@@ -403,40 +514,7 @@ async function renderUsdOnDevice(
   // compiler (T057m1) so the path tracer builds a megakernel variant per
   // procedural/textured material instead of the retired CPU bake path. Constant
   // materials keep the seven-parameter packed record through surfaceFor.
-  const baseDir = dirOf(entry);
-  const surfaces = new Map<string, RasterSurface>();
-  const texts = new Map<string, string>();
-  const materialDirs: string[] = [];
-  for (const ref of scene.materials) {
-    const url = joinUrl(baseDir, ref.assetPath);
-    const dir = dirOf(url);
-    if (!materialDirs.includes(dir)) materialDirs.push(dir);
-    try {
-      const text = await (await fetch(url)).text();
-      texts.set(ref.assetPath, text);
-      surfaces.set(ref.materialName, surfaceFromMtlx(text));
-    } catch {
-      line(`MaterialX introuvable: ${ref.assetPath}`);
-    }
-  }
-  const surfaceFor = (material: MaterialResource): RasterSurface =>
-    surfaces.get(material.materialName) ?? NEUTRAL_SURFACE;
-
-  const core = await loadMaterialXCore({
-    moduleUrl: MATERIALX_CORE_URL,
-    locateFile: (path) => MATERIALX_WASM_DIR + path,
-    onDiagnostic: sink,
-  });
-  line('diag step: core loaded');
-  const libraries = new MaterialXLibraries(core);
-  await libraries.load({
-    sources: defaultLibrarySources(MATERIALX_LIBRARIES_ROOT),
-    fetchText: async (url) => (await fetch(url)).text(),
-    onDiagnostic: sink,
-  });
-  line('diag step: libraries loaded');
-  const documents = await loadMaterialXDocuments({ core, libraries, texts, sink });
-  line('diag step: documents loaded');
+  const { documents, imageProvider, surfaceFor } = await loadMtlxSceneContext(scene, entry, line, sink);
 
   const resources = await buildSceneResources(scene, {
     meshSource: meshSourceFromScene(scene),
@@ -466,44 +544,8 @@ async function renderUsdOnDevice(
   );
 
   // Build the megakernel dispatch from the resolved variant sources and the device
-  // bindings plan (T057m2); decode textures through a provider that fetches each
-  // file once and reads its pixels back off a 2D canvas.
+  // bindings plan (T057m2); textures are decoded by the shared image provider.
   const dispatch = buildMaterialDispatch(ptScene.variantSources);
-  const imageProvider: PtImageProvider = {
-    async decode(fileRef: string): Promise<DecodedPixelImage | undefined> {
-      for (const dir of materialDirs) {
-        try {
-          const resp = await fetch(joinUrl(dir, fileRef));
-          if (!resp.ok) continue;
-          const bitmap = await createImageBitmap(await resp.blob());
-          const canvas = document.createElement('canvas');
-          canvas.width = bitmap.width;
-          canvas.height = bitmap.height;
-          const ctx = canvas.getContext('2d');
-          if (!ctx) {
-            bitmap.close();
-            return undefined;
-          }
-          ctx.drawImage(bitmap, 0, 0);
-          const pixels = ctx.getImageData(0, 0, bitmap.width, bitmap.height);
-          bitmap.close();
-          return {
-            kind: 'pixels',
-            data: new Uint8Array(pixels.data),
-            componentType: 'uint8',
-            channels: 4,
-            width: pixels.width,
-            height: pixels.height,
-            colorSpace: 'lin_rec709',
-          };
-        } catch {
-          // try the next candidate material directory
-        }
-      }
-      line(`Texture introuvable: ${fileRef}`);
-      return undefined;
-    },
-  };
   const bindings = await buildPtDeviceBindings(dispatch, ptScene, imageProvider, { sink });
   line(`diag variants=${dispatch.variants.length} textures=${bindings.textures.length} exposure=${exposure}`);
 

@@ -14,6 +14,8 @@ import type {
 } from '../../../src/materialx/graph.ts';
 import { resolveSurface } from '../../../src/materialx/surface-graph.ts';
 import { emitLayeredSurface } from '../../../src/compiler/surface-wgsl.ts';
+import type { LayeredSurfaceModule } from '../../../src/compiler/surface-wgsl.ts';
+import { FLOAT } from '../../../src/compiler/ir.ts';
 import {
   assembleIrForwardShader,
   IR_FORWARD_FRAME_GROUP,
@@ -103,5 +105,33 @@ describe('assembleIrForwardShader (T058b)', () => {
       value('emission_color', 'color3', '1, 1, 1'),
     ]);
     expect(shader.code).toContain('if (c.hasEmission != 0u) { radiance = radiance + c.emission; }');
+  });
+});
+
+// Minimal surface module stub: assembleIrForwardShader only reads the primvar
+// keys to decide which v_* varyings the host must feed, so the body is trivial.
+function stubModule(primvars: readonly string[]): LayeredSurfaceModule {
+  return {
+    code: 'fn mx_surface_layered(vary: MxVaryings) -> LayeredClosure { var c: LayeredClosure; return c; }',
+    entryPoint: 'mx_surface_layered',
+    returnType: 'LayeredClosure',
+    family: 'standard_surface',
+    uniforms: [],
+    textures: [],
+    samplers: [],
+    primvarFields: new Map(primvars.map((name) => [name, FLOAT])),
+    extraInputs: new Map(),
+  };
+}
+
+describe('assembleIrForwardShader primvar feed (st -> texcoord)', () => {
+  it('feeds the st primvar from the interpolated texcoord like the megakernel', () => {
+    const shader = assembleIrForwardShader(stubModule(['st']));
+    expect(shader.code).toContain('vary.v_st = fin.texcoord;');
+  });
+
+  it('omits the primvar assignment when the surface reads no st primvar', () => {
+    const shader = assembleIrForwardShader(stubModule([]));
+    expect(shader.code).not.toContain('vary.v_st');
   });
 });

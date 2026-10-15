@@ -91,6 +91,10 @@ export interface SceneDrawCall {
   pipelineKey: string;
   /** Texcoord stream (loc 2) consumed by the IR variant pipeline, if available. */
   texcoordBuffer?: GPUBuffer;
+  /** Texture/sampler bind groups (groups 1/2) the IR variant samples, keyed by
+   *  group index; set in addition to material (0) and frame. Absent when the
+   *  material folds to constants with no textures. */
+  textureBindGroups?: ReadonlyMap<number, GPUBindGroup>;
 }
 
 export interface ScenePassTargets {
@@ -233,6 +237,9 @@ export class RasterBackend {
       }
       pass.setBindGroup(0, draw.materialBindGroup);
       pass.setBindGroup(FRAME_BIND_GROUP, draw.frameBindGroup);
+      if (draw.textureBindGroups) {
+        for (const [group, bindGroup] of draw.textureBindGroups) pass.setBindGroup(group, bindGroup);
+      }
       pass.setVertexBuffer(0, draw.positionBuffer);
       pass.setVertexBuffer(1, draw.normalBuffer);
       if (draw.texcoordBuffer) pass.setVertexBuffer(2, draw.texcoordBuffer);

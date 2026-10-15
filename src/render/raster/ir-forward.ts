@@ -92,14 +92,22 @@ fn ${IR_FORWARD_VERTEX_ENTRY}(vin: MxVertexIn) -> MxVertexOut {
 /** Fragment stage: rebuild the surface LayeredClosure then shade it with the same
  *  direct term as the path tracer -- delta-light next-event (no shadows) plus a
  *  single constant-environment sample along the normal -- via mx_closure_eval. */
-function fragmentStage(surfaceEntry: string): string {
+function fragmentStage(surfaceEntry: string, primvarNames: readonly string[]): string {
+  // Feed the MxVaryings primvar fields the surface fn reads. 'st' is the default
+  // MaterialX texcoord set, so it mirrors the interpolated UV, exactly as the path
+  // tracer megakernel maps it (pathtracing/compute.ts). Other primvar/extra-input
+  // fields default to zero (WGSL zero-initializes `var vary: MxVaryings`).
+  const primvarAssigns = primvarNames
+    .filter((name) => name === 'st')
+    .map((name) => `  vary.v_${name} = fin.texcoord;`)
+    .join('\n');
   return `@fragment
 fn ${IR_FORWARD_FRAGMENT_ENTRY}(fin: MxVertexOut) -> @location(0) vec4f {
   var vary: MxVaryings;
   vary.position = fin.worldPos;
   vary.normal = normalize(fin.worldNormal);
   vary.viewDir = normalize(fin.viewDir);
-  vary.texcoord = fin.texcoord;
+  vary.texcoord = fin.texcoord;${primvarAssigns ? '\n' + primvarAssigns : ''}
   let c = ${surfaceEntry}(vary);
   let n = vary.normal;
   let sframe = basis(n);
@@ -139,7 +147,7 @@ export function assembleIrForwardShader(surface: LayeredSurfaceModule): IrForwar
     frameBlock(),
     basisHelper(),
     vertexStage(),
-    fragmentStage(surface.entryPoint),
+    fragmentStage(surface.entryPoint, [...surface.primvarFields.keys()]),
   ].join('\n\n') + '\n';
   return {
     code,
