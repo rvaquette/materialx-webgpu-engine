@@ -92,10 +92,11 @@ describe('assembleIrForwardShader (T058b)', () => {
     expect(shader.code).not.toContain('traverse(');
   });
 
-  it('adds a constant-environment term through the shared closure eval', () => {
+  it('reflects the constant environment through a BSDF-importance-sampled estimate', () => {
     const { shader } = forward('open_pbr_surface', [value('base_color', 'color3', '0.2, 0.5, 0.9')]);
-    expect(shader.code).toContain('let evEnv = mx_closure_eval(c, wo, wiEnv);');
-    expect(shader.code).toContain('radiance = radiance + evEnv.value * fu.env.xyz * MX_PI;');
+    expect(shader.code).toContain('let woEnv = normalize(vec3f(wo.xy, max(wo.z, 0.35)));');
+    expect(shader.code).toContain('let es = mx_closure_sample(c, woEnv, vec3f(0.5, 0.5, 0.5));');
+    expect(shader.code).toContain('radiance = radiance + es.value * fu.env.xyz * (max(es.wi.z, 0.0) / es.pdf);');
   });
 
   it('adds the closure emission when present', () => {

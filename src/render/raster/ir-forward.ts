@@ -122,12 +122,20 @@ fn ${IR_FORWARD_FRAGMENT_ENTRY}(fin: MxVertexOut) -> @location(0) vec4f {
   let cosL = max(dot(n, toLight), 0.0);
   var radiance = ev.value * (fu.lightColor.xyz * fu.lightColor.w) * cosL;
 
-  // Constant-environment ambient: a single deterministic cosine sample along the
-  // normal (wi = +Z), the raster approximation of the env NEE term in compute.ts
-  // (no RNG, no MIS). envPdf = wi.z / PI with wi.z = 1 folds to the MX_PI factor.
-  let wiEnv = vec3f(0.0, 0.0, 1.0);
-  let evEnv = mx_closure_eval(c, wo, wiEnv);
-  radiance = radiance + evEnv.value * fu.env.xyz * MX_PI;
+  // Constant-environment reflection via a single BSDF-importance-sampled estimate
+  // (env * f * cos / pdf). Importance sampling picks the mirror direction, so sharp
+  // specular/metal lobes reflect the environment instead of collapsing to ~0 when
+  // evaluated at wi = normal off-incidence (which rendered metals black). For a
+  // diffuse lobe value*cos/pdf folds to the albedo, matching the prior eval term.
+  // woEnv lifts the view to >= ~20deg above the horizon before sampling: the fixed
+  // deterministic sample u reflects below the surface at grazing wo (wi.z<0 ->
+  // sample invalid), which blackened the sphere silhouette; the path tracer avoids
+  // it with random samples averaged over many frames.
+  let woEnv = normalize(vec3f(wo.xy, max(wo.z, 0.35)));
+  let es = mx_closure_sample(c, woEnv, vec3f(0.5, 0.5, 0.5));
+  if (es.valid && es.pdf > 0.0) {
+    radiance = radiance + es.value * fu.env.xyz * (max(es.wi.z, 0.0) / es.pdf);
+  }
 
   if (c.hasEmission != 0u) { radiance = radiance + c.emission; }
   return vec4f(radiance, 1.0);
