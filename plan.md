@@ -1419,7 +1419,7 @@ siennes ; toute entree ou noeud non supporte produit un diagnostic (REQ-013).
     defaut, struct+binding+builder barycentrique, ombrage encore constant). Gate
     1012/90.
 
-  - [ ] T057i [Plan:P10] Cabler le dispatcher pour les graphes SANS texture (math
+  - [x] T057i [Plan:P10] Cabler le dispatcher pour les graphes SANS texture (math
     procedural pur) + oracle CPU miroir. DECOUPE en T057i1-i4 (l'exploration a montre
     3-4 sous-systemes manquants : le ResolvedGraph n'atteint pas le PT ; aucun
     interprete IR CPU ; aucun builder de valeurs MxUniforms ; l'eval des familles est
@@ -1572,7 +1572,7 @@ siennes ; toute entree ou noeud non supporte produit un diagnostic (REQ-013).
     vary.tangent=tang. Gate 1051/95 +1skip (+4). DECISION : wiring buffer triTangent cote
     device (bind group harness) reporte a T057m (graph path non execute device avant T057m).
 
-  - [ ] T057m [Plan:P10] Harnais USD sur ResolvedSurface + smoke device + cloture
+  - [x] T057m [Plan:P10] Harnais USD sur ResolvedSurface + smoke device + cloture
     T057. Le harnais USD resout le ResolvedGraph/ResolvedSurface complet (au lieu du
     RasterSurface 7-param) et le passe a buildPathTraceScene ; charge les textures de
     brick ; run device du brick (rouge-brique, texture). Mettre a jour
@@ -1718,7 +1718,7 @@ siennes ; toute entree ou noeud non supporte produit un diagnostic (REQ-013).
         Inputs/ParsedSurfaceInputs, types MaterialBuild/MaterialCompiler). Device-only
         (typecheck ; main.ts pas execute par vitest). Gate 1063/97 +1skip (inchange).
 
-    - [ ] T057m4 [Plan:P10] Smoke device, re-render matrice, docs et cloture T057. Run
+    - [x] T057m4 [Plan:P10] Smoke device, re-render matrice, docs et cloture T057. Run
       device local du path tracer sur brick (node scripts/run-usd-matrix-local.mjs) :
       brick rend rouge-brique + detail texture (motif, normal map), sans regression
       visible sur disney_gold/velvet/metal_brushed. Mettre a jour docs/validation.md
@@ -1726,6 +1726,13 @@ siennes ; toute entree ou noeud non supporte produit un diagnostic (REQ-013).
       megakernel) + paragraphe 9.6. Re-render de la matrice sous renders/. Marquer le
       parent T057 [x]. Valide : typecheck + suite Node ; run device local sans
       regression.
+      Fait : run device local + mobile (node scripts/run-usd-matrix-local.mjs 256 32
+      et scripts/run-usd-matrix-device.mjs 256 32) sur les 4 scenes x 2 backends ;
+      brick procedural rend le motif de briques fidelement (raster + path tracer),
+      sans regression sur disney_gold/velvet/metal_brushed. Matrice re-rendue sous
+      renders/ (local-*.png et device-*.png). docs/validation.md section megakernel
+      T057 completee du paragraphe "Nodegraph arbitraire fidele (9.6, T057g-m)".
+      Parent T057 marque [x].
 
 - [x] T058 [Plan:P10] Cabler le raster sur l'IR : src/render/raster/backend.ts,
   shaders.ts et src/main.ts rendent via le variant WGSL compile du materiau

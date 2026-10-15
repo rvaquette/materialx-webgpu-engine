@@ -144,9 +144,12 @@ function pipelineKeyFor(
   features: ShaderFeatures,
   module: WgslModule,
   options: BuildSceneResourcesOptions,
+  sceneCode?: string,
 ): string {
+  // Graph materials share one neutral mx_shade module; the real shading rides on
+  // the assembled scene-forward WGSL, so fold it in to keep pipeline keys distinct.
   const parts: PipelineKeyParts = {
-    shaderHash: hashString(module.code),
+    shaderHash: hashString(sceneCode !== undefined ? `${module.code}\n${sceneCode}` : module.code),
     compilerVersion: options.compilerVersion ?? '0',
     backend: options.backend ?? 'raster',
     pass: features.passes.map((p) => p.kind).sort().join('+') || 'opaque',
@@ -262,8 +265,8 @@ export async function buildSceneResources(
       continue;
     }
     const features = extractFeatures(build.ir);
-    const variant = createMaterialVariant(build.module, pipelineKeyFor(features, build.module, options));
     const sceneShader = build.layered ? assembleIrForwardShader(build.layered) : undefined;
+    const variant = createMaterialVariant(build.module, pipelineKeyFor(features, build.module, options, sceneShader?.code));
     materials.set(key, {
       unitKey: key,
       materialName: unit.materialName,

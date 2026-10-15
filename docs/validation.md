@@ -179,6 +179,24 @@ next-event estimation en cosinus et la capture par échantillonnage BSDF via la
 pondération `power_heuristic` (T057e). La parité numérique cross-backend du
 mégakernel reste couverte par le harnais device (T059).
 
+**Nodegraph arbitraire fidèle (§9.6, T057g-m).** Le mégakernel ne se limite plus
+aux matériaux à entrées constantes (enregistrement 157 floats). Pour un matériau
+« graphe », le compilateur abaisse le nodegraph de surface complet — entrées
+**texturées et procédurales** (`image`, `noise`, `mix`, `normalmap`, expressions
+mathématiques…) — directement dans le shader généré, au lieu de l'aplatir en
+sept scalaires. Les textures de **tous** les matériaux de la scène sont décodées
+et liées simultanément via un registre de textures dédupliqué par `fileRef`
+([`src/render/pathtracing/compute.ts`](../src/render/pathtracing/compute.ts),
+T057j/k) ; les UV proviennent du primvar géométrique `st` interpolé au hit
+(`vary.v_st`, T057h), et le harnais USD résout le `ResolvedGraph`/`ResolvedSurface`
+complet plutôt que le modèle canonique réduit (T057m). Résultat validé par run
+device (local + mobile) sur la scène `test_material_brick_procedural` : le motif
+de briques procédural et sa carte de rugosité/normale sont restitués fidèlement,
+sans régression visible sur `disney_gold`/`velvet`/`metal_brushed`. Le raster
+dérive le même motif via les mêmes bind groups de textures et le même feed de
+primvar `st` (voir ci-dessous), ce qui ferme l'exigence 9.6 : un `mtlx` quelconque
+est rendu par abaissement IR, pas par réduction à 7 paramètres.
+
 ### Backend raster : ombrage sur l'IR (T058)
 
 Le backend raster converge vers la même source d'ombrage que le path tracer :

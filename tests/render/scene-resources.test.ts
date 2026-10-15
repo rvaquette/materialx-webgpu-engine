@@ -101,12 +101,12 @@ function value(name: string, type: string, raw: string): ResolvedInput {
   return { name, type, source, provenance: { namePath: `/mat/${name}` } };
 }
 
-function surfaceGraph(): ResolvedGraph {
+function surfaceGraph(baseColor = '0.8, 0.1, 0.1'): ResolvedGraph {
   const surface: ResolvedNode = {
     id: 'SR',
     category: 'standard_surface',
     type: 'surfaceshader',
-    inputs: [value('base_color', 'color3', '0.8, 0.1, 0.1')],
+    inputs: [value('base_color', 'color3', baseColor)],
     provenance: { namePath: '/mat/SR' },
   };
   return {
@@ -134,6 +134,64 @@ function layeredCompiler(): MaterialCompiler {
 
 function meshSource(map: Record<string, RawMesh>): MeshSource {
   return { meshFor: (path) => map[path] };
+}
+
+const BRICK_MTLX: MaterialXReference = {
+  primPath: '/World/Looks/brick',
+  assetPath: './brick.mtlx',
+  referencedPrimPath: '/MaterialX/Materials/brick',
+  materialName: 'brick',
+};
+const BRICK_KEY = './brick.mtlx::/MaterialX/Materials/brick';
+const GROUND_MTLX: MaterialXReference = {
+  primPath: '/World/Looks/ground',
+  assetPath: './ground.mtlx',
+  referencedPrimPath: '/MaterialX/Materials/ground',
+  materialName: 'ground',
+};
+const GROUND_KEY = './ground.mtlx::/MaterialX/Materials/ground';
+
+/** Two meshes bound to two distinct materials, mirroring the brick/ground scene. */
+function twoMaterialScene(): SceneAsset {
+  const world = prim('/World', { children: ['/World/cube', '/World/ground', '/World/Looks'] });
+  const cube = prim('/World/cube', {
+    typeName: 'Mesh',
+    mesh: { primvars: [] },
+    materialBinding: { target: '/World/Looks/brick', strength: 'weakerThanDescendants' },
+  });
+  const ground = prim('/World/ground', {
+    typeName: 'Mesh',
+    mesh: { primvars: [] },
+    xformOps: [translate(0, -1, 0)],
+    materialBinding: { target: '/World/Looks/ground', strength: 'weakerThanDescendants' },
+  });
+  const looks = prim('/World/Looks', { children: ['/World/Looks/brick', '/World/Looks/ground'] });
+  const prims = [world, cube, ground, looks, prim('/World/Looks/brick', { typeName: 'Material' }), prim('/World/Looks/ground', { typeName: 'Material' })];
+  return {
+    entry: 'root.usda',
+    stage: { subLayers: [] },
+    prims: new Map(prims.map((p) => [p.path, p])),
+    roots: ['/World'],
+    materials: [BRICK_MTLX, GROUND_MTLX],
+  };
+}
+
+/** A layered compiler whose neutral mx_shade IR is identical for every material
+ *  (as createGraphMaterialCompiler does) but whose layered module differs by the
+ *  unit's base_color, so the real shading is what must keep pipeline keys apart. */
+function distinctLayeredCompiler(colors: Record<string, string>): MaterialCompiler {
+  return {
+    compile(unit: MaterialCompileUnit): MaterialBuild {
+      const b = new IrModuleBuilder();
+      const opacity = b.constant(FLOAT, 1);
+      const ref = b.add({ kind: 'closure', type: shaderType('surface'), closure: 'bsdf', op: 'surface', params: { opacity } });
+      b.output({ name: 'surfaceshader', type: shaderType('surface'), ref });
+      const ir = b.build();
+      const graph = surfaceGraph(colors[unit.materialName] ?? '0.5, 0.5, 0.5');
+      const resolved = resolveSurface(graph, {})!;
+      return { ir, module: emitWgsl(ir), layered: emitLayeredSurface(graph, resolved) };
+    },
+  };
 }
 
 describe('buildSceneResources (T050)', () => {
@@ -266,5 +324,18 @@ describe('buildSceneResources (T050)', () => {
     expect((bind.materialBindGroup as unknown as { group: number }).group).toBe(0);
     expect((bind.frameBindGroup as unknown as { group: number }).group).toBe(IR_FORWARD_FRAME_GROUP);
     expect(bind.byGroup.get(0)).toBe(bind.materialBindGroup);
+  });
+
+  it('gives distinct graph materials distinct pipeline keys so the raster pipeline cache does not collide', async () => {
+    const resources = await buildSceneResources(twoMaterialScene(), {
+      meshSource: meshSource({ '/World/cube': quad(), '/World/ground': quad() }),
+      materialCompiler: distinctLayeredCompiler({ brick: '0.8, 0.2, 0.1', ground: '0.5, 0.5, 0.5' }),
+    });
+    const brick = resources.materials.get(BRICK_KEY)!;
+    const ground = resources.materials.get(GROUND_KEY)!;
+    // Both lower to the same neutral mx_shade module; only the layered shading differs.
+    expect(brick.sceneShader!.code).not.toBe(ground.sceneShader!.code);
+    // The pipeline key (the raster pipeline cache key) must still differ.
+    expect(brick.variant.pipelineKey).not.toBe(ground.variant.pipelineKey);
   });
 });
