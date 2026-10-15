@@ -1647,7 +1647,7 @@ siennes ; toute entree ou noeud non supporte produit un diagnostic (REQ-013).
       echec de decode -> warning + image undefined. Gate 1059 passed +1 skipped / 96
       fichiers (T057m1 1055 -> +4).
 
-    - [ ] T057m3 [Plan:P10] Cabler le harnais USD sur le chemin graphe + main.ts.
+    - [x] T057m3 [Plan:P10] Cabler le harnais USD sur le chemin graphe + main.ts.
       DECOUPE en T057m3a-T057m3c (le chargement de documents MaterialX est la piece
       reutilisable Node-testable ; le cablage harnais et main.ts sont device-only,
       typecheck). Parent clos quand m3a..m3c tous [x].

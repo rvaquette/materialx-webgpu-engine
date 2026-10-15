@@ -104,6 +104,9 @@ export interface ScenePassTargets {
   draws: readonly SceneDrawCall[];
   /** Clear the HDR/depth target (first pass) or load the previous contents. */
   clear?: boolean;
+  /** Linear HDR background for the clear (scene environment radiance), so the
+   *  raster background matches the path tracer's env miss; defaults to black. */
+  clearColor?: readonly [number, number, number];
 }
 
 
@@ -211,11 +214,12 @@ export class RasterBackend {
    *  Each draw routes through its per-material IR variant pipeline (T058e). */
   recordScenePass(encoder: GPUCommandEncoder, targets: ScenePassTargets): void {
     const clear = targets.clear ?? true;
+    const bg = targets.clearColor ?? [0, 0, 0];
     const pass = encoder.beginRenderPass({
       colorAttachments: [
         {
           view: targets.hdrView,
-          clearValue: { r: 0, g: 0, b: 0, a: 1 },
+          clearValue: { r: bg[0], g: bg[1], b: bg[2], a: 1 },
           loadOp: clear ? 'clear' : 'load',
           storeOp: 'store',
         },

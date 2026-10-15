@@ -296,13 +296,16 @@ async function main(): Promise<void> {
     ],
   });
 
+  // Background matches the path tracer's env miss: clear the raster HDR target to
+  // the scene environment radiance instead of black.
+  const rasterBackground = frame.environment.radiance;
   function renderRaster(targetView: GPUTextureView): void {
     const encoder = device.createCommandEncoder();
     let first = true;
     for (const pass of frame.passes) {
       const draws = drawsByPass.get(pass) ?? [];
       if (draws.length === 0) continue;
-      backend.recordScenePass(encoder, { pass, hdrView, depthView, draws, clear: first });
+      backend.recordScenePass(encoder, { pass, hdrView, depthView, draws, clear: first, clearColor: rasterBackground });
       first = false;
     }
     backend.recordResolvePass(encoder, { outputView: targetView, bindGroup: resolveBindGroup });

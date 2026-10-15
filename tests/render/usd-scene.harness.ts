@@ -466,7 +466,7 @@ async function renderUsdRasterOnDevice(
   for (const pass of frame.passes) {
     const draws = drawsByPass.get(pass) ?? [];
     if (draws.length === 0) continue;
-    backend.recordScenePass(encoder, { pass, hdrView, depthView, draws, clear: firstPass });
+    backend.recordScenePass(encoder, { pass, hdrView, depthView, draws, clear: firstPass, clearColor: frame.environment.radiance });
     firstPass = false;
   }
   backend.recordResolvePass(encoder, { outputView, bindGroup: resolveBindGroup });

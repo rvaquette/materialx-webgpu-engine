@@ -228,4 +228,17 @@ describe('RasterBackend scene forward path', () => {
     expect(loadDesc.colorAttachments[0].loadOp).toBe('load');
     expect(loadDesc.depthStencilAttachment.depthLoadOp).toBe('load');
   });
+
+  it('clears the background to the scene environment radiance when given, else black', () => {
+    const { backend } = makeBackend();
+    const base = { pass: 'opaque' as const, hdrView: {} as GPUTextureView, depthView: {} as GPUTextureView, draws: [] };
+    const envEncoder = { beginRenderPass: vi.fn((_desc: any) => mockPass()) };
+    backend.recordScenePass(envEncoder as unknown as GPUCommandEncoder, { ...base, clear: true, clearColor: [0.2, 0.3, 0.4] });
+    const envDesc = envEncoder.beginRenderPass.mock.calls[0]![0] as any;
+    expect(envDesc.colorAttachments[0].clearValue).toEqual({ r: 0.2, g: 0.3, b: 0.4, a: 1 });
+    const blackEncoder = { beginRenderPass: vi.fn((_desc: any) => mockPass()) };
+    backend.recordScenePass(blackEncoder as unknown as GPUCommandEncoder, { ...base, clear: true });
+    const blackDesc = blackEncoder.beginRenderPass.mock.calls[0]![0] as any;
+    expect(blackDesc.colorAttachments[0].clearValue).toEqual({ r: 0, g: 0, b: 0, a: 1 });
+  });
 });
