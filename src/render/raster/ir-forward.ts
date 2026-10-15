@@ -122,19 +122,25 @@ fn ${IR_FORWARD_FRAGMENT_ENTRY}(fin: MxVertexOut) -> @location(0) vec4f {
   let cosL = max(dot(n, toLight), 0.0);
   var radiance = ev.value * (fu.lightColor.xyz * fu.lightColor.w) * cosL;
 
-  // Constant-environment reflection via a single BSDF-importance-sampled estimate
-  // (env * f * cos / pdf). Importance sampling picks the mirror direction, so sharp
-  // specular/metal lobes reflect the environment instead of collapsing to ~0 when
-  // evaluated at wi = normal off-incidence (which rendered metals black). For a
-  // diffuse lobe value*cos/pdf folds to the albedo, matching the prior eval term.
-  // woEnv lifts the view to >= ~20deg above the horizon before sampling: the fixed
-  // deterministic sample u reflects below the surface at grazing wo (wi.z<0 ->
-  // sample invalid), which blackened the sphere silhouette; the path tracer avoids
-  // it with random samples averaged over many frames.
-  let woEnv = normalize(vec3f(wo.xy, max(wo.z, 0.35)));
-  let es = mx_closure_sample(c, woEnv, vec3f(0.5, 0.5, 0.5));
-  if (es.valid && es.pdf > 0.0) {
-    radiance = radiance + es.value * fu.env.xyz * (max(es.wi.z, 0.0) / es.pdf);
+  // Constant-environment reflection, estimated from the directional albedo of the
+  // closure evaluated toward the perfect-mirror direction wiMir = reflect(wo) about
+  // the normal (in shading space that is -wo.xy, +wo.z). wiMir stays above the
+  // horizon whenever wo is, so the estimate is valid at grazing (no black sphere
+  // silhouette) unlike a fixed BSDF sample that reflects below the surface. value/pdf
+  // at the lobe peak folds to the Fresnel-weighted reflectance, so the grazing
+  // brightening that makes metals look metallic is preserved; for a diffuse lobe
+  // f*cos/pdf folds to the albedo, matching env * albedo.
+  // The environment is a hemisphere gradient (sky above, darker ground below) indexed
+  // by the world-space reflected view direction's up (+Y) component, so metals pick up
+  // the directional variation the path tracer gets from reflecting the ground plane;
+  // a single constant env term renders them flat and non-metallic.
+  let rWorld = reflect(-vary.viewDir, n);
+  let up = clamp(rWorld.y * 0.5 + 0.5, 0.0, 1.0);
+  let envDir = fu.env.xyz * mix(0.25, 1.0, up);
+  let wiMir = vec3f(-wo.x, -wo.y, wo.z);
+  let em = mx_closure_eval(c, wo, wiMir);
+  if (em.pdf > 0.0) {
+    radiance = radiance + em.value * envDir * (wiMir.z / em.pdf);
   }
 
   if (c.hasEmission != 0u) { radiance = radiance + c.emission; }

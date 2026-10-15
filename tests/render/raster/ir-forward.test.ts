@@ -92,11 +92,13 @@ describe('assembleIrForwardShader (T058b)', () => {
     expect(shader.code).not.toContain('traverse(');
   });
 
-  it('reflects the constant environment through a BSDF-importance-sampled estimate', () => {
+  it('reflects a hemisphere environment through a mirror-direction albedo estimate', () => {
     const { shader } = forward('open_pbr_surface', [value('base_color', 'color3', '0.2, 0.5, 0.9')]);
-    expect(shader.code).toContain('let woEnv = normalize(vec3f(wo.xy, max(wo.z, 0.35)));');
-    expect(shader.code).toContain('let es = mx_closure_sample(c, woEnv, vec3f(0.5, 0.5, 0.5));');
-    expect(shader.code).toContain('radiance = radiance + es.value * fu.env.xyz * (max(es.wi.z, 0.0) / es.pdf);');
+    expect(shader.code).toContain('let rWorld = reflect(-vary.viewDir, n);');
+    expect(shader.code).toContain('let envDir = fu.env.xyz * mix(0.25, 1.0, up);');
+    expect(shader.code).toContain('let wiMir = vec3f(-wo.x, -wo.y, wo.z);');
+    expect(shader.code).toContain('let em = mx_closure_eval(c, wo, wiMir);');
+    expect(shader.code).toContain('radiance = radiance + em.value * envDir * (wiMir.z / em.pdf);');
   });
 
   it('adds the closure emission when present', () => {
