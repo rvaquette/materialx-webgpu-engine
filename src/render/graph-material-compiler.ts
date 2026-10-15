@@ -12,6 +12,7 @@
 import { emitWgsl } from '../compiler/wgsl.ts';
 import { emitLayeredSurface } from '../compiler/surface-wgsl.ts';
 import { FLOAT, IrModuleBuilder, shaderType, type ShaderIr } from '../compiler/ir.ts';
+import { isNodeCovered } from '../compiler/nodes.ts';
 import { resolveGraph } from '../materialx/graph.ts';
 import { resolveSurface, type ResolveSurfaceOptions } from '../materialx/surface-graph.ts';
 import type { Diagnostic, DiagnosticSink } from '../core/diagnostics.ts';
@@ -57,6 +58,7 @@ export function createGraphMaterialCompiler(options: GraphMaterialCompilerOption
         const graph = resolveGraph({
           roots,
           onDiagnostic: emit,
+          isCovered: isNodeCovered,
           ...(options.target !== undefined ? { target: options.target } : {}),
         });
         const surface = resolveSurface(graph, options.surfaceOptions ?? {});

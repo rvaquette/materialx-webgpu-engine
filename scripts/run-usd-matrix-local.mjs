@@ -27,6 +27,7 @@ const ALL_SCENES = [
   'test_material_velvet',
   'test_material_metal_brushed',
   'test_material_brick_procedural',
+  'test_material_brick_metal_mix',
 ];
 // MX_SCENES=brick,velvet renders only the matching subset (substring match).
 const SCENE_FILTER = (process.env.MX_SCENES ?? '').split(',').map((s) => s.trim()).filter(Boolean);

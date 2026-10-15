@@ -127,6 +127,9 @@ export interface ResolveGraphOptions {
   /** Shader target used for NodeDef/implementation selection policy. */
   target?: string;
   onDiagnostic?: DiagnosticSink;
+  /** True when the renderer lowers this node category directly to WGSL, so a
+   *  missing MaterialX implementation element is expected and not warned on. */
+  isCovered?: (category: string) => boolean;
 }
 
 function toArray<T>(v: MxVector<T> | T[]): T[] {
@@ -222,7 +225,7 @@ function resolveInput(input: MxInput): { resolved: ResolvedInput; connected: MxN
   };
 }
 
-function resolveNodeDef(node: MxNode, target: string | undefined, diag: DiagnosticSink): ResolvedNodeDefRef | undefined {
+function resolveNodeDef(node: MxNode, target: string | undefined, diag: DiagnosticSink, isCovered?: (category: string) => boolean): ResolvedNodeDefRef | undefined {
   // The Core Embind binding types target as std::string; passing undefined trips
   // "Cannot pass non-string to std::string". MaterialX treats "" as "any target".
   const targetArg = target ?? '';
@@ -240,7 +243,10 @@ function resolveNodeDef(node: MxNode, target: string | undefined, diag: Diagnost
   const implementation: ResolvedImplementation = impl
     ? classifyImplementation(impl)
     : { kind: 'unresolved' };
-  if (!impl) {
+  // Builtin math/procedural leaves carry no MaterialX implementation element;
+  // they are lowered directly to WGSL, so only warn when the renderer does not
+  // cover the category.
+  if (!impl && !(isCovered?.(node.getCategory()) ?? false)) {
     diag({
       level: 'warning',
       message: `NodeDef '${nodeDef.getName()}' has no implementation for target '${target ?? '<any>'}'; explicit WGSL lowering required.`,
@@ -290,7 +296,7 @@ export function resolveGraph(options: ResolveGraphOptions): ResolvedGraph {
       if (connected) stack.push(connected);
     }
 
-    const nodeDef = resolveNodeDef(node, options.target, diag);
+    const nodeDef = resolveNodeDef(node, options.target, diag, options.isCovered);
     nodes.set(id, {
       id,
       category: node.getCategory(),
