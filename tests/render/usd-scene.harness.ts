@@ -37,6 +37,17 @@ import {
   type MeshSource,
 } from '../../src/render/scene-resources.ts';
 import { buildPathTraceScene } from '../../src/render/pathtracing/scene-buffers.ts';
+import {
+  emitHybridShadowPass,
+  emitGBufferPass,
+  emitShadowCompositePass,
+  packShadowUniform,
+  HYBRID_SHADOW_BINDINGS,
+  HYBRID_SHADOW_UNIFORM_SIZE,
+  HYBRID_WORKGROUP_SIZE,
+  GBUFFER_POSITION_FORMAT,
+  GBUFFER_NORMAL_FORMAT,
+} from '../../src/render/hybrid/trace-pass.ts';
 import { buildPathTraceUniform, PathTraceBackend, PT_UNIFORM_SIZE } from '../../src/render/pathtracing/compute.ts';
 import { buildMaterialDispatch } from '../../src/render/pathtracing/material-variant.ts';
 import { buildPtDeviceBindings, type PtImageProvider } from '../../src/render/pathtracing/device-bindings.ts';
@@ -607,6 +618,8 @@ async function renderUsdRasterOnDevice(
   exposureOverride?: number,
   camBackOverride?: number,
   dispScaleOverride?: number,
+  tracedShadows?: boolean,
+  lightDirOverride?: Vec3,
 ): Promise<{ rgba: Uint8ClampedArray; renderMs: number }> {
   const sink = (d: { level: string; message: string }): void => {
     if (d.level === 'warning' || d.level === 'error') line(`diag: ${d.message}`);
@@ -641,6 +654,9 @@ async function renderUsdRasterOnDevice(
     environment: envFrameConfig(envAsset),
     surfaceFor,
   });
+  // Override the dominant light direction (travel direction) so cast shadows are
+  // demonstrable on dome-only scenes whose default light points up from below.
+  if (lightDirOverride) frame.light.direction = lightDirOverride;
   line(`${frame.draws.length} draw(s), passes [${frame.passes.join(', ')}], ${frame.skipped.length} ignore(s)`);
 
   const outputFormat: GPUTextureFormat = 'rgba8unorm';
@@ -720,10 +736,98 @@ async function renderUsdRasterOnDevice(
   const depthView = depthTexture.createView();
   const outputView = outputTexture.createView();
 
+  // Hybrid traced shadows: build the shared world BVH (scene-buffers.ts), upload
+  // its packed buffers, and create the G-buffer + shadow compute + composite
+  // pipelines. A separate compute pass traces one occlusion ray per surface pixel
+  // toward the distant light; the scene is also rendered once with the direct
+  // light disabled (IBL only) so the composite shadows ONLY the direct term and
+  // leaves ambient/IBL untouched. This stays within the raster maxBindGroups budget.
+  const SHADOW_STRENGTH = 1.0;
+  let shadow:
+    | {
+        nodes: GPUBuffer; tris: GPUBuffer; triOrder: GPUBuffer;
+        gPosView: GPUTextureView; gNormView: GPUTextureView; gDepthView: GPUTextureView;
+        visView: GPUTextureView; hdr2View: GPUTextureView; hdrIblView: GPUTextureView;
+        gbufferPipeline: GPURenderPipeline; shadowPipeline: GPUComputePipeline; compositePipeline: GPURenderPipeline;
+        shadowUniform: GPUBuffer; compositeUniform: GPUBuffer;
+        draws: Array<{ position: GPUBuffer; normal: GPUBuffer; indexBuffer: GPUBuffer; indexCount: number; frameUniform: GPUBuffer }>;
+      }
+    | undefined;
+  if (tracedShadows) {
+    const ptScene = buildPathTraceScene(resources, {
+      lights,
+      surfaceFor,
+      frameCamera,
+      environment: envFrameConfig(envAsset),
+      ...(dispScaleOverride !== undefined ? { displacementScale: dispScaleOverride } : {}),
+    });
+    const storageBuf = (data: Float32Array | Uint32Array): GPUBuffer => {
+      const buf = device.createBuffer({ size: Math.max(data.byteLength, 4), usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
+      device.queue.writeBuffer(buf, 0, data);
+      return buf;
+    };
+    const gPos = device.createTexture({ size: [res, res], format: GBUFFER_POSITION_FORMAT, usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING });
+    const gNorm = device.createTexture({ size: [res, res], format: GBUFFER_NORMAL_FORMAT, usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING });
+    const gDepth = device.createTexture({ size: [res, res], format: backend.depthFormat, usage: GPUTextureUsage.RENDER_ATTACHMENT });
+    const visTex = device.createTexture({ size: [res, res], format: 'r32float', usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING });
+    const hdr2 = device.createTexture({ size: [res, res], format: backend.hdrFormat, usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING });
+    const hdrIbl = device.createTexture({ size: [res, res], format: backend.hdrFormat, usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING });
+
+    const gbufferPass = emitGBufferPass();
+    const gbufferModule = device.createShaderModule({ code: gbufferPass.code });
+    const gbufferPipeline = device.createRenderPipeline({
+      layout: 'auto',
+      vertex: {
+        module: gbufferModule,
+        entryPoint: gbufferPass.vertexEntry,
+        buffers: [
+          { arrayStride: 12, attributes: [{ shaderLocation: 0, offset: 0, format: 'float32x3' }] },
+          { arrayStride: 12, attributes: [{ shaderLocation: 1, offset: 0, format: 'float32x3' }] },
+        ],
+      },
+      fragment: { module: gbufferModule, entryPoint: gbufferPass.fragmentEntry, targets: [{ format: GBUFFER_POSITION_FORMAT }, { format: GBUFFER_NORMAL_FORMAT }] },
+      primitive: { topology: 'triangle-list', cullMode: 'back' },
+      depthStencil: { format: backend.depthFormat, depthWriteEnabled: true, depthCompare: 'less' },
+    });
+
+    const shadowPass = emitHybridShadowPass();
+    const shadowPipeline = device.createComputePipeline({
+      layout: 'auto',
+      compute: { module: device.createShaderModule({ code: shadowPass.code }), entryPoint: shadowPass.entryPoint },
+    });
+
+    const compositePass = emitShadowCompositePass();
+    const compositeModule = device.createShaderModule({ code: compositePass.code });
+    const compositePipeline = device.createRenderPipeline({
+      layout: 'auto',
+      vertex: { module: compositeModule, entryPoint: compositePass.vertexEntry },
+      fragment: { module: compositeModule, entryPoint: compositePass.fragmentEntry, targets: [{ format: backend.hdrFormat }] },
+      primitive: { topology: 'triangle-list' },
+    });
+
+    const shadowUniform = device.createBuffer({ size: HYBRID_SHADOW_UNIFORM_SIZE, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+    device.queue.writeBuffer(shadowUniform, 0, packShadowUniform({ lightDir: frame.light.direction, width: res, height: res }));
+    const compositeUniform = device.createBuffer({ size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+    device.queue.writeBuffer(compositeUniform, 0, new Float32Array([SHADOW_STRENGTH, 0, 0, 0]));
+
+    shadow = {
+      nodes: storageBuf(ptScene.nodes), tris: storageBuf(ptScene.triangles), triOrder: storageBuf(ptScene.triangleOrder),
+      gPosView: gPos.createView(), gNormView: gNorm.createView(), gDepthView: gDepth.createView(),
+      visView: visTex.createView(), hdr2View: hdr2.createView(), hdrIblView: hdrIbl.createView(),
+      gbufferPipeline, shadowPipeline, compositePipeline, shadowUniform, compositeUniform,
+      draws: [],
+    };
+    line(`diag shadows raster tris=${ptScene.triangleCount} nodes=${ptScene.nodeCount} strength=${SHADOW_STRENGTH}`);
+  }
+
   const uploaded = new Map<string, ReturnType<typeof uploadGeometry>>();
   for (const [id, geometry] of resources.geometries) uploaded.set(id, uploadGeometry(device, geometry, id));
 
   const drawsByPass = new Map<ScenePassKind, SceneDrawCall[]>();
+  const drawsByPassIbl = new Map<ScenePassKind, SceneDrawCall[]>();
+  // IBL-only frame plan: same scene with the distant light killed, so its render
+  // isolates the ambient/IBL term the shadow composite must preserve.
+  const frameIbl = { ...frame, light: { ...frame.light, color: [0, 0, 0] as Vec3, intensity: 0 } };
   const zeroTexcoords = new Map<string, GPUBuffer>();
   for (const draw of frame.draws) {
     const buffers = uploaded.get(draw.prototypeId);
@@ -782,6 +886,36 @@ async function renderUsdRasterOnDevice(
       ...(textureBindGroups.size > 0 ? { textureBindGroups } : {}),
     });
     drawsByPass.set(draw.pass, list);
+    if (shadow) {
+      shadow.draws.push({ position, normal, indexBuffer: buffers.indexBuffer, indexCount: buffers.indexCount, frameUniform });
+      // Parallel draw with the light killed, rendered into the IBL-only HDR target.
+      const frameUniformIbl = device.createBuffer({ size: SCENE_FRAME_UNIFORM_SIZE, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+      device.queue.writeBuffer(frameUniformIbl, 0, buildSceneFrameUniform(frameIbl, draw));
+      const bindGroupsIbl = createSceneBindGroups(
+        device,
+        material,
+        {
+          frame: frameUniformIbl,
+          material: materialUniform,
+          ...(textures ? { textureViews: textures.textureViews, samplers: textures.samplers } : {}),
+          ...(displacement ? { displacement } : {}),
+        },
+        (group) => pipeline.getBindGroupLayout(group),
+      );
+      const listIbl = drawsByPassIbl.get(draw.pass) ?? [];
+      listIbl.push({
+        materialBindGroup: bindGroupsIbl.materialBindGroup,
+        frameBindGroup: bindGroupsIbl.frameBindGroup,
+        positionBuffer: position,
+        normalBuffer: normal,
+        texcoordBuffer: texcoord,
+        indexBuffer: buffers.indexBuffer,
+        indexCount: buffers.indexCount,
+        pipelineKey: material.variant.pipelineKey,
+        ...(textureBindGroups.size > 0 ? { textureBindGroups } : {}),
+      });
+      drawsByPassIbl.set(draw.pass, listIbl);
+    }
   }
 
   const resolveUniform = device.createBuffer({ size: RESOLVE_UNIFORM_SIZE, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
@@ -790,7 +924,7 @@ async function renderUsdRasterOnDevice(
   const resolveBindGroup = device.createBindGroup({
     layout: resolvePipeline.getBindGroupLayout(0),
     entries: [
-      { binding: 0, resource: hdrView },
+      { binding: 0, resource: shadow ? shadow.hdr2View : hdrView },
       { binding: 1, resource: sampler },
       { binding: 2, resource: { buffer: resolveUniform } },
     ],
@@ -817,6 +951,75 @@ async function renderUsdRasterOnDevice(
     if (draws.length === 0) continue;
     backend.recordScenePass(encoder, { pass, hdrView, depthView, draws, clear: firstPass, clearColor: frame.environment.radiance });
     firstPass = false;
+  }
+  if (shadow) {
+    // G-buffer: redraw the geometry writing world position (.w = surface mask) and
+    // world normal, so the compute pass has per-pixel shading points to trace from.
+    const gPass = encoder.beginRenderPass({
+      colorAttachments: [
+        { view: shadow.gPosView, clearValue: { r: 0, g: 0, b: 0, a: 0 }, loadOp: 'clear', storeOp: 'store' },
+        { view: shadow.gNormView, clearValue: { r: 0, g: 0, b: 0, a: 0 }, loadOp: 'clear', storeOp: 'store' },
+      ],
+      depthStencilAttachment: { view: shadow.gDepthView, depthClearValue: 1, depthLoadOp: 'clear', depthStoreOp: 'store' },
+    });
+    gPass.setPipeline(shadow.gbufferPipeline);
+    for (const d of shadow.draws) {
+      gPass.setBindGroup(0, device.createBindGroup({ layout: shadow.gbufferPipeline.getBindGroupLayout(0), entries: [{ binding: 0, resource: { buffer: d.frameUniform } }] }));
+      gPass.setVertexBuffer(0, d.position);
+      gPass.setVertexBuffer(1, d.normal);
+      gPass.setIndexBuffer(d.indexBuffer, 'uint32');
+      gPass.drawIndexed(d.indexCount);
+    }
+    gPass.end();
+
+    // Traced occlusion: one shadow ray per surface pixel through the shared BVH.
+    const b = HYBRID_SHADOW_BINDINGS;
+    const shadowBind = device.createBindGroup({
+      layout: shadow.shadowPipeline.getBindGroupLayout(0),
+      entries: [
+        { binding: b.uniform, resource: { buffer: shadow.shadowUniform } },
+        { binding: b.nodes, resource: { buffer: shadow.nodes } },
+        { binding: b.triangles, resource: { buffer: shadow.tris } },
+        { binding: b.triangleOrder, resource: { buffer: shadow.triOrder } },
+        { binding: b.gPosition, resource: shadow.gPosView },
+        { binding: b.gNormal, resource: shadow.gNormView },
+        { binding: b.visibility, resource: shadow.visView },
+      ],
+    });
+    const cPass = encoder.beginComputePass();
+    cPass.setPipeline(shadow.shadowPipeline);
+    cPass.setBindGroup(0, shadowBind);
+    const groups = Math.ceil(res / HYBRID_WORKGROUP_SIZE);
+    cPass.dispatchWorkgroups(groups, groups);
+    cPass.end();
+
+    // IBL-only render: same geometry with the light killed, into a second HDR so
+    // the composite can isolate and shadow only the direct contribution.
+    let firstIbl = true;
+    for (const pass of frame.passes) {
+      const draws = drawsByPassIbl.get(pass) ?? [];
+      if (draws.length === 0) continue;
+      backend.recordScenePass(encoder, { pass, hdrView: shadow.hdrIblView, depthView, draws, clear: firstIbl, clearColor: [0, 0, 0] });
+      firstIbl = false;
+    }
+
+    // Composite: out = ibl + (full - ibl) * (1 - strength*(1 - vis)), into hdr2.
+    const compBind = device.createBindGroup({
+      layout: shadow.compositePipeline.getBindGroupLayout(0),
+      entries: [
+        { binding: 0, resource: hdrView },
+        { binding: 1, resource: shadow.hdrIblView },
+        { binding: 2, resource: shadow.visView },
+        { binding: 3, resource: { buffer: shadow.compositeUniform } },
+      ],
+    });
+    const compPass = encoder.beginRenderPass({
+      colorAttachments: [{ view: shadow.hdr2View, clearValue: { r: 0, g: 0, b: 0, a: 1 }, loadOp: 'clear', storeOp: 'store' }],
+    });
+    compPass.setPipeline(shadow.compositePipeline);
+    compPass.setBindGroup(0, compBind);
+    compPass.draw(3);
+    compPass.end();
   }
   backend.recordResolvePass(encoder, { outputView, bindGroup: resolveBindGroup });
   device.queue.submit([encoder.finish()]);
@@ -1228,6 +1431,8 @@ export async function bootstrapUsdImage(
   skyColor?: Vec3,
   camBack?: number,
   dispScale?: number,
+  tracedShadows?: boolean,
+  lightDir?: Vec3,
 ): Promise<UsdSceneImage | null> {
   const root = typeof document !== 'undefined' ? document.getElementById('log') ?? document.body : undefined;
   const line = (msg: string): void => {
@@ -1261,7 +1466,7 @@ export async function bootstrapUsdImage(
   if (materialOverride) line(`OpenPBRMaterial override: ${materialOverride}`);
   if (backend === 'raster') {
     line(`Rendu raster GPU de ${entry} (${res}x${res})...`);
-    ({ rgba, renderMs } = await renderUsdRasterOnDevice(device, entry, res, line, materialOverride, exposure, camBack, dispScale));
+    ({ rgba, renderMs } = await renderUsdRasterOnDevice(device, entry, res, line, materialOverride, exposure, camBack, dispScale, tracedShadows, lightDir));
   } else {
     line(`Rendu path-trace GPU de ${entry} (${res}x${res}, ${samples} spp)...`);
     ({ rgba, renderMs } = await renderUsdOnDevice(device, entry, res, samples, line, materialOverride, exposure, firefly, skyPower, skyColor, camBack, dispScale));

@@ -34,7 +34,11 @@
       const camBack = camBackParam !== null ? Number(camBackParam) : undefined;
       const dispScaleParam = params.get('dispScale');
       const dispScale = dispScaleParam !== null ? Number(dispScaleParam) : undefined;
-      bootstrapUsdImage(entry, res, spp, backend, openpbr, exposure, firefly, skyPower, skyColor, camBack, dispScale).catch((e) => {
+      const shadowsParam = params.get('shadows');
+      const shadows = shadowsParam !== null && shadowsParam !== '0' && shadowsParam !== 'false';
+      const lightDirParam = params.get('lightDir');
+      const lightDir = lightDirParam ? lightDirParam.split(',').map(Number) : undefined;
+      bootstrapUsdImage(entry, res, spp, backend, openpbr, exposure, firefly, skyPower, skyColor, camBack, dispScale, shadows, lightDir).catch((e) => {
         const p = document.createElement('p');
         p.textContent = 'Echec: ' + (e && e.message ? e.message : e);
         document.body.appendChild(p);

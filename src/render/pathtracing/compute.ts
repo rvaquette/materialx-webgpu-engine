@@ -13,6 +13,7 @@
 // uploads and dispatch run in the browser (src/main.ts) and are device-only.
 
 import type { PathTraceScene } from './scene-buffers.ts';
+import { BVH_TRAVERSAL_WGSL } from './bvh-wgsl.ts';
 import { LAYERED_CLOSURE_PRELUDE } from '../../compiler/surface-wgsl.ts';
 import { CLOSURE_LIBRARY_PRELUDE } from '../../compiler/closure-library.ts';
 import { emitVaryingsStruct } from '../../compiler/wgsl.ts';
@@ -197,109 +198,7 @@ fn rng_next(state : ptr<function, u32>) -> f32 {
 }
 
 function wgslTraversal(): string {
-  return /* wgsl */ `
-struct Hit { t : f32, tri : u32, u : f32, v : f32, hitAny : bool };
-
-fn tri_vertex(tri : u32, slot : u32) -> vec3<f32> {
-  let b = tri * TRI_STRIDE + slot * 3u;
-  return vec3<f32>(tris[b], tris[b + 1u], tris[b + 2u]);
-}
-
-fn tri_normal(tri : u32, slot : u32) -> vec3<f32> {
-  let b = tri * TRI_STRIDE + 9u + slot * 3u;
-  return vec3<f32>(tris[b], tris[b + 1u], tris[b + 2u]);
-}
-
-fn tri_material(tri : u32) -> u32 {
-  return u32(tris[tri * TRI_STRIDE + 18u]);
-}
-
-fn intersect_tri(tri : u32, ro : vec3<f32>, rd : vec3<f32>, tMax : f32) -> vec4<f32> {
-  let v0 = tri_vertex(tri, 0u);
-  let v1 = tri_vertex(tri, 1u);
-  let v2 = tri_vertex(tri, 2u);
-  let e1 = v1 - v0;
-  let e2 = v2 - v0;
-  let p = cross(rd, e2);
-  let det = dot(e1, p);
-  if (abs(det) < 1.0e-9) { return vec4<f32>(-1.0, 0.0, 0.0, 0.0); }
-  let inv = 1.0 / det;
-  let tvec = ro - v0;
-  let u = dot(tvec, p) * inv;
-  if (u < 0.0 || u > 1.0) { return vec4<f32>(-1.0, 0.0, 0.0, 0.0); }
-  let q = cross(tvec, e1);
-  let vv = dot(rd, q) * inv;
-  if (vv < 0.0 || u + vv > 1.0) { return vec4<f32>(-1.0, 0.0, 0.0, 0.0); }
-  let t = dot(e2, q) * inv;
-  if (t <= RAY_EPS || t >= tMax) { return vec4<f32>(-1.0, 0.0, 0.0, 0.0); }
-  return vec4<f32>(t, u, vv, 1.0);
-}
-
-fn aabb_hit(node : u32, ro : vec3<f32>, invDir : vec3<f32>, tMax : f32) -> bool {
-  let b = node * NODE_STRIDE;
-  var tmin = RAY_EPS;
-  var tmax = tMax;
-  for (var a = 0u; a < 3u; a = a + 1u) {
-    let lo = (nodes[b + a] - ro[a]) * invDir[a];
-    let hi = (nodes[b + 4u + a] - ro[a]) * invDir[a];
-    tmin = max(tmin, min(lo, hi));
-    tmax = min(tmax, max(lo, hi));
-    if (tmax < tmin) { return false; }
-  }
-  return true;
-}
-
-fn traverse(ro : vec3<f32>, rd : vec3<f32>, tMax : f32, anyHit : bool) -> Hit {
-  var result : Hit;
-  result.t = tMax;
-  result.hitAny = false;
-  let invDir = vec3<f32>(1.0 / select(rd.x, 1.0e-20, rd.x == 0.0),
-                         1.0 / select(rd.y, 1.0e-20, rd.y == 0.0),
-                         1.0 / select(rd.z, 1.0e-20, rd.z == 0.0));
-  var stack : array<u32, 64>;
-  var sp = 0;
-  stack[0] = 0u;
-  sp = 1;
-  var closest = tMax;
-  loop {
-    if (sp <= 0) { break; }
-    sp = sp - 1;
-    let node = stack[sp];
-    if (!aabb_hit(node, ro, invDir, closest)) { continue; }
-    let b = node * NODE_STRIDE;
-    let count = u32(nodes[b + 9u]);
-    if (count > 0u) {
-      let start = u32(nodes[b + 8u]);
-      for (var i = 0u; i < count; i = i + 1u) {
-        let tri = triOrder[start + i];
-        let h = intersect_tri(tri, ro, rd, closest);
-        if (h.w > 0.5) {
-          if (anyHit) {
-            result.hitAny = true;
-            result.t = h.x;
-            result.tri = tri;
-            return result;
-          }
-          closest = h.x;
-          result.t = h.x;
-          result.tri = tri;
-          result.u = h.y;
-          result.v = h.z;
-          result.hitAny = true;
-        }
-      }
-    } else {
-      if (sp < 62) {
-        stack[sp] = u32(nodes[b + 3u]);
-        sp = sp + 1;
-        stack[sp] = u32(nodes[b + 7u]);
-        sp = sp + 1;
-      }
-    }
-  }
-  return result;
-}
-`;
+  return BVH_TRAVERSAL_WGSL;
 }
 
 function wgslClosureSurface(textures: boolean): string {

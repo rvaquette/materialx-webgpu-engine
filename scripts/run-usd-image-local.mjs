@@ -4,7 +4,7 @@
 // PNG under renders/ and prints the on-page diagnostic log so black-render
 // causes (black bake / matLayer / UVs / exposure) are visible without a device.
 //
-// Usage:  node scripts/run-usd-image-local.mjs [--entry <urlPath>] [--res <n>] [--spp <n>] [--openpbr <mtlx>] [--exposure <EV>] [--firefly <maxLum> (default: 10)] [--sky-power <float>] [--sky-color <r,g,b>] [--cam-back <factor>] [--disp-scale <factor>] [--backend raster|pathtracing]
+// Usage:  node scripts/run-usd-image-local.mjs [--entry <urlPath>] [--res <n>] [--spp <n>] [--openpbr <mtlx>] [--exposure <EV>] [--firefly <maxLum> (default: 10)] [--sky-power <float>] [--sky-color <r,g,b>] [--cam-back <factor>] [--disp-scale <factor>] [--backend raster|pathtracing] [--shadows] [--light-dir <x,y,z>]
 // Env:    MX_CHROME        path to chrome.exe (default: standard Windows install)
 //         MX_PORT          dev server port (default 5173)
 //         MX_OPENPBR_MTLX  .mtlx to bind to OpenPBRMaterial at runtime (same as --openpbr)
@@ -21,7 +21,7 @@ import { join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 
 function parseOptions(argv) {
-  const BOOL_FLAGS = new Set();
+  const BOOL_FLAGS = new Set(['shadows']);
   const opts = {};
   for (let i = 0; i < argv.length; i++) {
     const token = argv[i];
@@ -58,6 +58,8 @@ const CAM_BACK = OPTIONS['cam-back'] ?? 1.6;
 const EXPOSURE = OPTIONS['exposure'] ?? -1;
 const DISP_SCALE = OPTIONS['disp-scale'];
 const BACKEND = OPTIONS['backend'];
+const SHADOWS = OPTIONS['shadows'] === true || OPTIONS['shadows'] === 'true' || OPTIONS['shadows'] === '1';
+const LIGHT_DIR = OPTIONS['light-dir'];
 const MTLX_LIBRARY_ROOT = '/scenes/mtlx-library';
 const OPENPBR_RAW = (OPTIONS.openpbr ?? process.env.MX_OPENPBR_MTLX)?.replace(/\\/g, '/');
 const OPENPBR_MTLX = OPENPBR_RAW
@@ -77,6 +79,8 @@ const QUERY =
   (CAM_BACK !== undefined ? `&camBack=${encodeURIComponent(CAM_BACK)}` : '') +
   (DISP_SCALE !== undefined ? `&dispScale=${encodeURIComponent(DISP_SCALE)}` : '') +
   (BACKEND !== undefined ? `&backend=${encodeURIComponent(BACKEND)}` : '') +
+  (SHADOWS ? `&shadows=1` : '') +
+  (LIGHT_DIR !== undefined ? `&lightDir=${encodeURIComponent(LIGHT_DIR)}` : '') +
   `&_=${Date.now()}`;
 const HARNESS_URL = `http://127.0.0.1:${PORT}${HARNESS_PATH}${QUERY}`;
 const LOCAL_URL = `http://127.0.0.1:${PORT}${HARNESS_PATH}`;
