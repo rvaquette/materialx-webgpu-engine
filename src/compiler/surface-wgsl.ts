@@ -36,6 +36,7 @@ type LobeKind =
   | 'burley_diffuse'
   | 'translucent'
   | 'dielectric_reflection'
+  | 'dielectric_transmission'
   | 'conductor'
   | 'generalized_schlick'
   | 'sheen'
@@ -46,6 +47,7 @@ const LOBE_KIND_CONST: Readonly<Record<LobeKind, string>> = {
   burley_diffuse: 'MX_LOBE_BURLEY_DIFFUSE',
   translucent: 'MX_LOBE_TRANSLUCENT',
   dielectric_reflection: 'MX_LOBE_DIELECTRIC_REFLECTION',
+  dielectric_transmission: 'MX_LOBE_DIELECTRIC_TRANSMISSION',
   conductor: 'MX_LOBE_CONDUCTOR',
   generalized_schlick: 'MX_LOBE_GENERALIZED_SCHLICK',
   sheen: 'MX_LOBE_SHEEN',
@@ -64,6 +66,7 @@ const MX_LOBE_CONDUCTOR: u32 = 4u;
 const MX_LOBE_GENERALIZED_SCHLICK: u32 = 5u;
 const MX_LOBE_SHEEN: u32 = 6u;
 const MX_LOBE_SUBSURFACE: u32 = 7u;
+const MX_LOBE_DIELECTRIC_TRANSMISSION: u32 = 8u;
 struct MxBsdfLobe {
   kind: u32,
   weight: f32,
@@ -269,6 +272,7 @@ function gltfPbr(c: Ctx): FamilyWgsl {
   const rough = c.s('roughness', 1);
   const aniso = c.s('anisotropy_strength', 0);
   const rot = c.s('anisotropy_rotation', 0);
+  const ior = c.s('ior', 1.5);
   const baseColor = c.col('base_color', [1, 1, 1]);
   const specColor = c.col('specular_color', [1, 1, 1]);
   const locals = [
@@ -279,8 +283,8 @@ function gltfPbr(c: Ctx): FamilyWgsl {
   ];
   const lobes: LobeWgsl[] = [
     { kind: 'conductor', weight: 'mx_metal', color: baseColor, roughness: rough, anisotropy: aniso, rotation: rot },
-    { kind: 'translucent', weight: '((1.0 - mx_metal) * mx_trans)', color: baseColor },
-    { kind: 'dielectric_reflection', weight: '(mx_diel * mx_spec)', color: specColor, roughness: rough, ior: '1.5', anisotropy: aniso, rotation: rot },
+    { kind: 'dielectric_transmission', weight: '((1.0 - mx_metal) * mx_trans)', color: baseColor, roughness: rough, ior },
+    { kind: 'dielectric_reflection', weight: '(mx_diel * mx_spec)', color: specColor, roughness: rough, ior, anisotropy: aniso, rotation: rot },
     { kind: 'burley_diffuse', weight: 'mx_diel', color: baseColor, roughness: rough },
   ];
   const out: FamilyWgsl = { locals, lobes, opacity: c.s('alpha', 1) };

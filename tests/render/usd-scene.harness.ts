@@ -175,25 +175,46 @@ function previewCamera(exposure: number): FrameCamera {
 
 /** Builds a render FrameCamera from a UsdGeomCamera, reprojected for the (square)
  *  render target: the authored view transform and vertical FOV are honoured while
- *  the aspect ratio is taken from the output so the subject is not stretched. */
-function frameCameraFromUsd(camera: SceneCamera, aspect: number): FrameCamera {
+ *  the aspect ratio is taken from the output so the subject is not stretched.
+ *  `dolly` > 1 pulls the camera straight back along its view axis (keeps the same
+ *  orientation and FOV) so the whole subject fits; the pull distance scales with the
+ *  eye's distance to the world origin (≈ scene centre). */
+function frameCameraFromUsd(camera: SceneCamera, aspect: number, dolly = 1): FrameCamera {
   const [near, far] = camera.clippingRange;
+  const t = camera.transform;
+  const eye0: Vec3 = [t[12] ?? 0, t[13] ?? 0, t[14] ?? 0];
+  if (camera.projection === 'perspective' && dolly !== 1) {
+    // Camera-to-world basis columns: col1 = up, col2 = backward (USD looks down -Z).
+    const up: Vec3 = [t[4] ?? 0, t[5] ?? 0, t[6] ?? 0];
+    const bw: Vec3 = [t[8] ?? 0, t[9] ?? 0, t[10] ?? 0];
+    const bl = Math.hypot(bw[0], bw[1], bw[2]) || 1;
+    const bn: Vec3 = [bw[0] / bl, bw[1] / bl, bw[2] / bl];
+    const focus = Math.hypot(eye0[0], eye0[1], eye0[2]) || 1;
+    const back = focus * (dolly - 1);
+    const eye: Vec3 = [eye0[0] + bn[0] * back, eye0[1] + bn[1] * back, eye0[2] + bn[2] * back];
+    const target: Vec3 = [eye[0] - bn[0], eye[1] - bn[1], eye[2] - bn[2]];
+    const view = lookAt4(eye, target, up);
+    const projection = perspective4(camera.fovY, aspect, near, far);
+    return { viewProj: multiply4(projection, view), eye, exposure: camera.exposure ?? 0 };
+  }
   const projection =
     camera.projection === 'orthographic' ? camera.projectionMatrix : perspective4(camera.fovY, aspect, near, far);
-  // Eye is the camera world-space translation (column-major translation column).
-  const eye: Vec3 = [camera.transform[12] ?? 0, camera.transform[13] ?? 0, camera.transform[14] ?? 0];
-  return { viewProj: multiply4(projection, camera.view), eye, exposure: camera.exposure ?? 0 };
+  return { viewProj: multiply4(projection, camera.view), eye: eye0, exposure: camera.exposure ?? 0 };
 }
 
 /** The scene's camera reprojected for a square target, or the legacy preview.
- *  `exposureOverride` (EV) replaces the authored exposure when supplied (CLI). */
+ *  `exposureOverride` (EV) replaces the authored exposure when supplied (CLI);
+ *  `dolly` (> 1) pulls the camera back along its view axis to frame the whole subject. */
 function resolveFrameCamera(
   cameras: readonly SceneCamera[],
   line: (m: string) => void,
   exposureOverride?: number,
+  dolly?: number,
 ): FrameCamera {
   const camera = cameras[0];
-  const base = camera ? (line(`diag camera=${camera.path} fovY=${camera.fovY.toFixed(3)} (USD)`), frameCameraFromUsd(camera, 1)) : previewCamera(0);
+  const back = dolly !== undefined && Number.isFinite(dolly) ? dolly : 1;
+  if (back !== 1) line(`diag cam back=${back}`);
+  const base = camera ? (line(`diag camera=${camera.path} fovY=${camera.fovY.toFixed(3)} (USD)`), frameCameraFromUsd(camera, 1, back)) : previewCamera(0);
   if (exposureOverride !== undefined && Number.isFinite(exposureOverride)) {
     line(`diag exposure override=${exposureOverride}`);
     return { ...base, exposure: exposureOverride };
@@ -582,6 +603,7 @@ async function renderUsdRasterOnDevice(
   line: (m: string) => void,
   materialOverride?: string,
   exposureOverride?: number,
+  camBackOverride?: number,
 ): Promise<{ rgba: Uint8ClampedArray; renderMs: number }> {
   const sink = (d: { level: string; message: string }): void => {
     if (d.level === 'warning' || d.level === 'error') line(`diag: ${d.message}`);
@@ -608,7 +630,7 @@ async function renderUsdRasterOnDevice(
   });
   line('diag step: scene resources built');
 
-  const frameCamera = resolveFrameCamera(cameras, line, exposureOverride);
+  const frameCamera = resolveFrameCamera(cameras, line, exposureOverride, camBackOverride);
   const exposure = frameCamera.exposure;
   const frame = buildSceneFrame(resources, {
     lights,
@@ -790,6 +812,7 @@ async function renderUsdOnDevice(
   fireflyOverride?: number,
   skyPowerOverride?: number,
   skyColorOverride?: Vec3,
+  camBackOverride?: number,
 ): Promise<{ rgba: Uint8ClampedArray; renderMs: number }> {
   const sink = (d: { level: string; message: string; detail?: unknown }): void => {
     if (d.level === 'warning' || d.level === 'error') {
@@ -821,7 +844,7 @@ async function renderUsdOnDevice(
   });
   line('diag step: scene resources built');
 
-  const frameCamera = resolveFrameCamera(cameras, line, exposureOverride);
+  const frameCamera = resolveFrameCamera(cameras, line, exposureOverride, camBackOverride);
   const exposure = frameCamera.exposure;
   // Upload the dome texture + luminance CDF up front so the frame environment config
   // can carry the CDF dimensions/sum used by the tracer's importance sampling.
@@ -1044,6 +1067,7 @@ export async function bootstrapUsdImage(
   firefly?: number,
   skyPower?: number,
   skyColor?: Vec3,
+  camBack?: number,
 ): Promise<UsdSceneImage | null> {
   const root = typeof document !== 'undefined' ? document.getElementById('log') ?? document.body : undefined;
   const line = (msg: string): void => {
@@ -1077,10 +1101,10 @@ export async function bootstrapUsdImage(
   if (materialOverride) line(`OpenPBRMaterial override: ${materialOverride}`);
   if (backend === 'raster') {
     line(`Rendu raster GPU de ${entry} (${res}x${res})...`);
-    ({ rgba, renderMs } = await renderUsdRasterOnDevice(device, entry, res, line, materialOverride, exposure));
+    ({ rgba, renderMs } = await renderUsdRasterOnDevice(device, entry, res, line, materialOverride, exposure, camBack));
   } else {
     line(`Rendu path-trace GPU de ${entry} (${res}x${res}, ${samples} spp)...`);
-    ({ rgba, renderMs } = await renderUsdOnDevice(device, entry, res, samples, line, materialOverride, exposure, firefly, skyPower, skyColor));
+    ({ rgba, renderMs } = await renderUsdOnDevice(device, entry, res, samples, line, materialOverride, exposure, firefly, skyPower, skyColor, camBack));
   }
 
   const canvas = document.createElement('canvas');

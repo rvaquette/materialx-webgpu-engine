@@ -158,6 +158,7 @@ function lowerGltfPbr(m: Inputs): LayeredClosure {
   const trans = clamp01(scalarOf(m, 'transmission', 0));
   const spec = clamp01(scalarOf(m, 'specular', 1));
   const rough = scalarOf(m, 'roughness', 1);
+  const ior = scalarOf(m, 'ior', 1.5);
   const aniso = scalarOf(m, 'anisotropy_strength', 0);
   const rot = scalarOf(m, 'anisotropy_rotation', 0);
   const baseColor = rgbOf(m, 'base_color', [1, 1, 1]);
@@ -166,8 +167,8 @@ function lowerGltfPbr(m: Inputs): LayeredClosure {
   const extras = anisoExtras(aniso, rot);
   const lobes: LayeredBsdfLobe[] = [
     { kind: 'conductor', weight: metal, color: baseColor, roughness: rough, ...extras },
-    { kind: 'translucent', weight: (1 - metal) * trans, color: baseColor },
-    { kind: 'dielectric_reflection', weight: dielectricShare * spec, color: specColor, roughness: rough, ior: 1.5, ...extras },
+    { kind: 'dielectric_transmission', weight: (1 - metal) * trans, color: baseColor, roughness: rough, ior },
+    { kind: 'dielectric_reflection', weight: dielectricShare * spec, color: specColor, roughness: rough, ior, ...extras },
     { kind: 'burley_diffuse', weight: dielectricShare, color: baseColor, roughness: rough },
   ];
   const slots: Slots = {};

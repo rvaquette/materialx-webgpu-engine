@@ -417,7 +417,7 @@ export function canonicalSurfaceToLayered(p: CanonicalSurfaceInputs): LayeredClo
   const dielectricShare = (1 - metal) * (1 - trans);
   const lobes: LayeredBsdfLobe[] = [
     { kind: 'conductor', weight: metal, color: p.baseColor, roughness: p.roughness },
-    { kind: 'translucent', weight: (1 - metal) * trans, color: p.baseColor },
+    { kind: 'dielectric_transmission', weight: (1 - metal) * trans, color: p.baseColor, roughness: p.roughness, ior: p.ior },
     { kind: 'dielectric_reflection', weight: dielectricShare * spec, color: [1, 1, 1], roughness: p.roughness, ior: p.ior },
     { kind: 'burley_diffuse', weight: dielectricShare, color: p.baseColor, roughness: p.roughness },
   ];

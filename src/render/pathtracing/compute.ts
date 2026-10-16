@@ -462,18 +462,25 @@ ${closureBuild}
     let frame = basis(n);
     let wo = transpose(frame) * (-rd);
 
+    // A smooth dielectric (clear glass / mirror) is a near-delta BSDF: NEE can
+    // only produce fireflies that the clamp removes, so skip it and treat the
+    // bounce as specular (environment seen directly, at full weight).
+    let specular = mx_closure_is_specular(c);
+
     // Next-event estimation for the distant (delta) light: a delta direction has
     // no BSDF-sampling counterpart, so its MIS weight is 1 (no power heuristic).
-    let shadow = traverse(pos + toLight * RAY_EPS, toLight, 1.0e30, true);
-    if (!shadow.hitAny) {
-      let wiLight = transpose(frame) * toLight;
-      let ev = mx_closure_eval(c, wo, wiLight);
-      let cosL = abs(dot(n, toLight));
-      radiance = radiance + beta * ev.value * lightRadiance * cosL;
+    if (!specular) {
+      let shadow = traverse(pos + toLight * RAY_EPS, toLight, 1.0e30, true);
+      if (!shadow.hitAny) {
+        let wiLight = transpose(frame) * toLight;
+        let ev = mx_closure_eval(c, wo, wiLight);
+        let cosL = abs(dot(n, toLight));
+        radiance = radiance + beta * ev.value * lightRadiance * cosL;
+      }
     }
 
     // Environment next-event estimation, MIS-weighted against BSDF sampling.
-    if (hasEnv) {
+    if (hasEnv && !specular) {
 ${
       environment
         ? /* wgsl */ `      if (U.envExtra.w > 0.5) {
@@ -529,7 +536,7 @@ ${
     let cosS = abs(dot(n, wiWorld));
     beta = beta * bs.value * cosS / bs.pdf;
     bsdfPdf = bs.pdf;
-    specularBounce = false;
+    specularBounce = specular;
     lastN = n;
     ro = pos + wiWorld * RAY_EPS;
     rd = wiWorld;

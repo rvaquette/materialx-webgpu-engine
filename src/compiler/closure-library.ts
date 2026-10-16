@@ -427,10 +427,28 @@ fn mx_refract_microfacet(wo: vec3f, wm: vec3f, invEta: f32) -> MxRefract {
   let cosT = sqrt(1.0 - sin2t);
   return MxRefract(normalize(-invEta * wo + (invEta * cosI - cosT) * wm), true);
 }
+// Complete smooth dielectric: Fresnel reflection on the same side OR refraction on
+// the far side, with total internal reflection folded into the reflection branch.
+// The reflect/refract split carries F / (1 - F) in both value and pdf so the one-
+// sample estimator is unbiased and energy-conserving (clear glass, no TIR leaks).
 fn mx_transmission_refractive_eval(ctx: MxLobeCtx, wi: vec3f) -> MxBsdfEval {
-  if (ctx.wo.z == 0.0 || wi.z == 0.0 || ctx.wo.z * wi.z > 0.0) { return MxBsdfEval(vec3f(0.0), 0.0); }
+  if (ctx.wo.z == 0.0 || wi.z == 0.0) { return MxBsdfEval(vec3f(0.0), 0.0); }
   let a = mx_alpha_of(ctx.roughness);
   let eta = select(1.0 / ctx.ior, ctx.ior, ctx.wo.z > 0.0);
+  if (ctx.wo.z * wi.z > 0.0) {
+    // Reflection branch (same hemisphere): microfacet mirror weighted by Fresnel F.
+    var wm = normalize(ctx.wo + wi);
+    if (wm.z < 0.0) { wm = -wm; }
+    let dotO = dot(ctx.wo, wm);
+    if (dotO <= 0.0) { return MxBsdfEval(vec3f(0.0), 0.0); }
+    let f = mx_fresnel_dielectric(dotO, eta);
+    let d = mx_ggx_ndf(abs(wm.z), a);
+    let g = mx_smith_g1(abs(ctx.wo.z), a) * mx_smith_g1(abs(wi.z), a);
+    let scalar = f * d * g / (4.0 * abs(ctx.wo.z) * abs(wi.z));
+    let pdf = f * d * abs(wm.z) / (4.0 * dotO);
+    return MxBsdfEval(vec3f(scalar), pdf);
+  }
+  // Refraction branch (far hemisphere): Walter BTDF weighted by (1 - F).
   var wm = normalize(ctx.wo + eta * wi);
   if (wm.z < 0.0) { wm = -wm; }
   let dotO = dot(ctx.wo, wm);
@@ -442,7 +460,7 @@ fn mx_transmission_refractive_eval(ctx: MxLobeCtx, wi: vec3f) -> MxBsdfEval {
   let g = mx_smith_g1(abs(ctx.wo.z), a) * mx_smith_g1(abs(wi.z), a);
   let geomFactor = (abs(dotO) * abs(dotI)) / (abs(ctx.wo.z) * abs(wi.z));
   let scalar = (1.0 - f) * geomFactor * d * g / (denom * denom);
-  let pdf = d * abs(wm.z) * eta * eta * abs(dotI) / (denom * denom);
+  let pdf = (1.0 - f) * d * abs(wm.z) * eta * eta * abs(dotI) / (denom * denom);
   return MxBsdfEval(ctx.color * scalar, pdf);
 }
 fn mx_transmission_thin_eval(ctx: MxLobeCtx, wi: vec3f) -> MxBsdfEval {
@@ -468,12 +486,12 @@ fn mx_dielectric_transmission_eval(ctx: MxLobeCtx, wi: vec3f) -> MxBsdfEval {
 fn mx_dielectric_transmission_pdf(ctx: MxLobeCtx, wi: vec3f) -> f32 {
   return mx_dielectric_transmission_eval(ctx, wi).pdf;
 }
-fn mx_dielectric_transmission_sample(ctx: MxLobeCtx, u: vec2f) -> MxBsdfSample {
+fn mx_dielectric_transmission_sample(ctx: MxLobeCtx, u: vec3f) -> MxBsdfSample {
   let a = mx_alpha_of(ctx.roughness);
   if (ctx.thin > 0.0) {
     let s = select(-1.0, 1.0, ctx.wo.z > 0.0);
     let woU = vec3f(ctx.wo.x, ctx.wo.y, s * ctx.wo.z);
-    let wm = mx_sample_ggx_normal(a, u);
+    let wm = mx_sample_ggx_normal(a, u.xy);
     let wrU = reflect(-woU, wm);
     if (wrU.z <= 0.0) { return MxBsdfSample(vec3f(0.0), vec3f(0.0), 0.0, false); }
     let wi = vec3f(wrU.x, wrU.y, -s * wrU.z);
@@ -481,12 +499,23 @@ fn mx_dielectric_transmission_sample(ctx: MxLobeCtx, u: vec2f) -> MxBsdfSample {
     if (e.pdf <= 0.0) { return MxBsdfSample(vec3f(0.0), vec3f(0.0), 0.0, false); }
     return MxBsdfSample(wi, e.value, e.pdf, true);
   }
-  var wm = mx_sample_ggx_normal(a, u);
+  var wm = mx_sample_ggx_normal(a, u.xy);
   if (ctx.wo.z < 0.0) { wm = -wm; }
   if (dot(ctx.wo, wm) <= 0.0) { return MxBsdfSample(vec3f(0.0), vec3f(0.0), 0.0, false); }
+  let eta = select(1.0 / ctx.ior, ctx.ior, ctx.wo.z > 0.0);
+  let f = mx_fresnel_dielectric(dot(ctx.wo, wm), eta);
   let invEta = select(ctx.ior, 1.0 / ctx.ior, ctx.wo.z > 0.0);
   let r = mx_refract_microfacet(ctx.wo, wm, invEta);
-  if (!r.valid || ctx.wo.z * r.dir.z > 0.0) { return MxBsdfSample(vec3f(0.0), vec3f(0.0), 0.0, false); }
+  // Total internal reflection (invalid refraction) or the Fresnel coin flip both
+  // reflect; otherwise refract. u.z is the free reflect/refract random.
+  if (!r.valid || u.z < f) {
+    let wi = reflect(-ctx.wo, wm);
+    if (ctx.wo.z * wi.z <= 0.0) { return MxBsdfSample(vec3f(0.0), vec3f(0.0), 0.0, false); }
+    let e = mx_transmission_refractive_eval(ctx, wi);
+    if (e.pdf <= 0.0) { return MxBsdfSample(vec3f(0.0), vec3f(0.0), 0.0, false); }
+    return MxBsdfSample(wi, e.value, e.pdf, true);
+  }
+  if (ctx.wo.z * r.dir.z > 0.0) { return MxBsdfSample(vec3f(0.0), vec3f(0.0), 0.0, false); }
   let e = mx_transmission_refractive_eval(ctx, r.dir);
   if (e.pdf <= 0.0) { return MxBsdfSample(vec3f(0.0), vec3f(0.0), 0.0, false); }
   return MxBsdfSample(r.dir, e.value, e.pdf, true);
@@ -622,18 +651,20 @@ fn mx_closure_lobe_eval(lobe: MxBsdfLobe, c: LayeredClosure, wo: vec3f, wi: vec3
     }
     case 6u: { return mx_sheen_eval(ctx, wi); }
     case 7u: { return mx_subsurface_eval(ctx, wi); }
+    case 8u: { return mx_dielectric_transmission_eval(ctx, wi); }
     default: { return MxBsdfEval(vec3f(0.0), 0.0); }
   }
 }
-fn mx_closure_lobe_sample(lobe: MxBsdfLobe, wo: vec3f, u: vec2f) -> MxBsdfSample {
+fn mx_closure_lobe_sample(lobe: MxBsdfLobe, wo: vec3f, u: vec3f) -> MxBsdfSample {
   let ctx = mx_closure_lobe_ctx(lobe, wo);
   switch (lobe.kind) {
-    case 0u, 1u: { return mx_diffuse_sample(ctx, u); }
-    case 2u: { return mx_translucent_sample(ctx, u); }
-    case 3u: { return mx_dielectric_reflection_sample(ctx, u); }
-    case 4u, 5u: { return mx_conductor_sample(ctx, u); }
-    case 6u: { return mx_sheen_sample(ctx, u); }
-    case 7u: { return mx_subsurface_sample(ctx, u); }
+    case 0u, 1u: { return mx_diffuse_sample(ctx, u.xy); }
+    case 2u: { return mx_translucent_sample(ctx, u.xy); }
+    case 3u: { return mx_dielectric_reflection_sample(ctx, u.xy); }
+    case 4u, 5u: { return mx_conductor_sample(ctx, u.xy); }
+    case 6u: { return mx_sheen_sample(ctx, u.xy); }
+    case 7u: { return mx_subsurface_sample(ctx, u.xy); }
+    case 8u: { return mx_dielectric_transmission_sample(ctx, u); }
     default: { return MxBsdfSample(vec3f(0.0), vec3f(0.0), 0.0, false); }
   }
 }
@@ -675,7 +706,9 @@ fn mx_closure_pdf(c: LayeredClosure, wo: vec3f, wi: vec3f) -> f32 {
 }
 fn mx_closure_base_sample(c: LayeredClosure, wo: vec3f, u: vec3f) -> MxBsdfSample {
   let total = mx_closure_total_weight(c);
-  if (total <= 0.0 || wo.z <= 0.0) { return MxBsdfSample(vec3f(0.0), vec3f(0.0), 0.0, false); }
+  // wo.z < 0 means a ray inside a refractive medium hitting the surface from the
+  // dense side; the transmission lobe handles that, so only reject grazing.
+  if (total <= 0.0 || wo.z == 0.0) { return MxBsdfSample(vec3f(0.0), vec3f(0.0), 0.0, false); }
   var pick = u.z * total;
   var chosen = 0u;
   var found = false;
@@ -687,14 +720,34 @@ fn mx_closure_base_sample(c: LayeredClosure, wo: vec3f, u: vec3f) -> MxBsdfSampl
       if (pick < w) { found = true; } else { pick = pick - w; }
     }
   }
-  let s = mx_closure_lobe_sample(c.lobes[chosen], wo, u.xy);
+  let s = mx_closure_lobe_sample(c.lobes[chosen], wo, u);
   if (!s.valid) { return MxBsdfSample(vec3f(0.0), vec3f(0.0), 0.0, false); }
   let e = mx_closure_base_eval(c, wo, s.wi);
   if (e.pdf <= 0.0) { return MxBsdfSample(vec3f(0.0), vec3f(0.0), 0.0, false); }
   return MxBsdfSample(s.wi, e.value, e.pdf, true);
 }
+// A closure whose energy is carried entirely by smooth dielectric lobes (clear
+// glass / mirror) behaves like a delta BSDF: next-event estimation can never
+// hit its sharp refraction/reflection lobe, so NEE only injects fireflies that
+// the firefly clamp later removes (losing energy and darkening the glass).
+// The integrator uses this to skip NEE and treat the bounce as specular, letting
+// the environment be seen directly through the glass at full weight.
+fn mx_closure_is_specular(c: LayeredClosure) -> bool {
+  if (c.hasCoat != 0u && c.coat.weight > 0.0) { return false; }
+  var w = 0.0;
+  var spec = 0.0;
+  for (var i = 0u; i < c.lobeCount; i = i + 1u) {
+    let l = c.lobes[i];
+    if (l.weight <= 0.0) { continue; }
+    w = w + l.weight;
+    if ((l.kind == MX_LOBE_DIELECTRIC_TRANSMISSION || l.kind == MX_LOBE_DIELECTRIC_REFLECTION) && l.roughness < 0.07) {
+      spec = spec + l.weight;
+    }
+  }
+  return w > 0.0 && spec >= w * 0.999;
+}
 fn mx_closure_sample(c: LayeredClosure, wo: vec3f, u: vec3f) -> MxBsdfSample {
-  if (wo.z <= 0.0) { return MxBsdfSample(vec3f(0.0), vec3f(0.0), 0.0, false); }
+  if (wo.z == 0.0) { return MxBsdfSample(vec3f(0.0), vec3f(0.0), 0.0, false); }
   if (c.hasCoat == 0u || c.coat.weight <= 0.0) { return mx_closure_base_sample(c, wo, u); }
   let coatW = clamp(c.coat.weight, 0.0, 1.0);
   let pCoat = min(coatW, 0.95);
