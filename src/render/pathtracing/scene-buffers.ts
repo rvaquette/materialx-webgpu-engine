@@ -79,6 +79,11 @@ export interface PathTraceScene {
   light: FrameLight;
   environment: FrameEnvironment;
   bounds: Aabb;
+  /** GPU height-map displacement plan (T0xx): a single scalar map sampled along
+   *  the shading normal, with a per-material scale (0 when the material has no
+   *  displacement). BVH node bounds are already inflated by the max offset so a
+   *  compute pre-pass can rewrite the vertex buffer without rebuilding the BVH. */
+  displacement?: { mapFile: string; midpoint: number; scale: Float32Array };
 }
 
 // --- small vec helpers -------------------------------------------------------
@@ -110,7 +115,7 @@ function materialKeyOf(materialKey: string | undefined): string {
  */
 export function buildPathTraceScene(
   resources: SceneResources,
-  options: BuildSceneFrameOptions = {},
+  options: BuildSceneFrameOptions & { displacementScale?: number } = {},
 ): PathTraceScene {
   const frame = buildSceneFrame(resources, options);
 
@@ -119,6 +124,8 @@ export function buildPathTraceScene(
   const surfaces: RasterSurface[] = [];
   const materialKeys: string[] = [];
   const variantSources: PtVariantSource[] = [];
+  const displaceScales: number[] = [];
+  let displaceMapFile: string | undefined;
   const indexFor = (key: string, surface: RasterSurface, materialKey: string | undefined): number => {
     const existing = materialIndex.get(key);
     if (existing !== undefined) return existing;
@@ -133,6 +140,9 @@ export function buildPathTraceScene(
     if (material?.surfaceGraph && material.resolvedSurface) {
       variantSources.push({ materialIndex: idx, graph: material.surfaceGraph, surface: material.resolvedSurface });
     }
+    const disp = material?.displacement;
+    displaceScales.push(disp ? disp.scale : 0);
+    if (disp && displaceMapFile === undefined) displaceMapFile = disp.file;
     return idx;
   };
 
@@ -218,7 +228,18 @@ export function buildPathTraceScene(
   for (let i = 0; i < indices.length; i++) indices[i] = i;
   const bvh: Bvh = buildBvh(positions, indices);
 
-  const nodes = packNodes(bvh);
+  // Height-map displacement: fold the CLI multiplier into each per-material scale,
+  // then inflate every BVH node AABB by the largest possible offset so the packed
+  // (original-position) triangles can be rewritten by a GPU pre-pass while the
+  // conservative bounds still enclose the displaced geometry (no BVH rebuild).
+  const midpoint = 0.5;
+  const dispMul = options.displacementScale ?? 1;
+  const displaceScaleArr = new Float32Array(displaceScales.map((s) => s * dispMul));
+  let maxDisp = 0;
+  for (const s of displaceScaleArr) maxDisp = Math.max(maxDisp, Math.max(midpoint, 1 - midpoint) * Math.abs(s));
+  const hasDisplacement = displaceMapFile !== undefined && maxDisp > 0;
+
+  const nodes = packNodes(bvh, hasDisplacement ? maxDisp : 0);
   const materials = packMaterials(surfaces);
 
   return {
@@ -242,6 +263,7 @@ export function buildPathTraceScene(
     light: frame.light,
     environment: frame.environment,
     bounds: bvh.bounds,
+    ...(hasDisplacement ? { displacement: { mapFile: displaceMapFile!, midpoint, scale: displaceScaleArr } } : {}),
   };
 }
 
@@ -261,14 +283,14 @@ function readVec2(data: Float32Array, vertex: number): [number, number] {
   return [data[o]!, data[o + 1]!];
 }
 
-function packNodes(bvh: Bvh): Float32Array {
+function packNodes(bvh: Bvh, inflate = 0): Float32Array {
   const out = new Float32Array(bvh.nodes.length * PT_NODE_FLOATS);
   for (let i = 0; i < bvh.nodes.length; i++) {
     const n = bvh.nodes[i]!;
     const b = i * PT_NODE_FLOATS;
-    out[b + 0] = n.min[0]; out[b + 1] = n.min[1]; out[b + 2] = n.min[2];
+    out[b + 0] = n.min[0] - inflate; out[b + 1] = n.min[1] - inflate; out[b + 2] = n.min[2] - inflate;
     out[b + 3] = n.left;
-    out[b + 4] = n.max[0]; out[b + 5] = n.max[1]; out[b + 6] = n.max[2];
+    out[b + 4] = n.max[0] + inflate; out[b + 5] = n.max[1] + inflate; out[b + 6] = n.max[2] + inflate;
     out[b + 7] = n.right;
     out[b + 8] = n.start;
     out[b + 9] = n.count;

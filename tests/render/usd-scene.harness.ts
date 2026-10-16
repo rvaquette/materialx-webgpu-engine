@@ -802,6 +802,59 @@ async function renderUsdRasterOnDevice(
   return { rgba, renderMs };
 }
 
+/** GPU height-map displacement pre-pass: rewrites the packed triangle vertex
+ *  buffer in place. Packed triangle stride is 24 floats (v0,v1,v2, n0,n1,n2,
+ *  materialIndex, pad); triangleUv stride is 6 floats (u0,v0,u1,v1,u2,v2). */
+const DISPLACE_WGSL = /* wgsl */ `
+struct DispInfo { triCount: u32, midpoint: f32, pad0: u32, pad1: u32 };
+
+@group(0) @binding(0) var<storage, read_write> tris: array<f32>;
+@group(0) @binding(1) var<storage, read> uvs: array<f32>;
+@group(0) @binding(2) var<storage, read> scales: array<f32>;
+@group(0) @binding(3) var<uniform> info: DispInfo;
+@group(0) @binding(4) var dispTex: texture_2d<f32>;
+@group(0) @binding(5) var dispSamp: sampler;
+
+const STRIDE: u32 = 24u;
+
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
+  let t = gid.x;
+  if (t >= info.triCount) { return; }
+  let base = t * STRIDE;
+  let matIdx = u32(tris[base + 18u]);
+  let scale = scales[matIdx];
+  if (scale == 0.0) { return; }
+  let ub = t * 6u;
+  var p0 = vec3<f32>(tris[base + 0u], tris[base + 1u], tris[base + 2u]);
+  var p1 = vec3<f32>(tris[base + 3u], tris[base + 4u], tris[base + 5u]);
+  var p2 = vec3<f32>(tris[base + 6u], tris[base + 7u], tris[base + 8u]);
+  let n0 = vec3<f32>(tris[base + 9u], tris[base + 10u], tris[base + 11u]);
+  let n1 = vec3<f32>(tris[base + 12u], tris[base + 13u], tris[base + 14u]);
+  let n2 = vec3<f32>(tris[base + 15u], tris[base + 16u], tris[base + 17u]);
+  let uv0 = vec2<f32>(uvs[ub + 0u], uvs[ub + 1u]);
+  let uv1 = vec2<f32>(uvs[ub + 2u], uvs[ub + 3u]);
+  let uv2 = vec2<f32>(uvs[ub + 4u], uvs[ub + 5u]);
+  let h0 = textureSampleLevel(dispTex, dispSamp, uv0, 0.0).r;
+  let h1 = textureSampleLevel(dispTex, dispSamp, uv1, 0.0).r;
+  let h2 = textureSampleLevel(dispTex, dispSamp, uv2, 0.0).r;
+  p0 = p0 + n0 * ((h0 - info.midpoint) * scale);
+  p1 = p1 + n1 * ((h1 - info.midpoint) * scale);
+  p2 = p2 + n2 * ((h2 - info.midpoint) * scale);
+  tris[base + 0u] = p0.x; tris[base + 1u] = p0.y; tris[base + 2u] = p0.z;
+  tris[base + 3u] = p1.x; tris[base + 4u] = p1.y; tris[base + 5u] = p1.z;
+  tris[base + 6u] = p2.x; tris[base + 7u] = p2.y; tris[base + 8u] = p2.z;
+  // Recompute a flat geometric normal from the displaced positions, keeping the
+  // winding-consistent orientation of the original interpolated normals.
+  let faceN = normalize(cross(p1 - p0, p2 - p0));
+  let orient = sign(dot(faceN, n0 + n1 + n2));
+  let gn = faceN * orient;
+  tris[base + 9u] = gn.x; tris[base + 10u] = gn.y; tris[base + 11u] = gn.z;
+  tris[base + 12u] = gn.x; tris[base + 13u] = gn.y; tris[base + 14u] = gn.z;
+  tris[base + 15u] = gn.x; tris[base + 16u] = gn.y; tris[base + 17u] = gn.z;
+}
+`;
+
 /** Path-traces the real USDA geometry on the device GPU and returns display RGBA. */
 async function renderUsdOnDevice(
   device: GPUDevice,
@@ -815,6 +868,7 @@ async function renderUsdOnDevice(
   skyPowerOverride?: number,
   skyColorOverride?: Vec3,
   camBackOverride?: number,
+  dispScaleOverride?: number,
 ): Promise<{ rgba: Uint8ClampedArray; renderMs: number }> {
   const sink = (d: { level: string; message: string; detail?: unknown }): void => {
     if (d.level === 'warning' || d.level === 'error') {
@@ -856,6 +910,7 @@ async function renderUsdOnDevice(
     surfaceFor,
     frameCamera,
     environment: envFrameConfig(envAsset, envGpu?.cdfStats, skyPowerOverride, skyColorOverride),
+    ...(dispScaleOverride !== undefined ? { displacementScale: dispScaleOverride } : {}),
   });
   line(`${resources.instances.length} instance(s), ${samples} spp`);
   line(
@@ -920,6 +975,8 @@ async function renderUsdOnDevice(
 
   // group-0: the per-frame uniform and accumulation buffers are data-less in the
   // plan (harness-sized), every other slot carries packed scene storage data.
+  let triangleBuffer: GPUBuffer | undefined;
+  let triangleUvBuffer: GPUBuffer | undefined;
   const group0Entries: GPUBindGroupEntry[] = bindings.group0.map((slot) => {
     if (slot.role === 'uniform') return { binding: slot.binding, resource: { buffer: uniform } };
     if (slot.role === 'accum') return { binding: slot.binding, resource: { buffer: accumBuffer } };
@@ -929,7 +986,10 @@ async function renderUsdOnDevice(
       const mx = device.createBuffer({ size: 256, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
       return { binding: slot.binding, resource: { buffer: mx } };
     }
-    return { binding: slot.binding, resource: { buffer: storageData(slot.data ?? new Float32Array(1)) } };
+    const buf = storageData(slot.data ?? new Float32Array(1));
+    if (slot.role === 'triangles') triangleBuffer = buf;
+    if (slot.role === 'triangleUv') triangleUvBuffer = buf;
+    return { binding: slot.binding, resource: { buffer: buf } };
   });
   const group0 = device.createBindGroup({ layout: pipeline.getBindGroupLayout(0), entries: group0Entries });
 
@@ -988,6 +1048,68 @@ async function renderUsdOnDevice(
         })
       : undefined;
   const [wgX, wgY] = PathTraceBackend.workgroupCount(res, res);
+
+  // GPU height-map displacement pre-pass (runs once, before accumulation): a
+  // compute shader rewrites the packed vertex buffer in place -- each triangle
+  // vertex is pushed along its shading normal by (height - midpoint) * scale,
+  // sampled from the displacement map at the vertex UV, then the flat geometric
+  // normal is recomputed from the displaced positions. The BVH node bounds were
+  // already inflated by the max offset in scene-buffers so traversal stays valid
+  // without a GPU BVH rebuild. Shared vertices duplicated across soup triangles
+  // carry identical UV+normal, so they displace identically -> no cracks.
+  if (ptScene.displacement && triangleBuffer && triangleUvBuffer) {
+    const map = await imageProvider.decode(ptScene.displacement.mapFile);
+    if (!map) {
+      line(`diag displacement map introuvable: ${ptScene.displacement.mapFile}`);
+    } else {
+      const dispTex = device.createTexture({
+        size: [map.width, map.height],
+        format: 'rgba8unorm',
+        usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
+      });
+      device.queue.writeTexture(
+        { texture: dispTex },
+        map.data,
+        { bytesPerRow: map.width * 4, rowsPerImage: map.height },
+        [map.width, map.height, 1],
+      );
+      const dispSampler = device.createSampler({
+        addressModeU: 'repeat',
+        addressModeV: 'repeat',
+        magFilter: 'linear',
+        minFilter: 'linear',
+      });
+      const scaleBuffer = storage(ptScene.displacement.scale);
+      const dispInfo = device.createBuffer({ size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+      device.queue.writeBuffer(dispInfo, 0, new Uint32Array([ptScene.triangleCount, 0, 0, 0]));
+      device.queue.writeBuffer(dispInfo, 4, new Float32Array([ptScene.displacement.midpoint]));
+      const dispModule = device.createShaderModule({ code: DISPLACE_WGSL });
+      const dispPipeline = device.createComputePipeline({
+        layout: 'auto',
+        compute: { module: dispModule, entryPoint: 'main' },
+      });
+      const dispGroup = device.createBindGroup({
+        layout: dispPipeline.getBindGroupLayout(0),
+        entries: [
+          { binding: 0, resource: { buffer: triangleBuffer } },
+          { binding: 1, resource: { buffer: triangleUvBuffer } },
+          { binding: 2, resource: { buffer: scaleBuffer } },
+          { binding: 3, resource: { buffer: dispInfo } },
+          { binding: 4, resource: dispTex.createView() },
+          { binding: 5, resource: dispSampler },
+        ],
+      });
+      const encoder = device.createCommandEncoder();
+      const pass = encoder.beginComputePass();
+      pass.setPipeline(dispPipeline);
+      pass.setBindGroup(0, dispGroup);
+      pass.dispatchWorkgroups(Math.ceil(ptScene.triangleCount / 64), 1, 1);
+      pass.end();
+      device.queue.submit([encoder.finish()]);
+      await device.queue.onSubmittedWorkDone();
+      line(`diag displacement ${map.width}x${map.height} tris=${ptScene.triangleCount} map=${ptScene.displacement.mapFile}`);
+    }
+  }
 
   backend.resetAccumulation();
   const renderStart = performance.now();
@@ -1070,6 +1192,7 @@ export async function bootstrapUsdImage(
   skyPower?: number,
   skyColor?: Vec3,
   camBack?: number,
+  dispScale?: number,
 ): Promise<UsdSceneImage | null> {
   const root = typeof document !== 'undefined' ? document.getElementById('log') ?? document.body : undefined;
   const line = (msg: string): void => {
@@ -1106,7 +1229,7 @@ export async function bootstrapUsdImage(
     ({ rgba, renderMs } = await renderUsdRasterOnDevice(device, entry, res, line, materialOverride, exposure, camBack));
   } else {
     line(`Rendu path-trace GPU de ${entry} (${res}x${res}, ${samples} spp)...`);
-    ({ rgba, renderMs } = await renderUsdOnDevice(device, entry, res, samples, line, materialOverride, exposure, firefly, skyPower, skyColor, camBack));
+    ({ rgba, renderMs } = await renderUsdOnDevice(device, entry, res, samples, line, materialOverride, exposure, firefly, skyPower, skyColor, camBack, dispScale));
   }
 
   const canvas = document.createElement('canvas');

@@ -17,6 +17,7 @@ import { resolveGraph } from '../materialx/graph.ts';
 import { resolveSurface, type ResolveSurfaceOptions } from '../materialx/surface-graph.ts';
 import type { Diagnostic, DiagnosticSink } from '../core/diagnostics.ts';
 import { materialGraphRoots, type MaterialCompileUnit, type MtlxDocumentView } from '../usd/materials.ts';
+import type { ResolvedGraph } from '../materialx/graph.ts';
 import type { MaterialBuild, MaterialCompiler } from './scene-resources.ts';
 
 /** Supplies the loaded MaterialX document backing a material unit's asset. */
@@ -40,6 +41,31 @@ function neutralSurfaceIr(): ShaderIr {
   const ref = b.add({ kind: 'closure', type: shaderType('surface'), closure: 'bsdf', op: 'surface', params: { opacity } });
   b.output({ name: 'surfaceshader', type: shaderType('surface'), ref });
   return b.build();
+}
+
+/** Extract a height-map displacement from the resolved graph's displacementshader
+ *  terminal: the `displacement` node feeds a scalar height image whose `file` we
+ *  sample on the GPU and a uniform `scale` applied along the shading normal. Only
+ *  the texture-fed case is handled; a constant displacement has no map to sample. */
+function extractDisplacement(graph: ResolvedGraph): { file: string; scale: number } | undefined {
+  const terminal = graph.terminals.find((t) => t.name === 'displacementshader');
+  if (!terminal?.nodeId) return undefined;
+  const node = graph.nodes.get(terminal.nodeId);
+  if (!node || node.category !== 'displacement') return undefined;
+  let scale = 1;
+  const scaleInput = node.inputs.find((i) => i.name === 'scale');
+  if (scaleInput?.source.kind === 'value') {
+    const v = Number(scaleInput.source.value);
+    if (Number.isFinite(v)) scale = v;
+  }
+  const height = node.inputs.find((i) => i.name === 'displacement');
+  if (height?.source.kind !== 'connection') return undefined;
+  const image = graph.nodes.get(height.source.nodeId);
+  const fileInput = image?.inputs.find((i) => i.name === 'file');
+  if (fileInput?.source.kind !== 'value') return undefined;
+  const file = String(fileInput.source.value);
+  if (!file) return undefined;
+  return { file, scale };
 }
 
 /** Build a MaterialCompiler that lowers each unit through the full node network. */
@@ -68,7 +94,8 @@ export function createGraphMaterialCompiler(options: GraphMaterialCompilerOption
         }
         const layered = emitLayeredSurface(graph, surface, emit);
         const ir = neutralSurfaceIr();
-        return { ir, module: emitWgsl(ir), layered, graph, surface };
+        const displacement = extractDisplacement(graph);
+        return { ir, module: emitWgsl(ir), layered, graph, surface, ...(displacement ? { displacement } : {}) };
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         const stack = error instanceof Error ? (error.stack ?? '') : '';

@@ -46,6 +46,10 @@ export interface MaterialBuild {
    *  constant-only or legacy builds, which keep the packed constant record. */
   graph?: ResolvedGraph;
   surface?: ResolvedSurface;
+  /** Height-map displacement extracted from the displacementshader terminal: a
+   *  scalar texture sampled along the shading normal, scaled by `scale`. Absent
+   *  when the material has no displacement or only a constant (map-less) one. */
+  displacement?: { file: string; scale: number };
 }
 
 /** Runs the MaterialX chain for a unique material unit (dedup already applied). */
@@ -93,6 +97,8 @@ export interface MaterialResource {
    *  megakernel variant source. Present iff the build exposed them. */
   surfaceGraph?: ResolvedGraph;
   resolvedSurface?: ResolvedSurface;
+  /** Height-map displacement threaded from the build for the GPU displace pass. */
+  displacement?: { file: string; scale: number };
 }
 
 export interface InstanceResource {
@@ -277,6 +283,7 @@ export async function buildSceneResources(
       ...(build.layered ? { surfaceModule: build.layered } : {}),
       ...(build.graph ? { surfaceGraph: build.graph } : {}),
       ...(build.surface ? { resolvedSurface: build.surface } : {}),
+      ...(build.displacement ? { displacement: build.displacement } : {}),
     });
   }
 

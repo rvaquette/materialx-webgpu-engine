@@ -568,6 +568,7 @@ export const PRIMITIVE_LOWERED: ReadonlySet<string> = new Set([
   'hextiledimage',
   'layer',
   'surfacematerial',
+  'displacement',
 ]);
 
 export function getNodeLowering(category: string): NodeLowering | undefined {
