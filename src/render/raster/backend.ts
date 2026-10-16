@@ -18,7 +18,7 @@ export const RESOLVE_UNIFORM_SIZE = 16;
  * 192 bytes. Kept in sync with the IR forward shader's Frame struct
  * (ir-forward.ts) and buildSceneFrameUniform in scene-frame.ts.
  */
-export const SCENE_FRAME_UNIFORM_SIZE = 192;
+export const SCENE_FRAME_UNIFORM_SIZE = 336;
 /**
  * Scene forward material uniform: baseColor(16) + params(16: metalness,
  * roughness, transmission, subsurface) + coat(16: ior, specular) = 48 bytes, at

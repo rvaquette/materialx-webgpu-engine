@@ -201,7 +201,7 @@ export function buildSceneFrame(resources: SceneResources, options: BuildSceneFr
 }
 
 /** Floats in a scene forward frame uniform (SCENE_FRAME_UNIFORM_SIZE / 4). */
-export const SCENE_FRAME_UNIFORM_FLOATS = 48;
+export const SCENE_FRAME_UNIFORM_FLOATS = 84;
 /** Floats in a scene forward material uniform (SCENE_MATERIAL_UNIFORM_SIZE / 4). */
 export const SCENE_MATERIAL_UNIFORM_FLOATS = 12;
 
@@ -218,7 +218,27 @@ export function buildSceneFrameUniform(frame: SceneFramePlan, draw: SceneDraw): 
   d.set([frame.camera.eye[0], frame.camera.eye[1], frame.camera.eye[2], 0], 32);
   d.set([frame.light.direction[0], frame.light.direction[1], frame.light.direction[2], 0], 36);
   d.set([frame.light.color[0], frame.light.color[1], frame.light.color[2], frame.light.intensity], 40);
-  d.set([frame.environment.radiance[0], frame.environment.radiance[1], frame.environment.radiance[2], 0], 44);
+  // env.xyz: constant dome radiance folded with tint*intensity (specular mirror term);
+  // sh[0..8].xyz: SH9 radiance coefficients likewise folded, consumed by the diffuse probe.
+  const env = frame.environment;
+  const gain = env.intensity ?? 1;
+  const tint = env.tint ?? [1, 1, 1];
+  const er = env.radiance[0] * tint[0] * gain;
+  const eg = env.radiance[1] * tint[1] * gain;
+  const eb = env.radiance[2] * tint[2] * gain;
+  d.set([er, eg, eb, gain], 44);
+  const sh = env.sh;
+  if (sh) {
+    for (let k = 0; k < 9; k++) {
+      d.set([(sh[k * 3] ?? 0) * tint[0] * gain, (sh[k * 3 + 1] ?? 0) * tint[1] * gain, (sh[k * 3 + 2] ?? 0) * tint[2] * gain, 0], 48 + k * 4);
+    }
+  } else {
+    // No SH probe: synthesize a DC-only coefficient whose cosine-convolved irradiance
+    // is pi * envRadiance, so the diffuse probe folds to albedo * envRadiance (the
+    // flat-ambient the preview/viewer path expects). pi / (A0 * Y00) = 3.544908.
+    const dc = 3.544908;
+    d.set([er * dc, eg * dc, eb * dc, 0], 48);
+  }
   return d;
 }
 

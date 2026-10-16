@@ -606,6 +606,7 @@ async function renderUsdRasterOnDevice(
   materialOverride?: string,
   exposureOverride?: number,
   camBackOverride?: number,
+  dispScaleOverride?: number,
 ): Promise<{ rgba: Uint8ClampedArray; renderMs: number }> {
   const sink = (d: { level: string; message: string }): void => {
     if (d.level === 'warning' || d.level === 'error') line(`diag: ${d.message}`);
@@ -668,6 +669,38 @@ async function renderUsdRasterOnDevice(
     }
   }
 
+  // Vertex-displacement (VTF) GPU resources per material: decode the height map and
+  // build the MxDisp uniform (scale*multiplier, midpoint) the scene vertex shader
+  // samples. Only materials whose compiled sceneShader declares a displacement
+  // group get them; the shader offsets each vertex along its normal in-stage.
+  const dispMidpoint = 0.5;
+  const dispMul = dispScaleOverride ?? 1;
+  const materialDisplacement = new Map<string, { group: number; params: GPUBuffer; textureView: GPUTextureView; sampler: GPUSampler }>();
+  for (const [key, material] of resources.materials) {
+    const group = material.sceneShader?.displacementGroup;
+    if (group === undefined || !material.displacement) continue;
+    const map = await imageProvider.decode(material.displacement.file);
+    if (!map) {
+      line(`diag displacement map introuvable: ${material.displacement.file}`);
+      continue;
+    }
+    const dispTex = device.createTexture({
+      size: [map.width, map.height],
+      format: 'rgba8unorm',
+      usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
+    });
+    device.queue.writeTexture({ texture: dispTex }, map.data, { bytesPerRow: map.width * 4, rowsPerImage: map.height }, [map.width, map.height, 1]);
+    const params = device.createBuffer({ size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+    device.queue.writeBuffer(params, 0, new Float32Array([material.displacement.scale * dispMul, dispMidpoint, 0, 0]));
+    materialDisplacement.set(key, {
+      group,
+      params,
+      textureView: dispTex.createView(),
+      sampler: device.createSampler({ addressModeU: 'repeat', addressModeV: 'repeat', magFilter: 'linear', minFilter: 'linear' }),
+    });
+    line(`diag displacement raster ${map.width}x${map.height} map=${material.displacement.file} scale=${(material.displacement.scale * dispMul).toFixed(4)}`);
+  }
+
   const hdrTexture = device.createTexture({
     size: [res, res],
     format: backend.hdrFormat,
@@ -716,6 +749,7 @@ async function renderUsdRasterOnDevice(
     const materialUniform = device.createBuffer({ size: SCENE_MATERIAL_UNIFORM_SIZE, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
     device.queue.writeBuffer(materialUniform, 0, buildSceneMaterialUniform(draw));
     const textures = draw.materialKey ? materialTextures.get(draw.materialKey) : undefined;
+    const displacement = draw.materialKey ? materialDisplacement.get(draw.materialKey) : undefined;
     const bindGroups = createSceneBindGroups(
       device,
       material,
@@ -723,6 +757,7 @@ async function renderUsdRasterOnDevice(
         frame: frameUniform,
         material: materialUniform,
         ...(textures ? { textureViews: textures.textureViews, samplers: textures.samplers } : {}),
+        ...(displacement ? { displacement } : {}),
       },
       (group) => pipeline.getBindGroupLayout(group),
     );
@@ -1226,7 +1261,7 @@ export async function bootstrapUsdImage(
   if (materialOverride) line(`OpenPBRMaterial override: ${materialOverride}`);
   if (backend === 'raster') {
     line(`Rendu raster GPU de ${entry} (${res}x${res})...`);
-    ({ rgba, renderMs } = await renderUsdRasterOnDevice(device, entry, res, line, materialOverride, exposure, camBack));
+    ({ rgba, renderMs } = await renderUsdRasterOnDevice(device, entry, res, line, materialOverride, exposure, camBack, dispScale));
   } else {
     line(`Rendu path-trace GPU de ${entry} (${res}x${res}, ${samples} spp)...`);
     ({ rgba, renderMs } = await renderUsdOnDevice(device, entry, res, samples, line, materialOverride, exposure, firefly, skyPower, skyColor, camBack, dispScale));

@@ -94,10 +94,11 @@ describe('assembleIrForwardShader (T058b)', () => {
 
   it('reflects a hemisphere environment through a mirror-direction albedo estimate', () => {
     const { shader } = forward('open_pbr_surface', [value('base_color', 'color3', '0.2, 0.5, 0.9')]);
+    expect(shader.code).toContain('radiance = radiance + mx_closure_diffuse_albedo(c) * (mx_sh_irradiance(n) / MX_PI);');
     expect(shader.code).toContain('let rWorld = reflect(-vary.viewDir, n);');
     expect(shader.code).toContain('let envDir = fu.env.xyz * mix(0.25, 1.0, up);');
     expect(shader.code).toContain('let wiMir = vec3f(-wo.x, -wo.y, wo.z);');
-    expect(shader.code).toContain('let em = mx_closure_eval(c, wo, wiMir);');
+    expect(shader.code).toContain('let em = mx_closure_specular_eval(c, wo, wiMir);');
     expect(shader.code).toContain('radiance = radiance + em.value * envDir * (wiMir.z / em.pdf);');
   });
 

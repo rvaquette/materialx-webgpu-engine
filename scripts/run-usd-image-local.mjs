@@ -4,7 +4,7 @@
 // PNG under renders/ and prints the on-page diagnostic log so black-render
 // causes (black bake / matLayer / UVs / exposure) are visible without a device.
 //
-// Usage:  node scripts/run-usd-image-local.mjs [--entry <urlPath>] [--res <n>] [--spp <n>] [--openpbr <mtlx>] [--exposure <EV>] [--firefly <maxLum> (default: 10)] [--sky-power <float>] [--sky-color <r,g,b>] [--cam-back <factor>] [--disp-scale <factor>]
+// Usage:  node scripts/run-usd-image-local.mjs [--entry <urlPath>] [--res <n>] [--spp <n>] [--openpbr <mtlx>] [--exposure <EV>] [--firefly <maxLum> (default: 10)] [--sky-power <float>] [--sky-color <r,g,b>] [--cam-back <factor>] [--disp-scale <factor>] [--backend raster|pathtracing]
 // Env:    MX_CHROME        path to chrome.exe (default: standard Windows install)
 //         MX_PORT          dev server port (default 5173)
 //         MX_OPENPBR_MTLX  .mtlx to bind to OpenPBRMaterial at runtime (same as --openpbr)
@@ -57,6 +57,7 @@ const SKY_COLOR = OPTIONS['sky-color'] ?? '1,1,1';
 const CAM_BACK = OPTIONS['cam-back'] ?? 1.6;
 const EXPOSURE = OPTIONS['exposure'] ?? -1;
 const DISP_SCALE = OPTIONS['disp-scale'];
+const BACKEND = OPTIONS['backend'];
 const MTLX_LIBRARY_ROOT = '/scenes/mtlx-library';
 const OPENPBR_RAW = (OPTIONS.openpbr ?? process.env.MX_OPENPBR_MTLX)?.replace(/\\/g, '/');
 const OPENPBR_MTLX = OPENPBR_RAW
@@ -75,6 +76,7 @@ const QUERY =
   (SKY_COLOR !== undefined ? `&skyColor=${encodeURIComponent(SKY_COLOR)}` : '') +
   (CAM_BACK !== undefined ? `&camBack=${encodeURIComponent(CAM_BACK)}` : '') +
   (DISP_SCALE !== undefined ? `&dispScale=${encodeURIComponent(DISP_SCALE)}` : '') +
+  (BACKEND !== undefined ? `&backend=${encodeURIComponent(BACKEND)}` : '') +
   `&_=${Date.now()}`;
 const HARNESS_URL = `http://127.0.0.1:${PORT}${HARNESS_PATH}${QUERY}`;
 const LOCAL_URL = `http://127.0.0.1:${PORT}${HARNESS_PATH}`;

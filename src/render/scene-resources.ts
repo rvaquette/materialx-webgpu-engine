@@ -271,7 +271,9 @@ export async function buildSceneResources(
       continue;
     }
     const features = extractFeatures(build.ir);
-    const sceneShader = build.layered ? assembleIrForwardShader(build.layered) : undefined;
+    const sceneShader = build.layered
+      ? assembleIrForwardShader(build.layered, { displacement: build.displacement !== undefined })
+      : undefined;
     const variant = createMaterialVariant(build.module, pipelineKeyFor(features, build.module, options, sceneShader?.code));
     materials.set(key, {
       unitKey: key,
@@ -359,6 +361,10 @@ export interface SceneDrawBuffers {
   textureViews?: ReadonlyMap<string, GPUTextureView>;
   /** Resolved samplers by MaterialX sampler handle name. */
   samplers?: ReadonlyMap<string, GPUSampler>;
+  /** Vertex-displacement resources (VTF), bound at the scene shader's displacement
+   *  group: a MxDisp uniform (scale, midpoint), the height map and its sampler.
+   *  Present only for a material whose sceneShader declares displacementGroup. */
+  displacement?: { group: number; params: GPUBuffer; textureView: GPUTextureView; sampler: GPUSampler };
 }
 
 export interface SceneBindGroups {
@@ -405,6 +411,16 @@ export function createSceneBindGroups(
   }
   // Per-frame uniform at the dedicated frame bind group, binding 0.
   push(frameGroup, { binding: 0, resource: { buffer: buffers.frame } });
+
+  // Optional vertex-displacement (VTF): the height map, its sampler and the MxDisp
+  // params share the frame group at bindings 1, 2 and 3 (the device guarantees only
+  // 4 bind groups, so displacement cannot claim a group of its own).
+  if (buffers.displacement) {
+    const d = buffers.displacement;
+    push(d.group, { binding: 1, resource: d.textureView });
+    push(d.group, { binding: 2, resource: d.sampler });
+    push(d.group, { binding: 3, resource: { buffer: d.params } });
+  }
 
   const byGroup = new Map<number, GPUBindGroup>();
   for (const [group, entries] of entriesByGroup) {
