@@ -25,7 +25,7 @@ export const PT_WORKGROUP_SIZE = 8;
 /** Entry point name of the generated compute shader. */
 export const PT_COMPUTE_ENTRY = 'mx_path_trace';
 /** Floats in the path-trace uniform (PT_UNIFORM_SIZE / 4). */
-export const PT_UNIFORM_FLOATS = 36;
+export const PT_UNIFORM_FLOATS = 40;
 /** Bytes in the path-trace uniform buffer. */
 export const PT_UNIFORM_SIZE = PT_UNIFORM_FLOATS * 4;
 
@@ -62,8 +62,9 @@ struct Uniforms {
   eye : vec4<f32>,
   lightDir : vec4<f32>,
   lightColor : vec4<f32>,
-  env : vec4<f32>,
+  env : vec4<f32>, // xyz = skyColor, w = skyPower (dome intensity; > 0 selects textured path)
   frame : vec4<f32>, // x = frameIndex, y = samplesPerFrame, z = width, w = height
+  envExtra : vec4<f32>, // x = envResX, y = envResY, z = envTotalSum, w = hasEnvCdf
 };
 
 @group(0) @binding(0) var<uniform> U : Uniforms;
@@ -88,6 +89,7 @@ function envBindings(): string {
   return /* wgsl */ `
 @group(3) @binding(0) var envTex : texture_2d<f32>;
 @group(3) @binding(1) var envSampler : sampler;
+@group(3) @binding(2) var<storage, read> envCdf : array<f32>;
 fn env_dir_to_uv(d : vec3<f32>) -> vec2<f32> {
   let n = normalize(d);
   let u = atan2(n.z, n.x) * (0.5 / PI) + 0.5;
@@ -100,6 +102,58 @@ fn env_radiance(d : vec3<f32>) -> vec3<f32> {
     return c * U.env.xyz * U.env.w;
   }
   return U.env.xyz;
+}
+// Equirectangular latlong <-> direction (raw scanline order, matching the env
+// texture and the flat row-major luminance CDF). env_map_uv_to_dir is the exact
+// inverse of env_dir_to_uv used for CDF importance sampling.
+fn env_map_uv_to_dir(uv : vec2<f32>) -> vec3<f32> {
+  let phi = uv.x * (2.0 * PI);
+  let theta = uv.y * PI;
+  let s = sin(theta);
+  return vec3<f32>(-s * cos(phi), cos(theta), -s * sin(phi));
+}
+fn env_map_luminance(c : vec3<f32>) -> f32 {
+  return dot(c, vec3<f32>(0.212671, 0.715160, 0.072169));
+}
+fn env_cdf_at(x : i32, y : i32) -> f32 {
+  return envCdf[y * i32(U.envExtra.x) + x];
+}
+// Two-stage binary search over the single monotonic flat CDF (GLSL-PathTracer-JS
+// style): first the row-end checkpoints (column W-1) for the row, then within it.
+fn env_map_binary_search(value : f32) -> vec2<f32> {
+  let resX = i32(U.envExtra.x);
+  let resY = i32(U.envExtra.y);
+  var lower = 0;
+  var upper = resY - 1;
+  loop {
+    if (lower >= upper) { break; }
+    let mid = (lower + upper) / 2;
+    if (value < env_cdf_at(resX - 1, mid)) { upper = mid; } else { lower = mid + 1; }
+  }
+  let y = clamp(lower, 0, resY - 1);
+  lower = 0;
+  upper = resX - 1;
+  loop {
+    if (lower >= upper) { break; }
+    let mid = (lower + upper) / 2;
+    if (value < env_cdf_at(mid, y)) { upper = mid; } else { lower = mid + 1; }
+  }
+  let x = clamp(lower, 0, resX - 1);
+  return vec2<f32>(f32(x), f32(y)) / vec2<f32>(U.envExtra.x, U.envExtra.y);
+}
+// Solid-angle PDF of an env sample at uv with pixel radiance 'color'.
+fn env_map_pdf_from_uv(uv : vec2<f32>, color : vec3<f32>) -> f32 {
+  let theta = uv.y * PI;
+  let s = sin(theta);
+  if (s <= 0.0) { return 0.0; }
+  let p = env_map_luminance(color) / max(U.envExtra.z, 1.0e-6);
+  return (p * U.envExtra.x * U.envExtra.y) / (2.0 * PI * PI * s);
+}
+// Solid-angle PDF the env-importance strategy would assign to direction d (for MIS).
+fn sky_pdf(d : vec3<f32>) -> f32 {
+  let uv = env_dir_to_uv(normalize(d));
+  let color = textureSampleLevel(envTex, envSampler, uv, 0.0).xyz;
+  return env_map_pdf_from_uv(uv, color);
 }
 `;
 }
@@ -389,13 +443,13 @@ fn integrate(ro0 : vec3<f32>, rd0 : vec3<f32>, state : ptr<function, u32>) -> ve
   for (var bounce = 0; bounce < 64; bounce = bounce + 1) {
     let hit = traverse(ro, rd, 1.0e30, false);
     if (!hit.hitAny) {
-      // Constant environment reached by BSDF sampling; MIS-weight it against the
-      // environment next-event strategy unless the previous bounce was specular.
+      // Environment reached by BSDF sampling; MIS-weight it against the env
+      // next-event strategy unless the previous bounce was specular.
       if (hasEnv) {
         if (specularBounce) {
           radiance = radiance + beta * ${envMiss};
         } else {
-          let envPdf = max(dot(lastN, rd), 0.0) / PI;
+          ${environment ? 'let envPdf = select(max(dot(lastN, rd), 0.0) / PI, sky_pdf(rd), U.envExtra.w > 0.5);' : 'let envPdf = max(dot(lastN, rd), 0.0) / PI;'}
           let w = power_heuristic(1.0, bsdfPdf, 1.0, envPdf);
           radiance = radiance + beta * ${envMiss} * w;
         }
@@ -418,10 +472,42 @@ ${closureBuild}
       radiance = radiance + beta * ev.value * lightRadiance * cosL;
     }
 
-    // Environment next-event estimation (constant env): cosine-sampled direction,
-    // MIS-weighted against BSDF sampling via the power heuristic.
+    // Environment next-event estimation, MIS-weighted against BSDF sampling.
     if (hasEnv) {
-      let eu = vec2<f32>(rng_next(state), rng_next(state));
+${
+      environment
+        ? /* wgsl */ `      if (U.envExtra.w > 0.5) {
+        // Importance-sample the HDR by its luminance CDF (unbiased, low variance).
+        let uvS = env_map_binary_search(rng_next(state) * max(U.envExtra.z, 1.0e-6));
+        let wiW = normalize(env_map_uv_to_dir(uvS));
+        let wiLocal = transpose(frame) * wiW;
+        if (wiLocal.z > 0.0) {
+          let colS = textureSampleLevel(envTex, envSampler, uvS, 0.0).xyz;
+          let envPdf = env_map_pdf_from_uv(uvS, colS);
+          if (envPdf > 0.0) {
+            let shadowE = traverse(pos + wiW * RAY_EPS, wiW, 1.0e30, true);
+            if (!shadowE.hitAny) {
+              let ev = mx_closure_eval(c, wo, wiLocal);
+              let w = power_heuristic(1.0, envPdf, 1.0, ev.pdf);
+              radiance = radiance + beta * ev.value * (colS * U.env.xyz * U.env.w) * (w * wiLocal.z / envPdf);
+            }
+          }
+        }
+      } else {
+        let eu = vec2<f32>(rng_next(state), rng_next(state));
+        let wiLocal = mx_cosine_hemisphere(eu);
+        let envPdf = wiLocal.z / PI;
+        if (envPdf > 0.0) {
+          let wiW = frame * wiLocal;
+          let shadowE = traverse(pos + wiW * RAY_EPS, wiW, 1.0e30, true);
+          if (!shadowE.hitAny) {
+            let ev = mx_closure_eval(c, wo, wiLocal);
+            let w = power_heuristic(1.0, envPdf, 1.0, ev.pdf);
+            radiance = radiance + beta * ev.value * ${envNee} * (w * wiLocal.z / envPdf);
+          }
+        }
+      }`
+        : /* wgsl */ `      let eu = vec2<f32>(rng_next(state), rng_next(state));
       let wiLocal = mx_cosine_hemisphere(eu);
       let envPdf = wiLocal.z / PI;
       if (envPdf > 0.0) {
@@ -432,7 +518,8 @@ ${closureBuild}
           let w = power_heuristic(1.0, envPdf, 1.0, ev.pdf);
           radiance = radiance + beta * ev.value * ${envNee} * (w * wiLocal.z / envPdf);
         }
-      }
+      }`
+    }
     }
 
     let u = vec3<f32>(rng_next(state), rng_next(state), rng_next(state));
@@ -481,11 +568,19 @@ fn ${PT_COMPUTE_ENTRY}(@builtin(global_invocation_id) gid : vec3<u32>) {
   let dims = vec2<f32>(U.frame.z, U.frame.w);
 
   var state = pcg_hash(pixel + 0x9e3779b9u * (frameIndex + 1u));
+  // eye.w carries an optional per-sample luminance clamp; 0 keeps the tracer
+  // unbiased, > 0 tames glossy/env fireflies (hue-preserving down-scale).
+  let fireflyMax = U.eye.w;
   var sample = vec3<f32>(0.0);
   for (var i = 0u; i < spp; i = i + 1u) {
     let jitter = vec2<f32>(rng_next(&state), rng_next(&state));
     let rd = camera_ray(vec2<f32>(f32(gid.x), f32(gid.y)), dims, jitter);
-    sample = sample + integrate(U.eye.xyz, rd, &state);
+    var radiance = integrate(U.eye.xyz, rd, &state);
+    if (fireflyMax > 0.0) {
+      let lum = dot(radiance, vec3<f32>(0.2126, 0.7152, 0.0722));
+      if (lum > fireflyMax) { radiance = radiance * (fireflyMax / lum); }
+    }
+    sample = sample + radiance;
   }
   sample = sample / f32(spp);
 
@@ -559,10 +654,11 @@ export function buildPathTraceUniform(
   samplesPerFrame: number,
   width: number,
   height: number,
+  fireflyClamp = 0,
 ): Float32Array {
   const d = new Float32Array(PT_UNIFORM_FLOATS);
   d.set(scene.camera.invViewProj, 0);
-  d.set([scene.camera.eye[0], scene.camera.eye[1], scene.camera.eye[2], 0], 16);
+  d.set([scene.camera.eye[0], scene.camera.eye[1], scene.camera.eye[2], fireflyClamp], 16);
   d.set([scene.light.direction[0], scene.light.direction[1], scene.light.direction[2], 0], 20);
   d.set([scene.light.color[0], scene.light.color[1], scene.light.color[2], scene.light.intensity], 24);
   const env = scene.environment;
@@ -573,6 +669,8 @@ export function buildPathTraceUniform(
     d.set([env.radiance[0], env.radiance[1], env.radiance[2], 0], 28);
   }
   d.set([frameIndex, samplesPerFrame, width, height], 32);
+  const hasCdf = env.hasTexture && (env.envTotalSum ?? 0) > 0 && (env.envResX ?? 0) > 0 ? 1 : 0;
+  d.set([env.envResX ?? 0, env.envResY ?? 0, env.envTotalSum ?? 0, hasCdf], 36);
   return d;
 }
 

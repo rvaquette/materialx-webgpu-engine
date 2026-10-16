@@ -62,6 +62,11 @@ export interface FrameEnvironment {
   intensity?: number;
   /** True when an equirectangular envmap texture backs this environment. */
   hasTexture?: boolean;
+  /** Equirect envmap width/height and the total luminance sum of its flat CDF, used
+   *  by the path tracer's environment importance sampling (absent = cosine fallback). */
+  envResX?: number;
+  envResY?: number;
+  envTotalSum?: number;
 }
 
 export interface SceneDraw {

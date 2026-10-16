@@ -50,12 +50,14 @@ import {
   parsedSurfaceToCanonical,
 } from '../../src/materialx/surface-from-inputs.ts';
 import { resolvePixel } from '../../src/render/output.ts';
-import { importCameras } from '../../src/usd/cameras.ts';
+import { importCameras, type SceneCamera } from '../../src/usd/cameras.ts';
 import { importLights } from '../../src/usd/lights.ts';
+import { loadEnvironment, type LoadedEnvironment } from '../../src/render/usd-scene-assets.ts';
 import { importUsdStage, type UsdLayerReader } from '../../src/usd/importer.ts';
-import { lookAt4, multiply4, perspective4, type Vec3 } from '../../src/scene/transforms.ts';
+import { lowerPreviewSurfaceMaterials } from '../../src/usd/preview-surface.ts';
+import { inverse4, lookAt4, multiply4, perspective4, type Mat4, type Vec3 } from '../../src/scene/transforms.ts';
 import type { RawMesh, Primvar, PrimvarInterpolation } from '../../src/geometry/prepare.ts';
-import type { SceneAsset, ScenePrim } from '../../src/scene/types.ts';
+import type { MaterialXReference, SceneAsset, ScenePrim } from '../../src/scene/types.ts';
 
 export interface UsdSceneImage {
   entry: string;
@@ -171,7 +173,256 @@ function previewCamera(exposure: number): FrameCamera {
   return { viewProj: multiply4(perspective4(0.62, 1, 0.1, 100), lookAt4(eye, target, [0, 1, 0])), eye, exposure };
 }
 
+/** Builds a render FrameCamera from a UsdGeomCamera, reprojected for the (square)
+ *  render target: the authored view transform and vertical FOV are honoured while
+ *  the aspect ratio is taken from the output so the subject is not stretched. */
+function frameCameraFromUsd(camera: SceneCamera, aspect: number): FrameCamera {
+  const [near, far] = camera.clippingRange;
+  const projection =
+    camera.projection === 'orthographic' ? camera.projectionMatrix : perspective4(camera.fovY, aspect, near, far);
+  // Eye is the camera world-space translation (column-major translation column).
+  const eye: Vec3 = [camera.transform[12] ?? 0, camera.transform[13] ?? 0, camera.transform[14] ?? 0];
+  return { viewProj: multiply4(projection, camera.view), eye, exposure: camera.exposure ?? 0 };
+}
+
+/** The scene's camera reprojected for a square target, or the legacy preview.
+ *  `exposureOverride` (EV) replaces the authored exposure when supplied (CLI). */
+function resolveFrameCamera(
+  cameras: readonly SceneCamera[],
+  line: (m: string) => void,
+  exposureOverride?: number,
+): FrameCamera {
+  const camera = cameras[0];
+  const base = camera ? (line(`diag camera=${camera.path} fovY=${camera.fovY.toFixed(3)} (USD)`), frameCameraFromUsd(camera, 1)) : previewCamera(0);
+  if (exposureOverride !== undefined && Number.isFinite(exposureOverride)) {
+    line(`diag exposure override=${exposureOverride}`);
+    return { ...base, exposure: exposureOverride };
+  }
+  return base;
+}
+
+/** USD material prim rebinding takes at runtime when a .mtlx override is given. */
+const OPENPBR_MATERIAL_PATH = '/World/Looks/OpenPBRMaterial';
+
+/** First <surfacematerial name="..."> declared in a .mtlx document. */
+function firstSurfaceMaterialName(mtlx: string): string | undefined {
+  return /<surfacematerial\b[^>]*\bname\s*=\s*"([^"]+)"/.exec(mtlx)?.[1];
+}
+
+/** Rebind a USD material prim to a runtime .mtlx: synthesize a MaterialX reference
+ *  so resolveSceneMaterials/buildSceneResources compile the loaded document for the
+ *  bound gprim instead of its inline UsdPreviewSurface. The .mtlx and any sibling
+ *  textures resolve against the asset URL's directory (loadMtlxSceneContext). */
+async function overrideMaterialWithMtlx(
+  scene: SceneAsset,
+  materialPath: string,
+  assetUrl: string,
+  line: (m: string) => void,
+): Promise<void> {
+  if (!scene.prims.has(materialPath)) {
+    line(`override ignore: prim ${materialPath} absent de la scene`);
+    return;
+  }
+  let text: string;
+  try {
+    const res = await fetch(assetUrl);
+    if (!res.ok) {
+      line(`override mtlx HTTP ${res.status}: ${assetUrl}`);
+      return;
+    }
+    text = await res.text();
+  } catch {
+    line(`override mtlx introuvable: ${assetUrl}`);
+    return;
+  }
+  const name = firstSurfaceMaterialName(text);
+  if (!name) {
+    line(`override mtlx sans <surfacematerial>: ${assetUrl}`);
+    return;
+  }
+  // Replace any existing reference for this prim (inline shader or prior arc).
+  const list = scene.materials as MaterialXReference[];
+  for (let i = list.length - 1; i >= 0; i--) if (list[i]!.primPath === materialPath) list.splice(i, 1);
+  list.push({ primPath: materialPath, assetPath: assetUrl, referencedPrimPath: `/${name}`, materialName: name });
+  line(`override ${materialPath} <- ${assetUrl} (surfacematerial "${name}")`);
+}
+
 const PREVIEW_ENV: Vec3 = [0.65, 0.68, 0.72];
+
+// IEEE float32 -> float16 bits, so HDR envmaps upload to a filterable rgba16float
+// texture without the float32-filterable device feature (mirrors InteractiveViewer).
+const _envF32 = new Float32Array(1);
+const _envI32 = new Int32Array(_envF32.buffer);
+function floatToHalf(value: number): number {
+  _envF32[0] = value;
+  const x = _envI32[0]!;
+  const sign = (x >> 16) & 0x8000;
+  let exp = (x >> 23) & 0xff;
+  let mant = x & 0x7fffff;
+  if (exp === 0xff) return sign | 0x7c00 | (mant ? 0x200 : 0);
+  exp = exp - 127 + 15;
+  if (exp >= 31) return sign | 0x7c00;
+  if (exp <= 0) {
+    if (exp < -10) return sign;
+    mant = (mant | 0x800000) >> (1 - exp);
+    return sign | (mant >> 13);
+  }
+  return sign | (exp << 10) | (mant >> 13);
+}
+
+/** Pack an equirect float-RGB HDR image into half-float RGBA for the GPU. */
+function hdrToHalfRgba(data: Float32Array, width: number, height: number): Uint16Array {
+  const out = new Uint16Array(width * height * 4);
+  const one = floatToHalf(1);
+  for (let i = 0; i < width * height; i++) {
+    out[i * 4] = floatToHalf(data[i * 3]!);
+    out[i * 4 + 1] = floatToHalf(data[i * 3 + 1]!);
+    out[i * 4 + 2] = floatToHalf(data[i * 3 + 2]!);
+    out[i * 4 + 3] = one;
+  }
+  return out;
+}
+
+/** Build a flat row-major luminance CDF over the equirect HDR, used by the path
+ *  tracer's environment importance sampling. Rec.709 luminance, cumulative sum. */
+function buildEnvCdf(image: { width: number; height: number; data: Float32Array | number[] }): {
+  cdf: Float32Array;
+  totalSum: number;
+  width: number;
+  height: number;
+} {
+  const { width, height, data } = image;
+  const n = width * height;
+  const cdf = new Float32Array(n);
+  let running = 0;
+  for (let i = 0; i < n; i += 1) {
+    const o = i * 3;
+    const lum = 0.212671 * (data[o] ?? 0) + 0.71516 * (data[o + 1] ?? 0) + 0.072169 * (data[o + 2] ?? 0);
+    running += Math.max(0, lum);
+    cdf[i] = running;
+  }
+  return { cdf, totalSum: running, width, height };
+}
+
+/** Upload the dome envmap as a filterable rgba16float texture shared by the raster
+ *  background pass and the path tracer's group 3, plus the luminance CDF storage
+ *  buffer the tracer importance-samples. */
+function uploadEnvTexture(
+  device: GPUDevice,
+  env: LoadedEnvironment,
+): { view: GPUTextureView; sampler: GPUSampler; cdfBuffer: GPUBuffer; cdfStats: { width: number; height: number; totalSum: number } } {
+  const { width: ew, height: eh, data } = env.image;
+  const texture = device.createTexture({
+    size: [ew, eh],
+    format: 'rgba16float',
+    usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
+  });
+  device.queue.writeTexture({ texture }, hdrToHalfRgba(data, ew, eh), { bytesPerRow: ew * 8, rowsPerImage: eh }, [ew, eh, 1]);
+  const { cdf, totalSum, width, height } = buildEnvCdf(env.image);
+  const cdfBuffer = device.createBuffer({
+    size: Math.max(16, cdf.byteLength),
+    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+  });
+  device.queue.writeBuffer(cdfBuffer, 0, cdf);
+  return {
+    view: texture.createView(),
+    sampler: device.createSampler({ addressModeU: 'repeat', addressModeV: 'clamp-to-edge', magFilter: 'linear', minFilter: 'linear' }),
+    cdfBuffer,
+    cdfStats: { width, height, totalSum },
+  };
+}
+
+/** FrameEnvironment config for a loaded dome (textured IBL) or the flat preview fill.
+ *  skyPower/skyColor override the dome intensity/tint (DomeLight-derived defaults). */
+function envFrameConfig(
+  env: LoadedEnvironment | undefined,
+  cdfStats?: { width: number; height: number; totalSum: number },
+  skyPower?: number,
+  skyColor?: Vec3,
+): {
+  radiance: Vec3;
+  tint?: Vec3;
+  intensity?: number;
+  hasTexture?: boolean;
+  envResX?: number;
+  envResY?: number;
+  envTotalSum?: number;
+} {
+  if (!env) return { radiance: PREVIEW_ENV };
+  return {
+    radiance: env.averageRadiance,
+    tint: skyColor ?? env.tint,
+    intensity: skyPower ?? env.intensity,
+    hasTexture: true,
+    ...(cdfStats ? { envResX: cdfStats.width, envResY: cdfStats.height, envTotalSum: cdfStats.totalSum } : {}),
+  };
+}
+
+/** Fullscreen equirect dome background: samples the envmap along each pixel's world
+ *  ray (mirrors InteractiveViewer) so the HDR shows behind geometry in the raster pass. */
+function createEnvBackground(
+  device: GPUDevice,
+  hdrFormat: GPUTextureFormat,
+  depthFormat: GPUTextureFormat,
+  env: LoadedEnvironment,
+  envView: GPUTextureView,
+  envSampler: GPUSampler,
+  invViewProj: Mat4,
+  eye: Vec3,
+): { pipeline: GPURenderPipeline; bindGroup: GPUBindGroup } {
+  const module = device.createShaderModule({
+    code: `
+struct EnvBg { invViewProj: mat4x4<f32>, eye: vec4<f32>, tint: vec4<f32> };
+@group(0) @binding(0) var<uniform> E : EnvBg;
+@group(0) @binding(1) var envTex : texture_2d<f32>;
+@group(0) @binding(2) var envSamp : sampler;
+const PI : f32 = 3.14159265358979;
+struct VO { @builtin(position) pos: vec4<f32>, @location(0) ndc: vec2<f32> };
+@vertex fn vs(@builtin(vertex_index) i: u32) -> VO {
+  var p = array<vec2<f32>, 3>(vec2<f32>(-1.0, -3.0), vec2<f32>(-1.0, 1.0), vec2<f32>(3.0, 1.0));
+  var o: VO;
+  o.pos = vec4<f32>(p[i], 1.0, 1.0);
+  o.ndc = p[i];
+  return o;
+}
+fn dir_to_uv(d: vec3<f32>) -> vec2<f32> {
+  let n = normalize(d);
+  let u = atan2(n.z, n.x) * (0.5 / PI) + 0.5;
+  let v = acos(clamp(n.y, -1.0, 1.0)) / PI;
+  return vec2<f32>(u, v);
+}
+@fragment fn fs(in: VO) -> @location(0) vec4<f32> {
+  let far = E.invViewProj * vec4<f32>(in.ndc, 1.0, 1.0);
+  let world = far.xyz / far.w;
+  let dir = world - E.eye.xyz;
+  let c = textureSample(envTex, envSamp, dir_to_uv(dir)).xyz;
+  return vec4<f32>(c * E.tint.xyz, 1.0);
+}
+`,
+  });
+  const pipeline = device.createRenderPipeline({
+    layout: 'auto',
+    vertex: { module, entryPoint: 'vs' },
+    fragment: { module, entryPoint: 'fs', targets: [{ format: hdrFormat }] },
+    primitive: { topology: 'triangle-list' },
+    depthStencil: { format: depthFormat, depthWriteEnabled: false, depthCompare: 'always' },
+  });
+  const uniform = device.createBuffer({ size: 96, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+  device.queue.writeBuffer(uniform, 0, new Float32Array(invViewProj));
+  device.queue.writeBuffer(uniform, 64, new Float32Array([eye[0], eye[1], eye[2], 0]));
+  const inten = env.intensity;
+  const t = env.tint;
+  device.queue.writeBuffer(uniform, 80, new Float32Array([t[0] * inten, t[1] * inten, t[2] * inten, 1]));
+  const bindGroup = device.createBindGroup({
+    layout: pipeline.getBindGroupLayout(0),
+    entries: [
+      { binding: 0, resource: { buffer: uniform } },
+      { binding: 1, resource: envView },
+      { binding: 2, resource: envSampler },
+    ],
+  });
+  return { pipeline, bindGroup };
+}
 
 // Served dev-server paths for the MaterialX Core WASM and standard libraries the
 // graph material compiler path consumes (T057m3b). The device matrix run (T057m4)
@@ -211,6 +462,22 @@ async function loadMtlxSceneContext(
     } catch {
       line(`MaterialX introuvable: ${ref.assetPath}`);
     }
+  }
+  // Lower inline UsdPreviewSurface shaders (incl. UsdUVTexture) into synthetic
+  // MaterialX documents so the graph compiler textures/shades them in both passes
+  // instead of falling back to the neutral surface. Textures resolve against the
+  // usd stage directory, so make sure it is a candidate material directory.
+  const lowered = lowerPreviewSurfaceMaterials(scene, sink);
+  if (lowered.length > 0 && !materialDirs.includes(baseDir)) materialDirs.push(baseDir);
+  for (const mat of lowered) {
+    texts.set(mat.reference.assetPath, mat.xml);
+    (scene.materials as MaterialXReference[]).push(mat.reference);
+    try {
+      surfaces.set(mat.reference.materialName, surfaceFromMtlx(mat.xml));
+    } catch {
+      // raster fallback surface is optional; the graph compiler drives shading
+    }
+    line(`UsdPreviewSurface lowered: ${mat.reference.primPath} (textures=${mat.textureFiles.length})`);
   }
   const core = await loadMaterialXCore({
     moduleUrl: MATERIALX_CORE_URL,
@@ -313,6 +580,8 @@ async function renderUsdRasterOnDevice(
   entry: string,
   res: number,
   line: (m: string) => void,
+  materialOverride?: string,
+  exposureOverride?: number,
 ): Promise<{ rgba: Uint8ClampedArray; renderMs: number }> {
   const sink = (d: { level: string; message: string }): void => {
     if (d.level === 'warning' || d.level === 'error') line(`diag: ${d.message}`);
@@ -320,8 +589,11 @@ async function renderUsdRasterOnDevice(
 
   const reader = httpReader(entry);
   const scene = await importUsdStage(entry, { reader, sink });
+  if (materialOverride) await overrideMaterialWithMtlx(scene, OPENPBR_MATERIAL_PATH, materialOverride, line);
   const lights = importLights(scene, { sink });
   const cameras = importCameras(scene, { sink });
+  const envAsset = await loadEnvironment(lights, entry, sink);
+  if (envAsset) line(`diag env ${envAsset.image.width}x${envAsset.image.height} intensity=${envAsset.intensity.toFixed(3)} (dome)`);
 
   // Compile every material through the real graph material compiler (same path as
   // the path tracer, T057m1): constant, procedural AND textured nodegraphs lower
@@ -336,12 +608,12 @@ async function renderUsdRasterOnDevice(
   });
   line('diag step: scene resources built');
 
-  const camera = cameras[0];
-  const exposure = camera?.exposure ?? 0;
+  const frameCamera = resolveFrameCamera(cameras, line, exposureOverride);
+  const exposure = frameCamera.exposure;
   const frame = buildSceneFrame(resources, {
     lights,
-    frameCamera: previewCamera(exposure),
-    environment: { radiance: PREVIEW_ENV },
+    frameCamera,
+    environment: envFrameConfig(envAsset),
     surfaceFor,
   });
   line(`${frame.draws.length} draw(s), passes [${frame.passes.join(', ')}], ${frame.skipped.length} ignore(s)`);
@@ -355,6 +627,13 @@ async function renderUsdRasterOnDevice(
     }
   }
   const resolvePipeline = backend.createResolvePipeline();
+
+  // Dome envmap: upload once, shown as the raster background and reused as IBL fill.
+  const envGpu = envAsset ? uploadEnvTexture(device, envAsset) : undefined;
+  const envBg =
+    envAsset && envGpu
+      ? createEnvBackground(device, backend.hdrFormat, backend.depthFormat, envAsset, envGpu.view, envGpu.sampler, inverse4(frameCamera.viewProj), frameCamera.eye)
+      : undefined;
 
   // Decode + upload each material's sampled textures once, keyed by material unit.
   const imageCache = new Map<string, DecodedPixelImage | undefined>();
@@ -463,6 +742,17 @@ async function renderUsdRasterOnDevice(
   const renderStart = performance.now();
   const encoder = device.createCommandEncoder();
   let firstPass = true;
+  if (envBg) {
+    const bgPass = encoder.beginRenderPass({
+      colorAttachments: [{ view: hdrView, clearValue: { r: 0, g: 0, b: 0, a: 1 }, loadOp: 'clear', storeOp: 'store' }],
+      depthStencilAttachment: { view: depthView, depthClearValue: 1, depthLoadOp: 'clear', depthStoreOp: 'store' },
+    });
+    bgPass.setPipeline(envBg.pipeline);
+    bgPass.setBindGroup(0, envBg.bindGroup);
+    bgPass.draw(3);
+    bgPass.end();
+    firstPass = false;
+  }
   for (const pass of frame.passes) {
     const draws = drawsByPass.get(pass) ?? [];
     if (draws.length === 0) continue;
@@ -495,6 +785,11 @@ async function renderUsdOnDevice(
   res: number,
   samples: number,
   line: (m: string) => void,
+  materialOverride?: string,
+  exposureOverride?: number,
+  fireflyOverride?: number,
+  skyPowerOverride?: number,
+  skyColorOverride?: Vec3,
 ): Promise<{ rgba: Uint8ClampedArray; renderMs: number }> {
   const sink = (d: { level: string; message: string; detail?: unknown }): void => {
     if (d.level === 'warning' || d.level === 'error') {
@@ -506,8 +801,11 @@ async function renderUsdOnDevice(
 
   const reader = httpReader(entry);
   const scene = await importUsdStage(entry, { reader, sink });
+  if (materialOverride) await overrideMaterialWithMtlx(scene, OPENPBR_MATERIAL_PATH, materialOverride, line);
   const lights = importLights(scene, { sink });
   const cameras = importCameras(scene, { sink });
+  const envAsset = await loadEnvironment(lights, entry, sink);
+  if (envAsset) line(`diag env ${envAsset.image.width}x${envAsset.image.height} intensity=${envAsset.intensity.toFixed(3)} (dome)`);
 
   // Load the MaterialX Core WASM and standard libraries once, read every
   // referenced .mtlx into a document source (T057m3a), and feed the graph material
@@ -523,13 +821,16 @@ async function renderUsdOnDevice(
   });
   line('diag step: scene resources built');
 
-  const camera = cameras[0];
-  const exposure = camera?.exposure ?? 0;
+  const frameCamera = resolveFrameCamera(cameras, line, exposureOverride);
+  const exposure = frameCamera.exposure;
+  // Upload the dome texture + luminance CDF up front so the frame environment config
+  // can carry the CDF dimensions/sum used by the tracer's importance sampling.
+  const envGpu = envAsset ? uploadEnvTexture(device, envAsset) : undefined;
   const ptScene = buildPathTraceScene(resources, {
     lights,
     surfaceFor,
-    frameCamera: previewCamera(exposure),
-    environment: { radiance: PREVIEW_ENV },
+    frameCamera,
+    environment: envFrameConfig(envAsset, envGpu?.cdfStats, skyPowerOverride, skyColorOverride),
   });
   line(`${resources.instances.length} instance(s), ${samples} spp`);
   line(
@@ -547,10 +848,20 @@ async function renderUsdOnDevice(
   // bindings plan (T057m2); textures are decoded by the shared image provider.
   const dispatch = buildMaterialDispatch(ptScene.variantSources);
   const bindings = await buildPtDeviceBindings(dispatch, ptScene, imageProvider, { sink });
-  line(`diag variants=${dispatch.variants.length} textures=${bindings.textures.length} exposure=${exposure}`);
+  const fireflyClamp = Number.isFinite(fireflyOverride) ? (fireflyOverride as number) : 0;
+  const sky = ptScene.environment;
+  const skyDiag =
+    sky.hasTexture && skyColorOverride ? ` sky-color=[${(sky.tint ?? [1, 1, 1]).map((x) => x.toFixed(2)).join(',')}]` : '';
+  const skyPowerDiag = sky.hasTexture && skyPowerOverride !== undefined ? ` sky-power=${sky.intensity}` : '';
+  line(
+    `diag variants=${dispatch.variants.length} textures=${bindings.textures.length} exposure=${exposure}` +
+      (fireflyClamp > 0 ? ` firefly=${fireflyClamp}` : '') +
+      skyPowerDiag +
+      skyDiag,
+  );
 
   // Compute path tracer on the packed scene buffers, progressive accumulation.
-  const backend = new PathTraceBackend(device, { dispatch });
+  const backend = new PathTraceBackend(device, { dispatch, ...(envAsset ? { environment: true } : {}) });
   device.pushErrorScope('validation');
   const { pipeline, module } = backend.createPipeline();
   const pipelineError = await device.popErrorScope();
@@ -640,6 +951,17 @@ async function renderUsdOnDevice(
           })),
         })
       : undefined;
+  const ptEnvGroup =
+    envAsset && envGpu
+      ? device.createBindGroup({
+          layout: pipeline.getBindGroupLayout(3),
+          entries: [
+            { binding: 0, resource: envGpu.view },
+            { binding: 1, resource: envGpu.sampler },
+            { binding: 2, resource: { buffer: envGpu.cdfBuffer } },
+          ],
+        })
+      : undefined;
   const [wgX, wgY] = PathTraceBackend.workgroupCount(res, res);
 
   backend.resetAccumulation();
@@ -648,13 +970,14 @@ async function renderUsdOnDevice(
   const batch = 8;
   for (let f = 0; f < samples; f++) {
     const frameIndex = backend.advanceFrame();
-    device.queue.writeBuffer(uniform, 0, buildPathTraceUniform(ptScene, frameIndex, 1, res, res));
+    device.queue.writeBuffer(uniform, 0, buildPathTraceUniform(ptScene, frameIndex, 1, res, res, fireflyClamp));
     const encoder = device.createCommandEncoder();
     const compute = encoder.beginComputePass();
     compute.setPipeline(pipeline);
     compute.setBindGroup(0, group0);
     if (group1) compute.setBindGroup(1, group1);
     if (group2) compute.setBindGroup(2, group2);
+    if (ptEnvGroup) compute.setBindGroup(3, ptEnvGroup);
     compute.dispatchWorkgroups(wgX, wgY, 1);
     compute.end();
     device.queue.submit([encoder.finish()]);
@@ -716,6 +1039,11 @@ export async function bootstrapUsdImage(
   res = 256,
   samples = 192,
   backend: 'raster' | 'pathtracing' = 'pathtracing',
+  materialOverride?: string,
+  exposure?: number,
+  firefly?: number,
+  skyPower?: number,
+  skyColor?: Vec3,
 ): Promise<UsdSceneImage | null> {
   const root = typeof document !== 'undefined' ? document.getElementById('log') ?? document.body : undefined;
   const line = (msg: string): void => {
@@ -746,12 +1074,13 @@ export async function bootstrapUsdImage(
 
   let rgba: Uint8ClampedArray;
   let renderMs: number;
+  if (materialOverride) line(`OpenPBRMaterial override: ${materialOverride}`);
   if (backend === 'raster') {
     line(`Rendu raster GPU de ${entry} (${res}x${res})...`);
-    ({ rgba, renderMs } = await renderUsdRasterOnDevice(device, entry, res, line));
+    ({ rgba, renderMs } = await renderUsdRasterOnDevice(device, entry, res, line, materialOverride, exposure));
   } else {
     line(`Rendu path-trace GPU de ${entry} (${res}x${res}, ${samples} spp)...`);
-    ({ rgba, renderMs } = await renderUsdOnDevice(device, entry, res, samples, line));
+    ({ rgba, renderMs } = await renderUsdOnDevice(device, entry, res, samples, line, materialOverride, exposure, firefly, skyPower, skyColor));
   }
 
   const canvas = document.createElement('canvas');
@@ -762,7 +1091,7 @@ export async function bootstrapUsdImage(
     line('Canvas 2D indisponible.');
     return fail();
   }
-  ctx.putImageData(new ImageData(rgba, res, res), 0, 0);
+  ctx.putImageData(new ImageData(rgba as Uint8ClampedArray<ArrayBuffer>, res, res), 0, 0);
   const dataUrl = canvas.toDataURL('image/png');
 
   const img = document.createElement('img');

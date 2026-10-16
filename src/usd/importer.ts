@@ -386,11 +386,15 @@ class Parser {
     const name = words[words.length - 1]!;
     const typeName = words[words.length - 2]!;
     let interpolation: string | undefined;
-    const afterName = this.peek();
-    if (afterName && afterName.kind === 'punct' && afterName.value === '(') {
+    const readMeta = () => {
       const attrMeta = this.parseInlineMetadata();
       const interp = attrMeta.get('interpolation');
-      if (interp) interpolation = asString(interp);
+      if (interp && interpolation === undefined) interpolation = asString(interp);
+    };
+    // Metadata may appear before the value (declaration-only form) ...
+    const afterName = this.peek();
+    if (afterName && afterName.kind === 'punct' && afterName.value === '(') {
+      readMeta();
     }
     let value: AttributeValue | undefined;
     const eq = this.peek();
@@ -398,6 +402,11 @@ class Parser {
       this.next();
       const raw = this.parseValue();
       value = toAttributeValue(raw);
+      // ... or after the value: `type name = [...] ( interpolation = "vertex" )`.
+      const afterValue = this.peek();
+      if (afterValue && afterValue.kind === 'punct' && afterValue.value === '(') {
+        readMeta();
+      }
     }
 
     if (name === 'xformOpOrder') {
