@@ -77,6 +77,7 @@ struct MxBsdfLobe {
   rotation: f32,
   ior: f32,
   extinction: vec3f,
+  thin: f32,
 };
 struct MxCoatLayer { weight: f32, color: vec3f, roughness: f32, ior: f32 };
 struct MxSheenLayer { weight: f32, color: vec3f, roughness: f32 };
@@ -109,6 +110,8 @@ interface LobeWgsl {
   rotation?: string;
   ior?: string;
   extinction?: string;
+  /** Thin-walled transmission flag (1.0 = straight-through, no refraction). */
+  thin?: string;
 }
 
 interface FamilyWgsl {
@@ -219,7 +222,7 @@ function standardSurface(c: Ctx): FamilyWgsl {
   ];
   const lobes: LobeWgsl[] = [
     { kind: 'conductor', weight: 'mx_metal', color: baseColor, roughness: specRough, anisotropy: aniso, rotation: rot },
-    { kind: 'translucent', weight: '((1.0 - mx_metal) * mx_trans)', color: transColor },
+    { kind: 'dielectric_transmission', weight: '((1.0 - mx_metal) * mx_trans)', color: transColor, roughness: specRough, ior },
     { kind: 'dielectric_reflection', weight: '(mx_diel * mx_spec)', color: specColor, roughness: specRough, ior, anisotropy: aniso, rotation: rot },
     { kind: 'burley_diffuse', weight: '(mx_diel * mx_base)', color: baseColor, roughness: diffRough },
     { kind: 'subsurface', weight: '(mx_diel * mx_sss)', color: sssColor },
@@ -243,6 +246,9 @@ function openPbrSurface(c: Ctx): FamilyWgsl {
   const specColor = c.col('specular_color', [1, 1, 1]);
   const transColor = c.col('transmission_color', [1, 1, 1]);
   const sssColor = c.col('subsurface_color', [0.8, 0.8, 0.8]);
+  // Thin-walled: straight-through transmission (no refraction) + a front-surface
+  // specular reflection that survives transmission=1 (carries thin-film iridescence).
+  const thinWalled = c.lit('geometry_thin_walled', 0) > 0.5;
   const locals = [
     `  let mx_baseW = ${clampExpr(c.s('base_weight', 1))};`,
     `  let mx_metal = ${clampExpr(c.s('base_metalness', 0))};`,
@@ -251,17 +257,20 @@ function openPbrSurface(c: Ctx): FamilyWgsl {
     `  let mx_sss = ${clampExpr(c.s('subsurface_weight', 0))};`,
     `  let mx_diel = (1.0 - mx_metal) * (1.0 - mx_trans);`,
   ];
+  const reflW = thinWalled ? '((1.0 - mx_metal) * mx_specW)' : '(mx_diel * mx_specW)';
+  const transLobe: LobeWgsl = { kind: 'dielectric_transmission', weight: '((1.0 - mx_metal) * mx_trans)', color: transColor, roughness: specRough, ior };
+  if (thinWalled) transLobe.thin = '1.0';
   const lobes: LobeWgsl[] = [
     { kind: 'conductor', weight: 'mx_metal', color: baseColor, roughness: specRough, anisotropy: aniso },
-    { kind: 'translucent', weight: '((1.0 - mx_metal) * mx_trans)', color: transColor },
-    { kind: 'dielectric_reflection', weight: '(mx_diel * mx_specW)', color: specColor, roughness: specRough, ior, anisotropy: aniso },
+    transLobe,
+    { kind: 'dielectric_reflection', weight: reflW, color: specColor, roughness: specRough, ior, anisotropy: aniso },
     { kind: 'burley_diffuse', weight: '(mx_diel * mx_baseW)', color: baseColor, roughness: diffRough },
     { kind: 'subsurface', weight: '(mx_diel * mx_sss)', color: sssColor },
   ];
   const out: FamilyWgsl = { locals, lobes, opacity: c.s('geometry_opacity', 1) };
   if (presentWeighted(c, 'coat_weight')) out.coat = { weight: clampExpr(c.s('coat_weight', 0)), color: c.col('coat_color', [1, 1, 1]), roughness: c.s('coat_roughness', 0), ior: c.s('coat_ior', 1.6) };
   if (presentWeighted(c, 'fuzz_weight')) out.fuzz = { weight: clampExpr(c.s('fuzz_weight', 0)), color: c.col('fuzz_color', [1, 1, 1]), roughness: c.s('fuzz_roughness', 0.5) };
-  if (presentWeighted(c, 'thin_film_weight')) out.thinFilm = { weight: clampExpr(c.s('thin_film_weight', 0)), thickness: c.s('thin_film_thickness', 0.5), ior: c.s('thin_film_ior', 1.4) };
+  if (presentWeighted(c, 'thin_film_weight')) out.thinFilm = { weight: clampExpr(c.s('thin_film_weight', 0)), thickness: `(${c.s('thin_film_thickness', 0.5)} * 1000.0)`, ior: c.s('thin_film_ior', 1.4) };
   if (presentWeighted(c, 'emission_luminance')) out.emission = `(${c.col('emission_color', [1, 1, 1])} * ${c.s('emission_luminance', 0)})`;
   return out;
 }
@@ -341,7 +350,7 @@ function disneyPrincipled(c: Ctx): FamilyWgsl {
   ];
   const lobes: LobeWgsl[] = [
     { kind: 'conductor', weight: 'mx_metal', color: baseColor, roughness: rough, anisotropy: aniso },
-    { kind: 'translucent', weight: '((1.0 - mx_metal) * mx_trans)', color: baseColor },
+    { kind: 'dielectric_transmission', weight: '((1.0 - mx_metal) * mx_trans)', color: baseColor, roughness: rough, ior },
     { kind: 'dielectric_reflection', weight: '(mx_diel * mx_spec)', color: specColor, roughness: rough, ior, anisotropy: aniso },
     { kind: 'burley_diffuse', weight: 'mx_diel', color: baseColor, roughness: rough },
     { kind: 'subsurface', weight: '(mx_diel * mx_sss)', color: baseColor },
@@ -378,6 +387,7 @@ function lobeAssign(index: number, lobe: LobeWgsl): string {
     lobe.rotation ?? '0.0',
     lobe.ior ?? '1.5',
     lobe.extinction ?? 'vec3f(0.0)',
+    lobe.thin ?? '0.0',
   ];
   return `  c.lobes[${index}] = MxBsdfLobe(${fields.join(', ')});`;
 }

@@ -24,8 +24,10 @@ import { PT_MATERIAL_DISPATCH_ENTRY, type PtMaterialDispatch } from './material-
 export const PT_WORKGROUP_SIZE = 8;
 /** Entry point name of the generated compute shader. */
 export const PT_COMPUTE_ENTRY = 'mx_path_trace';
-/** Floats in the path-trace uniform (PT_UNIFORM_SIZE / 4). */
-export const PT_UNIFORM_FLOATS = 40;
+/** Floats in the path-trace uniform (PT_UNIFORM_SIZE / 4). Slots 0..39 hold the
+ *  camera/light/env/frame blocks; 40..75 hold the 9 RGB SH irradiance coefficients
+ *  (one vec4 per coefficient, w unused) the integrator reads for diffuse IBL. */
+export const PT_UNIFORM_FLOATS = 76;
 /** Bytes in the path-trace uniform buffer. */
 export const PT_UNIFORM_SIZE = PT_UNIFORM_FLOATS * 4;
 
@@ -65,6 +67,7 @@ struct Uniforms {
   env : vec4<f32>, // xyz = skyColor, w = skyPower (dome intensity; > 0 selects textured path)
   frame : vec4<f32>, // x = frameIndex, y = samplesPerFrame, z = width, w = height
   envExtra : vec4<f32>, // x = envResX, y = envResY, z = envTotalSum, w = hasEnvCdf
+  sh : array<vec4<f32>, 9>, // 9 RGB SH9 irradiance coefficients (.xyz), w unused
 };
 
 @group(0) @binding(0) var<uniform> U : Uniforms;
@@ -154,6 +157,25 @@ fn sky_pdf(d : vec3<f32>) -> f32 {
   let uv = env_dir_to_uv(normalize(d));
   let color = textureSampleLevel(envTex, envSampler, uv, 0.0).xyz;
   return env_map_pdf_from_uv(uv, color);
+}
+// Diffuse irradiance E(n) from the uploaded SH9 radiance coefficients (cosine-lobe
+// convolution A_l; basis matches projectIrradianceSH / evalIrradianceSH on the CPU).
+// Returns radiance to be multiplied by albedo/PI and the dome tint/intensity.
+fn mx_sh_irradiance(n : vec3<f32>) -> vec3<f32> {
+  let A0 = 3.14159265358979;
+  let A1 = 2.09439510239320; // 2*PI/3
+  let A2 = 0.78539816339745; // PI/4
+  let x = n.x; let y = n.y; let z = n.z;
+  var e = U.sh[0].xyz * (A0 * 0.282095);
+  e = e + U.sh[1].xyz * (A1 * 0.488603 * y);
+  e = e + U.sh[2].xyz * (A1 * 0.488603 * z);
+  e = e + U.sh[3].xyz * (A1 * 0.488603 * x);
+  e = e + U.sh[4].xyz * (A2 * 1.092548 * x * y);
+  e = e + U.sh[5].xyz * (A2 * 1.092548 * y * z);
+  e = e + U.sh[6].xyz * (A2 * 0.315392 * (3.0 * z * z - 1.0));
+  e = e + U.sh[7].xyz * (A2 * 1.092548 * x * z);
+  e = e + U.sh[8].xyz * (A2 * 0.546274 * (x * x - y * y));
+  return max(e, vec3<f32>(0.0));
 }
 `;
 }
@@ -437,6 +459,7 @@ fn integrate(ro0 : vec3<f32>, rd0 : vec3<f32>, state : ptr<function, u32>) -> ve
   let hasEnv = U.env.w > 0.0 || dot(U.env.xyz, vec3<f32>(1.0)) > 0.0;
   // MIS state carried across bounces (mirrors integratePath in integrator.ts).
   var specularBounce = true;
+  var diffuseBounce = false;
   var bsdfPdf = 0.0;
   var lastN = vec3<f32>(0.0, 0.0, 1.0);
 
@@ -444,15 +467,31 @@ fn integrate(ro0 : vec3<f32>, rd0 : vec3<f32>, state : ptr<function, u32>) -> ve
     let hit = traverse(ro, rd, 1.0e30, false);
     if (!hit.hitAny) {
       // Environment reached by BSDF sampling; MIS-weight it against the env
-      // next-event strategy unless the previous bounce was specular.
+      // next-event strategy unless the previous bounce was specular. With the SH
+      // irradiance probe active (textured env), diffuse bounces already got the
+      // environment analytically, so only specular bounces add the miss here.
       if (hasEnv) {
-        if (specularBounce) {
+${
+        environment
+          ? /* wgsl */ `        if (specularBounce) {
           radiance = radiance + beta * ${envMiss};
-        } else {
-          ${environment ? 'let envPdf = select(max(dot(lastN, rd), 0.0) / PI, sky_pdf(rd), U.envExtra.w > 0.5);' : 'let envPdf = max(dot(lastN, rd), 0.0) / PI;'}
+        } else if (!diffuseBounce) {
+          // Glossy reflection reaching the environment: the SH probe only covers
+          // the diffuse lobes, so this glossy miss is MIS-weighted against the
+          // specular env NEE (restores metal/coat reflections).
+          var envPdf = max(dot(lastN, rd), 0.0) / PI;
+          if (U.envExtra.w > 0.5) { envPdf = sky_pdf(rd); }
           let w = power_heuristic(1.0, bsdfPdf, 1.0, envPdf);
           radiance = radiance + beta * ${envMiss} * w;
-        }
+        }`
+          : /* wgsl */ `        if (specularBounce) {
+          radiance = radiance + beta * ${envMiss};
+        } else {
+          let envPdf = max(dot(lastN, rd), 0.0) / PI;
+          let w = power_heuristic(1.0, bsdfPdf, 1.0, envPdf);
+          radiance = radiance + beta * ${envMiss} * w;
+        }`
+      }
       }
       break;
     }
@@ -461,6 +500,9 @@ fn integrate(ro0 : vec3<f32>, rd0 : vec3<f32>, state : ptr<function, u32>) -> ve
 ${closureBuild}
     let frame = basis(n);
     let wo = transpose(frame) * (-rd);
+
+    // Emitters have no NEE counterpart here, so add their radiance at full weight.
+    if (c.hasEmission != 0u) { radiance = radiance + beta * c.emission; }
 
     // A smooth dielectric (clear glass / mirror) is a near-delta BSDF: NEE can
     // only produce fireflies that the clamp removes, so skip it and treat the
@@ -479,11 +521,16 @@ ${closureBuild}
       }
     }
 
-    // Environment next-event estimation, MIS-weighted against BSDF sampling.
+    // Environment next-event estimation. The diffuse part is read analytically
+    // from the SH9 irradiance probe (noise-free); only the glossy/coat specular
+    // lobes keep HDR importance sampling (reflets du vernis), MIS-weighted.
     if (hasEnv && !specular) {
 ${
       environment
-        ? /* wgsl */ `      if (U.envExtra.w > 0.5) {
+        ? /* wgsl */ `      // Diffuse IBL from the SH probe, scaled by the dome tint/intensity.
+      let diffE = mx_sh_irradiance(n) * U.env.xyz * U.env.w;
+      radiance = radiance + beta * mx_closure_diffuse_albedo(c) * (diffE / PI);
+      if (U.envExtra.w > 0.5) {
         // Importance-sample the HDR by its luminance CDF (unbiased, low variance).
         let uvS = env_map_binary_search(rng_next(state) * max(U.envExtra.z, 1.0e-6));
         let wiW = normalize(env_map_uv_to_dir(uvS));
@@ -494,7 +541,7 @@ ${
           if (envPdf > 0.0) {
             let shadowE = traverse(pos + wiW * RAY_EPS, wiW, 1.0e30, true);
             if (!shadowE.hitAny) {
-              let ev = mx_closure_eval(c, wo, wiLocal);
+              let ev = mx_closure_specular_eval(c, wo, wiLocal);
               let w = power_heuristic(1.0, envPdf, 1.0, ev.pdf);
               radiance = radiance + beta * ev.value * (colS * U.env.xyz * U.env.w) * (w * wiLocal.z / envPdf);
             }
@@ -508,7 +555,7 @@ ${
           let wiW = frame * wiLocal;
           let shadowE = traverse(pos + wiW * RAY_EPS, wiW, 1.0e30, true);
           if (!shadowE.hitAny) {
-            let ev = mx_closure_eval(c, wo, wiLocal);
+            let ev = mx_closure_specular_eval(c, wo, wiLocal);
             let w = power_heuristic(1.0, envPdf, 1.0, ev.pdf);
             radiance = radiance + beta * ev.value * ${envNee} * (w * wiLocal.z / envPdf);
           }
@@ -537,6 +584,7 @@ ${
     beta = beta * bs.value * cosS / bs.pdf;
     bsdfPdf = bs.pdf;
     specularBounce = specular;
+    diffuseBounce = mx_closure_sampled_is_diffuse(c, u.z);
     lastN = n;
     ro = pos + wiWorld * RAY_EPS;
     rd = wiWorld;
@@ -678,6 +726,13 @@ export function buildPathTraceUniform(
   d.set([frameIndex, samplesPerFrame, width, height], 32);
   const hasCdf = env.hasTexture && (env.envTotalSum ?? 0) > 0 && (env.envResX ?? 0) > 0 ? 1 : 0;
   d.set([env.envResX ?? 0, env.envResY ?? 0, env.envTotalSum ?? 0, hasCdf], 36);
+  // SH9 irradiance coefficients (9 RGB), one vec4 per coefficient from offset 40.
+  const sh = env.sh;
+  if (sh) {
+    for (let k = 0; k < 9; k++) {
+      d.set([sh[k * 3] ?? 0, sh[k * 3 + 1] ?? 0, sh[k * 3 + 2] ?? 0, 0], 40 + k * 4);
+    }
+  }
   return d;
 }
 

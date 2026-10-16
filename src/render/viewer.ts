@@ -161,7 +161,7 @@ export class InteractiveViewer {
     const exposure = loaded.cameras[0]?.exposure ?? 0;
     const env = loaded.environment;
     const environment = env
-      ? { radiance: env.averageRadiance, tint: env.tint, intensity: env.intensity, hasTexture: true }
+      ? { radiance: env.averageRadiance, tint: env.tint, intensity: env.intensity, hasTexture: true, sh: env.sh }
       : { radiance: PREVIEW_ENV };
     const frame = buildSceneFrame(loaded.resources, {
       lights: loaded.lights,

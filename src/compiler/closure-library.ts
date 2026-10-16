@@ -626,7 +626,7 @@ fn mx_microfacet_eval_aniso_tf(wo: vec3f, wi: vec3f, alpha: vec2f, rotation: f32
 // modulates the specular lobes' Fresnel. Wired onto the backends in T057/T058;
 // device parity checked in T059.
 fn mx_closure_lobe_ctx(lobe: MxBsdfLobe, wo: vec3f) -> MxLobeCtx {
-  return MxLobeCtx(wo, lobe.color, lobe.roughness, lobe.ior, lobe.anisotropy, lobe.rotation, 0.0);
+  return MxLobeCtx(wo, lobe.color, lobe.roughness, lobe.ior, lobe.anisotropy, lobe.rotation, lobe.thin);
 }
 fn mx_closure_lobe_eval(lobe: MxBsdfLobe, c: LayeredClosure, wo: vec3f, wi: vec3f) -> MxBsdfEval {
   let ctx = mx_closure_lobe_ctx(lobe, wo);
@@ -745,6 +745,86 @@ fn mx_closure_is_specular(c: LayeredClosure) -> bool {
     }
   }
   return w > 0.0 && spec >= w * 0.999;
+}
+// Diffuse albedo carried by the non-specular lobes (oren-nayar/burley/translucent
+// /sheen/subsurface). The integrator lights these from the SH9 irradiance probe
+// (noise-free) instead of sampling the environment, so this returns the summed
+// weighted lobe colour the probe is modulated by.
+fn mx_closure_diffuse_albedo(c: LayeredClosure) -> vec3f {
+  var a = vec3f(0.0);
+  for (var i = 0u; i < c.lobeCount; i = i + 1u) {
+    let l = c.lobes[i];
+    if (l.weight <= 0.0) { continue; }
+    if (l.kind == MX_LOBE_OREN_NAYAR_DIFFUSE || l.kind == MX_LOBE_BURLEY_DIFFUSE
+        || l.kind == MX_LOBE_TRANSLUCENT || l.kind == MX_LOBE_SHEEN
+        || l.kind == MX_LOBE_SUBSURFACE) {
+      a = a + l.color * l.weight;
+    }
+  }
+  return a;
+}
+// True when a BSDF sample drawn with random scalar uz picks a diffuse lobe (lit by
+// the SH probe, so the integrator suppresses its env miss). Mirrors the lobe pick
+// in mx_closure_sample / mx_closure_base_sample, including the coat branch.
+fn mx_closure_sampled_is_diffuse(c: LayeredClosure, uz: f32) -> bool {
+  var pz = uz;
+  if (c.hasCoat != 0u && c.coat.weight > 0.0) {
+    let pCoat = min(clamp(c.coat.weight, 0.0, 1.0), 0.95);
+    if (uz < pCoat) { return false; }
+    pz = (uz - pCoat) / max(1.0 - pCoat, 1.0e-6);
+  }
+  let total = mx_closure_total_weight(c);
+  if (total <= 0.0) { return false; }
+  var pick = pz * total;
+  var chosen = 0u;
+  var found = false;
+  for (var i = 0u; i < c.lobeCount; i = i + 1u) {
+    let w = c.lobes[i].weight;
+    if (w <= 0.0) { continue; }
+    if (!found) {
+      chosen = i;
+      if (pick < w) { found = true; } else { pick = pick - w; }
+    }
+  }
+  let k = c.lobes[chosen].kind;
+  return k == MX_LOBE_OREN_NAYAR_DIFFUSE || k == MX_LOBE_BURLEY_DIFFUSE
+      || k == MX_LOBE_TRANSLUCENT || k == MX_LOBE_SHEEN || k == MX_LOBE_SUBSURFACE;
+}
+// Specular-only closure response: the dielectric/conductor/schlick reflection
+// lobes, the glass transmission lobe and the dielectric coat. The diffuse lobes
+// are excluded (lit by the SH probe) so the environment NEE keeps importance
+// sampling only the glossy/coat reflections (reflets du vernis).
+fn mx_closure_specular_eval(c: LayeredClosure, wo: vec3f, wi: vec3f) -> MxBsdfEval {
+  var specTotal = 0.0;
+  for (var i = 0u; i < c.lobeCount; i = i + 1u) {
+    let l = c.lobes[i];
+    if (l.weight <= 0.0) { continue; }
+    if (l.kind == MX_LOBE_DIELECTRIC_REFLECTION || l.kind == MX_LOBE_CONDUCTOR
+        || l.kind == MX_LOBE_GENERALIZED_SCHLICK || l.kind == MX_LOBE_DIELECTRIC_TRANSMISSION) {
+      specTotal = specTotal + l.weight;
+    }
+  }
+  var value = vec3f(0.0);
+  var pdf = 0.0;
+  if (specTotal > 0.0) {
+    for (var i = 0u; i < c.lobeCount; i = i + 1u) {
+      let lobe = c.lobes[i];
+      if (lobe.weight <= 0.0) { continue; }
+      if (!(lobe.kind == MX_LOBE_DIELECTRIC_REFLECTION || lobe.kind == MX_LOBE_CONDUCTOR
+          || lobe.kind == MX_LOBE_GENERALIZED_SCHLICK || lobe.kind == MX_LOBE_DIELECTRIC_TRANSMISSION)) { continue; }
+      let r = mx_closure_lobe_eval(lobe, c, wo, wi);
+      value = value + r.value * lobe.weight;
+      pdf = pdf + (lobe.weight / specTotal) * r.pdf;
+    }
+  }
+  if (c.hasCoat == 0u || c.coat.weight <= 0.0) { return MxBsdfEval(value, pdf); }
+  let coatW = clamp(c.coat.weight, 0.0, 1.0);
+  let cc = mx_dielectric_reflection_eval(mx_closure_coat_ctx(c, wo), wi);
+  let att = mx_coat_attenuation(coatW, c.coat.ior, c.coat.color, wo, wi);
+  let pCoat = min(coatW, 0.95);
+  let v = coatW * cc.value + att * value;
+  let p = pCoat * cc.pdf + (1.0 - pCoat) * pdf;
+  return MxBsdfEval(v, p);
 }
 fn mx_closure_sample(c: LayeredClosure, wo: vec3f, u: vec3f) -> MxBsdfSample {
   if (wo.z == 0.0) { return MxBsdfSample(vec3f(0.0), vec3f(0.0), 0.0, false); }

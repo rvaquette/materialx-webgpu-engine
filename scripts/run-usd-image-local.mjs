@@ -55,6 +55,7 @@ const FIREFLY = OPTIONS.firefly ?? 10;
 const SKY_POWER = OPTIONS['sky-power'] ?? 1;
 const SKY_COLOR = OPTIONS['sky-color'] ?? '1,1,1';
 const CAM_BACK = OPTIONS['cam-back'] ?? 1.6;
+const EXPOSURE = OPTIONS['exposure'] ?? -1;
 const MTLX_LIBRARY_ROOT = '/scenes/mtlx-library';
 const OPENPBR_RAW = (OPTIONS.openpbr ?? process.env.MX_OPENPBR_MTLX)?.replace(/\\/g, '/');
 const OPENPBR_MTLX = OPENPBR_RAW
@@ -67,7 +68,7 @@ const HARNESS_PATH = '/usd-image-harness.html';
 const QUERY =
   `?entry=${encodeURIComponent(ENTRY)}&res=${RES}&spp=${SPP}` +
   (OPENPBR_MTLX ? `&openpbr=${encodeURIComponent(OPENPBR_MTLX)}` : '') +
-  (OPTIONS.exposure !== undefined ? `&exposure=${encodeURIComponent(OPTIONS.exposure)}` : '') +
+  (EXPOSURE !== undefined ? `&exposure=${encodeURIComponent(EXPOSURE)}` : '') +
   `&firefly=${encodeURIComponent(FIREFLY)}` +
   (SKY_POWER !== undefined ? `&skyPower=${encodeURIComponent(SKY_POWER)}` : '') +
   (SKY_COLOR !== undefined ? `&skyColor=${encodeURIComponent(SKY_COLOR)}` : '') +

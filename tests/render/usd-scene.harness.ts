@@ -368,6 +368,7 @@ function envFrameConfig(
   envResX?: number;
   envResY?: number;
   envTotalSum?: number;
+  sh?: Float32Array;
 } {
   if (!env) return { radiance: PREVIEW_ENV };
   return {
@@ -375,6 +376,7 @@ function envFrameConfig(
     tint: skyColor ?? env.tint,
     intensity: skyPower ?? env.intensity,
     hasTexture: true,
+    sh: env.sh,
     ...(cdfStats ? { envResX: cdfStats.width, envResY: cdfStats.height, envTotalSum: cdfStats.totalSum } : {}),
   };
 }

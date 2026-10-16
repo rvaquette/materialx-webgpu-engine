@@ -67,6 +67,9 @@ export interface FrameEnvironment {
   envResX?: number;
   envResY?: number;
   envTotalSum?: number;
+  /** 9 RGB SH9 irradiance coefficients (flat [c0.rgb, c1.rgb, ...]) for noise-free
+   *  diffuse IBL in the path tracer; absent keeps the sampled diffuse env. */
+  sh?: Float32Array;
 }
 
 export interface SceneDraw {

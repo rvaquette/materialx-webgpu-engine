@@ -96,7 +96,7 @@ function lowerStandardSurface(m: Inputs): LayeredClosure {
   const extras = anisoExtras(aniso, rot);
   const lobes: LayeredBsdfLobe[] = [
     { kind: 'conductor', weight: metal, color: baseColor, roughness: specRough, ...extras },
-    { kind: 'translucent', weight: (1 - metal) * trans, color: transColor },
+    { kind: 'dielectric_transmission', weight: (1 - metal) * trans, color: transColor, roughness: specRough, ior },
     { kind: 'dielectric_reflection', weight: dielectricShare * spec, color: specColor, roughness: specRough, ior, ...extras },
     { kind: 'burley_diffuse', weight: dielectricShare * base, color: baseColor, roughness: diffRough },
     { kind: 'subsurface', weight: dielectricShare * sss, color: sssColor },
@@ -131,11 +131,13 @@ function lowerOpenPbrSurface(m: Inputs): LayeredClosure {
   const transColor = rgbOf(m, 'transmission_color', [1, 1, 1]);
   const sssColor = rgbOf(m, 'subsurface_color', [0.8, 0.8, 0.8]);
   const dielectricShare = (1 - metal) * (1 - trans);
+  const thinWalled = scalarOf(m, 'geometry_thin_walled', 0) > 0.5;
+  const reflShare = thinWalled ? (1 - metal) : dielectricShare;
   const extras = anisoExtras(aniso, 0);
   const lobes: LayeredBsdfLobe[] = [
     { kind: 'conductor', weight: metal, color: baseColor, roughness: specRough, ...extras },
-    { kind: 'translucent', weight: (1 - metal) * trans, color: transColor },
-    { kind: 'dielectric_reflection', weight: dielectricShare * specW, color: specColor, roughness: specRough, ior, ...extras },
+    { kind: 'dielectric_transmission', weight: (1 - metal) * trans, color: transColor, roughness: specRough, ior, ...(thinWalled ? { thinWalled: true } : {}) },
+    { kind: 'dielectric_reflection', weight: reflShare * specW, color: specColor, roughness: specRough, ior, ...extras },
     { kind: 'burley_diffuse', weight: dielectricShare * baseW, color: baseColor, roughness: diffRough },
     { kind: 'subsurface', weight: dielectricShare * sss, color: sssColor },
   ];
@@ -145,7 +147,7 @@ function lowerOpenPbrSurface(m: Inputs): LayeredClosure {
   const fuzzW = clamp01(scalarOf(m, 'fuzz_weight', 0));
   if (fuzzW > 0) slots.fuzz = { weight: fuzzW, color: rgbOf(m, 'fuzz_color', [1, 1, 1]), roughness: scalarOf(m, 'fuzz_roughness', 0.5) };
   const filmW = clamp01(scalarOf(m, 'thin_film_weight', 0));
-  if (filmW > 0) slots.thinFilm = { weight: filmW, thickness: scalarOf(m, 'thin_film_thickness', 0.5), ior: scalarOf(m, 'thin_film_ior', 1.4) };
+  if (filmW > 0) slots.thinFilm = { weight: filmW, thickness: scalarOf(m, 'thin_film_thickness', 0.5) * 1000, ior: scalarOf(m, 'thin_film_ior', 1.4) };
   const lum = scalarOf(m, 'emission_luminance', 0);
   if (lum > 0) slots.emission = scaleRgb(rgbOf(m, 'emission_color', [1, 1, 1]), lum);
   return assemble(lobes, scalarOf(m, 'geometry_opacity', 1), slots);
@@ -224,7 +226,7 @@ function lowerDisneyPrincipled(m: Inputs): LayeredClosure {
   const extras = anisoExtras(aniso, 0);
   const lobes: LayeredBsdfLobe[] = [
     { kind: 'conductor', weight: metal, color: baseColor, roughness: rough, ...extras },
-    { kind: 'translucent', weight: (1 - metal) * trans, color: baseColor },
+    { kind: 'dielectric_transmission', weight: (1 - metal) * trans, color: baseColor, roughness: rough, ior },
     { kind: 'dielectric_reflection', weight: dielectricShare * spec, color: specColor, roughness: rough, ior, ...extras },
     { kind: 'burley_diffuse', weight: dielectricShare, color: baseColor, roughness: rough },
     { kind: 'subsurface', weight: dielectricShare * sss, color: baseColor },

@@ -262,6 +262,7 @@ fn mx_material_lobe(base : u32) -> MxBsdfLobe {
   } else {
     lobe.extinction = vec3f(0.0, 0.0, 0.0);
   }
+  lobe.thin = select(0.0, 1.0, (flags & MX_LOBE_THIN_WALLED) != 0u);
   return lobe;
 }
 fn mx_material_closure(matIndex : u32) -> LayeredClosure {

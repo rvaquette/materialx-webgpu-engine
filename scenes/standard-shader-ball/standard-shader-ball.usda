@@ -193840,7 +193840,8 @@ def Xform "World" {
     def DomeLight "Environment" {
         token inputs:texture:format = "latlong"
         asset inputs:texture:file = @./envmaps/san_giuseppe_bridge.hdr@
-        float inputs:intensity = 2.5
+        asset inputs:texture:irradianceFile = @./envmaps/irradiance/san_giuseppe_bridge.hdr@
+        float inputs:intensity = 1
     }
 
 }
