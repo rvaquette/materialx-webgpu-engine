@@ -201,6 +201,92 @@ function wgslTraversal(): string {
   return BVH_TRAVERSAL_WGSL;
 }
 
+// Homogeneous participating-medium helpers shared by the packed material reader
+// (interior-medium derivation) and the integrator free-flight sampler. Mirrors
+// media.ts / subsurface.ts on the CPU reference; rng_next is defined earlier.
+const MEDIA_HELPERS_PRELUDE = /* wgsl */ `struct MxMedium {
+  sigmaA: vec3f,
+  sigmaS: vec3f,
+  g: f32,
+};
+struct MxMediumSample {
+  scattered: bool,
+  t: f32,
+  weight: vec3f,
+};
+fn mx_pick3(v : vec3f, ch : u32) -> f32 {
+  if (ch == 0u) { return v.x; }
+  if (ch == 1u) { return v.y; }
+  return v.z;
+}
+fn mx_absorbing_medium(attenColor : vec3f, attenDist : f32) -> MxMedium {
+  var m : MxMedium;
+  if (attenDist > 0.0) {
+    let c = clamp(attenColor, vec3f(1.0e-6), vec3f(1.0));
+    m.sigmaA = -log(c) / attenDist;
+  }
+  return m;
+}
+fn mx_single_scatter_albedo(a : vec3f) -> vec3f {
+  let c = clamp(a, vec3f(0.0), vec3f(1.0));
+  return vec3f(1.0) - exp(-5.09406 * c + 2.61188 * c * c - 4.31805 * c * c * c);
+}
+fn mx_extinction_from_mfp(mfp : vec3f, albedo : vec3f) -> vec3f {
+  let d = albedo - vec3f(0.8);
+  let s = vec3f(1.9) - albedo + 3.5 * d * d;
+  let dd = mfp * s;
+  return select(vec3f(0.0), vec3f(1.0) / dd, dd > vec3f(0.0));
+}
+fn mx_subsurface_medium(albedo : vec3f, mfp : vec3f, g : f32) -> MxMedium {
+  let alpha = mx_single_scatter_albedo(albedo);
+  let sigmaT = mx_extinction_from_mfp(mfp, albedo);
+  var m : MxMedium;
+  m.sigmaS = alpha * sigmaT;
+  m.sigmaA = (vec3f(1.0) - alpha) * sigmaT;
+  m.g = g;
+  return m;
+}
+// Hero-wavelength free-flight sampler: picks a channel, samples a collision
+// distance from its extinction, and returns the MIS-balanced throughput for the
+// scatter or the surface-reaching branch (matches sampleHomogeneous in media.ts).
+fn mx_sample_homogeneous(m : MxMedium, tMax : f32, state : ptr<function, u32>) -> MxMediumSample {
+  let sigmaT = m.sigmaA + m.sigmaS;
+  let ch = min(2u, u32(floor(rng_next(state) * 3.0)));
+  let st = mx_pick3(sigmaT, ch);
+  var t = 1.0e30;
+  if (st > 0.0) { t = -log(1.0 - rng_next(state)) / st; }
+  var samp : MxMediumSample;
+  samp.scattered = t < tMax;
+  let dist = select(tMax, t, samp.scattered);
+  samp.t = dist;
+  let tr = exp(-sigmaT * max(dist, 0.0));
+  if (samp.scattered) {
+    let density = dot(sigmaT * tr, vec3f(1.0)) / 3.0;
+    samp.weight = select(vec3f(0.0), (tr * m.sigmaS) / density, density > 0.0);
+  } else {
+    let density = dot(tr, vec3f(1.0)) / 3.0;
+    samp.weight = select(vec3f(0.0), tr / density, density > 0.0);
+  }
+  return samp;
+}`;
+
+// Henyey-Greenstein phase sampling; depends on basis() so it is emitted after it.
+// Matches sampleHenyeyGreenstein in media.ts (importance-sampled, so f/pdf = 1).
+const MEDIA_PHASE_PRELUDE = /* wgsl */ `fn mx_sample_hg(wo : vec3f, g : f32, u1 : f32, u2 : f32) -> vec3f {
+  let w = normalize(wo);
+  var cosTheta : f32;
+  if (abs(g) < 1.0e-3) {
+    cosTheta = 1.0 - 2.0 * u1;
+  } else {
+    let sqr = (1.0 - g * g) / (1.0 + g - 2.0 * g * u1);
+    cosTheta = -(1.0 + g * g - sqr * sqr) / (2.0 * g);
+  }
+  let sinTheta = sqrt(max(0.0, 1.0 - cosTheta * cosTheta));
+  let phi = 2.0 * PI * u2;
+  let local = vec3f(sinTheta * cos(phi), sinTheta * sin(phi), cosTheta);
+  return basis(w) * local;
+}`;
+
 function wgslClosureSurface(textures: boolean): string {
   // Shared layered-closure shading: the struct family (LAYERED_CLOSURE_PRELUDE),
   // the runtime lobe library plus the mx_closure_eval/pdf/sample assembler
@@ -227,6 +313,7 @@ fn mx_apply_baked(c : ptr<function, LayeredClosure>, albedo : vec3<f32>, rough :
   return [
     LAYERED_CLOSURE_PRELUDE,
     CLOSURE_LIBRARY_PRELUDE,
+    MEDIA_HELPERS_PRELUDE,
     materialClosureReaderWgsl(),
     /* wgsl */ `
 // Branchless orthonormal basis (Duff et al. 2017) around a unit normal; matches
@@ -239,6 +326,7 @@ fn basis(n : vec3<f32>) -> mat3x3<f32> {
   let bt = vec3<f32>(b, s + n.y * n.y * a, -n.y);
   return mat3x3<f32>(t, bt, n);
 }`,
+    MEDIA_PHASE_PRELUDE,
     bakedApply,
   ].join('\n');
 }
@@ -361,9 +449,35 @@ fn integrate(ro0 : vec3<f32>, rd0 : vec3<f32>, state : ptr<function, u32>) -> ve
   var diffuseBounce = false;
   var bsdfPdf = 0.0;
   var lastN = vec3<f32>(0.0, 0.0, 1.0);
+  // Active interior medium (entered through a transmissive/subsurface interface).
+  var inMedium = false;
+  var medium : MxMedium;
 
   for (var bounce = 0; bounce < 64; bounce = bounce + 1) {
     let hit = traverse(ro, rd, 1.0e30, false);
+    // Free-flight sampling: when inside a medium, a collision before the surface
+    // scatters off the Henyey-Greenstein phase (importance-sampled, f/pdf = 1);
+    // otherwise beta carries the surface-reaching transmittance (media.ts).
+    let tMax = select(1.0e30, hit.t, hit.hitAny);
+    if (inMedium) {
+      let ms = mx_sample_homogeneous(medium, tMax, state);
+      beta = beta * ms.weight;
+      if (ms.scattered) {
+        let sp = ro + rd * ms.t;
+        let wiM = mx_sample_hg(-rd, medium.g, rng_next(state), rng_next(state));
+        specularBounce = false;
+        diffuseBounce = false;
+        bsdfPdf = 0.0;
+        ro = sp + wiM * RAY_EPS;
+        rd = wiM;
+        if (bounce >= 3) {
+          let q = clamp(max(beta.x, max(beta.y, beta.z)), 0.0, 0.95);
+          if (rng_next(state) >= q) { break; }
+          beta = beta / q;
+        }
+        continue;
+      }
+    }
     if (!hit.hitAny) {
       // Environment reached by BSDF sampling; MIS-weight it against the env
       // next-event strategy unless the previous bounce was specular. With the SH
@@ -487,6 +601,18 @@ ${
     lastN = n;
     ro = pos + wiWorld * RAY_EPS;
     rd = wiWorld;
+
+    // Convex-interface assumption: a transmissive bounce enters the surface's
+    // interior medium (or leaves the current one), matching integratePath.
+    let transmitted = (wo.z > 0.0) != (bs.wi.z > 0.0);
+    if (transmitted) {
+      if (inMedium) {
+        inMedium = false;
+      } else if (c.hasInterior != 0u) {
+        medium = MxMedium(c.interiorSigmaA, c.interiorSigmaS, c.interiorG);
+        inMedium = true;
+      }
+    }
 
     if (bounce >= 3) {
       let q = clamp(max(beta.x, max(beta.y, beta.z)), 0.0, 0.95);

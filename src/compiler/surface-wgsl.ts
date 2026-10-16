@@ -97,6 +97,10 @@ struct LayeredClosure {
   hasFuzz: u32,
   hasThinFilm: u32,
   hasEmission: u32,
+  interiorSigmaA: vec3f,
+  interiorSigmaS: vec3f,
+  interiorG: f32,
+  hasInterior: u32,
 };`;
 
 /** One BSDF lobe to assign into `c.lobes[i]`; fields are WGSL expression strings. */

@@ -14,6 +14,7 @@
 
 import type { Vec3 } from '../../scene/transforms.ts';
 import type { Rng } from './integrator.ts';
+import type { HomogeneousMedium } from './media.ts';
 import { sampleHenyeyGreenstein } from './media.ts';
 
 type V = Vec3;
@@ -156,4 +157,28 @@ export function estimateSlabResponse(
       Math.max(0, 1 - reflectance[2] - transmittance[2]),
     ],
   };
+}
+
+/**
+ * Build the interior HomogeneousMedium that drives the BSSRDF random walk inside
+ * an object, so the volumetric path integrator (integratePath) handles subsurface
+ * transport with the same free-flight/phase machinery as participating media.
+ * The artist diffuse albedo maps to the single-scatter albedo (Chiang 2016) and
+ * the mean free path to the extinction (Christensen-Burley); the scattering and
+ * absorption coefficients then partition the extinction by that albedo.
+ */
+export function subsurfaceMedium(
+  diffuseAlbedo: Vec3,
+  meanFreePath: Vec3,
+  anisotropy = 0,
+): HomogeneousMedium {
+  const alpha = singleScatterAlbedo(diffuseAlbedo);
+  const sigmaT = extinctionFromMeanFreePath(meanFreePath, diffuseAlbedo);
+  const scattering: Vec3 = [alpha[0] * sigmaT[0], alpha[1] * sigmaT[1], alpha[2] * sigmaT[2]];
+  const absorption: Vec3 = [
+    (1 - alpha[0]) * sigmaT[0],
+    (1 - alpha[1]) * sigmaT[1],
+    (1 - alpha[2]) * sigmaT[2],
+  ];
+  return { absorption, scattering, anisotropy };
 }

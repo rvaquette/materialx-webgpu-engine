@@ -237,3 +237,45 @@ describe('integratePath MIS on a surface light (T057e)', () => {
     }
   });
 });
+
+describe('integratePath participating media', () => {
+  const Le = 4;
+  const D = 2;
+  const a = 0.5;
+  // Camera-interior absorbing medium (no scattering): Beer-Lambert attenuation of
+  // a far emissive surface. Expected radiance converges to exp(-a*D)*Le.
+  const absorbing = { absorption: [a, a, a], scattering: [0, 0, 0], anisotropy: 0 } as const;
+  const farLight: SurfaceHit = { position: [0, 0, 1 - D], normal: [0, 0, 1], emission: [Le, Le, Le] };
+  const scene = makeScene({ intersect: () => farLight });
+
+  it('attenuates a far light by Beer-Lambert through an absorbing medium', () => {
+    const rng = createPcg32(5);
+    let sum = 0;
+    const n = 40000;
+    for (let i = 0; i < n; i++) {
+      sum += integratePath(scene, cameraRay, rng, { initialMedium: absorbing, maxBounces: 16 })[0];
+    }
+    const expected = Math.exp(-a * D) * Le;
+    expect(sum / n).toBeCloseTo(expected, 1);
+  });
+
+  it('stays finite, non-negative and bounded by the source through a scattering medium', () => {
+    const scattering = { absorption: [0, 0, 0], scattering: [0.6, 0.6, 0.6], anisotropy: 0 } as const;
+    const rng = createPcg32(9);
+    let sum = 0;
+    const n = 4000;
+    for (let i = 0; i < n; i++) {
+      const v = integratePath(scene, cameraRay, rng, { initialMedium: scattering, maxBounces: 64 })[0];
+      expect(Number.isFinite(v)).toBe(true);
+      expect(v).toBeGreaterThanOrEqual(0);
+      sum += v;
+    }
+    expect(sum / n).toBeLessThanOrEqual(Le);
+  });
+
+  it('ignores media for scenes that provide none (backward compatible)', () => {
+    const hit: SurfaceHit = { position: [0, 0, 0], normal: [0, 0, 1], emission: [3, 2, 1] };
+    const plain = makeScene({ intersect: () => hit });
+    expect(integratePath(plain, cameraRay, createPcg32(1))).toEqual([3, 2, 1]);
+  });
+});

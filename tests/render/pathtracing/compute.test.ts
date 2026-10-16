@@ -116,6 +116,35 @@ describe('pathTraceComputeWgsl', () => {
   });
 });
 
+describe('pathTraceComputeWgsl participating media (increment 4)', () => {
+  const src = pathTraceComputeWgsl();
+
+  it('emits the homogeneous-medium helpers and the HG phase sampler', () => {
+    expect(src).toContain('struct MxMedium {');
+    expect(src).toContain('fn mx_absorbing_medium(');
+    expect(src).toContain('fn mx_subsurface_medium(');
+    expect(src).toContain('fn mx_single_scatter_albedo(');
+    expect(src).toContain('fn mx_extinction_from_mfp(');
+    expect(src).toContain('fn mx_sample_homogeneous(');
+    expect(src).toContain('fn mx_sample_hg(');
+  });
+
+  it('derives the interior medium from the packed closure flags', () => {
+    expect(src).toContain('const MX_LOBE_HAS_ATTENUATION');
+    expect(src).toContain('const MX_LOBE_HAS_SUBSURFACE_RADIUS');
+    expect(src).toContain('c.hasInterior = 1u;');
+    expect(src).toContain('interiorSigmaA: vec3f,');
+  });
+
+  it('runs free-flight sampling and toggles the medium on transmission', () => {
+    expect(src).toContain('var inMedium = false;');
+    expect(src).toContain('mx_sample_homogeneous(medium, tMax, state)');
+    expect(src).toContain('mx_sample_hg(-rd, medium.g');
+    expect(src).toContain('(wo.z > 0.0) != (bs.wi.z > 0.0)');
+    expect(src).toContain('medium = MxMedium(c.interiorSigmaA, c.interiorSigmaS, c.interiorG);');
+  });
+});
+
 describe('pathTraceComputeWgsl varyings (T057h)', () => {
   it('omits the varyings machinery by default', () => {
     const src = pathTraceComputeWgsl();

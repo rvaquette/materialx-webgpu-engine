@@ -6,7 +6,9 @@ import {
   extinctionFromMeanFreePath,
   randomWalkSlabChannel,
   singleScatterAlbedo,
+  subsurfaceMedium,
 } from '../../../src/render/pathtracing/subsurface.ts';
+import { extinction } from '../../../src/render/pathtracing/media.ts';
 
 describe('single-scatter albedo inversion', () => {
   it('maps black to zero and white near one', () => {
@@ -83,5 +85,31 @@ describe('random walk slab', () => {
     const r = randomWalkSlabChannel(0, 1, 0, 1, entry, rng);
     expect(r.exit).toBe('back');
     expect(r.weight).toBe(1);
+  });
+});
+
+describe('subsurfaceMedium bridge to the volumetric integrator', () => {
+  const albedo: Vec3 = [0.8, 0.5, 0.3];
+  const mfp: Vec3 = [0.4, 0.4, 0.4];
+
+  it('partitions extinction into scattering + absorption by the single-scatter albedo', () => {
+    const m = subsurfaceMedium(albedo, mfp, 0.1);
+    const sigmaT = extinction(m);
+    const expectedSigmaT = extinctionFromMeanFreePath(mfp, albedo);
+    const expectedAlpha = singleScatterAlbedo(albedo);
+    for (let c = 0; c < 3; c += 1) {
+      expect(sigmaT[c]!).toBeCloseTo(expectedSigmaT[c]!, 10);
+      expect(m.scattering[c]! / sigmaT[c]!).toBeCloseTo(expectedAlpha[c]!, 10);
+      expect(m.scattering[c]! + m.absorption[c]!).toBeCloseTo(sigmaT[c]!, 10);
+    }
+    expect(m.anisotropy).toBe(0.1);
+  });
+
+  it('scatters more (higher albedo) for a brighter diffuse albedo', () => {
+    const dark = subsurfaceMedium([0.2, 0.2, 0.2], mfp);
+    const bright = subsurfaceMedium([0.9, 0.9, 0.9], mfp);
+    const alphaDark = dark.scattering[0]! / extinction(dark)[0]!;
+    const alphaBright = bright.scattering[0]! / extinction(bright)[0]!;
+    expect(alphaBright).toBeGreaterThan(alphaDark);
   });
 });

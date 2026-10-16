@@ -13,7 +13,8 @@ import type { RasterSurface } from '../../../src/render/raster/scene-frame.ts';
 import type { SceneLight } from '../../../src/usd/lights.ts';
 import { createPcg32, integratePath, type Ray } from '../../../src/render/pathtracing/integrator.ts';
 import { evalWorld, layeredSurfaceBsdf, surfaceBsdf } from '../../../src/render/pathtracing/bsdf.ts';
-import { canonicalSurfaceToLayered } from '../../../src/compiler/ir.ts';
+import { canonicalSurfaceToLayered, type LayeredClosure } from '../../../src/compiler/ir.ts';
+import { packLayeredMaterial } from '../../../src/render/pathtracing/material-record.ts';
 import { evaluateSurfaceToLayered } from '../../../src/compiler/surface-eval.ts';
 import { IDENTITY4 } from '../../../src/scene/transforms.ts';
 import { resolveSurface, type ResolvedSurface } from '../../../src/materialx/surface-graph.ts';
@@ -299,5 +300,77 @@ describe('direct lighting and the full integrator over packed buffers', () => {
       sum += r[0];
     }
     expect(sum).toBeGreaterThan(0);
+  });
+});
+
+describe('interior medium oracle wiring', () => {
+  it('attaches an absorbing interior when the hit material transmits with attenuation', () => {
+    const scene = build();
+    const glass: LayeredClosure = {
+      lobes: [
+        {
+          kind: 'dielectric_transmission',
+          weight: 1,
+          color: [1, 1, 1],
+          roughness: 0.02,
+          ior: 1.5,
+          attenuationColor: [0.5, 0.5, 0.5],
+          attenuationDistance: 2,
+        },
+      ],
+      opacity: 1,
+    };
+    scene.materials.set(packLayeredMaterial(glass), 0);
+    const sampler = createSceneSampler(scene);
+    const hit = sampler.intersect({ origin: [0, 0, 2], direction: [0, 0, -1] })!;
+    expect(hit.interiorMedium).toBeDefined();
+    // attenuationColor 0.5 reached at distance 2 -> sigma_a = -ln(0.5)/2, no scattering.
+    expect(hit.interiorMedium!.absorption[0]).toBeCloseTo(-Math.log(0.5) / 2, 6);
+    expect(hit.interiorMedium!.scattering[0]).toBe(0);
+  });
+
+  it('derives a scattering interior from a subsurface lobe radius', () => {
+    const scene = build();
+    const skin: LayeredClosure = {
+      lobes: [{ kind: 'subsurface', weight: 1, color: [0.9, 0.5, 0.4], subsurfaceRadius: [1.2, 0.4, 0.2] }],
+      opacity: 1,
+    };
+    scene.materials.set(packLayeredMaterial(skin), 0);
+    const sampler = createSceneSampler(scene);
+    const hit = sampler.intersect({ origin: [0, 0, 2], direction: [0, 0, -1] })!;
+    expect(hit.interiorMedium).toBeDefined();
+    expect(hit.interiorMedium!.scattering[0]).toBeGreaterThan(0);
+  });
+
+  it('attaches no interior medium to an opaque material', () => {
+    const scene = build({
+      baseColor: [0.5, 0.5, 0.5],
+      metalness: 0,
+      roughness: 0.3,
+      transmission: 0,
+      subsurface: 0,
+      ior: 1.5,
+      specular: 0.5,
+    });
+    const sampler = createSceneSampler(scene);
+    const hit = sampler.intersect({ origin: [0, 0, 2], direction: [0, 0, -1] })!;
+    expect(hit.interiorMedium).toBeUndefined();
+  });
+
+  it('does not flag a reflective metal sample as transmission', () => {
+    const scene = build({
+      baseColor: [0.9, 0.7, 0.4],
+      metalness: 1,
+      roughness: 0.2,
+      transmission: 0,
+      subsurface: 0,
+      ior: 1.5,
+      specular: 1,
+    });
+    const sampler = createSceneSampler(scene);
+    const hit = sampler.intersect({ origin: [0, 0, 2], direction: [0, 0, -1] })!;
+    const bs = sampler.sampleBsdf(hit, [0, 0, 1], createPcg32(7))!;
+    expect(bs).not.toBeNull();
+    expect(bs.transmission).toBe(false);
   });
 });

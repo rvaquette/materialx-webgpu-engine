@@ -331,6 +331,12 @@ export interface LayeredBsdfLobe {
   extinction?: Rgb;
   /** Thin-walled transmission: straight-through, no refraction bending. */
   thinWalled?: boolean;
+  /** Interior Beer-Lambert tint reached after attenuationDistance (glass volume). */
+  attenuationColor?: Rgb;
+  /** Reference distance for attenuationColor; absent/Infinity disables absorption. */
+  attenuationDistance?: number;
+  /** Subsurface mean free path per channel (OpenPBR subsurface_radius); drives the BSSRDF walk. */
+  subsurfaceRadius?: Rgb;
 }
 
 /** Dielectric coat layered over the base stack (clearcoat). */
@@ -397,6 +403,14 @@ export interface CanonicalSurfaceInputs {
   readonly subsurface: number;
   readonly ior: number;
   readonly specular: number;
+  /** Interior attenuation tint for the transmission lobe (glass volume colour). */
+  readonly attenuationColor?: Rgb;
+  /** Reference distance for attenuationColor; Infinity/absent disables absorption. */
+  readonly attenuationDistance?: number;
+  /** Subsurface albedo tint; defaults to baseColor. */
+  readonly subsurfaceColor?: Rgb;
+  /** Subsurface mean free path per channel; enables the volumetric BSSRDF walk. */
+  readonly subsurfaceRadius?: Rgb;
 }
 
 const clamp01 = (x: number): number => (x < 0 ? 0 : x > 1 ? 1 : x);
@@ -413,13 +427,31 @@ const clamp01 = (x: number): number => (x < 0 ? 0 : x > 1 ? 1 : x);
 export function canonicalSurfaceToLayered(p: CanonicalSurfaceInputs): LayeredClosure {
   const metal = clamp01(p.metalness);
   const trans = clamp01(p.transmission);
+  const sss = clamp01(p.subsurface);
   const spec = clamp01(p.specular);
   const dielectricShare = (1 - metal) * (1 - trans);
+  // A subsurface lobe replaces part of the diffuse base only when a radius is authored;
+  // without it subsurface stays folded into diffuse (the T054 non-regression anchor).
+  const sssVolumetric = sss > 0 && p.subsurfaceRadius !== undefined;
+  const transmissionLobe: LayeredBsdfLobe = {
+    kind: 'dielectric_transmission',
+    weight: (1 - metal) * trans,
+    color: p.baseColor,
+    roughness: p.roughness,
+    ior: p.ior,
+  };
+  if (p.attenuationColor !== undefined && p.attenuationDistance !== undefined) {
+    transmissionLobe.attenuationColor = p.attenuationColor;
+    transmissionLobe.attenuationDistance = p.attenuationDistance;
+  }
   const lobes: LayeredBsdfLobe[] = [
     { kind: 'conductor', weight: metal, color: p.baseColor, roughness: p.roughness },
-    { kind: 'dielectric_transmission', weight: (1 - metal) * trans, color: p.baseColor, roughness: p.roughness, ior: p.ior },
+    transmissionLobe,
     { kind: 'dielectric_reflection', weight: dielectricShare * spec, color: [1, 1, 1], roughness: p.roughness, ior: p.ior },
-    { kind: 'burley_diffuse', weight: dielectricShare, color: p.baseColor, roughness: p.roughness },
+    { kind: 'burley_diffuse', weight: sssVolumetric ? dielectricShare * (1 - sss) : dielectricShare, color: p.baseColor, roughness: p.roughness },
   ];
+  if (sssVolumetric) {
+    lobes.push({ kind: 'subsurface', weight: dielectricShare * sss, color: p.subsurfaceColor ?? p.baseColor, subsurfaceRadius: p.subsurfaceRadius });
+  }
   return { lobes: lobes.filter((l) => l.weight > 0), opacity: 1 };
 }

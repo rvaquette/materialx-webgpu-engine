@@ -123,6 +123,34 @@ describe('T057b material-record codec', () => {
     expect(back.opacity).toBeCloseTo(0.9, 5);
   });
 
+  it('round-trips a transmissive interior medium and a subsurface radius', () => {
+    const closure: LayeredClosure = {
+      lobes: [
+        {
+          kind: 'dielectric_transmission',
+          weight: 1,
+          color: [0.8, 0.9, 1],
+          roughness: 0.05,
+          ior: 1.5,
+          attenuationColor: [0.5, 0.25, 0.1],
+          attenuationDistance: 2,
+        },
+        { kind: 'subsurface', weight: 0.7, color: [0.9, 0.5, 0.4], subsurfaceRadius: [1.2, 0.4, 0.2] },
+      ],
+      opacity: 1,
+    };
+    const back = unpackLayeredMaterial(packLayeredMaterial(closure));
+    expectLobesClose(closure, back);
+    const glass = back.lobes[0]!;
+    expect(glass.attenuationColor![1]!).toBeCloseTo(0.25, 5);
+    expect(glass.attenuationDistance!).toBeCloseTo(2, 5);
+    const sss = back.lobes[1]!;
+    expect(sss.subsurfaceRadius![0]!).toBeCloseTo(1.2, 5);
+    expect(sss.subsurfaceRadius![2]!).toBeCloseTo(0.2, 5);
+    // A lobe without medium fields keeps them undefined after the round-trip.
+    expect(back.lobes[1]!.attenuationColor).toBeUndefined();
+  });
+
   it('is idempotent: pack(unpack(pack(c))) is byte-identical', () => {
     const closure = canonicalSurfaceToLayered({
       baseColor: [0.3, 0.6, 0.2],

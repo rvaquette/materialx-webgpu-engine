@@ -43,6 +43,24 @@ export function extinction(medium: HomogeneousMedium): Vec3 {
   ];
 }
 
+/**
+ * Pure-absorption interior for a transmissive surface (OpenPBR / glTF
+ * KHR_materials_volume). attenuationColor is the Beer-Lambert tint reached after
+ * attenuationDistance, so sigma_a = -ln(color)/distance and there is no scattering.
+ * An infinite or non-positive distance yields a vacuum (no absorption).
+ */
+export function absorbingMedium(attenuationColor: Vec3, attenuationDistance: number): HomogeneousMedium {
+  const sigma = (c: number): number => {
+    if (!(attenuationDistance > 0) || !Number.isFinite(attenuationDistance)) return 0;
+    return -Math.log(Math.min(Math.max(c, 1e-6), 1)) / attenuationDistance;
+  };
+  return {
+    absorption: [sigma(attenuationColor[0]), sigma(attenuationColor[1]), sigma(attenuationColor[2])],
+    scattering: [0, 0, 0],
+    anisotropy: 0,
+  };
+}
+
 /** Beer-Lambert transmittance of a homogeneous segment, per channel. */
 export function transmittanceHomogeneous(sigmaT: Vec3, distance: number): Vec3 {
   const d = Math.max(distance, 0);

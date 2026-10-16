@@ -18,8 +18,8 @@ import type {
 /** Max lobes packed per material; matches MX_MAX_LOBES in LAYERED_CLOSURE_PRELUDE. */
 export const PT_MAX_LOBES = 8;
 
-/** f32 stride of one packed lobe (kind, weight, flags, color, color90, scalars, extinction). */
-export const PT_LOBE_FLOATS = 16;
+/** f32 stride of one packed lobe (kind, weight, flags, color, color90, scalars, extinction, medium). */
+export const PT_LOBE_FLOATS = 23;
 
 /** f32 count of the per-material header that precedes the lobe array. */
 export const PT_MATERIAL_HEADER_FLOATS = 29;
@@ -64,6 +64,8 @@ const LOBE_HAS_ROTATION = 8;
 const LOBE_HAS_IOR = 16;
 const LOBE_HAS_EXTINCTION = 32;
 const LOBE_THIN_WALLED = 64;
+const LOBE_HAS_ATTENUATION = 128;
+const LOBE_HAS_SUBSURFACE_RADIUS = 256;
 
 function rd(buf: ArrayLike<number>, i: number): number {
   return buf[i] ?? 0;
@@ -78,6 +80,8 @@ function writeLobe(out: Float32Array, base: number, lobe: LayeredBsdfLobe): void
   if (lobe.ior !== undefined) flags |= LOBE_HAS_IOR;
   if (lobe.extinction !== undefined) flags |= LOBE_HAS_EXTINCTION;
   if (lobe.thinWalled === true) flags |= LOBE_THIN_WALLED;
+  if (lobe.attenuationColor !== undefined && lobe.attenuationDistance !== undefined) flags |= LOBE_HAS_ATTENUATION;
+  if (lobe.subsurfaceRadius !== undefined) flags |= LOBE_HAS_SUBSURFACE_RADIUS;
 
   out[base] = KIND_TO_U32[lobe.kind];
   out[base + 1] = lobe.weight;
@@ -97,6 +101,15 @@ function writeLobe(out: Float32Array, base: number, lobe: LayeredBsdfLobe): void
   out[base + 13] = ext[0];
   out[base + 14] = ext[1];
   out[base + 15] = ext[2];
+  const atten = lobe.attenuationColor ?? [0, 0, 0];
+  out[base + 16] = atten[0];
+  out[base + 17] = atten[1];
+  out[base + 18] = atten[2];
+  out[base + 19] = lobe.attenuationDistance ?? 0;
+  const radius = lobe.subsurfaceRadius ?? [0, 0, 0];
+  out[base + 20] = radius[0];
+  out[base + 21] = radius[1];
+  out[base + 22] = radius[2];
 }
 
 function readLobe(buf: ArrayLike<number>, base: number): LayeredBsdfLobe {
@@ -116,6 +129,13 @@ function readLobe(buf: ArrayLike<number>, base: number): LayeredBsdfLobe {
     lobe.extinction = [rd(buf, base + 13), rd(buf, base + 14), rd(buf, base + 15)];
   }
   if ((flags & LOBE_THIN_WALLED) !== 0) lobe.thinWalled = true;
+  if ((flags & LOBE_HAS_ATTENUATION) !== 0) {
+    lobe.attenuationColor = [rd(buf, base + 16), rd(buf, base + 17), rd(buf, base + 18)];
+    lobe.attenuationDistance = rd(buf, base + 19);
+  }
+  if ((flags & LOBE_HAS_SUBSURFACE_RADIUS) !== 0) {
+    lobe.subsurfaceRadius = [rd(buf, base + 20), rd(buf, base + 21), rd(buf, base + 22)];
+  }
   return lobe;
 }
 
@@ -242,6 +262,8 @@ const MX_LOBE_HAS_ROTATION: u32 = ${LOBE_HAS_ROTATION}u;
 const MX_LOBE_HAS_IOR: u32 = ${LOBE_HAS_IOR}u;
 const MX_LOBE_HAS_EXTINCTION: u32 = ${LOBE_HAS_EXTINCTION}u;
 const MX_LOBE_THIN_WALLED: u32 = ${LOBE_THIN_WALLED}u;
+const MX_LOBE_HAS_ATTENUATION: u32 = ${LOBE_HAS_ATTENUATION}u;
+const MX_LOBE_HAS_SUBSURFACE_RADIUS: u32 = ${LOBE_HAS_SUBSURFACE_RADIUS}u;
 fn mx_material_lobe(base : u32) -> MxBsdfLobe {
   var lobe : MxBsdfLobe;
   lobe.kind = u32(round(materials[base]));
@@ -284,6 +306,43 @@ fn mx_material_closure(matIndex : u32) -> LayeredClosure {
   for (var i : u32 = 0u; i < MX_MAX_LOBES; i = i + 1u) {
     if (i < lobeCount) {
       c.lobes[i] = mx_material_lobe(base + MX_MATERIAL_HEADER_FLOATS + i * MX_LOBE_FLOATS);
+    }
+  }
+  // Interior participating medium derivation: subsurface radius takes priority
+  // over transmissive absorption, mirroring interiorMediumFor on the CPU oracle.
+  var sssFound = false;
+  for (var i : u32 = 0u; i < MX_MAX_LOBES; i = i + 1u) {
+    if (i >= lobeCount) { break; }
+    let lb = base + MX_MATERIAL_HEADER_FLOATS + i * MX_LOBE_FLOATS;
+    let kind = u32(round(materials[lb]));
+    let lflags = u32(round(materials[lb + 2u]));
+    if (kind == MX_LOBE_SUBSURFACE && (lflags & MX_LOBE_HAS_SUBSURFACE_RADIUS) != 0u && !sssFound) {
+      let scol = vec3f(materials[lb + 3u], materials[lb + 4u], materials[lb + 5u]);
+      let radius = vec3f(materials[lb + 20u], materials[lb + 21u], materials[lb + 22u]);
+      let g = select(0.0, materials[lb + 10u], (lflags & MX_LOBE_HAS_ANISOTROPY) != 0u);
+      let m = mx_subsurface_medium(scol, radius, g);
+      c.interiorSigmaA = m.sigmaA;
+      c.interiorSigmaS = m.sigmaS;
+      c.interiorG = m.g;
+      c.hasInterior = 1u;
+      sssFound = true;
+    }
+  }
+  if (!sssFound) {
+    for (var i : u32 = 0u; i < MX_MAX_LOBES; i = i + 1u) {
+      if (i >= lobeCount) { break; }
+      let lb = base + MX_MATERIAL_HEADER_FLOATS + i * MX_LOBE_FLOATS;
+      let kind = u32(round(materials[lb]));
+      let lflags = u32(round(materials[lb + 2u]));
+      if (kind == MX_LOBE_DIELECTRIC_TRANSMISSION && (lflags & MX_LOBE_HAS_ATTENUATION) != 0u && c.hasInterior == 0u) {
+        let acol = vec3f(materials[lb + 16u], materials[lb + 17u], materials[lb + 18u]);
+        let adist = materials[lb + 19u];
+        let m = mx_absorbing_medium(acol, adist);
+        c.interiorSigmaA = m.sigmaA;
+        c.interiorSigmaS = m.sigmaS;
+        c.interiorG = m.g;
+        c.hasInterior = 1u;
+      }
     }
   }
   return c;

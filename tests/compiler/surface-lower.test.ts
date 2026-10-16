@@ -227,3 +227,46 @@ describe('surfaceGraphToLayered (T055b)', () => {
     expect(lobe(closure, 'burley_diffuse')!.color).toEqual([1, 1, 1]);
   });
 });
+
+describe('canonicalSurfaceToLayered volumetric extension', () => {
+  const base = { baseColor: [0.6, 0.3, 0.1] as const, metalness: 0, roughness: 0.3, ior: 1.5, specular: 1 };
+
+  it('stays backward compatible when no medium params are authored', () => {
+    const closure = canonicalSurfaceToLayered({ ...base, transmission: 0.5, subsurface: 0.4 });
+    const trans = closure.lobes.find((l) => l.kind === 'dielectric_transmission')!;
+    expect(trans.attenuationColor).toBeUndefined();
+    expect(trans.attenuationDistance).toBeUndefined();
+    // Subsurface without a radius stays folded into the diffuse base (T054 anchor).
+    expect(closure.lobes.some((l) => l.kind === 'subsurface')).toBe(false);
+  });
+
+  it('attaches the interior attenuation onto the transmission lobe', () => {
+    const closure = canonicalSurfaceToLayered({
+      ...base,
+      transmission: 1,
+      subsurface: 0,
+      attenuationColor: [0.5, 0.25, 0.1],
+      attenuationDistance: 2,
+    });
+    const trans = closure.lobes.find((l) => l.kind === 'dielectric_transmission')!;
+    expect(trans.attenuationColor).toEqual([0.5, 0.25, 0.1]);
+    expect(trans.attenuationDistance).toBe(2);
+  });
+
+  it('emits a subsurface lobe carrying the radius when one is authored', () => {
+    const closure = canonicalSurfaceToLayered({
+      ...base,
+      transmission: 0,
+      subsurface: 0.6,
+      subsurfaceColor: [0.9, 0.5, 0.4],
+      subsurfaceRadius: [1.2, 0.4, 0.2],
+    });
+    const sss = closure.lobes.find((l) => l.kind === 'subsurface')!;
+    expect(sss.color).toEqual([0.9, 0.5, 0.4]);
+    expect(sss.subsurfaceRadius).toEqual([1.2, 0.4, 0.2]);
+    expect(sss.weight).toBeCloseTo(0.6, 10);
+    // The diffuse base is scaled down by the subsurface share.
+    const diffuse = closure.lobes.find((l) => l.kind === 'burley_diffuse')!;
+    expect(diffuse.weight).toBeCloseTo(0.4, 10);
+  });
+});

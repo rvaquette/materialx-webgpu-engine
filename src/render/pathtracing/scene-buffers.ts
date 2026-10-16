@@ -23,6 +23,8 @@ import {
   type RasterSurface,
 } from '../raster/scene-frame.ts';
 import { evalWorld, layeredSurfaceBsdf, sampleWorld } from './bsdf.ts';
+import { absorbingMedium, type HomogeneousMedium } from './media.ts';
+import { subsurfaceMedium } from './subsurface.ts';
 import { canonicalSurfaceToLayered, type LayeredClosure } from '../../compiler/ir.ts';
 import { composeSurfaceLayered, prepareSurface, type PreparedSurface } from '../../compiler/surface-eval.ts';
 import type { IrEvalVaryings } from '../../compiler/ir-eval.ts';
@@ -511,15 +513,35 @@ export function createSceneSampler(scene: PathTraceScene): SceneSampler {
     return layeredSurfaceBsdf(closureFor(hit as PtHit));
   }
 
+  // Interior entered on transmission: volumetric subsurface takes priority, then
+  // glass absorption; a closure with neither returns no medium (vacuum interior).
+  function interiorMediumFor(hit: PtHit): HomogeneousMedium | null {
+    const closure = closureFor(hit);
+    const sss = closure.lobes.find((l) => l.kind === 'subsurface' && l.subsurfaceRadius !== undefined);
+    if (sss?.subsurfaceRadius) return subsurfaceMedium(sss.color, sss.subsurfaceRadius, sss.anisotropy ?? 0);
+    const glass = closure.lobes.find(
+      (l) => l.kind === 'dielectric_transmission' && l.attenuationColor !== undefined && l.attenuationDistance !== undefined,
+    );
+    if (glass?.attenuationColor && glass.attenuationDistance !== undefined) {
+      return absorbingMedium(glass.attenuationColor, glass.attenuationDistance);
+    }
+    return null;
+  }
+
   const sampler: SceneSampler = {
     intersect(ray: Ray): SurfaceHit | null {
       const hit = traverse(scene, ray, Infinity, false);
-      return hit ? hitSurface(scene, hit, ray) : null;
+      if (!hit) return null;
+      const surface = hitSurface(scene, hit, ray);
+      const medium = interiorMediumFor(surface as PtHit);
+      return medium ? { ...surface, interiorMedium: medium } : surface;
     },
     sampleBsdf(hit: SurfaceHit, wo: Vec3, rng: Rng): BsdfSample | null {
       const s = sampleWorld(lobeFor(hit), hit.normal, wo, rng);
       if (!s) return null;
-      return { direction: s.direction, value: s.value, pdf: s.pdf, specular: s.specular };
+      // Direction crossed the interface (sign flip of the normal projection) -> transmission.
+      const transmission = dot3(hit.normal, wo) > 0 !== dot3(hit.normal, s.direction) > 0;
+      return { direction: s.direction, value: s.value, pdf: s.pdf, specular: s.specular, transmission };
     },
     evalBsdf(hit: SurfaceHit, wo: Vec3, wi: Vec3) {
       return evalWorld(lobeFor(hit), hit.normal, wo, wi);

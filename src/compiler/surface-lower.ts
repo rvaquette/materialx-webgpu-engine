@@ -92,14 +92,17 @@ function lowerStandardSurface(m: Inputs): LayeredClosure {
   const specColor = rgbOf(m, 'specular_color', [1, 1, 1]);
   const transColor = rgbOf(m, 'transmission_color', [1, 1, 1]);
   const sssColor = rgbOf(m, 'subsurface_color', [1, 1, 1]);
+  const transDepth = scalarOf(m, 'transmission_depth', 0);
+  const sssRadius = scaleRgb(rgbOf(m, 'subsurface_radius', [1, 1, 1]), scalarOf(m, 'subsurface_scale', 1));
+  const sssAniso = scalarOf(m, 'subsurface_anisotropy', 0);
   const dielectricShare = (1 - metal) * (1 - trans);
   const extras = anisoExtras(aniso, rot);
   const lobes: LayeredBsdfLobe[] = [
     { kind: 'conductor', weight: metal, color: baseColor, roughness: specRough, ...extras },
-    { kind: 'dielectric_transmission', weight: (1 - metal) * trans, color: transColor, roughness: specRough, ior },
+    { kind: 'dielectric_transmission', weight: (1 - metal) * trans, color: transColor, roughness: specRough, ior, ...(transDepth > 0 ? { attenuationColor: transColor, attenuationDistance: transDepth } : {}) },
     { kind: 'dielectric_reflection', weight: dielectricShare * spec, color: specColor, roughness: specRough, ior, ...extras },
     { kind: 'burley_diffuse', weight: dielectricShare * base, color: baseColor, roughness: diffRough },
-    { kind: 'subsurface', weight: dielectricShare * sss, color: sssColor },
+    { kind: 'subsurface', weight: dielectricShare * sss, color: sssColor, ...(sss > 0 ? { subsurfaceRadius: sssRadius, ...(sssAniso !== 0 ? { anisotropy: sssAniso } : {}) } : {}) },
   ];
   const slots: Slots = {};
   const coatW = clamp01(scalarOf(m, 'coat', 0));
@@ -130,16 +133,19 @@ function lowerOpenPbrSurface(m: Inputs): LayeredClosure {
   const specColor = rgbOf(m, 'specular_color', [1, 1, 1]);
   const transColor = rgbOf(m, 'transmission_color', [1, 1, 1]);
   const sssColor = rgbOf(m, 'subsurface_color', [0.8, 0.8, 0.8]);
+  const transDepth = scalarOf(m, 'transmission_depth', 0);
+  const sssRadius = scaleRgb(rgbOf(m, 'subsurface_radius_scale', [1, 0.5, 0.25]), scalarOf(m, 'subsurface_radius', 1));
+  const sssAniso = scalarOf(m, 'subsurface_scatter_anisotropy', 0);
   const dielectricShare = (1 - metal) * (1 - trans);
   const thinWalled = scalarOf(m, 'geometry_thin_walled', 0) > 0.5;
   const reflShare = thinWalled ? (1 - metal) : dielectricShare;
   const extras = anisoExtras(aniso, 0);
   const lobes: LayeredBsdfLobe[] = [
     { kind: 'conductor', weight: metal, color: baseColor, roughness: specRough, ...extras },
-    { kind: 'dielectric_transmission', weight: (1 - metal) * trans, color: transColor, roughness: specRough, ior, ...(thinWalled ? { thinWalled: true } : {}) },
+    { kind: 'dielectric_transmission', weight: (1 - metal) * trans, color: transColor, roughness: specRough, ior, ...(thinWalled ? { thinWalled: true } : (transDepth > 0 ? { attenuationColor: transColor, attenuationDistance: transDepth } : {})) },
     { kind: 'dielectric_reflection', weight: reflShare * specW, color: specColor, roughness: specRough, ior, ...extras },
     { kind: 'burley_diffuse', weight: dielectricShare * baseW, color: baseColor, roughness: diffRough },
-    { kind: 'subsurface', weight: dielectricShare * sss, color: sssColor },
+    { kind: 'subsurface', weight: dielectricShare * sss, color: sssColor, ...(sss > 0 ? { subsurfaceRadius: sssRadius, ...(sssAniso !== 0 ? { anisotropy: sssAniso } : {}) } : {}) },
   ];
   const slots: Slots = {};
   const coatW = clamp01(scalarOf(m, 'coat_weight', 0));
