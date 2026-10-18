@@ -17,7 +17,7 @@ function formatStatus(s: ViewerStatus): string {
   const extra = s.backend === 'pathtracing' ? `, ${s.samples} spp` : '';
   const note = s.warnings ? ` (${s.warnings} diagnostic(s))` : '';
   return `Backend ${s.backend}: ${s.drawCount} object(s), passes [${s.passes.join(', ')}]${extra}${note}. ` +
-    `[r]aster / [p]athtracing - glisser pour orbiter, molette pour zoomer`;
+    'Glisser pour orbiter, molette pour zoomer.';
 }
 
 function populateSelector(select: HTMLSelectElement): void {
@@ -51,6 +51,7 @@ async function main(): Promise<void> {
 
   const select = document.getElementById('scene') as HTMLSelectElement | null;
   if (select) populateSelector(select);
+  const backendButtons = Array.from(document.querySelectorAll<HTMLButtonElement>('#backend-mode button[data-backend]'));
 
   const viewer = new InteractiveViewer({
     device,
@@ -70,10 +71,16 @@ async function main(): Promise<void> {
   }
 
   select?.addEventListener('change', () => void loadEntry(select.value));
-  window.addEventListener('keydown', (e) => {
-    if (e.key === 'r') viewer.setBackend('raster');
-    else if (e.key === 'p') viewer.setBackend('pathtracing');
-  });
+  for (const button of backendButtons) {
+    button.addEventListener('click', () => {
+      const backend = button.dataset.backend;
+      if (backend !== 'raster' && backend !== 'pathtracing') return;
+      viewer.setBackend(backend);
+      for (const modeButton of backendButtons) {
+        modeButton.setAttribute('aria-pressed', String(modeButton === button));
+      }
+    });
+  }
 
   await loadEntry(SCENE_CATALOG[0]!.entry);
 }

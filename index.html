@@ -30,6 +30,7 @@
       }
       #toolbar {
         display: flex;
+        flex-wrap: wrap;
         align-items: center;
         gap: 8px;
         padding: 8px 12px;
@@ -47,6 +48,31 @@
         padding: 4px 8px;
         font-size: 13px;
       }
+      #backend-mode {
+        display: inline-flex;
+        overflow: hidden;
+        border: 1px solid #3a3a44;
+        border-radius: 4px;
+      }
+      #backend-mode button {
+        padding: 5px 10px;
+        border: 0;
+        color: #e6e6e6;
+        background: #1c1c22;
+        font: inherit;
+        cursor: pointer;
+      }
+      #backend-mode button + button {
+        border-left: 1px solid #3a3a44;
+      }
+      #backend-mode button[aria-pressed="true"] {
+        color: #fff;
+        background: #315c53;
+      }
+      #backend-mode button:focus-visible {
+        outline: 2px solid #91d5c4;
+        outline-offset: -2px;
+      }
     </style>
   </head>
   <body>
@@ -54,6 +80,11 @@
       <div id="toolbar">
         <label for="scene">Scene</label>
         <select id="scene"></select>
+        <span id="backend-label">Mode</span>
+        <div id="backend-mode" role="group" aria-labelledby="backend-label">
+          <button type="button" data-backend="raster" aria-pressed="true">Raster</button>
+          <button type="button" data-backend="pathtracing" aria-pressed="false">Path tracing</button>
+        </div>
       </div>
       <div id="status">Initializing…</div>
       <canvas id="view"></canvas>

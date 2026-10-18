@@ -215,13 +215,12 @@ export class InteractiveViewer {
   #loop = (): void => {
     const current = this.#current;
     if (current) {
-      const targetView = this.#context.getCurrentTexture().createView();
       if (this.#backend === 'pathtracing') {
-        current.renderPathTrace(targetView);
+        current.renderPathTrace(this.#context.getCurrentTexture().createView());
         this.#emitStatus();
       } else if (this.#rasterDirty) {
         this.#rasterDirty = false;
-        current.renderRaster(targetView);
+        current.renderRaster(this.#context.getCurrentTexture().createView());
         this.#emitStatus();
       }
     }
