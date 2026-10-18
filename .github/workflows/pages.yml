@@ -1,0 +1,77 @@
+name: Deploy Vite site to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout application
+        uses: actions/checkout@v4
+
+      - name: Checkout MaterialX
+        uses: actions/checkout@v4
+        with:
+          repository: rvaquette/MaterialX
+          ref: bea1e9251d8f936a73930ad19a6f3b37265d46f5
+          path: materialx
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Set up Emscripten
+        uses: mymindstorm/setup-emsdk@v14
+        with:
+          version: 4.0.8
+
+      - name: Build MaterialX JavaScript Core
+        run: |
+          cmake -S materialx -B materialx/javascript/build -G Ninja \
+            -DMATERIALX_BUILD_JS=ON \
+            -DMATERIALX_BUILD_GEN_GLSL=ON \
+            -DMATERIALX_EMSDK_PATH="$EMSDK" \
+            -DCMAKE_BUILD_TYPE=Release
+          cmake --build materialx/javascript/build --target install --parallel 2
+
+      - name: Install application dependencies
+        run: npm ci
+
+      - name: Build static site
+        run: npm run build
+        env:
+          MX_CORE_DIR: ${{ github.workspace }}/materialx/javascript/build/bin
+          MX_LIB_ROOT: ${{ github.workspace }}/materialx/libraries
+
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v5
