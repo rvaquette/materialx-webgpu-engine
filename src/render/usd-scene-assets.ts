@@ -36,10 +36,12 @@ import type { RawMesh, Primvar, PrimvarInterpolation } from '../geometry/prepare
 import type { SceneAsset, ScenePrim } from '../scene/types.ts';
 import type { Diagnostic, DiagnosticSink } from '../core/diagnostics.ts';
 
-/** Served dev-server paths for the MaterialX Core WASM and standard libraries. */
-const MATERIALX_CORE_URL = '/materialx/JsMaterialXCore.js';
-const MATERIALX_WASM_DIR = '/materialx/';
-const MATERIALX_LIBRARIES_ROOT = '/materialx/libraries';
+/** App-relative paths also work when dist/ is served below the workspace root. */
+const MATERIALX_ROOT = `${import.meta.env.BASE_URL}materialx/`;
+const MATERIALX_CORE_URL = `${MATERIALX_ROOT}JsMaterialXCore.js`;
+const MATERIALX_WASM_DIR = MATERIALX_ROOT;
+const MATERIALX_LIBRARIES_ROOT = `${MATERIALX_ROOT}libraries`;
+const appAssetUrl = (path: string): string => new URL(path, document.baseURI).href;
 
 /** Directory portion of a URL-ish path, keeping the trailing slash. */
 export function dirOf(path: string): string {
@@ -158,8 +160,8 @@ export async function loadMtlxSceneContext(
     }
   }
   const core = await loadMaterialXCore({
-    moduleUrl: MATERIALX_CORE_URL,
-    locateFile: (path) => MATERIALX_WASM_DIR + path,
+    moduleUrl: appAssetUrl(MATERIALX_CORE_URL),
+    locateFile: (path) => appAssetUrl(MATERIALX_WASM_DIR + path),
     onDiagnostic: sink,
   });
   const libraries = new MaterialXLibraries(core);

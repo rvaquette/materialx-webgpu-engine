@@ -70,6 +70,7 @@ const materialxAssets = {
 };
 
 export default defineConfig({
+  base: './',
   plugins: [crossOriginIsolation, materialxAssets],
   // MaterialX ships a .wasm binary that must be served as an asset, not inlined.
   assetsInclude: ['**/*.wasm'],

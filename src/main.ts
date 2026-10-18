@@ -63,7 +63,7 @@ async function main(): Promise<void> {
   async function loadEntry(entry: string): Promise<void> {
     setStatus(`Chargement de ${entry}...`);
     try {
-      await viewer.load(entry);
+      await viewer.load(new URL(entry, document.baseURI).href);
     } catch (e) {
       setStatus(`Echec du chargement: ${(e as Error)?.message ?? e}`);
     }
