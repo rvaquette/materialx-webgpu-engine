@@ -41,8 +41,15 @@ async function main(): Promise<void> {
   }
   const device = await adapter.requestDevice();
   const canvas = document.getElementById('view') as HTMLCanvasElement | null;
-  const context = canvas?.getContext('webgpu') ?? null;
-  if (!canvas || !context) {
+  if (!canvas) {
+    setStatus('WebGPU adapter ready; no canvas.');
+    return;
+  }
+  const bounds = canvas.getBoundingClientRect();
+  canvas.width = Math.max(1, Math.round(bounds.width));
+  canvas.height = Math.max(1, Math.round(bounds.height));
+  const context = canvas.getContext('webgpu');
+  if (!context) {
     setStatus('WebGPU adapter ready; no canvas context.');
     return;
   }
