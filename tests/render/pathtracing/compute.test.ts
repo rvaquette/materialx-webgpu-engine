@@ -90,6 +90,14 @@ describe('pathTraceComputeWgsl', () => {
     expect(src).toContain('fn pcg_hash(');
   });
 
+  it('uses orthographic per-pixel camera rays matching the raster projection', () => {
+    expect(src).toContain('struct MxCameraRay {');
+    expect(src).toContain('let near = U.invViewProj * vec4<f32>(ndc, 0.0, 1.0);');
+    expect(src).toContain('ray.direction = normalize(far.xyz / far.w - ray.origin);');
+    expect(src).toContain('integrate(ray.origin, ray.direction, &state)');
+    expect(src).not.toContain('normalize(world - U.eye.xyz)');
+  });
+
   it('wires NEE + MIS on the generated stack (environment next-event estimation)', () => {
     // T057e: the integrator mirrors integratePath -- it carries the MIS state and
     // weights the environment via the power heuristic instead of "no MIS".

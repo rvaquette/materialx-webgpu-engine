@@ -627,14 +627,22 @@ ${
 
 function wgslEntry(): string {
   return /* wgsl */ `
-fn camera_ray(px : vec2<f32>, dims : vec2<f32>, jitter : vec2<f32>) -> vec3<f32> {
+struct MxCameraRay {
+  origin: vec3<f32>,
+  direction: vec3<f32>,
+};
+
+fn camera_ray(px : vec2<f32>, dims : vec2<f32>, jitter : vec2<f32>) -> MxCameraRay {
   let ndc = vec2<f32>(
     ((px.x + jitter.x) / dims.x) * 2.0 - 1.0,
     1.0 - ((px.y + jitter.y) / dims.y) * 2.0,
   );
+  let near = U.invViewProj * vec4<f32>(ndc, 0.0, 1.0);
   let far = U.invViewProj * vec4<f32>(ndc, 1.0, 1.0);
-  let world = far.xyz / far.w;
-  return normalize(world - U.eye.xyz);
+  var ray : MxCameraRay;
+  ray.origin = near.xyz / near.w;
+  ray.direction = normalize(far.xyz / far.w - ray.origin);
+  return ray;
 }
 
 @compute @workgroup_size(${PT_WORKGROUP_SIZE}, ${PT_WORKGROUP_SIZE}, 1)
@@ -654,8 +662,8 @@ fn ${PT_COMPUTE_ENTRY}(@builtin(global_invocation_id) gid : vec3<u32>) {
   var sample = vec3<f32>(0.0);
   for (var i = 0u; i < spp; i = i + 1u) {
     let jitter = vec2<f32>(rng_next(&state), rng_next(&state));
-    let rd = camera_ray(vec2<f32>(f32(gid.x), f32(gid.y)), dims, jitter);
-    var radiance = integrate(U.eye.xyz, rd, &state);
+    let ray = camera_ray(vec2<f32>(f32(gid.x), f32(gid.y)), dims, jitter);
+    var radiance = integrate(ray.origin, ray.direction, &state);
     if (fireflyMax > 0.0) {
       let lum = dot(radiance, vec3<f32>(0.2126, 0.7152, 0.0722));
       if (lum > fireflyMax) { radiance = radiance * (fireflyMax / lum); }
