@@ -430,6 +430,18 @@ describe('PathTraceBackend', () => {
     expect(backend.frameIndex).toBe(0);
     expect(backend.advanceTile(512, 512)).toEqual({ tile: pathTraceTile(512, 512, 0), frameIndex: 0 });
   });
+
+  it('restarts the tile grid after a full-image interactive sample', () => {
+    const { device } = mockDevice();
+    const backend = new PathTraceBackend(device);
+    backend.advanceTile(128, 128);
+    backend.advanceTile(128, 128);
+    expect(backend.advanceFrame()).toBe(0);
+    expect(backend.advanceTile(128, 128)).toEqual({ tile: pathTraceTile(128, 128, 0), frameIndex: 1 });
+    backend.resetAccumulation();
+    expect(backend.advanceFrame()).toBe(0);
+    expect(backend.advanceTile(128, 128)).toEqual({ tile: pathTraceTile(128, 128, 0), frameIndex: 1 });
+  });
 });
 
 describe('path-tracing tiles', () => {

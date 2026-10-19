@@ -8,6 +8,8 @@ const coreRoot = process.env.MX_CORE_DIR ??
   'D:/WebGL2/MaterialX/MaterialX-rva/javascript/build/installed/JavaScript/MaterialX';
 const libraryRoot = process.env.MX_LIB_ROOT ?? 'D:/WebGL2/MaterialX/MaterialX-rva/libraries';
 const sceneNames = [
+  'standard-shader-ball',
+  'mtlx-library',
   'test_material_disney_gold',
   'test_material_brick_procedural',
   'test_material_brick_metal_mix',

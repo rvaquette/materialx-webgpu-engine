@@ -46,15 +46,50 @@
         font-size: 13px;
         color: #a8a8b0;
       }
-      #toolbar select {
+      #toolbar select, #material-controls select, #material-controls input {
         background: #1c1c22;
         color: #e6e6e6;
         border: 1px solid #3a3a44;
         border-radius: 4px;
         padding: 4px 8px;
         font-size: 13px;
-        min-height: 36px;
+        min-height: 44px;
         max-width: 100%;
+      }
+      #materials-panel {
+        border-bottom: 1px solid #26262c;
+        padding: 0 12px;
+      }
+      #materials-panel summary {
+        padding: 12px 0;
+        cursor: pointer;
+      }
+      #material-controls {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 12px;
+        margin: 0;
+        padding: 0 0 12px;
+        border: 0;
+        min-width: 0;
+      }
+      #material-controls label {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        min-width: 0;
+        font-size: 13px;
+        color: #a8a8b0;
+      }
+      #material-controls select, #material-controls input {
+        width: 100%;
+        box-sizing: border-box;
+        min-width: 0;
+      }
+      @media (max-width: 600px) {
+        #material-controls {
+          grid-template-columns: minmax(0, 1fr);
+        }
       }
       #backend-mode {
         display: inline-flex;
@@ -118,6 +153,14 @@
           <span id="pathtracing-toggle-label">Pause</span>
         </button>
       </div>
+      <details id="materials-panel">
+        <summary>Matériaux</summary>
+        <fieldset id="material-controls" disabled>
+          <label for="material-object">Objet<select id="material-object"></select></label>
+          <label for="material-filter">Rechercher<input id="material-filter" type="search" autocomplete="off" /></label>
+          <label for="material-file">Matériau<select id="material-file"></select></label>
+        </fieldset>
+      </details>
       <div id="status">Initializing…</div>
       <canvas id="view" width="512" height="512"></canvas>
     </div>

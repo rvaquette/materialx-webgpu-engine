@@ -10,6 +10,7 @@ import {
   type MtlxMaterialNode,
 } from '../../src/usd/materials.ts';
 import type { SceneAsset } from '../../src/scene/types.ts';
+import { applyObjectMaterialOverrides } from '../../src/render/usd-scene-assets.ts';
 
 function reader(layers: Record<string, string>): UsdLayerReader {
   return {
@@ -31,6 +32,37 @@ async function stage(source: string): Promise<SceneAsset> {
 }
 
 describe('resolveSceneMaterials', () => {
+  it('overrides one object without changing another object sharing its original material', async () => {
+    const scene = await stage(`#usda 1.0
+def Xform "World" {
+    rel material:binding = </World/Looks/shared>
+    def Scope "Looks" {
+        def Material "shared" (
+            prepend references = @./shared.mtlx@</MaterialX/Materials/shared>
+        ) {}
+    }
+    def Mesh "a" {}
+    def Mesh "b" {}
+}`);
+    const overridden = applyObjectMaterialOverrides(scene, new Map([
+      ['/World/a', { assetPath: '/scenes/mtlx-library/gold.mtlx', materialName: 'Gold' }],
+    ]));
+    const bindings = resolveSceneMaterials(overridden);
+    expect(bindings.bindings.get('/World/a')?.materialX?.materialName).toBe('Gold');
+    expect(bindings.bindings.get('/World/b')?.materialX?.materialName).toBe('shared');
+    expect(scene.prims.get('/World/a')?.materialBinding).toBeUndefined();
+    expect(scene.materials).toHaveLength(1);
+    const restored = resolveSceneMaterials(applyObjectMaterialOverrides(scene, new Map()));
+    expect(restored.bindings.get('/World/a')?.materialX?.materialName).toBe('shared');
+  });
+
+  it('rejects material overrides targeting a missing object', async () => {
+    const scene = await stage('#usda 1.0\ndef Mesh "object" {}');
+    expect(() => applyObjectMaterialOverrides(scene, new Map([
+      ['/missing', { assetPath: 'gold.mtlx', materialName: 'Gold' }],
+    ]))).toThrow('Unknown mesh');
+  });
+
   it('inherits bindings down the tree and dedups materials', async () => {
     const scene = await stage(`#usda 1.0
 def Xform "World" {

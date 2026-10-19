@@ -7,6 +7,7 @@
 
 import { InteractiveViewer, type ViewerStatus } from './render/viewer.ts';
 import { SCENE_CATALOG } from './scene/scene-catalog.ts';
+import { MATERIAL_CATALOG } from './scene/material-catalog.ts';
 
 function setStatus(text: string): void {
   const el = document.getElementById('status');
@@ -57,6 +58,10 @@ async function main(): Promise<void> {
 
   const select = document.getElementById('scene') as HTMLSelectElement | null;
   const resolution = document.getElementById('resolution') as HTMLSelectElement | null;
+  const objectSelect = document.getElementById('material-object') as HTMLSelectElement | null;
+  const materialSelect = document.getElementById('material-file') as HTMLSelectElement | null;
+  const materialFilter = document.getElementById('material-filter') as HTMLInputElement | null;
+  const materialControls = document.getElementById('material-controls') as HTMLFieldSetElement | null;
   if (select) populateSelector(select);
   const backendButtons = Array.from(document.querySelectorAll<HTMLButtonElement>('#backend-mode button[data-backend]'));
   const pathTracingToggle = document.getElementById('pathtracing-toggle') as HTMLButtonElement | null;
@@ -87,33 +92,87 @@ async function main(): Promise<void> {
     updatePathTracingToggle(viewer.backend, viewer.pathTracingPaused);
   });
 
+  function setBusy(busy: boolean): void {
+    if (select) select.disabled = busy;
+    if (resolution) resolution.disabled = busy;
+    if (materialControls) materialControls.disabled = busy || viewer.objects.length === 0;
+  }
+
+  function refreshMaterials(): void {
+    if (!materialSelect) return;
+    const selected = viewer.objects.find((object) => object.path === objectSelect?.value)?.assetPath ?? '';
+    const query = materialFilter?.value.trim().toLowerCase() ?? '';
+    materialSelect.replaceChildren(new Option("Matériau d'origine", ''));
+    const groups = new Map<string, HTMLOptGroupElement>();
+    for (const material of MATERIAL_CATALOG) {
+      const url = new URL(material.path, document.baseURI).href;
+      if (url !== selected && !`${material.group} ${material.label}`.toLowerCase().includes(query)) continue;
+      let group = groups.get(material.group);
+      if (!group) {
+        group = document.createElement('optgroup');
+        group.label = material.group;
+        groups.set(material.group, group);
+        materialSelect.appendChild(group);
+      }
+      group.appendChild(new Option(material.label, url));
+    }
+    materialSelect.value = selected;
+  }
+
+  function refreshObjects(): void {
+    if (!objectSelect) return;
+    const selected = objectSelect.value;
+    objectSelect.replaceChildren();
+    for (const object of viewer.objects) {
+      const option = new Option(`${object.path.split('/').at(-1)} (${object.material})`, object.path);
+      option.title = object.path;
+      objectSelect.appendChild(option);
+    }
+    if (viewer.objects.some((object) => object.path === selected)) objectSelect.value = selected;
+    refreshMaterials();
+  }
+
+  objectSelect?.addEventListener('change', refreshMaterials);
+  materialFilter?.addEventListener('input', refreshMaterials);
+  materialSelect?.addEventListener('change', async () => {
+    if (!objectSelect) return;
+    setBusy(true);
+    setStatus('Compilation du matériau...');
+    try {
+      await viewer.setObjectMaterial(objectSelect.value, materialSelect.value || undefined);
+      refreshObjects();
+    } catch (error) {
+      refreshMaterials();
+      setStatus(`Echec du matériau: ${(error as Error)?.message ?? error}`);
+    } finally {
+      setBusy(false);
+    }
+  });
+
   async function loadEntry(entry: string): Promise<void> {
-    if (select) select.disabled = true;
-    if (resolution) resolution.disabled = true;
+    setBusy(true);
     setStatus(`Chargement de ${entry}...`);
     try {
       await viewer.load(new URL(entry, document.baseURI).href);
+      refreshObjects();
     } catch (e) {
       setStatus(`Echec du chargement: ${(e as Error)?.message ?? e}`);
     } finally {
-      if (select) select.disabled = false;
-      if (resolution) resolution.disabled = false;
+      setBusy(false);
     }
   }
 
   select?.addEventListener('change', () => void loadEntry(select.value));
   resolution?.addEventListener('change', async () => {
     const previousSize = canvas.width;
-    resolution.disabled = true;
-    if (select) select.disabled = true;
+    setBusy(true);
     try {
       await viewer.resize(Number(resolution.value));
     } catch (error) {
       resolution.value = String(previousSize);
       setStatus(`Echec du redimensionnement: ${(error as Error)?.message ?? error}`);
     } finally {
-      resolution.disabled = false;
-      if (select) select.disabled = false;
+      setBusy(false);
     }
   });
   for (const button of backendButtons) {

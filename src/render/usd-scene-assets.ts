@@ -32,8 +32,9 @@ import type { PtImageProvider } from './pathtracing/device-bindings.ts';
 import { importCameras, type SceneCamera } from '../usd/cameras.ts';
 import { importLights, type SceneLight } from '../usd/lights.ts';
 import { importUsdStage, type UsdLayerReader } from '../usd/importer.ts';
+import { lowerPreviewSurfaceMaterials } from '../usd/preview-surface.ts';
 import type { RawMesh, Primvar, PrimvarInterpolation } from '../geometry/prepare.ts';
-import type { SceneAsset, ScenePrim } from '../scene/types.ts';
+import type { MaterialXReference, SceneAsset, ScenePrim } from '../scene/types.ts';
 import type { Diagnostic, DiagnosticSink } from '../core/diagnostics.ts';
 
 /** App-relative paths also work when dist/ is served below the workspace root. */
@@ -134,6 +135,16 @@ export interface MtlxSceneContext {
   surfaceFor: (material: MaterialResource) => RasterSurface;
 }
 
+function resolveMaterialImageUrls(text: string, directory: string): string {
+  const document = new DOMParser().parseFromString(text, 'application/xml');
+  if (document.querySelector('parsererror')) throw new Error('Invalid MaterialX XML.');
+  for (const input of document.querySelectorAll('[type="filename"][value]')) {
+    const file = input.getAttribute('value');
+    if (file) input.setAttribute('value', new URL(file, new URL(directory, window.location.href)).href);
+  }
+  return new XMLSerializer().serializeToString(document);
+}
+
 /** Load the MaterialX Core WASM + standard libraries, read every referenced .mtlx
  *  into a document source, and return the graph-compiler document set plus an image
  *  provider that decodes texture files off a 2D canvas. */
@@ -152,12 +163,21 @@ export async function loadMtlxSceneContext(
     const dir = dirOf(url);
     if (!materialDirs.includes(dir)) materialDirs.push(dir);
     try {
-      const text = await (await fetch(url)).text();
+      const response = await fetch(url);
+      if (!response.ok) throw new Error(`HTTP ${response.status}: ${url}`);
+      const text = resolveMaterialImageUrls(await response.text(), dir);
       texts.set(ref.assetPath, text);
       surfaces.set(ref.materialName, surfaceFromMtlx(text));
     } catch {
       line(`MaterialX introuvable: ${ref.assetPath}`);
     }
+  }
+  const lowered = lowerPreviewSurfaceMaterials(scene, sink);
+  if (lowered.length > 0 && !materialDirs.includes(baseDir)) materialDirs.push(baseDir);
+  for (const material of lowered) {
+    texts.set(material.reference.assetPath, resolveMaterialImageUrls(material.xml, baseDir));
+    (scene.materials as MaterialXReference[]).push(material.reference);
+    surfaces.set(material.reference.materialName, surfaceFromMtlx(material.xml));
   }
   const core = await loadMaterialXCore({
     moduleUrl: appAssetUrl(MATERIALX_CORE_URL),
@@ -309,13 +329,35 @@ export interface LoadedUsdScene {
 }
 
 /** Fetch + import a USD stage and compile its materials into GPU-neutral resources. */
+export interface ObjectMaterialOverride {
+  assetPath: string;
+  materialName: string;
+}
+
+export function applyObjectMaterialOverrides(
+  scene: SceneAsset,
+  overrides: ReadonlyMap<string, ObjectMaterialOverride>,
+): SceneAsset {
+  const prims = new Map(scene.prims);
+  const materials = [...scene.materials];
+  for (const [path, material] of overrides) {
+    const prim = prims.get(path);
+    if (!prim || (prim.typeName !== 'Mesh' && !prim.mesh)) throw new Error(`Unknown mesh: ${path}`);
+    const materialPath = `${path}/__MaterialOverride`;
+    prims.set(path, { ...prim, materialBinding: { target: materialPath } });
+    materials.push({ primPath: materialPath, ...material, referencedPrimPath: `/${material.materialName}` });
+  }
+  return { ...scene, prims, materials };
+}
+
 export async function loadUsdScene(
   entry: string,
   sink: DiagnosticSink,
   line: (m: string) => void = () => {},
+  overrides: ReadonlyMap<string, ObjectMaterialOverride> = new Map(),
 ): Promise<LoadedUsdScene> {
   const reader = httpReader(entry);
-  const scene = await importUsdStage(entry, { reader, sink });
+  const scene = applyObjectMaterialOverrides(await importUsdStage(entry, { reader, sink }), overrides);
   const lights = importLights(scene, { sink });
   const cameras = importCameras(scene, { sink });
   const mtlx = await loadMtlxSceneContext(scene, entry, sink, line);

@@ -5,6 +5,7 @@ export interface SceneCatalogEntry {
 }
 
 export const SCENE_CATALOG: readonly SceneCatalogEntry[] = [
+  { label: 'Standard shader ball', entry: './scenes/standard-shader-ball/standard-shader-ball.usda' },
   { label: 'Disney gold', entry: './scenes/test_material_disney_gold/test_material_disney_gold.usda' },
   { label: 'Brick procedural', entry: './scenes/test_material_brick_procedural/test_material_brick_procedural.usda' },
   { label: 'Brick + metal mix', entry: './scenes/test_material_brick_metal_mix/test_material_brick_metal_mix.usda' },

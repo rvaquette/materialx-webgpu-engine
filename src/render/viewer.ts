@@ -27,7 +27,7 @@ import { buildPathTraceUniform, PathTraceBackend, PT_UNIFORM_SIZE } from './path
 import { buildMaterialDispatch } from './pathtracing/material-variant.ts';
 import { buildPtDeviceBindings } from './pathtracing/device-bindings.ts';
 import type { DecodedPixelImage } from '../assets/images.ts';
-import { loadUsdScene, uploadMaterialTextures } from './usd-scene-assets.ts';
+import { loadUsdScene, uploadMaterialTextures, type ObjectMaterialOverride } from './usd-scene-assets.ts';
 import { OrbitCamera, attachOrbitControls } from '../scene/orbit-camera.ts';
 import { inverse4, lookAt4, multiply4, perspective4, type Vec3 } from '../scene/transforms.ts';
 import type { DiagnosticSink } from '../core/diagnostics.ts';
@@ -93,7 +93,7 @@ interface SceneRender {
   frame: SceneFramePlan;
   ptScene: PathTraceScene;
   renderRaster: (targetView: GPUTextureView) => void;
-  renderPathTrace: (targetView: GPUTextureView) => void;
+  renderPathTrace: (targetView: GPUTextureView, tiled: boolean) => void;
   resetPathTrace: () => void;
   applyCamera: (viewProj: readonly number[], eye: Vec3) => void;
   frameCount: () => number;
@@ -112,8 +112,12 @@ export class InteractiveViewer {
   #orbit: OrbitCamera;
   #current: SceneRender | null = null;
   #rebuildRender: (() => Promise<SceneRender>) | undefined;
+  #sceneEntry: string | undefined;
+  #materialOverrides = new Map<string, ObjectMaterialOverride>();
+  #objects: ReadonlyArray<{ path: string; material: string; assetPath?: string }> = [];
   #warnings = 0;
   #rasterDirty = true;
+  #lastCameraChange = -Infinity;
   #detachControls: () => void;
   #onStatus: ((s: ViewerStatus) => void) | undefined;
 
@@ -140,6 +144,29 @@ export class InteractiveViewer {
     return this.#backend;
   }
 
+  get objects(): ReadonlyArray<{ path: string; material: string; assetPath?: string }> {
+    return this.#objects;
+  }
+
+  async setObjectMaterial(path: string, assetPath?: string): Promise<void> {
+    if (!this.#sceneEntry || !this.#objects.some((object) => object.path === path)) {
+      throw new Error(`Unknown object: ${path}`);
+    }
+    const overrides = new Map(this.#materialOverrides);
+    if (assetPath) {
+      const response = await fetch(assetPath);
+      if (!response.ok) throw new Error(`HTTP ${response.status}: ${assetPath}`);
+      const document = new DOMParser().parseFromString(await response.text(), 'application/xml');
+      if (document.querySelector('parsererror')) throw new Error('Invalid MaterialX XML.');
+      const materialName = document.getElementsByTagName('surfacematerial')[0]?.getAttribute('name');
+      if (!materialName) throw new Error('No surfacematerial in this MaterialX document.');
+      overrides.set(path, { assetPath, materialName });
+    } else {
+      overrides.delete(path);
+    }
+    await this.load(this.#sceneEntry, overrides, true);
+  }
+
   get pathTracingPaused(): boolean {
     return this.#pathTracingPaused;
   }
@@ -152,6 +179,7 @@ export class InteractiveViewer {
   setBackend(kind: BackendKind): void {
     if (kind === this.#backend) return;
     this.#backend = kind;
+    this.#canvas.style.imageRendering = kind === 'pathtracing' ? 'pixelated' : 'auto';
     if (kind === 'pathtracing') this.#current?.resetPathTrace();
     else this.#rasterDirty = true;
     this.#emitStatus();
@@ -192,12 +220,20 @@ export class InteractiveViewer {
   }
 
   /** (Re)load a USD scene entry and rebuild both backends on its resources. */
-  async load(entry: string): Promise<void> {
+  async load(
+    entry: string,
+    overrides: ReadonlyMap<string, ObjectMaterialOverride> = new Map(),
+    preserveCamera = false,
+  ): Promise<void> {
     this.#warnings = 0;
     const sink: DiagnosticSink = (d) => {
       if (d.level === 'warning' || d.level === 'error') this.#warnings++;
     };
-    const loaded = await loadUsdScene(entry, sink);
+    const loaded = await loadUsdScene(entry, sink, () => {}, overrides);
+    if (overrides.size > 0 && loaded.resources.pendingMaterials.length > 0) {
+      loaded.mtlx.documents.delete();
+      throw new Error('MaterialX compilation failed.');
+    }
     const exposure = loaded.cameras[0]?.exposure ?? 0;
     const env = loaded.environment;
     const environment = env
@@ -220,6 +256,17 @@ export class InteractiveViewer {
     this.#rebuildRender = () => this.#buildSceneRender(loaded, frame, ptScene, exposure, sink);
     this.#current?.dispose();
     this.#current = render;
+    this.#sceneEntry = entry;
+    this.#materialOverrides = new Map(overrides);
+    this.#objects = loaded.resources.instances.filter((instance) => instance.hasGeometry).map((instance) => {
+      const material = instance.materialKey ? loaded.resources.materials.get(instance.materialKey) : undefined;
+      const override = overrides.get(instance.primPath);
+      return {
+        path: instance.primPath,
+        material: material?.materialName ?? 'Default',
+        ...(override ? { assetPath: override.assetPath } : {}),
+      };
+    });
 
     // Seed the orbit from the scene bounds so the first frame is framed, then push
     // the camera into both backends and restart accumulation.
@@ -228,7 +275,23 @@ export class InteractiveViewer {
       (ptScene.bounds.min[1] + ptScene.bounds.max[1]) / 2,
       (ptScene.bounds.min[2] + ptScene.bounds.max[2]) / 2,
     ];
-    this.#orbit = OrbitCamera.fromEyeTarget(frame.camera.eye, center, this.#width / this.#height);
+    if (!preserveCamera) {
+      const camera = loaded.cameras[0];
+      if (camera) {
+        const transform = camera.transform;
+        const eye: Vec3 = [transform[12]!, transform[13]!, transform[14]!];
+        const distance = Math.hypot(eye[0] - center[0], eye[1] - center[1], eye[2] - center[2]);
+        const axisLength = Math.hypot(transform[8]!, transform[9]!, transform[10]!) || 1;
+        const target: Vec3 = [
+          eye[0] - transform[8]! * distance / axisLength,
+          eye[1] - transform[9]! * distance / axisLength,
+          eye[2] - transform[10]! * distance / axisLength,
+        ];
+        this.#orbit = OrbitCamera.fromEyeTarget(eye, target, this.#width / this.#height, camera.fovY || 0.62);
+      } else {
+        this.#orbit = OrbitCamera.fromEyeTarget(frame.camera.eye, center, this.#width / this.#height);
+      }
+    }
     this.#detachControls();
     this.#detachControls = attachOrbitControls(this.#canvas, this.#orbit, () => this.#onCameraChanged());
     this.#onCameraChanged();
@@ -237,6 +300,7 @@ export class InteractiveViewer {
 
   #onCameraChanged(): void {
     if (!this.#current) return;
+    this.#lastCameraChange = performance.now();
     this.#current.applyCamera(this.#orbit.viewProj(), this.#orbit.eye);
     this.#rasterDirty = true;
     if (this.#backend === 'pathtracing') this.#current.resetPathTrace();
@@ -258,7 +322,8 @@ export class InteractiveViewer {
     const current = this.#current;
     if (current) {
       if (this.#backend === 'pathtracing' && !this.#pathTracingPaused) {
-        current.renderPathTrace(this.#context.getCurrentTexture().createView());
+        const tiled = performance.now() - this.#lastCameraChange >= 200;
+        current.renderPathTrace(this.#context.getCurrentTexture().createView(), tiled);
         this.#emitStatus();
       } else if (this.#backend === 'raster' && this.#rasterDirty) {
         this.#rasterDirty = false;
@@ -508,6 +573,9 @@ fn dir_to_uv(d: vec3<f32>) -> vec2<f32> {
     };
 
     // --- path tracer ----------------------------------------------------------
+    let pixelScale = 1;
+    let ptWidth = width;
+    let ptHeight = height;
     const dispatch = buildMaterialDispatch(ptScene.variantSources);
     const bindings = await buildPtDeviceBindings(dispatch, ptScene, loaded.mtlx.imageProvider, { sink });
     const ptBackend = new PathTraceBackend(device, { dispatch, ...(envAsset ? { environment: true } : {}) });
@@ -581,6 +649,7 @@ fn dir_to_uv(d: vec3<f32>) -> vec2<f32> {
             entries: [
               { binding: 0, resource: envTextureView },
               { binding: 1, resource: envSampler },
+              { binding: 2, resource: { buffer: storageData(new Float32Array([0])) } },
             ],
           })
         : undefined;
@@ -588,7 +657,7 @@ fn dir_to_uv(d: vec3<f32>) -> vec2<f32> {
     // Fullscreen tonemap of the accumulated mean to the swap chain.
     const ptDisplayModule = device.createShaderModule({
       code: `
-struct Info { width: u32, height: u32, exposure: f32, pad: u32 };
+struct Info { width: u32, height: u32, exposure: f32, pixelScale: u32 };
 @group(0) @binding(0) var<storage, read> accum : array<vec4<f32>>;
 @group(0) @binding(1) var<uniform> info : Info;
 @vertex fn vs(@builtin(vertex_index) i: u32) -> @builtin(position) vec4<f32> {
@@ -600,7 +669,8 @@ fn tonemap(c: vec3<f32>) -> vec3<f32> {
   return x / (x + vec3<f32>(1.0));
 }
 @fragment fn fs(@builtin(position) frag: vec4<f32>) -> @location(0) vec4<f32> {
-  let idx = u32(frag.y) * info.width + u32(frag.x);
+  let pixel = min(vec2<u32>(frag.xy) / info.pixelScale, vec2<u32>(info.width - 1u, info.height - 1u));
+  let idx = pixel.y * info.width + pixel.x;
   return vec4<f32>(tonemap(accum[idx].xyz), 1.0);
 }
 `,
@@ -612,7 +682,7 @@ fn tonemap(c: vec3<f32>) -> vec3<f32> {
       primitive: { topology: 'triangle-list' },
     });
     const ptInfo = track(device.createBuffer({ size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST }));
-    device.queue.writeBuffer(ptInfo, 0, new Uint32Array([width, height, 0, 0]));
+    device.queue.writeBuffer(ptInfo, 0, new Uint32Array([ptWidth, ptHeight, 0, pixelScale]));
     device.queue.writeBuffer(ptInfo, 8, new Float32Array([exposure]));
     const ptDisplayBindGroup = device.createBindGroup({
       layout: ptDisplayPipeline.getBindGroupLayout(0),
@@ -627,10 +697,21 @@ fn tonemap(c: vec3<f32>) -> vec3<f32> {
       ptBackend.resetAccumulation();
       device.queue.writeBuffer(accumBuffer, 0, zeroAccum);
     };
-    const renderPathTrace = (targetView: GPUTextureView): void => {
-      const { tile, frameIndex } = ptBackend.advanceTile(width, height);
+    const renderPathTrace = (targetView: GPUTextureView, tiled: boolean): void => {
+      const nextPixelScale = tiled ? 1 : 4;
+      if (pixelScale !== nextPixelScale) {
+        pixelScale = nextPixelScale;
+        ptWidth = Math.max(1, Math.ceil(width / pixelScale));
+        ptHeight = Math.max(1, Math.ceil(height / pixelScale));
+        resetPathTrace();
+        device.queue.writeBuffer(ptInfo, 0, new Uint32Array([ptWidth, ptHeight, 0, pixelScale]));
+        device.queue.writeBuffer(ptInfo, 8, new Float32Array([exposure]));
+      }
+      const { tile, frameIndex } = tiled
+        ? ptBackend.advanceTile(ptWidth, ptHeight)
+        : { tile: { x: 0, y: 0, width: ptWidth, height: ptHeight }, frameIndex: ptBackend.advanceFrame() };
       const [wgX, wgY] = PathTraceBackend.workgroupCount(tile.width, tile.height);
-      device.queue.writeBuffer(ptUniform, 0, buildPathTraceUniform(ptScene, frameIndex, 1, width, height, 0, tile));
+      device.queue.writeBuffer(ptUniform, 0, buildPathTraceUniform(ptScene, frameIndex, 1, ptWidth, ptHeight, 0, tile));
       const encoder = device.createCommandEncoder();
       const compute = encoder.beginComputePass();
       compute.setPipeline(ptPipeline);

@@ -850,6 +850,7 @@ export class PathTraceBackend {
   advanceFrame(): number {
     const current = this.#frameIndex;
     this.#frameIndex += 1;
+    this.#tileIndex = 0;
     return current;
   }
 
