@@ -23,7 +23,7 @@ describe('orbit camera clipping', () => {
   });
 });
 
-function fixture() {
+function fixture(pointerType = 'touch') {
   const target = new EventTarget();
   const captured = new Set<number>();
   const canvas = Object.assign(target, {
@@ -38,7 +38,7 @@ function fixture() {
   const detach = attachOrbitControls(canvas, camera, onChange);
   const pointer = (type: string, pointerId: number, clientX: number, clientY: number) => {
     const event = Object.assign(new Event(type, { cancelable: true }), {
-      pointerId, clientX, clientY, pointerType: 'touch', button: 0,
+      pointerId, clientX, clientY, pointerType, button: 0,
     });
     canvas.dispatchEvent(event);
     return event;
@@ -46,13 +46,24 @@ function fixture() {
   return { camera, onChange, detach, pointer, captured };
 }
 
-describe('touch orbit controls', () => {
+describe('orbit controls', () => {
+  it('reverses vertical mouse drag while preserving horizontal orbit', () => {
+    const { camera, pointer } = fixture('mouse');
+    pointer('pointerdown', 1, 100, 100);
+    pointer('pointermove', 1, 140, 120);
+    expect(camera.yaw).toBeCloseTo(-0.2);
+    expect(camera.pitch).toBeCloseTo(0.1);
+    pointer('pointermove', 1, 100, 80);
+    expect(camera.yaw).toBeCloseTo(0);
+    expect(camera.pitch).toBeCloseTo(-0.1);
+  });
+
   it('orbits with one finger and prevents native drag behavior', () => {
     const { camera, onChange, pointer } = fixture();
     expect(pointer('pointerdown', 1, 100, 100).defaultPrevented).toBe(true);
     expect(pointer('pointermove', 1, 140, 120).defaultPrevented).toBe(true);
     expect(camera.yaw).toBeCloseTo(-0.2);
-    expect(camera.pitch).toBeCloseTo(-0.1);
+    expect(camera.pitch).toBeCloseTo(0.1);
     expect(onChange).toHaveBeenCalledOnce();
   });
 

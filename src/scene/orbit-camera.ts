@@ -159,7 +159,7 @@ export function attachOrbitControls(
       const distance = Math.hypot(next.x - other.x, next.y - other.y);
       if (previousDistance > 0 && distance > 0) camera.dolly(previousDistance / distance);
       camera.pan(dx / 2, dy / 2, canvas.clientHeight || canvas.height);
-    } else if (e.pointerType === 'touch' || mode === 'orbit') camera.orbit(-dx * 0.005, -dy * 0.005);
+    } else if (e.pointerType === 'touch' || mode === 'orbit') camera.orbit(-dx * 0.005, dy * 0.005);
     else camera.pan(dx, dy, canvas.clientHeight || canvas.height);
     onChange();
   };
