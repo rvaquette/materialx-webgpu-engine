@@ -28,9 +28,29 @@ export const PT_COMPUTE_ENTRY = 'mx_path_trace';
 /** Floats in the path-trace uniform (PT_UNIFORM_SIZE / 4). Slots 0..39 hold the
  *  camera/light/env/frame blocks; 40..75 hold the 9 RGB SH irradiance coefficients
  *  (one vec4 per coefficient, w unused) the integrator reads for diffuse IBL. */
-export const PT_UNIFORM_FLOATS = 76;
+export const PT_UNIFORM_FLOATS = 80;
 /** Bytes in the path-trace uniform buffer. */
 export const PT_UNIFORM_SIZE = PT_UNIFORM_FLOATS * 4;
+
+export interface PathTraceTile {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export function pathTraceTile(width: number, height: number, index: number): PathTraceTile {
+  const column = index % 4;
+  const row = Math.floor(index / 4);
+  const x = Math.floor(column * width / 4);
+  const y = Math.floor(row * height / 4);
+  return {
+    x,
+    y,
+    width: Math.floor((column + 1) * width / 4) - x,
+    height: Math.floor((row + 1) * height / 4) - y,
+  };
+}
 
 // --- WGSL generator ----------------------------------------------------------
 
@@ -69,6 +89,7 @@ struct Uniforms {
   frame : vec4<f32>, // x = frameIndex, y = samplesPerFrame, z = width, w = height
   envExtra : vec4<f32>, // x = envResX, y = envResY, z = envTotalSum, w = hasEnvCdf
   sh : array<vec4<f32>, 9>, // 9 RGB SH9 irradiance coefficients (.xyz), w unused
+  tile : vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> U : Uniforms;
@@ -649,8 +670,10 @@ fn camera_ray(px : vec2<f32>, dims : vec2<f32>, jitter : vec2<f32>) -> MxCameraR
 fn ${PT_COMPUTE_ENTRY}(@builtin(global_invocation_id) gid : vec3<u32>) {
   let width = u32(U.frame.z);
   let height = u32(U.frame.w);
-  if (gid.x >= width || gid.y >= height) { return; }
-  let pixel = gid.y * width + gid.x;
+  if (gid.x >= u32(U.tile.z) || gid.y >= u32(U.tile.w)) { return; }
+  let pixelCoord = gid.xy + vec2<u32>(U.tile.xy);
+  if (pixelCoord.x >= width || pixelCoord.y >= height) { return; }
+  let pixel = pixelCoord.y * width + pixelCoord.x;
   let frameIndex = u32(U.frame.x);
   let spp = max(u32(U.frame.y), 1u);
   let dims = vec2<f32>(U.frame.z, U.frame.w);
@@ -662,7 +685,7 @@ fn ${PT_COMPUTE_ENTRY}(@builtin(global_invocation_id) gid : vec3<u32>) {
   var sample = vec3<f32>(0.0);
   for (var i = 0u; i < spp; i = i + 1u) {
     let jitter = vec2<f32>(rng_next(&state), rng_next(&state));
-    let ray = camera_ray(vec2<f32>(f32(gid.x), f32(gid.y)), dims, jitter);
+    let ray = camera_ray(vec2<f32>(pixelCoord), dims, jitter);
     var radiance = integrate(ray.origin, ray.direction, &state);
     if (fireflyMax > 0.0) {
       let lum = dot(radiance, vec3<f32>(0.2126, 0.7152, 0.0722));
@@ -743,6 +766,7 @@ export function buildPathTraceUniform(
   width: number,
   height: number,
   fireflyClamp = 0,
+  tile?: PathTraceTile,
 ): Float32Array {
   const d = new Float32Array(PT_UNIFORM_FLOATS);
   d.set(scene.camera.invViewProj, 0);
@@ -766,6 +790,7 @@ export function buildPathTraceUniform(
       d.set([sh[k * 3] ?? 0, sh[k * 3 + 1] ?? 0, sh[k * 3 + 2] ?? 0, 0], 40 + k * 4);
     }
   }
+  d.set(tile ? [tile.x, tile.y, tile.width, tile.height] : [0, 0, width, height], 76);
   return d;
 }
 
@@ -791,6 +816,7 @@ export class PathTraceBackend {
   readonly #dispatch: PtMaterialDispatch | undefined;
   #pipeline: PathTracePipeline | null = null;
   #frameIndex = 0;
+  #tileIndex = 0;
 
   constructor(device: GPUDevice, options: { textures?: boolean; dispatch?: PtMaterialDispatch; environment?: boolean } = {}) {
     this.#device = device;
@@ -806,6 +832,18 @@ export class PathTraceBackend {
   /** Reset progressive accumulation (new scene / camera / resize). */
   resetAccumulation(): void {
     this.#frameIndex = 0;
+    this.#tileIndex = 0;
+  }
+
+  advanceTile(width: number, height: number): { tile: PathTraceTile; frameIndex: number } {
+    const frameIndex = this.#frameIndex;
+    const tile = pathTraceTile(width, height, this.#tileIndex);
+    this.#tileIndex += 1;
+    if (this.#tileIndex === 16) {
+      this.#tileIndex = 0;
+      this.#frameIndex += 1;
+    }
+    return { tile, frameIndex };
   }
 
   /** Advance to the next frame and return the previous (current sample) index. */

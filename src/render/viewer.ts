@@ -574,8 +574,6 @@ fn dir_to_uv(d: vec3<f32>) -> vec2<f32> {
             })),
           })
         : undefined;
-    const [wgX, wgY] = PathTraceBackend.workgroupCount(width, height);
-
     const ptEnvGroup =
       envAsset && envTextureView && envSampler
         ? device.createBindGroup({
@@ -630,8 +628,9 @@ fn tonemap(c: vec3<f32>) -> vec3<f32> {
       device.queue.writeBuffer(accumBuffer, 0, zeroAccum);
     };
     const renderPathTrace = (targetView: GPUTextureView): void => {
-      const frameIndex = ptBackend.advanceFrame();
-      device.queue.writeBuffer(ptUniform, 0, buildPathTraceUniform(ptScene, frameIndex, 1, width, height));
+      const { tile, frameIndex } = ptBackend.advanceTile(width, height);
+      const [wgX, wgY] = PathTraceBackend.workgroupCount(tile.width, tile.height);
+      device.queue.writeBuffer(ptUniform, 0, buildPathTraceUniform(ptScene, frameIndex, 1, width, height, 0, tile));
       const encoder = device.createCommandEncoder();
       const compute = encoder.beginComputePass();
       compute.setPipeline(ptPipeline);

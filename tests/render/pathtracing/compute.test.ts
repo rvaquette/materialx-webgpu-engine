@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   buildPathTraceUniform,
   pathTraceComputeWgsl,
+  pathTraceTile,
   PathTraceBackend,
   PT_COMPUTE_ENTRY,
   PT_UNIFORM_FLOATS,
@@ -333,6 +334,15 @@ describe('pathTraceComputeWgsl texture registry (T057j)', () => {
 
 
 describe('buildPathTraceUniform layout', () => {
+  it('defaults to a full image and packs an explicit tile after the SH coefficients', () => {
+    const full = buildPathTraceUniform(fakeScene(), 0, 1, 512, 512);
+    expect(Array.from(full.slice(76))).toEqual([0, 0, 512, 512]);
+    const tile = pathTraceTile(512, 512, 6);
+    const tiled = buildPathTraceUniform(fakeScene(), 0, 1, 512, 512, 10, tile);
+    expect(Array.from(tiled.slice(76))).toEqual([256, 128, 128, 128]);
+    expect(tiled[19]).toBe(10);
+  });
+
   it('packs invViewProj, eye, light, environment and frame counters', () => {
     const u = buildPathTraceUniform(fakeScene(), 7, 2, 320, 180);
     expect(u.length).toBe(PT_UNIFORM_FLOATS);
@@ -403,5 +413,49 @@ describe('PathTraceBackend', () => {
 
   it('computes the workgroup count to cover an image', () => {
     expect(PathTraceBackend.workgroupCount(320, 180)).toEqual([40, 23]);
+  });
+
+  it('counts a sample only after sixteen tiles and resets to the first tile', () => {
+    const { device } = mockDevice();
+    const backend = new PathTraceBackend(device);
+    for (let index = 0; index < 16; index++) {
+      expect(backend.frameIndex).toBe(0);
+      const step = backend.advanceTile(512, 512);
+      expect(step.frameIndex).toBe(0);
+      expect(step.tile).toEqual(pathTraceTile(512, 512, index));
+    }
+    expect(backend.frameIndex).toBe(1);
+    expect(backend.advanceTile(512, 512)).toEqual({ tile: pathTraceTile(512, 512, 0), frameIndex: 1 });
+    backend.resetAccumulation();
+    expect(backend.frameIndex).toBe(0);
+    expect(backend.advanceTile(512, 512)).toEqual({ tile: pathTraceTile(512, 512, 0), frameIndex: 0 });
+  });
+});
+
+describe('path-tracing tiles', () => {
+  it.each([256, 512, 1024])('uses quarter-sized tiles at resolution %i', (size) => {
+    expect(pathTraceTile(size, size, 0)).toEqual({ x: 0, y: 0, width: size / 4, height: size / 4 });
+    expect(pathTraceTile(size, size, 15)).toEqual({ x: size * 3 / 4, y: size * 3 / 4, width: size / 4, height: size / 4 });
+  });
+
+  it.each([[17, 13], [3, 2]])('covers every pixel exactly once for %ix%i', (width, height) => {
+    const visits = new Uint8Array(width * height);
+    for (let index = 0; index < 16; index++) {
+      const tile = pathTraceTile(width, height, index);
+      for (let y = tile.y; y < tile.y + tile.height; y++) {
+        for (let x = tile.x; x < tile.x + tile.width; x++) {
+          visits[y * width + x]! += 1;
+        }
+      }
+    }
+    expect(Array.from(visits)).toEqual(Array(width * height).fill(1));
+  });
+
+  it('uses global pixels and rejects workgroup padding outside the tile', () => {
+    const src = pathTraceComputeWgsl();
+    expect(src).toContain('if (gid.x >= u32(U.tile.z) || gid.y >= u32(U.tile.w)) { return; }');
+    expect(src).toContain('let pixelCoord = gid.xy + vec2<u32>(U.tile.xy);');
+    expect(src).toContain('let pixel = pixelCoord.y * width + pixelCoord.x;');
+    expect(src).toContain('camera_ray(vec2<f32>(pixelCoord), dims, jitter)');
   });
 });
