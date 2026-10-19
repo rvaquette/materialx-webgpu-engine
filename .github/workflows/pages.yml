@@ -34,19 +34,24 @@ jobs:
           node-version: 22
           cache: npm
 
-      - name: Set up Emscripten
-        uses: mymindstorm/setup-emsdk@v14
-        with:
-          version: 4.0.8
+      # - name: Set up Emscripten
+      #   uses: mymindstorm/setup-emsdk@v14
+      #   with:
+      #     version: 4.0.8
 
-      - name: Build MaterialX JavaScript Core
+      # - name: Build MaterialX JavaScript Core
+      #   run: |
+      #     cmake -S materialx -B materialx/javascript/build -G Ninja \
+      #       -DMATERIALX_BUILD_JS=ON \
+      #       -DMATERIALX_BUILD_GEN_GLSL=ON \
+      #       -DMATERIALX_EMSDK_PATH="$EMSDK" \
+      #       -DCMAKE_BUILD_TYPE=Release
+      #     cmake --build materialx/javascript/build --target install --parallel 2
+
+      - name: Verify prebuilt MaterialX Core
         run: |
-          cmake -S materialx -B materialx/javascript/build -G Ninja \
-            -DMATERIALX_BUILD_JS=ON \
-            -DMATERIALX_BUILD_GEN_GLSL=ON \
-            -DMATERIALX_EMSDK_PATH="$EMSDK" \
-            -DCMAKE_BUILD_TYPE=Release
-          cmake --build materialx/javascript/build --target install --parallel 2
+          test -s materialx/javascript/build/bin/JsMaterialXCore.js
+          test -s materialx/javascript/build/bin/JsMaterialXCore.wasm
 
       - name: Install application dependencies
         run: npm ci
