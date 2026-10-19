@@ -39,7 +39,7 @@ function previewCamera(aspect: number, exposure: number): FrameCamera {
   const dir: Vec3 = [0.657, 0.438, 0.613];
   const dist = 7;
   const eye: Vec3 = [target[0] + dir[0] * dist, target[1] + dir[1] * dist, target[2] + dir[2] * dist];
-  return { viewProj: multiply4(perspective4(0.62, aspect, 0.1, 100), lookAt4(eye, target, [0, 1, 0])), eye, exposure };
+  return { viewProj: multiply4(perspective4(0.62, aspect, 0.001, 10000), lookAt4(eye, target, [0, 1, 0])), eye, exposure };
 }
 
 /** IEEE-754 float32 -> float16 bit pattern, for uploading HDR data to a
@@ -81,6 +81,7 @@ export type BackendKind = 'raster' | 'pathtracing';
 
 export interface ViewerStatus {
   backend: BackendKind;
+  pathTracingPaused: boolean;
   drawCount: number;
   passes: readonly ScenePassKind[];
   samples: number;
@@ -104,11 +105,13 @@ export class InteractiveViewer {
   readonly #context: GPUCanvasContext;
   readonly #outputFormat: GPUTextureFormat;
   readonly #canvas: HTMLCanvasElement;
-  readonly #width: number;
-  readonly #height: number;
+  #width: number;
+  #height: number;
   #backend: BackendKind = 'raster';
+  #pathTracingPaused = false;
   #orbit: OrbitCamera;
   #current: SceneRender | null = null;
+  #rebuildRender: (() => Promise<SceneRender>) | undefined;
   #warnings = 0;
   #rasterDirty = true;
   #detachControls: () => void;
@@ -137,6 +140,15 @@ export class InteractiveViewer {
     return this.#backend;
   }
 
+  get pathTracingPaused(): boolean {
+    return this.#pathTracingPaused;
+  }
+
+  setPathTracingPaused(paused: boolean): void {
+    this.#pathTracingPaused = paused;
+    this.#emitStatus();
+  }
+
   setBackend(kind: BackendKind): void {
     if (kind === this.#backend) return;
     this.#backend = kind;
@@ -149,6 +161,34 @@ export class InteractiveViewer {
     this.#detachControls();
     this.#current?.dispose();
     this.#current = null;
+    this.#rebuildRender = undefined;
+  }
+
+  async resize(size: number): Promise<void> {
+    if (![256, 512, 1024].includes(size)) throw new Error('Unsupported render resolution.');
+    if (size === this.#width && size === this.#height) return;
+    const previousWidth = this.#width;
+    const previousHeight = this.#height;
+    this.#width = size;
+    this.#height = size;
+    let render: SceneRender | undefined;
+    try {
+      render = await this.#rebuildRender?.();
+    } catch (error) {
+      this.#width = previousWidth;
+      this.#height = previousHeight;
+      throw error;
+    }
+    this.#canvas.width = size;
+    this.#canvas.height = size;
+    this.#canvas.style.width = `${size}px`;
+    this.#orbit.aspect = 1;
+    if (render) {
+      this.#current?.dispose();
+      this.#current = render;
+    }
+    this.#onCameraChanged();
+    this.#emitStatus();
   }
 
   /** (Re)load a USD scene entry and rebuild both backends on its resources. */
@@ -177,6 +217,7 @@ export class InteractiveViewer {
     });
 
     const render = await this.#buildSceneRender(loaded, frame, ptScene, exposure, sink);
+    this.#rebuildRender = () => this.#buildSceneRender(loaded, frame, ptScene, exposure, sink);
     this.#current?.dispose();
     this.#current = render;
 
@@ -205,6 +246,7 @@ export class InteractiveViewer {
     if (!this.#onStatus || !this.#current) return;
     this.#onStatus({
       backend: this.#backend,
+      pathTracingPaused: this.#pathTracingPaused,
       drawCount: this.#current.frame.draws.length,
       passes: this.#current.frame.passes,
       samples: this.#current.frameCount(),
@@ -215,10 +257,10 @@ export class InteractiveViewer {
   #loop = (): void => {
     const current = this.#current;
     if (current) {
-      if (this.#backend === 'pathtracing') {
+      if (this.#backend === 'pathtracing' && !this.#pathTracingPaused) {
         current.renderPathTrace(this.#context.getCurrentTexture().createView());
         this.#emitStatus();
-      } else if (this.#rasterDirty) {
+      } else if (this.#backend === 'raster' && this.#rasterDirty) {
         this.#rasterDirty = false;
         current.renderRaster(this.#context.getCurrentTexture().createView());
         this.#emitStatus();

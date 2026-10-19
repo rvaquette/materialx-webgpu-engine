@@ -19,11 +19,16 @@
         height: 100%;
       }
       canvas {
-        flex: 1 1 auto;
-        width: 100%;
-        height: 100%;
+        flex: none;
+        width: 512px;
+        max-width: 100%;
+        height: auto;
+        aspect-ratio: 1;
+        align-self: center;
         display: block;
         object-fit: contain;
+        touch-action: none;
+        user-select: none;
       }
       #status {
         padding: 8px 12px;
@@ -41,13 +46,15 @@
         font-size: 13px;
         color: #a8a8b0;
       }
-      #scene {
+      #toolbar select {
         background: #1c1c22;
         color: #e6e6e6;
         border: 1px solid #3a3a44;
         border-radius: 4px;
         padding: 4px 8px;
         font-size: 13px;
+        min-height: 36px;
+        max-width: 100%;
       }
       #backend-mode {
         display: inline-flex;
@@ -55,13 +62,27 @@
         border: 1px solid #3a3a44;
         border-radius: 4px;
       }
-      #backend-mode button {
+      #backend-mode button, #pathtracing-toggle {
         padding: 5px 10px;
+        min-height: 36px;
         border: 0;
         color: #e6e6e6;
         background: #1c1c22;
         font: inherit;
         cursor: pointer;
+      }
+      #pathtracing-toggle {
+        min-width: 112px;
+        border: 1px solid #3a3a44;
+        border-radius: 4px;
+      }
+      #pathtracing-toggle:disabled {
+        opacity: 0.4;
+        cursor: default;
+      }
+      #pathtracing-toggle:focus-visible {
+        outline: 2px solid #91d5c4;
+        outline-offset: 2px;
       }
       #backend-mode button + button {
         border-left: 1px solid #3a3a44;
@@ -81,14 +102,24 @@
       <div id="toolbar">
         <label for="scene">Scene</label>
         <select id="scene"></select>
+        <label for="resolution">Resolution</label>
+        <select id="resolution">
+          <option value="256">256 x 256</option>
+          <option value="512" selected>512 x 512</option>
+          <option value="1024">1024 x 1024</option>
+        </select>
         <span id="backend-label">Mode</span>
         <div id="backend-mode" role="group" aria-labelledby="backend-label">
           <button type="button" data-backend="raster" aria-pressed="true">Raster</button>
           <button type="button" data-backend="pathtracing" aria-pressed="false">Path tracing</button>
         </div>
+        <button id="pathtracing-toggle" type="button" disabled title="Mettre le path tracer en pause">
+          <span id="pathtracing-toggle-icon" aria-hidden="true">&#10074;&#10074;</span>
+          <span id="pathtracing-toggle-label">Pause</span>
+        </button>
       </div>
       <div id="status">Initializing…</div>
-      <canvas id="view"></canvas>
+      <canvas id="view" width="512" height="512"></canvas>
     </div>
     <script type="module" src="/src/main.ts"></script>
   </body>

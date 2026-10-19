@@ -51,8 +51,8 @@ export class OrbitCamera {
     target: Vec3,
     aspect: number,
     fovY = Math.PI / 3,
-    near = 0.1,
-    far = 100,
+    near = 0.001,
+    far = 10000,
   ): OrbitCamera {
     const dx = eye[0] - target[0];
     const dy = eye[1] - target[1];
@@ -105,9 +105,9 @@ export class OrbitCamera {
     const fl = Math.hypot(fx, fy, fz) || 1;
     const f: Vec3 = [fx / fl, fy / fl, fz / fl];
     // right = normalize(f x up), camUp = right x f.
-    let rx = f[1] * 1 - f[2] * 0;
-    let ry = f[2] * 0 - f[0] * 1;
-    let rz = f[0] * 0 - f[1] * 0;
+    let rx = -f[2];
+    let ry = 0;
+    let rz = f[0];
     const rl = Math.hypot(rx, ry, rz) || 1;
     rx /= rl; ry /= rl; rz /= rl;
     const ux = ry * f[2] - rz * f[1];
@@ -135,31 +135,36 @@ export function attachOrbitControls(
   camera: OrbitCamera,
   onChange: () => void,
 ): () => void {
-  let dragging = false;
+  const pointers = new Map<number, { x: number; y: number }>();
   let mode: 'orbit' | 'pan' = 'orbit';
-  let lastX = 0;
-  let lastY = 0;
 
   const onPointerDown = (e: PointerEvent): void => {
-    dragging = true;
+    e.preventDefault();
+    pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
     mode = e.button === 0 ? 'orbit' : 'pan';
-    lastX = e.clientX;
-    lastY = e.clientY;
     canvas.setPointerCapture(e.pointerId);
   };
   const onPointerMove = (e: PointerEvent): void => {
-    if (!dragging) return;
-    const dx = e.clientX - lastX;
-    const dy = e.clientY - lastY;
-    lastX = e.clientX;
-    lastY = e.clientY;
+    const previous = pointers.get(e.pointerId);
+    if (!previous) return;
+    e.preventDefault();
+    const dx = e.clientX - previous.x;
+    const dy = e.clientY - previous.y;
+    const next = { x: e.clientX, y: e.clientY };
+    const other = Array.from(pointers.entries()).find(([pointerId]) => pointerId !== e.pointerId)?.[1];
+    pointers.set(e.pointerId, next);
     if (dx === 0 && dy === 0) return;
-    if (mode === 'orbit') camera.orbit(-dx * 0.005, -dy * 0.005);
+    if (e.pointerType === 'touch' && other) {
+      const previousDistance = Math.hypot(previous.x - other.x, previous.y - other.y);
+      const distance = Math.hypot(next.x - other.x, next.y - other.y);
+      if (previousDistance > 0 && distance > 0) camera.dolly(previousDistance / distance);
+      camera.pan(dx / 2, dy / 2, canvas.clientHeight || canvas.height);
+    } else if (e.pointerType === 'touch' || mode === 'orbit') camera.orbit(-dx * 0.005, -dy * 0.005);
     else camera.pan(dx, dy, canvas.clientHeight || canvas.height);
     onChange();
   };
   const onPointerUp = (e: PointerEvent): void => {
-    dragging = false;
+    pointers.delete(e.pointerId);
     if (canvas.hasPointerCapture(e.pointerId)) canvas.releasePointerCapture(e.pointerId);
   };
   const onWheel = (e: WheelEvent): void => {
@@ -173,14 +178,17 @@ export function attachOrbitControls(
   canvas.addEventListener('pointermove', onPointerMove);
   canvas.addEventListener('pointerup', onPointerUp);
   canvas.addEventListener('pointercancel', onPointerUp);
+  canvas.addEventListener('lostpointercapture', onPointerUp);
   canvas.addEventListener('wheel', onWheel, { passive: false });
   canvas.addEventListener('contextmenu', onContextMenu);
 
   return () => {
+    pointers.clear();
     canvas.removeEventListener('pointerdown', onPointerDown);
     canvas.removeEventListener('pointermove', onPointerMove);
     canvas.removeEventListener('pointerup', onPointerUp);
     canvas.removeEventListener('pointercancel', onPointerUp);
+    canvas.removeEventListener('lostpointercapture', onPointerUp);
     canvas.removeEventListener('wheel', onWheel);
     canvas.removeEventListener('contextmenu', onContextMenu);
   };

@@ -14,7 +14,7 @@ function setStatus(text: string): void {
 }
 
 function formatStatus(s: ViewerStatus): string {
-  const extra = s.backend === 'pathtracing' ? `, ${s.samples} spp` : '';
+  const extra = s.backend === 'pathtracing' ? `, ${s.samples} spp${s.pathTracingPaused ? ' (pause)' : ''}` : '';
   const note = s.warnings ? ` (${s.warnings} diagnostic(s))` : '';
   return `Backend ${s.backend}: ${s.drawCount} object(s), passes [${s.passes.join(', ')}]${extra}${note}. ` +
     'Glisser pour orbiter, molette pour zoomer.';
@@ -45,9 +45,8 @@ async function main(): Promise<void> {
     setStatus('WebGPU adapter ready; no canvas.');
     return;
   }
-  const bounds = canvas.getBoundingClientRect();
-  canvas.width = Math.max(1, Math.round(bounds.width));
-  canvas.height = Math.max(1, Math.round(bounds.height));
+  canvas.width = 512;
+  canvas.height = 512;
   const context = canvas.getContext('webgpu');
   if (!context) {
     setStatus('WebGPU adapter ready; no canvas context.');
@@ -57,32 +56,72 @@ async function main(): Promise<void> {
   context.configure({ device, format: outputFormat, alphaMode: 'opaque' });
 
   const select = document.getElementById('scene') as HTMLSelectElement | null;
+  const resolution = document.getElementById('resolution') as HTMLSelectElement | null;
   if (select) populateSelector(select);
   const backendButtons = Array.from(document.querySelectorAll<HTMLButtonElement>('#backend-mode button[data-backend]'));
+  const pathTracingToggle = document.getElementById('pathtracing-toggle') as HTMLButtonElement | null;
+
+  function updatePathTracingToggle(backend: string, paused: boolean): void {
+    if (!pathTracingToggle) return;
+    pathTracingToggle.disabled = backend !== 'pathtracing';
+    pathTracingToggle.title = paused ? 'Reprendre le path tracer' : 'Mettre le path tracer en pause';
+    const label = document.getElementById('pathtracing-toggle-label');
+    const icon = document.getElementById('pathtracing-toggle-icon');
+    if (label) label.textContent = paused ? 'Reprendre' : 'Pause';
+    if (icon) icon.textContent = paused ? '\u25b6' : '\u275a\u275a';
+  }
 
   const viewer = new InteractiveViewer({
     device,
     context,
     outputFormat,
     canvas,
-    onStatus: (s) => setStatus(formatStatus(s)),
+    onStatus: (s) => {
+      setStatus(formatStatus(s));
+      updatePathTracingToggle(s.backend, s.pathTracingPaused);
+    },
+  });
+
+  pathTracingToggle?.addEventListener('click', () => {
+    viewer.setPathTracingPaused(!viewer.pathTracingPaused);
+    updatePathTracingToggle(viewer.backend, viewer.pathTracingPaused);
   });
 
   async function loadEntry(entry: string): Promise<void> {
+    if (select) select.disabled = true;
+    if (resolution) resolution.disabled = true;
     setStatus(`Chargement de ${entry}...`);
     try {
       await viewer.load(new URL(entry, document.baseURI).href);
     } catch (e) {
       setStatus(`Echec du chargement: ${(e as Error)?.message ?? e}`);
+    } finally {
+      if (select) select.disabled = false;
+      if (resolution) resolution.disabled = false;
     }
   }
 
   select?.addEventListener('change', () => void loadEntry(select.value));
+  resolution?.addEventListener('change', async () => {
+    const previousSize = canvas.width;
+    resolution.disabled = true;
+    if (select) select.disabled = true;
+    try {
+      await viewer.resize(Number(resolution.value));
+    } catch (error) {
+      resolution.value = String(previousSize);
+      setStatus(`Echec du redimensionnement: ${(error as Error)?.message ?? error}`);
+    } finally {
+      resolution.disabled = false;
+      if (select) select.disabled = false;
+    }
+  });
   for (const button of backendButtons) {
     button.addEventListener('click', () => {
       const backend = button.dataset.backend;
       if (backend !== 'raster' && backend !== 'pathtracing') return;
       viewer.setBackend(backend);
+      updatePathTracingToggle(backend, viewer.pathTracingPaused);
       for (const modeButton of backendButtons) {
         modeButton.setAttribute('aria-pressed', String(modeButton === button));
       }
