@@ -267,6 +267,7 @@ export const DEFAULT_SUPPORTED_UPSTREAM: ReadonlySet<string> = new Set([
   'min',
   'max',
   'clamp',
+  'range',
   'mix',
   'combine2',
   'combine3',

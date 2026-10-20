@@ -403,7 +403,16 @@ fn mx_fractal3d(p: vec3f, amplitude: f32, octaves: f32) -> f32 {
 const ARTISTIC_IOR_PRELUDE = `fn mx_artistic_ior(reflectivity: vec3f, edge_color: vec3f) -> vec3f {
   let r = clamp(reflectivity, vec3f(0.0), vec3f(0.99));
   let s = sqrt(r);
-  return (1.0 + s) / max(1.0 - s, vec3f(1e-4));
+  let nMin = (1.0 - r) / (1.0 + r);
+  let nMax = (1.0 + s) / (1.0 - s);
+  return mix(nMax, nMin, edge_color);
+}
+fn mx_artistic_ior_extinction(reflectivity: vec3f, edge_color: vec3f) -> vec3f {
+  let r = clamp(reflectivity, vec3f(0.0), vec3f(0.99));
+  let ior = mx_artistic_ior(reflectivity, edge_color);
+  let np1 = ior + 1.0;
+  let nm1 = ior - 1.0;
+  return sqrt(max((np1 * np1 * r - nm1 * nm1) / (1.0 - r), vec3f(0.0)));
 }
 `;
 
@@ -465,6 +474,18 @@ const LOWERINGS: readonly NodeLowering[] = [
     const t = ctx.wgslType(type);
     return `clamp(${inp.at(0)}, ${inp.at(1, `${t}(0.0)`)}, ${inp.at(2, `${t}(1.0)`)})`;
   }),
+  expr('range', (inp, type, ctx) => {
+    const target = ctx.wgslType(type);
+    const low = `${target}(${inp.at(1, '0.0')})`;
+    const high = `${target}(${inp.at(2, '1.0')})`;
+    const outLow = `${target}(${inp.at(3, '0.0')})`;
+    const outHigh = `${target}(${inp.at(4, '1.0')})`;
+    const gamma = `${target}(${inp.at(5, '1.0')})`;
+    const normalized = `((${inp.at(0)} - ${low}) / (${high} - ${low}))`;
+    const corrected = `(sign(${normalized}) * pow(abs(${normalized}), ${target}(1.0) / ${gamma}))`;
+    const mapped = `(${outLow} + (${outHigh} - ${outLow}) * ${corrected})`;
+    return `select(${mapped}, clamp(${mapped}, min(${outLow}, ${outHigh}), max(${outLow}, ${outHigh})), ${inp.at(6, 'false')})`;
+  }),
   expr('dotproduct', fn2('dot')),
   expr('dot', (inp) => inp.at(0)),
   expr('invert', (inp) => `(${inp.at(1, '1.0')} - ${inp.at(0)})`),
@@ -497,6 +518,7 @@ const LOWERINGS: readonly NodeLowering[] = [
   expr('fractal3d', (inp, _type, ctx) => `mx_fractal3d(${ctx.varyings.position}, ${inp.at(0, '1.0')}, ${inp.at(1, '3.0')})`, FRACTAL3D_PRELUDE),
   // pbr helpers
   expr('artistic_ior', (inp) => `mx_artistic_ior(${inp.at(0)}, ${inp.at(1, 'vec3f(0.0)')})`, ARTISTIC_IOR_PRELUDE),
+  expr('artistic_ior_extinction', (inp) => `mx_artistic_ior_extinction(${inp.at(0)}, ${inp.at(1, 'vec3f(0.0)')})`, ARTISTIC_IOR_PRELUDE),
   expr('roughness_anisotropy', (inp) => `mx_roughness_anisotropy(${inp.at(0, '0.0')}, ${inp.at(1, '0.0')})`, ROUGHNESS_ANISO_PRELUDE),
   expr('roughness_dual', (inp) => `mx_roughness_dual(${inp.at(0, 'vec2f(0.0)')})`, ROUGHNESS_DUAL_PRELUDE),
   expr('chiang_hair_absorption_from_color', (inp) => `mx_chiang_hair_absorption_from_color(${inp.at(0)})`, HAIR_PRELUDE),

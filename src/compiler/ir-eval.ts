@@ -183,11 +183,14 @@ function normalMap(sample: IrValue, scale: number, N: IrValue, T: IrValue): numb
   return normalize(out);
 }
 
-function artisticIor(reflectivity: IrValue): number[] {
-  return reflectivity.map((x) => {
+function artisticIor(reflectivity: IrValue, edge: IrValue): number[] {
+  return reflectivity.map((x, index) => {
     const r = clampNum(x, 0, 0.99);
     const s = Math.sqrt(r);
-    return (1 + s) / Math.max(1 - s, 1e-4);
+    const nMin = (1 - r) / (1 + r);
+    const nMax = (1 + s) / (1 - s);
+    const tint = edge[index] ?? edge[0] ?? 0;
+    return nMax * (1 - tint) + nMin * tint;
   });
 }
 
@@ -336,7 +339,30 @@ function evalCall(op: string, args: IrValue[], env: IrEvalVaryings, type: IrType
     case 'fractal3d':
       return [fractal3d(env.position ?? zeros(3), at(0, [1])[0]!, at(1, [3])[0]!)];
     case 'artistic_ior':
-      return artisticIor(at(0));
+      return artisticIor(at(0), at(1, [0, 0, 0]));
+    case 'artistic_ior_extinction': {
+      const reflectivity = at(0);
+      const ior = artisticIor(reflectivity, at(1, [0, 0, 0]));
+      return reflectivity.map((value, index) => {
+        const r = clampNum(value, 0, 0.99);
+        const n = ior[index]!;
+        return Math.sqrt(Math.max(((n + 1) ** 2 * r - (n - 1) ** 2) / (1 - r), 0));
+      });
+    }
+    case 'range': {
+      const component = (slot: number, index: number, fallback: number): number => args[slot]?.[index] ?? args[slot]?.[0] ?? fallback;
+      return at(0).map((value, index) => {
+        const low = component(1, index, 0);
+        const high = component(2, index, 1);
+        const outLow = component(3, index, 0);
+        const outHigh = component(4, index, 1);
+        const gamma = component(5, index, 1);
+        const normalized = (value - low) / (high - low);
+        const corrected = Math.sign(normalized) * Math.abs(normalized) ** (1 / gamma);
+        const mapped = outLow + (outHigh - outLow) * corrected;
+        return at(6, [0])[0] ? clampNum(mapped, Math.min(outLow, outHigh), Math.max(outLow, outHigh)) : mapped;
+      });
+    }
     case 'roughness_anisotropy': {
       const r = at(0, [0])[0]!;
       const a = clampNum(at(1, [0])[0]!, 0, 1);

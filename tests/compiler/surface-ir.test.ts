@@ -82,6 +82,83 @@ function lowerAndEmit(
 
 describe('lowerSurfaceInputsToIr (T055c)', () => {
   it.each([
+    ['false', [-1, 1, 4]],
+    ['true', [0, 1, 2]],
+  ] as const)('evaluates range gamma and doclamp=%s', (doclamp, expected) => {
+    const graph = surfaceGraph([conn('base_color', 'color3', 'remap')], [
+      upstream('remap', 'range', 'color3', [
+        value('in', 'color3', '-0.25, 0.25, 4'),
+        value('inlow', 'color3', '0, 0, 0'),
+        value('inhigh', 'color3', '1, 1, 1'),
+        value('outlow', 'color3', '0, 0, 0'),
+        value('outhigh', 'color3', '2, 2, 2'),
+        value('gamma', 'color3', '2, 2, 2'),
+        value('doclamp', 'boolean', doclamp),
+      ]),
+    ]);
+    const diagnostics: Diagnostic[] = [];
+    const surface = resolveSurface(graph, { onDiagnostic: (diagnostic) => diagnostics.push(diagnostic) })!;
+    const builder = new IrModuleBuilder();
+    const lowered = lowerSurfaceInputsToIr(graph, surface, builder);
+    builder.output({ name: 'color', type: COLOR3, ref: lowered.inputs.get('base_color')! });
+    const ir = builder.build();
+    expect(evaluateShaderIr(ir).get('color')).toEqual(expected);
+    expect(emitWgsl(ir).code).toContain(`= ${doclamp};`);
+    expect(diagnostics).toEqual([]);
+  });
+
+  it('preserves both artistic IOR outputs and ranges the copper display instead of substituting black', () => {
+    const graph = surfaceGraph([
+      conn('base_color', 'color3', 'display'),
+      conn('emission_color', 'color3', 'extinction_display'),
+    ], [
+      upstream('copper', 'artistic_ior', 'multioutput', [
+        value('reflectivity', 'color3', '0.955, 0.638, 0.538'),
+        value('edge_color', 'color3', '0.969, 0.906, 0.726'),
+      ]),
+      upstream('ior_display', 'range', 'color3', [
+        conn('in', 'color3', 'copper', 'ior'),
+        value('inlow', 'color3', '1, 1, 1'),
+        value('inhigh', 'color3', '5, 5, 5'),
+        value('outlow', 'color3', '0, 0, 0'),
+        value('outhigh', 'color3', '1, 1, 1'),
+        value('gamma', 'color3', '1, 1, 1'),
+      ]),
+      upstream('extinction_display', 'range', 'color3', [
+        conn('in', 'color3', 'copper', 'extinction'),
+        value('inlow', 'color3', '0, 0, 0'),
+        value('inhigh', 'color3', '8, 8, 8'),
+      ]),
+      upstream('display', 'mix', 'color3', [
+        conn('fg', 'color3', 'extinction_display'),
+        conn('bg', 'color3', 'ior_display'),
+        value('mix', 'float', '0.35'),
+      ]),
+    ]);
+    const builder = new IrModuleBuilder();
+    const diagnostics: Diagnostic[] = [];
+    const lowered = lowerSurfaceInputsToIr(graph, resolveSurface(graph)!, builder, (diagnostic) => diagnostics.push(diagnostic));
+    for (const name of ['base_color', 'emission_color']) {
+      builder.output({ name, type: COLOR3, ref: lowered.inputs.get(name)! });
+    }
+    const ir = builder.build();
+    const result = evaluateShaderIr(ir);
+    const reflectivity = [0.955, 0.638, 0.538];
+    const edge = [0.969, 0.906, 0.726];
+    reflectivity.forEach((r, index) => {
+      const n = ((1 + Math.sqrt(r)) / (1 - Math.sqrt(r))) * (1 - edge[index]!) + ((1 - r) / (1 + r)) * edge[index]!;
+      const k = Math.sqrt(Math.max(((n + 1) ** 2 * r - (n - 1) ** 2) / (1 - r), 0));
+      expect(result.get('emission_color')![index]).toBeCloseTo(k / 8, 10);
+      expect(result.get('base_color')![index]).toBeCloseTo((n - 1) / 4 * 0.65 + k / 8 * 0.35, 10);
+      expect(result.get('base_color')![index]).toBeGreaterThan(0);
+    });
+    expect(diagnostics).toEqual([]);
+    const code = emitWgsl(ir).code;
+    expect(code).toMatch(/= mx_artistic_ior\(e\d+, e\d+\);/);
+    expect(code).toMatch(/= mx_artistic_ior_extinction\(e\d+, e\d+\);/);
+  });
+
+  it.each([
     ['separate2', 'vector2', '-0.2, 0.7', 'outx', 'outy'],
     ['separate3', 'color3', '-0.2, 0.7, 0.4', 'outr', 'outg'],
     ['separate4', 'vector4', '-0.2, 0.7, 0.4, 1', 'outx', 'outy'],

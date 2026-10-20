@@ -59,6 +59,7 @@ const CATEGORY_INPUT_ORDER: Readonly<Record<string, readonly string[]>> = {
   luminance: ['in'],
   dot: ['in'],
   clamp: ['in', 'low', 'high'],
+  range: ['in', 'inlow', 'inhigh', 'outlow', 'outhigh', 'gamma', 'doclamp'],
   mix: ['fg', 'bg', 'mix'],
   combine2: ['in1', 'in2'],
   combine3: ['in1', 'in2', 'in3'],
@@ -72,7 +73,7 @@ const CATEGORY_INPUT_ORDER: Readonly<Record<string, readonly string[]>> = {
   rotate2d: ['in', 'amount'],
   rotate3d: ['in', 'amount', 'axis'],
   fractal3d: ['amplitude', 'octaves'],
-  artistic_ior: ['ior', 'extinction'],
+  artistic_ior: ['reflectivity', 'edge_color'],
   roughness_anisotropy: ['roughness', 'anisotropy'],
   roughness_dual: ['roughness'],
 };
@@ -93,6 +94,8 @@ function surfaceIrType(type: SurfaceInputType): IrType {
 }
 
 function parseNumbers(raw: string): number[] {
+  if (raw.trim() === 'true') return [1];
+  if (raw.trim() === 'false') return [0];
   return raw.split(',').map((s) => {
     const n = Number.parseFloat(s.trim());
     return Number.isFinite(n) ? n : 0;
@@ -190,7 +193,7 @@ export function lowerSurfaceInputsToIr(
     return builder.add({ kind: 'convert', type: to, source, from });
   };
 
-  const lowerCall = (nodeId: string): IrRef => {
+  const lowerCall = (nodeId: string, output?: string): IrRef => {
     const node = graph.nodes.get(nodeId)!;
     const type = irTypeFromMaterialX(node.type) ?? COLOR3;
     const order = CATEGORY_INPUT_ORDER[node.category] ?? node.inputs.map((i) => i.name);
@@ -203,10 +206,11 @@ export function lowerSurfaceInputsToIr(
     // filled with a neutral scalar so positional indices stay contiguous.
     while (slots.length > 0 && slots[slots.length - 1] === undefined) slots.pop();
     const args: IrRef[] = slots.map((r) => r ?? builder.constant(FLOAT, 0));
+    const op = node.category === 'artistic_ior' && output === 'extinction' ? 'artistic_ior_extinction' : node.category;
     return builder.add(
       node.nodeDef !== undefined
-        ? { kind: 'call', type, op: node.category, args, nodeDef: node.nodeDef }
-        : { kind: 'call', type, op: node.category, args },
+        ? { kind: 'call', type, op, args, nodeDef: node.nodeDef }
+        : { kind: 'call', type, op, args },
     );
   };
 
@@ -235,7 +239,7 @@ export function lowerSurfaceInputsToIr(
     } else if (node.category === 'convert') {
       ref = lowerConvert(nodeId);
     } else if (getNodeLowering(node.category)) {
-      ref = lowerCall(nodeId);
+      ref = lowerCall(nodeId, output);
     } else {
       sink({
         level: 'warning',
