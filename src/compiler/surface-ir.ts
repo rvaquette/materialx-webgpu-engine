@@ -154,7 +154,7 @@ export function lowerSurfaceInputsToIr(
         return constOfIrType(builder, irt, parseNumbers(input.source.value));
       }
       case 'connection':
-        return lowerNode(input.source.nodeId);
+        return lowerNode(input.source.nodeId, input.source.output);
       case 'interface':
       case 'default':
         // No literal value available at this layer; let the registry fallback apply.
@@ -210,8 +210,9 @@ export function lowerSurfaceInputsToIr(
     );
   };
 
-  function lowerNode(nodeId: string): IrRef {
-    const memo = nodeMemo.get(nodeId);
+  function lowerNode(nodeId: string, output?: string): IrRef {
+    const key = JSON.stringify([nodeId, output]);
+    const memo = nodeMemo.get(key);
     if (memo !== undefined) return memo;
     const node = graph.nodes.get(nodeId);
     if (!node) {
@@ -221,11 +222,15 @@ export function lowerSurfaceInputsToIr(
         detail: { nodeId },
       });
       const ref = neutralColor();
-      nodeMemo.set(nodeId, ref);
+      nodeMemo.set(key, ref);
       return ref;
     }
     let ref: IrRef;
-    if (TEXTURE_CATEGORIES.has(node.category)) {
+    if (/^separate[234]$/.test(node.category) && output && /^out[xyzwrgba]$/.test(output)) {
+      const input = node.inputs.find((candidate) => candidate.name === 'in');
+      const source = (input ? lowerInput(input) : undefined) ?? neutralColor();
+      ref = builder.add({ kind: 'swizzle', type: FLOAT, source, pattern: output.slice(3) });
+    } else if (TEXTURE_CATEGORIES.has(node.category)) {
       ref = lowerTexture(nodeId);
     } else if (node.category === 'convert') {
       ref = lowerConvert(nodeId);
@@ -239,7 +244,7 @@ export function lowerSurfaceInputsToIr(
       });
       ref = constOfIrType(builder, irTypeFromMaterialX(node.type) ?? COLOR3, [0]);
     }
-    nodeMemo.set(nodeId, ref);
+    nodeMemo.set(key, ref);
     return ref;
   }
 
@@ -252,7 +257,7 @@ export function lowerSurfaceInputsToIr(
         ref = constOfIrType(builder, surfaceIrType(ni.type), ni.source.value);
         break;
       case 'connection':
-        ref = lowerNode(ni.source.nodeId);
+        ref = lowerNode(ni.source.nodeId, ni.source.output);
         break;
       case 'geomprop':
         ref = geomRef(ni.source.name);

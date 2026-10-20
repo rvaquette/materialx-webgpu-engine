@@ -302,7 +302,7 @@ describe('buildSceneResources (T050)', () => {
     expect(mat.surfaceModule).toBeUndefined();
   });
 
-  it('createSceneBindGroups builds the material (group 0) and frame bind groups', async () => {
+  it.each([false, true])('builds material and frame bind groups with displacement=%s', async (withDisplacement) => {
     const resources = await buildSceneResources(demoScene(), {
       meshSource: meshSource({ '/World/floor': quad() }),
       materialCompiler: layeredCompiler(),
@@ -310,11 +310,25 @@ describe('buildSceneResources (T050)', () => {
     const mat = resources.materials.get(FLOOR_KEY)!;
 
     const groups: number[] = [];
+    const descriptors: GPUBindGroupDescriptor[] = [];
     const device = {
-      createBindGroup: (d: { layout: { group: number } }) => ({ group: d.layout.group }),
+      createBindGroup: (descriptor: GPUBindGroupDescriptor) => {
+        descriptors.push(descriptor);
+        return { group: (descriptor.layout as unknown as { group: number }).group };
+      },
     } as unknown as GPUDevice;
     const layout = (group: number) => ({ group } as unknown as GPUBindGroupLayout);
-    const buffers = { frame: { id: 'f' } as unknown as GPUBuffer, material: { id: 'm' } as unknown as GPUBuffer };
+    const displacement = {
+      group: IR_FORWARD_FRAME_GROUP,
+      params: { id: 'disp-params' } as unknown as GPUBuffer,
+      textureView: { id: 'height-map' } as unknown as GPUTextureView,
+      sampler: { id: 'disp-sampler' } as unknown as GPUSampler,
+    };
+    const buffers = {
+      frame: { id: 'f' } as unknown as GPUBuffer,
+      material: { id: 'm' } as unknown as GPUBuffer,
+      ...(withDisplacement ? { displacement } : {}),
+    };
     const bind = createSceneBindGroups(device, mat, buffers, (g) => {
       groups.push(g);
       return layout(g);
@@ -324,6 +338,16 @@ describe('buildSceneResources (T050)', () => {
     expect((bind.materialBindGroup as unknown as { group: number }).group).toBe(0);
     expect((bind.frameBindGroup as unknown as { group: number }).group).toBe(IR_FORWARD_FRAME_GROUP);
     expect(bind.byGroup.get(0)).toBe(bind.materialBindGroup);
+    const frameDescriptor = descriptors.find((descriptor) =>
+      (descriptor.layout as unknown as { group: number }).group === IR_FORWARD_FRAME_GROUP)!;
+    expect([...frameDescriptor.entries]).toEqual([
+      { binding: 0, resource: { buffer: buffers.frame } },
+      ...(withDisplacement ? [
+        { binding: 1, resource: displacement.textureView },
+        { binding: 2, resource: displacement.sampler },
+        { binding: 3, resource: { buffer: displacement.params } },
+      ] : []),
+    ]);
   });
 
   it('gives distinct graph materials distinct pipeline keys so the raster pipeline cache does not collide', async () => {

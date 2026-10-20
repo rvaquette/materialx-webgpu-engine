@@ -21,7 +21,7 @@ import {
   type ScenePassKind,
   type SceneDrawCall,
 } from './raster/backend.ts';
-import { createSceneBindGroups, uploadGeometry } from './scene-resources.ts';
+import { createSceneBindGroups, uploadGeometry, type SceneDrawBuffers } from './scene-resources.ts';
 import { buildPathTraceScene, type PathTraceScene } from './pathtracing/scene-buffers.ts';
 import { buildPathTraceUniform, PathTraceBackend, PT_UNIFORM_SIZE } from './pathtracing/compute.ts';
 import { buildMaterialDispatch } from './pathtracing/material-variant.ts';
@@ -399,6 +399,38 @@ export class InteractiveViewer {
       }
     }
 
+    const materialDisplacement = new Map<string, NonNullable<SceneDrawBuffers['displacement']>>();
+    for (const [key, material] of resources.materials) {
+      const group = material.sceneShader?.displacementGroup;
+      if (group === undefined || !material.displacement) continue;
+      const file = material.displacement.file;
+      if (!imageCache.has(file)) imageCache.set(file, await loaded.mtlx.imageProvider.decode(file));
+      const image = imageCache.get(file);
+      if (!image || image.componentType !== 'uint8' || image.channels !== 4) {
+        for (const resource of trash) resource.destroy();
+        loaded.mtlx.documents.delete();
+        throw new Error(`Invalid displacement map: ${file}`);
+      }
+      const texture = track(device.createTexture({
+        size: [image.width, image.height],
+        format: 'rgba8unorm',
+        usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
+      }));
+      device.queue.writeTexture(
+        { texture }, image.data,
+        { bytesPerRow: image.width * 4, rowsPerImage: image.height },
+        [image.width, image.height, 1],
+      );
+      const params = track(device.createBuffer({ size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST }));
+      device.queue.writeBuffer(params, 0, new Float32Array([material.displacement.scale, 0.5, 0, 0]));
+      materialDisplacement.set(key, {
+        group,
+        params,
+        textureView: texture.createView(),
+        sampler: device.createSampler({ addressModeU: 'repeat', addressModeV: 'repeat', magFilter: 'linear', minFilter: 'linear' }),
+      });
+    }
+
     const hdrTexture = track(device.createTexture({
       size: [width, height],
       format: backend.hdrFormat,
@@ -443,6 +475,7 @@ export class InteractiveViewer {
       const materialUniform = track(device.createBuffer({ size: SCENE_MATERIAL_UNIFORM_SIZE, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST }));
       device.queue.writeBuffer(materialUniform, 0, buildSceneMaterialUniform(draw));
       const textures = draw.materialKey ? materialTextures.get(draw.materialKey) : undefined;
+      const displacement = draw.materialKey ? materialDisplacement.get(draw.materialKey) : undefined;
       const bindGroups = createSceneBindGroups(
         device,
         material,
@@ -450,6 +483,7 @@ export class InteractiveViewer {
           frame: frameUniform,
           material: materialUniform,
           ...(textures ? { textureViews: textures.textureViews, samplers: textures.samplers } : {}),
+          ...(displacement ? { displacement } : {}),
         },
         (group) => pipeline.getBindGroupLayout(group),
       );

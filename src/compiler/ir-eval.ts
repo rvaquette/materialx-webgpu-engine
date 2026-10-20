@@ -261,6 +261,8 @@ function evalCall(op: string, args: IrValue[], env: IrEvalVaryings, type: IrType
   switch (op) {
     case 'absval':
       return unary(at(0), Math.abs);
+    case 'fract':
+      return unary(at(0), fract);
     case 'add':
       return binary(at(0), at(1), (a, b) => a + b);
     case 'subtract':

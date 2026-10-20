@@ -446,6 +446,7 @@ function closure(category: string, emit: NodeEmit, prelude?: string): NodeLoweri
 const LOWERINGS: readonly NodeLowering[] = [
   // math
   expr('absval', fn1('abs')),
+  expr('fract', fn1('fract')),
   expr('add', op2('+')),
   expr('subtract', op2('-')),
   expr('multiply', op2('*')),

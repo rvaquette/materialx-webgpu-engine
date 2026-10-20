@@ -16,6 +16,7 @@ import { resolveSurface } from '../../src/materialx/surface-graph.ts';
 import { lowerSurfaceInputsToIr } from '../../src/compiler/surface-ir.ts';
 import { IrModuleBuilder, COLOR3, FLOAT, type IrRef } from '../../src/compiler/ir.ts';
 import { emitWgsl, type WgslModule } from '../../src/compiler/wgsl.ts';
+import { evaluateShaderIr } from '../../src/compiler/ir-eval.ts';
 import type { Diagnostic } from '../../src/core/diagnostics.ts';
 
 function value(name: string, type: string, raw: string, colorSpace?: string): ResolvedInput {
@@ -25,8 +26,8 @@ function value(name: string, type: string, raw: string, colorSpace?: string): Re
     : { name, type, source, provenance: { namePath: `/mat/${name}` } };
 }
 
-function conn(name: string, type: string, nodeId: string): ResolvedInput {
-  return { name, type, source: { kind: 'connection', nodeId }, provenance: { namePath: `/mat/${name}` } };
+function conn(name: string, type: string, nodeId: string, output?: string): ResolvedInput {
+  return { name, type, source: { kind: 'connection', nodeId, ...(output ? { output } : {}) }, provenance: { namePath: `/mat/${name}` } };
 }
 
 function upstream(id: string, category: string, type: string, inputs: ResolvedInput[]): ResolvedNode {
@@ -80,6 +81,33 @@ function lowerAndEmit(
 }
 
 describe('lowerSurfaceInputsToIr (T055c)', () => {
+  it.each([
+    ['separate2', 'vector2', '-0.2, 0.7', 'outx', 'outy'],
+    ['separate3', 'color3', '-0.2, 0.7, 0.4', 'outr', 'outg'],
+    ['separate4', 'vector4', '-0.2, 0.7, 0.4, 1', 'outx', 'outy'],
+  ])('preserves named scalar outputs from %s through an absval graph', (category, type, raw, first, second) => {
+    const graph = surfaceGraph([conn('base_color', 'color3', 'abs')], [
+      upstream('split', category, 'multioutput', [value('in', type, raw)]),
+      upstream('color', 'combine3', 'color3', [
+        conn('in1', 'float', 'split', first),
+        conn('in2', 'float', 'split', second),
+        conn('in3', 'float', 'fraction'),
+      ]),
+      upstream('fraction', 'fract', 'float', [value('in', 'float', '-0.6')]),
+      upstream('abs', 'absval', 'color3', [conn('in', 'color3', 'color')]),
+    ]);
+    const builder = new IrModuleBuilder();
+    const lowered = lowerSurfaceInputsToIr(graph, resolveSurface(graph)!, builder);
+    builder.output({ name: 'color', type: COLOR3, ref: lowered.inputs.get('base_color')! });
+    const ir = builder.build();
+    expect(evaluateShaderIr(ir).get('color')).toEqual([0.2, 0.7, 0.4]);
+    const code = emitWgsl(ir).code;
+    expect(code).toContain(`.${first.slice(3)};`);
+    expect(code).toContain(`.${second.slice(3)};`);
+    expect(code).toContain('abs(');
+    expect(code).toContain('fract(');
+  });
+
   it('lowers a connected color input to a texture-binding sub-graph', () => {
     const graph = surfaceGraph(
       [conn('base_color', 'color3', 'tex'), value('specular', 'float', '0')],
