@@ -85,6 +85,14 @@ async function main(): Promise<void> {
       setStatus(formatStatus(s));
       updatePathTracingToggle(s.backend, s.pathTracingPaused);
     },
+    onShaderErrors: (errors) => {
+      const count = document.getElementById('shader-error-count');
+      const output = document.getElementById('shader-errors');
+      if (count) count.textContent = String(errors.length);
+      if (output) output.textContent = errors.length > 0
+        ? errors.map((error) => `${error.shader} (${error.line}:${error.column})\n${error.message}${error.source ? `\n> ${error.source}` : ''}`).join('\n\n')
+        : 'Aucune erreur WGSL.';
+    },
   });
 
   pathTracingToggle?.addEventListener('click', () => {

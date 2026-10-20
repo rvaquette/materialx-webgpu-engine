@@ -178,11 +178,11 @@ export class RasterBackend {
    * shader uses the vs_forward/fs_forward entry points and reads position/normal/
    * texcoord vertex buffers; blend and depth match the hand-written pass.
    */
-  createSceneVariantPipeline(pass: ScenePassKind, pipelineKey: string, code: string): GPURenderPipeline {
+  createSceneVariantPipeline(pass: ScenePassKind, pipelineKey: string, code: string, checkedModule?: GPUShaderModule): GPURenderPipeline {
     const cacheKey = `${pass}:${pipelineKey}`;
     const cached = this.sceneVariants.get(cacheKey);
     if (cached) return cached;
-    const module = this.device.createShaderModule({ code });
+    const module = checkedModule ?? this.device.createShaderModule({ code });
     const transparent = pass === 'transmission';
     const pipeline = this.device.createRenderPipeline({
       layout: 'auto',

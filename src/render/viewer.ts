@@ -23,7 +23,7 @@ import {
 } from './raster/backend.ts';
 import { createSceneBindGroups, uploadGeometry, type SceneDrawBuffers } from './scene-resources.ts';
 import { buildPathTraceScene, type PathTraceScene } from './pathtracing/scene-buffers.ts';
-import { buildPathTraceUniform, PathTraceBackend, PT_UNIFORM_SIZE } from './pathtracing/compute.ts';
+import { buildPathTraceUniform, pathTraceComputeWgsl, PathTraceBackend, PT_UNIFORM_SIZE } from './pathtracing/compute.ts';
 import { buildMaterialDispatch } from './pathtracing/material-variant.ts';
 import { buildPtDeviceBindings } from './pathtracing/device-bindings.ts';
 import type { DecodedPixelImage } from '../assets/images.ts';
@@ -31,6 +31,7 @@ import { loadUsdScene, uploadMaterialTextures, type ObjectMaterialOverride } fro
 import { OrbitCamera, attachOrbitControls } from '../scene/orbit-camera.ts';
 import { inverse4, lookAt4, multiply4, perspective4, type Vec3 } from '../scene/transforms.ts';
 import type { DiagnosticSink } from '../core/diagnostics.ts';
+import { compileShaderWithDiagnostics, type ShaderCompilationError } from '../gpu/shader-diagnostics.ts';
 
 /** Preview fill + framing shared with the capture harness so the live view matches. */
 const PREVIEW_ENV: Vec3 = [0.65, 0.68, 0.72];
@@ -120,6 +121,7 @@ export class InteractiveViewer {
   #lastCameraChange = -Infinity;
   #detachControls: () => void;
   #onStatus: ((s: ViewerStatus) => void) | undefined;
+  #onShaderErrors: ((errors: readonly ShaderCompilationError[]) => void) | undefined;
 
   constructor(opts: {
     device: GPUDevice;
@@ -127,6 +129,7 @@ export class InteractiveViewer {
     outputFormat: GPUTextureFormat;
     canvas: HTMLCanvasElement;
     onStatus?: (s: ViewerStatus) => void;
+    onShaderErrors?: (errors: readonly ShaderCompilationError[]) => void;
   }) {
     this.#device = opts.device;
     this.#context = opts.context;
@@ -135,6 +138,7 @@ export class InteractiveViewer {
     this.#width = opts.canvas.width;
     this.#height = opts.canvas.height;
     this.#onStatus = opts.onStatus;
+    this.#onShaderErrors = opts.onShaderErrors;
     this.#orbit = OrbitCamera.fromEyeTarget([0, 0.3 + 0.438 * 7, 0], [0, 0.3, 0], this.#width / this.#height);
     this.#detachControls = attachOrbitControls(this.#canvas, this.#orbit, () => this.#onCameraChanged());
     this.#loop();
@@ -252,7 +256,13 @@ export class InteractiveViewer {
       environment,
     });
 
-    const render = await this.#buildSceneRender(loaded, frame, ptScene, exposure, sink);
+    let render: SceneRender;
+    try {
+      render = await this.#buildSceneRender(loaded, frame, ptScene, exposure, sink);
+    } catch (error) {
+      loaded.mtlx.documents.delete();
+      throw error;
+    }
     this.#rebuildRender = () => this.#buildSceneRender(loaded, frame, ptScene, exposure, sink);
     this.#current?.dispose();
     this.#current = render;
@@ -347,6 +357,26 @@ export class InteractiveViewer {
     const height = this.#height;
     const outputFormat = this.#outputFormat;
     const resources = loaded.resources;
+    this.#onShaderErrors?.([]);
+    const rasterShaders = new Map<string, { code: string; label: string }>();
+    for (const draw of frame.draws) {
+      const material = draw.materialKey ? resources.materials.get(draw.materialKey) : undefined;
+      if (material?.sceneShader) {
+        rasterShaders.set(material.variant.pipelineKey, { code: material.sceneShader.code, label: `Raster: ${material.materialName}` });
+      }
+    }
+    const dispatch = buildMaterialDispatch(ptScene.variantSources);
+    const [rasterCompilation, ptCompilation] = await Promise.all([
+      Promise.all([...rasterShaders].map(async ([key, shader]) => ({
+        key,
+        ...await compileShaderWithDiagnostics(device, shader.code, shader.label),
+      }))),
+      compileShaderWithDiagnostics(device, pathTraceComputeWgsl({ dispatch, environment: loaded.environment !== undefined }), 'Path tracing'),
+    ]);
+    const errors = [...rasterCompilation.flatMap((result) => result.errors), ...ptCompilation.errors];
+    this.#onShaderErrors?.(errors);
+    if (errors.length > 0) throw new Error(`WGSL: ${errors.length} erreur(s) de compilation.`);
+    const rasterModules = new Map(rasterCompilation.map((result) => [result.key, result.module]));
     const trash: Array<{ destroy(): void }> = [];
     const track = <T extends { destroy(): void }>(o: T): T => {
       trash.push(o);
@@ -386,7 +416,7 @@ export class InteractiveViewer {
     for (const draw of frame.draws) {
       const material = draw.materialKey ? resources.materials.get(draw.materialKey) : undefined;
       if (material?.sceneShader) {
-        backend.createSceneVariantPipeline(draw.pass, material.variant.pipelineKey, material.sceneShader.code);
+        backend.createSceneVariantPipeline(draw.pass, material.variant.pipelineKey, material.sceneShader.code, rasterModules.get(material.variant.pipelineKey));
       }
     }
     const resolvePipeline = backend.createResolvePipeline();
@@ -408,7 +438,6 @@ export class InteractiveViewer {
       const image = imageCache.get(file);
       if (!image || image.componentType !== 'uint8' || image.channels !== 4) {
         for (const resource of trash) resource.destroy();
-        loaded.mtlx.documents.delete();
         throw new Error(`Invalid displacement map: ${file}`);
       }
       const texture = track(device.createTexture({
@@ -610,10 +639,9 @@ fn dir_to_uv(d: vec3<f32>) -> vec2<f32> {
     let pixelScale = 1;
     let ptWidth = width;
     let ptHeight = height;
-    const dispatch = buildMaterialDispatch(ptScene.variantSources);
     const bindings = await buildPtDeviceBindings(dispatch, ptScene, loaded.mtlx.imageProvider, { sink });
     const ptBackend = new PathTraceBackend(device, { dispatch, ...(envAsset ? { environment: true } : {}) });
-    const { pipeline: ptPipeline } = ptBackend.createPipeline();
+    const { pipeline: ptPipeline } = ptBackend.createPipeline(ptCompilation.module);
     const storage = (data: Float32Array | Uint32Array): GPUBuffer =>
       track(device.createBuffer({ size: Math.max(data.byteLength, 4), usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST }));
     const storageData = (data: Float32Array | Uint32Array): GPUBuffer => {

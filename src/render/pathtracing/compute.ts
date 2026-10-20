@@ -855,14 +855,14 @@ export class PathTraceBackend {
   }
 
   /** Create (once) the compute pipeline from the generated WGSL. */
-  createPipeline(): PathTracePipeline {
+  createPipeline(checkedModule?: GPUShaderModule): PathTracePipeline {
     if (this.#pipeline) return this.#pipeline;
     const code = pathTraceComputeWgsl({
       textures: this.#textures,
       environment: this.#environment,
       ...(this.#dispatch ? { dispatch: this.#dispatch } : {}),
     });
-    const module = this.#device.createShaderModule({ code });
+    const module = checkedModule ?? this.#device.createShaderModule({ code });
     const pipeline = this.#device.createComputePipeline({
       layout: 'auto',
       compute: { module, entryPoint: PT_COMPUTE_ENTRY },

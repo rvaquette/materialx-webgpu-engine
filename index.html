@@ -56,13 +56,25 @@
         min-height: 44px;
         max-width: 100%;
       }
-      #materials-panel {
+      #materials-panel, #shader-errors-panel {
         border-bottom: 1px solid #26262c;
         padding: 0 12px;
       }
-      #materials-panel summary {
+      #materials-panel summary, #shader-errors-panel summary {
         padding: 12px 0;
         cursor: pointer;
+      }
+      #shader-errors-panel {
+        min-width: 0;
+      }
+      #shader-errors {
+        margin: 0 0 12px;
+        max-height: 240px;
+        overflow: auto;
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+        font: 12px/1.5 ui-monospace, monospace;
+        color: #f3b6b6;
       }
       #material-controls {
         display: grid;
@@ -160,6 +172,10 @@
           <label for="material-filter">Rechercher<input id="material-filter" type="search" autocomplete="off" /></label>
           <label for="material-file">Matériau<select id="material-file"></select></label>
         </fieldset>
+      </details>
+      <details id="shader-errors-panel">
+        <summary>Erreurs WGSL (<span id="shader-error-count" aria-live="polite">0</span>)</summary>
+        <pre id="shader-errors">Aucune erreur WGSL.</pre>
       </details>
       <div id="status">Initializing…</div>
       <canvas id="view" width="512" height="512"></canvas>
