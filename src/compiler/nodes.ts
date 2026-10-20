@@ -515,7 +515,7 @@ const LOWERINGS: readonly NodeLowering[] = [
   expr('rotate2d', (inp) => `mx_rotate2d(${inp.named('in', undefined, 0)}, ${inp.named('amount', '0.0', 1)})`, ROTATE2D_PRELUDE),
   expr('rotate3d', (inp) => `mx_rotate3d(${inp.named('in', undefined, 0)}, ${inp.named('amount', '0.0', 1)}, ${inp.named('axis', 'vec3f(0.0, 0.0, 1.0)', 2)})`, ROTATE3D_PRELUDE),
   // procedural
-  expr('fractal3d', (inp, _type, ctx) => `mx_fractal3d(${ctx.varyings.position}, ${inp.named('amplitude', '1.0', 0)}, ${inp.named('octaves', '3.0', 1)})`, FRACTAL3D_PRELUDE),
+  expr('fractal3d', (inp, _type, ctx) => `mx_fractal3d(${ctx.varyings.position}, ${inp.named('amplitude', '1.0', 0)}, f32(${inp.named('octaves', '3.0', 1)}))`, FRACTAL3D_PRELUDE),
   // pbr helpers
   expr('artistic_ior', (inp) => `mx_artistic_ior(${inp.named('reflectivity', undefined, 0)}, ${inp.named('edge_color', 'vec3f(0.0)', 1)})`, ARTISTIC_IOR_PRELUDE),
   expr('artistic_ior_extinction', (inp) => `mx_artistic_ior_extinction(${inp.named('reflectivity', undefined, 0)}, ${inp.named('edge_color', 'vec3f(0.0)', 1)})`, ARTISTIC_IOR_PRELUDE),

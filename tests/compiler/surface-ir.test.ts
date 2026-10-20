@@ -81,6 +81,22 @@ function lowerAndEmit(
 }
 
 describe('lowerSurfaceInputsToIr (T055c)', () => {
+  it('keeps integer NodeDef defaults typed and converts them at the WGSL helper boundary', () => {
+    const noise = upstream('noise', 'fractal3d', 'float', [value('amplitude', 'float', '0.5')]);
+    noise.nodeDef = {
+      name: 'ND_fractal3d_float', nodeString: 'fractal3d', type: 'float', implementation: { kind: 'unresolved' },
+      inputs: [{ name: 'octaves', type: 'integer', value: '3' }],
+    };
+    const graph = surfaceGraph([conn('specular', 'float', 'noise')], [noise]);
+    const builder = new IrModuleBuilder();
+    const lowered = lowerSurfaceInputsToIr(graph, resolveSurface(graph)!, builder);
+    builder.output({ name: 'specular', type: FLOAT, ref: lowered.inputs.get('specular')! });
+    const ir = builder.build();
+    expect([...ir.exprs.values()]).toContainEqual({ kind: 'const', type: { kind: 'scalar', scalar: 'int' }, value: 3 });
+    expect(emitWgsl(ir).code).toMatch(/mx_fractal3d\(vary.position, e\d+, f32\(e\d+\)\)/);
+    expect(Number.isFinite(evaluateShaderIr(ir, { position: [0.2, 0.3, 0.4] }).get('specular')![0])).toBe(true);
+  });
+
   it.each([false, true])('keeps range defaults when intermediate inputs are omitted (reversed=%s)', (reversed) => {
     const inputs = [value('in', 'color3', '0.25, 0.5, 0.75'), value('outhigh', 'color3', '2, 2, 2')];
     const graph = surfaceGraph([conn('base_color', 'color3', 'range')], [
