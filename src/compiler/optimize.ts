@@ -72,7 +72,7 @@ function childRefs(expr: IrExpr): IrRef[] {
       return refs;
     }
     case 'call':
-      return [...expr.args];
+      return [...expr.args, ...Object.values(expr.namedArgs ?? {})];
     case 'closure':
       return Object.values(expr.params);
     case 'combine':
@@ -96,7 +96,11 @@ function remapChildren(expr: IrExpr, remap: (ref: IrRef) => IrRef): IrExpr {
       return next;
     }
     case 'call':
-      return { ...expr, args: expr.args.map(remap) };
+      return {
+        ...expr,
+        args: expr.args.map(remap),
+        ...(expr.namedArgs !== undefined ? { namedArgs: Object.fromEntries(Object.entries(expr.namedArgs).map(([name, ref]) => [name, remap(ref)])) } : {}),
+      };
     case 'closure': {
       const params: Record<string, IrRef> = {};
       for (const [k, v] of Object.entries(expr.params)) params[k] = remap(v);
@@ -196,7 +200,7 @@ function structuralKey(expr: IrExpr): string {
     case 'texture':
       return `${base}|${expr.texture}|${expr.sampler}|${expr.uv}|${expr.lod ?? ''}|${expr.bias ?? ''}|${expr.gradient ? `${expr.gradient.ddx},${expr.gradient.ddy}` : ''}`;
     case 'call':
-      return `${base}|${expr.op}|${expr.args.join(',')}`;
+      return `${base}|${expr.op}|${expr.args.join(',')}|${expr.namedArgs === undefined ? 'positional' : JSON.stringify(Object.entries(expr.namedArgs).sort(([first], [second]) => first.localeCompare(second)))}`;
     case 'closure': {
       const params = Object.entries(expr.params)
         .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))

@@ -120,7 +120,7 @@ function childRefs(expr: IrExpr): IrRef[] {
       return refs;
     }
     case 'call':
-      return [...expr.args];
+      return [...expr.args, ...Object.values(expr.namedArgs ?? {})];
     case 'closure':
       return Object.values(expr.params);
     case 'combine':
@@ -146,7 +146,7 @@ function topoOrder(ir: ShaderIr): IrRef[] {
   return order;
 }
 
-function makeInputs(positional: readonly string[], named: Readonly<Record<string, string>>): NodeInputs {
+function makeInputs(positional: readonly string[], named: Readonly<Record<string, string>>, namedCall = false): NodeInputs {
   return {
     at(index, fallback) {
       const v = positional[index];
@@ -154,8 +154,8 @@ function makeInputs(positional: readonly string[], named: Readonly<Record<string
       if (fallback !== undefined) return fallback;
       throw new WgslEmitError(`missing positional argument ${index}`);
     },
-    named(name, fallback) {
-      const v = named[name];
+    named(name, fallback, legacyIndex) {
+      const v = named[name] ?? (!namedCall && legacyIndex !== undefined ? positional[legacyIndex] : undefined);
       if (v !== undefined) return v;
       if (fallback !== undefined) return fallback;
       throw new WgslEmitError(`missing named input '${name}'`);
@@ -313,7 +313,8 @@ export function lowerExprs(ir: ShaderIr, handlePrefix = '', computeStage = false
         const lowering = getNodeLowering(expr.op);
         if (!lowering) throw new WgslEmitError(`no WGSL lowering for node '${expr.op}'`);
         if (lowering.prelude) preludes.add(lowering.prelude);
-        rhs = lowering.emit(makeInputs(expr.args.map(varName), {}), expr.type, ctx);
+        const named = Object.fromEntries(Object.entries(expr.namedArgs ?? {}).map(([name, ref]) => [name, varName(ref)]));
+        rhs = lowering.emit(makeInputs(expr.args.map(varName), named, expr.namedArgs !== undefined), expr.type, ctx);
         break;
       }
       case 'closure': {

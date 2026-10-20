@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { optimize } from '../../src/compiler/optimize.ts';
+import { evaluateShaderIr } from '../../src/compiler/ir-eval.ts';
+import { emitWgsl } from '../../src/compiler/wgsl.ts';
 import {
   IrModuleBuilder,
   FLOAT,
@@ -10,6 +12,24 @@ import {
 } from '../../src/compiler/ir.ts';
 
 describe('optimize', () => {
+  it('remaps and deduplicates named calls without confusing their argument names', () => {
+    const builder = new IrModuleBuilder();
+    const first = builder.constant(FLOAT, 3);
+    const duplicate = builder.constant(FLOAT, 3);
+    const second = builder.constant(FLOAT, 1);
+    const forward = builder.add({ kind: 'call', type: FLOAT, op: 'subtract', args: [], namedArgs: { in1: first, in2: second } });
+    const reordered = builder.add({ kind: 'call', type: FLOAT, op: 'subtract', args: [], namedArgs: { in2: second, in1: duplicate } });
+    const reverse = builder.add({ kind: 'call', type: FLOAT, op: 'subtract', args: [], namedArgs: { in1: second, in2: first } });
+    builder.output({ name: 'forward', type: FLOAT, ref: forward });
+    builder.output({ name: 'reordered', type: FLOAT, ref: reordered });
+    builder.output({ name: 'reverse', type: FLOAT, ref: reverse });
+    const ir = optimize(builder.build());
+    expect(ir.outputs[0]!.ref).toBe(ir.outputs[1]!.ref);
+    expect(ir.outputs[0]!.ref).not.toBe(ir.outputs[2]!.ref);
+    expect(evaluateShaderIr(ir)).toEqual(new Map([['forward', [2]], ['reordered', [2]], ['reverse', [-2]]]));
+    expect(emitWgsl(ir).code).toContain(' - ');
+  });
+
   it('eliminates dead code and unused resources', () => {
     const b = new IrModuleBuilder();
     b.declareParam({ name: 'used', type: FLOAT, editable: true });

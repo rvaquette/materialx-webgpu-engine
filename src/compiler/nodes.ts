@@ -26,8 +26,8 @@ export interface NodeEmitContext {
 export interface NodeInputs {
   /** Positional argument (call nodes); throws if absent and no fallback. */
   at(index: number, fallback?: string): string;
-  /** Named input (closure nodes); throws if absent and no fallback. */
-  named(name: string, fallback?: string): string;
+  /** Named input; legacyIndex is used only for older positional call IR. */
+  named(name: string, fallback?: string, legacyIndex?: number): string;
   has(name: string): boolean;
 }
 
@@ -441,9 +441,9 @@ fn mx_deon_hair_absorption_from_melanin(eumelanin: f32, pheomelanin: f32) -> vec
 
 // --- Registry ----------------------------------------------------------------
 
-const op2 = (sym: string): NodeEmit => (inp) => `(${inp.at(0)} ${sym} ${inp.at(1)})`;
-const fn1 = (name: string): NodeEmit => (inp) => `${name}(${inp.at(0)})`;
-const fn2 = (name: string): NodeEmit => (inp) => `${name}(${inp.at(0)}, ${inp.at(1)})`;
+const op2 = (sym: string): NodeEmit => (inp) => `(${inp.named('in1', undefined, 0)} ${sym} ${inp.named('in2', undefined, 1)})`;
+const fn1 = (name: string): NodeEmit => (inp) => `${name}(${inp.named('in', undefined, 0)})`;
+const fn2 = (name: string): NodeEmit => (inp) => `${name}(${inp.named('in1', undefined, 0)}, ${inp.named('in2', undefined, 1)})`;
 
 function expr(category: string, emit: NodeEmit, prelude?: string): NodeLowering {
   return prelude !== undefined ? { category, kind: 'expr', emit, prelude } : { category, kind: 'expr', emit };
@@ -472,35 +472,35 @@ const LOWERINGS: readonly NodeLowering[] = [
     // clamp is a builtin (no scalar->vector broadcast); splat the default bounds
     // to the node type so a color3/vector clamp gets vecN bounds, not scalars.
     const t = ctx.wgslType(type);
-    return `clamp(${inp.at(0)}, ${inp.at(1, `${t}(0.0)`)}, ${inp.at(2, `${t}(1.0)`)})`;
+    return `clamp(${inp.named('in', undefined, 0)}, ${inp.named('low', `${t}(0.0)`, 1)}, ${inp.named('high', `${t}(1.0)`, 2)})`;
   }),
   expr('range', (inp, type, ctx) => {
     const target = ctx.wgslType(type);
-    const low = `${target}(${inp.at(1, '0.0')})`;
-    const high = `${target}(${inp.at(2, '1.0')})`;
-    const outLow = `${target}(${inp.at(3, '0.0')})`;
-    const outHigh = `${target}(${inp.at(4, '1.0')})`;
-    const gamma = `${target}(${inp.at(5, '1.0')})`;
-    const normalized = `((${inp.at(0)} - ${low}) / (${high} - ${low}))`;
+    const low = `${target}(${inp.named('inlow', '0.0', 1)})`;
+    const high = `${target}(${inp.named('inhigh', '1.0', 2)})`;
+    const outLow = `${target}(${inp.named('outlow', '0.0', 3)})`;
+    const outHigh = `${target}(${inp.named('outhigh', '1.0', 4)})`;
+    const gamma = `${target}(${inp.named('gamma', '1.0', 5)})`;
+    const normalized = `((${inp.named('in', undefined, 0)} - ${low}) / (${high} - ${low}))`;
     const corrected = `(sign(${normalized}) * pow(abs(${normalized}), ${target}(1.0) / ${gamma}))`;
     const mapped = `(${outLow} + (${outHigh} - ${outLow}) * ${corrected})`;
-    return `select(${mapped}, clamp(${mapped}, min(${outLow}, ${outHigh}), max(${outLow}, ${outHigh})), ${inp.at(6, 'false')})`;
+    return `select(${mapped}, clamp(${mapped}, min(${outLow}, ${outHigh}), max(${outLow}, ${outHigh})), ${inp.named('doclamp', 'false', 6)})`;
   }),
   expr('dotproduct', fn2('dot')),
-  expr('dot', (inp) => inp.at(0)),
-  expr('invert', (inp) => `(${inp.at(1, '1.0')} - ${inp.at(0)})`),
+  expr('dot', (inp) => inp.named('in', undefined, 0)),
+  expr('invert', (inp) => `(${inp.named('amount', '1.0', 1)} - ${inp.named('in', undefined, 0)})`),
   // compositing / channel
-  expr('mix', (inp) => `mix(${inp.at(1)}, ${inp.at(0)}, ${inp.at(2)})`),
-  expr('extract', (inp) => `${inp.at(0)}[${inp.at(1)}]`),
-  expr('combine2', (inp) => `vec2f(${inp.at(0)}, ${inp.at(1)})`),
-  expr('combine3', (inp) => `vec3f(${inp.at(0)}, ${inp.at(1)}, ${inp.at(2)})`),
-  expr('constant', (inp) => inp.at(0)),
+  expr('mix', (inp) => `mix(${inp.named('bg', undefined, 1)}, ${inp.named('fg', undefined, 0)}, ${inp.named('mix', undefined, 2)})`),
+  expr('extract', (inp) => `${inp.named('in', undefined, 0)}[${inp.named('index', undefined, 1)}]`),
+  expr('combine2', (inp) => `vec2f(${inp.named('in1', undefined, 0)}, ${inp.named('in2', undefined, 1)})`),
+  expr('combine3', (inp) => `vec3f(${inp.named('in1', undefined, 0)}, ${inp.named('in2', undefined, 1)}, ${inp.named('in3', undefined, 2)})`),
+  expr('constant', (inp) => inp.named('value', undefined, 0)),
   // conditionals
-  expr('ifequal', (inp) => `select(${inp.at(3)}, ${inp.at(2)}, ${inp.at(0)} == ${inp.at(1)})`),
-  expr('ifgreater', (inp) => `select(${inp.at(3)}, ${inp.at(2)}, ${inp.at(0)} > ${inp.at(1)})`),
-  expr('ifgreatereq', (inp) => `select(${inp.at(3)}, ${inp.at(2)}, ${inp.at(0)} >= ${inp.at(1)})`),
+  expr('ifequal', (inp) => `select(${inp.named('in2', undefined, 3)}, ${inp.named('in1', undefined, 2)}, ${inp.named('value1', undefined, 0)} == ${inp.named('value2', undefined, 1)})`),
+  expr('ifgreater', (inp) => `select(${inp.named('in2', undefined, 3)}, ${inp.named('in1', undefined, 2)}, ${inp.named('value1', undefined, 0)} > ${inp.named('value2', undefined, 1)})`),
+  expr('ifgreatereq', (inp) => `select(${inp.named('in2', undefined, 3)}, ${inp.named('in1', undefined, 2)}, ${inp.named('value1', undefined, 0)} >= ${inp.named('value2', undefined, 1)})`),
   // adjustment
-  expr('luminance', (inp) => `mx_luminance(${inp.at(0)})`, LUMINANCE_PRELUDE),
+  expr('luminance', (inp) => `mx_luminance(${inp.named('in', undefined, 0)})`, LUMINANCE_PRELUDE),
   expr('rgbtohsv', fn1('mx_rgbtohsv'), HSV_PRELUDE),
   expr('hsvtorgb', fn1('mx_hsvtorgb'), HSV_PRELUDE),
   // geometric
@@ -508,22 +508,22 @@ const LOWERINGS: readonly NodeLowering[] = [
   expr('texcoord', (_inp, _type, ctx) => ctx.varyings.texcoord),
   expr(
     'normalmap',
-    (inp, _type, ctx) => `mx_normalmap(${inp.at(0)}, ${inp.at(1, '1.0')}, ${ctx.varyings.normal}, ${ctx.varyings.tangent})`,
+    (inp, _type, ctx) => `mx_normalmap(${inp.named('in', undefined, 0)}, ${inp.named('scale', '1.0', 1)}, ${inp.named('normal', ctx.varyings.normal)}, ${inp.named('tangent', ctx.varyings.tangent)})`,
     NORMALMAP_PRELUDE,
   ),
   // transforms
-  expr('rotate2d', (inp) => `mx_rotate2d(${inp.at(0)}, ${inp.at(1, '0.0')})`, ROTATE2D_PRELUDE),
-  expr('rotate3d', (inp) => `mx_rotate3d(${inp.at(0)}, ${inp.at(1, '0.0')}, ${inp.at(2, 'vec3f(0.0, 0.0, 1.0)')})`, ROTATE3D_PRELUDE),
+  expr('rotate2d', (inp) => `mx_rotate2d(${inp.named('in', undefined, 0)}, ${inp.named('amount', '0.0', 1)})`, ROTATE2D_PRELUDE),
+  expr('rotate3d', (inp) => `mx_rotate3d(${inp.named('in', undefined, 0)}, ${inp.named('amount', '0.0', 1)}, ${inp.named('axis', 'vec3f(0.0, 0.0, 1.0)', 2)})`, ROTATE3D_PRELUDE),
   // procedural
-  expr('fractal3d', (inp, _type, ctx) => `mx_fractal3d(${ctx.varyings.position}, ${inp.at(0, '1.0')}, ${inp.at(1, '3.0')})`, FRACTAL3D_PRELUDE),
+  expr('fractal3d', (inp, _type, ctx) => `mx_fractal3d(${ctx.varyings.position}, ${inp.named('amplitude', '1.0', 0)}, ${inp.named('octaves', '3.0', 1)})`, FRACTAL3D_PRELUDE),
   // pbr helpers
-  expr('artistic_ior', (inp) => `mx_artistic_ior(${inp.at(0)}, ${inp.at(1, 'vec3f(0.0)')})`, ARTISTIC_IOR_PRELUDE),
-  expr('artistic_ior_extinction', (inp) => `mx_artistic_ior_extinction(${inp.at(0)}, ${inp.at(1, 'vec3f(0.0)')})`, ARTISTIC_IOR_PRELUDE),
-  expr('roughness_anisotropy', (inp) => `mx_roughness_anisotropy(${inp.at(0, '0.0')}, ${inp.at(1, '0.0')})`, ROUGHNESS_ANISO_PRELUDE),
-  expr('roughness_dual', (inp) => `mx_roughness_dual(${inp.at(0, 'vec2f(0.0)')})`, ROUGHNESS_DUAL_PRELUDE),
-  expr('chiang_hair_absorption_from_color', (inp) => `mx_chiang_hair_absorption_from_color(${inp.at(0)})`, HAIR_PRELUDE),
-  expr('chiang_hair_roughness', (inp) => `mx_chiang_hair_roughness(${inp.at(0, '0.0')}, ${inp.at(1, '0.0')})`, HAIR_PRELUDE),
-  expr('deon_hair_absorption_from_melanin', (inp) => `mx_deon_hair_absorption_from_melanin(${inp.at(0, '0.0')}, ${inp.at(1, '0.0')})`, HAIR_PRELUDE),
+  expr('artistic_ior', (inp) => `mx_artistic_ior(${inp.named('reflectivity', undefined, 0)}, ${inp.named('edge_color', 'vec3f(0.0)', 1)})`, ARTISTIC_IOR_PRELUDE),
+  expr('artistic_ior_extinction', (inp) => `mx_artistic_ior_extinction(${inp.named('reflectivity', undefined, 0)}, ${inp.named('edge_color', 'vec3f(0.0)', 1)})`, ARTISTIC_IOR_PRELUDE),
+  expr('roughness_anisotropy', (inp) => `mx_roughness_anisotropy(${inp.named('roughness', '0.0', 0)}, ${inp.named('anisotropy', '0.0', 1)})`, ROUGHNESS_ANISO_PRELUDE),
+  expr('roughness_dual', (inp) => `mx_roughness_dual(${inp.named('roughness', 'vec2f(0.0)', 0)})`, ROUGHNESS_DUAL_PRELUDE),
+  expr('chiang_hair_absorption_from_color', (inp) => `mx_chiang_hair_absorption_from_color(${inp.named('color', undefined, 0)})`, HAIR_PRELUDE),
+  expr('chiang_hair_roughness', (inp) => `mx_chiang_hair_roughness(${inp.named('longitudinal', '0.0', 0)}, ${inp.named('azimuthal', '0.0', 1)})`, HAIR_PRELUDE),
+  expr('deon_hair_absorption_from_melanin', (inp) => `mx_deon_hair_absorption_from_melanin(${inp.named('melanin_concentration', '0.0', 0)}, ${inp.named('melanin_redness', '0.0', 1)})`, HAIR_PRELUDE),
   // closures (BSDF / EDF / VDF / surface)
   closure(
     'oren_nayar_diffuse_bsdf',

@@ -129,7 +129,7 @@ export type IrExpr =
       gradient?: { ddx: IrRef; ddy: IrRef };
       meta?: IrMeta;
     }
-  | { kind: 'call'; type: IrType; op: string; args: IrRef[]; nodeDef?: ResolvedNodeDefRef; meta?: IrMeta }
+  | { kind: 'call'; type: IrType; op: string; args: IrRef[]; namedArgs?: Record<string, IrRef>; nodeDef?: ResolvedNodeDefRef; meta?: IrMeta }
   | { kind: 'closure'; type: IrType; closure: ClosureKind; op: string; params: Record<string, IrRef>; meta?: IrMeta }
   | {
       kind: 'combine';

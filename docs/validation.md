@@ -29,6 +29,20 @@ d'erreur :
    mesuré soit l'arithmétique fp32 du GPU face au fp64 du CPU, et non une différence
    de visibilité ou d'échantillonnage.
 
+## Arguments des noeuds MaterialX
+
+Les graphes MaterialX conservent leurs entrees par nom dans `IrExpr.call.namedArgs`.
+Les lowerings WGSL et l'evaluateur CPU lisent ces noms, independamment de l'ordre
+des entrees dans le XML. Les valeurs explicites priment sur les valeurs par defaut
+typees du NodeDef actif, y compris ses entrees heritees. Un parametre optionnel
+absent garde son fallback de lowering ; un parametre requis absent declenche une
+erreur, sans insertion d'un zero pour remplir une position.
+
+Les anciens IR `call.args` restent acceptes pour compatibilite. La table
+`CATEGORY_INPUT_ORDER` n'est plus utilisee. Les tests de `surface-ir`, `graph` et
+`optimize` couvrent les entrees permutees, les defauts types, les trous optionnels,
+les entrees requises absentes et la conservation des arguments nommes apres CSE.
+
 ## Sources d'oracle
 
 | Domaine | Oracle | Nature |

@@ -99,6 +99,25 @@ function fakeNode(opts: {
 }
 
 describe('resolveGraph', () => {
+  it('preserves active NodeDef inputs and their typed defaults, including inherited inputs', () => {
+    const definition = fakeNodeDef({ name: 'ND_mix_color3', nodeString: 'mix', type: 'color3' });
+    definition.getInputs = () => [fakeInput({ name: 'mix', type: 'float', value: '0.25' })];
+    definition.getActiveInputs = () => [
+      fakeInput({ name: 'bg', type: 'color3', value: '0.2, 0.4, 0.6' }),
+      fakeInput({ name: 'fg', type: 'color3', value: '1, 0, 0' }),
+      fakeInput({ name: 'mix', type: 'float', value: '0.25' }),
+      fakeInput({ name: 'normal', type: 'vector3' }),
+    ];
+    const node = fakeNode({ name: 'blend', category: 'mix', type: 'color3', nodeDef: definition });
+    const graph = resolveGraph({ roots: [{ name: 'color', type: 'color3', node: node as unknown as MxNode }], onDiagnostic: () => {} });
+    expect(graph.nodes.get('/mat/blend')?.nodeDef?.inputs).toEqual([
+      { name: 'bg', type: 'color3', value: '0.2, 0.4, 0.6' },
+      { name: 'fg', type: 'color3', value: '1, 0, 0' },
+      { name: 'mix', type: 'float', value: '0.25' },
+      { name: 'normal', type: 'vector3' },
+    ]);
+  });
+
   it('walks connected nodes, resolves inputs, nodedef and provenance', () => {
     const texDef = fakeNodeDef({
       name: 'ND_image_color3',

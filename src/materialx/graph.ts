@@ -54,6 +54,8 @@ export interface MxNodeDef extends MxElement {
   getVersionString?(): string;
   getImplementation?(target?: string): MxInterfaceElement | null;
   getActiveSourceUri?(): string;
+  getActiveInputs?(): MxVector<MxInput> | MxInput[];
+  getInputs?(): MxVector<MxInput> | MxInput[];
 }
 
 export interface Provenance {
@@ -90,6 +92,7 @@ export interface ResolvedNodeDefRef {
   nodeGroup?: string;
   version?: string;
   implementation: ResolvedImplementation;
+  inputs?: readonly { name: string; type: string; value?: string }[];
 }
 
 export interface ResolvedNode {
@@ -256,12 +259,21 @@ function resolveNodeDef(node: MxNode, target: string | undefined, diag: Diagnost
 
   const nodeGroup = nonEmpty(nodeDef.getNodeGroup?.());
   const version = nonEmpty(nodeDef.getVersionString?.());
+  const inputs = toArray(nodeDef.getActiveInputs?.() ?? nodeDef.getInputs?.() ?? []).map((input) => {
+    const value = nonEmpty(input.getValueString());
+    return {
+      name: input.getName(),
+      type: input.getType(),
+      ...(value !== undefined ? { value } : {}),
+    };
+  });
   return {
     name: nodeDef.getName(),
     nodeString: nodeDef.getNodeString(),
     type: nodeDef.getType(),
     ...(nodeGroup !== undefined ? { nodeGroup } : {}),
     ...(version !== undefined ? { version } : {}),
+    ...(inputs.length > 0 ? { inputs } : {}),
     implementation,
   };
 }

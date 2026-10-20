@@ -81,6 +81,64 @@ function lowerAndEmit(
 }
 
 describe('lowerSurfaceInputsToIr (T055c)', () => {
+  it.each([false, true])('keeps range defaults when intermediate inputs are omitted (reversed=%s)', (reversed) => {
+    const inputs = [value('in', 'color3', '0.25, 0.5, 0.75'), value('outhigh', 'color3', '2, 2, 2')];
+    const graph = surfaceGraph([conn('base_color', 'color3', 'range')], [
+      upstream('range', 'range', 'color3', reversed ? inputs.reverse() : inputs),
+    ]);
+    const builder = new IrModuleBuilder();
+    const lowered = lowerSurfaceInputsToIr(graph, resolveSurface(graph)!, builder);
+    const ref = lowered.inputs.get('base_color')!;
+    builder.output({ name: 'color', type: COLOR3, ref });
+    const ir = builder.build();
+    expect(ir.exprs.get(ref)).toMatchObject({ kind: 'call', args: [], namedArgs: { in: expect.any(String), outhigh: expect.any(String) } });
+    expect(evaluateShaderIr(ir).get('color')).toEqual([0.5, 1, 1.5]);
+    expect(emitWgsl(ir).code).toContain('pow(');
+  });
+
+  it('uses typed NodeDef defaults by name and gives authored values precedence', () => {
+    const blend = upstream('blend', 'mix', 'color3', [value('mix', 'float', '0.5')]);
+    blend.nodeDef = {
+      name: 'ND_mix_color3', nodeString: 'mix', type: 'color3', implementation: { kind: 'unresolved' },
+      inputs: [
+        { name: 'mix', type: 'float', value: '0.25' },
+        { name: 'bg', type: 'color3', value: '0.2, 0.4, 0.6' },
+        { name: 'fg', type: 'color3', value: '1, 0, 0' },
+      ],
+    };
+    const graph = surfaceGraph([conn('base_color', 'color3', 'blend')], [blend]);
+    const builder = new IrModuleBuilder();
+    const lowered = lowerSurfaceInputsToIr(graph, resolveSurface(graph)!, builder);
+    const ref = lowered.inputs.get('base_color')!;
+    builder.output({ name: 'color', type: COLOR3, ref });
+    const ir = builder.build();
+    expect(evaluateShaderIr(ir).get('color')).toEqual([0.6, 0.2, 0.3]);
+    expect(emitWgsl(ir).code).toContain('vec3f(0.2, 0.4, 0.6)');
+    expect([...ir.exprs.values()].some((expression) => expression.kind === 'const' && expression.value === 0.25)).toBe(false);
+  });
+
+  it('reports a missing required named input instead of injecting a zero', () => {
+    const graph = surfaceGraph([conn('base_color', 'color3', 'multiply')], [
+      upstream('multiply', 'multiply', 'color3', [value('in1', 'color3', '1, 1, 1')]),
+    ]);
+    const builder = new IrModuleBuilder();
+    const lowered = lowerSurfaceInputsToIr(graph, resolveSurface(graph)!, builder);
+    builder.output({ name: 'color', type: COLOR3, ref: lowered.inputs.get('base_color')! });
+    const ir = builder.build();
+    expect(() => emitWgsl(ir)).toThrow("missing named input 'in2'");
+    expect(() => evaluateShaderIr(ir)).toThrow("missing named input 'in2'");
+  });
+
+  it('emits and evaluates named call arguments without positional arguments', () => {
+    const builder = new IrModuleBuilder();
+    const source = builder.constant(COLOR3, [-0.2, 0.4, -0.6]);
+    const ref = builder.add({ kind: 'call', type: COLOR3, op: 'absval', args: [], namedArgs: { in: source } });
+    builder.output({ name: 'color', type: COLOR3, ref });
+    const ir = builder.build();
+    expect(emitWgsl(ir).code).toContain(`abs(${source})`);
+    expect(evaluateShaderIr(ir).get('color')).toEqual([0.2, 0.4, 0.6]);
+  });
+
   it.each([
     ['false', [-1, 1, 4]],
     ['true', [0, 1, 2]],
@@ -215,9 +273,9 @@ describe('lowerSurfaceInputsToIr (T055c)', () => {
       [conn('base_color', 'color3', 'blend')],
       [
         upstream('blend', 'mix', 'color3', [
+          value('mix', 'float', '0.25'),
           value('fg', 'color3', '1, 0, 0'),
           value('bg', 'color3', '0, 0, 1'),
-          value('mix', 'float', '0.25'),
         ]),
       ],
     );

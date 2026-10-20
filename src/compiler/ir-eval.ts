@@ -259,90 +259,96 @@ function readInput(env: IrEvalVaryings, name: string, size: number): IrValue {
   return env.inputs?.[name] ?? zeros(size);
 }
 
-function evalCall(op: string, args: IrValue[], env: IrEvalVaryings, type: IrType): number[] {
+function evalCall(op: string, args: IrValue[], env: IrEvalVaryings, type: IrType, named?: Readonly<Record<string, IrValue>>): number[] {
   const at = (i: number, fallback?: number[]): IrValue => args[i] ?? fallback ?? [0];
+  const input = (name: string, legacyIndex: number, fallback?: number[]): IrValue => {
+    if (named === undefined) return at(legacyIndex, fallback);
+    const value = named[name] ?? fallback;
+    if (value === undefined) throw new IrEvalError(`missing named input '${name}' for '${op}'`);
+    return value;
+  };
   switch (op) {
     case 'absval':
-      return unary(at(0), Math.abs);
+      return unary(input('in', 0), Math.abs);
     case 'fract':
-      return unary(at(0), fract);
+      return unary(input('in', 0), fract);
     case 'add':
-      return binary(at(0), at(1), (a, b) => a + b);
+      return binary(input('in1', 0), input('in2', 1), (a, b) => a + b);
     case 'subtract':
-      return binary(at(0), at(1), (a, b) => a - b);
+      return binary(input('in1', 0), input('in2', 1), (a, b) => a - b);
     case 'multiply':
-      return binary(at(0), at(1), (a, b) => a * b);
+      return binary(input('in1', 0), input('in2', 1), (a, b) => a * b);
     case 'divide':
-      return binary(at(0), at(1), (a, b) => a / b);
+      return binary(input('in1', 0), input('in2', 1), (a, b) => a / b);
     case 'power':
-      return binary(at(0), at(1), Math.pow);
+      return binary(input('in1', 0), input('in2', 1), Math.pow);
     case 'sin':
-      return unary(at(0), Math.sin);
+      return unary(input('in', 0), Math.sin);
     case 'sqrt':
-      return unary(at(0), Math.sqrt);
+      return unary(input('in', 0), Math.sqrt);
     case 'ln':
-      return unary(at(0), Math.log);
+      return unary(input('in', 0), Math.log);
     case 'sign':
-      return unary(at(0), Math.sign);
+      return unary(input('in', 0), Math.sign);
     case 'normalize':
-      return normalize(at(0));
+      return normalize(input('in', 0));
     case 'min':
-      return binary(at(0), at(1), Math.min);
+      return binary(input('in1', 0), input('in2', 1), Math.min);
     case 'max':
-      return binary(at(0), at(1), Math.max);
+      return binary(input('in1', 0), input('in2', 1), Math.max);
     case 'clamp':
-      return clampValue(at(0), at(1, [0]), at(2, [1]));
+      return clampValue(input('in', 0), input('low', 1, [0]), input('high', 2, [1]));
     case 'dotproduct':
-      return [dot(at(0), at(1))];
+      return [dot(input('in1', 0), input('in2', 1))];
     case 'dot':
-      return [...at(0)];
+      return [...input('in', 0)];
     case 'invert': {
-      const amount = at(1, [1]);
-      return at(0).map((x, i) => (amount.length === 1 ? amount[0]! : amount[i] ?? 0) - x);
+      const amount = input('amount', 1, [1]);
+      return input('in', 0).map((x, i) => (amount.length === 1 ? amount[0]! : amount[i] ?? 0) - x);
     }
     case 'mix':
-      return mix(at(0), at(1), at(2, [0])[0]!);
+      return mix(input('fg', 0), input('bg', 1), input('mix', 2, [0])[0]!);
     case 'extract':
-      return [at(0)[Math.trunc(at(1)[0]!)] ?? 0];
+      return [input('in', 0)[Math.trunc(input('index', 1)[0]!)] ?? 0];
     case 'combine2':
-      return [at(0)[0]!, at(1)[0]!];
+      return [input('in1', 0)[0]!, input('in2', 1)[0]!];
     case 'combine3':
-      return [at(0)[0]!, at(1)[0]!, at(2)[0]!];
+      return [input('in1', 0)[0]!, input('in2', 1)[0]!, input('in3', 2)[0]!];
     case 'combine4':
-      return [at(0)[0]!, at(1)[0]!, at(2)[0]!, at(3)[0]!];
+      return [input('in1', 0)[0]!, input('in2', 1)[0]!, input('in3', 2)[0]!, input('in4', 3)[0]!];
     case 'constant':
-      return [...at(0)];
+      return [...input('value', 0)];
     case 'ifequal':
-      return at(0)[0]! === at(1)[0]! ? [...at(2)] : [...at(3)];
+      return input('value1', 0)[0]! === input('value2', 1)[0]! ? [...input('in1', 2)] : [...input('in2', 3)];
     case 'ifgreater':
-      return at(0)[0]! > at(1)[0]! ? [...at(2)] : [...at(3)];
+      return input('value1', 0)[0]! > input('value2', 1)[0]! ? [...input('in1', 2)] : [...input('in2', 3)];
     case 'ifgreatereq':
-      return at(0)[0]! >= at(1)[0]! ? [...at(2)] : [...at(3)];
+      return input('value1', 0)[0]! >= input('value2', 1)[0]! ? [...input('in1', 2)] : [...input('in2', 3)];
     case 'luminance': {
-      const l = dot(at(0), LUMA);
+      const l = dot(input('in', 0), LUMA);
       return [l, l, l];
     }
     case 'rgbtohsv':
-      return rgbToHsv(at(0));
+      return rgbToHsv(input('in', 0));
     case 'hsvtorgb':
-      return hsvToRgb(at(0));
+      return hsvToRgb(input('in', 0));
     case 'position':
       return [...(env.position ?? zeros(3))];
     case 'texcoord':
       return [...(env.texcoord ?? zeros(2))];
     case 'normalmap':
-      return normalMap(at(0), at(1, [1])[0]!, env.normal ?? [0, 0, 1], env.tangent ?? [1, 0, 0]);
+      return normalMap(input('in', 0), input('scale', 1, [1])[0]!, named?.['normal'] ?? env.normal ?? [0, 0, 1], named?.['tangent'] ?? env.tangent ?? [1, 0, 0]);
     case 'rotate2d':
-      return rotate2d(at(0), at(1, [0])[0]!);
+      return rotate2d(input('in', 0), input('amount', 1, [0])[0]!);
     case 'rotate3d':
-      return rotate3d(at(0), at(1, [0])[0]!, at(2, [0, 0, 1]));
+      return rotate3d(input('in', 0), input('amount', 1, [0])[0]!, input('axis', 2, [0, 0, 1]));
     case 'fractal3d':
-      return [fractal3d(env.position ?? zeros(3), at(0, [1])[0]!, at(1, [3])[0]!)];
+      return [fractal3d(env.position ?? zeros(3), input('amplitude', 0, [1])[0]!, input('octaves', 1, [3])[0]!)];
     case 'artistic_ior':
-      return artisticIor(at(0), at(1, [0, 0, 0]));
+      return artisticIor(input('reflectivity', 0), input('edge_color', 1, [0, 0, 0]));
     case 'artistic_ior_extinction': {
-      const reflectivity = at(0);
-      const ior = artisticIor(reflectivity, at(1, [0, 0, 0]));
+      const reflectivity = input('reflectivity', 0);
+      const ior = artisticIor(reflectivity, input('edge_color', 1, [0, 0, 0]));
       return reflectivity.map((value, index) => {
         const r = clampNum(value, 0, 0.99);
         const n = ior[index]!;
@@ -350,42 +356,45 @@ function evalCall(op: string, args: IrValue[], env: IrEvalVaryings, type: IrType
       });
     }
     case 'range': {
-      const component = (slot: number, index: number, fallback: number): number => args[slot]?.[index] ?? args[slot]?.[0] ?? fallback;
-      return at(0).map((value, index) => {
-        const low = component(1, index, 0);
-        const high = component(2, index, 1);
-        const outLow = component(3, index, 0);
-        const outHigh = component(4, index, 1);
-        const gamma = component(5, index, 1);
+      const component = (name: string, slot: number, index: number, fallback: number): number => {
+        const value = input(name, slot, [fallback]);
+        return value[index] ?? value[0]!;
+      };
+      return input('in', 0).map((value, index) => {
+        const low = component('inlow', 1, index, 0);
+        const high = component('inhigh', 2, index, 1);
+        const outLow = component('outlow', 3, index, 0);
+        const outHigh = component('outhigh', 4, index, 1);
+        const gamma = component('gamma', 5, index, 1);
         const normalized = (value - low) / (high - low);
         const corrected = Math.sign(normalized) * Math.abs(normalized) ** (1 / gamma);
         const mapped = outLow + (outHigh - outLow) * corrected;
-        return at(6, [0])[0] ? clampNum(mapped, Math.min(outLow, outHigh), Math.max(outLow, outHigh)) : mapped;
+        return input('doclamp', 6, [0])[0] ? clampNum(mapped, Math.min(outLow, outHigh), Math.max(outLow, outHigh)) : mapped;
       });
     }
     case 'roughness_anisotropy': {
-      const r = at(0, [0])[0]!;
-      const a = clampNum(at(1, [0])[0]!, 0, 1);
+      const r = input('roughness', 0, [0])[0]!;
+      const a = clampNum(input('anisotropy', 1, [0])[0]!, 0, 1);
       const r2 = r * r;
       return [r2 / Math.max(1 - a * 0.9, 1e-3), r2 * (1 - a * 0.9)];
     }
     case 'roughness_dual': {
-      const r = at(0, [0, 0]);
+      const r = input('roughness', 0, [0, 0]);
       return [r[0]! * r[0]!, (r[1] ?? r[0]!) * (r[1] ?? r[0]!)];
     }
     case 'chiang_hair_absorption_from_color':
-      return at(0).map((x) => {
+      return input('color', 0).map((x) => {
         const l = Math.log(clampNum(x, 1e-4, 1));
         return l * l;
       });
     case 'chiang_hair_roughness': {
-      const lon = at(0, [0])[0]!;
-      const azi = at(1, [0])[0]!;
+      const lon = input('longitudinal', 0, [0])[0]!;
+      const azi = input('azimuthal', 1, [0])[0]!;
       return [lon * lon, azi * azi];
     }
     case 'deon_hair_absorption_from_melanin': {
-      const eu = at(0, [0])[0]!;
-      const pheo = at(1, [0])[0]!;
+      const eu = input('melanin_concentration', 0, [0])[0]!;
+      const pheo = input('melanin_redness', 1, [0])[0]!;
       return [eu * 0.419 + pheo * 0.187, eu * 0.697 + pheo * 0.4, eu * 1.37 + pheo * 1.05];
     }
     default:
@@ -426,7 +435,8 @@ function evalExpr(ir: ShaderIr, expr: IrExpr, env: IrEvalVaryings, cache: Map<Ir
     case 'texture':
       return sampleTexture(ir, expr, env, cache);
     case 'call':
-      return evalCall(expr.op, expr.args.map((a) => evaluateIrRef(ir, a, env, cache)), env, expr.type);
+      return evalCall(expr.op, expr.args.map((a) => evaluateIrRef(ir, a, env, cache)), env, expr.type,
+        expr.namedArgs === undefined ? undefined : Object.fromEntries(Object.entries(expr.namedArgs).map(([name, ref]) => [name, evaluateIrRef(ir, ref, env, cache)])));
     case 'combine':
       return evalValueCombine(ir, expr, env, cache);
     case 'closure':

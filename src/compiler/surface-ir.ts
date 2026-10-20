@@ -36,48 +36,6 @@ export interface LoweredSurfaceInputs {
 
 const TEXTURE_CATEGORIES: ReadonlySet<string> = new Set(['image', 'tiledimage', 'hextiledimage']);
 
-// Positional argument order expected by the expr lowerings in nodes.ts. Categories
-// not listed fall back to their authored input order.
-const CATEGORY_INPUT_ORDER: Readonly<Record<string, readonly string[]>> = {
-  add: ['in1', 'in2'],
-  subtract: ['in1', 'in2'],
-  multiply: ['in1', 'in2'],
-  divide: ['in1', 'in2'],
-  power: ['in1', 'in2'],
-  min: ['in1', 'in2'],
-  max: ['in1', 'in2'],
-  modulo: ['in1', 'in2'],
-  dotproduct: ['in1', 'in2'],
-  absval: ['in'],
-  sign: ['in'],
-  sin: ['in'],
-  sqrt: ['in'],
-  ln: ['in'],
-  normalize: ['in'],
-  rgbtohsv: ['in'],
-  hsvtorgb: ['in'],
-  luminance: ['in'],
-  dot: ['in'],
-  clamp: ['in', 'low', 'high'],
-  range: ['in', 'inlow', 'inhigh', 'outlow', 'outhigh', 'gamma', 'doclamp'],
-  mix: ['fg', 'bg', 'mix'],
-  combine2: ['in1', 'in2'],
-  combine3: ['in1', 'in2', 'in3'],
-  constant: ['value'],
-  extract: ['in', 'index'],
-  invert: ['in', 'amount'],
-  ifequal: ['value1', 'value2', 'in1', 'in2'],
-  ifgreater: ['value1', 'value2', 'in1', 'in2'],
-  ifgreatereq: ['value1', 'value2', 'in1', 'in2'],
-  normalmap: ['in', 'scale'],
-  rotate2d: ['in', 'amount'],
-  rotate3d: ['in', 'amount', 'axis'],
-  fractal3d: ['amplitude', 'octaves'],
-  artistic_ior: ['reflectivity', 'edge_color'],
-  roughness_anisotropy: ['roughness', 'anisotropy'],
-  roughness_dual: ['roughness'],
-};
-
 function surfaceIrType(type: SurfaceInputType): IrType {
   switch (type) {
     case 'float':
@@ -196,21 +154,23 @@ export function lowerSurfaceInputsToIr(
   const lowerCall = (nodeId: string, output?: string): IrRef => {
     const node = graph.nodes.get(nodeId)!;
     const type = irTypeFromMaterialX(node.type) ?? COLOR3;
-    const order = CATEGORY_INPUT_ORDER[node.category] ?? node.inputs.map((i) => i.name);
-    const authored = new Map(node.inputs.map((i) => [i.name, i] as const));
-    const slots: (IrRef | undefined)[] = order.map((name) => {
-      const inp = authored.get(name);
-      return inp ? lowerInput(inp) : undefined;
-    });
-    // Trailing absent slots rely on the lowering's own fallback; interior gaps are
-    // filled with a neutral scalar so positional indices stay contiguous.
-    while (slots.length > 0 && slots[slots.length - 1] === undefined) slots.pop();
-    const args: IrRef[] = slots.map((r) => r ?? builder.constant(FLOAT, 0));
+    const namedArgs: Record<string, IrRef> = {};
+    for (const input of node.inputs) {
+      const ref = lowerInput(input);
+      if (ref !== undefined) namedArgs[input.name] = ref;
+    }
+    for (const input of node.nodeDef?.inputs ?? []) {
+      if (namedArgs[input.name] !== undefined || input.value === undefined) continue;
+      const inputType = irTypeFromMaterialX(input.type);
+      if (inputType?.kind === 'scalar' || inputType?.kind === 'vector') {
+        namedArgs[input.name] = constOfIrType(builder, inputType, parseNumbers(input.value));
+      }
+    }
     const op = node.category === 'artistic_ior' && output === 'extinction' ? 'artistic_ior_extinction' : node.category;
     return builder.add(
       node.nodeDef !== undefined
-        ? { kind: 'call', type, op, args, nodeDef: node.nodeDef }
-        : { kind: 'call', type, op, args },
+        ? { kind: 'call', type, op, args: [], namedArgs, nodeDef: node.nodeDef }
+        : { kind: 'call', type, op, args: [], namedArgs },
     );
   };
 
