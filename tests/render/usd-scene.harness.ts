@@ -80,6 +80,10 @@ export interface UsdSceneImage {
   backend: 'raster' | 'pathtracing';
   /** GPU render wall-clock in milliseconds (submit -> onSubmittedWorkDone). */
   renderMs: number;
+  /** OpenPBRMaterial override bound for this render, if any. */
+  materialOverride?: string;
+  /** Mean 8-bit luminance and fraction of pixels brighter than 2/255. */
+  stats: { meanLuma: number; litFraction: number };
 }
 
 /** Directory portion of a URL-ish path, keeping the trailing slash. */
@@ -1490,7 +1494,19 @@ export async function bootstrapUsdImage(
 
   const info = adapter.info;
   const effectiveSamples = backend === 'raster' ? 1 : samples;
-  const image: UsdSceneImage = { entry, width: res, height: res, samples: effectiveSamples, dataUrl, backend, renderMs };
+  let lumaSum = 0;
+  let lit = 0;
+  for (let i = 0; i < rgba.length; i += 4) {
+    const luma = 0.2126 * rgba[i]! + 0.7152 * rgba[i + 1]! + 0.0722 * rgba[i + 2]!;
+    lumaSum += luma;
+    if (luma > 2) lit++;
+  }
+  const pixels = Math.max(1, rgba.length / 4);
+  const stats = { meanLuma: lumaSum / pixels, litFraction: lit / pixels };
+  const image: UsdSceneImage = {
+    entry, width: res, height: res, samples: effectiveSamples, dataUrl, backend, renderMs, stats,
+    ...(materialOverride !== undefined ? { materialOverride } : {}),
+  };
   (globalThis as { __MX_IMAGE__?: UsdSceneImage | null }).__MX_IMAGE__ = image;
   line(`${info?.vendor ?? 'gpu'} / ${info?.architecture ?? '?'} - ${backend} prete en ${renderMs.toFixed(0)} ms.`);
   return image;

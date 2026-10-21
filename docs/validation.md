@@ -79,6 +79,34 @@ Aucun fichier MaterialX ni lowering n'est modifie.
 Cet audit ne charge pas les images et ne rend pas de pixels : une compilation
 reussie ne prouve ni la disponibilite des textures ni la fidelite du rendu.
 
+## Rendus de la scène standard-shader-ball
+
+`npm run test:shaderball` rend `scenes/standard-shader-ball/standard-shader-ball.usda`
+sur le mobile (par défaut) ou le GPU local, en raster et en path tracing, via
+`usd-image-harness.html`. `--materials <filtre>|all` ajoute un rendu par fichier
+`.mtlx` de `scenes/mtlx-library` lié à `OpenPBRMaterial`.
+
+```sh
+npm run test:shaderball
+npm run test:shaderball -- --target local
+npm run test:shaderball -- --target local --materials open_pbr_surface --spp 32
+npm run test:shaderball -- --backends raster --materials all --list
+```
+
+Les PNG et `report.json` sont écrits dans `renders/shaderball/<cible>/`. Un cas est
+`ok`, `black` (moins de 2 % de pixels non noirs, réglable par `--black-threshold`)
+ou `failed` (exception, perte du device, délai `--timeout` de 600000 ms dépassé).
+Le code de sortie vaut 1 si un cas n'est pas `ok`. Autres options : `--res`
+(256), `--spp` (64), `--port`, `--device`, `--out-dir`.
+Le rapport est sauvegardé après chaque cas ; `--resume` (mêmes options, même
+`--res`/`--spp`) conserve les cas `ok`/`black` déjà rendus et relance les `failed`
+puis les cas restants.
+En cours de run, un plantage (connexion CDP perdue, onglet ou Chrome fermé, perte
+du device GPU, mobile déconnecté puis reconnecté dans les 2 minutes, délai dépassé)
+déclenche une reprise automatique : Chrome ou l'onglet est relancé, les tunnels ADB
+sont recréés et le cas est retenté une fois. Au-delà de `--max-recoveries` (20)
+reprises, le run s'arrête ; `--resume` permet alors de continuer.
+
 ## Arguments des noeuds MaterialX
 
 Les graphes MaterialX conservent leurs entrees par nom dans `IrExpr.call.namedArgs`.
