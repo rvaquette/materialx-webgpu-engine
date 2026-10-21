@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+  <head><meta charset="UTF-8" /><title>MaterialX WGSL compilation audit</title></head>
+  <body>
+    <pre id="status">Initializing MaterialX and WebGPU...</pre>
+    <script type="module">
+      import { createCompilationAudit, summarizeCompilation } from '/tests/materialx/compile-audit.harness.ts';
+      const status = document.getElementById('status');
+      try {
+        const audit = await createCompilationAudit();
+        globalThis.__MX_COMPILE_AUDIT__ = {
+          ...audit,
+          url: location.href,
+          summarize: summarizeCompilation,
+          async runFile(file) {
+            status.textContent = file;
+            const result = await audit.runFile(file);
+            status.textContent = `${file}: ${result.status}`;
+            return result;
+          },
+        };
+        status.textContent = 'Ready';
+      } catch (error) {
+        globalThis.__MX_COMPILE_AUDIT_ERROR__ = String(error);
+        status.textContent = String(error);
+      }
+    </script>
+  </body>
+</html>

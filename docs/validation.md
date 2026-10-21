@@ -29,6 +29,49 @@ d'erreur :
    mesuré soit l'arithmétique fp32 du GPU face au fp64 du CPU, et non une différence
    de visibilité ou d'échantillonnage.
 
+## Audit de compilation des fichiers MaterialX
+
+`npm run audit:mtlx` parcourt les fichiers `.mtlx` du workspace, hors dependances,
+sorties `dist` et stockage interne, et compile chaque `surfacematerial` sur le GPU
+du mobile Android autorise via ADB. Node.js 22+, Chrome avec WebGPU et les assets
+MaterialX servis par Vite sont requis. Le script cree son propre serveur et ses
+propres tunnels ADB, puis les libere. Il ne bascule jamais implicitement sur le PC.
+
+```sh
+npm run audit:mtlx
+npm run audit:mtlx -- --target local
+npm run audit:mtlx -- --root scenes --filter artistic_ior --limit 10
+npm run audit:mtlx -- --device R5CW900CHQD --out docs/generated/copper-audit.json
+npm run audit:mtlx -- --resume
+npm run audit:mtlx -- --list
+```
+
+Les deux shaders, raster et path tracing, passent par le compilateur de graphes
+reel, `getCompilationInfo()` et la creation asynchrone des pipelines. Le rapport
+JSON contient les entrees nommees, NodeDefs, diagnostics, lignes WGSL et echecs
+de pipeline. Le Markdown associe resume les fichiers a corriger. Par defaut :
+`docs/generated/mtlx-compile-audit.json` et `.md`, sauvegardes progressivement.
+
+Les statuts sont `compiled`, `incomplete` (noeud non pris en charge ou repli neutre),
+`failed` et `skipped` (aucun terminal `surfacematerial`). Le code de sortie vaut 1
+si un echec ou un materiau incomplet est trouve ; 0 sinon. `complete: false`
+signale une interruption ou un echec d'infrastructure. `MX_ADB`, `MX_DEVICE` et
+`MX_CHROME` permettent de personnaliser les executables/la cible ; `--port` choisit
+le port prefere du serveur. `--timeout` borne chaque fichier (60000 ms par defaut).
+Un timeout est consigne comme echec, puis le contexte navigateur est recharge pour
+poursuivre ; il est aussi recharge tous les 10 fichiers pour liberer les pipelines.
+Si la connexion ADB se renouvelle, les tunnels et la cible CDP sont recrees ; une
+deconnexion persistante interrompt le run avec un rapport partiel explicite.
+La reprise recree l'onglet Chrome si celui-ci a disparu. `--resume` relit le rapport
+choisi par `--out`, conserve les resultats enregistres et retente les fichiers
+interrompus par CDP. La cible, le repertoire et le filtre doivent correspondre au
+rapport initial ; ne pas utiliser cette option apres modification des materiaux
+ou du compilateur si leurs anciens resultats doivent etre revalides.
+Aucun fichier MaterialX ni lowering n'est modifie.
+
+Cet audit ne charge pas les images et ne rend pas de pixels : une compilation
+reussie ne prouve ni la disponibilite des textures ni la fidelite du rendu.
+
 ## Arguments des noeuds MaterialX
 
 Les graphes MaterialX conservent leurs entrees par nom dans `IrExpr.call.namedArgs`.
