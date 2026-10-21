@@ -15,7 +15,7 @@ import type {
 import { resolveSurface } from '../../src/materialx/surface-graph.ts';
 import { lowerSurfaceInputsToIr } from '../../src/compiler/surface-ir.ts';
 import { IrModuleBuilder, COLOR3, FLOAT, type IrRef } from '../../src/compiler/ir.ts';
-import { emitWgsl, type WgslModule } from '../../src/compiler/wgsl.ts';
+import { emitWgsl, lowerExprs, type WgslModule } from '../../src/compiler/wgsl.ts';
 import { evaluateShaderIr } from '../../src/compiler/ir-eval.ts';
 import type { Diagnostic } from '../../src/core/diagnostics.ts';
 
@@ -374,15 +374,38 @@ describe('lowerSurfaceInputsToIr (T055c)', () => {
     expect(module.code).toMatch(/= e\d+\.w;/);
   });
 
+  it('uses derivatives for heighttonormal in raster and a flat normal in compute stages', () => {
+    const graph = surfaceGraph([conn('normal', 'vector3', 'htn')], [
+      upstream('htn', 'heighttonormal', 'vector3', [value('in', 'float', '0.5'), value('scale', 'float', '2')]),
+    ]);
+    const builder = new IrModuleBuilder();
+    const lowered = lowerSurfaceInputsToIr(graph, resolveSurface(graph)!, builder);
+    builder.output({ name: 'normal', type: COLOR3, ref: lowered.inputs.get('normal')! });
+    const ir = builder.build();
+    expect(lowerExprs(ir).body.join('\n')).toContain('mx_heighttonormal(vec2f(dpdx(');
+    const compute = lowerExprs(ir, '', true).body.join('\n');
+    expect(compute).not.toContain('dpdx');
+    expect(compute).toContain('vec3f(0.5, 0.5, 1.0)');
+  });
+
+  it('chains ramp gradients over the ten control points', () => {
+    const graph = surfaceGraph([conn('base_color', 'color3', 'ramp')], [
+      upstream('ramp', 'ramp', 'color4', [value('num_intervals', 'integer', '3')]),
+    ]);
+    const { module } = lowerAndEmit(graph, [{ name: 'base_color', type: COLOR3 }]);
+    expect(module.code.match(/mx_ramp_gradient\(/g)!.length).toBeGreaterThanOrEqual(10);
+    expect(module.code).toContain('mx_ramp_x(');
+  });
+
   it('diagnoses an unsupported upstream node and bakes a neutral constant', () => {
     const diagnostics: Diagnostic[] = [];
     const graph = surfaceGraph(
       [conn('base_color', 'color3', 'nz')],
-      [upstream('nz', 'ramp_gradient', 'color3', [value('x', 'float', '1')])],
+      [upstream('nz', 'custom_unsupported', 'color3', [value('x', 'float', '1')])],
     );
     const { module } = lowerAndEmit(graph, [{ name: 'base_color', type: COLOR3 }], (d) => diagnostics.push(d));
-    expect(diagnostics.some((d) => d.level === 'warning' && d.message.includes('ramp_gradient'))).toBe(true);
-    expect(module.code).not.toContain('ramp_gradient');
+    expect(diagnostics.some((d) => d.level === 'warning' && d.message.includes('custom_unsupported'))).toBe(true);
+    expect(module.code).not.toContain('custom_unsupported');
     expect(module.textures).toHaveLength(0);
     expect(module.code).toContain('vec3f(0.0, 0.0, 0.0)');
   });

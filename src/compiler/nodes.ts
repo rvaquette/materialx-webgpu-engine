@@ -21,6 +21,8 @@ export interface NodeEmitContext {
     viewDir: string;
   }>;
   wgslType(type: IrType): string;
+  /** True when emitting for a compute stage (no screen-space derivatives). */
+  computeStage?: boolean;
 }
 
 export interface NodeInputs {
@@ -564,6 +566,33 @@ const BLACKBODY_PRELUDE = `fn mx_blackbody(temperature: f32) -> vec3f {
 }
 `;
 
+// Derivatives are passed in so the helper stays valid in compute modules.
+const HEIGHTTONORMAL_PRELUDE = `fn mx_heighttonormal(dh: vec2f, du: vec2f, dv: vec2f, scale: f32) -> vec3f {
+  let h = dh * scale * (1.0 / 16.0);
+  var n = cross(vec3f(du.x, dv.x, h.x), vec3f(du.y, dv.y, h.y));
+  if (dot(n, n) < 1e-12) { n = vec3f(0.0, 0.0, 1.0); }
+  else if (n.z < 0.0) { n = -n; }
+  return normalize(n) * 0.5 + 0.5;
+}
+`;
+
+const RAMP_PRELUDE = `fn mx_ramp_gradient(x: f32, i1: f32, i2: f32, c1: vec4f, c2: vec4f, interpolation: i32, prev: vec4f, num: i32, count: i32) -> vec4f {
+  if (num > count || !(x > i1)) { return prev; }
+  if (interpolation >= 2) { return select(c2, c1, i2 > x); }
+  let t = select((clamp(x, i1, i2) - i1) / (i2 - i1), smoothstep(i1, i2, x), interpolation == 1);
+  return mix(c1, c2, t);
+}
+fn mx_ramp_x(uv: vec2f, kind: i32) -> f32 {
+  let d = uv - vec2f(0.5);
+  switch (kind) {
+    case 1 { return atan2(d.x, d.y) / 6.28319 + 0.5; }
+    case 2 { return length(d * 1.414); }
+    case 3 { return 2.0 * max(abs(d.x), abs(d.y)); }
+    default { return uv.x; }
+  }
+}
+`;
+
 const COLORCORRECT_PRELUDE = `fn mx_colorcorrect(c: vec3f, hue: f32, saturation: f32, gamma: f32, lift: f32, gain: f32, contrast: f32, pivot: f32, exposure: f32) -> vec3f {
   let hsv = mx_rgbtohsv(c);
   var r = mx_hsvtorgb(vec3f(fract(hsv.x + hue), hsv.y * saturation, hsv.z));
@@ -900,6 +929,47 @@ const LOWERINGS: readonly NodeLowering[] = [
     const radius = inp.named('radius', '0.5');
     return `select(1.0, 0.0, dot(${delta}, ${delta}) > ${radius} * ${radius})`;
   }),
+  expr('ramp_gradient', (inp) => {
+    const args = [
+      inp.named('x', '0.0'),
+      inp.named('interval1', '0.0'),
+      inp.named('interval2', '1.0'),
+      inp.named('color1', 'vec4f(0.0, 0.0, 0.0, 1.0)'),
+      inp.named('color2', 'vec4f(1.0)'),
+      `i32(${inp.named('interpolation', '1')})`,
+      inp.named('prev_color', 'vec4f(0.0, 0.0, 0.0, 1.0)'),
+      `i32(${inp.named('interval_num', '1')})`,
+      `i32(${inp.named('num_intervals', '2')})`,
+    ];
+    return `mx_ramp_gradient(${args.join(', ')})`;
+  }, RAMP_PRELUDE),
+  expr('ramp', (inp, _type, ctx) => {
+    const x = `mx_ramp_x(${texcoordOf(inp, ctx)}, i32(${inp.named('type', '0')}))`;
+    const interpolation = `i32(${inp.named('interpolation', '1')})`;
+    const count = `i32(${inp.named('num_intervals', '2')})`;
+    const interval = (k: number): string => inp.named(`interval${k}`, k === 1 ? '0.0' : '1.0');
+    const color = (k: number): string => inp.named(`color${k}`, k === 1 ? 'vec4f(0.0, 0.0, 0.0, 1.0)' : 'vec4f(1.0)');
+    let acc = color(1);
+    for (let k = 1; k <= 9; k++) {
+      acc = `mx_ramp_gradient(${x}, ${interval(k)}, ${interval(k + 1)}, ${color(k)}, ${color(k + 1)}, ${interpolation}, ${acc}, ${k}, ${count})`;
+    }
+    return acc;
+  }, RAMP_PRELUDE),
+  // Compute stages (path tracer) have no screen-space derivatives: flat normal.
+  expr('heighttonormal', (inp, _type, ctx) => {
+    if (ctx.computeStage) return 'vec3f(0.5, 0.5, 1.0)';
+    const h = inp.named('in', '0.0');
+    const uv = texcoordOf(inp, ctx);
+    return `mx_heighttonormal(vec2f(dpdx(${h}), dpdy(${h})), vec2f(dpdx(${uv}.x), dpdy(${uv}.x)), vec2f(dpdx(${uv}.y), dpdy(${uv}.y)), ${inp.named('scale', '1.0')})`;
+  }, HEIGHTTONORMAL_PRELUDE),
+  expr('bump', (inp, _type, ctx) => {
+    const normal = inp.named('normal', ctx.varyings.normal);
+    if (ctx.computeStage) return normal;
+    const h = inp.named('height', '0.0');
+    const uv = ctx.varyings.texcoord;
+    const encoded = `mx_heighttonormal(vec2f(dpdx(${h}), dpdy(${h})), vec2f(dpdx(${uv}.x), dpdy(${uv}.x)), vec2f(dpdx(${uv}.y), dpdy(${uv}.y)), 1.0)`;
+    return `mx_normalmap(${encoded}, vec2f(${inp.named('scale', '1.0')}), ${normal}, ${inp.named('tangent', ctx.varyings.tangent)})`;
+  }, [HEIGHTTONORMAL_PRELUDE, NORMALMAP_PRELUDE]),
   // noise
   expr('noise2d', (inp, type, ctx) => {
     const p = `vec3f(${texcoordOf(inp, ctx)}, 0.0)`;

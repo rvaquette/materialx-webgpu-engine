@@ -302,6 +302,7 @@ export function lowerExprs(ir: ShaderIr, handlePrefix = '', computeStage = false
       viewDir: 'vary.viewDir',
     },
     wgslType,
+    computeStage,
   };
 
   const order = topoOrder(ir);

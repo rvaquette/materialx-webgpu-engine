@@ -36,7 +36,7 @@ export interface LoweredSurfaceInputs {
 }
 
 const TEXTURE_CATEGORIES: ReadonlySet<string> = new Set(['image', 'tiledimage', 'hextiledimage']);
-const GLTF_TEXTURE_CATEGORIES: ReadonlySet<string> = new Set(['gltf_image', 'gltf_colorimage', 'gltf_normalmap', 'gltf_iridescence_thickness']);
+const GLTF_TEXTURE_CATEGORIES: ReadonlySet<string> = new Set(['gltf_image', 'gltf_colorimage', 'gltf_normalmap', 'gltf_iridescence_thickness', 'hextilednormalmap']);
 
 /** Upstream node categories this lowering emits (registry + special-cased nodes). */
 export const SURFACE_IR_UPSTREAM: ReadonlySet<string> = new Set([
@@ -164,7 +164,7 @@ export function lowerSurfaceInputsToIr(
   const callRef = (op: string, type: IrType, namedArgs: Record<string, IrRef>): IrRef =>
     builder.add({ kind: 'call', type, op, args: [], namedArgs });
 
-  const lowerTexture = (nodeId: string, typeOverride?: IrType): IrRef => {
+  const lowerTexture = (nodeId: string, typeOverride?: IrType, uvOverride?: IrRef): IrRef => {
     const node = graph.nodes.get(nodeId)!;
     const valueType = typeOverride ?? irTypeFromMaterialX(node.type) ?? COLOR3;
     const file = node.inputs.find((i) => i.name === 'file');
@@ -179,7 +179,7 @@ export function lowerSurfaceInputsToIr(
     });
     builder.declareSampler({ name: nodeId });
     const texcoord = node.inputs.find((i) => i.name === 'texcoord');
-    const uv = (texcoord ? lowerInput(texcoord) : undefined) ?? ensureUv();
+    const uv = uvOverride ?? (texcoord ? lowerInput(texcoord) : undefined) ?? ensureUv();
     return builder.add({ kind: 'texture', type: valueType, texture: nodeId, uv: coerce(uv, vector(2, 'float', 'texcoord')), sampler: nodeId });
   };
 
@@ -207,6 +207,22 @@ export function lowerSurfaceInputsToIr(
       case 'gltf_normalmap': {
         const vec3 = vector(3, 'float', 'vector');
         return callRef('normalmap', vec3, { in: lowerTexture(nodeId, vec3) });
+      }
+      case 'hextilednormalmap': {
+        // Approximation: one tiled normal-map sample, without hex-tile blending.
+        const vec2 = vector(2, 'float', 'texcoord');
+        const vec3 = vector(3, 'float', 'vector');
+        const uv = authoredRef(nodeId, 'texcoord', vec2) ?? ensureUv();
+        const tiling = authoredRef(nodeId, 'tiling', vec2);
+        const tiled = tiling !== undefined ? callRef('multiply', vec2, { in1: uv, in2: tiling }) : uv;
+        const args: Record<string, IrRef> = { in: lowerTexture(nodeId, vec3, tiled) };
+        const strength = authoredRef(nodeId, 'strength', FLOAT);
+        if (strength !== undefined) args['scale'] = strength;
+        for (const name of ['normal', 'tangent']) {
+          const ref = authoredRef(nodeId, name, vec3);
+          if (ref !== undefined) args[name] = ref;
+        }
+        return callRef('normalmap', vec3, args);
       }
       case 'gltf_iridescence_thickness': {
         const sample = lowerTexture(nodeId, vector(3, 'float', 'vector'));

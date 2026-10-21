@@ -1,0 +1,28 @@
+{
+  "schemaVersion": 1,
+  "startedAt": "2026-10-21T13:25:55.370Z",
+  "target": "local",
+  "complete": false,
+  "scope": {
+    "root": ".",
+    "filter": "",
+    "limit": null,
+    "discoveredFiles": 827,
+    "retest": "docs/generated/mtlx-compile-audit-local.json"
+  },
+  "totalFiles": 10,
+  "files": [],
+  "adapter": {
+    "vendor": "intel",
+    "architecture": "gen-12lp",
+    "device": "",
+    "description": "",
+    "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/155.0.0.0 Safari/537.36"
+  },
+  "summary": {
+    "compiled": 0,
+    "incomplete": 0,
+    "failed": 0,
+    "skipped": 0
+  }
+}
