@@ -160,7 +160,7 @@ function rotate2d(v: IrValue, deg: number): number[] {
   const a = (deg * Math.PI) / 180;
   const c = Math.cos(a);
   const s = Math.sin(a);
-  return [c * v[0]! - s * v[1]!, s * v[0]! + c * v[1]!];
+  return [c * v[0]! + s * v[1]!, -s * v[0]! + c * v[1]!];
 }
 
 function rotate3d(v: IrValue, deg: number, axis: IrValue): number[] {
@@ -232,7 +232,7 @@ function convert(src: IrValue, from: IrType, to: IrType): number[] {
       if (from.size === to.size) return [...src];
       if (from.size < to.size) {
         const out = [...src];
-        while (out.length < to.size) out.push(1);
+        while (out.length < to.size) out.push(out.length === 3 ? 1 : 0);
         return out;
       }
       return src.slice(0, to.size);
@@ -319,11 +319,14 @@ function evalCall(op: string, args: IrValue[], env: IrEvalVaryings, type: IrType
     case 'constant':
       return [...input('value', 0)];
     case 'ifequal':
-      return input('value1', 0)[0]! === input('value2', 1)[0]! ? [...input('in1', 2)] : [...input('in2', 3)];
     case 'ifgreater':
-      return input('value1', 0)[0]! > input('value2', 1)[0]! ? [...input('in1', 2)] : [...input('in2', 3)];
-    case 'ifgreatereq':
-      return input('value1', 0)[0]! >= input('value2', 1)[0]! ? [...input('in1', 2)] : [...input('in2', 3)];
+    case 'ifgreatereq': {
+      const a = input('value1', 0)[0]!;
+      const b = input('value2', 1)[0]!;
+      const test = op === 'ifequal' ? a === b : op === 'ifgreater' ? a > b : a >= b;
+      if (named !== undefined && named['in1'] === undefined && type.kind === 'scalar' && type.scalar === 'bool') return [test ? 1 : 0];
+      return test ? [...input('in1', 2)] : [...input('in2', 3)];
+    }
     case 'luminance': {
       const l = dot(input('in', 0), LUMA);
       return [l, l, l];
@@ -382,6 +385,12 @@ function evalCall(op: string, args: IrValue[], env: IrEvalVaryings, type: IrType
       const r = input('roughness', 0, [0, 0]);
       return [r[0]! * r[0]!, (r[1] ?? r[0]!) * (r[1] ?? r[0]!)];
     }
+    case 'open_pbr_anisotropy': {
+      const r = input('roughness', 0, [0])[0]!;
+      const inv = 1 - input('anisotropy', 1, [0])[0]!;
+      const ax = r * r * Math.sqrt(2 / (1 + inv * inv));
+      return [ax, inv * ax];
+    }
     case 'chiang_hair_absorption_from_color':
       return input('color', 0).map((x) => {
         const l = Math.log(clampNum(x, 1e-4, 1));
@@ -396,6 +405,80 @@ function evalCall(op: string, args: IrValue[], env: IrEvalVaryings, type: IrType
       const eu = input('melanin_concentration', 0, [0])[0]!;
       const pheo = input('melanin_redness', 1, [0])[0]!;
       return [eu * 0.419 + pheo * 0.187, eu * 0.697 + pheo * 0.4, eu * 1.37 + pheo * 1.05];
+    }
+    case 'cos':
+      return unary(input('in', 0), Math.cos);
+    case 'tan':
+      return unary(input('in', 0), Math.tan);
+    case 'asin':
+      return unary(input('in', 0), Math.asin);
+    case 'acos':
+      return unary(input('in', 0), Math.acos);
+    case 'exp':
+      return unary(input('in', 0), Math.exp);
+    case 'floor':
+      return unary(input('in', 0), Math.floor);
+    case 'ceil':
+      return unary(input('in', 0), Math.ceil);
+    case 'round':
+      return unary(input('in', 0), Math.round);
+    case 'atan2':
+      return binary(input('iny', 0), input('inx', 1, [1]), Math.atan2);
+    case 'magnitude':
+      return [Math.sqrt(dot(input('in', 0), input('in', 0)))];
+    case 'distance': {
+      const d = binary(input('in1', 0), input('in2', 1), (a, b) => a - b);
+      return [Math.sqrt(dot(d, d))];
+    }
+    case 'crossproduct':
+      return cross(input('in1', 0), input('in2', 1));
+    case 'modulo':
+      return binary(input('in1', 0), input('in2', 1, [1]), (a, b) => a - b * Math.floor(a / b));
+    case 'safepower':
+      return binary(input('in1', 0), input('in2', 1, [1]), (a, b) => Math.sign(a) * Math.abs(a) ** b);
+    case 'smoothstep': {
+      const low = input('low', 1, [0]);
+      const high = input('high', 2, [1]);
+      return input('in', 0).map((x, i) => {
+        const lo = low[i] ?? low[0]!;
+        const hi = high[i] ?? high[0]!;
+        const t = clampNum((x - lo) / (hi - lo), 0, 1);
+        return t * t * (3 - 2 * t);
+      });
+    }
+    case 'remap': {
+      const pick = (v: IrValue, i: number): number => v[i] ?? v[0]!;
+      const inLow = input('inlow', 1, [0]);
+      const inHigh = input('inhigh', 2, [1]);
+      const outLow = input('outlow', 3, [0]);
+      const outHigh = input('outhigh', 4, [1]);
+      return input('in', 0).map((x, i) => pick(outLow, i) + ((x - pick(inLow, i)) * (pick(outHigh, i) - pick(outLow, i))) / (pick(inHigh, i) - pick(inLow, i)));
+    }
+    case 'contrast': {
+      const pivot = input('pivot', 2, [0.5]);
+      const amount = input('amount', 1, [1]);
+      return input('in', 0).map((x, i) => (x - (pivot[i] ?? pivot[0]!)) * (amount[i] ?? amount[0]!) + (pivot[i] ?? pivot[0]!));
+    }
+    case 'and':
+      return [input('in1', 0, [0])[0]! && input('in2', 1, [0])[0]! ? 1 : 0];
+    case 'or':
+      return [input('in1', 0, [0])[0]! || input('in2', 1, [0])[0]! ? 1 : 0];
+    case 'xor':
+      return [(input('in1', 0, [0])[0]! !== 0) !== (input('in2', 1, [0])[0]! !== 0) ? 1 : 0];
+    case 'not':
+      return [input('in', 0, [0])[0]! ? 0 : 1];
+    case 'normal':
+      return [...(env.normal ?? [0, 0, 1])];
+    case 'tangent':
+      return [...(env.tangent ?? [1, 0, 0])];
+    case 'bitangent':
+      return [...(env.bitangent ?? [0, 1, 0])];
+    case 'switch': {
+      const which = Math.floor(input('which', 10, [0])[0]!);
+      let count = 10;
+      while (count > 1 && named?.[`in${count}`] === undefined) count--;
+      const k = clampNum(which, 0, count - 1) + 1;
+      return [...input(`in${k}`, k - 1, zeros(typeSize(type)))];
     }
     default:
       throw new IrEvalError(`no CPU evaluation for node '${op}' (type ${type.kind})`);

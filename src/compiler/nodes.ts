@@ -29,6 +29,8 @@ export interface NodeInputs {
   /** Named input; legacyIndex is used only for older positional call IR. */
   named(name: string, fallback?: string, legacyIndex?: number): string;
   has(name: string): boolean;
+  /** IR type of a named input, when known (lets lowerings pick type-specific code). */
+  typeOf(name: string): IrType | undefined;
 }
 
 export type NodeEmit = (inp: NodeInputs, type: IrType, ctx: NodeEmitContext) => string;
@@ -38,7 +40,7 @@ export interface NodeLowering {
   kind: 'expr' | 'closure';
   emit: NodeEmit;
   /** WGSL helper function(s) this node needs; emitted once, deduplicated. */
-  prelude?: string;
+  prelude?: string | readonly string[];
 }
 
 // --- WGSL preludes -----------------------------------------------------------
@@ -361,7 +363,7 @@ const ROTATE2D_PRELUDE = `fn mx_rotate2d(v: vec2f, deg: f32) -> vec2f {
   let a = radians(deg);
   let c = cos(a);
   let s = sin(a);
-  return vec2f(c * v.x - s * v.y, s * v.x + c * v.y);
+  return vec2f(c * v.x + s * v.y, -s * v.x + c * v.y);
 }
 `;
 
@@ -374,7 +376,7 @@ const ROTATE3D_PRELUDE = `fn mx_rotate3d(v: vec3f, deg: f32, axis: vec3f) -> vec
 }
 `;
 
-const NORMALMAP_PRELUDE = `fn mx_normalmap(sample: vec3f, scale: f32, N: vec3f, T: vec3f) -> vec3f {
+const NORMALMAP_PRELUDE = `fn mx_normalmap(sample: vec3f, scale: vec2f, N: vec3f, T: vec3f) -> vec3f {
   let t = normalize(T - N * dot(N, T));
   let b = cross(N, t);
   let m = sample * 2.0 - 1.0;
@@ -397,6 +399,179 @@ fn mx_fractal3d(p: vec3f, amplitude: f32, octaves: f32) -> f32 {
     freq = freq * 2.0;
   }
   return sum;
+}
+`;
+
+// Hash-based gradient (Perlin-style) noise shared by the noise2d/3d, fractal,
+// cellnoise, worley and unifiednoise lowerings. Integer hashing keeps results
+// stable across GPUs (no fract(sin) precision drift on mobile).
+const NOISE_PRELUDE = `fn mx_hash_u32(x: u32) -> u32 {
+  var h = x;
+  h = h ^ (h >> 16u);
+  h = h * 0x7feb352du;
+  h = h ^ (h >> 15u);
+  h = h * 0x846ca68bu;
+  h = h ^ (h >> 16u);
+  return h;
+}
+fn mx_hash_cell(c: vec3i, seed: u32) -> u32 {
+  return mx_hash_u32(bitcast<u32>(c.x) ^ mx_hash_u32(bitcast<u32>(c.y) ^ mx_hash_u32(bitcast<u32>(c.z) ^ mx_hash_u32(seed))));
+}
+fn mx_cell_float(c: vec3i, seed: u32) -> f32 {
+  return f32(mx_hash_cell(c, seed) >> 8u) / 16777216.0;
+}
+fn mx_grad3(h: u32, d: vec3f) -> f32 {
+  let k = h & 15u;
+  let u = select(d.y, d.x, k < 8u);
+  let v = select(select(d.z, d.x, k == 12u || k == 14u), d.y, k < 4u);
+  return select(-u, u, (k & 1u) == 0u) + select(-v, v, (k & 2u) == 0u);
+}
+fn mx_perlin3(p: vec3f, seed: u32) -> f32 {
+  let fl = floor(p);
+  let i = vec3i(fl);
+  let f = p - fl;
+  let u = f * f * f * (f * (f * 6.0 - 15.0) + 10.0);
+  let n000 = mx_grad3(mx_hash_cell(i, seed), f);
+  let n100 = mx_grad3(mx_hash_cell(i + vec3i(1, 0, 0), seed), f - vec3f(1.0, 0.0, 0.0));
+  let n010 = mx_grad3(mx_hash_cell(i + vec3i(0, 1, 0), seed), f - vec3f(0.0, 1.0, 0.0));
+  let n110 = mx_grad3(mx_hash_cell(i + vec3i(1, 1, 0), seed), f - vec3f(1.0, 1.0, 0.0));
+  let n001 = mx_grad3(mx_hash_cell(i + vec3i(0, 0, 1), seed), f - vec3f(0.0, 0.0, 1.0));
+  let n101 = mx_grad3(mx_hash_cell(i + vec3i(1, 0, 1), seed), f - vec3f(1.0, 0.0, 1.0));
+  let n011 = mx_grad3(mx_hash_cell(i + vec3i(0, 1, 1), seed), f - vec3f(0.0, 1.0, 1.0));
+  let n111 = mx_grad3(mx_hash_cell(i + vec3i(1, 1, 1), seed), f - vec3f(1.0, 1.0, 1.0));
+  let x00 = mix(n000, n100, u.x);
+  let x10 = mix(n010, n110, u.x);
+  let x01 = mix(n001, n101, u.x);
+  let x11 = mix(n011, n111, u.x);
+  return 0.982 * mix(mix(x00, x10, u.y), mix(x01, x11, u.y), u.z);
+}
+fn mx_perlin3v(p: vec3f) -> vec3f {
+  return vec3f(mx_perlin3(p, 0u), mx_perlin3(p, 1u), mx_perlin3(p, 2u));
+}
+fn mx_fractal3(p: vec3f, octaves: i32, lacunarity: f32, diminish: f32, seed: u32) -> f32 {
+  var result = 0.0;
+  var amp = 1.0;
+  var q = p;
+  let n = clamp(octaves, 0, 16);
+  for (var i = 0; i < n; i = i + 1) {
+    result = result + amp * mx_perlin3(q, seed);
+    amp = amp * diminish;
+    q = q * lacunarity;
+  }
+  return result;
+}
+fn mx_fractal3v(p: vec3f, octaves: i32, lacunarity: f32, diminish: f32) -> vec3f {
+  return vec3f(mx_fractal3(p, octaves, lacunarity, diminish, 0u), mx_fractal3(p, octaves, lacunarity, diminish, 1u), mx_fractal3(p, octaves, lacunarity, diminish, 2u));
+}
+fn mx_cellnoise3(p: vec3f) -> f32 {
+  return mx_cell_float(vec3i(floor(p)), 0u);
+}
+fn mx_worley(p: vec3f, jitter: f32, dims: i32) -> vec3f {
+  let fl = floor(p);
+  let base = vec3i(fl);
+  let f = p - fl;
+  var d = vec3f(1e6);
+  let zr = select(0, 1, dims == 3);
+  for (var z = -zr; z <= zr; z = z + 1) {
+    for (var y = -1; y <= 1; y = y + 1) {
+      for (var x = -1; x <= 1; x = x + 1) {
+        let o = vec3i(x, y, z);
+        let c = base + o;
+        let r = vec3f(mx_cell_float(c, 0u), mx_cell_float(c, 1u), mx_cell_float(c, 2u));
+        var diff = vec3f(o) + vec3f(0.5) + (r - vec3f(0.5)) * jitter - f;
+        if (dims == 2) { diff.z = 0.0; }
+        let dist = dot(diff, diff);
+        if (dist < d.x) { d = vec3f(dist, d.x, d.y); }
+        else if (dist < d.y) { d = vec3f(d.x, dist, d.y); }
+        else if (dist < d.z) { d.z = dist; }
+      }
+    }
+  }
+  return sqrt(d);
+}
+fn mx_unifiednoise(p: vec3f, dims: i32, jitter: f32, octaves: i32, lacunarity: f32, diminish: f32, kind: i32) -> f32 {
+  switch (kind) {
+    case 1 { return mx_cellnoise3(p); }
+    case 2 { return mx_worley(p, jitter, dims).x; }
+    case 3 { return mx_fractal3(p, octaves, lacunarity, diminish, 0u) * 0.5 + 0.5; }
+    default { return mx_perlin3(p, 0u) * 0.5 + 0.5; }
+  }
+}
+`;
+
+const MATRIX_PRELUDE = `fn mx_inverse3(m: mat3x3f) -> mat3x3f {
+  let r0 = cross(m[1], m[2]);
+  let r1 = cross(m[2], m[0]);
+  let r2 = cross(m[0], m[1]);
+  let det = dot(m[0], r0);
+  let inv = 1.0 / select(det, 1e-8, abs(det) < 1e-8);
+  return transpose(mat3x3f(r0, r1, r2)) * inv;
+}
+fn mx_inverse4(m: mat4x4f) -> mat4x4f {
+  let a00 = m[0][0]; let a01 = m[0][1]; let a02 = m[0][2]; let a03 = m[0][3];
+  let a10 = m[1][0]; let a11 = m[1][1]; let a12 = m[1][2]; let a13 = m[1][3];
+  let a20 = m[2][0]; let a21 = m[2][1]; let a22 = m[2][2]; let a23 = m[2][3];
+  let a30 = m[3][0]; let a31 = m[3][1]; let a32 = m[3][2]; let a33 = m[3][3];
+  let b00 = a00 * a11 - a01 * a10;
+  let b01 = a00 * a12 - a02 * a10;
+  let b02 = a00 * a13 - a03 * a10;
+  let b03 = a01 * a12 - a02 * a11;
+  let b04 = a01 * a13 - a03 * a11;
+  let b05 = a02 * a13 - a03 * a12;
+  let b06 = a20 * a31 - a21 * a30;
+  let b07 = a20 * a32 - a22 * a30;
+  let b08 = a20 * a33 - a23 * a30;
+  let b09 = a21 * a32 - a22 * a31;
+  let b10 = a21 * a33 - a23 * a31;
+  let b11 = a22 * a33 - a23 * a32;
+  let det = b00 * b11 - b01 * b10 + b02 * b09 + b03 * b08 - b04 * b07 + b05 * b06;
+  let inv = 1.0 / select(det, 1e-8, abs(det) < 1e-8);
+  return mat4x4f(
+    a11 * b11 - a12 * b10 + a13 * b09, a02 * b10 - a01 * b11 - a03 * b09, a31 * b05 - a32 * b04 + a33 * b03, a22 * b04 - a21 * b05 - a23 * b03,
+    a12 * b08 - a10 * b11 - a13 * b07, a00 * b11 - a02 * b08 + a03 * b07, a32 * b02 - a30 * b05 - a33 * b01, a20 * b05 - a22 * b02 + a23 * b01,
+    a10 * b10 - a11 * b08 + a13 * b06, a01 * b08 - a00 * b10 - a03 * b06, a30 * b04 - a31 * b02 + a33 * b00, a21 * b02 - a20 * b04 - a23 * b00,
+    a11 * b07 - a10 * b09 - a12 * b06, a00 * b09 - a01 * b07 + a02 * b06, a31 * b01 - a30 * b03 - a32 * b00, a20 * b03 - a21 * b01 + a22 * b00) * inv;
+}
+`;
+
+const PLACE2D_PRELUDE = `fn mx_place2d(tc: vec2f, pivot: vec2f, scale: vec2f, rotate: f32, offset: vec2f, order: i32) -> vec2f {
+  let a = radians(rotate);
+  let c = cos(a);
+  let s = sin(a);
+  let rot = mat2x2f(c, -s, s, c);
+  let centered = tc - pivot;
+  if (order == 0) { return rot * (centered / scale) - offset + pivot; }
+  return (rot * (centered - offset)) / scale + pivot;
+}
+`;
+
+const BLACKBODY_PRELUDE = `fn mx_blackbody(temperature: f32) -> vec3f {
+  let k = clamp(temperature, 800.0, 25000.0);
+  let t = 1000.0 / k;
+  let t2 = t * t;
+  let t3 = t2 * t;
+  var xc = -3.0258469 * t3 + 2.1070379 * t2 + 0.2226347 * t + 0.240390;
+  if (k < 4000.0) { xc = -0.2661239 * t3 - 0.2343580 * t2 + 0.8776956 * t + 0.179910; }
+  let xc2 = xc * xc;
+  let xc3 = xc2 * xc;
+  var yc = 3.0817580 * xc3 - 5.87338670 * xc2 + 3.75112997 * xc - 0.37001483;
+  if (k < 2222.0) { yc = -1.1063814 * xc3 - 1.34811020 * xc2 + 2.18555832 * xc - 0.20219683; }
+  else if (k < 4000.0) { yc = -0.9549476 * xc3 - 1.37418593 * xc2 + 2.09137015 * xc - 0.16748867; }
+  if (yc <= 0.0) { return vec3f(1.0); }
+  let xyz = vec3f(xc / yc, 1.0, (1.0 - xc - yc) / yc);
+  let m = mat3x3f(3.2406, -0.9689, 0.0557, -1.5372, 1.8758, -0.2040, -0.4986, 0.0415, 1.0570);
+  return max(m * xyz, vec3f(0.0));
+}
+`;
+
+const COLORCORRECT_PRELUDE = `fn mx_colorcorrect(c: vec3f, hue: f32, saturation: f32, gamma: f32, lift: f32, gain: f32, contrast: f32, pivot: f32, exposure: f32) -> vec3f {
+  let hsv = mx_rgbtohsv(c);
+  var r = mx_hsvtorgb(vec3f(fract(hsv.x + hue), hsv.y * saturation, hsv.z));
+  r = sign(r) * pow(abs(r), vec3f(1.0 / max(gamma, 1e-4)));
+  r = r * (1.0 - lift) + vec3f(lift);
+  r = r * gain;
+  r = (r - vec3f(pivot)) * contrast + vec3f(pivot);
+  return r * exp2(exposure);
 }
 `;
 
@@ -444,8 +619,57 @@ fn mx_deon_hair_absorption_from_melanin(eumelanin: f32, pheomelanin: f32) -> vec
 const op2 = (sym: string): NodeEmit => (inp) => `(${inp.named('in1', undefined, 0)} ${sym} ${inp.named('in2', undefined, 1)})`;
 const fn1 = (name: string): NodeEmit => (inp) => `${name}(${inp.named('in', undefined, 0)})`;
 const fn2 = (name: string): NodeEmit => (inp) => `${name}(${inp.named('in1', undefined, 0)}, ${inp.named('in2', undefined, 1)})`;
+/** Binary builtin whose second operand may be a scalar for vector nodes (FA variants). */
+const fn2Splat = (name: string): NodeEmit => (inp, type, ctx) => {
+  const in2 = inp.named('in2', undefined, 1);
+  const t2 = inp.typeOf('in2');
+  const splat = type.kind === 'vector' && t2 !== undefined && t2.kind === 'scalar' ? `${ctx.wgslType(type)}(${in2})` : in2;
+  return `${name}(${inp.named('in1', undefined, 0)}, ${splat})`;
+};
 
-function expr(category: string, emit: NodeEmit, prelude?: string): NodeLowering {
+function zeroOf(type: IrType, ctx: NodeEmitContext): string {
+  if (type.kind === 'scalar' && type.scalar === 'bool') return 'false';
+  if (type.kind === 'matrix') return `${ctx.wgslType(type)}()`;
+  return `${ctx.wgslType(type)}(0)`;
+}
+
+function vectorSize(type: IrType): number {
+  return type.kind === 'vector' ? type.size : 1;
+}
+
+/** Fit a 3-channel noise expression (vec3 `v`, scalar `s(seed)`) to the node type. */
+function fitNoise(type: IrType, scalar: (seed: string) => string, vec3: string): string {
+  switch (vectorSize(type)) {
+    case 1:
+      return scalar('0u');
+    case 2:
+      return `(${vec3}).xy`;
+    case 3:
+      return vec3;
+    default:
+      return `vec4f(${vec3}, ${scalar('3u')})`;
+  }
+}
+
+const texcoordOf = (inp: NodeInputs, ctx: NodeEmitContext): string => inp.named('texcoord', ctx.varyings.texcoord);
+const positionOf = (inp: NodeInputs, ctx: NodeEmitContext): string => inp.named('position', ctx.varyings.position);
+
+/** Compositing node: mix(bg, op(fg, bg), mix). */
+const blend = (op: (fg: string, bg: string, t: string) => string): NodeEmit => (inp, type, ctx) => {
+  const t = ctx.wgslType(type);
+  const fg = inp.named('fg', `${t}(0.0)`);
+  const bg = inp.named('bg', `${t}(0.0)`);
+  return `mix(${bg}, ${op(fg, bg, t)}, ${inp.named('mix', '1.0')})`;
+};
+
+/** if* conditional; the boolean-output variants only compare value1/value2. */
+const conditional = (cmp: string): NodeEmit => (inp, type) => {
+  const test = `${inp.named('value1', undefined, 0)} ${cmp} ${inp.named('value2', undefined, 1)}`;
+  if (type.kind === 'scalar' && type.scalar === 'bool' && !inp.has('in1')) return `(${test})`;
+  return `select(${inp.named('in2', undefined, 3)}, ${inp.named('in1', undefined, 2)}, ${test})`;
+};
+
+function expr(category: string, emit: NodeEmit, prelude?: string | readonly string[]): NodeLowering {
   return prelude !== undefined ? { category, kind: 'expr', emit, prelude } : { category, kind: 'expr', emit };
 }
 function closure(category: string, emit: NodeEmit, prelude?: string): NodeLowering {
@@ -460,19 +684,19 @@ const LOWERINGS: readonly NodeLowering[] = [
   expr('subtract', op2('-')),
   expr('multiply', op2('*')),
   expr('divide', op2('/')),
-  expr('power', fn2('pow')),
+  expr('power', fn2Splat('pow')),
   expr('sin', fn1('sin')),
   expr('sqrt', fn1('sqrt')),
   expr('ln', fn1('log')),
   expr('sign', fn1('sign')),
   expr('normalize', fn1('normalize')),
-  expr('min', fn2('min')),
-  expr('max', fn2('max')),
+  expr('min', fn2Splat('min')),
+  expr('max', fn2Splat('max')),
   expr('clamp', (inp, type, ctx) => {
-    // clamp is a builtin (no scalar->vector broadcast); splat the default bounds
-    // to the node type so a color3/vector clamp gets vecN bounds, not scalars.
+    // clamp is a builtin (no scalar->vector broadcast); splat the bounds to the
+    // node type so a color3/vector clamp gets vecN bounds, not scalars.
     const t = ctx.wgslType(type);
-    return `clamp(${inp.named('in', undefined, 0)}, ${inp.named('low', `${t}(0.0)`, 1)}, ${inp.named('high', `${t}(1.0)`, 2)})`;
+    return `clamp(${inp.named('in', undefined, 0)}, ${t}(${inp.named('low', '0.0', 1)}), ${t}(${inp.named('high', '1.0', 2)}))`;
   }),
   expr('range', (inp, type, ctx) => {
     const target = ctx.wgslType(type);
@@ -494,33 +718,259 @@ const LOWERINGS: readonly NodeLowering[] = [
   expr('extract', (inp) => `${inp.named('in', undefined, 0)}[${inp.named('index', undefined, 1)}]`),
   expr('combine2', (inp) => `vec2f(${inp.named('in1', undefined, 0)}, ${inp.named('in2', undefined, 1)})`),
   expr('combine3', (inp) => `vec3f(${inp.named('in1', undefined, 0)}, ${inp.named('in2', undefined, 1)}, ${inp.named('in3', undefined, 2)})`),
+  expr('combine4', (inp) => `vec4f(${inp.named('in1', '0.0')}, ${inp.named('in2', '0.0')}, ${inp.named('in3', '0.0')}, ${inp.named('in4', '0.0')})`),
   expr('constant', (inp) => inp.named('value', undefined, 0)),
-  // conditionals
-  expr('ifequal', (inp) => `select(${inp.named('in2', undefined, 3)}, ${inp.named('in1', undefined, 2)}, ${inp.named('value1', undefined, 0)} == ${inp.named('value2', undefined, 1)})`),
-  expr('ifgreater', (inp) => `select(${inp.named('in2', undefined, 3)}, ${inp.named('in1', undefined, 2)}, ${inp.named('value1', undefined, 0)} > ${inp.named('value2', undefined, 1)})`),
-  expr('ifgreatereq', (inp) => `select(${inp.named('in2', undefined, 3)}, ${inp.named('in1', undefined, 2)}, ${inp.named('value1', undefined, 0)} >= ${inp.named('value2', undefined, 1)})`),
+  // conditionals / logic
+  expr('ifequal', conditional('==')),
+  expr('ifgreater', conditional('>')),
+  expr('ifgreatereq', conditional('>=')),
+  expr('switch', (inp, type, ctx) => {
+    let count = 10;
+    while (count > 1 && !inp.has(`in${count}`)) count--;
+    const zero = zeroOf(type, ctx);
+    const which = `clamp(i32(floor(f32(${inp.named('which', '0.0')}))), 0, ${count - 1})`;
+    let acc = inp.named(`in${count}`, zero);
+    for (let k = count - 1; k >= 1; k--) acc = `select(${acc}, ${inp.named(`in${k}`, zero)}, ${which} == ${k - 1})`;
+    return acc;
+  }),
+  expr('and', (inp) => `(${inp.named('in1', 'false')} && ${inp.named('in2', 'false')})`),
+  expr('or', (inp) => `(${inp.named('in1', 'false')} || ${inp.named('in2', 'false')})`),
+  expr('xor', (inp) => `(${inp.named('in1', 'false')} != ${inp.named('in2', 'false')})`),
+  expr('not', (inp) => `(!${inp.named('in', 'false')})`),
+  // more math
+  expr('cos', fn1('cos')),
+  expr('tan', fn1('tan')),
+  expr('asin', fn1('asin')),
+  expr('acos', fn1('acos')),
+  expr('atan2', (inp) => `atan2(${inp.named('iny')}, ${inp.named('inx')})`),
+  expr('exp', fn1('exp')),
+  expr('floor', fn1('floor')),
+  expr('ceil', fn1('ceil')),
+  expr('round', fn1('round')),
+  expr('magnitude', fn1('length')),
+  expr('distance', fn2('distance')),
+  expr('crossproduct', fn2('cross')),
+  expr('reflect', (inp, _type, ctx) => `reflect(${inp.named('in')}, ${inp.named('normal', ctx.varyings.normal)})`),
+  expr('refract', (inp, _type, ctx) => `refract(${inp.named('in')}, ${inp.named('normal', ctx.varyings.normal)}, ${inp.named('ior', '1.0')})`),
+  expr('modulo', (inp) => {
+    const a = inp.named('in1');
+    const b = inp.named('in2', '1.0');
+    return `(${a} - ${b} * floor(${a} / ${b}))`;
+  }),
+  expr('safepower', (inp, type, ctx) => {
+    const a = inp.named('in1');
+    return `(sign(${a}) * pow(abs(${a}), ${ctx.wgslType(type)}(${inp.named('in2', '1.0')})))`;
+  }),
+  expr('smoothstep', (inp, type, ctx) => {
+    const t = ctx.wgslType(type);
+    return `smoothstep(${t}(${inp.named('low', '0.0')}), ${t}(${inp.named('high', '1.0')}), ${inp.named('in')})`;
+  }),
+  expr('remap', (inp) => {
+    const inLow = inp.named('inlow', '0.0');
+    const outLow = inp.named('outlow', '0.0');
+    return `(${outLow} + (${inp.named('in')} - ${inLow}) * (${inp.named('outhigh', '1.0')} - ${outLow}) / (${inp.named('inhigh', '1.0')} - ${inLow}))`;
+  }),
+  // matrices
+  expr('creatematrix', (inp, type) => {
+    const a = inp.named('in1');
+    const b = inp.named('in2');
+    const c = inp.named('in3');
+    if (type.kind === 'matrix' && type.size === 4) {
+      const d = inp.named('in4');
+      return vectorSize(inp.typeOf('in1') ?? type) === 3
+        ? `mat4x4f(vec4f(${a}, 0.0), vec4f(${b}, 0.0), vec4f(${c}, 0.0), vec4f(${d}, 1.0))`
+        : `mat4x4f(${a}, ${b}, ${c}, ${d})`;
+    }
+    return `mat3x3f(${a}, ${b}, ${c})`;
+  }),
+  expr('determinant', fn1('determinant')),
+  expr('transpose', fn1('transpose')),
+  expr('invertmatrix', (inp, type) => `${type.kind === 'matrix' && type.size === 4 ? 'mx_inverse4' : 'mx_inverse3'}(${inp.named('in')})`, MATRIX_PRELUDE),
+  expr('transformmatrix', (inp, type) => {
+    const m = inp.named('mat');
+    const v = inp.named('in');
+    const matType = inp.typeOf('mat');
+    const size = vectorSize(type);
+    if (size === 2) return `(${m} * vec3f(${v}, 1.0)).xy`;
+    if (size === 3 && matType?.kind === 'matrix' && matType.size === 4) return `(${m} * vec4f(${v}, 1.0)).xyz`;
+    return `(${m} * ${v})`;
+  }),
+  // spaces: the shading frame is world space for both backends, so space
+  // transforms between object/world are identity here.
+  expr('transformpoint', (inp) => inp.named('in')),
+  expr('transformvector', (inp) => inp.named('in')),
+  expr('transformnormal', (inp) => `normalize(${inp.named('in')})`),
+  // compositing
+  expr('plus', blend((fg, bg) => `(${bg} + ${fg})`)),
+  expr('minus', blend((fg, bg) => `(${bg} - ${fg})`)),
+  expr('difference', blend((fg, bg) => `abs(${bg} - ${fg})`)),
+  expr('screen', blend((fg, bg, t) => `(${t}(1.0) - (${t}(1.0) - ${fg}) * (${t}(1.0) - ${bg}))`)),
+  expr('overlay', blend((fg, bg, t) => `select(${t}(1.0) - 2.0 * (${t}(1.0) - ${fg}) * (${t}(1.0) - ${bg}), 2.0 * ${fg} * ${bg}, ${fg} < ${t}(0.5))`)),
+  expr('burn', blend((fg, bg, t) => `select(${t}(1.0) - (${t}(1.0) - ${bg}) / ${fg}, ${t}(0.0), abs(${fg}) < ${t}(1e-6))`)),
+  expr('dodge', blend((fg, bg, t) => `select(${bg} / (${t}(1.0) - ${fg}), ${t}(0.0), abs(${t}(1.0) - ${fg}) < ${t}(1e-6))`)),
+  expr('premult', (inp) => `vec4f(${inp.named('in')}.rgb * ${inp.named('in')}.a, ${inp.named('in')}.a)`),
+  expr('unpremult', (inp) => {
+    const c = inp.named('in');
+    return `vec4f(${c}.rgb / select(${c}.a, 1.0, ${c}.a == 0.0), ${c}.a)`;
+  }),
   // adjustment
-  expr('luminance', (inp) => `mx_luminance(${inp.named('in', undefined, 0)})`, LUMINANCE_PRELUDE),
+  expr('contrast', (inp) => {
+    const pivot = inp.named('pivot', '0.5');
+    return `((${inp.named('in')} - ${pivot}) * ${inp.named('amount', '1.0')} + ${pivot})`;
+  }),
+  expr('saturate', (inp, type) => {
+    const c = inp.named('in');
+    const rgb = vectorSize(type) === 4 ? `${c}.rgb` : c;
+    const lum = inp.named('lumacoeffs', 'vec3f(0.2722287, 0.6740818, 0.0536895)');
+    const out = `mix(vec3f(dot(${rgb}, ${lum})), ${rgb}, ${inp.named('amount', '1.0')})`;
+    return vectorSize(type) === 4 ? `vec4f(${out}, ${c}.a)` : out;
+  }),
+  expr('colorcorrect', (inp, type) => {
+    const c = inp.named('in');
+    const rgb = vectorSize(type) === 4 ? `${c}.rgb` : c;
+    const args = [
+      inp.named('hue', '0.0'),
+      inp.named('saturation', '1.0'),
+      inp.named('gamma', '1.0'),
+      inp.named('lift', '0.0'),
+      inp.named('gain', '1.0'),
+      inp.named('contrast', '1.0'),
+      inp.named('contrastpivot', '0.5'),
+      inp.named('exposure', '0.0'),
+    ].join(', ');
+    const out = `mx_colorcorrect(${rgb}, ${args})`;
+    return vectorSize(type) === 4 ? `vec4f(${out}, ${c}.a)` : out;
+  }, [HSV_PRELUDE, COLORCORRECT_PRELUDE]),
+  expr('blackbody', (inp) => `mx_blackbody(${inp.named('temperature', '5000.0')})`, BLACKBODY_PRELUDE),
+  // adjustment
+  expr('luminance', (inp, type) => {
+    const lum = `mx_luminance(${inp.named('in', undefined, 0)})`;
+    return vectorSize(type) === 1 ? `${lum}.x` : vectorSize(type) === 4 ? `vec4f(${lum}, 1.0)` : lum;
+  }, LUMINANCE_PRELUDE),
   expr('rgbtohsv', fn1('mx_rgbtohsv'), HSV_PRELUDE),
   expr('hsvtorgb', fn1('mx_hsvtorgb'), HSV_PRELUDE),
   // geometric
   expr('position', (_inp, _type, ctx) => ctx.varyings.position),
   expr('texcoord', (_inp, _type, ctx) => ctx.varyings.texcoord),
+  expr('normal', (_inp, _type, ctx) => ctx.varyings.normal),
+  expr('tangent', (_inp, _type, ctx) => ctx.varyings.tangent),
+  expr('bitangent', (_inp, _type, ctx) => ctx.varyings.bitangent),
+  // MaterialX view direction points from the camera towards the surface.
+  expr('viewdirection', (_inp, _type, ctx) => `normalize(-${ctx.varyings.viewDir})`),
+  expr('geomcolor', (_inp, type, ctx) => `${ctx.wgslType(type)}(1.0)`),
+  // Static scenes: no animation clock is bound, time/frame are constants.
+  expr('time', () => '0.0'),
+  expr('frame', () => '1.0'),
   expr(
     'normalmap',
-    (inp, _type, ctx) => `mx_normalmap(${inp.named('in', undefined, 0)}, ${inp.named('scale', '1.0', 1)}, ${inp.named('normal', ctx.varyings.normal)}, ${inp.named('tangent', ctx.varyings.tangent)})`,
+    (inp, _type, ctx) => `mx_normalmap(${inp.named('in', undefined, 0)}, vec2f(${inp.named('scale', '1.0', 1)}), ${inp.named('normal', ctx.varyings.normal)}, ${inp.named('tangent', ctx.varyings.tangent)})`,
     NORMALMAP_PRELUDE,
   ),
+  // texture coordinates / patterns
+  expr('place2d', (inp, _type, ctx) => {
+    const args = [
+      texcoordOf(inp, ctx),
+      inp.named('pivot', 'vec2f(0.0)'),
+      inp.named('scale', 'vec2f(1.0)'),
+      inp.named('rotate', '0.0'),
+      inp.named('offset', 'vec2f(0.0)'),
+      `i32(${inp.named('operationorder', '0')})`,
+    ];
+    return `mx_place2d(${args.join(', ')})`;
+  }, PLACE2D_PRELUDE),
+  expr('ramplr', (inp, type, ctx) => `mix(${inp.named('valuel', zeroOf(type, ctx))}, ${inp.named('valuer', zeroOf(type, ctx))}, clamp(${texcoordOf(inp, ctx)}.x, 0.0, 1.0))`),
+  expr('ramptb', (inp, type, ctx) => `mix(${inp.named('valueb', zeroOf(type, ctx))}, ${inp.named('valuet', zeroOf(type, ctx))}, clamp(${texcoordOf(inp, ctx)}.y, 0.0, 1.0))`),
+  expr('ramp4', (inp, type, ctx) => {
+    const tc = texcoordOf(inp, ctx);
+    const z = zeroOf(type, ctx);
+    const s = `clamp(${tc}.x, 0.0, 1.0)`;
+    const bottom = `mix(${inp.named('valuebl', z)}, ${inp.named('valuebr', z)}, ${s})`;
+    const top = `mix(${inp.named('valuetl', z)}, ${inp.named('valuetr', z)}, ${s})`;
+    return `mix(${bottom}, ${top}, clamp(${tc}.y, 0.0, 1.0))`;
+  }),
+  expr('splitlr', (inp, type, ctx) => `mix(${inp.named('valuel', zeroOf(type, ctx))}, ${inp.named('valuer', zeroOf(type, ctx))}, step(${inp.named('center', '0.5')}, ${texcoordOf(inp, ctx)}.x))`),
+  expr('splittb', (inp, type, ctx) => `mix(${inp.named('valueb', zeroOf(type, ctx))}, ${inp.named('valuet', zeroOf(type, ctx))}, step(${inp.named('center', '0.5')}, ${texcoordOf(inp, ctx)}.y))`),
+  expr('checkerboard', (inp, _type, ctx) => {
+    const cell = `floor(${texcoordOf(inp, ctx)} * ${inp.named('uvtiling', 'vec2f(8.0)')} - ${inp.named('uvoffset', 'vec2f(0.0)')})`;
+    const sum = `dot(${cell}, vec2f(1.0))`;
+    return `mix(${inp.named('color2', 'vec3f(0.0)')}, ${inp.named('color1', 'vec3f(1.0)')}, (${sum} - 2.0 * floor(${sum} / 2.0)))`;
+  }),
+  expr('circle', (inp, _type, ctx) => {
+    const delta = `(${texcoordOf(inp, ctx)} - ${inp.named('center', 'vec2f(0.0)')})`;
+    const radius = inp.named('radius', '0.5');
+    return `select(1.0, 0.0, dot(${delta}, ${delta}) > ${radius} * ${radius})`;
+  }),
+  // noise
+  expr('noise2d', (inp, type, ctx) => {
+    const p = `vec3f(${texcoordOf(inp, ctx)}, 0.0)`;
+    const n = fitNoise(type, (seed) => `mx_perlin3(${p}, ${seed})`, `mx_perlin3v(${p})`);
+    return `(${n} * ${inp.named('amplitude', '1.0')} + ${inp.named('pivot', '0.0')})`;
+  }, NOISE_PRELUDE),
+  expr('noise3d', (inp, type, ctx) => {
+    const p = positionOf(inp, ctx);
+    const n = fitNoise(type, (seed) => `mx_perlin3(${p}, ${seed})`, `mx_perlin3v(${p})`);
+    return `(${n} * ${inp.named('amplitude', '1.0')} + ${inp.named('pivot', '0.0')})`;
+  }, NOISE_PRELUDE),
+  expr('fractal2d', (inp, type, ctx) => {
+    const p = `vec3f(${texcoordOf(inp, ctx)}, 0.0)`;
+    const args = `i32(${inp.named('octaves', '3')}), ${inp.named('lacunarity', '2.0')}, ${inp.named('diminish', '0.5')}`;
+    const n = fitNoise(type, (seed) => `mx_fractal3(${p}, ${args}, ${seed})`, `mx_fractal3v(${p}, ${args})`);
+    return `(${n} * ${inp.named('amplitude', '1.0')})`;
+  }, NOISE_PRELUDE),
+  expr('cellnoise2d', (inp, type, ctx) => `${ctx.wgslType(type)}(mx_cellnoise3(vec3f(${texcoordOf(inp, ctx)}, 0.0)))`, NOISE_PRELUDE),
+  expr('cellnoise3d', (inp, type, ctx) => `${ctx.wgslType(type)}(mx_cellnoise3(${positionOf(inp, ctx)}))`, NOISE_PRELUDE),
+  expr('worleynoise2d', (inp, type, ctx) => {
+    const w = `mx_worley(vec3f(${texcoordOf(inp, ctx)}, 0.0), ${inp.named('jitter', '1.0')}, 2)`;
+    return vectorSize(type) === 1 ? `${w}.x` : vectorSize(type) === 2 ? `${w}.xy` : w;
+  }, NOISE_PRELUDE),
+  expr('worleynoise3d', (inp, type, ctx) => {
+    const w = `mx_worley(${positionOf(inp, ctx)}, ${inp.named('jitter', '1.0')}, 3)`;
+    return vectorSize(type) === 1 ? `${w}.x` : vectorSize(type) === 2 ? `${w}.xy` : w;
+  }, NOISE_PRELUDE),
+  ...(['unifiednoise2d', 'unifiednoise3d'] as const).map((category) => expr(category, (inp, _type, ctx) => {
+    const is2d = category === 'unifiednoise2d';
+    const scaled = `${is2d ? texcoordOf(inp, ctx) : positionOf(inp, ctx)} * ${inp.named('freq', '1.0')} + ${inp.named('offset', '0.0')}`;
+    const p = is2d ? `vec3f(${scaled}, 0.0)` : `(${scaled})`;
+    const args = [
+      p,
+      is2d ? '2' : '3',
+      inp.named('jitter', '1.0'),
+      `i32(${inp.named('octaves', '3')})`,
+      inp.named('lacunarity', '2.0'),
+      inp.named('diminish', '0.5'),
+      `i32(${inp.named('type', '0')})`,
+    ];
+    const outMin = inp.named('outmin', '0.0');
+    const outMax = inp.named('outmax', '1.0');
+    const mapped = `mix(${outMin}, ${outMax}, mx_unifiednoise(${args.join(', ')}))`;
+    return `select(${mapped}, clamp(${mapped}, min(${outMin}, ${outMax}), max(${outMin}, ${outMax})), ${inp.named('clampoutput', 'true')})`;
+  }, NOISE_PRELUDE)),
   // transforms
   expr('rotate2d', (inp) => `mx_rotate2d(${inp.named('in', undefined, 0)}, ${inp.named('amount', '0.0', 1)})`, ROTATE2D_PRELUDE),
   expr('rotate3d', (inp) => `mx_rotate3d(${inp.named('in', undefined, 0)}, ${inp.named('amount', '0.0', 1)}, ${inp.named('axis', 'vec3f(0.0, 0.0, 1.0)', 2)})`, ROTATE3D_PRELUDE),
   // procedural
-  expr('fractal3d', (inp, _type, ctx) => `mx_fractal3d(${ctx.varyings.position}, ${inp.named('amplitude', '1.0', 0)}, f32(${inp.named('octaves', '3.0', 1)}))`, FRACTAL3D_PRELUDE),
+  expr('fractal3d', (inp, type, ctx) => {
+    if (!inp.has('lacunarity') && !inp.has('diminish')) {
+      const octaves = `f32(${inp.named('octaves', '3.0', 1)})`;
+      if (vectorSize(type) === 1) return `mx_fractal3d(${ctx.varyings.position}, ${inp.named('amplitude', '1.0', 0)}, ${octaves})`;
+      return `(${ctx.wgslType(type)}(mx_fractal3d(${ctx.varyings.position}, 1.0, ${octaves})) * ${inp.named('amplitude', '1.0', 0)})`;
+    }
+    const p = positionOf(inp, ctx);
+    const args = `i32(${inp.named('octaves', '3')}), ${inp.named('lacunarity', '2.0')}, ${inp.named('diminish', '0.5')}`;
+    const n = fitNoise(type, (seed) => `mx_fractal3(${p}, ${args}, ${seed})`, `mx_fractal3v(${p}, ${args})`);
+    return `(${n} * ${inp.named('amplitude', '1.0')})`;
+  }, [FRACTAL3D_PRELUDE, NOISE_PRELUDE]),
   // pbr helpers
   expr('artistic_ior', (inp) => `mx_artistic_ior(${inp.named('reflectivity', undefined, 0)}, ${inp.named('edge_color', 'vec3f(0.0)', 1)})`, ARTISTIC_IOR_PRELUDE),
   expr('artistic_ior_extinction', (inp) => `mx_artistic_ior_extinction(${inp.named('reflectivity', undefined, 0)}, ${inp.named('edge_color', 'vec3f(0.0)', 1)})`, ARTISTIC_IOR_PRELUDE),
   expr('roughness_anisotropy', (inp) => `mx_roughness_anisotropy(${inp.named('roughness', '0.0', 0)}, ${inp.named('anisotropy', '0.0', 1)})`, ROUGHNESS_ANISO_PRELUDE),
   expr('roughness_dual', (inp) => `mx_roughness_dual(${inp.named('roughness', 'vec2f(0.0)', 0)})`, ROUGHNESS_DUAL_PRELUDE),
+  expr('open_pbr_anisotropy', (inp) => {
+    const inv = `(1.0 - ${inp.named('anisotropy', '0.0')})`;
+    const r = inp.named('roughness', '0.0');
+    const ax = `(${r} * ${r} * sqrt(2.0 / (1.0 + ${inv} * ${inv})))`;
+    return `vec2f(${ax}, ${inv} * ${ax})`;
+  }),
   expr('chiang_hair_absorption_from_color', (inp) => `mx_chiang_hair_absorption_from_color(${inp.named('color', undefined, 0)})`, HAIR_PRELUDE),
   expr('chiang_hair_roughness', (inp) => `mx_chiang_hair_roughness(${inp.named('longitudinal', '0.0', 0)}, ${inp.named('azimuthal', '0.0', 1)})`, HAIR_PRELUDE),
   expr('deon_hair_absorption_from_melanin', (inp) => `mx_deon_hair_absorption_from_melanin(${inp.named('melanin_concentration', '0.0', 0)}, ${inp.named('melanin_redness', '0.0', 1)})`, HAIR_PRELUDE),

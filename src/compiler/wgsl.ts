@@ -97,6 +97,11 @@ function litConst(type: IrType, value: IrConstValue): string {
       const comps = value as readonly number[];
       return `${wgslType(type)}(${comps.map(litFloat).join(', ')})`;
     }
+    case 'matrix': {
+      const comps = Array.isArray(value) ? (value as readonly number[]) : [];
+      if (comps.length !== type.size * type.size) return identityMatrix(type.size);
+      return `${wgslType(type)}(${comps.map(litFloat).join(', ')})`;
+    }
     default:
       throw new WgslEmitError(`cannot emit constant of type ${type.kind}`);
   }
@@ -146,7 +151,12 @@ function topoOrder(ir: ShaderIr): IrRef[] {
   return order;
 }
 
-function makeInputs(positional: readonly string[], named: Readonly<Record<string, string>>, namedCall = false): NodeInputs {
+function makeInputs(
+  positional: readonly string[],
+  named: Readonly<Record<string, string>>,
+  namedCall = false,
+  types: Readonly<Record<string, IrType>> = {},
+): NodeInputs {
   return {
     at(index, fallback) {
       const v = positional[index];
@@ -163,24 +173,55 @@ function makeInputs(positional: readonly string[], named: Readonly<Record<string
     has(name) {
       return named[name] !== undefined;
     },
+    typeOf(name) {
+      return types[name];
+    },
   };
 }
 
+function addPreludes(preludes: Set<string>, prelude: string | readonly string[] | undefined): void {
+  if (prelude === undefined) return;
+  if (typeof prelude === 'string') preludes.add(prelude);
+  else for (const p of prelude) preludes.add(p);
+}
+
+function identityMatrix(size: number): string {
+  const comps: string[] = [];
+  for (let c = 0; c < size; c++) for (let r = 0; r < size; r++) comps.push(c === r ? '1.0' : '0.0');
+  return `mat${size}x${size}f(${comps.join(', ')})`;
+}
+
 function emitConvert(src: string, from: IrType, to: IrType): string {
+  if (to.kind === 'matrix') {
+    return from.kind === 'matrix' && from.size === to.size ? src : identityMatrix(to.size);
+  }
   if (to.kind === 'vector') {
-    if (from.kind === 'scalar') return `${wgslType(to)}(${src})`;
-    if (from.kind === 'vector') {
-      if (from.size === to.size) return src;
-      if (from.size < to.size) {
-        const pad = to.size - from.size === 1 ? '1.0' : Array(to.size - from.size).fill('1.0').join(', ');
-        return `${wgslType(to)}(${src}, ${pad})`;
-      }
-      return `${src}.${'xyzw'.slice(0, to.size)}`;
+    const target = wgslType(to);
+    if (from.kind === 'scalar') {
+      const scalar = from.scalar === to.scalar ? src : `${wgslType({ kind: 'scalar', scalar: to.scalar })}(${src})`;
+      return `${target}(${scalar})`;
     }
+    if (from.kind === 'vector') {
+      const cast = (s: string, size: number): string =>
+        from.scalar === to.scalar ? s : `${wgslType({ kind: 'vector', scalar: to.scalar, size: size as 2 | 3 | 4 })}(${s})`;
+      if (from.size === to.size) return cast(src, to.size);
+      if (from.size < to.size) {
+        // MaterialX convert pads the 3rd component with 0 and the 4th with 1.
+        const pads: string[] = [];
+        for (let i = from.size; i < to.size; i++) pads.push(i === 3 ? '1.0' : '0.0');
+        return `${target}(${cast(src, from.size)}, ${pads.join(', ')})`;
+      }
+      return cast(`${src}.${'xyzw'.slice(0, to.size)}`, to.size);
+    }
+    return `${target}(0.0)`;
   }
   if (to.kind === 'scalar') {
-    if (from.kind === 'vector') return `${src}.x`;
-    if (from.kind === 'scalar' && from.scalar !== to.scalar) return `${wgslType(to)}(${src})`;
+    const component = from.kind === 'vector' ? `${src}.x` : src;
+    const fromScalar = from.kind === 'vector' || from.kind === 'scalar' ? from.scalar : to.scalar;
+    if (from.kind !== 'vector' && from.kind !== 'scalar') return to.scalar === 'bool' ? 'false' : `${wgslType(to)}(0)`;
+    if (fromScalar === to.scalar) return component;
+    if (to.scalar === 'bool') return `(${component} != ${fromScalar === 'float' ? '0.0' : '0'})`;
+    return `${wgslType(to)}(${component})`;
   }
   return src;
 }
@@ -312,9 +353,14 @@ export function lowerExprs(ir: ShaderIr, handlePrefix = '', computeStage = false
       case 'call': {
         const lowering = getNodeLowering(expr.op);
         if (!lowering) throw new WgslEmitError(`no WGSL lowering for node '${expr.op}'`);
-        if (lowering.prelude) preludes.add(lowering.prelude);
+        addPreludes(preludes, lowering.prelude);
         const named = Object.fromEntries(Object.entries(expr.namedArgs ?? {}).map(([name, ref]) => [name, varName(ref)]));
-        rhs = lowering.emit(makeInputs(expr.args.map(varName), named, expr.namedArgs !== undefined), expr.type, ctx);
+        const types: Record<string, IrType> = {};
+        for (const [name, argRef] of Object.entries(expr.namedArgs ?? {})) {
+          const argExpr = ir.exprs.get(argRef);
+          if (argExpr) types[name] = argExpr.type;
+        }
+        rhs = lowering.emit(makeInputs(expr.args.map(varName), named, expr.namedArgs !== undefined, types), expr.type, ctx);
         break;
       }
       case 'closure': {
@@ -324,7 +370,7 @@ export function lowerExprs(ir: ShaderIr, handlePrefix = '', computeStage = false
           preludes.add(LIGHTING_PRELUDE);
           usesLighting = true;
         }
-        if (lowering.prelude) preludes.add(lowering.prelude);
+        addPreludes(preludes, lowering.prelude);
         const named: Record<string, string> = {};
         for (const [k, v] of Object.entries(expr.params)) named[k] = varName(v);
         rhs = lowering.emit(makeInputs([], named), expr.type, ctx);

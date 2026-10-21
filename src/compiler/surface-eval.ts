@@ -53,8 +53,16 @@ export function composeSurfaceLayered(prepared: PreparedSurface, env: IrEvalVary
   const overridden = new Map<string, NormalizedSurfaceInput>();
   for (const [name, input] of prepared.surface.inputs) {
     const ref = input.source.kind === 'connection' ? prepared.inputs.get(name) : undefined;
+    let value: readonly number[] | undefined;
     if (ref !== undefined) {
-      const value = evaluateIrRef(prepared.ir, ref, env, cache);
+      try {
+        value = evaluateIrRef(prepared.ir, ref, env, cache);
+      } catch {
+        // Nodes without a CPU mirror (noise, matrices...) keep the authored/default input.
+        value = undefined;
+      }
+    }
+    if (value !== undefined) {
       overridden.set(name, { name: input.name, type: input.type, source: { kind: 'value', value: [...value] } });
     } else {
       overridden.set(name, input);

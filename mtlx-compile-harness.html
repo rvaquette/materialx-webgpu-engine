@@ -7,7 +7,7 @@
       import { createCompilationAudit, summarizeCompilation } from '/tests/materialx/compile-audit.harness.ts';
       const status = document.getElementById('status');
       try {
-        const audit = await createCompilationAudit();
+        const audit = await createCompilationAudit({ pipelines: new URLSearchParams(location.search).get('pipelines') !== '0' });
         globalThis.__MX_COMPILE_AUDIT__ = {
           ...audit,
           url: location.href,

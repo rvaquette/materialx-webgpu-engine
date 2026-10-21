@@ -168,6 +168,16 @@ describe('resolveGraph', () => {
     expect(img?.nodeDef?.implementation).toEqual({ kind: 'sourcecode', target: 'genglsl', function: 'mx_image' });
   });
 
+  it('uses the upstream output carried by a nodegraph output connection', () => {
+    const split = fakeNode({ name: 'split', category: 'separate2', type: 'multioutput' });
+    const roughness = fakeInput({ name: 'specular_roughness', type: 'float', connected: split, output: 'out_roughness' });
+    roughness.getNodeGraphString = () => 'NG_helpers';
+    roughness.getConnectedOutput = () => fakeInput({ name: 'out_roughness', type: 'float', output: 'outy' });
+    const surface = fakeNode({ name: 'surface', category: 'standard_surface', type: 'surfaceshader', inputs: [roughness] });
+    const graph = resolveGraph({ roots: [{ name: 'surfaceshader', type: 'surfaceshader', node: surface as unknown as MxNode }], onDiagnostic: () => {} });
+    expect(graph.nodes.get('/mat/surface')?.inputs[0]?.source).toEqual({ kind: 'connection', nodeId: '/mat/split', output: 'outy' });
+  });
+
   it('classifies interface-bound inputs', () => {
     const node = fakeNode({
       name: 'mul',

@@ -26,6 +26,8 @@ export interface MxInput extends MxElement {
   getConnectedNode?(): MxNode | null;
   getInterfaceInput?(): MxInput | null;
   getOutputString?(): string;
+  getNodeGraphString?(): string;
+  getConnectedOutput?(): MxInput | null;
   getColorSpace?(): string;
   getUnit?(): string;
   getUnitType?(): string;
@@ -204,7 +206,12 @@ function resolveInput(input: MxInput): { resolved: ResolvedInput; connected: MxN
     }
   } else if (connectedNode) {
     connected = connectedNode;
-    const output = nonEmpty(input.getOutputString?.());
+    // A nodegraph connection names the graph <output>; the upstream node output
+    // (e.g. separate2.outy) is the output string carried by that graph output.
+    const viaGraph = nonEmpty(input.getNodeGraphString?.()) !== undefined;
+    const output = viaGraph
+      ? nonEmpty(input.getConnectedOutput?.()?.getOutputString?.())
+      : nonEmpty(input.getOutputString?.());
     source = output !== undefined
       ? { kind: 'connection', nodeId: connectedNode.getNamePath(), output }
       : { kind: 'connection', nodeId: connectedNode.getNamePath() };

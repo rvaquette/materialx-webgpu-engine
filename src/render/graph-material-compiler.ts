@@ -13,6 +13,7 @@ import { emitWgsl } from '../compiler/wgsl.ts';
 import { emitLayeredSurface } from '../compiler/surface-wgsl.ts';
 import { FLOAT, IrModuleBuilder, shaderType, type ShaderIr } from '../compiler/ir.ts';
 import { isNodeCovered } from '../compiler/nodes.ts';
+import { SURFACE_IR_UPSTREAM } from '../compiler/surface-ir.ts';
 import { resolveGraph } from '../materialx/graph.ts';
 import { resolveSurface, type ResolveSurfaceOptions } from '../materialx/surface-graph.ts';
 import type { Diagnostic, DiagnosticSink } from '../core/diagnostics.ts';
@@ -84,10 +85,10 @@ export function createGraphMaterialCompiler(options: GraphMaterialCompilerOption
         const graph = resolveGraph({
           roots,
           onDiagnostic: emit,
-          isCovered: isNodeCovered,
+          isCovered: (category) => isNodeCovered(category) || SURFACE_IR_UPSTREAM.has(category),
           ...(options.target !== undefined ? { target: options.target } : {}),
         });
-        const surface = resolveSurface(graph, options.surfaceOptions ?? {});
+        const surface = resolveSurface(graph, { supportedUpstream: SURFACE_IR_UPSTREAM, ...options.surfaceOptions });
         if (!surface) {
           emit({ level: 'warning', message: `Unresolved surface for material ${unit.materialName}`, detail: { material: unit.materialName } });
           return undefined;

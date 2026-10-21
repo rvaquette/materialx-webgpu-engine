@@ -153,12 +153,12 @@ describe('emitLayeredSurface (T055d)', () => {
       surfaceGraph(
         'standard_surface',
         [conn('base_color', 'color3', 'n')],
-        [upstream('n', 'noise3d', 'color3', [value('amplitude', 'float', '1')])],
+        [upstream('n', 'ramp_gradient', 'color3', [value('x', 'float', '1')])],
       ),
       (d) => diags.push(d),
     );
-    expect(diags.some((d) => d.level === 'warning' && d.message.includes('noise3d'))).toBe(true);
-    expect(mod.code).not.toContain('noise3d');
+    expect(diags.some((d) => d.level === 'warning' && d.message.includes('ramp_gradient'))).toBe(true);
+    expect(mod.code).not.toContain('ramp_gradient');
     expect(mod.code).toContain('vec3f(0.0, 0.0, 0.0)');
   });
 });

@@ -142,9 +142,11 @@ async function main() {
     port: { type: 'string', default: '5175' },
     out: { type: 'string', default: 'docs/generated/mtlx-compile-audit.json' },
     device: { type: 'string' },
+    'modules-only': { type: 'boolean' },
+    retest: { type: 'string' },
   } });
   if (values.help) {
-    console.log('npm run audit:mtlx -- [--target mobile|local] [--root scenes] [--filter text] [--limit N] [--timeout milliseconds] [--port N] [--out report.json] [--device serial] [--resume] [--list]');
+    console.log('npm run audit:mtlx -- [--target mobile|local] [--root scenes] [--filter text] [--limit N] [--timeout milliseconds] [--port N] [--out report.json] [--device serial] [--resume] [--list] [--modules-only] [--retest previous-report.json]');
     return;
   }
   if (typeof WebSocket !== 'function') throw new Error('This audit requires Node.js 22 or newer (WebSocket).');
@@ -159,7 +161,10 @@ async function main() {
   const rootRelative = relative(ROOT, root);
   if (rootRelative === '..' || rootRelative.startsWith(`..${sep}`) || isAbsolute(rootRelative)) throw new Error('--root must be inside the workspace');
   const discovered = findMaterials(root);
+  const retest = values.retest === undefined ? null : new Set(JSON.parse(readFileSync(resolve(ROOT, values.retest), 'utf8')).files
+    .filter((file) => file.status !== 'compiled').map((file) => file.file));
   const files = discovered.map((file) => relative(ROOT, file).split(sep).join('/'))
+    .filter((file) => retest === null || retest.has(file))
     .filter((file) => file.toLowerCase().includes(values.filter.replaceAll('\\', '/').toLowerCase())).slice(0, limit);
   if (files.length === 0) throw new Error('No matching .mtlx files');
   if (values.list) {
@@ -171,7 +176,8 @@ async function main() {
   const adbPath = process.env.MX_ADB ?? 'D:\\platform-tools\\adb.exe';
   let serial = values.device ?? process.env.MX_DEVICE ?? process.env.ANDROID_SERIAL;
   const adb = async (...command) => (await exec(adbPath, [...(serial ? ['-s', serial] : []), ...command])).stdout.trim();
-  const scope = { root: rootRelative || '.', filter: values.filter, limit: values.limit === undefined ? null : limit, discoveredFiles: discovered.length };
+  const scope = { root: rootRelative || '.', filter: values.filter, limit: values.limit === undefined ? null : limit, discoveredFiles: discovered.length,
+    ...(values.retest !== undefined ? { retest: values.retest } : {}), ...(values['modules-only'] ? { modulesOnly: true } : {}) };
   const report = values.resume ? resumeAuditReport(JSON.parse(readFileSync(out, 'utf8')), { target: values.target, files, scope }) : {
     schemaVersion: 1, startedAt: new Date().toISOString(), target: values.target, complete: false,
     scope,
@@ -188,11 +194,11 @@ async function main() {
       if (!devices.some((line) => line.startsWith(`${serial}\t`))) throw new Error(`Mobile not authorized: ${serial}`);
       report.device = serial;
     }
-    server = await createServer({ root: ROOT, configFile: join(ROOT, 'vite.config.ts'), server: { host: '127.0.0.1', port, strictPort: false, open: false } });
+    server = await createServer({ root: ROOT, configFile: join(ROOT, 'vite.config.ts'), server: { host: '127.0.0.1', port, strictPort: false, open: false, hmr: false } });
     await server.listen();
     const actualPort = server.httpServer.address().port;
     const origin = `http://${values.target === 'mobile' ? 'localhost' : '127.0.0.1'}:${actualPort}`;
-    const url = `${origin}/mtlx-compile-harness.html?run=${Date.now()}`;
+    const url = `${origin}/mtlx-compile-harness.html?run=${Date.now()}${values['modules-only'] ? '&pipelines=0' : ''}`;
     let debugPort;
     if (values.target === 'mobile') {
       await adb('reverse', `tcp:${actualPort}`, `tcp:${actualPort}`);
@@ -272,13 +278,22 @@ async function main() {
       if (completed.has(file)) continue;
       if (index > 0 && index % 10 === 0) await restart();
       let result;
-      try {
-        const asset = '/' + file.split('/').map(encodeURIComponent).join('/');
-        result = await cdp.evaluate(`globalThis.__MX_COMPILE_AUDIT__.runFile(${JSON.stringify(asset)})`, timeout);
-        if (!result) throw new Error('No result from browser');
-        result.file = file;
-      } catch (error) {
-        result = { file, status: 'failed', reason: String(error), diagnostics: [], materials: [] };
+      const asset = '/' + file.split('/').map(encodeURIComponent).join('/');
+      for (let attempt = 0; ; attempt++) {
+        try {
+          result = await cdp.evaluate(`globalThis.__MX_COMPILE_AUDIT__.runFile(${JSON.stringify(asset)})`, timeout);
+          if (!result) throw new Error('No result from browser');
+          result.file = file;
+        } catch (error) {
+          result = { file, status: 'failed', reason: String(error), diagnostics: [], materials: [] };
+          // A page reload (navigation) leaves the harness undefined: reload it and retry once.
+          if (attempt === 0 && /navigated|reading 'runFile'|context was destroyed/i.test(result.reason)) {
+            log(`page reloaded during ${file}; restarting and retrying`);
+            await restart();
+            continue;
+          }
+        }
+        break;
       }
       report.files.push(result);
       completed.add(file);

@@ -332,15 +332,57 @@ describe('lowerSurfaceInputsToIr (T055c)', () => {
     expect(module.textures).toHaveLength(1);
   });
 
+  it('coerces mismatched upstream types to the declared input and surface types', () => {
+    const graph = surfaceGraph([conn('base_color', 'color3', 'tint'), conn('opacity', 'color3', 'alpha')], [
+      upstream('tint', 'multiply', 'color4', [value('in1', 'color4', '0.5, 0.25, 1, 1'), value('in2', 'float', '2')]),
+      upstream('alpha', 'constant', 'float', [value('value', 'float', '0.5')]),
+    ]);
+    const { module } = lowerAndEmit(graph, [{ name: 'base_color', type: COLOR3 }, { name: 'opacity', type: COLOR3 }]);
+    expect(module.code).toMatch(/= e\d+\.xyz;/);
+    expect(module.code).toMatch(/= vec3f\(e\d+\);/);
+  });
+
+  it('lowers boolean-output conditionals, logic and zero-based switch', () => {
+    const graph = surfaceGraph([conn('base_color', 'color3', 'pick')], [
+      upstream('test', 'ifgreater', 'boolean', [value('value1', 'float', '0.7'), value('value2', 'float', '0.5')]),
+      upstream('flag', 'not', 'boolean', [conn('in', 'boolean', 'test')]),
+      upstream('which', 'convert', 'integer', [conn('in', 'boolean', 'flag')]),
+      upstream('pick', 'switch', 'color3', [
+        value('in1', 'color3', '1, 0, 0'),
+        value('in2', 'color3', '0, 1, 0'),
+        conn('which', 'integer', 'which'),
+      ]),
+    ]);
+    const { module } = lowerAndEmit(graph, [{ name: 'base_color', type: COLOR3 }]);
+    expect(module.code).toMatch(/= \(e\d+ > e\d+\);/);
+    expect(module.code).toMatch(/= \(!e\d+\);/);
+    expect(module.code).toMatch(/= i32\(e\d+\);/);
+    expect(module.code).toContain('select(');
+  });
+
+  it('lowers glTF color images to a modulated texture sample with split outputs', () => {
+    const graph = surfaceGraph([conn('base_color', 'color3', 'img', 'outcolor'), conn('specular', 'float', 'img', 'outa')], [
+      upstream('img', 'gltf_colorimage', 'multioutput', [
+        value('file', 'filename', 'albedo.png'),
+        value('color', 'color4', '0.5, 0.5, 0.5, 1'),
+      ]),
+    ]);
+    const { module } = lowerAndEmit(graph, [{ name: 'base_color', type: COLOR3 }, { name: 'specular', type: FLOAT }]);
+    expect(module.textures).toHaveLength(1);
+    expect(module.code).toContain('textureSample(tex_img, samp_img');
+    expect(module.code).toMatch(/= e\d+\.xyz;/);
+    expect(module.code).toMatch(/= e\d+\.w;/);
+  });
+
   it('diagnoses an unsupported upstream node and bakes a neutral constant', () => {
     const diagnostics: Diagnostic[] = [];
     const graph = surfaceGraph(
       [conn('base_color', 'color3', 'nz')],
-      [upstream('nz', 'noise3d', 'color3', [value('amplitude', 'float', '1')])],
+      [upstream('nz', 'ramp_gradient', 'color3', [value('x', 'float', '1')])],
     );
     const { module } = lowerAndEmit(graph, [{ name: 'base_color', type: COLOR3 }], (d) => diagnostics.push(d));
-    expect(diagnostics.some((d) => d.level === 'warning' && d.message.includes('noise3d'))).toBe(true);
-    expect(module.code).not.toContain('noise3d');
+    expect(diagnostics.some((d) => d.level === 'warning' && d.message.includes('ramp_gradient'))).toBe(true);
+    expect(module.code).not.toContain('ramp_gradient');
     expect(module.textures).toHaveLength(0);
     expect(module.code).toContain('vec3f(0.0, 0.0, 0.0)');
   });

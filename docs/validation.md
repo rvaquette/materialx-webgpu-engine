@@ -44,6 +44,7 @@ npm run audit:mtlx -- --root scenes --filter artistic_ior --limit 10
 npm run audit:mtlx -- --device R5CW900CHQD --out docs/generated/copper-audit.json
 npm run audit:mtlx -- --resume
 npm run audit:mtlx -- --list
+npm run audit:mtlx -- --target local --modules-only --retest docs/generated/mtlx-compile-audit.json --out docs/generated/mtlx-compile-audit-local.json
 ```
 
 Les deux shaders, raster et path tracing, passent par le compilateur de graphes
@@ -67,6 +68,12 @@ choisi par `--out`, conserve les resultats enregistres et retente les fichiers
 interrompus par CDP. La cible, le repertoire et le filtre doivent correspondre au
 rapport initial ; ne pas utiliser cette option apres modification des materiaux
 ou du compilateur si leurs anciens resultats doivent etre revalides.
+`--retest rapport.json` ne reprend que les fichiers non `compiled` d'un rapport
+precedent. `--modules-only` valide le WGSL (`getCompilationInfo()`) sans creer les
+pipelines : beaucoup plus rapide sur GPU Intel (compilation pilote du megakernel
+path tracing), mais ne detecte pas les echecs propres a la creation de pipeline.
+Un rechargement inattendu de la page est retente une fois ; le serveur d'audit
+desactive le HMR.
 Aucun fichier MaterialX ni lowering n'est modifie.
 
 Cet audit ne charge pas les images et ne rend pas de pixels : une compilation

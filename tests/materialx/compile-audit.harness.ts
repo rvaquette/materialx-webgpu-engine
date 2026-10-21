@@ -42,7 +42,8 @@ export function summarizeCompilation(files: readonly AuditFile[]): Record<AuditS
   return summary;
 }
 
-export async function createCompilationAudit() {
+export async function createCompilationAudit(options: { pipelines?: boolean } = {}) {
+  const pipelines = options.pipelines ?? true;
   const adapter = await navigator.gpu?.requestAdapter({ powerPreference: 'high-performance' });
   if (!adapter) throw new Error('WebGPU adapter unavailable');
   const device = await adapter.requestDevice();
@@ -66,7 +67,7 @@ export async function createCompilationAudit() {
     try {
       const checked = await compileShaderWithDiagnostics(device, code, label);
       result.errors = checked.errors;
-      if (checked.errors.length === 0) {
+      if (checked.errors.length === 0 && pipelines) {
         if (backend === 'raster') {
           await device.createRenderPipelineAsync({
             label, layout: 'auto',

@@ -16,6 +16,7 @@ import type {
 } from '../materialx/surface-graph.ts';
 import {
   COLOR3,
+  COLOR4,
   FLOAT,
   INT,
   BOOL,
@@ -25,7 +26,7 @@ import {
   type IrRef,
   type IrType,
 } from './ir.ts';
-import { getNodeLowering } from './nodes.ts';
+import { coveredCategories, getNodeLowering } from './nodes.ts';
 
 export interface LoweredSurfaceInputs {
   readonly family: SurfaceFamily;
@@ -35,6 +36,29 @@ export interface LoweredSurfaceInputs {
 }
 
 const TEXTURE_CATEGORIES: ReadonlySet<string> = new Set(['image', 'tiledimage', 'hextiledimage']);
+const GLTF_TEXTURE_CATEGORIES: ReadonlySet<string> = new Set(['gltf_image', 'gltf_colorimage', 'gltf_normalmap', 'gltf_iridescence_thickness']);
+
+/** Upstream node categories this lowering emits (registry + special-cased nodes). */
+export const SURFACE_IR_UPSTREAM: ReadonlySet<string> = new Set([
+  ...coveredCategories(),
+  ...TEXTURE_CATEGORIES,
+  ...GLTF_TEXTURE_CATEGORIES,
+  'convert',
+  'separate2',
+  'separate3',
+  'separate4',
+]);
+
+function isValueType(type: IrType | undefined): type is IrType {
+  return type !== undefined && (type.kind === 'scalar' || type.kind === 'vector' || type.kind === 'matrix');
+}
+
+function sameShape(a: IrType, b: IrType): boolean {
+  if (a.kind === 'scalar' && b.kind === 'scalar') return a.scalar === b.scalar;
+  if (a.kind === 'vector' && b.kind === 'vector') return a.size === b.size && a.scalar === b.scalar;
+  if (a.kind === 'matrix' && b.kind === 'matrix') return a.size === b.size;
+  return false;
+}
 
 function surfaceIrType(type: SurfaceInputType): IrType {
   switch (type) {
@@ -68,6 +92,12 @@ function constOfIrType(builder: IrModuleBuilder, irt: IrType, nums: readonly num
     return builder.constant(irt, comps);
   }
   if (irt.kind === 'scalar') return builder.constant(irt, nums[0] ?? 0);
+  if (irt.kind === 'matrix') {
+    const n = irt.size * irt.size;
+    const comps: number[] = [];
+    for (let i = 0; i < n; i++) comps.push(nums.length === n ? nums[i]! : i % (irt.size + 1) === 0 ? 1 : 0);
+    return builder.constant(irt, comps);
+  }
   // Closures/matrices/strings have no literal surface value; fall back to a scalar.
   return builder.constant(FLOAT, nums[0] ?? 0);
 }
@@ -112,6 +142,7 @@ export function lowerSurfaceInputsToIr(
     switch (input.source.kind) {
       case 'value': {
         const irt = irTypeFromMaterialX(input.type) ?? FLOAT;
+        if (irt.kind === 'string' || irt.kind === 'filename') return undefined;
         return constOfIrType(builder, irt, parseNumbers(input.source.value));
       }
       case 'connection':
@@ -123,9 +154,19 @@ export function lowerSurfaceInputsToIr(
     }
   };
 
-  const lowerTexture = (nodeId: string): IrRef => {
+  /** Insert a conversion when an upstream value does not match the declared type. */
+  const coerce = (ref: IrRef, to: IrType | undefined): IrRef => {
+    const from = builder.get(ref)?.type;
+    if (!isValueType(to) || !isValueType(from) || sameShape(from, to)) return ref;
+    return builder.add({ kind: 'convert', type: to, source: ref, from });
+  };
+
+  const callRef = (op: string, type: IrType, namedArgs: Record<string, IrRef>): IrRef =>
+    builder.add({ kind: 'call', type, op, args: [], namedArgs });
+
+  const lowerTexture = (nodeId: string, typeOverride?: IrType): IrRef => {
     const node = graph.nodes.get(nodeId)!;
-    const valueType = irTypeFromMaterialX(node.type) ?? COLOR3;
+    const valueType = typeOverride ?? irTypeFromMaterialX(node.type) ?? COLOR3;
     const file = node.inputs.find((i) => i.name === 'file');
     // Record the image reference so the PT texture registry can dedup shared
     // files across materials (T057j).
@@ -139,30 +180,76 @@ export function lowerSurfaceInputsToIr(
     builder.declareSampler({ name: nodeId });
     const texcoord = node.inputs.find((i) => i.name === 'texcoord');
     const uv = (texcoord ? lowerInput(texcoord) : undefined) ?? ensureUv();
-    return builder.add({ kind: 'texture', type: valueType, texture: nodeId, uv, sampler: nodeId });
+    return builder.add({ kind: 'texture', type: valueType, texture: nodeId, uv: coerce(uv, vector(2, 'float', 'texcoord')), sampler: nodeId });
+  };
+
+  const authoredRef = (nodeId: string, name: string, type: IrType): IrRef | undefined => {
+    const input = graph.nodes.get(nodeId)!.inputs.find((i) => i.name === name);
+    const ref = input ? lowerInput(input) : undefined;
+    return ref !== undefined ? coerce(ref, type) : undefined;
+  };
+
+  // glTF texture nodes are nodegraph-implemented in MaterialX; lower them to
+  // the equivalent texture sample + factor / normal-map / remap primitives.
+  const lowerGltfTexture = (nodeId: string, output?: string): IrRef => {
+    const node = graph.nodes.get(nodeId)!;
+    switch (node.category) {
+      case 'gltf_colorimage': {
+        let color = lowerTexture(nodeId, COLOR4);
+        for (const name of ['color', 'geomcolor']) {
+          const factor = authoredRef(nodeId, name, COLOR4);
+          if (factor !== undefined) color = callRef('multiply', COLOR4, { in1: color, in2: factor });
+        }
+        return output === 'outa'
+          ? builder.add({ kind: 'swizzle', type: FLOAT, source: color, pattern: 'w' })
+          : builder.add({ kind: 'swizzle', type: COLOR3, source: color, pattern: 'xyz' });
+      }
+      case 'gltf_normalmap': {
+        const vec3 = vector(3, 'float', 'vector');
+        return callRef('normalmap', vec3, { in: lowerTexture(nodeId, vec3) });
+      }
+      case 'gltf_iridescence_thickness': {
+        const sample = lowerTexture(nodeId, vector(3, 'float', 'vector'));
+        const g = builder.add({ kind: 'swizzle', type: FLOAT, source: sample, pattern: 'y' });
+        return callRef('mix', FLOAT, {
+          fg: authoredRef(nodeId, 'thicknessMin', FLOAT) ?? builder.constant(FLOAT, 100),
+          bg: authoredRef(nodeId, 'thicknessMax', FLOAT) ?? builder.constant(FLOAT, 400),
+          mix: g,
+        });
+      }
+      default: {
+        const type = irTypeFromMaterialX(node.type) ?? COLOR3;
+        const tex = lowerTexture(nodeId);
+        const factor = authoredRef(nodeId, 'factor', type);
+        return factor !== undefined ? callRef('multiply', type, { in1: tex, in2: factor }) : tex;
+      }
+    }
   };
 
   const lowerConvert = (nodeId: string): IrRef => {
     const node = graph.nodes.get(nodeId)!;
     const to = irTypeFromMaterialX(node.type) ?? COLOR3;
     const inInput = node.inputs.find((i) => i.name === 'in');
-    const from = inInput ? irTypeFromMaterialX(inInput.type) ?? FLOAT : FLOAT;
-    const source = (inInput ? lowerInput(inInput) : undefined) ?? builder.constant(from, 0);
+    const declared = inInput ? irTypeFromMaterialX(inInput.type) ?? FLOAT : FLOAT;
+    const source = (inInput ? lowerInput(inInput) : undefined) ?? builder.constant(declared, 0);
+    const from = builder.get(source)?.type ?? declared;
     return builder.add({ kind: 'convert', type: to, source, from });
   };
 
   const lowerCall = (nodeId: string, output?: string): IrRef => {
     const node = graph.nodes.get(nodeId)!;
     const type = irTypeFromMaterialX(node.type) ?? COLOR3;
+    const declaredTypes = new Map<string, IrType | undefined>();
+    for (const input of node.nodeDef?.inputs ?? []) declaredTypes.set(input.name, irTypeFromMaterialX(input.type));
     const namedArgs: Record<string, IrRef> = {};
     for (const input of node.inputs) {
       const ref = lowerInput(input);
-      if (ref !== undefined) namedArgs[input.name] = ref;
+      if (ref !== undefined) namedArgs[input.name] = coerce(ref, declaredTypes.get(input.name) ?? irTypeFromMaterialX(input.type));
     }
     for (const input of node.nodeDef?.inputs ?? []) {
       if (namedArgs[input.name] !== undefined || input.value === undefined) continue;
       const inputType = irTypeFromMaterialX(input.type);
-      if (inputType?.kind === 'scalar' || inputType?.kind === 'vector') {
+      if (isValueType(inputType)) {
         namedArgs[input.name] = constOfIrType(builder, inputType, parseNumbers(input.value));
       }
     }
@@ -192,10 +279,14 @@ export function lowerSurfaceInputsToIr(
     let ref: IrRef;
     if (/^separate[234]$/.test(node.category) && output && /^out[xyzwrgba]$/.test(output)) {
       const input = node.inputs.find((candidate) => candidate.name === 'in');
-      const source = (input ? lowerInput(input) : undefined) ?? neutralColor();
+      const size = Number(node.category.slice(-1)) as 2 | 3 | 4;
+      const raw = (input ? lowerInput(input) : undefined) ?? neutralColor();
+      const source = coerce(raw, input ? irTypeFromMaterialX(input.type) ?? vector(size) : vector(size));
       ref = builder.add({ kind: 'swizzle', type: FLOAT, source, pattern: output.slice(3) });
     } else if (TEXTURE_CATEGORIES.has(node.category)) {
       ref = lowerTexture(nodeId);
+    } else if (GLTF_TEXTURE_CATEGORIES.has(node.category)) {
+      ref = lowerGltfTexture(nodeId, output);
     } else if (node.category === 'convert') {
       ref = lowerConvert(nodeId);
     } else if (getNodeLowering(node.category)) {
@@ -221,7 +312,7 @@ export function lowerSurfaceInputsToIr(
         ref = constOfIrType(builder, surfaceIrType(ni.type), ni.source.value);
         break;
       case 'connection':
-        ref = lowerNode(ni.source.nodeId, ni.source.output);
+        ref = coerce(lowerNode(ni.source.nodeId, ni.source.output), surfaceIrType(ni.type));
         break;
       case 'geomprop':
         ref = geomRef(ni.source.name);
