@@ -111,6 +111,13 @@ reprises, le run s'arrête ; `--resume` permet alors de continuer.
 
 ## Arguments des noeuds MaterialX
 
+La couleur `base_color` de `standard_surface` est bornée par composante à
+`[0, 1]` lors de la construction des lobes diffus et conducteurs, sur CPU et GPU.
+Les valeurs intermédiaires du graphe (notamment les sorties de `artistic_ior`)
+restent inchangées. L'émission HDR n'est pas bornée. Cette limite de réflectance
+empêche les couleurs supérieures à 1 d'amplifier l'énergie à chaque rebond
+jusqu'au débordement de l'accumulation du path tracing.
+
 ### Domaine de `acos`
 
 Pour une entrée finie hors de `[-1, 1]`, `acos` renvoie explicitement zéro

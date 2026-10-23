@@ -212,7 +212,7 @@ function standardSurface(c: Ctx): FamilyWgsl {
   const aniso = c.s('specular_anisotropy', 0);
   const rot = c.s('specular_rotation', 0);
   const ior = c.s('specular_IOR', 1.5);
-  const baseColor = c.col('base_color', [1, 1, 1]);
+  const baseColor = `clamp(${c.col('base_color', [1, 1, 1])}, vec3f(0.0), vec3f(1.0))`;
   const specColor = c.col('specular_color', [1, 1, 1]);
   const transColor = c.col('transmission_color', [1, 1, 1]);
   const sssColor = c.col('subsurface_color', [1, 1, 1]);

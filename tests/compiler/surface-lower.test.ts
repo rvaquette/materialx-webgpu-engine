@@ -69,6 +69,17 @@ function shade(closure: LayeredClosure, lighting: ReferenceLighting = defaultLig
 }
 
 describe('surfaceGraphToLayered (T055b)', () => {
+  it.each([0, 1])('bounds standard_surface base reflectance and preserves HDR emission (metalness=%s)', (metalness) => {
+    const closure = lower('standard_surface', [
+      input('base_color', 'color3', '5, -1, 0.5'),
+      input('metalness', 'float', String(metalness)),
+      input('emission_color', 'color3', '10, 2, 0.5'),
+      input('emission', 'float', '0.3'),
+    ]);
+    expect(lobe(closure, metalness ? 'conductor' : 'burley_diffuse')?.color).toEqual([1, 0, 0.5]);
+    expect(closure.emission).toEqual([3, 0.6, 0.15]);
+  });
+
   it('reduces a pure-diffuse standard_surface to a single burley lobe', () => {
     const closure = lower('standard_surface', [
       input('base', 'float', '1'),

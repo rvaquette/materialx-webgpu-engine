@@ -203,7 +203,7 @@ export function buildSceneFrame(resources: SceneResources, options: BuildSceneFr
 }
 
 /** Floats in a scene forward frame uniform (SCENE_FRAME_UNIFORM_SIZE / 4). */
-export const SCENE_FRAME_UNIFORM_FLOATS = 84;
+export const SCENE_FRAME_UNIFORM_FLOATS = 88;
 /** Floats in a scene forward material uniform (SCENE_MATERIAL_UNIFORM_SIZE / 4). */
 export const SCENE_MATERIAL_UNIFORM_FLOATS = 12;
 
@@ -241,6 +241,8 @@ export function buildSceneFrameUniform(frame: SceneFramePlan, draw: SceneDraw): 
     const dc = 3.544908;
     d.set([er * dc, eg * dc, eb * dc, 0], 48);
   }
+  const scale = gain * (env.textureRadianceScale ?? 1);
+  d.set([tint[0] * scale, tint[1] * scale, tint[2] * scale, env.hasTexture ? 1 : 0], 84);
   return d;
 }
 

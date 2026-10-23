@@ -88,7 +88,8 @@ function lowerStandardSurface(m: Inputs): LayeredClosure {
   const aniso = scalarOf(m, 'specular_anisotropy', 0);
   const rot = scalarOf(m, 'specular_rotation', 0);
   const ior = scalarOf(m, 'specular_IOR', 1.5);
-  const baseColor = rgbOf(m, 'base_color', [1, 1, 1]);
+  const rawBaseColor = rgbOf(m, 'base_color', [1, 1, 1]);
+  const baseColor: Rgb = [clamp01(rawBaseColor[0]), clamp01(rawBaseColor[1]), clamp01(rawBaseColor[2])];
   const specColor = rgbOf(m, 'specular_color', [1, 1, 1]);
   const transColor = rgbOf(m, 'transmission_color', [1, 1, 1]);
   const sssColor = rgbOf(m, 'subsurface_color', [1, 1, 1]);

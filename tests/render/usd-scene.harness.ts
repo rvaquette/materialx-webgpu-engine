@@ -596,6 +596,7 @@ async function renderUsdRasterOnDevice(
 
   // Dome envmap: upload once, shown as the raster background and reused as IBL fill.
   const envGpu = envAsset ? uploadEnvTexture(device, envAsset) : undefined;
+  frame.environment.textureRadianceScale = envGpu?.radianceScale ?? 1;
   const envBg =
     envAsset && envGpu
       ? createEnvBackground(device, backend.hdrFormat, backend.depthFormat, envAsset, envGpu.view, envGpu.sampler, inverse4(frameCamera.viewProj), frameCamera.eye, envGpu.radianceScale)
@@ -787,6 +788,7 @@ async function renderUsdRasterOnDevice(
         material: materialUniform,
         ...(textures ? { textureViews: textures.textureViews, samplers: textures.samplers } : {}),
         ...(displacement ? { displacement } : {}),
+        ...(envGpu ? { environment: { textureView: envGpu.view, sampler: envGpu.sampler } } : {}),
       },
       (group) => pipeline.getBindGroupLayout(group),
     );
@@ -824,6 +826,7 @@ async function renderUsdRasterOnDevice(
           material: materialUniform,
           ...(textures ? { textureViews: textures.textureViews, samplers: textures.samplers } : {}),
           ...(displacement ? { displacement } : {}),
+          ...(envGpu ? { environment: { textureView: envGpu.view, sampler: envGpu.sampler } } : {}),
         },
         (group) => pipeline.getBindGroupLayout(group),
       );

@@ -360,6 +360,7 @@ export class InteractiveViewer {
       const { width: ew, height: eh } = envAsset.image;
       const packed = packHdrTexture(envAsset.image);
       envRadianceScale = packed.radianceScale;
+      frame.environment.textureRadianceScale = envRadianceScale;
       ptScene.environment.textureRadianceScale = envRadianceScale;
       const envTexture = track(device.createTexture({
         size: [ew, eh],
@@ -483,6 +484,7 @@ export class InteractiveViewer {
           material: materialUniform,
           ...(textures ? { textureViews: textures.textureViews, samplers: textures.samplers } : {}),
           ...(displacement ? { displacement } : {}),
+          ...(envTextureView && envSampler ? { environment: { textureView: envTextureView, sampler: envSampler } } : {}),
         },
         (group) => pipeline.getBindGroupLayout(group),
       );

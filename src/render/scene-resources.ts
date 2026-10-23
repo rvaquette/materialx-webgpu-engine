@@ -361,6 +361,7 @@ export interface SceneDrawBuffers {
   textureViews?: ReadonlyMap<string, GPUTextureView>;
   /** Resolved samplers by MaterialX sampler handle name. */
   samplers?: ReadonlyMap<string, GPUSampler>;
+  environment?: { textureView: GPUTextureView; sampler: GPUSampler };
   /** Vertex-displacement resources (VTF), bound at the scene shader's displacement
    *  group: a MxDisp uniform (scale, midpoint), the height map and its sampler.
    *  Present only for a material whose sceneShader declares displacementGroup. */
@@ -373,6 +374,18 @@ export interface SceneBindGroups {
   /** Every bind group built, keyed by its group index (includes texture/sampler
    *  groups when the surface module declares them). */
   byGroup: ReadonlyMap<number, GPUBindGroup>;
+}
+
+const fallbackEnvironments = new WeakMap<GPUDevice, { textureView: GPUTextureView; sampler: GPUSampler }>();
+
+function fallbackEnvironment(device: GPUDevice) {
+  let environment = fallbackEnvironments.get(device);
+  if (!environment) {
+    const texture = device.createTexture({ size: [1, 1], format: 'rgba8unorm', usage: GPUTextureUsage.TEXTURE_BINDING });
+    environment = { textureView: texture.createView(), sampler: device.createSampler() };
+    fallbackEnvironments.set(device, environment);
+  }
+  return environment;
 }
 
 /**
@@ -411,6 +424,9 @@ export function createSceneBindGroups(
   }
   // Per-frame uniform at the dedicated frame bind group, binding 0.
   push(frameGroup, { binding: 0, resource: { buffer: buffers.frame } });
+  const environment = buffers.environment ?? fallbackEnvironment(device);
+  push(frameGroup, { binding: 4, resource: environment.textureView });
+  push(frameGroup, { binding: 5, resource: environment.sampler });
 
   // Optional vertex-displacement (VTF): the height map, its sampler and the MxDisp
   // params share the frame group at bindings 1, 2 and 3 (the device guarantees only

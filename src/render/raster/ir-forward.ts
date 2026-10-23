@@ -50,8 +50,18 @@ function frameBlock(): string {
   lightColor: vec4f,
   env: vec4f,
   sh: array<vec4f, 9>,
+  envMap: vec4f,
 };
 @group(${IR_FORWARD_FRAME_GROUP}) @binding(${IR_FORWARD_FRAME_BINDING}) var<uniform> fu: MxFrame;
+@group(${IR_FORWARD_FRAME_GROUP}) @binding(4) var forwardEnv: texture_2d<f32>;
+@group(${IR_FORWARD_FRAME_GROUP}) @binding(5) var forwardEnvSampler: sampler;
+
+fn mx_forward_environment(d: vec3f) -> vec3f {
+  if (fu.envMap.w == 0.0) { return fu.env.xyz; }
+  let n = normalize(d);
+  let uv = vec2f(atan2(n.z, n.x) * (0.5 / MX_PI) + 0.5, acos(clamp(n.y, -1.0, 1.0)) / MX_PI);
+  return textureSampleLevel(forwardEnv, forwardEnvSampler, uv, 0.0).rgb * fu.envMap.xyz;
+}
 
 // Diffuse irradiance E(n) from the uploaded SH9 radiance coefficients (cosine-lobe
 // convolution A_l). Basis matches projectIrradianceSH on the CPU and mx_sh_irradiance
@@ -171,20 +181,17 @@ fn ${IR_FORWARD_FRAGMENT_ENTRY}(fin: MxVertexOut) -> @location(0) vec4f {
   // correct brightness instead of the dim constant-ambient estimate.
   radiance = radiance + mx_closure_diffuse_albedo(c) * (mx_sh_irradiance(n) / MX_PI);
 
-  // Glossy/specular environment reflection: the SH probe is diffuse-only, so the
-  // specular lobes still sample a constant dome radiance along the mirror direction
-  // wiMir = reflect(wo) about the normal (in shading space -wo.xy, +wo.z). wiMir stays
-  // above the horizon whenever wo is, so the estimate is valid at grazing (no black
-  // silhouette). A hemisphere gradient indexed by the reflected view up (+Y) gives
-  // metals the sky/ground variation a single constant term would flatten. Only the
-  // specular lobes are evaluated here to avoid double-counting the diffuse SH term.
-  let rWorld = reflect(-vary.viewDir, n);
-  let up = clamp(rWorld.y * 0.5 + 0.5, 0.0, 1.0);
-  let envDir = fu.env.xyz * mix(0.25, 1.0, up);
-  let wiMir = vec3f(-wo.x, -wo.y, wo.z);
-  let em = mx_closure_specular_eval(c, wo, wiMir);
-  if (em.pdf > 0.0) {
-    radiance = radiance + em.value * envDir * (wiMir.z / em.pdf);
+  // Deterministic BSDF quadrature of the actual dome; diffuse stays in SH above.
+  for (var i = 0u; i < 64u; i++) {
+    let u = vec3f((f32(i) + 0.5) / 64.0,
+      f32(reverseBits(i)) * 2.3283064365386963e-10,
+      fract((f32(i) + 0.5) * 0.61803398875));
+    let bs = mx_closure_sample(c, wo, u);
+    if (bs.valid && bs.pdf > 0.0) {
+      let em = mx_closure_specular_eval(c, wo, bs.wi);
+      let envDir = mx_forward_environment(sframe * bs.wi);
+      radiance = radiance + em.value * envDir * (abs(bs.wi.z) / (64.0 * bs.pdf));
+    }
   }
 
   if (c.hasEmission != 0u) { radiance = radiance + c.emission; }

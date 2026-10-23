@@ -119,7 +119,17 @@ describe('emitLayeredSurface (T055d)', () => {
     expect(mod.textures).toHaveLength(1);
     expect(mod.code).toContain('textureSample(tex_tex, samp_tex');
     // The conductor lobe colour references the lowered IR ref, not a baked constant.
-    expect(mod.code).toMatch(/c\.lobes\[0\] = MxBsdfLobe\(MX_LOBE_CONDUCTOR, mx_metal, e\d+,/);
+    expect(mod.code).toMatch(/c\.lobes\[0\] = MxBsdfLobe\(MX_LOBE_CONDUCTOR, mx_metal, clamp\(e\d+, vec3f\(0\.0\), vec3f\(1\.0\)\),/);
+  });
+
+  it('bounds standard_surface base reflectance without clipping HDR emission', () => {
+    const mod = emit(surfaceGraph('standard_surface', [
+      value('base_color', 'color3', '5, -1, 0.5'),
+      value('emission_color', 'color3', '10, 2, 0.5'),
+      value('emission', 'float', '0.3'),
+    ]));
+    expect(mod.code).toContain('clamp(vec3f(5.0, -1.0, 0.5), vec3f(0.0), vec3f(1.0))');
+    expect(mod.code).toContain('c.emission = (vec3f(10.0, 2.0, 0.5) * 0.3);');
   });
 
   it('keeps weights dynamic when a scalar input is textured', () => {
