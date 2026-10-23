@@ -1,5 +1,51 @@
 # USD import: loader qualification (T003)
 
+## Local GLB and OBJ geometry
+
+The interactive viewer and USD image harness can load static geometry with
+Three.js `GLTFLoader` (GLB) and `OBJLoader` (OBJ). Author the engine-specific
+attributes on a `Mesh` prim, retaining normal USD material bindings:
+
+```usda
+def Mesh "Preview" {
+    custom asset engine:geometry:file = @./ShaderBall.glb@
+    custom string engine:geometry:object = "Preview_Mesh"
+    rel material:binding = </World/Looks/OpenPBRMaterial>
+}
+```
+
+`engine:geometry:object` optionally selects a uniquely named object and its
+descendants. Without it, all triangle meshes in the default GLB scene or OBJ are
+merged. Asset paths resolve relative to the authoring USDA layer, including
+sublayers. Each asset is fetched/parsed once per scene load. GLB node/parent
+transforms are baked into the selected geometry; USD transforms are then applied
+normally. Normals and UVs are preserved; negative-determinant transforms reverse
+triangle winding. OBJ polygons are triangulated by Three.js.
+Missing normals are generated per mesh. Merging objects with mixed UV
+availability omits UVs and emits a warning; select individual objects to retain
+their UVs.
+
+Only geometry is imported: embedded glTF materials/textures and OBJ material
+libraries do not override USD or runtime MaterialX assignments. Skinning and
+morph targets and glTF GPU instancing are unsupported and rejected. A missing file, invalid format,
+missing/ambiguous object or invalid mesh emits an error diagnostic and rejects
+scene loading rather than silently dropping geometry. Inline USDA meshes remain
+supported, including mixed inline/external scenes.
+
+These are custom engine attributes, not native USD references or a USD glTF
+file-format plugin. Other USD applications need the geometry converted to USD.
+Both shaderball stages in `scenes/standard-shader-ball` use these attributes;
+the RVA stage shares `/World/Looks/OpenPBRMaterial` across its two meshes so
+`test:shaderball --entry /scenes/standard-shader-ball/openpbr-rva-standard-shader-ball.usda`
+applies each MaterialX override to both objects, locally or with `--target mobile`.
+
+HDR environments are uniformly normalized before uploading to `rgba16float`
+and their original radiance is restored after texture sampling, including the
+path tracer's importance-sampling PDF. This prevents bright HDR texels above
+65504 from becoming infinite without clipping their energy. SH irradiance and
+the luminance CDF remain in original radiance units. Image tests reject
+non-finite path-tracing accumulation rather than saving a misleading black PNG.
+
 Evidence-based comparison of USD import strategies for the target scene, focused
 on the six blocking criteria: **sublayers, references, inherits, payloads,
 bindings, and `.mtlx` references**. Conclusion: no off-the-shelf JS loader covers

@@ -32,6 +32,7 @@ import { OrbitCamera, attachOrbitControls } from '../scene/orbit-camera.ts';
 import { inverse4, lookAt4, multiply4, perspective4, type Vec3 } from '../scene/transforms.ts';
 import type { DiagnosticSink } from '../core/diagnostics.ts';
 import { compileShaderWithDiagnostics, type ShaderCompilationError } from '../gpu/shader-diagnostics.ts';
+import { packHdrTexture } from '../assets/hdr-texture.ts';
 
 /** Preview fill + framing shared with the capture harness so the live view matches. */
 const PREVIEW_ENV: Vec3 = [0.65, 0.68, 0.72];
@@ -41,41 +42,6 @@ function previewCamera(aspect: number, exposure: number): FrameCamera {
   const dist = 7;
   const eye: Vec3 = [target[0] + dir[0] * dist, target[1] + dir[1] * dist, target[2] + dir[2] * dist];
   return { viewProj: multiply4(perspective4(0.62, aspect, 0.001, 10000), lookAt4(eye, target, [0, 1, 0])), eye, exposure };
-}
-
-/** IEEE-754 float32 -> float16 bit pattern, for uploading HDR data to a
- *  filterable rgba16float environment texture without the float32-filterable
- *  device feature. */
-const _f32 = new Float32Array(1);
-const _i32 = new Int32Array(_f32.buffer);
-function floatToHalf(value: number): number {
-  _f32[0] = value;
-  const x = _i32[0]!;
-  const sign = (x >> 16) & 0x8000;
-  let exp = (x >> 23) & 0xff;
-  let mant = x & 0x7fffff;
-  if (exp === 0xff) return sign | 0x7c00 | (mant ? 0x200 : 0);
-  exp = exp - 127 + 15;
-  if (exp >= 31) return sign | 0x7c00;
-  if (exp <= 0) {
-    if (exp < -10) return sign;
-    mant = (mant | 0x800000) >> (1 - exp);
-    return sign | (mant >> 13);
-  }
-  return sign | (exp << 10) | (mant >> 13);
-}
-
-/** Pack an equirect float-RGB HDR image into half-float RGBA for the GPU. */
-function hdrToHalfRgba(data: Float32Array, width: number, height: number): Uint16Array {
-  const out = new Uint16Array(width * height * 4);
-  const one = floatToHalf(1);
-  for (let i = 0; i < width * height; i++) {
-    out[i * 4] = floatToHalf(data[i * 3]!);
-    out[i * 4 + 1] = floatToHalf(data[i * 3 + 1]!);
-    out[i * 4 + 2] = floatToHalf(data[i * 3 + 2]!);
-    out[i * 4 + 3] = one;
-  }
-  return out;
 }
 
 export type BackendKind = 'raster' | 'pathtracing';
@@ -389,8 +355,12 @@ export class InteractiveViewer {
     const envAsset = loaded.environment;
     let envTextureView: GPUTextureView | undefined;
     let envSampler: GPUSampler | undefined;
+    let envRadianceScale = 1;
     if (envAsset) {
-      const { width: ew, height: eh, data } = envAsset.image;
+      const { width: ew, height: eh } = envAsset.image;
+      const packed = packHdrTexture(envAsset.image);
+      envRadianceScale = packed.radianceScale;
+      ptScene.environment.textureRadianceScale = envRadianceScale;
       const envTexture = track(device.createTexture({
         size: [ew, eh],
         format: 'rgba16float',
@@ -398,7 +368,7 @@ export class InteractiveViewer {
       }));
       device.queue.writeTexture(
         { texture: envTexture },
-        hdrToHalfRgba(data, ew, eh),
+        packed.data,
         { bytesPerRow: ew * 8, rowsPerImage: eh },
         [ew, eh, 1],
       );
@@ -598,7 +568,7 @@ fn dir_to_uv(d: vec3<f32>) -> vec2<f32> {
         depthStencil: { format: backend.depthFormat, depthWriteEnabled: false, depthCompare: 'always' },
       });
       envBgUniform = track(device.createBuffer({ size: 96, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST }));
-      const inten = envAsset.intensity;
+      const inten = envAsset.intensity * envRadianceScale;
       const t = envAsset.tint;
       device.queue.writeBuffer(envBgUniform, 80, new Float32Array([t[0] * inten, t[1] * inten, t[2] * inten, 1]));
       envBgBindGroup = device.createBindGroup({

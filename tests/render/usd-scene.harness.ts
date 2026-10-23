@@ -34,7 +34,6 @@ import {
   createSceneBindGroups,
   uploadGeometry,
   type MaterialResource,
-  type MeshSource,
 } from '../../src/render/scene-resources.ts';
 import { buildPathTraceScene } from '../../src/render/pathtracing/scene-buffers.ts';
 import {
@@ -49,6 +48,7 @@ import {
   GBUFFER_NORMAL_FORMAT,
 } from '../../src/render/hybrid/trace-pass.ts';
 import { buildPathTraceUniform, PathTraceBackend, PT_UNIFORM_SIZE } from '../../src/render/pathtracing/compute.ts';
+import { packHdrTexture } from '../../src/assets/hdr-texture.ts';
 import { buildMaterialDispatch } from '../../src/render/pathtracing/material-variant.ts';
 import { buildPtDeviceBindings, type PtImageProvider } from '../../src/render/pathtracing/device-bindings.ts';
 import { createGraphMaterialCompiler } from '../../src/render/graph-material-compiler.ts';
@@ -63,12 +63,12 @@ import {
 import { resolvePixel } from '../../src/render/output.ts';
 import { importCameras, type SceneCamera } from '../../src/usd/cameras.ts';
 import { importLights } from '../../src/usd/lights.ts';
-import { loadEnvironment, type LoadedEnvironment } from '../../src/render/usd-scene-assets.ts';
+import { loadEnvironment, meshSourceFromScene, type LoadedEnvironment } from '../../src/render/usd-scene-assets.ts';
+import { loadExternalMeshSource } from '../../src/geometry/external-mesh.ts';
 import { importUsdStage, type UsdLayerReader } from '../../src/usd/importer.ts';
 import { lowerPreviewSurfaceMaterials } from '../../src/usd/preview-surface.ts';
 import { inverse4, lookAt4, multiply4, perspective4, type Mat4, type Vec3 } from '../../src/scene/transforms.ts';
-import type { RawMesh, Primvar, PrimvarInterpolation } from '../../src/geometry/prepare.ts';
-import type { MaterialXReference, SceneAsset, ScenePrim } from '../../src/scene/types.ts';
+import type { MaterialXReference, SceneAsset } from '../../src/scene/types.ts';
 
 export interface UsdSceneImage {
   entry: string;
@@ -107,54 +107,6 @@ function httpReader(entry: string): UsdLayerReader {
       const res = await fetch(url);
       if (!res.ok) throw new Error(`HTTP ${res.status} for ${url}`);
       return res.text();
-    },
-  };
-}
-
-/** Flat numeric attribute array (point3f[]/int[] flatten to number[]). */
-function numArray(prim: ScenePrim, name: string): number[] {
-  const value = prim.attributes.get(name)?.value;
-  return Array.isArray(value) ? (value as readonly unknown[]).map((v) => Number(v)) : [];
-}
-
-/** Supplies inline USDA mesh geometry per prototype prim path. */
-function meshSourceFromScene(scene: SceneAsset): MeshSource {
-  return {
-    meshFor(primPath: string): RawMesh | undefined {
-      const prim = scene.prims.get(primPath);
-      if (!prim) return undefined;
-      const points = numArray(prim, 'points');
-      const faceVertexCounts = numArray(prim, 'faceVertexCounts');
-      const faceVertexIndices = numArray(prim, 'faceVertexIndices');
-      if (points.length === 0 || faceVertexCounts.length === 0 || faceVertexIndices.length === 0) {
-        return undefined;
-      }
-      const orientation = prim.attributes.get('orientation')?.value;
-      const leftHanded = orientation === 'leftHanded';
-      // Pass authored normals through so hard-edged meshes (e.g. the cube) keep
-      // their per-face normals instead of being smooth-averaged into a blob.
-      const normalValues = numArray(prim, 'normals');
-      const normalInterp = prim.attributes.get('normals')?.interpolation as PrimvarInterpolation | undefined;
-      const normals: Primvar | undefined =
-        normalValues.length > 0
-          ? { name: 'normals', interpolation: normalInterp ?? 'faceVarying', values: normalValues, elementSize: 3 }
-          : undefined;
-      // Pass the st texture coordinates through so textured nodegraph materials
-      // (evaluated + baked per UV) sample correctly in the path tracer.
-      const stValues = numArray(prim, 'primvars:st');
-      const stInterp = prim.attributes.get('primvars:st')?.interpolation as PrimvarInterpolation | undefined;
-      const st: Primvar | undefined =
-        stValues.length > 0
-          ? { name: 'st', interpolation: stInterp ?? 'faceVarying', values: stValues, elementSize: 2 }
-          : undefined;
-      return {
-        points,
-        faceVertexCounts,
-        faceVertexIndices,
-        ...(leftHanded ? { leftHanded: true } : {}),
-        ...(normals ? { normals } : {}),
-        ...(st ? { primvars: [st] } : {}),
-      };
     },
   };
 }
@@ -285,40 +237,6 @@ async function overrideMaterialWithMtlx(
 
 const PREVIEW_ENV: Vec3 = [0.65, 0.68, 0.72];
 
-// IEEE float32 -> float16 bits, so HDR envmaps upload to a filterable rgba16float
-// texture without the float32-filterable device feature (mirrors InteractiveViewer).
-const _envF32 = new Float32Array(1);
-const _envI32 = new Int32Array(_envF32.buffer);
-function floatToHalf(value: number): number {
-  _envF32[0] = value;
-  const x = _envI32[0]!;
-  const sign = (x >> 16) & 0x8000;
-  let exp = (x >> 23) & 0xff;
-  let mant = x & 0x7fffff;
-  if (exp === 0xff) return sign | 0x7c00 | (mant ? 0x200 : 0);
-  exp = exp - 127 + 15;
-  if (exp >= 31) return sign | 0x7c00;
-  if (exp <= 0) {
-    if (exp < -10) return sign;
-    mant = (mant | 0x800000) >> (1 - exp);
-    return sign | (mant >> 13);
-  }
-  return sign | (exp << 10) | (mant >> 13);
-}
-
-/** Pack an equirect float-RGB HDR image into half-float RGBA for the GPU. */
-function hdrToHalfRgba(data: Float32Array, width: number, height: number): Uint16Array {
-  const out = new Uint16Array(width * height * 4);
-  const one = floatToHalf(1);
-  for (let i = 0; i < width * height; i++) {
-    out[i * 4] = floatToHalf(data[i * 3]!);
-    out[i * 4 + 1] = floatToHalf(data[i * 3 + 1]!);
-    out[i * 4 + 2] = floatToHalf(data[i * 3 + 2]!);
-    out[i * 4 + 3] = one;
-  }
-  return out;
-}
-
 /** Build a flat row-major luminance CDF over the equirect HDR, used by the path
  *  tracer's environment importance sampling. Rec.709 luminance, cumulative sum. */
 function buildEnvCdf(image: { width: number; height: number; data: Float32Array | number[] }): {
@@ -346,14 +264,15 @@ function buildEnvCdf(image: { width: number; height: number; data: Float32Array 
 function uploadEnvTexture(
   device: GPUDevice,
   env: LoadedEnvironment,
-): { view: GPUTextureView; sampler: GPUSampler; cdfBuffer: GPUBuffer; cdfStats: { width: number; height: number; totalSum: number } } {
-  const { width: ew, height: eh, data } = env.image;
+): { view: GPUTextureView; sampler: GPUSampler; radianceScale: number; cdfBuffer: GPUBuffer; cdfStats: { width: number; height: number; totalSum: number } } {
+  const { width: ew, height: eh } = env.image;
+  const packed = packHdrTexture(env.image);
   const texture = device.createTexture({
     size: [ew, eh],
     format: 'rgba16float',
     usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
   });
-  device.queue.writeTexture({ texture }, hdrToHalfRgba(data, ew, eh), { bytesPerRow: ew * 8, rowsPerImage: eh }, [ew, eh, 1]);
+  device.queue.writeTexture({ texture }, packed.data, { bytesPerRow: ew * 8, rowsPerImage: eh }, [ew, eh, 1]);
   const { cdf, totalSum, width, height } = buildEnvCdf(env.image);
   const cdfBuffer = device.createBuffer({
     size: Math.max(16, cdf.byteLength),
@@ -362,6 +281,7 @@ function uploadEnvTexture(
   device.queue.writeBuffer(cdfBuffer, 0, cdf);
   return {
     view: texture.createView(),
+    radianceScale: packed.radianceScale,
     sampler: device.createSampler({ addressModeU: 'repeat', addressModeV: 'clamp-to-edge', magFilter: 'linear', minFilter: 'linear' }),
     cdfBuffer,
     cdfStats: { width, height, totalSum },
@@ -407,6 +327,7 @@ function createEnvBackground(
   envSampler: GPUSampler,
   invViewProj: Mat4,
   eye: Vec3,
+  radianceScale: number,
 ): { pipeline: GPURenderPipeline; bindGroup: GPUBindGroup } {
   const module = device.createShaderModule({
     code: `
@@ -448,7 +369,7 @@ fn dir_to_uv(d: vec3<f32>) -> vec2<f32> {
   const uniform = device.createBuffer({ size: 96, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
   device.queue.writeBuffer(uniform, 0, new Float32Array(invViewProj));
   device.queue.writeBuffer(uniform, 64, new Float32Array([eye[0], eye[1], eye[2], 0]));
-  const inten = env.intensity;
+  const inten = env.intensity * radianceScale;
   const t = env.tint;
   device.queue.writeBuffer(uniform, 80, new Float32Array([t[0] * inten, t[1] * inten, t[2] * inten, 1]));
   const bindGroup = device.createBindGroup({
@@ -644,7 +565,7 @@ async function renderUsdRasterOnDevice(
   const { documents, imageProvider, surfaceFor } = await loadMtlxSceneContext(scene, entry, line, sink);
 
   const resources = await buildSceneResources(scene, {
-    meshSource: meshSourceFromScene(scene),
+    meshSource: await loadExternalMeshSource(scene, meshSourceFromScene(scene), sink),
     materialCompiler: createGraphMaterialCompiler({ documents, sink }),
     sink,
   });
@@ -677,7 +598,7 @@ async function renderUsdRasterOnDevice(
   const envGpu = envAsset ? uploadEnvTexture(device, envAsset) : undefined;
   const envBg =
     envAsset && envGpu
-      ? createEnvBackground(device, backend.hdrFormat, backend.depthFormat, envAsset, envGpu.view, envGpu.sampler, inverse4(frameCamera.viewProj), frameCamera.eye)
+      ? createEnvBackground(device, backend.hdrFormat, backend.depthFormat, envAsset, envGpu.view, envGpu.sampler, inverse4(frameCamera.viewProj), frameCamera.eye, envGpu.radianceScale)
       : undefined;
 
   // Decode + upload each material's sampled textures once, keyed by material unit.
@@ -1136,7 +1057,7 @@ async function renderUsdOnDevice(
   const { documents, imageProvider, surfaceFor } = await loadMtlxSceneContext(scene, entry, line, sink);
 
   const resources = await buildSceneResources(scene, {
-    meshSource: meshSourceFromScene(scene),
+    meshSource: await loadExternalMeshSource(scene, meshSourceFromScene(scene), sink),
     materialCompiler: createGraphMaterialCompiler({ documents, sink }),
     sink,
   });
@@ -1154,6 +1075,7 @@ async function renderUsdOnDevice(
     environment: envFrameConfig(envAsset, envGpu?.cdfStats, skyPowerOverride, skyColorOverride),
     ...(dispScaleOverride !== undefined ? { displacementScale: dispScaleOverride } : {}),
   });
+  ptScene.environment.textureRadianceScale = envGpu?.radianceScale ?? 1;
   line(`${resources.instances.length} instance(s), ${samples} spp`);
   line(
     `diag tris=${ptScene.triangleCount} mats=${ptScene.materialCount} ` +
@@ -1388,6 +1310,15 @@ async function renderUsdOnDevice(
   device.queue.submit([copy.finish()]);
   await readback.mapAsync(GPUMapMode.READ);
   const mean = new Float32Array(readback.getMappedRange());
+  let nonFinite = 0;
+  for (let p = 0; p < res * res; p++) {
+    for (let c = 0; c < 3; c++) if (!Number.isFinite(mean[p * 4 + c])) nonFinite++;
+  }
+  line(`diag accum nonfinite=${nonFinite}`);
+  if (nonFinite > 0) {
+    readback.unmap();
+    throw new Error(`Pathtracing accumulation contains ${nonFinite} non-finite RGB components`);
+  }
   const rgba = new Uint8ClampedArray(res * res * 4);
   for (let p = 0; p < res * res; p++) {
     const o = p * 4;

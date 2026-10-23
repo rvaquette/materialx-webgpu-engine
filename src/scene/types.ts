@@ -31,6 +31,8 @@ export interface PrimAttribute {
   typeName: string;
   value?: AttributeValue;
   interpolation?: string;
+  /** Authoring layer for engine geometry asset paths (before USD composition). */
+  sourceLayer?: string;
 }
 
 export interface PrimRelationship {

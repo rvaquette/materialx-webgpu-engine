@@ -4,7 +4,7 @@
 // Each case drives usd-image-harness.html, saves a PNG and is checked for failure
 // or an (almost) black image; a JSON report summarizes the run.
 //
-// Usage: npm run test:shaderball -- [--target mobile|local] [--backends raster,pathtracing]
+// Usage: npm run test:shaderball -- [--entry /scenes/.../scene.usda] [--target mobile|local] [--backends raster,pathtracing]
 //          [--materials <filter>|all] [--res N] [--spp N] [--timeout ms] [--port N]
 //          [--device serial] [--out-dir renders/shaderball] [--list]
 
@@ -18,7 +18,7 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import { createServer } from 'vite';
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url));
-const ENTRY = '/scenes/standard-shader-ball/standard-shader-ball.usda';
+const DEFAULT_ENTRY = '/scenes/standard-shader-ball/standard-shader-ball.usda';
 const LIBRARY = join(ROOT, 'scenes', 'mtlx-library');
 const HARNESS = '/usd-image-harness.html';
 const exec = promisify(execFile);
@@ -90,11 +90,11 @@ function caseName(override, backend) {
 }
 
 async function renderCase(cdp, origin, { backend, override }, values) {
-  const query = new URLSearchParams({ entry: ENTRY, res: values.res, spp: values.spp, backend, _: String(Date.now()) });
+  const query = new URLSearchParams({ entry: values.entry, res: values.res, spp: values.spp, backend, _: String(Date.now()) });
   if (override) query.set('openpbr', override);
   const url = `${origin}${HARNESS}?${query}`;
   await cdp.send('Page.navigate', { url });
-  const expected = JSON.stringify({ e: ENTRY, b: backend, o: override ?? null });
+  const expected = JSON.stringify({ e: values.entry, b: backend, o: override ?? null });
   const started = Date.now();
   let pageLog = '';
   while (Date.now() - started < Number(values.timeout)) {
@@ -133,6 +133,7 @@ async function main() {
     help: { type: 'boolean', short: 'h' },
     list: { type: 'boolean' },
     resume: { type: 'boolean' },
+    entry: { type: 'string', default: DEFAULT_ENTRY },
     target: { type: 'string', default: 'local' },
     backends: { type: 'string', default: 'raster,pathtracing' },
     materials: { type: 'string', default: 'all' },
@@ -146,10 +147,14 @@ async function main() {
     'max-recoveries': { type: 'string', default: '20' },
   } });
   if (values.help) {
-    console.log('npm run test:shaderball -- [--target mobile|local] [--backends raster,pathtracing] [--materials <filter>|all] [--res N] [--spp N] [--timeout ms] [--port N] [--device serial] [--out-dir dir] [--black-threshold fraction] [--max-recoveries N] [--resume] [--list]');
+    console.log('npm run test:shaderball -- [--entry /scenes/.../scene.usda] [--target mobile|local] [--backends raster,pathtracing] [--materials <filter>|all] [--res N] [--spp N] [--timeout ms] [--port N] [--device serial] [--out-dir dir] [--black-threshold fraction] [--max-recoveries N] [--resume] [--list]');
     return;
   }
   if (!['mobile', 'local'].includes(values.target)) throw new Error('--target must be mobile or local');
+  values.entry = values.entry.replaceAll('\\', '/');
+  if (!values.entry.startsWith('/scenes/') || !/\.usda?$/i.test(values.entry) || values.entry.split('/').includes('..')) {
+    throw new Error('--entry must be a workspace USDA URL path under /scenes/');
+  }
   const backends = values.backends.split(',').map((backend) => backend.trim()).filter(Boolean);
   if (backends.length === 0 || backends.some((backend) => !['raster', 'pathtracing'].includes(backend))) throw new Error('--backends accepts raster and/or pathtracing');
 
@@ -163,17 +168,21 @@ async function main() {
   const cases = overrides.flatMap((override) => backends.map((backend) => ({ backend, override })));
   if (values.list) {
     for (const item of cases) console.log(caseName(item.override, item.backend));
-    log(`${cases.length} render cases`);
+    log(`${cases.length} render cases for ${values.entry}`);
     return;
   }
 
-  const outDir = resolve(ROOT, values['out-dir'], values.target);
+  const sceneName = values.entry === DEFAULT_ENTRY ? undefined : values.entry.split('/').at(-1).replace(/\.usda?$/i, '');
+  const outDir = resolve(ROOT, values['out-dir'], ...(sceneName ? [sceneName] : []), values.target);
   mkdirSync(outDir, { recursive: true });
   const reportFile = join(outDir, 'report.json');
-  const report = { startedAt: new Date().toISOString(), target: values.target, entry: ENTRY, res: Number(values.res), spp: Number(values.spp), cases: [] };
+  const report = { startedAt: new Date().toISOString(), target: values.target, entry: values.entry, res: Number(values.res), spp: Number(values.spp), cases: [] };
   if (values.resume) {
     if (!existsSync(reportFile)) throw new Error(`--resume: no report at ${relative(ROOT, reportFile)}`);
     const previous = JSON.parse(readFileSync(reportFile, 'utf8'));
+    if (previous.entry !== report.entry) {
+      throw new Error(`--resume requires the same --entry as the saved report (${previous.entry})`);
+    }
     if (previous.res !== report.res || previous.spp !== report.spp) {
       throw new Error(`--resume requires the same --res/--spp as the saved report (${previous.res}/${previous.spp})`);
     }
@@ -199,7 +208,7 @@ async function main() {
     await server.listen();
     const port = server.httpServer.address().port;
     const origin = `http://${values.target === 'mobile' ? 'localhost' : '127.0.0.1'}:${port}`;
-    const startUrl = `${origin}${HARNESS}?entry=${encodeURIComponent(ENTRY)}&res=16&spp=1&backend=raster`;
+    const startUrl = `${origin}${HARNESS}?entry=${encodeURIComponent(values.entry)}&res=16&spp=1&backend=raster`;
     let debugPort;
     const chromePath = process.env.MX_CHROME ?? 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe';
     const launchBrowser = async () => {

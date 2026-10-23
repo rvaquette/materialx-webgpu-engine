@@ -62,6 +62,8 @@ export interface FrameEnvironment {
   intensity?: number;
   /** True when an equirectangular envmap texture backs this environment. */
   hasTexture?: boolean;
+  /** Restores the original HDR range after sampling a normalized half-float texture. */
+  textureRadianceScale?: number;
   /** Equirect envmap width/height and the total luminance sum of its flat CDF, used
    *  by the path tracer's environment importance sampling (absent = cosine fallback). */
   envResX?: number;

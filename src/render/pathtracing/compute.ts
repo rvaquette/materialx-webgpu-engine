@@ -27,8 +27,9 @@ export const PT_WORKGROUP_SIZE = 8;
 export const PT_COMPUTE_ENTRY = 'mx_path_trace';
 /** Floats in the path-trace uniform (PT_UNIFORM_SIZE / 4). Slots 0..39 hold the
  *  camera/light/env/frame blocks; 40..75 hold the 9 RGB SH irradiance coefficients
- *  (one vec4 per coefficient, w unused) the integrator reads for diffuse IBL. */
-export const PT_UNIFORM_FLOATS = 80;
+ *  (one vec4 per coefficient, w unused); 76..79 hold the tile and 80..83 the HDR
+ *  texture radiance scale (x, remaining components unused). */
+export const PT_UNIFORM_FLOATS = 84;
 /** Bytes in the path-trace uniform buffer. */
 export const PT_UNIFORM_SIZE = PT_UNIFORM_FLOATS * 4;
 
@@ -90,6 +91,7 @@ struct Uniforms {
   envExtra : vec4<f32>, // x = envResX, y = envResY, z = envTotalSum, w = hasEnvCdf
   sh : array<vec4<f32>, 9>, // 9 RGB SH9 irradiance coefficients (.xyz), w unused
   tile : vec4<f32>,
+  envTexture : vec4<f32>, // x = half-float texture radiance scale
 };
 
 @group(0) @binding(0) var<uniform> U : Uniforms;
@@ -124,7 +126,7 @@ fn env_dir_to_uv(d : vec3<f32>) -> vec2<f32> {
 fn env_radiance(d : vec3<f32>) -> vec3<f32> {
   if (U.env.w > 0.0) {
     let c = textureSampleLevel(envTex, envSampler, env_dir_to_uv(d), 0.0).xyz;
-    return c * U.env.xyz * U.env.w;
+    return c * U.envTexture.x * U.env.xyz * U.env.w;
   }
   return U.env.xyz;
 }
@@ -177,7 +179,7 @@ fn env_map_pdf_from_uv(uv : vec2<f32>, color : vec3<f32>) -> f32 {
 // Solid-angle PDF the env-importance strategy would assign to direction d (for MIS).
 fn sky_pdf(d : vec3<f32>) -> f32 {
   let uv = env_dir_to_uv(normalize(d));
-  let color = textureSampleLevel(envTex, envSampler, uv, 0.0).xyz;
+  let color = textureSampleLevel(envTex, envSampler, uv, 0.0).xyz * U.envTexture.x;
   return env_map_pdf_from_uv(uv, color);
 }
 // Diffuse irradiance E(n) from the uploaded SH9 radiance coefficients (cosine-lobe
@@ -570,7 +572,7 @@ ${
         let wiW = normalize(env_map_uv_to_dir(uvS));
         let wiLocal = transpose(frame) * wiW;
         if (wiLocal.z > 0.0) {
-          let colS = textureSampleLevel(envTex, envSampler, uvS, 0.0).xyz;
+          let colS = textureSampleLevel(envTex, envSampler, uvS, 0.0).xyz * U.envTexture.x;
           let envPdf = env_map_pdf_from_uv(uvS, colS);
           if (envPdf > 0.0) {
             let shadowE = traverse(pos + wiW * RAY_EPS, wiW, 1.0e30, true);
@@ -791,6 +793,7 @@ export function buildPathTraceUniform(
     }
   }
   d.set(tile ? [tile.x, tile.y, tile.width, tile.height] : [0, 0, width, height], 76);
+  d[80] = env.textureRadianceScale ?? 1;
   return d;
 }
 

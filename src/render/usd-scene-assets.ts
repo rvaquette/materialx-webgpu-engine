@@ -36,6 +36,7 @@ import { lowerPreviewSurfaceMaterials } from '../usd/preview-surface.ts';
 import type { RawMesh, Primvar, PrimvarInterpolation } from '../geometry/prepare.ts';
 import type { MaterialXReference, SceneAsset, ScenePrim } from '../scene/types.ts';
 import type { Diagnostic, DiagnosticSink } from '../core/diagnostics.ts';
+import { loadExternalMeshSource } from '../geometry/external-mesh.ts';
 
 /** App-relative paths also work when dist/ is served below the workspace root. */
 const MATERIALX_ROOT = `${import.meta.env.BASE_URL}materialx/`;
@@ -362,7 +363,7 @@ export async function loadUsdScene(
   const cameras = importCameras(scene, { sink });
   const mtlx = await loadMtlxSceneContext(scene, entry, sink, line);
   const resources = await buildSceneResources(scene, {
-    meshSource: meshSourceFromScene(scene),
+    meshSource: await loadExternalMeshSource(scene, meshSourceFromScene(scene), sink),
     materialCompiler: createGraphMaterialCompiler({ documents: mtlx.documents, sink }),
     sink,
   });

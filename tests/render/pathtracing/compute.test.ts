@@ -336,10 +336,10 @@ describe('pathTraceComputeWgsl texture registry (T057j)', () => {
 describe('buildPathTraceUniform layout', () => {
   it('defaults to a full image and packs an explicit tile after the SH coefficients', () => {
     const full = buildPathTraceUniform(fakeScene(), 0, 1, 512, 512);
-    expect(Array.from(full.slice(76))).toEqual([0, 0, 512, 512]);
+    expect(Array.from(full.slice(76, 80))).toEqual([0, 0, 512, 512]);
     const tile = pathTraceTile(512, 512, 6);
     const tiled = buildPathTraceUniform(fakeScene(), 0, 1, 512, 512, 10, tile);
-    expect(Array.from(tiled.slice(76))).toEqual([256, 128, 128, 128]);
+    expect(Array.from(tiled.slice(76, 80))).toEqual([256, 128, 128, 128]);
     expect(tiled[19]).toBe(10);
   });
 
@@ -367,6 +367,25 @@ describe('buildPathTraceUniform layout', () => {
     expect(u[33]).toBeCloseTo(2);
     expect(u[34]).toBeCloseTo(320);
     expect(u[35]).toBeCloseTo(180);
+    expect(u[80]).toBe(1);
+  });
+
+  it('restores normalized HDR samples without scaling SH or the original-unit CDF', () => {
+    const scene = fakeScene();
+    scene.environment = {
+      radiance: [1, 1, 1], hasTexture: true, intensity: 3,
+      textureRadianceScale: 2, envResX: 2048, envResY: 1024, envTotalSum: 900000,
+      sh: new Float32Array(27).fill(0.5),
+    };
+    const u = buildPathTraceUniform(scene, 0, 1, 256, 256);
+    expect(u[31]).toBe(3);
+    expect(u[38]).toBe(900000);
+    expect(u[40]).toBe(0.5);
+    expect(u[80]).toBe(2);
+    const shader = pathTraceComputeWgsl({ environment: true });
+    expect(shader).toContain('return c * U.envTexture.x * U.env.xyz * U.env.w;');
+    expect(shader).toContain('uv, 0.0).xyz * U.envTexture.x');
+    expect(shader).toContain('uvS, 0.0).xyz * U.envTexture.x');
   });
 });
 

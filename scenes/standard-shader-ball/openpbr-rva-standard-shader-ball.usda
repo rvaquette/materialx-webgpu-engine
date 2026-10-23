@@ -1,0 +1,56 @@
+#usda 1.0
+(
+    defaultPrim = "World"
+    metersPerUnit = 1
+    upAxis = "Y"
+)
+
+# Reconstructed from GLSL-PathTracer-JS/scenes/pathtracer/openpbr_rva_standard_shader_ball.scene.
+# GLTFLoader reads the local ShaderBall.glb and preserves its node transforms.
+# MaterialX assignments are intentionally omitted. Source camera: (-0.05, 1.05, 3.58) -> (-0.05, 1.05, -0.06), fov 45; source render resolution: 1280x720.
+# The source environment and irradiance are retained unchanged; these referenced copies rotate the panorama 90 degrees right.
+def Xform "World" {
+    def Scope "Looks" {
+        def Material "OpenPBRMaterial" {
+            token outputs:surface.connect = </World/Looks/OpenPBRMaterial/Surface.outputs:surface>
+            def Shader "Surface" {
+                uniform token info:id = "UsdPreviewSurface"
+                color3f inputs:diffuseColor = (0.5, 0.5, 0.5)
+                float inputs:roughness = 0.7
+                float inputs:metallic = 0
+                token outputs:surface
+            }
+        }
+    }
+
+    def Xform "Geometry" {
+        rel material:binding = </World/Looks/OpenPBRMaterial>
+        def Mesh "Preview_Mesh" {
+            uniform token subdivisionScheme = "none"
+            custom asset engine:geometry:file = @./openpbr-rva-standard-shader-ball/ShaderBall.glb@
+            custom string engine:geometry:object = "Preview_Mesh"
+        }
+
+        def Mesh "Calibration_Mesh" {
+            uniform token subdivisionScheme = "none"
+            custom asset engine:geometry:file = @./openpbr-rva-standard-shader-ball/ShaderBall.glb@
+            custom string engine:geometry:object = "Calibration_Mesh"
+        }
+    }
+
+    def Camera "RenderCamera" {
+        double3 xformOp:translate = (-0.05, 1.05, 3.58)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        float focalLength = 50
+        float horizontalAperture = 73.637967
+        float verticalAperture = 41.421356
+        float2 clippingRange = (0.01, 1000)
+    }
+
+    def DomeLight "Environment" {
+        token inputs:texture:format = "latlong"
+        asset inputs:texture:file = @./openpbr-rva-standard-shader-ball/HDR/san_giuseppe_bridge_2k_rotate90_right.hdr@
+        asset inputs:texture:irradianceFile = @./openpbr-rva-standard-shader-ball/HDR/irradiance/san_giuseppe_bridge_rotate90_right.hdr@
+        float inputs:intensity = 1
+    }
+}
