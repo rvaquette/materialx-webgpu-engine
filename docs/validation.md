@@ -111,6 +111,17 @@ reprises, le run s'arrête ; `--resume` permet alors de continuer.
 
 ## Arguments des noeuds MaterialX
 
+Le raster intègre les reflets spéculaires depuis la HDR de la scène, avec les
+mêmes coordonnées latlong que le path tracing. Une quadrature déterministe
+combine 64 échantillons BSDF et 64 échantillons de la CDF de luminance avec MIS ;
+elle remplace l'ancien gradient ciel/sol artificiel. La rugosité provient des
+lobes partagés et l'intensité, la teinte et l'échelle HDR sont conservées.
+Le diffus reste éclairé par les SH. Cette approximation sans occlusion des
+reflets ne reproduit pas les rebonds ni les ombres du path tracing.
+Une scène ne contenant qu'une `DomeLight` n'ajoute aucune lumière directionnelle
+implicite : raster et path tracing sont éclairés uniquement par l'environnement.
+Les lumières explicitement présentes dans la scène restent actives.
+
 La couleur `base_color` de `standard_surface` est bornée par composante à
 `[0, 1]` lors de la construction des lobes diffus et conducteurs, sur CPU et GPU.
 Les valeurs intermédiaires du graphe (notamment les sorties de `artistic_ior`)

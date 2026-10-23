@@ -22,6 +22,7 @@ import {
   type SceneDrawCall,
 } from './raster/backend.ts';
 import { createSceneBindGroups, uploadGeometry, type SceneDrawBuffers } from './scene-resources.ts';
+import { buildEnvCdf } from '../assets/environment-cdf.ts';
 import { buildPathTraceScene, type PathTraceScene } from './pathtracing/scene-buffers.ts';
 import { buildPathTraceUniform, pathTraceComputeWgsl, PathTraceBackend, PT_UNIFORM_SIZE } from './pathtracing/compute.ts';
 import { buildMaterialDispatch } from './pathtracing/material-variant.ts';
@@ -356,11 +357,18 @@ export class InteractiveViewer {
     let envTextureView: GPUTextureView | undefined;
     let envSampler: GPUSampler | undefined;
     let envRadianceScale = 1;
+    let envCdfBuffer: GPUBuffer | undefined;
     if (envAsset) {
       const { width: ew, height: eh } = envAsset.image;
       const packed = packHdrTexture(envAsset.image);
       envRadianceScale = packed.radianceScale;
       frame.environment.textureRadianceScale = envRadianceScale;
+      const cdf = buildEnvCdf(envAsset.image);
+      frame.environment.envResX = cdf.width;
+      frame.environment.envResY = cdf.height;
+      frame.environment.envTotalSum = cdf.totalSum;
+      envCdfBuffer = track(device.createBuffer({ size: Math.max(16, cdf.cdf.byteLength), usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST }));
+      device.queue.writeBuffer(envCdfBuffer, 0, cdf.cdf);
       ptScene.environment.textureRadianceScale = envRadianceScale;
       const envTexture = track(device.createTexture({
         size: [ew, eh],
@@ -484,7 +492,7 @@ export class InteractiveViewer {
           material: materialUniform,
           ...(textures ? { textureViews: textures.textureViews, samplers: textures.samplers } : {}),
           ...(displacement ? { displacement } : {}),
-          ...(envTextureView && envSampler ? { environment: { textureView: envTextureView, sampler: envSampler } } : {}),
+          ...(envTextureView && envSampler && envCdfBuffer ? { environment: { textureView: envTextureView, sampler: envSampler, cdf: envCdfBuffer } } : {}),
         },
         (group) => pipeline.getBindGroupLayout(group),
       );

@@ -71,6 +71,15 @@ describe('camera/light/environment derivation', () => {
     const none = environmentFrom([]);
     expect(none.radiance[0]).toBeGreaterThan(0);
   });
+
+  it('does not add a default sun to a dome-only scene', () => {
+    const lights = [
+      { type: 'dome', transform: IDENTITY4, color: [1, 1, 1], intensity: 1, exposure: 0 },
+    ] as unknown as SceneLight[];
+    expect(directionalLightFrom(lights).intensity).toBe(0);
+    expect(environmentFrom(lights).radiance).toEqual([1, 1, 1]);
+    expect(directionalLightFrom([]).intensity).toBe(1);
+  });
 });
 
 describe('buildSceneFrame', () => {
@@ -127,6 +136,17 @@ describe('buildSceneFrameUniform / buildSceneMaterialUniform', () => {
     expect(u[44]).toBeCloseTo(0.1); // environment.r
     expect(u[45]).toBeCloseTo(0.2);
     expect(u[46]).toBeCloseTo(0.3);
+    expect(u[87]).toBe(0);
+  });
+
+  it('packs HDR texture scale, tint and CDF separately from diffuse irradiance', () => {
+    const frame = buildSceneFrame(
+      resources(new Map(), [{ id: '/a', prototypeId: '/pa', primPath: '/a', transform: IDENTITY4, hasGeometry: true }]),
+      { environment: { radiance: [0.1, 0.2, 0.3], tint: [1, 0.5, 0.25], intensity: 2, textureRadianceScale: 4,
+        hasTexture: true, envResX: 16, envResY: 8, envTotalSum: 100 } },
+    );
+    const u = buildSceneFrameUniform(frame, frame.draws[0]!);
+    expect(Array.from(u.slice(84))).toEqual([8, 4, 2, 1, 16, 8, 100, 4]);
   });
 
   it('packs the material block (baseColor, params, coat) at the WGSL offsets', () => {

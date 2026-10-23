@@ -92,14 +92,17 @@ describe('assembleIrForwardShader (T058b)', () => {
     expect(shader.code).not.toContain('traverse(');
   });
 
-  it('reflects a hemisphere environment through a mirror-direction albedo estimate', () => {
+  it('integrates specular HDR reflections with the path tracer latlong convention and MIS', () => {
     const { shader } = forward('open_pbr_surface', [value('base_color', 'color3', '0.2, 0.5, 0.9')]);
     expect(shader.code).toContain('radiance = radiance + mx_closure_diffuse_albedo(c) * (mx_sh_irradiance(n) / MX_PI);');
-    expect(shader.code).toContain('let rWorld = reflect(-vary.viewDir, n);');
-    expect(shader.code).toContain('let envDir = fu.env.xyz * mix(0.25, 1.0, up);');
-    expect(shader.code).toContain('let wiMir = vec3f(-wo.x, -wo.y, wo.z);');
-    expect(shader.code).toContain('let em = mx_closure_specular_eval(c, wo, wiMir);');
-    expect(shader.code).toContain('radiance = radiance + em.value * envDir * (wiMir.z / em.pdf);');
+    expect(shader.code).toContain('atan2(n.z, n.x) * (0.5 / MX_PI) + 0.5');
+    expect(shader.code).toContain('acos(clamp(n.y, -1.0, 1.0)) / MX_PI');
+    expect(shader.code).toContain('textureSampleLevel(forwardEnv, forwardEnvSampler, uv, 0.0).rgb * fu.envMap.xyz');
+    expect(shader.code).toContain('let bs = mx_closure_sample(c, wo, u);');
+    expect(shader.code).toContain('let wi = transpose(sframe) * wiWorld;');
+    expect(shader.code).toContain('let em = mx_closure_specular_eval(c, wo, wi);');
+    expect(shader.code).toContain('mx_forward_env_direction((f32(i) + 0.5) / 64.0)');
+    expect(shader.code).not.toContain('mix(0.25, 1.0, up)');
   });
 
   it('adds the closure emission when present', () => {

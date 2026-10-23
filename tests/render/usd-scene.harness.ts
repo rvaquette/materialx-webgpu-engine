@@ -239,24 +239,7 @@ const PREVIEW_ENV: Vec3 = [0.65, 0.68, 0.72];
 
 /** Build a flat row-major luminance CDF over the equirect HDR, used by the path
  *  tracer's environment importance sampling. Rec.709 luminance, cumulative sum. */
-function buildEnvCdf(image: { width: number; height: number; data: Float32Array | number[] }): {
-  cdf: Float32Array;
-  totalSum: number;
-  width: number;
-  height: number;
-} {
-  const { width, height, data } = image;
-  const n = width * height;
-  const cdf = new Float32Array(n);
-  let running = 0;
-  for (let i = 0; i < n; i += 1) {
-    const o = i * 3;
-    const lum = 0.212671 * (data[o] ?? 0) + 0.71516 * (data[o + 1] ?? 0) + 0.072169 * (data[o + 2] ?? 0);
-    running += Math.max(0, lum);
-    cdf[i] = running;
-  }
-  return { cdf, totalSum: running, width, height };
-}
+import { buildEnvCdf } from '../../src/assets/environment-cdf.ts';
 
 /** Upload the dome envmap as a filterable rgba16float texture shared by the raster
  *  background pass and the path tracer's group 3, plus the luminance CDF storage
@@ -597,6 +580,11 @@ async function renderUsdRasterOnDevice(
   // Dome envmap: upload once, shown as the raster background and reused as IBL fill.
   const envGpu = envAsset ? uploadEnvTexture(device, envAsset) : undefined;
   frame.environment.textureRadianceScale = envGpu?.radianceScale ?? 1;
+  if (envGpu) {
+    frame.environment.envResX = envGpu.cdfStats.width;
+    frame.environment.envResY = envGpu.cdfStats.height;
+    frame.environment.envTotalSum = envGpu.cdfStats.totalSum;
+  }
   const envBg =
     envAsset && envGpu
       ? createEnvBackground(device, backend.hdrFormat, backend.depthFormat, envAsset, envGpu.view, envGpu.sampler, inverse4(frameCamera.viewProj), frameCamera.eye, envGpu.radianceScale)
@@ -788,7 +776,7 @@ async function renderUsdRasterOnDevice(
         material: materialUniform,
         ...(textures ? { textureViews: textures.textureViews, samplers: textures.samplers } : {}),
         ...(displacement ? { displacement } : {}),
-        ...(envGpu ? { environment: { textureView: envGpu.view, sampler: envGpu.sampler } } : {}),
+        ...(envGpu ? { environment: { textureView: envGpu.view, sampler: envGpu.sampler, cdf: envGpu.cdfBuffer } } : {}),
       },
       (group) => pipeline.getBindGroupLayout(group),
     );
@@ -826,7 +814,7 @@ async function renderUsdRasterOnDevice(
           material: materialUniform,
           ...(textures ? { textureViews: textures.textureViews, samplers: textures.samplers } : {}),
           ...(displacement ? { displacement } : {}),
-          ...(envGpu ? { environment: { textureView: envGpu.view, sampler: envGpu.sampler } } : {}),
+          ...(envGpu ? { environment: { textureView: envGpu.view, sampler: envGpu.sampler, cdf: envGpu.cdfBuffer } } : {}),
         },
         (group) => pipeline.getBindGroupLayout(group),
       );

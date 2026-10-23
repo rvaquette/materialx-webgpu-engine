@@ -135,7 +135,7 @@ export function cameraFrom(camera: SceneCamera): FrameCamera {
 export function directionalLightFrom(lights: readonly SceneLight[]): FrameLight {
   const distant = lights.find((l) => l.type === 'distant');
   const chosen = distant ?? lights.find((l) => l.type !== 'dome');
-  if (!chosen) return DEFAULT_LIGHT;
+  if (!chosen) return lights.some((l) => l.type === 'dome') ? { ...DEFAULT_LIGHT, intensity: 0 } : DEFAULT_LIGHT;
   // USD lights emit along local -Z; the travel direction is that axis in world.
   const dir = transformDirection(chosen.transform, [0, 0, -1]);
   return {
@@ -203,7 +203,7 @@ export function buildSceneFrame(resources: SceneResources, options: BuildSceneFr
 }
 
 /** Floats in a scene forward frame uniform (SCENE_FRAME_UNIFORM_SIZE / 4). */
-export const SCENE_FRAME_UNIFORM_FLOATS = 88;
+export const SCENE_FRAME_UNIFORM_FLOATS = 92;
 /** Floats in a scene forward material uniform (SCENE_MATERIAL_UNIFORM_SIZE / 4). */
 export const SCENE_MATERIAL_UNIFORM_FLOATS = 12;
 
@@ -243,6 +243,7 @@ export function buildSceneFrameUniform(frame: SceneFramePlan, draw: SceneDraw): 
   }
   const scale = gain * (env.textureRadianceScale ?? 1);
   d.set([tint[0] * scale, tint[1] * scale, tint[2] * scale, env.hasTexture ? 1 : 0], 84);
+  d.set([env.envResX ?? 0, env.envResY ?? 0, env.envTotalSum ?? 0, env.textureRadianceScale ?? 1], 88);
   return d;
 }
 

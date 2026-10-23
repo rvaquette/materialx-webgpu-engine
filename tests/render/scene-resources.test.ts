@@ -327,6 +327,11 @@ describe('buildSceneResources (T050)', () => {
     const buffers = {
       frame: { id: 'f' } as unknown as GPUBuffer,
       material: { id: 'm' } as unknown as GPUBuffer,
+      environment: {
+        textureView: { id: 'env' } as unknown as GPUTextureView,
+        sampler: { id: 'env-sampler' } as unknown as GPUSampler,
+        cdf: { id: 'env-cdf' } as unknown as GPUBuffer,
+      },
       ...(withDisplacement ? { displacement } : {}),
     };
     const bind = createSceneBindGroups(device, mat, buffers, (g) => {
@@ -342,6 +347,9 @@ describe('buildSceneResources (T050)', () => {
       (descriptor.layout as unknown as { group: number }).group === IR_FORWARD_FRAME_GROUP)!;
     expect([...frameDescriptor.entries]).toEqual([
       { binding: 0, resource: { buffer: buffers.frame } },
+      { binding: 4, resource: buffers.environment.textureView },
+      { binding: 5, resource: buffers.environment.sampler },
+      { binding: 6, resource: { buffer: buffers.environment.cdf } },
       ...(withDisplacement ? [
         { binding: 1, resource: displacement.textureView },
         { binding: 2, resource: displacement.sampler },

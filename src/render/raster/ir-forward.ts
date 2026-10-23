@@ -51,15 +51,44 @@ function frameBlock(): string {
   env: vec4f,
   sh: array<vec4f, 9>,
   envMap: vec4f,
+  envInfo: vec4f,
 };
 @group(${IR_FORWARD_FRAME_GROUP}) @binding(${IR_FORWARD_FRAME_BINDING}) var<uniform> fu: MxFrame;
 @group(${IR_FORWARD_FRAME_GROUP}) @binding(4) var forwardEnv: texture_2d<f32>;
 @group(${IR_FORWARD_FRAME_GROUP}) @binding(5) var forwardEnvSampler: sampler;
+@group(${IR_FORWARD_FRAME_GROUP}) @binding(6) var<storage, read> forwardEnvCdf: array<f32>;
+
+fn mx_forward_uv(d: vec3f) -> vec2f {
+  let n = normalize(d);
+  return vec2f(atan2(n.z, n.x) * (0.5 / MX_PI) + 0.5, acos(clamp(n.y, -1.0, 1.0)) / MX_PI);
+}
+
+fn mx_forward_env_pdf(d: vec3f) -> f32 {
+  if (fu.envMap.w == 0.0 || fu.envInfo.z <= 0.0) { return 0.0; }
+  let uv = mx_forward_uv(d);
+  let color = textureSampleLevel(forwardEnv, forwardEnvSampler, uv, 0.0).rgb * fu.envInfo.w;
+  let lum = dot(color, vec3f(0.212671, 0.715160, 0.072169));
+  return lum * fu.envInfo.x * fu.envInfo.y / (fu.envInfo.z * 2.0 * MX_PI * MX_PI * max(sin(uv.y * MX_PI), 1e-6));
+}
+
+fn mx_forward_env_direction(u: f32) -> vec3f {
+  let width = u32(fu.envInfo.x);
+  var low = 0u;
+  var high = width * u32(fu.envInfo.y) - 1u;
+  loop {
+    if (low >= high) { break; }
+    let mid = (low + high) / 2u;
+    if (u * fu.envInfo.z < forwardEnvCdf[mid]) { high = mid; } else { low = mid + 1u; }
+  }
+  let uv = vec2f(f32(low % width), f32(low / width)) / fu.envInfo.xy;
+  let phi = uv.x * (2.0 * MX_PI);
+  let theta = uv.y * MX_PI;
+  return vec3f(-sin(theta) * cos(phi), cos(theta), -sin(theta) * sin(phi));
+}
 
 fn mx_forward_environment(d: vec3f) -> vec3f {
   if (fu.envMap.w == 0.0) { return fu.env.xyz; }
-  let n = normalize(d);
-  let uv = vec2f(atan2(n.z, n.x) * (0.5 / MX_PI) + 0.5, acos(clamp(n.y, -1.0, 1.0)) / MX_PI);
+  let uv = mx_forward_uv(d);
   return textureSampleLevel(forwardEnv, forwardEnvSampler, uv, 0.0).rgb * fu.envMap.xyz;
 }
 
@@ -190,7 +219,20 @@ fn ${IR_FORWARD_FRAGMENT_ENTRY}(fin: MxVertexOut) -> @location(0) vec4f {
     if (bs.valid && bs.pdf > 0.0) {
       let em = mx_closure_specular_eval(c, wo, bs.wi);
       let envDir = mx_forward_environment(sframe * bs.wi);
-      radiance = radiance + em.value * envDir * (abs(bs.wi.z) / (64.0 * bs.pdf));
+      let envPdf = mx_forward_env_pdf(sframe * bs.wi);
+      let mis = bs.pdf * bs.pdf / max(bs.pdf * bs.pdf + envPdf * envPdf, 1e-20);
+      radiance = radiance + em.value * envDir * (mis * abs(bs.wi.z) / (64.0 * bs.pdf));
+    }
+    if (fu.envMap.w != 0.0 && fu.envInfo.z > 0.0) {
+      let wiWorld = mx_forward_env_direction((f32(i) + 0.5) / 64.0);
+      let wi = transpose(sframe) * wiWorld;
+      let envPdf = mx_forward_env_pdf(wiWorld);
+      if (envPdf > 0.0) {
+        let em = mx_closure_specular_eval(c, wo, wi);
+        let bsdfPdf = mx_closure_eval(c, wo, wi).pdf;
+        let mis = envPdf * envPdf / max(envPdf * envPdf + bsdfPdf * bsdfPdf, 1e-20);
+        radiance = radiance + em.value * mx_forward_environment(wiWorld) * (mis * abs(wi.z) / (64.0 * envPdf));
+      }
     }
   }
 
