@@ -23,8 +23,10 @@ async function stage(body: string) {
 
 function glb(): ArrayBuffer {
   const positions = new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]);
-  const binary = new Uint8Array(36);
+  const uvs = new Float32Array([0, 0.25, 1, 0.25, 0, 1.25]);
+  const binary = new Uint8Array(60);
   binary.set(new Uint8Array(positions.buffer));
+  binary.set(new Uint8Array(uvs.buffer), 36);
   const json = {
     asset: { version: '2.0' },
     scene: 0,
@@ -34,10 +36,13 @@ function glb(): ArrayBuffer {
       { name: 'First', mesh: 0, translation: [0, 2, 0], scale: [2, 1, 1] },
       { name: 'Mirrored', mesh: 0, scale: [-1, 1, 1] },
     ],
-    meshes: [{ primitives: [{ attributes: { POSITION: 0 } }] }],
-    accessors: [{ bufferView: 0, componentType: 5126, count: 3, type: 'VEC3', min: [0, 0, 0], max: [1, 1, 0] }],
-    bufferViews: [{ buffer: 0, byteOffset: 0, byteLength: 36 }],
-    buffers: [{ byteLength: 36 }],
+    meshes: [{ primitives: [{ attributes: { POSITION: 0, TEXCOORD_0: 1 } }] }],
+    accessors: [
+      { bufferView: 0, componentType: 5126, count: 3, type: 'VEC3', min: [0, 0, 0], max: [1, 1, 0] },
+      { bufferView: 1, componentType: 5126, count: 3, type: 'VEC2' },
+    ],
+    bufferViews: [{ buffer: 0, byteOffset: 0, byteLength: 36 }, { buffer: 0, byteOffset: 36, byteLength: 24 }],
+    buffers: [{ byteLength: 60 }],
   };
   const text = new TextEncoder().encode(JSON.stringify(json));
   const jsonLength = Math.ceil(text.length / 4) * 4;
@@ -95,6 +100,21 @@ describe('Three.js external geometry bridge', () => {
     const normals = source.meshFor('/mesh')!.normals!.values;
     expect(normals).toHaveLength(18);
     for (let i = 0; i < normals.length; i++) expect(normals[i]).toBeCloseTo(i % 3 === 2 ? 1 : 0);
+  });
+
+  it('converts GLB UVs once to MaterialX space, preserving tiling and tangent handedness', async () => {
+    const scene = await stage(`def Mesh "a" { asset engine:geometry:file = @objects.glb@ string engine:geometry:object = "First" }
+      def Mesh "b" { asset engine:geometry:file = @objects.glb@ string engine:geometry:object = "First" }`);
+    const read = vi.fn(async () => glb());
+    const source = await loadExternalMeshSource(scene, empty, () => {}, read);
+    expect(read).toHaveBeenCalledTimes(1);
+    for (const path of ['/a', '/b']) {
+      const raw = source.meshFor(path)!;
+      expect(raw.primvars?.[0]?.values).toEqual([0, 0.75, 1, 0.75, 0, -0.25]);
+      const prepared = prepareMesh(raw);
+      expect(Array.from(prepared.uvs!)).toEqual([0, 0.75, 1, 0.75, 0, -0.25]);
+      expect(Array.from(prepared.tangents!)).toEqual([1, 0, 0, -1, 1, 0, 0, -1, 1, 0, 0, -1]);
+    }
   });
 
   it('warns explicitly when merging objects with mixed UV availability', async () => {

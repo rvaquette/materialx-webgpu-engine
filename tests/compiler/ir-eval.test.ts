@@ -3,6 +3,7 @@ import { COLOR3, FLOAT, IrModuleBuilder, vector } from '../../src/compiler/ir.ts
 import { evaluateIrRef, evaluateShaderIr, IrEvalError } from '../../src/compiler/ir-eval.ts';
 import { buildNodeIr } from '../fixtures/node-ir.ts';
 import { NODE_CASES, VARYINGS } from '../fixtures/node-cases.ts';
+import { emitWgsl } from '../../src/compiler/wgsl.ts';
 
 const varyingEnv = {
   position: VARYINGS.position,
@@ -14,6 +15,33 @@ const varyingEnv = {
 };
 
 describe('evaluateShaderIr (T057i2)', () => {
+  it.each([FLOAT, vector(2), vector(3), vector(4)])('defines finite acos results outside the domain for %j', (type) => {
+    const size = type.kind === 'vector' ? type.size : 1;
+    for (const x of [-1.2, -1, -0.5, 0, 0.5, 1, 1.2]) {
+      const b = new IrModuleBuilder();
+      const input = b.constant(type, size === 1 ? x : Array(size).fill(x));
+      const ref = b.add({ kind: 'call', type, op: 'acos', args: [], namedArgs: { in: input } });
+      b.output({ name: 'out', type, ref });
+      const ir = b.build();
+      const expected = Math.abs(x) <= 1 ? Math.acos(x) : 0;
+      expect(evaluateIrRef(ir, ref)).toEqual(Array(size).fill(expected));
+      expect(emitWgsl(ir).code).toContain('acos(clamp(');
+      expect(emitWgsl(ir).code).toContain(`abs(${input}) <=`);
+    }
+  });
+
+  it('keeps the degenerate acos vector4 debug channels finite and red-only', () => {
+    const b = new IrModuleBuilder();
+    const type = vector(4);
+    const input = b.constant(type, [0, -1.2, 0.5, 1.2]);
+    const acos = b.add({ kind: 'call', type, op: 'acos', args: [input] });
+    const magnitude = b.add({ kind: 'call', type, op: 'absval', args: [acos] });
+    const wrapped = b.add({ kind: 'call', type, op: 'fract', args: [magnitude] });
+    const result = evaluateIrRef(b.build(), wrapped);
+    expect(result).toEqual([Math.PI / 2 - 1, 0, Math.acos(0.5) - 1, 0]);
+    expect(result.every(Number.isFinite)).toBe(true);
+  });
+
   it('reproduces the CPU reference for every expr corpus case', () => {
     const exprCases = NODE_CASES.filter((c) => c.exec === 'expr' && c.expected);
     expect(exprCases.length).toBeGreaterThan(10);

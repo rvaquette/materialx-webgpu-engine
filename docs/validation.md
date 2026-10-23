@@ -83,8 +83,10 @@ reussie ne prouve ni la disponibilite des textures ni la fidelite du rendu.
 
 `npm run test:shaderball` rend `scenes/standard-shader-ball/standard-shader-ball.usda`
 sur le mobile (par défaut) ou le GPU local, en raster et en path tracing, via
-`usd-image-harness.html`. `--materials <filtre>|all` ajoute un rendu par fichier
-`.mtlx` de `scenes/mtlx-library` lié à `OpenPBRMaterial`.
+`usd-image-harness.html`. `--materials <filtre>|all` sélectionne les fichiers
+`.mtlx` de `scenes/mtlx-library` liés à `OpenPBRMaterial`.
+Seules ces variantes sont rendues : les cas sans remplacement de matériau
+`scene__raster` et `scene__pathtracing` sont exclus.
 
 ```sh
 npm run test:shaderball
@@ -108,6 +110,15 @@ sont recréés et le cas est retenté une fois. Au-delà de `--max-recoveries` (
 reprises, le run s'arrête ; `--resume` permet alors de continuer.
 
 ## Arguments des noeuds MaterialX
+
+### Domaine de `acos`
+
+Pour une entrée finie hors de `[-1, 1]`, `acos` renvoie explicitement zéro
+par composante, conformément aux canaux noirs des références de tests dégénérés.
+Le comportement GLSL hors domaine n'est pas portable entre pilotes :
+un appel direct peut produire des NaN sur GPU local et des couleurs différentes
+sur mobile. Le WGSL borne l'argument avant l'appel intrinsèque, puis sélectionne
+zéro hors domaine ; l'évaluateur CPU applique la même règle.
 
 Les graphes MaterialX conservent leurs entrees par nom dans `IrExpr.call.namedArgs`.
 Les lowerings WGSL et l'evaluateur CPU lisent ces noms, independamment de l'ordre
@@ -627,4 +638,3 @@ sont rafraîchis avant leurs parents). Il corrige **simultanément** les chemins
 et GPU. Les 787 tests restent verts (`tests/geometry/bvh.test.ts` n'assertait que
 `nodes.length`, l'ordre des triangles et les bornes, jamais l'index racine ; le
 helper de traversée `tests/render/scene-samples.ts` démarre désormais au nœud 0).
-

@@ -158,13 +158,13 @@ async function main() {
   const backends = values.backends.split(',').map((backend) => backend.trim()).filter(Boolean);
   if (backends.length === 0 || backends.some((backend) => !['raster', 'pathtracing'].includes(backend))) throw new Error('--backends accepts raster and/or pathtracing');
 
-  const overrides = [undefined];
+  const overrides = [];
   if (values.materials) {
     const filter = values.materials === 'all' ? '' : values.materials.replaceAll('\\', '/').toLowerCase();
     const library = findMaterials(LIBRARY).map((file) => '/' + relative(ROOT, file).split(sep).join('/'));
     overrides.push(...library.filter((file) => file.toLowerCase().includes(filter)));
-    if (overrides.length === 1) throw new Error(`No .mtlx in scenes/mtlx-library matches '${values.materials}'`);
   }
+  if (overrides.length === 0) throw new Error(`No .mtlx in scenes/mtlx-library matches '${values.materials}'`);
   const cases = overrides.flatMap((override) => backends.map((backend) => ({ backend, override })));
   if (values.list) {
     for (const item of cases) console.log(caseName(item.override, item.backend));

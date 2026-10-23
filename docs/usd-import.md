@@ -19,7 +19,10 @@ descendants. Without it, all triangle meshes in the default GLB scene or OBJ are
 merged. Asset paths resolve relative to the authoring USDA layer, including
 sublayers. Each asset is fetched/parsed once per scene load. GLB node/parent
 transforms are baked into the selected geometry; USD transforms are then applied
-normally. Normals and UVs are preserved; negative-determinant transforms reverse
+normally. Normals are preserved. GLB UVs are converted from glTF's top-left
+origin to USD/MaterialX's bottom-left origin (`v = 1 - v`) before tangent
+generation and upload to either renderer; OBJ and inline USD UVs are unchanged.
+UVs outside the unit square retain their tiling. Negative-determinant transforms reverse
 triangle winding. OBJ polygons are triangulated by Three.js.
 Missing normals are generated per mesh. Merging objects with mixed UV
 availability omits UVs and emits a warning; select individual objects to retain

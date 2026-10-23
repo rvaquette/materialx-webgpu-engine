@@ -770,7 +770,12 @@ const LOWERINGS: readonly NodeLowering[] = [
   expr('cos', fn1('cos')),
   expr('tan', fn1('tan')),
   expr('asin', fn1('asin')),
-  expr('acos', fn1('acos')),
+  expr('acos', (inp, type, ctx) => {
+    const input = inp.named('in', undefined, 0);
+    const t = ctx.wgslType(type);
+    // Out-of-domain GLSL results vary by driver; use the reference's zero channels.
+    return `select(${t}(0.0), acos(clamp(${input}, ${t}(-1.0), ${t}(1.0))), abs(${input}) <= ${t}(1.0))`;
+  }),
   expr('atan2', (inp) => `atan2(${inp.named('iny')}, ${inp.named('inx')})`),
   expr('exp', fn1('exp')),
   expr('floor', fn1('floor')),

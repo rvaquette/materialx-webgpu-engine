@@ -413,7 +413,7 @@ function evalCall(op: string, args: IrValue[], env: IrEvalVaryings, type: IrType
     case 'asin':
       return unary(input('in', 0), Math.asin);
     case 'acos':
-      return unary(input('in', 0), Math.acos);
+      return unary(input('in', 0), (x) => Math.abs(x) <= 1 ? Math.acos(x) : 0);
     case 'exp':
       return unary(input('in', 0), Math.exp);
     case 'floor':

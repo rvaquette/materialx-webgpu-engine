@@ -22,9 +22,9 @@ async function fetchGeometry(uri: string): Promise<ArrayBuffer> {
   return response.arrayBuffer();
 }
 
-async function parseGeometry(bytes: ArrayBuffer, uri: string): Promise<Object3D> {
+async function parseGeometry(bytes: ArrayBuffer, uri: string): Promise<{ root: Object3D; flipV: boolean }> {
   const extension = new URL(uri, 'http://scene.local/').pathname.split('.').at(-1)?.toLowerCase();
-  if (extension === 'obj') return new OBJLoader().parse(new TextDecoder().decode(bytes));
+  if (extension === 'obj') return { root: new OBJLoader().parse(new TextDecoder().decode(bytes)), flipV: false };
   if (extension === 'glb') {
     // Geometry only: do not fetch or decode glTF materials/textures. USD owns shading.
     const loader = new GLTFLoader();
@@ -33,12 +33,12 @@ async function parseGeometry(bytes: ArrayBuffer, uri: string): Promise<Object3D>
       name: 'EngineGeometryOnly',
       loadMaterial: () => Promise.resolve(material),
     }));
-    return (await loader.parseAsync(bytes, uri.slice(0, uri.lastIndexOf('/') + 1))).scene;
+    return { root: (await loader.parseAsync(bytes, uri.slice(0, uri.lastIndexOf('/') + 1))).scene, flipV: true };
   }
   throw new Error(`Unsupported geometry format: ${uri} (expected .glb or .obj)`);
 }
 
-function extractMesh(root: Object3D, objectName: string | undefined, sink: DiagnosticSink): RawMesh {
+function extractMesh(root: Object3D, objectName: string | undefined, sink: DiagnosticSink, flipV: boolean): RawMesh {
   root.updateMatrixWorld(true);
   let selected = root;
   if (objectName) {
@@ -86,7 +86,8 @@ function extractMesh(root: Object3D, objectName: string | undefined, sink: Diagn
       if (hasUvs) {
         const u = uv.getX(i), v = uv.getY(i);
         if (!Number.isFinite(u) || !Number.isFinite(v)) throw new Error(`Invalid UV in ${mesh.name}`);
-        uvs.push(u, v);
+        // glTF's top-left UV origin must become USD/MaterialX's bottom-left origin.
+        uvs.push(u, flipV ? 1 - v : v);
       }
     }
     const count = geometry.index?.count ?? position.count;
@@ -115,7 +116,7 @@ export async function loadExternalMeshSource(
   sink: DiagnosticSink,
   read: GeometryReader = fetchGeometry,
 ): Promise<MeshSource> {
-  const files = new Map<string, Promise<Object3D>>();
+  const files = new Map<string, ReturnType<typeof parseGeometry>>();
   const meshes = new Map<string, RawMesh>();
   for (const [path, prim] of scene.prims) {
     const attribute = prim.attributes.get('engine:geometry:file');
@@ -131,7 +132,8 @@ export async function loadExternalMeshSource(
         file = read(uri).then((bytes) => parseGeometry(bytes, uri));
         files.set(uri, file);
       }
-      meshes.set(path, extractMesh(await file, objectName, sink));
+      const { root, flipV } = await file;
+      meshes.set(path, extractMesh(root, objectName, sink, flipV));
     } catch (cause) {
       const message = `Failed to load geometry for ${path}: ${String(cause)}`;
       sink({ level: 'error', message });
