@@ -16,6 +16,10 @@ import type { SceneCamera } from '../../../src/usd/cameras.ts';
 import type { SceneLight } from '../../../src/usd/lights.ts';
 import { IDENTITY4 } from '../../../src/scene/transforms.ts';
 import type { ResolvedSurface } from '../../../src/materialx/surface-graph.ts';
+import { resolveSurface } from '../../../src/materialx/surface-graph.ts';
+import type { ResolvedGraph } from '../../../src/materialx/graph.ts';
+import featureTransmissionXml from '../../../scenes/mtlx-library/surfaces/gltf_pbr/feature_transmission/feature_transmission.mtlx?raw';
+import featureDispersionXml from '../../../scenes/mtlx-library/surfaces/gltf_pbr/feature_dispersion/feature_dispersion.mtlx?raw';
 
 function material(passKind: 'opaque' | 'transmission'): MaterialResource {
   return {
@@ -84,6 +88,54 @@ describe('camera/light/environment derivation', () => {
 });
 
 describe('buildSceneFrame', () => {
+  it.each([featureTransmissionXml, featureDispersionXml])(
+    'keeps a default-metallic glTF feature in the depth-writing opaque pass',
+    (xml) => {
+      const inputs = [...xml.matchAll(/<input name="([^"]+)" type="([^"]+)" value="([^"]+)"\s*\/>/g)]
+        .map((match) => ({
+          name: match[1]!, type: match[2]!,
+          source: { kind: 'value' as const, type: match[2]!, value: match[3]! },
+          provenance: { namePath: `/SR/${match[1]!}` },
+        }));
+      const graph: ResolvedGraph = {
+        terminals: [{ name: 'surfaceshader', type: 'surfaceshader', nodeId: 'SR', provenance: { namePath: '/SR' } }],
+        nodes: new Map([['SR', { id: 'SR', category: 'gltf_pbr', type: 'surfaceshader', inputs, provenance: { namePath: '/SR' } }]]),
+      };
+      const resolvedSurface = resolveSurface(graph);
+      expect(resolvedSurface).not.toBeNull();
+      const mat = { ...material('transmission'), resolvedSurface: resolvedSurface! };
+      const frame = buildSceneFrame(resources(new Map([['mat', mat]]), [
+        { id: '/a', primPath: '/a', prototypeId: '/pa', materialKey: 'mat', hasGeometry: true, transform: IDENTITY4 },
+      ]), { surfaceFor: () => ({ ...NEUTRAL_SURFACE, metalness: 1, transmission: 1 }) });
+      expect(frame.draws[0]!.pass).toBe('opaque');
+      expect(frame.passes).toEqual(['opaque']);
+    },
+  );
+
+  it.each([
+    [1, 0, false, 'opaque'],
+    [0, 0, false, 'transmission'],
+    [0.5, 0, false, 'transmission'],
+    [1, 2, false, 'transmission'],
+    [1, 0, true, 'transmission'],
+  ] as const)('routes metal=%s alpha mode=%s connected metal=%s to %s', (metal, mode, connected, pass) => {
+    const resolvedSurface: ResolvedSurface = {
+      family: 'gltf_pbr', nodeId: 'SR',
+      inputs: new Map([
+        ['metallic', { name: 'metallic', type: 'float', source: connected
+          ? { kind: 'connection', nodeId: 'metal' } : { kind: 'value', value: [metal] } }],
+        ['transmission', { name: 'transmission', type: 'float', source: { kind: 'value', value: [1] } }],
+        ['alpha_mode', { name: 'alpha_mode', type: 'integer', source: { kind: 'value', value: [mode] } }],
+        ['alpha', { name: 'alpha', type: 'float', source: { kind: 'value', value: [0.5] } }],
+      ]),
+    };
+    const mat = { ...material('transmission'), resolvedSurface };
+    const frame = buildSceneFrame(resources(new Map([['mat', mat]]), [
+      { id: '/a', primPath: '/a', prototypeId: '/pa', materialKey: 'mat', hasGeometry: true, transform: IDENTITY4 },
+    ]), { surfaceFor: () => ({ ...NEUTRAL_SURFACE, metalness: metal, transmission: 1 }) });
+    expect(frame.draws[0]!.pass).toBe(pass);
+  });
+
   it.each([
     [0, false, 'opaque'],
     [1, true, 'masked'],

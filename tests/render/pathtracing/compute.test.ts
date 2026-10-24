@@ -513,6 +513,37 @@ describe('PathTraceBackend', () => {
     expect(backend.advanceFrame()).toBe(0);
     expect(backend.advanceTile(128, 128)).toEqual({ tile: pathTraceTile(128, 128, 0), frameIndex: 1 });
   });
+
+  it.each([[256, 256], [17, 13], [3, 2]])(
+    'preserves all 16 samples per pixel and full-frame uniforms when tiled at %ix%i',
+    (width, height) => {
+      const { device } = mockDevice();
+      const backend = new PathTraceBackend(device);
+      const scene = fakeScene();
+      const samples = 16;
+      const visits = new Uint8Array(width * height * samples);
+      for (let f = 0; f < samples; f++) {
+        const full = buildPathTraceUniform(scene, f, 1, width, height, 10);
+        let tiles = 0;
+        while (backend.frameIndex === f) {
+          const { tile, frameIndex } = backend.advanceTile(width, height);
+          expect(frameIndex).toBe(f);
+          const tiled = buildPathTraceUniform(scene, frameIndex, 1, width, height, 10, tile);
+          expect(tiled.slice(0, 76)).toEqual(full.slice(0, 76));
+          expect(tiled.slice(80)).toEqual(full.slice(80));
+          for (let y = tile.y; y < tile.y + tile.height; y++) {
+            for (let x = tile.x; x < tile.x + tile.width; x++) {
+              visits[(f * height + y) * width + x]! += 1;
+            }
+          }
+          tiles++;
+        }
+        expect(tiles).toBe(16);
+      }
+      expect(backend.frameIndex).toBe(samples);
+      expect(visits.every((count) => count === 1)).toBe(true);
+    },
+  );
 });
 
 describe('path-tracing tiles', () => {
@@ -539,6 +570,7 @@ describe('path-tracing tiles', () => {
     expect(src).toContain('if (gid.x >= u32(U.tile.z) || gid.y >= u32(U.tile.w)) { return; }');
     expect(src).toContain('let pixelCoord = gid.xy + vec2<u32>(U.tile.xy);');
     expect(src).toContain('let pixel = pixelCoord.y * width + pixelCoord.x;');
+    expect(src).toContain('var state = pcg_hash(pixel + 0x9e3779b9u * (frameIndex + 1u));');
     expect(src).toContain('camera_ray(vec2<f32>(pixelCoord), dims, jitter)');
   });
 });

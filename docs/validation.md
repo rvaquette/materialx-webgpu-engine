@@ -114,6 +114,22 @@ déclenche une reprise automatique : Chrome ou l'onglet est relancé, les tunnel
 sont recréés et le cas est retenté une fois. Au-delà de `--max-recoveries` (20)
 reprises, le run s'arrête ; `--resume` permet alors de continuer.
 
+Le harness path tracing utilise le meme decoupage 4x4 que le viewer, avec attente
+de fin GPU entre les tuiles. Chaque pixel conserve son indice global, sa graine
+aleatoire et tous ses echantillons ; le compteur de samples n'avance qu'apres
+les 16 tuiles. Il ne s'agit ni d'une reduction de resolution ni d'une diminution
+du nombre de rebonds ou des tests de visibilite alpha. L'ancien dispatch
+plein cadre provoquait une perte du device mobile (`VK_ERROR_DEVICE_LOST`)
+avec `surfaces/gltf_pbr/gltf_pbr_sweep_alpha_0_75`, meme a 256x256 et 16 spp.
+Le controle suivant a reussi avec le decoupage, sans modifier le materiau :
+
+```sh
+node scripts/run-shaderball-renders.mjs --entry /scenes/standard-shader-ball/openpbr-rva-standard-shader-ball.usda --target mobile --materials /surfaces/gltf_pbr/gltf_pbr_sweep_alpha_0_75 --backends pathtracing --out-dir renders/shaderball-alpha-075-validation
+```
+
+Ce succes valide la stabilite et la production du PNG, pas la conformite
+visuelle complete ; le rendu path trace a 16 spp reste bruite.
+
 ## Arguments des noeuds MaterialX
 
 Les noeuds `tiledimage` appliquent `((texcoord * uvtiling - uvoffset) /
@@ -189,6 +205,21 @@ Ne pas confondre les deux materiaux suivants lors de la comparaison :
 Les materiaux et les references restent inchanges. La dispersion ne doit pas
 servir a modifier la rugosite ou a activer la transmission d'un metal.
 
+La provenance de la reference `feature_dispersion` a ete verifiee par SHA-256 :
+le fichier `surfaces__gltf_pbr__feature_dispersion__feature_dispersion__ref.avif`
+est identique a `beauty/blender-eevee-nodes.avif` dans la bibliotheque
+`material-samples/materials/surfaces/gltf_pbr/feature_dispersion`
+(`9201c9162736385ad20cdb1b8537e5d0e77572c103d9dcaf8460572fb0f9275e`).
+Ce n'est donc pas le rendu `materialx-glsl` du meme dossier. Le fichier auteur
+est identique a celui embarque dans le moteur. L'aspect depoli/translucide de
+cette reference ne suffit pas a justifier un changement des poids MaterialX :
+la conversion Blender et ses valeurs implicites restent a verifier avant de
+revendiquer une parite de modele ou de changer les valeurs par defaut.
+Decision de validation : conserver la semantique MaterialX stricte et signaler
+cette reference comme incompatible pour le critere de transmission. Le moteur
+doit donc rester opaque pour ce fichier (metallic implicite = 1) ; ne pas
+ajouter d'alpha ou de transmission forcee pour imiter le rendu Eevee.
+
 ```sh
 node scripts/run-shaderball-renders.mjs --entry /scenes/standard-shader-ball/openpbr-rva-standard-shader-ball.usda --target mobile --materials /surfaces/gltf_pbr/feature_dispersion --spp 64 --out-dir renders/shaderball-feature-dispersion-validation
 node scripts/run-shaderball-renders.mjs --entry /scenes/standard-shader-ball/openpbr-rva-standard-shader-ball.usda --target mobile --materials /showcase/gltf_pbr/glass_dispersion --spp 64 --out-dir renders/shaderball-dispersion-validation
@@ -197,8 +228,10 @@ node scripts/run-shaderball-renders.mjs --entry /scenes/standard-shader-ball/ope
 Ces controles a 64 spp sont distincts de la commande standard a 16 spp.
 Les deux cas de chaque commande ont produit des images sur mobile sans crash.
 Cela ne valide pas leur fidelite : la comparaison de `feature_dispersion` montre
-encore des aplats raster et une teinte path tracee trop grise/bleue par rapport
-aux reflets chauds et doux de sa reference. Ce cas reste non conforme.
+une teinte trop grise/bleue par rapport aux reflets chauds et doux de sa reference.
+Cet ecart visuel reste ouvert ;
+la reference Eevee est incompatible comme oracle de transmission, selon la
+decision de conserver la semantique MaterialX stricte.
 Le verre dispersif presente aussi un bruit chromatique important a 64 spp ;
 le raster reste limite a une interface. Les entrees de volume non reconnues
 (`thickness`, `attenuation_distance`, `attenuation_color`) du showcase sont
@@ -210,6 +243,29 @@ avec entree, sortie, dispersion nulle et feuille mince pour les trois canaux.
 La tolerance absolue est `2e-5`. Ils ont reussi sur le mobile R5CW900CHQD,
 ainsi que les 24 cas de parite de quadrature cites plus haut.
 Ces preuves numeriques ne remplacent pas la comparaison visuelle.
+
+### Routage raster des metaux sans transmission effective
+
+Un metal constant a 1 annule la transmission dielectrique. Il doit donc rester
+dans la passe opaque avec ecriture de profondeur, meme si l'entree auteur
+`transmission` vaut 1 ou si l'analyse conservative marque une passe transmissive.
+La passe sans ecriture de profondeur laissait des triangles arriere ecraser les
+faces visibles de `feature_transmission` et `feature_dispersion` : grands aplats
+et contours internes incorrects, reproduits sur GPU mobile et local.
+Le choix de passe tient maintenant compte du metal constant resolu pour les
+familles de surface. Une metalness connectee conserve le routage conservatif ;
+une vraie couverture alpha BLEND et le mode MASK gardent leurs passes respectives.
+Le BSDF, les valeurs par defaut MaterialX et les fichiers auteur sont inchanges.
+
+```sh
+node scripts/run-shaderball-renders.mjs --entry /scenes/standard-shader-ball/openpbr-rva-standard-shader-ball.usda --target mobile --materials /surfaces/gltf_pbr/feature_transmission --backends raster --out-dir renders/shaderball-transmission-validation
+```
+
+Le rendu mobile 256x256 ne presente plus les grands aplats. Le meme controle
+raster de `feature_dispersion` retablit les gradients et l'occultation des faces.
+Le vrai verre `showcase/gltf_pbr/glass_dispersion` reste refractif et se rend
+sans perte du device. Ces controles ne prouvent pas la parite visuelle complete
+avec les references.
 
 ## Couverture alpha glTF
 

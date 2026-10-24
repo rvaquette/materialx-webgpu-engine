@@ -1195,8 +1195,6 @@ async function renderUsdOnDevice(
           ],
         })
       : undefined;
-  const [wgX, wgY] = PathTraceBackend.workgroupCount(res, res);
-
   // GPU height-map displacement pre-pass (runs once, before accumulation): a
   // compute shader rewrites the packed vertex buffer in place -- each triangle
   // vertex is pushed along its shading normal by (height - midpoint) * scale,
@@ -1264,22 +1262,26 @@ async function renderUsdOnDevice(
   device.pushErrorScope('validation');
   const batch = 8;
   for (let f = 0; f < samples; f++) {
-    const frameIndex = backend.advanceFrame();
-    device.queue.writeBuffer(uniform, 0, buildPathTraceUniform(ptScene, frameIndex, 1, res, res, fireflyClamp));
-    const encoder = device.createCommandEncoder();
-    const compute = encoder.beginComputePass();
-    compute.setPipeline(pipeline);
-    compute.setBindGroup(0, group0);
-    if (group1) compute.setBindGroup(1, group1);
-    if (group2) compute.setBindGroup(2, group2);
-    if (ptEnvGroup) compute.setBindGroup(3, ptEnvGroup);
-    compute.dispatchWorkgroups(wgX, wgY, 1);
-    compute.end();
-    device.queue.submit([encoder.finish()]);
-    // Flush each batch so a GPU hang/TDR is localized instead of silently
-    // stalling the whole accumulation behind one trailing onSubmittedWorkDone.
-    if ((f + 1) % batch === 0 || f === samples - 1) {
+    // Match the viewer's tiled dispatch: full-image alpha/shadow work can exceed
+    // the mobile watchdog budget even for a single sample.
+    while (backend.frameIndex === f) {
+      const { tile, frameIndex } = backend.advanceTile(res, res);
+      if (tile.width === 0 || tile.height === 0) { continue; }
+      const [wgX, wgY] = PathTraceBackend.workgroupCount(tile.width, tile.height);
+      device.queue.writeBuffer(uniform, 0, buildPathTraceUniform(ptScene, frameIndex, 1, res, res, fireflyClamp, tile));
+      const encoder = device.createCommandEncoder();
+      const compute = encoder.beginComputePass();
+      compute.setPipeline(pipeline);
+      compute.setBindGroup(0, group0);
+      if (group1) compute.setBindGroup(1, group1);
+      if (group2) compute.setBindGroup(2, group2);
+      if (ptEnvGroup) compute.setBindGroup(3, ptEnvGroup);
+      compute.dispatchWorkgroups(wgX, wgY, 1);
+      compute.end();
+      device.queue.submit([encoder.finish()]);
       await device.queue.onSubmittedWorkDone();
+    }
+    if ((f + 1) % batch === 0 || f === samples - 1) {
       line(`diag pt frame ${f + 1}/${samples} @ ${(performance.now() - renderStart).toFixed(0)} ms`);
     }
   }

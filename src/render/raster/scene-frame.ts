@@ -156,8 +156,17 @@ export function environmentFrom(lights: readonly SceneLight[]): FrameEnvironment
 
 /** Routes a draw to the transmission pass when its material transmits. */
 function passFor(material: MaterialResource | undefined, surface: RasterSurface): ScenePassKind {
-  const transmits = material?.features.passes.some((p) => p.kind === 'transmission') ?? false;
   const resolved = material?.resolvedSurface;
+  const metalName = resolved?.family === 'open_pbr_surface' ? 'base_metalness'
+    : resolved?.family === 'standard_surface' ? 'metalness' : 'metallic';
+  const metalSource = resolved?.inputs.get(metalName)?.source;
+  const metalness = metalSource?.kind === 'value' || metalSource?.kind === 'default'
+    ? metalSource.value[0] : metalSource === undefined ? surface.metalness : undefined;
+  // A constant full metal has no dielectric transmission, even when the authored
+  // transmission input (or conservative feature flag) is nonzero.
+  const fullyMetallic = metalness !== undefined && metalness >= 1;
+  const transmits = !fullyMetallic
+    && (material?.features.passes.some((p) => p.kind === 'transmission') ?? false);
   const alphaName = resolved?.family === 'gltf_pbr' ? 'alpha'
     : resolved?.family === 'open_pbr_surface' ? 'geometry_opacity' : 'opacity';
   const modeSource = resolved?.inputs.get('alpha_mode')?.source;
@@ -171,7 +180,7 @@ function passFor(material: MaterialResource | undefined, surface: RasterSurface)
       && (modeSource?.kind === 'value' || modeSource?.kind === 'default')
       && modeSource.value[0] === 0);
   const transparent = resolved !== undefined && (alphaConnected || surfaceGraphToLayered(resolved).opacity < 1);
-  return transmits || transparent || surface.transmission > 0 ? 'transmission' : 'opaque';
+  return transmits || transparent || (!fullyMetallic && surface.transmission > 0) ? 'transmission' : 'opaque';
 }
 
 /**
