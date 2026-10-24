@@ -146,6 +146,72 @@ fn mx_forward_smooth_sheet(c: LayeredClosure, wo: vec3f, frame: mat3x3f) -> vec3
   return radiance;
 }
 
+fn mx_forward_single_dielectric(c: LayeredClosure) -> i32 {
+  if (c.hasCoat != 0u && c.coat.weight > 0.0) { return -1; }
+  if (c.hasFuzz != 0u && c.fuzz.weight > 0.0) { return -1; }
+  if (c.hasThinFilm != 0u && c.thinFilm.weight > 0.0 && c.thinFilm.thickness > 0.0) { return -1; }
+  var index = -1;
+  for (var i = 0u; i < c.lobeCount; i++) {
+    let l = c.lobes[i];
+    if (l.weight <= 0.0) { continue; }
+    if (index >= 0 || (l.kind != MX_LOBE_DIELECTRIC_TRANSMISSION
+        && l.kind != MX_LOBE_DIELECTRIC_REFLECTION
+        && l.kind != MX_LOBE_CONDUCTOR && l.kind != MX_LOBE_GENERALIZED_SCHLICK)) { return -1; }
+    index = i32(i);
+  }
+  return index;
+}
+
+// A single specular lobe can be sampled directly; transmission includes both
+// reflection and refraction. Avoid re-evaluating the entire layered stack at
+// every quadrature sample, which can exhaust the mobile fragment budget.
+fn mx_forward_dielectric_environment(l: MxBsdfLobe, wo: vec3f, frame: mat3x3f) -> vec3f {
+  let ctx = mx_closure_lobe_ctx(l, wo);
+  let deltaSpecular = (l.kind == MX_LOBE_DIELECTRIC_REFLECTION
+    || l.kind == MX_LOBE_DIELECTRIC_TRANSMISSION) && l.roughness < 0.07;
+  var radiance = vec3f(0.0);
+  for (var i = 0u; i < 64u; i++) {
+    let u = vec3f((f32(i) + 0.5) / 64.0,
+      f32(reverseBits(i)) * 2.3283064365386963e-10,
+      fract((f32(i) + 0.5) * 0.61803398875));
+    var bs: MxBsdfSample;
+    if (l.kind == MX_LOBE_DIELECTRIC_REFLECTION) {
+      bs = mx_dielectric_reflection_sample(ctx, u.xy);
+    } else if (l.kind == MX_LOBE_CONDUCTOR || l.kind == MX_LOBE_GENERALIZED_SCHLICK) {
+      bs = mx_conductor_sample(ctx, u.xy);
+    } else {
+      bs = mx_dielectric_transmission_sample(ctx, u);
+    }
+    if (bs.valid && bs.pdf > 0.0) {
+      let envDir = mx_forward_environment(frame * bs.wi);
+      var mis = 1.0;
+      if (!deltaSpecular) {
+        let envPdf = mx_forward_env_pdf(frame * bs.wi);
+        mis = bs.pdf * bs.pdf / max(bs.pdf * bs.pdf + envPdf * envPdf, 1e-20);
+      }
+      radiance = radiance + l.weight * bs.value * envDir * (mis * abs(bs.wi.z) / (64.0 * bs.pdf));
+    }
+    if (!deltaSpecular && fu.envMap.w != 0.0 && fu.envInfo.z > 0.0) {
+      let wiWorld = mx_forward_env_direction((f32(i) + 0.5) / 64.0);
+      let wi = transpose(frame) * wiWorld;
+      let envPdf = mx_forward_env_pdf(wiWorld);
+      if (envPdf > 0.0) {
+        var em: MxBsdfEval;
+        if (l.kind == MX_LOBE_DIELECTRIC_REFLECTION) {
+          em = mx_dielectric_reflection_eval(ctx, wi);
+        } else if (l.kind == MX_LOBE_CONDUCTOR || l.kind == MX_LOBE_GENERALIZED_SCHLICK) {
+          em = mx_conductor_eval(ctx, wi);
+        } else {
+          em = mx_dielectric_transmission_eval(ctx, wi);
+        }
+        let mis = envPdf * envPdf / max(envPdf * envPdf + em.pdf * em.pdf, 1e-20);
+        radiance = radiance + l.weight * em.value * mx_forward_environment(wiWorld) * (mis * abs(wi.z) / (64.0 * envPdf));
+      }
+    }
+  }
+  return radiance;
+}
+
 // Diffuse irradiance E(n) from the uploaded SH9 radiance coefficients (cosine-lobe
 // convolution A_l). Basis matches projectIrradianceSH on the CPU and mx_sh_irradiance
 // in the path tracer so raster and path-traced diffuse IBL agree.
@@ -260,10 +326,26 @@ fn ${IR_FORWARD_FRAGMENT_ENTRY}(fin: MxVertexOut) -> @location(0) vec4f {
   vary.viewDir = normalize(fin.viewDir);
   vary.texcoord = fin.texcoord;${primvarAssigns ? '\n' + primvarAssigns : ''}
   let c = ${surfaceEntry}(vary);
-  let n = vary.normal;
+  if (c.opacity <= 0.0) { discard; }
+  let authoredNormal = mx_closure_shading_normal(c, vary.normal);
+  let n = mx_closure_oriented_normal(c, authoredNormal, vary.viewDir);
   let sframe = basis(n);
   let wo = transpose(sframe) * vary.viewDir;
 
+  var radiance = vec3f(0.0);
+  if (mx_closure_has_dispersion(c)) {
+    for (var channel = 0u; channel < 3u; channel++) {
+      let spectral = mx_closure_spectral_channel(c, channel);
+      let light = mx_forward_lighting(spectral, n, wo, sframe);
+      radiance[channel] = light[channel];
+    }
+  } else {
+    radiance = mx_forward_lighting(c, n, wo, sframe);
+  }
+  return vec4f(radiance, clamp(c.opacity, 0.0, 1.0));
+}
+
+fn mx_forward_lighting(c: LayeredClosure, n: vec3f, wo: vec3f, sframe: mat3x3f) -> vec3f {
   // Direct next-event term for the distant (delta) light: a delta direction has
   // no BSDF-sampling counterpart, mirroring the delta light in compute.ts. Raster
   // omits the shadow ray (no occlusion test in the forward pass).
@@ -281,8 +363,11 @@ fn ${IR_FORWARD_FRAGMENT_ENTRY}(fin: MxVertexOut) -> @location(0) vec4f {
   // Deterministic BSDF quadrature of the actual dome; diffuse stays in SH above.
   let spec = mx_forward_specular_closure(c);
   let deltaSpecular = mx_closure_is_specular(spec);
+  let dielectricIndex = mx_forward_single_dielectric(spec);
   if (mx_forward_is_smooth_sheet(spec)) {
     radiance = radiance + mx_forward_smooth_sheet(spec, wo, sframe);
+  } else if (dielectricIndex >= 0) {
+    radiance = radiance + mx_forward_dielectric_environment(spec.lobes[u32(dielectricIndex)], wo, sframe);
   } else {
     for (var i = 0u; i < 64u; i++) {
       let u = vec3f((f32(i) + 0.5) / 64.0,
@@ -312,7 +397,7 @@ fn ${IR_FORWARD_FRAGMENT_ENTRY}(fin: MxVertexOut) -> @location(0) vec4f {
   }
 
   if (c.hasEmission != 0u) { radiance = radiance + c.emission; }
-  return vec4f(radiance, 1.0);
+  return radiance;
 }`;
 }
 

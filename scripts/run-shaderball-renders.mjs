@@ -238,12 +238,13 @@ async function main() {
     };
     const listPages = () => fetch(`http://127.0.0.1:${debugPort}/json/list`).then((response) => response.json()).catch(() => []);
     const attach = async () => {
-      let page = (await listPages()).find((entry) => entry.type === 'page' && entry.url?.includes(HARNESS));
+      const isHarnessPage = (entry) => entry.type === 'page' && entry.url?.startsWith(`${origin}${HARNESS}`);
+      let page = (await listPages()).find(isHarnessPage);
       if (!page) {
         log('harness tab missing; reopening it');
         if (values.target === 'mobile') await adb('shell', 'am', 'start', '-W', '-a', 'android.intent.action.VIEW', '-d', `'${startUrl}'`, 'com.android.chrome');
         else await fetch(`http://127.0.0.1:${debugPort}/json/new?${encodeURIComponent(startUrl)}`, { method: 'PUT' });
-        page = await waitFor(async () => (await listPages()).find((entry) => entry.type === 'page' && entry.url?.includes(HARNESS)),
+        page = await waitFor(async () => (await listPages()).find(isHarnessPage),
           'harness tab (keep the phone unlocked)', 60000);
       }
       cdp?.socket.close();

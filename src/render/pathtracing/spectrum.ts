@@ -11,6 +11,11 @@ import type { Vec3 } from '../../scene/transforms.ts';
 export const LAMBDA_MIN = 360;
 export const LAMBDA_MAX = 830;
 
+/** KHR_materials_dispersion RGB approximation (R/G/B = 0/1/2). */
+export function dispersionIor(ior: number, dispersion: number, channel: 0 | 1 | 2): number {
+  return Math.max(1, ior + (channel - 1) * (ior - 1) * 0.025 * Math.max(dispersion, 0));
+}
+
 function lobe(x: number, alpha: number, mu: number, sigma1: number, sigma2: number): number {
   const t = (x - mu) * (x < mu ? 1 / sigma1 : 1 / sigma2);
   return alpha * Math.exp(-0.5 * t * t);

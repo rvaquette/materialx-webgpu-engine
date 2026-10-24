@@ -13,7 +13,7 @@ import type {
   ResolvedValueSource,
 } from '../../src/materialx/graph.ts';
 import { resolveSurface } from '../../src/materialx/surface-graph.ts';
-import { emitLayeredSurface } from '../../src/compiler/surface-wgsl.ts';
+import { emitLayeredSurface, emitSurfaceVariant } from '../../src/compiler/surface-wgsl.ts';
 import type { Diagnostic } from '../../src/core/diagnostics.ts';
 
 function value(name: string, type: string, raw: string, colorSpace?: string): ResolvedInput {
@@ -55,6 +55,70 @@ function emit(graph: ResolvedGraph, sink?: (d: Diagnostic) => void) {
 }
 
 describe('emitLayeredSurface (T055d)', () => {
+  it.each([
+    ['gltf_pbr', 'dispersion'],
+    ['standard_surface', 'transmission_dispersion'],
+    ['open_pbr_surface', 'transmission_dispersion_scale'],
+  ])('retains connected %s dispersion in the transmission lobe', (family, name) => {
+    const mod = emit(surfaceGraph(family, [conn(name, 'float', 'dispersion')],
+      [upstream('dispersion', 'constant', 'float', [value('value', 'float', '0.35')])]));
+    expect(mod.code).toContain('dispersion: f32');
+    expect(mod.code).toMatch(/MxBsdfLobe\(MX_LOBE_DIELECTRIC_TRANSMISSION,[^\n]*e\d+[^\n]*\);/);
+    expect(mod.code).toContain('0.35');
+  });
+  it('retains glTF alpha mode, alpha and connected cutoff in the opacity expression', () => {
+    const mod = emit(surfaceGraph('gltf_pbr', [
+      value('alpha_mode', 'integer', '1'),
+      value('alpha', 'float', '0.35'),
+      conn('alpha_cutoff', 'float', 'cutoff'),
+    ], [upstream('cutoff', 'constant', 'float', [value('value', 'float', '0.6')])]));
+    expect(mod.code).toMatch(/c\.opacity = select\(select\(clamp\(e\d+, 0\.0, 1\.0\), select\(0\.0, 1\.0, clamp\(e\d+, 0\.0, 1\.0\) >= e\d+\), e\d+ == 1\), 1\.0, e\d+ == 0\);/);
+    expect(mod.code).toContain('0.35');
+    expect(mod.code).toContain('0.6');
+  });
+
+  it.each([
+    ['standard_surface', 'normal'],
+    ['open_pbr_surface', 'geometry_normal'],
+  ])('keeps the connected %s normal map in raster and path-tracer material functions', (family, normalName) => {
+    const graph = surfaceGraph(family!, [conn(normalName!, 'vector3', 'normal')], [
+      upstream('normal', 'normalmap', 'vector3', [conn('in', 'vector3', 'tex')]),
+      upstream('tex', 'tiledimage', 'vector3', [
+        value('file', 'filename', 'brick_normal.jpg'),
+        value('uvtiling', 'vector2', '3, 3'),
+      ]),
+    ]);
+    const resolved = resolveSurface(graph)!;
+    const raster = emitLayeredSurface(graph, resolved);
+    const pathtracer = emitSurfaceVariant(graph, resolved, 0);
+    for (const code of [raster.code, pathtracer.fnCode]) {
+      expect(code).toContain('c.hasShadingNormal = 1u;');
+      expect(code).toMatch(/c\.shadingNormal = e\d+;/);
+      expect(code).toContain('mx_normalmap(');
+    }
+    expect(raster.textures).toHaveLength(1);
+    expect(pathtracer.textures).toHaveLength(1);
+    expect(raster.code).toContain('textureSample(');
+    expect(pathtracer.fnCode).toContain('textureSampleLevel(');
+  });
+
+  it('leaves unconnected geometric normals unchanged', () => {
+    const mod = emit(surfaceGraph('standard_surface', []));
+    expect(mod.code).not.toContain('c.hasShadingNormal = 1u;');
+    expect(mod.code).not.toContain('c.shadingNormal =');
+    expect(mod.textures).toHaveLength(0);
+  });
+
+  it('orients exposed opaque backfaces without reversing a solid glass interface', () => {
+    const code = emit(surfaceGraph('gltf_pbr', [])).code;
+    const start = code.indexOf('fn mx_closure_oriented_normal(');
+    const end = code.indexOf('fn mx_closure_base_eval(', start);
+    const helper = code.slice(start, end);
+    expect(helper).toContain('if (dot(n, viewDir) >= 0.0) { return n; }');
+    expect(helper).toContain('l.weight > 0.0 && l.kind == MX_LOBE_DIELECTRIC_TRANSMISSION && l.thin == 0.0');
+    expect(helper).toContain('return -n;');
+  });
+
   it('declares the LayeredClosure struct and the fill function', () => {
     const mod = emit(surfaceGraph('standard_surface', [value('base_color', 'color3', '0.8, 0.1, 0.1')]));
     expect(mod.entryPoint).toBe('mx_surface_layered');

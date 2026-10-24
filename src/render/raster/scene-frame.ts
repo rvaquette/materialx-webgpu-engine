@@ -16,6 +16,7 @@ import type { MaterialResource, SceneResources } from '../scene-resources.ts';
 import type { SceneCamera } from '../../usd/cameras.ts';
 import type { SceneLight } from '../../usd/lights.ts';
 import { multiply4, transformDirection, type Mat4, type Vec3 } from '../../scene/transforms.ts';
+import { surfaceGraphToLayered } from '../../compiler/surface-lower.ts';
 
 /** OpenPBR surface constants consumed by the analytic raster fragment shader. */
 export interface RasterSurface {
@@ -156,7 +157,21 @@ export function environmentFrom(lights: readonly SceneLight[]): FrameEnvironment
 /** Routes a draw to the transmission pass when its material transmits. */
 function passFor(material: MaterialResource | undefined, surface: RasterSurface): ScenePassKind {
   const transmits = material?.features.passes.some((p) => p.kind === 'transmission') ?? false;
-  return transmits || surface.transmission > 0 ? 'transmission' : 'opaque';
+  const resolved = material?.resolvedSurface;
+  const alphaName = resolved?.family === 'gltf_pbr' ? 'alpha'
+    : resolved?.family === 'open_pbr_surface' ? 'geometry_opacity' : 'opacity';
+  const modeSource = resolved?.inputs.get('alpha_mode')?.source;
+  if (resolved?.family === 'gltf_pbr'
+      && (modeSource?.kind === 'value' || modeSource?.kind === 'default')
+      && modeSource.value[0] === 1) {
+    return 'masked';
+  }
+  const alphaConnected = resolved?.inputs.get(alphaName)?.source.kind === 'connection'
+    && !(resolved.family === 'gltf_pbr'
+      && (modeSource?.kind === 'value' || modeSource?.kind === 'default')
+      && modeSource.value[0] === 0);
+  const transparent = resolved !== undefined && (alphaConnected || surfaceGraphToLayered(resolved).opacity < 1);
+  return transmits || transparent || surface.transmission > 0 ? 'transmission' : 'opaque';
 }
 
 /**
@@ -173,6 +188,7 @@ export function buildSceneFrame(resources: SceneResources, options: BuildSceneFr
   const draws: SceneDraw[] = [];
   const skipped: string[] = [];
   let hasOpaque = false;
+  let hasMasked = false;
   let hasTransmission = false;
 
   for (const inst of resources.instances) {
@@ -184,6 +200,7 @@ export function buildSceneFrame(resources: SceneResources, options: BuildSceneFr
     const surface = material ? surfaceFor(material) : NEUTRAL_SURFACE;
     const pass = passFor(material, surface);
     if (pass === 'transmission') hasTransmission = true;
+    else if (pass === 'masked') hasMasked = true;
     else hasOpaque = true;
     draws.push({
       instanceId: inst.id,
@@ -197,6 +214,7 @@ export function buildSceneFrame(resources: SceneResources, options: BuildSceneFr
 
   const passes: ScenePassKind[] = [];
   if (hasOpaque) passes.push('opaque');
+  if (hasMasked) passes.push('masked');
   if (hasTransmission) passes.push('transmission');
 
   return { camera, light, environment, draws, passes, skipped };

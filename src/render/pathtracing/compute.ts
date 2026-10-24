@@ -459,6 +459,27 @@ fn surface_hit_normal(h : Hit) -> vec3<f32> {
 }
 ${texHelpers}
 
+fn mx_hit_closure(hit: Hit, pos: vec3f, rd: vec3f) -> LayeredClosure {
+  let n = surface_hit_normal(hit);
+${closureBuild}
+  return c;
+}
+
+fn mx_alpha_visibility(origin: vec3f, direction: vec3f) -> f32 {
+  var ro = origin;
+  var visibility = 1.0;
+  for (var layer = 0u; layer < 128u; layer++) {
+    let hit = traverse(ro, direction, 1.0e30, false);
+    if (!hit.hitAny) { return visibility; }
+    let pos = ro + direction * hit.t;
+    let c = mx_hit_closure(hit, pos, direction);
+    visibility = visibility * (1.0 - clamp(c.opacity, 0.0, 1.0));
+    if (visibility <= 0.0) { return 0.0; }
+    ro = pos + direction * RAY_EPS;
+  }
+  return 0.0;
+}
+
 fn integrate(ro0 : vec3<f32>, rd0 : vec3<f32>, state : ptr<function, u32>) -> vec3<f32> {
   var radiance = vec3<f32>(0.0);
   var beta = vec3<f32>(1.0);
@@ -477,6 +498,8 @@ fn integrate(ro0 : vec3<f32>, rd0 : vec3<f32>, state : ptr<function, u32>) -> ve
   // Active interior medium (entered through a transmissive/subsurface interface).
   var inMedium = false;
   var medium : MxMedium;
+  // Select once, at the first dispersive interface, and reuse at every bounce.
+  var spectralChannel = 3u;
 
   for (var bounce = 0; bounce < 64; bounce = bounce + 1) {
     let hit = traverse(ro, rd, 1.0e30, false);
@@ -507,18 +530,16 @@ fn integrate(ro0 : vec3<f32>, rd0 : vec3<f32>, state : ptr<function, u32>) -> ve
     }
     if (!hit.hitAny) {
       // Environment reached by BSDF sampling; MIS-weight it against the env
-      // next-event strategy unless the previous bounce was specular. With the SH
-      // irradiance probe active (textured env), diffuse bounces already got the
-      // environment analytically, so only specular bounces add the miss here.
+      // next-event strategy unless the previous bounce was specular. Only the
+      // separate fuzz/SH path has an analytically integrated environment term.
       if (hasEnv) {
 ${
         environment
           ? /* wgsl */ `        if (specularBounce) {
           radiance = radiance + beta * ${envMiss};
         } else if (splitFuzzEnvironment || !diffuseBounce) {
-          // Glossy reflection reaching the environment: the SH probe only covers
-          // the diffuse lobes, so this glossy miss is MIS-weighted against the
-          // specular env NEE (restores metal/coat reflections).
+          // Full diffuse/glossy transport, or the residual glossy response when
+          // the preceding surface used the separate fuzz/SH integration.
           var envPdf = max(dot(lastN, rd), 0.0) / PI;
           if (U.envExtra.w > 0.5) { envPdf = sky_pdf(rd); }
           let w = power_heuristic(1.0, bsdfPdf, 1.0, envPdf);
@@ -537,9 +558,27 @@ ${
       break;
     }
     let pos = ro + rd * hit.t;
-    let n = surface_hit_normal(hit);
+    let geometricNormal = surface_hit_normal(hit);
+    let n = geometricNormal;
 ${closureBuild}
-    let frame = basis(n);
+    let opacity = clamp(c.opacity, 0.0, 1.0);
+    // Null events preserve throughput, MIS state and direction; alpha is
+    // coverage, not coloured transmission or a refractive interface.
+    if (opacity <= 0.0 || (opacity < 1.0 && rng_next(state) >= opacity)) {
+      ro = pos + rd * RAY_EPS;
+      continue;
+    }
+    if (mx_closure_has_dispersion(c) && spectralChannel == 3u) {
+      spectralChannel = min(u32(rng_next(state) * 3.0), 2u);
+      var channelWeight = vec3f(0.0);
+      channelWeight[spectralChannel] = 3.0;
+      beta = beta * channelWeight;
+      environmentBeta = environmentBeta * channelWeight;
+    }
+    if (spectralChannel < 3u) { c = mx_closure_spectral_channel(c, spectralChannel); }
+    let authoredNormal = mx_closure_shading_normal(c, geometricNormal);
+    let shadingNormal = mx_closure_oriented_normal(c, authoredNormal, -rd);
+    let frame = basis(shadingNormal);
     let wo = transpose(frame) * (-rd);
 
     // Emitters have no NEE counterpart here, so add their radiance at full weight.
@@ -553,24 +592,25 @@ ${closureBuild}
     // Next-event estimation for the distant (delta) light: a delta direction has
     // no BSDF-sampling counterpart, so its MIS weight is 1 (no power heuristic).
     if (!specular) {
-      let shadow = traverse(pos + toLight * RAY_EPS, toLight, 1.0e30, true);
-      if (!shadow.hitAny) {
+      let visibility = mx_alpha_visibility(pos + toLight * RAY_EPS, toLight);
+      if (visibility > 0.0) {
         let wiLight = transpose(frame) * toLight;
         let ev = mx_closure_eval(c, wo, wiLight);
-        let cosL = abs(dot(n, toLight));
-        radiance = radiance + beta * ev.value * lightRadiance * cosL;
+        let cosL = abs(dot(shadingNormal, toLight));
+        radiance = radiance + beta * ev.value * lightRadiance * (cosL * visibility);
       }
     }
 
-    // Environment next-event estimation. The diffuse part is read analytically
-    // from the SH9 irradiance probe (noise-free); only the glossy/coat specular
-    // lobes keep HDR importance sampling (reflets du vernis), MIS-weighted.
+    // Diffuse illumination must test visibility too. Retain the separate SH/LTC
+    // integration only for the existing fuzz path.
     if (hasEnv && !specular) {
 ${
       environment
-        ? /* wgsl */ `      // Diffuse IBL from the SH probe, scaled by the dome tint/intensity.
-      let diffE = mx_sh_irradiance(n) * U.env.xyz * U.env.w;
-      radiance = radiance + beta * mx_closure_diffuse_albedo(c, wo) * (diffE / PI);
+        ? /* wgsl */ `      let shFuzz = c.hasFuzz != 0u && c.fuzz.weight > 0.0;
+      if (shFuzz) {
+        let diffE = mx_sh_irradiance(shadingNormal) * U.env.xyz * U.env.w;
+        radiance = radiance + beta * mx_closure_diffuse_albedo(c, wo) * (diffE / PI);
+      }
       if (U.envExtra.w > 0.5) {
         // Importance-sample the HDR by its luminance CDF (unbiased, low variance).
         let uvS = env_map_binary_search(rng_next(state) * max(U.envExtra.z, 1.0e-6));
@@ -580,11 +620,13 @@ ${
           let colS = textureSampleLevel(envTex, envSampler, uvS, 0.0).xyz * U.envTexture.x;
           let envPdf = env_map_pdf_from_uv(uvS, colS);
           if (envPdf > 0.0) {
-            let shadowE = traverse(pos + wiW * RAY_EPS, wiW, 1.0e30, true);
-            if (!shadowE.hitAny) {
-              let ev = mx_closure_specular_eval(c, wo, wiLocal);
+            let visibility = mx_alpha_visibility(pos + wiW * RAY_EPS, wiW);
+            if (visibility > 0.0) {
+              var ev: MxBsdfEval;
+              if (shFuzz) { ev = mx_closure_specular_eval(c, wo, wiLocal); }
+              else { ev = mx_closure_eval(c, wo, wiLocal); }
               let w = power_heuristic(1.0, envPdf, 1.0, ev.pdf);
-              radiance = radiance + beta * ev.value * (colS * U.env.xyz * U.env.w) * (w * wiLocal.z / envPdf);
+              radiance = radiance + beta * ev.value * (colS * U.env.xyz * U.env.w) * (w * wiLocal.z * visibility / envPdf);
             }
           }
         }
@@ -594,11 +636,13 @@ ${
         let envPdf = wiLocal.z / PI;
         if (envPdf > 0.0) {
           let wiW = frame * wiLocal;
-          let shadowE = traverse(pos + wiW * RAY_EPS, wiW, 1.0e30, true);
-          if (!shadowE.hitAny) {
-            let ev = mx_closure_specular_eval(c, wo, wiLocal);
+          let visibility = mx_alpha_visibility(pos + wiW * RAY_EPS, wiW);
+          if (visibility > 0.0) {
+            var ev: MxBsdfEval;
+            if (shFuzz) { ev = mx_closure_specular_eval(c, wo, wiLocal); }
+            else { ev = mx_closure_eval(c, wo, wiLocal); }
             let w = power_heuristic(1.0, envPdf, 1.0, ev.pdf);
-            radiance = radiance + beta * ev.value * ${envNee} * (w * wiLocal.z / envPdf);
+            radiance = radiance + beta * ev.value * ${envNee} * (w * wiLocal.z * visibility / envPdf);
           }
         }
       }`
@@ -607,11 +651,11 @@ ${
       let envPdf = wiLocal.z / PI;
       if (envPdf > 0.0) {
         let wiW = frame * wiLocal;
-        let shadowE = traverse(pos + wiW * RAY_EPS, wiW, 1.0e30, true);
-        if (!shadowE.hitAny) {
+        let visibility = mx_alpha_visibility(pos + wiW * RAY_EPS, wiW);
+        if (visibility > 0.0) {
           let ev = mx_closure_eval(c, wo, wiLocal);
           let w = power_heuristic(1.0, envPdf, 1.0, ev.pdf);
-          radiance = radiance + beta * ev.value * ${envNee} * (w * wiLocal.z / envPdf);
+          radiance = radiance + beta * ev.value * ${envNee} * (w * wiLocal.z * visibility / envPdf);
         }
       }`
     }
@@ -621,7 +665,7 @@ ${
     let bs = mx_closure_sample(c, wo, u);
     if (!bs.valid || bs.pdf <= 0.0) { break; }
     let wiWorld = frame * bs.wi;
-    let cosS = abs(dot(n, wiWorld));
+    let cosS = abs(dot(shadingNormal, wiWorld));
     splitFuzzEnvironment = false;
 ${
       environment
@@ -637,8 +681,8 @@ ${
     beta = beta * bs.value * cosS / bs.pdf;
     bsdfPdf = bs.pdf;
     specularBounce = specular;
-    diffuseBounce = mx_closure_sampled_is_diffuse(c, wo, u.z);
-    lastN = n;
+    diffuseBounce = splitFuzzEnvironment && mx_closure_sampled_is_diffuse(c, wo, u.z);
+    lastN = shadingNormal;
     ro = pos + wiWorld * RAY_EPS;
     rd = wiWorld;
 

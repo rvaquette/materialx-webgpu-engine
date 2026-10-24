@@ -13,7 +13,7 @@
 
 import type { Vec3 } from '../../scene/transforms.ts';
 import type { CoatLayer, LayeredBsdfLobe, LayeredClosure, ThinFilmLayer } from '../../compiler/ir.ts';
-import { thinFilmTint } from './spectrum.ts';
+import { dispersionIor, thinFilmTint } from './spectrum.ts';
 
 const PI = Math.PI;
 const INV_PI = 1 / Math.PI;
@@ -437,7 +437,7 @@ export function fuzzDirectionalAlbedo(cosView: number, roughness: number): numbe
   const mean = r * (-0.193854 + r * (-1.14885 + r * (1.7932 - 0.95943 * r * r))) / (0.046391 + r);
   const offset = r * (0.000654023 + r * (-0.0207818 + 0.119681 * r)) / (1.26264 + r * (-1.92021 + r));
   const z = (clamp01(cosView) - mean) / sigma;
-  return Math.exp(-0.5 * z * z) / (sigma * Math.sqrt(2 * PI)) + offset;
+  return clamp01(Math.exp(-0.5 * z * z) / (sigma * Math.sqrt(2 * PI)) + offset);
 }
 
 /** Zeltner LTC sheen: the normalized transformed cosine is its sampling PDF. */
@@ -633,7 +633,7 @@ export function composeLobes(input: readonly WeightedLobe[]): Lobe {
   return {
     eval: (wo, wi) => combinedEval(wo as V, wi as V),
     sample(wo, rng) {
-      if (total <= 0 || (wo as V)[2] <= 0) return null;
+      if (total <= 0 || (wo as V)[2] === 0) return null;
       let pick = rng() * total;
       let chosen = entries[entries.length - 1]!;
       for (const e of entries) {
@@ -820,11 +820,14 @@ function fuzzOverBase(fuzz: NonNullable<LayeredClosure['fuzz']>, base: Lobe): Lo
  * film, so it reproduces surfaceBsdf exactly -- the non-regression anchor for the
  * layered model.
  */
-export function layeredSurfaceBsdf(closure: LayeredClosure): Lobe {
+export function layeredSurfaceBsdf(closure: LayeredClosure, channel: 0 | 1 | 2 = 1): Lobe {
   const film = closure.thinFilm;
   const entries: WeightedLobe[] = [];
   for (const l of closure.lobes) {
-    const lobe = lobeFromLayered(l, film);
+    const spectral = l.kind === 'dielectric_transmission' && !l.thinWalled && (l.dispersion ?? 0) > 0
+      ? { ...l, ior: dispersionIor(l.ior ?? 1.5, l.dispersion ?? 0, channel) }
+      : l;
+    const lobe = lobeFromLayered(spectral, film);
     if (lobe) entries.push({ weight: l.weight, lobe });
   }
   if (closure.sheen && closure.sheen.weight > 0) {

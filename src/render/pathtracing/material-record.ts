@@ -19,7 +19,7 @@ import type {
 export const PT_MAX_LOBES = 8;
 
 /** f32 stride of one packed lobe (kind, weight, flags, color, color90, scalars, extinction, medium). */
-export const PT_LOBE_FLOATS = 23;
+export const PT_LOBE_FLOATS = 24;
 
 /** f32 count of the per-material header that precedes the lobe array. */
 export const PT_MATERIAL_HEADER_FLOATS = 29;
@@ -66,6 +66,7 @@ const LOBE_HAS_EXTINCTION = 32;
 const LOBE_THIN_WALLED = 64;
 const LOBE_HAS_ATTENUATION = 128;
 const LOBE_HAS_SUBSURFACE_RADIUS = 256;
+const LOBE_HAS_DISPERSION = 512;
 
 function rd(buf: ArrayLike<number>, i: number): number {
   return buf[i] ?? 0;
@@ -82,6 +83,7 @@ function writeLobe(out: Float32Array, base: number, lobe: LayeredBsdfLobe): void
   if (lobe.thinWalled === true) flags |= LOBE_THIN_WALLED;
   if (lobe.attenuationColor !== undefined && lobe.attenuationDistance !== undefined) flags |= LOBE_HAS_ATTENUATION;
   if (lobe.subsurfaceRadius !== undefined) flags |= LOBE_HAS_SUBSURFACE_RADIUS;
+  if (lobe.dispersion !== undefined) flags |= LOBE_HAS_DISPERSION;
 
   out[base] = KIND_TO_U32[lobe.kind];
   out[base + 1] = lobe.weight;
@@ -110,6 +112,7 @@ function writeLobe(out: Float32Array, base: number, lobe: LayeredBsdfLobe): void
   out[base + 20] = radius[0];
   out[base + 21] = radius[1];
   out[base + 22] = radius[2];
+  out[base + 23] = lobe.dispersion ?? 0;
 }
 
 function readLobe(buf: ArrayLike<number>, base: number): LayeredBsdfLobe {
@@ -118,6 +121,7 @@ function readLobe(buf: ArrayLike<number>, base: number): LayeredBsdfLobe {
   const flags = Math.round(rd(buf, base + 2));
   const color: Rgb = [rd(buf, base + 3), rd(buf, base + 4), rd(buf, base + 5)];
   const lobe: LayeredBsdfLobe = { kind, weight: rd(buf, base + 1), color };
+  if ((flags & LOBE_HAS_DISPERSION) !== 0) lobe.dispersion = rd(buf, base + 23);
   if ((flags & LOBE_HAS_COLOR90) !== 0) {
     lobe.color90 = [rd(buf, base + 6), rd(buf, base + 7), rd(buf, base + 8)];
   }
@@ -285,6 +289,7 @@ fn mx_material_lobe(base : u32) -> MxBsdfLobe {
     lobe.extinction = vec3f(0.0, 0.0, 0.0);
   }
   lobe.thin = select(0.0, 1.0, (flags & MX_LOBE_THIN_WALLED) != 0u);
+  lobe.dispersion = materials[base + 23u];
   return lobe;
 }
 fn mx_material_closure(matIndex : u32) -> LayeredClosure {

@@ -327,6 +327,8 @@ export interface LayeredBsdfLobe {
   rotation?: number;
   /** Index of refraction for the dielectric reflection/transmission lobe. */
   ior?: number;
+  /** RGB dispersion strength: IOR half-spread = (ior - 1) * 0.025 * dispersion. */
+  dispersion?: number;
   /** Conductor extinction coefficient k (per channel). */
   extinction?: Rgb;
   /** Thin-walled transmission: straight-through, no refraction bending. */

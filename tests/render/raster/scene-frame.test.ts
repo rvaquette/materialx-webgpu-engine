@@ -15,6 +15,7 @@ import type { MaterialResource, SceneResources } from '../../../src/render/scene
 import type { SceneCamera } from '../../../src/usd/cameras.ts';
 import type { SceneLight } from '../../../src/usd/lights.ts';
 import { IDENTITY4 } from '../../../src/scene/transforms.ts';
+import type { ResolvedSurface } from '../../../src/materialx/surface-graph.ts';
 
 function material(passKind: 'opaque' | 'transmission'): MaterialResource {
   return {
@@ -83,6 +84,29 @@ describe('camera/light/environment derivation', () => {
 });
 
 describe('buildSceneFrame', () => {
+  it.each([
+    [0, false, 'opaque'],
+    [1, true, 'masked'],
+    [1, false, 'masked'],
+    [2, false, 'transmission'],
+    [0, true, 'opaque'],
+  ] as const)('routes alpha mode %s (connected alpha=%s) to %s', (mode, connected, pass) => {
+    const resolvedSurface: ResolvedSurface = {
+      family: 'gltf_pbr',
+      nodeId: 'SR',
+      inputs: new Map([
+        ['alpha_mode', { name: 'alpha_mode', type: 'integer', source: { kind: 'value', value: [mode] } }],
+        ['alpha', { name: 'alpha', type: 'float', source: connected
+          ? { kind: 'connection', nodeId: 'alpha' } : { kind: 'value', value: [0.35] } }],
+      ]),
+    };
+    const mat = { ...material('opaque'), resolvedSurface };
+    const frame = buildSceneFrame(resources(new Map([['mat', mat]]), [
+      { id: '/a', primPath: '/a', prototypeId: '/pa', materialKey: 'mat', hasGeometry: true, transform: IDENTITY4 },
+    ]));
+    expect(frame.draws[0]!.pass).toBe(pass);
+  });
+
   const instances: SceneResources['instances'] = [
     { id: '/a', prototypeId: '/pa', primPath: '/a', transform: IDENTITY4, hasGeometry: true, materialKey: 'mat-opaque' },
     { id: '/b', prototypeId: '/pb', primPath: '/b', transform: IDENTITY4, hasGeometry: true, materialKey: 'mat-transmission' },

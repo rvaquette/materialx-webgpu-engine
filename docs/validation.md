@@ -116,6 +116,19 @@ reprises, le run s'arrête ; `--resume` permet alors de continuer.
 
 ## Arguments des noeuds MaterialX
 
+Les noeuds `tiledimage` appliquent `((texcoord * uvtiling - uvoffset) /
+realworldimagesize) * realworldtilesize`, puis la conversion V vers l'espace
+image, avec adressage periodique sur les deux axes. Les parametres connectes
+et les valeurs NodeDef restent actifs pour les sorties couleur, float et
+normale. Brick procedural demande notamment `uvtiling = (3, 3)` : l'ignorer
+produit des briques trois fois trop grandes. Les tests de `surface-ir` verifient
+les coordonnees numeriques et l'emission raster/compute du meme sous-graphe.
+Les normales connectees des surfaces MaterialX sont conservees dans la fermeture
+WGSL, puis utilisees pour le repere BSDF et l'irradiance dans les deux backends.
+La normale geometrique reste le repli des surfaces sans normale connectee.
+Le graphe `normalmap` de Brick et sa texture ne doivent pas etre elimines comme
+des expressions inutilisees lors de l'emission de la surface.
+
 Pour le verre refractif, orienter le demi-vecteur de reflexion vers le rayon
 incident, pas toujours vers +Z. Sinon les reflexions internes (dont la reflexion
 totale) sont rejetees avec une PDF nulle et les trajets deviennent noirs.
@@ -132,6 +145,134 @@ Cela evite la perte du GPU mobile observee a 256x256 dans la passe verre
 avec la double quadrature, sans reduire la resolution ou le nombre d'echantillons.
 Le raster reste une approximation a une interface ; il ne reproduit pas les
 refractions successives du path tracer.
+
+Les fermetures speculaires avec un seul lobe dielectrique actif utilisent
+directement `mx_dielectric_transmission_sample/eval` dans la quadrature raster.
+Le lobe contient deja les branches Fresnel de reflexion et de refraction :
+repasser par le dispatch de toute la fermeture a chaque echantillon est inutile
+et provoquait `VK_ERROR_DEVICE_LOST` sur le mobile avec `glass_tinted`
+(rugosite 0.15). Les 64 echantillons, les deux strategies d'environnement,
+leurs PDF, les poids MIS et le poids auteur du lobe sont conserves.
+Les fermetures multicouches ou multilobes gardent la voie generale ; la voie
+analytique des feuilles strictement lisses reste prioritaire.
+`tests/fixtures/single-dielectric-probe.ts` expose
+`runSingleDielectricProbe(device, code)` : 24 cas couvrent le
+selecteur et la parite avec la quadrature complete (verre teinte, poids partiel,
+vue interieure, reflexion totale, feuille mince, plusieurs rugosites et rejets
+des couches/melanges, ainsi que la reflexion dielectrique seule isotrope et
+anisotrope, et quatre cas conducteur/Schlick). La tolerance absolue est `2e-5` ;
+sur les 24 cas, l'ecart maximal observe
+sur le mobile R5CW900CHQD est `4.77e-7`. Les 12 cas de feuille lisse et les
+3 cas de reflexion du verre restent valides.
+
+## Dispersion et aspect rugueux
+
+La dispersion utilise une approximation RGB de `KHR_materials_dispersion` :
+`halfSpread = (ior - 1) * 0.025 * dispersion`. Les trois IOR sont
+`ior - halfSpread`, `ior`, `ior + halfSpread`, bornes a 1 au minimum.
+Le parametre Abbe de standard_surface est converti en `20 / Abbe` lorsqu'il
+est positif ; OpenPBR applique aussi son facteur de dispersion.
+Le raster evalue trois fermetures et conserve le canal correspondant de chacune.
+Le path tracer choisit un canal au premier verre dispersif, compense son poids
+par 3 et conserve ce canal aux interfaces suivantes. Les trajets sans dispersion,
+les feuilles minces et les conducteurs sans transmission active ne passent pas
+par cette selection. Ce modele n'est pas un transport spectral continu.
+
+Ne pas confondre les deux materiaux suivants lors de la comparaison :
+
+- `surfaces/gltf_pbr/feature_dispersion` omet metallic et roughness ; leurs
+  valeurs par defaut sont toutes deux 1. Sa reference est mate. La transmission
+  auteur vaut 1, mais son poids effectif est nul avec metallic = 1.
+- `showcase/gltf_pbr/glass_dispersion` declare metallic = 0 et roughness = 0.02 :
+  c'est un verre lisse, pas un substitut pour valider la reference precedente.
+
+Les materiaux et les references restent inchanges. La dispersion ne doit pas
+servir a modifier la rugosite ou a activer la transmission d'un metal.
+
+```sh
+node scripts/run-shaderball-renders.mjs --entry /scenes/standard-shader-ball/openpbr-rva-standard-shader-ball.usda --target mobile --materials /surfaces/gltf_pbr/feature_dispersion --spp 64 --out-dir renders/shaderball-feature-dispersion-validation
+node scripts/run-shaderball-renders.mjs --entry /scenes/standard-shader-ball/openpbr-rva-standard-shader-ball.usda --target mobile --materials /showcase/gltf_pbr/glass_dispersion --spp 64 --out-dir renders/shaderball-dispersion-validation
+```
+
+Ces controles a 64 spp sont distincts de la commande standard a 16 spp.
+Les deux cas de chaque commande ont produit des images sur mobile sans crash.
+Cela ne valide pas leur fidelite : la comparaison de `feature_dispersion` montre
+encore des aplats raster et une teinte path tracee trop grise/bleue par rapport
+aux reflets chauds et doux de sa reference. Ce cas reste non conforme.
+Le verre dispersif presente aussi un bruit chromatique important a 64 spp ;
+le raster reste limite a une interface. Les entrees de volume non reconnues
+(`thickness`, `attenuation_distance`, `attenuation_color`) du showcase sont
+signalees par les diagnostics et leur effet n'est pas valide.
+
+`tests/fixtures/dispersion-probe.ts` expose `runDispersionProbe(device)` :
+15 cas WebGPU confrontent les directions a Snell et a la reflexion totale,
+avec entree, sortie, dispersion nulle et feuille mince pour les trois canaux.
+La tolerance absolue est `2e-5`. Ils ont reussi sur le mobile R5CW900CHQD,
+ainsi que les 24 cas de parite de quadrature cites plus haut.
+Ces preuves numeriques ne remplacent pas la comparaison visuelle.
+
+## Couverture alpha glTF
+
+Les entrees `alpha_mode` et `alpha_cutoff` font partie de l'interface resolue
+de `gltf_pbr`, au meme titre que `alpha`. Le lowering CPU et WGSL applique :
+
+- OPAQUE (0) : opacite 1, independamment d'alpha ;
+- MASK (1) : opacite 0 si `alpha < alpha_cutoff`, sinon 1 (egalite incluse) ;
+- BLEND (2) : alpha borne entre 0 et 1.
+
+L'alpha n'est ni une couleur de transmission ni un IOR. Le path tracer tire
+l'acceptation de chaque intersection selon cette couverture avant toute emission
+ou evaluation BSDF. Un rejet continue le rayon droit sans changer le throughput,
+la PDF precedente ou l'etat MIS. Les rayons d'ombre accumulent le produit des
+`1 - opacite` le long du segment vers la lumiere ou l'environnement.
+Les limites de securite restent 64 intersections par trajet et 128 pour les
+rayons d'ombre ; les empilements au-dela de ces limites ne sont pas valides.
+Le raster rejette les fragments de couverture nulle et retourne l'alpha reel.
+MASK utilise une passe `masked` double face, sans blending, avec test et ecriture
+de profondeur : les fragments conserves sont opaques et s'occultent selon leur
+profondeur, pas l'ordre des triangles. BLEND utilise la composition alpha sans
+ecriture de profondeur ; OPAQUE garde la passe opaque.
+Le tri/OIT raster reste approximatif pour les couches qui se chevauchent.
+
+Les faces opaques exposees par une decoupe sont evaluees dans un repere oriente
+vers la vue, dans les deux backends. Les interfaces de verre solide conservent
+leur normale signee pour distinguer l'entree de la sortie et ne pas casser
+la refraction ou la reflexion totale.
+
+L'eclairage diffus d'environnement du path tracer, hors voie fuzz/LTC existante,
+utilise la fermeture complete dans la NEE avec visibilite alpha et conserve les
+contributions d'environnement des rebonds diffus avec MIS. Il ne remplit plus
+les cavites avec une irradiance SH non occultee. Les surfaces masquees peuvent
+ainsi projeter de vraies ombres sur les autres surfaces et recevoir des rebonds
+indirects, plutot qu'un facteur d'occlusion ambiante applique a posteriori.
+La voie SH du fuzz n'est pas modifiee par ce correctif et reste une limite pour
+les ombres de materiaux avec fuzz actif.
+
+```sh
+node scripts/run-shaderball-renders.mjs --entry /scenes/standard-shader-ball/openpbr-rva-standard-shader-ball.usda --target mobile --materials /surfaces/gltf_pbr/alpha_mode_ --spp 64 --out-dir renders/shaderball-alpha-validation
+```
+
+Verifier les six sorties, pas seulement leur statut : BLEND laisse apparaitre
+le decor sans refraction, MASK presente une decoupe franche suivant l'UV et
+OPAQUE reste opaque meme si l'alpha auteur est inferieur a 1. Le controle a
+64 spp est distinct de la commande standard a 16 spp et ne modifie pas celle-ci.
+
+Le materiau de demonstration `surfaces/gltf_pbr/feature_alpha` declare
+explicitement `alpha_mode = 2` avec `alpha = 0.5`. Sans cette declaration,
+le mode glTF par defaut est OPAQUE : la reference transparente ne correspondait
+pas au fichier auteur. Ne pas changer le defaut global pour compenser cette
+omission. Son lobe conducteur unique utilise aussi la quadrature directe
+64 echantillons, avec les memes PDF et MIS que le dispatch complet ; cela evite
+la perte du device mobile observee dans la passe BLEND de ce materiau.
+
+```sh
+node scripts/run-shaderball-renders.mjs --entry /scenes/standard-shader-ball/openpbr-rva-standard-shader-ball.usda --target mobile --materials /showcase/standard_surface/glass_tinted
+```
+
+Cette commande doit produire les deux PNG sans perte du device. Ce controle de
+stabilite ne vaut pas conformite visuelle a la reference : en particulier,
+le raster a une interface garde une transmission et des reflets differents
+d'un rendu volumique a refractions multiples.
 
 Les feuilles dielectriques strictement lisses (rugosite et anisotropie nulles,
 transmission thin-walled active, sans coat ni autre lobe speculaire) integrent

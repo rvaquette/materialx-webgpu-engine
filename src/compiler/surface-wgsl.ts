@@ -78,6 +78,7 @@ struct MxBsdfLobe {
   ior: f32,
   extinction: vec3f,
   thin: f32,
+  dispersion: f32,
 };
 struct MxCoatLayer { weight: f32, color: vec3f, roughness: f32, ior: f32 };
 struct MxSheenLayer { weight: f32, color: vec3f, roughness: f32 };
@@ -101,6 +102,8 @@ struct LayeredClosure {
   interiorSigmaS: vec3f,
   interiorG: f32,
   hasInterior: u32,
+  shadingNormal: vec3f,
+  hasShadingNormal: u32,
 };`;
 
 /** One BSDF lobe to assign into `c.lobes[i]`; fields are WGSL expression strings. */
@@ -113,6 +116,7 @@ interface LobeWgsl {
   anisotropy?: string;
   rotation?: string;
   ior?: string;
+  dispersion?: string;
   extinction?: string;
   /** Thin-walled transmission flag (1.0 = straight-through, no refraction). */
   thin?: string;
@@ -226,7 +230,8 @@ function standardSurface(c: Ctx): FamilyWgsl {
   ];
   const lobes: LobeWgsl[] = [
     { kind: 'conductor', weight: 'mx_metal', color: baseColor, roughness: specRough, anisotropy: aniso, rotation: rot },
-    { kind: 'dielectric_transmission', weight: '((1.0 - mx_metal) * mx_trans)', color: transColor, roughness: specRough, ior },
+    { kind: 'dielectric_transmission', weight: '((1.0 - mx_metal) * mx_trans)', color: transColor, roughness: specRough, ior,
+      dispersion: `select(0.0, 20.0 / max(${c.s('transmission_dispersion', 0)}, 1e-6), ${c.s('transmission_dispersion', 0)} > 0.0)` },
     { kind: 'dielectric_reflection', weight: '(mx_diel * mx_spec)', color: specColor, roughness: specRough, ior, anisotropy: aniso, rotation: rot },
     { kind: 'burley_diffuse', weight: '(mx_diel * mx_base)', color: baseColor, roughness: diffRough },
     { kind: 'subsurface', weight: '(mx_diel * mx_sss)', color: sssColor },
@@ -262,7 +267,8 @@ function openPbrSurface(c: Ctx): FamilyWgsl {
     `  let mx_diel = (1.0 - mx_metal) * (1.0 - mx_trans);`,
   ];
   const reflW = thinWalled ? '((1.0 - mx_metal) * mx_specW)' : '(mx_diel * mx_specW)';
-  const transLobe: LobeWgsl = { kind: 'dielectric_transmission', weight: '((1.0 - mx_metal) * mx_trans)', color: transColor, roughness: specRough, ior };
+  const transLobe: LobeWgsl = { kind: 'dielectric_transmission', weight: '((1.0 - mx_metal) * mx_trans)', color: transColor, roughness: specRough, ior,
+    dispersion: `(max(${c.s('transmission_dispersion_scale', 0)}, 0.0) * 20.0 / max(${c.s('transmission_dispersion_abbe_number', 20)}, 1e-6))` };
   if (thinWalled) transLobe.thin = '1.0';
   const lobes: LobeWgsl[] = [
     { kind: 'conductor', weight: 'mx_metal', color: baseColor, roughness: specRough, anisotropy: aniso },
@@ -296,11 +302,17 @@ function gltfPbr(c: Ctx): FamilyWgsl {
   ];
   const lobes: LobeWgsl[] = [
     { kind: 'conductor', weight: 'mx_metal', color: baseColor, roughness: rough, anisotropy: aniso, rotation: rot },
-    { kind: 'dielectric_transmission', weight: '((1.0 - mx_metal) * mx_trans)', color: baseColor, roughness: rough, ior },
+    { kind: 'dielectric_transmission', weight: '((1.0 - mx_metal) * mx_trans)', color: baseColor, roughness: rough, ior, dispersion: `max(${c.s('dispersion', 0)}, 0.0)` },
     { kind: 'dielectric_reflection', weight: '(mx_diel * mx_spec)', color: specColor, roughness: rough, ior, anisotropy: aniso, rotation: rot },
     { kind: 'burley_diffuse', weight: 'mx_diel', color: baseColor, roughness: rough },
   ];
-  const out: FamilyWgsl = { locals, lobes, opacity: c.s('alpha', 1) };
+  const alpha = clampExpr(c.s('alpha', 1));
+  const mode = c.s('alpha_mode', 0);
+  const cutoff = c.s('alpha_cutoff', 0.5);
+  const out: FamilyWgsl = {
+    locals, lobes,
+    opacity: `select(select(${alpha}, select(0.0, 1.0, ${alpha} >= ${cutoff}), ${mode} == 1), 1.0, ${mode} == 0)`,
+  };
   if (presentWeighted(c, 'clearcoat')) out.coat = { weight: clampExpr(c.s('clearcoat', 0)), color: 'vec3f(1.0)', roughness: c.s('clearcoat_roughness', 0), ior: '1.5' };
   const sheenRgb = c.litRgb('sheen_color', [0, 0, 0]);
   if (Math.max(sheenRgb[0], sheenRgb[1], sheenRgb[2]) > 0 || c.dyn('sheen_color')) {
@@ -392,6 +404,7 @@ function lobeAssign(index: number, lobe: LobeWgsl): string {
     lobe.ior ?? '1.5',
     lobe.extinction ?? 'vec3f(0.0)',
     lobe.thin ?? '0.0',
+    lobe.dispersion ?? '0.0',
   ];
   return `  c.lobes[${index}] = MxBsdfLobe(${fields.join(', ')});`;
 }
@@ -432,6 +445,12 @@ function buildSurfaceFn(
   const fam = lowerFamily(surface.family, ctx);
   const lobes = [...fam.lobes];
   if (fam.sheen) lobes.push({ kind: 'sheen', ...fam.sheen });
+  const normalName = surface.family === 'open_pbr_surface' ? 'geometry_normal' : 'normal';
+  const normalSource = surface.inputs.get(normalName)?.source;
+  const shadingNormal = surface.family !== 'UsdPreviewSurface'
+    && (normalSource?.kind === 'connection' || normalSource?.kind === 'value')
+    ? lowered.inputs.get(normalName) : undefined;
+  if (shadingNormal !== undefined) used.add(shadingNormal);
 
   // Declare every referenced input ref as an output so lowerExprs emits its
   // sub-graph (topo order). The output name/type are irrelevant here.
@@ -441,6 +460,7 @@ function buildSurfaceFn(
   const exprs = lowerExprs(ir, handlePrefix, computeStage);
 
   const assigns: string[] = [`  c.lobeCount = ${lobes.length}u;`];
+  if (shadingNormal !== undefined) assigns.push('  c.hasShadingNormal = 1u;', `  c.shadingNormal = ${shadingNormal};`);
   lobes.forEach((lobe, i) => assigns.push(lobeAssign(i, lobe)));
   if (fam.coat) assigns.push(`  c.hasCoat = 1u;`, `  c.coat = MxCoatLayer(${fam.coat.weight}, ${fam.coat.color}, ${fam.coat.roughness}, ${fam.coat.ior});`);
   if (fam.sheen) assigns.push(`  c.hasSheen = 1u;`, `  c.sheen = MxSheenLayer(${fam.sheen.weight}, ${fam.sheen.color}, ${fam.sheen.roughness});`);

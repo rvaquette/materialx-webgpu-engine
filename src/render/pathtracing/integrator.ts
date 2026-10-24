@@ -103,6 +103,8 @@ export interface Ray {
 export interface SurfaceHit {
   position: Vec3;
   normal: Vec3;
+  /** Coverage opacity, after applying alpha mode/cutoff; omitted means opaque. */
+  opacity?: number;
   /** Emitted radiance if the surface is a light; omitted otherwise. */
   emission?: Vec3;
   /** Homogeneous medium filling the interior side of this surface; entered on transmission. */
@@ -231,6 +233,12 @@ export function integratePath(
         }
       }
       break;
+    }
+
+    const opacity = Math.min(Math.max(hit.opacity ?? 1, 0), 1);
+    if (opacity <= 0 || (opacity < 1 && rng() >= opacity)) {
+      ray = { origin: add(hit.position, scale(ray.direction, 1e-4)), direction: ray.direction };
+      continue;
     }
 
     if (hit.emission) {

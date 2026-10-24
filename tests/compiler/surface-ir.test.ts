@@ -14,7 +14,7 @@ import type {
 } from '../../src/materialx/graph.ts';
 import { resolveSurface } from '../../src/materialx/surface-graph.ts';
 import { lowerSurfaceInputsToIr } from '../../src/compiler/surface-ir.ts';
-import { IrModuleBuilder, COLOR3, FLOAT, type IrRef } from '../../src/compiler/ir.ts';
+import { IrModuleBuilder, COLOR3, FLOAT, vector, type IrRef } from '../../src/compiler/ir.ts';
 import { emitWgsl, lowerExprs, type WgslModule } from '../../src/compiler/wgsl.ts';
 import { evaluateShaderIr } from '../../src/compiler/ir-eval.ts';
 import type { Diagnostic } from '../../src/core/diagnostics.ts';
@@ -305,6 +305,88 @@ describe('lowerSurfaceInputsToIr (T055c)', () => {
       const code = lowerExprs(ir, '', compute).body.join('\n');
       expect(code).toContain(compute ? 'textureSampleLevel(' : 'textureSample(');
       expect(code).toMatch(/\(e\d+ \* e\d+\)/);
+    }
+  });
+
+  it.each(['literal', 'connected', 'nodedef', 'omitted'] as const)(
+    'applies %s tiledimage transforms in MaterialX order for color, scalar and normal textures',
+    (mode) => {
+      const settings = [
+        value('uvtiling', 'vector2', '3, 2'),
+        value('uvoffset', 'vector2', '0.1, -0.2'),
+        value('realworldimagesize', 'vector2', '2, 4'),
+        value('realworldtilesize', 'vector2', '5, 3'),
+      ];
+      for (const [type, input, irType] of [
+        ['color3', 'base_color', COLOR3],
+        ['float', 'specular_roughness', FLOAT],
+        ['vector3', 'normal', vector(3)],
+      ] as const) {
+        const tex = upstream('tex', 'tiledimage', type, [
+          value('file', 'filename', 'brick.png'),
+          ...(mode === 'literal' ? settings : mode === 'connected'
+            ? settings.map((s) => conn(s.name, s.type, s.name)) : []),
+        ]);
+        if (mode === 'nodedef') tex.nodeDef = {
+          name: `ND_tiledimage_${type}`, nodeString: 'tiledimage', type, implementation: { kind: 'unresolved' },
+          inputs: settings.map((s) => ({ name: s.name, type: s.type, value: s.source.kind === 'value' ? s.source.value : '' })),
+        };
+        const graph = surfaceGraph([conn(input, type, 'tex')], [
+          tex,
+          ...settings.map((s) => upstream(s.name, 'constant', 'vector2', [
+            value('value', 'vector2', s.source.kind === 'value' ? s.source.value : ''),
+          ])),
+        ]);
+        const builder = new IrModuleBuilder();
+        const lowered = lowerSurfaceInputsToIr(graph, resolveSurface(graph)!, builder);
+        builder.output({ name: 'result', type: irType, ref: lowered.inputs.get(input)! });
+        const ir = builder.build();
+        expect(ir.samplers[0]).toMatchObject({ addressU: 'periodic', addressV: 'periodic' });
+        for (const uv of [[0.2, 0.4], [-0.3, 1.2]]) {
+          const coordinates: number[][] = [];
+          evaluateShaderIr(ir, { texcoord: uv, textures: { tex: (u, v) => {
+            coordinates.push([u, v]);
+            return [u, v, 0, 1];
+          } } });
+          expect(coordinates).toHaveLength(1);
+          const expected = mode === 'omitted'
+            ? [uv[0]!, 1 - uv[1]!]
+            : [(uv[0]! * 3 - 0.1) / 2 * 5, 1 - (uv[1]! * 2 + 0.2) / 4 * 3];
+          expect(coordinates[0]![0]).toBeCloseTo(expected[0]!);
+          expect(coordinates[0]![1]).toBeCloseTo(expected[1]!);
+        }
+        for (const compute of [false, true]) {
+          const code = lowerExprs(ir, '', compute).body.join('\n');
+          expect(code).toContain(compute ? 'textureSampleLevel(' : 'textureSample(');
+          expect(code).toMatch(/\(e\d+ \* e\d+\)/);
+        }
+      }
+    },
+  );
+
+  it('preserves Brick procedural scalar-to-vector tiling shared by its image inputs', () => {
+    const graph = surfaceGraph([
+      conn('base_color', 'color3', 'color'), conn('specular_roughness', 'float', 'roughness'),
+    ], [
+      upstream('tiles', 'convert', 'vector2', [value('in', 'float', '3')]),
+      upstream('color', 'tiledimage', 'color3', [conn('uvtiling', 'vector2', 'tiles')]),
+      upstream('roughness', 'tiledimage', 'float', [conn('uvtiling', 'vector2', 'tiles')]),
+    ]);
+    const builder = new IrModuleBuilder();
+    const lowered = lowerSurfaceInputsToIr(graph, resolveSurface(graph)!, builder);
+    builder.output({ name: 'color', type: COLOR3, ref: lowered.inputs.get('base_color')! });
+    builder.output({ name: 'roughness', type: FLOAT, ref: lowered.inputs.get('specular_roughness')! });
+    const ir = builder.build();
+    const coordinates: number[][] = [];
+    const texture = (u: number, v: number): number[] => {
+      coordinates.push([u, v]);
+      return [0.2, 0.4, 0.6, 1];
+    };
+    evaluateShaderIr(ir, { texcoord: [0.2, 0.4], textures: { color: texture, roughness: texture } });
+    expect(coordinates).toHaveLength(2);
+    for (const uv of coordinates) {
+      expect(uv[0]).toBeCloseTo(0.6);
+      expect(uv[1]).toBeCloseTo(-0.2);
     }
   });
 

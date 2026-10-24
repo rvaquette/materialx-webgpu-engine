@@ -3,7 +3,7 @@ import { LAYERED_CLOSURE_PRELUDE } from '../../src/compiler/surface-wgsl.ts';
 
 export function smoothSheetProbe(forwardCode: string): string {
   const start = forwardCode.indexOf('fn mx_forward_is_smooth_sheet(');
-  const end = forwardCode.indexOf('fn mx_sh_irradiance(', start);
+  const end = forwardCode.indexOf('fn mx_forward_single_dielectric(', start);
   if (start < 0 || end < 0) { throw new Error('Forward shader lacks smooth-sheet helpers'); }
   return `${LAYERED_CLOSURE_PRELUDE}
 ${CLOSURE_LIBRARY_PRELUDE}

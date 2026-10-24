@@ -188,8 +188,10 @@ export function lowerSurfaceInputsToIr(
     const filter = stringInput('filtertype');
     builder.declareSampler({
       name: nodeId,
-      ...(addressU !== undefined ? { addressU } : {}),
-      ...(addressV !== undefined ? { addressV } : {}),
+      ...(node.category === 'tiledimage' ? { addressU: 'periodic', addressV: 'periodic' } : {
+        ...(addressU !== undefined ? { addressU } : {}),
+        ...(addressV !== undefined ? { addressV } : {}),
+      }),
       ...(filter !== undefined ? { filter } : {}),
     });
     const texcoord = node.inputs.find((i) => i.name === 'texcoord');
@@ -217,11 +219,31 @@ export function lowerSurfaceInputsToIr(
       }, (coord) => builder.add({ kind: 'texture', type: valueType, texture: nodeId, uv: coord, sampler: nodeId }));
     }
     const uvType = vector(2, 'float', 'texcoord');
+    if (node.category === 'tiledimage') {
+      const input = (name: string, fallback: readonly number[]): IrRef => {
+        const authored = authoredRef(nodeId, name, uvType);
+        if (authored !== undefined) return authored;
+        const declared = node.nodeDef?.inputs?.find((candidate) => candidate.name === name)?.value;
+        return constOfIrType(builder, uvType, declared !== undefined ? parseNumbers(declared) : fallback);
+      };
+      uv = callRef('multiply', uvType, {
+        in1: callRef('divide', uvType, {
+          in1: callRef('subtract', uvType, {
+            in1: callRef('multiply', uvType, { in1: coerce(uv, uvType), in2: input('uvtiling', [1, 1]) }),
+            in2: input('uvoffset', [0, 0]),
+          }),
+          in2: input('realworldimagesize', [1, 1]),
+        }),
+        in2: input('realworldtilesize', [1, 1]),
+      });
+    }
     if (node.category === 'image') {
       const scale = authoredRef(nodeId, 'uv_scale', uvType);
       const offset = authoredRef(nodeId, 'uv_offset', uvType);
       if (scale !== undefined) uv = callRef('multiply', uvType, { in1: coerce(uv, uvType), in2: scale });
       if (offset !== undefined) uv = callRef('add', uvType, { in1: coerce(uv, uvType), in2: offset });
+    }
+    if (node.category === 'image' || node.category === 'tiledimage') {
       uv = callRef('add', uvType, {
         in1: callRef('multiply', uvType, { in1: coerce(uv, uvType), in2: builder.constant(uvType, [1, -1]) }),
         in2: builder.constant(uvType, [0, 1]),

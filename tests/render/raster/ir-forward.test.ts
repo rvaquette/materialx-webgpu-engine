@@ -48,6 +48,19 @@ function forward(category: string, inputs: ResolvedInput[]) {
 }
 
 describe('assembleIrForwardShader (T058b)', () => {
+  it('integrates each RGB channel with its own dispersive closure', () => {
+    const { shader } = forward('gltf_pbr', [value('dispersion', 'float', '0.35')]);
+    expect(shader.code).toContain('if (mx_closure_has_dispersion(c))');
+    expect(shader.code).toContain('let spectral = mx_closure_spectral_channel(c, channel);');
+    expect(shader.code).toContain('radiance[channel] = light[channel];');
+    expect(shader.code).toContain('radiance = mx_forward_lighting(c, n, wo, sframe);');
+  });
+  it('discards zero coverage and outputs straight alpha for blending', () => {
+    const { shader } = forward('gltf_pbr', [value('alpha_mode', 'integer', '2'), value('alpha', 'float', '0.35')]);
+    expect(shader.code).toContain('if (c.opacity <= 0.0) { discard; }');
+    expect(shader.code).toContain('return vec4f(radiance, clamp(c.opacity, 0.0, 1.0));');
+  });
+
   it('keeps the material module source: shared closure library and surface entry', () => {
     const { surface, shader } = forward('standard_surface', [value('base_color', 'color3', '0.8, 0.1, 0.1')]);
     // The shared library (LayeredClosure struct + mx_closure_eval) rides along.
@@ -77,6 +90,8 @@ describe('assembleIrForwardShader (T058b)', () => {
     expect(shader.code).toContain(`fn ${shader.fragmentEntry}(fin: MxVertexOut) -> @location(0) vec4f`);
     expect(shader.code).toContain('var vary: MxVaryings;');
     expect(shader.code).toContain('vary.viewDir = normalize(fin.viewDir);');
+    expect(shader.code).toContain('let authoredNormal = mx_closure_shading_normal(c, vary.normal);');
+    expect(shader.code).toContain('let n = mx_closure_oriented_normal(c, authoredNormal, vary.viewDir);');
   });
 
   it('shades the closure with the same direct term as the path tracer (delta light, no shadow)', () => {
@@ -156,7 +171,35 @@ describe('assembleIrForwardShader (T058b)', () => {
     expect(shader.code).toContain('frame * (-wo)');
     expect(shader.code).toContain('mx_thin_film_fresnel(f, f0, cosV, c.thinFilm.weight, c.thinFilm.thickness, c.thinFilm.ior)');
     expect(shader.code).toContain('l.weight * l.color * (1.0 - f) * transmitted');
-    expect(shader.code).toMatch(/if \(mx_forward_is_smooth_sheet\(spec\)\) \{\s+radiance = radiance \+ mx_forward_smooth_sheet\(spec, wo, sframe\);\s+\} else \{\s+for \(var i = 0u; i < 64u; i\+\+\)/);
+    expect(shader.code).toMatch(/if \(mx_forward_is_smooth_sheet\(spec\)\) \{\s+radiance = radiance \+ mx_forward_smooth_sheet\(spec, wo, sframe\);/);
+    expect(shader.code).toMatch(/else if \(dielectricIndex >= 0\) \{\s+radiance = radiance \+ mx_forward_dielectric_environment\(spec.lobes\[u32\(dielectricIndex\)\], wo, sframe\);\s+\} else \{\s+for \(var i = 0u; i < 64u; i\+\+\)/);
+  });
+
+  it('integrates single-lobe rough glass directly with the same 64 samples and both MIS strategies', () => {
+    const { shader } = forward('standard_surface', [
+      value('base', 'float', '0'),
+      value('specular_roughness', 'float', '0.15'),
+      value('transmission', 'float', '1'),
+      value('transmission_color', 'color3', '0.2, 0.1, 1'),
+    ]);
+    const direct = shader.code.slice(
+      shader.code.indexOf('fn mx_forward_dielectric_environment('),
+      shader.code.indexOf('fn mx_sh_irradiance('),
+    );
+    expect(direct).toContain('for (var i = 0u; i < 64u; i++)');
+    expect(direct).toContain('mx_dielectric_transmission_sample(ctx, u)');
+    expect(direct).toContain('mx_dielectric_transmission_eval(ctx, wi)');
+    expect(direct).toContain('l.weight * bs.value');
+    expect(direct).toContain('l.weight * em.value');
+    expect(direct).toContain('bs.pdf * bs.pdf + envPdf * envPdf');
+    expect(direct).toContain('envPdf * envPdf + em.pdf * em.pdf');
+    expect(direct).not.toContain('mx_closure_sample(');
+    expect(direct).not.toContain('mx_closure_eval(');
+    expect(shader.code).toContain('if (index >= 0 || (l.kind != MX_LOBE_DIELECTRIC_TRANSMISSION');
+    expect(direct).toContain('mx_dielectric_reflection_sample(ctx, u.xy)');
+    expect(direct).toContain('mx_dielectric_reflection_eval(ctx, wi)');
+    expect(direct).toContain('mx_conductor_sample(ctx, u.xy)');
+    expect(direct).toContain('mx_conductor_eval(ctx, wi)');
   });
 
   it('adds the closure emission when present', () => {

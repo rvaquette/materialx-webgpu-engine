@@ -41,6 +41,16 @@ function makeBackend(tonemap?: 'none' | 'reinhard' | 'acesFilmic') {
 }
 
 describe('RasterBackend pipelines', () => {
+  it('renders alpha masks with depth writes and no blending, retaining both sides of cutouts', () => {
+    const { device, backend } = makeBackend();
+    backend.createSceneVariantPipeline('masked', 'mask', '// mask shader');
+    const desc = device.createRenderPipeline.mock.calls[0]![0];
+    expect(desc.depthStencil).toMatchObject({ depthWriteEnabled: true, depthCompare: 'less' });
+    expect(desc.fragment).toMatchObject({ targets: [{ format: 'rgba16float' }] });
+    expect(desc.fragment).not.toMatchObject({ targets: [{ blend: expect.anything() }] });
+    expect(desc.primitive).toMatchObject({ cullMode: 'none' });
+  });
+
   it('compiles the forward pipeline into the HDR target with depth', () => {
     const { device, backend } = makeBackend();
     const code = '@vertex fn vs_forward() {} @fragment fn fs_forward() {}';
@@ -132,7 +142,7 @@ describe('RasterBackend frame recording', () => {
 });
 
 describe('RasterBackend scene forward path', () => {
-  it('compiles a per-variant IR scene pipeline, caches it by key, and reads three vertex buffers', () => {
+  it('compiles a per-variant IR scene pipeline, caches it by key, and reads four vertex buffers', () => {
     const { device, backend } = makeBackend();
     const code = '// ir scene forward';
     const pipeline = backend.createSceneVariantPipeline('opaque', 'key-a', code);
@@ -140,7 +150,7 @@ describe('RasterBackend scene forward path', () => {
     const desc = device.createRenderPipeline.mock.calls[0]![0] as any;
     expect(desc.vertex.entryPoint).toBe('vs_forward');
     expect(desc.fragment.entryPoint).toBe('fs_forward');
-    expect(desc.vertex.buffers).toHaveLength(3);
+    expect(desc.vertex.buffers).toHaveLength(4);
     expect(desc.vertex.buffers[2].attributes[0].shaderLocation).toBe(2);
     expect(backend.sceneVariantPipeline('opaque', 'key-a')).toBe(pipeline);
     // A second request for the same key returns the cache without recompiling.

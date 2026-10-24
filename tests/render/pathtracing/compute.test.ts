@@ -66,6 +66,47 @@ function fakeScene(): PathTraceScene {
 describe('pathTraceComputeWgsl', () => {
   const src = pathTraceComputeWgsl();
 
+  it('traces diffuse environment visibility instead of filling alpha-mask cavities with unoccluded SH', () => {
+    const shader = pathTraceComputeWgsl({ environment: true });
+    expect(shader).toContain('let shFuzz = c.hasFuzz != 0u && c.fuzz.weight > 0.0;');
+    expect(shader).toMatch(/if \(shFuzz\) \{\s+let diffE = mx_sh_irradiance/);
+    expect(shader).toContain('else { ev = mx_closure_eval(c, wo, wiLocal); }');
+    expect(shader).toContain('let visibility = mx_alpha_visibility(pos + wiW * RAY_EPS, wiW);');
+    expect(shader).toContain('diffuseBounce = splitFuzzEnvironment && mx_closure_sampled_is_diffuse(c, wo, u.z);');
+  });
+
+  it('treats alpha rejection as a null event before emission and preserves MIS state', () => {
+    const start = src.indexOf('let opacity = clamp(c.opacity');
+    const end = src.indexOf('if (mx_closure_has_dispersion', start);
+    const nullEvent = src.slice(start, end);
+    expect(nullEvent).toContain('rng_next(state) >= opacity');
+    expect(nullEvent).toContain('ro = pos + rd * RAY_EPS;');
+    expect(nullEvent).toContain('continue;');
+    expect(nullEvent).not.toContain('beta =');
+    expect(nullEvent).not.toContain('specularBounce =');
+    expect(start).toBeLessThan(src.indexOf('if (c.hasEmission != 0u)'));
+    expect(src).toContain('visibility = visibility * (1.0 - clamp(c.opacity');
+    expect(src).toContain('mx_alpha_visibility(pos + toLight * RAY_EPS, toLight)');
+  });
+
+  it('selects a compensated RGB channel once per path and reuses it across interfaces', () => {
+    expect(src).toContain('var spectralChannel = 3u;');
+    expect(src).toContain('if (mx_closure_has_dispersion(c) && spectralChannel == 3u)');
+    expect(src).toContain('channelWeight[spectralChannel] = 3.0;');
+    expect(src).toContain('beta = beta * channelWeight;');
+    expect(src).toContain('if (spectralChannel < 3u) { c = mx_closure_spectral_channel(c, spectralChannel); }');
+  });
+
+  it('uses the graph normal for shading while retaining geometric normals for hit varyings', () => {
+    const shader = pathTraceComputeWgsl({ environment: true });
+    expect(shader).toContain('let geometricNormal = surface_hit_normal(hit);');
+    expect(shader).toContain('let authoredNormal = mx_closure_shading_normal(c, geometricNormal);');
+    expect(shader).toContain('let shadingNormal = mx_closure_oriented_normal(c, authoredNormal, -rd);');
+    expect(shader).toContain('let frame = basis(shadingNormal);');
+    expect(shader).toContain('mx_sh_irradiance(shadingNormal)');
+    expect(shader).toContain('let cosS = abs(dot(shadingNormal, wiWorld));');
+  });
+
   it('excludes SH-lit fuzz from the throughput of environment misses for mixed BSDF samples', () => {
     const shader = pathTraceComputeWgsl({ environment: true });
     expect(shader).toContain('mx_closure_diffuse_albedo(c, wo)');

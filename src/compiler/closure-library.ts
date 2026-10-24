@@ -382,7 +382,7 @@ fn mx_fuzz_dir_albedo(cosView: f32, roughness: f32) -> f32 {
   let mean = r * (-0.193854 + r * (-1.14885 + r * (1.7932 - 0.95943 * r * r))) / (0.046391 + r);
   let offset = r * (0.000654023 + r * (-0.0207818 + 0.119681 * r)) / (1.26264 + r * (-1.92021 + r));
   let z = (clamp(cosView, 0.0, 1.0) - mean) / sigma;
-  return exp(-0.5 * z * z) / (sigma * sqrt(2.0 * MX_PI)) + offset;
+  return clamp(exp(-0.5 * z * z) / (sigma * sqrt(2.0 * MX_PI)) + offset, 0.0, 1.0);
 }
 fn mx_fuzz_ltc(cosView: f32, roughness: f32) -> vec2f {
   let v = clamp(cosView, 0.0, 1.0);
@@ -714,6 +714,46 @@ fn mx_closure_total_weight(c: LayeredClosure) -> f32 {
   var total = 0.0;
   for (var i = 0u; i < c.lobeCount; i = i + 1u) { total = total + c.lobes[i].weight; }
   return total;
+}
+fn mx_closure_has_dispersion(c: LayeredClosure) -> bool {
+  for (var i = 0u; i < c.lobeCount; i++) {
+    let l = c.lobes[i];
+    if (l.kind == MX_LOBE_DIELECTRIC_TRANSMISSION && l.weight > 0.0 && l.dispersion > 0.0 && l.thin == 0.0) {
+      return true;
+    }
+  }
+  return false;
+}
+fn mx_dispersion_ior(ior: f32, dispersion: f32, channel: u32) -> f32 {
+  return max(1.0, ior + (f32(channel) - 1.0) * (ior - 1.0) * 0.025 * max(dispersion, 0.0));
+}
+fn mx_closure_spectral_channel(c: LayeredClosure, channel: u32) -> LayeredClosure {
+  var result = c;
+  for (var i = 0u; i < c.lobeCount; i++) {
+    let l = c.lobes[i];
+    if (l.kind == MX_LOBE_DIELECTRIC_TRANSMISSION && l.thin == 0.0 && l.dispersion > 0.0) {
+      result.lobes[i].ior = mx_dispersion_ior(l.ior, l.dispersion, channel);
+    }
+  }
+  return result;
+}
+fn mx_closure_shading_normal(c: LayeredClosure, geometricNormal: vec3f) -> vec3f {
+  if (c.hasShadingNormal != 0u && dot(c.shadingNormal, c.shadingNormal) > 1e-12) {
+    return normalize(c.shadingNormal);
+  }
+  return geometricNormal;
+}
+fn mx_closure_oriented_normal(c: LayeredClosure, n: vec3f, viewDir: vec3f) -> vec3f {
+  if (dot(n, viewDir) >= 0.0) { return n; }
+  for (var i = 0u; i < c.lobeCount; i++) {
+    let l = c.lobes[i];
+    // Solid glass needs the signed interface normal to distinguish entering
+    // from exiting. Opaque backfaces exposed by cutouts must still scatter.
+    if (l.weight > 0.0 && l.kind == MX_LOBE_DIELECTRIC_TRANSMISSION && l.thin == 0.0) {
+      return n;
+    }
+  }
+  return -n;
 }
 fn mx_closure_base_eval(c: LayeredClosure, wo: vec3f, wi: vec3f) -> MxBsdfEval {
   let total = mx_closure_total_weight(c);

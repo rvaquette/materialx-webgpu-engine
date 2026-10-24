@@ -41,7 +41,7 @@ export const SCENE_IR_VERTEX_LAYOUTS: GPUVertexBufferLayout[] = [
 ];
 
 /** Active raster pass kinds driven by a material's effective render passes. */
-export type ScenePassKind = 'opaque' | 'transmission';
+export type ScenePassKind = 'opaque' | 'masked' | 'transmission';
 
 
 export interface RasterBackendOptions {
@@ -191,7 +191,7 @@ export class RasterBackend {
       layout: 'auto',
       vertex: { module, entryPoint: IR_FORWARD_VERTEX_ENTRY, buffers: SCENE_IR_VERTEX_LAYOUTS },
       fragment: { module, entryPoint: IR_FORWARD_FRAGMENT_ENTRY, targets: [this.sceneColorTarget(transparent)] },
-      primitive: { topology: 'triangle-list', cullMode: transparent ? 'none' : 'back' },
+      primitive: { topology: 'triangle-list', cullMode: pass === 'opaque' ? 'back' : 'none' },
       depthStencil: { format: this.depthFormat, depthWriteEnabled: !transparent, depthCompare: 'less' },
     });
     this.sceneVariants.set(cacheKey, pipeline);

@@ -199,6 +199,14 @@ describe('reference layered evaluator (T054)', () => {
       expect(fuzzDirectionalAlbedo(1, 0.5)).toBeCloseTo(0.024868648015727062, 12);
       expect(fuzzDirectionalAlbedo(0.5, 0.5)).toBeCloseTo(0.14971759463589474, 12);
       expect(fuzzDirectionalAlbedo(0, 0.5)).toBeCloseTo(0.6882118258413238, 12);
+      // The analytic fit can undershoot zero at low roughness.
+      expect(fuzzDirectionalAlbedo(0.79, 0.1)).toBe(0);
+      for (const roughness of [0, 0.01, 0.1, 0.5, 1]) {
+        for (const view of [0, 0.1, 0.5, 0.79, 1]) {
+          expect(fuzzDirectionalAlbedo(view, roughness)).toBeGreaterThanOrEqual(0);
+          expect(fuzzDirectionalAlbedo(view, roughness)).toBeLessThanOrEqual(1);
+        }
+      }
     });
 
     it('uses directional albedo for indirect lighting in the CPU direct evaluator', () => {

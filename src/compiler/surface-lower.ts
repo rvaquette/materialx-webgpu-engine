@@ -88,6 +88,7 @@ function lowerStandardSurface(m: Inputs): LayeredClosure {
   const aniso = scalarOf(m, 'specular_anisotropy', 0);
   const rot = scalarOf(m, 'specular_rotation', 0);
   const ior = scalarOf(m, 'specular_IOR', 1.5);
+  const abbe = scalarOf(m, 'transmission_dispersion', 0);
   const rawBaseColor = rgbOf(m, 'base_color', [1, 1, 1]);
   const baseColor: Rgb = [clamp01(rawBaseColor[0]), clamp01(rawBaseColor[1]), clamp01(rawBaseColor[2])];
   const specColor = rgbOf(m, 'specular_color', [1, 1, 1]);
@@ -100,7 +101,7 @@ function lowerStandardSurface(m: Inputs): LayeredClosure {
   const extras = anisoExtras(aniso, rot);
   const lobes: LayeredBsdfLobe[] = [
     { kind: 'conductor', weight: metal, color: baseColor, roughness: specRough, ...extras },
-    { kind: 'dielectric_transmission', weight: (1 - metal) * trans, color: transColor, roughness: specRough, ior, ...(transDepth > 0 ? { attenuationColor: transColor, attenuationDistance: transDepth } : {}) },
+    { kind: 'dielectric_transmission', weight: (1 - metal) * trans, color: transColor, roughness: specRough, ior, ...(abbe > 0 ? { dispersion: 20 / abbe } : {}), ...(transDepth > 0 ? { attenuationColor: transColor, attenuationDistance: transDepth } : {}) },
     { kind: 'dielectric_reflection', weight: dielectricShare * spec, color: specColor, roughness: specRough, ior, ...extras },
     { kind: 'burley_diffuse', weight: dielectricShare * base, color: baseColor, roughness: diffRough },
     { kind: 'subsurface', weight: dielectricShare * sss, color: sssColor, ...(sss > 0 ? { subsurfaceRadius: sssRadius, ...(sssAniso !== 0 ? { anisotropy: sssAniso } : {}) } : {}) },
@@ -130,6 +131,8 @@ function lowerOpenPbrSurface(m: Inputs): LayeredClosure {
   const diffRough = scalarOf(m, 'base_diffuse_roughness', 0);
   const aniso = scalarOf(m, 'specular_roughness_anisotropy', 0);
   const ior = scalarOf(m, 'specular_ior', 1.5);
+  const dispersion = Math.max(scalarOf(m, 'transmission_dispersion_scale', 0), 0) * 20
+    / Math.max(scalarOf(m, 'transmission_dispersion_abbe_number', 20), 1e-6);
   const baseColor = rgbOf(m, 'base_color', [0.8, 0.8, 0.8]);
   const specColor = rgbOf(m, 'specular_color', [1, 1, 1]);
   const transColor = rgbOf(m, 'transmission_color', [1, 1, 1]);
@@ -143,7 +146,7 @@ function lowerOpenPbrSurface(m: Inputs): LayeredClosure {
   const extras = anisoExtras(aniso, 0);
   const lobes: LayeredBsdfLobe[] = [
     { kind: 'conductor', weight: metal, color: baseColor, roughness: specRough, ...extras },
-    { kind: 'dielectric_transmission', weight: (1 - metal) * trans, color: transColor, roughness: specRough, ior, ...(thinWalled ? { thinWalled: true } : (transDepth > 0 ? { attenuationColor: transColor, attenuationDistance: transDepth } : {})) },
+    { kind: 'dielectric_transmission', weight: (1 - metal) * trans, color: transColor, roughness: specRough, ior, ...(dispersion > 0 ? { dispersion } : {}), ...(thinWalled ? { thinWalled: true } : (transDepth > 0 ? { attenuationColor: transColor, attenuationDistance: transDepth } : {})) },
     { kind: 'dielectric_reflection', weight: reflShare * specW, color: specColor, roughness: specRough, ior, ...extras },
     { kind: 'burley_diffuse', weight: dielectricShare * baseW, color: baseColor, roughness: diffRough },
     { kind: 'subsurface', weight: dielectricShare * sss, color: sssColor, ...(sss > 0 ? { subsurfaceRadius: sssRadius, ...(sssAniso !== 0 ? { anisotropy: sssAniso } : {}) } : {}) },
@@ -190,7 +193,13 @@ function lowerGltfPbr(m: Inputs): LayeredClosure {
   if (irid > 0) slots.thinFilm = { weight: irid, thickness: scalarOf(m, 'iridescence_thickness', 100), ior: 1.3 };
   const emissive = rgbOf(m, 'emissive', [0, 0, 0]);
   if (emissive[0] > 0 || emissive[1] > 0 || emissive[2] > 0) slots.emission = emissive;
-  return assemble(lobes, scalarOf(m, 'alpha', 1), slots);
+  const alpha = clamp01(scalarOf(m, 'alpha', 1));
+  const mode = scalarOf(m, 'alpha_mode', 0);
+  const opacity = mode === 0 ? 1 : mode === 1 ? Number(alpha >= scalarOf(m, 'alpha_cutoff', 0.5)) : alpha;
+  const transmission = lobes.find((lobe) => lobe.kind === 'dielectric_transmission');
+  const dispersion = Math.max(scalarOf(m, 'dispersion', 0), 0);
+  if (transmission && dispersion > 0) transmission.dispersion = dispersion;
+  return assemble(lobes, opacity, slots);
 }
 
 // --- UsdPreviewSurface -------------------------------------------------------

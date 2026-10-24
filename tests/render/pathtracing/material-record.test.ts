@@ -29,6 +29,14 @@ function expectLobesClose(a: LayeredClosure, b: LayeredClosure): void {
 }
 
 describe('T057b material-record codec', () => {
+  it('preserves optional dispersion through CPU packing and the GPU reader', () => {
+    const closure: LayeredClosure = { opacity: 1, lobes: [
+      { kind: 'dielectric_transmission', weight: 1, color: [1, 1, 1], ior: 1.52, dispersion: 0.35 },
+    ] };
+    const back = unpackLayeredMaterial(packLayeredMaterial(closure));
+    expect(back.lobes[0]?.dispersion).toBeCloseTo(0.35);
+    expect(materialClosureReaderWgsl()).toContain('lobe.dispersion = materials[base + 23u]');
+  });
   it('packs a record of the documented fixed stride', () => {
     const closure = canonicalSurfaceToLayered({
       baseColor: [0.8, 0.2, 0.1],

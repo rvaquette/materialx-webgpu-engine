@@ -25,6 +25,57 @@ function makeScene(overrides: Partial<SceneSampler>): SceneSampler {
 
 const cameraRay: Ray = { origin: [0, 0, 1], direction: [0, 0, -1] };
 
+describe('coverage opacity', () => {
+  it.each([
+    [0, 1],
+    [0.35, 0.65],
+    [1, 0],
+  ])('blocks diffuse dome light with occluder coverage %s (expected visibility %s)', (opacity, expected) => {
+    const scene = makeScene({
+      intersect: (ray) => ray.direction[2] < 0
+        ? { position: [0, 0, 0], normal: [0, 0, 1] }
+        : ray.origin[2] < 0.5
+          ? { position: [0, 0, 0.5], normal: [0, 0, -1], opacity }
+          : null,
+      sampleBsdf: (hit) => hit.position[2] === 0
+        ? { direction: [0, 0, 1], value: [1 / Math.PI, 1 / Math.PI, 1 / Math.PI], pdf: 1 / Math.PI }
+        : null,
+      environment: () => [1, 1, 1],
+    });
+    const sum = [0, 0, 0];
+    for (let i = 0; i < 1000; i++) {
+      const rgb = integratePath(scene, cameraRay, () => (i + 0.5) / 1000);
+      rgb.forEach((v, k) => { sum[k]! += v / 1000; });
+    }
+    sum.forEach((v) => expect(v).toBeCloseTo(expected, 10));
+  });
+
+  it('passes through zero coverage before emission or scattering without changing direction', () => {
+    const scene = makeScene({
+      intersect: (ray) => ray.origin[2] > 0
+        ? { position: [0, 0, 0], normal: [0, 0, 1], opacity: 0, emission: [100, 0, 0] } : null,
+      environment: (direction) => direction[2] === -1 ? [0.2, 0.4, 0.8] : [0, 0, 0],
+      sampleBsdf: () => { throw new Error('A null surface must not scatter'); },
+    });
+    expect(integratePath(scene, cameraRay, () => { throw new Error('Zero opacity needs no RNG'); })).toEqual([0.2, 0.4, 0.8]);
+  });
+
+  it('matches alpha-over compositing for a 0.35 coverage layer', () => {
+    const scene = makeScene({
+      intersect: (ray) => ray.origin[2] > 0
+        ? { position: [0, 0, 0], normal: [0, 0, 1], opacity: 0.35, emission: [1, 0, 0] } : null,
+      environment: () => [0, 0, 1],
+    });
+    const sum = [0, 0, 0];
+    for (let i = 0; i < 1000; i++) {
+      const rgb = integratePath(scene, cameraRay, () => (i + 0.5) / 1000);
+      rgb.forEach((v, k) => { sum[k]! += v / 1000; });
+    }
+    expect(sum[0]).toBeCloseTo(0.35, 10);
+    expect(sum[2]).toBeCloseTo(0.65, 10);
+  });
+});
+
 describe('createPcg32', () => {
   it('is deterministic for a seed and stays in [0,1)', () => {
     const a = createPcg32(42);

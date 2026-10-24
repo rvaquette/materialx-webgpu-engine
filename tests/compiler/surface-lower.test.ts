@@ -6,6 +6,7 @@
 // canonicalSurfaceToLayered.
 
 import { describe, it, expect } from 'vitest';
+import featureAlphaXml from '../../scenes/mtlx-library/surfaces/gltf_pbr/feature_alpha/feature_alpha.mtlx?raw';
 import type {
   ResolvedGraph,
   ResolvedInput,
@@ -62,6 +63,26 @@ function lobe(closure: LayeredClosure, kind: string) {
   return closure.lobes.find((l) => l.kind === kind);
 }
 
+describe('transmission dispersion lowering', () => {
+  it.each([
+    ['gltf_pbr', 'metallic', 'transmission', [input('dispersion', 'float', '0.35')], 0.35],
+    ['standard_surface', 'metalness', 'transmission', [input('transmission_dispersion', 'float', '40')], 0.5],
+    ['open_pbr_surface', 'base_metalness', 'transmission_weight', [
+      input('transmission_dispersion_scale', 'float', '0.5'),
+      input('transmission_dispersion_abbe_number', 'float', '40'),
+    ], 0.25],
+  ] as const)('normalizes %s dispersion without changing the material', (family, metal, trans, inputs, expected) => {
+    const closure = lower(family, [input(metal, 'float', '0'), input(trans, 'float', '1'), ...inputs]);
+    expect(lobe(closure, 'dielectric_transmission')?.dispersion).toBeCloseTo(expected);
+  });
+
+  it('keeps metallic glTF feature materials non-transmissive even with dispersion', () => {
+    const closure = lower('gltf_pbr', [input('transmission', 'float', '1'), input('dispersion', 'float', '1')]);
+    expect(lobe(closure, 'dielectric_transmission')).toBeUndefined();
+    expect(lobe(closure, 'conductor')?.weight).toBe(1);
+  });
+});
+
 const GEOM: ShadingGeometry = { normal: [0, 0, 1], view: [0, 0, 1] };
 
 function shade(closure: LayeredClosure, lighting: ReferenceLighting = defaultLighting()) {
@@ -69,6 +90,30 @@ function shade(closure: LayeredClosure, lighting: ReferenceLighting = defaultLig
 }
 
 describe('surfaceGraphToLayered (T055b)', () => {
+  it('keeps the feature_alpha showcase explicitly blended at half coverage', () => {
+    const inputs = [...featureAlphaXml.matchAll(/<input name="([^"]+)" type="([^"]+)" value="([^"]+)"\s*\/>/g)]
+      .map((match) => input(match[1]!, match[2]!, match[3]!));
+    expect(inputs.find((entry) => entry.name === 'alpha_mode')?.source).toEqual(val('integer', '2'));
+    expect(lower('gltf_pbr', inputs).opacity).toBe(0.5);
+  });
+
+  it.each([
+    [0, 0.35, 0.5, 1],
+    [1, 0.35, 0.5, 0],
+    [1, 0.5, 0.5, 1],
+    [1, 0.7, 0.8, 0],
+    [2, 0.35, 0.5, 0.35],
+    [2, -0.5, 0.5, 0],
+    [2, 1.5, 0.5, 1],
+  ])('applies glTF alpha mode %s to alpha %s with cutoff %s', (mode, alpha, cutoff, expected) => {
+    const closure = lower('gltf_pbr', [
+      input('alpha_mode', 'integer', String(mode)),
+      input('alpha', 'float', String(alpha)),
+      input('alpha_cutoff', 'float', String(cutoff)),
+    ]);
+    expect(closure.opacity).toBe(expected);
+  });
+
   it.each([0, 1])('bounds standard_surface base reflectance and preserves HDR emission (metalness=%s)', (metalness) => {
     const closure = lower('standard_surface', [
       input('base_color', 'color3', '5, -1, 0.5'),
