@@ -491,12 +491,67 @@ fn mx_worley(p: vec3f, jitter: f32, dims: i32) -> vec3f {
   }
   return sqrt(d);
 }
+`;
+
+const UNIFIED_NOISE_PRELUDE = `fn mx_noise_rotl(x: u32, k: u32) -> u32 {
+  return (x << k) | (x >> (32u - k));
+}
+fn mx_unified_hash(cell: vec3i, dims: i32) -> u32 {
+  let seed = 0xdeadbeefu + u32(dims) * 4u + 13u;
+  var a = seed + bitcast<u32>(cell.x);
+  var b = seed + bitcast<u32>(cell.y);
+  var c = seed + select(0u, bitcast<u32>(cell.z), dims == 3);
+  c = (c ^ b) - mx_noise_rotl(b, 14u);
+  a = (a ^ c) - mx_noise_rotl(c, 11u);
+  b = (b ^ a) - mx_noise_rotl(a, 25u);
+  c = (c ^ b) - mx_noise_rotl(b, 16u);
+  a = (a ^ c) - mx_noise_rotl(c, 4u);
+  b = (b ^ a) - mx_noise_rotl(a, 14u);
+  c = (c ^ b) - mx_noise_rotl(b, 24u);
+  return c;
+}
+fn mx_unified_cell(p: vec3f, dims: i32) -> f32 {
+  return f32(mx_unified_hash(vec3i(floor(p)), dims)) / 4294967295.0;
+}
+fn mx_unified_perlin3(p: vec3f) -> f32 {
+  let fl = floor(p);
+  let cell = vec3i(fl);
+  let f = p - fl;
+  let u = f * f * f * (f * (f * 6.0 - 15.0) + 10.0);
+  var result = 0.0;
+  for (var z = 0; z <= 1; z = z + 1) {
+    for (var y = 0; y <= 1; y = y + 1) {
+      for (var x = 0; x <= 1; x = x + 1) {
+        let corner = vec3i(x, y, z);
+        let w = mix(vec3f(1.0) - u, u, vec3f(corner));
+        result = result + w.x * w.y * w.z * mx_grad3(mx_unified_hash(cell + corner, 3), f - vec3f(corner));
+      }
+    }
+  }
+  return 0.982 * result;
+}
+fn mx_unified_fractal3(p: vec3f, octaves: i32, lacunarity: f32, diminish: f32) -> f32 {
+  var result = 0.0;
+  var amplitude = 1.0;
+  var q = p;
+  for (var i = 0; i < octaves; i = i + 1) {
+    result = result + amplitude * mx_unified_perlin3(q);
+    amplitude = amplitude * diminish;
+    q = q * lacunarity;
+  }
+  return result;
+}
 fn mx_unifiednoise(p: vec3f, dims: i32, jitter: f32, octaves: i32, lacunarity: f32, diminish: f32, kind: i32) -> f32 {
+  let angle = (jitter - 1.0) * 90000.0;
+  var q = mx_rotate3d(p, angle, vec3f(0.1, 1.0, 0.0));
+  if (dims == 2) { q = vec3f(mx_rotate2d(p.xy, angle), 0.0); }
   switch (kind) {
-    case 1 { return mx_cellnoise3(p); }
+    case 1 { return mx_unified_cell(q, dims); }
     case 2 { return mx_worley(p, jitter, dims).x; }
-    case 3 { return mx_fractal3(p, octaves, lacunarity, diminish, 0u) * 0.5 + 0.5; }
-    default { return mx_perlin3(p, 0u) * 0.5 + 0.5; }
+    case 3 {
+      return mx_unified_fractal3(select(q, vec3f(p.xy, angle), dims == 2), octaves, lacunarity, diminish);
+    }
+    default { return mx_perlin3(q, 0u) * 0.5 + 0.5; }
   }
 }
 `;
@@ -805,12 +860,10 @@ const LOWERINGS: readonly NodeLowering[] = [
     const low = `${target}(${inp.named('low', '0.0')})`;
     const high = `${target}(${inp.named('high', '1.0')})`;
     const value = inp.named('in');
-    const degenerate = `${low} == ${high}`;
-    const denominator = `select(${high} - ${low}, ${target}(1.0), ${degenerate})`;
+    const denominator = `select(${target}(1.0), ${high} - ${low}, ${high} > ${low})`;
     const t = `clamp((${value} - ${low}) / ${denominator}, ${target}(0.0), ${target}(1.0))`;
     const smooth = `(${t} * ${t} * (${target}(3.0) - ${target}(2.0) * ${t}))`;
-    const step = `select(select(${target}(0.0), ${target}(0.5), ${value} == ${low}), ${target}(1.0), ${value} > ${low})`;
-    return `select(${smooth}, ${step}, ${degenerate})`;
+    return `select(select(${smooth}, ${target}(0.0), ${value} <= ${low}), ${target}(1.0), ${value} >= ${high})`;
   }),
   expr('remap', (inp, type, ctx) => {
     const target = ctx.wgslType(type);
@@ -1039,7 +1092,7 @@ const LOWERINGS: readonly NodeLowering[] = [
     const outMax = inp.named('outmax', '1.0');
     const mapped = `mix(${outMin}, ${outMax}, mx_unifiednoise(${args.join(', ')}))`;
     return `select(${mapped}, clamp(${mapped}, min(${outMin}, ${outMax}), max(${outMin}, ${outMax})), ${inp.named('clampoutput', 'true')})`;
-  }, NOISE_PRELUDE)),
+  }, [ROTATE2D_PRELUDE, ROTATE3D_PRELUDE, NOISE_PRELUDE, UNIFIED_NOISE_PRELUDE])),
   // transforms
   expr('rotate2d', (inp) => `mx_rotate2d(${inp.named('in', undefined, 0)}, ${inp.named('amount', '0.0', 1)})`, ROTATE2D_PRELUDE),
   expr('rotate3d', (inp) => `mx_rotate3d(${inp.named('in', undefined, 0)}, ${inp.named('amount', '0.0', 1)}, ${inp.named('axis', 'vec3f(0.0, 0.0, 1.0)', 2)})`, ROTATE3D_PRELUDE),

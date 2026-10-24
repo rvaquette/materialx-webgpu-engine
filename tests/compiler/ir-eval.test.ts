@@ -58,14 +58,14 @@ describe('evaluateShaderIr (T057i2)', () => {
     builder.output({ name: 'out', type, ref });
     const ir = builder.build();
 
-    expect(evaluateIrRef(ir, ref)).toEqual([0, 0.5, 0.5, 1]);
+    expect(evaluateIrRef(ir, ref)).toEqual([0, 1, 1, 1]);
     const code = emitWgsl(ir).code;
     expect(code).toContain('select(');
-    expect(code).toContain('==');
-    expect(code).toContain('> ');
+    expect(code).toContain(`${input} >= vec4f(${high})`);
+    expect(code).toContain(`${input} <= vec4f(${low})`);
   });
 
-  it('smoothly reverses the transition for inverted bounds in CPU and WGSL', () => {
+  it('prioritizes the high threshold for inverted smoothstep bounds in CPU and WGSL', () => {
     const builder = new IrModuleBuilder();
     const type = vector(4);
     const input = builder.constant(type, [0, 0.5, 0.75, 1]);
@@ -81,10 +81,48 @@ describe('evaluateShaderIr (T057i2)', () => {
     builder.output({ name: 'out', type, ref });
     const ir = builder.build();
 
-    expect(evaluateIrRef(ir, ref)).toEqual([1, 0.5, 0, 0]);
+    expect(evaluateIrRef(ir, ref)).toEqual([0, 1, 1, 1]);
     const code = emitWgsl(ir).code;
-    expect(code).toContain('vec4f(e2) - vec4f(e1)');
+    expect(code).toContain(`${input} >= vec4f(${high})`);
+    expect(code).toContain(`${input} <= vec4f(${low})`);
     expect(code).not.toContain('smoothstep(');
+  });
+
+  it.each([FLOAT, vector(2), COLOR3, vector(4)])('matches MaterialX smoothstep boundary priority for %j', (type) => {
+    const size = type.kind === 'vector' ? type.size : 1;
+    for (const [low, high, cases] of [
+      [0.25, 0.75, [[0, 0], [0.25, 0], [0.375, 0.15625], [0.5, 0.5], [0.75, 1], [1, 1]]],
+      [0.75, 0.25, [[0, 0], [0.249, 0], [0.25, 1], [0.5, 1], [0.75, 1], [1, 1]]],
+      [0.5, 0.5, [[0, 0], [0.499, 0], [0.5, 1], [0.501, 1], [1, 1]]],
+    ] as const) {
+      for (const [x, expected] of cases) {
+        const builder = new IrModuleBuilder();
+        const input = builder.constant(type, size === 1 ? x : Array(size).fill(x));
+        const lo = builder.constant(FLOAT, low);
+        const hi = builder.constant(FLOAT, high);
+        const ref = builder.add({ kind: 'call', type, op: 'smoothstep', args: [], namedArgs: { in: input, low: lo, high: hi } });
+        builder.output({ name: 'out', type, ref });
+        const ir = builder.build();
+        expect(evaluateIrRef(ir, ref)).toEqual(Array(size).fill(expected));
+        expect(emitWgsl(ir).code).toContain('select(');
+      }
+    }
+  });
+
+  it('preserves the white upper band of the inverted vector4 debug material', () => {
+    const builder = new IrModuleBuilder();
+    const type = vector(4);
+    const input = builder.add({ kind: 'primvar', type, name: 'step_in' });
+    const low = builder.constant(type, [0.75, 0.8, 0.9, 0.95]);
+    const high = builder.constant(type, [0.25, 0.2, 0.1, 0.05]);
+    const step = builder.add({ kind: 'call', type, op: 'smoothstep', args: [], namedArgs: { in: input, low, high } });
+    const color = builder.add({ kind: 'swizzle', type: COLOR3, source: step, pattern: 'xyw' });
+    const ir = builder.build();
+    const sample = (u: number, v: number) => evaluateIrRef(ir, color, { primvars: { step_in: [u, v, 0.25, 0.75] } });
+    expect(sample(0.5, 0.21)).toEqual([1, 1, 1]);
+    expect(sample(0.5, 0.19)).toEqual([1, 0, 1]);
+    expect(sample(0.1, 0.19)).toEqual([0, 0, 1]);
+    expect(sample(0.1, 0.21)).toEqual([0, 1, 1]);
   });
 
   it('uses outlow for degenerate remap bounds while preserving regular and inverted ranges', () => {

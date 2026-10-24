@@ -442,7 +442,8 @@ function evalCall(op: string, args: IrValue[], env: IrEvalVaryings, type: IrType
       return input('in', 0).map((x, i) => {
         const lo = low[i] ?? low[0]!;
         const hi = high[i] ?? high[0]!;
-        if (hi === lo) return x < lo ? 0 : x > lo ? 1 : 0.5;
+        if (x >= hi) return 1;
+        if (x <= lo) return 0;
         const t = clampNum((x - lo) / (hi - lo), 0, 1);
         return t * t * (3 - 2 * t);
       });

@@ -3,6 +3,7 @@ import { emitWgsl, wgslType, WgslEmitError } from '../../src/compiler/wgsl.ts';
 import {
   IrModuleBuilder,
   FLOAT,
+  INT,
   COLOR3,
   vector,
   shaderType,
@@ -37,6 +38,77 @@ describe('wgslType', () => {
 });
 
 describe('emitWgsl', () => {
+  function unifiedNoiseModule(dimensions: 2 | 3, explicitPosition = false, kind = 1) {
+    const b = new IrModuleBuilder();
+    const namedArgs = {
+      freq: b.constant(vector(dimensions, 'float'), dimensions === 3 ? [1.8, 2.4, 1.6] : [1.8, 2.4]),
+      offset: b.constant(vector(dimensions, 'float'), dimensions === 3 ? [0.2, 0.35, 0.1] : [0.2, 0.35]),
+      jitter: b.constant(FLOAT, 0.75),
+      type: b.constant(INT, kind),
+      octaves: b.constant(INT, 4),
+      lacunarity: b.constant(FLOAT, 2.2),
+      diminish: b.constant(FLOAT, 0.6),
+      outmin: b.constant(FLOAT, -0.7),
+      outmax: b.constant(FLOAT, 0.9),
+      ...(explicitPosition ? {
+        [dimensions === 3 ? 'position' : 'texcoord']: b.constant(vector(dimensions, 'float'), dimensions === 3 ? [2, 3, 4] : [2, 3]),
+      } : {}),
+    };
+    const ref = b.add({ kind: 'call', type: FLOAT, op: `unifiednoise${dimensions}d`, args: [], namedArgs });
+    b.output({ name: 'out', type: FLOAT, ref });
+    return emitWgsl(b.build()).code;
+  }
+
+  it.each([2, 3] as const)('rotates unified cell noise in %i dimensions and emits all dependencies once', (dims) => {
+    const code = unifiedNoiseModule(dims);
+    expect(code).toContain('let angle = (jitter - 1.0) * 90000.0;');
+    expect(code).toContain('mx_rotate3d(p, angle, vec3f(0.1, 1.0, 0.0))');
+    expect(code).toContain('mx_rotate2d(p.xy, angle)');
+    expect(code).toContain('case 1 { return mx_unified_cell(q, dims); }');
+    expect(code).toContain('case 2 { return mx_worley(p, jitter, dims).x; }');
+    for (const helper of ['mx_unified_cell', 'mx_rotate2d', 'mx_rotate3d', 'mx_unifiednoise']) {
+      expect(code.split(`fn ${helper}(`)).toHaveLength(2);
+    }
+    expect(code).toContain('let seed = 0xdeadbeefu + u32(dims) * 4u + 13u;');
+    expect(code).toContain('return f32(mx_unified_hash(vec3i(floor(p)), dims)) / 4294967295.0;');
+  });
+
+  it('uses the default geometric position only when unifiednoise3d position is omitted', () => {
+    const implicit = unifiedNoiseModule(3);
+    const explicit = unifiedNoiseModule(3, true);
+    expect(implicit).toMatch(/mx_unifiednoise\(\(vary\.position \*/);
+    const position = explicit.match(/let (e\d+) = vec3f\(2\.0, 3\.0, 4\.0\);/)?.[1];
+    expect(position).toBeDefined();
+    expect(explicit).toContain(`mx_unifiednoise((${position} *`);
+    expect(explicit).not.toMatch(/mx_unifiednoise\(\(vary\.position \*/);
+  });
+
+  it('keeps the fractal sum signed instead of lifting its zero to 0.5', () => {
+    const code = unifiedNoiseModule(3, true, 3);
+    const fractalBranch = code.match(/case 3 \{([\s\S]*?)\}/)?.[1];
+    expect(fractalBranch).toContain('return mx_unified_fractal3(');
+    expect(fractalBranch).not.toContain('0.5');
+    expect(code).toContain('result = result + amplitude * mx_unified_perlin3(q);');
+    expect(code).toContain('amplitude = amplitude * diminish;');
+    expect(code).toContain('q = q * lacunarity;');
+    expect(code).toContain('mx_grad3(mx_unified_hash(cell + corner, 3), f - vec3f(corner))');
+  });
+
+  it('embeds the 2D fractal position with the jitter angle as its third coordinate', () => {
+    const code = unifiedNoiseModule(2, true, 3);
+    expect(code).toContain('mx_unified_fractal3(select(q, vec3f(p.xy, angle), dims == 2), octaves, lacunarity, diminish)');
+  });
+
+  it('keeps the unified noise helpers out of standalone cellnoise3d modules', () => {
+    const b = new IrModuleBuilder();
+    const ref = b.add({ kind: 'call', type: FLOAT, op: 'cellnoise3d', args: [] });
+    b.output({ name: 'out', type: FLOAT, ref });
+    const code = emitWgsl(b.build()).code;
+    expect(code).toContain('fn mx_cellnoise3(');
+    expect(code).not.toContain('mx_rotate3d');
+    expect(code).not.toContain('mx_unified_cell');
+  });
+
   it('emits a complete, deterministic WGSL module', () => {
     const ir = sampleIr();
     const a = emitWgsl(ir);
@@ -227,4 +299,3 @@ describe('EDF/VDF and energetic composition (T040)', () => {
     expect(m.code).toContain('a.weight * clamp(dot(w,');
   });
 });
-

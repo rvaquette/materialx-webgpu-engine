@@ -88,13 +88,14 @@ sur le mobile (par défaut) ou le GPU local, en raster et en path tracing, via
 Seules ces variantes sont rendues : les cas sans remplacement de matériau
 `scene__raster` et `scene__pathtracing` sont exclus.
 Pour comparer les matériaux aux rendus de référence de la boule frontale,
-utiliser explicitement l'entrée OpenPBR ci-dessous : la scène par défaut utilise
-une géométrie et une caméra différentes.
+utiliser la scène OpenPBR sur mobile. La scène par défaut utilise une géométrie
+et une caméra différentes ; les rendus GPU locaux ne sont pas l'oracle de ces
+comparaisons.
 
 ```sh
 npm run test:shaderball
 npm run test:shaderball -- --target local
-npm run test:shaderball -- --entry /scenes/standard-shader-ball/openpbr-rva-standard-shader-ball.usda --materials nodes/smoothstep_degenerate_inverted_bounds/smoothstep_degenerate_inverted_bounds.mtlx
+npm run test:shaderball -- --entry /scenes/standard-shader-ball/openpbr-rva-standard-shader-ball.usda --target mobile
 npm run test:shaderball -- --target local --materials open_pbr_surface --spp 32
 npm run test:shaderball -- --backends raster --materials all --list
 ```
@@ -114,6 +115,28 @@ sont recréés et le cas est retenté une fois. Au-delà de `--max-recoveries` (
 reprises, le run s'arrête ; `--resume` permet alors de continuer.
 
 ## Arguments des noeuds MaterialX
+
+Pour les modes Cell et Fractal de `unifiednoise2d/3d`, respecter le graphe
+`stdlib/stdlib_ng.mtlx` : appliquer frequence et offset, puis une rotation
+de `(jitter - 1) * 90000` degres (axe `(0.1, 1, 0)` en 3D). Les cellules
+et les gradients du fractal utilisent le hachage entier Jenkins de MaterialX,
+pas le hachage des autres bruits du moteur. Le fractal conserve sa somme signee,
+sans appliquer `* 0.5 + 0.5` avant le remapping vers `outmin/outmax` :
+ce biais rendrait le materiau trop clair et supprimerait ses zones noires.
+En 2D, le fractal utilise la position non tournee et l'angle de jitter comme
+troisieme coordonnee. Worley conserve aussi la position non tournee.
+Les cas `unifiednoise3d_omit_position` et `unifiednoise3d_type3` sont
+valides visuellement avec la scene
+OpenPBR sur mobile, en raster et en path tracing ; un statut `ok` du rapport
+ne suffit pas a prouver la correspondance avec l'image de reference.
+
+Pour `smoothstep`, appliquer l'ordre des tests de MaterialX
+(`stdlib/genglsl/mx_smoothstep_float.glsl`) sur chaque composante :
+`in >= high` retourne 1 en priorité, puis `in <= low` retourne 0 ;
+seules les valeurs restantes sont interpolées. Les bornes égales retournent
+donc 1 à l'égalité. Les bornes inversées ne sont pas triées : elles produisent
+un seuil à `high`, pas une rampe. CPU et WGSL suivent la même règle ; le WGSL
+protège aussi le dénominateur des branches non sélectionnées.
 
 Pour `ln`, les entrees finies negatives ou nulles renvoient explicitement zero,
 comme la reference `ln_degenerate_nonpositive_input`. Le logarithme GPU ne
