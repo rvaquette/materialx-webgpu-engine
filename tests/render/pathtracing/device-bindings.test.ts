@@ -152,6 +152,23 @@ describe('buildPtDeviceBindings (T057m2)', () => {
     expect(bindings.images).toHaveLength(0);
   });
 
+  it('chooses sRGB decoding per binding, not from the shared decoded file', async () => {
+    const dataGraph = surfaceGraph('standard_surface', [conn('base_color', 'color3', 'tex')], [
+      upstream('tex', 'image', 'color3', [value('file', 'filename', 'shared.png', 'lin_rec709')]),
+    ]);
+    const unspecifiedGraph = surfaceGraph('standard_surface', [conn('base_color', 'color3', 'tex')], [
+      upstream('tex', 'image', 'color3', [value('file', 'filename', 'shared.png')]),
+    ]);
+    const dispatch = buildMaterialDispatch([
+      source(0, texturedBaseColor('shared.png')), source(1, dataGraph), source(2, unspecifiedGraph),
+    ]);
+    const { calls, provider } = countingProvider(fakeImage());
+    const bindings = await buildPtDeviceBindings(dispatch, fakeScene(), provider);
+    expect(calls).toEqual(['shared.png']);
+    expect(bindings.textures.map((t) => t.imageIndex)).toEqual([0, 0, 0]);
+    expect(bindings.textures.map((t) => t.format)).toEqual(['rgba8unorm-srgb', 'rgba8unorm', 'rgba8unorm']);
+  });
+
   it('warns and leaves the image undefined when a file fails to decode', async () => {
     const dispatch = buildMaterialDispatch([source(0, texturedBaseColor('missing.jpg'))]);
     const messages: string[] = [];

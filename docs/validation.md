@@ -111,6 +111,37 @@ reprises, le run s'arrête ; `--resume` permet alors de continuer.
 
 ## Arguments des noeuds MaterialX
 
+Pour `hextiledimage`, le lowering partage applique le `tiling` aux UV puis
+inverse V dans l'espace image : `(u * tiling.x, 1 - v * tiling.y)`, en raster
+comme en path tracing. Le test `hextiledimage_probe_tiling` utilise `(2, 1.5)`
+avec rotation, scale et offset aleatoires desactives. Les tests unitaires
+verifient les coordonnees echantillonnees, y compris hors de `[0, 1]`, avec
+tiling litteral, connecte ou omis. Le lowering construit ensuite la grille
+triangulaire, trois coordonnees aleatoires (rotation, echelle, decalage) et
+leur melange avec poids de luminance, contraste et falloff. `rotation` est
+une amplitude de randomisation ; `rotationrange` donne les angles en degres,
+et non une rotation globale des UV. Un oracle numerique independant teste
+ces calculs pour les sorties color3 et color4, avec des poids alpha separes.
+Pour comparer ce probe aux references utilisant la boule frontale, passer
+`--entry /scenes/standard-shader-ball/openpbr-rva-standard-shader-ball.usda`
+au script `test:shaderball` ; la scene par defaut utilise une autre geometrie
+et une autre camera.
+
+Les espaces couleur declares sur les fichiers sont conserves dans les bindings
+raster et path tracing. Une texture `srgb_texture` est envoyee en
+`rgba8unorm-srgb` pour decoder RGB en lineaire avant le filtrage ; alpha reste
+lineaire. Les textures lineaires et les entrees sans espace declare conservent
+`rgba8unorm`. Un meme fichier utilise comme couleur et comme donnees partage
+son decodage, mais pas son interpretation couleur. Le sampler CPU suit la
+meme convention. Cette correction ne change ni l'exposition ni le tonemapping.
+
+Le raster fournit aux matériaux les tangentes interpolées de la géométrie,
+transformées dans le monde et orthogonalisées à la normale, comme le path tracing.
+La bitangente est dérivée par `normalize(cross(normal, tangent))` avec la même
+convention que le path tracing. Sans tangente valide, les deux axes proviennent
+du repère orthonormal de secours. Les nœuds `tangent`, `bitangent` et `normalmap`
+ne reçoivent donc plus des vecteurs nuls dans le raster.
+
 Le raster intègre les reflets spéculaires depuis la HDR de la scène, avec les
 mêmes coordonnées latlong que le path tracing. Une quadrature déterministe
 combine 64 échantillons BSDF et 64 échantillons de la CDF de luminance avec MIS ;
@@ -118,6 +149,11 @@ elle remplace l'ancien gradient ciel/sol artificiel. La rugosité provient des
 lobes partagés et l'intensité, la teinte et l'échelle HDR sont conservées.
 Le diffus reste éclairé par les SH. Cette approximation sans occlusion des
 reflets ne reproduit pas les rebonds ni les ombres du path tracing.
+La quadrature utilise une copie de la closure dont seuls les lobes spéculaires
+et le coat restent actifs. Les valeurs et PDF sont issus de cette même closure,
+sans réévaluation séparée de la réponse spéculaire. Cela évite les calculs
+redondants qui provoquaient une perte du périphérique Vulkan sur le mobile
+avec `fractal2d_defaults`, sans réduire les 64 + 64 échantillons.
 Une scène ne contenant qu'une `DomeLight` n'ajoute aucune lumière directionnelle
 implicite : raster et path tracing sont éclairés uniquement par l'environnement.
 Les lumières explicitement présentes dans la scène restent actives.

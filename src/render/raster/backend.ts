@@ -37,6 +37,7 @@ export const SCENE_IR_VERTEX_LAYOUTS: GPUVertexBufferLayout[] = [
   { arrayStride: 12, attributes: [{ shaderLocation: 0, offset: 0, format: 'float32x3' }] },
   { arrayStride: 12, attributes: [{ shaderLocation: 1, offset: 0, format: 'float32x3' }] },
   { arrayStride: 8, attributes: [{ shaderLocation: 2, offset: 0, format: 'float32x2' }] },
+  { arrayStride: 16, attributes: [{ shaderLocation: 3, offset: 0, format: 'float32x4' }] },
 ];
 
 /** Active raster pass kinds driven by a material's effective render passes. */
@@ -57,6 +58,7 @@ export interface ForwardGeometry {
   positionBuffer: GPUBuffer;
   normalBuffer: GPUBuffer;
   texcoordBuffer: GPUBuffer;
+  tangentBuffer: GPUBuffer;
   indexBuffer: GPUBuffer;
   indexCount: number;
 }
@@ -91,6 +93,7 @@ export interface SceneDrawCall {
   pipelineKey: string;
   /** Texcoord stream (loc 2) consumed by the IR variant pipeline, if available. */
   texcoordBuffer?: GPUBuffer;
+  tangentBuffer: GPUBuffer;
   /** Texture/sampler bind groups (groups 1/2) the IR variant samples, keyed by
    *  group index; set in addition to material (0) and frame. Absent when the
    *  material folds to constants with no textures. */
@@ -247,6 +250,7 @@ export class RasterBackend {
       pass.setVertexBuffer(0, draw.positionBuffer);
       pass.setVertexBuffer(1, draw.normalBuffer);
       if (draw.texcoordBuffer) pass.setVertexBuffer(2, draw.texcoordBuffer);
+      pass.setVertexBuffer(3, draw.tangentBuffer);
       pass.setIndexBuffer(draw.indexBuffer, 'uint32');
       pass.drawIndexed(draw.indexCount);
     }
@@ -272,6 +276,7 @@ export class RasterBackend {
     pass.setVertexBuffer(0, targets.geometry.positionBuffer);
     pass.setVertexBuffer(1, targets.geometry.normalBuffer);
     pass.setVertexBuffer(2, targets.geometry.texcoordBuffer);
+    pass.setVertexBuffer(3, targets.geometry.tangentBuffer);
     pass.setIndexBuffer(targets.geometry.indexBuffer, 'uint32');
     pass.drawIndexed(targets.geometry.indexCount);
     pass.end();

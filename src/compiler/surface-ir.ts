@@ -27,6 +27,7 @@ import {
   type IrType,
 } from './ir.ts';
 import { coveredCategories, getNodeLowering } from './nodes.ts';
+import { lowerHexTiledImage, type HexTileInputs } from './hextile.ts';
 
 export interface LoweredSurfaceInputs {
   readonly family: SurfaceFamily;
@@ -180,6 +181,28 @@ export function lowerSurfaceInputsToIr(
     builder.declareSampler({ name: nodeId });
     const texcoord = node.inputs.find((i) => i.name === 'texcoord');
     const uv = uvOverride ?? (texcoord ? lowerInput(texcoord) : undefined) ?? ensureUv();
+    if (uvOverride === undefined && node.category === 'hextiledimage') {
+      const uvType = vector(2, 'float', 'texcoord');
+      const input = (name: keyof HexTileInputs, type: IrType, fallback: readonly number[]): IrRef => {
+        const authored = authoredRef(nodeId, name, type);
+        if (authored !== undefined) return authored;
+        const declared = node.nodeDef?.inputs?.find((candidate) => candidate.name === name)?.value;
+        return constOfIrType(builder, type, declared !== undefined ? parseNumbers(declared) : fallback);
+      };
+      return lowerHexTiledImage(builder, valueType, {
+        texcoord: coerce(uv, uvType),
+        tiling: input('tiling', uvType, [1, 1]),
+        rotation: input('rotation', FLOAT, [1]),
+        rotationrange: input('rotationrange', uvType, [0, 360]),
+        scale: input('scale', FLOAT, [1]),
+        scalerange: input('scalerange', uvType, [0.5, 2]),
+        offset: input('offset', FLOAT, [1]),
+        offsetrange: input('offsetrange', uvType, [0, 1]),
+        falloff: input('falloff', FLOAT, [0.5]),
+        falloffcontrast: input('falloffcontrast', FLOAT, [0.5]),
+        lumacoeffs: input('lumacoeffs', COLOR3, [0.2722287, 0.6740818, 0.0536895]),
+      }, (coord) => builder.add({ kind: 'texture', type: valueType, texture: nodeId, uv: coord, sampler: nodeId }));
+    }
     return builder.add({ kind: 'texture', type: valueType, texture: nodeId, uv: coerce(uv, vector(2, 'float', 'texcoord')), sampler: nodeId });
   };
 

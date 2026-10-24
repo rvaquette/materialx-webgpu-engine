@@ -19,6 +19,19 @@ function checker(): DecodedPixelImage {
 }
 
 describe('createImageSampler (T057k)', () => {
+  it('decodes sRGB RGB texels to linear before interpolation while leaving alpha unchanged', () => {
+    const sample = createImageSampler({
+      kind: 'pixels', componentType: 'uint8', channels: 4, width: 2, height: 1, colorSpace: 'srgb_texture',
+      data: new Uint8Array([128, 10, 0, 128, 255, 255, 255, 255]),
+    });
+    const first = sample(0.25, 0.5);
+    expect(first[0]).toBeCloseTo(0.2158605, 6);
+    expect(first[1]).toBeCloseTo(10 / 255 / 12.92, 8);
+    expect(first[2]).toBe(0);
+    expect(first[3]).toBeCloseTo(128 / 255, 8);
+    expect(sample(0.5, 0.5)[0]).toBeCloseTo((0.2158605 + 1) / 2, 6);
+  });
+
   it('returns exact texels at their half-texel centers', () => {
     const s = createImageSampler(checker());
     expect(s(0.25, 0.25)).toEqual([1, 0, 0, 1]);

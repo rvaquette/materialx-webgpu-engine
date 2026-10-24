@@ -267,9 +267,56 @@ describe('lowerSurfaceInputsToIr (T055c)', () => {
     const { module } = lowerAndEmit(graph, [{ name: 'base_color', type: COLOR3 }]);
     expect(module.textures).toHaveLength(1);
     expect(module.textures[0]!.name).toBe('tex');
+    expect(module.textures[0]!.colorSpace).toBe('srgb_texture');
     expect(module.code).toContain('textureSample(tex_tex, samp_tex');
     // UV comes from a declared texcoord primvar, not a baked constant.
     expect(module.code).toContain('vary.v_st');
+  });
+
+  it.each(['literal', 'connected', 'omitted'] as const)('applies %s hextiledimage tiling before the image-space V flip in both shader stages', (mode) => {
+    const inputs = [
+      value('file', 'filename', 'grid.png', 'srgb_texture'),
+      conn('texcoord', 'vector2', 'uv'),
+      value('rotation', 'float', '0'),
+      value('scale', 'float', '0'),
+      value('offset', 'float', '0'),
+    ];
+    if (mode === 'literal') inputs.push(value('tiling', 'vector2', '2, 1.5'));
+    if (mode === 'connected') inputs.push(conn('tiling', 'vector2', 'tiles'));
+    const graph = surfaceGraph([conn('base_color', 'color3', 'tex')], [
+      upstream('tex', 'hextiledimage', 'color3', inputs),
+      upstream('uv', 'texcoord', 'vector2', []),
+      upstream('tiles', 'constant', 'vector2', [value('value', 'vector2', '2, 1.5')]),
+    ]);
+    const builder = new IrModuleBuilder();
+    const lowered = lowerSurfaceInputsToIr(graph, resolveSurface(graph)!, builder);
+    builder.output({ name: 'color', type: COLOR3, ref: lowered.inputs.get('base_color')! });
+    const ir = builder.build();
+    for (const uv of [[0.2, 0.4], [-0.3, 1.2]]) {
+      const sampled = evaluateShaderIr(ir, { texcoord: uv, textures: { tex: (u, v) => [u, v, 0, 1] } }).get('color')!;
+      expect(sampled[0]).toBeCloseTo(uv[0]! * (mode === 'omitted' ? 1 : 2));
+      expect(sampled[1]).toBeCloseTo(1 - uv[1]! * (mode === 'omitted' ? 1 : 1.5));
+    }
+    expect(ir.textures).toHaveLength(1);
+    expect(ir.textures[0]).toMatchObject({ name: 'tex', fileRef: 'grid.png', colorSpace: 'srgb_texture' });
+    expect(emitWgsl(ir).textures[0]!.colorSpace).toBe('srgb_texture');
+    for (const compute of [false, true]) {
+      const code = lowerExprs(ir, '', compute).body.join('\n');
+      expect(code).toContain(compute ? 'textureSampleLevel(' : 'textureSample(');
+      expect(code).toMatch(/\(e\d+ \* e\d+\)/);
+    }
+  });
+
+  it('does not apply a hextiledimage tiling transform to plain image nodes', () => {
+    const graph = surfaceGraph([conn('base_color', 'color3', 'tex')], [
+      upstream('tex', 'image', 'color3', [value('tiling', 'vector2', '2, 1.5')]),
+    ]);
+    const builder = new IrModuleBuilder();
+    const lowered = lowerSurfaceInputsToIr(graph, resolveSurface(graph)!, builder);
+    builder.output({ name: 'color', type: COLOR3, ref: lowered.inputs.get('base_color')! });
+    expect(evaluateShaderIr(builder.build(), {
+      texcoord: [0.2, 0.4], textures: { tex: (u, v) => [u, v, 0, 1] },
+    }).get('color')).toEqual([0.2, 0.4, 0]);
   });
 
   it('lowers a literal input to a baked constant with no bindings', () => {

@@ -1,0 +1,8 @@
+{
+    "chat.tools.terminal.autoApprove": {
+        "/^python -c \"from PIL import Image; im=Image\\.open\\(r'renders\\\\shaderball\\\\local\\\\nodes__hextiledimage_probe_tiling__material__ref\\.avif'\\); print\\(im\\.size\\); im\\.save\\(r'C:\\\\Users\\\\RégisVAQUETTE\\\\\\.copilot\\\\session-state\\\\33b20bdf-cacf-4151-b26c-dc417215c997\\\\files\\\\hextiled-reference\\.png'\\)\"$/": {
+            "approve": true,
+            "matchCommandLine": true
+        }
+    }
+}

@@ -501,7 +501,7 @@ async function uploadMaterialTextures(
     const height = image?.height ?? 1;
     const gpuTex = device.createTexture({
       size: [width, height],
-      format: 'rgba8unorm',
+      format: t.colorSpace === 'srgb_texture' ? 'rgba8unorm-srgb' : 'rgba8unorm',
       usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
     });
     if (image && image.componentType === 'uint8' && image.channels === 4) {
@@ -743,6 +743,7 @@ async function renderUsdRasterOnDevice(
   // isolates the ambient/IBL term the shadow composite must preserve.
   const frameIbl = { ...frame, light: { ...frame.light, color: [0, 0, 0] as Vec3, intensity: 0 } };
   const zeroTexcoords = new Map<string, GPUBuffer>();
+  const zeroTangents = new Map<string, GPUBuffer>();
   for (const draw of frame.draws) {
     const buffers = uploaded.get(draw.prototypeId);
     const geometry = resources.geometries.get(draw.prototypeId);
@@ -763,6 +764,11 @@ async function renderUsdRasterOnDevice(
       }
     }
     const frameUniform = device.createBuffer({ size: SCENE_FRAME_UNIFORM_SIZE, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+    let tangent = buffers.vertexBuffers.get('tangent') ?? zeroTangents.get(draw.prototypeId);
+    if (!tangent) {
+      tangent = device.createBuffer({ size: geometry.vertexCount * 16, usage: GPUBufferUsage.VERTEX });
+      zeroTangents.set(draw.prototypeId, tangent);
+    }
     device.queue.writeBuffer(frameUniform, 0, buildSceneFrameUniform(frame, draw));
     const materialUniform = device.createBuffer({ size: SCENE_MATERIAL_UNIFORM_SIZE, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
     device.queue.writeBuffer(materialUniform, 0, buildSceneMaterialUniform(draw));
@@ -795,6 +801,7 @@ async function renderUsdRasterOnDevice(
       positionBuffer: position,
       normalBuffer: normal,
       texcoordBuffer: texcoord,
+      tangentBuffer: tangent,
       indexBuffer: buffers.indexBuffer,
       indexCount: buffers.indexCount,
       pipelineKey: material.variant.pipelineKey,
@@ -825,6 +832,7 @@ async function renderUsdRasterOnDevice(
         positionBuffer: position,
         normalBuffer: normal,
         texcoordBuffer: texcoord,
+        tangentBuffer: tangent,
         indexBuffer: buffers.indexBuffer,
         indexCount: buffers.indexCount,
         pipelineKey: material.variant.pipelineKey,
@@ -1156,7 +1164,7 @@ async function renderUsdOnDevice(
     const height = image?.height ?? 1;
     const gpuTex = device.createTexture({
       size: [width, height],
-      format: 'rgba8unorm',
+      format: tex.format,
       usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
     });
     if (image && image.componentType === 'uint8' && image.channels === 4) {

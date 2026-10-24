@@ -10,12 +10,13 @@ import { resolveSurface } from '../../../src/materialx/surface-graph.ts';
 import type { ResolvedGraph, ResolvedInput, ResolvedNode } from '../../../src/materialx/graph.ts';
 
 /** standard_surface whose base_color samples an image node reading `file`. */
-function imageSurface(file: string): { graph: ResolvedGraph; surface: ReturnType<typeof resolveSurface> } {
+function imageSurface(file: string, colorSpace?: string): { graph: ResolvedGraph; surface: ReturnType<typeof resolveSurface> } {
   const fileInput: ResolvedInput = {
     name: 'file',
     type: 'filename',
     source: { kind: 'value', value: file, type: 'filename' },
     provenance: { namePath: '/mat/tex/file' },
+    ...(colorSpace !== undefined ? { colorSpace } : {}),
   };
   const tex: ResolvedNode = {
     id: 'tex',
@@ -40,8 +41,8 @@ function imageSurface(file: string): { graph: ResolvedGraph; surface: ReturnType
   return { graph, surface: resolveSurface(graph) };
 }
 
-function variant(file: string, index: number) {
-  const { graph, surface } = imageSurface(file);
+function variant(file: string, index: number, colorSpace?: string) {
+  const { graph, surface } = imageSurface(file, colorSpace);
   expect(surface).not.toBeNull();
   return emitSurfaceVariant(graph, surface!, index);
 }
@@ -77,6 +78,17 @@ describe('buildTextureRegistry (T057j)', () => {
     const reg = buildTextureRegistry([variant('brick.png', 0), variant('wood.png', 1)]);
     expect(reg.images).toEqual(['brick.png', 'wood.png']);
     expect(reg.textureImage).toEqual([0, 1]);
+  });
+
+  it('preserves per-binding color spaces when the same file is sampled as color and data', () => {
+    const reg = buildTextureRegistry([
+      variant('shared.png', 0, 'srgb_texture'),
+      variant('shared.png', 1, 'lin_rec709'),
+      variant('shared.png', 2),
+    ]);
+    expect(reg.images).toEqual(['shared.png']);
+    expect(reg.textureImage).toEqual([0, 0, 0]);
+    expect(reg.textures.map((t) => t.colorSpace)).toEqual(['srgb_texture', 'lin_rec709', undefined]);
   });
 
   it('is empty for materials without textures', () => {

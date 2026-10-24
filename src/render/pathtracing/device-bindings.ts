@@ -63,6 +63,7 @@ export interface PtTextureBinding {
   handle: string;
   /** Index into `images` (shared when materials reference the same file). */
   imageIndex: number;
+  format: 'rgba8unorm' | 'rgba8unorm-srgb';
 }
 
 export interface PtSamplerBinding {
@@ -135,6 +136,7 @@ export async function buildPtDeviceBindings(
     binding: t.binding,
     handle: t.handle,
     imageIndex: registry.textureImage[i]!,
+    format: registry.textures[i]!.colorSpace === 'srgb_texture' ? 'rgba8unorm-srgb' : 'rgba8unorm',
   }));
   const samplers: PtSamplerBinding[] = registry.samplers.map((s) => ({
     binding: s.binding,

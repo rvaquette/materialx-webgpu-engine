@@ -255,7 +255,7 @@ export async function uploadMaterialTextures(
     const height = image?.height ?? 1;
     const gpuTex = device.createTexture({
       size: [width, height],
-      format: 'rgba8unorm',
+      format: t.colorSpace === 'srgb_texture' ? 'rgba8unorm-srgb' : 'rgba8unorm',
       usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
     });
     if (image && image.componentType === 'uint8' && image.channels === 4) {

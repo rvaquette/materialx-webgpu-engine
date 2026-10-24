@@ -457,6 +457,7 @@ export class InteractiveViewer {
 
     const drawsByPass = new Map<ScenePassKind, SceneDrawCall[]>();
     const zeroTexcoords = new Map<string, GPUBuffer>();
+    const zeroTangents = new Map<string, GPUBuffer>();
     const frameUniforms: GPUBuffer[] = [];
     for (const draw of frame.draws) {
       const buffers = uploaded.get(draw.prototypeId);
@@ -478,6 +479,11 @@ export class InteractiveViewer {
         }
       }
       const frameUniform = track(device.createBuffer({ size: SCENE_FRAME_UNIFORM_SIZE, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST }));
+      let tangent = buffers.vertexBuffers.get('tangent') ?? zeroTangents.get(draw.prototypeId);
+      if (!tangent) {
+        tangent = track(device.createBuffer({ size: geometry.vertexCount * 16, usage: GPUBufferUsage.VERTEX }));
+        zeroTangents.set(draw.prototypeId, tangent);
+      }
       device.queue.writeBuffer(frameUniform, 0, buildSceneFrameUniform(frame, draw));
       frameUniforms.push(frameUniform);
       const materialUniform = track(device.createBuffer({ size: SCENE_MATERIAL_UNIFORM_SIZE, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST }));
@@ -509,6 +515,7 @@ export class InteractiveViewer {
         positionBuffer: position,
         normalBuffer: normal,
         texcoordBuffer: texcoord,
+        tangentBuffer: tangent,
         indexBuffer: buffers.indexBuffer,
         indexCount: buffers.indexCount,
         pipelineKey: material.variant.pipelineKey,
@@ -654,7 +661,7 @@ fn dir_to_uv(d: vec3<f32>) -> vec2<f32> {
       const h = image?.height ?? 1;
       const gpuTex = track(device.createTexture({
         size: [w, h],
-        format: 'rgba8unorm',
+        format: tex.format,
         usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
       }));
       if (image && image.componentType === 'uint8' && image.channels === 4) {

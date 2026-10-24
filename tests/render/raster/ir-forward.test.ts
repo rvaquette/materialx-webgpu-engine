@@ -98,11 +98,26 @@ describe('assembleIrForwardShader (T058b)', () => {
     expect(shader.code).toContain('atan2(n.z, n.x) * (0.5 / MX_PI) + 0.5');
     expect(shader.code).toContain('acos(clamp(n.y, -1.0, 1.0)) / MX_PI');
     expect(shader.code).toContain('textureSampleLevel(forwardEnv, forwardEnvSampler, uv, 0.0).rgb * fu.envMap.xyz');
-    expect(shader.code).toContain('let bs = mx_closure_sample(c, wo, u);');
+    expect(shader.code).toContain('let spec = mx_forward_specular_closure(c);');
+    expect(shader.code).toContain('let bs = mx_closure_sample(spec, wo, u);');
     expect(shader.code).toContain('let wi = transpose(sframe) * wiWorld;');
-    expect(shader.code).toContain('let em = mx_closure_specular_eval(c, wo, wi);');
+    expect(shader.code).toContain('let em = mx_closure_eval(spec, wo, wi);');
     expect(shader.code).toContain('mx_forward_env_direction((f32(i) + 0.5) / 64.0)');
     expect(shader.code).not.toContain('mix(0.25, 1.0, up)');
+  });
+
+  it('excludes SH-lit lobes from HDR sampling without reducing the quadrature', () => {
+    const { shader } = forward('standard_surface', []);
+    expect(shader.code).toContain('var spec = c;');
+    expect(shader.code).toContain('kind == MX_LOBE_DIELECTRIC_REFLECTION || kind == MX_LOBE_CONDUCTOR');
+    expect(shader.code).toContain('kind == MX_LOBE_GENERALIZED_SCHLICK || kind == MX_LOBE_DIELECTRIC_TRANSMISSION');
+    expect(shader.code).toContain('spec.lobes[i].weight = 0.0;');
+    expect(shader.code).toContain('for (var i = 0u; i < 64u; i++)');
+    expect(shader.code).toContain('radiance = radiance + bs.value * envDir');
+    expect(shader.code).toContain('envPdf * envPdf + em.pdf * em.pdf');
+    const fragment = shader.code.slice(shader.code.indexOf('@fragment'));
+    expect(fragment).not.toContain('mx_closure_specular_eval(');
+    expect(fragment).not.toContain('mx_closure_eval(c, wo, wi).pdf');
   });
 
   it('adds the closure emission when present', () => {
@@ -112,6 +127,17 @@ describe('assembleIrForwardShader (T058b)', () => {
       value('emission_color', 'color3', '1, 1, 1'),
     ]);
     expect(shader.code).toContain('if (c.hasEmission != 0u) { radiance = radiance + c.emission; }');
+  });
+
+  it('feeds the interpolated geometry tangent and derives bitangent before evaluating the material', () => {
+    const { shader } = forward('standard_surface', []);
+    expect(shader.code).toContain('@location(3) tangent: vec4f');
+    expect(shader.code).toContain('let projectedTangent = fin.worldTangent - vary.normal * dot(vary.normal, fin.worldTangent);');
+    expect(shader.code).toContain('bitangent = normalize(cross(vary.normal, tangent));');
+    expect(shader.code).toContain('vary.tangent = tangent;');
+    expect(shader.code).toContain('vary.bitangent = bitangent;');
+    expect(shader.code.indexOf('vary.bitangent = bitangent;')).toBeLessThan(shader.code.indexOf('let c = mx_surface_layered(vary);'));
+    expect(shader.code).toContain('var bitangent = fallbackFrame[1];');
   });
 });
 

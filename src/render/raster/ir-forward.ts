@@ -92,6 +92,20 @@ fn mx_forward_environment(d: vec3f) -> vec3f {
   return textureSampleLevel(forwardEnv, forwardEnvSampler, uv, 0.0).rgb * fu.envMap.xyz;
 }
 
+// Diffuse is integrated separately with SH. Remove its lobes before sampling,
+// rather than repeatedly evaluating the full closure and discarding its value.
+fn mx_forward_specular_closure(c: LayeredClosure) -> LayeredClosure {
+  var spec = c;
+  for (var i = 0u; i < spec.lobeCount; i++) {
+    let kind = spec.lobes[i].kind;
+    if (!(kind == MX_LOBE_DIELECTRIC_REFLECTION || kind == MX_LOBE_CONDUCTOR
+        || kind == MX_LOBE_GENERALIZED_SCHLICK || kind == MX_LOBE_DIELECTRIC_TRANSMISSION)) {
+      spec.lobes[i].weight = 0.0;
+    }
+  }
+  return spec;
+}
+
 // Diffuse irradiance E(n) from the uploaded SH9 radiance coefficients (cosine-lobe
 // convolution A_l). Basis matches projectIrradianceSH on the CPU and mx_sh_irradiance
 // in the path tracer so raster and path-traced diffuse IBL agree.
@@ -148,6 +162,7 @@ function vertexStage(displacement: boolean): string {
   @location(0) position: vec3f,
   @location(1) normal: vec3f,
   @location(2) texcoord: vec2f,
+  @location(3) tangent: vec4f,
 };
 struct MxVertexOut {
   @builtin(position) clip: vec4f,
@@ -155,6 +170,7 @@ struct MxVertexOut {
   @location(1) worldNormal: vec3f,
   @location(2) texcoord: vec2f,
   @location(3) viewDir: vec3f,
+  @location(4) worldTangent: vec3f,
 };
 @vertex
 fn ${IR_FORWARD_VERTEX_ENTRY}(vin: MxVertexIn) -> MxVertexOut {
@@ -168,6 +184,8 @@ ${dispOffset}
   out.worldNormal = worldNormal;
   out.texcoord = vin.texcoord;
   out.viewDir = normalize(fu.eye.xyz - worldPos);
+  let tangent = (fu.model * vec4f(vin.tangent.xyz, 0.0)).xyz;
+  out.worldTangent = tangent / max(length(tangent), 1e-20);
   return out;
 }`;
 }
@@ -189,6 +207,16 @@ fn ${IR_FORWARD_FRAGMENT_ENTRY}(fin: MxVertexOut) -> @location(0) vec4f {
   var vary: MxVaryings;
   vary.position = fin.worldPos;
   vary.normal = normalize(fin.worldNormal);
+  let fallbackFrame = basis(vary.normal);
+  let projectedTangent = fin.worldTangent - vary.normal * dot(vary.normal, fin.worldTangent);
+  var tangent = fallbackFrame[0];
+  var bitangent = fallbackFrame[1];
+  if (dot(projectedTangent, projectedTangent) > 1e-10) {
+    tangent = normalize(projectedTangent);
+    bitangent = normalize(cross(vary.normal, tangent));
+  }
+  vary.tangent = tangent;
+  vary.bitangent = bitangent;
   vary.viewDir = normalize(fin.viewDir);
   vary.texcoord = fin.texcoord;${primvarAssigns ? '\n' + primvarAssigns : ''}
   let c = ${surfaceEntry}(vary);
@@ -211,26 +239,25 @@ fn ${IR_FORWARD_FRAGMENT_ENTRY}(fin: MxVertexOut) -> @location(0) vec4f {
   radiance = radiance + mx_closure_diffuse_albedo(c) * (mx_sh_irradiance(n) / MX_PI);
 
   // Deterministic BSDF quadrature of the actual dome; diffuse stays in SH above.
+  let spec = mx_forward_specular_closure(c);
   for (var i = 0u; i < 64u; i++) {
     let u = vec3f((f32(i) + 0.5) / 64.0,
       f32(reverseBits(i)) * 2.3283064365386963e-10,
       fract((f32(i) + 0.5) * 0.61803398875));
-    let bs = mx_closure_sample(c, wo, u);
+    let bs = mx_closure_sample(spec, wo, u);
     if (bs.valid && bs.pdf > 0.0) {
-      let em = mx_closure_specular_eval(c, wo, bs.wi);
       let envDir = mx_forward_environment(sframe * bs.wi);
       let envPdf = mx_forward_env_pdf(sframe * bs.wi);
       let mis = bs.pdf * bs.pdf / max(bs.pdf * bs.pdf + envPdf * envPdf, 1e-20);
-      radiance = radiance + em.value * envDir * (mis * abs(bs.wi.z) / (64.0 * bs.pdf));
+      radiance = radiance + bs.value * envDir * (mis * abs(bs.wi.z) / (64.0 * bs.pdf));
     }
     if (fu.envMap.w != 0.0 && fu.envInfo.z > 0.0) {
       let wiWorld = mx_forward_env_direction((f32(i) + 0.5) / 64.0);
       let wi = transpose(sframe) * wiWorld;
       let envPdf = mx_forward_env_pdf(wiWorld);
       if (envPdf > 0.0) {
-        let em = mx_closure_specular_eval(c, wo, wi);
-        let bsdfPdf = mx_closure_eval(c, wo, wi).pdf;
-        let mis = envPdf * envPdf / max(envPdf * envPdf + bsdfPdf * bsdfPdf, 1e-20);
+        let em = mx_closure_eval(spec, wo, wi);
+        let mis = envPdf * envPdf / max(envPdf * envPdf + em.pdf * em.pdf, 1e-20);
         radiance = radiance + em.value * mx_forward_environment(wiWorld) * (mis * abs(wi.z) / (64.0 * envPdf));
       }
     }

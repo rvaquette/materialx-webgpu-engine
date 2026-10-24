@@ -33,7 +33,12 @@ export function createImageSampler(image: DecodedPixelImage): ImageSampler {
   const texel = (x: number, y: number): number[] => {
     const base = (wrap(y, height) * width + wrap(x, width)) * channels;
     const out = [0, 0, 0, 1];
-    for (let c = 0; c < channels && c < 4; c++) out[c] = normalize(data[base + c]!, componentType);
+    for (let c = 0; c < channels && c < 4; c++) {
+      const value = normalize(data[base + c]!, componentType);
+      out[c] = image.colorSpace === 'srgb_texture' && c < 3
+        ? value <= 0.04045 ? value / 12.92 : Math.pow((value + 0.055) / 1.055, 2.4)
+        : value;
+    }
     return out;
   };
   return (u, v) => {

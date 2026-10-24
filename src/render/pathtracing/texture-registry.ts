@@ -48,7 +48,10 @@ export function buildTextureRegistry(variants: readonly SurfaceVariantModule[]):
     }
   }
 
-  const textures = allTextures.map((t, i) => ({ name: t.name, handle: t.handle, group: 1, binding: i }));
+  const textures = allTextures.map((t, i) => ({
+    name: t.name, handle: t.handle, group: 1, binding: i,
+    ...(t.colorSpace !== undefined ? { colorSpace: t.colorSpace } : {}),
+  }));
   const samplers = variants
     .flatMap((v) => v.samplers)
     .map((s, i) => ({ name: s.name, handle: s.handle, group: 2, binding: i }));

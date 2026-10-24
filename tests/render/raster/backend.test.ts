@@ -50,7 +50,7 @@ describe('RasterBackend pipelines', () => {
     const desc = device.createRenderPipeline.mock.calls[0]![0] as any;
     expect(desc.vertex.entryPoint).toBe('vs_forward');
     expect(desc.fragment.entryPoint).toBe('fs_forward');
-    expect(desc.vertex.buffers).toHaveLength(3);
+    expect(desc.vertex.buffers).toHaveLength(4);
     expect(desc.fragment.targets[0].format).toBe('rgba16float');
     expect(desc.depthStencil.format).toBe('depth24plus');
     expect(backend.forwardPipeline).toBe(pipeline);
@@ -77,6 +77,7 @@ describe('RasterBackend frame recording', () => {
       positionBuffer: { id: 'p' } as unknown as GPUBuffer,
       normalBuffer: { id: 'n' } as unknown as GPUBuffer,
       texcoordBuffer: { id: 't' } as unknown as GPUBuffer,
+      tangentBuffer: { id: 'tan' } as unknown as GPUBuffer,
       indexBuffer: {} as GPUBuffer,
       indexCount: 36,
     },
@@ -154,8 +155,8 @@ describe('RasterBackend scene forward path', () => {
     backend.createSceneVariantPipeline('opaque', 'ka', '// a');
     backend.createSceneVariantPipeline('opaque', 'kb', '// b');
     const draws = [
-      { pipelineKey: 'ka', materialBindGroup: { id: 'ma' } as unknown as GPUBindGroup, frameBindGroup: { id: 'fa' } as unknown as GPUBindGroup, positionBuffer: { id: 'pa' } as unknown as GPUBuffer, normalBuffer: { id: 'na' } as unknown as GPUBuffer, indexBuffer: {} as GPUBuffer, indexCount: 3 },
-      { pipelineKey: 'kb', materialBindGroup: { id: 'mb' } as unknown as GPUBindGroup, frameBindGroup: { id: 'fb' } as unknown as GPUBindGroup, positionBuffer: { id: 'pb' } as unknown as GPUBuffer, normalBuffer: { id: 'nb' } as unknown as GPUBuffer, indexBuffer: {} as GPUBuffer, indexCount: 6 },
+      { pipelineKey: 'ka', tangentBuffer: {} as GPUBuffer, materialBindGroup: { id: 'ma' } as unknown as GPUBindGroup, frameBindGroup: { id: 'fa' } as unknown as GPUBindGroup, positionBuffer: { id: 'pa' } as unknown as GPUBuffer, normalBuffer: { id: 'na' } as unknown as GPUBuffer, indexBuffer: {} as GPUBuffer, indexCount: 3 },
+      { pipelineKey: 'kb', tangentBuffer: {} as GPUBuffer, materialBindGroup: { id: 'mb' } as unknown as GPUBindGroup, frameBindGroup: { id: 'fb' } as unknown as GPUBindGroup, positionBuffer: { id: 'pb' } as unknown as GPUBuffer, normalBuffer: { id: 'nb' } as unknown as GPUBuffer, indexBuffer: {} as GPUBuffer, indexCount: 6 },
     ];
     const pass = mockPass();
     const encoder = { beginRenderPass: vi.fn(() => pass) };
@@ -180,9 +181,9 @@ describe('RasterBackend scene forward path', () => {
     const pa = backend.createSceneVariantPipeline('opaque', 'ka', '// a');
     const pb = backend.createSceneVariantPipeline('opaque', 'kb', '// b');
     const draws = [
-      { pipelineKey: 'ka', texcoordBuffer: { id: 'ta' } as unknown as GPUBuffer, materialBindGroup: {} as GPUBindGroup, frameBindGroup: {} as GPUBindGroup, positionBuffer: {} as GPUBuffer, normalBuffer: {} as GPUBuffer, indexBuffer: {} as GPUBuffer, indexCount: 3 },
-      { pipelineKey: 'ka', texcoordBuffer: { id: 'tb' } as unknown as GPUBuffer, materialBindGroup: {} as GPUBindGroup, frameBindGroup: {} as GPUBindGroup, positionBuffer: {} as GPUBuffer, normalBuffer: {} as GPUBuffer, indexBuffer: {} as GPUBuffer, indexCount: 3 },
-      { pipelineKey: 'kb', materialBindGroup: {} as GPUBindGroup, frameBindGroup: {} as GPUBindGroup, positionBuffer: {} as GPUBuffer, normalBuffer: {} as GPUBuffer, indexBuffer: {} as GPUBuffer, indexCount: 6 },
+      { pipelineKey: 'ka', tangentBuffer: {} as GPUBuffer, texcoordBuffer: { id: 'ta' } as unknown as GPUBuffer, materialBindGroup: {} as GPUBindGroup, frameBindGroup: {} as GPUBindGroup, positionBuffer: {} as GPUBuffer, normalBuffer: {} as GPUBuffer, indexBuffer: {} as GPUBuffer, indexCount: 3 },
+      { pipelineKey: 'ka', tangentBuffer: {} as GPUBuffer, texcoordBuffer: { id: 'tb' } as unknown as GPUBuffer, materialBindGroup: {} as GPUBindGroup, frameBindGroup: {} as GPUBindGroup, positionBuffer: {} as GPUBuffer, normalBuffer: {} as GPUBuffer, indexBuffer: {} as GPUBuffer, indexCount: 3 },
+      { pipelineKey: 'kb', tangentBuffer: {} as GPUBuffer, materialBindGroup: {} as GPUBindGroup, frameBindGroup: {} as GPUBindGroup, positionBuffer: {} as GPUBuffer, normalBuffer: {} as GPUBuffer, indexBuffer: {} as GPUBuffer, indexCount: 6 },
     ];
     const pass = mockPass();
     const encoder = { beginRenderPass: vi.fn(() => pass) };
@@ -197,6 +198,7 @@ describe('RasterBackend scene forward path', () => {
     expect(pass.setPipeline).toHaveBeenNthCalledWith(2, pb);
     expect(pass.setPipeline).toHaveBeenCalledTimes(2);
     expect(pass.setVertexBuffer).toHaveBeenCalledWith(2, draws[0]!.texcoordBuffer);
+    expect(pass.setVertexBuffer).toHaveBeenCalledWith(3, draws[0]!.tangentBuffer);
     expect(pass.drawIndexed).toHaveBeenCalledTimes(3);
   });
 
@@ -209,7 +211,7 @@ describe('RasterBackend scene forward path', () => {
         hdrView: {} as GPUTextureView,
         depthView: {} as GPUTextureView,
         draws: [
-          { pipelineKey: 'missing', materialBindGroup: {} as GPUBindGroup, frameBindGroup: {} as GPUBindGroup, positionBuffer: {} as GPUBuffer, normalBuffer: {} as GPUBuffer, indexBuffer: {} as GPUBuffer, indexCount: 3 },
+          { pipelineKey: 'missing', tangentBuffer: {} as GPUBuffer, materialBindGroup: {} as GPUBindGroup, frameBindGroup: {} as GPUBindGroup, positionBuffer: {} as GPUBuffer, normalBuffer: {} as GPUBuffer, indexBuffer: {} as GPUBuffer, indexCount: 3 },
         ],
       }),
     ).toThrow();
