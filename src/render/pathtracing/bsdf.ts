@@ -430,6 +430,52 @@ export function sheenLobe(color: Vec3, roughness: number): Lobe {
   };
 }
 
+/** Gaussian directional-albedo fit for the Zeltner et al. LTC sheen model. */
+export function fuzzDirectionalAlbedo(cosView: number, roughness: number): number {
+  const r = Math.min(1, Math.max(0.01, roughness));
+  const sigma = r * (0.0206607 + 1.58491 * r) / (0.0379424 + r * (1.32227 + r));
+  const mean = r * (-0.193854 + r * (-1.14885 + r * (1.7932 - 0.95943 * r * r))) / (0.046391 + r);
+  const offset = r * (0.000654023 + r * (-0.0207818 + 0.119681 * r)) / (1.26264 + r * (-1.92021 + r));
+  const z = (clamp01(cosView) - mean) / sigma;
+  return Math.exp(-0.5 * z * z) / (sigma * Math.sqrt(2 * PI)) + offset;
+}
+
+/** Zeltner LTC sheen: the normalized transformed cosine is its sampling PDF. */
+export function fuzzLobe(color: Vec3, roughness: number): Lobe {
+  function parameters(wo: V) {
+    const v = clamp01(wo[2]);
+    const r = Math.min(1, Math.max(0.01, roughness));
+    const a = r * (2.58126 * v + 0.813703 * r) / (1 + 0.310327 * v * v + 2.60994 * v * r);
+    const b = Math.sqrt(1 - v) * (r - 1) * r * r * r / (0.0000254053 + 1.71228 * v - 1.71506 * v * r + 1.34174 * r * r);
+    const length = Math.hypot(wo[0], wo[1]);
+    const tangent: V = length > 0 ? [wo[0] / length, wo[1] / length, 0] : [1, 0, 0];
+    return { a, b, tangent };
+  }
+  function ev(wo: V, wi: V): BsdfEval {
+    if (wo[2] <= 0 || wi[2] <= 0) return { value: [0, 0, 0], pdf: 0 };
+    const { a, b, tangent: t } = parameters(wo);
+    const x = a * dot(wi, t) + b * wi[2];
+    const y = a * (-wi[0] * t[1] + wi[1] * t[0]);
+    const lengthSquared = x * x + y * y + wi[2] * wi[2];
+    const densityOverCosine = INV_PI * (a / lengthSquared) ** 2;
+    return {
+      value: scale(color, fuzzDirectionalAlbedo(wo[2], roughness) * densityOverCosine),
+      pdf: wi[2] * densityOverCosine,
+    };
+  }
+  return {
+    eval: ev,
+    sample(wo, rng) {
+      if (wo[2] <= 0) return null;
+      const { a, b, tangent: t } = parameters(wo);
+      const cosine = cosineHemisphere(rng(), rng());
+      const local = normalize([(cosine[0] - b * cosine[2]) / a, cosine[1] / a, cosine[2]]);
+      const wi: V = [t[0] * local[0] - t[1] * local[1], t[1] * local[0] + t[0] * local[1], local[2]];
+      return { wi, ...ev(wo, wi), specular: false };
+    },
+  };
+}
+
 // --- dielectric transmission (BTDF): refraction + thin-walled ----------------
 // Rough dielectric transmission from the Walter et al. 2007 microfacet BTDF. The
 // refractive variant bends the transmitted ray by Snell's law and carries the
@@ -727,12 +773,49 @@ function coatOverBase(coat: CoatLayer, base: Lobe): Lobe {
   };
 }
 
+function fuzzOverBase(fuzz: NonNullable<LayeredClosure['fuzz']>, base: Lobe): Lobe {
+  const fuzzW = clamp01(fuzz.weight);
+  if (fuzzW <= 0) return base;
+  const top = fuzzLobe(fuzz.color, fuzz.roughness);
+  const coverage = (wo: V) => wo[2] > 0 ? fuzzW * fuzzDirectionalAlbedo(wo[2], fuzz.roughness) : 0;
+  function ev(wo: V, wi: V): BsdfEval {
+    const f = top.eval(wo, wi);
+    const b = base.eval(wo, wi);
+    const p = coverage(wo);
+    return {
+      value: [
+        fuzzW * f.value[0] + (1 - p) * b.value[0],
+        fuzzW * f.value[1] + (1 - p) * b.value[1],
+        fuzzW * f.value[2] + (1 - p) * b.value[2],
+      ],
+      pdf: p * f.pdf + (1 - p) * b.pdf,
+    };
+  }
+  return {
+    eval: (wo, wi) => ev(wo as V, wi as V),
+    sample(wo, rng) {
+      const w = wo as V;
+      const fuzzProb = coverage(w);
+      let sample: BsdfSampleLocal | null;
+      if (fuzzProb > 0 && rng() < fuzzProb) {
+        sample = top.sample(w, rng);
+      } else {
+        sample = base.sample(w, rng);
+      }
+      if (!sample) return null;
+      const { value, pdf } = ev(w, sample.wi as V);
+      if (pdf <= 0) return null;
+      return { wi: sample.wi, value, pdf, specular: false };
+    },
+  };
+}
+
 /**
  * Sample-capable surface BSDF for a lowered LayeredClosure (T054). The base lobe
  * stack is composed with the shared one-sample MIS sampler; a thin-film layer
- * (T056f) modulates the specular lobes' Fresnel with Airy interference; sheen and
- * fuzz layers (T056h) ride in the stack as extra grazing-retroreflective lobes;
- * the coat layer (T056d) wraps the result as a dielectric clearcoat when present.
+ * (T056f) modulates the specular lobes' Fresnel with Airy interference; sheen
+ * stays in the base stack. Coat wraps that stack, then the OpenPBR Zeltner fuzz
+ * layer attenuates the substrate by its directional albedo.
  * A closure produced by canonicalSurfaceToLayered has no coat, sheen, fuzz or thin
  * film, so it reproduces surfaceBsdf exactly -- the non-regression anchor for the
  * layered model.
@@ -747,11 +830,9 @@ export function layeredSurfaceBsdf(closure: LayeredClosure): Lobe {
   if (closure.sheen && closure.sheen.weight > 0) {
     entries.push({ weight: closure.sheen.weight, lobe: sheenLobe(closure.sheen.color, closure.sheen.roughness) });
   }
-  if (closure.fuzz && closure.fuzz.weight > 0) {
-    entries.push({ weight: closure.fuzz.weight, lobe: sheenLobe(closure.fuzz.color, closure.fuzz.roughness) });
-  }
   const base = composeLobes(entries);
-  return closure.coat ? coatOverBase(closure.coat, base) : base;
+  const coated = closure.coat ? coatOverBase(closure.coat, base) : base;
+  return closure.fuzz ? fuzzOverBase(closure.fuzz, coated) : coated;
 }
 
 // --- hemispherical reflectance (energy / unbiasedness checks) ----------------

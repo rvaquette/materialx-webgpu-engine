@@ -69,7 +69,7 @@ describe('resolveSurface (T055a)', () => {
       { category: 'standard_surface', count: 42 },
       { category: 'open_pbr_surface', count: 41 },
       { category: 'disney_principled', count: 14 },
-      { category: 'gltf_pbr', count: 21 },
+      { category: 'gltf_pbr', count: 22 },
       { category: 'UsdPreviewSurface', count: 14 },
     ];
     for (const { category, count } of cases) {

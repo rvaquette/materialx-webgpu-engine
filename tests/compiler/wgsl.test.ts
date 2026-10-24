@@ -65,7 +65,7 @@ describe('emitWgsl', () => {
     expect(code).toContain('mx_rotate3d(p, angle, vec3f(0.1, 1.0, 0.0))');
     expect(code).toContain('mx_rotate2d(p.xy, angle)');
     expect(code).toContain('case 1 { return mx_unified_cell(q, dims); }');
-    expect(code).toContain('case 2 { return mx_worley(p, jitter, dims).x; }');
+    expect(code).toContain('case 2 { return mx_worley(p, jitter, dims, style, 1).x; }');
     for (const helper of ['mx_unified_cell', 'mx_rotate2d', 'mx_rotate3d', 'mx_unifiednoise']) {
       expect(code.split(`fn ${helper}(`)).toHaveLength(2);
     }

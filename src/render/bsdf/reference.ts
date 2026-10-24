@@ -14,7 +14,7 @@
 // radiance added once per lobe.
 
 import type { LayeredBsdfLobe, LayeredClosure } from '../../compiler/ir.ts';
-import { evalWorld, layeredSurfaceBsdf } from '../pathtracing/bsdf.ts';
+import { evalWorld, fuzzDirectionalAlbedo, fuzzLobe, layeredSurfaceBsdf } from '../pathtracing/bsdf.ts';
 
 export type Vec3 = readonly [number, number, number];
 
@@ -440,8 +440,19 @@ export function evaluateLayeredSurface(
     acc = layer(s, acc);
   }
   if (closure.fuzz && closure.fuzz.weight > 0) {
-    const f = sheen(closure.fuzz.weight, closure.fuzz.color, Math.max(closure.fuzz.roughness, 1e-3), geom, lighting);
-    acc = layer(f, acc);
+    const fuzz = closure.fuzz;
+    const n = normalize(geom.normal);
+    const v = normalize(geom.view);
+    const weight = clampScalar(fuzz.weight, 0, 1);
+    const coverage = weight * fuzzDirectionalAlbedo(Math.max(dot(n, v), 0), fuzz.roughness);
+    const top = fuzzLobe(fuzz.color, fuzz.roughness);
+    let response = scale(mulv(fuzz.color, lighting.environment), coverage);
+    for (const light of lighting.lights) {
+      const wi = normalize(scale(light.direction, -1));
+      const ev = evalWorld(top, n, v, wi);
+      response = add(response, scale(mulv(ev.value, light.color), weight * light.intensity * Math.max(dot(n, wi), 0)));
+    }
+    acc = { color: add(response, scale(acc.color, 1 - coverage)), weight: coverage + acc.weight * (1 - coverage) };
   }
   let color = acc.color;
   if (closure.emission) color = add(color, closure.emission);

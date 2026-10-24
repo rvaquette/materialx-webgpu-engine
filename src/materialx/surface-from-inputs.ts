@@ -92,10 +92,7 @@ export function parsedInputsToLayered(
 // is lowered from -- there is no longer a parallel per-family mapping living in
 // the build script. The per-family interface names are reduced to the shared
 // {baseColor, metalness, roughness, transmission, subsurface, ior, specular}
-// model with the official MaterialX defaults. gltf_pbr's authored `ior` is read
-// here from the parsed inputs because it is absent from the gltf nodedef
-// interface (so the resolved surface drops it); every other value matches the
-// resolved surface exactly.
+// model with the official MaterialX defaults, matching the resolved surface.
 
 type ParsedValue = number | readonly number[] | boolean;
 

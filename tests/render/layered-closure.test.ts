@@ -16,6 +16,8 @@ import {
   surfaceBsdf,
   layeredSurfaceBsdf,
   lobeFromLayered,
+  fuzzLobe,
+  fuzzDirectionalAlbedo,
   hemisphericalReflectance,
   type Lobe,
   type SurfaceParams,
@@ -167,6 +169,87 @@ describe('reference layered evaluator (T054)', () => {
     const got = evaluateLayeredSurface(closure, geom, lighting);
     const want = burleyDiffuse(1, [0.8, 0.5, 0.2], 0.4, geom, lighting);
     for (let c = 0; c < 3; c++) expect(got.color[c]).toBeCloseTo(want.color[c]!, 12);
+  });
+
+  describe('OpenPBR fuzz layer', () => {
+    it('layers Zeltner fuzz over the base using directional-albedo attenuation', () => {
+      const base = {
+        lobes: [{ kind: 'burley_diffuse' as const, weight: 1, color: [0.1, 0.1, 0.1] as const, roughness: 0 }],
+        opacity: 1,
+      };
+      const fuzz = { weight: 0.75, color: [0.4, 0.4, 0.4] as const, roughness: 0.5 };
+      const layered = layeredSurfaceBsdf({ ...base, fuzz });
+      const baseBsdf = layeredSurfaceBsdf(base);
+      const fuzzBsdf = fuzzLobe(fuzz.color, fuzz.roughness);
+      const coverage = fuzz.weight * fuzzDirectionalAlbedo(WO[2], fuzz.roughness);
+      const wi = normalize([0.2, 0.1, 1]);
+      const result = layered.eval(WO, wi);
+      const baseEval = baseBsdf.eval(WO, wi);
+      const fuzzEval = fuzzBsdf.eval(WO, wi);
+      for (let channel = 0; channel < 3; channel++) {
+        expect(result.value[channel]).toBeCloseTo(
+          fuzz.weight * fuzzEval.value[channel]! + (1 - coverage) * baseEval.value[channel]!,
+          12,
+        );
+      }
+      expect(result.pdf).toBeCloseTo(coverage * fuzzEval.pdf + (1 - coverage) * baseEval.pdf, 12);
+    });
+
+    it('matches the Zeltner directional-albedo fit for Velvet, not its authored color', () => {
+      expect(fuzzDirectionalAlbedo(1, 0.5)).toBeCloseTo(0.024868648015727062, 12);
+      expect(fuzzDirectionalAlbedo(0.5, 0.5)).toBeCloseTo(0.14971759463589474, 12);
+      expect(fuzzDirectionalAlbedo(0, 0.5)).toBeCloseTo(0.6882118258413238, 12);
+    });
+
+    it('uses directional albedo for indirect lighting in the CPU direct evaluator', () => {
+      const c: LayeredClosure = {
+        lobes: [{ kind: 'burley_diffuse', weight: 1, color: [0.02, 0.02, 0.02], roughness: 0 }],
+        opacity: 1,
+      };
+      const env = { lights: [], environment: [1, 1, 1] as V };
+      const base = evaluateLayeredSurface(c, geom, env);
+      const result = evaluateLayeredSurface({ ...c, fuzz: { weight: 1, color: [0.4, 0.4, 0.4], roughness: 0.5 } }, geom, env);
+      const coverage = fuzzDirectionalAlbedo(WO[2], 0.5);
+      for (let channel = 0; channel < 3; channel++) {
+        expect(result.color[channel]).toBeCloseTo(base.color[channel]! * (1 - coverage) + 0.4 * coverage, 12);
+      }
+    });
+
+    it('importance samples the LTC with constant furnace throughput at normal and grazing views', () => {
+      for (const wo of [[0, 0, 1], WO, normalize([1, 0.2, 0.01])] as V[]) {
+        const top = fuzzLobe([0.4, 0.4, 0.4], 0.5);
+        const rng = createPcg32(213);
+        const expected = 0.4 * fuzzDirectionalAlbedo(wo[2], 0.5);
+        for (let i = 0; i < 128; i++) {
+          const s = top.sample(wo, rng)!;
+          expect(s.pdf).toBeGreaterThan(0);
+          const e = top.eval(wo, s.wi);
+          expect(s.pdf).toBeCloseTo(e.pdf, 12);
+          for (let channel = 0; channel < 3; channel++) {
+            expect(s.value[channel]! * s.wi[2] / s.pdf).toBeCloseTo(expected, 10);
+          }
+        }
+      }
+    });
+
+    it('preserves the dark substrate at full fuzz weight and keeps sampling coherent', () => {
+      const c: LayeredClosure = {
+        lobes: [{ kind: 'burley_diffuse', weight: 1, color: [0.02, 0.02, 0.02], roughness: 0 }],
+        fuzz: { weight: 1, color: [0.4, 0.4, 0.4], roughness: 0.5 },
+        opacity: 1,
+      };
+      const layered = layeredSurfaceBsdf(c);
+      const rho = hemisphericalReflectance(layered, [0, 0, 1], createPcg32(43), 65536);
+      const coverage = fuzzDirectionalAlbedo(1, 0.5);
+      expect(rho[0]).toBeCloseTo(0.4 * coverage + 0.02 * (1 - coverage), 3);
+      const rng = createPcg32(71);
+      for (let i = 0; i < 256; i++) {
+        const s = layered.sample(WO, rng)!;
+        const e = layered.eval(WO, s.wi);
+        expect(s.pdf).toBeCloseTo(e.pdf, 12);
+        expect(s.value).toEqual(e.value);
+      }
+    });
   });
 
   it('carries opacity as the surface weight', () => {

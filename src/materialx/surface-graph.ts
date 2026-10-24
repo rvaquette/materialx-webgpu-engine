@@ -196,6 +196,7 @@ const GLTF_PBR: readonly SurfaceInputDef[] = [
   f('transmission', 0),
   f('specular', 1),
   c('specular_color', 1, 1, 1),
+  f('ior', 1.5),
   f('alpha', 1),
   f('iridescence', 0),
   f('iridescence_thickness', 100),

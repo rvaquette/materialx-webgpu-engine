@@ -66,6 +66,17 @@ function fakeScene(): PathTraceScene {
 describe('pathTraceComputeWgsl', () => {
   const src = pathTraceComputeWgsl();
 
+  it('excludes SH-lit fuzz from the throughput of environment misses for mixed BSDF samples', () => {
+    const shader = pathTraceComputeWgsl({ environment: true });
+    expect(shader).toContain('mx_closure_diffuse_albedo(c, wo)');
+    expect(shader).toContain('environmentBeta = beta * glossy.value * cosS / bs.pdf;');
+    expect(shader).toContain('let missBeta = select(beta, environmentBeta, splitFuzzEnvironment);');
+    expect(shader).toContain('radiance = radiance + missBeta *');
+    expect(shader).toContain('environmentBeta = environmentBeta * ms.weight;');
+    expect(shader).toContain('environmentBeta = environmentBeta / q;');
+    expect(src).not.toContain('environmentBeta = beta * glossy.value');
+  });
+
   it('declares the compute entry point and workgroup tile', () => {
     expect(src).toContain(`fn ${PT_COMPUTE_ENTRY}`);
     expect(src).toContain(`@workgroup_size(${PT_WORKGROUP_SIZE}, ${PT_WORKGROUP_SIZE}, 1)`);

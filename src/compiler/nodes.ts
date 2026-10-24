@@ -468,39 +468,65 @@ fn mx_fractal3v(p: vec3f, octaves: i32, lacunarity: f32, diminish: f32) -> vec3f
 fn mx_cellnoise3(p: vec3f) -> f32 {
   return mx_cell_float(vec3i(floor(p)), 0u);
 }
-fn mx_worley(p: vec3f, jitter: f32, dims: i32) -> vec3f {
+`;
+
+const WORLEY_PRELUDE = `fn mx_worley_cell_color(cell: vec3i, dims: i32) -> vec3f {
+  if (dims == 2) {
+    return vec3f(f32(mx_unified_hash(vec3i(cell.xy, 0), 3)), f32(mx_unified_hash(vec3i(cell.xy, 1), 3)), f32(mx_unified_hash(vec3i(cell.xy, 2), 3))) / 4294967295.0;
+  }
+  let seed = 0xdeadbeefu + 16u + 13u;
+  var a = seed + bitcast<u32>(cell.x);
+  var b = seed + bitcast<u32>(cell.y);
+  var c = seed + bitcast<u32>(cell.z);
+  a = (a - c) ^ mx_noise_rotl(c, 4u); c = c + b;
+  b = (b - a) ^ mx_noise_rotl(a, 6u); a = a + c;
+  c = (c - b) ^ mx_noise_rotl(b, 8u); b = b + a;
+  a = (a - c) ^ mx_noise_rotl(c, 16u); c = c + b;
+  b = (b - a) ^ mx_noise_rotl(a, 19u); a = a + c;
+  c = (c - b) ^ mx_noise_rotl(b, 4u); b = b + a;
+  return vec3f(f32(mx_noise_final(a, b, c)), f32(mx_noise_final(a + 1u, b, c)), f32(mx_noise_final(a + 2u, b, c))) / 4294967295.0;
+}
+fn mx_worley(p: vec3f, jitter: f32, dims: i32, style: i32, channels: i32) -> vec3f {
   let fl = floor(p);
   let base = vec3i(fl);
   let f = p - fl;
   var d = vec3f(1e6);
+  var nearest = base;
   let zr = select(0, 1, dims == 3);
-  for (var z = -zr; z <= zr; z = z + 1) {
+  for (var x = -1; x <= 1; x = x + 1) {
     for (var y = -1; y <= 1; y = y + 1) {
-      for (var x = -1; x <= 1; x = x + 1) {
+      for (var z = -zr; z <= zr; z = z + 1) {
         let o = vec3i(x, y, z);
         let c = base + o;
-        let r = vec3f(mx_cell_float(c, 0u), mx_cell_float(c, 1u), mx_cell_float(c, 2u));
-        var diff = vec3f(o) + vec3f(0.5) + (r - vec3f(0.5)) * jitter - f;
+        let r = mx_worley_cell_color(c, dims);
+        let cellpos = vec3f(o) + vec3f(0.5) + (r - vec3f(0.5)) * jitter;
+        var diff = cellpos - f;
         if (dims == 2) { diff.z = 0.0; }
         let dist = dot(diff, diff);
-        if (dist < d.x) { d = vec3f(dist, d.x, d.y); }
+        if (dist < d.x) {
+          d = vec3f(dist, d.x, d.y);
+          nearest = vec3i(floor(cellpos + fl));
+        }
         else if (dist < d.y) { d = vec3f(d.x, dist, d.y); }
         else if (dist < d.z) { d.z = dist; }
       }
     }
   }
+  if (style == 1) {
+    if (channels == 1) { return vec3f(f32(mx_unified_hash(nearest, dims)) / 4294967295.0); }
+    return mx_worley_cell_color(nearest, dims);
+  }
   return sqrt(d);
 }
 `;
 
-const UNIFIED_NOISE_PRELUDE = `fn mx_noise_rotl(x: u32, k: u32) -> u32 {
+const MATERIALX_NOISE_HASH_PRELUDE = `fn mx_noise_rotl(x: u32, k: u32) -> u32 {
   return (x << k) | (x >> (32u - k));
 }
-fn mx_unified_hash(cell: vec3i, dims: i32) -> u32 {
-  let seed = 0xdeadbeefu + u32(dims) * 4u + 13u;
-  var a = seed + bitcast<u32>(cell.x);
-  var b = seed + bitcast<u32>(cell.y);
-  var c = seed + select(0u, bitcast<u32>(cell.z), dims == 3);
+fn mx_noise_final(a0: u32, b0: u32, c0: u32) -> u32 {
+  var a = a0;
+  var b = b0;
+  var c = c0;
   c = (c ^ b) - mx_noise_rotl(b, 14u);
   a = (a ^ c) - mx_noise_rotl(c, 11u);
   b = (b ^ a) - mx_noise_rotl(a, 25u);
@@ -510,7 +536,13 @@ fn mx_unified_hash(cell: vec3i, dims: i32) -> u32 {
   c = (c ^ b) - mx_noise_rotl(b, 24u);
   return c;
 }
-fn mx_unified_cell(p: vec3f, dims: i32) -> f32 {
+fn mx_unified_hash(cell: vec3i, dims: i32) -> u32 {
+  let seed = 0xdeadbeefu + u32(dims) * 4u + 13u;
+  return mx_noise_final(seed + bitcast<u32>(cell.x), seed + bitcast<u32>(cell.y), seed + select(0u, bitcast<u32>(cell.z), dims == 3));
+}
+`;
+
+const UNIFIED_NOISE_PRELUDE = `fn mx_unified_cell(p: vec3f, dims: i32) -> f32 {
   return f32(mx_unified_hash(vec3i(floor(p)), dims)) / 4294967295.0;
 }
 fn mx_unified_perlin3(p: vec3f) -> f32 {
@@ -541,13 +573,13 @@ fn mx_unified_fractal3(p: vec3f, octaves: i32, lacunarity: f32, diminish: f32) -
   }
   return result;
 }
-fn mx_unifiednoise(p: vec3f, dims: i32, jitter: f32, octaves: i32, lacunarity: f32, diminish: f32, kind: i32) -> f32 {
+fn mx_unifiednoise(p: vec3f, dims: i32, jitter: f32, octaves: i32, lacunarity: f32, diminish: f32, kind: i32, style: i32) -> f32 {
   let angle = (jitter - 1.0) * 90000.0;
   var q = mx_rotate3d(p, angle, vec3f(0.1, 1.0, 0.0));
   if (dims == 2) { q = vec3f(mx_rotate2d(p.xy, angle), 0.0); }
   switch (kind) {
     case 1 { return mx_unified_cell(q, dims); }
-    case 2 { return mx_worley(p, jitter, dims).x; }
+    case 2 { return mx_worley(p, jitter, dims, style, 1).x; }
     case 3 {
       return mx_unified_fractal3(select(q, vec3f(p.xy, angle), dims == 2), octaves, lacunarity, diminish);
     }
@@ -1068,13 +1100,13 @@ const LOWERINGS: readonly NodeLowering[] = [
   expr('cellnoise2d', (inp, type, ctx) => `${ctx.wgslType(type)}(mx_cellnoise3(vec3f(${texcoordOf(inp, ctx)}, 0.0)))`, NOISE_PRELUDE),
   expr('cellnoise3d', (inp, type, ctx) => `${ctx.wgslType(type)}(mx_cellnoise3(${positionOf(inp, ctx)}))`, NOISE_PRELUDE),
   expr('worleynoise2d', (inp, type, ctx) => {
-    const w = `mx_worley(vec3f(${texcoordOf(inp, ctx)}, 0.0), ${inp.named('jitter', '1.0')}, 2)`;
+    const w = `mx_worley(vec3f(${texcoordOf(inp, ctx)}, 0.0), ${inp.named('jitter', '1.0')}, 2, i32(${inp.named('style', '0')}), ${vectorSize(type)})`;
     return vectorSize(type) === 1 ? `${w}.x` : vectorSize(type) === 2 ? `${w}.xy` : w;
-  }, NOISE_PRELUDE),
+  }, [MATERIALX_NOISE_HASH_PRELUDE, WORLEY_PRELUDE]),
   expr('worleynoise3d', (inp, type, ctx) => {
-    const w = `mx_worley(${positionOf(inp, ctx)}, ${inp.named('jitter', '1.0')}, 3)`;
+    const w = `mx_worley(${positionOf(inp, ctx)}, ${inp.named('jitter', '1.0')}, 3, i32(${inp.named('style', '0')}), ${vectorSize(type)})`;
     return vectorSize(type) === 1 ? `${w}.x` : vectorSize(type) === 2 ? `${w}.xy` : w;
-  }, NOISE_PRELUDE),
+  }, [MATERIALX_NOISE_HASH_PRELUDE, WORLEY_PRELUDE]),
   ...(['unifiednoise2d', 'unifiednoise3d'] as const).map((category) => expr(category, (inp, _type, ctx) => {
     const is2d = category === 'unifiednoise2d';
     const scaled = `${is2d ? texcoordOf(inp, ctx) : positionOf(inp, ctx)} * ${inp.named('freq', '1.0')} + ${inp.named('offset', '0.0')}`;
@@ -1087,12 +1119,13 @@ const LOWERINGS: readonly NodeLowering[] = [
       inp.named('lacunarity', '2.0'),
       inp.named('diminish', '0.5'),
       `i32(${inp.named('type', '0')})`,
+      `i32(${inp.named('style', '0')})`,
     ];
     const outMin = inp.named('outmin', '0.0');
     const outMax = inp.named('outmax', '1.0');
     const mapped = `mix(${outMin}, ${outMax}, mx_unifiednoise(${args.join(', ')}))`;
     return `select(${mapped}, clamp(${mapped}, min(${outMin}, ${outMax}), max(${outMin}, ${outMax})), ${inp.named('clampoutput', 'true')})`;
-  }, [ROTATE2D_PRELUDE, ROTATE3D_PRELUDE, NOISE_PRELUDE, UNIFIED_NOISE_PRELUDE])),
+  }, [ROTATE2D_PRELUDE, ROTATE3D_PRELUDE, NOISE_PRELUDE, MATERIALX_NOISE_HASH_PRELUDE, WORLEY_PRELUDE, UNIFIED_NOISE_PRELUDE])),
   // transforms
   expr('rotate2d', (inp) => `mx_rotate2d(${inp.named('in', undefined, 0)}, ${inp.named('amount', '0.0', 1)})`, ROTATE2D_PRELUDE),
   expr('rotate3d', (inp) => `mx_rotate3d(${inp.named('in', undefined, 0)}, ${inp.named('amount', '0.0', 1)}, ${inp.named('axis', 'vec3f(0.0, 0.0, 1.0)', 2)})`, ROTATE3D_PRELUDE),

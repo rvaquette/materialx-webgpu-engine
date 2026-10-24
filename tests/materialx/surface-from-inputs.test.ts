@@ -100,11 +100,11 @@ describe('parsedSurfaceToCanonical reduction (T055e4)', () => {
     expect(parsedSurfaceToCanonical({ category: 'UsdPreviewSurface', inputs: {} }).specular).toBe(1);
   });
 
-  it('reads the gltf_pbr authored ior the nodedef interface drops', () => {
-    // gltf_pbr has no `ior` interface input, so the resolved surface cannot carry
-    // it; the reduction recovers it from the parsed inputs for the 7-param path.
-    const surface = surfaceFromParsedInputs({ category: 'gltf_pbr', inputs: { ior: 1.52 } }, { onDiagnostic: () => {} })!;
-    expect(surface.inputs.has('ior')).toBe(false);
+  it('preserves the gltf_pbr authored ior in the resolved and canonical surfaces', () => {
+    const diagnostics: unknown[] = [];
+    const surface = surfaceFromParsedInputs({ category: 'gltf_pbr', inputs: { ior: 1.52 } }, { onDiagnostic: (d) => diagnostics.push(d) })!;
+    expect(surface.inputs.get('ior')?.source).toEqual({ kind: 'value', value: [1.52] });
+    expect(diagnostics).toEqual([]);
     expect(parsedSurfaceToCanonical({ category: 'gltf_pbr', inputs: { ior: 1.52 } }).ior).toBe(1.52);
   });
 

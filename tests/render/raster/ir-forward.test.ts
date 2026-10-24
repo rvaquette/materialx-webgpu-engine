@@ -94,7 +94,8 @@ describe('assembleIrForwardShader (T058b)', () => {
 
   it('integrates specular HDR reflections with the path tracer latlong convention and MIS', () => {
     const { shader } = forward('open_pbr_surface', [value('base_color', 'color3', '0.2, 0.5, 0.9')]);
-    expect(shader.code).toContain('radiance = radiance + mx_closure_diffuse_albedo(c) * (mx_sh_irradiance(n) / MX_PI);');
+    expect(shader.code).toContain('radiance = radiance + mx_closure_diffuse_albedo(c, wo) * (mx_sh_irradiance(n) / MX_PI);');
+    expect(shader.code).toContain('spec.fuzz.color = vec3f(0.0);');
     expect(shader.code).toContain('atan2(n.z, n.x) * (0.5 / MX_PI) + 0.5');
     expect(shader.code).toContain('acos(clamp(n.y, -1.0, 1.0)) / MX_PI');
     expect(shader.code).toContain('textureSampleLevel(forwardEnv, forwardEnvSampler, uv, 0.0).rgb * fu.envMap.xyz');
@@ -118,6 +119,44 @@ describe('assembleIrForwardShader (T058b)', () => {
     const fragment = shader.code.slice(shader.code.indexOf('@fragment'));
     expect(fragment).not.toContain('mx_closure_specular_eval(');
     expect(fragment).not.toContain('mx_closure_eval(c, wo, wi).pdf');
+  });
+
+  it('uses BSDF-only environment sampling for near-delta glass without lowering the sample count', () => {
+    const { shader } = forward('gltf_pbr', [
+      value('metallic', 'float', '0'),
+      value('transmission', 'float', '1'),
+      value('roughness', 'float', '0.01'),
+      value('ior', 'float', '1.52'),
+    ]);
+    const fragment = shader.code.slice(shader.code.indexOf('@fragment'));
+    expect(fragment).toContain('let deltaSpecular = mx_closure_is_specular(spec);');
+    expect(fragment).toContain('for (var i = 0u; i < 64u; i++)');
+    expect(fragment).toContain('var mis = 1.0;');
+    expect(fragment).toMatch(/if \(!deltaSpecular\) \{\s+let envPdf = mx_forward_env_pdf/);
+    expect(fragment).toContain('if (!deltaSpecular && fu.envMap.w != 0.0 && fu.envInfo.z > 0.0)');
+    expect(fragment).toContain('let em = mx_closure_eval(spec, wo, wi);');
+    expect(shader.code).toContain('l.roughness < 0.07');
+    expect(shader.code).toContain('if (c.hasCoat != 0u && c.coat.weight > 0.0) { return false; }');
+  });
+
+  it('integrates exactly smooth thin sheets analytically, retaining the generic path for other closures', () => {
+    const { shader } = forward('open_pbr_surface', [
+      value('specular_roughness', 'float', '0'),
+      value('specular_ior', 'float', '1'),
+      value('transmission_weight', 'float', '1'),
+      value('geometry_thin_walled', 'boolean', 'true'),
+      value('thin_film_weight', 'float', '1'),
+      value('thin_film_thickness', 'float', '0.5'),
+      value('thin_film_ior', 'float', '1.4'),
+    ]);
+    expect(shader.code).toContain('if (l.roughness != 0.0 || l.anisotropy != 0.0) { return false; }');
+    expect(shader.code).toContain('l.kind == MX_LOBE_DIELECTRIC_TRANSMISSION && l.thin > 0.0');
+    expect(shader.code).toContain('return hasTransmission;');
+    expect(shader.code).toContain('frame * vec3f(-wo.xy, wo.z)');
+    expect(shader.code).toContain('frame * (-wo)');
+    expect(shader.code).toContain('mx_thin_film_fresnel(f, f0, cosV, c.thinFilm.weight, c.thinFilm.thickness, c.thinFilm.ior)');
+    expect(shader.code).toContain('l.weight * l.color * (1.0 - f) * transmitted');
+    expect(shader.code).toMatch(/if \(mx_forward_is_smooth_sheet\(spec\)\) \{\s+radiance = radiance \+ mx_forward_smooth_sheet\(spec, wo, sframe\);\s+\} else \{\s+for \(var i = 0u; i < 64u; i\+\+\)/);
   });
 
   it('adds the closure emission when present', () => {

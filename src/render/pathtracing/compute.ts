@@ -470,6 +470,8 @@ fn integrate(ro0 : vec3<f32>, rd0 : vec3<f32>, state : ptr<function, u32>) -> ve
   // MIS state carried across bounces (mirrors integratePath in integrator.ts).
   var specularBounce = true;
   var diffuseBounce = false;
+  var splitFuzzEnvironment = false;
+  var environmentBeta = vec3f(0.0);
   var bsdfPdf = 0.0;
   var lastN = vec3<f32>(0.0, 0.0, 1.0);
   // Active interior medium (entered through a transmissive/subsurface interface).
@@ -485,11 +487,13 @@ fn integrate(ro0 : vec3<f32>, rd0 : vec3<f32>, state : ptr<function, u32>) -> ve
     if (inMedium) {
       let ms = mx_sample_homogeneous(medium, tMax, state);
       beta = beta * ms.weight;
+      environmentBeta = environmentBeta * ms.weight;
       if (ms.scattered) {
         let sp = ro + rd * ms.t;
         let wiM = mx_sample_hg(-rd, medium.g, rng_next(state), rng_next(state));
         specularBounce = false;
         diffuseBounce = false;
+        splitFuzzEnvironment = false;
         bsdfPdf = 0.0;
         ro = sp + wiM * RAY_EPS;
         rd = wiM;
@@ -511,14 +515,15 @@ ${
         environment
           ? /* wgsl */ `        if (specularBounce) {
           radiance = radiance + beta * ${envMiss};
-        } else if (!diffuseBounce) {
+        } else if (splitFuzzEnvironment || !diffuseBounce) {
           // Glossy reflection reaching the environment: the SH probe only covers
           // the diffuse lobes, so this glossy miss is MIS-weighted against the
           // specular env NEE (restores metal/coat reflections).
           var envPdf = max(dot(lastN, rd), 0.0) / PI;
           if (U.envExtra.w > 0.5) { envPdf = sky_pdf(rd); }
           let w = power_heuristic(1.0, bsdfPdf, 1.0, envPdf);
-          radiance = radiance + beta * ${envMiss} * w;
+          let missBeta = select(beta, environmentBeta, splitFuzzEnvironment);
+          radiance = radiance + missBeta * ${envMiss} * w;
         }`
           : /* wgsl */ `        if (specularBounce) {
           radiance = radiance + beta * ${envMiss};
@@ -565,7 +570,7 @@ ${
       environment
         ? /* wgsl */ `      // Diffuse IBL from the SH probe, scaled by the dome tint/intensity.
       let diffE = mx_sh_irradiance(n) * U.env.xyz * U.env.w;
-      radiance = radiance + beta * mx_closure_diffuse_albedo(c) * (diffE / PI);
+      radiance = radiance + beta * mx_closure_diffuse_albedo(c, wo) * (diffE / PI);
       if (U.envExtra.w > 0.5) {
         // Importance-sample the HDR by its luminance CDF (unbiased, low variance).
         let uvS = env_map_binary_search(rng_next(state) * max(U.envExtra.z, 1.0e-6));
@@ -617,10 +622,22 @@ ${
     if (!bs.valid || bs.pdf <= 0.0) { break; }
     let wiWorld = frame * bs.wi;
     let cosS = abs(dot(n, wiWorld));
+    splitFuzzEnvironment = false;
+${
+      environment
+        ? /* wgsl */ `    if (c.hasFuzz != 0u && c.fuzz.weight > 0.0) {
+      // SH already integrated fuzz and diffuse. A mixture sample reaching the
+      // dome must carry only the remaining glossy response, regardless of pick.
+      splitFuzzEnvironment = true;
+      let glossy = mx_closure_specular_eval(c, wo, bs.wi);
+      environmentBeta = beta * glossy.value * cosS / bs.pdf;
+    }`
+        : ''
+    }
     beta = beta * bs.value * cosS / bs.pdf;
     bsdfPdf = bs.pdf;
     specularBounce = specular;
-    diffuseBounce = mx_closure_sampled_is_diffuse(c, u.z);
+    diffuseBounce = mx_closure_sampled_is_diffuse(c, wo, u.z);
     lastN = n;
     ro = pos + wiWorld * RAY_EPS;
     rd = wiWorld;
@@ -641,6 +658,7 @@ ${
       let q = clamp(max(beta.x, max(beta.y, beta.z)), 0.0, 0.95);
       if (rng_next(state) >= q) { break; }
       beta = beta / q;
+      environmentBeta = environmentBeta / q;
     }
   }
   return radiance;

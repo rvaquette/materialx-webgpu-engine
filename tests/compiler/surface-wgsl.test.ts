@@ -88,9 +88,10 @@ describe('emitLayeredSurface (T055d)', () => {
         value('emission', 'float', '2'),
       ]),
     );
-    expect(mod.code).toContain('c.lobeCount = 5u;');
+    expect(mod.code).toContain('c.lobeCount = 6u;');
     expect(mod.code).toContain('c.lobes[0] = MxBsdfLobe(MX_LOBE_CONDUCTOR,');
     expect(mod.code).toContain('c.lobes[3] = MxBsdfLobe(MX_LOBE_BURLEY_DIFFUSE,');
+    expect(mod.code).toContain('c.sheen = MxSheenLayer(');
     expect(mod.code).toContain('c.hasCoat = 1u;');
     expect(mod.code).toContain('c.coat = MxCoatLayer(');
     expect(mod.code).toContain('c.hasSheen = 1u;');
@@ -106,6 +107,22 @@ describe('emitLayeredSurface (T055d)', () => {
     expect(mod.code).not.toContain('c.hasSheen = 1u;');
     expect(mod.code).not.toContain('c.hasThinFilm = 1u;');
     expect(mod.code).not.toContain('c.hasEmission = 1u;');
+  });
+
+  it('keeps OpenPBR fuzz as a top layer instead of adding it to the base lobe stack', () => {
+    const mod = emit(surfaceGraph('open_pbr_surface', [
+      value('base_color', 'color3', '0.02, 0.02, 0.02'),
+      value('fuzz_weight', 'float', '1'),
+      value('fuzz_color', 'color3', '0.4, 0.4, 0.4'),
+      value('fuzz_roughness', 'float', '0.5'),
+    ]));
+    expect(mod.code).toContain('c.hasFuzz = 1u;');
+    expect(mod.code).toContain('c.fuzz = MxFuzzLayer(');
+    expect(mod.code).toContain('c.lobeCount = 5u;');
+    expect(mod.code).toContain('fn mx_closure_eval_base(c: LayeredClosure, wo: vec3f, wi: vec3f) -> MxBsdfEval');
+    expect(mod.code).toContain('let fuzz = mx_fuzz_eval(fuzzCtx, wi);');
+    expect(mod.code).toContain('fuzz.value * fuzzW + base.value * (1.0 - coverage)');
+    expect(mod.code).toContain('fuzz.pdf * coverage + base.pdf * (1.0 - coverage)');
   });
 
   it('flows a textured color input into a lobe field as a node sub-graph', () => {
@@ -128,8 +145,8 @@ describe('emitLayeredSurface (T055d)', () => {
       value('emission_color', 'color3', '10, 2, 0.5'),
       value('emission', 'float', '0.3'),
     ]));
-    expect(mod.code).toContain('clamp(vec3f(5.0, -1.0, 0.5), vec3f(0.0), vec3f(1.0))');
-    expect(mod.code).toContain('c.emission = (vec3f(10.0, 2.0, 0.5) * 0.3);');
+    expect(mod.code).toMatch(/MX_LOBE_BURLEY_DIFFUSE,[^,\n]+, clamp\(e\d+, vec3f\(0\.0\), vec3f\(1\.0\)\),/);
+    expect(mod.code).toMatch(/c\.emission = \(e\d+ \* e\d+\);/);
   });
 
   it('keeps weights dynamic when a scalar input is textured', () => {

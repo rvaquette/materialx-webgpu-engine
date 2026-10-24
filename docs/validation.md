@@ -116,6 +116,55 @@ reprises, le run s'arrête ; `--resume` permet alors de continuer.
 
 ## Arguments des noeuds MaterialX
 
+Pour le verre refractif, orienter le demi-vecteur de reflexion vers le rayon
+incident, pas toujours vers +Z. Sinon les reflexions internes (dont la reflexion
+totale) sont rejetees avec une PDF nulle et les trajets deviennent noirs.
+`tests/fixtures/glass-reflection-probe.ts` expose `runGlassReflectionProbe(device)` :
+les trois cas WebGPU (exterieur, interieur, reflexion totale) doivent rester
+valides et conserver une energie unitaire a `1e-4` pres.
+L'interface `gltf_pbr` conserve aussi l'IOR auteur (`1.52` pour le showcase glass).
+La validation du verre est faite sur mobile avec la scene OpenPBR.
+En raster, les dielectriques quasi delta suivent le meme critere que le path
+tracer (`mx_closure_is_specular`) : quadrature BSDF conservee a 64 echantillons,
+sans echantillonnage concurrent de l'environnement ni attenuation MIS.
+Les autres lobes conservent les deux strategies et leurs poids MIS.
+Cela evite la perte du GPU mobile observee a 256x256 dans la passe verre
+avec la double quadrature, sans reduire la resolution ou le nombre d'echantillons.
+Le raster reste une approximation a une interface ; il ne reproduit pas les
+refractions successives du path tracer.
+
+Les feuilles dielectriques strictement lisses (rugosite et anisotropie nulles,
+transmission thin-walled active, sans coat ni autre lobe speculaire) integrent
+directement les deux directions delta de l'environnement : reflexion et
+transmission droite. Le Fresnel et les interferences de couche mince restent
+actifs, mais ne sont plus recalcules 64 fois par fragment. Cela evite la perte
+du GPU Adreno sur `soapbubble` a 256x256. Les feuilles sont evaluees des deux
+cotes ; le verre refractif et les materiaux rugueux conservent la quadrature.
+Cette voie conserve le modele existant de transmission, sans lui ajouter une
+attenuation coloree complementaire au film.
+`tests/fixtures/smooth-sheet-probe.ts` expose `runSmoothSheetProbe(device, code)`
+pour verifier sur WebGPU le selecteur, les directions, le Fresnel et le film
+de 500 nm a IOR 1.4, a partir du code produit par `assembleIrForwardShader`.
+
+La couche `fuzz` d'OpenPBR utilise le sheen Zeltner/LTC de MaterialX, pas le
+sheen Charlie des autres surfaces. Son albedo directionnel `E(N.V, roughness)`
+attenue le BSDF sous-jacent par `1 - fuzz_weight * E` ; un poids de 1 ne masque
+donc pas completement le substrat. L'eclairage indirect suit MaterialX :
+irradiance SH multipliee par `fuzz_color * fuzz_weight * E`, sans compter le
+fuzz une deuxieme fois dans la quadrature d'environnement. Le BSDF direct et
+les rebonds utilisent le lobe LTC et sa PDF transformee. Les tests `OpenPBR
+fuzz layer` verifient l'albedo, l'attenuation, la coherence evaluation/PDF et
+l'energie dans un environnement uniforme aux vues normale et rasante.
+
+Pour `worleynoise2d/3d`, `style=0` retourne les distances triees F1/F2/F3,
+et `style=1` retourne une couleur constante par cellule (Solid), pas une
+distance. Le placement des germes et les couleurs utilisent le hachage
+Jenkins MaterialX. En mode Solid, le resultat scalaire et les composantes
+vectorielles utilisent des hachages distincts, comme `mx_noise.glsl`.
+Les valeurs numeriques de regression sont dans `tests/fixtures/worley-cases.ts`.
+Comparer `worleynoise2d_vector2` sur mobile avec la scene OpenPBR : les cellules
+doivent etre polygonales et uniformes, sans gradients radiaux.
+
 Pour les modes Cell et Fractal de `unifiednoise2d/3d`, respecter le graphe
 `stdlib/stdlib_ng.mtlx` : appliquer frequence et offset, puis une rotation
 de `(jitter - 1) * 90000` degres (axe `(0.1, 1, 0)` en 3D). Les cellules

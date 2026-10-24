@@ -29,6 +29,12 @@ const normalize = (a: V): V => {
 const WO: V = normalize([0.4, 0.1, 1.0]);
 
 describe('closure library prelude (T056a)', () => {
+  it('faces the reflective half-vector toward the incident ray inside and outside glass', () => {
+    const reflection = CLOSURE_LIBRARY_PRELUDE.match(/\/\/ Reflection branch([\s\S]*?)\/\/ Refraction branch/)?.[1];
+    expect(reflection).toContain('if (dot(ctx.wo, wm) < 0.0) { wm = -wm; }');
+    expect(reflection).not.toContain('if (wm.z < 0.0)');
+  });
+
   it('declares the shared BSDF types and MX_PI', () => {
     expect(CLOSURE_LIBRARY_PRELUDE).toContain('const MX_PI: f32');
     expect(CLOSURE_LIBRARY_PRELUDE).toContain('struct MxBsdfEval {');
@@ -44,6 +50,16 @@ describe('closure library prelude (T056a)', () => {
       expect(CLOSURE_LIBRARY_PRELUDE).toContain(`fn ${fns.pdf}(ctx: MxLobeCtx, wi: vec3f) -> f32`);
       expect(CLOSURE_LIBRARY_PRELUDE).toContain(`fn ${fns.sample}(ctx: MxLobeCtx, u: vec2f) -> MxBsdfSample`);
     }
+  });
+
+  it('lights Zeltner fuzz with directional albedo in SH without duplicating its environment energy', () => {
+    const diffuse = CLOSURE_LIBRARY_PRELUDE.match(/fn mx_closure_diffuse_albedo[\s\S]*?\n}/)?.[0];
+    const sampledDiffuse = CLOSURE_LIBRARY_PRELUDE.match(/fn mx_closure_sampled_is_diffuse[\s\S]*?\n}/)?.[0];
+    const specular = CLOSURE_LIBRARY_PRELUDE.match(/fn mx_closure_specular_eval[\s\S]*?\n}/)?.[0];
+    expect(diffuse).toContain('a = a * (1.0 - coverage) + c.fuzz.color * coverage;');
+    expect(sampledDiffuse).toContain('if (uz < coverage) { return true; }');
+    expect(specular).toContain('base.value * (1.0 - coverage)');
+    expect(specular).not.toContain('mx_fuzz_eval');
   });
 
   it('declares every shared math helper', () => {

@@ -92,10 +92,11 @@ fn mx_forward_environment(d: vec3f) -> vec3f {
   return textureSampleLevel(forwardEnv, forwardEnvSampler, uv, 0.0).rgb * fu.envMap.xyz;
 }
 
-// Diffuse is integrated separately with SH. Remove its lobes before sampling,
-// rather than repeatedly evaluating the full closure and discarding its value.
+// SH integrates diffuse and LTC fuzz. Keep the fuzz attenuation but remove its
+// response from the sampled closure so its environment energy is not counted twice.
 fn mx_forward_specular_closure(c: LayeredClosure) -> LayeredClosure {
   var spec = c;
+  spec.fuzz.color = vec3f(0.0);
   for (var i = 0u; i < spec.lobeCount; i++) {
     let kind = spec.lobes[i].kind;
     if (!(kind == MX_LOBE_DIELECTRIC_REFLECTION || kind == MX_LOBE_CONDUCTOR
@@ -104,6 +105,45 @@ fn mx_forward_specular_closure(c: LayeredClosure) -> LayeredClosure {
     }
   }
   return spec;
+}
+
+fn mx_forward_is_smooth_sheet(c: LayeredClosure) -> bool {
+  if (c.hasCoat != 0u && c.coat.weight > 0.0) { return false; }
+  var hasTransmission = false;
+  for (var i = 0u; i < c.lobeCount; i++) {
+    let l = c.lobes[i];
+    if (l.weight <= 0.0) { continue; }
+    if (l.roughness != 0.0 || l.anisotropy != 0.0) { return false; }
+    if (l.kind != MX_LOBE_DIELECTRIC_REFLECTION
+        && !(l.kind == MX_LOBE_DIELECTRIC_TRANSMISSION && l.thin > 0.0)) { return false; }
+    if (l.kind == MX_LOBE_DIELECTRIC_TRANSMISSION) { hasTransmission = true; }
+  }
+  return hasTransmission;
+}
+
+// A smooth sheet has two delta directions; integrate them without repeatedly
+// evaluating the thin-film interference inside the GGX quadrature.
+fn mx_forward_smooth_sheet(c: LayeredClosure, wo: vec3f, frame: mat3x3f) -> vec3f {
+  let cosV = abs(wo.z);
+  let reflected = mx_forward_environment(frame * vec3f(-wo.xy, wo.z));
+  let transmitted = mx_forward_environment(frame * (-wo));
+  var radiance = vec3f(0.0);
+  for (var i = 0u; i < c.lobeCount; i++) {
+    let l = c.lobes[i];
+    if (l.weight <= 0.0) { continue; }
+    if (l.kind == MX_LOBE_DIELECTRIC_REFLECTION) {
+      let f0 = vec3f(mx_dielectric_f0(l.ior));
+      var f = mx_fresnel_schlick(f0, cosV);
+      if (c.hasThinFilm != 0u) {
+        f = mx_thin_film_fresnel(f, f0, cosV, c.thinFilm.weight, c.thinFilm.thickness, c.thinFilm.ior);
+      }
+      radiance = radiance + l.weight * f * reflected;
+    } else {
+      let f = mx_fresnel_dielectric(cosV, l.ior);
+      radiance = radiance + l.weight * l.color * (1.0 - f) * transmitted;
+    }
+  }
+  return radiance;
 }
 
 // Diffuse irradiance E(n) from the uploaded SH9 radiance coefficients (cosine-lobe
@@ -236,29 +276,37 @@ fn ${IR_FORWARD_FRAGMENT_ENTRY}(fin: MxVertexOut) -> @location(0) vec4f {
   // Diffuse environment IBL read analytically from the SH9 irradiance probe (the
   // same noise-free term the path tracer uses), so textured albedo reads at the
   // correct brightness instead of the dim constant-ambient estimate.
-  radiance = radiance + mx_closure_diffuse_albedo(c) * (mx_sh_irradiance(n) / MX_PI);
+  radiance = radiance + mx_closure_diffuse_albedo(c, wo) * (mx_sh_irradiance(n) / MX_PI);
 
   // Deterministic BSDF quadrature of the actual dome; diffuse stays in SH above.
   let spec = mx_forward_specular_closure(c);
-  for (var i = 0u; i < 64u; i++) {
-    let u = vec3f((f32(i) + 0.5) / 64.0,
-      f32(reverseBits(i)) * 2.3283064365386963e-10,
-      fract((f32(i) + 0.5) * 0.61803398875));
-    let bs = mx_closure_sample(spec, wo, u);
-    if (bs.valid && bs.pdf > 0.0) {
-      let envDir = mx_forward_environment(sframe * bs.wi);
-      let envPdf = mx_forward_env_pdf(sframe * bs.wi);
-      let mis = bs.pdf * bs.pdf / max(bs.pdf * bs.pdf + envPdf * envPdf, 1e-20);
-      radiance = radiance + bs.value * envDir * (mis * abs(bs.wi.z) / (64.0 * bs.pdf));
-    }
-    if (fu.envMap.w != 0.0 && fu.envInfo.z > 0.0) {
-      let wiWorld = mx_forward_env_direction((f32(i) + 0.5) / 64.0);
-      let wi = transpose(sframe) * wiWorld;
-      let envPdf = mx_forward_env_pdf(wiWorld);
-      if (envPdf > 0.0) {
-        let em = mx_closure_eval(spec, wo, wi);
-        let mis = envPdf * envPdf / max(envPdf * envPdf + em.pdf * em.pdf, 1e-20);
-        radiance = radiance + em.value * mx_forward_environment(wiWorld) * (mis * abs(wi.z) / (64.0 * envPdf));
+  let deltaSpecular = mx_closure_is_specular(spec);
+  if (mx_forward_is_smooth_sheet(spec)) {
+    radiance = radiance + mx_forward_smooth_sheet(spec, wo, sframe);
+  } else {
+    for (var i = 0u; i < 64u; i++) {
+      let u = vec3f((f32(i) + 0.5) / 64.0,
+        f32(reverseBits(i)) * 2.3283064365386963e-10,
+        fract((f32(i) + 0.5) * 0.61803398875));
+      let bs = mx_closure_sample(spec, wo, u);
+      if (bs.valid && bs.pdf > 0.0) {
+        let envDir = mx_forward_environment(sframe * bs.wi);
+        var mis = 1.0;
+        if (!deltaSpecular) {
+          let envPdf = mx_forward_env_pdf(sframe * bs.wi);
+          mis = bs.pdf * bs.pdf / max(bs.pdf * bs.pdf + envPdf * envPdf, 1e-20);
+        }
+        radiance = radiance + bs.value * envDir * (mis * abs(bs.wi.z) / (64.0 * bs.pdf));
+      }
+      if (!deltaSpecular && fu.envMap.w != 0.0 && fu.envInfo.z > 0.0) {
+        let wiWorld = mx_forward_env_direction((f32(i) + 0.5) / 64.0);
+        let wi = transpose(sframe) * wiWorld;
+        let envPdf = mx_forward_env_pdf(wiWorld);
+        if (envPdf > 0.0) {
+          let em = mx_closure_eval(spec, wo, wi);
+          let mis = envPdf * envPdf / max(envPdf * envPdf + em.pdf * em.pdf, 1e-20);
+          radiance = radiance + em.value * mx_forward_environment(wiWorld) * (mis * abs(wi.z) / (64.0 * envPdf));
+        }
       }
     }
   }

@@ -1,6 +1,6 @@
 // T056h: full-stack closure assembly on the CPU oracle. The layered sampler now
-// folds the sheen and fuzz layers into the weighted lobe stack (they ride as
-// extra sheen lobes). These tests pin the stack intrinsics -- energy stays below
+// adds sheen to the weighted stack, then layers Zeltner fuzz above the substrate.
+// These tests pin the stack intrinsics -- energy stays below
 // one (global furnace), the sampler stays coherent and unbiased, the sheen/fuzz
 // layers actually add grazing energy, and a stack whose optional layers are all
 // zero/absent is byte-for-byte the prior response (non-regression anchor for the

@@ -375,6 +375,48 @@ fn mx_sheen_sample(ctx: MxLobeCtx, u: vec2f) -> MxBsdfSample {
   return MxBsdfSample(wi, e.value, e.pdf, true);
 }
 
+// OpenPBR fuzz uses the Zeltner LTC model, not the Charlie sheen above.
+fn mx_fuzz_dir_albedo(cosView: f32, roughness: f32) -> f32 {
+  let r = clamp(roughness, 0.01, 1.0);
+  let sigma = r * (0.0206607 + 1.58491 * r) / (0.0379424 + r * (1.32227 + r));
+  let mean = r * (-0.193854 + r * (-1.14885 + r * (1.7932 - 0.95943 * r * r))) / (0.046391 + r);
+  let offset = r * (0.000654023 + r * (-0.0207818 + 0.119681 * r)) / (1.26264 + r * (-1.92021 + r));
+  let z = (clamp(cosView, 0.0, 1.0) - mean) / sigma;
+  return exp(-0.5 * z * z) / (sigma * sqrt(2.0 * MX_PI)) + offset;
+}
+fn mx_fuzz_ltc(cosView: f32, roughness: f32) -> vec2f {
+  let v = clamp(cosView, 0.0, 1.0);
+  let r = clamp(roughness, 0.01, 1.0);
+  let a = r * (2.58126 * v + 0.813703 * r) / (1.0 + 0.310327 * v * v + 2.60994 * v * r);
+  let b = sqrt(1.0 - v) * (r - 1.0) * r * r * r / (0.0000254053 + 1.71228 * v - 1.71506 * v * r + 1.34174 * r * r);
+  return vec2f(a, b);
+}
+fn mx_fuzz_tangent(wo: vec3f) -> vec3f {
+  let len = length(wo.xy);
+  if (len > 0.0) { return vec3f(wo.xy / len, 0.0); }
+  return vec3f(1.0, 0.0, 0.0);
+}
+fn mx_fuzz_eval(ctx: MxLobeCtx, wi: vec3f) -> MxBsdfEval {
+  if (ctx.wo.z <= 0.0 || wi.z <= 0.0) { return MxBsdfEval(vec3f(0.0), 0.0); }
+  let ab = mx_fuzz_ltc(ctx.wo.z, ctx.roughness);
+  let t = mx_fuzz_tangent(ctx.wo);
+  let w = vec3f(ab.x * dot(wi, t) + ab.y * wi.z,
+    ab.x * dot(wi, vec3f(-t.y, t.x, 0.0)), wi.z);
+  let ratio = ab.x / dot(w, w);
+  let densityOverCosine = ratio * ratio / MX_PI;
+  return MxBsdfEval(ctx.color * (mx_fuzz_dir_albedo(ctx.wo.z, ctx.roughness) * densityOverCosine), wi.z * densityOverCosine);
+}
+fn mx_fuzz_sample(ctx: MxLobeCtx, u: vec2f) -> MxBsdfSample {
+  if (ctx.wo.z <= 0.0) { return MxBsdfSample(vec3f(0.0), vec3f(0.0), 0.0, false); }
+  let ab = mx_fuzz_ltc(ctx.wo.z, ctx.roughness);
+  let t = mx_fuzz_tangent(ctx.wo);
+  let cosine = mx_cosine_hemisphere(u);
+  let local = normalize(vec3f((cosine.x - ab.y * cosine.z) / ab.x, cosine.y / ab.x, cosine.z));
+  let wi = vec3f(t.x * local.x - t.y * local.y, t.y * local.x + t.x * local.y, local.z);
+  let e = mx_fuzz_eval(ctx, wi);
+  return MxBsdfSample(wi, e.value, e.pdf, e.pdf > 0.0);
+}
+
 // --- coat (dielectric clearcoat layered over the base stack) -------------------
 // The coat reflection reuses the dielectric GGX lobe (coat ior/roughness via its
 // own MxLobeCtx); these helpers supply the view-dependent darkening the base
@@ -438,7 +480,7 @@ fn mx_transmission_refractive_eval(ctx: MxLobeCtx, wi: vec3f) -> MxBsdfEval {
   if (ctx.wo.z * wi.z > 0.0) {
     // Reflection branch (same hemisphere): microfacet mirror weighted by Fresnel F.
     var wm = normalize(ctx.wo + wi);
-    if (wm.z < 0.0) { wm = -wm; }
+    if (dot(ctx.wo, wm) < 0.0) { wm = -wm; }
     let dotO = dot(ctx.wo, wm);
     if (dotO <= 0.0) { return MxBsdfEval(vec3f(0.0), 0.0); }
     let f = mx_fresnel_dielectric(dotO, eta);
@@ -690,7 +732,7 @@ fn mx_closure_base_eval(c: LayeredClosure, wo: vec3f, wi: vec3f) -> MxBsdfEval {
 fn mx_closure_coat_ctx(c: LayeredClosure, wo: vec3f) -> MxLobeCtx {
   return MxLobeCtx(wo, vec3f(0.0), c.coat.roughness, c.coat.ior, 0.0, 0.0, 0.0);
 }
-fn mx_closure_eval(c: LayeredClosure, wo: vec3f, wi: vec3f) -> MxBsdfEval {
+fn mx_closure_eval_base(c: LayeredClosure, wo: vec3f, wi: vec3f) -> MxBsdfEval {
   let base = mx_closure_base_eval(c, wo, wi);
   if (c.hasCoat == 0u || c.coat.weight <= 0.0) { return base; }
   let coatW = clamp(c.coat.weight, 0.0, 1.0);
@@ -700,6 +742,19 @@ fn mx_closure_eval(c: LayeredClosure, wo: vec3f, wi: vec3f) -> MxBsdfEval {
   let value = coatW * cc.value + att * base.value;
   let pdf = pCoat * cc.pdf + (1.0 - pCoat) * base.pdf;
   return MxBsdfEval(value, pdf);
+}
+fn mx_closure_eval(c: LayeredClosure, wo: vec3f, wi: vec3f) -> MxBsdfEval {
+  let base = mx_closure_eval_base(c, wo, wi);
+  if (c.hasFuzz == 0u || c.fuzz.weight <= 0.0) { return base; }
+  let fuzzW = clamp(c.fuzz.weight, 0.0, 1.0);
+  let fuzzCtx = MxLobeCtx(wo, c.fuzz.color, c.fuzz.roughness, 1.5, 0.0, 0.0, 0.0);
+  let fuzz = mx_fuzz_eval(fuzzCtx, wi);
+  let coverage = mx_closure_fuzz_coverage(c, wo);
+  return MxBsdfEval(fuzz.value * fuzzW + base.value * (1.0 - coverage), fuzz.pdf * coverage + base.pdf * (1.0 - coverage));
+}
+fn mx_closure_fuzz_coverage(c: LayeredClosure, wo: vec3f) -> f32 {
+  if (c.hasFuzz == 0u || c.fuzz.weight <= 0.0 || wo.z <= 0.0) { return 0.0; }
+  return clamp(c.fuzz.weight, 0.0, 1.0) * mx_fuzz_dir_albedo(wo.z, c.fuzz.roughness);
 }
 fn mx_closure_pdf(c: LayeredClosure, wo: vec3f, wi: vec3f) -> f32 {
   return mx_closure_eval(c, wo, wi).pdf;
@@ -734,6 +789,7 @@ fn mx_closure_base_sample(c: LayeredClosure, wo: vec3f, u: vec3f) -> MxBsdfSampl
 // the environment be seen directly through the glass at full weight.
 fn mx_closure_is_specular(c: LayeredClosure) -> bool {
   if (c.hasCoat != 0u && c.coat.weight > 0.0) { return false; }
+  if (c.hasFuzz != 0u && c.fuzz.weight > 0.0) { return false; }
   var w = 0.0;
   var spec = 0.0;
   for (var i = 0u; i < c.lobeCount; i = i + 1u) {
@@ -750,7 +806,7 @@ fn mx_closure_is_specular(c: LayeredClosure) -> bool {
 // /sheen/subsurface). The integrator lights these from the SH9 irradiance probe
 // (noise-free) instead of sampling the environment, so this returns the summed
 // weighted lobe colour the probe is modulated by.
-fn mx_closure_diffuse_albedo(c: LayeredClosure) -> vec3f {
+fn mx_closure_diffuse_albedo(c: LayeredClosure, wo: vec3f) -> vec3f {
   var a = vec3f(0.0);
   for (var i = 0u; i < c.lobeCount; i = i + 1u) {
     let l = c.lobes[i];
@@ -761,13 +817,21 @@ fn mx_closure_diffuse_albedo(c: LayeredClosure) -> vec3f {
       a = a + l.color * l.weight;
     }
   }
+  if (c.hasFuzz != 0u && c.fuzz.weight > 0.0) {
+    let coverage = mx_closure_fuzz_coverage(c, wo);
+    a = a * (1.0 - coverage) + c.fuzz.color * coverage;
+  }
   return a;
 }
 // True when a BSDF sample drawn with random scalar uz picks a diffuse lobe (lit by
-// the SH probe, so the integrator suppresses its env miss). Mirrors the lobe pick
-// in mx_closure_sample / mx_closure_base_sample, including the coat branch.
-fn mx_closure_sampled_is_diffuse(c: LayeredClosure, uz: f32) -> bool {
+// the SH probe, so the integrator suppresses its env miss), including LTC fuzz.
+fn mx_closure_sampled_is_diffuse(c: LayeredClosure, wo: vec3f, uz: f32) -> bool {
   var pz = uz;
+  if (c.hasFuzz != 0u && c.fuzz.weight > 0.0 && wo.z > 0.0) {
+    let coverage = mx_closure_fuzz_coverage(c, wo);
+    if (uz < coverage) { return true; }
+    pz = (uz - coverage) / max(1.0 - coverage, 1.0e-6);
+  }
   if (c.hasCoat != 0u && c.coat.weight > 0.0) {
     let pCoat = min(clamp(c.coat.weight, 0.0, 1.0), 0.95);
     if (uz < pCoat) { return false; }
@@ -817,16 +881,22 @@ fn mx_closure_specular_eval(c: LayeredClosure, wo: vec3f, wi: vec3f) -> MxBsdfEv
       pdf = pdf + (lobe.weight / specTotal) * r.pdf;
     }
   }
-  if (c.hasCoat == 0u || c.coat.weight <= 0.0) { return MxBsdfEval(value, pdf); }
-  let coatW = clamp(c.coat.weight, 0.0, 1.0);
-  let cc = mx_dielectric_reflection_eval(mx_closure_coat_ctx(c, wo), wi);
-  let att = mx_coat_attenuation(coatW, c.coat.ior, c.coat.color, wo, wi);
-  let pCoat = min(coatW, 0.95);
-  let v = coatW * cc.value + att * value;
-  let p = pCoat * cc.pdf + (1.0 - pCoat) * pdf;
-  return MxBsdfEval(v, p);
+  var base = MxBsdfEval(value, pdf);
+  if (c.hasCoat != 0u && c.coat.weight > 0.0) {
+    let coatW = clamp(c.coat.weight, 0.0, 1.0);
+    let cc = mx_dielectric_reflection_eval(mx_closure_coat_ctx(c, wo), wi);
+    let att = mx_coat_attenuation(coatW, c.coat.ior, c.coat.color, wo, wi);
+    let pCoat = min(coatW, 0.95);
+    base = MxBsdfEval(
+      coatW * cc.value + att * base.value,
+      pCoat * cc.pdf + (1.0 - pCoat) * base.pdf,
+    );
+  }
+  if (c.hasFuzz == 0u || c.fuzz.weight <= 0.0) { return base; }
+  let coverage = mx_closure_fuzz_coverage(c, wo);
+  return MxBsdfEval(base.value * (1.0 - coverage), mx_closure_pdf(c, wo, wi));
 }
-fn mx_closure_sample(c: LayeredClosure, wo: vec3f, u: vec3f) -> MxBsdfSample {
+fn mx_closure_sample_base(c: LayeredClosure, wo: vec3f, u: vec3f) -> MxBsdfSample {
   if (wo.z == 0.0) { return MxBsdfSample(vec3f(0.0), vec3f(0.0), 0.0, false); }
   if (c.hasCoat == 0u || c.coat.weight <= 0.0) { return mx_closure_base_sample(c, wo, u); }
   let coatW = clamp(c.coat.weight, 0.0, 1.0);
@@ -839,6 +909,27 @@ fn mx_closure_sample(c: LayeredClosure, wo: vec3f, u: vec3f) -> MxBsdfSample {
   } else {
     let ru = vec3f(u.x, u.y, (u.z - pCoat) / max(1.0 - pCoat, 1.0e-6));
     let s = mx_closure_base_sample(c, wo, ru);
+    if (!s.valid) { return MxBsdfSample(vec3f(0.0), vec3f(0.0), 0.0, false); }
+    wi = s.wi;
+  }
+  let e = mx_closure_eval_base(c, wo, wi);
+  if (e.pdf <= 0.0) { return MxBsdfSample(vec3f(0.0), vec3f(0.0), 0.0, false); }
+  return MxBsdfSample(wi, e.value, e.pdf, true);
+}
+fn mx_closure_sample(c: LayeredClosure, wo: vec3f, u: vec3f) -> MxBsdfSample {
+  if (c.hasFuzz == 0u || c.fuzz.weight <= 0.0) { return mx_closure_sample_base(c, wo, u); }
+  if (wo.z == 0.0) { return MxBsdfSample(vec3f(0.0), vec3f(0.0), 0.0, false); }
+  let coverage = mx_closure_fuzz_coverage(c, wo);
+  var wi: vec3f;
+  if (u.z < coverage) {
+    let fuzzCtx = MxLobeCtx(wo, c.fuzz.color, c.fuzz.roughness, 1.5, 0.0, 0.0, 0.0);
+    let s = mx_fuzz_sample(fuzzCtx, u.xy);
+    if (!s.valid) { return MxBsdfSample(vec3f(0.0), vec3f(0.0), 0.0, false); }
+    wi = s.wi;
+  } else {
+    var baseU = u;
+    baseU.z = (u.z - coverage) / max(1.0 - coverage, 1.0e-6);
+    let s = mx_closure_sample_base(c, wo, baseU);
     if (!s.valid) { return MxBsdfSample(vec3f(0.0), vec3f(0.0), 0.0, false); }
     wi = s.wi;
   }

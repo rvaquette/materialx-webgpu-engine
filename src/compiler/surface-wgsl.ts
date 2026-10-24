@@ -430,6 +430,8 @@ function buildSurfaceFn(
   const used = new Set<IrRef>();
   const ctx = makeCtx(surface, lowered.inputs, used);
   const fam = lowerFamily(surface.family, ctx);
+  const lobes = [...fam.lobes];
+  if (fam.sheen) lobes.push({ kind: 'sheen', ...fam.sheen });
 
   // Declare every referenced input ref as an output so lowerExprs emits its
   // sub-graph (topo order). The output name/type are irrelevant here.
@@ -438,8 +440,8 @@ function buildSurfaceFn(
   const ir = builder.build();
   const exprs = lowerExprs(ir, handlePrefix, computeStage);
 
-  const assigns: string[] = [`  c.lobeCount = ${fam.lobes.length}u;`];
-  fam.lobes.forEach((lobe, i) => assigns.push(lobeAssign(i, lobe)));
+  const assigns: string[] = [`  c.lobeCount = ${lobes.length}u;`];
+  lobes.forEach((lobe, i) => assigns.push(lobeAssign(i, lobe)));
   if (fam.coat) assigns.push(`  c.hasCoat = 1u;`, `  c.coat = MxCoatLayer(${fam.coat.weight}, ${fam.coat.color}, ${fam.coat.roughness}, ${fam.coat.ior});`);
   if (fam.sheen) assigns.push(`  c.hasSheen = 1u;`, `  c.sheen = MxSheenLayer(${fam.sheen.weight}, ${fam.sheen.color}, ${fam.sheen.roughness});`);
   if (fam.fuzz) assigns.push(`  c.hasFuzz = 1u;`, `  c.fuzz = MxFuzzLayer(${fam.fuzz.weight}, ${fam.fuzz.color}, ${fam.fuzz.roughness});`);
