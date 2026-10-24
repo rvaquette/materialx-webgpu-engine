@@ -92,6 +92,41 @@ fn mx_forward_environment(d: vec3f) -> vec3f {
   return textureSampleLevel(forwardEnv, forwardEnvSampler, uv, 0.0).rgb * fu.envMap.xyz;
 }
 
+fn mx_forward_sample_diffuse(c: LayeredClosure) -> bool {
+  return c.hasCoat != 0u && c.coat.weight > 0.0
+    && !(c.hasFuzz != 0u && c.fuzz.weight > 0.0);
+}
+
+fn mx_forward_coated_diffuse(c: LayeredClosure, wo: vec3f, frame: mat3x3f) -> vec3f {
+  let albedo = mx_closure_diffuse_albedo(c, wo);
+  let coatW = clamp(c.coat.weight, 0.0, 1.0);
+  var radiance = vec3f(0.0);
+  for (var i = 0u; i < 64u; i++) {
+    let u = vec2f((f32(i) + 0.5) / 64.0,
+      f32(reverseBits(i)) * 2.3283064365386963e-10);
+    let wi = mx_cosine_hemisphere(u);
+    let wiWorld = frame * wi;
+    let pdf = wi.z / MX_PI;
+    let envPdf = mx_forward_env_pdf(wiWorld);
+    let mis = pdf * pdf / max(pdf * pdf + envPdf * envPdf, 1e-20);
+    let attenuation = mx_coat_attenuation(coatW, c.coat.ior, c.coat.color, wo, wi);
+    radiance = radiance + albedo * attenuation * mx_forward_environment(wiWorld) * (mis / 64.0);
+    if (fu.envMap.w != 0.0 && fu.envInfo.z > 0.0) {
+      let lightWorld = mx_forward_env_direction(u.x);
+      let light = transpose(frame) * lightWorld;
+      let lightPdf = mx_forward_env_pdf(lightWorld);
+      if (light.z > 0.0 && lightPdf > 0.0) {
+        let bsdfPdf = light.z / MX_PI;
+        let lightMis = lightPdf * lightPdf / max(lightPdf * lightPdf + bsdfPdf * bsdfPdf, 1e-20);
+        let att = mx_coat_attenuation(coatW, c.coat.ior, c.coat.color, wo, light);
+        radiance = radiance + albedo * att * mx_forward_environment(lightWorld)
+          * (lightMis * bsdfPdf / (64.0 * lightPdf));
+      }
+    }
+  }
+  return radiance;
+}
+
 // SH integrates diffuse and LTC fuzz. Keep the fuzz attenuation but remove its
 // response from the sampled closure so its environment energy is not counted twice.
 fn mx_forward_specular_closure(c: LayeredClosure) -> LayeredClosure {
@@ -166,6 +201,11 @@ fn mx_forward_single_dielectric(c: LayeredClosure) -> i32 {
 // reflection and refraction. Avoid re-evaluating the entire layered stack at
 // every quadrature sample, which can exhaust the mobile fragment budget.
 fn mx_forward_dielectric_environment(l: MxBsdfLobe, wo: vec3f, frame: mat3x3f) -> vec3f {
+  return mx_forward_lobe_environment(l, wo, frame, 0.0, 1.0, vec3f(1.0));
+}
+
+fn mx_forward_lobe_environment(l: MxBsdfLobe, wo: vec3f, frame: mat3x3f,
+    coatW: f32, coatIor: f32, coatColor: vec3f) -> vec3f {
   let ctx = mx_closure_lobe_ctx(l, wo);
   let deltaSpecular = (l.kind == MX_LOBE_DIELECTRIC_REFLECTION
     || l.kind == MX_LOBE_DIELECTRIC_TRANSMISSION) && l.roughness < 0.07;
@@ -189,7 +229,8 @@ fn mx_forward_dielectric_environment(l: MxBsdfLobe, wo: vec3f, frame: mat3x3f) -
         let envPdf = mx_forward_env_pdf(frame * bs.wi);
         mis = bs.pdf * bs.pdf / max(bs.pdf * bs.pdf + envPdf * envPdf, 1e-20);
       }
-      radiance = radiance + l.weight * bs.value * envDir * (mis * abs(bs.wi.z) / (64.0 * bs.pdf));
+      let att = mx_coat_attenuation(coatW, coatIor, coatColor, wo, bs.wi);
+      radiance = radiance + att * l.weight * bs.value * envDir * (mis * abs(bs.wi.z) / (64.0 * bs.pdf));
     }
     if (!deltaSpecular && fu.envMap.w != 0.0 && fu.envInfo.z > 0.0) {
       let wiWorld = mx_forward_env_direction((f32(i) + 0.5) / 64.0);
@@ -205,9 +246,37 @@ fn mx_forward_dielectric_environment(l: MxBsdfLobe, wo: vec3f, frame: mat3x3f) -
           em = mx_dielectric_transmission_eval(ctx, wi);
         }
         let mis = envPdf * envPdf / max(envPdf * envPdf + em.pdf * em.pdf, 1e-20);
-        radiance = radiance + l.weight * em.value * mx_forward_environment(wiWorld) * (mis * abs(wi.z) / (64.0 * envPdf));
+        let att = mx_coat_attenuation(coatW, coatIor, coatColor, wo, wi);
+        radiance = radiance + att * l.weight * em.value * mx_forward_environment(wiWorld) * (mis * abs(wi.z) / (64.0 * envPdf));
       }
     }
+  }
+  return radiance;
+}
+
+fn mx_forward_simple_coat(c: LayeredClosure) -> bool {
+  if (!mx_forward_sample_diffuse(c) || c.hasThinFilm != 0u) { return false; }
+  for (var i = 0u; i < c.lobeCount; i++) {
+    let l = c.lobes[i];
+    if (l.weight <= 0.0) { continue; }
+    if (l.kind != MX_LOBE_DIELECTRIC_REFLECTION && l.kind != MX_LOBE_CONDUCTOR
+        && l.kind != MX_LOBE_GENERALIZED_SCHLICK) { return false; }
+  }
+  return true;
+}
+
+fn mx_forward_coated_specular(c: LayeredClosure, wo: vec3f, frame: mat3x3f) -> vec3f {
+  let coatW = clamp(c.coat.weight, 0.0, 1.0);
+  var coat: MxBsdfLobe;
+  coat.kind = MX_LOBE_DIELECTRIC_REFLECTION;
+  coat.weight = coatW;
+  coat.ior = c.coat.ior;
+  coat.roughness = c.coat.roughness;
+  var radiance = mx_forward_dielectric_environment(coat, wo, frame);
+  for (var i = 0u; i < c.lobeCount; i++) {
+    let l = c.lobes[i];
+    if (l.weight <= 0.0) { continue; }
+    radiance = radiance + mx_forward_lobe_environment(l, wo, frame, coatW, c.coat.ior, c.coat.color);
   }
   return radiance;
 }
@@ -358,13 +427,19 @@ fn mx_forward_lighting(c: LayeredClosure, n: vec3f, wo: vec3f, sframe: mat3x3f) 
   // Diffuse environment IBL read analytically from the SH9 irradiance probe (the
   // same noise-free term the path tracer uses), so textured albedo reads at the
   // correct brightness instead of the dim constant-ambient estimate.
-  radiance = radiance + mx_closure_diffuse_albedo(c, wo) * (mx_sh_irradiance(n) / MX_PI);
+  if (!mx_forward_sample_diffuse(c)) {
+    radiance = radiance + mx_closure_diffuse_albedo(c, wo) * (mx_sh_irradiance(n) / MX_PI);
+  } else {
+    radiance = radiance + mx_forward_coated_diffuse(c, wo, sframe);
+  }
 
   // Deterministic BSDF quadrature of the actual dome; diffuse stays in SH above.
   let spec = mx_forward_specular_closure(c);
   let deltaSpecular = mx_closure_is_specular(spec);
   let dielectricIndex = mx_forward_single_dielectric(spec);
-  if (mx_forward_is_smooth_sheet(spec)) {
+  if (mx_forward_simple_coat(spec)) {
+    radiance = radiance + mx_forward_coated_specular(spec, wo, sframe);
+  } else if (mx_forward_is_smooth_sheet(spec)) {
     radiance = radiance + mx_forward_smooth_sheet(spec, wo, sframe);
   } else if (dielectricIndex >= 0) {
     radiance = radiance + mx_forward_dielectric_environment(spec.lobes[u32(dielectricIndex)], wo, sframe);

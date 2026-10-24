@@ -267,6 +267,42 @@ Le vrai verre `showcase/gltf_pbr/glass_dispersion` reste refractif et se rend
 sans perte du device. Ces controles ne prouvent pas la parite visuelle complete
 avec les references.
 
+## Coat colore : substrat et echantillonnage
+
+Le graphe MaterialX standard_surface multiplie le substrat par
+`mix(white, coat_color, coat)`. Le coat reflechit une lumiere non teintee.
+Le moteur conserve les deux facteurs Fresnel de passage et utilise maintenant
+cette teinte lineaire, sans exposant d'absorption dependant du trajet qui
+saturait et assombrissait artificiellement le substrat aux angles rasants.
+Le lowering et les fichiers auteur ne sont pas modifies.
+
+Les PDF et le choix du lobe coat emploient la meme probabilite
+`min(coat_weight * Fresnel(wo), 0.95)` sur CPU et GPU, plutot que d'allouer 95 %
+des samples au coat pour un reflecteur normal d'environ 4 %. Les tests verifient
+la teinte a plusieurs angles, les poids partiels, la PDF du melange,
+la coherence eval/sample et la conservation d'energie.
+
+En raster, le diffus d'une surface avec coat actif, sans fuzz, n'est plus ajoute
+comme un terme SH non colore. Il integre l'environnement HDR avec la meme teinte
+et les facteurs Fresnel, par quadrature cosine + CDF, 64 samples par strategie
+avec MIS. Le speculaire reste separe pour ne pas compter le diffus deux fois.
+Les stacks coat simples sans fuzz, film ni transmission utilisent une quadrature
+directe de chaque lobe et du coat, avec attenuation du substrat ; le dispatch
+multicouche complet pouvait perdre le device mobile. Les autres stacks gardent
+la voie generale. La combinaison coat/fuzz conserve la voie SH/LTC existante
+et n'est pas couverte par cette correction.
+
+```sh
+node scripts/run-shaderball-renders.mjs --entry /scenes/standard-shader-ball/openpbr-rva-standard-shader-ball.usda --target mobile --materials /surfaces/standard_surface/coat_color_variation --out-dir renders/shaderball-coat-validation
+```
+
+Les controles de convergence a 64 ou 256 spp sont distincts du controle standard
+a 16 spp. Ne pas assimiler le statut `ok` a une parite visuelle : le raster
+n'integre pas les rebonds multiples et sa visibilite differe du path tracer.
+`tests/fixtures/coat-probe.ts` expose `runCoatProbe(device, code)` pour comparer
+le diffus coat GPU a une integrale analytique sous environnement constant :
+six cas (poids 0, 0.5, 1 ; vues normale et rasante), tolerance absolue `2e-4`.
+
 ## Couverture alpha glTF
 
 Les entrees `alpha_mode` et `alpha_cutoff` font partie de l'interface resolue

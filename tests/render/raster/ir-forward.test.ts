@@ -48,6 +48,18 @@ function forward(category: string, inputs: ResolvedInput[]) {
 }
 
 describe('assembleIrForwardShader (T058b)', () => {
+  it('integrates coated diffuse against the actual HDR without an uncoated SH term', () => {
+    const { shader } = forward('standard_surface', [
+      value('coat', 'float', '1'), value('coat_color', 'color3', '0.85, 0.2, 0.25'),
+    ]);
+    expect(shader.code).toContain('if (!mx_forward_sample_diffuse(c))');
+    expect(shader.code).toContain('mx_forward_coated_diffuse(c, wo, sframe)');
+    expect(shader.code).toContain('albedo * attenuation * mx_forward_environment(wiWorld)');
+    expect(shader.code).toContain('albedo * att * mx_forward_environment(lightWorld)');
+    expect(shader.code).toContain('if (mx_forward_simple_coat(spec))');
+    expect(shader.code).toContain('mx_forward_lobe_environment(l, wo, frame, coatW, c.coat.ior, c.coat.color)');
+  });
+
   it('integrates each RGB channel with its own dispersive closure', () => {
     const { shader } = forward('gltf_pbr', [value('dispersion', 'float', '0.35')]);
     expect(shader.code).toContain('if (mx_closure_has_dispersion(c))');

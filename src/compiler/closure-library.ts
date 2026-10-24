@@ -422,8 +422,8 @@ fn mx_fuzz_sample(ctx: MxLobeCtx, u: vec2f) -> MxBsdfSample {
 // own MxLobeCtx); these helpers supply the view-dependent darkening the base
 // receives under the coat. mx_coat_attenuation returns the per-channel factor
 // applied to the base value: the two Fresnel crossings (1 - w*F(cosWo)) *
-// (1 - w*F(cosWi)) times a coloured, path-length absorption through the coat
-// medium (grazing angles darken more). Coat weight <= 0 returns vec3f(1.0) so the
+// (1 - w*F(cosWi)) times MaterialX's mix(white, coat_color, coat_weight).
+// Coat weight <= 0 returns vec3f(1.0) so the
 // base stays untouched. The full coat-over-base composition lands in the T056h
 // assembler.
 fn mx_coat_fresnel(ior: f32, cosT: f32) -> f32 {
@@ -436,8 +436,7 @@ fn mx_coat_attenuation(coatW: f32, ior: f32, color: vec3f, wo: vec3f, wi: vec3f)
   let fo = mx_coat_fresnel(ior, wo.z);
   let fi = mx_coat_fresnel(ior, wi.z);
   let att = (1.0 - coatW * fo) * (1.0 - coatW * fi);
-  let pathLen = 0.5 * (1.0 / max(wo.z, 1.0e-3) + 1.0 / max(wi.z, 1.0e-3));
-  let absorb = vec3f(1.0 - coatW) + coatW * pow(color, vec3f(pathLen));
+  let absorb = vec3f(1.0 - coatW) + coatW * color;
   return vec3f(att) * absorb;
 }
 
@@ -778,7 +777,7 @@ fn mx_closure_eval_base(c: LayeredClosure, wo: vec3f, wi: vec3f) -> MxBsdfEval {
   let coatW = clamp(c.coat.weight, 0.0, 1.0);
   let cc = mx_dielectric_reflection_eval(mx_closure_coat_ctx(c, wo), wi);
   let att = mx_coat_attenuation(coatW, c.coat.ior, c.coat.color, wo, wi);
-  let pCoat = min(coatW, 0.95);
+  let pCoat = min(coatW * mx_coat_fresnel(c.coat.ior, wo.z), 0.95);
   let value = coatW * cc.value + att * base.value;
   let pdf = pCoat * cc.pdf + (1.0 - pCoat) * base.pdf;
   return MxBsdfEval(value, pdf);
@@ -873,7 +872,7 @@ fn mx_closure_sampled_is_diffuse(c: LayeredClosure, wo: vec3f, uz: f32) -> bool 
     pz = (uz - coverage) / max(1.0 - coverage, 1.0e-6);
   }
   if (c.hasCoat != 0u && c.coat.weight > 0.0) {
-    let pCoat = min(clamp(c.coat.weight, 0.0, 1.0), 0.95);
+    let pCoat = min(clamp(c.coat.weight, 0.0, 1.0) * mx_coat_fresnel(c.coat.ior, wo.z), 0.95);
     if (uz < pCoat) { return false; }
     pz = (uz - pCoat) / max(1.0 - pCoat, 1.0e-6);
   }
@@ -926,7 +925,7 @@ fn mx_closure_specular_eval(c: LayeredClosure, wo: vec3f, wi: vec3f) -> MxBsdfEv
     let coatW = clamp(c.coat.weight, 0.0, 1.0);
     let cc = mx_dielectric_reflection_eval(mx_closure_coat_ctx(c, wo), wi);
     let att = mx_coat_attenuation(coatW, c.coat.ior, c.coat.color, wo, wi);
-    let pCoat = min(coatW, 0.95);
+    let pCoat = min(coatW * mx_coat_fresnel(c.coat.ior, wo.z), 0.95);
     base = MxBsdfEval(
       coatW * cc.value + att * base.value,
       pCoat * cc.pdf + (1.0 - pCoat) * base.pdf,
@@ -940,7 +939,7 @@ fn mx_closure_sample_base(c: LayeredClosure, wo: vec3f, u: vec3f) -> MxBsdfSampl
   if (wo.z == 0.0) { return MxBsdfSample(vec3f(0.0), vec3f(0.0), 0.0, false); }
   if (c.hasCoat == 0u || c.coat.weight <= 0.0) { return mx_closure_base_sample(c, wo, u); }
   let coatW = clamp(c.coat.weight, 0.0, 1.0);
-  let pCoat = min(coatW, 0.95);
+  let pCoat = min(coatW * mx_coat_fresnel(c.coat.ior, wo.z), 0.95);
   var wi: vec3f;
   if (u.z < pCoat) {
     let s = mx_dielectric_reflection_sample(mx_closure_coat_ctx(c, wo), u.xy);

@@ -559,7 +559,7 @@ describe('lowerSurfaceInputsToIr (T055c)', () => {
     expect(module.code).toMatch(/= e\d+\.w;/);
   });
 
-  it('uses derivatives for heighttonormal in raster and a flat normal in compute stages', () => {
+  it('reevaluates heighttonormal at neighboring UVs in both raster and compute stages', () => {
     const graph = surfaceGraph([conn('normal', 'vector3', 'htn')], [
       upstream('htn', 'heighttonormal', 'vector3', [value('in', 'float', '0.5'), value('scale', 'float', '2')]),
     ]);
@@ -567,10 +567,34 @@ describe('lowerSurfaceInputsToIr (T055c)', () => {
     const lowered = lowerSurfaceInputsToIr(graph, resolveSurface(graph)!, builder);
     builder.output({ name: 'normal', type: COLOR3, ref: lowered.inputs.get('normal')! });
     const ir = builder.build();
-    expect(lowerExprs(ir).body.join('\n')).toContain('mx_heighttonormal(vec2f(dpdx(');
+    const raster = lowerExprs(ir).body.join('\n');
+    expect(raster).toContain('mx_heighttonormal(vec2f(');
+    expect(raster).not.toContain('dpdx');
     const compute = lowerExprs(ir, '', true).body.join('\n');
     expect(compute).not.toContain('dpdx');
-    expect(compute).toContain('vec3f(0.5, 0.5, 1.0)');
+    expect(compute).not.toContain('vec3f(0.5, 0.5, 1.0)');
+    expect(compute).toBe(raster);
+    expect(compute).toContain('_0_p_');
+    expect(compute).toContain('_1_m_');
+  });
+
+  it('resamples the upstream image and procedural height graph with namespaced texture handles', () => {
+    const graph = surfaceGraph([conn('normal', 'vector3', 'htn')], [
+      upstream('img', 'image', 'float', [value('file', 'filename', 'grid.png')]),
+      upstream('height', 'multiply', 'float', [conn('in1', 'float', 'img'), value('in2', 'float', '0.5')]),
+      upstream('htn', 'heighttonormal', 'vector3', [conn('in', 'float', 'height'), value('scale', 'float', '2')]),
+    ]);
+    const builder = new IrModuleBuilder();
+    const lowered = lowerSurfaceInputsToIr(graph, resolveSurface(graph)!, builder);
+    builder.output({ name: 'normal', type: COLOR3, ref: lowered.inputs.get('normal')! });
+    const loweredWgsl = lowerExprs(builder.build(), 'm7_', true);
+    const code = loweredWgsl.body.join('\n');
+    expect(code).toContain('textureDimensions(m7_tex_img, 0)');
+    expect(code.match(/textureSampleLevel\(m7_tex_img/g)).toHaveLength(5);
+    expect(code).toContain('vary.v_st + vec2f(');
+    expect(code).not.toContain('dpdx');
+    expect(loweredWgsl.textures).toHaveLength(1);
+    expect(loweredWgsl.primvarFields.has('st')).toBe(true);
   });
 
   it('chains ramp gradients over the ten control points', () => {

@@ -1065,9 +1065,9 @@ const LOWERINGS: readonly NodeLowering[] = [
     }
     return acc;
   }, RAMP_PRELUDE),
-  // Compute stages (path tracer) have no screen-space derivatives: flat normal.
+  // Graph-aware finite differences are emitted by lowerExprs for both stages.
   expr('heighttonormal', (inp, _type, ctx) => {
-    if (ctx.computeStage) return 'vec3f(0.5, 0.5, 1.0)';
+    if (ctx.computeStage) throw new Error('heighttonormal requires graph-aware UV finite differences');
     const h = inp.named('in', '0.0');
     const uv = texcoordOf(inp, ctx);
     return `mx_heighttonormal(vec2f(dpdx(${h}), dpdy(${h})), vec2f(dpdx(${uv}.x), dpdy(${uv}.x)), vec2f(dpdx(${uv}.y), dpdy(${uv}.y)), ${inp.named('scale', '1.0')})`;

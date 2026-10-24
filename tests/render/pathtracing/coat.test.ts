@@ -5,7 +5,7 @@
 // sample agree) and energy stays bounded (furnace). WGSL parity is deferred to
 // the device run (T059); the CPU oracle carries the numeric reference here.
 import { describe, expect, it } from 'vitest';
-import { layeredSurfaceBsdf, hemisphericalReflectance } from '../../../src/render/pathtracing/bsdf.ts';
+import { layeredSurfaceBsdf, hemisphericalReflectance, dielectricLobe } from '../../../src/render/pathtracing/bsdf.ts';
 import { createPcg32 } from '../../../src/render/pathtracing/integrator.ts';
 import type { LayeredClosure } from '../../../src/compiler/ir.ts';
 import type { Vec3 } from '../../../src/scene/transforms.ts';
@@ -32,6 +32,43 @@ const baseClosure = (): LayeredClosure => ({
 });
 
 describe('dielectric coat layer (T056d)', () => {
+  it.each([0.25, 1])('uses the MaterialX linear substrate tint at coat weight %s at every angle', (weight) => {
+    const tint: V = [0.85, 0.2, 0.25];
+    const closure = (color: V): LayeredClosure => ({
+      lobes: [{ kind: 'burley_diffuse', weight: 1, color: [0.8, 0.8, 0.8], roughness: 0.25 }],
+      coat: { weight, color, roughness: 0.05, ior: 1.5 }, opacity: 1,
+    });
+    const colored = layeredSurfaceBsdf(closure(tint));
+    const white = layeredSurfaceBsdf(closure([1, 1, 1]));
+    const black = layeredSurfaceBsdf(closure([0, 0, 0]));
+    for (const wo of [[0, 0, 1], normalize([0.95, 0, 0.1])] as V[]) {
+      for (const wi of DIRS) {
+        const c = colored.eval(wo, wi);
+        const w = white.eval(wo, wi);
+        const b = black.eval(wo, wi);
+        for (let k = 0; k < 3; k++) {
+          // Subtract the achromatic coat reflection to isolate the substrate.
+          expect((c.value[k]! - b.value[k]!) / (w.value[k]! - b.value[k]!)).toBeCloseTo(tint[k]!, 10);
+        }
+      }
+    }
+  });
+
+  it('balances coat sampling by Fresnel rather than allocating 95% to a 4% reflector', () => {
+    const base: LayeredClosure = {
+      lobes: [{ kind: 'burley_diffuse', weight: 1, color: [0.8, 0.8, 0.8], roughness: 0.25 }], opacity: 1,
+    };
+    const coat = { weight: 1, color: [1, 1, 1] as V, roughness: 0.3, ior: 1.5 };
+    const coated = layeredSurfaceBsdf({ ...base, coat });
+    const baseBsdf = layeredSurfaceBsdf(base);
+    const top = dielectricLobe(coat.ior, coat.roughness);
+    const wo: V = [0, 0, 1];
+    for (const wi of DIRS) {
+      const expectedPdf = 0.04 * top.eval(wo, wi).pdf + 0.96 * baseBsdf.eval(wo, wi).pdf;
+      expect(coated.eval(wo, wi).pdf).toBeCloseTo(expectedPdf, 12);
+    }
+  });
+
   it('leaves the base untouched at coat weight 0 (non-regression)', () => {
     const base = layeredSurfaceBsdf(baseClosure());
     const coated0 = layeredSurfaceBsdf({

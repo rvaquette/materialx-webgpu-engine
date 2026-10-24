@@ -727,7 +727,7 @@ export function lobeFromLayered(l: LayeredBsdfLobe, film?: ThinFilmLayer): Lobe 
  * Layer a dielectric coat over an already-composed base lobe (T056d). The coat
  * reflects via the dielectric GGX lobe weighted by its presence; the base is
  * attenuated by the two Fresnel crossings and a coloured, view-dependent
- * absorption through the coat medium (grazing angles darken more). Coat weight 0
+ * MaterialX coat tint on the substrate. Coat weight 0
  * returns the base untouched -- the non-regression anchor. Sampling is a two-way
  * one-sample MIS (coat vs base) whose selection probability matches the composed
  * pdf, so the estimator stays unbiased.
@@ -737,15 +737,14 @@ function coatOverBase(coat: CoatLayer, base: Lobe): Lobe {
   if (coatW <= 0) return base;
   const coatLobe = dielectricLobe(coat.ior, coat.roughness);
   const f0 = dielectricF0(coat.ior);
-  const pCoat = Math.min(coatW, 0.95);
   const schlick = (c: number): number => f0 + (1 - f0) * Math.pow(clamp01(1 - c), 5);
+  const coatProbability = (wo: V): number => Math.min(coatW * schlick(wo[2]), 0.95);
   const attenuation = (wo: V, wi: V): V => {
     const att = (1 - coatW * schlick(wo[2])) * (1 - coatW * schlick(wi[2]));
-    const pathLen = 0.5 * (1 / Math.max(wo[2], 1e-3) + 1 / Math.max(wi[2], 1e-3));
     return [
-      att * (1 - coatW + coatW * Math.pow(coat.color[0], pathLen)),
-      att * (1 - coatW + coatW * Math.pow(coat.color[1], pathLen)),
-      att * (1 - coatW + coatW * Math.pow(coat.color[2], pathLen)),
+      att * (1 - coatW + coatW * coat.color[0]),
+      att * (1 - coatW + coatW * coat.color[1]),
+      att * (1 - coatW + coatW * coat.color[2]),
     ];
   };
   function ev(wo: V, wi: V): BsdfEval {
@@ -757,6 +756,7 @@ function coatOverBase(coat: CoatLayer, base: Lobe): Lobe {
       coatW * c.value[1] + t[1] * b.value[1],
       coatW * c.value[2] + t[2] * b.value[2],
     ];
+    const pCoat = coatProbability(wo);
     return { value, pdf: pCoat * c.pdf + (1 - pCoat) * b.pdf };
   }
   return {
@@ -764,7 +764,7 @@ function coatOverBase(coat: CoatLayer, base: Lobe): Lobe {
     sample(wo, rng) {
       const w = wo as V;
       if (w[2] <= 0) return null;
-      const s = rng() < pCoat ? coatLobe.sample(w, rng) : base.sample(w, rng);
+      const s = rng() < coatProbability(w) ? coatLobe.sample(w, rng) : base.sample(w, rng);
       if (!s) return null;
       const { value, pdf } = ev(w, s.wi as V);
       if (pdf <= 0) return null;

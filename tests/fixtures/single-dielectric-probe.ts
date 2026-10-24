@@ -3,7 +3,7 @@ import { LAYERED_CLOSURE_PRELUDE } from '../../src/compiler/surface-wgsl.ts';
 
 export function singleDielectricProbe(forwardCode: string): string {
   const start = forwardCode.indexOf('fn mx_forward_single_dielectric(');
-  const end = forwardCode.indexOf('fn mx_sh_irradiance(', start);
+  const end = forwardCode.indexOf('fn mx_forward_simple_coat(', start);
   if (start < 0 || end < 0) throw new Error('Forward shader lacks single-dielectric helpers');
   return `${LAYERED_CLOSURE_PRELUDE}
 ${CLOSURE_LIBRARY_PRELUDE}

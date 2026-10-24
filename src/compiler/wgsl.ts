@@ -294,14 +294,18 @@ export interface LoweredExprs {
  *  it defaults to empty for single-surface modules. `computeStage` forces explicit
  *  LOD-0 texture sampling (textureSample is fragment-only; the PT megakernel runs
  *  in a compute pipeline). */
-export function lowerExprs(ir: ShaderIr, handlePrefix = '', computeStage = false): LoweredExprs {
+export function lowerExprs(
+  ir: ShaderIr, handlePrefix = '', computeStage = false,
+  stencil?: { offset: string; prefix: string },
+): LoweredExprs {
+  const shiftedUv = (uv: string): string => stencil ? `(${uv} + ${stencil.offset})` : uv;
   const ctx: NodeEmitContext = {
     varyings: {
       position: 'vary.position',
       normal: 'vary.normal',
       tangent: 'vary.tangent',
       bitangent: 'vary.bitangent',
-      texcoord: 'vary.texcoord',
+      texcoord: shiftedUv('vary.texcoord'),
       viewDir: 'vary.viewDir',
     },
     wgslType,
@@ -309,7 +313,7 @@ export function lowerExprs(ir: ShaderIr, handlePrefix = '', computeStage = false
   };
 
   const order = topoOrder(ir);
-  const varName = (r: IrRef): string => r;
+  const varName = (r: IrRef): string => `${stencil?.prefix ?? ''}${r}`;
   const preludes = new Set<string>([CLOSURE_PRELUDE]);
   // Texture/sampler handles actually sampled by the emitted body. A declared but
   // unreachable texture (e.g. an input the surface family never reads) would add
@@ -336,11 +340,11 @@ export function lowerExprs(ir: ShaderIr, handlePrefix = '', computeStage = false
       case 'input': {
         const r = inputRef(expr.name);
         if (r.startsWith('vary.in_')) extraInputs.set(expr.name, expr.type);
-        rhs = r;
+        rhs = expr.name.toLowerCase() === 'texcoord' ? shiftedUv(r) : r;
         break;
       }
       case 'primvar':
-        rhs = `vary.v_${ident(expr.name)}`;
+        rhs = expr.name === 'st' ? shiftedUv(`vary.v_${ident(expr.name)}`) : `vary.v_${ident(expr.name)}`;
         primvarFields.set(expr.name, expr.type);
         break;
       case 'convert':
@@ -358,6 +362,56 @@ export function lowerExprs(ir: ShaderIr, handlePrefix = '', computeStage = false
         const lowering = getNodeLowering(expr.op);
         if (!lowering) throw new WgslEmitError(`no WGSL lowering for node '${expr.op}'`);
         addPreludes(preludes, lowering.prelude);
+        if (expr.op === 'heighttonormal') {
+          const height = expr.namedArgs?.in ?? expr.args[0];
+          if (!height) throw new WgslEmitError(`${expr.op} requires a height input`);
+          const heightExpr = ir.exprs.get(height);
+          if (!heightExpr) throw new WgslEmitError(`missing height expression '${height}'`);
+          const texcoord = expr.namedArgs?.texcoord;
+          const subIr: ShaderIr = { ...ir, outputs: [
+            { name: 'height', type: heightExpr.type, ref: height },
+            ...(texcoord ? [{ name: 'texcoord', type: ir.exprs.get(texcoord)!.type, ref: texcoord }] : []),
+          ] };
+          const texture = topoOrder(subIr).map((r) => ir.exprs.get(r)).find((e) => e?.kind === 'texture');
+          const step = texture?.kind === 'texture'
+            ? `(1.0 / vec2f(textureDimensions(${handlePrefix}tex_${ident(texture.texture)}, 0)))`
+            : 'vec2f(0.0009765625)';
+          const stepName = `${varName(ref)}_step`;
+          body.push(`  let ${stepName} = ${step};`);
+          const samples: string[] = [];
+          const coordinates: string[] = [];
+          for (const [axis, sign] of [[0, 1], [0, -1], [1, 1], [1, -1]] as const) {
+            const offset = axis === 0 ? `vec2f(${sign}.0 * ${stepName}.x, 0.0)` : `vec2f(0.0, ${sign}.0 * ${stepName}.y)`;
+            const prefix = `${varName(ref)}_${axis}_${sign > 0 ? 'p' : 'm'}_`;
+            const sampled = lowerExprs(subIr, handlePrefix, true, {
+              prefix, offset: stencil ? `(${stencil.offset} + ${offset})` : offset,
+            });
+            body.push(...sampled.body);
+            for (const p of sampled.preludes) preludes.add(p);
+            for (const t of sampled.textures) usedTextures.add(t.name);
+            for (const s of sampled.samplers) usedSamplers.add(s.name);
+            for (const [name, type] of sampled.primvarFields) primvarFields.set(name, type);
+            for (const [name, type] of sampled.extraInputs) extraInputs.set(name, type);
+            usesLighting ||= sampled.usesLighting;
+            samples.push(`${prefix}${height}`);
+            if (texcoord) coordinates.push(`${prefix}${texcoord}`);
+          }
+          const gradient = `vec2f((${samples[0]} - ${samples[1]}) / (2.0 * ${stepName}.x), (${samples[2]} - ${samples[3]}) / (2.0 * ${stepName}.y))`;
+          const scale = expr.namedArgs?.scale ? varName(expr.namedArgs.scale) : '1.0';
+          let du = 'vec2f(1.0, 0.0)';
+          let dv = 'vec2f(0.0, 1.0)';
+          if (texcoord) {
+            const dx = `${varName(ref)}_uv_dx`;
+            const dy = `${varName(ref)}_uv_dy`;
+            body.push(`  let ${dx} = (${coordinates[0]} - ${coordinates[1]}) / (2.0 * ${stepName}.x);`);
+            body.push(`  let ${dy} = (${coordinates[2]} - ${coordinates[3]}) / (2.0 * ${stepName}.y);`);
+            du = `vec2f(${dx}.x, ${dy}.x)`;
+            dv = `vec2f(${dx}.y, ${dy}.y)`;
+          }
+          const encoded = `mx_heighttonormal(${gradient}, ${du}, ${dv}, ${scale})`;
+          rhs = encoded;
+          break;
+        }
         const named = Object.fromEntries(Object.entries(expr.namedArgs ?? {}).map(([name, ref]) => [name, varName(ref)]));
         const types: Record<string, IrType> = {};
         for (const [name, argRef] of Object.entries(expr.namedArgs ?? {})) {
@@ -384,7 +438,7 @@ export function lowerExprs(ir: ShaderIr, handlePrefix = '', computeStage = false
         rhs = emitCombine(expr, varName);
         break;
     }
-    body.push(`  let ${ref} = ${rhs};`);
+    body.push(`  let ${varName(ref)} = ${rhs};`);
   }
 
   // Uniforms.

@@ -83,9 +83,10 @@ describe('closure library prelude (T056a)', () => {
     expect(CLOSURE_LIBRARY_PRELUDE).toContain('vec2f(min(base / aspect, 1.0), base * aspect)');
     expect(CLOSURE_LIBRARY_PRELUDE).toContain('MX_PI * alpha.x * alpha.y * t * t');
     expect(CLOSURE_LIBRARY_PRELUDE).toContain('if (ctx.anisotropy <= 0.0)');
-    // Coat layering: two Fresnel crossings and coloured path-length absorption (T056d).
+    // Coat layering: two Fresnel crossings and MaterialX substrate tint.
     expect(CLOSURE_LIBRARY_PRELUDE).toContain('let att = (1.0 - coatW * fo) * (1.0 - coatW * fi);');
-    expect(CLOSURE_LIBRARY_PRELUDE).toContain('vec3f(1.0 - coatW) + coatW * pow(color, vec3f(pathLen))');
+    expect(CLOSURE_LIBRARY_PRELUDE).toContain('vec3f(1.0 - coatW) + coatW * color');
+    expect(CLOSURE_LIBRARY_PRELUDE).not.toContain('vec3f(pathLen)');
     // Dielectric transmission: Snell refraction, dielectric Fresnel, eta^2 pdf
     // Jacobian (1/eta^2 radiance compression) and the thin-walled branch (T056e).
     expect(CLOSURE_LIBRARY_PRELUDE).toContain('invEta * invEta * max(0.0, 1.0 - cosI * cosI)');
