@@ -178,9 +178,22 @@ export function lowerSurfaceInputsToIr(
       ...(file?.colorSpace !== undefined ? { colorSpace: file.colorSpace } : {}),
       ...(fileRef !== undefined ? { fileRef } : {}),
     });
-    builder.declareSampler({ name: nodeId });
+    const stringInput = (name: string): string | undefined => {
+      const input = node.inputs.find((candidate) => candidate.name === name);
+      if (input?.source.kind === 'value') return input.source.value;
+      return node.nodeDef?.inputs?.find((candidate) => candidate.name === name)?.value;
+    };
+    const addressU = stringInput('uaddressmode');
+    const addressV = stringInput('vaddressmode');
+    const filter = stringInput('filtertype');
+    builder.declareSampler({
+      name: nodeId,
+      ...(addressU !== undefined ? { addressU } : {}),
+      ...(addressV !== undefined ? { addressV } : {}),
+      ...(filter !== undefined ? { filter } : {}),
+    });
     const texcoord = node.inputs.find((i) => i.name === 'texcoord');
-    const uv = uvOverride ?? (texcoord ? lowerInput(texcoord) : undefined) ?? ensureUv();
+    let uv = uvOverride ?? (texcoord ? lowerInput(texcoord) : undefined) ?? ensureUv();
     if (uvOverride === undefined && node.category === 'hextiledimage') {
       const uvType = vector(2, 'float', 'texcoord');
       const input = (name: keyof HexTileInputs, type: IrType, fallback: readonly number[]): IrRef => {
@@ -203,7 +216,30 @@ export function lowerSurfaceInputsToIr(
         lumacoeffs: input('lumacoeffs', COLOR3, [0.2722287, 0.6740818, 0.0536895]),
       }, (coord) => builder.add({ kind: 'texture', type: valueType, texture: nodeId, uv: coord, sampler: nodeId }));
     }
-    return builder.add({ kind: 'texture', type: valueType, texture: nodeId, uv: coerce(uv, vector(2, 'float', 'texcoord')), sampler: nodeId });
+    const uvType = vector(2, 'float', 'texcoord');
+    if (node.category === 'image') {
+      const scale = authoredRef(nodeId, 'uv_scale', uvType);
+      const offset = authoredRef(nodeId, 'uv_offset', uvType);
+      if (scale !== undefined) uv = callRef('multiply', uvType, { in1: coerce(uv, uvType), in2: scale });
+      if (offset !== undefined) uv = callRef('add', uvType, { in1: coerce(uv, uvType), in2: offset });
+      uv = callRef('add', uvType, {
+        in1: callRef('multiply', uvType, { in1: coerce(uv, uvType), in2: builder.constant(uvType, [1, -1]) }),
+        in2: builder.constant(uvType, [0, 1]),
+      });
+    }
+    let sample = builder.add({ kind: 'texture', type: valueType, texture: nodeId, uv: coerce(uv, uvType), sampler: nodeId });
+    for (const [axis, mode] of [['x', addressU], ['y', addressV]] as const) {
+      if (mode !== 'constant') continue;
+      const coord = builder.add({ kind: 'swizzle', type: FLOAT, source: uv, pattern: axis });
+      const fallback = authoredRef(nodeId, 'default', valueType) ?? constOfIrType(builder, valueType, [0]);
+      sample = callRef('ifgreater', valueType, {
+        value1: coord, value2: builder.constant(FLOAT, 1), in1: fallback, in2: sample,
+      });
+      sample = callRef('ifgreater', valueType, {
+        value1: builder.constant(FLOAT, 0), value2: coord, in1: fallback, in2: sample,
+      });
+    }
+    return sample;
   };
 
   const authoredRef = (nodeId: string, name: string, type: IrType): IrRef | undefined => {

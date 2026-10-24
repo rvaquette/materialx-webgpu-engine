@@ -18,6 +18,7 @@ import { IrModuleBuilder, COLOR3, FLOAT, type IrRef } from '../../src/compiler/i
 import { emitWgsl, lowerExprs, type WgslModule } from '../../src/compiler/wgsl.ts';
 import { evaluateShaderIr } from '../../src/compiler/ir-eval.ts';
 import type { Diagnostic } from '../../src/core/diagnostics.ts';
+import { createImageSampler } from '../../src/render/pathtracing/texture-sample.ts';
 
 function value(name: string, type: string, raw: string, colorSpace?: string): ResolvedInput {
   const source: ResolvedValueSource = { kind: 'value', value: raw, type };
@@ -316,7 +317,62 @@ describe('lowerSurfaceInputsToIr (T055c)', () => {
     builder.output({ name: 'color', type: COLOR3, ref: lowered.inputs.get('base_color')! });
     expect(evaluateShaderIr(builder.build(), {
       texcoord: [0.2, 0.4], textures: { tex: (u, v) => [u, v, 0, 1] },
-    }).get('color')).toEqual([0.2, 0.4, 0]);
+    }).get('color')).toEqual([0.2, 0.6, 0]);
+  });
+
+  it.each([false, true])('preserves image sampler settings and flips V after the connected UV transform (defaults=%s)', (defaults) => {
+    const settings = [
+      value('uaddressmode', 'string', 'clamp'), value('vaddressmode', 'string', 'clamp'),
+      value('filtertype', 'string', 'closest'),
+    ];
+    const tex = upstream('tex', 'image', 'color3', [
+      conn('texcoord', 'vector2', 'expanded'), ...(defaults ? [] : settings),
+    ]);
+    if (defaults) tex.nodeDef = {
+      name: 'ND_image_color3', nodeString: 'image', type: 'color3', implementation: { kind: 'unresolved' },
+      inputs: settings.map((input) => ({ name: input.name, type: input.type, value: input.source.kind === 'value' ? input.source.value : '' })),
+    };
+    const graph = surfaceGraph([conn('base_color', 'color3', 'tex')], [
+      tex,
+      upstream('expanded', 'add', 'vector2', [conn('in1', 'vector2', 'scaled'), value('in2', 'vector2', '-1, -1')]),
+      upstream('scaled', 'multiply', 'vector2', [conn('in1', 'vector2', 'uv'), value('in2', 'vector2', '3, 3')]),
+      upstream('uv', 'texcoord', 'vector2', []),
+    ]);
+    const builder = new IrModuleBuilder();
+    const lowered = lowerSurfaceInputsToIr(graph, resolveSurface(graph)!, builder);
+    builder.output({ name: 'color', type: COLOR3, ref: lowered.inputs.get('base_color')! });
+    const ir = builder.build();
+    expect(ir.samplers[0]).toMatchObject({ addressU: 'clamp', addressV: 'clamp', filter: 'closest' });
+    const sampler = createImageSampler({
+      kind: 'pixels', data: new Uint8Array([255, 0, 0, 0, 255, 0, 0, 0, 255, 255, 255, 255]),
+      componentType: 'uint8', channels: 3, width: 2, height: 2, colorSpace: 'lin_rec709',
+    }, ir.samplers[0]);
+    for (const [uv, expected] of [
+      [[0, 0], [0, 0, 1]], [[1, 0], [1, 1, 1]], [[0, 1], [1, 0, 0]], [[1, 1], [0, 1, 0]],
+    ] as const) {
+      expect(evaluateShaderIr(ir, { texcoord: uv, textures: { tex: sampler } }).get('color')).toEqual(expected);
+    }
+    for (const compute of [false, true]) {
+      expect(lowerExprs(ir, '', compute).samplers[0]!.sampler).toEqual({ addressU: 'clamp', addressV: 'clamp', filter: 'closest' });
+    }
+  });
+
+  it('uses the declared default for constant-addressed UVs without clamping the other axis', () => {
+    const graph = surfaceGraph([conn('base_color', 'color3', 'tex')], [
+      upstream('tex', 'image', 'color3', [
+        value('uaddressmode', 'string', 'constant'), value('default', 'color3', '1, 0, 1'),
+      ]),
+    ]);
+    const builder = new IrModuleBuilder();
+    const lowered = lowerSurfaceInputsToIr(graph, resolveSurface(graph)!, builder);
+    builder.output({ name: 'color', type: COLOR3, ref: lowered.inputs.get('base_color')! });
+    const ir = builder.build();
+    const evaluate = (u: number, v: number) => evaluateShaderIr(ir, { texcoord: [u, v], textures: { tex: () => [0, 1, 0, 1] } }).get('color');
+    expect(evaluate(-0.01, 0.5)).toEqual([1, 0, 1]);
+    expect(evaluate(1.01, 0.5)).toEqual([1, 0, 1]);
+    expect(evaluate(0.5, 2)).toEqual([0, 1, 0]);
+    expect(evaluate(0, 0.5)).toEqual([0, 1, 0]);
+    expect(evaluate(1, 0.5)).toEqual([0, 1, 0]);
   });
 
   it('lowers a literal input to a baked constant with no bindings', () => {

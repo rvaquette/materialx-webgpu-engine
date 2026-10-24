@@ -15,6 +15,102 @@ const varyingEnv = {
 };
 
 describe('evaluateShaderIr (T057i2)', () => {
+  it.each([FLOAT, vector(2), vector(3), vector(4)])('defines ln on nonpositive inputs without changing positive inputs for %j', (type) => {
+    const size = type.kind === 'vector' ? type.size : 1;
+    for (const x of [-10, -0.5, -0, 0, 1e-30, 1e-8, 0.25, 1, Math.E, 100]) {
+      const builder = new IrModuleBuilder();
+      const input = builder.constant(type, size === 1 ? x : Array(size).fill(x));
+      const ref = builder.add({ kind: 'call', type, op: 'ln', args: [], namedArgs: { in: input } });
+      builder.output({ name: 'out', type, ref });
+      const ir = builder.build();
+      expect(evaluateIrRef(ir, ref)).toEqual(Array(size).fill(x > 0 ? Math.log(x) : 0));
+      const code = emitWgsl(ir).code;
+      expect(code).toContain('log(select(');
+      expect(code).toContain(`${input} >`);
+    }
+  });
+
+  it('keeps mixed ln debug channels finite after abs and fract', () => {
+    const builder = new IrModuleBuilder();
+    const type = vector(4);
+    const input = builder.constant(type, [-0.5, 0, 0.25, 2]);
+    const ln = builder.add({ kind: 'call', type, op: 'ln', args: [input] });
+    const magnitude = builder.add({ kind: 'call', type, op: 'absval', args: [ln] });
+    const wrapped = builder.add({ kind: 'call', type, op: 'fract', args: [magnitude] });
+    const values = evaluateIrRef(builder.build(), wrapped);
+    expect(values).toEqual([0, 0, Math.abs(Math.log(0.25)) % 1, Math.log(2)]);
+    expect(values.every(Number.isFinite)).toBe(true);
+  });
+
+  it('defines smoothstep for equal bounds and emits finite WGSL', () => {
+    const builder = new IrModuleBuilder();
+    const type = vector(4);
+    const input = builder.constant(type, [-0.1, 0.5, 0.5, 0.75]);
+    const low = builder.constant(type, [0.5, 0.5, 0.5, 0.5]);
+    const high = builder.constant(type, [0.5, 0.5, 0.5, 0.5]);
+    const ref = builder.add({
+      kind: 'call',
+      type,
+      op: 'smoothstep',
+      args: [],
+      namedArgs: { in: input, low, high },
+    });
+    builder.output({ name: 'out', type, ref });
+    const ir = builder.build();
+
+    expect(evaluateIrRef(ir, ref)).toEqual([0, 0.5, 0.5, 1]);
+    const code = emitWgsl(ir).code;
+    expect(code).toContain('select(');
+    expect(code).toContain('==');
+    expect(code).toContain('> ');
+  });
+
+  it('smoothly reverses the transition for inverted bounds in CPU and WGSL', () => {
+    const builder = new IrModuleBuilder();
+    const type = vector(4);
+    const input = builder.constant(type, [0, 0.5, 0.75, 1]);
+    const low = builder.constant(type, [0.75, 0.75, 0.75, 0.75]);
+    const high = builder.constant(type, [0.25, 0.25, 0.25, 0.25]);
+    const ref = builder.add({
+      kind: 'call',
+      type,
+      op: 'smoothstep',
+      args: [],
+      namedArgs: { in: input, low, high },
+    });
+    builder.output({ name: 'out', type, ref });
+    const ir = builder.build();
+
+    expect(evaluateIrRef(ir, ref)).toEqual([1, 0.5, 0, 0]);
+    const code = emitWgsl(ir).code;
+    expect(code).toContain('vec4f(e2) - vec4f(e1)');
+    expect(code).not.toContain('smoothstep(');
+  });
+
+  it('uses outlow for degenerate remap bounds while preserving regular and inverted ranges', () => {
+    const builder = new IrModuleBuilder();
+    const type = vector(4);
+    const input = builder.constant(type, [-0.5, 0.25, 0.5, 1.5]);
+    const inLow = builder.constant(type, [0, 0, 0.75, 0]);
+    const inHigh = builder.constant(type, [0, 1, 0.25, 1]);
+    const outLow = builder.constant(type, [0, 0, 0, 1]);
+    const outHigh = builder.constant(type, [1, 1, 1, 0]);
+    const ref = builder.add({
+      kind: 'call',
+      type,
+      op: 'remap',
+      args: [],
+      namedArgs: { in: input, inlow: inLow, inhigh: inHigh, outlow: outLow, outhigh: outHigh },
+    });
+    builder.output({ name: 'out', type, ref });
+    const ir = builder.build();
+
+    expect(evaluateIrRef(ir, ref)).toEqual([0, 0.25, 0.5, -0.5]);
+    const code = emitWgsl(ir).code;
+    expect(code).toContain('select(');
+    expect(code).toContain('==');
+  });
+
   it.each([FLOAT, vector(2), vector(3), vector(4)])('defines finite acos results outside the domain for %j', (type) => {
     const size = type.kind === 'vector' ? type.size : 1;
     for (const x of [-1.2, -1, -0.5, 0, 0.5, 1, 1.2]) {

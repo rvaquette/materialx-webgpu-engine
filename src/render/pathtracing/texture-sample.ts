@@ -6,6 +6,8 @@
 // textureSample returns a vec4 the surface lowering then swizzles.
 
 import type { DecodedPixelImage } from '../../assets/images.ts';
+import { imageSamplerDescriptor } from '../../assets/samplers.ts';
+import type { SamplerResource } from '../../compiler/ir.ts';
 
 /** Bilinear RGBA sampler at normalized uv; returns four components in [0,1]. */
 export type ImageSampler = (u: number, v: number) => number[];
@@ -27,11 +29,24 @@ function wrap(i: number, n: number): number {
   return m < 0 ? m + n : m;
 }
 
-/** Build a bilinear RGBA sampler over a decoded pixel image (repeat addressing). */
-export function createImageSampler(image: DecodedPixelImage): ImageSampler {
+/** Build an RGBA sampler; omitted settings retain repeat/linear filtering. */
+export function createImageSampler(
+  image: DecodedPixelImage,
+  sampler: Pick<SamplerResource, 'addressU' | 'addressV' | 'filter'> = {},
+  border: readonly number[] = [0, 0, 0, 1],
+): ImageSampler {
+  const descriptor = imageSamplerDescriptor(sampler);
   const { data, width, height, channels, componentType } = image;
+  const address = (i: number, size: number, mode: GPUAddressMode): number => {
+    if (mode === 'clamp-to-edge') return Math.min(Math.max(i, 0), size - 1);
+    if (mode === 'mirror-repeat') {
+      const mirrored = wrap(i, size * 2);
+      return mirrored < size ? mirrored : size * 2 - 1 - mirrored;
+    }
+    return wrap(i, size);
+  };
   const texel = (x: number, y: number): number[] => {
-    const base = (wrap(y, height) * width + wrap(x, width)) * channels;
+    const base = (address(y, height, descriptor.addressModeV) * width + address(x, width, descriptor.addressModeU)) * channels;
     const out = [0, 0, 0, 1];
     for (let c = 0; c < channels && c < 4; c++) {
       const value = normalize(data[base + c]!, componentType);
@@ -42,6 +57,9 @@ export function createImageSampler(image: DecodedPixelImage): ImageSampler {
     return out;
   };
   return (u, v) => {
+    if ((sampler.addressU === 'constant' && (u < 0 || u > 1)) ||
+        (sampler.addressV === 'constant' && (v < 0 || v > 1))) return [...border];
+    if (descriptor.magFilter === 'nearest') return texel(Math.floor(u * width), Math.floor(v * height));
     const fx = u * width - 0.5;
     const fy = v * height - 0.5;
     const x0 = Math.floor(fx);

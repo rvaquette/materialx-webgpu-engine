@@ -133,13 +133,13 @@ describe('composeSurfaceLayered texture sampling (T057k)', () => {
     expect(surface).not.toBeNull();
     const prepared = prepareSurface(graph, surface);
     const sampler = createImageSampler(checker());
-    // The (0,0) texel center samples pure red into base_color.
-    const red = composeSurfaceLayered(prepared, { texcoord: [0.25, 0.25], textures: { tex: sampler } });
+    // Image-space V is inverted relative to the MaterialX texcoord.
+    const red = composeSurfaceLayered(prepared, { texcoord: [0.25, 0.75], textures: { tex: sampler } });
     expect(diffuse(red).color[0]).toBeCloseTo(1, 5);
     expect(diffuse(red).color[1]).toBeCloseTo(0, 5);
     expect(diffuse(red).color[2]).toBeCloseTo(0, 5);
     // A different texcoord samples a different texel -> a different base_color.
-    const green = composeSurfaceLayered(prepared, { texcoord: [0.75, 0.25], textures: { tex: sampler } });
+    const green = composeSurfaceLayered(prepared, { texcoord: [0.75, 0.75], textures: { tex: sampler } });
     expect(diffuse(green).color[0]).toBeCloseTo(0, 5);
     expect(diffuse(green).color[1]).toBeCloseTo(1, 5);
   });

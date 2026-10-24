@@ -11,6 +11,7 @@ import type { DecodedPixelImage } from '../../assets/images.ts';
 import type { Diagnostic, DiagnosticSink } from '../../core/diagnostics.ts';
 import type { PtMaterialDispatch } from './material-variant.ts';
 import type { PathTraceScene } from './scene-buffers.ts';
+import { imageSamplerDescriptor, type ImageSamplerDescriptor } from '../../assets/samplers.ts';
 
 /** Decodes a texture file reference to pixels; injected so the resolver/decoder
  *  (and its colorspace policy) stay out of this pure planner. Called once per
@@ -41,21 +42,8 @@ export interface PtBufferSlot {
   data?: Float32Array | Uint32Array;
 }
 
-/** MaterialX texture sampling wraps (repeat) with bilinear filtering, matching the
- *  CPU oracle createImageSampler (T057k). */
-export interface PtSamplerDescriptor {
-  addressModeU: 'repeat';
-  addressModeV: 'repeat';
-  magFilter: 'linear';
-  minFilter: 'linear';
-}
-
-const DEFAULT_SAMPLER: PtSamplerDescriptor = {
-  addressModeU: 'repeat',
-  addressModeV: 'repeat',
-  magFilter: 'linear',
-  minFilter: 'linear',
-};
+/** MaterialX image addressing/filtering mapped to the device sampler. */
+export type PtSamplerDescriptor = ImageSamplerDescriptor;
 
 export interface PtTextureBinding {
   /** group-1 binding index. */
@@ -141,7 +129,7 @@ export async function buildPtDeviceBindings(
   const samplers: PtSamplerBinding[] = registry.samplers.map((s) => ({
     binding: s.binding,
     handle: s.handle,
-    descriptor: DEFAULT_SAMPLER,
+    descriptor: imageSamplerDescriptor(s.sampler ?? {}),
   }));
 
   return { group0: group0Slots(scene, dispatch), textures, samplers, images };

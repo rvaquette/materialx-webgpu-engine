@@ -716,7 +716,12 @@ const LOWERINGS: readonly NodeLowering[] = [
   expr('power', fn2Splat('pow')),
   expr('sin', fn1('sin')),
   expr('sqrt', fn1('sqrt')),
-  expr('ln', fn1('log')),
+  expr('ln', (inp, type, ctx) => {
+    const input = inp.named('in', undefined, 0);
+    const t = ctx.wgslType(type);
+    const positive = `${input} > ${t}(0.0)`;
+    return `select(${t}(0.0), log(select(${t}(1.0), ${input}, ${positive})), ${positive})`;
+  }),
   expr('sign', fn1('sign')),
   expr('normalize', fn1('normalize')),
   expr('min', fn2Splat('min')),
@@ -796,13 +801,28 @@ const LOWERINGS: readonly NodeLowering[] = [
     return `(sign(${a}) * pow(abs(${a}), ${ctx.wgslType(type)}(${inp.named('in2', '1.0')})))`;
   }),
   expr('smoothstep', (inp, type, ctx) => {
-    const t = ctx.wgslType(type);
-    return `smoothstep(${t}(${inp.named('low', '0.0')}), ${t}(${inp.named('high', '1.0')}), ${inp.named('in')})`;
+    const target = ctx.wgslType(type);
+    const low = `${target}(${inp.named('low', '0.0')})`;
+    const high = `${target}(${inp.named('high', '1.0')})`;
+    const value = inp.named('in');
+    const degenerate = `${low} == ${high}`;
+    const denominator = `select(${high} - ${low}, ${target}(1.0), ${degenerate})`;
+    const t = `clamp((${value} - ${low}) / ${denominator}, ${target}(0.0), ${target}(1.0))`;
+    const smooth = `(${t} * ${t} * (${target}(3.0) - ${target}(2.0) * ${t}))`;
+    const step = `select(select(${target}(0.0), ${target}(0.5), ${value} == ${low}), ${target}(1.0), ${value} > ${low})`;
+    return `select(${smooth}, ${step}, ${degenerate})`;
   }),
-  expr('remap', (inp) => {
-    const inLow = inp.named('inlow', '0.0');
-    const outLow = inp.named('outlow', '0.0');
-    return `(${outLow} + (${inp.named('in')} - ${inLow}) * (${inp.named('outhigh', '1.0')} - ${outLow}) / (${inp.named('inhigh', '1.0')} - ${inLow}))`;
+  expr('remap', (inp, type, ctx) => {
+    const target = ctx.wgslType(type);
+    const inLow = `${target}(${inp.named('inlow', '0.0')})`;
+    const inHigh = `${target}(${inp.named('inhigh', '1.0')})`;
+    const outLow = `${target}(${inp.named('outlow', '0.0')})`;
+    const outHigh = `${target}(${inp.named('outhigh', '1.0')})`;
+    const degenerate = `${inHigh} == ${inLow}`;
+    const denominator = `select(${inHigh} - ${inLow}, ${target}(1.0), ${degenerate})`;
+    const normalized = `((${inp.named('in')} - ${inLow}) / ${denominator})`;
+    const mapped = `(${outLow} + ${normalized} * (${outHigh} - ${outLow}))`;
+    return `select(${mapped}, ${outLow}, ${degenerate})`;
   }),
   // matrices
   expr('creatematrix', (inp, type) => {

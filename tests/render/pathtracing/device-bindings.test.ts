@@ -179,4 +179,24 @@ describe('buildPtDeviceBindings (T057m2)', () => {
     expect(bindings.textures).toHaveLength(1);
     expect(messages.join('\n')).toContain('failed to decode');
   });
+
+  it('keeps per-material addressing and filtering when images are deduplicated', async () => {
+    const graph = surfaceGraph('standard_surface', [conn('base_color', 'color3', 'tex')], [
+      upstream('tex', 'image', 'color3', [
+        value('file', 'filename', 'shared.png', 'srgb_texture'),
+        value('uaddressmode', 'string', 'clamp'),
+        value('vaddressmode', 'string', 'mirror'),
+        value('filtertype', 'string', 'closest'),
+      ]),
+    ]);
+    const dispatch = buildMaterialDispatch([source(0, graph), source(1, texturedBaseColor('shared.png'))]);
+    const { calls, provider } = countingProvider(fakeImage());
+    const bindings = await buildPtDeviceBindings(dispatch, fakeScene(), provider);
+    expect(calls).toEqual(['shared.png']);
+    expect(bindings.textures.map((t) => t.imageIndex)).toEqual([0, 0]);
+    expect(bindings.samplers.map((s) => s.descriptor)).toEqual([
+      { addressModeU: 'clamp-to-edge', addressModeV: 'mirror-repeat', magFilter: 'nearest', minFilter: 'nearest' },
+      { addressModeU: 'repeat', addressModeV: 'repeat', magFilter: 'linear', minFilter: 'linear' },
+    ]);
+  });
 });

@@ -10,6 +10,7 @@ import type {
   IrRef,
   IrType,
   ShaderIr,
+  SamplerResource,
 } from './ir.ts';
 import {
   CLOSURE_PRELUDE,
@@ -38,6 +39,7 @@ export interface WgslBinding {
   /** Image reference (textures only); the PT registry dedups shared files. */
   fileRef?: string;
   colorSpace?: string;
+  sampler?: Omit<SamplerResource, 'name'>;
 }
 
 export interface WgslOutput {
@@ -396,7 +398,10 @@ export function lowerExprs(ir: ShaderIr, handlePrefix = '', computeStage = false
     ...(t.fileRef !== undefined ? { fileRef: t.fileRef } : {}),
     ...(t.colorSpace !== undefined ? { colorSpace: t.colorSpace } : {}),
   }));
-  const samplers: WgslBinding[] = usedSamp.map((s, i) => ({ name: s.name, handle: `${handlePrefix}samp_${ident(s.name)}`, group: 2, binding: i }));
+  const samplers: WgslBinding[] = usedSamp.map(({ name, ...sampler }, i) => ({
+    name, handle: `${handlePrefix}samp_${ident(name)}`, group: 2, binding: i,
+    ...(Object.keys(sampler).length > 0 ? { sampler } : {}),
+  }));
   return { order, body, preludes, extraInputs, primvarFields, usesLighting, uniforms, textures, samplers };
 }
 

@@ -19,6 +19,43 @@ function checker(): DecodedPixelImage {
 }
 
 describe('createImageSampler (T057k)', () => {
+  it('clamps nearest samples outside the image instead of repeating them', () => {
+    const s = createImageSampler(checker(), { addressU: 'clamp', addressV: 'clamp', filter: 'closest' });
+    expect(s(-1, -1)).toEqual([1, 0, 0, 1]);
+    expect(s(2, -1)).toEqual([0, 1, 0, 1]);
+    expect(s(-1, 2)).toEqual([0, 0, 1, 1]);
+    expect(s(2, 2)).toEqual([1, 1, 1, 1]);
+    expect(s(0, 0)).toEqual([1, 0, 0, 1]);
+    expect(s(1, 1)).toEqual([1, 1, 1, 1]);
+  });
+
+  it('uses nearest filtering without blending across texels', () => {
+    const s = createImageSampler(checker(), { filter: 'closest' });
+    expect(s(0.49, 0.25)).toEqual([1, 0, 0, 1]);
+    expect(s(0.51, 0.25)).toEqual([0, 1, 0, 1]);
+  });
+
+  it('clamps linear filtering at edges and keeps U and V modes independent', () => {
+    const s = createImageSampler(checker(), { addressU: 'clamp', addressV: 'periodic' });
+    expect(s(-0.25, 1.25)).toEqual([1, 0, 0, 1]);
+    expect(s(1.25, -0.25)).toEqual([1, 1, 1, 1]);
+    expect(s(0, 0.25)).toEqual([1, 0, 0, 1]);
+  });
+
+  it('mirrors on both sides of the image', () => {
+    const s = createImageSampler(checker(), { addressU: 'mirror', addressV: 'mirror', filter: 'closest' });
+    expect(s(-0.25, 0.25)).toEqual(s(0.25, 0.25));
+    expect(s(1.25, 0.25)).toEqual(s(0.75, 0.25));
+    expect(s(0.25, -0.25)).toEqual(s(0.25, 0.25));
+  });
+
+  it('returns the declared constant outside only the constant-addressed axis', () => {
+    const s = createImageSampler(checker(), { addressU: 'constant', filter: 'closest' }, [1, 0, 1, 0.5]);
+    expect(s(-0.01, 0.25)).toEqual([1, 0, 1, 0.5]);
+    expect(s(1.01, 0.25)).toEqual([1, 0, 1, 0.5]);
+    expect(s(0.25, 1.25)).toEqual([1, 0, 0, 1]);
+  });
+
   it('decodes sRGB RGB texels to linear before interpolation while leaving alpha unchanged', () => {
     const sample = createImageSampler({
       kind: 'pixels', componentType: 'uint8', channels: 4, width: 2, height: 1, colorSpace: 'srgb_texture',

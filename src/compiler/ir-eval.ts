@@ -287,7 +287,7 @@ function evalCall(op: string, args: IrValue[], env: IrEvalVaryings, type: IrType
     case 'sqrt':
       return unary(input('in', 0), Math.sqrt);
     case 'ln':
-      return unary(input('in', 0), Math.log);
+      return unary(input('in', 0), (x) => x > 0 ? Math.log(x) : 0);
     case 'sign':
       return unary(input('in', 0), Math.sign);
     case 'normalize':
@@ -442,6 +442,7 @@ function evalCall(op: string, args: IrValue[], env: IrEvalVaryings, type: IrType
       return input('in', 0).map((x, i) => {
         const lo = low[i] ?? low[0]!;
         const hi = high[i] ?? high[0]!;
+        if (hi === lo) return x < lo ? 0 : x > lo ? 1 : 0.5;
         const t = clampNum((x - lo) / (hi - lo), 0, 1);
         return t * t * (3 - 2 * t);
       });
@@ -452,7 +453,13 @@ function evalCall(op: string, args: IrValue[], env: IrEvalVaryings, type: IrType
       const inHigh = input('inhigh', 2, [1]);
       const outLow = input('outlow', 3, [0]);
       const outHigh = input('outhigh', 4, [1]);
-      return input('in', 0).map((x, i) => pick(outLow, i) + ((x - pick(inLow, i)) * (pick(outHigh, i) - pick(outLow, i))) / (pick(inHigh, i) - pick(inLow, i)));
+      return input('in', 0).map((x, i) => {
+        const low = pick(inLow, i);
+        const high = pick(inHigh, i);
+        const outputLow = pick(outLow, i);
+        if (high === low) return outputLow;
+        return outputLow + ((x - low) * (pick(outHigh, i) - outputLow)) / (high - low);
+      });
     }
     case 'contrast': {
       const pivot = input('pivot', 2, [0.5]);

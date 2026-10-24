@@ -54,7 +54,7 @@ export function buildTextureRegistry(variants: readonly SurfaceVariantModule[]):
   }));
   const samplers = variants
     .flatMap((v) => v.samplers)
-    .map((s, i) => ({ name: s.name, handle: s.handle, group: 2, binding: i }));
+    .map((s, i) => ({ ...s, group: 2, binding: i }));
 
   return { textures, samplers, images, textureImage };
 }

@@ -87,10 +87,14 @@ sur le mobile (par défaut) ou le GPU local, en raster et en path tracing, via
 `.mtlx` de `scenes/mtlx-library` liés à `OpenPBRMaterial`.
 Seules ces variantes sont rendues : les cas sans remplacement de matériau
 `scene__raster` et `scene__pathtracing` sont exclus.
+Pour comparer les matériaux aux rendus de référence de la boule frontale,
+utiliser explicitement l'entrée OpenPBR ci-dessous : la scène par défaut utilise
+une géométrie et une caméra différentes.
 
 ```sh
 npm run test:shaderball
 npm run test:shaderball -- --target local
+npm run test:shaderball -- --entry /scenes/standard-shader-ball/openpbr-rva-standard-shader-ball.usda --materials nodes/smoothstep_degenerate_inverted_bounds/smoothstep_degenerate_inverted_bounds.mtlx
 npm run test:shaderball -- --target local --materials open_pbr_surface --spp 32
 npm run test:shaderball -- --backends raster --materials all --list
 ```
@@ -110,6 +114,34 @@ sont recréés et le cas est retenté une fois. Au-delà de `--max-recoveries` (
 reprises, le run s'arrête ; `--resume` permet alors de continuer.
 
 ## Arguments des noeuds MaterialX
+
+Pour `ln`, les entrees finies negatives ou nulles renvoient explicitement zero,
+comme la reference `ln_degenerate_nonpositive_input`. Le logarithme GPU ne
+recoit que des arguments positifs : les composantes hors domaine sont remplacees
+par 1 avant `log`, puis leur resultat par 0. Le CPU applique la meme regle.
+Les entrees strictement positives, meme tres petites, restent inchangees
+(pas de seuil epsilon). Cette convention explicite evite de dependre du resultat
+indefini de `log(x <= 0)` selon le pilote.
+
+Les textures SVG du viewer et du harness sont rasterisees via
+`HTMLImageElement.decode()` puis un canvas 2D. Chromium ne prend pas en charge
+leur decodage direct par `createImageBitmap(Blob)`. Les formats bitmap conservent
+ce dernier chemin. Les URL objet et les bitmaps sont liberes, meme en cas
+d'erreur. Un fichier trouve mais impossible a decoder produit un diagnostic
+et un echec explicite, pas une texture noire silencieuse. Le cas
+`image_format_svg` valide le rendu sur les deux backends.
+
+Les noeuds `image` conservent `uaddressmode`, `vaddressmode` et `filtertype`
+depuis les entrees MaterialX (ou leurs valeurs NodeDef) jusqu'aux samplers
+raster et path tracing. `clamp` utilise `clamp-to-edge`, `periodic` utilise
+`repeat`, `mirror` utilise `mirror-repeat`, et `closest` utilise `nearest`.
+Sans reglage, le comportement reste `repeat` / `linear`. Le filtre `cubic`
+reste une approximation bilineaire. Le mode `constant` utilise l'entree
+`default` hors de `[0, 1]` sur l'axe concerne. Le sampler CPU applique les
+memes modes. Pour `image`, la transformation `uv_scale` / `uv_offset` est
+suivie de l'inversion V avant l'echantillonnage. Le cas
+`image_addressmode_clamp` etend les UV a `[-1, 2]` et permet de verifier que
+les bords sont prolonges, sans repetition ni inversion haut/bas.
 
 Pour `hextiledimage`, le lowering partage applique le `tiling` aux UV puis
 inverse V dans l'espace image : `(u * tiling.x, 1 - v * tiling.y)`, en raster

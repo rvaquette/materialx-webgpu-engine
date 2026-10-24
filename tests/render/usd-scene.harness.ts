@@ -56,6 +56,8 @@ import { loadMaterialXDocuments } from '../../src/materialx/document-source.ts';
 import { loadMaterialXCore } from '../../src/materialx/wasm.ts';
 import { MaterialXLibraries, defaultLibrarySources } from '../../src/materialx/libraries.ts';
 import type { DecodedPixelImage } from '../../src/assets/images.ts';
+import { decodeBrowserImage } from '../../src/assets/browser-image.ts';
+import { imageSamplerDescriptor } from '../../src/assets/samplers.ts';
 import {
   parseSurfaceInputsFromMtlx,
   parsedSurfaceToCanonical,
@@ -439,32 +441,15 @@ async function loadMtlxSceneContext(
   const imageProvider: PtImageProvider = {
     async decode(fileRef: string): Promise<DecodedPixelImage | undefined> {
       for (const dir of materialDirs) {
+        const url = joinUrl(dir, fileRef);
+        const resp = await fetch(url);
+        if (resp.status === 404) continue;
+        if (!resp.ok) throw new Error(`HTTP ${resp.status} for texture ${url}`);
         try {
-          const resp = await fetch(joinUrl(dir, fileRef));
-          if (!resp.ok) continue;
-          const bitmap = await createImageBitmap(await resp.blob());
-          const canvas = document.createElement('canvas');
-          canvas.width = bitmap.width;
-          canvas.height = bitmap.height;
-          const ctx = canvas.getContext('2d');
-          if (!ctx) {
-            bitmap.close();
-            return undefined;
-          }
-          ctx.drawImage(bitmap, 0, 0);
-          const pixels = ctx.getImageData(0, 0, bitmap.width, bitmap.height);
-          bitmap.close();
-          return {
-            kind: 'pixels',
-            data: new Uint8Array(pixels.data),
-            componentType: 'uint8',
-            channels: 4,
-            width: pixels.width,
-            height: pixels.height,
-            colorSpace: 'lin_rec709',
-          };
-        } catch {
-          // try the next candidate material directory
+          return await decodeBrowserImage(await resp.blob(), url);
+        } catch (error) {
+          sink({ level: 'error', message: `Texture decode failed: ${url}`, detail: { error: String(error) } });
+          throw error;
         }
       }
       line(`Texture introuvable: ${fileRef}`);
@@ -510,7 +495,7 @@ async function uploadMaterialTextures(
     textureViews.set(t.name, gpuTex.createView());
   }
   for (const s of module.samplers) {
-    samplers.set(s.name, device.createSampler({ addressModeU: 'repeat', addressModeV: 'repeat', magFilter: 'linear', minFilter: 'linear' }));
+    samplers.set(s.name, device.createSampler(imageSamplerDescriptor(s.sampler ?? {})));
   }
   return { textureViews, samplers };
 }
