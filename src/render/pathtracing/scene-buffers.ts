@@ -68,7 +68,7 @@ export interface PathTraceScene {
   materialCount: number;
   /** Per-triangle UVs (6 floats: u0,v0,u1,v1,u2,v2) in triangle-soup order; 0 when unauthored. */
   triangleUv: Float32Array;
-  /** Per-triangle world tangents (9 floats: t0,t1,t2 as vec3) in triangle-soup order;
+  /** Per-triangle world tangents (12 floats: t0,t1,t2 as vec4, w = handedness) in triangle-soup order;
    *  empty when no geometry authored a tangent stream (normalmap falls back, T057l). */
   triangleTangent: Float32Array;
   /** Dedup material keys in material-index order (lets callers map textures per material). */
@@ -212,12 +212,18 @@ export function buildPathTraceScene(
       }
       const tb = triCount * PT_TAN_STRIDE;
       if (tangent) {
+        const modelSign = dot3(cross3(
+          [model[0]!, model[1]!, model[2]!], [model[4]!, model[5]!, model[6]!],
+        ), [model[8]!, model[9]!, model[10]!]) < 0 ? -1 : 1;
         const ta = normalize3(transformDirection(model, readVec3Strided(tangent.data, ia, tangent.components)));
         const tbb = normalize3(transformDirection(model, readVec3Strided(tangent.data, ib, tangent.components)));
         const tc = normalize3(transformDirection(model, readVec3Strided(tangent.data, ic, tangent.components)));
         tanFloats[tb] = ta[0]; tanFloats[tb + 1] = ta[1]; tanFloats[tb + 2] = ta[2];
-        tanFloats[tb + 3] = tbb[0]; tanFloats[tb + 4] = tbb[1]; tanFloats[tb + 5] = tbb[2];
-        tanFloats[tb + 6] = tc[0]; tanFloats[tb + 7] = tc[1]; tanFloats[tb + 8] = tc[2];
+        tanFloats[tb + 4] = tbb[0]; tanFloats[tb + 5] = tbb[1]; tanFloats[tb + 6] = tbb[2];
+        tanFloats[tb + 8] = tc[0]; tanFloats[tb + 9] = tc[1]; tanFloats[tb + 10] = tc[2];
+        for (const [slot, vertex] of [ia, ib, ic].entries()) {
+          tanFloats[tb + slot * 4 + 3] = modelSign * (tangent.components >= 4 ? tangent.data[vertex * tangent.components + 3]! : 1);
+        }
       } else if (hasTangents) {
         for (let p = 0; p < PT_TAN_STRIDE; p++) tanFloats[tb + p] = 0;
       }
@@ -333,8 +339,8 @@ interface PtHit extends SurfaceHit {
 
 /** Floats per triangle in triangleUv: u0,v0,u1,v1,u2,v2. */
 const PT_UV_STRIDE = 6;
-/** Floats per triangle in triangleTangent: t0,t1,t2 as vec3 (bitangent derived, T057l). */
-const PT_TAN_STRIDE = 9;
+/** Floats per triangle in triangleTangent: t0,t1,t2 as vec4 (w = handedness). */
+const PT_TAN_STRIDE = 12;
 
 interface TriHit {
   t: number;
@@ -453,11 +459,14 @@ function hitVaryings(scene: PathTraceScene, hit: PtHit): IrEvalVaryings {
   // geometry supplied a tangent stream, letting ir-eval fall back gracefully.
   const tan = scene.triangleTangent;
   const tangent = packedTangent(tan, hit.triangle, hit.u, hit.v, w);
+  const tb = hit.triangle * PT_TAN_STRIDE;
+  const handedness = tangent === undefined ? 1
+    : tan[tb + 3]! * w + tan[tb + 7]! * hit.u + tan[tb + 11]! * hit.v < 0 ? -1 : 1;
   return {
     position: hit.position,
     normal: hit.normal,
     texcoord: [s, t],
-    ...(tangent !== undefined ? { tangent } : {}),
+    ...(tangent !== undefined ? { tangent, bitangent: scale3(normalize3(cross3(hit.normal, tangent)), handedness) } : {}),
   };
 }
 
@@ -470,11 +479,11 @@ function packedTangent(
   w: number,
 ): V3 | undefined {
   const b = triangle * PT_TAN_STRIDE;
-  if (b + 8 >= tan.length) return undefined;
+  if (b + 11 >= tan.length) return undefined;
   const raw: V3 = [
-    tan[b]! * w + tan[b + 3]! * u + tan[b + 6]! * v,
-    tan[b + 1]! * w + tan[b + 4]! * u + tan[b + 7]! * v,
-    tan[b + 2]! * w + tan[b + 5]! * u + tan[b + 8]! * v,
+    tan[b]! * w + tan[b + 4]! * u + tan[b + 8]! * v,
+    tan[b + 1]! * w + tan[b + 5]! * u + tan[b + 9]! * v,
+    tan[b + 2]! * w + tan[b + 6]! * u + tan[b + 10]! * v,
   ];
   return dot3(raw, raw) > 1e-12 ? normalize3(raw) : undefined;
 }

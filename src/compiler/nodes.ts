@@ -378,12 +378,10 @@ const ROTATE3D_PRELUDE = `fn mx_rotate3d(v: vec3f, deg: f32, axis: vec3f) -> vec
 }
 `;
 
-const NORMALMAP_PRELUDE = `fn mx_normalmap(sample: vec3f, scale: vec2f, N: vec3f, T: vec3f) -> vec3f {
-  let t = normalize(T - N * dot(N, T));
-  let b = cross(N, t);
-  let m = sample * 2.0 - 1.0;
+const NORMALMAP_PRELUDE = `fn mx_normalmap(sample: vec3f, scale: vec2f, N: vec3f, T: vec3f, B: vec3f) -> vec3f {
+  let m = select(sample * 2.0 - 1.0, vec3f(0.0, 0.0, 1.0), dot(sample, sample) == 0.0);
   let v = vec3f(m.xy * scale, m.z);
-  return normalize(t * v.x + b * v.y + N * v.z);
+  return normalize(T * v.x + B * v.y + N * v.z);
 }
 `;
 
@@ -1002,7 +1000,7 @@ const LOWERINGS: readonly NodeLowering[] = [
   expr('frame', () => '1.0'),
   expr(
     'normalmap',
-    (inp, _type, ctx) => `mx_normalmap(${inp.named('in', undefined, 0)}, vec2f(${inp.named('scale', '1.0', 1)}), ${inp.named('normal', ctx.varyings.normal)}, ${inp.named('tangent', ctx.varyings.tangent)})`,
+    (inp, _type, ctx) => `mx_normalmap(${inp.named('in', undefined, 0)}, vec2f(${inp.named('scale', '1.0', 1)}), ${inp.named('normal', ctx.varyings.normal)}, ${inp.named('tangent', ctx.varyings.tangent)}, ${inp.named('bitangent', ctx.varyings.bitangent)})`,
     NORMALMAP_PRELUDE,
   ),
   // texture coordinates / patterns
@@ -1078,7 +1076,7 @@ const LOWERINGS: readonly NodeLowering[] = [
     const h = inp.named('height', '0.0');
     const uv = ctx.varyings.texcoord;
     const encoded = `mx_heighttonormal(vec2f(dpdx(${h}), dpdy(${h})), vec2f(dpdx(${uv}.x), dpdy(${uv}.x)), vec2f(dpdx(${uv}.y), dpdy(${uv}.y)), 1.0)`;
-    return `mx_normalmap(${encoded}, vec2f(${inp.named('scale', '1.0')}), ${normal}, ${inp.named('tangent', ctx.varyings.tangent)})`;
+    return `mx_normalmap(${encoded}, vec2f(${inp.named('scale', '1.0')}), ${normal}, ${inp.named('tangent', ctx.varyings.tangent)}, ${inp.named('bitangent', ctx.varyings.bitangent)})`;
   }, [HEIGHTTONORMAL_PRELUDE, NORMALMAP_PRELUDE]),
   // noise
   expr('noise2d', (inp, type, ctx) => {

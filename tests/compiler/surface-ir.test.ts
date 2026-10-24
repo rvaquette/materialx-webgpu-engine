@@ -597,6 +597,27 @@ describe('lowerSurfaceInputsToIr (T055c)', () => {
     expect(loweredWgsl.primvarFields.has('st')).toBe(true);
   });
 
+  it('differentiates the explicit heighttonormal UV frame after upstream UV transforms', () => {
+    const graph = surfaceGraph([conn('normal', 'vector3', 'htn')], [
+      upstream('uv', 'texcoord', 'vector2', []),
+      upstream('scaled', 'multiply', 'vector2', [conn('in1', 'vector2', 'uv'), value('in2', 'float', '-2')]),
+      upstream('img', 'image', 'float', [value('file', 'filename', 'grid.png'), conn('texcoord', 'vector2', 'scaled')]),
+      upstream('htn', 'heighttonormal', 'vector3', [
+        conn('in', 'float', 'img'), conn('texcoord', 'vector2', 'scaled'), value('scale', 'float', '2'),
+      ]),
+    ]);
+    const builder = new IrModuleBuilder();
+    const lowered = lowerSurfaceInputsToIr(graph, resolveSurface(graph)!, builder);
+    builder.output({ name: 'normal', type: COLOR3, ref: lowered.inputs.get('normal')! });
+    const code = lowerExprs(builder.build(), '', true).body.join('\n');
+    expect(code).toContain('_uv_dx');
+    expect(code).toContain('_uv_dy');
+    expect(code).toMatch(/_uv_dx\.x, e\d+_uv_dy\.x/);
+    expect(code).not.toMatch(/dpd[xy]|textureSample\(/);
+    const variables = [...code.matchAll(/let (\w+) =/g)].map((match) => match[1]);
+    expect(new Set(variables).size).toBe(variables.length);
+  });
+
   it('chains ramp gradients over the ten control points', () => {
     const graph = surfaceGraph([conn('base_color', 'color3', 'ramp')], [
       upstream('ramp', 'ramp', 'color4', [value('num_intervals', 'integer', '3')]),

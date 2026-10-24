@@ -173,13 +173,11 @@ function rotate3d(v: IrValue, deg: number, axis: IrValue): number[] {
   return [v[0]! * c + cr[0]! * s + n[0]! * nd, v[1]! * c + cr[1]! * s + n[1]! * nd, v[2]! * c + cr[2]! * s + n[2]! * nd];
 }
 
-function normalMap(sample: IrValue, scale: number, N: IrValue, T: IrValue): number[] {
-  const t = normalize([T[0]! - N[0]! * dot(N, T), T[1]! - N[1]! * dot(N, T), T[2]! - N[2]! * dot(N, T)]);
-  const b = cross(N, t);
-  const m = sample.map((x) => x * 2 - 1);
-  const vv = [m[0]! * scale, m[1]! * scale, m[2]!];
+function normalMap(sample: IrValue, scale: IrValue, N: IrValue, T: IrValue, B: IrValue): number[] {
+  const m = dot(sample, sample) === 0 ? [0, 0, 1] : sample.map((x) => x * 2 - 1);
+  const vv = [m[0]! * scale[0]!, m[1]! * (scale[1] ?? scale[0]!), m[2]!];
   const out = [0, 0, 0];
-  for (let i = 0; i < 3; i++) out[i] = t[i]! * vv[0]! + b[i]! * vv[1]! + N[i]! * vv[2]!;
+  for (let i = 0; i < 3; i++) out[i] = T[i]! * vv[0]! + B[i]! * vv[1]! + N[i]! * vv[2]!;
   return normalize(out);
 }
 
@@ -340,7 +338,7 @@ function evalCall(op: string, args: IrValue[], env: IrEvalVaryings, type: IrType
     case 'texcoord':
       return [...(env.texcoord ?? zeros(2))];
     case 'normalmap':
-      return normalMap(input('in', 0), input('scale', 1, [1])[0]!, named?.['normal'] ?? env.normal ?? [0, 0, 1], named?.['tangent'] ?? env.tangent ?? [1, 0, 0]);
+      return normalMap(input('in', 0), input('scale', 1, [1]), named?.['normal'] ?? env.normal ?? [0, 0, 1], named?.['tangent'] ?? env.tangent ?? [1, 0, 0], named?.['bitangent'] ?? env.bitangent ?? cross(env.normal ?? [0, 0, 1], env.tangent ?? [1, 0, 0]));
     case 'rotate2d':
       return rotate2d(input('in', 0), input('amount', 1, [0])[0]!);
     case 'rotate3d':

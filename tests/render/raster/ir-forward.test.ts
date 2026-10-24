@@ -226,8 +226,9 @@ describe('assembleIrForwardShader (T058b)', () => {
   it('feeds the interpolated geometry tangent and derives bitangent before evaluating the material', () => {
     const { shader } = forward('standard_surface', []);
     expect(shader.code).toContain('@location(3) tangent: vec4f');
-    expect(shader.code).toContain('let projectedTangent = fin.worldTangent - vary.normal * dot(vary.normal, fin.worldTangent);');
-    expect(shader.code).toContain('bitangent = normalize(cross(vary.normal, tangent));');
+    expect(shader.code).toContain('let projectedTangent = fin.worldTangent.xyz - vary.normal * dot(vary.normal, fin.worldTangent.xyz);');
+    expect(shader.code).toContain('bitangent = normalize(cross(vary.normal, tangent)) * select(1.0, -1.0, fin.worldTangent.w < 0.0);');
+    expect(shader.code).toContain('vin.tangent.w * modelSign');
     expect(shader.code).toContain('vary.tangent = tangent;');
     expect(shader.code).toContain('vary.bitangent = bitangent;');
     expect(shader.code.indexOf('vary.bitangent = bitangent;')).toBeLessThan(shader.code.indexOf('let c = mx_surface_layered(vary);'));

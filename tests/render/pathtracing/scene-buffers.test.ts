@@ -153,18 +153,27 @@ function sceneWithTangents(tangent: readonly number[]): { resources: SceneResour
 }
 
 describe('buildPathTraceScene tangent packing (T057l)', () => {
-  it('packs per-triangle world tangents (9 floats/tri) when a tangent stream exists', () => {
+  it('packs per-triangle world tangents and handedness (12 floats/tri)', () => {
     const { resources, lights } = sceneWithTangents([1, 0, 0, 1]);
     const scene = buildPathTraceScene(resources, { lights });
-    expect(scene.triangleTangent.length).toBe(scene.triangleCount * 9);
+    expect(scene.triangleTangent.length).toBe(scene.triangleCount * 12);
     // Identity transform: the +X tangent round-trips to each of the 3 vertex slots.
     for (let tri = 0; tri < scene.triangleCount; tri++) {
       for (let slot = 0; slot < 3; slot++) {
-        const b = tri * 9 + slot * 3;
+        const b = tri * 12 + slot * 4;
         expect(scene.triangleTangent[b]!).toBeCloseTo(1, 6);
         expect(scene.triangleTangent[b + 1]!).toBeCloseTo(0, 6);
         expect(scene.triangleTangent[b + 2]!).toBeCloseTo(0, 6);
+        expect(scene.triangleTangent[b + 3]!).toBe(1);
       }
+    }
+  });
+
+  it('preserves the negative handedness of mirrored UV frames', () => {
+    const { resources, lights } = sceneWithTangents([1, 0, 0, -1]);
+    const scene = buildPathTraceScene(resources, { lights });
+    for (let i = 3; i < scene.triangleTangent.length; i += 4) {
+      expect(scene.triangleTangent[i]).toBe(-1);
     }
   });
 

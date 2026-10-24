@@ -77,7 +77,7 @@ const UV_STRIDE : u32 = 6u;
 @group(0) @binding(6) var<storage, read> triUv : array<f32>;
 @group(0) @binding(7) var<storage, read> triTangent : array<f32>;
 const UV_STRIDE : u32 = 6u;
-const TAN_STRIDE : u32 = 9u;
+const TAN_STRIDE : u32 = 12u;
 `
       : '';
   return /* wgsl */ `
@@ -374,15 +374,15 @@ fn mx_hit_uv(h : Hit) -> vec2<f32> {
   return mx_tri_uv(h.tri, 0u) * w + mx_tri_uv(h.tri, 1u) * h.u + mx_tri_uv(h.tri, 2u) * h.v;
 }
 
-fn mx_tri_tangent(tri : u32, slot : u32) -> vec3<f32> {
-  let b = tri * TAN_STRIDE + slot * 3u;
-  return vec3<f32>(triTangent[b], triTangent[b + 1u], triTangent[b + 2u]);
+fn mx_tri_tangent(tri : u32, slot : u32) -> vec4<f32> {
+  let b = tri * TAN_STRIDE + slot * 4u;
+  return vec4<f32>(triTangent[b], triTangent[b + 1u], triTangent[b + 2u], triTangent[b + 3u]);
 }
 
 // Barycentric-interpolated per-triangle tangent; zero when no tangent stream was
 // packed (empty buffer), so the caller keeps the branchless basis tangent.
-fn mx_hit_tangent(h : Hit) -> vec3<f32> {
-  if (arrayLength(&triTangent) < TAN_STRIDE) { return vec3<f32>(0.0); }
+fn mx_hit_tangent(h : Hit) -> vec4<f32> {
+  if (arrayLength(&triTangent) < TAN_STRIDE) { return vec4<f32>(0.0); }
   let w = 1.0 - h.u - h.v;
   return mx_tri_tangent(h.tri, 0u) * w + mx_tri_tangent(h.tri, 1u) * h.u + mx_tri_tangent(h.tri, 2u) * h.v;
 }
@@ -396,13 +396,14 @@ fn mx_hit_varyings(h : Hit, pos : vec3<f32>, n : vec3<f32>, viewDir : vec3<f32>)
   var vary : MxVaryings;
   let uv = mx_hit_uv(h);
   let f = basis(n);
-  let tRaw = mx_hit_tangent(h);
+  let tangentWithSign = mx_hit_tangent(h);
+  let tRaw = tangentWithSign.xyz;
   let hasT = dot(tRaw, tRaw) > 1.0e-10;
   let tang = select(f[0], normalize(tRaw - n * dot(n, tRaw)), hasT);
   vary.position = pos;
   vary.normal = n;
   vary.tangent = tang;
-  vary.bitangent = select(f[1], normalize(cross(n, tang)), hasT);
+  vary.bitangent = select(f[1], normalize(cross(n, tang)) * select(1.0, -1.0, tangentWithSign.w < 0.0), hasT);
   vary.texcoord = uv;
   vary.viewDir = viewDir;
 ${assigns.join('\n')}

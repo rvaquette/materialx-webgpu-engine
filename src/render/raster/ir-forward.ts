@@ -345,7 +345,7 @@ struct MxVertexOut {
   @location(1) worldNormal: vec3f,
   @location(2) texcoord: vec2f,
   @location(3) viewDir: vec3f,
-  @location(4) worldTangent: vec3f,
+  @location(4) worldTangent: vec4f,
 };
 @vertex
 fn ${IR_FORWARD_VERTEX_ENTRY}(vin: MxVertexIn) -> MxVertexOut {
@@ -360,7 +360,8 @@ ${dispOffset}
   out.texcoord = vin.texcoord;
   out.viewDir = normalize(fu.eye.xyz - worldPos);
   let tangent = (fu.model * vec4f(vin.tangent.xyz, 0.0)).xyz;
-  out.worldTangent = tangent / max(length(tangent), 1e-20);
+  let modelSign = select(1.0, -1.0, determinant(mat3x3f(fu.model[0].xyz, fu.model[1].xyz, fu.model[2].xyz)) < 0.0);
+  out.worldTangent = vec4f(tangent / max(length(tangent), 1e-20), vin.tangent.w * modelSign);
   return out;
 }`;
 }
@@ -383,12 +384,12 @@ fn ${IR_FORWARD_FRAGMENT_ENTRY}(fin: MxVertexOut) -> @location(0) vec4f {
   vary.position = fin.worldPos;
   vary.normal = normalize(fin.worldNormal);
   let fallbackFrame = basis(vary.normal);
-  let projectedTangent = fin.worldTangent - vary.normal * dot(vary.normal, fin.worldTangent);
+  let projectedTangent = fin.worldTangent.xyz - vary.normal * dot(vary.normal, fin.worldTangent.xyz);
   var tangent = fallbackFrame[0];
   var bitangent = fallbackFrame[1];
   if (dot(projectedTangent, projectedTangent) > 1e-10) {
     tangent = normalize(projectedTangent);
-    bitangent = normalize(cross(vary.normal, tangent));
+    bitangent = normalize(cross(vary.normal, tangent)) * select(1.0, -1.0, fin.worldTangent.w < 0.0);
   }
   vary.tangent = tangent;
   vary.bitangent = bitangent;

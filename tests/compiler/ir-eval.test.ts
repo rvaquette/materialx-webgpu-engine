@@ -15,6 +15,24 @@ const varyingEnv = {
 };
 
 describe('evaluateShaderIr (T057i2)', () => {
+  it.each([1, -1])('uses the supplied bitangent with handedness %i for normal maps', (sign) => {
+    const builder = new IrModuleBuilder();
+    const normal = builder.add({
+      kind: 'call', type: vector(3), op: 'normalmap', args: [],
+      namedArgs: {
+        in: builder.constant(vector(3), [0.5, 1, 1]),
+        scale: builder.constant(vector(2), [0.2, 0.5]),
+      },
+    });
+    builder.output({ name: 'normal', type: vector(3), ref: normal });
+    const ir = builder.build();
+    const result = evaluateIrRef(ir, normal, { normal: [0, 0, 1], tangent: [1, 0, 0], bitangent: [0, sign, 0] });
+    expect(result[0]).toBeCloseTo(0, 6);
+    expect(result[1]).toBeCloseTo(sign * 0.5 / Math.hypot(0.5, 1), 6);
+    expect(result[2]).toBeCloseTo(1 / Math.hypot(0.5, 1), 6);
+    expect(emitWgsl(ir).code).toContain('vary.bitangent)');
+  });
+
   it.each([FLOAT, vector(2), vector(3), vector(4)])('defines ln on nonpositive inputs without changing positive inputs for %j', (type) => {
     const size = type.kind === 'vector' ? type.size : 1;
     for (const x of [-10, -0.5, -0, 0, 1e-30, 1e-8, 0.25, 1, Math.E, 100]) {

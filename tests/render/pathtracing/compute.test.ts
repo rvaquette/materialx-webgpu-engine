@@ -245,13 +245,13 @@ describe('pathTraceComputeWgsl tangent frame (T057l)', () => {
     const primvarFields = new Map<string, IrType>([['st', vector(2)]]);
     const src = pathTraceComputeWgsl({ varyings: { primvarFields, extraInputs: new Map() } });
     expect(src).toContain('@group(0) @binding(7) var<storage, read> triTangent : array<f32>;');
-    expect(src).toContain('const TAN_STRIDE : u32 = 9u;');
-    expect(src).toContain('fn mx_tri_tangent(tri : u32, slot : u32) -> vec3<f32>');
-    expect(src).toContain('fn mx_hit_tangent(h : Hit) -> vec3<f32>');
+    expect(src).toContain('const TAN_STRIDE : u32 = 12u;');
+    expect(src).toContain('fn mx_tri_tangent(tri : u32, slot : u32) -> vec4<f32>');
+    expect(src).toContain('fn mx_hit_tangent(h : Hit) -> vec4<f32>');
     // Empty buffer -> keep the branchless basis tangent (graceful fallback).
     expect(src).toContain('if (arrayLength(&triTangent) < TAN_STRIDE)');
     expect(src).toContain('let tang = select(f[0], normalize(tRaw - n * dot(n, tRaw)), hasT);');
-    expect(src).toContain('vary.bitangent = select(f[1], normalize(cross(n, tang)), hasT);');
+    expect(src).toContain('vary.bitangent = select(f[1], normalize(cross(n, tang)) * select(1.0, -1.0, tangentWithSign.w < 0.0), hasT);');
   });
 });
 
