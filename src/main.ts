@@ -15,7 +15,8 @@ function setStatus(text: string): void {
 }
 
 function formatStatus(s: ViewerStatus): string {
-  const extra = s.backend === 'pathtracing' ? `, ${s.samples} spp${s.pathTracingPaused ? ' (pause)' : ''}` : '';
+  const pt = s.pathTracer === 'compiling' ? ', compilation du path tracer...' : s.pathTracer === 'error' ? ', échec du path tracer' : '';
+  const extra = s.backend === 'pathtracing' ? `${pt || `, ${s.samples} spp`}${s.pathTracingPaused ? ' (pause)' : ''}` : '';
   const note = s.warnings ? ` (${s.warnings} diagnostic(s))` : '';
   return `Backend ${s.backend}: ${s.drawCount} object(s), passes [${s.passes.join(', ')}]${extra}${note}. ` +
     'Glisser pour orbiter, molette pour zoomer.';

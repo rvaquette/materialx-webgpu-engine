@@ -48,24 +48,29 @@ function previewCamera(aspect: number, exposure: number): FrameCamera {
 
 export type BackendKind = 'raster' | 'pathtracing';
 
+export type PathTracerState = 'idle' | 'compiling' | 'ready' | 'error';
+
 export interface ViewerStatus {
   backend: BackendKind;
   pathTracingPaused: boolean;
+  pathTracer: PathTracerState;
   drawCount: number;
   passes: readonly ScenePassKind[];
   samples: number;
   warnings: number;
 }
 
-/** A disposable per-scene GPU render set (raster + path tracer) for one loaded USD. */
+/** A disposable per-scene GPU render set (raster + lazily built path tracer) for one loaded USD. */
 interface SceneRender {
   frame: SceneFramePlan;
   ptScene: PathTraceScene;
   renderRaster: (targetView: GPUTextureView) => void;
+  /** Starts the path tracer build on first call; renders nothing until it is ready. */
   renderPathTrace: (targetView: GPUTextureView, tiled: boolean) => void;
   resetPathTrace: () => void;
   applyCamera: (viewProj: readonly number[], eye: Vec3) => void;
   frameCount: () => number;
+  pathTracerState: () => PathTracerState;
   dispose: () => void;
 }
 
@@ -176,22 +181,24 @@ export class InteractiveViewer {
     const previousHeight = this.#height;
     this.#width = size;
     this.#height = size;
+    // Pipelines are only reclaimed by GC: drop the old set before compiling the new one.
+    this.#current?.dispose();
+    this.#current = null;
     let render: SceneRender | undefined;
     try {
       render = await this.#rebuildRender?.();
     } catch (error) {
       this.#width = previousWidth;
       this.#height = previousHeight;
+      this.#current = (await this.#rebuildRender?.().catch(() => undefined)) ?? null;
+      this.#rasterDirty = true;
       throw error;
     }
     this.#canvas.width = size;
     this.#canvas.height = size;
     this.#canvas.style.width = `${size}px`;
     this.#orbit.aspect = 1;
-    if (render) {
-      this.#current?.dispose();
-      this.#current = render;
-    }
+    if (render) this.#current = render;
     this.#onCameraChanged();
     this.#emitStatus();
   }
@@ -231,6 +238,11 @@ export class InteractiveViewer {
         frameCamera: previewCamera(this.#width / this.#height, exposure),
         environment,
       });
+      // Pipelines are only reclaimed by GC: drop the old set before compiling the new one.
+      this.#current?.dispose();
+      this.#current = null;
+      this.#rebuildRender = undefined;
+      await new Promise((resolve) => setTimeout(resolve, 0));
       render = await this.#buildSceneRender(loaded, frame, ptScene, exposure, sink);
     } catch (error) {
       loaded.mtlx.documents.delete();
@@ -242,7 +254,6 @@ export class InteractiveViewer {
       throw new Error('Viewer disposed during load.');
     }
     this.#rebuildRender = () => this.#buildSceneRender(loaded, frame, ptScene, exposure, sink);
-    this.#current?.dispose();
     this.#current = render;
     this.#loaded?.mtlx.documents.delete();
     this.#loaded = loaded;
@@ -301,6 +312,7 @@ export class InteractiveViewer {
     this.#onStatus({
       backend: this.#backend,
       pathTracingPaused: this.#pathTracingPaused,
+      pathTracer: this.#current.pathTracerState(),
       drawCount: this.#current.frame.draws.length,
       passes: this.#current.frame.passes,
       samples: this.#current.frameCount(),
@@ -364,16 +376,13 @@ export class InteractiveViewer {
       }
     }
     const dispatch = buildMaterialDispatch(ptScene.variantSources);
-    const [rasterCompilation, ptCompilation] = await Promise.all([
-      Promise.all([...rasterShaders].map(async ([key, shader]) => ({
-        key,
-        ...await compileShaderWithDiagnostics(device, shader.code, shader.label),
-      }))),
-      compileShaderWithDiagnostics(device, pathTraceComputeWgsl({ dispatch, environment: loaded.environment !== undefined }), 'Path tracing'),
-    ]);
-    const errors = [...rasterCompilation.flatMap((result) => result.errors), ...ptCompilation.errors];
-    this.#onShaderErrors?.(errors);
-    if (errors.length > 0) throw new Error(`WGSL: ${errors.length} erreur(s) de compilation.`);
+    const rasterCompilation = await Promise.all([...rasterShaders].map(async ([key, shader]) => ({
+      key,
+      ...await compileShaderWithDiagnostics(device, shader.code, shader.label),
+    })));
+    const rasterErrors = rasterCompilation.flatMap((result) => result.errors);
+    this.#onShaderErrors?.(rasterErrors);
+    if (rasterErrors.length > 0) throw new Error(`WGSL: ${rasterErrors.length} erreur(s) de compilation.`);
     const rasterModules = new Map(rasterCompilation.map((result) => [result.key, result.module]));
     const track = <T extends { destroy(): void }>(o: T): T => {
       trash.push(o);
@@ -664,13 +673,24 @@ fn dir_to_uv(d: vec3<f32>) -> vec2<f32> {
       device.queue.submit([encoder.finish()]);
     };
 
-    // --- path tracer ----------------------------------------------------------
+    // --- path tracer (built on first use: its pipeline costs ~230 MB of driver memory on mobile) ---
+    const buildPathTracer = async (ptTrash: Array<{ destroy(): void }>) => {
+    const track = <T extends { destroy(): void }>(o: T): T => {
+      ptTrash.push(o);
+      return o;
+    };
+    const ptCompilation = await compileShaderWithDiagnostics(
+      device, pathTraceComputeWgsl({ dispatch, environment: loaded.environment !== undefined }), 'Path tracing');
+    if (ptCompilation.errors.length > 0) {
+      this.#onShaderErrors?.([...rasterErrors, ...ptCompilation.errors]);
+      throw new Error(`WGSL: ${ptCompilation.errors.length} erreur(s) de compilation (path tracing).`);
+    }
     let pixelScale = 1;
     let ptWidth = width;
     let ptHeight = height;
     const bindings = await buildPtDeviceBindings(dispatch, ptScene, loaded.mtlx.imageProvider, { sink });
     const ptBackend = new PathTraceBackend(device, { dispatch, ...(envAsset ? { environment: true } : {}) });
-    const { pipeline: ptPipeline } = ptBackend.createPipeline(ptCompilation.module);
+    const { pipeline: ptPipeline } = await ptBackend.createPipelineAsync(ptCompilation.module);
     const storage = (data: Float32Array | Uint32Array): GPUBuffer =>
       track(device.createBuffer({ size: Math.max(data.byteLength, 4), usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST }));
     const storageData = (data: Float32Array | Uint32Array): GPUBuffer => {
@@ -821,6 +841,30 @@ fn tonemap(c: vec3<f32>) -> vec3<f32> {
       renderPass.end();
       device.queue.submit([encoder.finish()]);
     };
+    return { renderPathTrace, resetPathTrace, frameCount: () => ptBackend.frameIndex };
+    };
+
+    let disposed = false;
+    let ptState: PathTracerState = 'idle';
+    let pathTracer: Awaited<ReturnType<typeof buildPathTracer>> | undefined;
+    const startPathTracer = (): void => {
+      if (ptState !== 'idle') return;
+      ptState = 'compiling';
+      const ptTrash: Array<{ destroy(): void }> = [];
+      buildPathTracer(ptTrash).then((built) => {
+        if (disposed) {
+          for (const o of ptTrash) o.destroy();
+          return;
+        }
+        trash.push(...ptTrash);
+        pathTracer = built;
+        ptState = 'ready';
+      }, (error: unknown) => {
+        for (const o of ptTrash) o.destroy();
+        ptState = 'error';
+        console.error(`Path tracer: ${(error as Error)?.message ?? error}`);
+      });
+    };
 
     const applyCamera = (viewProj: readonly number[], eye: Vec3): void => {
       const viewProjArray = new Float32Array(viewProj);
@@ -843,11 +887,17 @@ fn tonemap(c: vec3<f32>) -> vec3<f32> {
       frame,
       ptScene,
       renderRaster,
-      renderPathTrace,
-      resetPathTrace,
+      renderPathTrace: (targetView, tiled) => {
+        if (pathTracer) pathTracer.renderPathTrace(targetView, tiled);
+        else startPathTracer();
+      },
+      resetPathTrace: () => pathTracer?.resetPathTrace(),
       applyCamera,
-      frameCount: () => ptBackend.frameIndex,
+      frameCount: () => pathTracer?.frameCount() ?? 0,
+      pathTracerState: () => ptState,
       dispose: () => {
+        disposed = true;
+        pathTracer = undefined;
         for (const o of trash) o.destroy();
       },
     };

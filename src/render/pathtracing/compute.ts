@@ -938,6 +938,17 @@ export class PathTraceBackend {
     return this.#pipeline;
   }
 
+  /** Async variant: the driver compile (seconds on mobile) does not stall the GPU queue. */
+  async createPipelineAsync(module: GPUShaderModule): Promise<PathTracePipeline> {
+    if (this.#pipeline) return this.#pipeline;
+    const pipeline = await this.#device.createComputePipelineAsync({
+      layout: 'auto',
+      compute: { module, entryPoint: PT_COMPUTE_ENTRY },
+    });
+    this.#pipeline = { pipeline, module };
+    return this.#pipeline;
+  }
+
   /** Number of workgroups to dispatch to cover a width x height image. */
   static workgroupCount(width: number, height: number): [number, number] {
     return [
