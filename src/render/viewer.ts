@@ -87,6 +87,7 @@ export class InteractiveViewer {
   #objects: ReadonlyArray<{ path: string; material: string; assetPath?: string }> = [];
   #warnings = 0;
   #rasterDirty = true;
+  #disposed = false;
   #lastCameraChange = -Infinity;
   #detachControls: () => void;
   #onStatus: ((s: ViewerStatus) => void) | undefined;
@@ -159,6 +160,7 @@ export class InteractiveViewer {
   }
 
   dispose(): void {
+    this.#disposed = true;
     this.#detachControls();
     this.#current?.dispose();
     this.#current = null;
@@ -234,6 +236,11 @@ export class InteractiveViewer {
       loaded.mtlx.documents.delete();
       throw error;
     }
+    if (this.#disposed) {
+      render.dispose();
+      loaded.mtlx.documents.delete();
+      throw new Error('Viewer disposed during load.');
+    }
     this.#rebuildRender = () => this.#buildSceneRender(loaded, frame, ptScene, exposure, sink);
     this.#current?.dispose();
     this.#current = render;
@@ -302,6 +309,7 @@ export class InteractiveViewer {
   }
 
   #loop = (): void => {
+    if (this.#disposed) return;
     const current = this.#current;
     if (current) {
       if (this.#backend === 'pathtracing' && !this.#pathTracingPaused) {

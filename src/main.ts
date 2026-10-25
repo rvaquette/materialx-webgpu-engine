@@ -35,12 +35,26 @@ async function main(): Promise<void> {
     setStatus('WebGPU is not available in this browser.');
     return;
   }
-  const adapter = await navigator.gpu.requestAdapter({ powerPreference: 'high-performance' });
-  if (!adapter) {
+  // Chrome Android can return null while the previous page's adapter is still being released.
+  async function requestGpu(): Promise<{ adapter: GPUAdapter; device: GPUDevice } | undefined> {
+    for (let attempt = 0; attempt < 5; attempt++) {
+      if (attempt > 0) await new Promise((resolve) => setTimeout(resolve, 500 * attempt));
+      const adapter = await navigator.gpu.requestAdapter({ powerPreference: 'high-performance' });
+      if (adapter) return { adapter, device: await adapter.requestDevice() };
+    }
+    return undefined;
+  }
+  const gpu = await requestGpu();
+  if (!gpu) {
     setStatus('No WebGPU adapter found.');
     return;
   }
-  const device = await adapter.requestDevice();
+  const { device } = gpu;
+  (globalThis as { __mxGpu?: unknown }).__mxGpu = gpu;
+  let deviceLost = false;
+  device.addEventListener('uncapturederror', (event) => {
+    console.error(`WebGPU error: ${(event as GPUUncapturedErrorEvent).error.message}`);
+  });
   const canvas = document.getElementById('view') as HTMLCanvasElement | null;
   if (!canvas) {
     setStatus('WebGPU adapter ready; no canvas.');
@@ -76,12 +90,9 @@ async function main(): Promise<void> {
     if (icon) icon.textContent = paused ? '\u25b6' : '\u275a\u275a';
   }
 
-  const viewer = new InteractiveViewer({
-    device,
-    context,
-    outputFormat,
-    canvas,
+  const viewerCallbacks: Pick<ConstructorParameters<typeof InteractiveViewer>[0], 'onStatus' | 'onShaderErrors'> = {
     onStatus: (s) => {
+      if (deviceLost) return;
       setStatus(formatStatus(s));
       updatePathTracingToggle(s.backend, s.pathTracingPaused);
     },
@@ -93,7 +104,44 @@ async function main(): Promise<void> {
         ? errors.map((error) => `${error.shader} (${error.line}:${error.column})\n${error.message}${error.source ? `\n> ${error.source}` : ''}`).join('\n\n')
         : 'Aucune erreur WGSL.';
     },
-  });
+  };
+  let viewer = new InteractiveViewer({ device, context, outputFormat, canvas, ...viewerCallbacks });
+  const viewCanvas = canvas;
+  const viewContext = context;
+
+  // Chrome Android may drop the WebGPU instance (e.g. right after a reload): rebuild on a new device.
+  let recoveries = 0;
+  function watchDevice(watched: GPUDevice): void {
+    void watched.lost.then(async (info) => {
+      console.error(`WebGPU device lost (${info.reason}): ${info.message}`);
+      if (info.reason === 'destroyed') return;
+      deviceLost = true;
+      if (++recoveries > 3) {
+        setStatus(`GPU perdu (${info.message || info.reason}). Recharger la page.`);
+        return;
+      }
+      setStatus('GPU perdu, réinitialisation...');
+      const backend = viewer.backend;
+      viewer.dispose();
+      const next = await requestGpu();
+      if (!next) {
+        setStatus('GPU perdu et aucun adaptateur WebGPU disponible. Recharger la page.');
+        return;
+      }
+      (globalThis as { __mxGpu?: unknown }).__mxGpu = next;
+      next.device.addEventListener('uncapturederror', (event) => {
+        console.error(`WebGPU error: ${(event as GPUUncapturedErrorEvent).error.message}`);
+      });
+      viewContext.configure({ device: next.device, format: outputFormat, alphaMode: 'opaque' });
+      viewer = new InteractiveViewer({ device: next.device, context: viewContext, outputFormat, canvas: viewCanvas, ...viewerCallbacks });
+      viewer.setBackend(backend);
+      deviceLost = false;
+      watchDevice(next.device);
+      await loadEntry(select?.value ?? SCENE_CATALOG[0]!.entry);
+      if (!deviceLost) recoveries = 0;
+    });
+  }
+  watchDevice(device);
 
   pathTracingToggle?.addEventListener('click', () => {
     viewer.setPathTracingPaused(!viewer.pathTracingPaused);
@@ -164,7 +212,7 @@ async function main(): Promise<void> {
       await viewer.load(new URL(entry, document.baseURI).href);
       refreshObjects();
     } catch (e) {
-      setStatus(`Echec du chargement: ${(e as Error)?.message ?? e}`);
+      if (!deviceLost) setStatus(`Echec du chargement: ${(e as Error)?.message ?? e}`);
     } finally {
       setBusy(false);
     }
