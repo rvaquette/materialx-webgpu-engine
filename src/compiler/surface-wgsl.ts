@@ -132,6 +132,17 @@ interface FamilyWgsl {
   thinFilm?: { weight: string; thickness: string; ior: string };
   emission?: string;
   opacity: string;
+  /** Statically known to have a non-zero transmission weight (default: a transmission lobe exists). */
+  transmission?: boolean;
+  /** Statically known to have non-zero dispersion (default: a lobe declares dispersion). */
+  dispersion?: boolean;
+}
+
+/** Closure features a surface can produce, known at compile time; lets hosts drop dead lighting paths. */
+export interface SurfaceFeatures {
+  coat: boolean;
+  transmission: boolean;
+  dispersion: boolean;
 }
 
 export interface LayeredSurfaceModule {
@@ -151,6 +162,8 @@ export interface LayeredSurfaceModule {
   /** Present iff the module declares the lighting uniform. Closure construction
    *  never evaluates lighting, so this stays absent (evaluation lands in T056). */
   lighting?: { group: number; binding: number };
+  /** Absent for hand-built modules: hosts must then assume every feature. */
+  features?: SurfaceFeatures;
 }
 
 /** Build the WGSL expression helpers for one surface. `s`/`col` resolve an input
@@ -236,7 +249,8 @@ function standardSurface(c: Ctx): FamilyWgsl {
     { kind: 'burley_diffuse', weight: '(mx_diel * mx_base)', color: baseColor, roughness: diffRough },
     { kind: 'subsurface', weight: '(mx_diel * mx_sss)', color: sssColor },
   ];
-  const out: FamilyWgsl = { locals, lobes, opacity: avgOpacity(c.col('opacity', [1, 1, 1])) };
+  const out: FamilyWgsl = { locals, lobes, opacity: avgOpacity(c.col('opacity', [1, 1, 1])),
+    transmission: presentWeighted(c, 'transmission'), dispersion: presentWeighted(c, 'transmission_dispersion') };
   if (presentWeighted(c, 'coat')) out.coat = { weight: clampExpr(c.s('coat', 0)), color: c.col('coat_color', [1, 1, 1]), roughness: c.s('coat_roughness', 0.1), ior: c.s('coat_IOR', 1.5) };
   if (presentWeighted(c, 'sheen')) out.sheen = { weight: clampExpr(c.s('sheen', 0)), color: c.col('sheen_color', [1, 1, 1]), roughness: c.s('sheen_roughness', 0.3) };
   if (presentWeighted(c, 'thin_film_thickness')) out.thinFilm = { weight: '1.0', thickness: c.s('thin_film_thickness', 0), ior: c.s('thin_film_IOR', 1.5) };
@@ -277,7 +291,9 @@ function openPbrSurface(c: Ctx): FamilyWgsl {
     { kind: 'burley_diffuse', weight: '(mx_diel * mx_baseW)', color: baseColor, roughness: diffRough },
     { kind: 'subsurface', weight: '(mx_diel * mx_sss)', color: sssColor },
   ];
-  const out: FamilyWgsl = { locals, lobes, opacity: c.s('geometry_opacity', 1) };
+  const out: FamilyWgsl = { locals, lobes, opacity: c.s('geometry_opacity', 1),
+    transmission: presentWeighted(c, 'transmission_weight'),
+    dispersion: !thinWalled && presentWeighted(c, 'transmission_dispersion_scale') };
   if (presentWeighted(c, 'coat_weight')) out.coat = { weight: clampExpr(c.s('coat_weight', 0)), color: c.col('coat_color', [1, 1, 1]), roughness: c.s('coat_roughness', 0), ior: c.s('coat_ior', 1.6) };
   if (presentWeighted(c, 'fuzz_weight')) out.fuzz = { weight: clampExpr(c.s('fuzz_weight', 0)), color: c.col('fuzz_color', [1, 1, 1]), roughness: c.s('fuzz_roughness', 0.5) };
   if (presentWeighted(c, 'thin_film_weight')) out.thinFilm = { weight: clampExpr(c.s('thin_film_weight', 0)), thickness: `(${c.s('thin_film_thickness', 0.5)} * 1000.0)`, ior: c.s('thin_film_ior', 1.4) };
@@ -312,6 +328,8 @@ function gltfPbr(c: Ctx): FamilyWgsl {
   const out: FamilyWgsl = {
     locals, lobes,
     opacity: `select(select(${alpha}, select(0.0, 1.0, ${alpha} >= ${cutoff}), ${mode} == 1), 1.0, ${mode} == 0)`,
+    transmission: presentWeighted(c, 'transmission'),
+    dispersion: presentWeighted(c, 'dispersion'),
   };
   if (presentWeighted(c, 'clearcoat')) out.coat = { weight: clampExpr(c.s('clearcoat', 0)), color: 'vec3f(1.0)', roughness: c.s('clearcoat_roughness', 0), ior: '1.5' };
   const sheenRgb = c.litRgb('sheen_color', [0, 0, 0]);
@@ -371,7 +389,7 @@ function disneyPrincipled(c: Ctx): FamilyWgsl {
     { kind: 'burley_diffuse', weight: 'mx_diel', color: baseColor, roughness: rough },
     { kind: 'subsurface', weight: '(mx_diel * mx_sss)', color: baseColor },
   ];
-  const out: FamilyWgsl = { locals, lobes, opacity: '1.0' };
+  const out: FamilyWgsl = { locals, lobes, opacity: '1.0', transmission: presentWeighted(c, 'specTrans'), dispersion: false };
   if (presentWeighted(c, 'sheen')) out.sheen = { weight: clampExpr(c.s('sheen', 0)), color: `mix(vec3f(1.0), ${baseColor}, ${clampExpr(c.s('sheenTint', 0.5))})`, roughness: '0.3' };
   if (presentWeighted(c, 'clearcoat')) out.coat = { weight: clampExpr(c.s('clearcoat', 0)), color: 'vec3f(1.0)', roughness: `(1.0 - ${clampExpr(c.s('clearcoatGloss', 1))})`, ior: '1.5' };
   return out;
@@ -424,6 +442,7 @@ interface SurfaceFnParts {
   primvarFields: Map<string, IrType>;
   extraInputs: Map<string, IrType>;
   usesLighting: boolean;
+  features: SurfaceFeatures;
 }
 
 /** Lower a resolved surface to a single `fn <entryName>(vary) -> LayeredClosure`
@@ -470,6 +489,12 @@ function buildSurfaceFn(
   assigns.push(`  c.opacity = ${fam.opacity};`);
 
   const fnCode = `fn ${entryName}(vary: MxVaryings) -> ${SURFACE_RETURN} {\n${exprs.body.join('\n')}\n${fam.locals.join('\n')}\n  var c: ${SURFACE_RETURN};\n${assigns.join('\n')}\n  return c;\n}`;
+  const transmission = fam.transmission ?? lobes.some((lobe) => lobe.kind === 'dielectric_transmission');
+  const features: SurfaceFeatures = {
+    coat: fam.coat !== undefined,
+    transmission,
+    dispersion: transmission && (fam.dispersion ?? lobes.some((lobe) => lobe.dispersion !== undefined)),
+  };
 
   return {
     fnName: entryName,
@@ -482,6 +507,7 @@ function buildSurfaceFn(
     primvarFields: exprs.primvarFields,
     extraInputs: exprs.extraInputs,
     usesLighting: exprs.usesLighting,
+    features,
   };
 }
 
@@ -526,6 +552,7 @@ export function emitLayeredSurface(
     primvarFields: fn.primvarFields,
     extraInputs: fn.extraInputs,
     ...(fn.usesLighting ? { lighting: { group: 0, binding: 1 } } : {}),
+    features: fn.features,
   };
 }
 

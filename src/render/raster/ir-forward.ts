@@ -11,7 +11,9 @@
 // minus shadows, NEE/MIS multi-bounce and textured environments. Additive only:
 // no backend consumes this yet (wiring lands in T058c-e, device parity in T059).
 
-import type { LayeredSurfaceModule } from '../../compiler/surface-wgsl.ts';
+import type { LayeredSurfaceModule, SurfaceFeatures } from '../../compiler/surface-wgsl.ts';
+
+const ALL_FEATURES: SurfaceFeatures = { coat: true, transmission: true, dispersion: true };
 
 /** Bind group / binding of the dedicated frame uniform, kept distinct from the
  *  material MxUniforms (group 0), textures (group 1) and samplers (group 2). */
@@ -41,7 +43,7 @@ export interface IrForwardShader {
 /** The dedicated per-frame uniform: object transform, camera and the single
  *  directional light plus the constant environment radiance. Separate from the
  *  material MxUniforms so the frame is shared across every material variant. */
-function frameBlock(): string {
+function frameBlock(f: SurfaceFeatures): string {
   return `struct MxFrame {
   model: mat4x4f,
   viewProj: mat4x4f,
@@ -96,7 +98,7 @@ fn mx_forward_sample_diffuse(c: LayeredClosure) -> bool {
   return c.hasCoat != 0u && c.coat.weight > 0.0
     && !(c.hasFuzz != 0u && c.fuzz.weight > 0.0);
 }
-
+${f.coat ? `
 fn mx_forward_coated_diffuse(c: LayeredClosure, wo: vec3f, frame: mat3x3f) -> vec3f {
   let albedo = mx_closure_diffuse_albedo(c, wo);
   let coatW = clamp(c.coat.weight, 0.0, 1.0);
@@ -126,7 +128,7 @@ fn mx_forward_coated_diffuse(c: LayeredClosure, wo: vec3f, frame: mat3x3f) -> ve
   }
   return radiance;
 }
-
+` : ''}
 // SH integrates diffuse and LTC fuzz. Keep the fuzz attenuation but remove its
 // response from the sampled closure so its environment energy is not counted twice.
 fn mx_forward_specular_closure(c: LayeredClosure) -> LayeredClosure {
@@ -141,7 +143,7 @@ fn mx_forward_specular_closure(c: LayeredClosure) -> LayeredClosure {
   }
   return spec;
 }
-
+${f.transmission ? `
 fn mx_forward_is_smooth_sheet(c: LayeredClosure) -> bool {
   if (c.hasCoat != 0u && c.coat.weight > 0.0) { return false; }
   var hasTransmission = false;
@@ -180,7 +182,7 @@ fn mx_forward_smooth_sheet(c: LayeredClosure, wo: vec3f, frame: mat3x3f) -> vec3
   }
   return radiance;
 }
-
+` : ''}
 fn mx_forward_single_dielectric(c: LayeredClosure) -> i32 {
   if (c.hasCoat != 0u && c.coat.weight > 0.0) { return -1; }
   if (c.hasFuzz != 0u && c.fuzz.weight > 0.0) { return -1; }
@@ -253,7 +255,7 @@ fn mx_forward_lobe_environment(l: MxBsdfLobe, wo: vec3f, frame: mat3x3f,
   }
   return radiance;
 }
-
+${f.coat ? `
 fn mx_forward_simple_coat(c: LayeredClosure) -> bool {
   if (!mx_forward_sample_diffuse(c) || c.hasThinFilm != 0u) { return false; }
   for (var i = 0u; i < c.lobeCount; i++) {
@@ -280,7 +282,7 @@ fn mx_forward_coated_specular(c: LayeredClosure, wo: vec3f, frame: mat3x3f) -> v
   }
   return radiance;
 }
-
+` : ''}
 // Diffuse irradiance E(n) from the uploaded SH9 radiance coefficients (cosine-lobe
 // convolution A_l). Basis matches projectIrradianceSH on the CPU and mx_sh_irradiance
 // in the path tracer so raster and path-traced diffuse IBL agree.
@@ -369,7 +371,7 @@ ${dispOffset}
 /** Fragment stage: rebuild the surface LayeredClosure then shade it with the same
  *  direct term as the path tracer -- delta-light next-event (no shadows) plus a
  *  single constant-environment sample along the normal -- via mx_closure_eval. */
-function fragmentStage(surfaceEntry: string, primvarNames: readonly string[]): string {
+function fragmentStage(surfaceEntry: string, primvarNames: readonly string[], f: SurfaceFeatures): string {
   // Feed the MxVaryings primvar fields the surface fn reads. 'st' is the default
   // MaterialX texcoord set, so it mirrors the interpolated UV, exactly as the path
   // tracer megakernel maps it (pathtracing/compute.ts). Other primvar/extra-input
@@ -403,7 +405,7 @@ fn ${IR_FORWARD_FRAGMENT_ENTRY}(fin: MxVertexOut) -> @location(0) vec4f {
   let wo = transpose(sframe) * vary.viewDir;
 
   var radiance = vec3f(0.0);
-  if (mx_closure_has_dispersion(c)) {
+${f.dispersion ? `  if (mx_closure_has_dispersion(c)) {
     for (var channel = 0u; channel < 3u; channel++) {
       let spectral = mx_closure_spectral_channel(c, channel);
       let light = mx_forward_lighting(spectral, n, wo, sframe);
@@ -411,7 +413,7 @@ fn ${IR_FORWARD_FRAGMENT_ENTRY}(fin: MxVertexOut) -> @location(0) vec4f {
     }
   } else {
     radiance = mx_forward_lighting(c, n, wo, sframe);
-  }
+  }` : '  radiance = mx_forward_lighting(c, n, wo, sframe);'}
   return vec4f(radiance, clamp(c.opacity, 0.0, 1.0));
 }
 
@@ -428,21 +430,21 @@ fn mx_forward_lighting(c: LayeredClosure, n: vec3f, wo: vec3f, sframe: mat3x3f) 
   // Diffuse environment IBL read analytically from the SH9 irradiance probe (the
   // same noise-free term the path tracer uses), so textured albedo reads at the
   // correct brightness instead of the dim constant-ambient estimate.
-  if (!mx_forward_sample_diffuse(c)) {
+${f.coat ? `  if (!mx_forward_sample_diffuse(c)) {
     radiance = radiance + mx_closure_diffuse_albedo(c, wo) * (mx_sh_irradiance(n) / MX_PI);
   } else {
     radiance = radiance + mx_forward_coated_diffuse(c, wo, sframe);
-  }
+  }` : '  radiance = radiance + mx_closure_diffuse_albedo(c, wo) * (mx_sh_irradiance(n) / MX_PI);'}
 
   // Deterministic BSDF quadrature of the actual dome; diffuse stays in SH above.
   let spec = mx_forward_specular_closure(c);
   let deltaSpecular = mx_closure_is_specular(spec);
   let dielectricIndex = mx_forward_single_dielectric(spec);
-  if (mx_forward_simple_coat(spec)) {
+  ${f.coat ? `if (mx_forward_simple_coat(spec)) {
     radiance = radiance + mx_forward_coated_specular(spec, wo, sframe);
-  } else if (mx_forward_is_smooth_sheet(spec)) {
+  } else ` : ''}${f.transmission ? `if (mx_forward_is_smooth_sheet(spec)) {
     radiance = radiance + mx_forward_smooth_sheet(spec, wo, sframe);
-  } else if (dielectricIndex >= 0) {
+  } else ` : ''}if (dielectricIndex >= 0) {
     radiance = radiance + mx_forward_dielectric_environment(spec.lobes[u32(dielectricIndex)], wo, sframe);
   } else {
     for (var i = 0u; i < 64u; i++) {
@@ -486,12 +488,13 @@ fn mx_forward_lighting(c: LayeredClosure, n: vec3f, wo: vec3f, sframe: mat3x3f) 
  */
 export function assembleIrForwardShader(surface: LayeredSurfaceModule, options: { displacement?: boolean } = {}): IrForwardShader {
   const displacement = options.displacement === true;
+  const features = surface.features ?? ALL_FEATURES;
   const code = [
     surface.code.trimEnd(),
-    frameBlock(),
+    frameBlock(features),
     basisHelper(),
     vertexStage(displacement),
-    fragmentStage(surface.entryPoint, [...surface.primvarFields.keys()]),
+    fragmentStage(surface.entryPoint, [...surface.primvarFields.keys()], features),
   ].join('\n\n') + '\n';
   return {
     code,
