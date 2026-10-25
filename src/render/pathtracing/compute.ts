@@ -18,7 +18,7 @@ import { LAYERED_CLOSURE_PRELUDE } from '../../compiler/surface-wgsl.ts';
 import { CLOSURE_LIBRARY_PRELUDE } from '../../compiler/closure-library.ts';
 import { emitVaryingsStruct } from '../../compiler/wgsl.ts';
 import type { IrType } from '../../compiler/ir.ts';
-import { materialClosureReaderWgsl } from './material-record.ts';
+import { materialClosureReaderWgsl, PT_MAX_LOBES } from './material-record.ts';
 import { PT_MATERIAL_DISPATCH_ENTRY, type PtMaterialDispatch } from './material-variant.ts';
 
 /** Compute workgroup tile edge (threads per dimension). */
@@ -310,7 +310,7 @@ const MEDIA_PHASE_PRELUDE = /* wgsl */ `fn mx_sample_hg(wo : vec3f, g : f32, u1 
   return basis(w) * local;
 }`;
 
-function wgslClosureSurface(textures: boolean): string {
+function wgslClosureSurface(textures: boolean, maxLobes: number): string {
   // Shared layered-closure shading: the struct family (LAYERED_CLOSURE_PRELUDE),
   // the runtime lobe library plus the mx_closure_eval/pdf/sample assembler
   // (CLOSURE_LIBRARY_PRELUDE, T056) and the megakernel material-record reader
@@ -334,7 +334,7 @@ fn mx_apply_baked(c : ptr<function, LayeredClosure>, albedo : vec3<f32>, rough :
 }`
     : '';
   return [
-    LAYERED_CLOSURE_PRELUDE,
+    LAYERED_CLOSURE_PRELUDE.replace('const MX_MAX_LOBES: u32 = 8u;', `const MX_MAX_LOBES: u32 = ${maxLobes}u;`),
     CLOSURE_LIBRARY_PRELUDE,
     MEDIA_HELPERS_PRELUDE,
     materialClosureReaderWgsl(),
@@ -772,11 +772,19 @@ fn ${PT_COMPUTE_ENTRY}(@builtin(global_invocation_id) gid : vec3<u32>) {
 
 /** Full WGSL source of the compute path tracer. */
 export function pathTraceComputeWgsl(
-  options: { textures?: boolean; varyings?: PtVaryings; dispatch?: PtMaterialDispatch; environment?: boolean } = {},
+  options: {
+    textures?: boolean;
+    varyings?: PtVaryings;
+    dispatch?: PtMaterialDispatch;
+    environment?: boolean;
+    /** LayeredClosure lobe capacity; must cover every variant and record (default PT_MAX_LOBES). */
+    maxLobes?: number;
+  } = {},
 ): string {
   const textures = options.textures ?? false;
   const environment = options.environment ?? false;
   const dispatch = options.dispatch;
+  const maxLobes = Math.min(Math.max(1, options.maxLobes ?? PT_MAX_LOBES), PT_MAX_LOBES);
   // The dispatcher's merged MxVaryings fields drive the varyings struct, so a
   // graph path always emits the varyings machinery it consumes.
   const varyings = dispatch
@@ -786,7 +794,7 @@ export function pathTraceComputeWgsl(
     wgslStructsAndBindings(textures, varyings !== undefined, environment),
     wgslRng(),
     wgslTraversal(),
-    wgslClosureSurface(textures),
+    wgslClosureSurface(textures, maxLobes),
     ...(varyings !== undefined ? [wgslVaryings(varyings)] : []),
     ...(dispatch !== undefined ? [wgslDispatch(dispatch)] : []),
     wgslIntegrator(textures, dispatch !== undefined, environment),

@@ -69,11 +69,16 @@ describe('assembleIrForwardShader (T058b)', () => {
   });
   it('omits coat, smooth-sheet and dispersion paths a surface cannot reach', () => {
     const { surface, shader } = forward('gltf_pbr', [value('dispersion', 'float', '0.35')]);
-    expect(surface.features).toEqual({ coat: false, transmission: false, dispersion: false });
+    expect(surface.features).toEqual({
+      coat: false, transmission: false, dispersion: false, thinFilm: false, lobeKinds: [4, 3, 1],
+    });
     expect(shader.code).not.toContain('mx_closure_has_dispersion(c)');
     expect(shader.code).not.toContain('mx_forward_coated_diffuse');
     expect(shader.code).not.toContain('mx_forward_simple_coat');
     expect(shader.code).not.toContain('mx_forward_smooth_sheet');
+    expect(shader.code).not.toContain('case 8u: { return mx_dielectric_transmission_eval(ctx, wi); }');
+    expect(shader.code).not.toContain('mx_microfacet_eval_tf(wo, wi');
+    expect(shader.code).toContain('case 4u: { return mx_conductor_eval(ctx, wi); }');
     expect(shader.code).toContain('radiance = mx_forward_lighting(c, n, wo, sframe);');
     expect(shader.code).toContain('if (dielectricIndex >= 0) {');
   });

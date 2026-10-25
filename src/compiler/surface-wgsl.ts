@@ -472,6 +472,7 @@ interface SurfaceFnParts {
   extraInputs: Map<string, IrType>;
   usesLighting: boolean;
   features: SurfaceFeatures;
+  lobeCount: number;
 }
 
 /** Lower a resolved surface to a single `fn <entryName>(vary) -> LayeredClosure`
@@ -484,6 +485,7 @@ function buildSurfaceFn(
   sink: DiagnosticSink,
   handlePrefix = '',
   computeStage = false,
+  pruneInactiveLobes = false,
 ): SurfaceFnParts {
   const builder = new IrModuleBuilder();
   const lowered = lowerSurfaceInputsToIr(graph, surface, builder, sink);
@@ -491,7 +493,8 @@ function buildSurfaceFn(
   const used = new Set<IrRef>();
   const ctx = makeCtx(surface, lowered.inputs, used);
   const fam = lowerFamily(surface.family, ctx);
-  const lobes = [...fam.lobes];
+  // Zero-weight lobes are skipped by every closure fn, so dropping them is neutral.
+  const lobes = pruneInactiveLobes ? fam.lobes.filter((lobe) => lobe.active !== false) : [...fam.lobes];
   if (fam.sheen) lobes.push({ kind: 'sheen', ...fam.sheen });
   const normalName = surface.family === 'open_pbr_surface' ? 'geometry_normal' : 'normal';
   const normalSource = surface.inputs.get(normalName)?.source;
@@ -539,6 +542,7 @@ function buildSurfaceFn(
     extraInputs: exprs.extraInputs,
     usesLighting: exprs.usesLighting,
     features,
+    lobeCount: lobes.length,
   };
 }
 
@@ -553,11 +557,12 @@ export function emitLayeredSurface(
   surface: ResolvedSurface,
   sink: DiagnosticSink = defaultDiagnosticSink,
 ): LayeredSurfaceModule {
-  const fn = buildSurfaceFn(graph, surface, SURFACE_ENTRY, sink);
+  const fn = buildSurfaceFn(graph, surface, SURFACE_ENTRY, sink, '', false, true);
 
   const parts: string[] = [];
   parts.push(fn.preludes.join('\n'));
-  parts.push(LAYERED_CLOSURE_PRELUDE);
+  // Mobile drivers reserve per-thread stack for the by-value lobe array (~27 MB per lobe on Mali).
+  parts.push(LAYERED_CLOSURE_PRELUDE.replace('const MX_MAX_LOBES: u32 = 8u;', `const MX_MAX_LOBES: u32 = ${Math.max(1, fn.lobeCount)}u;`));
   // T056h: emit the shared runtime closure library so the surface module is the
   // single source both backends call. It references LayeredClosure, so it must
   // follow LAYERED_CLOSURE_PRELUDE. Effective eval wiring lands in T057/T058.
@@ -602,6 +607,8 @@ export interface SurfaceVariantModule {
   samplers: WgslBinding[];
   primvarFields: Map<string, IrType>;
   extraInputs: Map<string, IrType>;
+  /** Lobes assigned by fnCode (zero-weight lobes pruned). */
+  lobeCount: number;
 }
 
 /** Lower a resolved surface to a megakernel variant keyed by its scene material
@@ -613,7 +620,7 @@ export function emitSurfaceVariant(
   index: number,
   sink: DiagnosticSink = defaultDiagnosticSink,
 ): SurfaceVariantModule {
-  const fn = buildSurfaceFn(graph, surface, `${SURFACE_ENTRY}_${index}`, sink, `m${index}_`, true);
+  const fn = buildSurfaceFn(graph, surface, `${SURFACE_ENTRY}_${index}`, sink, `m${index}_`, true, true);
   return {
     index,
     family: fn.family,
@@ -625,5 +632,6 @@ export function emitSurfaceVariant(
     samplers: fn.samplers,
     primvarFields: fn.primvarFields,
     extraInputs: fn.extraInputs,
+    lobeCount: fn.lobeCount,
   };
 }

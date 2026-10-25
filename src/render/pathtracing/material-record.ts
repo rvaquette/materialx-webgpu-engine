@@ -197,6 +197,16 @@ export function packLayeredMaterial(closure: LayeredClosure): Float32Array {
   return out;
 }
 
+/** Largest lobe count among the packed records, ignoring the material indices in `skip`. */
+export function maxRecordLobes(materials: ArrayLike<number>, skip: ReadonlySet<number> = new Set()): number {
+  let max = 0;
+  for (let index = 0; index * PT_MATERIAL_RECORD_FLOATS < materials.length; index++) {
+    if (skip.has(index)) continue;
+    max = Math.max(max, Math.min(Math.round(rd(materials, index * PT_MATERIAL_RECORD_FLOATS)), PT_MAX_LOBES));
+  }
+  return max;
+}
+
 /** Unpack material `index` from a buffer of concatenated records into a LayeredClosure. */
 export function unpackLayeredMaterial(
   buf: ArrayLike<number>,

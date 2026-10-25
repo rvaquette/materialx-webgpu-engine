@@ -27,6 +27,7 @@ import { buildPathTraceScene, type PathTraceScene } from './pathtracing/scene-bu
 import { buildPathTraceUniform, pathTraceComputeWgsl, PathTraceBackend, PT_UNIFORM_SIZE } from './pathtracing/compute.ts';
 import { buildMaterialDispatch } from './pathtracing/material-variant.ts';
 import { buildPtDeviceBindings } from './pathtracing/device-bindings.ts';
+import { maxRecordLobes } from './pathtracing/material-record.ts';
 import type { DecodedPixelImage } from '../assets/images.ts';
 import { loadUsdScene, uploadMaterialTextures, type ObjectMaterialOverride } from './usd-scene-assets.ts';
 import { OrbitCamera, attachOrbitControls } from '../scene/orbit-camera.ts';
@@ -679,8 +680,13 @@ fn dir_to_uv(d: vec3<f32>) -> vec2<f32> {
       ptTrash.push(o);
       return o;
     };
+    // Mobile drivers reserve per-thread stack for the by-value lobe array: size it to the scene.
+    const maxLobes = Math.max(
+      ...dispatch.variants.map((variant) => variant.lobeCount),
+      maxRecordLobes(ptScene.materials, new Set(dispatch.variants.map((variant) => variant.index))),
+    );
     const ptCompilation = await compileShaderWithDiagnostics(
-      device, pathTraceComputeWgsl({ dispatch, environment: loaded.environment !== undefined }), 'Path tracing');
+      device, pathTraceComputeWgsl({ dispatch, environment: loaded.environment !== undefined, maxLobes }), 'Path tracing');
     if (ptCompilation.errors.length > 0) {
       this.#onShaderErrors?.([...rasterErrors, ...ptCompilation.errors]);
       throw new Error(`WGSL: ${ptCompilation.errors.length} erreur(s) de compilation (path tracing).`);

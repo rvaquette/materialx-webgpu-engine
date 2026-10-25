@@ -56,11 +56,11 @@ function emit(graph: ResolvedGraph, sink?: (d: Diagnostic) => void) {
 
 describe('emitLayeredSurface (T055d)', () => {
   it.each([
-    ['gltf_pbr', 'dispersion'],
-    ['standard_surface', 'transmission_dispersion'],
-    ['open_pbr_surface', 'transmission_dispersion_scale'],
-  ])('retains connected %s dispersion in the transmission lobe', (family, name) => {
-    const mod = emit(surfaceGraph(family, [conn(name, 'float', 'dispersion')],
+    ['gltf_pbr', 'dispersion', 'transmission'],
+    ['standard_surface', 'transmission_dispersion', 'transmission'],
+    ['open_pbr_surface', 'transmission_dispersion_scale', 'transmission_weight'],
+  ])('retains connected %s dispersion in the transmission lobe', (family, name, transmission) => {
+    const mod = emit(surfaceGraph(family, [conn(name, 'float', 'dispersion'), value(transmission, 'float', '1')],
       [upstream('dispersion', 'constant', 'float', [value('value', 'float', '0.35')])]));
     expect(mod.code).toContain('dispersion: f32');
     expect(mod.code).toMatch(/MxBsdfLobe\(MX_LOBE_DIELECTRIC_TRANSMISSION,[^\n]*e\d+[^\n]*\);/);
@@ -146,6 +146,9 @@ describe('emitLayeredSurface (T055d)', () => {
     const mod = emit(
       surfaceGraph('standard_surface', [
         value('base_color', 'color3', '0.5, 0.5, 0.5'),
+        value('metalness', 'float', '0.5'),
+        value('transmission', 'float', '0.2'),
+        value('subsurface', 'float', '0.1'),
         value('coat', 'float', '0.4'),
         value('sheen', 'float', '0.3'),
         value('thin_film_thickness', 'float', '250'),
@@ -182,7 +185,7 @@ describe('emitLayeredSurface (T055d)', () => {
     ]));
     expect(mod.code).toContain('c.hasFuzz = 1u;');
     expect(mod.code).toContain('c.fuzz = MxFuzzLayer(');
-    expect(mod.code).toContain('c.lobeCount = 5u;');
+    expect(mod.code).toContain('c.lobeCount = 2u;');
     expect(mod.code).toContain('fn mx_closure_eval_base(c: LayeredClosure, wo: vec3f, wi: vec3f) -> MxBsdfEval');
     expect(mod.code).toContain('let fuzz = mx_fuzz_eval(fuzzCtx, wi);');
     expect(mod.code).toContain('fuzz.value * fuzzW + base.value * (1.0 - coverage)');
@@ -193,7 +196,7 @@ describe('emitLayeredSurface (T055d)', () => {
     const mod = emit(
       surfaceGraph(
         'standard_surface',
-        [conn('base_color', 'color3', 'tex')],
+        [conn('base_color', 'color3', 'tex'), value('metalness', 'float', '1')],
         [upstream('tex', 'image', 'color3', [value('file', 'filename', 'albedo.png', 'srgb_texture')])],
       ),
     );
@@ -232,10 +235,21 @@ describe('emitLayeredSurface (T055d)', () => {
     expect(mod.code).not.toContain('mxLighting');
   });
 
-  it('dispatches per family (UsdPreviewSurface has three base lobes)', () => {
+  it('dispatches per family (UsdPreviewSurface keeps its two non-metal base lobes)', () => {
     const mod = emit(surfaceGraph('UsdPreviewSurface', [value('diffuseColor', 'color3', '0.2, 0.2, 0.2')]));
     expect(mod.family).toBe('UsdPreviewSurface');
-    expect(mod.code).toContain('c.lobeCount = 3u;');
+    expect(mod.code).toContain('c.lobeCount = 2u;');
+    expect(mod.code).toContain('const MX_MAX_LOBES: u32 = 2u;');
+  });
+
+  it('sizes the raster lobe array to the statically active lobes', () => {
+    const mod = emit(surfaceGraph('open_pbr_surface', [value('base_color', 'color3', '0.5, 0.5, 0.5')]));
+    expect(mod.code).toContain('const MX_MAX_LOBES: u32 = 2u;');
+    expect(mod.code).toContain('c.lobes[0] = MxBsdfLobe(MX_LOBE_DIELECTRIC_REFLECTION,');
+    expect(mod.code).toContain('c.lobes[1] = MxBsdfLobe(MX_LOBE_BURLEY_DIFFUSE,');
+    expect(mod.code).not.toContain('MxBsdfLobe(MX_LOBE_CONDUCTOR,');
+    const pt = emitSurfaceVariant(surfaceGraph('open_pbr_surface', []), resolveSurface(surfaceGraph('open_pbr_surface', []))!, 0);
+    expect(pt.fnCode).toContain('c.lobeCount = 5u;');
   });
 
   it('diagnoses an unsupported upstream node and bakes a neutral constant', () => {
