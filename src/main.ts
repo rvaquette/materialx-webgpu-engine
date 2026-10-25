@@ -35,12 +35,15 @@ async function main(): Promise<void> {
     setStatus('WebGPU is not available in this browser.');
     return;
   }
-  // Chrome Android can return null while the previous page's adapter is still being released.
+  // Chrome Android can return null (or hang) while the previous adapter is still being released.
+  const withTimeout = <T>(promise: Promise<T>, ms: number): Promise<T | undefined> =>
+    Promise.race([promise, new Promise<undefined>((resolve) => setTimeout(() => resolve(undefined), ms))]);
   async function requestGpu(): Promise<{ adapter: GPUAdapter; device: GPUDevice } | undefined> {
     for (let attempt = 0; attempt < 5; attempt++) {
       if (attempt > 0) await new Promise((resolve) => setTimeout(resolve, 500 * attempt));
-      const adapter = await navigator.gpu.requestAdapter({ powerPreference: 'high-performance' });
-      if (adapter) return { adapter, device: await adapter.requestDevice() };
+      const adapter = await withTimeout(navigator.gpu.requestAdapter({ powerPreference: 'high-performance' }), 10000);
+      const device = adapter ? await withTimeout(adapter.requestDevice(), 10000) : undefined;
+      if (adapter && device) return { adapter, device };
     }
     return undefined;
   }
@@ -116,6 +119,7 @@ async function main(): Promise<void> {
       console.error(`WebGPU device lost (${info.reason}): ${info.message}`);
       if (info.reason === 'destroyed') return;
       deviceLost = true;
+      setBusy(true);
       if (++recoveries > 3) {
         setStatus(`GPU perdu (${info.message || info.reason}). Recharger la page.`);
         return;
