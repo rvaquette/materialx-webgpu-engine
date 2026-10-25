@@ -9,6 +9,7 @@ import {
   PT_MATERIAL_RECORD_FLOATS,
   PT_MAX_LOBES,
   materialClosureReaderWgsl,
+  maxRecordLobes,
   packLayeredMaterial,
   unpackLayeredMaterial,
 } from '../../../src/render/pathtracing/material-record.ts';
@@ -29,6 +30,16 @@ function expectLobesClose(a: LayeredClosure, b: LayeredClosure): void {
 }
 
 describe('T057b material-record codec', () => {
+  it('reports the largest packed lobe count, skipping graph-backed materials', () => {
+    const lobe = { kind: 'burley_diffuse' as const, weight: 1, color: [1, 1, 1] as [number, number, number] };
+    const one = packLayeredMaterial({ opacity: 1, lobes: [lobe] });
+    const three = packLayeredMaterial({ opacity: 1, lobes: [lobe, lobe, lobe] });
+    const buf = new Float32Array(PT_MATERIAL_RECORD_FLOATS * 2);
+    buf.set(one, 0);
+    buf.set(three, PT_MATERIAL_RECORD_FLOATS);
+    expect(maxRecordLobes(buf)).toBe(3);
+    expect(maxRecordLobes(buf, new Set([1]))).toBe(1);
+  });
   it('preserves optional dispersion through CPU packing and the GPU reader', () => {
     const closure: LayeredClosure = { opacity: 1, lobes: [
       { kind: 'dielectric_transmission', weight: 1, color: [1, 1, 1], ior: 1.52, dispersion: 0.35 },
