@@ -89,6 +89,83 @@ export const CLOSURE_LIBRARY_HELPERS = [
   'mx_microfacet_eval_aniso_tf',
 ] as const;
 
+/** Lobe kinds (MX_LOBE_* values) a closure dispatch may reach, plus whether thin film can be active. */
+export interface ClosureDispatchSpec {
+  kinds: ReadonlySet<number>;
+  thinFilm: boolean;
+}
+
+const ALL_DISPATCH: ClosureDispatchSpec = { kinds: new Set([0, 1, 2, 3, 4, 5, 6, 7, 8]), thinFilm: true };
+
+/** mx_closure_lobe_eval/sample restricted to `spec`; unreachable kinds fall to the zero default. */
+function lobeDispatch(spec: ClosureDispatchSpec): string {
+  const has = (...kinds: number[]) => kinds.filter((k) => spec.kinds.has(k));
+  const label = (kinds: number[]) => kinds.map((k) => `${k}u`).join(', ');
+  const evalCases: string[] = [];
+  const sampleCases: string[] = [];
+  const diffuse = has(0, 1);
+  if (diffuse.length) {
+    evalCases.push(`    case ${label(diffuse)}: { return mx_diffuse_eval(ctx, wi); }`);
+    sampleCases.push(`    case ${label(diffuse)}: { return mx_diffuse_sample(ctx, u.xy); }`);
+  }
+  if (has(2).length) {
+    evalCases.push('    case 2u: { return mx_translucent_eval(ctx, wi); }');
+    sampleCases.push('    case 2u: { return mx_translucent_sample(ctx, u.xy); }');
+  }
+  if (has(3).length) {
+    evalCases.push(spec.thinFilm ? `    case 3u: {
+      let f0 = vec3f(mx_dielectric_f0(lobe.ior));
+      if (filmActive) {
+        if (lobe.anisotropy <= 0.0) { return mx_microfacet_eval_tf(wo, wi, mx_alpha_of(lobe.roughness), f0, c.thinFilm.weight, c.thinFilm.thickness, c.thinFilm.ior); }
+        return mx_microfacet_eval_aniso_tf(wo, wi, mx_aniso_alphas(lobe.roughness, lobe.anisotropy), lobe.rotation, f0, c.thinFilm.weight, c.thinFilm.thickness, c.thinFilm.ior);
+      }
+      return mx_dielectric_reflection_eval(ctx, wi);
+    }` : '    case 3u: { return mx_dielectric_reflection_eval(ctx, wi); }');
+    sampleCases.push('    case 3u: { return mx_dielectric_reflection_sample(ctx, u.xy); }');
+  }
+  const conductor = has(4, 5);
+  if (conductor.length) {
+    evalCases.push(spec.thinFilm ? `    case ${label(conductor)}: {
+      if (filmActive) {
+        if (lobe.anisotropy <= 0.0) { return mx_microfacet_eval_tf(wo, wi, mx_alpha_of(lobe.roughness), lobe.color, c.thinFilm.weight, c.thinFilm.thickness, c.thinFilm.ior); }
+        return mx_microfacet_eval_aniso_tf(wo, wi, mx_aniso_alphas(lobe.roughness, lobe.anisotropy), lobe.rotation, lobe.color, c.thinFilm.weight, c.thinFilm.thickness, c.thinFilm.ior);
+      }
+      return mx_conductor_eval(ctx, wi);
+    }` : `    case ${label(conductor)}: { return mx_conductor_eval(ctx, wi); }`);
+    sampleCases.push(`    case ${label(conductor)}: { return mx_conductor_sample(ctx, u.xy); }`);
+  }
+  if (has(6).length) {
+    evalCases.push('    case 6u: { return mx_sheen_eval(ctx, wi); }');
+    sampleCases.push('    case 6u: { return mx_sheen_sample(ctx, u.xy); }');
+  }
+  if (has(7).length) {
+    evalCases.push('    case 7u: { return mx_subsurface_eval(ctx, wi); }');
+    sampleCases.push('    case 7u: { return mx_subsurface_sample(ctx, u.xy); }');
+  }
+  if (has(8).length) {
+    evalCases.push('    case 8u: { return mx_dielectric_transmission_eval(ctx, wi); }');
+    sampleCases.push('    case 8u: { return mx_dielectric_transmission_sample(ctx, u); }');
+  }
+  const film = spec.thinFilm ? '\n  let filmActive = c.hasThinFilm != 0u && c.thinFilm.weight > 0.0 && c.thinFilm.thickness > 0.0;' : '';
+  return `fn mx_closure_lobe_eval(lobe: MxBsdfLobe, c: LayeredClosure, wo: vec3f, wi: vec3f) -> MxBsdfEval {
+  let ctx = mx_closure_lobe_ctx(lobe, wo);${film}
+  switch (lobe.kind) {
+${[...evalCases, '    default: { return MxBsdfEval(vec3f(0.0), 0.0); }'].join('\n')}
+  }
+}
+fn mx_closure_lobe_sample(lobe: MxBsdfLobe, wo: vec3f, u: vec3f) -> MxBsdfSample {
+  let ctx = mx_closure_lobe_ctx(lobe, wo);
+  switch (lobe.kind) {
+${[...sampleCases, '    default: { return MxBsdfSample(vec3f(0.0), vec3f(0.0), 0.0, false); }'].join('\n')}
+  }
+}`;
+}
+
+/** The closure library with its lobe dispatch restricted to the kinds a surface can reach. */
+export function closureLibraryPrelude(spec: ClosureDispatchSpec = ALL_DISPATCH): string {
+  return spec === ALL_DISPATCH ? CLOSURE_LIBRARY_PRELUDE : CLOSURE_LIBRARY_PRELUDE.replace(lobeDispatch(ALL_DISPATCH), lobeDispatch(spec));
+}
+
 /** WGSL prelude: shared BSDF types, math helpers and the lobe triplets, plus the
  *  T056h full-stack assembler. The lobe library is self-contained (defines MX_PI,
  *  uses only WGSL builtins); the mx_closure_* assembler at the tail references the
@@ -669,46 +746,7 @@ fn mx_microfacet_eval_aniso_tf(wo: vec3f, wi: vec3f, alpha: vec2f, rotation: f32
 fn mx_closure_lobe_ctx(lobe: MxBsdfLobe, wo: vec3f) -> MxLobeCtx {
   return MxLobeCtx(wo, lobe.color, lobe.roughness, lobe.ior, lobe.anisotropy, lobe.rotation, lobe.thin);
 }
-fn mx_closure_lobe_eval(lobe: MxBsdfLobe, c: LayeredClosure, wo: vec3f, wi: vec3f) -> MxBsdfEval {
-  let ctx = mx_closure_lobe_ctx(lobe, wo);
-  let filmActive = c.hasThinFilm != 0u && c.thinFilm.weight > 0.0 && c.thinFilm.thickness > 0.0;
-  switch (lobe.kind) {
-    case 0u, 1u: { return mx_diffuse_eval(ctx, wi); }
-    case 2u: { return mx_translucent_eval(ctx, wi); }
-    case 3u: {
-      let f0 = vec3f(mx_dielectric_f0(lobe.ior));
-      if (filmActive) {
-        if (lobe.anisotropy <= 0.0) { return mx_microfacet_eval_tf(wo, wi, mx_alpha_of(lobe.roughness), f0, c.thinFilm.weight, c.thinFilm.thickness, c.thinFilm.ior); }
-        return mx_microfacet_eval_aniso_tf(wo, wi, mx_aniso_alphas(lobe.roughness, lobe.anisotropy), lobe.rotation, f0, c.thinFilm.weight, c.thinFilm.thickness, c.thinFilm.ior);
-      }
-      return mx_dielectric_reflection_eval(ctx, wi);
-    }
-    case 4u, 5u: {
-      if (filmActive) {
-        if (lobe.anisotropy <= 0.0) { return mx_microfacet_eval_tf(wo, wi, mx_alpha_of(lobe.roughness), lobe.color, c.thinFilm.weight, c.thinFilm.thickness, c.thinFilm.ior); }
-        return mx_microfacet_eval_aniso_tf(wo, wi, mx_aniso_alphas(lobe.roughness, lobe.anisotropy), lobe.rotation, lobe.color, c.thinFilm.weight, c.thinFilm.thickness, c.thinFilm.ior);
-      }
-      return mx_conductor_eval(ctx, wi);
-    }
-    case 6u: { return mx_sheen_eval(ctx, wi); }
-    case 7u: { return mx_subsurface_eval(ctx, wi); }
-    case 8u: { return mx_dielectric_transmission_eval(ctx, wi); }
-    default: { return MxBsdfEval(vec3f(0.0), 0.0); }
-  }
-}
-fn mx_closure_lobe_sample(lobe: MxBsdfLobe, wo: vec3f, u: vec3f) -> MxBsdfSample {
-  let ctx = mx_closure_lobe_ctx(lobe, wo);
-  switch (lobe.kind) {
-    case 0u, 1u: { return mx_diffuse_sample(ctx, u.xy); }
-    case 2u: { return mx_translucent_sample(ctx, u.xy); }
-    case 3u: { return mx_dielectric_reflection_sample(ctx, u.xy); }
-    case 4u, 5u: { return mx_conductor_sample(ctx, u.xy); }
-    case 6u: { return mx_sheen_sample(ctx, u.xy); }
-    case 7u: { return mx_subsurface_sample(ctx, u.xy); }
-    case 8u: { return mx_dielectric_transmission_sample(ctx, u); }
-    default: { return MxBsdfSample(vec3f(0.0), vec3f(0.0), 0.0, false); }
-  }
-}
+${lobeDispatch(ALL_DISPATCH)}
 fn mx_closure_total_weight(c: LayeredClosure) -> f32 {
   var total = 0.0;
   for (var i = 0u; i < c.lobeCount; i = i + 1u) { total = total + c.lobes[i].weight; }

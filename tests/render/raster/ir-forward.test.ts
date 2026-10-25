@@ -61,11 +61,21 @@ describe('assembleIrForwardShader (T058b)', () => {
   });
 
   it('integrates each RGB channel with its own dispersive closure', () => {
-    const { shader } = forward('gltf_pbr', [value('dispersion', 'float', '0.35')]);
+    const { shader } = forward('gltf_pbr', [value('transmission', 'float', '1'), value('dispersion', 'float', '0.35')]);
     expect(shader.code).toContain('if (mx_closure_has_dispersion(c))');
     expect(shader.code).toContain('let spectral = mx_closure_spectral_channel(c, channel);');
     expect(shader.code).toContain('radiance[channel] = light[channel];');
     expect(shader.code).toContain('radiance = mx_forward_lighting(c, n, wo, sframe);');
+  });
+  it('omits coat, smooth-sheet and dispersion paths a surface cannot reach', () => {
+    const { surface, shader } = forward('gltf_pbr', [value('dispersion', 'float', '0.35')]);
+    expect(surface.features).toEqual({ coat: false, transmission: false, dispersion: false });
+    expect(shader.code).not.toContain('mx_closure_has_dispersion(c)');
+    expect(shader.code).not.toContain('mx_forward_coated_diffuse');
+    expect(shader.code).not.toContain('mx_forward_simple_coat');
+    expect(shader.code).not.toContain('mx_forward_smooth_sheet');
+    expect(shader.code).toContain('radiance = mx_forward_lighting(c, n, wo, sframe);');
+    expect(shader.code).toContain('if (dielectricIndex >= 0) {');
   });
   it('discards zero coverage and outputs straight alpha for blending', () => {
     const { shader } = forward('gltf_pbr', [value('alpha_mode', 'integer', '2'), value('alpha', 'float', '0.35')]);

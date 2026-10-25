@@ -13,7 +13,7 @@
 
 import type { LayeredSurfaceModule, SurfaceFeatures } from '../../compiler/surface-wgsl.ts';
 
-const ALL_FEATURES: SurfaceFeatures = { coat: true, transmission: true, dispersion: true };
+const ALL_FEATURES: SurfaceFeatures = { coat: true, transmission: true, dispersion: true, thinFilm: true, lobeKinds: [0, 1, 2, 3, 4, 5, 6, 7, 8] };
 
 /** Bind group / binding of the dedicated frame uniform, kept distinct from the
  *  material MxUniforms (group 0), textures (group 1) and samplers (group 2). */

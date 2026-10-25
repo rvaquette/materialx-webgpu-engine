@@ -16,7 +16,7 @@ import type {
   ResolvedSurface,
   SurfaceFamily,
 } from '../materialx/surface-graph.ts';
-import { CLOSURE_LIBRARY_PRELUDE } from './closure-library.ts';
+import { closureLibraryPrelude } from './closure-library.ts';
 import { FLOAT, IrModuleBuilder, type IrRef, type IrType } from './ir.ts';
 import { lowerSurfaceInputsToIr } from './surface-ir.ts';
 import {
@@ -52,6 +52,19 @@ const LOBE_KIND_CONST: Readonly<Record<LobeKind, string>> = {
   generalized_schlick: 'MX_LOBE_GENERALIZED_SCHLICK',
   sheen: 'MX_LOBE_SHEEN',
   subsurface: 'MX_LOBE_SUBSURFACE',
+};
+
+/** Numeric values of the MX_LOBE_* constants below. */
+const LOBE_KIND_NUM: Readonly<Record<LobeKind, number>> = {
+  oren_nayar_diffuse: 0,
+  burley_diffuse: 1,
+  translucent: 2,
+  dielectric_reflection: 3,
+  conductor: 4,
+  generalized_schlick: 5,
+  sheen: 6,
+  subsurface: 7,
+  dielectric_transmission: 8,
 };
 
 /** WGSL prelude: the layered-closure struct family consumed by the runtime eval
@@ -120,6 +133,8 @@ interface LobeWgsl {
   extinction?: string;
   /** Thin-walled transmission flag (1.0 = straight-through, no refraction). */
   thin?: string;
+  /** False when the weight is statically zero (default true). */
+  active?: boolean;
 }
 
 interface FamilyWgsl {
@@ -143,6 +158,9 @@ export interface SurfaceFeatures {
   coat: boolean;
   transmission: boolean;
   dispersion: boolean;
+  thinFilm: boolean;
+  /** MX_LOBE_* kinds of the lobes whose weight may be non-zero. */
+  lobeKinds: readonly number[];
 }
 
 export interface LayeredSurfaceModule {
@@ -203,6 +221,10 @@ function makeCtx(surface: ResolvedSurface, inputs: ReadonlyMap<string, IrRef>, u
     dyn(name: string): boolean {
       return source(name)?.kind === 'connection';
     },
+    literal(name: string): boolean {
+      const kind = source(name)?.kind;
+      return kind === undefined || kind === 'value' || kind === 'default';
+    },
   };
 }
 
@@ -219,6 +241,11 @@ function clampExpr(expr: string): string {
 
 function presentWeighted(c: Ctx, name: string, threshold = 0): boolean {
   return c.lit(name, 0) > threshold || c.dyn(name);
+}
+
+/** A weight input that may be non-zero, given its family default when unauthored. */
+function mayWeigh(c: Ctx, name: string, fallback: number): boolean {
+  return !c.literal(name) || c.lit(name, fallback) > 0;
 }
 
 // --- standard_surface --------------------------------------------------------
@@ -242,12 +269,13 @@ function standardSurface(c: Ctx): FamilyWgsl {
     `  let mx_diel = (1.0 - mx_metal) * (1.0 - mx_trans);`,
   ];
   const lobes: LobeWgsl[] = [
-    { kind: 'conductor', weight: 'mx_metal', color: baseColor, roughness: specRough, anisotropy: aniso, rotation: rot },
+    { kind: 'conductor', weight: 'mx_metal', color: baseColor, roughness: specRough, anisotropy: aniso, rotation: rot, active: mayWeigh(c, 'metalness', 0) },
     { kind: 'dielectric_transmission', weight: '((1.0 - mx_metal) * mx_trans)', color: transColor, roughness: specRough, ior,
-      dispersion: `select(0.0, 20.0 / max(${c.s('transmission_dispersion', 0)}, 1e-6), ${c.s('transmission_dispersion', 0)} > 0.0)` },
-    { kind: 'dielectric_reflection', weight: '(mx_diel * mx_spec)', color: specColor, roughness: specRough, ior, anisotropy: aniso, rotation: rot },
-    { kind: 'burley_diffuse', weight: '(mx_diel * mx_base)', color: baseColor, roughness: diffRough },
-    { kind: 'subsurface', weight: '(mx_diel * mx_sss)', color: sssColor },
+      dispersion: `select(0.0, 20.0 / max(${c.s('transmission_dispersion', 0)}, 1e-6), ${c.s('transmission_dispersion', 0)} > 0.0)`,
+      active: mayWeigh(c, 'transmission', 0) },
+    { kind: 'dielectric_reflection', weight: '(mx_diel * mx_spec)', color: specColor, roughness: specRough, ior, anisotropy: aniso, rotation: rot, active: mayWeigh(c, 'specular', 1) },
+    { kind: 'burley_diffuse', weight: '(mx_diel * mx_base)', color: baseColor, roughness: diffRough, active: mayWeigh(c, 'base', 1) },
+    { kind: 'subsurface', weight: '(mx_diel * mx_sss)', color: sssColor, active: mayWeigh(c, 'subsurface', 0) },
   ];
   const out: FamilyWgsl = { locals, lobes, opacity: avgOpacity(c.col('opacity', [1, 1, 1])),
     transmission: presentWeighted(c, 'transmission'), dispersion: presentWeighted(c, 'transmission_dispersion') };
@@ -282,14 +310,15 @@ function openPbrSurface(c: Ctx): FamilyWgsl {
   ];
   const reflW = thinWalled ? '((1.0 - mx_metal) * mx_specW)' : '(mx_diel * mx_specW)';
   const transLobe: LobeWgsl = { kind: 'dielectric_transmission', weight: '((1.0 - mx_metal) * mx_trans)', color: transColor, roughness: specRough, ior,
-    dispersion: `(max(${c.s('transmission_dispersion_scale', 0)}, 0.0) * 20.0 / max(${c.s('transmission_dispersion_abbe_number', 20)}, 1e-6))` };
+    dispersion: `(max(${c.s('transmission_dispersion_scale', 0)}, 0.0) * 20.0 / max(${c.s('transmission_dispersion_abbe_number', 20)}, 1e-6))`,
+    active: mayWeigh(c, 'transmission_weight', 0) };
   if (thinWalled) transLobe.thin = '1.0';
   const lobes: LobeWgsl[] = [
-    { kind: 'conductor', weight: 'mx_metal', color: baseColor, roughness: specRough, anisotropy: aniso },
+    { kind: 'conductor', weight: 'mx_metal', color: baseColor, roughness: specRough, anisotropy: aniso, active: mayWeigh(c, 'base_metalness', 0) },
     transLobe,
-    { kind: 'dielectric_reflection', weight: reflW, color: specColor, roughness: specRough, ior, anisotropy: aniso },
-    { kind: 'burley_diffuse', weight: '(mx_diel * mx_baseW)', color: baseColor, roughness: diffRough },
-    { kind: 'subsurface', weight: '(mx_diel * mx_sss)', color: sssColor },
+    { kind: 'dielectric_reflection', weight: reflW, color: specColor, roughness: specRough, ior, anisotropy: aniso, active: mayWeigh(c, 'specular_weight', 1) },
+    { kind: 'burley_diffuse', weight: '(mx_diel * mx_baseW)', color: baseColor, roughness: diffRough, active: mayWeigh(c, 'base_weight', 1) },
+    { kind: 'subsurface', weight: '(mx_diel * mx_sss)', color: sssColor, active: mayWeigh(c, 'subsurface_weight', 0) },
   ];
   const out: FamilyWgsl = { locals, lobes, opacity: c.s('geometry_opacity', 1),
     transmission: presentWeighted(c, 'transmission_weight'),
@@ -317,9 +346,9 @@ function gltfPbr(c: Ctx): FamilyWgsl {
     `  let mx_diel = (1.0 - mx_metal) * (1.0 - mx_trans);`,
   ];
   const lobes: LobeWgsl[] = [
-    { kind: 'conductor', weight: 'mx_metal', color: baseColor, roughness: rough, anisotropy: aniso, rotation: rot },
-    { kind: 'dielectric_transmission', weight: '((1.0 - mx_metal) * mx_trans)', color: baseColor, roughness: rough, ior, dispersion: `max(${c.s('dispersion', 0)}, 0.0)` },
-    { kind: 'dielectric_reflection', weight: '(mx_diel * mx_spec)', color: specColor, roughness: rough, ior, anisotropy: aniso, rotation: rot },
+    { kind: 'conductor', weight: 'mx_metal', color: baseColor, roughness: rough, anisotropy: aniso, rotation: rot, active: mayWeigh(c, 'metallic', 1) },
+    { kind: 'dielectric_transmission', weight: '((1.0 - mx_metal) * mx_trans)', color: baseColor, roughness: rough, ior, dispersion: `max(${c.s('dispersion', 0)}, 0.0)`, active: mayWeigh(c, 'transmission', 0) },
+    { kind: 'dielectric_reflection', weight: '(mx_diel * mx_spec)', color: specColor, roughness: rough, ior, anisotropy: aniso, rotation: rot, active: mayWeigh(c, 'specular', 1) },
     { kind: 'burley_diffuse', weight: 'mx_diel', color: baseColor, roughness: rough },
   ];
   const alpha = clampExpr(c.s('alpha', 1));
@@ -356,7 +385,7 @@ function usdPreviewSurface(c: Ctx): FamilyWgsl {
     `  let mx_diel = 1.0 - mx_metal;`,
   ];
   const lobes: LobeWgsl[] = [
-    { kind: 'conductor', weight: 'mx_metal', color: diffuse, roughness: rough },
+    { kind: 'conductor', weight: 'mx_metal', color: diffuse, roughness: rough, active: mayWeigh(c, 'metallic', 0) },
     { kind: 'dielectric_reflection', weight: 'mx_diel', color: specColor, roughness: rough, ior },
     { kind: 'burley_diffuse', weight: 'mx_diel', color: diffuse, roughness: rough },
   ];
@@ -383,11 +412,11 @@ function disneyPrincipled(c: Ctx): FamilyWgsl {
     `  let mx_diel = (1.0 - mx_metal) * (1.0 - mx_trans);`,
   ];
   const lobes: LobeWgsl[] = [
-    { kind: 'conductor', weight: 'mx_metal', color: baseColor, roughness: rough, anisotropy: aniso },
-    { kind: 'dielectric_transmission', weight: '((1.0 - mx_metal) * mx_trans)', color: baseColor, roughness: rough, ior },
-    { kind: 'dielectric_reflection', weight: '(mx_diel * mx_spec)', color: specColor, roughness: rough, ior, anisotropy: aniso },
+    { kind: 'conductor', weight: 'mx_metal', color: baseColor, roughness: rough, anisotropy: aniso, active: mayWeigh(c, 'metallic', 0) },
+    { kind: 'dielectric_transmission', weight: '((1.0 - mx_metal) * mx_trans)', color: baseColor, roughness: rough, ior, active: mayWeigh(c, 'specTrans', 0) },
+    { kind: 'dielectric_reflection', weight: '(mx_diel * mx_spec)', color: specColor, roughness: rough, ior, anisotropy: aniso, active: mayWeigh(c, 'specular', 0.5) },
     { kind: 'burley_diffuse', weight: 'mx_diel', color: baseColor, roughness: rough },
-    { kind: 'subsurface', weight: '(mx_diel * mx_sss)', color: baseColor },
+    { kind: 'subsurface', weight: '(mx_diel * mx_sss)', color: baseColor, active: mayWeigh(c, 'subsurface', 0) },
   ];
   const out: FamilyWgsl = { locals, lobes, opacity: '1.0', transmission: presentWeighted(c, 'specTrans'), dispersion: false };
   if (presentWeighted(c, 'sheen')) out.sheen = { weight: clampExpr(c.s('sheen', 0)), color: `mix(vec3f(1.0), ${baseColor}, ${clampExpr(c.s('sheenTint', 0.5))})`, roughness: '0.3' };
@@ -494,6 +523,8 @@ function buildSurfaceFn(
     coat: fam.coat !== undefined,
     transmission,
     dispersion: transmission && (fam.dispersion ?? lobes.some((lobe) => lobe.dispersion !== undefined)),
+    thinFilm: fam.thinFilm !== undefined,
+    lobeKinds: [...new Set(lobes.filter((lobe) => lobe.active !== false).map((lobe) => LOBE_KIND_NUM[lobe.kind]))],
   };
 
   return {
@@ -530,7 +561,7 @@ export function emitLayeredSurface(
   // T056h: emit the shared runtime closure library so the surface module is the
   // single source both backends call. It references LayeredClosure, so it must
   // follow LAYERED_CLOSURE_PRELUDE. Effective eval wiring lands in T057/T058.
-  parts.push(CLOSURE_LIBRARY_PRELUDE);
+  parts.push(closureLibraryPrelude({ kinds: new Set(fn.features.lobeKinds), thinFilm: fn.features.thinFilm }));
   if (fn.uniforms.length > 0) {
     parts.push(
       `struct MxUniforms {\n${fn.uniforms.map((u) => `  ${u.field}: ${u.wgslType},`).join('\n')}\n};\n@group(0) @binding(0) var<uniform> u: MxUniforms;`,
