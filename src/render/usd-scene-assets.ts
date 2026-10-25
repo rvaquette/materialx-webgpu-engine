@@ -223,11 +223,12 @@ export async function uploadMaterialTextures(
   material: MaterialResource,
   imageProvider: PtImageProvider,
   cache: Map<string, DecodedPixelImage | undefined>,
-): Promise<{ textureViews: Map<string, GPUTextureView>; samplers: Map<string, GPUSampler> }> {
+): Promise<{ textureViews: Map<string, GPUTextureView>; samplers: Map<string, GPUSampler>; textures: GPUTexture[] }> {
   const textureViews = new Map<string, GPUTextureView>();
   const samplers = new Map<string, GPUSampler>();
+  const textures: GPUTexture[] = [];
   const module = material.surfaceModule;
-  if (!module) return { textureViews, samplers };
+  if (!module) return { textureViews, samplers, textures };
   for (const t of module.textures) {
     const fileRef = t.fileRef;
     if (fileRef === undefined) continue;
@@ -243,6 +244,7 @@ export async function uploadMaterialTextures(
       format: t.colorSpace === 'srgb_texture' ? 'rgba8unorm-srgb' : 'rgba8unorm',
       usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
     });
+    textures.push(gpuTex);
     if (image && image.componentType === 'uint8' && image.channels === 4) {
       device.queue.writeTexture({ texture: gpuTex }, image.data, { bytesPerRow: width * 4, rowsPerImage: height }, [width, height, 1]);
     }
@@ -251,7 +253,7 @@ export async function uploadMaterialTextures(
   for (const s of module.samplers) {
     samplers.set(s.name, device.createSampler(imageSamplerDescriptor(s.sampler ?? {})));
   }
-  return { textureViews, samplers };
+  return { textureViews, samplers, textures };
 }
 
 /** A loaded dome environment: the decoded equirect map plus derived lighting. */

@@ -37,6 +37,7 @@ import { packHdrTexture } from '../assets/hdr-texture.ts';
 
 /** Preview fill + framing shared with the capture harness so the live view matches. */
 const PREVIEW_ENV: Vec3 = [0.65, 0.68, 0.72];
+const RASTER_BAND_PIXELS = 256 * 256;
 function previewCamera(aspect: number, exposure: number): FrameCamera {
   const target: Vec3 = [0, 0.3, 0];
   const dir: Vec3 = [0.657, 0.438, 0.613];
@@ -79,6 +80,7 @@ export class InteractiveViewer {
   #pathTracingPaused = false;
   #orbit: OrbitCamera;
   #current: SceneRender | null = null;
+  #loaded: Awaited<ReturnType<typeof loadUsdScene>> | undefined;
   #rebuildRender: (() => Promise<SceneRender>) | undefined;
   #sceneEntry: string | undefined;
   #materialOverrides = new Map<string, ObjectMaterialOverride>();
@@ -161,6 +163,8 @@ export class InteractiveViewer {
     this.#current?.dispose();
     this.#current = null;
     this.#rebuildRender = undefined;
+    this.#loaded?.mtlx.documents.delete();
+    this.#loaded = undefined;
   }
 
   async resize(size: number): Promise<void> {
@@ -201,30 +205,30 @@ export class InteractiveViewer {
       if (d.level === 'warning' || d.level === 'error') this.#warnings++;
     };
     const loaded = await loadUsdScene(entry, sink, () => {}, overrides);
-    if (overrides.size > 0 && loaded.resources.pendingMaterials.length > 0) {
-      loaded.mtlx.documents.delete();
-      throw new Error('MaterialX compilation failed.');
-    }
     const exposure = loaded.cameras[0]?.exposure ?? 0;
-    const env = loaded.environment;
-    const environment = env
-      ? { radiance: env.averageRadiance, tint: env.tint, intensity: env.intensity, hasTexture: true, sh: env.sh }
-      : { radiance: PREVIEW_ENV };
-    const frame = buildSceneFrame(loaded.resources, {
-      lights: loaded.lights,
-      frameCamera: previewCamera(this.#width / this.#height, exposure),
-      environment,
-      surfaceFor: loaded.mtlx.surfaceFor,
-    });
-    const ptScene = buildPathTraceScene(loaded.resources, {
-      lights: loaded.lights,
-      surfaceFor: loaded.mtlx.surfaceFor,
-      frameCamera: previewCamera(this.#width / this.#height, exposure),
-      environment,
-    });
-
+    let frame: SceneFramePlan;
+    let ptScene: PathTraceScene;
     let render: SceneRender;
     try {
+      if (overrides.size > 0 && loaded.resources.pendingMaterials.length > 0) {
+        throw new Error('MaterialX compilation failed.');
+      }
+      const env = loaded.environment;
+      const environment = env
+        ? { radiance: env.averageRadiance, tint: env.tint, intensity: env.intensity, hasTexture: true, sh: env.sh }
+        : { radiance: PREVIEW_ENV };
+      frame = buildSceneFrame(loaded.resources, {
+        lights: loaded.lights,
+        frameCamera: previewCamera(this.#width / this.#height, exposure),
+        environment,
+        surfaceFor: loaded.mtlx.surfaceFor,
+      });
+      ptScene = buildPathTraceScene(loaded.resources, {
+        lights: loaded.lights,
+        surfaceFor: loaded.mtlx.surfaceFor,
+        frameCamera: previewCamera(this.#width / this.#height, exposure),
+        environment,
+      });
       render = await this.#buildSceneRender(loaded, frame, ptScene, exposure, sink);
     } catch (error) {
       loaded.mtlx.documents.delete();
@@ -233,6 +237,8 @@ export class InteractiveViewer {
     this.#rebuildRender = () => this.#buildSceneRender(loaded, frame, ptScene, exposure, sink);
     this.#current?.dispose();
     this.#current = render;
+    this.#loaded?.mtlx.documents.delete();
+    this.#loaded = loaded;
     this.#sceneEntry = entry;
     this.#materialOverrides = new Map(overrides);
     this.#objects = loaded.resources.instances.filter((instance) => instance.hasGeometry).map((instance) => {
@@ -319,6 +325,23 @@ export class InteractiveViewer {
     exposure: number,
     sink: DiagnosticSink,
   ): Promise<SceneRender> {
+    const trash: Array<{ destroy(): void }> = [];
+    try {
+      return await this.#createSceneRender(loaded, frame, ptScene, exposure, sink, trash);
+    } catch (error) {
+      for (const resource of trash) resource.destroy();
+      throw error;
+    }
+  }
+
+  async #createSceneRender(
+    loaded: Awaited<ReturnType<typeof loadUsdScene>>,
+    frame: SceneFramePlan,
+    ptScene: PathTraceScene,
+    exposure: number,
+    sink: DiagnosticSink,
+    trash: Array<{ destroy(): void }>,
+  ): Promise<SceneRender> {
     const device = this.#device;
     const width = this.#width;
     const height = this.#height;
@@ -344,7 +367,6 @@ export class InteractiveViewer {
     this.#onShaderErrors?.(errors);
     if (errors.length > 0) throw new Error(`WGSL: ${errors.length} erreur(s) de compilation.`);
     const rasterModules = new Map(rasterCompilation.map((result) => [result.key, result.module]));
-    const trash: Array<{ destroy(): void }> = [];
     const track = <T extends { destroy(): void }>(o: T): T => {
       trash.push(o);
       return o;
@@ -404,7 +426,9 @@ export class InteractiveViewer {
     const materialTextures = new Map<string, { textureViews: Map<string, GPUTextureView>; samplers: Map<string, GPUSampler> }>();
     for (const [key, material] of resources.materials) {
       if (material.surfaceModule && material.surfaceModule.textures.length > 0) {
-        materialTextures.set(key, await uploadMaterialTextures(device, material, loaded.mtlx.imageProvider, imageCache));
+        const uploadedTextures = await uploadMaterialTextures(device, material, loaded.mtlx.imageProvider, imageCache);
+        uploadedTextures.textures.forEach(track);
+        materialTextures.set(key, uploadedTextures);
       }
     }
 
@@ -416,7 +440,6 @@ export class InteractiveViewer {
       if (!imageCache.has(file)) imageCache.set(file, await loaded.mtlx.imageProvider.decode(file));
       const image = imageCache.get(file);
       if (!image || image.componentType !== 'uint8' || image.channels !== 4) {
-        for (const resource of trash) resource.destroy();
         throw new Error(`Invalid displacement map: ${file}`);
       }
       const texture = track(device.createTexture({
@@ -453,7 +476,12 @@ export class InteractiveViewer {
     const depthView = depthTexture.createView();
 
     const uploaded = new Map<string, ReturnType<typeof uploadGeometry>>();
-    for (const [id, geometry] of resources.geometries) uploaded.set(id, uploadGeometry(device, geometry, id));
+    for (const [id, geometry] of resources.geometries) {
+      const buffers = uploadGeometry(device, geometry, id);
+      track(buffers.indexBuffer);
+      for (const vb of buffers.vertexBuffers.values()) track(vb);
+      uploaded.set(id, buffers);
+    }
 
     const drawsByPass = new Map<ScenePassKind, SceneDrawCall[]>();
     const zeroTexcoords = new Map<string, GPUBuffer>();
@@ -522,10 +550,6 @@ export class InteractiveViewer {
         ...(textureBindGroups.size > 0 ? { textureBindGroups } : {}),
       });
       drawsByPass.set(draw.pass, list);
-    }
-    for (const b of uploaded.values()) {
-      track(b.indexBuffer);
-      for (const vb of b.vertexBuffers.values()) track(vb);
     }
 
     const resolveUniform = track(device.createBuffer({ size: RESOLVE_UNIFORM_SIZE, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST }));
@@ -598,8 +622,11 @@ fn dir_to_uv(d: vec3<f32>) -> vec2<f32> {
       });
     }
 
+    // Heavy MaterialX fragments over a full frame in one submission exceed the
+    // mobile GPU watchdog (VK_ERROR_DEVICE_LOST): submit horizontal bands instead.
+    const bandRows = Math.max(1, Math.floor(RASTER_BAND_PIXELS / width));
     const renderRaster = (targetView: GPUTextureView): void => {
-      const encoder = device.createCommandEncoder();
+      let encoder = device.createCommandEncoder();
       let first = true;
       if (envBgPipeline && envBgBindGroup) {
         const pass = encoder.beginRenderPass({
@@ -612,11 +639,18 @@ fn dir_to_uv(d: vec3<f32>) -> vec2<f32> {
         pass.end();
         first = false;
       }
-      for (const pass of frame.passes) {
-        const draws = drawsByPass.get(pass) ?? [];
-        if (draws.length === 0) continue;
-        backend.recordScenePass(encoder, { pass, hdrView, depthView, draws, clear: first, clearColor: rasterBackground });
-        first = false;
+      for (let y = 0; y < height; y += bandRows) {
+        const scissor = { x: 0, y, width, height: Math.min(bandRows, height - y) };
+        for (const pass of frame.passes) {
+          const draws = drawsByPass.get(pass) ?? [];
+          if (draws.length === 0) continue;
+          backend.recordScenePass(encoder, { pass, hdrView, depthView, draws, clear: first, clearColor: rasterBackground, scissor });
+          first = false;
+        }
+        if (y + bandRows < height) {
+          device.queue.submit([encoder.finish()]);
+          encoder = device.createCommandEncoder();
+        }
       }
       backend.recordResolvePass(encoder, { outputView: targetView, bindGroup: resolveBindGroup });
       device.queue.submit([encoder.finish()]);

@@ -110,6 +110,8 @@ export interface ScenePassTargets {
   /** Linear HDR background for the clear (scene environment radiance), so the
    *  raster background matches the path tracer's env miss; defaults to black. */
   clearColor?: readonly [number, number, number];
+  /** Restricts the draws to this framebuffer rectangle; a clear still covers the whole target. */
+  scissor?: { x: number; y: number; width: number; height: number };
 }
 
 
@@ -234,6 +236,10 @@ export class RasterBackend {
         depthStoreOp: 'store',
       },
     });
+    if (targets.scissor) {
+      const s = targets.scissor;
+      pass.setScissorRect(s.x, s.y, s.width, s.height);
+    }
     let current: GPURenderPipeline | undefined;
     for (const draw of targets.draws) {
       const pipeline = this.sceneVariantPipeline(targets.pass, draw.pipelineKey);
