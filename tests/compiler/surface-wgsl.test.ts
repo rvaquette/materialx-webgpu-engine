@@ -249,7 +249,8 @@ describe('emitLayeredSurface (T055d)', () => {
     expect(mod.code).toContain('c.lobes[1] = MxBsdfLobe(MX_LOBE_BURLEY_DIFFUSE,');
     expect(mod.code).not.toContain('MxBsdfLobe(MX_LOBE_CONDUCTOR,');
     const pt = emitSurfaceVariant(surfaceGraph('open_pbr_surface', []), resolveSurface(surfaceGraph('open_pbr_surface', []))!, 0);
-    expect(pt.fnCode).toContain('c.lobeCount = 5u;');
+    expect(pt.lobeCount).toBe(2);
+    expect(pt.fnCode).toContain('c.lobeCount = 2u;');
   });
 
   it('diagnoses an unsupported upstream node and bakes a neutral constant', () => {
