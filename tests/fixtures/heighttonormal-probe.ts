@@ -41,22 +41,40 @@ export async function runHeightToNormalProbe(device: GPUDevice): Promise<number[
       namedArgs: { in: height, scale: builder.constant(FLOAT, test.scale), texcoord: q },
     });
     builder.output({ name: 'normal', type: VECTOR3, ref: normal });
+    const mapped = builder.add({
+      kind: 'call', op: 'normalmap', type: VECTOR3, args: [], namedArgs: { in: normal },
+    });
+    builder.output({ name: 'mapped', type: VECTOR3, ref: mapped });
     const lowered = lowerExprs(builder.build(), '', true);
     for (const prelude of lowered.preludes) preludes.add(prelude);
-    functions.push(`fn case_${i}() -> vec3f {
-  var vary: ProbeVaryings;
+    const sign = i % 2 === 0 ? 1 : -1;
+    const body = `  var vary: ProbeVaryings;
   vary.texcoord = vec2f(0.375, 0.625);
-${lowered.body.join('\n')}
+  vary.normal = vec3f(0.0, 1.0, 0.0);
+  vary.tangent = vec3f(0.0, 0.0, 1.0);
+  vary.bitangent = vec3f(${sign}.0, 0.0, 0.0);
+${lowered.body.join('\n')}`;
+    functions.push(`fn case_${i}() -> vec3f {
+${body}
   return ${normal};
+}
+fn case_${i}_mapped() -> vec3f {
+${body}
+  return ${mapped};
 }`);
     const n = test.uvScale === 0 ? [0, 0, 1]
       : [-test.slope[0]! * test.scale / 16, -test.slope[1]! * test.scale / 16, 1];
     const length = Math.hypot(...n);
     expected.push(n.map((v) => v / length * 0.5 + 0.5));
   }
-  const size = cases.length * 16;
+  const encodedNormals = [...expected];
+  encodedNormals.forEach((n, i) => {
+    const sign = i % 2 === 0 ? 1 : -1;
+    expected.push([(2 * n[1]! - 1) * sign, 2 * n[2]! - 1, 2 * n[0]! - 1]);
+  });
+  const size = expected.length * 16;
   const code = `${[...preludes].join('\n')}
-struct ProbeVaryings { texcoord: vec2f };
+struct ProbeVaryings { texcoord: vec2f, normal: vec3f, tangent: vec3f, bitangent: vec3f };
 @group(1) @binding(0) var tex_height: texture_2d<f32>;
 @group(2) @binding(0) var samp_height: sampler;
 ${functions.join('\n')}
@@ -64,6 +82,7 @@ ${functions.join('\n')}
 @compute @workgroup_size(1)
 fn probe() {
 ${cases.map((_, i) => `  results[${i}] = vec4f(case_${i}(), 0.0);`).join('\n')}
+${cases.map((_, i) => `  results[${cases.length + i}] = vec4f(case_${i}_mapped(), 0.0);`).join('\n')}
 }`;
   const pipeline = await device.createComputePipelineAsync({
     layout: 'auto', compute: { module: device.createShaderModule({ code }), entryPoint: 'probe' },

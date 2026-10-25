@@ -398,8 +398,9 @@ fn mx_hit_varyings(h : Hit, pos : vec3<f32>, n : vec3<f32>, viewDir : vec3<f32>)
   let f = basis(n);
   let tangentWithSign = mx_hit_tangent(h);
   let tRaw = tangentWithSign.xyz;
-  let hasT = dot(tRaw, tRaw) > 1.0e-10;
-  let tang = select(f[0], normalize(tRaw - n * dot(n, tRaw)), hasT);
+  let projectedTangent = tRaw - n * dot(n, tRaw);
+  let hasT = dot(projectedTangent, projectedTangent) > 1.0e-10;
+  let tang = select(f[0], normalize(projectedTangent), hasT);
   vary.position = pos;
   vary.normal = n;
   vary.tangent = tang;

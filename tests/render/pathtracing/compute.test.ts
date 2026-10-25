@@ -250,7 +250,8 @@ describe('pathTraceComputeWgsl tangent frame (T057l)', () => {
     expect(src).toContain('fn mx_hit_tangent(h : Hit) -> vec4<f32>');
     // Empty buffer -> keep the branchless basis tangent (graceful fallback).
     expect(src).toContain('if (arrayLength(&triTangent) < TAN_STRIDE)');
-    expect(src).toContain('let tang = select(f[0], normalize(tRaw - n * dot(n, tRaw)), hasT);');
+    expect(src).toContain('let tang = select(f[0], normalize(projectedTangent), hasT);');
+    expect(src).toContain('let hasT = dot(projectedTangent, projectedTangent) > 1.0e-10;');
     expect(src).toContain('vary.bitangent = select(f[1], normalize(cross(n, tang)) * select(1.0, -1.0, tangentWithSign.w < 0.0), hasT);');
   });
 });

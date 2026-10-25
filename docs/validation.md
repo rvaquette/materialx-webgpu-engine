@@ -181,6 +181,48 @@ sur les 24 cas, l'ecart maximal observe
 sur le mobile R5CW900CHQD est `4.77e-7`. Les 12 cas de feuille lisse et les
 3 cas de reflexion du verre restent valides.
 
+## Relief heighttonormal et repere des normales
+
+`heighttonormal` reevalue le sous-graphe de hauteur aux quatre UV voisins dans
+les deux backends. Les differences centrales utilisent un pas d'un texel de la
+premiere texture amont, ou 1/1024 en UV pour un graphe sans texture. Le graphe
+amont, ses transformations UV et le repere `texcoord` explicite sont reevalues ;
+le facteur MaterialX `scale / 16` et l'encodage [0, 1] sont conserves.
+Le compute ne remplace plus le resultat par une normale plate.
+
+Cette approximation utilise le niveau de texture 0. Elle n'est pas un filtre
+Sobel 3x3 ni une reproduction exacte des differences entre fragments du GLSL
+MaterialX ; les details sous-pixel restent sujets a l'aliasing.
+
+`normalmap` utilise les trois vecteurs N, T et B, y compris une bitangente auteur,
+au lieu de reconstruire inconditionnellement B par `cross(N, T)`. Le signe du
+repere tangent est transporte en raster et dans le buffer PT (12 floats par
+triangle : trois tangentes vec4 avec le signe en w). Les transformations miroir
+du modele sont prises en compte. Le vecteur echantillonne nul retrouve la
+normale N, conformement a MaterialX. L'oracle CPU suit la meme convention et
+accepte aussi une echelle XY distincte.
+
+`tests/fixtures/heighttonormal-probe.ts` expose
+`runHeightToNormalProbe(device)` : 14 controles GPU verifient des hauteurs
+constantes, des rampes, une image bilineaire connue, une echelle nulle, des UV
+inverses ou degeneres, puis la conversion dans un repere monde tourne, avec les
+deux signes de bitangente. Ils ont reussi sur R5CW900CHQD avec une tolerance
+absolue de `2e-5`. Les 187 tests cibles du compilateur, des buffers PT et des
+shaders raster/PT passent, ainsi que `npm run typecheck`.
+
+```sh
+node scripts/run-shaderball-renders.mjs --entry /scenes/standard-shader-ball/openpbr-rva-standard-shader-ball.usda --target mobile --materials /surfaces/standard_surface/heighttonormal_normal_input --out-dir renders/shaderball-heighttonormal-final-validation --port 5198
+```
+
+Les controles standards a 256x256/16 spp et le controle distinct a 512x512/64 spp
+ont produit les deux images sans perte du device. Le relief est present en PT,
+mais le raster reste plus plat et les contours different de la reference :
+la fidelite visuelle complete n'est pas validee par les seuls tests de normales.
+L'orientation opaque face a la vue reste celle de
+`mx_forward_facing_normal` de MaterialX ; la retourner uniquement d'apres la
+normale geometrique cree des zones noires avec les fortes pentes de ce materiau
+et n'est pas une correction conforme a cet oracle.
+
 ## Dispersion et aspect rugueux
 
 La dispersion utilise une approximation RGB de `KHR_materials_dispersion` :

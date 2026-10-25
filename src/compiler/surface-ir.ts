@@ -134,7 +134,7 @@ export function lowerSurfaceInputsToIr(
     if (existing !== undefined) return existing;
     const lower = name.toLowerCase();
     const mapped = lower.startsWith('t') ? 'tangent' : lower.startsWith('b') ? 'bitangent' : 'normal';
-    const semantic = mapped === 'tangent' ? 'vector' : 'normal';
+    const semantic = mapped === 'normal' ? 'normal' : 'vector';
     const ref = builder.add({ kind: 'input', type: vector(3, 'float', semantic), name: mapped });
     geomMemo.set(name, ref);
     return ref;
