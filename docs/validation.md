@@ -243,6 +243,19 @@ Il est masqué en raster et pendant la compilation.
 Les tests d'entrée couvrent chargement, compilation PT en pause, échec de
 compilation et absence de WebGPU.
 
+## Contour gris de Simple shader ball
+
+Le contour gris en raster a ete reproduit sur PC. Un affichage de diagnostic
+des normales montre des normales de shading orientees derriere le plan de vue
+sur des faces geometriquement visibles, au bord du modele. Leur inversion
+brutale par l'orientation de la closure produisait la bande d'eclairage.
+Le fragment raster corrige maintenant ces normales de faces avant par reflexion
+continue dans l'hemisphere visible, avant l'orientation de la closure. Les
+faces arriere, notamment les interfaces de sortie du verre, gardent leur logique.
+Un essai GPU temporaire dans le navigateur a confirme la disparition de la
+bande ; la version deployee n'a pas ete modifiee. Tests raster/backend/viewer
+et compilation de production verifies. Cette correction est propre au raster.
+
 ## Chargement raster du playground simplifie
 
 Source locale : `D:\WebGL2\MaterialX\OpenPBRShaderPlayground\ShdrPlygrnd`,
