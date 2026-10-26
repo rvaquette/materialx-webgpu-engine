@@ -145,10 +145,10 @@ describe('assembleIrForwardShader (T058b)', () => {
     expect(shader.code).toContain('out.clip = fu.viewProj * world;');
     expect(shader.code).toContain('out.viewDir = normalize(fu.eye.xyz - worldPos);');
     expect(shader.code).toContain('@fragment');
-    expect(shader.code).toContain(`fn ${shader.fragmentEntry}(fin: MxVertexOut) -> @location(0) vec4f`);
+    expect(shader.code).toContain(`fn ${shader.fragmentEntry}(fin: MxVertexOut, @builtin(front_facing) frontFacing: bool) -> @location(0) vec4f`);
     expect(shader.code).toContain('var vary: MxVaryings;');
     expect(shader.code).toContain('vary.viewDir = normalize(fin.viewDir);');
-    expect(shader.code).toContain('let authoredNormal = mx_closure_shading_normal(c, vary.normal);');
+    expect(shader.code).toContain('var authoredNormal = mx_closure_shading_normal(c, vary.normal);');
     expect(shader.code).toContain('let n = mx_closure_oriented_normal(c, authoredNormal, vary.viewDir);');
   });
 
