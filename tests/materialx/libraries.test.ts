@@ -105,15 +105,27 @@ describe('MaterialXLibraries', () => {
     expect(content.importLibrary).toHaveBeenCalledWith(doc);
   });
 
-  it('uses a separate data library to avoid content-node / NodeDef name collisions', async () => {
-    const doc = makeDoc();
+  it('renames colliding authored nodes and rewires their downstream ports before import', async () => {
+    const doc = {
+      ...makeDoc(),
+      getChild: (name: string) => name === 'ND_colorcorrect_color3' ? { ...makeDoc(), getCategory: () => 'nodedef' } : null,
+    };
     const { core } = makeCore(doc);
     const libs = new MaterialXLibraries(core);
     await libs.load({ sources: [{ name: 'a', url: 'a' }], fetchText: async () => '<xml/>' });
-    const content = { ...makeDoc(), setDataLibrary: vi.fn() };
+    const port = { setNodeName: vi.fn() };
+    const node = {
+      ...makeDoc(), getName: () => 'ND_colorcorrect_color3', setName: vi.fn(),
+      getDownstreamPorts: () => [port],
+    };
+    const content = {
+      ...makeDoc(), getNodes: () => [node],
+      getChild: (name: string) => name === 'ND_colorcorrect_color3_content' ? makeDoc() : null,
+    };
     libs.importInto(content);
-    expect(content.setDataLibrary).toHaveBeenCalledWith(doc);
-    expect(content.importLibrary).not.toHaveBeenCalled();
+    expect(node.setName).toHaveBeenCalledWith('ND_colorcorrect_color3_content1');
+    expect(port.setNodeName).toHaveBeenCalledWith('ND_colorcorrect_color3_content1');
+    expect(content.importLibrary).toHaveBeenCalledWith(doc);
   });
 
   it('declares inherited exporter image signatures when loading stdlib', async () => {

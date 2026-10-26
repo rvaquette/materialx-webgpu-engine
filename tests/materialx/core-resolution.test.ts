@@ -54,8 +54,8 @@ describe.skipIf(!existsSync(coreFile) || !existsSync(libraryRoot))('installed Ma
       const build = await compiler.compile({
         assetPath: 'valid', materialName: 'material', referencedPrimPath: '/MaterialX/Materials/material', boundPrims: [],
       });
-      expect(build).toBeDefined();
       expect(diagnostics).toEqual([]);
+      expect(build).toBeDefined();
       const nodes = [...build!.graph!.nodes.values()];
       expect(nodes.map(node => [node.category, node.nodeDef?.name])).toContainEqual(['image', 'ND_engine_image_color3']);
       expect(nodes.find(node => node.category === 'colorcorrect')?.nodeDef?.inputs)

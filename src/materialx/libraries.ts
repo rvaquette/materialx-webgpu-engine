@@ -120,10 +120,20 @@ export class MaterialXLibraries {
     if (!this.libraryDoc) {
       throw new Error('MaterialXLibraries.importInto called before load().');
     }
-    // Keep definitions out of the content namespace (e.g. an authored node can
-    // itself be named ND_colorcorrect_color3).
-    if (target.setDataLibrary) target.setDataLibrary(this.libraryDoc);
-    else target.importLibrary(this.libraryDoc);
+    // importLibrary skips duplicate names. Rename authored shader nodes, not
+    // definitions, and keep every downstream connection intact.
+    for (const node of target.getNodes?.() ?? []) {
+      const name = node.getName();
+      if (this.libraryDoc.getChild?.(name)?.getCategory?.() !== 'nodedef') continue;
+      let newName = `${name}_content`;
+      for (let suffix = 1; target.getChild?.(newName) || this.libraryDoc.getChild?.(newName); suffix++) {
+        newName = `${name}_content${suffix}`;
+      }
+      const ports = node.getDownstreamPorts();
+      node.setName(newName);
+      for (const port of ports) port.setNodeName(newName);
+    }
+    target.importLibrary(this.libraryDoc);
   }
 
   /** Release the underlying library document. */

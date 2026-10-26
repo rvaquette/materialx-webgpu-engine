@@ -103,8 +103,9 @@ The scene `.mtlx` files use nodes **not present** in the `Materials/Examples`
 corpus inventoried in T002, notably **`geompropvalue`** (named-primvar lookup)
 and **`<UDIM>` tiled textures**. The 57 WGSL leaves from
 [materialx-node-coverage.md](materialx-node-coverage.md) are therefore a lower
-bound; `geompropvalue` and UDIM resolution must be added for the target scene
-(feeds T004 textures and T014/REQ-014 node coverage).
+bound. `geompropvalue` now supports the vector2 `st` / `UV0` UV stream in both
+renderers; arbitrary named primvars and UDIM resolution remain outside this
+coverage (T004 textures and T014/REQ-014 node coverage).
 
 ## 2. Loader comparison
 
@@ -183,9 +184,10 @@ silent path repair).
   `scripts/package-static.mjs`. Browser memory qualification remains a follow-up:
   the full simplified scene loads on PC but the mobile import currently fails
   (see [validation.md](validation.md#chargement-raster-du-playground-simplifie)).
-- **Node coverage gap** (§1.3): add `geompropvalue` and `<UDIM>` handling to
-  T014/REQ-014 and the texture system (T004). The simplified scene no longer
-  references UDIM or TIFF, but still emits graph-lowering warnings.
+- **Node coverage gap** (§1.3): vector2 `geompropvalue(st)` / `UV0` is lowered to
+  interpolated UVs. Other named properties emit a warning and use the declared
+  default. The simplified scene no longer references UDIM or TIFF; its 54
+  material documents now compile without material diagnostics in the Core test.
 - **Asset-root policy** (plan §8, T049 done): `textures/...` + `<UDIM>` paths and
   every composed layer require an explicit asset root served over HTTP(S) or via
   local selection; the browser cannot open `D:\` paths. The `AssetResolver` is
@@ -227,6 +229,19 @@ are decoded through the installed Three.js EXRLoader as float RGB, without LDR
 conversion, and resolved relative to their authoring light layer. This does not
 add TIFF/EXR support for arbitrary material textures or qualify subdivision and
 all MaterialX graph features.
+
+MaterialX libraries preserve authored connections when a shader node has the
+same name as a library NodeDef (for example `ND_colorcorrect_color3`): the
+in-memory shader node is renamed uniquely and its downstream ports are rewired
+before importing definitions. Source files are unchanged. Importing definitions
+without this step skips the colliding NodeDef; using a separate data library
+alone can instead shadow the connected node in Core name lookup.
+
+Exporter `image` signatures with vector2 `uvtiling`, `uvoffset`, `uv_scale` and
+`uv_offset` are declared as inherited standard-library signatures. Their UV
+mapping is `(uv * uvtiling - uvoffset) * uv_scale + uv_offset`, followed by the
+existing image-space V flip. Unknown inputs still produce unresolved-NodeDef
+diagnostics. Cameras and lights carrying primvars are not mesh prototypes.
 
 ## 5. Evidence log
 

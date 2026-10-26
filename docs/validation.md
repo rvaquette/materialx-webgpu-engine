@@ -279,6 +279,28 @@ préexistantes expliquent notamment pourquoi toutes les textures ne sont pas
 Subdivision, affectations par face et conformité visuelle globale ne sont pas
 qualifiées par cet essai.
 
+Correction des avertissements apres cette mesure :
+
+- `geompropvalue` vector2 `st` / `UV0` utilise maintenant les UV interpolees,
+  sans constante neutre ; meme IR en raster et path tracing.
+- Les signatures `image` exportees avec `uvtiling` sont declarees via heritage
+  de la bibliotheque standard et leur transformation UV est appliquee.
+- Une collision entre le noeud auteur `ND_colorcorrect_color3` et la definition
+  importee est resolue par renommage interne avec preservation des connexions.
+- Les cameras/lumieres portant des primvars ne deviennent plus des prototypes
+  de maillage, ce qui supprime leurs faux diagnostics de geometrie manquante.
+
+Le test `tests/materialx/core-resolution.test.ts` utilise le vrai Core WASM et
+les bibliotheques locales (`MX_CORE_DIR`, `MX_LIB_ROOT`) : il verifie une
+collision de noms, une image avec tiling, le maintien d'un diagnostic pour une
+entree inconnue, et la compilation des 54 documents du Playground sans
+diagnostic de materiau (`MX_PLAYGROUND_ROOT`). Ces tests sont ignores si les
+assets externes correspondants ne sont pas disponibles. Des tests IR numeriques
+verifient les UV et le tiling ; l'emission fragment/compute est couverte.
+Cette verification ne remplace pas une nouvelle qualification visuelle GPU de
+la scene complete : les temps et les 39 requetes ci-dessus sont ceux de la
+mesure precedente, avant correction.
+
 Sur SM-F731B / Adreno 740, essai raster en 256² : l'import a échoué avant le
 premier rendu, avec `Unterminated list` dans la géométrie exportée. Une tentative
 isolée d'export de la même crate a ensuite déclenché une exception native WASM.
