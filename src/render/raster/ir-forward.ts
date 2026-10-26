@@ -399,7 +399,7 @@ function fragmentStage(surfaceEntry: string, primvarNames: readonly string[], f:
     .map((name) => `  vary.v_${name} = fin.texcoord;`)
     .join('\n');
   return `@fragment
-fn ${IR_FORWARD_FRAGMENT_ENTRY}(fin: MxVertexOut) -> @location(0) vec4f {
+fn ${IR_FORWARD_FRAGMENT_ENTRY}(fin: MxVertexOut, @builtin(front_facing) frontFacing: bool) -> @location(0) vec4f {
   var vary: MxVaryings;
   vary.position = fin.worldPos;
   vary.normal = normalize(fin.worldNormal);
@@ -417,7 +417,13 @@ fn ${IR_FORWARD_FRAGMENT_ENTRY}(fin: MxVertexOut) -> @location(0) vec4f {
   vary.texcoord = fin.texcoord;${primvarAssigns ? '\n' + primvarAssigns : ''}
   let c = ${surfaceEntry}(vary);
   if (c.opacity <= 0.0) { discard; }
-  let authoredNormal = mx_closure_shading_normal(c, vary.normal);
+  var authoredNormal = mx_closure_shading_normal(c, vary.normal);
+  let facing = dot(authoredNormal, vary.viewDir);
+  // Smoothed front-face normals can cross the silhouette's viewing hemisphere.
+  // Reflect across its tangent plane continuously instead of flipping by 180 degrees.
+  if (frontFacing && facing < 0.0) {
+    authoredNormal = normalize(authoredNormal - 2.0 * facing * vary.viewDir);
+  }
   let n = mx_closure_oriented_normal(c, authoredNormal, vary.viewDir);
   let sframe = basis(n);
   let wo = transpose(sframe) * vary.viewDir;
