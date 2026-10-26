@@ -237,6 +237,9 @@ tracer, y compris en pause. Il disparaît lorsque la compilation se termine ou
 échoue. Le canvas expose également `aria-busy` ; l'animation respecte la préférence
 de réduction des mouvements. La ligne descriptive « Backend … objets … Glisser »
 n'est plus affichée. Une zone masquée au repos reste réservée aux erreurs.
+Le compteur `N spp` reste affiché dans la barre d'outils en path tracing après
+compilation, avec la mention `(pause)` lorsque l'accumulation est suspendue.
+Il est masqué en raster et pendant la compilation.
 Les tests d'entrée couvrent chargement, compilation PT en pause, échec de
 compilation et absence de WebGPU.
 

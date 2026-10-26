@@ -106,6 +106,11 @@ async function main(): Promise<void> {
   const viewerCallbacks: Pick<ConstructorParameters<typeof InteractiveViewer>[0], 'onStatus' | 'onShaderErrors'> = {
     onStatus: (s) => {
       if (deviceLost) return;
+      const spp = document.getElementById('pathtracing-spp');
+      if (spp) {
+        spp.hidden = s.backend !== 'pathtracing' || s.pathTracer !== 'ready';
+        spp.textContent = `${s.samples} spp${s.pathTracingPaused ? ' (pause)' : ''}`;
+      }
       shaderBusy = s.backend === 'pathtracing' && (s.pathTracer === 'idle' || s.pathTracer === 'compiling');
       showBusy(operationBusy || shaderBusy);
       if (s.backend === 'pathtracing' && s.pathTracer === 'error') {

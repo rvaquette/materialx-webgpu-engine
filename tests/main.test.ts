@@ -20,6 +20,7 @@ function element() {
 describe('viewer loading indicator', () => {
   const indicator = element();
   const status = element();
+  const spp = element();
   const canvas = { ...element(), getContext: () => ({ configure: vi.fn() }) };
   let finishLoad: () => void;
 
@@ -33,7 +34,7 @@ describe('viewer loading indicator', () => {
     canvas.setAttribute.mockClear();
     vi.stubGlobal('document', {
       baseURI: 'http://localhost/',
-      getElementById: (id: string) => ({ view: canvas, status, 'busy-indicator': indicator })[id],
+      getElementById: (id: string) => ({ view: canvas, status, 'busy-indicator': indicator, 'pathtracing-spp': spp })[id],
       querySelectorAll: () => [],
     });
     const device = { addEventListener: vi.fn(), lost: new Promise(() => {}) };
@@ -46,11 +47,11 @@ describe('viewer loading indicator', () => {
   afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
   const settle = () => new Promise(resolve => setTimeout(resolve, 0));
-  const emit = (pathTracer: ViewerStatus['pathTracer'], backend: ViewerStatus['backend'] = 'pathtracing') => {
+  const emit = (pathTracer: ViewerStatus['pathTracer'], backend: ViewerStatus['backend'] = 'pathtracing', samples = 0, paused = true) => {
     state.onStatus!({
-      backend, pathTracer, pathTracingPaused: true, rasterQuality: 'interactive',
+      backend, pathTracer, pathTracingPaused: paused, rasterQuality: 'interactive',
       pathTracingDenoise: false, denoiser: { state: 'off' }, drawCount: 2, passes: [],
-      samples: 0, warnings: 0,
+      samples, warnings: 0,
     });
   };
 
@@ -93,6 +94,25 @@ describe('viewer loading indicator', () => {
     expect(indicator.hidden).toBe(true);
     expect(status.hidden).toBe(false);
     expect(status.textContent).toContain('Echec de compilation');
+  });
+
+  it('shows live spp only for a ready path tracer and preserves its count in pause', async () => {
+    await import('../src/main.ts');
+    await settle();
+    emit('compiling');
+    expect(spp.hidden).toBe(true);
+    emit('ready', 'pathtracing', 8, false);
+    expect(spp.hidden).toBe(false);
+    expect(spp.textContent).toBe('8 spp');
+    emit('ready', 'pathtracing', 8);
+    expect(spp.textContent).toBe('8 spp (pause)');
+    emit('ready', 'pathtracing', 9, false);
+    expect(spp.textContent).toBe('9 spp');
+    emit('ready', 'raster');
+    expect(spp.hidden).toBe(true);
+    expect(status.hidden).toBe(true);
+    finishLoad();
+    await settle();
   });
 
   it('stops the initial indicator when WebGPU is unavailable', async () => {
