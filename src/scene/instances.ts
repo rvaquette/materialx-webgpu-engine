@@ -9,6 +9,7 @@
 import type { DiagnosticSink } from '../core/diagnostics.ts';
 import type { SceneMaterials } from '../usd/materials.ts';
 import type { SceneAsset, ScenePrim } from './types.ts';
+import { isMeshPrim } from './types.ts';
 import { composeXform, computeWorldTransforms, IDENTITY4, multiply4, type Mat4 } from './transforms.ts';
 
 export { composeXform, multiply4, IDENTITY4 };
@@ -45,7 +46,7 @@ export interface BuildSceneInstancesOptions {
 }
 
 function defaultIsRenderable(prim: ScenePrim): boolean {
-  return prim.mesh !== undefined || prim.typeName === 'Mesh';
+  return isMeshPrim(prim);
 }
 
 function internalPrototypeTarget(prim: ScenePrim, isRenderable: (p: ScenePrim) => boolean, prims: ReadonlyMap<string, ScenePrim>): ScenePrim | undefined {

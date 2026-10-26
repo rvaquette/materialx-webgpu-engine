@@ -17,6 +17,7 @@ import type {
   SceneAsset,
   ScenePrim,
 } from '../scene/types.ts';
+import { isMeshPrim } from '../scene/types.ts';
 
 export interface ResolvedBinding {
   /** Renderable prim (gprim) the material applies to. */
@@ -52,7 +53,7 @@ export interface ResolveSceneMaterialsOptions {
 }
 
 function defaultIsRenderable(prim: ScenePrim): boolean {
-  return prim.mesh !== undefined || prim.typeName === 'Mesh';
+  return isMeshPrim(prim);
 }
 
 const DEFAULT_STRENGTH: BindingStrength = 'weakerThanDescendants';

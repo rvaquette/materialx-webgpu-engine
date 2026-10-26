@@ -110,3 +110,8 @@ export interface SceneAsset {
   /** Every resolved MaterialX material reference across the stage. */
   materials: readonly MaterialXReference[];
 }
+
+export function isMeshPrim(prim: ScenePrim): boolean {
+  // Non-mesh USD schemas also carry primvars; those do not make them geometry.
+  return prim.typeName === 'Mesh' || (prim.typeName === undefined && prim.mesh !== undefined);
+}

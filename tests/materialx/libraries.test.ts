@@ -105,6 +105,29 @@ describe('MaterialXLibraries', () => {
     expect(content.importLibrary).toHaveBeenCalledWith(doc);
   });
 
+  it('uses a separate data library to avoid content-node / NodeDef name collisions', async () => {
+    const doc = makeDoc();
+    const { core } = makeCore(doc);
+    const libs = new MaterialXLibraries(core);
+    await libs.load({ sources: [{ name: 'a', url: 'a' }], fetchText: async () => '<xml/>' });
+    const content = { ...makeDoc(), setDataLibrary: vi.fn() };
+    libs.importInto(content);
+    expect(content.setDataLibrary).toHaveBeenCalledWith(doc);
+    expect(content.importLibrary).not.toHaveBeenCalled();
+  });
+
+  it('declares inherited exporter image signatures when loading stdlib', async () => {
+    const { core, read } = makeCore(makeDoc());
+    const libs = new MaterialXLibraries(core);
+    await libs.load({
+      sources: defaultLibrarySources('/lib', ['stdlib/stdlib_defs.mtlx']),
+      fetchText: async () => '<materialx/>',
+    });
+    expect(read).toHaveBeenCalledTimes(2);
+    expect(read.mock.calls[1]![1]).toContain('inherit="ND_image_vector3"');
+    expect(read.mock.calls[1]![1]).toContain('name="uvtiling" type="vector2"');
+  });
+
   it('throws if importInto is called before load', () => {
     const { core } = makeCore(makeDoc());
     const libs = new MaterialXLibraries(core);

@@ -82,6 +82,39 @@ function lowerAndEmit(
 }
 
 describe('lowerSurfaceInputsToIr (T055c)', () => {
+  it.each(['st', 'UV0'])('lowers geompropvalue(%s) to the interpolated UV stream', (name) => {
+    const diagnostics: Diagnostic[] = [];
+    const graph = surfaceGraph([conn('base_color', 'color3', 'color')], [
+      upstream('st', 'geompropvalue', 'vector2', [value('geomprop', 'string', name)]),
+      upstream('color', 'image', 'color3', [conn('texcoord', 'vector2', 'st'), value('uvtiling', 'vector2', '0.25, 1')]),
+    ]);
+    const { module } = lowerAndEmit(graph, [{ name: 'base_color', type: COLOR3 }], d => diagnostics.push(d));
+    expect(diagnostics).toEqual([]);
+    expect(module.code).toContain('vary.v_st');
+    expect(module.code).toContain('0.25');
+    expect(module.code).toContain('textureSample');
+    const builder = new IrModuleBuilder();
+    const lowered = lowerSurfaceInputsToIr(graph, resolveSurface(graph)!, builder);
+    builder.output({ name: 'color', type: COLOR3, ref: lowered.inputs.get('base_color')! });
+    const ir = builder.build();
+    expect(evaluateShaderIr(ir, {
+      texcoord: [0.8, 0.3], textures: { color: (u, v) => [u, v, 0, 1] },
+    }).get('color')).toEqual([0.2, 0.7, 0]);
+    expect(lowerExprs(ir, '', true).body.join('\n')).toContain('textureSampleLevel');
+  });
+
+  it('diagnoses unsupported geometry properties and preserves the authored default', () => {
+    const diagnostics: Diagnostic[] = [];
+    const graph = surfaceGraph([conn('specular', 'float', 'custom')], [
+      upstream('custom', 'geompropvalue', 'float', [
+        value('geomprop', 'string', 'missing'), value('default', 'float', '0.75'),
+      ]),
+    ]);
+    const { module } = lowerAndEmit(graph, [{ name: 'specular', type: FLOAT }], d => diagnostics.push(d));
+    expect(diagnostics).toEqual([expect.objectContaining({ message: expect.stringContaining("Unsupported geometry property 'missing'") })]);
+    expect(module.code).toContain('0.75');
+  });
+
   it('keeps integer NodeDef defaults typed and converts them at the WGSL helper boundary', () => {
     const noise = upstream('noise', 'fractal3d', 'float', [value('amplitude', 'float', '0.5')]);
     noise.nodeDef = {

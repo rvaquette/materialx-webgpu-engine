@@ -50,6 +50,17 @@ export const MATERIALX_DEFAULT_LIBRARY_FILES: readonly string[] = [
   'bxdf/disney_principled.mtlx',
 ];
 
+// Exporter image extensions are declared separately, without altering stdlib.
+const IMAGE_EXTENSION_DEFS = `<materialx version="1.39">
+${['float', 'color3', 'color4', 'vector2', 'vector3', 'vector4'].map(type => `
+  <nodedef name="ND_engine_image_${type}" node="image" inherit="ND_image_${type}">
+    <input name="uvtiling" type="vector2" value="1, 1" />
+    <input name="uvoffset" type="vector2" value="0, 0" />
+    <input name="uv_scale" type="vector2" value="1, 1" />
+    <input name="uv_offset" type="vector2" value="0, 0" />
+  </nodedef>`).join('')}
+</materialx>`;
+
 /** Build library sources from a root URL and a list of relative file paths. */
 export function defaultLibrarySources(
   rootUrl: string,
@@ -81,6 +92,9 @@ export class MaterialXLibraries {
           readXIncludes: true,
         });
       }
+      if (options.sources.some(source => source.name === 'stdlib/stdlib_defs.mtlx')) {
+        await this.core.readXmlString(doc, IMAGE_EXTENSION_DEFS, { readXIncludes: false });
+      }
 
     } catch (error) {
       doc.delete();
@@ -106,7 +120,10 @@ export class MaterialXLibraries {
     if (!this.libraryDoc) {
       throw new Error('MaterialXLibraries.importInto called before load().');
     }
-    target.importLibrary(this.libraryDoc);
+    // Keep definitions out of the content namespace (e.g. an authored node can
+    // itself be named ND_colorcorrect_color3).
+    if (target.setDataLibrary) target.setDataLibrary(this.libraryDoc);
+    else target.importLibrary(this.libraryDoc);
   }
 
   /** Release the underlying library document. */

@@ -45,6 +45,7 @@ export const SURFACE_IR_UPSTREAM: ReadonlySet<string> = new Set([
   ...TEXTURE_CATEGORIES,
   ...GLTF_TEXTURE_CATEGORIES,
   'convert',
+  'geompropvalue',
   'separate2',
   'separate3',
   'separate4',
@@ -239,8 +240,12 @@ export function lowerSurfaceInputsToIr(
       });
     }
     if (node.category === 'image') {
+      const tiling = authoredRef(nodeId, 'uvtiling', uvType);
+      const tileOffset = authoredRef(nodeId, 'uvoffset', uvType);
       const scale = authoredRef(nodeId, 'uv_scale', uvType);
       const offset = authoredRef(nodeId, 'uv_offset', uvType);
+      if (tiling !== undefined) uv = callRef('multiply', uvType, { in1: coerce(uv, uvType), in2: tiling });
+      if (tileOffset !== undefined) uv = callRef('subtract', uvType, { in1: coerce(uv, uvType), in2: tileOffset });
       if (scale !== undefined) uv = callRef('multiply', uvType, { in1: coerce(uv, uvType), in2: scale });
       if (offset !== undefined) uv = callRef('add', uvType, { in1: coerce(uv, uvType), in2: offset });
     }
@@ -381,6 +386,21 @@ export function lowerSurfaceInputsToIr(
       const raw = (input ? lowerInput(input) : undefined) ?? neutralColor();
       const source = coerce(raw, input ? irTypeFromMaterialX(input.type) ?? vector(size) : vector(size));
       ref = builder.add({ kind: 'swizzle', type: FLOAT, source, pattern: output.slice(3) });
+    } else if (node.category === 'geompropvalue') {
+      const property = node.inputs.find(input => input.name === 'geomprop');
+      const name = property?.source.kind === 'value' ? property.source.value : undefined;
+      if (node.type === 'vector2' && (name === 'st' || name === 'UV0')) {
+        ref = ensureUv();
+      } else {
+        sink({
+          level: 'warning',
+          message: `Unsupported geometry property '${name ?? '<dynamic>'}' (${node.type}) on '${nodeId}'; using its declared default.`,
+          detail: { nodeId, property: name, type: node.type },
+        });
+        const type = irTypeFromMaterialX(node.type) ?? FLOAT;
+        ref = authoredRef(nodeId, 'default', type)
+          ?? constOfIrType(builder, type, parseNumbers(node.nodeDef?.inputs?.find(input => input.name === 'default')?.value ?? '0'));
+      }
     } else if (TEXTURE_CATEGORIES.has(node.category)) {
       ref = lowerTexture(nodeId);
     } else if (GLTF_TEXTURE_CATEGORIES.has(node.category)) {

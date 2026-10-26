@@ -18,6 +18,7 @@ export interface MxElement extends MxObject {
 
 export interface MxDocument extends MxElement {
   importLibrary(library: MxDocument): void;
+  setDataLibrary?(library: MxDocument): void;
 }
 
 export interface MxReadOptions extends MxObject {

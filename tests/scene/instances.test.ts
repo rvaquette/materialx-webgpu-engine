@@ -58,6 +58,15 @@ describe('composeXform', () => {
 });
 
 describe('buildSceneInstances', () => {
+  it('does not treat primvars on cameras and lights as mesh geometry', () => {
+    const camera = prim('/camera', { typeName: 'Camera', mesh: { primvars: [] } });
+    const light = prim('/light', { typeName: 'DomeLight', mesh: { primvars: [] } });
+    const mesh = prim('/mesh', { typeName: 'Mesh', mesh: { primvars: [] } });
+    const result = buildSceneInstances(scene([camera, light, mesh], ['/camera', '/light', '/mesh']));
+    expect(result.prototypes.map(p => p.primPath)).toEqual(['/mesh']);
+    expect(result.instances).toHaveLength(1);
+  });
+
   it('accumulates ancestor transforms for a standalone mesh', () => {
     const world = prim('/World', { children: ['/World/mesh'], xformOps: [translateOp(1, 0, 0)] });
     const mesh = prim('/World/mesh', { typeName: 'Mesh', mesh: { primvars: [] }, xformOps: [translateOp(0, 2, 0)] });
