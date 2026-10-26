@@ -33,12 +33,16 @@ import {
 import type { PtImageProvider } from './pathtracing/device-bindings.ts';
 import { importCameras, type SceneCamera } from '../usd/cameras.ts';
 import { importLights, type SceneLight } from '../usd/lights.ts';
-import { importUsdStage, type UsdLayerReader } from '../usd/importer.ts';
+import type { UsdLayerReader } from '../usd/importer.ts';
 import { lowerPreviewSurfaceMaterials } from '../usd/preview-surface.ts';
 import type { RawMesh, Primvar, PrimvarInterpolation } from '../geometry/prepare.ts';
 import type { MaterialXReference, SceneAsset, ScenePrim } from '../scene/types.ts';
 import type { Diagnostic, DiagnosticSink } from '../core/diagnostics.ts';
 import { loadExternalMeshSource } from '../geometry/external-mesh.ts';
+import { composeStage } from '../usd/compose.ts';
+import { loadBrowserOpenUsd } from '../usd/browser-loader.ts';
+import { AssetResolver } from '../assets/resolver.ts';
+import type { OpenUsdModule } from '../usd/crate.ts';
 
 /** App-relative paths also work when dist/ is served below the workspace root. */
 const MATERIALX_ROOT = `${import.meta.env.BASE_URL}materialx/`;
@@ -96,13 +100,15 @@ export function meshSourceFromScene(scene: SceneAsset): MeshSource {
       const normalInterp = prim.attributes.get('normals')?.interpolation as PrimvarInterpolation | undefined;
       const normals: Primvar | undefined =
         normalValues.length > 0
-          ? { name: 'normals', interpolation: normalInterp ?? 'faceVarying', values: normalValues, elementSize: 3 }
+          ? { name: 'normals', interpolation: normalInterp ?? 'faceVarying', values: normalValues, elementSize: 3,
+            ...(prim.attributes.has('normals:indices') ? { indices: numArray(prim, 'normals:indices') } : {}) }
           : undefined;
       const stValues = numArray(prim, 'primvars:st');
       const stInterp = prim.attributes.get('primvars:st')?.interpolation as PrimvarInterpolation | undefined;
       const st: Primvar | undefined =
         stValues.length > 0
-          ? { name: 'st', interpolation: stInterp ?? 'faceVarying', values: stValues, elementSize: 2 }
+          ? { name: 'st', interpolation: stInterp ?? 'faceVarying', values: stValues, elementSize: 2,
+            ...(prim.attributes.has('primvars:st:indices') ? { indices: numArray(prim, 'primvars:st:indices') } : {}) }
           : undefined;
       return {
         points,
@@ -138,12 +144,16 @@ export interface MtlxSceneContext {
   surfaceFor: (material: MaterialResource) => RasterSurface;
 }
 
-function resolveMaterialImageUrls(text: string, directory: string): string {
+export function resolveMaterialTextureUrl(file: string, directory: string, textureRoot?: string): string {
+  return new URL(file, textureRoot ?? directory).href;
+}
+
+export function resolveMaterialImageUrls(text: string, directory: string, textureRoot?: string): string {
   const document = new DOMParser().parseFromString(text, 'application/xml');
   if (document.querySelector('parsererror')) throw new Error('Invalid MaterialX XML.');
   for (const input of document.querySelectorAll('[type="filename"][value]')) {
     const file = input.getAttribute('value');
-    if (file) input.setAttribute('value', new URL(file, new URL(directory, window.location.href)).href);
+    if (file) input.setAttribute('value', resolveMaterialTextureUrl(file, new URL(directory, window.location.href).href, textureRoot));
   }
   return new XMLSerializer().serializeToString(document);
 }
@@ -156,19 +166,20 @@ export async function loadMtlxSceneContext(
   entry: string,
   sink: DiagnosticSink,
   line: (m: string) => void = () => {},
+  textureRoot?: string,
 ): Promise<MtlxSceneContext> {
   const baseDir = dirOf(entry);
   const surfaces = new Map<string, RasterSurface>();
   const texts = new Map<string, string>();
   const materialDirs: string[] = [];
   for (const ref of scene.materials) {
-    const url = joinUrl(baseDir, ref.assetPath);
+    const url = new URL(ref.assetPath, new URL(ref.authoringLayer ?? entry, document.baseURI)).href;
     const dir = dirOf(url);
     if (!materialDirs.includes(dir)) materialDirs.push(dir);
     try {
       const response = await fetch(url);
       if (!response.ok) throw new Error(`HTTP ${response.status}: ${url}`);
-      const text = resolveMaterialImageUrls(await response.text(), dir);
+      const text = resolveMaterialImageUrls(await response.text(), dir, ref.authoringLayer ? textureRoot : undefined);
       texts.set(ref.assetPath, text);
       surfaces.set(ref.materialName, surfaceFromMtlx(text));
     } catch {
@@ -289,7 +300,22 @@ export async function loadEnvironment(
     try {
       const res = await fetch(url);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      return decodeHdr(new Uint8Array(await res.arrayBuffer()));
+      const bytes = await res.arrayBuffer();
+      if (/\.exr(?:[?#]|$)/i.test(url)) {
+        const [{ EXRLoader }, { FloatType }] = await Promise.all([
+          import('three/addons/loaders/EXRLoader.js'), import('three'),
+        ]);
+        const image = new EXRLoader().setDataType(FloatType).parse(bytes);
+        if (!(image.data instanceof Float32Array) || image.data.length !== image.width * image.height * 4) {
+          throw new Error(`Invalid RGBA float EXR environment: ${url}`);
+        }
+        const data = new Float32Array(image.width * image.height * 3);
+        for (let i = 0; i < image.width * image.height; i++) {
+          data.set(image.data.subarray(i * 4, i * 4 + 3), i * 3);
+        }
+        return { width: image.width, height: image.height, data };
+      }
+      return decodeHdr(new Uint8Array(bytes));
     } catch (e) {
       sink({ level: 'warning', message: `Failed to load envmap ${url}`, detail: String((e as Error)?.message ?? e) });
       return undefined;
@@ -343,23 +369,51 @@ export function applyObjectMaterialOverrides(
   return { ...scene, prims, materials };
 }
 
+export interface SceneLoadOptions {
+  /** Explicit root for scene-authored MaterialX texture paths, not runtime overrides. */
+  textureRoot?: string;
+  loadCrateModule?: () => Promise<OpenUsdModule>;
+}
+
 export async function loadUsdScene(
   entry: string,
   sink: DiagnosticSink,
   line: (m: string) => void = () => {},
   overrides: ReadonlyMap<string, ObjectMaterialOverride> = new Map(),
+  options: SceneLoadOptions = {},
 ): Promise<LoadedUsdScene> {
-  const reader = httpReader(entry);
-  const scene = applyObjectMaterialOverrides(await importUsdStage(entry, { reader, sink }), overrides);
+  const started = performance.now();
+  let failedComposition = false;
+  const sceneSink: DiagnosticSink = diagnostic => {
+    if (diagnostic.level === 'error') failedComposition = true;
+    sink(diagnostic);
+  };
+  const composed = await composeStage(entry, {
+    resolver: new AssetResolver({ rootUrl: dirOf(entry), onDiagnostic: sceneSink }),
+    source: { fetchBytes: async url => {
+      const response = await fetch(url);
+      if (!response.ok) throw new Error(`HTTP ${response.status} for ${url}`);
+      return new Uint8Array(await response.arrayBuffer());
+    } },
+    loadCrateModule: options.loadCrateModule ?? loadBrowserOpenUsd,
+    sink: sceneSink,
+  });
+  if (failedComposition) throw new Error('USD composition failed. See scene diagnostics.');
+  const scene = applyObjectMaterialOverrides(composed, overrides);
+  const composedAt = performance.now();
+  performance.measure('usd:composition', { start: started, end: composedAt });
   const lights = importLights(scene, { sink });
   const cameras = importCameras(scene, { sink });
-  const mtlx = await loadMtlxSceneContext(scene, entry, sink, line);
+  const mtlx = await loadMtlxSceneContext(scene, entry, sink, line, options.textureRoot);
+  const materialsAt = performance.now();
+  performance.measure('usd:materials', { start: composedAt, end: materialsAt });
   const resources = await buildSceneResources(scene, {
     meshSource: await loadExternalMeshSource(scene, meshSourceFromScene(scene), sink),
     materialCompiler: createGraphMaterialCompiler({ documents: mtlx.documents, sink }),
     sink,
   });
   const environment = await loadEnvironment(lights, entry, sink);
+  performance.measure('usd:resources', { start: materialsAt, end: performance.now() });
   return { entry, scene, resources, lights, cameras, mtlx, ...(environment ? { environment } : {}) };
 }
 

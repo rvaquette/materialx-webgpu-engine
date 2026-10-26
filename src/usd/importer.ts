@@ -85,9 +85,16 @@ function tokenize(source: string): Token[] {
         i += 3;
       } else {
         i += 1;
-        const start = i;
-        while (i < n && source[i] !== '"') i += 1;
-        tokens.push({ kind: 'string', value: source.slice(start, i) });
+        let value = '';
+        while (i < n && source[i] !== '"') {
+          if (source[i] === '\\' && i + 1 < n) {
+            i++;
+            const escaped = source[i]!;
+            value += escaped === 'n' ? '\n' : escaped === 't' ? '\t' : escaped;
+          } else value += source[i];
+          i++;
+        }
+        tokens.push({ kind: 'string', value });
         i += 1;
       }
       continue;
@@ -127,7 +134,8 @@ type RawValue =
   | { k: 'path'; v: string }
   | { k: 'ref'; asset?: string; path?: string }
   | { k: 'list'; items: RawValue[] }
-  | { k: 'tuple'; items: RawValue[] };
+  | { k: 'tuple'; items: RawValue[] }
+  | { k: 'dict'; entries: Map<string, RawValue> };
 
 interface LayerMetadata {
   defaultPrim?: string;
@@ -340,6 +348,7 @@ class Parser {
           this.parseRelationship(prim);
           return;
         }
+        if (words.filter(word => !['custom', 'uniform', 'varying', 'config'].includes(word)).length >= 2) break;
         // The member name is the last word; stop once an '=' or '(' follows.
         const nxt = this.peek();
         if (nxt && nxt.kind === 'punct' && (nxt.value === '=' || nxt.value === '(')) break;
@@ -370,6 +379,13 @@ class Parser {
       const value = this.parseValue();
       for (const r of toReferences(value)) if (r.primPath !== undefined) targets.push(r.primPath);
     }
+    if (this.peek()?.value === '(') {
+      const meta = this.parseInlineMetadata();
+      const s = meta.get('bindMaterialAs');
+      if (s) strength = asString(s);
+      const p = meta.get('materialPurpose') ?? meta.get('purpose');
+      if (p) purpose = asString(p);
+    }
     prim.relationships.set(name, {
       name,
       targets,
@@ -381,7 +397,9 @@ class Parser {
   private parseAttribute(prim: PrimSpec, words: string[]): void {
     // words = [...qualifiers, typeName, memberName]; typeName may carry [].
     if (words.length < 2) {
-      throw new UsdImportError(`Malformed attribute near '${words.join(' ')}' in ${this.uri}.`);
+      throw new UsdImportError(`Malformed attribute near '${words.join(' ')}' in ${this.uri}: ${
+        this.tokens.slice(Math.max(0, this.pos - 8), this.pos + 8).map(token => token.value).join(' ')
+      }`);
     }
     const name = words[words.length - 1]!;
     const typeName = words[words.length - 2]!;
@@ -461,6 +479,17 @@ class Parser {
     }
     if (t.kind === 'punct' && t.value === '[') return this.parseList(']');
     if (t.kind === 'punct' && t.value === '(') return this.parseList(')', true);
+    if (t.kind === 'punct' && t.value === '{') {
+      const entries = new Map<string, RawValue>();
+      while (this.peek()?.value !== '}') {
+        let key = this.next();
+        while (this.peek()?.value !== '=') key = this.next();
+        this.expectPunct('=');
+        entries.set(key.value, this.parseValue());
+      }
+      this.expectPunct('}');
+      return { k: 'dict', entries };
+    }
     // word: number, bool, or identifier
     if (t.value === 'true') return { k: 'bool', v: true };
     if (t.value === 'false') return { k: 'bool', v: false };
@@ -531,6 +560,7 @@ function toStringArray(v: AttributeValue): string[] {
 }
 
 function toAttributeValue(v: RawValue): AttributeValue {
+  if (v.k === 'dict') throw new UsdImportError('Dictionary-valued attributes are not supported.');
   if (v.k === 'str' || v.k === 'ident' || v.k === 'path') return v.k === 'ident' ? v.v : (v as { v: string }).v;
   if (v.k === 'num') return v.v;
   if (v.k === 'bool') return v.v;
@@ -557,6 +587,7 @@ function toAttributeValue(v: RawValue): AttributeValue {
 // --- Path resolution ---------------------------------------------------------
 
 function resolveRelative(baseUri: string, rel: string): string {
+  if (/^https?:\/\//i.test(baseUri)) return new URL(rel, baseUri).href;
   if (/^[a-z]+:\/\//i.test(rel) || rel.startsWith('/')) return rel;
   const slash = baseUri.lastIndexOf('/');
   const baseDir = slash >= 0 ? baseUri.slice(0, slash + 1) : '';
@@ -758,6 +789,7 @@ class Composer {
       this.comp.materials.push({
         primPath: path,
         assetPath: ref.assetPath,
+        authoringLayer: layerUri,
         referencedPrimPath: ref.primPath,
         materialName,
       });

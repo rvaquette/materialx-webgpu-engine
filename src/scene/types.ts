@@ -58,6 +58,8 @@ export interface MaterialBinding {
 }
 
 export interface MaterialXReference {
+  /** Layer that authored the asset reference; relative paths are anchored here. */
+  authoringLayer?: string;
   /** Path of the prim that carries the reference. */
   primPath: string;
   assetPath: string;

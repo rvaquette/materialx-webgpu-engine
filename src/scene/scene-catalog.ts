@@ -2,6 +2,7 @@
 export interface SceneCatalogEntry {
   label: string;
   entry: string;
+  textureRoot?: string;
 }
 
 export const SCENE_CATALOG: readonly SceneCatalogEntry[] = [
@@ -12,4 +13,9 @@ export const SCENE_CATALOG: readonly SceneCatalogEntry[] = [
   { label: 'Brick + metal mix', entry: './scenes/test_material_brick_metal_mix/test_material_brick_metal_mix.usda' },
   { label: 'Metal brushed', entry: './scenes/test_material_metal_brushed/test_material_metal_brushed.usda' },
   { label: 'Velvet', entry: './scenes/test_material_velvet/test_material_velvet.usda' },
+  ...(import.meta.env.DEV ? [{
+    label: 'OpenPBR Shader Playground (local)',
+    entry: './playground/ShdrPlygrnd_OpenPBR.usda',
+    textureRoot: './playground/',
+  }] : []),
 ];

@@ -47,4 +47,12 @@ for (const file of ['JsMaterialXCore.js', 'JsMaterialXCore.wasm']) {
 }
 cpSync(libraryRoot, join(materialxRoot, 'libraries'), { recursive: true });
 
+const openUsdRoot = join(projectRoot, 'node_modules', '@needle-tools', 'usd', 'src', 'bindings');
+const openUsdOutput = join(distRoot, 'openusd');
+mkdirSync(openUsdOutput, { recursive: true });
+for (const file of ['index.js', 'emHdBindings.js', 'emHdBindings.wasm', 'openusd-build-info.json']) {
+  requirePath(join(openUsdRoot, file), `OpenUSD ${file}`);
+  cpSync(join(openUsdRoot, file), join(openUsdOutput, file));
+}
+
 console.log(`Packaged static app: ${sceneNames.length} scenes + MaterialX Core and libraries into ${distRoot}`);

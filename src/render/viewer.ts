@@ -26,7 +26,7 @@ import { buildMaterialDispatch } from './pathtracing/material-variant.ts';
 import { buildPtDeviceBindings } from './pathtracing/device-bindings.ts';
 import { maxRecordLobes } from './pathtracing/material-record.ts';
 import type { DecodedPixelImage } from '../assets/images.ts';
-import { loadUsdScene, uploadMaterialTextures, type ObjectMaterialOverride } from './usd-scene-assets.ts';
+import { loadUsdScene, uploadMaterialTextures, type ObjectMaterialOverride, type SceneLoadOptions } from './usd-scene-assets.ts';
 import { OrbitCamera, attachOrbitControls } from '../scene/orbit-camera.ts';
 import { inverse4, lookAt4, multiply4, perspective4, type Vec3 } from '../scene/transforms.ts';
 import type { DiagnosticSink } from '../core/diagnostics.ts';
@@ -102,6 +102,8 @@ export class InteractiveViewer {
   #orbit: OrbitCamera;
   #current: SceneRender | null = null;
   #loaded: Awaited<ReturnType<typeof loadUsdScene>> | undefined;
+  #loadOptions: SceneLoadOptions = {};
+  #firstFrameStart: number | undefined;
   #sceneEntry: string | undefined;
   #materialOverrides = new Map<string, ObjectMaterialOverride>();
   #objects: ReadonlyArray<{ path: string; material: string; assetPath?: string }> = [];
@@ -173,7 +175,7 @@ export class InteractiveViewer {
     } else {
       overrides.delete(path);
     }
-    await this.load(this.#sceneEntry, overrides, true);
+    await this.load(this.#sceneEntry, overrides, true, this.#loadOptions);
   }
 
   get pathTracingPaused(): boolean {
@@ -238,12 +240,16 @@ export class InteractiveViewer {
     entry: string,
     overrides: ReadonlyMap<string, ObjectMaterialOverride> = new Map(),
     preserveCamera = false,
+    options: SceneLoadOptions = {},
   ): Promise<void> {
+    const loadStarted = performance.now();
     this.#warnings = 0;
     const sink: DiagnosticSink = (d) => {
       if (d.level === 'warning' || d.level === 'error') this.#warnings++;
+      if (d.level === 'error') console.error(d.message, d.detail ?? '');
+      else if (d.level === 'warning') console.warn(d.message, d.detail ?? '');
     };
-    const loaded = await loadUsdScene(entry, sink, () => { }, overrides);
+    const loaded = await loadUsdScene(entry, sink, () => { }, overrides, options);
     const exposure = loaded.cameras[0]?.exposure ?? 0;
     let frame: SceneFramePlan;
     let render: SceneRender;
@@ -276,8 +282,10 @@ export class InteractiveViewer {
       throw new Error('Viewer disposed during load.');
     }
     this.#current = render;
+    this.#firstFrameStart = loadStarted;
     this.#loaded?.mtlx.documents.delete();
     this.#loaded = loaded;
+    this.#loadOptions = options;
     this.#sceneEntry = entry;
     this.#materialOverrides = new Map(overrides);
     this.#objects = loaded.resources.instances.filter((instance) => instance.hasGeometry).map((instance) => {
@@ -367,8 +375,13 @@ export class InteractiveViewer {
         this.#emitStatus();
       }
       if (submitted) {
+        const firstFrameStart = this.#firstFrameStart;
+        this.#firstFrameStart = undefined;
         this.#framePending = true;
         void this.#device.queue.onSubmittedWorkDone().then(() => {
+          if (firstFrameStart !== undefined) {
+            performance.measure('viewer:first-frame', { start: firstFrameStart, end: performance.now() });
+          }
           if (pathTracingFrame) current.reportFrameTime(performance.now() - started);
           this.#framePending = false;
         }, (error: unknown) => {

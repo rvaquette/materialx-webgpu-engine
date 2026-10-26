@@ -27,6 +27,9 @@ const MATERIALX_CORE_DIR =
   'D:/WebGL2/MaterialX/MaterialX-rva/javascript/build/installed/JavaScript/MaterialX';
 const MATERIALX_LIB_ROOT =
   process.env['MX_LIB_ROOT'] ?? 'D:/WebGL2/MaterialX/MaterialX-rva/libraries';
+const PLAYGROUND_ROOT = process.env['MX_PLAYGROUND_ROOT'] ??
+  'D:\\WebGL2\\MaterialX\\OpenPBRShaderPlayground\\ShdrPlygrnd';
+const OPENUSD_ROOT = join('node_modules', '@needle-tools', 'usd', 'src', 'bindings');
 
 const MATERIALX_MIME: Record<string, string> = {
   '.js': 'application/javascript',
@@ -49,6 +52,18 @@ const materialxAssets = {
   }) {
     server.middlewares.use((req, res, next) => {
       const path = (req.url ?? '').split('?')[0] ?? '';
+      const externalRoot = path.startsWith('/openusd/') ? OPENUSD_ROOT
+        : path.startsWith('/playground/') ? PLAYGROUND_ROOT : undefined;
+      if (externalRoot) {
+        const prefix = path.startsWith('/openusd/') ? '/openusd/' : '/playground/';
+        const rel = decodeURIComponent(path.slice(prefix.length));
+        if (rel.split(/[\\/]/).some(part => part === '..') || rel.includes(':')) { next(); return; }
+        const file = join(externalRoot, rel);
+        if (!existsSync(file)) { next(); return; }
+        res.setHeader('Content-Type', MATERIALX_MIME[extname(file)] ?? 'application/octet-stream');
+        res.end(readFileSync(file));
+        return;
+      }
       if (!path.startsWith('/materialx/')) {
         next();
         return;

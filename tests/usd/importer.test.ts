@@ -94,6 +94,7 @@ def "Looks" {
     expect(asset.materials).toEqual([
       {
         primPath: '/Looks/floor',
+        authoringLayer: 'stage.usda',
         assetPath: './floor.mtlx',
         referencedPrimPath: '/MaterialX/Materials/floor',
         materialName: 'floor',

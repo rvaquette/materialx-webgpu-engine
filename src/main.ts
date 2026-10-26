@@ -245,7 +245,10 @@ async function main(): Promise<void> {
     setBusy(true);
     setStatus(`Chargement de ${entry}...`, false);
     try {
-      await viewer.load(new URL(entry, document.baseURI).href);
+      const config = SCENE_CATALOG.find(scene => scene.entry === entry);
+      await viewer.load(new URL(entry, document.baseURI).href, new Map(), false, {
+        ...(config?.textureRoot ? { textureRoot: new URL(config.textureRoot, document.baseURI).href } : {}),
+      });
       refreshObjects();
     } catch (e) {
       if (!deviceLost) setStatus(`Echec du chargement: ${(e as Error)?.message ?? e}`);
