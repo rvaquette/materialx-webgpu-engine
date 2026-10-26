@@ -113,6 +113,88 @@ de transmission et unité d'épaisseur thin-film. Une exécution isolée sur HEA
 n'a pas été autorisée ; leur préexistence n'est donc pas confirmée par un
 comparatif exécuté. Ces écarts restent hors du périmètre de cette optimisation.
 
+## Présentation progressive du path tracing
+
+Le viewer applique maintenant la même fonction d'affichage que le raster :
+exposition en EV, ACES filmique puis encodage sRGB. Cela corrige le rendu
+artificiellement sombre du précédent resolve Reinhard sans encodage sRGB.
+Cela ne rend pas identiques les intégrateurs raster et path tracing.
+
+### Aperçu et raffinement
+
+- Une première image complète est toujours calculée à résolution réduite, même
+  si la compilation se termine après l'arrêt des gestes.
+- Pendant les mouvements, la résolution est divisée par 2, 4 ou 8 sur chaque axe.
+  Le contrôleur part de 4 et ajuste après quatre mesures de complétion GPU, avec
+  une fenêtre d'hystérésis de 22–55 ms autour d'un budget indicatif de 40 ms.
+  Ces délais incluent la soumission et l'affichage ; ce ne sont pas des
+  timestamps matériels. Aucune cadence minimale n'est garantie.
+- La reconstruction bilinéaire remplace l'ancien agrandissement en gros pixels.
+  Après 200 ms sans changement de caméra, l'aperçu est conservé sur le GPU ;
+  seules les tuiles déjà calculées à pleine résolution le remplacent. L'aperçu
+  n'est jamais réutilisé après un changement de caméra ou de dimensions.
+- Le jitter des rayons caméra utilise une séquence Halton 2/3 décalée par pixel
+  pour mieux répartir les échantillons progressifs. Les tirages de transport
+  restent PCG, le nombre de rebonds et les modèles de matériaux sont inchangés.
+- La vraie CDF HDR est partagée avec le compute, au lieu du buffer factice d'un
+  seul élément précédemment fourni par le viewer à l'importance sampling.
+
+### Fond et débruitage
+
+Dans le viewer, le compute accumule séparément radiance de premier plan,
+normale/profondeur et couverture. Le panorama visible est échantillonné directement
+à la résolution de sortie, puis composé en HDR avec le premier plan. Il est net
+sans attendre les samples du fond, y compris durant la compilation initiale.
+La couverture Monte Carlo conserve les silhouettes et les événements d'opacité
+nulle ; les réflexions et réfractions continuent à transporter le véritable HDR.
+La convention de caméra de fond perspective décrite plus haut reste inchangée.
+
+Le contrôle **PT denoise (approx.)** active un filtre spatial de présentation
+5 × 5, guidé par normale, profondeur, couverture et luminance. Il évite de mélanger
+les silhouettes et les ruptures de géométrie, et son influence décroît au-delà
+de huit passages. Il peut néanmoins adoucir des détails de matériaux ou des
+reflets : c'est une approximation d'affichage, pas une nouvelle référence
+physique. Désactiver le contrôle montre l'accumulation brute, avec le même
+tonemapping et sans effacer ni modifier les samples. Le changement fonctionne
+aussi en pause, sans relancer le compute ni recompiler de pipeline.
+
+Les AOVs sont stockés avec la radiance dans le même buffer pour respecter les
+limites mobiles de bindings storage. Le viewer utilise 48 octets par pixel
+d'accumulation, plus un buffer d'aperçu d'au plus un quart du nombre de pixels
+(environ 60 Mio au total en 1024²). Le redimensionnement remplace ces deux buffers,
+sans reconstruire les données de scène ou les pipelines. Les harness de référence
+conservent par défaut leur layout de 16 octets par pixel et leur jitter antérieur :
+l'option `displayAovs` est activée explicitement par le viewer uniquement.
+
+### Vérifications de cette amélioration
+
+Sur le même SM-F731B / Adreno 740, tests GPU avec lecture des pixels :
+
+- écart maximal observé sur la mire de couleur constante par rapport au resolve
+  CPU : environ 0,00052 en sortie normalisée, sous le seuil de 2/255 ;
+- variance de la mire alternée plane après filtrage : 0,100 fois la variance
+  brute (environ 90 % de réduction), avec seuil requis inférieur à 0,65 ;
+- aucune fuite mesurée à travers la rupture normale/profondeur de la mire ;
+- fond et aperçu de secours vérifiés contre leurs couleurs CPU, sous 2/255.
+
+Ces résultats contrôlés ne sont pas une mesure du bruit sur tous les matériaux.
+Sur Simple shader ball en 512², les réaffichages en pause ont pris environ
+3,7–4,9 ms en brut et 4,6–5,1 ms filtrés pour la complétion de file, sans
+allocation ni compilation au basculement. Ce ne sont pas les durées d'une image
+path-tracée complète. Un mouvement prolongé a effectivement déclenché le passage
+de 128² à 64² pour l'aperçu ; le raffinement a conservé son buffer précédent.
+Le resize a alloué deux buffers, sans nouveau shader. Carpaint OpenPBR et verre
+dispersif glTF ont également compilé et progressé sur ce GPU, sans erreur
+WGSL/WebGPU observée. Le raffinement de Simple shader ball en 1024² a aussi
+atteint deux passages complets sans erreur GPU.
+
+Les tests couvrent également le partage du transform d'affichage, la séparation
+des layouts de référence/viewer, les bornes d'adaptation, la conservation de
+l'aperçu, son invalidation au resize, le débruitage en pause et la vraie CDF.
+Les cinq fichiers ciblés totalisent 70 tests réussis. Le typage et le build
+passent. La suite complète totalise 1350 succès, un test ignoré et les trois
+échecs du compilateur déjà observés avant cette amélioration, décrits plus haut.
+
 ## Audit de compilation des fichiers MaterialX
 
 `npm run audit:mtlx` parcourt les fichiers `.mtlx` du workspace, hors dependances,

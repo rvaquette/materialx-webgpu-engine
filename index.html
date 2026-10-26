@@ -131,6 +131,13 @@
         outline: 2px solid #91d5c4;
         outline-offset: 2px;
       }
+      #pathtracing-denoise-label {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        min-height: 44px;
+        cursor: pointer;
+      }
       #backend-mode button + button {
         border-left: 1px solid #3a3a44;
       }
@@ -169,6 +176,10 @@
           <span id="pathtracing-toggle-icon" aria-hidden="true">&#10074;&#10074;</span>
           <span id="pathtracing-toggle-label">Pause</span>
         </button>
+        <label id="pathtracing-denoise-label" for="pathtracing-denoise" title="Filtre spatial guidé par les normales et la profondeur. Approximation d'affichage uniquement ; désactiver pour voir l'accumulation brute.">
+          <input id="pathtracing-denoise" type="checkbox" checked />
+          PT denoise (approx.)
+        </label>
       </div>
       <details id="materials-panel">
         <summary>Matériaux</summary>

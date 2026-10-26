@@ -415,7 +415,7 @@ ${assigns.join('\n')}
   ].join('\n');
 }
 
-function wgslIntegrator(textures: boolean, dispatch: boolean, environment: boolean): string {
+function wgslIntegrator(textures: boolean, dispatch: boolean, environment: boolean, displayAovs: boolean): string {
   const envMiss = environment ? 'env_radiance(rd)' : 'U.env.xyz';
   const envNee = environment ? 'env_radiance(wiW)' : 'U.env.xyz';
   const texOverride = textures
@@ -484,7 +484,7 @@ fn mx_alpha_visibility(origin: vec3f, direction: vec3f) -> f32 {
   return 0.0;
 }
 
-fn integrate(ro0 : vec3<f32>, rd0 : vec3<f32>, backgroundDirection : vec3<f32>, state : ptr<function, u32>) -> vec3<f32> {
+fn integrate(ro0 : vec3<f32>, rd0 : vec3<f32>, backgroundDirection : vec3<f32>, state : ptr<function, u32>${displayAovs ? ', guide: ptr<function, vec4<f32>>' : ''}) -> vec3<f32> {
   var radiance = vec3<f32>(0.0);
   var beta = vec3<f32>(1.0);
   var ro = ro0;
@@ -534,6 +534,7 @@ fn integrate(ro0 : vec3<f32>, rd0 : vec3<f32>, backgroundDirection : vec3<f32>, 
       }
     }
     if (!hit.hitAny) {
+${displayAovs ? '      if (cameraSegment) { break; } // Visible dome is composited at display resolution.' : ''}
       // Environment reached by BSDF sampling; MIS-weight it against the env
       // next-event strategy unless the previous bounce was specular. Only the
       // separate fuzz/SH path has an analytically integrated environment term.
@@ -575,6 +576,9 @@ ${closureBuild}
       ro = pos + rd * RAY_EPS;
       continue;
     }
+${displayAovs ? `    if (cameraSegment) {
+      *guide = vec4<f32>(geometricNormal, max(distance(pos, ro0), 1e-6));
+    }` : ''}
     cameraSegment = false;
     if (mx_closure_has_dispersion(c) && spectralChannel == 3u) {
       spectralChannel = min(u32(rng_next(state) * 3.0), 2u);
@@ -718,7 +722,7 @@ ${
 `;
 }
 
-function wgslEntry(): string {
+function wgslEntry(displayAovs: boolean): string {
   return /* wgsl */ `
 struct MxCameraRay {
   origin: vec3<f32>,
@@ -744,6 +748,21 @@ fn camera_ray(px : vec2<f32>, dims : vec2<f32>, jitter : vec2<f32>) -> MxCameraR
   return ray;
 }
 
+${displayAovs ? `
+fn camera_jitter(index: u32, pixel: u32) -> vec2f {
+  var n = index + 1u;
+  var base3 = 0.0;
+  var place = 1.0 / 3.0;
+  while (n > 0u) {
+    base3 += f32(n % 3u) * place;
+    n /= 3u;
+    place /= 3.0;
+  }
+  let shift = vec2f(f32(pcg_hash(pixel)), f32(pcg_hash(pixel ^ 0x68bc21ebu))) * 2.3283064365386963e-10;
+  return fract(vec2f(f32(reverseBits(index + 1u)) * 2.3283064365386963e-10, base3) + shift);
+}
+` : ''}
+
 @compute @workgroup_size(${PT_WORKGROUP_SIZE}, ${PT_WORKGROUP_SIZE}, 1)
 fn ${PT_COMPUTE_ENTRY}(@builtin(global_invocation_id) gid : vec3<u32>) {
   let width = u32(U.frame.z);
@@ -761,10 +780,14 @@ fn ${PT_COMPUTE_ENTRY}(@builtin(global_invocation_id) gid : vec3<u32>) {
   // unbiased, > 0 tames glossy/env fireflies (hue-preserving down-scale).
   let fireflyMax = U.eye.w;
   var sample = vec3<f32>(0.0);
+${displayAovs ? '  var guideSum = vec4f(0.0);\n  var coverage = 0.0;' : ''}
   for (var i = 0u; i < spp; i = i + 1u) {
-    let jitter = vec2<f32>(rng_next(&state), rng_next(&state));
+    let jitter = ${displayAovs ? 'camera_jitter(frameIndex * spp + i, pixel)' : 'vec2<f32>(rng_next(&state), rng_next(&state))'};
     let ray = camera_ray(vec2<f32>(pixelCoord), dims, jitter);
-    var radiance = integrate(ray.origin, ray.direction, ray.backgroundDirection, &state);
+${displayAovs ? '    var guide = vec4f(0.0);' : ''}
+    var radiance = integrate(ray.origin, ray.direction, ray.backgroundDirection, &state${displayAovs ? ', &guide' : ''});
+${displayAovs ? `    guideSum += guide;
+    coverage += select(0.0, 1.0, guide.w > 0.0);` : ''}
     if (fireflyMax > 0.0) {
       let lum = dot(radiance, vec3<f32>(0.2126, 0.7152, 0.0722));
       if (lum > fireflyMax) { radiance = radiance * (fireflyMax / lum); }
@@ -774,10 +797,18 @@ fn ${PT_COMPUTE_ENTRY}(@builtin(global_invocation_id) gid : vec3<u32>) {
   sample = sample / f32(spp);
 
   // Progressive accumulation: running mean keyed by frame index.
-  let prev = accum[pixel];
+${displayAovs ? '  let outputPixel = pixel * 3u;' : ''}
+  let prev = accum[${displayAovs ? 'outputPixel' : 'pixel'}];
   let count = prev.w;
   let mean = (prev.xyz * count + sample) / (count + 1.0);
-  accum[pixel] = vec4<f32>(mean, count + 1.0);
+  accum[${displayAovs ? 'outputPixel' : 'pixel'}] = vec4<f32>(mean, count + 1.0);
+${displayAovs ? `  let oldCoverage = accum[outputPixel + 2u].x;
+  let hitCount = oldCoverage * count;
+  let hits = coverage / f32(spp);
+  if (hitCount + hits > 0.0) {
+    accum[outputPixel + 1u] = (accum[outputPixel + 1u] * hitCount + guideSum / f32(spp)) / (hitCount + hits);
+  }
+  accum[outputPixel + 2u] = vec4f((oldCoverage * count + hits) / (count + 1.0), 0.0, 0.0, 0.0);` : ''}
 }
 `;
 }
@@ -791,6 +822,8 @@ export function pathTraceComputeWgsl(
     environment?: boolean;
     /** LayeredClosure lobe capacity; must cover every variant and record (default PT_MAX_LOBES). */
     maxLobes?: number;
+    /** Viewer-only radiance/normal-depth/coverage records; reference layout stays unchanged. */
+    displayAovs?: boolean;
   } = {},
 ): string {
   const textures = options.textures ?? false;
@@ -809,8 +842,8 @@ export function pathTraceComputeWgsl(
     wgslClosureSurface(textures, maxLobes),
     ...(varyings !== undefined ? [wgslVaryings(varyings)] : []),
     ...(dispatch !== undefined ? [wgslDispatch(dispatch)] : []),
-    wgslIntegrator(textures, dispatch !== undefined, environment),
-    wgslEntry(),
+    wgslIntegrator(textures, dispatch !== undefined, environment, options.displayAovs ?? false),
+    wgslEntry(options.displayAovs ?? false),
   ].join('\n');
 }
 

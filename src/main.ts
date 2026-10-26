@@ -16,7 +16,7 @@ function setStatus(text: string): void {
 
 function formatStatus(s: ViewerStatus): string {
   const pt = s.pathTracer === 'compiling' ? ', compilation du path tracer...' : s.pathTracer === 'error' ? ', échec du path tracer' : '';
-  const extra = s.backend === 'pathtracing' ? `${pt || `, ${s.samples} spp`}${s.pathTracingPaused ? ' (pause)' : ''}`
+  const extra = s.backend === 'pathtracing' ? `${pt || `, ${s.samples} spp`}${s.pathTracingPaused ? ' (pause)' : ''}${s.pathTracingDenoise ? ', débruitage (approximation)' : ', brut sans débruitage'}`
     : s.rasterQuality === 'interactive' ? ', IBL filtrée 16 échantillons (approximation)' : ', référence 64 échantillons MIS';
   const note = s.warnings ? ` (${s.warnings} diagnostic(s))` : '';
   return `Backend ${s.backend}: ${s.drawCount} object(s), passes [${s.passes.join(', ')}]${extra}${note}. ` +
@@ -78,6 +78,7 @@ async function main(): Promise<void> {
   const select = document.getElementById('scene') as HTMLSelectElement | null;
   const resolution = document.getElementById('resolution') as HTMLSelectElement | null;
   const rasterQuality = document.getElementById('raster-quality') as HTMLSelectElement | null;
+  const ptDenoise = document.getElementById('pathtracing-denoise') as HTMLInputElement | null;
   const objectSelect = document.getElementById('material-object') as HTMLSelectElement | null;
   const materialSelect = document.getElementById('material-file') as HTMLSelectElement | null;
   const materialFilter = document.getElementById('material-filter') as HTMLInputElement | null;
@@ -130,6 +131,7 @@ async function main(): Promise<void> {
       setStatus('GPU perdu, réinitialisation...');
       const backend = viewer.backend;
       const quality = viewer.rasterQuality;
+      const denoise = viewer.pathTracingDenoise;
       viewer.dispose();
       const next = await requestGpu();
       if (!next) {
@@ -143,6 +145,7 @@ async function main(): Promise<void> {
       viewContext.configure({ device: next.device, format: outputFormat, alphaMode: 'opaque' });
       viewer = new InteractiveViewer({ device: next.device, context: viewContext, outputFormat, canvas: viewCanvas, ...viewerCallbacks });
       await viewer.setRasterQuality(quality);
+      viewer.setPathTracingDenoise(denoise);
       viewer.setBackend(backend);
       deviceLost = false;
       watchDevice(next.device);
@@ -156,11 +159,13 @@ async function main(): Promise<void> {
     viewer.setPathTracingPaused(!viewer.pathTracingPaused);
     updatePathTracingToggle(viewer.backend, viewer.pathTracingPaused);
   });
+  ptDenoise?.addEventListener('change', () => viewer.setPathTracingDenoise(ptDenoise.checked));
 
   function setBusy(busy: boolean): void {
     if (select) select.disabled = busy;
     if (resolution) resolution.disabled = busy;
     if (rasterQuality) rasterQuality.disabled = busy;
+    if (ptDenoise) ptDenoise.disabled = busy;
     if (materialControls) materialControls.disabled = busy || viewer.objects.length === 0;
   }
 

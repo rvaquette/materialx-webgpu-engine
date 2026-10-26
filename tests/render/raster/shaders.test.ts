@@ -7,7 +7,8 @@ describe('tonemapResolveWgsl', () => {
     expect(code).toContain('@vertex');
     expect(code).toContain('@fragment');
     expect(code).toContain('textureSample(hdrTex');
-    expect(code).toContain('exp2(r.exposure)');
+    expect(code).toContain('display_color(hdr, r.exposure)');
+    expect(code).toContain('exp2(exposure)');
     expect(code).toContain('fn srgb');
   });
 

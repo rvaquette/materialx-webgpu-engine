@@ -6,6 +6,8 @@ import { generateEnvironmentMipmaps } from '../../src/render/env/mipmaps.ts';
 import { buildSceneResources } from '../../src/render/scene-resources.ts';
 import { importUsdStage } from '../../src/usd/importer.ts';
 import { NEUTRAL_SURFACE } from '../../src/render/raster/scene-frame.ts';
+import { projectIrradianceSH } from '../../src/render/env/irradiance.ts';
+import { buildEnvCdf } from '../../src/assets/environment-cdf.ts';
 
 vi.mock('../../src/render/usd-scene-assets.ts', async (original) => ({
   ...await original<typeof import('../../src/render/usd-scene-assets.ts')>(),
@@ -20,6 +22,7 @@ function fakeDevice() {
   const pass = {
     setPipeline: vi.fn(), setBindGroup: vi.fn(), setVertexBuffer: vi.fn(), setIndexBuffer: vi.fn(),
     setScissorRect: vi.fn(), drawIndexed: vi.fn(), draw: vi.fn(), end: vi.fn(),
+    dispatchWorkgroups: vi.fn(),
   };
   const textures: Array<{ destroy: ReturnType<typeof vi.fn> }> = [];
   const device = {
@@ -31,9 +34,13 @@ function fakeDevice() {
     }),
     createShaderModule: vi.fn(() => ({ getCompilationInfo: async () => ({ messages: [] }) })),
     createRenderPipeline: vi.fn(() => ({ getBindGroupLayout: vi.fn(() => ({})) })),
-    createBindGroup: vi.fn(() => ({})),
+    createComputePipelineAsync: vi.fn(async () => ({ getBindGroupLayout: vi.fn(() => ({})) })),
+    createBindGroup: vi.fn((_desc: GPUBindGroupDescriptor) => ({})),
     createSampler: vi.fn(() => ({})),
-    createCommandEncoder: vi.fn(() => ({ beginRenderPass: vi.fn(() => pass), finish: vi.fn(() => ({})) })),
+    createCommandEncoder: vi.fn(() => ({
+      beginRenderPass: vi.fn(() => pass), beginComputePass: vi.fn(() => pass),
+      clearBuffer: vi.fn(), copyBufferToBuffer: vi.fn(), finish: vi.fn(() => ({})),
+    })),
     queue: {
       writeBuffer: vi.fn(), writeTexture: vi.fn(), submit: vi.fn(),
       onSubmittedWorkDone: vi.fn(async () => {}),
@@ -98,14 +105,20 @@ describe('interactive viewer resource lifecycle', () => {
 
   beforeEach(() => {
     vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => { tick = callback; return 1; });
-    vi.stubGlobal('GPUBufferUsage', { VERTEX: 1, INDEX: 2, COPY_DST: 4, UNIFORM: 8, STORAGE: 16 });
+    vi.stubGlobal('GPUBufferUsage', { VERTEX: 1, INDEX: 2, COPY_DST: 4, UNIFORM: 8, STORAGE: 16, COPY_SRC: 32 });
     vi.stubGlobal('GPUTextureUsage', { TEXTURE_BINDING: 1, COPY_DST: 2, RENDER_ATTACHMENT: 4 });
     vi.mocked(buildPathTraceScene).mockReset();
   });
   afterEach(() => { viewer?.dispose(); vi.unstubAllGlobals(); });
 
-  async function setup() {
+  async function setup(environment = false) {
     const loaded = await sceneFixture();
+    if (environment) {
+      const image = { width: 4, height: 2, data: new Float32Array(24).fill(1) };
+      loaded.environment = {
+        image, sh: projectIrradianceSH(image), averageRadiance: [1, 1, 1], tint: [1, 1, 1], intensity: 1,
+      };
+    }
     vi.mocked(loadUsdScene).mockResolvedValue(loaded);
     const mock = fakeDevice();
     const canvas = {
@@ -169,6 +182,69 @@ describe('interactive viewer resource lifecycle', () => {
       expect(buildPathTraceScene).toHaveBeenCalledTimes(1);
       expect(error).toHaveBeenCalledWith('Path tracer: test preparation');
     } finally { error.mockRestore(); }
+  });
+
+  it('keeps the preview while refining tiles, redraws denoise while paused and resizes without recompilation', async () => {
+    const actual = await vi.importActual<typeof import('../../src/render/pathtracing/scene-buffers.ts')>(
+      '../../src/render/pathtracing/scene-buffers.ts');
+    vi.mocked(buildPathTraceScene).mockImplementation(actual.buildPathTraceScene);
+    const { viewer, device, pass } = await setup();
+    viewer.setBackend('pathtracing');
+    tick(0);
+    await new Promise(r => setTimeout(r, 20));
+    await Promise.resolve();
+    expect(device.createComputePipelineAsync).toHaveBeenCalledTimes(1);
+    device.createCommandEncoder.mockClear();
+    tick(1);
+    await Promise.resolve();
+    const previewDispatch = pass.dispatchWorkgroups.mock.calls.at(-1);
+    expect(previewDispatch).toEqual([16, 16, 1]); // 512 / 4 / workgroup 8
+    await new Promise(r => setTimeout(r, 220));
+    tick(2);
+    await Promise.resolve();
+    const refinement = device.createCommandEncoder.mock.results.at(-1)!.value;
+    expect(refinement.copyBufferToBuffer).toHaveBeenCalledWith(expect.anything(), 0, expect.anything(), 0, 128 * 128 * 48);
+    const shaders = device.createShaderModule.mock.calls.length;
+    const dispatches = pass.dispatchWorkgroups.mock.calls.length;
+    viewer.setPathTracingPaused(true);
+    viewer.setPathTracingDenoise(false);
+    tick(3);
+    await Promise.resolve();
+    expect(pass.dispatchWorkgroups).toHaveBeenCalledTimes(dispatches);
+    expect(viewer.pathTracingDenoise).toBe(false);
+    const writes = device.queue.writeBuffer.mock.calls;
+    const displayInfo = [...writes].reverse().find((call) => call[2] instanceof ArrayBuffer)?.[2] as ArrayBuffer;
+    expect(new Uint32Array(displayInfo)[3]).toBe(0);
+    const copyCalls = device.createCommandEncoder.mock.results.reduce((sum, result) =>
+      sum + result.value.copyBufferToBuffer.mock.calls.length, 0);
+    await viewer.resize(256);
+    expect(device.createShaderModule).toHaveBeenCalledTimes(shaders);
+    expect(device.createComputePipelineAsync).toHaveBeenCalledTimes(1);
+    viewer.setPathTracingPaused(false);
+    tick(4);
+    await Promise.resolve();
+    expect(device.createCommandEncoder.mock.results.reduce((sum, result) =>
+      sum + result.value.copyBufferToBuffer.mock.calls.length, 0)).toBe(copyCalls);
+  });
+
+  it('shares the real HDR CDF with the path tracer and keeps its sampling metadata', async () => {
+    const actual = await vi.importActual<typeof import('../../src/render/pathtracing/scene-buffers.ts')>(
+      '../../src/render/pathtracing/scene-buffers.ts');
+    vi.mocked(buildPathTraceScene).mockImplementation(actual.buildPathTraceScene);
+    const { viewer, device, loaded } = await setup(true);
+    viewer.setBackend('pathtracing');
+    tick(0);
+    await new Promise(r => setTimeout(r, 20));
+    const expected = buildEnvCdf(loaded.environment!.image);
+    const upload = device.queue.writeBuffer.mock.calls.find(call =>
+      call[2] instanceof Float32Array && call[2].length === 8 && call[2][7] === expected.cdf[7]);
+    expect(upload).toBeDefined();
+    const cdfBuffer = upload![0];
+    expect(device.createBindGroup.mock.calls.some(([desc]) =>
+      Array.from(desc.entries).some(entry => entry.binding === 2 && 'buffer' in entry.resource && entry.resource.buffer === cdfBuffer))).toBe(true);
+    const scene = vi.mocked(buildPathTraceScene).mock.results[0]!.value;
+    expect(scene.environment.envTotalSum).toBe(expected.totalSum);
+    expect(scene.environment.envResX).toBe(4);
   });
 
   it('retains old targets on allocation failure and destroys replaced targets', async () => {

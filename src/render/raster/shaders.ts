@@ -17,6 +17,21 @@ function tonemapExpr(op: Tonemap): string {
   }
 }
 
+/** Shared display transform; inputs are linear HDR, outputs are encoded sRGB. */
+export function displayTransformWgsl(op: Tonemap): string {
+  return `
+fn srgb(c : vec3<f32>) -> vec3<f32> {
+  let lo = c * 12.92;
+  let hi = 1.055 * pow(c, vec3<f32>(1.0 / 2.4)) - 0.055;
+  return select(hi, lo, c <= vec3<f32>(0.0031308));
+}
+fn display_color(hdr: vec3<f32>, exposure: f32) -> vec3<f32> {
+  var c = max(hdr, vec3<f32>(0.0)) * exp2(exposure);
+  c = ${tonemapExpr(op)};
+  return srgb(clamp(c, vec3<f32>(0.0), vec3<f32>(1e8)));
+}`;
+}
+
 /**
  * Fullscreen resolve pass. Vertex stage emits a single covering triangle;
  * fragment stage samples the linear HDR target, applies exposure and the chosen
@@ -44,17 +59,11 @@ fn vs_main(@builtin(vertex_index) vid : u32) -> VsOut {
   return out;
 }
 
-fn srgb(c : vec3<f32>) -> vec3<f32> {
-  let lo = c * 12.92;
-  let hi = 1.055 * pow(c, vec3<f32>(1.0 / 2.4)) - 0.055;
-  return select(hi, lo, c <= vec3<f32>(0.0031308));
-}
+${displayTransformWgsl(op)}
 
 @fragment
 fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
   let hdr = textureSample(hdrTex, hdrSampler, vec2<f32>(in.uv.x, 1.0 - in.uv.y)).rgb;
-  var c = hdr * exp2(r.exposure);
-  c = ${tonemapExpr(op)};
-  return vec4<f32>(srgb(clamp(c, vec3<f32>(0.0), vec3<f32>(1e8))), 1.0);
+  return vec4<f32>(display_color(hdr, r.exposure), 1.0);
 }`;
 }
