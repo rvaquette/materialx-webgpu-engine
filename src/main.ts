@@ -5,27 +5,26 @@
 // on the SAME imported resources (no reimport on backend switch). Loading a new
 // scene disposes the previous GPU state and rebuilds both backends.
 
-import { InteractiveViewer, type ViewerStatus } from './render/viewer.ts';
+import { InteractiveViewer } from './render/viewer.ts';
 import { SCENE_CATALOG } from './scene/scene-catalog.ts';
 import { MATERIAL_CATALOG } from './scene/material-catalog.ts';
 
-function setStatus(text: string): void {
-  const el = document.getElementById('status');
-  if (el) el.textContent = text;
+let statusIsError = false;
+
+function showBusy(busy: boolean): void {
+  const indicator = document.getElementById('busy-indicator');
+  if (indicator) indicator.hidden = !busy;
+  document.getElementById('view')?.setAttribute('aria-busy', String(busy));
 }
 
-function formatStatus(s: ViewerStatus): string {
-  const pt = s.pathTracer === 'compiling' ? ', compilation du path tracer...' : s.pathTracer === 'error' ? ', échec du path tracer' : '';
-  const denoiser = s.denoiser.state === 'off' ? ', brut'
-    : s.denoiser.state === 'running' ? ', denoiser JS : chargement / calcul...'
-    : s.denoiser.state === 'error' ? `, échec denoiser JS : ${s.denoiser.error}`
-    : s.denoiser.state === 'ready' ? ', denoiser JS (neuronal, approximation)'
-    : ', denoiser JS : attente d’un passage complet';
-  const extra = s.backend === 'pathtracing' ? `${pt || `, ${s.samples} spp`}${s.pathTracingPaused ? ' (pause)' : ''}${denoiser}`
-    : s.rasterQuality === 'interactive' ? ', IBL filtrée 16 échantillons (approximation)' : ', référence 64 échantillons MIS';
-  const note = s.warnings ? ` (${s.warnings} diagnostic(s))` : '';
-  return `Backend ${s.backend}: ${s.drawCount} object(s), passes [${s.passes.join(', ')}]${extra}${note}. ` +
-    'Glisser pour orbiter, molette pour zoomer.';
+function setStatus(text: string, error = true): void {
+  statusIsError = error && text.length > 0;
+  const el = document.getElementById('status');
+  if (el) {
+    el.textContent = text;
+    el.hidden = !statusIsError;
+  }
+  if (statusIsError) showBusy(false);
 }
 
 function populateSelector(select: HTMLSelectElement): void {
@@ -91,6 +90,8 @@ async function main(): Promise<void> {
   if (select) populateSelector(select);
   const backendButtons = Array.from(document.querySelectorAll<HTMLButtonElement>('#backend-mode button[data-backend]'));
   const pathTracingToggle = document.getElementById('pathtracing-toggle') as HTMLButtonElement | null;
+  let operationBusy = false;
+  let shaderBusy = false;
 
   function updatePathTracingToggle(backend: string, paused: boolean): void {
     if (!pathTracingToggle) return;
@@ -105,7 +106,13 @@ async function main(): Promise<void> {
   const viewerCallbacks: Pick<ConstructorParameters<typeof InteractiveViewer>[0], 'onStatus' | 'onShaderErrors'> = {
     onStatus: (s) => {
       if (deviceLost) return;
-      setStatus(formatStatus(s));
+      shaderBusy = s.backend === 'pathtracing' && (s.pathTracer === 'idle' || s.pathTracer === 'compiling');
+      showBusy(operationBusy || shaderBusy);
+      if (s.backend === 'pathtracing' && s.pathTracer === 'error') {
+        setStatus('Echec de compilation du path tracer. Consulter les erreurs WGSL.');
+      } else if (s.backend === 'pathtracing' && s.denoiser.state === 'error') {
+        setStatus(`Echec denoiser JS : ${s.denoiser.error}`);
+      }
       updatePathTracingToggle(s.backend, s.pathTracingPaused);
     },
     onShaderErrors: (errors) => {
@@ -133,7 +140,7 @@ async function main(): Promise<void> {
         setStatus(`GPU perdu (${info.message || info.reason}). Recharger la page.`);
         return;
       }
-      setStatus('GPU perdu, réinitialisation...');
+      setStatus('GPU perdu, réinitialisation...', false);
       const backend = viewer.backend;
       const quality = viewer.rasterQuality;
       const denoise = viewer.pathTracingDenoise;
@@ -167,6 +174,10 @@ async function main(): Promise<void> {
   ptDenoise?.addEventListener('change', () => viewer.setPathTracingDenoise(ptDenoise.checked));
 
   function setBusy(busy: boolean): void {
+    operationBusy = busy;
+    if (busy) setStatus('', false);
+    else if (!statusIsError) setStatus('', false);
+    showBusy(!statusIsError && (operationBusy || shaderBusy));
     if (select) select.disabled = busy;
     if (resolution) resolution.disabled = busy;
     if (rasterQuality) rasterQuality.disabled = busy;
@@ -213,7 +224,7 @@ async function main(): Promise<void> {
   materialSelect?.addEventListener('change', async () => {
     if (!objectSelect) return;
     setBusy(true);
-    setStatus('Compilation du matériau...');
+    setStatus('Compilation du matériau...', false);
     try {
       await viewer.setObjectMaterial(objectSelect.value, materialSelect.value || undefined);
       refreshObjects();
@@ -227,7 +238,7 @@ async function main(): Promise<void> {
 
   async function loadEntry(entry: string): Promise<void> {
     setBusy(true);
-    setStatus(`Chargement de ${entry}...`);
+    setStatus(`Chargement de ${entry}...`, false);
     try {
       await viewer.load(new URL(entry, document.baseURI).href);
       refreshObjects();
@@ -242,7 +253,7 @@ async function main(): Promise<void> {
   rasterQuality?.addEventListener('change', async () => {
     const previous = viewer.rasterQuality;
     setBusy(true);
-    setStatus('Compilation du profil raster...');
+    setStatus('Compilation du profil raster...', false);
     try {
       const quality = rasterQuality.value;
       if (quality !== 'interactive' && quality !== 'reference') throw new Error('Unsupported raster quality.');
@@ -281,4 +292,7 @@ async function main(): Promise<void> {
   await loadEntry(SCENE_CATALOG[0]!.entry);
 }
 
-void main();
+void main().catch((error: unknown) => {
+  console.error('Viewer initialization failed:', error);
+  setStatus(`Echec de l'initialisation : ${error instanceof Error ? error.message : String(error)}`);
+});

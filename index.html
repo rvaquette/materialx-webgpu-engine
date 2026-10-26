@@ -34,6 +34,26 @@
         padding: 8px 12px;
         font-size: 13px;
       }
+      #busy-indicator {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 13px;
+      }
+      #busy-indicator[hidden] { display: none; }
+      #busy-indicator::before {
+        content: "";
+        width: 14px;
+        height: 14px;
+        border: 2px solid #3a3a44;
+        border-top-color: #91d5c4;
+        border-radius: 50%;
+        animation: busy-spin 0.8s linear infinite;
+      }
+      @keyframes busy-spin { to { transform: rotate(360deg); } }
+      @media (prefers-reduced-motion: reduce) {
+        #busy-indicator::before { animation: none; }
+      }
       #toolbar {
         display: flex;
         flex-wrap: wrap;
@@ -154,6 +174,7 @@
   <body>
     <div id="app">
       <div id="toolbar">
+        <span id="busy-indicator" role="status" aria-live="polite">Chargement / compilation...</span>
         <label for="scene">Scene</label>
         <select id="scene"></select>
         <label for="resolution">Resolution</label>
@@ -193,8 +214,8 @@
         <summary>Erreurs WGSL (<span id="shader-error-count" aria-live="polite">0</span>)</summary>
         <pre id="shader-errors">Aucune erreur WGSL.</pre>
       </details>
-      <div id="status">Initializing…</div>
-      <canvas id="view" width="512" height="512"></canvas>
+      <div id="status" role="alert" hidden></div>
+      <canvas id="view" width="512" height="512" aria-busy="true"></canvas>
     </div>
     <script type="module" src="/src/main.ts"></script>
   </body>

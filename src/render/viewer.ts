@@ -1074,7 +1074,7 @@ fn dir_to_uv(d: vec3<f32>) -> vec2<f32> {
         } finally {
           for (const resource of jobTrash) resource.destroy();
           denoiserBusy = false;
-          if (!disposed) {
+          if (!this.#disposed) {
             this.#ptDisplayDirty = true;
             this.#emitStatus();
           }
@@ -1112,11 +1112,13 @@ fn dir_to_uv(d: vec3<f32>) -> vec2<f32> {
         pathTracer = built;
         ptState = 'ready';
         this.#ptDisplayDirty = true;
+        this.#emitStatus();
       }, (error: unknown) => {
         for (const o of ptTrash) o.destroy();
         if (disposed) return;
         ptState = 'error';
         console.error(`Path tracer: ${(error as Error)?.message ?? error}`);
+        this.#emitStatus();
       });
     };
 

@@ -141,7 +141,7 @@ Cela ne rend pas identiques les intégrateurs raster et path tracing.
 
 ### Fond et débruitage
 
-Dans le viewer, le compute accumule séparément radiance de premier plan,
+Dans le viewer, le compute accumule séparément radiance de premier plan
 et couverture. Le panorama visible est échantillonné directement
 à la résolution de sortie, puis composé en HDR avec le premier plan. Il est net
 sans attendre les samples du fond, y compris durant la compilation initiale.
@@ -166,8 +166,8 @@ l'accumulation est suspendue pendant ce calcul, sans modifier le choix
 Pause/Reprendre de l'utilisateur. Un mouvement de caméra, un redimensionnement,
 un changement de scène/mode ou la désactivation invalide le résultat en cours.
 Le dernier résultat valide peut être affiché jusqu'à l'inférence suivante.
-Le statut distingue attente d'un passage complet, chargement/calcul, résultat
-prêt et erreur ; une erreur conserve le rendu brut et n'est pas masquée.
+L'API de statut distingue attente d'un passage complet, chargement/calcul,
+résultat prêt et erreur ; une erreur conserve le rendu brut et reste visible.
 
 Le modèle disponible est **LDR couleur seule** : son entrée est une ImageData
 sRGB après exposition et ACES, en ordre haut-vers-bas, avec conversion BGRA/RGBA
@@ -198,6 +198,11 @@ et la compilation). Ce délai n'est ni un temps d'inférence à pleine résoluti
 ni une garantie de cadence. L'intégration sur Simple shader ball en 256² à
 deux passages, y compris activation en pause, a affiché le résultat neuronal
 sans erreur WGSL/WebGPU.
+En 512², une inférence à chaud a pris environ 0,71 s sur six passages en pause,
+sans modifier ce nombre au retour au brut. Le resize/désactivation pendant une
+inférence a été suivi d'une nouvelle inférence réussie en 256², sans erreur GPU
+ni réaffichage de l'ancien résultat. Ce sont des mesures ponctuelles, pas une
+garantie de cadence.
 
 Les vérifications antérieures de l'aperçu ont effectivement déclenché le passage
 de 128² à 64² pour l'aperçu ; le raffinement a conservé son buffer précédent.
@@ -213,6 +218,27 @@ Les tests du nouvel adaptateur couvrent aussi le chargement paresseux, la
 réutilisation, l'exclusion mutuelle, les erreurs/retries et la libération différée.
 Les tests du viewer vérifient qu'une erreur d'inférence est visible et qu'une
 image devenue obsolète après resize/désactivation n'est jamais téléversée.
+Ils couvrent aussi le réveil d'une nouvelle scène en pause lorsque l'ancienne
+inférence libère le modèle partagé.
+
+Les six fichiers ciblés totalisent 76 tests réussis ; le typage et le build
+passent. Le build statique a également été exécuté sur le téléphone sous le
+sous-chemin `/materialx-webgpu-engine/` : aucun chargement neuronal avant
+activation, module et poids chargés localement au bon emplacement, résultat en
+pause puis retour au brut sans changer les deux samples, zéro erreur GPU/WGSL.
+La suite complète totalise 1356 succès, un test ignoré et les trois échecs du
+compilateur déjà observés avant cette amélioration, décrits plus haut.
+
+## Indicateur de compilation
+
+La barre d'outils affiche un indicateur animé pendant le chargement d'une scène,
+la compilation d'un matériau/profil raster et la compilation différée du path
+tracer, y compris en pause. Il disparaît lorsque la compilation se termine ou
+échoue. Le canvas expose également `aria-busy` ; l'animation respecte la préférence
+de réduction des mouvements. La ligne descriptive « Backend … objets … Glisser »
+n'est plus affichée. Une zone masquée au repos reste réservée aux erreurs.
+Les tests d'entrée couvrent chargement, compilation PT en pause, échec de
+compilation et absence de WebGPU.
 
 ## Audit de compilation des fichiers MaterialX
 

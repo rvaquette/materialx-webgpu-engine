@@ -108,8 +108,8 @@ describe('interactive viewer resource lifecycle', () => {
 
   beforeEach(() => {
     vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => { tick = callback; return 1; });
-    vi.stubGlobal('GPUBufferUsage', { VERTEX: 1, INDEX: 2, COPY_DST: 4, UNIFORM: 8, STORAGE: 16, COPY_SRC: 32 });
-    vi.stubGlobal('GPUTextureUsage', { TEXTURE_BINDING: 1, COPY_DST: 2, RENDER_ATTACHMENT: 4 });
+    vi.stubGlobal('GPUBufferUsage', { VERTEX: 1, INDEX: 2, COPY_DST: 4, UNIFORM: 8, STORAGE: 16, COPY_SRC: 32, MAP_READ: 64 });
+    vi.stubGlobal('GPUTextureUsage', { TEXTURE_BINDING: 1, COPY_DST: 2, RENDER_ATTACHMENT: 4, COPY_SRC: 8 });
     vi.stubGlobal('GPUMapMode', { READ: 1 });
     vi.stubGlobal('ImageData', class {
       constructor(public data: Uint8ClampedArray, public width: number, public height: number) {}
@@ -232,6 +232,49 @@ describe('interactive viewer resource lifecycle', () => {
     await Promise.resolve();
     expect(device.createCommandEncoder.mock.results.reduce((sum, result) =>
       sum + result.value.copyBufferToBuffer.mock.calls.length, 0)).toBe(copyCalls);
+  });
+
+  it('redisplays a paused replacement scene when an older scene releases the denoiser', async () => {
+    const actual = await vi.importActual<typeof import('../../src/render/pathtracing/scene-buffers.ts')>(
+      '../../src/render/pathtracing/scene-buffers.ts');
+    vi.mocked(buildPathTraceScene).mockImplementation(actual.buildPathTraceScene);
+    const image = new ImageData(new Uint8ClampedArray(512 * 512 * 4), 512, 512);
+    let busy = false;
+    let finish!: (image: ImageData) => void;
+    const busyGetter = vi.spyOn(JsDenoiser.prototype, 'busy', 'get').mockImplementation(() => busy);
+    const run = vi.spyOn(JsDenoiser.prototype, 'run').mockImplementationOnce(() => {
+      busy = true;
+      return new Promise<ImageData>(resolve => { finish = resolve; }).finally(() => { busy = false; });
+    }).mockResolvedValue(image);
+    try {
+      const { viewer, device, statuses } = await setup();
+      viewer.setPathTracingDenoise(true);
+      viewer.setBackend('pathtracing');
+      const sweep = async () => {
+        tick(0);
+        await new Promise(r => setTimeout(r, 20));
+        tick(1);
+        await Promise.resolve();
+        await new Promise(r => setTimeout(r, 220));
+        for (let i = 0; i < 16; i++) { tick(i + 2); await Promise.resolve(); }
+        await new Promise(r => setTimeout(r, 0));
+      };
+      await sweep();
+      expect(run).toHaveBeenCalledTimes(1);
+      await viewer.load('replacement.usda');
+      await sweep();
+      viewer.setPathTracingPaused(true);
+      expect(statuses.at(-1)?.denoiser.state).toBe('waiting');
+      const samples = statuses.at(-1)?.samples;
+      finish(image);
+      await new Promise(r => setTimeout(r, 0));
+      tick(40);
+      await new Promise(r => setTimeout(r, 0));
+      expect(run).toHaveBeenCalledTimes(2);
+      expect(statuses.at(-1)?.denoiser.state).toBe('ready');
+      expect(statuses.at(-1)?.samples).toBe(samples);
+      expect(device.queue.writeTexture).toHaveBeenCalledTimes(1);
+    } finally { run.mockRestore(); busyGetter.mockRestore(); }
   });
 
   it('shares the real HDR CDF with the path tracer and keeps its sampling metadata', async () => {

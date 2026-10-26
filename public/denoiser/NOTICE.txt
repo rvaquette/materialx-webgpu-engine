@@ -10,7 +10,10 @@ rt_ldr_small.tza:
 
 The denoiser package is by Dennis Smolek (MIT); it bundles TensorFlow.js
 (Google LLC, Apache-2.0). Copyright and license notices embedded in the bundle
-are preserved. The neural model is an Open Image Denoise RT LDR model.
+are preserved. The neural model is an Open Image Denoise RT LDR model
+(Intel Corporation, Apache-2.0).
 Both license texts are included in this directory.
 
 Package provenance: https://www.npmjs.com/package/denoiser
+Open Image Denoise: https://github.com/RenderKit/oidn
+OIDN license: https://github.com/RenderKit/oidn/blob/master/LICENSE.txt
