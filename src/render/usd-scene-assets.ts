@@ -43,6 +43,7 @@ import { composeStage } from '../usd/compose.ts';
 import { loadBrowserOpenUsd } from '../usd/browser-loader.ts';
 import { AssetResolver } from '../assets/resolver.ts';
 import type { OpenUsdModule } from '../usd/crate.ts';
+import { FloatType } from 'three';
 
 /** App-relative paths also work when dist/ is served below the workspace root. */
 const MATERIALX_ROOT = `${import.meta.env.BASE_URL}materialx/`;
@@ -182,8 +183,9 @@ export async function loadMtlxSceneContext(
       const text = resolveMaterialImageUrls(await response.text(), dir, ref.authoringLayer ? textureRoot : undefined);
       texts.set(ref.assetPath, text);
       surfaces.set(ref.materialName, surfaceFromMtlx(text));
-    } catch {
-      line(`MaterialX introuvable: ${ref.assetPath}`);
+    } catch (error) {
+      sink({ level: 'error', message: `Failed to load MaterialX: ${url}`, detail: String(error) });
+      throw error;
     }
   }
   const lowered = lowerPreviewSurfaceMaterials(scene, sink);
@@ -296,22 +298,25 @@ export async function loadEnvironment(
   if (!dome?.textureFile) return undefined;
   const baseDir = dirOf(entry);
   const fetchHdr = async (ref: string): Promise<HdrImage | undefined> => {
-    const url = joinUrl(baseDir, ref);
+    const url = new URL(ref, dome.textureSourceLayer ?? new URL(baseDir, document.baseURI).href).href;
     try {
       const res = await fetch(url);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const bytes = await res.arrayBuffer();
       if (/\.exr(?:[?#]|$)/i.test(url)) {
-        const [{ EXRLoader }, { FloatType }] = await Promise.all([
-          import('three/addons/loaders/EXRLoader.js'), import('three'),
-        ]);
+        const { EXRLoader } = await import('three/addons/loaders/EXRLoader.js');
         const image = new EXRLoader().setDataType(FloatType).parse(bytes);
-        if (!(image.data instanceof Float32Array) || image.data.length !== image.width * image.height * 4) {
+        if (image.width === undefined || image.height === undefined ||
+          !(image.data instanceof Float32Array) || image.data.length !== image.width * image.height * 4) {
           throw new Error(`Invalid RGBA float EXR environment: ${url}`);
         }
         const data = new Float32Array(image.width * image.height * 3);
-        for (let i = 0; i < image.width * image.height; i++) {
-          data.set(image.data.subarray(i * 4, i * 4 + 3), i * 3);
+        // EXRLoader returns bottom-up rows; HdrImage uses top-down rows.
+        for (let y = 0; y < image.height; y++) {
+          for (let x = 0; x < image.width; x++) {
+            const src = ((image.height - 1 - y) * image.width + x) * 4;
+            data.set(image.data.subarray(src, src + 3), (y * image.width + x) * 3);
+          }
         }
         return { width: image.width, height: image.height, data };
       }
@@ -401,19 +406,24 @@ export async function loadUsdScene(
   if (failedComposition) throw new Error('USD composition failed. See scene diagnostics.');
   const scene = applyObjectMaterialOverrides(composed, overrides);
   const composedAt = performance.now();
-  performance.measure('usd:composition', { start: started, end: composedAt });
+  performance.measure('usd:composition', { start: started, end: composedAt, detail: { entry, prims: scene.prims.size } });
   const lights = importLights(scene, { sink });
   const cameras = importCameras(scene, { sink });
   const mtlx = await loadMtlxSceneContext(scene, entry, sink, line, options.textureRoot);
   const materialsAt = performance.now();
-  performance.measure('usd:materials', { start: composedAt, end: materialsAt });
+  performance.measure('usd:materials', { start: composedAt, end: materialsAt, detail: { entry, documents: scene.materials.length } });
   const resources = await buildSceneResources(scene, {
     meshSource: await loadExternalMeshSource(scene, meshSourceFromScene(scene), sink),
     materialCompiler: createGraphMaterialCompiler({ documents: mtlx.documents, sink }),
     sink,
   });
   const environment = await loadEnvironment(lights, entry, sink);
-  performance.measure('usd:resources', { start: materialsAt, end: performance.now() });
+  performance.measure('usd:resources', { start: materialsAt, end: performance.now(), detail: {
+    entry, geometries: resources.geometries.size, materials: resources.materials.size,
+    pendingMaterials: resources.pendingMaterials.length,
+    triangles: [...resources.geometries.values()].reduce((sum, mesh) => sum + mesh.indices.length / 3, 0),
+    lights: lights.length, cameras: cameras.length, environment: environment !== undefined,
+  } });
   return { entry, scene, resources, lights, cameras, mtlx, ...(environment ? { environment } : {}) };
 }
 

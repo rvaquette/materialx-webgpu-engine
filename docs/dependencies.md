@@ -186,23 +186,31 @@ dependency is added and version-locked.
   Flagged for the shipping decision; a commercially-licensed crate reader (or a
   self-built OpenUSD/alternative) would be required before any commercial release.
 - **Role:** data extractor only. The reader writes the crate into the module's
-  in-memory FS (`FS_createDataFile`), opens the stage (`OpenStage`), flattens the
-  composed stage to USDA text (`stage.ExportToString()`), then composes that text
+  in-memory FS (`FS_createDataFile`), opens the stage (`OpenStage`), exports USDA
+  text, then composes that text
   through the existing custom USDA adapter (`src/usd/importer.ts`) into a
   `SceneAsset`. Composition errors (`stage.GetCompositionErrors()`) are forwarded
   as diagnostics. It does **not** drive materials or composition itself.
+  The compose reader selects `GetRootLayer().ExportToString()` to preserve
+  authored asset paths and leave composition to the adapter. Standalone
+  `flattenCrate()` retains stage flattening unless `preserveLayer` is requested.
 - **Code:** `src/usd/crate.ts` (`flattenCrate`, `importCrate`, injected
   `OpenUsdModule`), unit-tested with a fake module in `tests/usd/crate.test.ts`.
   The default Node loader is `scripts/openusd-loader.ts` (resolves the package
   main, then imports the internal `bindings/index.js` directly to bypass the
   package `exports` map and the transitive `three` peer). The Node-only loader is
-  kept under `scripts/` because `src/` stays browser-typed.
+  kept under `scripts/` because `src/` stays browser-typed. The browser loader
+  is `src/usd/browser-loader.ts`: it imports local bindings under `openusd/`
+  only when a crate is encountered. The static packager includes those bindings,
+  the WASM, build information and a license/provenance notice.
 - **Qualification evidence (end-to-end):** reads the 57 MB
   `ShdrPlygrnd_Geo.usd` in ~1.5 s with **0 composition errors** (default memory),
   including indexed normals (`elementSize 8196`) and indexed `st`; plus
   `renderCams.usd` (8 cameras) and `lightRig.usd` (6 lights: 4 RectLight,
   1 SphereLight, 1 DomeLight). Reproduce with `node scripts/qualify-crate.ts`.
-- **Follow-ups:** a browser-side loader (the current loader is Node-only) and a
-  mesh->RawMesh bridge from the composed `SceneAsset` attributes
-  (points / faceVertexCounts / faceVertexIndices / primvars:normals / primvars:st /
-  GeomSubset) within the browser memory budget (REQ-012).
+- **Browser evidence:** the simplified playground was composed and rendered in
+  raster on an Intel gen-12lp GPU; full measurements and compatibility warnings
+  are recorded in [validation.md](validation.md#chargement-raster-du-playground-simplifie).
+  The indexed normals/UV bridge is connected. Mobile import failed before
+  rendering, so mobile memory/runtime qualification and GeomSubset/subdivision
+  fidelity remain follow-ups (REQ-012).

@@ -2,7 +2,7 @@
 // OpenUSD 0.26.5 WebAssembly runtime from @needle-tools/usd and caches the
 // instantiated module. It lives under scripts/ because it is Node-only wiring
 // (uses node:module/path/url); the engine's src/ stays browser-typed. A
-// browser-side loader is a later T048/T049 step. See docs/dependencies.md for
+// browser-side loader lives in src/usd/browser-loader.ts. See docs/dependencies.md for
 // the locked revision and the PolyForm-Noncommercial licensing note.
 //
 // The @needle-tools/usd bindings live at an internal subpath that the package

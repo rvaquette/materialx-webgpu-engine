@@ -243,6 +243,55 @@ Il est masqué en raster et pendant la compilation.
 Les tests d'entrée couvrent chargement, compilation PT en pause, échec de
 compilation et absence de WebGPU.
 
+## Chargement raster du playground simplifie
+
+Source locale : `D:\WebGL2\MaterialX\OpenPBRShaderPlayground\ShdrPlygrnd`,
+entrée `ShdrPlygrnd_OpenPBR.usda`. Scène externe servie par Vite sous
+`/playground/`, sans ajout de ses assets au dépôt ni au build de production.
+Profil raster interactif, sortie 512², GPU Intel `gen-12lp` non fallback.
+Mesure ponctuelle en serveur de développement, pas un benchmark de production
+ni une garantie de cadence.
+
+| Étape | Durée observée |
+| --- | ---: |
+| Composition USD, lecture/export des crates et parsing | 133,37 s |
+| Chargement des documents MaterialX et bibliothèques | 5,22 s |
+| Préparation géométrie, compilation IR des matériaux et environnement | 29,60 s |
+| Préparation raster : uploads, bindings et pipelines | 102,38 s |
+| Début du chargement → complétion GPU du premier rendu raster | **273,23 s** |
+
+La scène composée contient 797 prims, 341 géométries, 3 056 274 triangles,
+54 références de documents MaterialX et 53 ressources de matériaux compilées
+(aucun matériau en attente), huit caméras et six lumières. Le panorama EXR a
+été chargé en flottant. Les 39 requêtes d'images observées pour cette passe
+(textures effectivement demandées et environnement) ont toutes répondu HTTP 200,
+pour environ 11,68 Mo transférés. Ce nombre n'est pas l'ensemble des 109
+références de fichiers du dossier de matériaux.
+
+Aucune erreur GPU non capturée n'a été observée. **Ce résultat valide le
+raccordement et le chargement, pas la fidélité complète de la scène** : 110
+avertissements ont été émis, dont des NodeDefs non résolus (`colorcorrect`,
+certains `image`), des `geompropvalue` non abaissés et des prototypes sans
+géométrie pour les caméras/lumières. Des contributions de graphes sont encore
+remplacées par les valeurs neutres signalées par le compilateur. Ces limites
+préexistantes expliquent notamment pourquoi toutes les textures ne sont pas
+échantillonnées ; elles ne doivent pas être confondues avec une erreur de chemin.
+Subdivision, affectations par face et conformité visuelle globale ne sont pas
+qualifiées par cet essai.
+
+Sur SM-F731B / Adreno 740, essai raster en 256² : l'import a échoué avant le
+premier rendu, avec `Unterminated list` dans la géométrie exportée. Une tentative
+isolée d'export de la même crate a ensuite déclenché une exception native WASM.
+Le statut d'échec est visible et aucun temps de premier rendu mobile n'est
+annoncé. Une limite mémoire est une piste, **pas une cause confirmée** par ces
+observations. Le chargement mobile de la scène complète n'est donc pas validé.
+
+Instrumentation persistante via les mesures Performance API
+`usd:composition`, `usd:materials`, `usd:resources`, `viewer:raster-build` et
+`viewer:first-frame`. Les détails incluent l'entrée, les comptes de ressources
+et le backend. Le dernier marqueur attend la complétion de la file GPU :
+il ne s'agit pas de timestamps matériels.
+
 ## Audit de compilation des fichiers MaterialX
 
 `npm run audit:mtlx` parcourt les fichiers `.mtlx` du workspace, hors dependances,

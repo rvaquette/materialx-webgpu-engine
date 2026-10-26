@@ -12,6 +12,8 @@ import { importUsdStage, type UsdImportOptions } from './importer.ts';
 
 /** Opaque stage handle returned by the OpenUSD-wasm module. */
 export interface OpenUsdStage {
+  /** Preserve authored relative assets; composition is performed by the adapter. */
+  GetRootLayer?(): { ExportToString(): string };
   /** Flattens the composed stage to USDA text. */
   ExportToString(): string;
   /** Composition errors collected while opening the stage. */
@@ -35,6 +37,8 @@ export interface OpenUsdModule {
 }
 
 export interface CrateReaderOptions {
+  /** Export only the authored layer when composition is handled by composeStage. */
+  preserveLayer?: boolean;
   /** Loads (and should cache) the OpenUSD-wasm module. */
   loadModule: () => Promise<OpenUsdModule>;
   sink?: DiagnosticSink;
@@ -77,7 +81,10 @@ export async function flattenCrate(
           options.sink({ level: 'warning', message: `Crate composition: ${message}`, detail: { crate: name } });
         }
       }
-      const usda = stage.ExportToString();
+      if (options.preserveLayer && !stage.GetRootLayer) {
+        throw new CrateReadError('OpenUSD runtime cannot export an authored root layer.');
+      }
+      const usda = options.preserveLayer ? stage.GetRootLayer!().ExportToString() : stage.ExportToString();
       if (typeof usda !== 'string' || usda.length === 0) {
         throw new CrateReadError(`OpenUSD-wasm exported empty USDA for crate: ${name}`);
       }

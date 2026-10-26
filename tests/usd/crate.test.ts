@@ -74,6 +74,18 @@ function fakeModule(overrides: Partial<OpenUsdModule> & { usda?: string; errors?
 const bytes = new Uint8Array([0x50, 0x58, 0x52, 0x2d, 0x55, 0x53, 0x44, 0x43]); // "PXR-USDC"
 
 describe('OpenUSD-wasm crate reader', () => {
+  it('exports the authored layer without rewriting relative assets through stage flattening', async () => {
+    const { mod, calls } = fakeModule({
+      OpenStage: () => ({
+        ExportToString: () => { throw new Error('Flattening would reanchor assets in the temporary FS'); },
+        GetRootLayer: () => ({ ExportToString: () => '#usda 1.0\nasset = @../textures/env.exr@' }),
+      }),
+    });
+    expect(await flattenCrate(bytes, 'lightRig.usd', { loadModule: async () => mod, preserveLayer: true }))
+      .toContain('@../textures/env.exr@');
+    expect(calls.released).toBe(1);
+    expect(calls.unlinked).toEqual(['/lightRig.usd']);
+  });
   it('flattens a crate through the module FS lifecycle', async () => {
     const { mod, calls } = fakeModule();
     const usda = await flattenCrate(bytes, 'assets/ShdrPlygrnd_Geo.usd', { loadModule: async () => mod });

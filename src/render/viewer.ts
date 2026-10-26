@@ -271,7 +271,9 @@ export class InteractiveViewer {
       this.#current?.dispose();
       this.#current = null;
       await new Promise((resolve) => setTimeout(resolve, 0));
+      const gpuBuildStarted = performance.now();
       render = await this.#buildSceneRender(loaded, frame, exposure, sink);
+      performance.measure('viewer:raster-build', { start: gpuBuildStarted, end: performance.now(), detail: { entry } });
     } catch (error) {
       loaded.mtlx.documents.delete();
       throw error;
@@ -380,7 +382,8 @@ export class InteractiveViewer {
         this.#framePending = true;
         void this.#device.queue.onSubmittedWorkDone().then(() => {
           if (firstFrameStart !== undefined) {
-            performance.measure('viewer:first-frame', { start: firstFrameStart, end: performance.now() });
+            performance.measure('viewer:first-frame', { start: firstFrameStart, end: performance.now(),
+              detail: { entry: this.#sceneEntry, backend: pathTracingFrame ? 'pathtracing' : 'raster' } });
           }
           if (pathTracingFrame) current.reportFrameTime(performance.now() - started);
           this.#framePending = false;

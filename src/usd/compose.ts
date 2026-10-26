@@ -60,6 +60,7 @@ export function createCrateAwareReader(options: ComposeStageOptions): UsdLayerRe
           throw new StageComposeError(`Crate layer '${uri}' requires a crate module loader (loadCrateModule).`);
         }
         return flattenCrate(bytes, uri, {
+          preserveLayer: true,
           loadModule: loadCrateModule,
           ...(sink ? { sink } : {}),
           ...(maxDepth !== undefined ? { maxDepth } : {}),

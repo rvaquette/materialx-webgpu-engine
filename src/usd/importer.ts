@@ -438,7 +438,7 @@ class Parser {
     prim.attributes.set(name, {
       name,
       typeName,
-      ...(name === 'engine:geometry:file' ? { sourceLayer: this.uri } : {}),
+      ...(typeName === 'asset' ? { sourceLayer: this.uri } : {}),
       ...(value !== undefined ? { value } : {}),
       ...(interpolation !== undefined ? { interpolation } : {}),
     });

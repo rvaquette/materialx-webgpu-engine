@@ -177,12 +177,15 @@ silent path repair).
 - **Crate reader qualification** (T048, done): OpenUSD-wasm reads the 57.5 MB
   `ShdrPlygrnd_Geo.usd` (meshes, indexed normals, primvars incl. `st`, subdivision
   tags) with 0 composition errors; tinyusdz-wasm failed and was dropped. The
-  current loader (`scripts/openusd-loader.ts`) is Node-only; a browser-side loader
-  and a mesh->RawMesh bridge within the browser memory budget (REQ-012) remain
-  follow-ups.
+  Node loader remains in `scripts/openusd-loader.ts`. The browser now uses
+  `src/usd/browser-loader.ts`, loaded lazily on the first crate. Its local
+  bindings/WASM are served under `openusd/` in development and packaged by
+  `scripts/package-static.mjs`. Browser memory qualification remains a follow-up:
+  the full simplified scene loads on PC but the mobile import currently fails
+  (see [validation.md](validation.md#chargement-raster-du-playground-simplifie)).
 - **Node coverage gap** (§1.3): add `geompropvalue` and `<UDIM>` handling to
-  T014/REQ-014 and the texture system (T004); update
-  [materialx-node-coverage.md](materialx-node-coverage.md).
+  T014/REQ-014 and the texture system (T004). The simplified scene no longer
+  references UDIM or TIFF, but still emits graph-lowering warnings.
 - **Asset-root policy** (plan §8, T049 done): `textures/...` + `<UDIM>` paths and
   every composed layer require an explicit asset root served over HTTP(S) or via
   local selection; the browser cannot open `D:\` paths. The `AssetResolver` is
@@ -193,6 +196,37 @@ silent path repair).
   must ignore it without dropping real opinions (REQ-013).
 - **Binding strength / subdivision**: preserve `weakerThanDescendants` and
   `catmullClark` + `refinementLevel` for correct assignment and tessellation.
+
+### Browser integration and explicit texture roots
+
+`loadUsdScene()` now calls `composeStage()` with byte fetches and the lazy
+OpenUSD loader, following both sublayers and payload/reference arcs. A failed
+layer rejects the scene load instead of presenting an incomplete stage as a
+successful load. HTTP origins are retained when composing relative layer paths.
+The compose reader exports the crate's **authored root layer**, not a flattened
+stage, so paths such as `../textures/env.exr` are not rewritten into the temporary
+WASM filesystem. The standalone `flattenCrate()`/`importCrate()` APIs retain
+their original stage-flattening default.
+
+MaterialX references record their authoring layer. Their XML is fetched relative
+to that layer; texture filenames normally resolve relative to that XML document.
+`SceneLoadOptions.textureRoot` explicitly selects a different root for
+scene-authored MaterialX textures. This is not a search/fallback: an unavailable
+asset raises a diagnostic. Runtime material overrides keep their own document
+directory rather than inheriting the scene root.
+
+The local-only catalog entry **OpenPBR Shader Playground (local)** maps to
+`playground/ShdrPlygrnd_OpenPBR.usda` with `playground/` as texture root. The Vite
+server serves the external directory configured by `MX_PLAYGROUND_ROOT`
+(default: the local source directory above), without copying it into the repo.
+It is deliberately absent from production builds, which do not include the
+external scene.
+
+The browser bridge preserves indexed normals and indexed `st`. Dome EXR images
+are decoded through the installed Three.js EXRLoader as float RGB, without LDR
+conversion, and resolved relative to their authoring light layer. This does not
+add TIFF/EXR support for arbitrary material textures or qualify subdivision and
+all MaterialX graph features.
 
 ## 5. Evidence log
 

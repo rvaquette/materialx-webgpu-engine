@@ -31,6 +31,7 @@ export interface SceneLight {
   treatAsPoint?: boolean;
   /** Recorded asset path; not loaded. */
   textureFile?: string;
+  textureSourceLayer?: string;
   /** Optional pre-convolved diffuse irradiance map (non-standard dome input). */
   irradianceFile?: string;
   /** Recorded IES photometric profile path; not loaded. */
@@ -130,6 +131,8 @@ export function importLights(scene: SceneAsset, options: ImportLightsOptions = {
       ...(angle !== undefined ? { angle } : {}),
       ...(treatAsPoint !== undefined ? { treatAsPoint } : {}),
       ...(textureFile !== undefined ? { textureFile } : {}),
+      ...(prim.attributes.get('inputs:texture:file')?.sourceLayer !== undefined
+        ? { textureSourceLayer: prim.attributes.get('inputs:texture:file')!.sourceLayer! } : {}),
       ...(irradianceFile !== undefined ? { irradianceFile } : {}),
       ...(iesFile !== undefined ? { iesFile } : {}),
       ...(coneAngle !== undefined ? { coneAngle } : {}),

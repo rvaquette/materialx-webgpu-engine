@@ -1,7 +1,15 @@
 import { describe, expect, it, vi } from 'vitest';
-import { loadUsdScene, resolveMaterialTextureUrl, meshSourceFromScene } from '../../src/render/usd-scene-assets.ts';
+import { loadUsdScene, loadEnvironment, resolveMaterialTextureUrl, meshSourceFromScene } from '../../src/render/usd-scene-assets.ts';
 import { composeStage } from '../../src/usd/compose.ts';
 import { AssetResolver } from '../../src/assets/resolver.ts';
+import { IDENTITY4 } from '../../src/scene/transforms.ts';
+
+vi.mock('three/addons/loaders/EXRLoader.js', () => ({
+  EXRLoader: class {
+    setDataType() { return this; }
+    parse() { return { width: 1, height: 2, data: new Float32Array([4, 2, 1, 1, 8, 4, 2, 1]) }; }
+  },
+}));
 
 describe('browser USD scene loading', () => {
   it('anchors material texture paths at the document by default or at an explicit scene root', () => {
@@ -62,6 +70,22 @@ over "World" {
     try {
       await expect(loadUsdScene('https://example.test/stage.usda', sink)).rejects.toThrow('USD composition failed');
       expect(sink).toHaveBeenCalledWith(expect.objectContaining({ level: 'error' }));
+    } finally { vi.unstubAllGlobals(); }
+  });
+
+  it('loads EXR lighting relative to its authoring USD layer and preserves HDR values', async () => {
+    const fetch = vi.fn().mockResolvedValue(new Response(new Uint8Array(8)));
+    vi.stubGlobal('fetch', fetch);
+    try {
+      const environment = await loadEnvironment([{
+        path: '/World/lightRig/dome', type: 'dome', usdType: 'DomeLight',
+        color: [1, 1, 1], intensity: 1, exposure: 0, normalize: false, transform: IDENTITY4,
+        textureFile: '../textures/env.exr', textureSourceLayer: 'https://example.test/playground/lights/rig.usd',
+      }], 'https://example.test/playground/stage.usda', vi.fn());
+      expect(fetch).toHaveBeenCalledWith('https://example.test/playground/textures/env.exr');
+      expect(environment?.image.data).toEqual(new Float32Array([8, 4, 2, 4, 2, 1]));
+      expect(environment?.image.width).toBe(1);
+      expect(environment?.image.height).toBe(2);
     } finally { vi.unstubAllGlobals(); }
   });
 });

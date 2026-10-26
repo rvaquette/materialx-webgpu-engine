@@ -26,6 +26,7 @@ function fakeCrateModule(): OpenUsdModule {
   const files = new Map<string, Uint8Array>();
   let current: string | null = null;
   const stageFor = (path: string): OpenUsdStage => ({
+    GetRootLayer: () => ({ ExportToString: () => new TextDecoder().decode(files.get(path)!.subarray(MAGIC.length)) }),
     ExportToString: () => new TextDecoder().decode(files.get(path)!.subarray(MAGIC.length)),
     GetCompositionErrors: () => [],
   });
