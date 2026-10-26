@@ -3,6 +3,7 @@ import {
   MaterialXLibraries,
   defaultLibrarySources,
   MATERIALX_DEFAULT_LIBRARY_FILES,
+  loadSharedMaterialXLibraries,
 } from '../../src/materialx/libraries.ts';
 import { MaterialXCore, type MaterialXCoreModule, type MxDocument } from '../../src/materialx/wasm.ts';
 
@@ -38,6 +39,42 @@ describe('defaultLibrarySources', () => {
 });
 
 describe('MaterialXLibraries', () => {
+  it('fetches independent sources in parallel but reads XML in dependency order', async () => {
+    const { core, read } = makeCore(makeDoc());
+    const libs = new MaterialXLibraries(core);
+    let resolveFirst!: (text: string) => void;
+    const fetchText = vi.fn((url: string) => url === 'a'
+      ? new Promise<string>((resolve) => { resolveFirst = resolve; })
+      : Promise.resolve('<b/>'));
+    const loading = libs.load({ sources: [{ name: 'a', url: 'a' }, { name: 'b', url: 'b' }], fetchText });
+    expect(fetchText).toHaveBeenCalledTimes(2);
+    expect(read).not.toHaveBeenCalled();
+    resolveFirst('<a/>');
+    await loading;
+    expect(read.mock.calls.map((call) => call[1])).toEqual(['<a/>', '<b/>']);
+  });
+
+  it('shares libraries for the same Core and source URLs, including concurrent callers', async () => {
+    const { core, read } = makeCore(makeDoc());
+    const options = { sources: [{ name: 'a', url: 'a' }], fetchText: vi.fn(async () => '<a/>') };
+    const [first, second] = await Promise.all([
+      loadSharedMaterialXLibraries(core, options),
+      loadSharedMaterialXLibraries(core, options),
+    ]);
+    expect(first).toBe(second);
+    expect(await loadSharedMaterialXLibraries(core, options)).toBe(first);
+    expect(options.fetchText).toHaveBeenCalledTimes(1);
+    expect(read).toHaveBeenCalledTimes(1);
+  });
+
+  it('evicts failed shared loads so a subsequent scene can retry', async () => {
+    const { core } = makeCore(makeDoc());
+    const fetchText = vi.fn().mockRejectedValueOnce(new Error('offline')).mockResolvedValue('<a/>');
+    const options = { sources: [{ name: 'a', url: 'a' }], fetchText, onDiagnostic: vi.fn() };
+    await expect(loadSharedMaterialXLibraries(core, options)).rejects.toThrow('offline');
+    await expect(loadSharedMaterialXLibraries(core, options)).resolves.toBeInstanceOf(MaterialXLibraries);
+    expect(fetchText).toHaveBeenCalledTimes(2);
+  });
   it('reads every source into one document in order and memoizes', async () => {
     const doc = makeDoc();
     const { core, read } = makeCore(doc);

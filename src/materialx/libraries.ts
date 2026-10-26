@@ -72,14 +72,16 @@ export class MaterialXLibraries {
     const diag = options.onDiagnostic ?? defaultDiagnosticSink;
     const doc = this.core.createDocument();
     try {
-      for (const source of options.sources) {
+      throwIfAborted(options.signal);
+      const texts = await Promise.all(options.sources.map((source) => options.fetchText(source.url, options.signal)));
+      for (const xml of texts) {
         throwIfAborted(options.signal);
-        const xml = await options.fetchText(source.url, options.signal);
         await this.core.readXmlString(doc, xml, {
           ...(options.searchPath !== undefined ? { searchPath: options.searchPath } : {}),
           readXIncludes: true,
         });
       }
+
     } catch (error) {
       doc.delete();
       diag({
@@ -112,4 +114,25 @@ export class MaterialXLibraries {
     this.libraryDoc?.delete();
     this.libraryDoc = undefined;
   }
+}
+
+const sharedLibraries = new WeakMap<MaterialXCore, Map<string, Promise<MaterialXLibraries>>>();
+
+/** Core-lifetime libraries; scene documents import them but do not own them. */
+export function loadSharedMaterialXLibraries(core: MaterialXCore, options: LoadLibrariesOptions): Promise<MaterialXLibraries> {
+  let entries = sharedLibraries.get(core);
+  if (!entries) {
+    entries = new Map();
+    sharedLibraries.set(core, entries);
+  }
+  const key = JSON.stringify([options.sources, options.searchPath]);
+  const existing = entries.get(key);
+  if (existing) return existing;
+  const libraries = new MaterialXLibraries(core);
+  const loading = libraries.load(options).then(() => libraries, (error: unknown) => {
+    entries.delete(key);
+    throw error;
+  });
+  entries.set(key, loading);
+  return loading;
 }

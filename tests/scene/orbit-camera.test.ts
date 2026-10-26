@@ -1,8 +1,23 @@
 import { describe, expect, it, vi } from 'vitest';
 import { OrbitCamera, attachOrbitControls } from '../../src/scene/orbit-camera.ts';
-import { transformPoint } from '../../src/scene/transforms.ts';
+import { inverse4, transformPoint } from '../../src/scene/transforms.ts';
 
 describe('orbit camera clipping', () => {
+  it('displays a varying panorama behind orthographic geometry and preserves its FOV when zooming', () => {
+    const camera = OrbitCamera.fromEyeTarget([0, 0, 5], [0, 0, 0], 1);
+    const direction = (x: number) => {
+      const p = transformPoint(inverse4(camera.backgroundViewProj()), [x, 0, 0]);
+      const d = p.map((v, i) => v - camera.eye[i]!);
+      return d.map(v => v / Math.hypot(...d));
+    };
+    const left = direction(-1), right = direction(1);
+    expect(left[0]).toBeLessThan(-0.4);
+    expect(right[0]).toBeGreaterThan(0.4);
+    expect(left[2]).toBeCloseTo(right[2]!);
+    camera.dolly(0.5);
+    direction(-1).forEach((v, i) => expect(v).toBeCloseTo(left[i]!, 12));
+    expect(camera.viewProj()[15]).toBe(1);
+  });
   it('keeps close and distant geometry within the default depth range', () => {
     const camera = OrbitCamera.fromEyeTarget([0, 0, 5], [0, 0, 0], 1);
     for (const depth of [0.01, 1000, 9000]) {

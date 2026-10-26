@@ -16,7 +16,8 @@ function setStatus(text: string): void {
 
 function formatStatus(s: ViewerStatus): string {
   const pt = s.pathTracer === 'compiling' ? ', compilation du path tracer...' : s.pathTracer === 'error' ? ', échec du path tracer' : '';
-  const extra = s.backend === 'pathtracing' ? `${pt || `, ${s.samples} spp`}${s.pathTracingPaused ? ' (pause)' : ''}` : '';
+  const extra = s.backend === 'pathtracing' ? `${pt || `, ${s.samples} spp`}${s.pathTracingPaused ? ' (pause)' : ''}`
+    : s.rasterQuality === 'interactive' ? ', IBL filtrée 16 échantillons (approximation)' : ', référence 64 échantillons MIS';
   const note = s.warnings ? ` (${s.warnings} diagnostic(s))` : '';
   return `Backend ${s.backend}: ${s.drawCount} object(s), passes [${s.passes.join(', ')}]${extra}${note}. ` +
     'Glisser pour orbiter, molette pour zoomer.';
@@ -76,6 +77,7 @@ async function main(): Promise<void> {
 
   const select = document.getElementById('scene') as HTMLSelectElement | null;
   const resolution = document.getElementById('resolution') as HTMLSelectElement | null;
+  const rasterQuality = document.getElementById('raster-quality') as HTMLSelectElement | null;
   const objectSelect = document.getElementById('material-object') as HTMLSelectElement | null;
   const materialSelect = document.getElementById('material-file') as HTMLSelectElement | null;
   const materialFilter = document.getElementById('material-filter') as HTMLInputElement | null;
@@ -127,6 +129,7 @@ async function main(): Promise<void> {
       }
       setStatus('GPU perdu, réinitialisation...');
       const backend = viewer.backend;
+      const quality = viewer.rasterQuality;
       viewer.dispose();
       const next = await requestGpu();
       if (!next) {
@@ -139,6 +142,7 @@ async function main(): Promise<void> {
       });
       viewContext.configure({ device: next.device, format: outputFormat, alphaMode: 'opaque' });
       viewer = new InteractiveViewer({ device: next.device, context: viewContext, outputFormat, canvas: viewCanvas, ...viewerCallbacks });
+      await viewer.setRasterQuality(quality);
       viewer.setBackend(backend);
       deviceLost = false;
       watchDevice(next.device);
@@ -156,6 +160,7 @@ async function main(): Promise<void> {
   function setBusy(busy: boolean): void {
     if (select) select.disabled = busy;
     if (resolution) resolution.disabled = busy;
+    if (rasterQuality) rasterQuality.disabled = busy;
     if (materialControls) materialControls.disabled = busy || viewer.objects.length === 0;
   }
 
@@ -224,6 +229,21 @@ async function main(): Promise<void> {
   }
 
   select?.addEventListener('change', () => void loadEntry(select.value));
+  rasterQuality?.addEventListener('change', async () => {
+    const previous = viewer.rasterQuality;
+    setBusy(true);
+    setStatus('Compilation du profil raster...');
+    try {
+      const quality = rasterQuality.value;
+      if (quality !== 'interactive' && quality !== 'reference') throw new Error('Unsupported raster quality.');
+      await viewer.setRasterQuality(quality);
+    } catch (error) {
+      rasterQuality.value = previous;
+      setStatus(`Echec du profil raster: ${(error as Error)?.message ?? error}`);
+    } finally {
+      setBusy(false);
+    }
+  });
   resolution?.addEventListener('change', async () => {
     const previousSize = canvas.width;
     setBusy(true);

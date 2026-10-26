@@ -6,14 +6,14 @@
 // dedicated frame uniform block on a distinct bind group, an orthonormal basis
 // helper and the vertex/fragment stages. The fragment reconstructs the surface
 // LayeredClosure and evaluates it against the single directional light plus the
-// constant environment through the shared mx_closure_eval -- the same direct term
-// the path tracer megakernel computes per bounce (pathtracing/compute.ts, T057),
-// minus shadows, NEE/MIS multi-bounce and textured environments. Additive only:
-// no backend consumes this yet (wiring lands in T058c-e, device parity in T059).
+// environment through the shared closures. Reference quadrature retains 64
+// BSDF/environment MIS samples; interactive IBL uses 16 mip-filtered BSDF samples.
 
 import type { LayeredSurfaceModule, SurfaceFeatures } from '../../compiler/surface-wgsl.ts';
 
 const ALL_FEATURES: SurfaceFeatures = { coat: true, transmission: true, dispersion: true, thinFilm: true, lobeKinds: [0, 1, 2, 3, 4, 5, 6, 7, 8] };
+
+export type RasterQuality = 'interactive' | 'reference';
 
 /** Bind group / binding of the dedicated frame uniform, kept distinct from the
  *  material MxUniforms (group 0), textures (group 1) and samplers (group 2). */
@@ -36,6 +36,7 @@ export interface IrForwardShader {
   fragmentEntry: string;
   frameGroup: number;
   frameBinding: number;
+  rasterQuality?: RasterQuality;
   /** Set to IR_FORWARD_DISP_GROUP when the vertex stage samples a displacement map. */
   displacementGroup?: number;
 }
@@ -43,7 +44,9 @@ export interface IrForwardShader {
 /** The dedicated per-frame uniform: object transform, camera and the single
  *  directional light plus the constant environment radiance. Separate from the
  *  material MxUniforms so the frame is shared across every material variant. */
-function frameBlock(f: SurfaceFeatures): string {
+function frameBlock(f: SurfaceFeatures, quality: RasterQuality): string {
+  const reference = quality === 'reference';
+  const samples = reference ? 64 : 16;
   return `struct MxFrame {
   model: mat4x4f,
   viewProj: mat4x4f,
@@ -58,14 +61,14 @@ function frameBlock(f: SurfaceFeatures): string {
 @group(${IR_FORWARD_FRAME_GROUP}) @binding(${IR_FORWARD_FRAME_BINDING}) var<uniform> fu: MxFrame;
 @group(${IR_FORWARD_FRAME_GROUP}) @binding(4) var forwardEnv: texture_2d<f32>;
 @group(${IR_FORWARD_FRAME_GROUP}) @binding(5) var forwardEnvSampler: sampler;
-@group(${IR_FORWARD_FRAME_GROUP}) @binding(6) var<storage, read> forwardEnvCdf: array<f32>;
+${reference ? `@group(${IR_FORWARD_FRAME_GROUP}) @binding(6) var<storage, read> forwardEnvCdf: array<f32>;` : ''}
 
 fn mx_forward_uv(d: vec3f) -> vec2f {
   let n = normalize(d);
   return vec2f(atan2(n.z, n.x) * (0.5 / MX_PI) + 0.5, acos(clamp(n.y, -1.0, 1.0)) / MX_PI);
 }
 
-fn mx_forward_env_pdf(d: vec3f) -> f32 {
+${reference ? `fn mx_forward_env_pdf(d: vec3f) -> f32 {
   if (fu.envMap.w == 0.0 || fu.envInfo.z <= 0.0) { return 0.0; }
   let uv = mx_forward_uv(d);
   let color = textureSampleLevel(forwardEnv, forwardEnvSampler, uv, 0.0).rgb * fu.envInfo.w;
@@ -86,13 +89,26 @@ fn mx_forward_env_direction(u: f32) -> vec3f {
   let phi = uv.x * (2.0 * MX_PI);
   let theta = uv.y * MX_PI;
   return vec3f(-sin(theta) * cos(phi), cos(theta), -sin(theta) * sin(phi));
-}
+}` : ''}
 
 fn mx_forward_environment(d: vec3f) -> vec3f {
   if (fu.envMap.w == 0.0) { return fu.env.xyz; }
   let uv = mx_forward_uv(d);
   return textureSampleLevel(forwardEnv, forwardEnvSampler, uv, 0.0).rgb * fu.envMap.xyz;
 }
+${reference ? '' : `
+fn mx_forward_filtered_environment(d: vec3f, pdf: f32) -> vec3f {
+  if (fu.envMap.w == 0.0) { return fu.env.xyz; }
+  let uv = mx_forward_uv(d);
+  let dimensions = vec2f(textureDimensions(forwardEnv));
+  let texelSolidAngle = 2.0 * MX_PI * MX_PI * max(sin(uv.y * MX_PI), 1e-6)
+    / (dimensions.x * dimensions.y);
+  let sampleSolidAngle = 1.0 / max(${samples}.0 * pdf, 1e-20);
+  let lod = clamp(0.5 * log2(sampleSolidAngle / texelSolidAngle),
+    0.0, f32(textureNumLevels(forwardEnv) - 1u));
+  return textureSampleLevel(forwardEnv, forwardEnvSampler, uv, lod).rgb * fu.envMap.xyz;
+}
+`}
 
 fn mx_forward_sample_diffuse(c: LayeredClosure) -> bool {
   return c.hasCoat != 0u && c.coat.weight > 0.0
@@ -103,17 +119,17 @@ fn mx_forward_coated_diffuse(c: LayeredClosure, wo: vec3f, frame: mat3x3f) -> ve
   let albedo = mx_closure_diffuse_albedo(c, wo);
   let coatW = clamp(c.coat.weight, 0.0, 1.0);
   var radiance = vec3f(0.0);
-  for (var i = 0u; i < 64u; i++) {
-    let u = vec2f((f32(i) + 0.5) / 64.0,
+  for (var i = 0u; i < ${samples}u; i++) {
+    let u = vec2f((f32(i) + 0.5) / ${samples}.0,
       f32(reverseBits(i)) * 2.3283064365386963e-10);
     let wi = mx_cosine_hemisphere(u);
     let wiWorld = frame * wi;
     let pdf = wi.z / MX_PI;
-    let envPdf = mx_forward_env_pdf(wiWorld);
-    let mis = pdf * pdf / max(pdf * pdf + envPdf * envPdf, 1e-20);
+${reference ? `    let envPdf = mx_forward_env_pdf(wiWorld);
+    let mis = pdf * pdf / max(pdf * pdf + envPdf * envPdf, 1e-20);` : '    let mis = 1.0;'}
     let attenuation = mx_coat_attenuation(coatW, c.coat.ior, c.coat.color, wo, wi);
-    radiance = radiance + albedo * attenuation * mx_forward_environment(wiWorld) * (mis / 64.0);
-    if (fu.envMap.w != 0.0 && fu.envInfo.z > 0.0) {
+    radiance = radiance + albedo * attenuation * ${reference ? 'mx_forward_environment(wiWorld)' : 'mx_forward_filtered_environment(wiWorld, pdf)'} * (mis / ${samples}.0);
+${reference ? `    if (fu.envMap.w != 0.0 && fu.envInfo.z > 0.0) {
       let lightWorld = mx_forward_env_direction(u.x);
       let light = transpose(frame) * lightWorld;
       let lightPdf = mx_forward_env_pdf(lightWorld);
@@ -124,7 +140,7 @@ fn mx_forward_coated_diffuse(c: LayeredClosure, wo: vec3f, frame: mat3x3f) -> ve
         radiance = radiance + albedo * att * mx_forward_environment(lightWorld)
           * (lightMis * bsdfPdf / (64.0 * lightPdf));
       }
-    }
+    }` : ''}
   }
   return radiance;
 }
@@ -212,8 +228,8 @@ fn mx_forward_lobe_environment(l: MxBsdfLobe, wo: vec3f, frame: mat3x3f,
   let deltaSpecular = (l.kind == MX_LOBE_DIELECTRIC_REFLECTION
     || l.kind == MX_LOBE_DIELECTRIC_TRANSMISSION) && l.roughness < 0.07;
   var radiance = vec3f(0.0);
-  for (var i = 0u; i < 64u; i++) {
-    let u = vec3f((f32(i) + 0.5) / 64.0,
+  for (var i = 0u; i < ${samples}u; i++) {
+    let u = vec3f((f32(i) + 0.5) / ${samples}.0,
       f32(reverseBits(i)) * 2.3283064365386963e-10,
       fract((f32(i) + 0.5) * 0.61803398875));
     var bs: MxBsdfSample;
@@ -225,16 +241,18 @@ fn mx_forward_lobe_environment(l: MxBsdfLobe, wo: vec3f, frame: mat3x3f,
       bs = mx_dielectric_transmission_sample(ctx, u);
     }
     if (bs.valid && bs.pdf > 0.0) {
-      let envDir = mx_forward_environment(frame * bs.wi);
+${reference ? '      let envDir = mx_forward_environment(frame * bs.wi);' : `      var envDir: vec3f;
+      if (deltaSpecular) { envDir = mx_forward_environment(frame * bs.wi); }
+      else { envDir = mx_forward_filtered_environment(frame * bs.wi, bs.pdf); }`}
       var mis = 1.0;
-      if (!deltaSpecular) {
+${reference ? `      if (!deltaSpecular) {
         let envPdf = mx_forward_env_pdf(frame * bs.wi);
         mis = bs.pdf * bs.pdf / max(bs.pdf * bs.pdf + envPdf * envPdf, 1e-20);
-      }
+      }` : ''}
       let att = mx_coat_attenuation(coatW, coatIor, coatColor, wo, bs.wi);
-      radiance = radiance + att * l.weight * bs.value * envDir * (mis * abs(bs.wi.z) / (64.0 * bs.pdf));
+      radiance = radiance + att * l.weight * bs.value * envDir * (mis * abs(bs.wi.z) / (${samples}.0 * bs.pdf));
     }
-    if (!deltaSpecular && fu.envMap.w != 0.0 && fu.envInfo.z > 0.0) {
+${reference ? `    if (!deltaSpecular && fu.envMap.w != 0.0 && fu.envInfo.z > 0.0) {
       let wiWorld = mx_forward_env_direction((f32(i) + 0.5) / 64.0);
       let wi = transpose(frame) * wiWorld;
       let envPdf = mx_forward_env_pdf(wiWorld);
@@ -251,7 +269,7 @@ fn mx_forward_lobe_environment(l: MxBsdfLobe, wo: vec3f, frame: mat3x3f,
         let att = mx_coat_attenuation(coatW, coatIor, coatColor, wo, wi);
         radiance = radiance + att * l.weight * em.value * mx_forward_environment(wiWorld) * (mis * abs(wi.z) / (64.0 * envPdf));
       }
-    }
+    }` : ''}
   }
   return radiance;
 }
@@ -368,10 +386,10 @@ ${dispOffset}
 }`;
 }
 
-/** Fragment stage: rebuild the surface LayeredClosure then shade it with the same
- *  direct term as the path tracer -- delta-light next-event (no shadows) plus a
- *  single constant-environment sample along the normal -- via mx_closure_eval. */
-function fragmentStage(surfaceEntry: string, primvarNames: readonly string[], f: SurfaceFeatures): string {
+/** Rebuild the material closure, shade direct light and integrate dome IBL. */
+function fragmentStage(surfaceEntry: string, primvarNames: readonly string[], f: SurfaceFeatures, quality: RasterQuality): string {
+  const reference = quality === 'reference';
+  const samples = reference ? 64 : 16;
   // Feed the MxVaryings primvar fields the surface fn reads. 'st' is the default
   // MaterialX texcoord set, so it mirrors the interpolated UV, exactly as the path
   // tracer megakernel maps it (pathtracing/compute.ts). Other primvar/extra-input
@@ -447,21 +465,23 @@ ${f.coat ? `  if (!mx_forward_sample_diffuse(c)) {
   } else ` : ''}if (dielectricIndex >= 0) {
     radiance = radiance + mx_forward_dielectric_environment(spec.lobes[u32(dielectricIndex)], wo, sframe);
   } else {
-    for (var i = 0u; i < 64u; i++) {
-      let u = vec3f((f32(i) + 0.5) / 64.0,
+    for (var i = 0u; i < ${samples}u; i++) {
+      let u = vec3f((f32(i) + 0.5) / ${samples}.0,
         f32(reverseBits(i)) * 2.3283064365386963e-10,
         fract((f32(i) + 0.5) * 0.61803398875));
       let bs = mx_closure_sample(spec, wo, u);
       if (bs.valid && bs.pdf > 0.0) {
-        let envDir = mx_forward_environment(sframe * bs.wi);
+${reference ? '        let envDir = mx_forward_environment(sframe * bs.wi);' : `        var envDir: vec3f;
+        if (deltaSpecular) { envDir = mx_forward_environment(sframe * bs.wi); }
+        else { envDir = mx_forward_filtered_environment(sframe * bs.wi, bs.pdf); }`}
         var mis = 1.0;
-        if (!deltaSpecular) {
+${reference ? `        if (!deltaSpecular) {
           let envPdf = mx_forward_env_pdf(sframe * bs.wi);
           mis = bs.pdf * bs.pdf / max(bs.pdf * bs.pdf + envPdf * envPdf, 1e-20);
-        }
-        radiance = radiance + bs.value * envDir * (mis * abs(bs.wi.z) / (64.0 * bs.pdf));
+        }` : ''}
+        radiance = radiance + bs.value * envDir * (mis * abs(bs.wi.z) / (${samples}.0 * bs.pdf));
       }
-      if (!deltaSpecular && fu.envMap.w != 0.0 && fu.envInfo.z > 0.0) {
+${reference ? `      if (!deltaSpecular && fu.envMap.w != 0.0 && fu.envInfo.z > 0.0) {
         let wiWorld = mx_forward_env_direction((f32(i) + 0.5) / 64.0);
         let wi = transpose(sframe) * wiWorld;
         let envPdf = mx_forward_env_pdf(wiWorld);
@@ -470,7 +490,7 @@ ${f.coat ? `  if (!mx_forward_sample_diffuse(c)) {
           let mis = envPdf * envPdf / max(envPdf * envPdf + em.pdf * em.pdf, 1e-20);
           radiance = radiance + em.value * mx_forward_environment(wiWorld) * (mis * abs(wi.z) / (64.0 * envPdf));
         }
-      }
+      }` : ''}
     }
   }
 
@@ -483,18 +503,19 @@ ${f.coat ? `  if (!mx_forward_sample_diffuse(c)) {
  * Assemble the scene-forward WGSL shader for a compiled layered surface module.
  * The material module source is used verbatim (preludes, MxUniforms, MxVaryings,
  * the shared closure library and mx_surface_layered) and extended with the frame
- * uniform, basis helper and vertex/fragment stages. Not consumed by the backend
- * yet (T058b is additive; backend wiring lands in T058d/e).
+ * uniform, basis helper and vertex/fragment stages. Captures default to reference
+ * quality; the interactive viewer explicitly selects filtered IBL.
  */
-export function assembleIrForwardShader(surface: LayeredSurfaceModule, options: { displacement?: boolean } = {}): IrForwardShader {
+export function assembleIrForwardShader(surface: LayeredSurfaceModule, options: { displacement?: boolean; rasterQuality?: RasterQuality } = {}): IrForwardShader {
   const displacement = options.displacement === true;
+  const rasterQuality = options.rasterQuality ?? 'reference';
   const features = surface.features ?? ALL_FEATURES;
   const code = [
     surface.code.trimEnd(),
-    frameBlock(features),
+    frameBlock(features, rasterQuality),
     basisHelper(),
     vertexStage(displacement),
-    fragmentStage(surface.entryPoint, [...surface.primvarFields.keys()], features),
+    fragmentStage(surface.entryPoint, [...surface.primvarFields.keys()], features, rasterQuality),
   ].join('\n\n') + '\n';
   return {
     code,
@@ -502,6 +523,7 @@ export function assembleIrForwardShader(surface: LayeredSurfaceModule, options: 
     fragmentEntry: IR_FORWARD_FRAGMENT_ENTRY,
     frameGroup: IR_FORWARD_FRAME_GROUP,
     frameBinding: IR_FORWARD_FRAME_BINDING,
+    rasterQuality,
     ...(displacement ? { displacementGroup: IR_FORWARD_DISP_GROUP } : {}),
   };
 }

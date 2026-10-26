@@ -48,6 +48,28 @@ function forward(category: string, inputs: ResolvedInput[]) {
 }
 
 describe('assembleIrForwardShader (T058b)', () => {
+  it('offers filtered 16-sample interactive IBL without CDF searches or a second MIS strategy', () => {
+    const { surface } = forward('standard_surface', [value('coat', 'float', '1')]);
+    const shader = assembleIrForwardShader(surface, { rasterQuality: 'interactive' });
+    expect(shader.rasterQuality).toBe('interactive');
+    expect(shader.code).toContain('i < 16u');
+    expect(shader.code).toContain('mx_forward_filtered_environment');
+    expect(shader.code).toContain('textureNumLevels(forwardEnv)');
+    expect(shader.code).not.toContain('forwardEnvCdf');
+    expect(shader.code).not.toContain('mx_forward_env_pdf');
+    expect(shader.code).not.toContain('mx_forward_env_direction');
+    expect(shader.code).not.toContain('i < 64u');
+    expect(shader.code).toContain('mx_coat_attenuation');
+    expect(shader.code).toContain('let c = mx_surface_layered(vary);');
+  });
+
+  it('keeps reference quadrature as the default for captures and parity tests', () => {
+    const { shader } = forward('standard_surface', []);
+    expect(shader.rasterQuality).toBe('reference');
+    expect(shader.code).toContain('i < 64u');
+    expect(shader.code).toContain('forwardEnvCdf[mid]');
+    expect(shader.code).not.toContain('mx_forward_filtered_environment');
+  });
   it('integrates coated diffuse against the actual HDR without an uncoated SH term', () => {
     const { shader } = forward('standard_surface', [
       value('coat', 'float', '1'), value('coat_color', 'color3', '0.85, 0.2, 0.25'),

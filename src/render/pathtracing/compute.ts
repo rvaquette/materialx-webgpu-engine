@@ -28,8 +28,9 @@ export const PT_COMPUTE_ENTRY = 'mx_path_trace';
 /** Floats in the path-trace uniform (PT_UNIFORM_SIZE / 4). Slots 0..39 hold the
  *  camera/light/env/frame blocks; 40..75 hold the 9 RGB SH irradiance coefficients
  *  (one vec4 per coefficient, w unused); 76..79 hold the tile and 80..83 the HDR
- *  texture radiance scale (x, remaining components unused). */
-export const PT_UNIFORM_FLOATS = 84;
+ *  texture radiance scale (x) and panorama flag (y); 84..99 hold the optional
+ *  display-only inverse background view-projection. */
+export const PT_UNIFORM_FLOATS = 100;
 /** Bytes in the path-trace uniform buffer. */
 export const PT_UNIFORM_SIZE = PT_UNIFORM_FLOATS * 4;
 
@@ -92,6 +93,7 @@ struct Uniforms {
   sh : array<vec4<f32>, 9>, // 9 RGB SH9 irradiance coefficients (.xyz), w unused
   tile : vec4<f32>,
   envTexture : vec4<f32>, // x = half-float texture radiance scale
+  backgroundInvViewProj : mat4x4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> U : Uniforms;
@@ -482,7 +484,7 @@ fn mx_alpha_visibility(origin: vec3f, direction: vec3f) -> f32 {
   return 0.0;
 }
 
-fn integrate(ro0 : vec3<f32>, rd0 : vec3<f32>, state : ptr<function, u32>) -> vec3<f32> {
+fn integrate(ro0 : vec3<f32>, rd0 : vec3<f32>, backgroundDirection : vec3<f32>, state : ptr<function, u32>) -> vec3<f32> {
   var radiance = vec3<f32>(0.0);
   var beta = vec3<f32>(1.0);
   var ro = ro0;
@@ -502,6 +504,7 @@ fn integrate(ro0 : vec3<f32>, rd0 : vec3<f32>, state : ptr<function, u32>) -> ve
   var medium : MxMedium;
   // Select once, at the first dispersive interface, and reuse at every bounce.
   var spectralChannel = 3u;
+  var cameraSegment = true;
 
   for (var bounce = 0; bounce < 64; bounce = bounce + 1) {
     let hit = traverse(ro, rd, 1.0e30, false);
@@ -537,7 +540,9 @@ fn integrate(ro0 : vec3<f32>, rd0 : vec3<f32>, state : ptr<function, u32>) -> ve
       if (hasEnv) {
 ${
         environment
-          ? /* wgsl */ `        if (specularBounce) {
+          ? /* wgsl */ `        if (cameraSegment && U.envTexture.y > 0.5) {
+          radiance = radiance + beta * env_radiance(backgroundDirection);
+        } else if (specularBounce) {
           radiance = radiance + beta * ${envMiss};
         } else if (splitFuzzEnvironment || !diffuseBounce) {
           // Full diffuse/glossy transport, or the residual glossy response when
@@ -570,6 +575,7 @@ ${closureBuild}
       ro = pos + rd * RAY_EPS;
       continue;
     }
+    cameraSegment = false;
     if (mx_closure_has_dispersion(c) && spectralChannel == 3u) {
       spectralChannel = min(u32(rng_next(state) * 3.0), 2u);
       var channelWeight = vec3f(0.0);
@@ -717,6 +723,7 @@ function wgslEntry(): string {
 struct MxCameraRay {
   origin: vec3<f32>,
   direction: vec3<f32>,
+  backgroundDirection: vec3<f32>,
 };
 
 fn camera_ray(px : vec2<f32>, dims : vec2<f32>, jitter : vec2<f32>) -> MxCameraRay {
@@ -729,6 +736,11 @@ fn camera_ray(px : vec2<f32>, dims : vec2<f32>, jitter : vec2<f32>) -> MxCameraR
   var ray : MxCameraRay;
   ray.origin = near.xyz / near.w;
   ray.direction = normalize(far.xyz / far.w - ray.origin);
+  ray.backgroundDirection = ray.direction;
+  if (U.envTexture.y > 0.5) {
+    let backgroundNear = U.backgroundInvViewProj * vec4<f32>(ndc, 0.0, 1.0);
+    ray.backgroundDirection = normalize(backgroundNear.xyz / backgroundNear.w - U.eye.xyz);
+  }
   return ray;
 }
 
@@ -752,7 +764,7 @@ fn ${PT_COMPUTE_ENTRY}(@builtin(global_invocation_id) gid : vec3<u32>) {
   for (var i = 0u; i < spp; i = i + 1u) {
     let jitter = vec2<f32>(rng_next(&state), rng_next(&state));
     let ray = camera_ray(vec2<f32>(pixelCoord), dims, jitter);
-    var radiance = integrate(ray.origin, ray.direction, &state);
+    var radiance = integrate(ray.origin, ray.direction, ray.backgroundDirection, &state);
     if (fireflyMax > 0.0) {
       let lum = dot(radiance, vec3<f32>(0.2126, 0.7152, 0.0722));
       if (lum > fireflyMax) { radiance = radiance * (fireflyMax / lum); }
@@ -866,6 +878,10 @@ export function buildPathTraceUniform(
   }
   d.set(tile ? [tile.x, tile.y, tile.width, tile.height] : [0, 0, width, height], 76);
   d[80] = env.textureRadianceScale ?? 1;
+  if (scene.camera.backgroundInvViewProj) {
+    d[81] = 1;
+    d.set(scene.camera.backgroundInvViewProj, 84);
+  }
   return d;
 }
 

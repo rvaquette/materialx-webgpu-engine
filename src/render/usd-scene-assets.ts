@@ -19,7 +19,7 @@ import {
 import { createGraphMaterialCompiler } from './graph-material-compiler.ts';
 import { loadMaterialXDocuments } from '../materialx/document-source.ts';
 import { loadMaterialXCore } from '../materialx/wasm.ts';
-import { MaterialXLibraries, defaultLibrarySources } from '../materialx/libraries.ts';
+import { loadSharedMaterialXLibraries, defaultLibrarySources } from '../materialx/libraries.ts';
 import type { DecodedPixelImage } from '../assets/images.ts';
 import { decodeBrowserImage } from '../assets/browser-image.ts';
 import { imageSamplerDescriptor } from '../assets/samplers.ts';
@@ -187,10 +187,13 @@ export async function loadMtlxSceneContext(
     locateFile: (path) => appAssetUrl(MATERIALX_WASM_DIR + path),
     onDiagnostic: sink,
   });
-  const libraries = new MaterialXLibraries(core);
-  await libraries.load({
+  const libraries = await loadSharedMaterialXLibraries(core, {
     sources: defaultLibrarySources(MATERIALX_LIBRARIES_ROOT),
-    fetchText: async (url) => (await fetch(url)).text(),
+    fetchText: async (url) => {
+      const response = await fetch(url);
+      if (!response.ok) throw new Error(`HTTP ${response.status}: ${url}`);
+      return response.text();
+    },
     onDiagnostic: sink,
   });
   const documents = await loadMaterialXDocuments({ core, libraries, texts, sink });
@@ -292,9 +295,11 @@ export async function loadEnvironment(
       return undefined;
     }
   };
-  const image = await fetchHdr(dome.textureFile);
+  const [image, irradianceImage] = await Promise.all([
+    fetchHdr(dome.textureFile),
+    dome.irradianceFile ? fetchHdr(dome.irradianceFile) : undefined,
+  ]);
   if (!image) return undefined;
-  const irradianceImage = dome.irradianceFile ? await fetchHdr(dome.irradianceFile) : undefined;
   const sh = projectIrradianceSH(irradianceImage ?? image);
   return {
     image,

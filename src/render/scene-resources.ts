@@ -211,7 +211,21 @@ function buildGeometry(prototypeId: string, primPath: string, raw: RawMesh, opti
   for (const [name, attr] of mesh.attributes) {
     streams.push({ name, data: attr.values, components: attr.elementSize });
   }
-  const blas = buildBvh(mesh.positions, mesh.indices);
+  let blas: Bvh | undefined;
+  const bounds: { min: [number, number, number]; max: [number, number, number] } = {
+    min: [Infinity, Infinity, Infinity], max: [-Infinity, -Infinity, -Infinity],
+  };
+  for (const index of mesh.indices) {
+    for (let axis = 0; axis < 3; axis++) {
+      const value = mesh.positions[index * 3 + axis]!;
+      bounds.min[axis] = Math.min(bounds.min[axis]!, value);
+      bounds.max[axis] = Math.max(bounds.max[axis]!, value);
+    }
+  }
+  if (mesh.indices.length === 0) {
+    bounds.min = [0, 0, 0];
+    bounds.max = [0, 0, 0];
+  }
   return {
     prototypeId,
     primPath,
@@ -219,8 +233,8 @@ function buildGeometry(prototypeId: string, primPath: string, raw: RawMesh, opti
     indices: mesh.indices,
     vertexCount: mesh.positions.length / 3,
     triangleCount: mesh.indices.length / 3,
-    bounds: blas.bounds,
-    blas,
+    bounds,
+    get blas() { return blas ??= buildBvh(mesh.positions, mesh.indices); },
     subsets: mesh.subsets,
     subdivision: mesh.subdivision,
     displacement: mesh.displacement,
@@ -430,7 +444,9 @@ export function createSceneBindGroups(
   const environment = buffers.environment ?? fallbackEnvironment(device);
   push(frameGroup, { binding: 4, resource: environment.textureView });
   push(frameGroup, { binding: 5, resource: environment.sampler });
-  push(frameGroup, { binding: 6, resource: { buffer: environment.cdf } });
+  if (material.sceneShader?.rasterQuality !== 'interactive') {
+    push(frameGroup, { binding: 6, resource: { buffer: environment.cdf } });
+  }
 
   // Optional vertex-displacement (VTF): the height map, its sampler and the MxDisp
   // params share the frame group at bindings 1, 2 and 3 (the device guarantees only

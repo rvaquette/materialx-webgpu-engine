@@ -50,6 +50,8 @@ export interface PathTraceCamera {
   viewProj: Mat4;
   /** Inverse view-projection for unprojecting pixel rays in the compute shader. */
   invViewProj: Mat4;
+  /** Optional display-only panorama projection; transport keeps the geometry camera. */
+  backgroundInvViewProj?: Mat4;
   eye: Vec3;
   exposure: number;
 }

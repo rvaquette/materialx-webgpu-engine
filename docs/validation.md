@@ -29,6 +29,90 @@ d'erreur :
    mesuré soit l'arithmétique fp32 du GPU face au fp64 du CPU, et non une différence
    de visibilité ou d'échantillonnage.
 
+## Profils raster et réactivité du viewer mobile
+
+Le viewer propose deux profils explicitement sélectionnables :
+
+- **Interactive (filtered IBL)**, par défaut dans le viewer : 16 échantillons
+  BSDF par intégration, environnement HDR filtré par mipmaps et LOD calculé à
+  partir de la PDF et de l'angle solide des texels latlong. Ce profil est une
+  **approximation** : il supprime la stratégie d'importance environnement/CDF et
+  son MIS complémentaire. Les reflets quasi spéculaires gardent le niveau zéro
+  pour ne pas flouter les miroirs et le verre lisse.
+- **Reference (64 samples)** : intégration historique à 64 échantillons avec
+  CDF et MIS. C'est toujours le défaut de `assembleIrForwardShader`, donc des
+  captures et tests qui ne demandent pas explicitement le profil interactif.
+  Les comparaisons oracle ne doivent pas substituer implicitement l'interactif
+  à cette référence.
+
+Les mipmaps HDR sont générées sur le GPU, sans modifier le niveau zéro utilisé
+par le path tracer. La qualité raster ne change pas l'intégrateur path tracing.
+L'interactif soumet une image en une commande ; la référence conserve les bandes
+de 65 536 pixels pour éviter les watchdogs des pilotes mobiles.
+
+Les changements de résolution remplacent uniquement les cibles HDR/profondeur,
+et le buffer d'accumulation si le path tracer a déjà été initialisé. Géométrie,
+textures et pipelines sont conservés ; les deux jeux de pipelines raster sont
+mis en cache après leur première compilation. La préparation CPU/BVH et GPU du
+path tracer est différée jusqu'à sa première utilisation. Les bibliothèques
+MaterialX sont partagées pendant la vie du Core, téléchargées en parallèle,
+puis parsées dans l'ordre des dépendances ; un chargement échoué peut être retenté.
+Le viewer limite les images en vol pour ne pas accumuler une file de mouvements
+de caméra obsolètes.
+
+### Panorama visible, raster et path tracing
+
+La caméra des objets reste **orthographique**. Employer ses rayons parallèles
+pour le panorama produisait un fond presque uniforme. Le viewer utilise désormais
+une projection perspective dédiée au **fond visible**, de même orientation et
+FOV dans les deux modes ; le zoom orthographique ne change pas ce FOV.
+Dans le path tracer, cette direction ne remplace que l'environnement rencontré
+sur le segment caméra, y compris à travers les événements d'opacité nulle.
+Après une interaction avec une surface, les réflexions, transmissions et autres
+rebonds continuent d'échantillonner leurs véritables directions de transport.
+Il s'agit d'une convention d'affichage, pas d'une conversion de toute la scène
+en perspective. Les autres consommateurs du path tracer conservent leur caméra
+habituelle tant qu'ils ne fournissent pas `backgroundInvViewProj`.
+
+### Mesures et vérifications sur téléphone
+
+Mesures locales via ADB/CDP, Samsung SM-F731B, Adreno 740, Chrome 155,
+scène **Simple shader ball**, après compilation des pipelines :
+
+| Résolution | Ancien raster 64 échantillons | Interactif avec panorama corrigé |
+|---|---:|---:|
+| 512 × 512 | environ 166 ms | 39–48 ms |
+| 1024 × 1024 | environ 324 ms | 50–55 ms |
+
+Ce sont des délais entre soumission et `queue.onSubmittedWorkDone`, **pas des
+timestamps GPU matériels ni des durées garanties de présentation**. Les mesures
+dépendent aussi de l'état thermique du téléphone. Elles montrent un gain
+d'environ 3,5–4× à 512² et 6× à 1024², sans garantir 60 images/s. La référence
+conserve un coût similaire à l'ancien rendu (environ 173–177 ms à 512² lors
+de cette vérification).
+
+Les vérifications sur GPU réel ont couvert :
+
+- panorama visible dans les deux modes, sans erreur WGSL/WebGPU ;
+- profils interactif/référence et retour sur un profil déjà compilé sans
+  compilation ni allocation supplémentaire ;
+- redimensionnement sans nouveau pipeline ni shader ; deux textures raster,
+  plus un buffer d'accumulation si le path tracer est déjà initialisé ;
+- progression du path tracing et réutilisation de son pipeline au resize ;
+- compilation/rendu raster de carpaint OpenPBR, verre dispersif glTF et
+  soapbubble OpenPBR ; ces essais ne constituent pas une preuve de parité
+  photométrique du profil approximatif ;
+- quinze requêtes de bibliothèques MaterialX, sans nouvelle requête après ces
+  changements de matériaux.
+
+Les tests ciblés de cycle de vie, shaders, caméra, ressources et bibliothèques
+passent (99 tests), ainsi que `npm run typecheck` et `npm run build`. La suite
+complète donne 1343 succès, un test ignoré et trois échecs dans des tests/compiler
+non modifiés : comptage des catégories de nœuds, signature d'échantillonnage
+de transmission et unité d'épaisseur thin-film. Une exécution isolée sur HEAD
+n'a pas été autorisée ; leur préexistence n'est donc pas confirmée par un
+comparatif exécuté. Ces écarts restent hors du périmètre de cette optimisation.
+
 ## Audit de compilation des fichiers MaterialX
 
 `npm run audit:mtlx` parcourt les fichiers `.mtlx` du workspace, hors dependances,

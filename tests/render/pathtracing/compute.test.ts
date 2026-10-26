@@ -147,7 +147,7 @@ describe('pathTraceComputeWgsl', () => {
     expect(src).toContain('struct MxCameraRay {');
     expect(src).toContain('let near = U.invViewProj * vec4<f32>(ndc, 0.0, 1.0);');
     expect(src).toContain('ray.direction = normalize(far.xyz / far.w - ray.origin);');
-    expect(src).toContain('integrate(ray.origin, ray.direction, &state)');
+    expect(src).toContain('integrate(ray.origin, ray.direction, ray.backgroundDirection, &state)');
     expect(src).not.toContain('normalize(world - U.eye.xyz)');
   });
 
@@ -387,6 +387,20 @@ describe('pathTraceComputeWgsl texture registry (T057j)', () => {
 
 
 describe('buildPathTraceUniform layout', () => {
+  it('enables a display-only panorama camera without changing transport rays', () => {
+    const scene = fakeScene();
+    const normal = buildPathTraceUniform(scene, 0, 1, 512, 512);
+    expect(normal[81]).toBe(0);
+    scene.camera.backgroundInvViewProj = [...scene.camera.invViewProj].map((n) => n * 2);
+    const backdrop = buildPathTraceUniform(scene, 0, 1, 512, 512);
+    expect(backdrop[81]).toBe(1);
+    expect(Array.from(backdrop.slice(0, 16))).toEqual(Array.from(normal.slice(0, 16)));
+    expect(Array.from(backdrop.slice(84, 100))).toEqual(scene.camera.backgroundInvViewProj);
+    const code = pathTraceComputeWgsl({ environment: true });
+    expect(code).toContain('if (cameraSegment && U.envTexture.y > 0.5)');
+    expect(code).toContain('env_radiance(backgroundDirection)');
+    expect(code.indexOf('cameraSegment = false;')).toBeGreaterThan(code.indexOf('if (opacity <= 0.0'));
+  });
   it('defaults to a full image and packs an explicit tile after the SH coefficients', () => {
     const full = buildPathTraceUniform(fakeScene(), 0, 1, 512, 512);
     expect(Array.from(full.slice(76, 80))).toEqual([0, 0, 512, 512]);

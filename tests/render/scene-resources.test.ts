@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import * as acceleration from '../../src/geometry/bvh.ts';
 import type { Diagnostic } from '../../src/core/diagnostics.ts';
 import { IrModuleBuilder, FLOAT, shaderType } from '../../src/compiler/ir.ts';
 import { emitWgsl } from '../../src/compiler/wgsl.ts';
@@ -195,6 +196,28 @@ function distinctLayeredCompiler(colors: Record<string, string>): MaterialCompil
 }
 
 describe('buildSceneResources (T050)', () => {
+  it('keeps finite bounds for geometry without triangles', async () => {
+    const resources = await buildSceneResources(demoScene(), {
+      meshSource: meshSource({ '/World/floor': { points: [], faceVertexCounts: [], faceVertexIndices: [] } }),
+      materialCompiler: surfaceCompiler(),
+    });
+    expect(resources.geometries.get('/World/floor')!.bounds).toEqual({ min: [0, 0, 0], max: [0, 0, 0] });
+  });
+  it('computes bounds without a triangle BVH and memoizes BLAS on first access', async () => {
+    const build = vi.spyOn(acceleration, 'buildBvh');
+    try {
+      const resources = await buildSceneResources(demoScene(), {
+        meshSource: meshSource({ '/World/floor': quad() }), materialCompiler: surfaceCompiler(),
+      });
+      const geometry = resources.geometries.get('/World/floor')!;
+      expect(build).not.toHaveBeenCalled();
+      expect(geometry.bounds).toEqual({ min: [0, 0, 0], max: [1, 1, 0] });
+      const first = geometry.blas;
+      expect(first.bounds).toEqual(geometry.bounds);
+      expect(geometry.blas).toBe(first);
+      expect(build).toHaveBeenCalledTimes(1);
+    } finally { build.mockRestore(); }
+  });
   it('uploads geometry, builds instances/TLAS, compiles bound materials', async () => {
     const messages: Diagnostic[] = [];
     const resources = await buildSceneResources(demoScene(), {
