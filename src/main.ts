@@ -16,7 +16,12 @@ function setStatus(text: string): void {
 
 function formatStatus(s: ViewerStatus): string {
   const pt = s.pathTracer === 'compiling' ? ', compilation du path tracer...' : s.pathTracer === 'error' ? ', échec du path tracer' : '';
-  const extra = s.backend === 'pathtracing' ? `${pt || `, ${s.samples} spp`}${s.pathTracingPaused ? ' (pause)' : ''}${s.pathTracingDenoise ? ', débruitage (approximation)' : ', brut sans débruitage'}`
+  const denoiser = s.denoiser.state === 'off' ? ', brut'
+    : s.denoiser.state === 'running' ? ', denoiser JS : chargement / calcul...'
+    : s.denoiser.state === 'error' ? `, échec denoiser JS : ${s.denoiser.error}`
+    : s.denoiser.state === 'ready' ? ', denoiser JS (neuronal, approximation)'
+    : ', denoiser JS : attente d’un passage complet';
+  const extra = s.backend === 'pathtracing' ? `${pt || `, ${s.samples} spp`}${s.pathTracingPaused ? ' (pause)' : ''}${denoiser}`
     : s.rasterQuality === 'interactive' ? ', IBL filtrée 16 échantillons (approximation)' : ', référence 64 échantillons MIS';
   const note = s.warnings ? ` (${s.warnings} diagnostic(s))` : '';
   return `Backend ${s.backend}: ${s.drawCount} object(s), passes [${s.passes.join(', ')}]${extra}${note}. ` +

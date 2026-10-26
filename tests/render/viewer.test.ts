@@ -8,6 +8,7 @@ import { importUsdStage } from '../../src/usd/importer.ts';
 import { NEUTRAL_SURFACE } from '../../src/render/raster/scene-frame.ts';
 import { projectIrradianceSH } from '../../src/render/env/irradiance.ts';
 import { buildEnvCdf } from '../../src/assets/environment-cdf.ts';
+import { JsDenoiser } from '../../src/render/pathtracing/js-denoiser.ts';
 
 vi.mock('../../src/render/usd-scene-assets.ts', async (original) => ({
   ...await original<typeof import('../../src/render/usd-scene-assets.ts')>(),
@@ -26,7 +27,9 @@ function fakeDevice() {
   };
   const textures: Array<{ destroy: ReturnType<typeof vi.fn> }> = [];
   const device = {
-    createBuffer: vi.fn(() => ({ destroy: vi.fn() })),
+    createBuffer: vi.fn((desc: GPUBufferDescriptor) => ({
+      destroy: vi.fn(), mapAsync: vi.fn(async () => {}), getMappedRange: () => new ArrayBuffer(desc.size), unmap: vi.fn(),
+    })),
     createTexture: vi.fn((desc: GPUTextureDescriptor) => {
       const texture = { mipLevelCount: desc.mipLevelCount ?? 1, createView: vi.fn(() => ({})), destroy: vi.fn() };
       textures.push(texture);
@@ -39,7 +42,7 @@ function fakeDevice() {
     createSampler: vi.fn(() => ({})),
     createCommandEncoder: vi.fn(() => ({
       beginRenderPass: vi.fn(() => pass), beginComputePass: vi.fn(() => pass),
-      clearBuffer: vi.fn(), copyBufferToBuffer: vi.fn(), finish: vi.fn(() => ({})),
+      clearBuffer: vi.fn(), copyBufferToBuffer: vi.fn(), copyTextureToBuffer: vi.fn(), finish: vi.fn(() => ({})),
     })),
     queue: {
       writeBuffer: vi.fn(), writeTexture: vi.fn(), submit: vi.fn(),
@@ -107,6 +110,10 @@ describe('interactive viewer resource lifecycle', () => {
     vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => { tick = callback; return 1; });
     vi.stubGlobal('GPUBufferUsage', { VERTEX: 1, INDEX: 2, COPY_DST: 4, UNIFORM: 8, STORAGE: 16, COPY_SRC: 32 });
     vi.stubGlobal('GPUTextureUsage', { TEXTURE_BINDING: 1, COPY_DST: 2, RENDER_ATTACHMENT: 4 });
+    vi.stubGlobal('GPUMapMode', { READ: 1 });
+    vi.stubGlobal('ImageData', class {
+      constructor(public data: Uint8ClampedArray, public width: number, public height: number) {}
+    });
     vi.mocked(buildPathTraceScene).mockReset();
   });
   afterEach(() => { viewer?.dispose(); vi.unstubAllGlobals(); });
@@ -184,7 +191,7 @@ describe('interactive viewer resource lifecycle', () => {
     } finally { error.mockRestore(); }
   });
 
-  it('keeps the preview while refining tiles, redraws denoise while paused and resizes without recompilation', async () => {
+  it('keeps the preview while refining tiles, defaults to raw and resizes without recompilation', async () => {
     const actual = await vi.importActual<typeof import('../../src/render/pathtracing/scene-buffers.ts')>(
       '../../src/render/pathtracing/scene-buffers.ts');
     vi.mocked(buildPathTraceScene).mockImplementation(actual.buildPathTraceScene);
@@ -203,7 +210,7 @@ describe('interactive viewer resource lifecycle', () => {
     tick(2);
     await Promise.resolve();
     const refinement = device.createCommandEncoder.mock.results.at(-1)!.value;
-    expect(refinement.copyBufferToBuffer).toHaveBeenCalledWith(expect.anything(), 0, expect.anything(), 0, 128 * 128 * 48);
+    expect(refinement.copyBufferToBuffer).toHaveBeenCalledWith(expect.anything(), 0, expect.anything(), 0, 128 * 128 * 32);
     const shaders = device.createShaderModule.mock.calls.length;
     const dispatches = pass.dispatchWorkgroups.mock.calls.length;
     viewer.setPathTracingPaused(true);
@@ -245,6 +252,44 @@ describe('interactive viewer resource lifecycle', () => {
     const scene = vi.mocked(buildPathTraceScene).mock.results[0]!.value;
     expect(scene.environment.envTotalSum).toBe(expected.totalSum);
     expect(scene.environment.envResX).toBe(4);
+  });
+
+  it('reports neural inference errors and ignores results invalidated by resize or disabling', async () => {
+    const actual = await vi.importActual<typeof import('../../src/render/pathtracing/scene-buffers.ts')>(
+      '../../src/render/pathtracing/scene-buffers.ts');
+    vi.mocked(buildPathTraceScene).mockImplementation(actual.buildPathTraceScene);
+    const run = vi.spyOn(JsDenoiser.prototype, 'run').mockRejectedValue(new Error('model unavailable'));
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const { viewer, device, statuses } = await setup();
+      viewer.setPathTracingDenoise(true);
+      viewer.setBackend('pathtracing');
+      tick(0);
+      await new Promise(r => setTimeout(r, 20));
+      tick(1);
+      await Promise.resolve();
+      await new Promise(r => setTimeout(r, 220));
+      for (let i = 0; i < 16; i++) { tick(i + 2); await Promise.resolve(); }
+      await new Promise(r => setTimeout(r, 0));
+      expect(run).toHaveBeenCalledTimes(1);
+      expect(statuses.at(-1)?.denoiser).toEqual({ state: 'error', error: 'model unavailable' });
+      expect(error).toHaveBeenCalledWith('JS denoiser failed:', expect.any(Error));
+      viewer.setPathTracingPaused(true);
+      let finish!: (image: ImageData) => void;
+      run.mockImplementation(() => new Promise(resolve => { finish = resolve; }));
+      viewer.setPathTracingDenoise(false);
+      viewer.setPathTracingDenoise(true);
+      tick(18);
+      await new Promise(r => setTimeout(r, 0));
+      expect(statuses.at(-1)?.denoiser.state).toBe('running');
+      const writes = device.queue.writeTexture.mock.calls.length;
+      await viewer.resize(256);
+      viewer.setPathTracingDenoise(false);
+      finish(new ImageData(new Uint8ClampedArray(512 * 512 * 4), 512, 512));
+      await new Promise(r => setTimeout(r, 0));
+      expect(device.queue.writeTexture).toHaveBeenCalledTimes(writes);
+      expect(statuses.at(-1)?.denoiser.state).toBe('off');
+    } finally { run.mockRestore(); error.mockRestore(); }
   });
 
   it('retains old targets on allocation failure and destroys replaced targets', async () => {

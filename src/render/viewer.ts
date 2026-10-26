@@ -35,6 +35,7 @@ import { packHdrTexture } from '../assets/hdr-texture.ts';
 import { generateEnvironmentMipmaps } from './env/mipmaps.ts';
 import { assembleIrForwardShader, type RasterQuality } from './raster/ir-forward.ts';
 import { pathTraceDisplayWgsl, previewScale, PT_DISPLAY_INFO_BYTES, PT_DISPLAY_PIXEL_BYTES } from './pathtracing/display.ts';
+import { JsDenoiser } from './pathtracing/js-denoiser.ts';
 
 /** Preview fill + framing shared with the capture harness so the live view matches. */
 const PREVIEW_ENV: Vec3 = [0.65, 0.68, 0.72];
@@ -50,6 +51,9 @@ function previewCamera(aspect: number, exposure: number): FrameCamera {
 export type BackendKind = 'raster' | 'pathtracing';
 
 export type PathTracerState = 'idle' | 'compiling' | 'ready' | 'error';
+export type DenoiserStatus =
+  | { state: 'off' | 'waiting' | 'running' | 'ready' }
+  | { state: 'error'; error: string };
 
 export interface ViewerStatus {
   backend: BackendKind;
@@ -57,6 +61,7 @@ export interface ViewerStatus {
   pathTracer: PathTracerState;
   rasterQuality: RasterQuality;
   pathTracingDenoise: boolean;
+  denoiser: DenoiserStatus;
   drawCount: number;
   passes: readonly ScenePassKind[];
   samples: number;
@@ -72,6 +77,8 @@ interface SceneRender {
   /** Starts the path tracer build on first call; renders nothing until it is ready. */
   renderPathTrace: (targetView: GPUTextureView, tiled: boolean, accumulate: boolean) => void;
   reportFrameTime: (milliseconds: number) => void;
+  invalidateDenoise: () => void;
+  denoiserStatus: () => DenoiserStatus;
   resetPathTrace: () => void;
   applyCamera: (viewProj: readonly number[], eye: Vec3, backgroundInvViewProj: readonly number[]) => void;
   frameCount: () => number;
@@ -89,7 +96,8 @@ export class InteractiveViewer {
   #backend: BackendKind = 'raster';
   #rasterQuality: RasterQuality = 'interactive';
   #pathTracingPaused = false;
-  #pathTracingDenoise = true;
+  #pathTracingDenoise = false;
+  readonly #jsDenoiser: JsDenoiser;
   #ptDisplayDirty = true;
   #orbit: OrbitCamera;
   #current: SceneRender | null = null;
@@ -115,6 +123,7 @@ export class InteractiveViewer {
     onShaderErrors?: (errors: readonly ShaderCompilationError[]) => void;
   }) {
     this.#device = opts.device;
+    this.#jsDenoiser = new JsDenoiser(opts.device);
     this.#context = opts.context;
     this.#outputFormat = opts.outputFormat;
     this.#canvas = opts.canvas;
@@ -177,6 +186,7 @@ export class InteractiveViewer {
 
   setPathTracingDenoise(enabled: boolean): void {
     this.#pathTracingDenoise = enabled;
+    this.#current?.invalidateDenoise();
     this.#ptDisplayDirty = true;
     this.#emitStatus();
   }
@@ -192,7 +202,10 @@ export class InteractiveViewer {
     this.#canvas.style.imageRendering = 'auto';
     this.#ptDisplayDirty = true;
     if (kind === 'pathtracing') this.#current?.resetPathTrace();
-    else this.#rasterDirty = true;
+    else {
+      this.#current?.invalidateDenoise();
+      this.#rasterDirty = true;
+    }
     this.#emitStatus();
   }
 
@@ -201,6 +214,7 @@ export class InteractiveViewer {
     this.#detachControls();
     this.#current?.dispose();
     this.#current = null;
+    this.#jsDenoiser.dispose();
     this.#loaded?.mtlx.documents.delete();
     this.#loaded = undefined;
   }
@@ -324,6 +338,7 @@ export class InteractiveViewer {
       pathTracer: this.#current.pathTracerState(),
       rasterQuality: this.#rasterQuality,
       pathTracingDenoise: this.#pathTracingDenoise,
+      denoiser: this.#current.denoiserStatus(),
       drawCount: this.#current.frame.draws.length,
       passes: this.#current.frame.passes,
       samples: this.#current.frameCount(),
@@ -338,9 +353,10 @@ export class InteractiveViewer {
       let submitted = false;
       const started = performance.now();
       const pathTracingFrame = this.#backend === 'pathtracing';
-      if (this.#backend === 'pathtracing' && (!this.#pathTracingPaused || this.#ptDisplayDirty)) {
+      const denoising = current.denoiserStatus().state === 'running';
+      if (this.#backend === 'pathtracing' && ((!this.#pathTracingPaused && !denoising) || this.#ptDisplayDirty)) {
         const tiled = performance.now() - this.#lastCameraChange >= 200;
-        current.renderPathTrace(this.#context.getCurrentTexture().createView(), tiled, !this.#pathTracingPaused);
+        current.renderPathTrace(this.#context.getCurrentTexture().createView(), tiled, !this.#pathTracingPaused && !denoising);
         this.#ptDisplayDirty = false;
         submitted = true;
         this.#emitStatus();
@@ -864,19 +880,38 @@ fn dir_to_uv(d: vec3<f32>) -> vec2<f32> {
         primitive: { topology: 'triangle-list' },
       });
       const ptInfo = track(device.createBuffer({ size: PT_DISPLAY_INFO_BYTES, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST }));
-      const displayGroup = (accum: GPUBuffer, preview: GPUBuffer): GPUBindGroup => device.createBindGroup({
+      const neuralTarget = (w: number, h: number): GPUTexture => device.createTexture({
+        size: [w, h], format: 'rgba8unorm', usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
+      });
+      let neuralTexture = neuralTarget(width, height);
+      ptTrash.push({ destroy: () => neuralTexture.destroy() });
+      const displayGroup = (accum: GPUBuffer, preview: GPUBuffer, neural: GPUTexture, uniform = ptInfo): GPUBindGroup => device.createBindGroup({
         layout: ptDisplayPipeline.getBindGroupLayout(0),
         entries: [
           { binding: 0, resource: { buffer: accum } },
-          { binding: 1, resource: { buffer: ptInfo } },
+          { binding: 1, resource: { buffer: uniform } },
           { binding: 2, resource: { buffer: preview } },
+          { binding: 5, resource: neural.createView() },
           ...(envAsset && envTextureView && envSampler ? [
             { binding: 3, resource: envTextureView }, { binding: 4, resource: envSampler },
           ] : []),
         ],
       });
-      let ptDisplayBindGroup = displayGroup(accumBuffer, previewBuffer);
+      let ptDisplayBindGroup = displayGroup(accumBuffer, previewBuffer, neuralTexture);
+      let neuralReady = false;
+      let denoiserBusy = false;
+      let denoiserRevision = 0;
+      let lastDenoisedSample = 0;
+      let denoiserStatus: DenoiserStatus = { state: 'waiting' };
+      const invalidateDenoise = (): void => {
+        denoiserRevision++;
+        neuralReady = false;
+        lastDenoisedSample = 0;
+        denoiserStatus = { state: 'waiting' };
+        if (denoiserBusy) this.#jsDenoiser.abort();
+      };
       const resetPathTrace = (): void => {
+        invalidateDenoise();
         ptBackend.resetAccumulation();
         resetPending = true;
         needsPreview = true;
@@ -886,17 +921,21 @@ fn dir_to_uv(d: vec3<f32>) -> vec2<f32> {
       const resizePathTrace = (w: number, h: number): void => {
         const nextAccum = accumulation(w, h);
         let nextPreview: GPUBuffer | undefined;
+        let nextNeural: GPUTexture | undefined;
         try {
           nextPreview = accumulation(Math.ceil(w / 2), Math.ceil(h / 2));
+          nextNeural = neuralTarget(w, h);
           const entries = group0Entries.map((entry) => bindings.group0.some(
             (slot) => slot.role === 'accum' && slot.binding === entry.binding,
           ) ? { binding: entry.binding, resource: { buffer: nextAccum } } : entry);
           const nextGroup0 = device.createBindGroup({ layout: ptPipeline.getBindGroupLayout(0), entries });
-          const nextDisplay = displayGroup(nextAccum, nextPreview);
+          const nextDisplay = displayGroup(nextAccum, nextPreview, nextNeural);
           accumBuffer.destroy();
           previewBuffer.destroy();
+          neuralTexture.destroy();
           accumBuffer = nextAccum;
           previewBuffer = nextPreview;
+          neuralTexture = nextNeural;
           group0 = nextGroup0;
           ptDisplayBindGroup = nextDisplay;
           ptWidth = Math.max(1, Math.ceil(w / pixelScale));
@@ -905,6 +944,7 @@ fn dir_to_uv(d: vec3<f32>) -> vec2<f32> {
         } catch (error) {
           nextAccum.destroy();
           nextPreview?.destroy();
+          nextNeural?.destroy();
           throw error;
         }
       };
@@ -933,7 +973,7 @@ fn dir_to_uv(d: vec3<f32>) -> vec2<f32> {
         const ints = new Uint32Array(info);
         ints.set([ptWidth, ptHeight], 0);
         floats[2] = exposure;
-        ints[3] = this.#pathTracingDenoise ? 1 : 0;
+        ints[3] = this.#pathTracingDenoise && neuralReady ? 1 : 0;
         ints.set([previewWidth, previewHeight, width, height], 4);
         floats.set(backgroundInvViewProj, 8);
         floats.set([...cameraEye, 0], 24);
@@ -966,6 +1006,79 @@ fn dir_to_uv(d: vec3<f32>) -> vec2<f32> {
         renderPass.draw(3);
         renderPass.end();
         device.queue.submit([encoder.finish()]);
+        const samples = ptBackend.frameIndex;
+        if (this.#pathTracingDenoise && !denoiserBusy && !this.#jsDenoiser.busy && denoiserStatus.state !== 'error'
+          && pixelScale === 1 && samples >= 1 && (lastDenoisedSample === 0 || samples >= lastDenoisedSample + 8)) {
+          void runDenoise(info, samples);
+        }
+      };
+      const runDenoise = async (displayInfo: ArrayBuffer, samples: number): Promise<void> => {
+        denoiserBusy = true;
+        denoiserStatus = { state: 'running' };
+        lastDenoisedSample = samples;
+        const revision = denoiserRevision;
+        const w = width;
+        const h = height;
+        const jobTrash: Array<{ destroy(): void }> = [];
+        const own = <T extends { destroy(): void }>(resource: T): T => { jobTrash.push(resource); return resource; };
+        this.#emitStatus();
+        try {
+          const source = own(device.createTexture({
+            size: [w, h], format: outputFormat, usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC,
+          }));
+          const stride = Math.ceil(w * 4 / 256) * 256;
+          const readback = own(device.createBuffer({ size: stride * h, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ }));
+          const rawInfo = own(device.createBuffer({ size: PT_DISPLAY_INFO_BYTES, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST }));
+          const data = displayInfo.slice(0);
+          new Uint32Array(data)[3] = 0;
+          device.queue.writeBuffer(rawInfo, 0, data);
+          const rawGroup = displayGroup(accumBuffer, previewBuffer, neuralTexture, rawInfo);
+          const encoder = device.createCommandEncoder();
+          const pass = encoder.beginRenderPass({
+            colorAttachments: [{ view: source.createView(), loadOp: 'clear', storeOp: 'store' }],
+          });
+          pass.setPipeline(ptDisplayPipeline);
+          pass.setBindGroup(0, rawGroup);
+          pass.draw(3);
+          pass.end();
+          encoder.copyTextureToBuffer({ texture: source }, { buffer: readback, bytesPerRow: stride }, [w, h]);
+          device.queue.submit([encoder.finish()]);
+          await readback.mapAsync(GPUMapMode.READ);
+          const rgba = new Uint8ClampedArray(w * h * 4);
+          try {
+            const bytes = new Uint8Array(readback.getMappedRange());
+            const bgra = outputFormat.startsWith('bgra');
+            for (let y = 0; y < h; y++) {
+              for (let x = 0; x < w; x++) {
+                const src = y * stride + x * 4;
+                const dst = (y * w + x) * 4;
+                rgba[dst] = bytes[src + (bgra ? 2 : 0)]!;
+                rgba[dst + 1] = bytes[src + 1]!;
+                rgba[dst + 2] = bytes[src + (bgra ? 0 : 2)]!;
+                rgba[dst + 3] = 255;
+              }
+            }
+          } finally { readback.unmap(); }
+          if (disposed || revision !== denoiserRevision || !this.#pathTracingDenoise) return;
+          const result = await this.#jsDenoiser.run(new ImageData(rgba, w, h));
+          if (disposed || revision !== denoiserRevision || !this.#pathTracingDenoise) return;
+          device.queue.writeTexture({ texture: neuralTexture }, result.data, { bytesPerRow: w * 4 }, [w, h]);
+          neuralReady = true;
+          denoiserStatus = { state: 'ready' };
+        } catch (error) {
+          if (!disposed && revision === denoiserRevision) {
+            const message = error instanceof Error ? error.message : String(error);
+            denoiserStatus = { state: 'error', error: message };
+            console.error('JS denoiser failed:', error);
+          }
+        } finally {
+          for (const resource of jobTrash) resource.destroy();
+          denoiserBusy = false;
+          if (!disposed) {
+            this.#ptDisplayDirty = true;
+            this.#emitStatus();
+          }
+        }
       };
       const reportFrameTime = (milliseconds: number): void => {
         if (!lastPreview) return;
@@ -977,7 +1090,11 @@ fn dir_to_uv(d: vec3<f32>) -> vec2<f32> {
           measuredTime = 0;
         }
       };
-      return { renderPathTrace, reportFrameTime, resetPathTrace, resize: resizePathTrace, frameCount: () => ptBackend.frameIndex };
+      return {
+        renderPathTrace, reportFrameTime, resetPathTrace, invalidateDenoise,
+        denoiserStatus: (): DenoiserStatus => this.#pathTracingDenoise ? denoiserStatus : { state: 'off' },
+        resize: resizePathTrace, frameCount: () => ptBackend.frameIndex,
+      };
     };
 
     let ptState: PathTracerState = 'idle';
@@ -1068,12 +1185,15 @@ fn dir_to_uv(d: vec3<f32>) -> vec2<f32> {
         }
       },
       reportFrameTime: (milliseconds) => pathTracer?.reportFrameTime(milliseconds),
+      invalidateDenoise: () => pathTracer?.invalidateDenoise(),
+      denoiserStatus: () => pathTracer?.denoiserStatus() ?? { state: this.#pathTracingDenoise ? 'waiting' : 'off' },
       resetPathTrace: () => pathTracer?.resetPathTrace(),
       applyCamera,
       frameCount: () => pathTracer?.frameCount() ?? 0,
       pathTracerState: () => ptState,
       dispose: () => {
         disposed = true;
+        pathTracer?.invalidateDenoise();
         pathTracer = undefined;
         for (const o of trash) o.destroy();
       },

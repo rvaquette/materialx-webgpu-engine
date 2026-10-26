@@ -176,9 +176,9 @@
           <span id="pathtracing-toggle-icon" aria-hidden="true">&#10074;&#10074;</span>
           <span id="pathtracing-toggle-label">Pause</span>
         </button>
-        <label id="pathtracing-denoise-label" for="pathtracing-denoise" title="Filtre spatial guidé par les normales et la profondeur. Approximation d'affichage uniquement ; désactiver pour voir l'accumulation brute.">
-          <input id="pathtracing-denoise" type="checkbox" checked />
-          PT denoise (approx.)
+        <label id="pathtracing-denoise-label" for="pathtracing-denoise" title="Denoiser JS neuronal sur WebGPU, chargé à la demande avec son modèle local. Approximation d'affichage LDR après un passage complet ; désactiver pour voir le rendu brut.">
+          <input id="pathtracing-denoise" type="checkbox" />
+          Denoiser JS (neural)
         </label>
       </div>
       <details id="materials-panel">

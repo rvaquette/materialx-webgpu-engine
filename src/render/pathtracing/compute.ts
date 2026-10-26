@@ -484,7 +484,7 @@ fn mx_alpha_visibility(origin: vec3f, direction: vec3f) -> f32 {
   return 0.0;
 }
 
-fn integrate(ro0 : vec3<f32>, rd0 : vec3<f32>, backgroundDirection : vec3<f32>, state : ptr<function, u32>${displayAovs ? ', guide: ptr<function, vec4<f32>>' : ''}) -> vec3<f32> {
+fn integrate(ro0 : vec3<f32>, rd0 : vec3<f32>, backgroundDirection : vec3<f32>, state : ptr<function, u32>${displayAovs ? ', coverage: ptr<function, f32>' : ''}) -> vec3<f32> {
   var radiance = vec3<f32>(0.0);
   var beta = vec3<f32>(1.0);
   var ro = ro0;
@@ -577,7 +577,7 @@ ${closureBuild}
       continue;
     }
 ${displayAovs ? `    if (cameraSegment) {
-      *guide = vec4<f32>(geometricNormal, max(distance(pos, ro0), 1e-6));
+      *coverage = 1.0;
     }` : ''}
     cameraSegment = false;
     if (mx_closure_has_dispersion(c) && spectralChannel == 3u) {
@@ -780,14 +780,13 @@ fn ${PT_COMPUTE_ENTRY}(@builtin(global_invocation_id) gid : vec3<u32>) {
   // unbiased, > 0 tames glossy/env fireflies (hue-preserving down-scale).
   let fireflyMax = U.eye.w;
   var sample = vec3<f32>(0.0);
-${displayAovs ? '  var guideSum = vec4f(0.0);\n  var coverage = 0.0;' : ''}
+${displayAovs ? '  var coverage = 0.0;' : ''}
   for (var i = 0u; i < spp; i = i + 1u) {
     let jitter = ${displayAovs ? 'camera_jitter(frameIndex * spp + i, pixel)' : 'vec2<f32>(rng_next(&state), rng_next(&state))'};
     let ray = camera_ray(vec2<f32>(pixelCoord), dims, jitter);
-${displayAovs ? '    var guide = vec4f(0.0);' : ''}
-    var radiance = integrate(ray.origin, ray.direction, ray.backgroundDirection, &state${displayAovs ? ', &guide' : ''});
-${displayAovs ? `    guideSum += guide;
-    coverage += select(0.0, 1.0, guide.w > 0.0);` : ''}
+${displayAovs ? '    var hitCoverage = 0.0;' : ''}
+    var radiance = integrate(ray.origin, ray.direction, ray.backgroundDirection, &state${displayAovs ? ', &hitCoverage' : ''});
+${displayAovs ? '    coverage += hitCoverage;' : ''}
     if (fireflyMax > 0.0) {
       let lum = dot(radiance, vec3<f32>(0.2126, 0.7152, 0.0722));
       if (lum > fireflyMax) { radiance = radiance * (fireflyMax / lum); }
@@ -797,18 +796,14 @@ ${displayAovs ? `    guideSum += guide;
   sample = sample / f32(spp);
 
   // Progressive accumulation: running mean keyed by frame index.
-${displayAovs ? '  let outputPixel = pixel * 3u;' : ''}
+${displayAovs ? '  let outputPixel = pixel * 2u;' : ''}
   let prev = accum[${displayAovs ? 'outputPixel' : 'pixel'}];
   let count = prev.w;
   let mean = (prev.xyz * count + sample) / (count + 1.0);
   accum[${displayAovs ? 'outputPixel' : 'pixel'}] = vec4<f32>(mean, count + 1.0);
-${displayAovs ? `  let oldCoverage = accum[outputPixel + 2u].x;
-  let hitCount = oldCoverage * count;
+${displayAovs ? `  let oldCoverage = accum[outputPixel + 1u].x;
   let hits = coverage / f32(spp);
-  if (hitCount + hits > 0.0) {
-    accum[outputPixel + 1u] = (accum[outputPixel + 1u] * hitCount + guideSum / f32(spp)) / (hitCount + hits);
-  }
-  accum[outputPixel + 2u] = vec4f((oldCoverage * count + hits) / (count + 1.0), 0.0, 0.0, 0.0);` : ''}
+  accum[outputPixel + 1u] = vec4f((oldCoverage * count + hits) / (count + 1.0), 0.0, 0.0, 0.0);` : ''}
 }
 `;
 }
@@ -822,7 +817,7 @@ export function pathTraceComputeWgsl(
     environment?: boolean;
     /** LayeredClosure lobe capacity; must cover every variant and record (default PT_MAX_LOBES). */
     maxLobes?: number;
-    /** Viewer-only radiance/normal-depth/coverage records; reference layout stays unchanged. */
+    /** Viewer-only radiance/coverage records; reference layout stays unchanged. */
     displayAovs?: boolean;
   } = {},
 ): string {

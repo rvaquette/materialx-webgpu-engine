@@ -9,7 +9,7 @@ describe('path tracing presentation', () => {
     expect(tonemapResolveWgsl('acesFilmic')).toContain(transform);
     expect(pathTraceDisplayWgsl(true)).toContain(transform);
     expect(PT_DISPLAY_INFO_BYTES).toBe(144);
-    expect(PT_DISPLAY_PIXEL_BYTES).toBe(3 * 16);
+    expect(PT_DISPLAY_PIXEL_BYTES).toBe(2 * 16);
   });
 
   it('reconstructs previews, falls back only for unrendered tiles, and samples the dome at output resolution', () => {
@@ -22,22 +22,22 @@ describe('path tracing presentation', () => {
     expect(pathTraceDisplayWgsl(false)).not.toContain('textureSampleLevel');
   });
 
-  it('gates the display-only filter, rejects silhouette/depth/normal edges and fades with sample count', () => {
+  it('removes the spatial filter and gates the neural output without changing the visible dome', () => {
     const code = pathTraceDisplayWgsl(false);
-    expect(code).toContain('info.denoise == 0u');
-    expect(code).toContain('s.coverage < 0.999');
-    expect(code).toContain('pow(max(dot(a, b), 0.0), 32.0)');
-    expect(code).toContain('abs(center.guide.w - s.guide.w)');
-    expect(code).toContain('8.0 / max(center.count, 1.0)');
+    expect(code).toContain('info.neuralEnabled == 0u');
+    expect(code).toContain('textureLoad(neuralOutput');
+    expect(code).toContain('mix(raw.xyz, denoised, clamp(coverage');
+    expect(code).not.toContain('fn filtered');
+    expect(code).not.toContain('guide');
   });
 
   it('emits viewer AOVs without changing the reference layout or clamping transport', () => {
     const reference = pathTraceComputeWgsl({ environment: true });
     const viewer = pathTraceComputeWgsl({ environment: true, displayAovs: true });
-    expect(reference).not.toContain('pixel * 3u');
+    expect(reference).not.toContain('pixel * 2u');
     expect(reference).not.toContain('camera_jitter');
-    expect(viewer).toContain('pixel * 3u');
-    expect(viewer).toContain('guideSum += guide');
+    expect(viewer).toContain('pixel * 2u');
+    expect(viewer).toContain('coverage += hitCoverage');
     expect(viewer).toContain('if (cameraSegment) { break; }');
     expect(viewer).toContain('reverseBits(index + 1u)');
     expect(viewer).toContain('var state = pcg_hash');

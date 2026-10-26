@@ -142,48 +142,66 @@ Cela ne rend pas identiques les intégrateurs raster et path tracing.
 ### Fond et débruitage
 
 Dans le viewer, le compute accumule séparément radiance de premier plan,
-normale/profondeur et couverture. Le panorama visible est échantillonné directement
+et couverture. Le panorama visible est échantillonné directement
 à la résolution de sortie, puis composé en HDR avec le premier plan. Il est net
 sans attendre les samples du fond, y compris durant la compilation initiale.
 La couverture Monte Carlo conserve les silhouettes et les événements d'opacité
 nulle ; les réflexions et réfractions continuent à transporter le véritable HDR.
 La convention de caméra de fond perspective décrite plus haut reste inchangée.
 
-Le contrôle **PT denoise (approx.)** active un filtre spatial de présentation
-5 × 5, guidé par normale, profondeur, couverture et luminance. Il évite de mélanger
-les silhouettes et les ruptures de géométrie, et son influence décroît au-delà
-de huit passages. Il peut néanmoins adoucir des détails de matériaux ou des
-reflets : c'est une approximation d'affichage, pas une nouvelle référence
-physique. Désactiver le contrôle montre l'accumulation brute, avec le même
-tonemapping et sans effacer ni modifier les samples. Le changement fonctionne
-aussi en pause, sans relancer le compute ni recompiler de pipeline.
+Le précédent filtre spatial WGSL **PT denoise** a été supprimé, ainsi que ses
+guides normale/profondeur. Le contrôle **Denoiser JS (neural)** le remplace et
+reste **désactivé par défaut**. Il charge à la demande le bundle `denoiser.js`
+fourni dans le projet GLSL-PathTracer-JS et le modèle local `rt_ldr_small.tza`.
+Les fichiers originaux sont conservés sans modification dans `public/denoiser`,
+avec leurs notices et empreintes SHA256. Vite les copie dans le build statique ;
+aucun poids n'est téléchargé depuis un CDN et aucune image n'est envoyée à un
+service distant. Ce bundle JS utilise TensorFlow.js et le GPU WebGPU du viewer :
+ce n'est pas un filtre exécuté uniquement sur le CPU.
+
+L'inférence est lancée après le premier passage complet à pleine résolution,
+puis tous les huit passages supplémentaires, jamais sur chaque tuile ni sur
+l'aperçu pendant un geste. Un seul calcul neuronal est autorisé à la fois ;
+l'accumulation est suspendue pendant ce calcul, sans modifier le choix
+Pause/Reprendre de l'utilisateur. Un mouvement de caméra, un redimensionnement,
+un changement de scène/mode ou la désactivation invalide le résultat en cours.
+Le dernier résultat valide peut être affiché jusqu'à l'inférence suivante.
+Le statut distingue attente d'un passage complet, chargement/calcul, résultat
+prêt et erreur ; une erreur conserve le rendu brut et n'est pas masquée.
+
+Le modèle disponible est **LDR couleur seule** : son entrée est une ImageData
+sRGB après exposition et ACES, en ordre haut-vers-bas, avec conversion BGRA/RGBA
+si nécessaire. La sortie n'est donc pas tonemappée ou encodée une seconde fois.
+Le panorama visible est restauré hors de la couverture des objets pour rester
+net. Ce traitement neuronal est une approximation d'affichage : il peut lisser
+des textures, modifier des détails/reflets ou reconstruire des informations
+absentes à faible nombre de samples. Il ne modifie pas l'accumulation HDR.
+Désactiver le contrôle réaffiche le brut, y compris en pause, sans effacer
+les samples ni recompiler les pipelines.
 
 Les AOVs sont stockés avec la radiance dans le même buffer pour respecter les
-limites mobiles de bindings storage. Le viewer utilise 48 octets par pixel
+limites mobiles de bindings storage. Le viewer utilise 32 octets par pixel
 d'accumulation, plus un buffer d'aperçu d'au plus un quart du nombre de pixels
-(environ 60 Mio au total en 1024²). Le redimensionnement remplace ces deux buffers,
+(environ 40 Mio pour ces deux buffers en 1024²), plus une texture RGBA8 de résultat
+(4 Mio). L'inférence alloue temporairement une capture et un buffer de lecture,
+en plus des ressources propres au réseau neuronal. Le redimensionnement remplace
+les deux buffers et la texture de résultat,
 sans reconstruire les données de scène ou les pipelines. Les harness de référence
 conservent par défaut leur layout de 16 octets par pixel et leur jitter antérieur :
 l'option `displayAovs` est activée explicitement par le viewer uniquement.
 
 ### Vérifications de cette amélioration
 
-Sur le même SM-F731B / Adreno 740, tests GPU avec lecture des pixels :
+Sur le même SM-F731B / Adreno 740, le modèle neuronal local a produit une
+ImageData valide en 64² sans erreur GPU (environ 0,86 s avec le premier chargement
+et la compilation). Ce délai n'est ni un temps d'inférence à pleine résolution
+ni une garantie de cadence. L'intégration sur Simple shader ball en 256² à
+deux passages, y compris activation en pause, a affiché le résultat neuronal
+sans erreur WGSL/WebGPU.
 
-- écart maximal observé sur la mire de couleur constante par rapport au resolve
-  CPU : environ 0,00052 en sortie normalisée, sous le seuil de 2/255 ;
-- variance de la mire alternée plane après filtrage : 0,100 fois la variance
-  brute (environ 90 % de réduction), avec seuil requis inférieur à 0,65 ;
-- aucune fuite mesurée à travers la rupture normale/profondeur de la mire ;
-- fond et aperçu de secours vérifiés contre leurs couleurs CPU, sous 2/255.
-
-Ces résultats contrôlés ne sont pas une mesure du bruit sur tous les matériaux.
-Sur Simple shader ball en 512², les réaffichages en pause ont pris environ
-3,7–4,9 ms en brut et 4,6–5,1 ms filtrés pour la complétion de file, sans
-allocation ni compilation au basculement. Ce ne sont pas les durées d'une image
-path-tracée complète. Un mouvement prolongé a effectivement déclenché le passage
+Les vérifications antérieures de l'aperçu ont effectivement déclenché le passage
 de 128² à 64² pour l'aperçu ; le raffinement a conservé son buffer précédent.
-Le resize a alloué deux buffers, sans nouveau shader. Carpaint OpenPBR et verre
+Carpaint OpenPBR et verre
 dispersif glTF ont également compilé et progressé sur ce GPU, sans erreur
 WGSL/WebGPU observée. Le raffinement de Simple shader ball en 1024² a aussi
 atteint deux passages complets sans erreur GPU.
@@ -191,9 +209,10 @@ atteint deux passages complets sans erreur GPU.
 Les tests couvrent également le partage du transform d'affichage, la séparation
 des layouts de référence/viewer, les bornes d'adaptation, la conservation de
 l'aperçu, son invalidation au resize, le débruitage en pause et la vraie CDF.
-Les cinq fichiers ciblés totalisent 70 tests réussis. Le typage et le build
-passent. La suite complète totalise 1350 succès, un test ignoré et les trois
-échecs du compilateur déjà observés avant cette amélioration, décrits plus haut.
+Les tests du nouvel adaptateur couvrent aussi le chargement paresseux, la
+réutilisation, l'exclusion mutuelle, les erreurs/retries et la libération différée.
+Les tests du viewer vérifient qu'une erreur d'inférence est visible et qu'une
+image devenue obsolète après resize/désactivation n'est jamais téléversée.
 
 ## Audit de compilation des fichiers MaterialX
 
