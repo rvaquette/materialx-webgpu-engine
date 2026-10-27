@@ -122,6 +122,7 @@ export function buildPathTraceScene(
   resources: SceneResources,
   options: BuildSceneFrameOptions & { displacementScale?: number } = {},
   cachedBvh?: Bvh,
+  cachedPositions?: Float32Array,
 ): PathTraceScene {
   const frame = buildSceneFrame(resources, options);
 
@@ -177,9 +178,15 @@ export function buildPathTraceScene(
       const ia = idx[t]!;
       const ib = idx[t + 1]!;
       const ic = idx[t + 2]!;
-      const pa = transformPoint(model, readVec3(position.data, ia));
-      const pb = transformPoint(model, readVec3(position.data, ib));
-      const pc = transformPoint(model, readVec3(position.data, ic));
+      const pa = cachedPositions
+        ? readVec3(cachedPositions, triCount * 3)
+        : transformPoint(model, readVec3(position.data, ia));
+      const pb = cachedPositions
+        ? readVec3(cachedPositions, triCount * 3 + 1)
+        : transformPoint(model, readVec3(position.data, ib));
+      const pc = cachedPositions
+        ? readVec3(cachedPositions, triCount * 3 + 2)
+        : transformPoint(model, readVec3(position.data, ic));
       let na: V3;
       let nb: V3;
       let nc: V3;
@@ -193,7 +200,7 @@ export function buildPathTraceScene(
         nb = faceN;
         nc = faceN;
       }
-      soup.push(pa[0], pa[1], pa[2], pb[0], pb[1], pb[2], pc[0], pc[1], pc[2]);
+      if (!cachedPositions) soup.push(pa[0], pa[1], pa[2], pb[0], pb[1], pb[2], pc[0], pc[1], pc[2]);
       const base = triCount * PT_TRIANGLE_FLOATS;
       triFloats[base + 0] = pa[0]; triFloats[base + 1] = pa[1]; triFloats[base + 2] = pa[2];
       triFloats[base + 3] = pb[0]; triFloats[base + 4] = pb[1]; triFloats[base + 5] = pb[2];
@@ -235,7 +242,7 @@ export function buildPathTraceScene(
     }
   }
 
-  const positions = new Float32Array(soup);
+  const positions = cachedPositions ?? new Float32Array(soup);
   const indices = new Uint32Array(triCount * 3);
   for (let i = 0; i < indices.length; i++) indices[i] = i;
   let bvh = cachedBvh;
@@ -355,7 +362,7 @@ export async function buildCachedPathTraceScene(
     end: performance.now(),
     detail: { hit: cacheHit, triangles: positions.length / 9 },
   });
-  return buildPathTraceScene(resources, options, bvh);
+  return buildPathTraceScene(resources, options, bvh, positions);
 }
 
 function readVec3(data: Float32Array, vertex: number): V3 {

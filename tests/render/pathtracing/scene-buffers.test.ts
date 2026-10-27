@@ -92,6 +92,7 @@ describe('buildPathTraceScene packing', () => {
     const second = await buildCachedPathTraceScene(resources, { lights }, cache);
 
     expect(second.nodes).toEqual(first.nodes);
+    expect(second.triangles).toEqual(first.triangles);
     expect(second.triangleOrder).toEqual(first.triangleOrder);
     expect(entries.size).toBe(1);
   });
