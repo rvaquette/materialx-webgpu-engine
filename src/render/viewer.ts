@@ -21,7 +21,7 @@ import {
 import { createSceneBindGroups, uploadGeometry, type SceneDrawBuffers } from './scene-resources.ts';
 import { buildEnvCdf } from '../assets/environment-cdf.ts';
 import { buildCachedPathTraceScene, type PathTraceScene } from './pathtracing/scene-buffers.ts';
-import { buildPathTraceUniform, pathTraceComputeWgsl, PathTraceBackend, PT_UNIFORM_SIZE } from './pathtracing/compute.ts';
+import { buildPathTraceUniform, pathTraceComputeWgsl, pathTraceClosureDispatch, PathTraceBackend, PT_UNIFORM_SIZE } from './pathtracing/compute.ts';
 import { buildMaterialDispatch } from './pathtracing/material-variant.ts';
 import { buildPtDeviceBindings } from './pathtracing/device-bindings.ts';
 import { maxRecordLobes } from './pathtracing/material-record.ts';
@@ -789,7 +789,10 @@ fn dir_to_uv(d: vec3<f32>) -> vec2<f32> {
         maxRecordLobes(ptScene.materials, new Set(dispatch.variants.map((variant) => variant.index))),
       );
       const ptCompilation = await compileShaderWithDiagnostics(
-        device, pathTraceComputeWgsl({ dispatch, environment: loaded.environment !== undefined, maxLobes, displayAovs: true }), 'Path tracing');
+        device, pathTraceComputeWgsl({
+          dispatch, environment: loaded.environment !== undefined, maxLobes, displayAovs: true,
+          closureDispatch: pathTraceClosureDispatch(dispatch, ptScene.materials),
+        }), 'Path tracing');
       if (ptCompilation.errors.length > 0) {
         this.#onShaderErrors?.([...rasterErrors, ...ptCompilation.errors]);
         throw new Error(`WGSL: ${ptCompilation.errors.length} erreur(s) de compilation (path tracing).`);

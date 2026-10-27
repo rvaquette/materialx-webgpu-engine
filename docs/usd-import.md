@@ -42,6 +42,18 @@ the RVA stage shares `/World/Looks/OpenPBRMaterial` across its two meshes so
 `test:shaderball --entry /scenes/standard-shader-ball/openpbr-rva-standard-shader-ball.usda`
 applies each MaterialX override to both objects, locally or with `--target mobile`.
 
+The interactive scene loader bakes texture-fed MaterialX displacement once into
+material-specific geometry shared by raster and path tracing. Heights are linear,
+bilinearly sampled with repeat addressing and a midpoint of 0.5. Coincident
+vertices (position tolerance 1e-5) share a displacement offset across UV and
+hard-normal seams, avoiding cracks without merging the shading attributes.
+Normals/tangents and acceleration bounds are rebuilt after displacement; changing
+or removing an override starts from the original mesh. This uses the existing
+mesh tessellation, not adaptive subdivision. Missing height maps or UVs fail
+loading explicitly. The path tracer specializes its lobe dispatch to the union
+of graph materials and constant-record fallbacks to reduce driver compilation
+and runtime pressure without removing reachable material features.
+
 HDR environments are uniformly normalized before uploading to `rgba16float`
 and their original radiance is restored after texture sampling, including the
 path tracer's importance-sampling PDF. This prevents bright HDR texels above

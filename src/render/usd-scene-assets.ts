@@ -46,6 +46,7 @@ import { loadBrowserOpenUsd } from '../usd/browser-loader.ts';
 import { AssetResolver } from '../assets/resolver.ts';
 import type { OpenUsdModule } from '../usd/crate.ts';
 import { FloatType } from 'three';
+import { applySceneDisplacement } from './displacement.ts';
 
 /** App-relative paths also work when dist/ is served below the workspace root. */
 const MATERIALX_ROOT = `${import.meta.env.BASE_URL}materialx/`;
@@ -443,11 +444,11 @@ export async function loadUsdScene(
   const mtlx = await loadMtlxSceneContext(scene, entry, sink, line, options.textureRoot);
   const materialsAt = performance.now();
   performance.measure('usd:materials', { start: composedAt, end: materialsAt, detail: { entry, documents: scene.materials.length } });
-  const resources = await buildSceneResources(scene, {
+  const resources = await applySceneDisplacement(await buildSceneResources(scene, {
     meshSource: await loadExternalMeshSource(scene, meshSourceFromScene(scene), sink),
     materialCompiler: createGraphMaterialCompiler({ documents: mtlx.documents, sink }),
     sink,
-  });
+  }), mtlx.imageProvider);
   const environment = await loadEnvironment(lights, entry, sink);
   performance.measure('usd:resources', { start: materialsAt, end: performance.now(), detail: {
     entry, geometries: resources.geometries.size, materials: resources.materials.size,

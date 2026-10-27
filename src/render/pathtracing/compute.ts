@@ -15,10 +15,10 @@
 import type { PathTraceScene } from './scene-buffers.ts';
 import { BVH_TRAVERSAL_WGSL } from './bvh-wgsl.ts';
 import { LAYERED_CLOSURE_PRELUDE } from '../../compiler/surface-wgsl.ts';
-import { CLOSURE_LIBRARY_PRELUDE } from '../../compiler/closure-library.ts';
+import { closureLibraryPrelude, type ClosureDispatchSpec } from '../../compiler/closure-library.ts';
 import { emitVaryingsStruct } from '../../compiler/wgsl.ts';
 import type { IrType } from '../../compiler/ir.ts';
-import { materialClosureReaderWgsl, PT_MAX_LOBES } from './material-record.ts';
+import { materialClosureReaderWgsl, PT_MAX_LOBES, PT_MATERIAL_RECORD_FLOATS, PT_MATERIAL_HEADER_FLOATS, PT_LOBE_FLOATS } from './material-record.ts';
 import { PT_MATERIAL_DISPATCH_ENTRY, type PtMaterialDispatch } from './material-variant.ts';
 
 /** Compute workgroup tile edge (threads per dimension). */
@@ -33,6 +33,27 @@ export const PT_COMPUTE_ENTRY = 'mx_path_trace';
 export const PT_UNIFORM_FLOATS = 100;
 /** Bytes in the path-trace uniform buffer. */
 export const PT_UNIFORM_SIZE = PT_UNIFORM_FLOATS * 4;
+
+/** Include record fallbacks as well as graph variants; neither may lose a reachable lobe. */
+export function pathTraceClosureDispatch(dispatch: PtMaterialDispatch, materials: Float32Array): ClosureDispatchSpec {
+  const kinds = new Set<number>();
+  let thinFilm = false;
+  const variants = new Set(dispatch.variants.map(variant => variant.index));
+  for (const variant of dispatch.variants) {
+    if (!variant.features) return { kinds: new Set([0, 1, 2, 3, 4, 5, 6, 7, 8]), thinFilm: true };
+    variant.features.lobeKinds.forEach(kind => kinds.add(kind));
+    thinFilm ||= variant.features.thinFilm;
+  }
+  for (let base = 0, index = 0; base < materials.length; base += PT_MATERIAL_RECORD_FLOATS, index++) {
+    if (variants.has(index)) continue;
+    thinFilm ||= materials[base + 5]! !== 0;
+    for (let lobe = 0; lobe < materials[base]!; lobe++) {
+      const offset = base + PT_MATERIAL_HEADER_FLOATS + lobe * PT_LOBE_FLOATS;
+      if (materials[offset + 1]! > 0) kinds.add(materials[offset]!);
+    }
+  }
+  return { kinds, thinFilm };
+}
 
 export interface PathTraceTile {
   x: number;
@@ -312,7 +333,7 @@ const MEDIA_PHASE_PRELUDE = /* wgsl */ `fn mx_sample_hg(wo : vec3f, g : f32, u1 
   return basis(w) * local;
 }`;
 
-function wgslClosureSurface(textures: boolean, maxLobes: number): string {
+function wgslClosureSurface(textures: boolean, maxLobes: number, closureDispatch?: ClosureDispatchSpec): string {
   // Shared layered-closure shading: the struct family (LAYERED_CLOSURE_PRELUDE),
   // the runtime lobe library plus the mx_closure_eval/pdf/sample assembler
   // (CLOSURE_LIBRARY_PRELUDE, T056) and the megakernel material-record reader
@@ -337,7 +358,7 @@ fn mx_apply_baked(c : ptr<function, LayeredClosure>, albedo : vec3<f32>, rough :
     : '';
   return [
     LAYERED_CLOSURE_PRELUDE.replace('const MX_MAX_LOBES: u32 = 8u;', `const MX_MAX_LOBES: u32 = ${maxLobes}u;`),
-    CLOSURE_LIBRARY_PRELUDE,
+    closureLibraryPrelude(closureDispatch),
     MEDIA_HELPERS_PRELUDE,
     materialClosureReaderWgsl(),
     /* wgsl */ `
@@ -817,6 +838,8 @@ export function pathTraceComputeWgsl(
     environment?: boolean;
     /** LayeredClosure lobe capacity; must cover every variant and record (default PT_MAX_LOBES). */
     maxLobes?: number;
+    /** Specialize runtime lobe dispatch only when all scene materials are known. */
+    closureDispatch?: ClosureDispatchSpec;
     /** Viewer-only radiance/coverage records; reference layout stays unchanged. */
     displayAovs?: boolean;
   } = {},
@@ -834,7 +857,7 @@ export function pathTraceComputeWgsl(
     wgslStructsAndBindings(textures, varyings !== undefined, environment),
     wgslRng(),
     wgslTraversal(),
-    wgslClosureSurface(textures, maxLobes),
+    wgslClosureSurface(textures, maxLobes, options.closureDispatch),
     ...(varyings !== undefined ? [wgslVaryings(varyings)] : []),
     ...(dispatch !== undefined ? [wgslDispatch(dispatch)] : []),
     wgslIntegrator(textures, dispatch !== undefined, environment, options.displayAovs ?? false),

@@ -609,6 +609,7 @@ export interface SurfaceVariantModule {
   extraInputs: Map<string, IrType>;
   /** Lobes assigned by fnCode (zero-weight lobes pruned). */
   lobeCount: number;
+  features?: SurfaceFeatures;
 }
 
 /** Lower a resolved surface to a megakernel variant keyed by its scene material
@@ -633,5 +634,6 @@ export function emitSurfaceVariant(
     primvarFields: fn.primvarFields,
     extraInputs: fn.extraInputs,
     lobeCount: fn.lobeCount,
+    features: fn.features,
   };
 }

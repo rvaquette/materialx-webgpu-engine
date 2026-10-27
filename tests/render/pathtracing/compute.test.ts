@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   buildPathTraceUniform,
   pathTraceComputeWgsl,
+  pathTraceClosureDispatch,
   pathTraceTile,
   PathTraceBackend,
   PT_COMPUTE_ENTRY,
@@ -15,6 +16,7 @@ import { buildMaterialDispatch } from '../../../src/render/pathtracing/material-
 import { evaluateSurfaceToLayered } from '../../../src/compiler/surface-eval.ts';
 import { resolveSurface } from '../../../src/materialx/surface-graph.ts';
 import type { ResolvedGraph, ResolvedNode } from '../../../src/materialx/graph.ts';
+import { packLayeredMaterial } from '../../../src/render/pathtracing/material-record.ts';
 
 /** standard_surface whose base_color is driven by a connected constant node. */
 function brickGraph(): ResolvedGraph {
@@ -65,6 +67,29 @@ function fakeScene(): PathTraceScene {
 
 describe('pathTraceComputeWgsl', () => {
   const src = pathTraceComputeWgsl();
+
+  it('specializes lobe dispatch without dropping constant-record or graph material features', () => {
+    const graph = brickGraph();
+    const dispatch = buildMaterialDispatch([{ materialIndex: 0, graph, surface: resolveSurface(graph, {})! }]);
+    const fallback = packLayeredMaterial({
+      opacity: 1,
+      lobes: [{ kind: 'dielectric_transmission', weight: 1, color: [1, 1, 1], ior: 1.5 }],
+      thinFilm: { weight: 1, thickness: 400, ior: 1.3 },
+    });
+    const records = new Float32Array(fallback.length * 2);
+    records.set(fallback, fallback.length);
+    const spec = pathTraceClosureDispatch(dispatch, records);
+    expect(spec.thinFilm).toBe(true);
+    expect(spec.kinds.has(8)).toBe(true);
+    dispatch.variants[0]!.features!.lobeKinds.forEach(kind => expect(spec.kinds.has(kind)).toBe(true));
+    const compact = pathTraceClosureDispatch(dispatch, records.subarray(0, fallback.length));
+    expect(compact.thinFilm).toBe(false);
+    expect(compact.kinds.has(8)).toBe(false);
+    const shader = pathTraceComputeWgsl({ dispatch, closureDispatch: compact });
+    expect(shader).not.toContain('case 8u: { return mx_dielectric_transmission_eval(ctx, wi); }');
+    expect(shader).not.toContain('if (lobe.anisotropy <= 0.0) { return mx_microfacet_eval_tf');
+    expect(shader).toContain('case 3u: { return mx_dielectric_reflection_eval(ctx, wi); }');
+  });
 
   it('traces diffuse environment visibility instead of filling alpha-mask cavities with unoccluded SH', () => {
     const shader = pathTraceComputeWgsl({ environment: true });

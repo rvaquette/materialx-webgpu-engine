@@ -185,7 +185,7 @@ function cornersOf(bounds: Aabb): [number, number, number][] {
 }
 
 /** World-space AABB of a local AABB transformed by a column-major matrix. */
-function transformBounds(bounds: Aabb, transform: Mat4): Aabb {
+export function transformBounds(bounds: Aabb, transform: Mat4): Aabb {
   const min: [number, number, number] = [Infinity, Infinity, Infinity];
   const max: [number, number, number] = [-Infinity, -Infinity, -Infinity];
   for (const corner of cornersOf(bounds)) {
@@ -203,7 +203,7 @@ function pointBounds(transform: Mat4): Aabb {
   return { min: [p[0], p[1], p[2]], max: [p[0], p[1], p[2]] };
 }
 
-function buildGeometry(prototypeId: string, primPath: string, mesh: PreparedMesh): GeometryResource {
+export function buildGeometry(prototypeId: string, primPath: string, mesh: PreparedMesh): GeometryResource {
   const streams: VertexStream[] = [
     { name: 'position', data: mesh.positions, components: 3 },
     { name: 'normal', data: mesh.normals, components: 3 },
