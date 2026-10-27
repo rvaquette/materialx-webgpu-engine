@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { InteractiveViewer, type ViewerStatus } from '../../src/render/viewer.ts';
 import { loadUsdScene, type LoadedUsdScene } from '../../src/render/usd-scene-assets.ts';
-import { buildPathTraceScene } from '../../src/render/pathtracing/scene-buffers.ts';
+import { buildCachedPathTraceScene } from '../../src/render/pathtracing/scene-buffers.ts';
 import { generateEnvironmentMipmaps } from '../../src/render/env/mipmaps.ts';
 import { buildSceneResources } from '../../src/render/scene-resources.ts';
 import { importUsdStage } from '../../src/usd/importer.ts';
@@ -16,7 +16,7 @@ vi.mock('../../src/render/usd-scene-assets.ts', async (original) => ({
 }));
 vi.mock('../../src/render/pathtracing/scene-buffers.ts', async (original) => ({
   ...await original<typeof import('../../src/render/pathtracing/scene-buffers.ts')>(),
-  buildPathTraceScene: vi.fn(),
+  buildCachedPathTraceScene: vi.fn(),
 }));
 
 function fakeDevice() {
@@ -114,7 +114,7 @@ describe('interactive viewer resource lifecycle', () => {
     vi.stubGlobal('ImageData', class {
       constructor(public data: Uint8ClampedArray, public width: number, public height: number) {}
     });
-    vi.mocked(buildPathTraceScene).mockReset();
+    vi.mocked(buildCachedPathTraceScene).mockReset();
   });
   afterEach(() => { viewer?.dispose(); vi.unstubAllGlobals(); });
 
@@ -143,7 +143,7 @@ describe('interactive viewer resource lifecycle', () => {
   it('does not build path-tracing CPU data/BVH in raster, including after resize', async () => {
     const { viewer, device, loaded } = await setup();
     expect(loaded.resources.materials.size).toBe(1);
-    expect(buildPathTraceScene).not.toHaveBeenCalled();
+    expect(buildCachedPathTraceScene).not.toHaveBeenCalled();
     const pipelines = device.createRenderPipeline.mock.calls.length;
     const shaders = device.createShaderModule.mock.calls.length;
     const buffers = device.createBuffer.mock.calls.length;
@@ -151,7 +151,7 @@ describe('interactive viewer resource lifecycle', () => {
     expect(device.createRenderPipeline).toHaveBeenCalledTimes(pipelines);
     expect(device.createShaderModule).toHaveBeenCalledTimes(shaders);
     expect(device.createBuffer).toHaveBeenCalledTimes(buffers);
-    expect(buildPathTraceScene).not.toHaveBeenCalled();
+    expect(buildCachedPathTraceScene).not.toHaveBeenCalled();
   });
 
   it('submits one interactive frame, keeps reference bands and reuses quality pipelines', async () => {
@@ -175,18 +175,18 @@ describe('interactive viewer resource lifecycle', () => {
 
   it('starts CPU preparation only on first path-tracing render and not after disposal', async () => {
     const { viewer } = await setup();
-    vi.mocked(buildPathTraceScene).mockImplementation(() => { throw new Error('test preparation'); });
+    vi.mocked(buildCachedPathTraceScene).mockImplementation(async () => { throw new Error('test preparation'); });
     const error = vi.spyOn(console, 'error').mockImplementation(() => {});
     try {
       viewer.setBackend('pathtracing');
-      expect(buildPathTraceScene).not.toHaveBeenCalled();
+      expect(buildCachedPathTraceScene).not.toHaveBeenCalled();
       tick(0);
       await new Promise(r => setTimeout(r, 10));
-      expect(buildPathTraceScene).toHaveBeenCalledTimes(1);
+      expect(buildCachedPathTraceScene).toHaveBeenCalledTimes(1);
       viewer.setBackend('raster');
       viewer.setBackend('pathtracing');
       tick(1);
-      expect(buildPathTraceScene).toHaveBeenCalledTimes(1);
+      expect(buildCachedPathTraceScene).toHaveBeenCalledTimes(1);
       expect(error).toHaveBeenCalledWith('Path tracer: test preparation');
     } finally { error.mockRestore(); }
   });
@@ -194,7 +194,7 @@ describe('interactive viewer resource lifecycle', () => {
   it('keeps the preview while refining tiles, defaults to raw and resizes without recompilation', async () => {
     const actual = await vi.importActual<typeof import('../../src/render/pathtracing/scene-buffers.ts')>(
       '../../src/render/pathtracing/scene-buffers.ts');
-    vi.mocked(buildPathTraceScene).mockImplementation(actual.buildPathTraceScene);
+    vi.mocked(buildCachedPathTraceScene).mockImplementation(actual.buildCachedPathTraceScene);
     const { viewer, device, pass } = await setup();
     viewer.setBackend('pathtracing');
     tick(0);
@@ -237,7 +237,7 @@ describe('interactive viewer resource lifecycle', () => {
   it('redisplays a paused replacement scene when an older scene releases the denoiser', async () => {
     const actual = await vi.importActual<typeof import('../../src/render/pathtracing/scene-buffers.ts')>(
       '../../src/render/pathtracing/scene-buffers.ts');
-    vi.mocked(buildPathTraceScene).mockImplementation(actual.buildPathTraceScene);
+    vi.mocked(buildCachedPathTraceScene).mockImplementation(actual.buildCachedPathTraceScene);
     const image = new ImageData(new Uint8ClampedArray(512 * 512 * 4), 512, 512);
     let busy = false;
     let finish!: (image: ImageData) => void;
@@ -280,7 +280,7 @@ describe('interactive viewer resource lifecycle', () => {
   it('shares the real HDR CDF with the path tracer and keeps its sampling metadata', async () => {
     const actual = await vi.importActual<typeof import('../../src/render/pathtracing/scene-buffers.ts')>(
       '../../src/render/pathtracing/scene-buffers.ts');
-    vi.mocked(buildPathTraceScene).mockImplementation(actual.buildPathTraceScene);
+    vi.mocked(buildCachedPathTraceScene).mockImplementation(actual.buildCachedPathTraceScene);
     const { viewer, device, loaded } = await setup(true);
     viewer.setBackend('pathtracing');
     tick(0);
@@ -292,7 +292,7 @@ describe('interactive viewer resource lifecycle', () => {
     const cdfBuffer = upload![0];
     expect(device.createBindGroup.mock.calls.some(([desc]) =>
       Array.from(desc.entries).some(entry => entry.binding === 2 && 'buffer' in entry.resource && entry.resource.buffer === cdfBuffer))).toBe(true);
-    const scene = vi.mocked(buildPathTraceScene).mock.results[0]!.value;
+    const scene = await vi.mocked(buildCachedPathTraceScene).mock.results[0]!.value;
     expect(scene.environment.envTotalSum).toBe(expected.totalSum);
     expect(scene.environment.envResX).toBe(4);
   });
@@ -300,7 +300,7 @@ describe('interactive viewer resource lifecycle', () => {
   it('reports neural inference errors and ignores results invalidated by resize or disabling', async () => {
     const actual = await vi.importActual<typeof import('../../src/render/pathtracing/scene-buffers.ts')>(
       '../../src/render/pathtracing/scene-buffers.ts');
-    vi.mocked(buildPathTraceScene).mockImplementation(actual.buildPathTraceScene);
+    vi.mocked(buildCachedPathTraceScene).mockImplementation(actual.buildCachedPathTraceScene);
     const run = vi.spyOn(JsDenoiser.prototype, 'run').mockRejectedValue(new Error('model unavailable'));
     const error = vi.spyOn(console, 'error').mockImplementation(() => {});
     try {

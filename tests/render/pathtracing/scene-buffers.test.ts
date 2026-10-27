@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  buildCachedPathTraceScene,
   buildPathTraceScene,
   createSceneSampler,
   directLighting,
@@ -8,6 +9,8 @@ import {
   PT_MATERIAL_FLOATS,
   type PathTraceScene,
 } from '../../../src/render/pathtracing/scene-buffers.ts';
+import type { PathTraceBvhCache } from '../../../src/geometry/cache.ts';
+import type { Bvh } from '../../../src/geometry/bvh.ts';
 import type { GeometryResource, MaterialResource, SceneResources } from '../../../src/render/scene-resources.ts';
 import type { RasterSurface } from '../../../src/render/raster/scene-frame.ts';
 import type { SceneLight } from '../../../src/usd/lights.ts';
@@ -77,6 +80,22 @@ function build(surface?: RasterSurface): PathTraceScene {
 }
 
 describe('buildPathTraceScene packing', () => {
+  it('reuses the world BVH for the same transformed geometry', async () => {
+    const { resources, lights } = sceneWith();
+    const entries = new Map<string, Bvh>();
+    const cache: PathTraceBvhCache = {
+      get: async (key) => entries.get(key),
+      set: async (key, bvh) => { entries.set(key, bvh); },
+    };
+
+    const first = await buildCachedPathTraceScene(resources, { lights }, cache);
+    const second = await buildCachedPathTraceScene(resources, { lights }, cache);
+
+    expect(second.nodes).toEqual(first.nodes);
+    expect(second.triangleOrder).toEqual(first.triangleOrder);
+    expect(entries.size).toBe(1);
+  });
+
   it('packs the quad into two world triangles with a BVH and one material', () => {
     const scene = build();
     expect(scene.triangleCount).toBe(2);

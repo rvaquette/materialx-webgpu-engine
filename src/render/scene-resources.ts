@@ -19,7 +19,8 @@ import type { ResolvedGraph } from '../materialx/graph.ts';
 import type { ResolvedSurface } from '../materialx/surface-graph.ts';
 import type { Diagnostic, DiagnosticSink } from '../core/diagnostics.ts';
 import { buildBvh, buildTlas, type Aabb, type Bvh, type Tlas } from '../geometry/bvh.ts';
-import { prepareMesh, type PrepareMeshOptions, type PreparedSubset, type RawMesh, type DisplacementPlan, type SubdivisionPlan } from '../geometry/prepare.ts';
+import { openPreparedGeometryCache, preparedGeometryCacheKey, type PreparedGeometryCache } from '../geometry/cache.ts';
+import { prepareMesh, type PrepareMeshOptions, type PreparedMesh, type PreparedSubset, type RawMesh, type DisplacementPlan, type SubdivisionPlan } from '../geometry/prepare.ts';
 import { createMaterialVariant, type MaterialVariant } from '../materials/instance.ts';
 import { assembleIrForwardShader, IR_FORWARD_FRAME_GROUP, type IrForwardShader } from './raster/ir-forward.ts';
 import { buildSceneInstances, type Mat4 } from '../scene/instances.ts';
@@ -140,6 +141,8 @@ export interface BuildSceneResourcesOptions {
   colorFormats?: readonly string[];
   depthFormat?: string;
   sampleCount?: number;
+  /** Override persistent prepared-geometry storage (primarily for tests/embedders). */
+  geometryCache?: PreparedGeometryCache;
 }
 
 function unitKey(assetPath: string, referencedPrimPath: string): string {
@@ -200,8 +203,7 @@ function pointBounds(transform: Mat4): Aabb {
   return { min: [p[0], p[1], p[2]], max: [p[0], p[1], p[2]] };
 }
 
-function buildGeometry(prototypeId: string, primPath: string, raw: RawMesh, options: PrepareMeshOptions): GeometryResource {
-  const mesh = prepareMesh(raw, options);
+function buildGeometry(prototypeId: string, primPath: string, mesh: PreparedMesh): GeometryResource {
   const streams: VertexStream[] = [
     { name: 'position', data: mesh.positions, components: 3 },
     { name: 'normal', data: mesh.normals, components: 3 },
@@ -263,6 +265,25 @@ export async function buildSceneResources(
   // Geometry per prototype.
   const geometries = new Map<string, GeometryResource>();
   const pendingGeometry: string[] = [];
+  let geometryCacheHits = 0;
+  let geometryCacheMisses = 0;
+  let geometryCacheBypasses = 0;
+  let geometryCacheUnavailable = false;
+  const prepareOptions = options.prepareOptions ?? {};
+  const hasPendingSubdivision = (raw: RawMesh): boolean =>
+    ['catmullClark', 'loop', 'bilinear'].includes(raw.subdivisionScheme ?? 'none') &&
+    (raw.refinementLevel ?? 0) > 0;
+  const geometryStarted = performance.now();
+  let geometryCache = options.geometryCache;
+  const cacheable = prepareOptions.subdivider === undefined;
+  if (!geometryCache && cacheable && globalThis.indexedDB) {
+    try {
+      geometryCache = await openPreparedGeometryCache();
+    } catch (error) {
+      geometryCacheUnavailable = true;
+      emit({ level: 'warning', message: 'Prepared geometry cache unavailable; preparing meshes without persistent caching.', detail: String(error) });
+    }
+  }
   for (const proto of sceneInstances.prototypes) {
     const raw = options.meshSource.meshFor(proto.primPath);
     if (!raw) {
@@ -270,8 +291,53 @@ export async function buildSceneResources(
       emit({ level: 'warning', message: `Geometry pending: no mesh source for prototype ${proto.primPath}`, detail: { prim: proto.primPath } });
       continue;
     }
-    geometries.set(proto.id, buildGeometry(proto.id, proto.primPath, raw, options.prepareOptions ?? {}));
+    const canCache = cacheable && !hasPendingSubdivision(raw);
+    const key = canCache && geometryCache ? await preparedGeometryCacheKey(raw, prepareOptions) : undefined;
+    if (canCache && geometryCache && !key && !geometryCacheUnavailable) {
+      geometryCacheUnavailable = true;
+      emit({ level: 'warning', message: 'Web Crypto unavailable; prepared geometry will not be cached.' });
+    }
+    let prepared: PreparedMesh | undefined;
+    if (key && geometryCache) {
+      try {
+        prepared = await geometryCache.get(key);
+      } catch (error) {
+        geometryCacheUnavailable = true;
+        geometryCache = undefined;
+        emit({ level: 'warning', message: 'Failed to read prepared geometry cache; preparing meshes without persistent caching.', detail: String(error) });
+      }
+    }
+    if (prepared) {
+      geometryCacheHits++;
+    } else {
+      if (key && geometryCache) geometryCacheMisses++;
+      else geometryCacheBypasses++;
+      prepared = prepareMesh(raw, prepareOptions);
+      if (key && geometryCache) {
+        try {
+          await geometryCache.set(key, prepared);
+        } catch (error) {
+          geometryCacheUnavailable = true;
+          geometryCache = undefined;
+          emit({ level: 'warning', message: 'Failed to persist prepared geometry.', detail: String(error) });
+        }
+      }
+    }
+    geometries.set(proto.id, buildGeometry(proto.id, proto.primPath, prepared));
   }
+  const geometryFinished = performance.now();
+  performance.measure('usd:geometry', {
+    start: geometryStarted,
+    end: geometryFinished,
+    detail: {
+      geometries: geometries.size,
+      cacheHits: geometryCacheHits,
+      cacheMisses: geometryCacheMisses,
+      cacheBypasses: geometryCacheBypasses,
+      cacheUnavailable: geometryCacheUnavailable,
+      triangles: [...geometries.values()].reduce((sum, mesh) => sum + mesh.triangleCount, 0),
+    },
+  });
 
   // Materials per unique unit via the injected MaterialX chain.
   const materials = new Map<string, MaterialResource>();
@@ -325,7 +391,6 @@ export async function buildSceneResources(
   }
 
   const tlas = buildTlas(tlasBounds);
-
   return {
     geometries,
     materials,

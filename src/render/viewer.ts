@@ -20,7 +20,7 @@ import {
 } from './raster/backend.ts';
 import { createSceneBindGroups, uploadGeometry, type SceneDrawBuffers } from './scene-resources.ts';
 import { buildEnvCdf } from '../assets/environment-cdf.ts';
-import { buildPathTraceScene, type PathTraceScene } from './pathtracing/scene-buffers.ts';
+import { buildCachedPathTraceScene, type PathTraceScene } from './pathtracing/scene-buffers.ts';
 import { buildPathTraceUniform, pathTraceComputeWgsl, PathTraceBackend, PT_UNIFORM_SIZE } from './pathtracing/compute.ts';
 import { buildMaterialDispatch } from './pathtracing/material-variant.ts';
 import { buildPtDeviceBindings } from './pathtracing/device-bindings.ts';
@@ -763,11 +763,17 @@ fn dir_to_uv(d: vec3<f32>) -> vec2<f32> {
     const buildPathTracer = async (ptTrash: Array<{ destroy(): void }>) => {
       await new Promise((resolve) => setTimeout(resolve, 0));
       if (disposed) throw new Error('Viewer disposed during path tracer preparation.');
-      const ptScene = buildPathTraceScene(resources, {
+      const pathTraceBuildStarted = performance.now();
+      const ptScene = await buildCachedPathTraceScene(resources, {
         lights: loaded.lights,
         surfaceFor: loaded.mtlx.surfaceFor,
         frameCamera: { viewProj: cameraViewProj, eye: cameraEye, exposure },
         environment: frame.environment,
+      });
+      performance.measure('pathtracing:scene-build', {
+        start: pathTraceBuildStarted,
+        end: performance.now(),
+        detail: { triangles: ptScene.triangleCount, nodes: ptScene.nodeCount },
       });
       ptScene.environment.textureRadianceScale = envRadianceScale;
       ptScene.camera.backgroundInvViewProj = backgroundInvViewProj;

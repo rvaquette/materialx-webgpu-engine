@@ -12,6 +12,7 @@
 // writes live in the browser bootstrap and the backend (compute.ts).
 
 import { buildBvh, type Aabb, type Bvh } from '../../geometry/bvh.ts';
+import { openPathTraceBvhCache, pathTraceBvhCacheKey, type PathTraceBvhCache } from '../../geometry/cache.ts';
 import { inverse4, transformDirection, transformPoint, type Mat4, type Vec3 } from '../../scene/transforms.ts';
 import type { SceneResources } from '../scene-resources.ts';
 import {
@@ -120,6 +121,7 @@ function materialKeyOf(materialKey: string | undefined): string {
 export function buildPathTraceScene(
   resources: SceneResources,
   options: BuildSceneFrameOptions & { displacementScale?: number } = {},
+  cachedBvh?: Bvh,
 ): PathTraceScene {
   const frame = buildSceneFrame(resources, options);
 
@@ -236,7 +238,16 @@ export function buildPathTraceScene(
   const positions = new Float32Array(soup);
   const indices = new Uint32Array(triCount * 3);
   for (let i = 0; i < indices.length; i++) indices[i] = i;
-  const bvh: Bvh = buildBvh(positions, indices);
+  let bvh = cachedBvh;
+  if (!bvh) {
+    const bvhStarted = performance.now();
+    bvh = buildBvh(positions, indices);
+    performance.measure('pathtracing:bvh-build', {
+      start: bvhStarted,
+      end: performance.now(),
+      detail: { triangles: triCount, nodes: bvh.nodes.length },
+    });
+  }
 
   // Height-map displacement: fold the CLI multiplier into each per-material scale,
   // then inflate every BVH node AABB by the largest possible offset so the packed
@@ -275,6 +286,76 @@ export function buildPathTraceScene(
     bounds: bvh.bounds,
     ...(hasDisplacement ? { displacement: { mapFile: displaceMapFile!, midpoint, scale: displaceScaleArr } } : {}),
   };
+}
+
+/**
+ * Build a path-tracing scene while reusing its world-space BVH from IndexedDB.
+ * The cache key is based on the exact transformed triangle positions, so moving
+ * instances naturally invalidates it while material/camera changes do not.
+ */
+export async function buildCachedPathTraceScene(
+  resources: SceneResources,
+  options: BuildSceneFrameOptions & { displacementScale?: number } = {},
+  suppliedCache?: PathTraceBvhCache,
+): Promise<PathTraceScene> {
+  const cacheStarted = performance.now();
+  let cache = suppliedCache;
+  if (!cache && globalThis.indexedDB) {
+    try {
+      cache = await openPathTraceBvhCache();
+    } catch (error) {
+      console.warn('Path-tracing BVH cache unavailable; building the BVH without persistent caching.', error);
+    }
+  }
+  if (!cache) return buildPathTraceScene(resources, options);
+
+  const frame = buildSceneFrame(resources, options);
+  const soup: number[] = [];
+  for (const draw of frame.draws) {
+    const geometry = resources.geometries.get(draw.prototypeId);
+    const position = geometry?.streams.find((stream) => stream.name === 'position');
+    if (!geometry || !position) continue;
+    for (const index of geometry.indices) {
+      const point = transformPoint(draw.model, readVec3(position.data, index));
+      soup.push(point[0], point[1], point[2]);
+    }
+  }
+  const positions = new Float32Array(soup);
+  const key = await pathTraceBvhCacheKey(positions);
+  if (!key) {
+    console.warn('Web Crypto unavailable; path-tracing BVH will not be cached.');
+    return buildPathTraceScene(resources, options);
+  }
+
+  let bvh: Bvh | undefined;
+  try {
+    bvh = await cache.get(key);
+  } catch (error) {
+    console.warn('Failed to read the path-tracing BVH cache; rebuilding the BVH.', error);
+  }
+  const cacheHit = bvh !== undefined;
+  if (!bvh) {
+    const indices = new Uint32Array(positions.length / 3);
+    for (let i = 0; i < indices.length; i++) indices[i] = i;
+    const bvhStarted = performance.now();
+    bvh = buildBvh(positions, indices);
+    performance.measure('pathtracing:bvh-build', {
+      start: bvhStarted,
+      end: performance.now(),
+      detail: { triangles: indices.length / 3, nodes: bvh.nodes.length },
+    });
+    try {
+      await cache.set(key, bvh);
+    } catch (error) {
+      console.warn('Failed to persist the path-tracing BVH.', error);
+    }
+  }
+  performance.measure('pathtracing:bvh-cache', {
+    start: cacheStarted,
+    end: performance.now(),
+    detail: { hit: cacheHit, triangles: positions.length / 9 },
+  });
+  return buildPathTraceScene(resources, options, bvh);
 }
 
 function readVec3(data: Float32Array, vertex: number): V3 {

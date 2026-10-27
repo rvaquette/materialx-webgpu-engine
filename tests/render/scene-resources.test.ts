@@ -8,6 +8,7 @@ import { resolveSurface } from '../../src/materialx/surface-graph.ts';
 import type { ResolvedGraph, ResolvedInput, ResolvedNode, ResolvedValueSource } from '../../src/materialx/graph.ts';
 import { IR_FORWARD_FRAME_GROUP } from '../../src/render/raster/ir-forward.ts';
 import type { RawMesh } from '../../src/geometry/prepare.ts';
+import { prepareMesh } from '../../src/geometry/prepare.ts';
 import type { MaterialXReference, SceneAsset, ScenePrim, XformOp } from '../../src/scene/types.ts';
 import type { MaterialCompileUnit } from '../../src/usd/materials.ts';
 import {
@@ -196,6 +197,23 @@ function distinctLayeredCompiler(colors: Record<string, string>): MaterialCompil
 }
 
 describe('buildSceneResources (T050)', () => {
+  it('uses a matching prepared-geometry cache entry', async () => {
+    const prepared = prepareMesh(quad());
+    const geometryCache = {
+      get: vi.fn(async () => prepared),
+      set: vi.fn(async () => {}),
+    };
+    const resources = await buildSceneResources(demoScene(), {
+      meshSource: meshSource({ '/World/floor': quad() }),
+      materialCompiler: surfaceCompiler(),
+      geometryCache,
+    });
+
+    expect(geometryCache.get).toHaveBeenCalledTimes(1);
+    expect(geometryCache.set).not.toHaveBeenCalled();
+    expect(resources.geometries.get('/World/floor')?.triangleCount).toBe(2);
+  });
+
   it('keeps finite bounds for geometry without triangles', async () => {
     const resources = await buildSceneResources(demoScene(), {
       meshSource: meshSource({ '/World/floor': { points: [], faceVertexCounts: [], faceVertexIndices: [] } }),
