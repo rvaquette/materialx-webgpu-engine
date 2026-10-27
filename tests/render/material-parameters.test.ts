@@ -7,7 +7,7 @@ import type { ResolvedGraph } from '../../src/materialx/graph.ts';
 import { importUsdStage } from '../../src/usd/importer.ts';
 import { buildSceneResources } from '../../src/render/scene-resources.ts';
 import { buildMaterialDispatch } from '../../src/render/pathtracing/material-variant.ts';
-import { changeMaterialParameters, compileEditableMaterial, editableSceneMaterials, materialUniformData, packParameterUniforms, parameterValues } from '../../src/render/material-parameters.ts';
+import { changeMaterialParameters, compileEditableMaterial, editableSceneMaterials, materialUniformData, packParameterUniforms, parameterValues, visibleMaterialParameters } from '../../src/render/material-parameters.ts';
 import { applySceneDisplacement } from '../../src/render/displacement.ts';
 
 async function fixture(displacement = false, configure?: (graph: ResolvedGraph) => void) {
@@ -61,6 +61,25 @@ def Mesh "b" { rel material:binding = </Mat> }` } });
 }
 
 describe('dynamic MaterialX parameters', () => {
+  it('shows only authored unbound surface inputs, as in absval, not implicit defaults or graph internals', async () => {
+    const resources = await fixture(false, graph => {
+      graph.nodes.get('surface')!.inputs = [
+        { name: 'base_color', type: 'color3', source: { kind: 'connection', nodeId: 'color' }, provenance: { namePath: '/surface/base_color' } },
+        { name: 'specular_roughness', type: 'float', source: { kind: 'value', type: 'float', value: '0.45' }, provenance: { namePath: '/surface/specular_roughness' } },
+        { name: 'specular', type: 'float', source: { kind: 'value', type: 'float', value: '0.5' }, provenance: { namePath: '/surface/specular' } },
+      ];
+      graph.nodes.set('color', {
+        id: 'color', category: 'constant', type: 'color3', inputs: [
+          { name: 'value', type: 'color3', source: { kind: 'value', type: 'color3', value: '0.2, 0.4, 0.6' }, provenance: { namePath: '/color/value' } },
+        ], provenance: { namePath: '/color' },
+      });
+    });
+    const material = [...resources.materials.values()][0]!;
+    expect(visibleMaterialParameters(material).map(parameter => [parameter.input, parameter.type, parameter.value]))
+      .toEqual([['specular', 'float', [0.5]], ['specular_roughness', 'float', [0.45]]]);
+    expect(material.parameters!.some(parameter => parameter.nodeId === 'color')).toBe(true);
+    expect(material.parameters!.some(parameter => parameter.input === 'base')).toBe(true);
+  });
   it('only exposes unbound inputs, not connections, resolved interfaces or implicit geometry properties', async () => {
     const resources = await fixture(false, graph => {
       graph.nodes.get('surface')!.inputs = [

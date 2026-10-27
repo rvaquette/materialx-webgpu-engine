@@ -36,7 +36,7 @@ import { generateEnvironmentMipmaps } from './env/mipmaps.ts';
 import { assembleIrForwardShader, type RasterQuality } from './raster/ir-forward.ts';
 import { pathTraceDisplayWgsl, previewScale, PT_DISPLAY_INFO_BYTES, PT_DISPLAY_PIXEL_BYTES } from './pathtracing/display.ts';
 import { JsDenoiser } from './pathtracing/js-denoiser.ts';
-import { changeMaterialParameters, compileEditableMaterial, materialUniformData, packParameterUniforms, type MaterialParameter } from './material-parameters.ts';
+import { changeMaterialParameters, compileEditableMaterial, materialUniformData, packParameterUniforms, visibleMaterialParameters, type MaterialParameter } from './material-parameters.ts';
 import { applySceneDisplacement } from './displacement.ts';
 import type { MaterialResource } from './scene-resources.ts';
 
@@ -166,7 +166,8 @@ export class InteractiveViewer {
   objectParameters(path: string): readonly MaterialParameter[] {
     const resources = this.#loaded?.parameterResources;
     const key = resources?.instances.find(instance => instance.primPath === path)?.materialKey;
-    return key ? resources?.materials.get(key)?.parameters ?? [] : [];
+    const material = key ? resources?.materials.get(key) : undefined;
+    return material ? visibleMaterialParameters(material) : [];
   }
 
   async setObjectParameters(path: string, changes: ReadonlyMap<string, readonly number[]>): Promise<void> {

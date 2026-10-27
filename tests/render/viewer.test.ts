@@ -80,7 +80,11 @@ def Xform "World" {
   const { emitWgsl } = await import('../../src/compiler/wgsl.ts');
   const graph = {
     terminals: [{ name: 'surfaceshader', type: 'surfaceshader', nodeId: 's', provenance: { namePath: '/s' } }],
-    nodes: new Map([['s', { id: 's', category: 'standard_surface', type: 'surfaceshader', inputs: [], provenance: { namePath: '/s' } }]]),
+    nodes: new Map([['s', { id: 's', category: 'standard_surface', type: 'surfaceshader', inputs: [
+      { name: 'base_color', type: 'color3', source: { kind: 'value' as const, type: 'color3', value: '0.8, 0.8, 0.8' }, provenance: { namePath: '/s/base_color' } },
+      { name: 'coat', type: 'float', source: { kind: 'value' as const, type: 'float', value: '0' }, provenance: { namePath: '/s/coat' } },
+      { name: 'specular_roughness', type: 'float', source: { kind: 'value' as const, type: 'float', value: '0.2' }, provenance: { namePath: '/s/specular_roughness' } },
+    ], provenance: { namePath: '/s' } }]]),
   };
   const builder = new IrModuleBuilder();
   builder.output({ name: 'color', type: FLOAT, ref: builder.constant(FLOAT, 1) });

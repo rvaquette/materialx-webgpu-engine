@@ -42,8 +42,8 @@ export class MaterialParameterEditor {
     const values = parameters();
     const note = document.createElement('p');
     note.textContent = values.length
-      ? 'Valeurs propres à cet objet. Couleurs numériques linéaires ; sélecteur couleur sRGB. Les connexions du graphe sont conservées.'
-      : 'Aucun paramètre numérique modifiable pour cet objet.';
+      ? 'Entrées explicites et non liées du shader de surface. Couleurs numériques linéaires ; sélecteur couleur sRGB.'
+      : 'Aucune entrée numérique explicite et non liée sur le shader de surface.';
     container.appendChild(note);
     if (!values.length) return;
     const reset = document.createElement('button');

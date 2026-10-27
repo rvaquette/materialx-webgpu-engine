@@ -24,6 +24,15 @@ const numericTypes = new Set(['float', 'integer', 'boolean', 'color3', 'vector2'
 
 function isType(type: string): type is MaterialParameter['type'] { return numericTypes.has(type); }
 
+export function visibleMaterialParameters(material: MaterialResource): readonly MaterialParameter[] {
+  const surfaceNode = material.surfaceGraph?.nodes.get(material.resolvedSurface?.nodeId ?? '');
+  return (material.parameters ?? []).filter(parameter => {
+    if (parameter.nodeId) return false;
+    const input = surfaceNode?.inputs.find(input => input.name === parameter.input);
+    return input?.source.kind === 'value' && !input.interfaceName;
+  });
+}
+
 export function parameterValues(parameter: MaterialParameter, values: readonly number[]): number[] {
   const size = parameter.type === 'color3' ? 3 : parameter.type.startsWith('vector') ? Number(parameter.type.at(-1)) : 1;
   if (values.length !== size || !values.every(Number.isFinite)) throw new Error(`Invalid value for ${parameter.label}`);

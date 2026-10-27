@@ -65,9 +65,13 @@ material-name or parameter-name catalogue defines this UI. Active NodeDef
 interfaces take priority over the compiler's family fallback tables.
 
 The first editor supports numeric literal inputs: float sliders/numbers, integer
-fields, boolean checkboxes, color3 pickers and vector components. Upstream node
-inputs (including NodeDef defaults and displacement scale/UV mapping) are also
-discovered; connected surface ports are not replaced with constants.
+fields, boolean checkboxes, color3 pickers and vector components. The UI shows
+only numeric literal inputs explicitly authored on the surface shader, without
+an incoming connection. Implicit NodeDef defaults and internal graph-node inputs
+are hidden. For example, `nodes/absval/absval.mtlx` exposes only `specular` and
+`specular_roughness`, not its connected `base_color` or internal node constants.
+The engine retains internal parameter metadata for uniform packing and rebuilds;
+connected surface ports are not replaced with constants.
 Interface-bound inputs are hidden even when their binding resolves to a literal;
 implicit geometry-property inputs are not exposed as numeric defaults.
 Filename, string and graph-connection editing are outside this first version. Numeric
