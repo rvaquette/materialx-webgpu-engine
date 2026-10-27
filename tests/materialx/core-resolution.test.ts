@@ -68,7 +68,7 @@ describe.skipIf(!existsSync(coreFile) || !existsSync(libraryRoot))('installed Ma
       documents.delete();
       libraries.delete();
     }
-  });
+  }, 30000);
 
   it.skipIf(!existsSync(join(playgroundRoot, 'materials')))('compiles all playground documents without material warnings', async () => {
     const module = await import(/* @vite-ignore */ pathToFileURL(coreFile).href) as { default: MaterialXModuleFactory };

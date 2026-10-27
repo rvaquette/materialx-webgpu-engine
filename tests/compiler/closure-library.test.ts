@@ -48,7 +48,7 @@ describe('closure library prelude (T056a)', () => {
       const fns = lobeFns(lobe);
       expect(CLOSURE_LIBRARY_PRELUDE).toContain(`fn ${fns.eval}(ctx: MxLobeCtx, wi: vec3f) -> MxBsdfEval`);
       expect(CLOSURE_LIBRARY_PRELUDE).toContain(`fn ${fns.pdf}(ctx: MxLobeCtx, wi: vec3f) -> f32`);
-      expect(CLOSURE_LIBRARY_PRELUDE).toContain(`fn ${fns.sample}(ctx: MxLobeCtx, u: vec2f) -> MxBsdfSample`);
+      expect(CLOSURE_LIBRARY_PRELUDE).toContain(`fn ${fns.sample}(ctx: MxLobeCtx, u: ${fns.sampleInputType}) -> MxBsdfSample`);
     }
   });
 

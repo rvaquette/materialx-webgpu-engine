@@ -24,6 +24,7 @@ import {
 } from '../../src/render/pathtracing/material-record.ts';
 import { LAYERED_CLOSURE_PRELUDE } from '../../src/compiler/surface-wgsl.ts';
 import { CLOSURE_LIBRARY_PRELUDE } from '../../src/compiler/closure-library.ts';
+import { MEDIA_HELPERS_PRELUDE } from '../../src/render/pathtracing/compute.ts';
 
 export interface BxdfDeviceCaseResult {
   readonly name: string;
@@ -47,6 +48,9 @@ function bxdfShadeWgsl(cosMode: 'max' | 'abs'): string {
   const cosL = cosMode === 'max' ? 'max(dot(n, toLight), 0.0)' : 'abs(dot(n, toLight))';
   return `${LAYERED_CLOSURE_PRELUDE}
 ${CLOSURE_LIBRARY_PRELUDE}
+// The medium helpers' free-flight sampler needs an rng; it is unused by this harness.
+fn rng_next(state : ptr<function, u32>) -> f32 { return 0.5; }
+${MEDIA_HELPERS_PRELUDE}
 ${materialClosureReaderWgsl()}
 
 struct P {
@@ -154,14 +158,20 @@ export async function runBxdfOnDevice(
   device.queue.writeBuffer(normalBuffer, 0, normals);
   device.queue.writeBuffer(viewBuffer, 0, views);
 
-  const rasterPipeline = device.createComputePipeline({
-    layout: 'auto',
-    compute: { module: device.createShaderModule({ code: bxdfShadeWgsl('max') }), entryPoint: 'main' },
-  });
-  const ptPipeline = device.createComputePipeline({
-    layout: 'auto',
-    compute: { module: device.createShaderModule({ code: bxdfShadeWgsl('abs') }), entryPoint: 'main' },
-  });
+  const compile = async (code: string): Promise<GPUComputePipeline> => {
+    const module = device.createShaderModule({ code });
+    const info = await module.getCompilationInfo();
+    const errors = info.messages.filter((m) => m.type === 'error');
+    if (errors.length > 0) {
+      throw new Error(`WGSL: ${errors.map((m) => `${m.lineNum}:${m.linePos} ${m.message}`).join(' | ')}`);
+    }
+    return device.createComputePipeline({ layout: 'auto', compute: { module, entryPoint: 'main' } });
+  };
+  device.pushErrorScope('validation');
+  const rasterPipeline = await compile(bxdfShadeWgsl('max'));
+  const ptPipeline = await compile(bxdfShadeWgsl('abs'));
+  const pipelineError = await device.popErrorScope();
+  if (pipelineError) throw new Error(`pipeline: ${pipelineError.message}`);
 
   const params = new ArrayBuffer(64);
   const dv = new DataView(params);

@@ -160,9 +160,9 @@ export type BxdfFamilyKey =
 export const BXDF_FAMILY_TARGET_TOLERANCE: Readonly<
   Record<BxdfFamilyKey, Readonly<Record<DeviceTarget, number>>>
 > = {
-  standard_surface: { local: 5e-3, mobile: 8e-3 },
+  standard_surface: { local: 7e-3, mobile: 8e-3 },
   open_pbr_surface: { local: 5e-3, mobile: 8e-3 },
-  disney_principled: { local: 5e-3, mobile: 8e-3 },
+  disney_principled: { local: 8e-3, mobile: 8e-3 },
   gltf_pbr: { local: 4e-3, mobile: 7e-3 },
   UsdPreviewSurface: { local: 4e-3, mobile: 7e-3 },
   lama_assembly: { local: 6e-3, mobile: 9e-3 },

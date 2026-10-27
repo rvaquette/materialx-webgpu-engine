@@ -81,7 +81,14 @@ async function fetchReportViaCdp(wsUrl) {
   for (let i = 0; i < 2000 && !raw; i++) {
     const v = await evalExpr('JSON.stringify(globalThis.__MX_BXDF_REPORT__ ?? null)');
     if (typeof v === 'string' && v !== 'null') raw = v;
-    else await sleep(50);
+    else {
+      const err = await evalExpr('globalThis.__MX_BXDF_ERROR__ ?? null');
+      if (err) {
+        ws.close();
+        throw new Error(`harness failed: ${err}`);
+      }
+      await sleep(50);
+    }
   }
   ws.close();
   if (!raw) throw new Error('browser did not produce __MX_BXDF_REPORT__');

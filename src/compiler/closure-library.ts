@@ -46,11 +46,17 @@ export interface LobeFns {
   eval: string;
   pdf: string;
   sample: string;
+  sampleInputType: 'vec2f' | 'vec3f';
 }
 
 /** Map a lobe family to its eval/pdf/sample WGSL function names. */
 export function lobeFns(lobe: ClosureLibraryLobe): LobeFns {
-  return { eval: `mx_${lobe}_eval`, pdf: `mx_${lobe}_pdf`, sample: `mx_${lobe}_sample` };
+  return {
+    eval: `mx_${lobe}_eval`,
+    pdf: `mx_${lobe}_pdf`,
+    sample: `mx_${lobe}_sample`,
+    sampleInputType: lobe === 'dielectric_transmission' ? 'vec3f' : 'vec2f',
+  };
 }
 
 /** Shared math helper functions declared by the library prelude. */

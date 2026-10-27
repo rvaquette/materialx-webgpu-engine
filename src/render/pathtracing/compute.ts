@@ -229,7 +229,7 @@ function wgslTraversal(): string {
 // Homogeneous participating-medium helpers shared by the packed material reader
 // (interior-medium derivation) and the integrator free-flight sampler. Mirrors
 // media.ts / subsurface.ts on the CPU reference; rng_next is defined earlier.
-const MEDIA_HELPERS_PRELUDE = /* wgsl */ `struct MxMedium {
+export const MEDIA_HELPERS_PRELUDE = /* wgsl */ `struct MxMedium {
   sigmaA: vec3f,
   sigmaS: vec3f,
   g: f32,

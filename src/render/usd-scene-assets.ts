@@ -21,6 +21,8 @@ import { loadMaterialXDocuments } from '../materialx/document-source.ts';
 import { loadMaterialXCore } from '../materialx/wasm.ts';
 import { loadSharedMaterialXLibraries, defaultLibrarySources } from '../materialx/libraries.ts';
 import type { DecodedPixelImage } from '../assets/images.ts';
+import { DecodedImageCache } from '../assets/decoded-image-cache.ts';
+import { AsyncResourceCache } from '../assets/cache.ts';
 import { decodeBrowserImage } from '../assets/browser-image.ts';
 import { imageSamplerDescriptor } from '../assets/samplers.ts';
 import { decodeHdr, type HdrImage } from '../assets/hdr.ts';
@@ -51,6 +53,15 @@ const MATERIALX_CORE_URL = `${MATERIALX_ROOT}JsMaterialXCore.js`;
 const MATERIALX_WASM_DIR = MATERIALX_ROOT;
 const MATERIALX_LIBRARIES_ROOT = `${MATERIALX_ROOT}libraries`;
 const appAssetUrl = (path: string): string => new URL(path, document.baseURI).href;
+const decodedTextureCache = new DecodedImageCache();
+const decodedEnvironmentCache = new AsyncResourceCache<HdrImage>({
+  maxBytes: 128 * 1024 * 1024,
+  onDiagnostic: (diagnostic) => console.warn(diagnostic.message),
+});
+
+class MissingTextureError extends Error {
+  override readonly name = 'MissingTextureError';
+}
 
 /** Directory portion of a URL-ish path, keeping the trailing slash. */
 export function dirOf(path: string): string {
@@ -214,13 +225,20 @@ export async function loadMtlxSceneContext(
     async decode(fileRef: string): Promise<DecodedPixelImage | undefined> {
       for (const dir of materialDirs) {
         const url = joinUrl(dir, fileRef);
-        const resp = await fetch(url);
-        if (resp.status === 404) continue;
-        if (!resp.ok) throw new Error(`HTTP ${resp.status} for texture ${url}`);
         try {
-          return await decodeBrowserImage(await resp.blob(), url);
+          return await decodedTextureCache.get(url, async (signal) => {
+            const resp = await fetch(url, { signal });
+            if (resp.status === 404) throw new MissingTextureError(`Texture not found: ${url}`);
+            if (!resp.ok) throw new Error(`HTTP ${resp.status} for texture ${url}`);
+            try {
+              return await decodeBrowserImage(await resp.blob(), url);
+            } catch (error) {
+              sink({ level: 'error', message: `Texture decode failed: ${url}`, detail: { error: String(error) } });
+              throw error;
+            }
+          });
         } catch (error) {
-          sink({ level: 'error', message: `Texture decode failed: ${url}`, detail: { error: String(error) } });
+          if (error instanceof MissingTextureError) continue;
           throw error;
         }
       }
@@ -299,28 +317,41 @@ export async function loadEnvironment(
   const baseDir = dirOf(entry);
   const fetchHdr = async (ref: string): Promise<HdrImage | undefined> => {
     const url = new URL(ref, dome.textureSourceLayer ?? new URL(baseDir, document.baseURI).href).href;
+    const cacheHit = decodedEnvironmentCache.has(url);
+    const started = performance.now();
     try {
-      const res = await fetch(url);
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const bytes = await res.arrayBuffer();
-      if (/\.exr(?:[?#]|$)/i.test(url)) {
-        const { EXRLoader } = await import('three/addons/loaders/EXRLoader.js');
-        const image = new EXRLoader().setDataType(FloatType).parse(bytes);
-        if (image.width === undefined || image.height === undefined ||
-          !(image.data instanceof Float32Array) || image.data.length !== image.width * image.height * 4) {
-          throw new Error(`Invalid RGBA float EXR environment: ${url}`);
-        }
-        const data = new Float32Array(image.width * image.height * 3);
-        // EXRLoader returns bottom-up rows; HdrImage uses top-down rows.
-        for (let y = 0; y < image.height; y++) {
-          for (let x = 0; x < image.width; x++) {
-            const src = ((image.height - 1 - y) * image.width + x) * 4;
-            data.set(image.data.subarray(src, src + 3), (y * image.width + x) * 3);
+      const image = await decodedEnvironmentCache.get(url, async (signal) => {
+        const res = await fetch(url, { signal });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const bytes = await res.arrayBuffer();
+        let decoded: HdrImage;
+        if (/\.exr(?:[?#]|$)/i.test(url)) {
+          const { EXRLoader } = await import('three/addons/loaders/EXRLoader.js');
+          const parsed = new EXRLoader().setDataType(FloatType).parse(bytes);
+          if (parsed.width === undefined || parsed.height === undefined ||
+            !(parsed.data instanceof Float32Array) || parsed.data.length !== parsed.width * parsed.height * 4) {
+            throw new Error(`Invalid RGBA float EXR environment: ${url}`);
           }
+          const data = new Float32Array(parsed.width * parsed.height * 3);
+          // EXRLoader returns bottom-up rows; HdrImage uses top-down rows.
+          for (let y = 0; y < parsed.height; y++) {
+            for (let x = 0; x < parsed.width; x++) {
+              const src = ((parsed.height - 1 - y) * parsed.width + x) * 4;
+              data.set(parsed.data.subarray(src, src + 3), (y * parsed.width + x) * 3);
+            }
+          }
+          decoded = { width: parsed.width, height: parsed.height, data };
+        } else {
+          decoded = decodeHdr(new Uint8Array(bytes));
         }
-        return { width: image.width, height: image.height, data };
-      }
-      return decodeHdr(new Uint8Array(bytes));
+        return { value: decoded, size: decoded.data.byteLength };
+      });
+      performance.measure('assets:environment-cache', {
+        start: started,
+        end: performance.now(),
+        detail: { hit: cacheHit, url, bytes: image.data.byteLength },
+      });
+      return image;
     } catch (e) {
       sink({ level: 'warning', message: `Failed to load envmap ${url}`, detail: String((e as Error)?.message ?? e) });
       return undefined;

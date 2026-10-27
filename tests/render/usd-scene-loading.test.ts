@@ -82,7 +82,7 @@ over "World" {
         color: [1, 1, 1], intensity: 1, exposure: 0, normalize: false, transform: IDENTITY4,
         textureFile: '../textures/env.exr', textureSourceLayer: 'https://example.test/playground/lights/rig.usd',
       }], 'https://example.test/playground/stage.usda', vi.fn());
-      expect(fetch).toHaveBeenCalledWith('https://example.test/playground/textures/env.exr');
+      expect(fetch.mock.calls[0]?.[0]).toBe('https://example.test/playground/textures/env.exr');
       expect(environment?.image.data).toEqual(new Float32Array([8, 4, 2, 4, 2, 1]));
       expect(environment?.image.width).toBe(1);
       expect(environment?.image.height).toBe(2);

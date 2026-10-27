@@ -214,7 +214,7 @@ describe('surfaceGraphToLayered (T055b)', () => {
     ]);
     expect(closure.coat).toEqual({ weight: 0.6, color: [1, 1, 1], roughness: 0.1, ior: 1.6 });
     expect(closure.fuzz).toEqual({ weight: 0.4, color: [0.9, 0.9, 0.9], roughness: 0.5 });
-    expect(closure.thinFilm).toEqual({ weight: 1, thickness: 0.5, ior: 1.4 });
+    expect(closure.thinFilm).toEqual({ weight: 1, thickness: 500, ior: 1.4 });
     expect(closure.emission).toEqual([3, 3, 3]);
     expect(lobe(closure, 'burley_diffuse')).toBeDefined();
   });

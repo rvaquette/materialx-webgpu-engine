@@ -33,6 +33,7 @@ describe('node coverage', () => {
     const all = coveredCategories();
     expect(all).toContain('image');
     expect(all).toContain('layer');
-    expect(all.length).toBe(NODE_REGISTRY.size + 5);
+    expect(all).toContain('displacement');
+    expect(all.length).toBe(NODE_REGISTRY.size + 6);
   });
 });
