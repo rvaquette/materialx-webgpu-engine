@@ -335,7 +335,7 @@ export function lowerExprs(
         rhs = litConst(expr.type, expr.value);
         break;
       case 'param':
-        rhs = `u.${ident(expr.name)}`;
+        rhs = `u.${handlePrefix}${ident(expr.name)}`;
         break;
       case 'input': {
         const r = inputRef(expr.name);
@@ -442,7 +442,7 @@ export function lowerExprs(
   }
 
   // Uniforms.
-  const uniforms: WgslUniformField[] = ir.params.map((p) => ({ name: p.name, field: ident(p.name), wgslType: wgslType(p.type) }));
+  const uniforms: WgslUniformField[] = ir.params.map((p) => ({ name: p.name, field: `${handlePrefix}${ident(p.name)}`, wgslType: wgslType(p.type) }));
   // Bindings. Only expose textures/samplers the body actually samples so the
   // declared WGSL bindings match what auto-layout keeps (and the device plan).
   const usedTex = ir.textures.filter((t) => usedTextures.has(t.name));

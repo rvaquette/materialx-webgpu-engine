@@ -46,6 +46,15 @@ describe('shared displacement geometry', () => {
     expect(result.streams[0]!.data[15]).toBe(1);
   });
 
+  it('applies edited height-map UV tiling/offset before sampling', () => {
+    const source = geometry();
+    const result = displaceGeometry(source, image, 2, 'displaced', { uvScale: [1, 1], uvOffset: [0.5, 0] });
+    expect(result.streams[0]!.data[5]).toBe(1);
+    expect(source.streams[0]!.data[5]).toBe(0);
+    const neutral = displaceGeometry(source, image, 2, 'neutral', { uvScale: [0, 0], uvOffset: [0, 0] });
+    expect(Array.from(neutral.streams[0]!.data)).toEqual(Array.from(source.streams[0]!.data));
+  });
+
   it('isolates shared instances by material, decodes once and builds the PT BVH over displaced positions', async () => {
     const source = geometry();
     const material = { file: 'height.png', scale: 1 };

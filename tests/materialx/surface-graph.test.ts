@@ -64,6 +64,25 @@ function upstream(id: string, category: string): ResolvedNode {
 }
 
 describe('resolveSurface (T055a)', () => {
+  it('uses the loaded active NodeDef interface and its own types/defaults before family fallbacks', () => {
+    const graph = graphOf({ category: 'standard_surface' });
+    const node = graph.nodes.get('SR')!;
+    node.nodeDef = {
+      ...node.nodeDef!,
+      inputs: [
+        { name: 'base_color', type: 'color3', value: '0.1, 0.2, 0.3' },
+        { name: 'custom_flag', type: 'boolean', value: 'true' },
+        { name: 'custom_count', type: 'integer', value: '7' },
+        { name: 'normal', type: 'vector3', geomprop: 'Nworld' },
+      ],
+    };
+    const surface = resolveSurface(graph)!;
+    expect([...surface.inputs.keys()]).toEqual(['base_color', 'custom_flag', 'custom_count', 'normal']);
+    expect(surface.inputs.get('base_color')?.source).toEqual({ kind: 'default', value: [0.1, 0.2, 0.3] });
+    expect(surface.inputs.get('custom_flag')).toMatchObject({ type: 'boolean', source: { value: [1] } });
+    expect(surface.inputs.get('custom_count')).toMatchObject({ type: 'integer', source: { value: [7] } });
+    expect(surface.inputs.get('normal')?.source).toEqual({ kind: 'geomprop', name: 'Nworld' });
+  });
   it('classifies every known family and fills the full declared interface', () => {
     const cases: Array<{ category: string; count: number }> = [
       { category: 'standard_surface', count: 42 },

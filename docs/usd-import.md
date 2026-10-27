@@ -54,6 +54,34 @@ loading explicitly. The path tracer specializes its lobe dispatch to the union
 of graph materials and constant-record fallbacks to reduce driver compilation
 and runtime pressure without removing reachable material features.
 
+## Interactive MaterialX parameters
+
+Under **Matériaux > Paramètres du matériau**, controls are discovered from the
+loaded graph and its active NodeDefs, with their own types and defaults. No
+material-name or parameter-name catalogue defines this UI. Active NodeDef
+interfaces take priority over the compiler's family fallback tables.
+
+The first editor supports numeric literal inputs: float sliders/numbers, integer
+fields, boolean checkboxes, color3 pickers and vector components. Upstream node
+inputs (including NodeDef defaults and displacement scale/UV mapping) are also
+discovered; connected surface ports are not replaced with constants. Filename,
+string and graph-connection editing are outside this first version. Numeric
+color components are linear; color pickers convert to/from sRGB without clipping
+the numeric HDR fields.
+
+Each object has independent parameter state. Surface numeric edits use GPU
+uniforms in both renderers when the emitted shader and render pass remain
+unchanged. The engine compares generated code/pass classification rather than
+maintaining a list of special parameter names. Changes that activate a lobe,
+alter topology, or edit upstream expressions rebuild the necessary render set
+without re-fetching the USD/MaterialX documents. Displacement edits start from
+original mesh positions, rebuild sewn geometry and acceleration data, and are
+debounced. Path-tracing accumulation and denoising are invalidated on every edit.
+**Réinitialiser les paramètres** restores the values at material load, including
+authored overrides rather than only library defaults. Parameter edits are
+session-only; loading another scene or assigning another material reloads state,
+and does not write the source `.mtlx` document.
+
 HDR environments are uniformly normalized before uploading to `rgba16float`
 and their original radiance is restored after texture sampling, including the
 path tracer's importance-sampling PDF. This prevents bright HDR texels above

@@ -2,7 +2,7 @@ import type { DecodedPixelImage } from '../assets/images.ts';
 import { buildTlas } from '../geometry/bvh.ts';
 import { prepareMesh } from '../geometry/prepare.ts';
 import { assembleIrForwardShader } from './raster/ir-forward.ts';
-import { buildGeometry, transformBounds, type GeometryResource, type SceneResources } from './scene-resources.ts';
+import { buildGeometry, transformBounds, type GeometryResource, type SceneResources, type MaterialDisplacement } from './scene-resources.ts';
 import type { PtImageProvider } from './pathtracing/device-bindings.ts';
 
 function heightAt(image: DecodedPixelImage, u: number, v: number): number {
@@ -20,7 +20,10 @@ function heightAt(image: DecodedPixelImage, u: number, v: number): number {
 }
 
 /** Sew positional duplicates, not UVs or shading normals: hard edges stay hard. */
-export function displaceGeometry(geometry: GeometryResource, image: DecodedPixelImage, scale: number, id: string): GeometryResource {
+export function displaceGeometry(
+  geometry: GeometryResource, image: DecodedPixelImage, scale: number, id: string,
+  mapping: Pick<MaterialDisplacement, 'uvScale' | 'uvOffset'> = {},
+): GeometryResource {
   if (image.componentType !== 'uint8' || image.channels !== 4 || image.width < 1 || image.height < 1
       || image.data.length !== image.width * image.height * 4) {
     throw new Error('Displacement requires a nonempty RGBA8 height map.');
@@ -44,7 +47,9 @@ export function displaceGeometry(geometry: GeometryResource, image: DecodedPixel
   for (const vertices of groups.values()) {
     const offset = [0, 0, 0];
     for (const i of vertices) {
-      const height = (heightAt(image, uv[i * 2]!, uv[i * 2 + 1]!) - 0.5) * scale;
+      const u = uv[i * 2]! * (mapping.uvScale?.[0] ?? 1) + (mapping.uvOffset?.[0] ?? 0);
+      const v = uv[i * 2 + 1]! * (mapping.uvScale?.[1] ?? 1) + (mapping.uvOffset?.[1] ?? 0);
+      const height = (heightAt(image, u, v) - 0.5) * scale;
       for (let axis = 0; axis < 3; axis++) offset[axis]! += normals[i * 3 + axis]! * height / vertices.length;
     }
     const first = vertices[0]!;
@@ -114,7 +119,7 @@ export async function applySceneDisplacement(resources: SceneResources, provider
     if (!displacement || !geometry) return instance;
     replaced.add(instance.prototypeId);
     const id = `${instance.prototypeId}::displacement::${instance.materialKey}`;
-    if (!geometries.has(id)) geometries.set(id, displaceGeometry(geometry, images.get(displacement.file)!, displacement.scale, id));
+    if (!geometries.has(id)) geometries.set(id, displaceGeometry(geometry, images.get(displacement.file)!, displacement.scale, id, displacement));
     return { ...instance, prototypeId: id };
   });
   const used = new Set(instances.map(instance => instance.prototypeId));

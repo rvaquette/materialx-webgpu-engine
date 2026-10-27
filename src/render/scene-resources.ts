@@ -50,7 +50,7 @@ export interface MaterialBuild {
   /** Height-map displacement extracted from the displacementshader terminal: a
    *  scalar texture sampled along the shading normal, scaled by `scale`. Absent
    *  when the material has no displacement or only a constant (map-less) one. */
-  displacement?: { file: string; scale: number };
+  displacement?: MaterialDisplacement;
 }
 
 /** Runs the MaterialX chain for a unique material unit (dedup already applied). */
@@ -80,7 +80,15 @@ export interface GeometryResource {
   displacement: DisplacementPlan;
 }
 
+export interface MaterialDisplacement {
+  file: string;
+  scale: number;
+  uvScale?: readonly [number, number];
+  uvOffset?: readonly [number, number];
+}
+
 export interface MaterialResource {
+  parameters?: readonly import('./material-parameters.ts').MaterialParameter[];
   unitKey: string;
   materialName: string;
   features: ShaderFeatures;
@@ -99,7 +107,7 @@ export interface MaterialResource {
   surfaceGraph?: ResolvedGraph;
   resolvedSurface?: ResolvedSurface;
   /** Height-map displacement threaded from the build for the GPU displace pass. */
-  displacement?: { file: string; scale: number };
+  displacement?: MaterialDisplacement;
 }
 
 export interface InstanceResource {

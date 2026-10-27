@@ -427,7 +427,13 @@ export function lowerSurfaceInputsToIr(
     switch (ni.source.kind) {
       case 'value':
       case 'default':
-        ref = constOfIrType(builder, surfaceIrType(ni.type), ni.source.value);
+        if (ni.parameter) {
+          const type = surfaceIrType(ni.type);
+          builder.declareParam({ name: ni.parameter, type, defaultValue: ni.source.value.length === 1 ? ni.source.value[0]! : [...ni.source.value], editable: true });
+          ref = builder.add({ kind: 'param', type, name: ni.parameter });
+        } else {
+          ref = constOfIrType(builder, surfaceIrType(ni.type), ni.source.value);
+        }
         break;
       case 'connection':
         ref = coerce(lowerNode(ni.source.nodeId, ni.source.output), surfaceIrType(ni.type));

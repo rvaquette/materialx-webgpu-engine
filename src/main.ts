@@ -8,6 +8,7 @@
 import { InteractiveViewer } from './render/viewer.ts';
 import { SCENE_CATALOG } from './scene/scene-catalog.ts';
 import { MATERIAL_CATALOG } from './scene/material-catalog.ts';
+import { MaterialParameterEditor } from './material-parameter-editor.ts';
 
 let statusIsError = false;
 
@@ -87,6 +88,7 @@ async function main(): Promise<void> {
   const materialSelect = document.getElementById('material-file') as HTMLSelectElement | null;
   const materialFilter = document.getElementById('material-filter') as HTMLInputElement | null;
   const materialControls = document.getElementById('material-controls') as HTMLFieldSetElement | null;
+  const parameterControls = document.getElementById('material-parameters') as HTMLFieldSetElement | null;
   if (select) populateSelector(select);
   const backendButtons = Array.from(document.querySelectorAll<HTMLButtonElement>('#backend-mode button[data-backend]'));
   const pathTracingToggle = document.getElementById('pathtracing-toggle') as HTMLButtonElement | null;
@@ -130,6 +132,16 @@ async function main(): Promise<void> {
     },
   };
   let viewer = new InteractiveViewer({ device, context, outputFormat, canvas, ...viewerCallbacks });
+  const parameterEditor = parameterControls ? new MaterialParameterEditor({
+    container: parameterControls,
+    parameters: () => viewer.objectParameters(objectSelect?.value ?? ''),
+    apply: async changes => {
+      setBusy(true);
+      try { await viewer.setObjectParameters(objectSelect?.value ?? '', changes); }
+      finally { setBusy(false); }
+    },
+    error: error => setStatus(`Echec du paramètre : ${error instanceof Error ? error.message : String(error)}`),
+  }) : undefined;
   const viewCanvas = canvas;
   const viewContext = context;
 
@@ -188,6 +200,7 @@ async function main(): Promise<void> {
     if (rasterQuality) rasterQuality.disabled = busy;
     if (ptDenoise) ptDenoise.disabled = busy;
     if (materialControls) materialControls.disabled = busy || viewer.objects.length === 0;
+    if (parameterControls) parameterControls.disabled = busy || viewer.objects.length === 0;
   }
 
   function refreshMaterials(): void {
@@ -222,9 +235,10 @@ async function main(): Promise<void> {
     }
     if (viewer.objects.some((object) => object.path === selected)) objectSelect.value = selected;
     refreshMaterials();
+    parameterEditor?.refresh();
   }
 
-  objectSelect?.addEventListener('change', refreshMaterials);
+  objectSelect?.addEventListener('change', () => { refreshMaterials(); parameterEditor?.refresh(); });
   materialFilter?.addEventListener('input', refreshMaterials);
   materialSelect?.addEventListener('change', async () => {
     if (!objectSelect) return;

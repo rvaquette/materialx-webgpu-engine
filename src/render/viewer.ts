@@ -36,6 +36,9 @@ import { generateEnvironmentMipmaps } from './env/mipmaps.ts';
 import { assembleIrForwardShader, type RasterQuality } from './raster/ir-forward.ts';
 import { pathTraceDisplayWgsl, previewScale, PT_DISPLAY_INFO_BYTES, PT_DISPLAY_PIXEL_BYTES } from './pathtracing/display.ts';
 import { JsDenoiser } from './pathtracing/js-denoiser.ts';
+import { changeMaterialParameters, compileEditableMaterial, materialUniformData, packParameterUniforms, type MaterialParameter } from './material-parameters.ts';
+import { applySceneDisplacement } from './displacement.ts';
+import type { MaterialResource } from './scene-resources.ts';
 
 /** Preview fill + framing shared with the capture harness so the live view matches. */
 const PREVIEW_ENV: Vec3 = [0.65, 0.68, 0.72];
@@ -70,6 +73,7 @@ export interface ViewerStatus {
 
 /** A disposable per-scene GPU render set (raster + lazily built path tracer) for one loaded USD. */
 interface SceneRender {
+  updateMaterial: (key: string, material: MaterialResource) => void;
   frame: SceneFramePlan;
   resize: (width: number, height: number) => void;
   setRasterQuality: (quality: RasterQuality) => Promise<void>;
@@ -157,6 +161,81 @@ export class InteractiveViewer {
 
   get objects(): ReadonlyArray<{ path: string; material: string; assetPath?: string }> {
     return this.#objects;
+  }
+
+  objectParameters(path: string): readonly MaterialParameter[] {
+    const resources = this.#loaded?.parameterResources;
+    const key = resources?.instances.find(instance => instance.primPath === path)?.materialKey;
+    return key ? resources?.materials.get(key)?.parameters ?? [] : [];
+  }
+
+  async setObjectParameters(path: string, changes: ReadonlyMap<string, readonly number[]>): Promise<void> {
+    const loaded = this.#loaded;
+    const source = loaded?.parameterResources;
+    const key = source?.instances.find(instance => instance.primPath === path)?.materialKey;
+    const material = key ? source?.materials.get(key) : undefined;
+    if (!loaded || !source || !key || !material || !this.#current) throw new Error(`Unknown editable object: ${path}`);
+    changes = new Map([...changes].filter(([id, value]) => {
+      const current = material.parameters?.find(parameter => parameter.id === id);
+      return !current || value.length !== current.value.length || value.some((component, i) => component !== current.value[i]);
+    }));
+    if (changes.size === 0) return;
+    let updated = changeMaterialParameters(material, changes);
+    const compiled = compileEditableMaterial(updated);
+    const before = buildSceneFrame(source, { surfaceFor: loaded.mtlx.surfaceFor }).draws.find(draw => draw.materialKey === key);
+    const probeMaterials = new Map(source.materials);
+    probeMaterials.set(key, compiled);
+    const after = buildSceneFrame({ ...source, materials: probeMaterials }, { surfaceFor: loaded.mtlx.surfaceFor })
+      .draws.find(draw => draw.materialKey === key);
+    const rebuild = material.parameters?.some(parameter => changes.has(parameter.id) && parameter.update === 'rebuild')
+      || compiled.sceneShader?.code !== material.sceneShader?.code || before?.pass !== after?.pass;
+    if (rebuild) updated = compiled;
+    const materials = new Map(source.materials);
+    materials.set(key, updated);
+    const parameterResources = { ...source, materials };
+    if (!rebuild) {
+      // Keep baked geometry metadata; source materials retain displacement for future rebuilds.
+      const baked = { ...loaded.resources.materials.get(key)!, parameters: updated.parameters!,
+        surfaceGraph: updated.surfaceGraph!, resolvedSurface: updated.resolvedSurface! };
+      this.#current.updateMaterial(key, baked);
+      const bakedMaterials = new Map(loaded.resources.materials);
+      bakedMaterials.set(key, baked);
+      loaded.resources = { ...loaded.resources, materials: bakedMaterials };
+      loaded.parameterResources = parameterResources;
+      this.#rasterDirty = true;
+      this.#ptDisplayDirty = true;
+      this.#current.resetPathTrace();
+      this.#emitStatus();
+      return;
+    }
+    const resources = await applySceneDisplacement(parameterResources, loaded.mtlx.imageProvider);
+    const candidate = { ...loaded, resources, parameterResources };
+    const exposure = loaded.cameras[0]?.exposure ?? 0;
+    const frame = buildSceneFrame(resources, {
+      lights: loaded.lights, surfaceFor: loaded.mtlx.surfaceFor,
+      environment: this.#current.frame.environment,
+      frameCamera: { viewProj: this.#orbit.viewProj(), eye: this.#orbit.eye, exposure },
+    });
+    const sink: DiagnosticSink = diagnostic => {
+      if (diagnostic.level === 'error') console.error(diagnostic.message, diagnostic.detail ?? '');
+      else if (diagnostic.level === 'warning') console.warn(diagnostic.message, diagnostic.detail ?? '');
+    };
+    const render = await this.#buildSceneRender(candidate, frame, exposure, sink);
+    if (this.#loaded !== loaded || this.#disposed) {
+      render.dispose();
+      throw new Error('Scene changed during parameter update.');
+    }
+    this.#current.dispose();
+    this.#current = render;
+    this.#loaded = candidate;
+    this.#onCameraChanged();
+    this.#emitStatus();
+  }
+
+  async resetObjectParameters(path: string): Promise<void> {
+    await this.setObjectParameters(path, new Map(this.objectParameters(path)
+      .filter(parameter => parameter.value.some((value, i) => value !== parameter.initial[i]))
+      .map(parameter => [parameter.id, parameter.initial])));
   }
 
   async setObjectMaterial(path: string, assetPath?: string): Promise<void> {
@@ -249,7 +328,7 @@ export class InteractiveViewer {
       if (d.level === 'error') console.error(d.message, d.detail ?? '');
       else if (d.level === 'warning') console.warn(d.message, d.detail ?? '');
     };
-    const loaded = await loadUsdScene(entry, sink, () => { }, overrides, options);
+    const loaded = await loadUsdScene(entry, sink, () => { }, overrides, { ...options, editableParameters: true });
     const exposure = loaded.cameras[0]?.exposure ?? 0;
     let frame: SceneFramePlan;
     let render: SceneRender;
@@ -429,7 +508,9 @@ export class InteractiveViewer {
     let cameraEye = frame.camera.eye;
     let backgroundInvViewProj = inverse4(frame.camera.viewProj);
     const outputFormat = this.#outputFormat;
-    const resources = loaded.resources;
+    const resources = { ...loaded.resources, materials: new Map(loaded.resources.materials) };
+    const parameterBuffers = new Map<string, GPUBuffer[]>();
+    let uploadPtParameters: (() => void) | undefined;
     this.#onShaderErrors?.([]);
     let rasterErrors: ShaderCompilationError[] = [];
     const track = <T extends { destroy(): void }>(o: T): T => {
@@ -591,8 +672,14 @@ export class InteractiveViewer {
         }
         device.queue.writeBuffer(frameUniform, 0, buildSceneFrameUniform(frame, draw));
         frameUniforms.push(frameUniform);
-        const materialUniform = track(device.createBuffer({ size: SCENE_MATERIAL_UNIFORM_SIZE, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST }));
-        device.queue.writeBuffer(materialUniform, 0, buildSceneMaterialUniform(draw));
+        const materialData = material.parameters ? materialUniformData(material) : buildSceneMaterialUniform(draw);
+        const materialUniform = track(device.createBuffer({ size: Math.max(SCENE_MATERIAL_UNIFORM_SIZE, materialData.byteLength), usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST }));
+        device.queue.writeBuffer(materialUniform, 0, materialData);
+        if (draw.materialKey && material.parameters) {
+          const buffers = parameterBuffers.get(draw.materialKey) ?? [];
+          buffers.push(materialUniform);
+          parameterBuffers.set(draw.materialKey, buffers);
+        }
         const textures = draw.materialKey ? materialTextures.get(draw.materialKey) : undefined;
         const displacement = draw.materialKey ? materialDisplacement.get(draw.materialKey) : undefined;
         const bindGroups = createSceneBindGroups(
@@ -798,6 +885,13 @@ fn dir_to_uv(d: vec3<f32>) -> vec2<f32> {
         throw new Error(`WGSL: ${ptCompilation.errors.length} erreur(s) de compilation (path tracing).`);
       }
       const bindings = await buildPtDeviceBindings(dispatch, ptScene, loaded.mtlx.imageProvider, { sink });
+      const ptParameterData = (): ArrayBuffer => packParameterUniforms(dispatch.uniforms, field => {
+        const index = /^m(\d+)_/.exec(field.field)?.[1];
+        const key = index === undefined ? undefined : ptScene.materialKeys[Number(index)];
+        const parameter = key ? resources.materials.get(key)?.parameters?.find(parameter => parameter.uniform === field.name) : undefined;
+        if (!parameter) throw new Error(`Missing path-tracing parameter: ${field.field}`);
+        return parameter.value;
+      });
       const ptBackend = new PathTraceBackend(device, { dispatch, ...(envAsset ? { environment: true } : {}) });
       const { pipeline: ptPipeline } = await ptBackend.createPipelineAsync(ptCompilation.module);
       const displayCompilation = await compileShaderWithDiagnostics(
@@ -841,7 +935,10 @@ fn dir_to_uv(d: vec3<f32>) -> vec2<f32> {
         if (slot.role === 'uniform') return { binding: slot.binding, resource: { buffer: ptUniform } };
         if (slot.role === 'accum') return { binding: slot.binding, resource: { buffer: accumBuffer } };
         if (slot.role === 'mxUniforms') {
-          const mx = track(device.createBuffer({ size: 256, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST }));
+          const data = ptParameterData();
+          const mx = track(device.createBuffer({ size: data.byteLength, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST }));
+          uploadPtParameters = () => device.queue.writeBuffer(mx, 0, ptParameterData());
+          uploadPtParameters();
           return { binding: slot.binding, resource: { buffer: mx } };
         }
         return { binding: slot.binding, resource: { buffer: storageData(slot.data ?? new Float32Array(1)) } };
@@ -1171,6 +1268,12 @@ fn dir_to_uv(d: vec3<f32>) -> vec2<f32> {
     };
 
     return {
+      updateMaterial: (key, material) => {
+        resources.materials.set(key, material);
+        const data = materialUniformData(material);
+        for (const buffer of parameterBuffers.get(key) ?? []) device.queue.writeBuffer(buffer, 0, data);
+        uploadPtParameters?.();
+      },
       frame,
       resize: (w, h) => {
         const next = createRasterTargets(w, h);

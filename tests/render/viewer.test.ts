@@ -9,6 +9,7 @@ import { NEUTRAL_SURFACE } from '../../src/render/raster/scene-frame.ts';
 import { projectIrradianceSH } from '../../src/render/env/irradiance.ts';
 import { buildEnvCdf } from '../../src/assets/environment-cdf.ts';
 import { JsDenoiser } from '../../src/render/pathtracing/js-denoiser.ts';
+import { editableSceneMaterials, materialUniformData } from '../../src/render/material-parameters.ts';
 
 vi.mock('../../src/render/usd-scene-assets.ts', async (original) => ({
   ...await original<typeof import('../../src/render/usd-scene-assets.ts')>(),
@@ -52,7 +53,7 @@ function fakeDevice() {
   return { device, gpu: device as unknown as GPUDevice, pass, textures };
 }
 
-async function sceneFixture(): Promise<LoadedUsdScene> {
+async function sceneFixture(editable = false): Promise<LoadedUsdScene> {
   const imported = await importUsdStage('scene.usda', {
     reader: { read: async () => `#usda 1.0
 def Xform "World" {
@@ -89,11 +90,14 @@ def Xform "World" {
       points: [-1, 0, 0, 1, 0, 0, 0, 1, 0], faceVertexCounts: [3], faceVertexIndices: [0, 1, 2],
     }) },
     materialCompiler: {
-      compile: () => ({ ir, module: emitWgsl(ir), layered: emitLayeredSurface(graph, resolveSurface(graph, {})!) }),
+      compile: () => ({ ir, module: emitWgsl(ir), layered: emitLayeredSurface(graph, resolveSurface(graph, {})!),
+        ...(editable ? { graph, surface: resolveSurface(graph, {})! } : {}) }),
     },
   });
   return {
-    entry: 'scene.usda', scene, resources, lights: [], cameras: [],
+    entry: 'scene.usda', scene,
+    resources: editable ? editableSceneMaterials(resources) : resources,
+    ...(editable ? { parameterResources: editableSceneMaterials(resources) } : {}), lights: [], cameras: [],
     mtlx: {
       documents: { documentFor: () => undefined, delete: vi.fn() },
       surfaceFor: () => NEUTRAL_SURFACE,
@@ -118,8 +122,8 @@ describe('interactive viewer resource lifecycle', () => {
   });
   afterEach(() => { viewer?.dispose(); vi.unstubAllGlobals(); });
 
-  async function setup(environment = false) {
-    const loaded = await sceneFixture();
+  async function setup(environment = false, editable = false) {
+    const loaded = await sceneFixture(editable);
     if (environment) {
       const image = { width: 4, height: 2, data: new Float32Array(24).fill(1) };
       loaded.environment = {
@@ -139,6 +143,62 @@ describe('interactive viewer resource lifecycle', () => {
     await viewer.load('scene.usda');
     return { ...mock, loaded, canvas, statuses, viewer };
   }
+
+  it('updates live uniforms without reload, GPU recompilation or geometry upload', async () => {
+    const { viewer, device, loaded } = await setup(false, true);
+    const path = '/World/Ball';
+    const original = viewer.objectParameters(path).find(parameter => parameter.id === 'surface:base_color')!.initial;
+    const shaders = device.createShaderModule.mock.calls.length;
+    const buffers = device.createBuffer.mock.calls.length;
+    const loads = vi.mocked(loadUsdScene).mock.calls.length;
+    device.queue.writeBuffer.mockClear();
+    await viewer.setObjectParameters(path, new Map([['surface:base_color', [0.2, 0.4, 0.8]]]));
+    expect(viewer.objectParameters(path).find(parameter => parameter.id === 'surface:base_color')!.value).toEqual([0.2, 0.4, 0.8]);
+    expect(device.createShaderModule).toHaveBeenCalledTimes(shaders);
+    expect(device.createBuffer).toHaveBeenCalledTimes(buffers);
+    expect(loadUsdScene).toHaveBeenCalledTimes(loads);
+    expect(device.queue.writeBuffer).toHaveBeenCalled();
+    const key = loaded.parameterResources!.instances[0]!.materialKey!;
+    const data = materialUniformData(loaded.parameterResources!.materials.get(key)!);
+    expect(device.queue.writeBuffer.mock.calls.some(call => call[2] instanceof ArrayBuffer
+      && new Uint8Array(call[2]).every((value, i) => value === new Uint8Array(data)[i]))).toBe(true);
+    await viewer.resetObjectParameters(path);
+    expect(viewer.objectParameters(path).find(parameter => parameter.id === 'surface:base_color')!.value).toEqual(original);
+  });
+
+  it('rebuilds changed closure topology without reloading the document and retains parameter defaults', async () => {
+    const { viewer, device } = await setup(false, true);
+    const shaders = device.createShaderModule.mock.calls.length;
+    const loads = vi.mocked(loadUsdScene).mock.calls.length;
+    await viewer.setObjectParameters('/World/Ball', new Map([['surface:coat', [1]]]));
+    expect(device.createShaderModule.mock.calls.length).toBeGreaterThan(shaders);
+    expect(loadUsdScene).toHaveBeenCalledTimes(loads);
+    const coat = viewer.objectParameters('/World/Ball').find(parameter => parameter.id === 'surface:coat')!;
+    expect(coat.value).toEqual([1]);
+    expect(coat.initial).toEqual([0]);
+    await expect(viewer.setObjectParameters('/World/Ball', new Map([['surface:base_color', [NaN, 0, 0]]]))).rejects.toThrow();
+    expect(viewer.objectParameters('/World/Ball').find(parameter => parameter.id === 'surface:coat')!.value).toEqual([1]);
+  });
+
+  it('updates PT material uniforms and resets accumulation without rebuilding the compute pipeline', async () => {
+    const actual = await vi.importActual<typeof import('../../src/render/pathtracing/scene-buffers.ts')>(
+      '../../src/render/pathtracing/scene-buffers.ts');
+    vi.mocked(buildCachedPathTraceScene).mockImplementation(actual.buildCachedPathTraceScene);
+    const { viewer, device, statuses } = await setup(false, true);
+    viewer.setBackend('pathtracing');
+    tick(0);
+    await new Promise(resolve => setTimeout(resolve, 30));
+    tick(1);
+    await Promise.resolve();
+    const pipelines = device.createComputePipelineAsync.mock.calls.length;
+    expect(statuses.at(-1)?.samples).toBeGreaterThan(0);
+    device.queue.writeBuffer.mockClear();
+    await viewer.setObjectParameters('/World/Ball', new Map([['surface:specular_roughness', [0.7]]]));
+    expect(statuses.at(-1)?.samples).toBe(0);
+    expect(device.queue.writeBuffer.mock.calls.length).toBeGreaterThanOrEqual(2);
+    expect(device.createComputePipelineAsync).toHaveBeenCalledTimes(pipelines);
+    expect(buildCachedPathTraceScene).toHaveBeenCalledOnce();
+  });
 
   it('does not build path-tracing CPU data/BVH in raster, including after resize', async () => {
     const { viewer, device, loaded } = await setup();

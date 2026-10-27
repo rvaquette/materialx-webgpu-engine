@@ -48,7 +48,7 @@ function neutralSurfaceIr(): ShaderIr {
  *  terminal: the `displacement` node feeds a scalar height image whose `file` we
  *  sample on the GPU and a uniform `scale` applied along the shading normal. Only
  *  the texture-fed case is handled; a constant displacement has no map to sample. */
-function extractDisplacement(graph: ResolvedGraph): { file: string; scale: number } | undefined {
+export function extractDisplacement(graph: ResolvedGraph): NonNullable<MaterialBuild['displacement']> | undefined {
   const terminal = graph.terminals.find((t) => t.name === 'displacementshader');
   if (!terminal?.nodeId) return undefined;
   const node = graph.nodes.get(terminal.nodeId);
@@ -66,7 +66,23 @@ function extractDisplacement(graph: ResolvedGraph): { file: string; scale: numbe
   if (fileInput?.source.kind !== 'value') return undefined;
   const file = String(fileInput.source.value);
   if (!file) return undefined;
-  return { file, scale };
+  if (image?.category !== 'tiledimage') return { file, scale };
+  const pair = (name: string, fallback: readonly [number, number]): [number, number] => {
+    const source = image.inputs.find(input => input.name === name)?.source;
+    const raw = source?.kind === 'value' ? source.value : image.nodeDef?.inputs?.find(input => input.name === name)?.value;
+    if (raw === undefined) return [...fallback];
+    const values = raw.split(',').map(Number);
+    if (values.length !== 2 || !values.every(Number.isFinite)) throw new Error(`Invalid displacement ${name}`);
+    return [values[0]!, values[1]!];
+  };
+  const tiling = pair('uvtiling', [1, 1]), offset = pair('uvoffset', [0, 0]);
+  const imageSize = pair('realworldimagesize', [1, 1]), tileSize = pair('realworldtilesize', [1, 1]);
+  if (imageSize.some(value => value === 0)) throw new Error('Displacement realworldimagesize must be nonzero.');
+  return {
+    file, scale,
+    uvScale: [tiling[0] * tileSize[0] / imageSize[0], tiling[1] * tileSize[1] / imageSize[1]],
+    uvOffset: [-offset[0] * tileSize[0] / imageSize[0], -offset[1] * tileSize[1] / imageSize[1]],
+  };
 }
 
 /** Build a MaterialCompiler that lowers each unit through the full node network. */

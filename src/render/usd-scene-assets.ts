@@ -47,6 +47,7 @@ import { AssetResolver } from '../assets/resolver.ts';
 import type { OpenUsdModule } from '../usd/crate.ts';
 import { FloatType } from 'three';
 import { applySceneDisplacement } from './displacement.ts';
+import { editableSceneMaterials } from './material-parameters.ts';
 
 /** App-relative paths also work when dist/ is served below the workspace root. */
 const MATERIALX_ROOT = `${import.meta.env.BASE_URL}materialx/`;
@@ -374,6 +375,8 @@ export async function loadEnvironment(
 }
 
 export interface LoadedUsdScene {
+  /** Original positions plus editable material state, before displacement baking. */
+  parameterResources?: SceneResources;
   entry: string;
   scene: SceneAsset;
   resources: SceneResources;
@@ -407,6 +410,7 @@ export function applyObjectMaterialOverrides(
 }
 
 export interface SceneLoadOptions {
+  editableParameters?: boolean;
   /** Explicit root for scene-authored MaterialX texture paths, not runtime overrides. */
   textureRoot?: string;
   loadCrateModule?: () => Promise<OpenUsdModule>;
@@ -444,11 +448,13 @@ export async function loadUsdScene(
   const mtlx = await loadMtlxSceneContext(scene, entry, sink, line, options.textureRoot);
   const materialsAt = performance.now();
   performance.measure('usd:materials', { start: composedAt, end: materialsAt, detail: { entry, documents: scene.materials.length } });
-  const resources = await applySceneDisplacement(await buildSceneResources(scene, {
+  const built = await buildSceneResources(scene, {
     meshSource: await loadExternalMeshSource(scene, meshSourceFromScene(scene), sink),
     materialCompiler: createGraphMaterialCompiler({ documents: mtlx.documents, sink }),
     sink,
-  }), mtlx.imageProvider);
+  });
+  const parameterResources = options.editableParameters ? editableSceneMaterials(built) : undefined;
+  const resources = await applySceneDisplacement(parameterResources ?? built, mtlx.imageProvider);
   const environment = await loadEnvironment(lights, entry, sink);
   performance.measure('usd:resources', { start: materialsAt, end: performance.now(), detail: {
     entry, geometries: resources.geometries.size, materials: resources.materials.size,
@@ -456,7 +462,7 @@ export async function loadUsdScene(
     triangles: [...resources.geometries.values()].reduce((sum, mesh) => sum + mesh.indices.length / 3, 0),
     lights: lights.length, cameras: cameras.length, environment: environment !== undefined,
   } });
-  return { entry, scene, resources, lights, cameras, mtlx, ...(environment ? { environment } : {}) };
+  return { entry, scene, resources, lights, cameras, mtlx, ...(parameterResources ? { parameterResources } : {}), ...(environment ? { environment } : {}) };
 }
 
 export type { Diagnostic };

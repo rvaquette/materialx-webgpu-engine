@@ -42,6 +42,8 @@ export interface NormalizedSurfaceInput {
   readonly name: string;
   readonly type: SurfaceInputType;
   readonly source: NormalizedSurfaceSource;
+  /** Optional live uniform name, assigned by the interactive material editor. */
+  readonly parameter?: string;
 }
 
 export interface ResolvedSurface {
@@ -350,7 +352,23 @@ export function resolveSurface(graph: ResolvedGraph, options: ResolveSurfaceOpti
   }
   const family = familyKey as SurfaceFamily;
   const version = node.nodeDef?.version;
-  const defs = familyInputs(family, version);
+  const fallbackDefs = familyInputs(family, version);
+  // Real documents carry their active NodeDef interface, including inherited inputs.
+  // Family tables are only a fallback for synthetic graphs and absent NodeDefs.
+  const defs: readonly SurfaceInputDef[] = node.nodeDef?.inputs?.length
+    ? node.nodeDef.inputs.flatMap(input => {
+      if (!['float', 'color3', 'vector3', 'integer', 'boolean'].includes(input.type)) return [];
+      const type = input.type as SurfaceInputType;
+      const fallback = fallbackDefs.find(def => def.name === input.name);
+      return [{
+        name: input.name, type,
+        ...(input.geomprop ? { geomprop: input.geomprop }
+          : input.value !== undefined ? { default: parseValue(type, input.value) }
+          : fallback?.geomprop ? { geomprop: fallback.geomprop }
+          : { default: fallback?.default ?? [0] }),
+      }];
+    })
+    : fallbackDefs;
   const declared = new Set(defs.map((d) => d.name));
 
   const authored = new Map(node.inputs.map((input) => [input.name, input] as const));

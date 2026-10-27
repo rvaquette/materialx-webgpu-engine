@@ -118,6 +118,43 @@
         box-sizing: border-box;
         min-width: 0;
       }
+      #material-parameters {
+        border: 0;
+        padding: 0 0 12px;
+        margin: 0;
+        min-width: 0;
+      }
+      #material-parameters p, .parameter-row small {
+        font-size: 12px;
+        color: #a8a8b0;
+      }
+      .parameter-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+        gap: 8px;
+        margin-top: 12px;
+        max-height: 340px;
+        overflow: auto;
+      }
+      .parameter-row {
+        min-width: 0;
+        border: 1px solid #3a3a44;
+        border-radius: 4px;
+      }
+      .parameter-row legend { font-size: 12px; overflow-wrap: anywhere; }
+      .parameter-values { display: flex; align-items: center; gap: 6px; margin-top: 6px; }
+      .parameter-values input { min-width: 0; width: 100%; }
+      .parameter-values input[type="checkbox"] { width: auto; min-height: 32px; }
+      .parameter-values input[type="color"] { max-width: 44px; }
+      .parameter-values input[type="number"], #material-parameters button {
+        background: #1c1c22;
+        color: #e6e6e6;
+        border: 1px solid #3a3a44;
+        border-radius: 4px;
+        padding: 6px;
+        min-height: 32px;
+      }
+      #material-parameters:disabled { opacity: 0.6; }
       @media (max-width: 600px) {
         #material-controls {
           grid-template-columns: minmax(0, 1fr);
@@ -210,6 +247,10 @@
           <label for="material-filter">Rechercher<input id="material-filter" type="search" autocomplete="off" /></label>
           <label for="material-file">Matériau<select id="material-file"></select></label>
         </fieldset>
+        <details id="parameters-panel">
+          <summary>Paramètres du matériau</summary>
+          <fieldset id="material-parameters" disabled aria-label="Paramètres du matériau"></fieldset>
+        </details>
       </details>
       <details id="shader-errors-panel">
         <summary>Erreurs WGSL (<span id="shader-error-count" aria-live="polite">0</span>)</summary>

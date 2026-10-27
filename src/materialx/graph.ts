@@ -19,6 +19,7 @@ export interface MxVector<T> {
 }
 
 export interface MxInput extends MxElement {
+  getDefaultGeomPropString?(): string;
   getType(): string;
   getValueString(): string;
   hasValue?(): boolean;
@@ -94,7 +95,7 @@ export interface ResolvedNodeDefRef {
   nodeGroup?: string;
   version?: string;
   implementation: ResolvedImplementation;
-  inputs?: readonly { name: string; type: string; value?: string }[];
+  inputs?: readonly { name: string; type: string; value?: string; geomprop?: string }[];
 }
 
 export interface ResolvedNode {
@@ -268,10 +269,12 @@ function resolveNodeDef(node: MxNode, target: string | undefined, diag: Diagnost
   const version = nonEmpty(nodeDef.getVersionString?.());
   const inputs = toArray(nodeDef.getActiveInputs?.() ?? nodeDef.getInputs?.() ?? []).map((input) => {
     const value = nonEmpty(input.getValueString());
+    const geomprop = nonEmpty(input.getDefaultGeomPropString?.());
     return {
       name: input.getName(),
       type: input.getType(),
       ...(value !== undefined ? { value } : {}),
+      ...(geomprop !== undefined ? { geomprop } : {}),
     };
   });
   return {
