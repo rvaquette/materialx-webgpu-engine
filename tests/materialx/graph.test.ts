@@ -189,6 +189,19 @@ describe('resolveGraph', () => {
     expect(graph.nodes.get('/mat/mul')?.inputs[0]?.source).toEqual({ kind: 'interface', name: 'gain' });
   });
 
+  it('retains the interface binding when it resolves to a literal value', () => {
+    const input = fakeInput({ name: 'in2', type: 'float', interfaceName: 'gain' });
+    input.getInterfaceInput = () => fakeInput({ name: 'gain', type: 'float', value: '0.5' });
+    const node = fakeNode({ name: 'mul', category: 'multiply', type: 'float', inputs: [input] });
+    const graph = resolveGraph({
+      roots: [{ name: 'value', type: 'float', node: node as unknown as MxNode }],
+      onDiagnostic: () => {},
+    });
+    expect(graph.nodes.get('/mat/mul')?.inputs[0]).toMatchObject({
+      interfaceName: 'gain', source: { kind: 'value', type: 'float', value: '0.5' },
+    });
+  });
+
   it('diagnoses an unresolved NodeDef without throwing', () => {
     const onDiagnostic = vi.fn();
     const node = fakeNode({ name: 'mystery', category: 'mystery', type: 'color3', nodeDef: null });

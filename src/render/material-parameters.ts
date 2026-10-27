@@ -41,7 +41,10 @@ export function editableSceneMaterials(resources: SceneResources): SceneResource
     const key = `${instance.materialKey}::editor::${instance.primPath}`;
     const parameters: MaterialParameter[] = [];
     const inputs = new Map(material.resolvedSurface.inputs);
+    const surfaceNode = material.surfaceGraph.nodes.get(material.resolvedSurface.nodeId);
     for (const [name, input] of inputs) {
+      const authored = surfaceNode?.inputs.find(candidate => candidate.name === name);
+      if (authored?.interfaceName || authored?.source.kind === 'interface' || authored?.source.kind === 'connection') continue;
       if (input.source.kind !== 'value' && input.source.kind !== 'default') continue;
       const uniform = `parameter_${parameters.length}`;
       const rebuild = input.type === 'boolean' || input.type === 'integer';
@@ -57,12 +60,13 @@ export function editableSceneMaterials(resources: SceneResources): SceneResource
       if (nodeId === material.resolvedSurface.nodeId) continue;
       const inputs = [
         ...node.inputs,
-        ...(node.nodeDef?.inputs ?? []).filter(input => input.value !== undefined && !node.inputs.some(authored => authored.name === input.name))
+        ...(node.nodeDef?.inputs ?? []).filter(input => input.value !== undefined && !input.geomprop && !node.inputs.some(authored => authored.name === input.name))
           .map(input => ({
             ...input, source: { kind: 'value' as const, type: input.type, value: input.value! },
           })),
       ];
       for (const input of inputs) {
+        if ('interfaceName' in input && input.interfaceName) continue;
         if (input.source.kind !== 'value' || !isType(input.type)) continue;
         const values = input.source.value.trim() === 'true' ? [1] : input.source.value.trim() === 'false' ? [0]
           : input.source.value.split(',').map(Number);

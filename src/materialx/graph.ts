@@ -76,6 +76,8 @@ export interface ResolvedInput {
   name: string;
   type: string;
   source: ResolvedValueSource;
+  /** Preserve interface bindings even when their source resolves to a literal. */
+  interfaceName?: string;
   /** Declared colorspace carried from the input; never inferred. */
   colorSpace?: string;
   unit?: string;
@@ -227,6 +229,7 @@ function resolveInput(input: MxInput): { resolved: ResolvedInput; connected: MxN
       name,
       type,
       source,
+      ...(interfaceName !== undefined ? { interfaceName } : {}),
       ...(colorSpace !== undefined ? { colorSpace } : {}),
       ...(unit !== undefined ? { unit } : {}),
       ...(unitType !== undefined ? { unitType } : {}),

@@ -64,8 +64,10 @@ interfaces take priority over the compiler's family fallback tables.
 The first editor supports numeric literal inputs: float sliders/numbers, integer
 fields, boolean checkboxes, color3 pickers and vector components. Upstream node
 inputs (including NodeDef defaults and displacement scale/UV mapping) are also
-discovered; connected surface ports are not replaced with constants. Filename,
-string and graph-connection editing are outside this first version. Numeric
+discovered; connected surface ports are not replaced with constants.
+Interface-bound inputs are hidden even when their binding resolves to a literal;
+implicit geometry-property inputs are not exposed as numeric defaults.
+Filename, string and graph-connection editing are outside this first version. Numeric
 color components are linear; color pickers convert to/from sRGB without clipping
 the numeric HDR fields.
 

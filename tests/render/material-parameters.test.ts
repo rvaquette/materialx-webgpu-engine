@@ -10,7 +10,7 @@ import { buildMaterialDispatch } from '../../src/render/pathtracing/material-var
 import { changeMaterialParameters, compileEditableMaterial, editableSceneMaterials, materialUniformData, packParameterUniforms, parameterValues } from '../../src/render/material-parameters.ts';
 import { applySceneDisplacement } from '../../src/render/displacement.ts';
 
-async function fixture(displacement = false) {
+async function fixture(displacement = false, configure?: (graph: ResolvedGraph) => void) {
   const graph: ResolvedGraph = {
     terminals: [{ name: 'surfaceshader', type: 'surfaceshader', nodeId: 'surface', provenance: { namePath: '/surface' } }],
     nodes: new Map([['surface', {
@@ -41,6 +41,7 @@ async function fixture(displacement = false) {
     graph.nodes = nodes;
     graph.terminals = [...graph.terminals, { name: 'displacementshader', type: 'displacementshader', nodeId: 'disp', provenance: { namePath: '/disp' } }];
   }
+  configure?.(graph);
   const surface = resolveSurface(graph, {})!;
   const builder = new IrModuleBuilder();
   builder.output({ name: 'color', type: FLOAT, ref: builder.constant(FLOAT, 1) });
@@ -60,6 +61,37 @@ def Mesh "b" { rel material:binding = </Mat> }` } });
 }
 
 describe('dynamic MaterialX parameters', () => {
+  it('only exposes unbound inputs, not connections, resolved interfaces or implicit geometry properties', async () => {
+    const resources = await fixture(false, graph => {
+      graph.nodes.get('surface')!.inputs = [
+        { name: 'base_color', type: 'color3', source: { kind: 'connection', nodeId: 'custom_node' }, provenance: { namePath: '/surface/base_color' } },
+        { name: 'specular_roughness', type: 'float', interfaceName: 'roughness',
+          source: { kind: 'value', type: 'float', value: '0.4' }, provenance: { namePath: '/surface/specular_roughness' } },
+        { name: 'coat', type: 'float', source: { kind: 'interface', name: 'coat' }, provenance: { namePath: '/surface/coat' } },
+      ];
+      const upstream = graph.nodes.get('custom_node')!;
+      upstream.inputs = [
+        { name: 'in1', type: 'float', source: { kind: 'value', type: 'float', value: '1' }, provenance: { namePath: '/custom_node/in1' } },
+        { name: 'in2', type: 'float', source: { kind: 'value', type: 'float', value: '1' }, provenance: { namePath: '/custom_node/in2' } },
+        { name: 'enabled', type: 'boolean', interfaceName: 'enabled',
+          source: { kind: 'value', type: 'boolean', value: 'true' }, provenance: { namePath: '/custom_node/enabled' } },
+        { name: 'custom_direction', type: 'vector2', source: { kind: 'interface', name: 'direction' }, provenance: { namePath: '/custom_node/custom_direction' } },
+      ];
+      upstream.nodeDef!.inputs = [...upstream.nodeDef!.inputs!,
+        { name: 'position', type: 'vector3', value: '0, 0, 0', geomprop: 'Pobject' }];
+    });
+    const material = [...resources.materials.values()][0]!;
+    const ids = material.parameters!.map(parameter => parameter.id);
+    expect(ids).not.toContain('surface:base_color');
+    expect(ids).not.toContain('surface:specular_roughness');
+    expect(ids).not.toContain('surface:coat');
+    expect(ids).not.toContain(JSON.stringify(['custom_node', 'enabled']));
+    expect(ids).not.toContain(JSON.stringify(['custom_node', 'custom_direction']));
+    expect(ids).not.toContain(JSON.stringify(['custom_node', 'position']));
+    expect(ids).toContain('surface:base');
+    expect(ids).toContain(JSON.stringify(['custom_node', 'custom_gain']));
+    expect(material.resolvedSurface!.inputs.get('base_color')?.source.kind).toBe('connection');
+  });
   it('updates displacement from discovered inputs and rebakes original geometry, including reset', async () => {
     const resources = await fixture(true);
     const instance = resources.instances[0]!;
