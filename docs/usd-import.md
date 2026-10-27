@@ -22,6 +22,9 @@ transforms are baked into the selected geometry; USD transforms are then applied
 normally. Normals are preserved. GLB UVs are converted from glTF's top-left
 origin to USD/MaterialX's bottom-left origin (`v = 1 - v`) before tangent
 generation and upload to either renderer; OBJ and inline USD UVs are unchanged.
+Inline USD PreviewSurface textures keep those bottom-left UVs when converted to
+MaterialX. The image compiler performs the single V flip needed for top-left
+image storage, shared by raster and path tracing.
 UVs outside the unit square retain their tiling. Negative-determinant transforms reverse
 triangle winding. OBJ polygons are triangulated by Three.js.
 Missing normals are generated per mesh. Merging objects with mixed UV

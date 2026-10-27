@@ -130,25 +130,11 @@ function lowerOne(
   const textureFiles: string[] = [];
   const surfaceInputs: string[] = [];
 
-  // USD UsdUVTexture samples with a bottom-left (OpenGL) origin; the engine samples
-  // textures top-left, so feed images a V-flipped texcoord: uv * (1,-1) + (0,1).
+  // USD and MaterialX use bottom-left UVs; image lowering converts to image space.
   const uvNodes: string[] = [];
-  let flippedUv: string | undefined;
-  const ensureFlippedUv = (): string => {
-    if (flippedUv) return flippedUv;
-    uvNodes.push(
-      `  <texcoord name="st_raw" type="vector2" />`,
-      `  <multiply name="st_mul" type="vector2">\n` +
-        `    <input name="in1" type="vector2" nodename="st_raw" />\n` +
-        `    <input name="in2" type="vector2" value="1, -1" />\n` +
-        `  </multiply>`,
-      `  <add name="st_flip" type="vector2">\n` +
-        `    <input name="in1" type="vector2" nodename="st_mul" />\n` +
-        `    <input name="in2" type="vector2" value="0, 1" />\n` +
-        `  </add>`,
-    );
-    flippedUv = 'st_flip';
-    return flippedUv;
+  const ensureUv = (): string => {
+    if (!uvNodes.length) uvNodes.push(`  <texcoord name="st_raw" type="vector2" />`);
+    return 'st_raw';
   };
 
   const emitImage = (tex: ScenePrim, output: string, targetType: string): string | undefined => {
@@ -165,7 +151,7 @@ function lowerOne(
     const name = `img_${images.size}_${tex.name}`;
     const relFile = stripDotSlash(file);
     if (!textureFiles.includes(relFile)) textureFiles.push(relFile);
-    const uvNode = ensureFlippedUv();
+    const uvNode = ensureUv();
     const xml =
       `  <image name="${xmlEscape(name)}" type="${imageType}">\n` +
       `    <input name="file" type="filename" value="${xmlEscape(relFile)}" />\n` +
