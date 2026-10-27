@@ -59,6 +59,12 @@ and runtime pressure without removing reachable material features.
 
 ## Interactive MaterialX parameters
 
+The material chooser uses successive directory selectors (category, subfolders,
+then material), mirroring the library tree instead of a flat filtered list.
+Changing directories does not apply a material; choosing a material does.
+Selecting an object restores the directory of its assigned material.
+**Matériau d'origine** removes the override from any directory.
+
 Under **Matériaux > Paramètres du matériau**, controls are discovered from the
 loaded graph and its active NodeDefs, with their own types and defaults. No
 material-name or parameter-name catalogue defines this UI. Active NodeDef

@@ -66,7 +66,7 @@
         font-size: 13px;
         color: #a8a8b0;
       }
-      #toolbar select, #material-controls select, #material-controls input {
+      #toolbar select, #material-controls select {
         background: #1c1c22;
         color: #e6e6e6;
         border: 1px solid #3a3a44;
@@ -113,7 +113,8 @@
         font-size: 13px;
         color: #a8a8b0;
       }
-      #material-controls select, #material-controls input {
+      #material-folders { display: contents; }
+      #material-controls select {
         width: 100%;
         box-sizing: border-box;
         min-width: 0;
@@ -244,7 +245,7 @@
         <summary>Matériaux</summary>
         <fieldset id="material-controls" disabled>
           <label for="material-object">Objet<select id="material-object"></select></label>
-          <label for="material-filter">Rechercher<input id="material-filter" type="search" autocomplete="off" /></label>
+          <div id="material-folders"></div>
           <label for="material-file">Matériau<select id="material-file"></select></label>
         </fieldset>
         <details id="parameters-panel">

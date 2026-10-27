@@ -8,6 +8,7 @@
 import { InteractiveViewer } from './render/viewer.ts';
 import { SCENE_CATALOG } from './scene/scene-catalog.ts';
 import { MATERIAL_CATALOG } from './scene/material-catalog.ts';
+import { buildMaterialTree } from './scene/material-tree.ts';
 import { MaterialParameterEditor } from './material-parameter-editor.ts';
 
 let statusIsError = false;
@@ -86,7 +87,9 @@ async function main(): Promise<void> {
   const ptDenoise = document.getElementById('pathtracing-denoise') as HTMLInputElement | null;
   const objectSelect = document.getElementById('material-object') as HTMLSelectElement | null;
   const materialSelect = document.getElementById('material-file') as HTMLSelectElement | null;
-  const materialFilter = document.getElementById('material-filter') as HTMLInputElement | null;
+  const materialFolders = document.getElementById('material-folders');
+  const materialTree = buildMaterialTree(MATERIAL_CATALOG);
+  let materialFolderPath: string[] = [];
   const materialControls = document.getElementById('material-controls') as HTMLFieldSetElement | null;
   const parameterControls = document.getElementById('material-parameters') as HTMLFieldSetElement | null;
   if (select) populateSelector(select);
@@ -203,25 +206,46 @@ async function main(): Promise<void> {
     if (parameterControls) parameterControls.disabled = busy || viewer.objects.length === 0;
   }
 
-  function refreshMaterials(): void {
+  function refreshMaterials(restoreSelection = true): void {
     if (!materialSelect) return;
     const selected = viewer.objects.find((object) => object.path === objectSelect?.value)?.assetPath ?? '';
-    const query = materialFilter?.value.trim().toLowerCase() ?? '';
-    materialSelect.replaceChildren(new Option("Matériau d'origine", ''));
-    const groups = new Map<string, HTMLOptGroupElement>();
-    for (const material of MATERIAL_CATALOG) {
-      const url = new URL(material.path, document.baseURI).href;
-      if (url !== selected && !`${material.group} ${material.label}`.toLowerCase().includes(query)) continue;
-      let group = groups.get(material.group);
-      if (!group) {
-        group = document.createElement('optgroup');
-        group.label = material.group;
-        groups.set(material.group, group);
-        materialSelect.appendChild(group);
-      }
-      group.appendChild(new Option(material.label, url));
+    if (restoreSelection) {
+      const current = MATERIAL_CATALOG.find(material => new URL(material.path, document.baseURI).href === selected);
+      materialFolderPath = current ? current.path.split('/mtlx-library/')[1]!.split('/').slice(0, -1) : [];
     }
-    materialSelect.value = selected;
+    materialFolders?.replaceChildren();
+    let folder = materialTree;
+    for (let depth = 0; folder.folders.size; depth++) {
+      const label = document.createElement('label');
+      label.textContent = depth === 0 ? 'Catégorie' : `Sous-dossier ${depth}`;
+      const select = document.createElement('select');
+      select.id = `material-folder-${depth}`;
+      label.htmlFor = select.id;
+      select.appendChild(new Option('Choisir un dossier…', ''));
+      for (const name of [...folder.folders.keys()].sort()) select.appendChild(new Option(name, name));
+      const name = materialFolderPath[depth];
+      select.value = name ?? '';
+      select.addEventListener('change', () => {
+        materialFolderPath = [...materialFolderPath.slice(0, depth), ...(select.value ? [select.value] : [])];
+        refreshMaterials(false);
+      });
+      label.appendChild(select);
+      materialFolders?.appendChild(label);
+      if (!name) break;
+      const child = folder.folders.get(name);
+      if (!child) throw new Error(`Unknown material folder: ${name}`);
+      folder = child;
+    }
+    const placeholder = new Option('Choisir un matériau…', '', true, true);
+    placeholder.disabled = true;
+    materialSelect.replaceChildren(placeholder, new Option("Matériau d'origine", ''));
+    for (const material of folder.materials) {
+      const url = new URL(material.path, document.baseURI).href;
+      const option = new Option(material.label, url);
+      option.selected = url === selected;
+      materialSelect.appendChild(option);
+    }
+    if (!selected) materialSelect.selectedIndex = 1;
   }
 
   function refreshObjects(): void {
@@ -239,7 +263,6 @@ async function main(): Promise<void> {
   }
 
   objectSelect?.addEventListener('change', () => { refreshMaterials(); parameterEditor?.refresh(); });
-  materialFilter?.addEventListener('input', refreshMaterials);
   materialSelect?.addEventListener('change', async () => {
     if (!objectSelect) return;
     setBusy(true);
