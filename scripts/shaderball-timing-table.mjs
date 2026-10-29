@@ -28,9 +28,36 @@ export function formatTimingTable(report, currentCases) {
   const seconds = ms => `${(ms / 1000).toFixed(1).replace('.', ',')} s`;
   const width = Math.max('Phase'.length, ...rows.map(([label]) => label.length));
   const durationWidth = Math.max('Durée'.length, ...rows.map(([, ms]) => seconds(ms).length));
-  return [
+  const timingTable = [
     `| ${'Phase'.padEnd(width)} | ${'Durée'.padStart(durationWidth)} |`,
     `| ${'-'.repeat(width)} | ${'-'.repeat(durationWidth)} |`,
     ...rows.map(([label, ms]) => `| ${label.padEnd(width)} | ${seconds(ms).padStart(durationWidth)} |`),
+  ].join('\n');
+  const cpu = [...currentCases.map(entry => entry.memory?.cpu), report.memory?.cpu].filter(Boolean);
+  const gpu = currentCases.map(entry => entry.memory?.gpu).filter(Boolean);
+  const memoryRows = [];
+  const mib = bytes => `${(bytes / 1024 ** 2).toFixed(1).replace('.', ',')} Mio`;
+  const maximum = (label, values) => {
+    const available = values.filter(Number.isFinite);
+    memoryRows.push([label, available.length ? mib(Math.max(...available)) : 'indisponible']);
+  };
+  maximum('CPU Node : RSS (max. relevé)', cpu.map(sample => sample.node.rss));
+  maximum('CPU Node : pic RSS processus', cpu.map(sample => sample.node.peakRss));
+  maximum('CPU Node : tas JS utilisé (max. relevé)', cpu.map(sample => sample.node.heapUsed));
+  maximum('CPU Node : mémoire externe (max. relevé)', cpu.map(sample => sample.node.external));
+  maximum('CPU Node : ArrayBuffers (inclus dans externe)', cpu.map(sample => sample.node.arrayBuffers));
+  maximum('CPU Chrome + enfants : RSS (max. relevé)', cpu.map(sample => sample.chrome.rss));
+  maximum('CPU Chrome + enfants : mémoire privée (max. relevé)', cpu.map(sample => sample.chrome.privateBytes));
+  maximum('GPU estimé : pic buffers', gpu.map(sample => sample.peakBufferBytes));
+  maximum('GPU estimé : pic textures', gpu.map(sample => sample.peakTextureBytes));
+  maximum('GPU estimé : pic total simultané', gpu.map(sample => sample.peakBytes));
+  const unknownFormats = [...new Set(gpu.flatMap(sample => sample.unknownFormats))];
+  if (unknownFormats.length) memoryRows.push(['GPU formats non comptabilisés', unknownFormats.join(', ')]);
+  const labelWidth = Math.max('Mémoire'.length, ...memoryRows.map(([label]) => label.length));
+  const valueWidth = Math.max('Valeur'.length, ...memoryRows.map(([, value]) => value.length));
+  return timingTable + '\n\n' + [
+    `| ${'Mémoire'.padEnd(labelWidth)} | ${'Valeur'.padStart(valueWidth)} |`,
+    `| ${'-'.repeat(labelWidth)} | ${'-'.repeat(valueWidth)} |`,
+    ...memoryRows.map(([label, value]) => `| ${label.padEnd(labelWidth)} | ${value.padStart(valueWidth)} |`),
   ].join('\n');
 }

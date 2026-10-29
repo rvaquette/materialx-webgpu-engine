@@ -14,7 +14,13 @@
     <div id="log"></div>
     <script type="module">
       import { bootstrapUsdImage } from '/tests/render/usd-scene.harness.ts';
-      const params = new URLSearchParams(location.search);
+      let rendering = false;
+      globalThis.__MX_RENDER__ = async (search) => {
+      if (rendering) throw new Error('A render is already running');
+      rendering = true;
+      delete globalThis.__MX_IMAGE__;
+      document.getElementById('log').replaceChildren();
+      const params = new URLSearchParams(search);
       const entry = params.get('entry') ?? '/scenes/test_material_disney_gold/test_material_disney_gold.usda';
       const res = Number(params.get('res') ?? 256);
       const spp = Number(params.get('spp') ?? 192);
@@ -38,12 +44,18 @@
       const shadows = shadowsParam !== null && shadowsParam !== '0' && shadowsParam !== 'false';
       const lightDirParam = params.get('lightDir');
       const lightDir = lightDirParam ? lightDirParam.split(',').map(Number) : undefined;
-      bootstrapUsdImage(entry, res, spp, backend, openpbr, exposure, firefly, skyPower, skyColor, camBack, dispScale, shadows, lightDir).catch((e) => {
+      try {
+      await bootstrapUsdImage(entry, res, spp, backend, openpbr, exposure, firefly, skyPower, skyColor, camBack, dispScale, shadows, lightDir);
+      } catch (e) {
         globalThis.__MX_IMAGE__ = null;
         const p = document.createElement('p');
         p.textContent = 'Echec: ' + (e && e.message ? e.message : e);
-        document.body.appendChild(p);
-      });
+        document.getElementById('log').appendChild(p);
+      } finally {
+        rendering = false;
+      }
+      };
+      if (!new URLSearchParams(location.search).has('session')) globalThis.__MX_RENDER__(location.search);
     </script>
   </body>
 </html>

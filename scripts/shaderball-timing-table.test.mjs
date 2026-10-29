@@ -28,3 +28,19 @@ test('timing table handles an early failure or an entirely resumed run', () => {
   assert.match(table, /Autres opérations et nettoyage\s+\|\s+0,2 s/);
   assert.doesNotMatch(table, /Rendu|NaN/);
 });
+
+test('memory table takes maxima, not sums of sequential cases', () => {
+  const cpu = {
+    node: { rss: 1048576, peakRss: 2097152, heapUsed: 1, external: 1, arrayBuffers: 1 },
+    chrome: { rss: 3145728, privateBytes: 4194304 },
+  };
+  const table = formatTimingTable({ timings: { commandTotal: 0 }, memory: { cpu } }, [
+    { memory: { gpu: { peakBufferBytes: 1048576, peakTextureBytes: 2097152, peakBytes: 3145728, unknownFormats: [] } } },
+    { memory: { gpu: { peakBufferBytes: 2097152, peakTextureBytes: 1048576, peakBytes: 2097152, unknownFormats: ['bc1-rgba-unorm'] } } },
+  ]);
+  assert.match(table, /CPU Node : RSS \(max. relevé\)\s+\|\s+1,0 Mio/);
+  assert.match(table, /CPU Chrome \+ enfants : RSS \(max. relevé\)\s+\|\s+3,0 Mio/);
+  assert.match(table, /GPU estimé : pic buffers\s+\|\s+2,0 Mio/);
+  assert.match(table, /GPU estimé : pic total simultané\s+\|\s+3,0 Mio/);
+  assert.match(table, /GPU formats non comptabilisés\s+\|\s+bc1-rgba-unorm/);
+});

@@ -409,6 +409,16 @@ Le code de sortie vaut 1 si un cas n'est pas `ok`. Autres options : `--res`
 Chrome démarre sur une page neutre : aucun rendu raster préalable n'est lancé,
 même pour une commande limitée au path tracing. Seuls les backends demandés
 sont exécutés.
+Le runner conserve maintenant une page et un `GPUDevice` pendant la commande.
+Chaque cas est lancé par un appel JavaScript, sans navigation supplémentaire.
+Les modules WGSL, layouts et pipelines compatibles sont réutilisés ; un shader
+ou un état de pipeline différent conserve sa propre entrée. Les compteurs
+`sessionCache.hits/misses` sont affichés et sauvegardés par cas dans le rapport.
+Les buffers et textures du cas précédent sont détruits avant le cas suivant.
+Une reprise après erreur recrée la page et donc la session GPU et ses caches.
+Ces caches ne persistent pas entre deux commandes ; les pipelines raster et
+compute restent distincts. La phase `pageLoadAndModules` n'est comptée que
+pour le premier rendu réussi de chaque page.
 
 ### Rendus sans serveur Vite
 
@@ -438,6 +448,25 @@ exécutés dans la commande courante (hors résultats conservés par `--resume`)
 La ligne « Autres opérations et nettoyage » est le reste du temps total :
 lecture des pixels, encodage/transfert/écriture PNG, attente, reprises et nettoyage.
 Les totaux intermédiaires ne sont pas additionnés aux phases.
+Un second tableau détaille la mémoire en Mio (également sauvegardée dans
+`memory` pour chaque cas et dans le rapport). Le CPU Node expose RSS, pic RSS
+du processus, tas JS, mémoire externe et ArrayBuffers (déjà inclus dans externe).
+Sous Windows en cible locale, Chrome inclut uniquement le processus lancé par
+le script et ses enfants : somme des working sets (RSS) et mémoire privée
+engagée. Le RSS cumulé peut compter des pages partagées plusieurs fois.
+Ces relevés sont effectués en fin de cas et avant nettoyage ; leur maximum
+n'est pas un pic continu. La mesure processus Chrome est indisponible sur mobile
+et hors Windows, sans empêcher les rendus.
+
+Le GPU expose les pics des buffers, des textures et de leur total simultané,
+en comptabilisant les créations et destructions explicites sur le device du
+harnais (mips, couches et MSAA inclus). Ce sont des estimations logiques :
+pas la VRAM réelle, ni les allocations du pilote, pipelines ou alignements ;
+les formats depth24 sont estimés à 4 octets/texel. Les formats non pris en
+charge sont signalés, pas comptés comme zéro silencieusement. La récupération
+implicite par le GC n'est pas mesurée. Pour plusieurs cas, le tableau prend le
+maximum, pas la somme de leurs pics. Les résultats repris ne sont pas inclus.
+Recompiler avec `npm run build:shaderball` pour actualiser ces mesures en mode statique.
 Chaque cas expose `timings` dans `report.json` : initialisation WebGPU, import
 USD, environnement, documents MaterialX, chargement de géométrie, ressources
 de scène (dont compilation des graphes), puis préparation du backend, rendu,

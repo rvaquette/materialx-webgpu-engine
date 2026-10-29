@@ -18,6 +18,7 @@ import { tmpdir } from 'node:os';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { createShaderballStaticServer } from './shaderball-static-server.mjs';
 import { formatTimingTable } from './shaderball-timing-table.mjs';
+import { sampleCpuMemory } from './shaderball-cpu-memory.mjs';
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url));
 const DEFAULT_ENTRY = '/scenes/standard-shader-ball/standard-shader-ball.usda';
@@ -94,10 +95,20 @@ function caseName(override, backend) {
 async function renderCase(cdp, origin, { backend, override }, values) {
   const query = new URLSearchParams({ entry: values.entry, res: values.res, spp: values.spp, backend, _: String(Date.now()) });
   if (override) query.set('openpbr', override);
-  const url = `${origin}${HARNESS}?${query}`;
+  const url = `${origin}${HARNESS}?session=1`;
   const expected = JSON.stringify({ e: values.entry, b: backend, o: override ?? null });
   const started = performance.now();
-  await cdp.send('Page.navigate', { url });
+  if (!await cdp.evaluate("typeof globalThis.__MX_RENDER__ === 'function'")) {
+    await cdp.send('Page.navigate', { url });
+    await waitFor(async () => {
+      try { return await cdp.evaluate("typeof globalThis.__MX_RENDER__ === 'function'"); }
+      catch (error) {
+        if (/context|navigat/i.test(error.message)) return false;
+        throw error;
+      }
+    }, 'persistent render session', Number(values.timeout));
+  }
+  await cdp.evaluate(`void globalThis.__MX_RENDER__(${JSON.stringify(query.toString())})`);
   let pageLog = '';
   while (performance.now() - started < Number(values.timeout)) {
     await sleep(500);
@@ -117,7 +128,7 @@ async function renderCase(cdp, origin, { backend, override }, values) {
     if (/diag device lost/i.test(pageLog)) return { status: 'failed', reason: `GPU device lost: ${lastLines(pageLog, 2)}` };
     if (status.key === expected) {
       const transferStarted = performance.now();
-      const image = await cdp.evaluate('JSON.stringify({ dataUrl: __MX_IMAGE__.dataUrl, renderMs: __MX_IMAGE__.renderMs, stats: __MX_IMAGE__.stats, timings: __MX_IMAGE__.timings })');
+      const image = await cdp.evaluate('JSON.stringify({ dataUrl: __MX_IMAGE__.dataUrl, renderMs: __MX_IMAGE__.renderMs, stats: __MX_IMAGE__.stats, timings: __MX_IMAGE__.timings, memory: __MX_IMAGE__.memory, sessionCache: __MX_IMAGE__.sessionCache })');
       return { status: 'rendered', ...JSON.parse(image), pageLog,
         transferMs: performance.now() - transferStarted, caseMs: performance.now() - started };
     }
@@ -305,6 +316,14 @@ async function main() {
         : chrome.exitCode !== null || (await listPages()).length === 0;
       if (browserGone) await launchBrowser();
       await attach();
+      await cdp.send('Page.navigate', { url: startUrl });
+      await waitFor(async () => {
+        try { return await cdp.evaluate(`location.href === ${JSON.stringify(startUrl)} && typeof globalThis.__MX_RENDER__ === 'undefined'`); }
+        catch (error) {
+          if (/context|navigat/i.test(error.message)) return false;
+          throw error;
+        }
+      }, 'reset render session', 60000);
     };
     if (values.target === 'mobile') {
       const devices = (await exec(adbPath, ['devices'])).stdout.split('\n').slice(1).filter((line) => /\tdevice\s*$/.test(line.trim()));
@@ -340,6 +359,7 @@ async function main() {
         }
       }
       const entry = { name, backend: item.backend, override: item.override ?? null, status: result.status };
+      entry.sessionCache = result.sessionCache;
       if (result.status === 'rendered') {
         const file = join(outDir, `${name}.png`);
         const writeStarted = performance.now();
@@ -355,6 +375,7 @@ async function main() {
       } else {
         entry.reason = result.reason;
       }
+      entry.memory = { ...result.memory, cpu: await sampleCpuMemory(values.target === 'local' ? chrome?.pid : undefined) };
       report.cases.push(entry);
       currentCases.push(entry);
       saveReport();
@@ -363,11 +384,13 @@ async function main() {
         : entry.reason;
       log(`${index + 1}/${cases.length} ${entry.status}: ${name} (${detail})`);
       if (entry.timings) log(`timing ${name}: ${Object.entries(entry.timings).map(([key, ms]) => `${key}=${ms.toFixed(1)} ms`).join(', ')}`);
+      if (entry.sessionCache) log(`GPU session cache: ${entry.sessionCache.hits} hits, ${entry.sessionCache.misses} misses`);
     }
   } catch (error) {
     report.error = String(error);
     throw error;
   } finally {
+    report.memory = { cpu: await sampleCpuMemory(values.target === 'local' ? chrome?.pid : undefined) };
     const cleanupStarted = performance.now();
     report.finishedAt = new Date().toISOString();
     saveReport();

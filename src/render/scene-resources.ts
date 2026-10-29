@@ -471,6 +471,11 @@ export interface SceneBindGroups {
 
 const fallbackEnvironments = new WeakMap<GPUDevice, NonNullable<SceneDrawBuffers['environment']>>();
 
+/** Invalidate cached bindings before a host releases all per-scene GPU resources. */
+export function clearFallbackEnvironment(device: GPUDevice): void {
+  fallbackEnvironments.delete(device);
+}
+
 function fallbackEnvironment(device: GPUDevice) {
   let environment = fallbackEnvironments.get(device);
   if (!environment) {

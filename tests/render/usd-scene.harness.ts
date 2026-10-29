@@ -74,6 +74,20 @@ import { lowerPreviewSurfaceMaterials } from '../../src/usd/preview-surface.ts';
 import { inverse4, lookAt4, multiply4, perspective4, type Mat4, type Vec3 } from '../../src/scene/transforms.ts';
 import type { MaterialXReference, SceneAsset } from '../../src/scene/types.ts';
 
+import { trackGpuMemory, type GpuMemory } from './gpu-memory.ts';
+import { cacheGpuPipelines } from './gpu-session-cache.ts';
+import { clearFallbackEnvironment } from '../../src/render/scene-resources.ts';
+
+let renderSession: {
+  adapter: GPUAdapter;
+  device: GPUDevice;
+  memory: ReturnType<typeof trackGpuMemory>;
+  cache: ReturnType<typeof cacheGpuPipelines>;
+} | undefined;
+let sessionLine: (message: string) => void = () => {};
+let completedCases = 0;
+const checkedPathTraceModules = new WeakSet<GPUShaderModule>();
+
 export interface UsdSceneImage {
   entry: string;
   width: number;
@@ -85,6 +99,8 @@ export interface UsdSceneImage {
   /** GPU render wall-clock in milliseconds (submit -> onSubmittedWorkDone). */
   renderMs: number;
   timings: Record<string, number>;
+  memory: { gpu: GpuMemory };
+  sessionCache: { hits: number; misses: number };
   /** OpenPBRMaterial override bound for this render, if any. */
   materialOverride?: string;
   /** Mean 8-bit luminance and fraction of pixels brighter than 2/255. */
@@ -1125,7 +1141,7 @@ async function renderUsdOnDevice(
     dispatch, environment: envAsset !== undefined, maxLobes,
     closureDispatch: pathTraceClosureDispatch(dispatch, ptScene.materials),
   }) });
-  if (typeof module.getCompilationInfo === 'function') {
+  if (!checkedPathTraceModules.has(module) && typeof module.getCompilationInfo === 'function') {
     const info = await module.getCompilationInfo();
     for (const m of info.messages) {
       if (m.type === 'error' || m.type === 'warning') {
@@ -1135,6 +1151,7 @@ async function renderUsdOnDevice(
     line(`diag wgsl messages=${info.messages.length}`);
     const errors = info.messages.filter(message => message.type === 'error');
     if (errors.length) throw new Error(`Path-tracing WGSL: ${errors.map(message => message.message).join('; ')}`);
+    checkedPathTraceModules.add(module);
   }
   const { pipeline } = await backend.createPipelineAsync(module);
   phase('pipelineCompilation');
@@ -1418,17 +1435,28 @@ export async function bootstrapUsdImage(
     line('WebGPU indisponible sur cet appareil.');
     return fail();
   }
-  const adapter = await navigator.gpu.requestAdapter({ powerPreference: 'high-performance' });
-  if (!adapter) {
-    line('Aucun adaptateur WebGPU.');
-    return fail();
+  sessionLine = line;
+  if (!renderSession) {
+    const adapter = await navigator.gpu.requestAdapter({ powerPreference: 'high-performance' });
+    if (!adapter) {
+      line('Aucun adaptateur WebGPU.');
+      return fail();
+    }
+    const device = await adapter.requestDevice();
+    renderSession = { adapter, device, memory: trackGpuMemory(device), cache: cacheGpuPipelines(device) };
+    const currentSession = renderSession;
+    device.lost.then(info => {
+      if (renderSession === currentSession) renderSession = undefined;
+      sessionLine(`diag device lost: ${info.reason} ${info.message}`);
+    });
+    device.onuncapturederror = event => sessionLine(`diag uncaptured error: ${event.error.message}`);
   }
-  const device = await adapter.requestDevice();
+  const { adapter, device, memory: gpuMemory, cache } = renderSession;
+  await device.queue.onSubmittedWorkDone();
+  clearFallbackEnvironment(device);
+  gpuMemory.reset();
+  const cacheBefore = cache();
   phase('deviceInitialization');
-  // Surface a GPU device loss (e.g. a Windows TDR watchdog reset after a long
-  // megakernel dispatch) instead of hanging silently on onSubmittedWorkDone.
-  device.lost.then((info) => line(`diag device lost: ${info.reason} ${info.message}`)).catch(() => undefined);
-  device.onuncapturederror = (event) => line(`diag uncaptured error: ${event.error.message}`);
 
   let rgba: Uint8ClampedArray;
   let renderMs: number;
@@ -1470,13 +1498,16 @@ export async function bootstrapUsdImage(
   const stats = { meanLuma: lumaSum / pixels, litFraction: lit / pixels };
   phase('pngAndStatistics');
   timings.total = performance.now() - started;
-  timings.pageLoadAndModules = started;
-  line(`timing total: ${timings.total.toFixed(1)} ms (page/modules: ${started.toFixed(1)} ms)`);
+  timings.pageLoadAndModules = completedCases === 0 ? started : 0;
+  line(`timing total: ${timings.total.toFixed(1)} ms (page/modules: ${timings.pageLoadAndModules.toFixed(1)} ms)`);
   const image: UsdSceneImage = {
     entry, width: res, height: res, samples: effectiveSamples, dataUrl, backend, renderMs, stats, timings,
+    memory: { gpu: gpuMemory() },
+    sessionCache: { hits: cache().hits - cacheBefore.hits, misses: cache().misses - cacheBefore.misses },
     ...(materialOverride !== undefined ? { materialOverride } : {}),
   };
   (globalThis as { __MX_IMAGE__?: UsdSceneImage | null }).__MX_IMAGE__ = image;
+  completedCases++;
   line(`${info?.vendor ?? 'gpu'} / ${info?.architecture ?? '?'} - ${backend} prete en ${renderMs.toFixed(0)} ms.`);
   return image;
 }
