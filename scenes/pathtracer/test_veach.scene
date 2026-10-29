@@ -1,0 +1,123 @@
+renderer
+{
+	resolution 1280 720
+	maxdepth 4
+	tilewidth 256
+	tileheight 144
+	enabletonemap false
+}
+
+camera
+{
+	position 18.0 4.0 0.0
+	lookat 0 2.5 0
+	fov 45
+}
+
+material white
+{
+	color 1.0 1.0 1.0
+	roughness 1.0
+}
+
+material metal_1
+{
+	color 1.0 1.0 1.0
+	roughness 0.01
+	metallic 1.0
+}
+
+material metal_2
+{
+	color 1.0 1.0 1.0
+	roughness 0.04
+	metallic 1.0
+}
+
+material metal_3
+{
+	color 1.0 1.0 1.0
+	roughness 0.09
+	metallic 1.0
+}
+
+material metal_4
+{
+	color 1.0 1.0 1.0
+	roughness 0.16
+	metallic 1.0
+}
+
+mesh
+{
+	name Plate1
+	file veach/plate1.obj
+	material metal_1
+}
+
+mesh
+{
+	name Plate2
+	file veach/plate2.obj
+	material metal_2
+}
+
+mesh
+{
+	name Plate3
+	file veach/plate3.obj
+	material metal_3
+}
+
+mesh
+{
+	name Plate4
+	file veach/plate4.obj
+	material metal_4
+}
+
+mesh
+{
+	name floor
+	file veach/floor.obj
+	material white
+}
+
+mesh
+{
+	name wall
+	file veach/wall.obj
+	material white
+}
+
+light
+{
+	emission 2.0 0.64 0.174
+	position -3.3724 5.5 -3.74116
+	radius 0.8
+	type sphere
+}
+
+light
+{
+	emission 0.87 2.0 0.28
+	position -3.3724 5.5 -1.24
+	radius 0.6
+	type sphere
+}
+
+light
+{
+	emission 0.41 1.88 2.0
+	position -3.3724 5.5 1.24
+	radius 0.3
+	type sphere
+}
+
+light
+{
+	emission 1.43 0.46 2.0
+	position -3.3724 5.5 3.74116
+	radius 0.1
+	type sphere
+}

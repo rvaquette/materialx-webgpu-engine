@@ -1,0 +1,75 @@
+materialx_generator essl
+
+renderer
+{
+    resolution 1280 720
+    maxdepth 12
+    tilewidth 256
+    tileheight 144
+    //envmapfile HDR/san_giuseppe_bridge_2k.hdr
+}
+
+camera
+{
+    position 0 1.5 6
+    lookat 0 0.5 0
+    fov 40
+}
+
+material velvet_inline
+{
+    materialx_document ../materialx/materials/nodes/absval/absval.mtlx
+    materialx_surface M_absval
+
+//    material_type materialx
+//    materialx_inline_begin
+//<?xml version="1.0"?>
+//<materialx version="1.39" colorspace="lin_rec709">
+//  <surfacematerial name="test" type="material">
+//    <input name="surfaceshader" type="surfaceshader" nodename="open_pbr_surface_surfaceshader" />
+//  </surfacematerial>
+//  <open_pbr_surface name="open_pbr_surface_surfaceshader" type="surfaceshader">
+//    <input name="base_color" type="color3" value="0.8, 0.02, 0.02" />
+//    <input name="base_metalness" type="float" value="1.0" />
+//  </open_pbr_surface>
+//</materialx>
+//    materialx_inline_end
+}
+
+material ground
+{
+    color 0.55 0.55 0.55
+    roughness 0.4
+    metallic 0.0
+}
+
+mesh
+{
+    name velvet_sphere
+    file material_test/sphere.obj
+    material velvet_inline
+}
+
+mesh
+{
+    name ground
+    file material_test/floor.obj
+    material ground
+}
+
+light
+{
+    emission 5.0 5.0 5.0
+    position 1 5 1
+    radius 1.0
+    type sphere
+}
+
+light
+{
+    emission 3.125 3.125 3.125
+    position -3.500000 2.500000 0.500000
+    v2 -1.500000 2.500000 0.500000
+    v1 -3.500000 2.500000 -1.500000
+    type quad
+}

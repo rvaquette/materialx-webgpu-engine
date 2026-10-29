@@ -43,13 +43,13 @@ garantit que cette matrice et les fixtures restent cohérentes.
 | `gltf_pbr` | GltfPbr | supported | reference |
 | `UsdPreviewSurface` | UsdPreviewSurface | supported | reference |
 | `surface` | SimpleHair | supported | reference |
-| `simple_hair` | SimpleHair | approximated | reference |
+| `simple_hair` | SimpleHair | native Chiang | native Chiang |
 
 ### BSDF / cheveux
 
 | Nœud | Familles | Raster | Path tracing |
 | --- | --- | --- | --- |
-| `chiang_hair_bsdf` | SimpleHair | approximated | reference |
+| `chiang_hair_bsdf` via `simple_hair` | SimpleHair | native Chiang | native Chiang |
 | `chiang_hair_absorption_from_color` | SimpleHair | supported | supported |
 | `chiang_hair_roughness` | SimpleHair | supported | supported |
 | `deon_hair_absorption_from_melanin` | SimpleHair | supported | supported |
@@ -138,11 +138,33 @@ T041) qui n'est pas dérivée du WGSL.
 Les formules exactes, limites par lobe et tolérances par cible GPU sont décrites
 dans [docs/validation.md](validation.md) (sections « Tolérances des fermetures
 physiques (P8) » et « Évaluation physique des fermetures (P8) »). Les lobes
-`subsurface_bsdf` (repli diffus raster), l'ambiant d'environnement et
-`chiang_hair_bsdf` restent des **approximations raster déclarées** ; leur forme
-exacte est réservée au path tracing.
+`subsurface_bsdf` (repli diffus raster) et l'ambiant diffus d'environnement
+restent des **approximations raster déclarées**.
+
+`simple_hair` est abaissé vers une fermeture Chiang dédiée, partagée par le
+raster et le path tracing : absorption mélanine/couleur, Fresnel diélectrique,
+lobes R/TT/TRT et résidu des réflexions internes, inclinaison des cuticules,
+rugosités longitudinale et azimutale. L'évaluation, la PDF et l'échantillonnage
+utilisent le même modèle dans les deux moteurs. Le raster intègre cette réponse
+contre l'environnement par quadrature ; il ne trace pas les ombres ni les
+rebonds inter-fibres. Sur le shaderball, la tangente UV définit l'axe des fibres
+virtuelles : cela ne génère ni mèches ni courbes géométriques. Ce raccordement
+concerne la famille `simple_hair`, pas l'abaissement de graphes de closures
+arbitraires contenant un nœud `chiang_hair_bsdf` isolé.
+
+Le harnais BxDF vérifie aussi l'évaluation et l'échantillonnage Chiang sur
+72 cas CPU/GPU (rugosités, absorption, incidences rasantes et deux hémisphères).
+L'oracle CPU contrôle séparément la normalisation, l'énergie et les moments du
+sampler analytique par quadrature.
 
 ## Effets à approximation déclarée (raster)
+
+Pour `UsdPreviewSurface`, avec `opacityThreshold = 0`, `opacity` mélange
+la réponse diffuse avec une transmission diélectrique incolore, sans supprimer
+les réflexions de Fresnel ni l'émission. Un verre à `opacity = 0` reste donc
+optiquement présent. Avec un seuil strictement positif, l'opacité devient un
+masque binaire (égalité au seuil incluse), sans transmission. Le raster utilise
+son approximation de réfraction existante ; le path tracing échantillonne le BSDF.
 
 Conformément au plan 9.1, les effets suivants sont **exacts en path tracing** et
 **approximés en raster**, avec l'approximation déclarée dans le module raster
@@ -155,7 +177,7 @@ correspondant :
 | Subsurface | `src/render/raster/subsurface.ts` | `src/render/pathtracing/subsurface.ts` |
 | Volumes | `src/render/raster/volume.ts` | `src/render/pathtracing/media.ts` |
 | Thin film / dispersion (spectral) | approximation RGB déclarée | `src/render/pathtracing/spectrum.ts` |
-| Cheveux (chiang) | approximation raster | intégrateur + BSDF cheveux |
+| Cheveux (`simple_hair`) | BSDF Chiang natif, éclairage sans visibilité inter-fibres | même BSDF, visibilité et rebonds tracés |
 
 ## Scènes de contrôle
 
@@ -177,7 +199,7 @@ garantir des rendus déterministes et comparables entre backends.
 | `gltf_pbr_default` | GltfPbr | raster, pathtracing | base |
 | `gltf_pbr_glass` | GltfPbr | raster, pathtracing | transmission |
 | `usd_preview_surface_default` | UsdPreviewSurface | raster, pathtracing | base |
-| `simple_hair_default` | SimpleHair | pathtracing | hair |
+| `simple_hair_default` | SimpleHair | raster, pathtracing | hair |
 
 ## Parité device des familles BxDF (T059)
 

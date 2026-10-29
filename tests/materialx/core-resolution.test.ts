@@ -16,6 +16,33 @@ const playgroundRoot = process.env['MX_PLAYGROUND_ROOT']
 const coreFile = join(coreRoot, 'JsMaterialXCore.js');
 
 describe.skipIf(!existsSync(coreFile) || !existsSync(libraryRoot))('installed MaterialX Core resolution', () => {
+  it('resolves the corpus-local SimpleHair NodeDef to a native Chiang surface', async () => {
+    const module = await import(/* @vite-ignore */ pathToFileURL(coreFile).href) as { default: MaterialXModuleFactory };
+    const core = new MaterialXCore(await module.default());
+    const libraries = new MaterialXLibraries(core);
+    await libraries.load({
+      sources: defaultLibrarySources(libraryRoot),
+      fetchText: async path => readFileSync(path, 'utf8'),
+    });
+    const diagnostics: Diagnostic[] = [];
+    const text = readFileSync(join('scenes', 'mtlx-library', 'Examples', 'SimpleHair', 'simple_hair_default.mtlx'), 'utf8');
+    const documents = await loadMaterialXDocuments({
+      core, libraries, texts: new Map([['hair', text]]), sink: d => diagnostics.push(d),
+    });
+    try {
+      const build = await createGraphMaterialCompiler({ documents, sink: d => diagnostics.push(d) }).compile({
+        assetPath: 'hair', materialName: 'simple_hair_default',
+        referencedPrimPath: '/MaterialX/Materials/simple_hair_default', boundPrims: [],
+      });
+      expect(build?.surface?.family).toBe('simple_hair');
+      expect(build?.layered?.features?.lobeKinds).toEqual([9]);
+      expect(diagnostics).toEqual([]);
+    } finally {
+      documents.delete();
+      libraries.delete();
+    }
+  }, 30000);
+
   it('resolves colliding content names and exporter image signatures without hiding invalid inputs', async () => {
     const module = await import(/* @vite-ignore */ pathToFileURL(coreFile).href) as { default: MaterialXModuleFactory };
     const core = new MaterialXCore(await module.default());

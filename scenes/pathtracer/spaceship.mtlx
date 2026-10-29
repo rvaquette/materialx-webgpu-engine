@@ -1,0 +1,88 @@
+<?xml version="1.0"?>
+<materialx version="1.39" colorspace="lin_rec709">
+  <disney_principled name="Backdrop_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" value="0.1, 0.1, 0.1" />
+  </disney_principled>
+  <surfacematerial name="Backdrop" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="Backdrop_surface" />
+  </surfacematerial>
+  <disney_principled name="RoughAluminium_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" value="0.778, 0.778, 0.778" />
+    <input name="metallic" type="float" value="1" />
+    <input name="roughness" type="float" value="0.2" />
+  </disney_principled>
+  <surfacematerial name="RoughAluminium" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="RoughAluminium_surface" />
+  </surfacematerial>
+  <disney_principled name="RoughSteel_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" value="0.2, 0.2, 0.2" />
+    <input name="metallic" type="float" value="1" />
+    <input name="roughness" type="float" value="0.1" />
+  </disney_principled>
+  <surfacematerial name="RoughSteel" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="RoughSteel_surface" />
+  </surfacematerial>
+  <disney_principled name="DarkPlastic_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" value="0.01, 0.01, 0.01" />
+    <input name="roughness" type="float" value="0.2" />
+  </disney_principled>
+  <surfacematerial name="DarkPlastic" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="DarkPlastic_surface" />
+  </surfacematerial>
+  <disney_principled name="PinkLeather_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" value="0.25, 0.013, 0.08" />
+    <input name="roughness" type="float" value="0.4" />
+  </disney_principled>
+  <surfacematerial name="PinkLeather" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="PinkLeather_surface" />
+  </surfacematerial>
+  <disney_principled name="Leather_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" value="0.034, 0.014, 0.008" />
+    <input name="roughness" type="float" value="0.4" />
+  </disney_principled>
+  <surfacematerial name="Leather" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="Leather_surface" />
+  </surfacematerial>
+  <disney_principled name="RedLeather_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" value="0.163, 0.03, 0.037" />
+    <input name="roughness" type="float" value="0.4" />
+  </disney_principled>
+  <surfacematerial name="RedLeather" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="RedLeather_surface" />
+  </surfacematerial>
+  <disney_principled name="BrightPinkLeather_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" value="0.77, 0.174, 0.261" />
+    <input name="roughness" type="float" value="0.4" />
+  </disney_principled>
+  <surfacematerial name="BrightPinkLeather" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="BrightPinkLeather_surface" />
+  </surfacematerial>
+  <disney_principled name="Glass_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" value="1, 1, 1" />
+    <input name="roughness" type="float" value="0" />
+    <input name="specTrans" type="float" value="1" />
+    <input name="ior" type="float" value="1.45" />
+  </disney_principled>
+  <surfacematerial name="Glass" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="Glass_surface" />
+  </surfacematerial>
+  <disney_principled name="DarkRubber_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" value="0.025, 0.025, 0.025" />
+    <input name="roughness" type="float" value="0.4" />
+  </disney_principled>
+  <surfacematerial name="DarkRubber" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="DarkRubber_surface" />
+  </surfacematerial>
+  <disney_principled name="Light1_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" value="0, 0, 0" />
+  </disney_principled>
+  <surfacematerial name="Light1" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="Light1_surface" />
+  </surfacematerial>
+  <disney_principled name="Light2_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" value="0, 0, 0" />
+  </disney_principled>
+  <surfacematerial name="Light2" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="Light2_surface" />
+  </surfacematerial>
+</materialx>

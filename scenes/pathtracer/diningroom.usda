@@ -1,0 +1,629 @@
+#usda 1.0
+(
+    defaultPrim = "World"
+    metersPerUnit = 1
+    upAxis = "Y"
+    doc = "diningroom converted from GLSL-PathTracer .scene"
+)
+
+def Xform "World"
+{
+    custom string pathtracer:sourceScene = "diningroom.scene"
+    custom int2 pathtracer:resolution = (1280, 720)
+    custom int pathtracer:maxDepth = 3
+
+    def Camera "Camera"
+    {
+        matrix4d xformOp:transform = ((0, 0, 1, 0), (0.175033334717, 0.984562507786, 0, 0), (-0.984562507786, 0.175033334717, 0, 0), (-4.5, 1.6, 0, 1))
+        uniform token[] xformOpOrder = ["xformOp:transform"]
+        token projection = "perspective"
+        float focalLength = 50
+        float horizontalAperture = 57.735026919
+        float verticalAperture = 32.4759526419
+        float2 clippingRange = (0.001, 1000000)
+        custom point3f pathtracer:lookAt = (0, 0.8, 0)
+        custom float pathtracer:fov = 60
+    }
+
+    def Scope "Looks"
+    {
+        def Material "BlackPlastic" (
+            prepend references = @./diningroom.mtlx@</MaterialX/Materials/BlackPlastic>
+        )
+        {
+        }
+        def Material "StainlessSteel" (
+            prepend references = @./diningroom.mtlx@</MaterialX/Materials/StainlessSteel>
+        )
+        {
+        }
+        def Material "Aluminium" (
+            prepend references = @./diningroom.mtlx@</MaterialX/Materials/Aluminium>
+        )
+        {
+        }
+        def Material "Glass" (
+            prepend references = @./diningroom.mtlx@</MaterialX/Materials/Glass>
+        )
+        {
+        }
+        def Material "Ceramic" (
+            prepend references = @./diningroom.mtlx@</MaterialX/Materials/Ceramic>
+        )
+        {
+        }
+        def Material "WoodenFloor" (
+            prepend references = @./diningroom.mtlx@</MaterialX/Materials/WoodenFloor>
+        )
+        {
+        }
+        def Material "WoodenBox" (
+            prepend references = @./diningroom.mtlx@</MaterialX/Materials/WoodenBox>
+        )
+        {
+        }
+        def Material "Painting" (
+            prepend references = @./diningroom.mtlx@</MaterialX/Materials/Painting>
+        )
+        {
+        }
+        def Material "Walls" (
+            prepend references = @./diningroom.mtlx@</MaterialX/Materials/Walls>
+        )
+        {
+        }
+        def Material "Green" (
+            prepend references = @./diningroom.mtlx@</MaterialX/Materials/Green>
+        )
+        {
+        }
+        def Material "DarkGlossy" (
+            prepend references = @./diningroom.mtlx@</MaterialX/Materials/DarkGlossy>
+        )
+        {
+        }
+        def Material "ShelfBookCover1" (
+            prepend references = @./diningroom.mtlx@</MaterialX/Materials/ShelfBookCover1>
+        )
+        {
+        }
+        def Material "ShelfBookCover2" (
+            prepend references = @./diningroom.mtlx@</MaterialX/Materials/ShelfBookCover2>
+        )
+        {
+        }
+        def Material "Book1" (
+            prepend references = @./diningroom.mtlx@</MaterialX/Materials/Book1>
+        )
+        {
+        }
+        def Material "Book2" (
+            prepend references = @./diningroom.mtlx@</MaterialX/Materials/Book2>
+        )
+        {
+        }
+        def Material "Book3" (
+            prepend references = @./diningroom.mtlx@</MaterialX/Materials/Book3>
+        )
+        {
+        }
+        def Material "Book4" (
+            prepend references = @./diningroom.mtlx@</MaterialX/Materials/Book4>
+        )
+        {
+        }
+        def Material "Book6" (
+            prepend references = @./diningroom.mtlx@</MaterialX/Materials/Book6>
+        )
+        {
+        }
+        def Material "Book7" (
+            prepend references = @./diningroom.mtlx@</MaterialX/Materials/Book7>
+        )
+        {
+        }
+        def Material "Book8" (
+            prepend references = @./diningroom.mtlx@</MaterialX/Materials/Book8>
+        )
+        {
+        }
+        def Material "Book9" (
+            prepend references = @./diningroom.mtlx@</MaterialX/Materials/Book9>
+        )
+        {
+        }
+        def Material "Book10" (
+            prepend references = @./diningroom.mtlx@</MaterialX/Materials/Book10>
+        )
+        {
+        }
+        def Material "Book11" (
+            prepend references = @./diningroom.mtlx@</MaterialX/Materials/Book11>
+        )
+        {
+        }
+        def Material "Book14" (
+            prepend references = @./diningroom.mtlx@</MaterialX/Materials/Book14>
+        )
+        {
+        }
+        def Material "Book15" (
+            prepend references = @./diningroom.mtlx@</MaterialX/Materials/Book15>
+        )
+        {
+        }
+        def Material "Book16" (
+            prepend references = @./diningroom.mtlx@</MaterialX/Materials/Book16>
+        )
+        {
+        }
+        def Material "Book17" (
+            prepend references = @./diningroom.mtlx@</MaterialX/Materials/Book17>
+        )
+        {
+        }
+        def Material "Book18" (
+            prepend references = @./diningroom.mtlx@</MaterialX/Materials/Book18>
+        )
+        {
+        }
+    }
+
+    def Scope "Geometry"
+    {
+        def Mesh "bucket1"
+        {
+            custom asset engine:geometry:file = @./diningroom/bucket1.obj@
+
+            rel material:binding = </World/Looks/WoodenBox>
+        }
+        def Mesh "bucket2"
+        {
+            custom asset engine:geometry:file = @./diningroom/bucket2.obj@
+
+            rel material:binding = </World/Looks/WoodenBox>
+        }
+        def Mesh "bucket3"
+        {
+            custom asset engine:geometry:file = @./diningroom/bucket3.obj@
+
+            rel material:binding = </World/Looks/WoodenBox>
+        }
+        def Mesh "bucket4"
+        {
+            custom asset engine:geometry:file = @./diningroom/bucket4.obj@
+
+            rel material:binding = </World/Looks/WoodenBox>
+        }
+        def Mesh "chair_legs"
+        {
+            custom asset engine:geometry:file = @./diningroom/chair_legs.obj@
+
+            rel material:binding = </World/Looks/StainlessSteel>
+        }
+        def Mesh "chair_nuts"
+        {
+            custom asset engine:geometry:file = @./diningroom/chair_nuts.obj@
+
+            rel material:binding = </World/Looks/StainlessSteel>
+        }
+        def Mesh "chair_rubber_pegs"
+        {
+            custom asset engine:geometry:file = @./diningroom/chair_rubber_pegs.obj@
+
+            rel material:binding = </World/Looks/BlackPlastic>
+        }
+        def Mesh "chair_seats"
+        {
+            custom asset engine:geometry:file = @./diningroom/chair_seats.obj@
+
+            rel material:binding = </World/Looks/BlackPlastic>
+        }
+        def Mesh "cupboards"
+        {
+            custom asset engine:geometry:file = @./diningroom/cupboards.obj@
+
+            rel material:binding = </World/Looks/DarkGlossy>
+        }
+        def Mesh "floor"
+        {
+            custom asset engine:geometry:file = @./diningroom/floor.obj@
+
+            rel material:binding = </World/Looks/WoodenFloor>
+        }
+        def Mesh "floor_frame"
+        {
+            custom asset engine:geometry:file = @./diningroom/floor_frame.obj@
+
+            rel material:binding = </World/Looks/WoodenFloor>
+        }
+        def Mesh "frame1"
+        {
+            custom asset engine:geometry:file = @./diningroom/frame1.obj@
+
+            rel material:binding = </World/Looks/StainlessSteel>
+        }
+        def Mesh "frame2"
+        {
+            custom asset engine:geometry:file = @./diningroom/frame2.obj@
+
+            rel material:binding = </World/Looks/StainlessSteel>
+        }
+        def Mesh "left_front_wall"
+        {
+            custom asset engine:geometry:file = @./diningroom/left_front_wall.obj@
+
+            rel material:binding = </World/Looks/Walls>
+        }
+        def Mesh "rightwall"
+        {
+            custom asset engine:geometry:file = @./diningroom/rightwall.obj@
+
+            rel material:binding = </World/Looks/Green>
+        }
+        def Mesh "picture1"
+        {
+            custom asset engine:geometry:file = @./diningroom/picture1.obj@
+
+            rel material:binding = </World/Looks/Painting>
+        }
+        def Mesh "picture2"
+        {
+            custom asset engine:geometry:file = @./diningroom/picture2.obj@
+
+            rel material:binding = </World/Looks/Painting>
+        }
+        def Mesh "plant"
+        {
+            custom asset engine:geometry:file = @./diningroom/plant.obj@
+
+            rel material:binding = </World/Looks/DarkGlossy>
+        }
+        def Mesh "shelf"
+        {
+            custom asset engine:geometry:file = @./diningroom/shelf.obj@
+
+            rel material:binding = </World/Looks/Walls>
+        }
+        def Mesh "table_glass"
+        {
+            custom asset engine:geometry:file = @./diningroom/table_glass.obj@
+
+            rel material:binding = </World/Looks/Glass>
+        }
+        def Mesh "table_legs"
+        {
+            custom asset engine:geometry:file = @./diningroom/table_legs.obj@
+
+            rel material:binding = </World/Looks/Aluminium>
+        }
+        def Mesh "vase"
+        {
+            custom asset engine:geometry:file = @./diningroom/vase.obj@
+
+            rel material:binding = </World/Looks/Ceramic>
+        }
+        def Mesh "shelf_book1"
+        {
+            custom asset engine:geometry:file = @./diningroom/shelf_book1.obj@
+
+            rel material:binding = </World/Looks/ShelfBookCover1>
+        }
+        def Mesh "shelf_book2"
+        {
+            custom asset engine:geometry:file = @./diningroom/shelf_book2.obj@
+
+            rel material:binding = </World/Looks/ShelfBookCover2>
+        }
+        def Mesh "shelf_objects"
+        {
+            custom asset engine:geometry:file = @./diningroom/shelf_objects.obj@
+
+            rel material:binding = </World/Looks/Aluminium>
+        }
+        def Mesh "shelf_object2"
+        {
+            custom asset engine:geometry:file = @./diningroom/shelf_object2.obj@
+
+            rel material:binding = </World/Looks/DarkGlossy>
+        }
+        def Mesh "book1"
+        {
+            custom asset engine:geometry:file = @./diningroom/book1.obj@
+
+            rel material:binding = </World/Looks/Book1>
+        }
+        def Mesh "book2"
+        {
+            custom asset engine:geometry:file = @./diningroom/book2.obj@
+
+            rel material:binding = </World/Looks/Book2>
+        }
+        def Mesh "book3"
+        {
+            custom asset engine:geometry:file = @./diningroom/book3.obj@
+
+            rel material:binding = </World/Looks/Book3>
+        }
+        def Mesh "book4"
+        {
+            custom asset engine:geometry:file = @./diningroom/book4.obj@
+
+            rel material:binding = </World/Looks/Book4>
+        }
+        def Mesh "book5"
+        {
+            custom asset engine:geometry:file = @./diningroom/book5.obj@
+
+            rel material:binding = </World/Looks/ShelfBookCover1>
+        }
+        def Mesh "book6"
+        {
+            custom asset engine:geometry:file = @./diningroom/book6.obj@
+
+            rel material:binding = </World/Looks/Book6>
+        }
+        def Mesh "book7"
+        {
+            custom asset engine:geometry:file = @./diningroom/book7.obj@
+
+            rel material:binding = </World/Looks/Book7>
+        }
+        def Mesh "book8"
+        {
+            custom asset engine:geometry:file = @./diningroom/book8.obj@
+
+            rel material:binding = </World/Looks/Book8>
+        }
+        def Mesh "book9"
+        {
+            custom asset engine:geometry:file = @./diningroom/book9.obj@
+
+            rel material:binding = </World/Looks/Book9>
+        }
+        def Mesh "book10"
+        {
+            custom asset engine:geometry:file = @./diningroom/book10.obj@
+
+            rel material:binding = </World/Looks/Book10>
+        }
+        def Mesh "book11"
+        {
+            custom asset engine:geometry:file = @./diningroom/book11.obj@
+
+            rel material:binding = </World/Looks/Book11>
+        }
+        def Mesh "book12"
+        {
+            custom asset engine:geometry:file = @./diningroom/book12.obj@
+
+            rel material:binding = </World/Looks/ShelfBookCover2>
+        }
+        def Mesh "book13"
+        {
+            custom asset engine:geometry:file = @./diningroom/book13.obj@
+
+            rel material:binding = </World/Looks/Book3>
+        }
+        def Mesh "book14"
+        {
+            custom asset engine:geometry:file = @./diningroom/book14.obj@
+
+            rel material:binding = </World/Looks/Book14>
+        }
+        def Mesh "book15"
+        {
+            custom asset engine:geometry:file = @./diningroom/book15.obj@
+
+            rel material:binding = </World/Looks/Book15>
+        }
+        def Mesh "book16"
+        {
+            custom asset engine:geometry:file = @./diningroom/book16.obj@
+
+            rel material:binding = </World/Looks/Book16>
+        }
+        def Mesh "book17"
+        {
+            custom asset engine:geometry:file = @./diningroom/book17.obj@
+
+            rel material:binding = </World/Looks/Book17>
+        }
+        def Mesh "book18"
+        {
+            custom asset engine:geometry:file = @./diningroom/book18.obj@
+
+            rel material:binding = </World/Looks/Book18>
+        }
+    }
+
+    def Scope "Lights"
+    {
+        def RectLight "Light_001"
+        {
+            matrix4d xformOp:transform = ((0, 0, -1, 0), (-1, 0, 0, 0), (0, 1, 0, 0), (0.1097635, 4.893044, 0.083525, 1))
+            uniform token[] xformOpOrder = ["xformOp:transform"]
+            color3f inputs:color = (1, 1, 1)
+            float inputs:intensity = 1
+            bool inputs:normalize = false
+            float inputs:width = 6.556112
+            float inputs:height = 3.616113
+        }
+        def Material "Light_001_Material"
+        {
+            token outputs:surface.connect = </World/Lights/Light_001_Material/Surface.outputs:surface>
+            def Shader "Surface"
+            {
+                uniform token info:id = "UsdPreviewSurface"
+                color3f inputs:diffuseColor = (0, 0, 0)
+                int inputs:useSpecularWorkflow = 1
+                color3f inputs:specularColor = (0, 0, 0)
+                color3f inputs:emissiveColor = (1, 1, 1)
+                token outputs:surface
+            }
+        }
+        def Mesh "Light_001_Geometry"
+        {
+            point3f[] points = [(-1.698293, 4.893044, 3.361581), (-1.698293, 4.893044, -3.194531), (1.91782, 4.893044, -3.194531), (1.91782, 4.893044, 3.361581)]
+            int[] faceVertexCounts = [4]
+            int[] faceVertexIndices = [0, 1, 2, 3]
+            uniform token subdivisionScheme = "none"
+            rel material:binding = </World/Lights/Light_001_Material>
+        }
+        def RectLight "Light_002"
+        {
+            matrix4d xformOp:transform = ((1, 0, 0, 0), (0, -1, 0, 0), (0, 0, -1, 0), (-1.440558, 1.274611, -2.445509, 1))
+            uniform token[] xformOpOrder = ["xformOp:transform"]
+            color3f inputs:color = (0.8, 0.9, 1)
+            float inputs:intensity = 5
+            bool inputs:normalize = false
+            float inputs:width = 0.94
+            float inputs:height = 1.68
+        }
+        def Material "Light_002_Material"
+        {
+            token outputs:surface.connect = </World/Lights/Light_002_Material/Surface.outputs:surface>
+            def Shader "Surface"
+            {
+                uniform token info:id = "UsdPreviewSurface"
+                color3f inputs:diffuseColor = (0, 0, 0)
+                int inputs:useSpecularWorkflow = 1
+                color3f inputs:specularColor = (0, 0, 0)
+                color3f inputs:emissiveColor = (4, 4.5, 5)
+                token outputs:surface
+            }
+        }
+        def Mesh "Light_002_Geometry"
+        {
+            point3f[] points = [(-1.910558, 0.434611, -2.445509), (-0.970558, 0.434611, -2.445509), (-0.970558, 2.114611, -2.445509), (-1.910558, 2.114611, -2.445509)]
+            int[] faceVertexCounts = [4]
+            int[] faceVertexIndices = [0, 1, 2, 3]
+            uniform token subdivisionScheme = "none"
+            rel material:binding = </World/Lights/Light_002_Material>
+        }
+        def RectLight "Light_003"
+        {
+            matrix4d xformOp:transform = ((1, 0, 0, 0), (0, -1, 0, 0), (0, 0, -1, 0), (-0.291083, 1.274611, -2.446883, 1))
+            uniform token[] xformOpOrder = ["xformOp:transform"]
+            color3f inputs:color = (0.8, 0.9, 1)
+            float inputs:intensity = 5
+            bool inputs:normalize = false
+            float inputs:width = 0.94
+            float inputs:height = 1.68
+        }
+        def Material "Light_003_Material"
+        {
+            token outputs:surface.connect = </World/Lights/Light_003_Material/Surface.outputs:surface>
+            def Shader "Surface"
+            {
+                uniform token info:id = "UsdPreviewSurface"
+                color3f inputs:diffuseColor = (0, 0, 0)
+                int inputs:useSpecularWorkflow = 1
+                color3f inputs:specularColor = (0, 0, 0)
+                color3f inputs:emissiveColor = (4, 4.5, 5)
+                token outputs:surface
+            }
+        }
+        def Mesh "Light_003_Geometry"
+        {
+            point3f[] points = [(-0.761083, 0.434611, -2.446883), (0.178917, 0.434611, -2.446883), (0.178917, 2.114611, -2.446883), (-0.761083, 2.114611, -2.446883)]
+            int[] faceVertexCounts = [4]
+            int[] faceVertexIndices = [0, 1, 2, 3]
+            uniform token subdivisionScheme = "none"
+            rel material:binding = </World/Lights/Light_003_Material>
+        }
+        def RectLight "Light_004"
+        {
+            matrix4d xformOp:transform = ((1, 0, 0, 0), (0, -1, 0, 0), (0, 0, -1, 0), (0.868842, 1.274611, -2.450588, 1))
+            uniform token[] xformOpOrder = ["xformOp:transform"]
+            color3f inputs:color = (0.8, 0.9, 1)
+            float inputs:intensity = 5
+            bool inputs:normalize = false
+            float inputs:width = 0.94
+            float inputs:height = 1.68
+        }
+        def Material "Light_004_Material"
+        {
+            token outputs:surface.connect = </World/Lights/Light_004_Material/Surface.outputs:surface>
+            def Shader "Surface"
+            {
+                uniform token info:id = "UsdPreviewSurface"
+                color3f inputs:diffuseColor = (0, 0, 0)
+                int inputs:useSpecularWorkflow = 1
+                color3f inputs:specularColor = (0, 0, 0)
+                color3f inputs:emissiveColor = (4, 4.5, 5)
+                token outputs:surface
+            }
+        }
+        def Mesh "Light_004_Geometry"
+        {
+            point3f[] points = [(0.398842, 0.434611, -2.450588), (1.338842, 0.434611, -2.450588), (1.338842, 2.114611, -2.450588), (0.398842, 2.114611, -2.450588)]
+            int[] faceVertexCounts = [4]
+            int[] faceVertexIndices = [0, 1, 2, 3]
+            uniform token subdivisionScheme = "none"
+            rel material:binding = </World/Lights/Light_004_Material>
+        }
+        def RectLight "Light_005"
+        {
+            matrix4d xformOp:transform = ((-0.192521992775, -0.981292658842, 0, 0), (0, 0, 1, 0), (-0.981292658842, 0.192521992775, 0, 0), (-4.684008, 1.690403, 0.105282, 1))
+            uniform token[] xformOpOrder = ["xformOp:transform"]
+            color3f inputs:color = (1, 0.9375, 0.875)
+            float inputs:intensity = 0.8
+            bool inputs:normalize = false
+            float inputs:width = 3.196112772
+            float inputs:height = 5.856112
+        }
+        def Material "Light_005_Material"
+        {
+            token outputs:surface.connect = </World/Lights/Light_005_Material/Surface.outputs:surface>
+            def Shader "Surface"
+            {
+                uniform token info:id = "UsdPreviewSurface"
+                color3f inputs:diffuseColor = (0, 0, 0)
+                int inputs:useSpecularWorkflow = 1
+                color3f inputs:specularColor = (0, 0, 0)
+                color3f inputs:emissiveColor = (0.8, 0.75, 0.7)
+                token outputs:surface
+            }
+        }
+        def Mesh "Light_005_Geometry"
+        {
+            point3f[] points = [(-4.376347, 3.258564, 3.033338), (-4.991669, 0.122242, 3.033338), (-4.991669, 0.122242, -2.822774), (-4.376347, 3.258564, -2.822774)]
+            int[] faceVertexCounts = [4]
+            int[] faceVertexIndices = [0, 1, 2, 3]
+            uniform token subdivisionScheme = "none"
+            rel material:binding = </World/Lights/Light_005_Material>
+        }
+        def RectLight "Light_006"
+        {
+            matrix4d xformOp:transform = ((0.492758077057, -0.108339922112, -0.863395586491, 0), (-0.214735319866, -0.976672279939, 0, 0), (-0.843254535947, 0.185401527436, -0.504527562407, 0), (-3.7081745, 1.7673, -1.7985115, 1))
+            uniform token[] xformOpOrder = ["xformOp:transform"]
+            color3f inputs:color = (1, 0.77, 0.65)
+            float inputs:intensity = 1
+            bool inputs:normalize = false
+            float inputs:width = 2.47999993688
+            float inputs:height = 4.16000032299
+        }
+        def Material "Light_006_Material"
+        {
+            token outputs:surface.connect = </World/Lights/Light_006_Material/Surface.outputs:surface>
+            def Shader "Surface"
+            {
+                uniform token info:id = "UsdPreviewSurface"
+                color3f inputs:diffuseColor = (0, 0, 0)
+                int inputs:useSpecularWorkflow = 1
+                color3f inputs:specularColor = (0, 0, 0)
+                color3f inputs:emissiveColor = (1, 0.77, 0.65)
+                token outputs:surface
+            }
+        }
+        def Mesh "Light_006_Geometry"
+        {
+            point3f[] points = [(-4.765844, -0.129837, -0.727901), (-3.543804, -0.39852, -2.869122), (-2.650505, 3.664437, -2.869122), (-3.872545, 3.93312, -0.727901)]
+            int[] faceVertexCounts = [4]
+            int[] faceVertexIndices = [0, 1, 2, 3]
+            uniform token subdivisionScheme = "none"
+            rel material:binding = </World/Lights/Light_006_Material>
+        }
+    }
+}

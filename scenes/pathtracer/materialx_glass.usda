@@ -1,0 +1,57 @@
+#usda 1.0
+(
+    defaultPrim = "World"
+    metersPerUnit = 1
+    upAxis = "Y"
+    doc = "materialx_glass converted from GLSL-PathTracer .scene"
+)
+
+def Xform "World"
+{
+    custom string pathtracer:sourceScene = "materialx_glass.scene"
+    custom int2 pathtracer:resolution = (1280, 720)
+    custom int pathtracer:maxDepth = 12
+    custom asset pathtracer:environment = @./HDR/san_giuseppe_bridge_split.hdr@
+
+    def Camera "Camera"
+    {
+        matrix4d xformOp:transform = ((1, 0, 0, 0), (0, 0.986393923832, -0.164398987305, 0), (0, 0.164398987305, 0.986393923832, 0), (0, 1.5, 6, 1))
+        uniform token[] xformOpOrder = ["xformOp:transform"]
+        token projection = "perspective"
+        float focalLength = 50
+        float horizontalAperture = 36.3970234266
+        float verticalAperture = 20.4733256775
+        float2 clippingRange = (0.001, 1000000)
+        custom point3f pathtracer:lookAt = (0, 0.5, 0)
+        custom float pathtracer:fov = 40
+    }
+
+    def Scope "Looks"
+    {
+        def Material "glass" (
+            prepend references = @./materialx_glass.mtlx@</MaterialX/Materials/glass>
+        )
+        {
+        }
+    }
+
+    def Scope "Geometry"
+    {
+        def Mesh "glass_sphere"
+        {
+            custom asset engine:geometry:file = @./material_test/sphere.obj@
+
+            rel material:binding = </World/Looks/glass>
+        }
+    }
+
+    def Scope "Lights"
+    {
+        def DomeLight "Environment"
+        {
+            asset inputs:texture:file = @./HDR/san_giuseppe_bridge_split.hdr@
+            float inputs:intensity = 1
+            color3f inputs:color = (1, 1, 1)
+        }
+    }
+}

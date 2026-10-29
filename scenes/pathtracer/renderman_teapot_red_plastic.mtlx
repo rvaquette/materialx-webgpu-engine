@@ -1,0 +1,29 @@
+<?xml version="1.0"?>
+<materialx version="1.39" colorspace="lin_rec709">
+  <disney_principled name="red_plastic_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" value="1, 0, 0" />
+    <input name="roughness" type="float" value="0.1" />
+  </disney_principled>
+  <surfacematerial name="red_plastic" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="red_plastic_surface" />
+  </surfacematerial>
+  <disney_principled name="base_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" value="0.01, 0.01, 0.01" />
+    <input name="metallic" type="float" value="1" />
+    <input name="roughness" type="float" value="0.5" />
+  </disney_principled>
+  <surfacematerial name="base" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="base_surface" />
+  </surfacematerial>
+  <disney_principled name="checker_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" nodename="checker_baseColorTexture" />
+    <input name="metallic" type="float" value="0" />
+    <input name="roughness" type="float" value="0.5" />
+  </disney_principled>
+  <image name="checker_baseColorTexture" type="color3">
+    <input name="file" type="filename" value="renderman/textures/checker.png" />
+  </image>
+  <surfacematerial name="checker" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="checker_surface" />
+  </surfacematerial>
+</materialx>

@@ -1,0 +1,592 @@
+<?xml version="1.0"?>
+<materialx version="1.39" colorspace="lin_rec709">
+  <disney_principled name="object10_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" nodename="object10_baseColorTexture" />
+    <input name="metallic" type="float" nodename="object10_metallicRoughnessChannels" output="outz" />
+    <input name="roughness" type="float" nodename="object10_metallicRoughnessChannels" output="outy" />
+  </disney_principled>
+  <image name="object10_baseColorTexture" type="color3">
+    <input name="file" type="filename" value="rank3police/textures/material_baseColor.png" />
+  </image>
+  <image name="object10_metallicRoughnessTexture" type="color3">
+    <input name="file" type="filename" value="rank3police/textures/material_metallicRoughness.png" />
+  </image>
+  <separate3 name="object10_metallicRoughnessChannels" type="multioutput">
+    <input name="in" type="color3" nodename="object10_metallicRoughnessTexture" />
+  </separate3>
+  <surfacematerial name="object10" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="object10_surface" />
+  </surfacematerial>
+  <disney_principled name="object11_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" nodename="object11_baseColorTexture" />
+    <input name="metallic" type="float" nodename="object11_metallicRoughnessChannels" output="outz" />
+    <input name="roughness" type="float" nodename="object11_metallicRoughnessChannels" output="outy" />
+  </disney_principled>
+  <image name="object11_baseColorTexture" type="color3">
+    <input name="file" type="filename" value="rank3police/textures/cam2_baseColor.png" />
+  </image>
+  <image name="object11_metallicRoughnessTexture" type="color3">
+    <input name="file" type="filename" value="rank3police/textures/cam2_metallicRoughness.png" />
+  </image>
+  <separate3 name="object11_metallicRoughnessChannels" type="multioutput">
+    <input name="in" type="color3" nodename="object11_metallicRoughnessTexture" />
+  </separate3>
+  <surfacematerial name="object11" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="object11_surface" />
+  </surfacematerial>
+  <disney_principled name="object12_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" nodename="object12_baseColorTexture" />
+    <input name="metallic" type="float" value="0" />
+    <input name="roughness" type="float" value="0.843492" />
+  </disney_principled>
+  <image name="object12_baseColorTexture" type="color3">
+    <input name="file" type="filename" value="rank3police/textures/comm_block_baseColor.png" />
+  </image>
+  <surfacematerial name="object12" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="object12_surface" />
+  </surfacematerial>
+  <disney_principled name="object13_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" nodename="object13_baseColorTexture" />
+    <input name="metallic" type="float" nodename="object13_metallicRoughnessChannels" output="outz" />
+    <input name="roughness" type="float" nodename="object13_metallicRoughnessChannels" output="outy" />
+  </disney_principled>
+  <image name="object13_baseColorTexture" type="color3">
+    <input name="file" type="filename" value="rank3police/textures/ctrl_eye_baseColor.png" />
+  </image>
+  <image name="object13_metallicRoughnessTexture" type="color3">
+    <input name="file" type="filename" value="rank3police/textures/ctrl_eye_metallicRoughness.png" />
+  </image>
+  <separate3 name="object13_metallicRoughnessChannels" type="multioutput">
+    <input name="in" type="color3" nodename="object13_metallicRoughnessTexture" />
+  </separate3>
+  <surfacematerial name="object13" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="object13_surface" />
+  </surfacematerial>
+  <disney_principled name="object14001_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" nodename="object14001_baseColorTexture" />
+    <input name="metallic" type="float" value="0.5" />
+    <input name="roughness" type="float" value="0.001" />
+  </disney_principled>
+  <image name="object14001_baseColorTexture" type="color3">
+    <input name="file" type="filename" value="rank3police/textures/glass_baseColor.png" />
+  </image>
+  <surfacematerial name="object14001" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="object14001_surface" />
+  </surfacematerial>
+  <disney_principled name="object15_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" value="0, 0, 0" />
+    <input name="metallic" type="float" value="1" />
+    <input name="roughness" type="float" value="0.5" />
+  </disney_principled>
+  <surfacematerial name="object15" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="object15_surface" />
+  </surfacematerial>
+  <disney_principled name="object16_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" nodename="object16_baseColorTexture" />
+    <input name="metallic" type="float" nodename="object16_metallicRoughnessChannels" output="outz" />
+    <input name="roughness" type="float" nodename="object16_metallicRoughnessChannels" output="outy" />
+  </disney_principled>
+  <image name="object16_baseColorTexture" type="color3">
+    <input name="file" type="filename" value="rank3police/textures/helmet_baseColor.png" />
+  </image>
+  <image name="object16_metallicRoughnessTexture" type="color3">
+    <input name="file" type="filename" value="rank3police/textures/helmet_metallicRoughness.png" />
+  </image>
+  <separate3 name="object16_metallicRoughnessChannels" type="multioutput">
+    <input name="in" type="color3" nodename="object16_metallicRoughnessTexture" />
+  </separate3>
+  <surfacematerial name="object16" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="object16_surface" />
+  </surfacematerial>
+  <disney_principled name="object18_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" nodename="object18_baseColorTexture" />
+    <input name="metallic" type="float" nodename="object18_metallicRoughnessChannels" output="outz" />
+    <input name="roughness" type="float" nodename="object18_metallicRoughnessChannels" output="outy" />
+  </disney_principled>
+  <image name="object18_baseColorTexture" type="color3">
+    <input name="file" type="filename" value="rank3police/textures/helmet_ad_01_baseColor.png" />
+  </image>
+  <image name="object18_metallicRoughnessTexture" type="color3">
+    <input name="file" type="filename" value="rank3police/textures/helmet_ad_01_metallicRoughness.png" />
+  </image>
+  <separate3 name="object18_metallicRoughnessChannels" type="multioutput">
+    <input name="in" type="color3" nodename="object18_metallicRoughnessTexture" />
+  </separate3>
+  <surfacematerial name="object18" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="object18_surface" />
+  </surfacematerial>
+  <disney_principled name="object19_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" nodename="object19_baseColorTexture" />
+    <input name="metallic" type="float" nodename="object19_metallicRoughnessChannels" output="outz" />
+    <input name="roughness" type="float" nodename="object19_metallicRoughnessChannels" output="outy" />
+  </disney_principled>
+  <image name="object19_baseColorTexture" type="color3">
+    <input name="file" type="filename" value="rank3police/textures/helmet_ad_02_baseColor.png" />
+  </image>
+  <image name="object19_metallicRoughnessTexture" type="color3">
+    <input name="file" type="filename" value="rank3police/textures/helmet_ad_02_metallicRoughness.png" />
+  </image>
+  <separate3 name="object19_metallicRoughnessChannels" type="multioutput">
+    <input name="in" type="color3" nodename="object19_metallicRoughnessTexture" />
+  </separate3>
+  <surfacematerial name="object19" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="object19_surface" />
+  </surfacematerial>
+  <disney_principled name="object20_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" nodename="object20_baseColorTexture" />
+    <input name="metallic" type="float" value="0" />
+    <input name="roughness" type="float" value="0.156508" />
+  </disney_principled>
+  <image name="object20_baseColorTexture" type="color3">
+    <input name="file" type="filename" value="rank3police/textures/helmet_ad_03_baseColor.png" />
+  </image>
+  <surfacematerial name="object20" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="object20_surface" />
+  </surfacematerial>
+  <disney_principled name="object21_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" nodename="object21_baseColorTexture" />
+    <input name="metallic" type="float" value="0" />
+    <input name="roughness" type="float" value="0.843" />
+  </disney_principled>
+  <image name="object21_baseColorTexture" type="color3">
+    <input name="file" type="filename" value="rank3police/textures/helmet_logo_baseColor.png" />
+  </image>
+  <surfacematerial name="object21" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="object21_surface" />
+  </surfacematerial>
+  <disney_principled name="object22_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" nodename="object22_baseColorTexture" />
+    <input name="metallic" type="float" nodename="object22_metallicRoughnessChannels" output="outz" />
+    <input name="roughness" type="float" nodename="object22_metallicRoughnessChannels" output="outy" />
+  </disney_principled>
+  <image name="object22_baseColorTexture" type="color3">
+    <input name="file" type="filename" value="rank3police/textures/helmet_sidelock_baseColor.png" />
+  </image>
+  <image name="object22_metallicRoughnessTexture" type="color3">
+    <input name="file" type="filename" value="rank3police/textures/helmet_sidelock_metallicRoughness.png" />
+  </image>
+  <separate3 name="object22_metallicRoughnessChannels" type="multioutput">
+    <input name="in" type="color3" nodename="object22_metallicRoughnessTexture" />
+  </separate3>
+  <surfacematerial name="object22" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="object22_surface" />
+  </surfacematerial>
+  <disney_principled name="object23_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" nodename="object23_baseColorTexture" />
+    <input name="metallic" type="float" nodename="object23_metallicRoughnessChannels" output="outz" />
+    <input name="roughness" type="float" nodename="object23_metallicRoughnessChannels" output="outy" />
+  </disney_principled>
+  <image name="object23_baseColorTexture" type="color3">
+    <input name="file" type="filename" value="rank3police/textures/helmet_sidepart_baseColor.png" />
+  </image>
+  <image name="object23_metallicRoughnessTexture" type="color3">
+    <input name="file" type="filename" value="rank3police/textures/helmet_sidepart_metallicRoughness.png" />
+  </image>
+  <separate3 name="object23_metallicRoughnessChannels" type="multioutput">
+    <input name="in" type="color3" nodename="object23_metallicRoughnessTexture" />
+  </separate3>
+  <surfacematerial name="object23" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="object23_surface" />
+  </surfacematerial>
+  <disney_principled name="object25_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" nodename="object25_baseColorTexture" />
+    <input name="metallic" type="float" nodename="object25_metallicRoughnessChannels" output="outz" />
+    <input name="roughness" type="float" nodename="object25_metallicRoughnessChannels" output="outy" />
+  </disney_principled>
+  <image name="object25_baseColorTexture" type="color3">
+    <input name="file" type="filename" value="rank3police/textures/innerpart_baseColor.png" />
+  </image>
+  <image name="object25_metallicRoughnessTexture" type="color3">
+    <input name="file" type="filename" value="rank3police/textures/innerpart_metallicRoughness.png" />
+  </image>
+  <separate3 name="object25_metallicRoughnessChannels" type="multioutput">
+    <input name="in" type="color3" nodename="object25_metallicRoughnessTexture" />
+  </separate3>
+  <surfacematerial name="object25" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="object25_surface" />
+  </surfacematerial>
+  <disney_principled name="object26_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" nodename="object26_baseColorTexture" />
+    <input name="metallic" type="float" value="1" />
+    <input name="roughness" type="float" value="0.156508" />
+  </disney_principled>
+  <image name="object26_baseColorTexture" type="color3">
+    <input name="file" type="filename" value="rank3police/textures/light_metal_baseColor.png" />
+  </image>
+  <surfacematerial name="object26" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="object26_surface" />
+  </surfacematerial>
+  <disney_principled name="object3_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" nodename="object3_baseColorTexture" />
+    <input name="metallic" type="float" nodename="object3_metallicRoughnessChannels" output="outz" />
+    <input name="roughness" type="float" nodename="object3_metallicRoughnessChannels" output="outy" />
+  </disney_principled>
+  <image name="object3_baseColorTexture" type="color3">
+    <input name="file" type="filename" value="rank3police/textures/add_details_baseColor.png" />
+  </image>
+  <image name="object3_metallicRoughnessTexture" type="color3">
+    <input name="file" type="filename" value="rank3police/textures/add_details_metallicRoughness.png" />
+  </image>
+  <separate3 name="object3_metallicRoughnessChannels" type="multioutput">
+    <input name="in" type="color3" nodename="object3_metallicRoughnessTexture" />
+  </separate3>
+  <surfacematerial name="object3" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="object3_surface" />
+  </surfacematerial>
+  <disney_principled name="object32_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" nodename="object32_baseColorTexture" />
+    <input name="metallic" type="float" nodename="object32_metallicRoughnessChannels" output="outz" />
+    <input name="roughness" type="float" nodename="object32_metallicRoughnessChannels" output="outy" />
+  </disney_principled>
+  <image name="object32_baseColorTexture" type="color3">
+    <input name="file" type="filename" value="rank3police/textures/mask_ad_01_baseColor.png" />
+  </image>
+  <image name="object32_metallicRoughnessTexture" type="color3">
+    <input name="file" type="filename" value="rank3police/textures/mask_ad_01_metallicRoughness.png" />
+  </image>
+  <separate3 name="object32_metallicRoughnessChannels" type="multioutput">
+    <input name="in" type="color3" nodename="object32_metallicRoughnessTexture" />
+  </separate3>
+  <surfacematerial name="object32" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="object32_surface" />
+  </surfacematerial>
+  <disney_principled name="object33_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" nodename="object33_baseColorTexture" />
+    <input name="metallic" type="float" nodename="object33_metallicRoughnessChannels" output="outz" />
+    <input name="roughness" type="float" nodename="object33_metallicRoughnessChannels" output="outy" />
+  </disney_principled>
+  <image name="object33_baseColorTexture" type="color3">
+    <input name="file" type="filename" value="rank3police/textures/mask_big_lock_baseColor.png" />
+  </image>
+  <image name="object33_metallicRoughnessTexture" type="color3">
+    <input name="file" type="filename" value="rank3police/textures/mask_big_lock_metallicRoughness.png" />
+  </image>
+  <separate3 name="object33_metallicRoughnessChannels" type="multioutput">
+    <input name="in" type="color3" nodename="object33_metallicRoughnessTexture" />
+  </separate3>
+  <surfacematerial name="object33" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="object33_surface" />
+  </surfacematerial>
+  <disney_principled name="object35_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" nodename="object35_baseColorTexture" />
+    <input name="metallic" type="float" nodename="object35_metallicRoughnessChannels" output="outz" />
+    <input name="roughness" type="float" nodename="object35_metallicRoughnessChannels" output="outy" />
+  </disney_principled>
+  <image name="object35_baseColorTexture" type="color3">
+    <input name="file" type="filename" value="rank3police/textures/mask_dron_baseColor.png" />
+  </image>
+  <image name="object35_metallicRoughnessTexture" type="color3">
+    <input name="file" type="filename" value="rank3police/textures/mask_dron_metallicRoughness.png" />
+  </image>
+  <separate3 name="object35_metallicRoughnessChannels" type="multioutput">
+    <input name="in" type="color3" nodename="object35_metallicRoughnessTexture" />
+  </separate3>
+  <surfacematerial name="object35" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="object35_surface" />
+  </surfacematerial>
+  <disney_principled name="object36_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" nodename="object36_baseColorTexture" />
+    <input name="metallic" type="float" nodename="object36_metallicRoughnessChannels" output="outz" />
+    <input name="roughness" type="float" nodename="object36_metallicRoughnessChannels" output="outy" />
+  </disney_principled>
+  <image name="object36_baseColorTexture" type="color3">
+    <input name="file" type="filename" value="rank3police/textures/mask_gen_baseColor.png" />
+  </image>
+  <image name="object36_metallicRoughnessTexture" type="color3">
+    <input name="file" type="filename" value="rank3police/textures/mask_gen_metallicRoughness.png" />
+  </image>
+  <separate3 name="object36_metallicRoughnessChannels" type="multioutput">
+    <input name="in" type="color3" nodename="object36_metallicRoughnessTexture" />
+  </separate3>
+  <surfacematerial name="object36" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="object36_surface" />
+  </surfacematerial>
+  <disney_principled name="object37_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" nodename="object37_baseColorTexture" />
+    <input name="metallic" type="float" nodename="object37_metallicRoughnessChannels" output="outz" />
+    <input name="roughness" type="float" nodename="object37_metallicRoughnessChannels" output="outy" />
+  </disney_principled>
+  <image name="object37_baseColorTexture" type="color3">
+    <input name="file" type="filename" value="rank3police/textures/mask_part_01_baseColor.png" />
+  </image>
+  <image name="object37_metallicRoughnessTexture" type="color3">
+    <input name="file" type="filename" value="rank3police/textures/mask_part_01_metallicRoughness.png" />
+  </image>
+  <separate3 name="object37_metallicRoughnessChannels" type="multioutput">
+    <input name="in" type="color3" nodename="object37_metallicRoughnessTexture" />
+  </separate3>
+  <surfacematerial name="object37" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="object37_surface" />
+  </surfacematerial>
+  <disney_principled name="object38_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" nodename="object38_baseColorTexture" />
+    <input name="metallic" type="float" nodename="object38_metallicRoughnessChannels" output="outz" />
+    <input name="roughness" type="float" nodename="object38_metallicRoughnessChannels" output="outy" />
+  </disney_principled>
+  <image name="object38_baseColorTexture" type="color3">
+    <input name="file" type="filename" value="rank3police/textures/mask_part_02_baseColor.png" />
+  </image>
+  <image name="object38_metallicRoughnessTexture" type="color3">
+    <input name="file" type="filename" value="rank3police/textures/mask_part_02_metallicRoughness.png" />
+  </image>
+  <separate3 name="object38_metallicRoughnessChannels" type="multioutput">
+    <input name="in" type="color3" nodename="object38_metallicRoughnessTexture" />
+  </separate3>
+  <surfacematerial name="object38" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="object38_surface" />
+  </surfacematerial>
+  <disney_principled name="object39_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" nodename="object39_baseColorTexture" />
+    <input name="metallic" type="float" nodename="object39_metallicRoughnessChannels" output="outz" />
+    <input name="roughness" type="float" nodename="object39_metallicRoughnessChannels" output="outy" />
+  </disney_principled>
+  <image name="object39_baseColorTexture" type="color3">
+    <input name="file" type="filename" value="rank3police/textures/mask_part_03_baseColor.png" />
+  </image>
+  <image name="object39_metallicRoughnessTexture" type="color3">
+    <input name="file" type="filename" value="rank3police/textures/mask_part_03_metallicRoughness.png" />
+  </image>
+  <separate3 name="object39_metallicRoughnessChannels" type="multioutput">
+    <input name="in" type="color3" nodename="object39_metallicRoughnessTexture" />
+  </separate3>
+  <surfacematerial name="object39" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="object39_surface" />
+  </surfacematerial>
+  <disney_principled name="object40_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" nodename="object40_baseColorTexture" />
+    <input name="metallic" type="float" nodename="object40_metallicRoughnessChannels" output="outz" />
+    <input name="roughness" type="float" nodename="object40_metallicRoughnessChannels" output="outy" />
+  </disney_principled>
+  <image name="object40_baseColorTexture" type="color3">
+    <input name="file" type="filename" value="rank3police/textures/mask_part_04_baseColor.png" />
+  </image>
+  <image name="object40_metallicRoughnessTexture" type="color3">
+    <input name="file" type="filename" value="rank3police/textures/mask_part_04_metallicRoughness.png" />
+  </image>
+  <separate3 name="object40_metallicRoughnessChannels" type="multioutput">
+    <input name="in" type="color3" nodename="object40_metallicRoughnessTexture" />
+  </separate3>
+  <surfacematerial name="object40" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="object40_surface" />
+  </surfacematerial>
+  <disney_principled name="object42_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" nodename="object42_baseColorTexture" />
+    <input name="metallic" type="float" nodename="object42_metallicRoughnessChannels" output="outz" />
+    <input name="roughness" type="float" nodename="object42_metallicRoughnessChannels" output="outy" />
+  </disney_principled>
+  <image name="object42_baseColorTexture" type="color3">
+    <input name="file" type="filename" value="rank3police/textures/mc_block_baseColor.png" />
+  </image>
+  <image name="object42_metallicRoughnessTexture" type="color3">
+    <input name="file" type="filename" value="rank3police/textures/mc_block_metallicRoughness.png" />
+  </image>
+  <separate3 name="object42_metallicRoughnessChannels" type="multioutput">
+    <input name="in" type="color3" nodename="object42_metallicRoughnessTexture" />
+  </separate3>
+  <surfacematerial name="object42" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="object42_surface" />
+  </surfacematerial>
+  <disney_principled name="object43_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" nodename="object43_baseColorTexture" />
+    <input name="metallic" type="float" nodename="object43_metallicRoughnessChannels" output="outz" />
+    <input name="roughness" type="float" nodename="object43_metallicRoughnessChannels" output="outy" />
+  </disney_principled>
+  <image name="object43_baseColorTexture" type="color3">
+    <input name="file" type="filename" value="rank3police/textures/nose_baseColor.png" />
+  </image>
+  <image name="object43_metallicRoughnessTexture" type="color3">
+    <input name="file" type="filename" value="rank3police/textures/nose_metallicRoughness.png" />
+  </image>
+  <separate3 name="object43_metallicRoughnessChannels" type="multioutput">
+    <input name="in" type="color3" nodename="object43_metallicRoughnessTexture" />
+  </separate3>
+  <surfacematerial name="object43" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="object43_surface" />
+  </surfacematerial>
+  <disney_principled name="object44_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" nodename="object44_baseColorTexture" />
+    <input name="metallic" type="float" nodename="object44_metallicRoughnessChannels" output="outz" />
+    <input name="roughness" type="float" nodename="object44_metallicRoughnessChannels" output="outy" />
+  </disney_principled>
+  <image name="object44_baseColorTexture" type="color3">
+    <input name="file" type="filename" value="rank3police/textures/red_parts_baseColor.png" />
+  </image>
+  <image name="object44_metallicRoughnessTexture" type="color3">
+    <input name="file" type="filename" value="rank3police/textures/red_parts_metallicRoughness.png" />
+  </image>
+  <separate3 name="object44_metallicRoughnessChannels" type="multioutput">
+    <input name="in" type="color3" nodename="object44_metallicRoughnessTexture" />
+  </separate3>
+  <surfacematerial name="object44" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="object44_surface" />
+  </surfacematerial>
+  <disney_principled name="object45_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" nodename="object45_baseColorTexture" />
+    <input name="metallic" type="float" nodename="object45_metallicRoughnessChannels" output="outz" />
+    <input name="roughness" type="float" nodename="object45_metallicRoughnessChannels" output="outy" />
+  </disney_principled>
+  <image name="object45_baseColorTexture" type="color3">
+    <input name="file" type="filename" value="rank3police/textures/sd_block_baseColor.png" />
+  </image>
+  <image name="object45_metallicRoughnessTexture" type="color3">
+    <input name="file" type="filename" value="rank3police/textures/sd_block_metallicRoughness.png" />
+  </image>
+  <separate3 name="object45_metallicRoughnessChannels" type="multioutput">
+    <input name="in" type="color3" nodename="object45_metallicRoughnessTexture" />
+  </separate3>
+  <surfacematerial name="object45" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="object45_surface" />
+  </surfacematerial>
+  <disney_principled name="object46_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" nodename="object46_baseColorTexture" />
+    <input name="metallic" type="float" nodename="object46_metallicRoughnessChannels" output="outz" />
+    <input name="roughness" type="float" nodename="object46_metallicRoughnessChannels" output="outy" />
+  </disney_principled>
+  <image name="object46_baseColorTexture" type="color3">
+    <input name="file" type="filename" value="rank3police/textures/skull_head_baseColor.png" />
+  </image>
+  <image name="object46_metallicRoughnessTexture" type="color3">
+    <input name="file" type="filename" value="rank3police/textures/skull_head_metallicRoughness.png" />
+  </image>
+  <separate3 name="object46_metallicRoughnessChannels" type="multioutput">
+    <input name="in" type="color3" nodename="object46_metallicRoughnessTexture" />
+  </separate3>
+  <surfacematerial name="object46" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="object46_surface" />
+  </surfacematerial>
+  <disney_principled name="object47_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" nodename="object47_baseColorTexture" />
+    <input name="metallic" type="float" nodename="object47_metallicRoughnessChannels" output="outz" />
+    <input name="roughness" type="float" nodename="object47_metallicRoughnessChannels" output="outy" />
+  </disney_principled>
+  <image name="object47_baseColorTexture" type="color3">
+    <input name="file" type="filename" value="rank3police/textures/skull_jaw_baseColor.png" />
+  </image>
+  <image name="object47_metallicRoughnessTexture" type="color3">
+    <input name="file" type="filename" value="rank3police/textures/skull_jaw_metallicRoughness.png" />
+  </image>
+  <separate3 name="object47_metallicRoughnessChannels" type="multioutput">
+    <input name="in" type="color3" nodename="object47_metallicRoughnessTexture" />
+  </separate3>
+  <surfacematerial name="object47" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="object47_surface" />
+  </surfacematerial>
+  <disney_principled name="object48_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" value="0.64, 0.64, 0.64" />
+    <input name="metallic" type="float" value="0" />
+    <input name="roughness" type="float" value="0.71" />
+  </disney_principled>
+  <surfacematerial name="object48" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="object48_surface" />
+  </surfacematerial>
+  <disney_principled name="object5_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" nodename="object5_baseColorTexture" />
+    <input name="metallic" type="float" nodename="object5_metallicRoughnessChannels" output="outz" />
+    <input name="roughness" type="float" nodename="object5_metallicRoughnessChannels" output="outy" />
+  </disney_principled>
+  <image name="object5_baseColorTexture" type="color3">
+    <input name="file" type="filename" value="rank3police/textures/backpart_baseColor.png" />
+  </image>
+  <image name="object5_metallicRoughnessTexture" type="color3">
+    <input name="file" type="filename" value="rank3police/textures/backpart_metallicRoughness.png" />
+  </image>
+  <separate3 name="object5_metallicRoughnessChannels" type="multioutput">
+    <input name="in" type="color3" nodename="object5_metallicRoughnessTexture" />
+  </separate3>
+  <surfacematerial name="object5" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="object5_surface" />
+  </surfacematerial>
+  <disney_principled name="object51_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" nodename="object51_baseColorTexture" />
+    <input name="metallic" type="float" value="0" />
+    <input name="roughness" type="float" value="0.1" />
+  </disney_principled>
+  <image name="object51_baseColorTexture" type="color3">
+    <input name="file" type="filename" value="rank3police/textures/suit_chest_baseColor.png" />
+  </image>
+  <surfacematerial name="object51" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="object51_surface" />
+  </surfacematerial>
+  <disney_principled name="object52_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" nodename="object52_baseColorTexture" />
+    <input name="metallic" type="float" value="0" />
+    <input name="roughness" type="float" value="0.1" />
+  </disney_principled>
+  <image name="object52_baseColorTexture" type="color3">
+    <input name="file" type="filename" value="rank3police/textures/suit_collar_baseColor.png" />
+  </image>
+  <surfacematerial name="object52" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="object52_surface" />
+  </surfacematerial>
+  <disney_principled name="object53_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" nodename="object53_baseColorTexture" />
+    <input name="metallic" type="float" nodename="object53_metallicRoughnessChannels" output="outz" />
+    <input name="roughness" type="float" nodename="object53_metallicRoughnessChannels" output="outy" />
+  </disney_principled>
+  <image name="object53_baseColorTexture" type="color3">
+    <input name="file" type="filename" value="rank3police/textures/suit_fabric_baseColor.png" />
+  </image>
+  <image name="object53_metallicRoughnessTexture" type="color3">
+    <input name="file" type="filename" value="rank3police/textures/suit_fabric_metallicRoughness.png" />
+  </image>
+  <separate3 name="object53_metallicRoughnessChannels" type="multioutput">
+    <input name="in" type="color3" nodename="object53_metallicRoughnessTexture" />
+  </separate3>
+  <surfacematerial name="object53" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="object53_surface" />
+  </surfacematerial>
+  <disney_principled name="object54_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" nodename="object54_baseColorTexture" />
+    <input name="metallic" type="float" nodename="object54_metallicRoughnessChannels" output="outz" />
+    <input name="roughness" type="float" nodename="object54_metallicRoughnessChannels" output="outy" />
+  </disney_principled>
+  <image name="object54_baseColorTexture" type="color3">
+    <input name="file" type="filename" value="rank3police/textures/suit_front_stripe_baseColor.png" />
+  </image>
+  <image name="object54_metallicRoughnessTexture" type="color3">
+    <input name="file" type="filename" value="rank3police/textures/suit_front_stripe_metallicRoughness.png" />
+  </image>
+  <separate3 name="object54_metallicRoughnessChannels" type="multioutput">
+    <input name="in" type="color3" nodename="object54_metallicRoughnessTexture" />
+  </separate3>
+  <surfacematerial name="object54" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="object54_surface" />
+  </surfacematerial>
+  <disney_principled name="object57_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" value="0.005, 0.004, 0.004" />
+    <input name="metallic" type="float" value="0" />
+    <input name="roughness" type="float" value="0.71" />
+  </disney_principled>
+  <surfacematerial name="object57" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="object57_surface" />
+  </surfacematerial>
+  <disney_principled name="object58_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" nodename="object58_baseColorTexture" />
+    <input name="metallic" type="float" nodename="object58_metallicRoughnessChannels" output="outz" />
+    <input name="roughness" type="float" nodename="object58_metallicRoughnessChannels" output="outy" />
+  </disney_principled>
+  <image name="object58_baseColorTexture" type="color3">
+    <input name="file" type="filename" value="rank3police/textures/suit_strap_baseColor.png" />
+  </image>
+  <image name="object58_metallicRoughnessTexture" type="color3">
+    <input name="file" type="filename" value="rank3police/textures/suit_strap_metallicRoughness.png" />
+  </image>
+  <separate3 name="object58_metallicRoughnessChannels" type="multioutput">
+    <input name="in" type="color3" nodename="object58_metallicRoughnessTexture" />
+  </separate3>
+  <surfacematerial name="object58" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="object58_surface" />
+  </surfacematerial>
+  <disney_principled name="emissive_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" value="0, 0, 0" />
+  </disney_principled>
+  <surfacematerial name="emissive" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="emissive_surface" />
+  </surfacematerial>
+  <disney_principled name="emissive_red_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" value="0, 0, 0" />
+  </disney_principled>
+  <surfacematerial name="emissive_red" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="emissive_red_surface" />
+  </surfacematerial>
+</materialx>

@@ -1,0 +1,9 @@
+<?xml version="1.0"?>
+<materialx version="1.39" colorspace="lin_rec709">
+  <disney_principled name="volume_scatter_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" value="0.8, 0.8, 0.8" />
+  </disney_principled>
+  <surfacematerial name="volume_scatter" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="volume_scatter_surface" />
+  </surfacematerial>
+</materialx>

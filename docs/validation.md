@@ -380,11 +380,13 @@ reussie ne prouve ni la disponibilite des textures ni la fidelite du rendu.
 ## Rendus de la scène standard-shader-ball
 
 `npm run test:shaderball` rend `scenes/standard-shader-ball/standard-shader-ball.usda`
-sur le mobile (par défaut) ou le GPU local, en raster et en path tracing, via
+sur le GPU local (par défaut) ou le mobile, en raster et en path tracing, via
 `usd-image-harness.html`. `--materials <filtre>|all` sélectionne les fichiers
 `.mtlx` de `scenes/mtlx-library` liés à `OpenPBRMaterial`.
-Seules ces variantes sont rendues : les cas sans remplacement de matériau
-`scene__raster` et `scene__pathtracing` sont exclus.
+Sans `--materials`, seuls `scene__raster` et `scene__pathtracing` sont rendus :
+les matériaux et bindings du USDA sont conservés, sans parcourir la bibliothèque
+ni ajouter de variante. Avec `--materials`, seules les variantes sélectionnées
+sont rendues ; `--materials all` parcourt toute la bibliothèque.
 Pour comparer les matériaux aux rendus de référence de la boule frontale,
 utiliser la scène OpenPBR sur mobile. La scène par défaut utilise une géométrie
 et une caméra différentes ; les rendus GPU locaux ne sont pas l'oracle de ces
@@ -393,6 +395,7 @@ comparaisons.
 ```sh
 npm run test:shaderball
 npm run test:shaderball -- --target local
+npm run test:shaderball -- --entry /scenes/pathtracer/ajax.usda
 npm run test:shaderball -- --entry /scenes/standard-shader-ball/openpbr-rva-standard-shader-ball.usda --target mobile
 npm run test:shaderball -- --target local --materials open_pbr_surface --spp 32
 npm run test:shaderball -- --backends raster --materials all --list

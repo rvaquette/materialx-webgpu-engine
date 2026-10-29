@@ -1,0 +1,90 @@
+#usda 1.0
+(
+    defaultPrim = "World"
+    metersPerUnit = 1
+    upAxis = "Y"
+    doc = "tungsten-material-testball converted from GLSL-PathTracer .scene"
+)
+
+def Xform "World"
+{
+    custom string pathtracer:sourceScene = "tungsten-material-testball.scene"
+    custom int2 pathtracer:resolution = (1280, 720)
+    custom int pathtracer:maxDepth = 2
+    custom float pathtracer:environmentIntensity = 1
+    custom asset pathtracer:environment = @./HDR/material-test.hdr@
+
+    def Camera "Camera"
+    {
+        matrix4d xformOp:transform = ((0.721367277031, 0, -0.692552706752, 0), (-0.373123272548, 0.842455991842, -0.388647559226, 0), (0.583445177469, 0.538765163879, 0.607720184853, 0), (3.04068, 3.17153, 3.20454, 1))
+        uniform token[] xformOpOrder = ["xformOp:transform"]
+        token projection = "perspective"
+        float focalLength = 50
+        float horizontalAperture = 31.5298788879
+        float verticalAperture = 17.7355568744
+        float2 clippingRange = (0.001, 1000000)
+        custom point3f pathtracer:lookAt = (2.457235, 2.632765, 2.59682)
+        custom float pathtracer:fov = 35
+    }
+
+    def Scope "Looks"
+    {
+        def Material "stand" (
+            prepend references = @./tungsten-material-testball.mtlx@</MaterialX/Materials/stand>
+        )
+        {
+        }
+        def Material "checker" (
+            prepend references = @./tungsten-material-testball.mtlx@</MaterialX/Materials/checker>
+        )
+        {
+        }
+        def Material "test" (
+            prepend references = @./tungsten-material-testball.mtlx@</MaterialX/Materials/test>
+        )
+        {
+        }
+    }
+
+    def Scope "Geometry"
+    {
+        def Mesh "Mesh000"
+        {
+            custom asset engine:geometry:file = @./tungsten-material-testball/models/Mesh000.obj@
+            matrix4d xformOp:transform = ((0.482906, 0, 0, 0), (0, 0.482906, 0, 0), (0, 0, 0.482906, 0), (0.110507, 0.494301, 0.126194, 1))
+            uniform token[] xformOpOrder = ["xformOp:transform"]
+            rel material:binding = </World/Looks/stand>
+        }
+        def Mesh "Mesh001"
+        {
+            custom asset engine:geometry:file = @./tungsten-material-testball/models/Mesh001.obj@
+            matrix4d xformOp:transform = ((0.482906, 0, 0, 0), (0, 0.482906, 0, 0), (0, 0, 0.482906, 0), (0.0571719, 0.213656, 0.0682078, 1))
+            uniform token[] xformOpOrder = ["xformOp:transform"]
+            rel material:binding = </World/Looks/test>
+        }
+        def Mesh "Mesh002"
+        {
+            custom asset engine:geometry:file = @./tungsten-material-testball/models/Mesh002.obj@
+            matrix4d xformOp:transform = ((0.482906, 0, 0, 0), (0, 0.482906, 0, 0), (0, 0, 0.482906, 0), (0.156382, 0.777229, 0.161698, 1))
+            uniform token[] xformOpOrder = ["xformOp:transform"]
+            rel material:binding = </World/Looks/test>
+        }
+        def Mesh "Plane"
+        {
+            custom asset engine:geometry:file = @./tungsten-material-testball/models/Plane.obj@
+            matrix4d xformOp:transform = ((-1.88298, -2.37623e-7, -1.9602, 0), (1.9602, 1.18811e-7, -1.88298, 0), (2.50299e-7, -2.71809, 8.90586e-8, 0), (-0.708772, 0, -0.732108, 1))
+            uniform token[] xformOpOrder = ["xformOp:transform"]
+            rel material:binding = </World/Looks/checker>
+        }
+    }
+
+    def Scope "Lights"
+    {
+        def DomeLight "Environment"
+        {
+            asset inputs:texture:file = @./HDR/material-test.hdr@
+            float inputs:intensity = 1
+            color3f inputs:color = (1, 1, 1)
+        }
+    }
+}

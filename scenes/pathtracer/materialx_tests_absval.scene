@@ -1,0 +1,44 @@
+renderer
+{
+    resolution 1280 720
+    maxdepth 8
+    tilewidth 256
+    tileheight 144
+    envmapfile HDR/san_giuseppe_bridge_split.hdr
+    envmapintensity 4.0
+    envmaprotation -90
+}
+
+camera
+{
+	position 7.5 5 7
+	lookat 0 0 0
+	fov 45
+}
+
+material mtlx_test
+{
+    materialx_document ../materialx/materials/nodes/absval/absval.mtlx
+    materialx_surface M_absval
+}
+
+mesh
+{
+	name cube
+	file material_test/cube.obj
+	material mtlx_test
+}
+
+mesh
+{
+	name sphere
+	file material_test/sphere.obj
+	material mtlx_test
+}
+
+mesh
+{
+	name ground
+	file material_test/floor.obj
+	material mtlx_test
+}

@@ -1,0 +1,162 @@
+#usda 1.0
+(
+    defaultPrim = "World"
+    metersPerUnit = 1
+    upAxis = "Y"
+    doc = "cornell_box_orig converted from GLSL-PathTracer .scene"
+)
+
+def Xform "World"
+{
+    custom string pathtracer:sourceScene = "cornell_box_orig.scene"
+    custom int2 pathtracer:resolution = (800, 800)
+    custom int pathtracer:maxDepth = 2
+    custom float pathtracer:environmentIntensity = 2
+
+    def Camera "Camera"
+    {
+        matrix4d xformOp:transform = ((-1, 0, 0, 0), (0, 1, 0, 0), (0, 0, -1, 0), (0.276, 0.275, -0.75, 1))
+        uniform token[] xformOpOrder = ["xformOp:transform"]
+        token projection = "perspective"
+        float focalLength = 50
+        float horizontalAperture = 36.3970234266
+        float verticalAperture = 36.3970234266
+        float2 clippingRange = (0.001, 1000000)
+        custom point3f pathtracer:lookAt = (0.276, 0.275, 0.1)
+        custom float pathtracer:fov = 40
+    }
+
+    def Scope "Looks"
+    {
+        def Material "ceiling_white" (
+            prepend references = @./cornell_box_orig.mtlx@</MaterialX/Materials/ceiling_white>
+        )
+        {
+        }
+        def Material "back_wall_white" (
+            prepend references = @./cornell_box_orig.mtlx@</MaterialX/Materials/back_wall_white>
+        )
+        {
+        }
+        def Material "floor_white" (
+            prepend references = @./cornell_box_orig.mtlx@</MaterialX/Materials/floor_white>
+        )
+        {
+        }
+        def Material "small_box_white" (
+            prepend references = @./cornell_box_orig.mtlx@</MaterialX/Materials/small_box_white>
+        )
+        {
+        }
+        def Material "large_box_white" (
+            prepend references = @./cornell_box_orig.mtlx@</MaterialX/Materials/large_box_white>
+        )
+        {
+        }
+        def Material "red" (
+            prepend references = @./cornell_box_orig.mtlx@</MaterialX/Materials/red>
+        )
+        {
+        }
+        def Material "green" (
+            prepend references = @./cornell_box_orig.mtlx@</MaterialX/Materials/green>
+        )
+        {
+        }
+    }
+
+    def Scope "Geometry"
+    {
+        def Mesh "cbox_ceiling"
+        {
+            custom asset engine:geometry:file = @./cornell_box/cbox_ceiling.obj@
+            double3 xformOp:translate = (0.278, 0.5488, 0.27955)
+            float3 xformOp:scale = (0.01, 0.01, 0.01)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+            rel material:binding = </World/Looks/ceiling_white>
+        }
+        def Mesh "cbox_floor"
+        {
+            custom asset engine:geometry:file = @./cornell_box/cbox_floor.obj@
+            double3 xformOp:translate = (0.2756, 0, 0.2796)
+            float3 xformOp:scale = (0.01, 0.01, 0.01)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+            rel material:binding = </World/Looks/floor_white>
+        }
+        def Mesh "cbox_back"
+        {
+            custom asset engine:geometry:file = @./cornell_box/cbox_back.obj@
+            double3 xformOp:translate = (0.2764, 0.2744, 0.5592)
+            float3 xformOp:scale = (0.01, 0.01, 0.01)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+            rel material:binding = </World/Looks/back_wall_white>
+        }
+        def Mesh "cbox_smallbox"
+        {
+            custom asset engine:geometry:file = @./cornell_box/cbox_smallbox.obj@
+            double3 xformOp:translate = (0.1855, 0.0835, 0.169)
+            float3 xformOp:scale = (0.01, 0.01, 0.01)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+            rel material:binding = </World/Looks/small_box_white>
+        }
+        def Mesh "cbox_largebox"
+        {
+            custom asset engine:geometry:file = @./cornell_box/cbox_largebox.obj@
+            double3 xformOp:translate = (0.3685, 0.166, 0.35125)
+            float3 xformOp:scale = (0.01, 0.01, 0.01)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+            rel material:binding = </World/Looks/large_box_white>
+        }
+        def Mesh "cbox_greenwall"
+        {
+            custom asset engine:geometry:file = @./cornell_box/cbox_greenwall.obj@
+            double3 xformOp:translate = (0, 0.2744, 0.2796)
+            float3 xformOp:scale = (0.01, 0.01, 0.01)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+            rel material:binding = </World/Looks/green>
+        }
+        def Mesh "cbox_redwall"
+        {
+            custom asset engine:geometry:file = @./cornell_box/cbox_redwall.obj@
+            double3 xformOp:translate = (0.5536, 0.2744, 0.2796)
+            float3 xformOp:scale = (0.01, 0.01, 0.01)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+            rel material:binding = </World/Looks/red>
+        }
+    }
+
+    def Scope "Lights"
+    {
+        def RectLight "Light_001"
+        {
+            matrix4d xformOp:transform = ((0, 0, 1, 0), (1, 0, 0, 0), (0, 1, 0, 0), (0.278, 0.54779997, 0.27950009, 1))
+            uniform token[] xformOpOrder = ["xformOp:transform"]
+            color3f inputs:color = (1, 0.705882352941, 0.235294117647)
+            float inputs:intensity = 17
+            bool inputs:normalize = false
+            float inputs:width = 0.10499998
+            float inputs:height = 0.12999998
+        }
+        def Material "Light_001_Material"
+        {
+            token outputs:surface.connect = </World/Lights/Light_001_Material/Surface.outputs:surface>
+            def Shader "Surface"
+            {
+                uniform token info:id = "UsdPreviewSurface"
+                color3f inputs:diffuseColor = (0, 0, 0)
+                int inputs:useSpecularWorkflow = 1
+                color3f inputs:specularColor = (0, 0, 0)
+                color3f inputs:emissiveColor = (17, 12, 4)
+                token outputs:surface
+            }
+        }
+        def Mesh "Light_001_Geometry"
+        {
+            point3f[] points = [(0.34299999, 0.54779997, 0.2270001), (0.34299999, 0.54779997, 0.33200008), (0.21300001, 0.54779997, 0.33200008), (0.21300001, 0.54779997, 0.2270001)]
+            int[] faceVertexCounts = [4]
+            int[] faceVertexIndices = [0, 1, 2, 3]
+            uniform token subdivisionScheme = "none"
+            rel material:binding = </World/Lights/Light_001_Material>
+        }
+    }
+}

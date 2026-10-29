@@ -242,6 +242,19 @@ describe('emitLayeredSurface (T055d)', () => {
     expect(mod.code).toContain('const MX_MAX_LOBES: u32 = 2u;');
   });
 
+  it('routes transparent USD glass through transmission without alpha-discarding reflections', () => {
+    const mod = emit(surfaceGraph('UsdPreviewSurface', [value('opacity', 'float', '0')]));
+    expect(mod.features!.transmission).toBe(true);
+    expect(mod.features!.lobeKinds).toContain(8);
+    expect(mod.code).toContain('mx_diel * (1.0 - mx_diffuseShare)');
+    expect(mod.code).toContain('select(1.0, 0.0, mx_threshold > 0.0 && mx_opacity < mx_threshold)');
+    const masked = emit(surfaceGraph('UsdPreviewSurface', [
+      value('opacity', 'float', '0'), value('opacityThreshold', 'float', '0.5'),
+    ]));
+    expect(masked.features!.transmission).toBe(false);
+    expect(masked.features!.lobeKinds).not.toContain(8);
+  });
+
   it('sizes the raster lobe array to the statically active lobes', () => {
     const mod = emit(surfaceGraph('open_pbr_surface', [value('base_color', 'color3', '0.5, 0.5, 0.5')]));
     expect(mod.code).toContain('const MX_MAX_LOBES: u32 = 2u;');

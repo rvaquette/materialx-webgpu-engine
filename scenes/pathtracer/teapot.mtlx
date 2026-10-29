@@ -1,0 +1,20 @@
+<?xml version="1.0"?>
+<materialx version="1.39" colorspace="lin_rec709">
+  <disney_principled name="checker_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" nodename="checker_baseColorTexture" />
+    <input name="roughness" type="float" value="0.5" />
+  </disney_principled>
+  <image name="checker_baseColorTexture" type="color3">
+    <input name="file" type="filename" value="teapot/checker.png" />
+  </image>
+  <surfacematerial name="checker" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="checker_surface" />
+  </surfacematerial>
+  <disney_principled name="white_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" value="0, 0.29, 0.88" />
+    <input name="roughness" type="float" value="0" />
+  </disney_principled>
+  <surfacematerial name="white" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="white_surface" />
+  </surfacematerial>
+</materialx>

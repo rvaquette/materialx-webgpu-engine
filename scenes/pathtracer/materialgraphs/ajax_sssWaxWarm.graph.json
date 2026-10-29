@@ -1,0 +1,80 @@
+{
+  "version": 1,
+  "name": "ajax_sssWaxWarm_graph",
+  "nodes": [
+    {
+      "id": "base_a",
+      "type": "constant_color3",
+      "params": { "value": [0.94, 0.78, 0.58] }
+    },
+    {
+      "id": "base_b",
+      "type": "constant_color3",
+      "params": { "value": [1.0, 0.86, 0.66] }
+    },
+    {
+      "id": "mix_t",
+      "type": "constant_float",
+      "params": { "value": 0.42 }
+    },
+    {
+      "id": "base_mix",
+      "type": "mix_color3"
+    },
+    {
+      "id": "surface",
+      "type": "legacy_disney_surface",
+      "params": {
+        "metallic": 0.0,
+        "roughness": 0.28,
+        "subsurface": 0.9,
+        "specularTint": 0.0,
+        "sheen": 0.0,
+        "sheenTint": 0.0,
+        "clearcoat": 0.0,
+        "clearcoatGloss": 0.0,
+        "specTrans": 0.35,
+        "ior": 1.44,
+        "opacity": 1.0,
+        "alphaMode": 0,
+        "alphaCutoff": 0.0,
+        "anisotropic": 0.0
+      }
+    },
+    {
+      "id": "volume",
+      "type": "legacy_volume_medium",
+      "params": {
+        "mediumType": 2,
+        "mediumDensity": 0.95,
+        "mediumColor": [1.0, 0.85, 0.62],
+        "mediumAnisotropy": 0.0
+      }
+    },
+    {
+      "id": "emission",
+      "type": "constant_color3",
+      "params": { "value": [0.0, 0.0, 0.0] }
+    },
+    {
+      "id": "opacity",
+      "type": "constant_float",
+      "params": { "value": 1.0 }
+    }
+  ],
+  "links": [
+    { "fromNode": "base_a", "fromPort": "color", "toNode": "base_mix", "toPort": "a" },
+    { "fromNode": "base_b", "fromPort": "color", "toNode": "base_mix", "toPort": "b" },
+    { "fromNode": "mix_t", "fromPort": "value", "toNode": "base_mix", "toPort": "t" },
+    { "fromNode": "base_mix", "fromPort": "color", "toNode": "surface", "toPort": "baseColor" }
+  ],
+  "outputs": {
+    "surface": { "node": "surface", "port": "bsdf" },
+    "volume": { "node": "volume", "port": "volume" },
+    "emission": { "node": "emission", "port": "color" },
+    "opacity": { "node": "opacity", "port": "value" }
+  },
+  "metadata": {
+    "source": "hand-authored-example"
+  }
+}

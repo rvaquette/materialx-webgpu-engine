@@ -251,6 +251,41 @@ describe('surfaceGraphToLayered (T055b)', () => {
     expect(closure.emission).toEqual([0, 0.2, 0]);
   });
 
+  it('keeps clear USD glass optically present through its dielectric BSDF', () => {
+    const closure = lower('UsdPreviewSurface', [
+      input('diffuseColor', 'color3', '0, 0, 0'),
+      input('opacity', 'float', '0'),
+      input('ior', 'float', '1.52'),
+    ]);
+    expect(closure.opacity).toBe(1);
+    expect(closure.lobes).toHaveLength(1);
+    expect(lobe(closure, 'dielectric_transmission')).toMatchObject({ weight: 1, color: [1, 1, 1], ior: 1.52 });
+  });
+
+  it.each([[0.2, 0], [0.5, 1], [0.8, 1]])('preserves USD opacity cutouts at opacity %s', (opacity, expected) => {
+    const closure = lower('UsdPreviewSurface', [
+      input('opacity', 'float', String(opacity)),
+      input('opacityThreshold', 'float', '0.5'),
+    ]);
+    expect(closure.opacity).toBe(expected);
+    expect(lobe(closure, 'dielectric_transmission')).toBeUndefined();
+    expect(lobe(closure, 'burley_diffuse')!.weight).toBe(1);
+  });
+
+  it('blends partial USD transparency without double-counting dielectric Fresnel', () => {
+    const closure = lower('UsdPreviewSurface', [
+      input('opacity', 'float', '0.4'),
+      input('metallic', 'float', '0.25'),
+      input('emissiveColor', 'color3', '0.2, 0.1, 0'),
+    ]);
+    expect(closure.opacity).toBe(1);
+    expect(lobe(closure, 'conductor')!.weight).toBe(0.25);
+    expect(lobe(closure, 'dielectric_reflection')!.weight).toBeCloseTo(0.3);
+    expect(lobe(closure, 'burley_diffuse')!.weight).toBeCloseTo(0.3);
+    expect(lobe(closure, 'dielectric_transmission')!.weight).toBeCloseTo(0.45);
+    expect(closure.emission).toEqual([0.2, 0.1, 0]);
+  });
+
   it('lowers disney_principled sheen tint, clearcoat gloss and subsurface', () => {
     const closure = lower('disney_principled', [
       input('baseColor', 'color3', '0.8, 0.1, 0.1'),

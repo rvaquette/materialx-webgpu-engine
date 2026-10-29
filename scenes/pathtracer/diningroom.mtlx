@@ -1,0 +1,247 @@
+<?xml version="1.0"?>
+<materialx version="1.39" colorspace="lin_rec709">
+  <disney_principled name="BlackPlastic_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" value="0.005, 0.005, 0.005" />
+    <input name="roughness" type="float" value="0.2" />
+  </disney_principled>
+  <surfacematerial name="BlackPlastic" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="BlackPlastic_surface" />
+  </surfacematerial>
+  <disney_principled name="StainlessSteel_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" value="0.8, 0.8, 0.8" />
+    <input name="metallic" type="float" value="1" />
+    <input name="roughness" type="float" value="0" />
+  </disney_principled>
+  <surfacematerial name="StainlessSteel" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="StainlessSteel_surface" />
+  </surfacematerial>
+  <disney_principled name="Aluminium_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" value="1, 1, 1" />
+    <input name="metallic" type="float" value="1" />
+    <input name="roughness" type="float" value="0.15" />
+  </disney_principled>
+  <surfacematerial name="Aluminium" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="Aluminium_surface" />
+  </surfacematerial>
+  <disney_principled name="Glass_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" value="0.713, 0.8, 0.8" />
+    <input name="roughness" type="float" value="0.01" />
+    <input name="specTrans" type="float" value="1" />
+    <input name="ior" type="float" value="1.45" />
+  </disney_principled>
+  <surfacematerial name="Glass" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="Glass_surface" />
+  </surfacematerial>
+  <disney_principled name="Ceramic_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" value="0.787, 0.758, 0.737" />
+    <input name="roughness" type="float" value="0" />
+    <input name="clearcoat" type="float" value="1" />
+  </disney_principled>
+  <surfacematerial name="Ceramic" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="Ceramic_surface" />
+  </surfacematerial>
+  <disney_principled name="WoodenFloor_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" nodename="WoodenFloor_baseColorTexture" />
+    <input name="roughness" type="float" value="0.05" />
+  </disney_principled>
+  <image name="WoodenFloor_baseColorTexture" type="color3">
+    <input name="file" type="filename" value="diningroom/textures/floor.jpg" />
+  </image>
+  <surfacematerial name="WoodenFloor" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="WoodenFloor_surface" />
+  </surfacematerial>
+  <disney_principled name="WoodenBox_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" nodename="WoodenBox_baseColorTexture" />
+    <input name="roughness" type="float" value="0.1" />
+  </disney_principled>
+  <image name="WoodenBox_baseColorTexture" type="color3">
+    <input name="file" type="filename" value="diningroom/textures/box.jpg" />
+  </image>
+  <surfacematerial name="WoodenBox" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="WoodenBox_surface" />
+  </surfacematerial>
+  <disney_principled name="Painting_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" nodename="Painting_baseColorTexture" />
+  </disney_principled>
+  <image name="Painting_baseColorTexture" type="color3">
+    <input name="file" type="filename" value="diningroom/textures/painting.jpg" />
+  </image>
+  <surfacematerial name="Painting" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="Painting_surface" />
+  </surfacematerial>
+  <disney_principled name="Walls_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" value="0.842, 0.842, 0.842" />
+    <input name="roughness" type="float" value="0.2" />
+  </disney_principled>
+  <surfacematerial name="Walls" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="Walls_surface" />
+  </surfacematerial>
+  <disney_principled name="Green_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" value="0.016, 0.047, 0.002" />
+    <input name="roughness" type="float" value="0.2" />
+  </disney_principled>
+  <surfacematerial name="Green" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="Green_surface" />
+  </surfacematerial>
+  <disney_principled name="DarkGlossy_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" value="0.009, 0.009, 0.009" />
+    <input name="roughness" type="float" value="0.05" />
+    <input name="clearcoat" type="float" value="1" />
+  </disney_principled>
+  <surfacematerial name="DarkGlossy" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="DarkGlossy_surface" />
+  </surfacematerial>
+  <disney_principled name="ShelfBookCover1_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" nodename="ShelfBookCover1_baseColorTexture" />
+  </disney_principled>
+  <image name="ShelfBookCover1_baseColorTexture" type="color3">
+    <input name="file" type="filename" value="diningroom/textures/shelfbook1.jpg" />
+  </image>
+  <surfacematerial name="ShelfBookCover1" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="ShelfBookCover1_surface" />
+  </surfacematerial>
+  <disney_principled name="ShelfBookCover2_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" nodename="ShelfBookCover2_baseColorTexture" />
+  </disney_principled>
+  <image name="ShelfBookCover2_baseColorTexture" type="color3">
+    <input name="file" type="filename" value="diningroom/textures/shelfbook2.jpg" />
+  </image>
+  <surfacematerial name="ShelfBookCover2" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="ShelfBookCover2_surface" />
+  </surfacematerial>
+  <disney_principled name="Book1_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" nodename="Book1_baseColorTexture" />
+  </disney_principled>
+  <image name="Book1_baseColorTexture" type="color3">
+    <input name="file" type="filename" value="diningroom/textures/book1.jpg" />
+  </image>
+  <surfacematerial name="Book1" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="Book1_surface" />
+  </surfacematerial>
+  <disney_principled name="Book2_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" nodename="Book2_baseColorTexture" />
+  </disney_principled>
+  <image name="Book2_baseColorTexture" type="color3">
+    <input name="file" type="filename" value="diningroom/textures/book2.jpg" />
+  </image>
+  <surfacematerial name="Book2" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="Book2_surface" />
+  </surfacematerial>
+  <disney_principled name="Book3_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" nodename="Book3_baseColorTexture" />
+  </disney_principled>
+  <image name="Book3_baseColorTexture" type="color3">
+    <input name="file" type="filename" value="diningroom/textures/book3.jpg" />
+  </image>
+  <surfacematerial name="Book3" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="Book3_surface" />
+  </surfacematerial>
+  <disney_principled name="Book4_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" nodename="Book4_baseColorTexture" />
+  </disney_principled>
+  <image name="Book4_baseColorTexture" type="color3">
+    <input name="file" type="filename" value="diningroom/textures/book4.jpg" />
+  </image>
+  <surfacematerial name="Book4" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="Book4_surface" />
+  </surfacematerial>
+  <disney_principled name="Book6_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" nodename="Book6_baseColorTexture" />
+  </disney_principled>
+  <image name="Book6_baseColorTexture" type="color3">
+    <input name="file" type="filename" value="diningroom/textures/book6.jpg" />
+  </image>
+  <surfacematerial name="Book6" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="Book6_surface" />
+  </surfacematerial>
+  <disney_principled name="Book7_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" nodename="Book7_baseColorTexture" />
+  </disney_principled>
+  <image name="Book7_baseColorTexture" type="color3">
+    <input name="file" type="filename" value="diningroom/textures/book7.jpg" />
+  </image>
+  <surfacematerial name="Book7" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="Book7_surface" />
+  </surfacematerial>
+  <disney_principled name="Book8_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" nodename="Book8_baseColorTexture" />
+  </disney_principled>
+  <image name="Book8_baseColorTexture" type="color3">
+    <input name="file" type="filename" value="diningroom/textures/book8.jpg" />
+  </image>
+  <surfacematerial name="Book8" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="Book8_surface" />
+  </surfacematerial>
+  <disney_principled name="Book9_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" nodename="Book9_baseColorTexture" />
+  </disney_principled>
+  <image name="Book9_baseColorTexture" type="color3">
+    <input name="file" type="filename" value="diningroom/textures/book9.jpg" />
+  </image>
+  <surfacematerial name="Book9" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="Book9_surface" />
+  </surfacematerial>
+  <disney_principled name="Book10_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" nodename="Book10_baseColorTexture" />
+  </disney_principled>
+  <image name="Book10_baseColorTexture" type="color3">
+    <input name="file" type="filename" value="diningroom/textures/book10.jpg" />
+  </image>
+  <surfacematerial name="Book10" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="Book10_surface" />
+  </surfacematerial>
+  <disney_principled name="Book11_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" nodename="Book11_baseColorTexture" />
+  </disney_principled>
+  <image name="Book11_baseColorTexture" type="color3">
+    <input name="file" type="filename" value="diningroom/textures/book11.jpg" />
+  </image>
+  <surfacematerial name="Book11" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="Book11_surface" />
+  </surfacematerial>
+  <disney_principled name="Book14_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" nodename="Book14_baseColorTexture" />
+  </disney_principled>
+  <image name="Book14_baseColorTexture" type="color3">
+    <input name="file" type="filename" value="diningroom/textures/book14.jpg" />
+  </image>
+  <surfacematerial name="Book14" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="Book14_surface" />
+  </surfacematerial>
+  <disney_principled name="Book15_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" nodename="Book15_baseColorTexture" />
+  </disney_principled>
+  <image name="Book15_baseColorTexture" type="color3">
+    <input name="file" type="filename" value="diningroom/textures/book15.jpg" />
+  </image>
+  <surfacematerial name="Book15" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="Book15_surface" />
+  </surfacematerial>
+  <disney_principled name="Book16_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" nodename="Book16_baseColorTexture" />
+  </disney_principled>
+  <image name="Book16_baseColorTexture" type="color3">
+    <input name="file" type="filename" value="diningroom/textures/book16.jpg" />
+  </image>
+  <surfacematerial name="Book16" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="Book16_surface" />
+  </surfacematerial>
+  <disney_principled name="Book17_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" nodename="Book17_baseColorTexture" />
+  </disney_principled>
+  <image name="Book17_baseColorTexture" type="color3">
+    <input name="file" type="filename" value="diningroom/textures/book17.jpg" />
+  </image>
+  <surfacematerial name="Book17" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="Book17_surface" />
+  </surfacematerial>
+  <disney_principled name="Book18_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" nodename="Book18_baseColorTexture" />
+  </disney_principled>
+  <image name="Book18_baseColorTexture" type="color3">
+    <input name="file" type="filename" value="diningroom/textures/book18.jpg" />
+  </image>
+  <surfacematerial name="Book18" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="Book18_surface" />
+  </surfacematerial>
+</materialx>

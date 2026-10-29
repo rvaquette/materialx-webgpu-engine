@@ -1,0 +1,27 @@
+<?xml version="1.0"?>
+<materialx version="1.39" colorspace="lin_rec709">
+  <disney_principled name="white_helmet_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" value="1, 1, 1" />
+    <input name="metallic" type="float" value="0.001" />
+    <input name="roughness" type="float" value="0.001" />
+    <input name="clearcoat" type="float" value="1" />
+  </disney_principled>
+  <surfacematerial name="white_helmet" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="white_helmet_surface" />
+  </surfacematerial>
+  <disney_principled name="white_box_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" value="1, 1, 1" />
+    <input name="roughness" type="float" value="1" />
+  </disney_principled>
+  <surfacematerial name="white_box" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="white_box_surface" />
+  </surfacematerial>
+  <disney_principled name="black_visor_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" value="0, 0, 0" />
+    <input name="metallic" type="float" value="1" />
+    <input name="roughness" type="float" value="0.001" />
+  </disney_principled>
+  <surfacematerial name="black_visor" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="black_visor_surface" />
+  </surfacematerial>
+</materialx>

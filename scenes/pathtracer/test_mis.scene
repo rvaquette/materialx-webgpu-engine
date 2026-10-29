@@ -1,0 +1,44 @@
+renderer
+{
+	resolution 800 800
+	maxdepth 10
+	tilewidth 200
+	tileheight 200
+	enabletonemap false
+}
+
+camera
+{
+	position 15 10 16
+	lookat 0 2 0
+	fov 40
+}
+
+material grey
+{
+	color 0.8 0.8 0.8
+	roughness 1.0
+}
+
+mesh
+{
+	name floor
+	file odyssey/floor.obj
+	material grey
+}
+
+mesh
+{
+	name cube
+	file odyssey/cube.obj
+	material grey
+}
+
+light
+{
+	type quad
+	position -6.000000 5.000000 5.000000
+	v1 -6.000000 0.000000 5.000000
+	v2 -6.000000 5.000000 -5.000000
+	emission 2 2 2
+}

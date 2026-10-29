@@ -12,6 +12,7 @@ import {
 } from './raster/scene-frame.ts';
 import {
   buildSceneResources,
+  requireCompiledMaterials,
   type MaterialResource,
   type MeshSource,
   type SceneResources,
@@ -158,8 +159,9 @@ export interface MtlxSceneContext {
   surfaceFor: (material: MaterialResource) => RasterSurface;
 }
 
-export function resolveMaterialTextureUrl(file: string, directory: string, textureRoot?: string): string {
-  return new URL(file, textureRoot ?? directory).href;
+export function resolveMaterialTextureUrl(file: string, directory: string, textureRoot?: string, filePrefix = ''): string {
+  const absolute = /^(?:[a-z][a-z0-9+.-]*:|\/)/i.test(file);
+  return new URL(absolute ? file : filePrefix + file, textureRoot ?? directory).href;
 }
 
 export function resolveMaterialImageUrls(text: string, directory: string, textureRoot?: string): string {
@@ -167,8 +169,14 @@ export function resolveMaterialImageUrls(text: string, directory: string, textur
   if (document.querySelector('parsererror')) throw new Error('Invalid MaterialX XML.');
   for (const input of document.querySelectorAll('[type="filename"][value]')) {
     const file = input.getAttribute('value');
-    if (file) input.setAttribute('value', resolveMaterialTextureUrl(file, new URL(directory, window.location.href).href, textureRoot));
+    if (!file) continue;
+    let scope: Element | null = input;
+    while (scope && !scope.hasAttribute('fileprefix')) scope = scope.parentElement;
+    const filePrefix = scope?.getAttribute('fileprefix') ?? '';
+    input.setAttribute('value', resolveMaterialTextureUrl(file, new URL(directory, window.location.href).href, textureRoot, filePrefix));
   }
+  // Filenames are now absolute; Core must not apply the inherited prefix again.
+  for (const scope of document.querySelectorAll('[fileprefix]')) scope.removeAttribute('fileprefix');
   return new XMLSerializer().serializeToString(document);
 }
 
@@ -316,9 +324,9 @@ export async function loadEnvironment(
 ): Promise<LoadedEnvironment | undefined> {
   const dome = lights.find((l) => l.type === 'dome' && l.textureFile);
   if (!dome?.textureFile) return undefined;
-  const baseDir = dirOf(entry);
+  const sourceLayer = new URL(dome.textureSourceLayer ?? entry, document.baseURI).href;
   const fetchHdr = async (ref: string): Promise<HdrImage | undefined> => {
-    const url = new URL(ref, dome.textureSourceLayer ?? new URL(baseDir, document.baseURI).href).href;
+    const url = new URL(ref, sourceLayer).href;
     const cacheHit = decodedEnvironmentCache.has(url);
     const started = performance.now();
     try {
@@ -453,6 +461,7 @@ export async function loadUsdScene(
     materialCompiler: createGraphMaterialCompiler({ documents: mtlx.documents, sink }),
     sink,
   });
+  requireCompiledMaterials(built);
   const parameterResources = options.editableParameters ? editableSceneMaterials(built) : undefined;
   const resources = await applySceneDisplacement(parameterResources ?? built, mtlx.imageProvider);
   const environment = await loadEnvironment(lights, entry, sink);

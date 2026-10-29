@@ -25,6 +25,7 @@ import {
 import { LAYERED_CLOSURE_PRELUDE } from '../../src/compiler/surface-wgsl.ts';
 import { CLOSURE_LIBRARY_PRELUDE } from '../../src/compiler/closure-library.ts';
 import { MEDIA_HELPERS_PRELUDE } from '../../src/render/pathtracing/compute.ts';
+import { validateHairOnDevice } from './hair-device.harness.ts';
 
 export interface BxdfDeviceCaseResult {
   readonly name: string;
@@ -40,6 +41,7 @@ export interface BxdfDeviceReport {
   readonly adapter: Record<string, string>;
   readonly geomCount: number;
   readonly cases: readonly BxdfDeviceCaseResult[];
+  readonly hairParity?: { cases: number; maxRelativeError: number };
 }
 
 /** Compose a shade shader that rebuilds the packed closure via the shared reader
@@ -248,8 +250,10 @@ export async function bootstrap(): Promise<BxdfDeviceReport> {
   const device = await adapter.requestDevice();
 
   line('Rendu des familles BxDF sur le GPU (deux backends)...');
+  const hairParity = await validateHairOnDevice(device);
+  line(`Hair CPU/GPU: ${hairParity.cases} cases, max relative error ${hairParity.maxRelativeError}`);
   const body = await runBxdfOnDevice(device);
-  const report: BxdfDeviceReport = { userAgent: ua(), adapter: adapterFields(adapter), ...body };
+  const report: BxdfDeviceReport = { userAgent: ua(), adapter: adapterFields(adapter), ...body, hairParity };
   (globalThis as { __MX_BXDF_REPORT__?: BxdfDeviceReport }).__MX_BXDF_REPORT__ = report;
   line(`${report.cases.length} familles rendues (${report.geomCount} frames), rapport pret.`);
   return report;

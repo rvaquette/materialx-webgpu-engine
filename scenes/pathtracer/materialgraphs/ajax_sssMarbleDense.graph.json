@@ -1,0 +1,61 @@
+{
+  "version": 1,
+  "name": "ajax_sssMarbleDense_graph",
+  "nodes": [
+    {
+      "id": "surface",
+      "type": "legacy_disney_surface",
+      "params": {
+        "baseColor": [0.78, 0.81, 0.86],
+        "metallic": 0.0,
+        "roughness": 0.28,
+        "subsurface": 0.65,
+        "specularTint": 0.0,
+        "sheen": 0.0,
+        "sheenTint": 0.0,
+        "clearcoat": 0.0,
+        "clearcoatGloss": 0.0,
+        "specTrans": 0.18,
+        "ior": 1.5,
+        "opacity": 1.0,
+        "alphaMode": 0,
+        "alphaCutoff": 0.0,
+        "anisotropic": 0.0
+      }
+    },
+    {
+      "id": "volume",
+      "type": "legacy_volume_medium",
+      "params": {
+        "mediumType": 2,
+        "mediumDensity": 2.1,
+        "mediumColor": [0.8, 0.86, 0.95],
+        "mediumAnisotropy": 0.08
+      }
+    },
+    {
+      "id": "emission",
+      "type": "constant_color3",
+      "params": {
+        "value": [0.0, 0.0, 0.0]
+      }
+    },
+    {
+      "id": "opacity",
+      "type": "constant_float",
+      "params": {
+        "value": 1.0
+      }
+    }
+  ],
+  "links": [],
+  "outputs": {
+    "surface": { "node": "surface", "port": "bsdf" },
+    "volume": { "node": "volume", "port": "volume" },
+    "emission": { "node": "emission", "port": "color" },
+    "opacity": { "node": "opacity", "port": "value" }
+  },
+  "metadata": {
+    "source": "hand-authored-example"
+  }
+}

@@ -1,0 +1,134 @@
+#usda 1.0
+(
+    defaultPrim = "World"
+    metersPerUnit = 1
+    upAxis = "Y"
+    doc = "renderman_teapot_tiles converted from GLSL-PathTracer .scene"
+)
+
+def Xform "World"
+{
+    custom string pathtracer:sourceScene = "renderman_teapot_tiles.scene"
+    custom int2 pathtracer:resolution = (1280, 720)
+    custom int pathtracer:maxDepth = 3
+
+    def Camera "Camera"
+    {
+        matrix4d xformOp:transform = ((0, 0, -1, 0), (-0.352609234174, 0.935770659924, 0, 0), (0.935770659924, 0.352609234174, 0, 0), (0.69, 0.33, 0, 1))
+        uniform token[] xformOpOrder = ["xformOp:transform"]
+        token projection = "perspective"
+        float focalLength = 50
+        float horizontalAperture = 19.4380309138
+        float verticalAperture = 10.933892389
+        float2 clippingRange = (0.001, 1000000)
+        custom point3f pathtracer:lookAt = (0, 0.07, 0)
+        custom float pathtracer:fov = 22
+    }
+
+    def Scope "Looks"
+    {
+        def Material "blue_tiles" (
+            prepend references = @./renderman_teapot_tiles.mtlx@</MaterialX/Materials/blue_tiles>
+        )
+        {
+        }
+        def Material "base" (
+            prepend references = @./renderman_teapot_tiles.mtlx@</MaterialX/Materials/base>
+        )
+        {
+        }
+        def Material "checker" (
+            prepend references = @./renderman_teapot_tiles.mtlx@</MaterialX/Materials/checker>
+        )
+        {
+        }
+    }
+
+    def Scope "Geometry"
+    {
+        def Mesh "Background"
+        {
+            custom asset engine:geometry:file = @./renderman/background.obj@
+
+            rel material:binding = </World/Looks/checker>
+        }
+        def Mesh "Teapot"
+        {
+            custom asset engine:geometry:file = @./renderman/teapot.obj@
+
+            rel material:binding = </World/Looks/blue_tiles>
+        }
+        def Mesh "Base"
+        {
+            custom asset engine:geometry:file = @./renderman/teapot_base.obj@
+
+            rel material:binding = </World/Looks/base>
+        }
+    }
+
+    def Scope "Lights"
+    {
+        def RectLight "Light_001"
+        {
+            matrix4d xformOp:transform = ((0, 0.904081258482, -0.427360594886, 0), (-1, 0, 0, 0), (0, 0.427360594886, 0.904081258482, 0), (-0.003555, 0.375248, 0.564091, 1))
+            uniform token[] xformOpOrder = ["xformOp:transform"]
+            color3f inputs:color = (0.975609756098, 1, 1)
+            float inputs:intensity = 41
+            bool inputs:normalize = false
+            float inputs:width = 0.1999997216
+            float inputs:height = 0.2
+        }
+        def Material "Light_001_Material"
+        {
+            token outputs:surface.connect = </World/Lights/Light_001_Material/Surface.outputs:surface>
+            def Shader "Surface"
+            {
+                uniform token info:id = "UsdPreviewSurface"
+                color3f inputs:diffuseColor = (0, 0, 0)
+                int inputs:useSpecularWorkflow = 1
+                color3f inputs:specularColor = (0, 0, 0)
+                color3f inputs:emissiveColor = (40, 41, 41)
+                token outputs:surface
+            }
+        }
+        def Mesh "Light_001_Geometry"
+        {
+            point3f[] points = [(-0.103555, 0.28484, 0.606827), (-0.103555, 0.465656, 0.521355), (0.096445, 0.465656, 0.521355), (0.096445, 0.28484, 0.606827)]
+            int[] faceVertexCounts = [4]
+            int[] faceVertexIndices = [0, 1, 2, 3]
+            uniform token subdivisionScheme = "none"
+            rel material:binding = </World/Lights/Light_001_Material>
+        }
+        def RectLight "Light_002"
+        {
+            matrix4d xformOp:transform = ((0.297116013245, -0.907778095767, -0.296076009699, 0), (-0.705870411804, 0, -0.708340992559, 0), (0.643016437381, 0.41945074662, -0.640773698288, 0), (0.4048555, 0.3710285, -0.4083235, 1))
+            uniform token[] xformOpOrder = ["xformOp:transform"]
+            color3f inputs:color = (0.975609756098, 1, 1)
+            float inputs:intensity = 41
+            bool inputs:normalize = false
+            float inputs:width = 0.199999317946
+            float inputs:height = 0.204000617666
+        }
+        def Material "Light_002_Material"
+        {
+            token outputs:surface.connect = </World/Lights/Light_002_Material/Surface.outputs:surface>
+            def Shader "Surface"
+            {
+                uniform token info:id = "UsdPreviewSurface"
+                color3f inputs:diffuseColor = (0, 0, 0)
+                int inputs:useSpecularWorkflow = 1
+                color3f inputs:specularColor = (0, 0, 0)
+                color3f inputs:emissiveColor = (40, 41, 41)
+                token outputs:surface
+            }
+        }
+        def Mesh "Light_002_Geometry"
+        {
+            point3f[] points = [(0.303145, 0.461806, -0.450967), (0.362568, 0.280251, -0.510182), (0.506566, 0.280251, -0.36568), (0.447143, 0.461806, -0.306465)]
+            int[] faceVertexCounts = [4]
+            int[] faceVertexIndices = [0, 1, 2, 3]
+            uniform token subdivisionScheme = "none"
+            rel material:binding = </World/Lights/Light_002_Material>
+        }
+    }
+}

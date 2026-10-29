@@ -14,7 +14,7 @@
 // radiance added once per lobe.
 
 import type { LayeredBsdfLobe, LayeredClosure } from '../../compiler/ir.ts';
-import { evalWorld, fuzzDirectionalAlbedo, fuzzLobe, layeredSurfaceBsdf } from '../pathtracing/bsdf.ts';
+import { evalWorld, fuzzDirectionalAlbedo, fuzzLobe, layeredSurfaceBsdf, lobeFromLayered, shadingFrame } from '../pathtracing/bsdf.ts';
 
 export type Vec3 = readonly [number, number, number];
 
@@ -398,6 +398,32 @@ function evalLayeredLobe(lobe: LayeredBsdfLobe, geom: ShadingGeometry, lighting:
   const white: Vec3 = [1, 1, 1];
   const roughness = lobe.roughness ?? 0;
   switch (lobe.kind) {
+    case 'chiang_hair': {
+      const bsdf = lobeFromLayered(lobe)!;
+      const n = normalize(geom.normal);
+      const view = normalize(geom.view);
+      const [t, b] = shadingFrame(n);
+      const wo: Vec3 = [dot(view, t), dot(view, b), dot(view, n)];
+      let state = 0x12345678;
+      const random = () => {
+        state ^= state << 13;
+        state ^= state >>> 17;
+        state ^= state << 5;
+        return (state >>> 0) / 4294967296;
+      };
+      let response: Vec3 = [0, 0, 0];
+      for (let i = 0; i < 256; i++) {
+        const sample = bsdf.sample(wo, random);
+        if (sample && sample.pdf > 0) {
+          response = add(response, scale(mulv(sample.value, lighting.environment), Math.abs(sample.wi[2]) / (256 * sample.pdf)));
+        }
+      }
+      for (const light of lighting.lights) {
+        const wi = normalize(scale(light.direction, -1));
+        response = add(response, scale(mulv(evalWorld(bsdf, n, view, wi).value, light.color), light.intensity * Math.abs(dot(n, wi))));
+      }
+      return { color: scale(response, lobe.weight), weight: lobe.weight };
+    }
     case 'oren_nayar_diffuse':
       return orenNayarDiffuse(lobe.weight, lobe.color, roughness, geom, lighting);
     case 'burley_diffuse':

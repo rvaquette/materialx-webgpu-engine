@@ -1,0 +1,147 @@
+<?xml version="1.0"?>
+<materialx version="1.39" colorspace="lin_rec709">
+  <disney_principled name="blue_tiles_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" nodename="blue_tiles_baseColorTexture" />
+    <input name="metallic" type="float" nodename="blue_tiles_metallicRoughnessChannels" output="outz" />
+    <input name="roughness" type="float" nodename="blue_tiles_metallicRoughnessChannels" output="outy" />
+  </disney_principled>
+  <image name="blue_tiles_baseColorTexture" type="color3">
+    <input name="file" type="filename" value="renderman/textures/tiles_base.png" />
+  </image>
+  <image name="blue_tiles_metallicRoughnessTexture" type="color3">
+    <input name="file" type="filename" value="renderman/textures/tiles_mat_rgh.png" />
+  </image>
+  <separate3 name="blue_tiles_metallicRoughnessChannels" type="multioutput">
+    <input name="in" type="color3" nodename="blue_tiles_metallicRoughnessTexture" />
+  </separate3>
+  <surfacematerial name="blue_tiles" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="blue_tiles_surface" />
+  </surfacematerial>
+  <disney_principled name="rough_glass_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" value="0.8, 0.8, 0.8" />
+    <input name="roughness" type="float" value="0.02" />
+    <input name="specTrans" type="float" value="1" />
+  </disney_principled>
+  <surfacematerial name="rough_glass" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="rough_glass_surface" />
+  </surfacematerial>
+  <disney_principled name="chrome_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" nodename="chrome_baseColorTexture" />
+    <input name="metallic" type="float" nodename="chrome_metallicRoughnessChannels" output="outz" />
+    <input name="roughness" type="float" nodename="chrome_metallicRoughnessChannels" output="outy" />
+  </disney_principled>
+  <image name="chrome_baseColorTexture" type="color3">
+    <input name="file" type="filename" value="renderman/textures/striped_base.png" />
+  </image>
+  <image name="chrome_metallicRoughnessTexture" type="color3">
+    <input name="file" type="filename" value="renderman/textures/striped_mat_rgh.png" />
+  </image>
+  <separate3 name="chrome_metallicRoughnessChannels" type="multioutput">
+    <input name="in" type="color3" nodename="chrome_metallicRoughnessTexture" />
+  </separate3>
+  <surfacematerial name="chrome" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="chrome_surface" />
+  </surfacematerial>
+  <disney_principled name="purple_glass_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" value="0.8, 0.8, 0.8" />
+    <input name="roughness" type="float" value="0.02" />
+    <input name="specTrans" type="float" value="1" />
+  </disney_principled>
+  <surfacematerial name="purple_glass" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="purple_glass_surface" />
+  </surfacematerial>
+  <disney_principled name="teal_glass_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" value="0.8, 0.8, 0.8" />
+    <input name="roughness" type="float" value="0.02" />
+    <input name="specTrans" type="float" value="1" />
+  </disney_principled>
+  <surfacematerial name="teal_glass" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="teal_glass_surface" />
+  </surfacematerial>
+  <disney_principled name="gold_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" nodename="gold_baseColorTexture" />
+    <input name="metallic" type="float" nodename="gold_metallicRoughnessChannels" output="outz" />
+    <input name="roughness" type="float" nodename="gold_metallicRoughnessChannels" output="outy" />
+  </disney_principled>
+  <image name="gold_baseColorTexture" type="color3">
+    <input name="file" type="filename" value="renderman/textures/gold_base.png" />
+  </image>
+  <image name="gold_metallicRoughnessTexture" type="color3">
+    <input name="file" type="filename" value="renderman/textures/gold_mat_rgh.png" />
+  </image>
+  <separate3 name="gold_metallicRoughnessChannels" type="multioutput">
+    <input name="in" type="color3" nodename="gold_metallicRoughnessTexture" />
+  </separate3>
+  <surfacematerial name="gold" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="gold_surface" />
+  </surfacematerial>
+  <disney_principled name="blue_cloth_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" value="0.038, 0.01, 0.25" />
+    <input name="roughness" type="float" value="1" />
+    <input name="sheen" type="float" value="1" />
+  </disney_principled>
+  <surfacematerial name="blue_cloth" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="blue_cloth_surface" />
+  </surfacematerial>
+  <disney_principled name="purple_cloth_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" value="0.073, 0.01, 0.25" />
+    <input name="roughness" type="float" value="1" />
+    <input name="sheen" type="float" value="1" />
+  </disney_principled>
+  <surfacematerial name="purple_cloth" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="purple_cloth_surface" />
+  </surfacematerial>
+  <disney_principled name="blue_scratched_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" nodename="blue_scratched_baseColorTexture" />
+    <input name="metallic" type="float" nodename="blue_scratched_metallicRoughnessChannels" output="outz" />
+    <input name="roughness" type="float" nodename="blue_scratched_metallicRoughnessChannels" output="outy" />
+  </disney_principled>
+  <image name="blue_scratched_baseColorTexture" type="color3">
+    <input name="file" type="filename" value="renderman/textures/scratches_base.png" />
+  </image>
+  <image name="blue_scratched_metallicRoughnessTexture" type="color3">
+    <input name="file" type="filename" value="renderman/textures/scratches_mat_rgh.png" />
+  </image>
+  <separate3 name="blue_scratched_metallicRoughnessChannels" type="multioutput">
+    <input name="in" type="color3" nodename="blue_scratched_metallicRoughnessTexture" />
+  </separate3>
+  <surfacematerial name="blue_scratched" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="blue_scratched_surface" />
+  </surfacematerial>
+  <disney_principled name="marble_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" nodename="marble_baseColorTexture" />
+    <input name="metallic" type="float" nodename="marble_metallicRoughnessChannels" output="outz" />
+    <input name="roughness" type="float" nodename="marble_metallicRoughnessChannels" output="outy" />
+  </disney_principled>
+  <image name="marble_baseColorTexture" type="color3">
+    <input name="file" type="filename" value="renderman/textures/marble_base.png" />
+  </image>
+  <image name="marble_metallicRoughnessTexture" type="color3">
+    <input name="file" type="filename" value="renderman/textures/marble_mat_rgh.png" />
+  </image>
+  <separate3 name="marble_metallicRoughnessChannels" type="multioutput">
+    <input name="in" type="color3" nodename="marble_metallicRoughnessTexture" />
+  </separate3>
+  <surfacematerial name="marble" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="marble_surface" />
+  </surfacematerial>
+  <disney_principled name="base_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" value="0.01, 0.01, 0.01" />
+    <input name="metallic" type="float" value="1" />
+    <input name="roughness" type="float" value="0.5" />
+  </disney_principled>
+  <surfacematerial name="base" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="base_surface" />
+  </surfacematerial>
+  <disney_principled name="checker_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" nodename="checker_baseColorTexture" />
+    <input name="metallic" type="float" value="0" />
+    <input name="roughness" type="float" value="0.5" />
+  </disney_principled>
+  <image name="checker_baseColorTexture" type="color3">
+    <input name="file" type="filename" value="renderman/textures/checker.png" />
+  </image>
+  <surfacematerial name="checker" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="checker_surface" />
+  </surfacematerial>
+</materialx>

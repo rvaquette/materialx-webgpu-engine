@@ -1,0 +1,10 @@
+<?xml version="1.0"?>
+<materialx version="1.39" colorspace="lin_rec709">
+  <disney_principled name="orange_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" value="0.8, 0.289, 0.006" />
+    <input name="roughness" type="float" value="0.2" />
+  </disney_principled>
+  <surfacematerial name="orange" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="orange_surface" />
+  </surfacematerial>
+</materialx>

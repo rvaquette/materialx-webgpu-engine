@@ -66,6 +66,11 @@ describe('surface-from-inputs bridge (T055e1)', () => {
 });
 
 describe('parsedSurfaceToCanonical reduction (T055e4)', () => {
+  it('preserves USD glass transmission and does not transmit masked cutouts', () => {
+    expect(parsedSurfaceToCanonical({ category: 'UsdPreviewSurface', inputs: { opacity: 0 } }).transmission).toBe(1);
+    expect(parsedSurfaceToCanonical({ category: 'UsdPreviewSurface', inputs: { opacity: 0.4 } }).transmission).toBe(0.6);
+    expect(parsedSurfaceToCanonical({ category: 'UsdPreviewSurface', inputs: { opacity: 0, opacityThreshold: 0.5 } }).transmission).toBe(0);
+  });
   it('maps standard_surface inputs and folds base into baseColor', () => {
     const canon = parsedSurfaceToCanonical({
       category: 'standard_surface',

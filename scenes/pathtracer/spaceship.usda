@@ -1,0 +1,677 @@
+#usda 1.0
+(
+    defaultPrim = "World"
+    metersPerUnit = 1
+    upAxis = "Y"
+    doc = "spaceship converted from GLSL-PathTracer .scene"
+)
+
+def Xform "World"
+{
+    custom string pathtracer:sourceScene = "spaceship.scene"
+    custom int2 pathtracer:resolution = (1280, 720)
+    custom int pathtracer:maxDepth = 6
+
+    def Camera "Camera"
+    {
+        matrix4d xformOp:transform = ((1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (0, 1, 4, 1))
+        uniform token[] xformOpOrder = ["xformOp:transform"]
+        token projection = "perspective"
+        float focalLength = 50
+        float horizontalAperture = 57.735026919
+        float verticalAperture = 32.4759526419
+        float2 clippingRange = (0.001, 1000000)
+        custom point3f pathtracer:lookAt = (0, 1, -0.5)
+        custom float pathtracer:fov = 60
+    }
+
+    def Scope "Looks"
+    {
+        def Material "Backdrop" (
+            prepend references = @./spaceship.mtlx@</MaterialX/Materials/Backdrop>
+        )
+        {
+        }
+        def Material "RoughAluminium" (
+            prepend references = @./spaceship.mtlx@</MaterialX/Materials/RoughAluminium>
+        )
+        {
+        }
+        def Material "RoughSteel" (
+            prepend references = @./spaceship.mtlx@</MaterialX/Materials/RoughSteel>
+        )
+        {
+        }
+        def Material "DarkPlastic" (
+            prepend references = @./spaceship.mtlx@</MaterialX/Materials/DarkPlastic>
+        )
+        {
+        }
+        def Material "PinkLeather" (
+            prepend references = @./spaceship.mtlx@</MaterialX/Materials/PinkLeather>
+        )
+        {
+        }
+        def Material "Leather" (
+            prepend references = @./spaceship.mtlx@</MaterialX/Materials/Leather>
+        )
+        {
+        }
+        def Material "RedLeather" (
+            prepend references = @./spaceship.mtlx@</MaterialX/Materials/RedLeather>
+        )
+        {
+        }
+        def Material "BrightPinkLeather" (
+            prepend references = @./spaceship.mtlx@</MaterialX/Materials/BrightPinkLeather>
+        )
+        {
+        }
+        def Material "Glass" (
+            prepend references = @./spaceship.mtlx@</MaterialX/Materials/Glass>
+        )
+        {
+        }
+        def Material "DarkRubber" (
+            prepend references = @./spaceship.mtlx@</MaterialX/Materials/DarkRubber>
+        )
+        {
+        }
+        def Material "Light1" (
+            prepend references = @./spaceship.mtlx@</MaterialX/Materials/Light1>
+        )
+        {
+        }
+        def Material "Light2" (
+            prepend references = @./spaceship.mtlx@</MaterialX/Materials/Light2>
+        )
+        {
+        }
+    }
+
+    def Scope "Geometry"
+    {
+        def Mesh "Mesh050"
+        {
+            custom asset engine:geometry:file = @./spaceship/Mesh050.obj@
+
+            rel material:binding = </World/Looks/Backdrop>
+        }
+        def Mesh "Mesh042"
+        {
+            custom asset engine:geometry:file = @./spaceship/Mesh042.obj@
+
+            rel material:binding = </World/Looks/RoughAluminium>
+        }
+        def Mesh "Mesh038"
+        {
+            custom asset engine:geometry:file = @./spaceship/Mesh038.obj@
+
+            rel material:binding = </World/Looks/RoughAluminium>
+        }
+        def Mesh "Mesh040"
+        {
+            custom asset engine:geometry:file = @./spaceship/Mesh040.obj@
+
+            rel material:binding = </World/Looks/RoughAluminium>
+        }
+        def Mesh "Mesh072"
+        {
+            custom asset engine:geometry:file = @./spaceship/Mesh072.obj@
+
+            rel material:binding = </World/Looks/RoughAluminium>
+        }
+        def Mesh "Mesh027"
+        {
+            custom asset engine:geometry:file = @./spaceship/Mesh027.obj@
+
+            rel material:binding = </World/Looks/RoughAluminium>
+        }
+        def Mesh "Mesh067"
+        {
+            custom asset engine:geometry:file = @./spaceship/Mesh067.obj@
+
+            rel material:binding = </World/Looks/RoughAluminium>
+        }
+        def Mesh "Mesh060"
+        {
+            custom asset engine:geometry:file = @./spaceship/Mesh060.obj@
+
+            rel material:binding = </World/Looks/RoughAluminium>
+        }
+        def Mesh "Mesh065"
+        {
+            custom asset engine:geometry:file = @./spaceship/Mesh065.obj@
+
+            rel material:binding = </World/Looks/RoughAluminium>
+        }
+        def Mesh "Mesh048"
+        {
+            custom asset engine:geometry:file = @./spaceship/Mesh048.obj@
+
+            rel material:binding = </World/Looks/RoughAluminium>
+        }
+        def Mesh "Mesh066"
+        {
+            custom asset engine:geometry:file = @./spaceship/Mesh066.obj@
+
+            rel material:binding = </World/Looks/RoughAluminium>
+        }
+        def Mesh "Mesh046"
+        {
+            custom asset engine:geometry:file = @./spaceship/Mesh046.obj@
+
+            rel material:binding = </World/Looks/RoughAluminium>
+        }
+        def Mesh "Mesh076"
+        {
+            custom asset engine:geometry:file = @./spaceship/Mesh076.obj@
+
+            rel material:binding = </World/Looks/RoughAluminium>
+        }
+        def Mesh "Mesh059"
+        {
+            custom asset engine:geometry:file = @./spaceship/Mesh059.obj@
+
+            rel material:binding = </World/Looks/RoughAluminium>
+        }
+        def Mesh "Mesh057"
+        {
+            custom asset engine:geometry:file = @./spaceship/Mesh057.obj@
+
+            rel material:binding = </World/Looks/RoughAluminium>
+        }
+        def Mesh "Mesh062"
+        {
+            custom asset engine:geometry:file = @./spaceship/Mesh062.obj@
+
+            rel material:binding = </World/Looks/RoughAluminium>
+        }
+        def Mesh "Mesh074"
+        {
+            custom asset engine:geometry:file = @./spaceship/Mesh074.obj@
+
+            rel material:binding = </World/Looks/RoughAluminium>
+        }
+        def Mesh "Mesh075"
+        {
+            custom asset engine:geometry:file = @./spaceship/Mesh075.obj@
+
+            rel material:binding = </World/Looks/RoughAluminium>
+        }
+        def Mesh "Mesh078"
+        {
+            custom asset engine:geometry:file = @./spaceship/Mesh078.obj@
+
+            rel material:binding = </World/Looks/RoughAluminium>
+        }
+        def Mesh "Mesh081"
+        {
+            custom asset engine:geometry:file = @./spaceship/Mesh081.obj@
+
+            rel material:binding = </World/Looks/RoughAluminium>
+        }
+        def Mesh "Mesh034"
+        {
+            custom asset engine:geometry:file = @./spaceship/Mesh034.obj@
+
+            rel material:binding = </World/Looks/RoughAluminium>
+        }
+        def Mesh "Mesh084"
+        {
+            custom asset engine:geometry:file = @./spaceship/Mesh084.obj@
+
+            rel material:binding = </World/Looks/RoughAluminium>
+        }
+        def Mesh "Mesh085"
+        {
+            custom asset engine:geometry:file = @./spaceship/Mesh085.obj@
+
+            rel material:binding = </World/Looks/RoughAluminium>
+        }
+        def Mesh "Mesh073"
+        {
+            custom asset engine:geometry:file = @./spaceship/Mesh073.obj@
+
+            rel material:binding = </World/Looks/RoughAluminium>
+        }
+        def Mesh "Mesh077"
+        {
+            custom asset engine:geometry:file = @./spaceship/Mesh077.obj@
+
+            rel material:binding = </World/Looks/RoughAluminium>
+        }
+        def Mesh "Mesh087"
+        {
+            custom asset engine:geometry:file = @./spaceship/Mesh087.obj@
+
+            rel material:binding = </World/Looks/RoughAluminium>
+        }
+        def Mesh "Mesh052"
+        {
+            custom asset engine:geometry:file = @./spaceship/Mesh052.obj@
+
+            rel material:binding = </World/Looks/RoughAluminium>
+        }
+        def Mesh "Mesh025"
+        {
+            custom asset engine:geometry:file = @./spaceship/Mesh025.obj@
+
+            rel material:binding = </World/Looks/RoughAluminium>
+        }
+        def Mesh "Mesh024"
+        {
+            custom asset engine:geometry:file = @./spaceship/Mesh024.obj@
+
+            rel material:binding = </World/Looks/RoughAluminium>
+        }
+        def Mesh "Mesh086"
+        {
+            custom asset engine:geometry:file = @./spaceship/Mesh086.obj@
+
+            rel material:binding = </World/Looks/RoughAluminium>
+        }
+        def Mesh "Mesh023"
+        {
+            custom asset engine:geometry:file = @./spaceship/Mesh023.obj@
+
+            rel material:binding = </World/Looks/RoughAluminium>
+        }
+        def Mesh "Mesh021"
+        {
+            custom asset engine:geometry:file = @./spaceship/Mesh021.obj@
+
+            rel material:binding = </World/Looks/RoughAluminium>
+        }
+        def Mesh "Mesh039"
+        {
+            custom asset engine:geometry:file = @./spaceship/Mesh039.obj@
+
+            rel material:binding = </World/Looks/RoughAluminium>
+        }
+        def Mesh "Mesh020"
+        {
+            custom asset engine:geometry:file = @./spaceship/Mesh020.obj@
+
+            rel material:binding = </World/Looks/RoughAluminium>
+        }
+        def Mesh "Mesh032"
+        {
+            custom asset engine:geometry:file = @./spaceship/Mesh032.obj@
+
+            rel material:binding = </World/Looks/RoughAluminium>
+        }
+        def Mesh "Mesh018"
+        {
+            custom asset engine:geometry:file = @./spaceship/Mesh018.obj@
+
+            rel material:binding = </World/Looks/RoughAluminium>
+        }
+        def Mesh "Mesh070"
+        {
+            custom asset engine:geometry:file = @./spaceship/Mesh070.obj@
+
+            rel material:binding = </World/Looks/RoughAluminium>
+        }
+        def Mesh "Mesh016"
+        {
+            custom asset engine:geometry:file = @./spaceship/Mesh016.obj@
+
+            rel material:binding = </World/Looks/RoughAluminium>
+        }
+        def Mesh "Mesh015"
+        {
+            custom asset engine:geometry:file = @./spaceship/Mesh015.obj@
+
+            rel material:binding = </World/Looks/RoughAluminium>
+        }
+        def Mesh "Mesh054"
+        {
+            custom asset engine:geometry:file = @./spaceship/Mesh054.obj@
+
+            rel material:binding = </World/Looks/RoughAluminium>
+        }
+        def Mesh "Mesh013"
+        {
+            custom asset engine:geometry:file = @./spaceship/Mesh013.obj@
+
+            rel material:binding = </World/Looks/RoughAluminium>
+        }
+        def Mesh "Mesh079"
+        {
+            custom asset engine:geometry:file = @./spaceship/Mesh079.obj@
+
+            rel material:binding = </World/Looks/RoughAluminium>
+        }
+        def Mesh "Mesh041"
+        {
+            custom asset engine:geometry:file = @./spaceship/Mesh041.obj@
+
+            rel material:binding = </World/Looks/RoughAluminium>
+        }
+        def Mesh "Mesh012"
+        {
+            custom asset engine:geometry:file = @./spaceship/Mesh012.obj@
+
+            rel material:binding = </World/Looks/RoughAluminium>
+        }
+        def Mesh "Mesh011"
+        {
+            custom asset engine:geometry:file = @./spaceship/Mesh011.obj@
+
+            rel material:binding = </World/Looks/RoughAluminium>
+        }
+        def Mesh "Mesh010"
+        {
+            custom asset engine:geometry:file = @./spaceship/Mesh010.obj@
+
+            rel material:binding = </World/Looks/RoughAluminium>
+        }
+        def Mesh "Mesh083"
+        {
+            custom asset engine:geometry:file = @./spaceship/Mesh083.obj@
+
+            rel material:binding = </World/Looks/RoughAluminium>
+        }
+        def Mesh "Mesh069"
+        {
+            custom asset engine:geometry:file = @./spaceship/Mesh069.obj@
+
+            rel material:binding = </World/Looks/RoughAluminium>
+        }
+        def Mesh "Mesh009"
+        {
+            custom asset engine:geometry:file = @./spaceship/Mesh009.obj@
+
+            rel material:binding = </World/Looks/RoughAluminium>
+        }
+        def Mesh "Mesh007"
+        {
+            custom asset engine:geometry:file = @./spaceship/Mesh007.obj@
+
+            rel material:binding = </World/Looks/RoughAluminium>
+        }
+        def Mesh "Mesh017"
+        {
+            custom asset engine:geometry:file = @./spaceship/Mesh017.obj@
+
+            rel material:binding = </World/Looks/RoughAluminium>
+        }
+        def Mesh "Mesh037"
+        {
+            custom asset engine:geometry:file = @./spaceship/Mesh037.obj@
+
+            rel material:binding = </World/Looks/RoughAluminium>
+        }
+        def Mesh "Mesh005"
+        {
+            custom asset engine:geometry:file = @./spaceship/Mesh005.obj@
+
+            rel material:binding = </World/Looks/RoughAluminium>
+        }
+        def Mesh "Mesh004"
+        {
+            custom asset engine:geometry:file = @./spaceship/Mesh004.obj@
+
+            rel material:binding = </World/Looks/RoughAluminium>
+        }
+        def Mesh "Mesh002"
+        {
+            custom asset engine:geometry:file = @./spaceship/Mesh002.obj@
+
+            rel material:binding = </World/Looks/RoughAluminium>
+        }
+        def Mesh "Mesh056"
+        {
+            custom asset engine:geometry:file = @./spaceship/Mesh056.obj@
+
+            rel material:binding = </World/Looks/RoughAluminium>
+        }
+        def Mesh "Mesh033"
+        {
+            custom asset engine:geometry:file = @./spaceship/Mesh033.obj@
+
+            rel material:binding = </World/Looks/RoughSteel>
+        }
+        def Mesh "Mesh064"
+        {
+            custom asset engine:geometry:file = @./spaceship/Mesh064.obj@
+
+            rel material:binding = </World/Looks/RoughSteel>
+        }
+        def Mesh "Mesh058"
+        {
+            custom asset engine:geometry:file = @./spaceship/Mesh058.obj@
+
+            rel material:binding = </World/Looks/RoughSteel>
+        }
+        def Mesh "Mesh026"
+        {
+            custom asset engine:geometry:file = @./spaceship/Mesh026.obj@
+
+            rel material:binding = </World/Looks/RoughSteel>
+        }
+        def Mesh "Mesh047"
+        {
+            custom asset engine:geometry:file = @./spaceship/Mesh047.obj@
+
+            rel material:binding = </World/Looks/RoughSteel>
+        }
+        def Mesh "Mesh071"
+        {
+            custom asset engine:geometry:file = @./spaceship/Mesh071.obj@
+
+            rel material:binding = </World/Looks/RoughSteel>
+        }
+        def Mesh "Mesh019"
+        {
+            custom asset engine:geometry:file = @./spaceship/Mesh019.obj@
+
+            rel material:binding = </World/Looks/RoughSteel>
+        }
+        def Mesh "Mesh006"
+        {
+            custom asset engine:geometry:file = @./spaceship/Mesh006.obj@
+
+            rel material:binding = </World/Looks/RoughSteel>
+        }
+        def Mesh "Mesh008"
+        {
+            custom asset engine:geometry:file = @./spaceship/Mesh008.obj@
+
+            rel material:binding = </World/Looks/RoughSteel>
+        }
+        def Mesh "Mesh045"
+        {
+            custom asset engine:geometry:file = @./spaceship/Mesh045.obj@
+
+            rel material:binding = </World/Looks/RoughSteel>
+        }
+        def Mesh "Mesh049"
+        {
+            custom asset engine:geometry:file = @./spaceship/Mesh049.obj@
+
+            rel material:binding = </World/Looks/RoughSteel>
+        }
+        def Mesh "Mesh014"
+        {
+            custom asset engine:geometry:file = @./spaceship/Mesh014.obj@
+
+            rel material:binding = </World/Looks/RoughSteel>
+        }
+        def Mesh "Mesh003"
+        {
+            custom asset engine:geometry:file = @./spaceship/Mesh003.obj@
+
+            rel material:binding = </World/Looks/RoughSteel>
+        }
+        def Mesh "Mesh051"
+        {
+            custom asset engine:geometry:file = @./spaceship/Mesh051.obj@
+
+            rel material:binding = </World/Looks/RoughSteel>
+        }
+        def Mesh "Mesh001"
+        {
+            custom asset engine:geometry:file = @./spaceship/Mesh001.obj@
+
+            rel material:binding = </World/Looks/Glass>
+        }
+        def Mesh "Mesh055"
+        {
+            custom asset engine:geometry:file = @./spaceship/Mesh055.obj@
+
+            rel material:binding = </World/Looks/RedLeather>
+        }
+        def Mesh "Mesh036"
+        {
+            custom asset engine:geometry:file = @./spaceship/Mesh036.obj@
+
+            rel material:binding = </World/Looks/RedLeather>
+        }
+        def Mesh "Mesh031"
+        {
+            custom asset engine:geometry:file = @./spaceship/Mesh031.obj@
+
+            rel material:binding = </World/Looks/RedLeather>
+        }
+        def Mesh "Mesh022"
+        {
+            custom asset engine:geometry:file = @./spaceship/Mesh022.obj@
+
+            rel material:binding = </World/Looks/RedLeather>
+        }
+        def Mesh "Mesh053"
+        {
+            custom asset engine:geometry:file = @./spaceship/Mesh053.obj@
+
+            rel material:binding = </World/Looks/DarkPlastic>
+        }
+        def Mesh "Mesh061"
+        {
+            custom asset engine:geometry:file = @./spaceship/Mesh061.obj@
+
+            rel material:binding = </World/Looks/DarkPlastic>
+        }
+        def Mesh "Mesh035"
+        {
+            custom asset engine:geometry:file = @./spaceship/Mesh035.obj@
+
+            rel material:binding = </World/Looks/PinkLeather>
+        }
+        def Mesh "Mesh030"
+        {
+            custom asset engine:geometry:file = @./spaceship/Mesh030.obj@
+
+            rel material:binding = </World/Looks/PinkLeather>
+        }
+        def Mesh "Mesh000"
+        {
+            custom asset engine:geometry:file = @./spaceship/Mesh000.obj@
+
+            rel material:binding = </World/Looks/BrightPinkLeather>
+        }
+        def Mesh "Mesh044"
+        {
+            custom asset engine:geometry:file = @./spaceship/Mesh044.obj@
+
+            rel material:binding = </World/Looks/Leather>
+        }
+        def Mesh "Mesh028"
+        {
+            custom asset engine:geometry:file = @./spaceship/Mesh028.obj@
+
+            rel material:binding = </World/Looks/Leather>
+        }
+        def Mesh "Mesh063"
+        {
+            custom asset engine:geometry:file = @./spaceship/Mesh063.obj@
+
+            rel material:binding = </World/Looks/DarkRubber>
+        }
+        def Mesh "Mesh068"
+        {
+            custom asset engine:geometry:file = @./spaceship/Mesh068.obj@
+
+            rel material:binding = </World/Looks/DarkRubber>
+        }
+        def Mesh "Mesh029"
+        {
+            custom asset engine:geometry:file = @./spaceship/Mesh029.obj@
+
+            rel material:binding = </World/Looks/Light2>
+        }
+        def Mesh "Mesh043"
+        {
+            custom asset engine:geometry:file = @./spaceship/Mesh043.obj@
+
+            rel material:binding = </World/Looks/Light1>
+        }
+    }
+
+    def Scope "Lights"
+    {
+        def RectLight "Light_001"
+        {
+            matrix4d xformOp:transform = ((1, 0, 0, 0), (0, 0, -1, 0), (0, 1, 0, 0), (-0.004865, 5.14472, 1.6126825, 1))
+            uniform token[] xformOpOrder = ["xformOp:transform"]
+            color3f inputs:color = (0.9, 0.9, 1)
+            float inputs:intensity = 10
+            bool inputs:normalize = false
+            float inputs:width = 4.08973
+            float inputs:height = 1.276635
+        }
+        def Material "Light_001_Material"
+        {
+            token outputs:surface.connect = </World/Lights/Light_001_Material/Surface.outputs:surface>
+            def Shader "Surface"
+            {
+                uniform token info:id = "UsdPreviewSurface"
+                color3f inputs:diffuseColor = (0, 0, 0)
+                int inputs:useSpecularWorkflow = 1
+                color3f inputs:specularColor = (0, 0, 0)
+                color3f inputs:emissiveColor = (9, 9, 10)
+                token outputs:surface
+            }
+        }
+        def Mesh "Light_001_Geometry"
+        {
+            point3f[] points = [(-2.04973, 5.14472, 0.974365), (2.04, 5.14472, 0.974365), (2.04, 5.14472, 2.251), (-2.04973, 5.14472, 2.251)]
+            int[] faceVertexCounts = [4]
+            int[] faceVertexIndices = [0, 1, 2, 3]
+            uniform token subdivisionScheme = "none"
+            rel material:binding = </World/Lights/Light_001_Material>
+        }
+        def RectLight "Light_002"
+        {
+            matrix4d xformOp:transform = ((1, 0, 0, 0), (0, 0, -1, 0), (0, 1, 0, 0), (-0.004865, 5.14472, -1.60861, 1))
+            uniform token[] xformOpOrder = ["xformOp:transform"]
+            color3f inputs:color = (0.9, 0.9, 1)
+            float inputs:intensity = 10
+            bool inputs:normalize = false
+            float inputs:width = 4.08973
+            float inputs:height = 1.27722
+        }
+        def Material "Light_002_Material"
+        {
+            token outputs:surface.connect = </World/Lights/Light_002_Material/Surface.outputs:surface>
+            def Shader "Surface"
+            {
+                uniform token info:id = "UsdPreviewSurface"
+                color3f inputs:diffuseColor = (0, 0, 0)
+                int inputs:useSpecularWorkflow = 1
+                color3f inputs:specularColor = (0, 0, 0)
+                color3f inputs:emissiveColor = (9, 9, 10)
+                token outputs:surface
+            }
+        }
+        def Mesh "Light_002_Geometry"
+        {
+            point3f[] points = [(-2.04973, 5.14472, -2.24722), (2.04, 5.14472, -2.24722), (2.04, 5.14472, -0.97), (-2.04973, 5.14472, -0.97)]
+            int[] faceVertexCounts = [4]
+            int[] faceVertexIndices = [0, 1, 2, 3]
+            uniform token subdivisionScheme = "none"
+            rel material:binding = </World/Lights/Light_002_Material>
+        }
+    }
+}

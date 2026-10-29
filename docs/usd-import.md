@@ -40,10 +40,49 @@ supported, including mixed inline/external scenes.
 
 These are custom engine attributes, not native USD references or a USD glTF
 file-format plugin. Other USD applications need the geometry converted to USD.
+
+The 59 converted `scenes/pathtracer/*.usda` stages use this mesh bridge, USD
+cameras and USD lights. `scripts/repair-pathtracer-usda.mjs` verifies deterministic
+conversion from the local `.scene` sources; pass `--write` to regenerate the
+geometry/camera/light scopes while retaining the existing MaterialX references.
+Source FOV is horizontal; vertical aperture follows the source resolution.
+Row-major source mesh matrices are transposed to USD's matrix layout. Named GLB
+object assignments become separate bound Mesh prims. Finite lights also have
+matching emissive meshes (quad or tessellated sphere) reachable by path-traced
+BSDF rays. Analytic light sampling remains the engine's directional
+approximation; this is not full area-light next-event sampling.
+The original converted DisneyPrincipled materials are retained, including their
+existing approximations of source MaterialX graphs.
+Three source geometry assets remain absent: `bedroom/Mesh019.obj`, `jinx.gltf`,
+and `panther/panther.obj`. Their unresolved references are deliberately preserved;
+these three stages will fail loading until the original assets are supplied.
+Depth-of-field aperture metadata and dome rotation are authored but are not
+implemented by the current image renderer.
+Legacy `pathtracer:*` metadata alone does not configure cameras or lighting,
+and `engine:geometry:source` on an Xform is not a geometry-loading contract.
+
+Path-traced camera rays unproject an interior clip depth, not the far plane.
+This keeps directions finite in GPU f32 arithmetic even when a far/near ratio
+causes the far plane's homogeneous `w` to round to zero.
 Both shaderball stages in `scenes/standard-shader-ball` use these attributes;
 the RVA stage shares `/World/Looks/OpenPBRMaterial` across its two meshes so
 `test:shaderball --entry /scenes/standard-shader-ball/openpbr-rva-standard-shader-ball.usda`
 applies each MaterialX override to both objects, locally or with `--target mobile`.
+
+Dome environment and irradiance texture paths resolve relative to their authoring
+USD layer (or the entry stage when no authoring layer is recorded). Layer URLs may
+be absolute, root-relative or document-relative; relative layers are first resolved
+against the browser document URL.
+
+MaterialX filename inputs honor the nearest `fileprefix` on the input or its
+ancestors (including the document and nodegraphs). The prefix is applied before
+resolving a relative filename against the material directory or explicit texture
+root. Absolute filenames remain unchanged. After resolution, prefixes are removed
+from the in-memory document so MaterialX Core cannot apply them a second time.
+
+Bound materials must compile before the viewer or image harness starts rendering.
+An unresolved surface now fails loading explicitly instead of producing missing
+raster geometry or a neutral white path-traced fallback.
 
 The interactive scene loader bakes texture-fed MaterialX displacement once into
 material-specific geometry shared by raster and path tracing. Heights are linear,

@@ -1,0 +1,43 @@
+<?xml version="1.0"?>
+<materialx version="1.39" colorspace="lin_rec709">
+  <disney_principled name="Plastic_Orange_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" value="1, 0.37, 0.013" />
+    <input name="roughness" type="float" value="0.001" />
+    <input name="clearcoat" type="float" value="1" />
+    <input name="clearcoatGloss" type="float" value="1" />
+  </disney_principled>
+  <surfacematerial name="Plastic_Orange" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="Plastic_Orange_surface" />
+  </surfacematerial>
+  <disney_principled name="Plastic_Black_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" value="0.00063, 0.00063, 0.00063" />
+    <input name="roughness" type="float" value="0.1" />
+  </disney_principled>
+  <surfacematerial name="Plastic_Black" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="Plastic_Black_surface" />
+  </surfacematerial>
+  <disney_principled name="Glass_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" value="1, 1, 1" />
+    <input name="roughness" type="float" value="0" />
+    <input name="specTrans" type="float" value="1" />
+    <input name="ior" type="float" value="1.45" />
+  </disney_principled>
+  <surfacematerial name="Glass" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="Glass_surface" />
+  </surfacematerial>
+  <disney_principled name="Metal_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" value="1, 1, 1" />
+    <input name="metallic" type="float" value="1" />
+    <input name="roughness" type="float" value="0.01" />
+  </disney_principled>
+  <surfacematerial name="Metal" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="Metal_surface" />
+  </surfacematerial>
+  <disney_principled name="Floor_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" value="0.578, 0.578, 0.578" />
+    <input name="roughness" type="float" value="0.01" />
+  </disney_principled>
+  <surfacematerial name="Floor" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="Floor_surface" />
+  </surfacematerial>
+</materialx>

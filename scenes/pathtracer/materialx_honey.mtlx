@@ -1,0 +1,10 @@
+<?xml version="1.0"?>
+<materialx version="1.39" colorspace="lin_rec709">
+  <!-- source MaterialX: ../materialx/materials/showcase/open_pbr_surface/honey/honey.mtlx; surface: PBR_Glass; converted to DisneyPrincipled -->
+  <disney_principled name="glass_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" value="0.8, 0.8, 0.8" />
+  </disney_principled>
+  <surfacematerial name="glass" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="glass_surface" />
+  </surfacematerial>
+</materialx>

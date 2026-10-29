@@ -153,6 +153,12 @@ export interface BuildSceneResourcesOptions {
   geometryCache?: PreparedGeometryCache;
 }
 
+export function requireCompiledMaterials(resources: Pick<SceneResources, 'pendingMaterials'>): void {
+  if (resources.pendingMaterials.length > 0) {
+    throw new Error(`Material compilation failed: ${resources.pendingMaterials.join(', ')}`);
+  }
+}
+
 function unitKey(assetPath: string, referencedPrimPath: string): string {
   return `${assetPath}::${referencedPrimPath}`;
 }

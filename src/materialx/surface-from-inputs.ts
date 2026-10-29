@@ -10,6 +10,7 @@ import type { CanonicalSurfaceInputs, LayeredClosure } from '../compiler/ir.ts';
 import { surfaceGraphToLayered } from '../compiler/surface-lower.ts';
 import type { ResolvedGraph, ResolvedInput, ResolvedNode } from './graph.ts';
 import { resolveSurface, type ResolveSurfaceOptions, type ResolvedSurface } from './surface-graph.ts';
+import { hairAbsorptionFromColor, hairAbsorptionFromMelanin } from '../render/bsdf/hair.ts';
 
 /** A surface node's inputs already parsed to literal numbers (fixtures/harnesses). */
 export interface ParsedSurfaceInputs {
@@ -120,6 +121,21 @@ function scaleRgb(c: readonly [number, number, number], k: number): [number, num
 export function parsedSurfaceToCanonical(spec: ParsedSurfaceInputs): CanonicalSurfaceInputs {
   const inp = spec.inputs;
   switch (spec.category) {
+    case 'simple_hair': {
+      const mix = Math.max(0, Math.min(1, parsedNum(inp.melaninMix, 1)));
+      const roughness = parsedNum(inp.azimuthalRoughness, 0.1);
+      const color = hairAbsorptionFromColor(parsedRgb(inp.baseColor, [1, 1, 1]), roughness);
+      const melanin = hairAbsorptionFromMelanin(parsedNum(inp.melaninConcentration, 0.5), parsedNum(inp.melaninRedness, 0.5));
+      return {
+        baseColor: [
+          Math.exp(-2 * (color[0] * (1 - mix) + melanin[0] * mix)),
+          Math.exp(-2 * (color[1] * (1 - mix) + melanin[1] * mix)),
+          Math.exp(-2 * (color[2] * (1 - mix) + melanin[2] * mix)),
+        ],
+        metalness: 0, roughness: parsedNum(inp.longitudinalRoughness, 0.1),
+        transmission: 0, subsurface: 0, ior: parsedNum(inp.ior, 1.55), specular: 1,
+      };
+    }
     case 'standard_surface': {
       const base = parsedNum(inp.base, 1);
       return {
@@ -169,7 +185,7 @@ export function parsedSurfaceToCanonical(spec: ParsedSurfaceInputs): CanonicalSu
         baseColor: parsedRgb(inp.diffuseColor, [0.18, 0.18, 0.18]),
         metalness: parsedNum(inp.metallic, 0),
         roughness: parsedNum(inp.roughness, 0.5),
-        transmission: 0,
+        transmission: parsedNum(inp.opacityThreshold, 0) > 0 ? 0 : 1 - Math.min(1, Math.max(0, parsedNum(inp.opacity, 1))),
         subsurface: 0,
         ior: parsedNum(inp.ior, 1.5),
         specular: 1,
@@ -188,6 +204,7 @@ export function parsedSurfaceToCanonical(spec: ParsedSurfaceInputs): CanonicalSu
 
 /** Known MaterialX surface-shader node categories, in match-priority order. */
 const SURFACE_NODE_TAGS = [
+  'simple_hair',
   'standard_surface',
   'open_pbr_surface',
   'disney_principled',

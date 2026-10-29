@@ -1,0 +1,505 @@
+renderer
+{
+	#resolution 1500 1500
+	#windowresolution 800 800
+	#maxdepth 20
+	#tilewidth 400
+	#tileheight 400
+	#independentrendersize true
+	resolution 800 800
+	maxdepth 4
+	enablevolumemis true
+	tilewidth 200
+	tileheight 200
+	envmapfile HDR/spiaggia_di_mondello_4k_new.hdr
+	envmapintensity 1.0
+}  
+
+camera
+{
+	position 9.38 13.12 -6
+	lookat 0 0 0
+	fov 10
+}
+
+material water
+{
+	color 1.0 1.0 1.0
+	spectrans 1.0
+	roughness 0.0
+	mediumtype scatter
+	mediumdensity 6.0
+	mediumcolor 0.010 0.588 0.489
+}
+
+material wood
+{
+	color 0.582 0.388 0.164
+	roughness 0.25
+}
+
+material floor
+{
+	color 0.73 1.0 0.721
+	roughness 0.5
+}
+
+material grass
+{
+	color 0.104 0.357 0.092
+	roughness 0.5
+}
+
+material rock
+{
+	color 0.815 0.644 0.366
+	roughness 0.4
+}
+
+material sand
+{
+	color 0.973 0.751 0.571
+	roughness 0.25
+}
+
+material palm
+{
+	albedotexture tropical_island/textures/palm.png
+	alphamode blend
+}
+
+
+mesh
+{
+	name boat
+	file tropical_island/boat.obj
+	material wood
+}
+
+mesh
+{
+	name rope
+	file tropical_island/rope.obj
+	material wood
+}
+
+
+mesh
+{
+	name dock1
+	file tropical_island/dock1.obj
+	material wood
+}
+
+mesh
+{
+	name dock2
+	file tropical_island/dock2.obj
+	material wood
+}
+
+mesh
+{
+	name oar1
+	file tropical_island/oar1.obj
+	material wood
+}
+
+mesh
+{
+	name oar2
+	file tropical_island/oar2.obj
+	material wood
+}
+
+mesh
+{
+	name plank1
+	file tropical_island/plank1.obj
+	material wood
+}
+
+mesh
+{
+	name plank2
+	file tropical_island/plank2.obj
+	material wood
+}
+
+mesh
+{
+	name plank3
+	file tropical_island/plank3.obj
+	material wood
+}
+
+mesh
+{
+	name floor
+	file tropical_island/floor.obj
+	material floor
+}
+
+mesh
+{
+	name grass
+	file tropical_island/grass.obj
+	material grass
+}
+
+mesh
+{
+	name rock1
+	file tropical_island/rock1.obj
+	material rock
+}
+
+mesh
+{
+	name rock2
+	file tropical_island/rock2.obj
+	material rock
+}
+
+mesh
+{
+	name rock3
+	file tropical_island/rock3.obj
+	material rock
+}
+
+mesh
+{
+	name rock4
+	file tropical_island/rock4.obj
+	material rock
+}
+
+mesh
+{
+	name rock5
+	file tropical_island/rock5.obj
+	material rock
+}
+
+mesh
+{
+	name rock6
+	file tropical_island/rock6.obj
+	material rock
+}
+
+mesh
+{
+	name rock7
+	file tropical_island/rock7.obj
+	material rock
+}
+
+mesh
+{
+	name sand
+	file tropical_island/sand.obj
+	material sand
+}
+
+mesh
+{
+	name water
+	file tropical_island/water.obj
+	material water
+}
+
+mesh
+{
+	name trunk1
+	file tropical_island/trunk1.obj
+	material wood
+}
+
+mesh
+{
+	name trunk2
+	file tropical_island/trunk2.obj
+	material wood
+}
+
+mesh
+{
+	name leaf1
+	file tropical_island/leaf1.obj
+	material palm
+}
+
+mesh
+{
+	name leaf2
+	file tropical_island/leaf2.obj
+	material palm
+}
+
+mesh
+{
+	name leaf3
+	file tropical_island/leaf3.obj
+	material palm
+}
+
+mesh
+{
+	name leaf4
+	file tropical_island/leaf4.obj
+	material palm
+}
+
+mesh
+{
+	name leaf5
+	file tropical_island/leaf5.obj
+	material palm
+}
+
+mesh
+{
+	name leaf6
+	file tropical_island/leaf6.obj
+	material palm
+}
+
+mesh
+{
+	name leaf7
+	file tropical_island/leaf7.obj
+	material palm
+}
+
+mesh
+{
+	name leaf8
+	file tropical_island/leaf8.obj
+	material palm
+}
+
+mesh
+{
+	name leaf9
+	file tropical_island/leaf9.obj
+	material palm
+}
+
+mesh
+{
+	name leaf10
+	file tropical_island/leaf10.obj
+	material palm
+}
+
+mesh
+{
+	name leaf11
+	file tropical_island/leaf11.obj
+	material palm
+}
+
+mesh
+{
+	name leaf12
+	file tropical_island/leaf12.obj
+	material palm
+}
+
+mesh
+{
+	name leaf13
+	file tropical_island/leaf13.obj
+	material palm
+}
+
+mesh
+{
+	name leaf14
+	file tropical_island/leaf14.obj
+	material palm
+}
+
+mesh
+{
+	name leaf15
+	file tropical_island/leaf15.obj
+	material palm
+}
+
+mesh
+{
+	name leaf16
+	file tropical_island/leaf16.obj
+	material palm
+}
+
+mesh
+{
+	name leaf17
+	file tropical_island/leaf17.obj
+	material palm
+}
+
+mesh
+{
+	name leaf18
+	file tropical_island/leaf18.obj
+	material palm
+}
+
+mesh
+{
+	name leaf19
+	file tropical_island/leaf19.obj
+	material palm
+}
+
+mesh
+{
+	name leaf20
+	file tropical_island/leaf20.obj
+	material palm
+}
+
+mesh
+{
+	name leaf21
+	file tropical_island/leaf21.obj
+	material palm
+}
+
+mesh
+{
+	name leaf22
+	file tropical_island/leaf22.obj
+	material palm
+}
+
+mesh
+{
+	name leaf23
+	file tropical_island/leaf23.obj
+	material palm
+}
+
+mesh
+{
+	name leaf24
+	file tropical_island/leaf24.obj
+	material palm
+}
+
+mesh
+{
+	name leaf25
+	file tropical_island/leaf25.obj
+	material palm
+}
+
+mesh
+{
+	name shortleaf1
+	file tropical_island/shortleaf1.obj
+	material grass
+}
+
+mesh
+{
+	name shortleaf2
+	file tropical_island/shortleaf2.obj
+	material grass
+}
+
+mesh
+{
+	name shortleaf3
+	file tropical_island/shortleaf3.obj
+	material grass
+}
+
+mesh
+{
+	name shortleaf4
+	file tropical_island/shortleaf4.obj
+	material grass
+}
+
+mesh
+{
+	name shortleaf5
+	file tropical_island/shortleaf5.obj
+	material grass
+}
+
+mesh
+{
+	name shortleaf6
+	file tropical_island/shortleaf6.obj
+	material grass
+}
+
+mesh
+{
+	name shortleaf7
+	file tropical_island/shortleaf7.obj
+	material grass
+}
+
+mesh
+{
+	name shortleaf8
+	file tropical_island/shortleaf8.obj
+	material grass
+}
+
+mesh
+{
+	name shortleaf9
+	file tropical_island/shortleaf9.obj
+	material grass
+}
+
+mesh
+{
+	name shortleaf10
+	file tropical_island/shortleaf10.obj
+	material grass
+}
+
+mesh
+{
+	name shortleaf11
+	file tropical_island/shortleaf11.obj
+	material grass
+}
+
+mesh
+{
+	name shortleaf12
+	file tropical_island/shortleaf12.obj
+	material grass
+}
+
+mesh
+{
+	name shortleaf13
+	file tropical_island/shortleaf13.obj
+	material grass
+}
+
+mesh
+{
+	name shortleaf14
+	file tropical_island/shortleaf14.obj
+	material grass
+}
+
+mesh
+{
+	name shortleaf15
+	file tropical_island/shortleaf15.obj
+	material grass
+}

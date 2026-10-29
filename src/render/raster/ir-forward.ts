@@ -11,7 +11,7 @@
 
 import type { LayeredSurfaceModule, SurfaceFeatures } from '../../compiler/surface-wgsl.ts';
 
-const ALL_FEATURES: SurfaceFeatures = { coat: true, transmission: true, dispersion: true, thinFilm: true, lobeKinds: [0, 1, 2, 3, 4, 5, 6, 7, 8] };
+const ALL_FEATURES: SurfaceFeatures = { coat: true, transmission: true, dispersion: true, thinFilm: true, lobeKinds: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9] };
 
 export type RasterQuality = 'interactive' | 'reference';
 
@@ -153,7 +153,8 @@ fn mx_forward_specular_closure(c: LayeredClosure) -> LayeredClosure {
   for (var i = 0u; i < spec.lobeCount; i++) {
     let kind = spec.lobes[i].kind;
     if (!(kind == MX_LOBE_DIELECTRIC_REFLECTION || kind == MX_LOBE_CONDUCTOR
-        || kind == MX_LOBE_GENERALIZED_SCHLICK || kind == MX_LOBE_DIELECTRIC_TRANSMISSION)) {
+        || kind == MX_LOBE_GENERALIZED_SCHLICK || kind == MX_LOBE_DIELECTRIC_TRANSMISSION
+        || kind == MX_LOBE_CHIANG_HAIR)) {
       spec.lobes[i].weight = 0.0;
     }
   }
@@ -425,7 +426,7 @@ fn ${IR_FORWARD_FRAGMENT_ENTRY}(fin: MxVertexOut, @builtin(front_facing) frontFa
     authoredNormal = normalize(authoredNormal - 2.0 * facing * vary.viewDir);
   }
   let n = mx_closure_oriented_normal(c, authoredNormal, vary.viewDir);
-  let sframe = basis(n);
+  let sframe = mx_closure_frame(c, n, basis(n));
   let wo = transpose(sframe) * vary.viewDir;
 
   var radiance = vec3f(0.0);
@@ -448,7 +449,7 @@ fn mx_forward_lighting(c: LayeredClosure, n: vec3f, wo: vec3f, sframe: mat3x3f) 
   let toLight = normalize(-fu.lightDir.xyz);
   let wiLight = transpose(sframe) * toLight;
   let ev = mx_closure_eval(c, wo, wiLight);
-  let cosL = max(dot(n, toLight), 0.0);
+  let cosL = ${f.lobeKinds.includes(9) ? 'abs(dot(n, toLight))' : 'max(dot(n, toLight), 0.0)'};
   var radiance = ev.value * (fu.lightColor.xyz * fu.lightColor.w) * cosL;
 
   // Diffuse environment IBL read analytically from the SH9 irradiance probe (the

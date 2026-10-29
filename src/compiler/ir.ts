@@ -308,6 +308,7 @@ export type BsdfLobeKind =
   | 'conductor'
   | 'generalized_schlick'
   | 'sheen'
+  | 'chiang_hair'
   | 'subsurface';
 
 /** One weighted BSDF lobe in the surface stack. */
@@ -319,17 +320,19 @@ export interface LayeredBsdfLobe {
   color: Rgb;
   /** Grazing reflectance (generalized-schlick color90); defaults to color. */
   color90?: Rgb;
-  /** Perceptual roughness in [0,1]; microfacet alpha = roughness^2. */
+  /** Chiang TRT tint; color/color90 carry R/TT. */
+  hairTintTRT?: Rgb;
+  /** Perceptual roughness in [0,1]; longitudinal roughness for Chiang hair. */
   roughness?: number;
-  /** Anisotropy in [0,1] (GGX alpha_u/alpha_v split); 0 = isotropic. */
+  /** GGX anisotropy in [0,1]; azimuthal roughness for Chiang hair. */
   anisotropy?: number;
-  /** Tangent-frame rotation in turns [0,1) for the anisotropic lobe. */
+  /** Tangent rotation in turns; cuticle tilt in degrees for Chiang hair. */
   rotation?: number;
   /** Index of refraction for the dielectric reflection/transmission lobe. */
   ior?: number;
   /** RGB dispersion strength: IOR half-spread = (ior - 1) * 0.025 * dispersion. */
   dispersion?: number;
-  /** Conductor extinction coefficient k (per channel). */
+  /** Conductor extinction k; absorption coefficient for Chiang hair. */
   extinction?: Rgb;
   /** Thin-walled transmission: straight-through, no refraction bending. */
   thinWalled?: boolean;

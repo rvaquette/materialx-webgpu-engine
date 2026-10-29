@@ -1,0 +1,454 @@
+#usda 1.0
+(
+    defaultPrim = "World"
+    metersPerUnit = 1
+    upAxis = "Y"
+    doc = "tropical_island converted from GLSL-PathTracer .scene"
+)
+
+def Xform "World"
+{
+    custom string pathtracer:sourceScene = "tropical_island.scene"
+    custom int2 pathtracer:resolution = (800, 800)
+    custom int pathtracer:maxDepth = 4
+    custom float pathtracer:environmentIntensity = 1
+    custom asset pathtracer:environment = @./HDR/spiaggia_di_mondello_4k_new.hdr@
+
+    def Camera "Camera"
+    {
+        matrix4d xformOp:transform = ((-0.538849802537, 0, -0.842401857967, 0), (-0.642273732429, 0.647068907567, 0.410836076181, 0), (0.545092049967, 0.762431524047, -0.34867295307, 0), (9.38, 13.12, -6, 1))
+        uniform token[] xformOpOrder = ["xformOp:transform"]
+        token projection = "perspective"
+        float focalLength = 50
+        float horizontalAperture = 8.74886635259
+        float verticalAperture = 8.74886635259
+        float2 clippingRange = (0.001, 1000000)
+        custom point3f pathtracer:lookAt = (0, 0, 0)
+        custom float pathtracer:fov = 10
+    }
+
+    def Scope "Looks"
+    {
+        def Material "water" (
+            prepend references = @./tropical_island.mtlx@</MaterialX/Materials/water>
+        )
+        {
+        }
+        def Material "wood" (
+            prepend references = @./tropical_island.mtlx@</MaterialX/Materials/wood>
+        )
+        {
+        }
+        def Material "floor" (
+            prepend references = @./tropical_island.mtlx@</MaterialX/Materials/floor>
+        )
+        {
+        }
+        def Material "grass" (
+            prepend references = @./tropical_island.mtlx@</MaterialX/Materials/grass>
+        )
+        {
+        }
+        def Material "rock" (
+            prepend references = @./tropical_island.mtlx@</MaterialX/Materials/rock>
+        )
+        {
+        }
+        def Material "sand" (
+            prepend references = @./tropical_island.mtlx@</MaterialX/Materials/sand>
+        )
+        {
+        }
+        def Material "palm" (
+            prepend references = @./tropical_island.mtlx@</MaterialX/Materials/palm>
+        )
+        {
+        }
+    }
+
+    def Scope "Geometry"
+    {
+        def Mesh "boat"
+        {
+            custom asset engine:geometry:file = @./tropical_island/boat.obj@
+
+            rel material:binding = </World/Looks/wood>
+        }
+        def Mesh "rope"
+        {
+            custom asset engine:geometry:file = @./tropical_island/rope.obj@
+
+            rel material:binding = </World/Looks/wood>
+        }
+        def Mesh "dock1"
+        {
+            custom asset engine:geometry:file = @./tropical_island/dock1.obj@
+
+            rel material:binding = </World/Looks/wood>
+        }
+        def Mesh "dock2"
+        {
+            custom asset engine:geometry:file = @./tropical_island/dock2.obj@
+
+            rel material:binding = </World/Looks/wood>
+        }
+        def Mesh "oar1"
+        {
+            custom asset engine:geometry:file = @./tropical_island/oar1.obj@
+
+            rel material:binding = </World/Looks/wood>
+        }
+        def Mesh "oar2"
+        {
+            custom asset engine:geometry:file = @./tropical_island/oar2.obj@
+
+            rel material:binding = </World/Looks/wood>
+        }
+        def Mesh "plank1"
+        {
+            custom asset engine:geometry:file = @./tropical_island/plank1.obj@
+
+            rel material:binding = </World/Looks/wood>
+        }
+        def Mesh "plank2"
+        {
+            custom asset engine:geometry:file = @./tropical_island/plank2.obj@
+
+            rel material:binding = </World/Looks/wood>
+        }
+        def Mesh "plank3"
+        {
+            custom asset engine:geometry:file = @./tropical_island/plank3.obj@
+
+            rel material:binding = </World/Looks/wood>
+        }
+        def Mesh "floor"
+        {
+            custom asset engine:geometry:file = @./tropical_island/floor.obj@
+
+            rel material:binding = </World/Looks/floor>
+        }
+        def Mesh "grass"
+        {
+            custom asset engine:geometry:file = @./tropical_island/grass.obj@
+
+            rel material:binding = </World/Looks/grass>
+        }
+        def Mesh "rock1"
+        {
+            custom asset engine:geometry:file = @./tropical_island/rock1.obj@
+
+            rel material:binding = </World/Looks/rock>
+        }
+        def Mesh "rock2"
+        {
+            custom asset engine:geometry:file = @./tropical_island/rock2.obj@
+
+            rel material:binding = </World/Looks/rock>
+        }
+        def Mesh "rock3"
+        {
+            custom asset engine:geometry:file = @./tropical_island/rock3.obj@
+
+            rel material:binding = </World/Looks/rock>
+        }
+        def Mesh "rock4"
+        {
+            custom asset engine:geometry:file = @./tropical_island/rock4.obj@
+
+            rel material:binding = </World/Looks/rock>
+        }
+        def Mesh "rock5"
+        {
+            custom asset engine:geometry:file = @./tropical_island/rock5.obj@
+
+            rel material:binding = </World/Looks/rock>
+        }
+        def Mesh "rock6"
+        {
+            custom asset engine:geometry:file = @./tropical_island/rock6.obj@
+
+            rel material:binding = </World/Looks/rock>
+        }
+        def Mesh "rock7"
+        {
+            custom asset engine:geometry:file = @./tropical_island/rock7.obj@
+
+            rel material:binding = </World/Looks/rock>
+        }
+        def Mesh "sand"
+        {
+            custom asset engine:geometry:file = @./tropical_island/sand.obj@
+
+            rel material:binding = </World/Looks/sand>
+        }
+        def Mesh "water"
+        {
+            custom asset engine:geometry:file = @./tropical_island/water.obj@
+
+            rel material:binding = </World/Looks/water>
+        }
+        def Mesh "trunk1"
+        {
+            custom asset engine:geometry:file = @./tropical_island/trunk1.obj@
+
+            rel material:binding = </World/Looks/wood>
+        }
+        def Mesh "trunk2"
+        {
+            custom asset engine:geometry:file = @./tropical_island/trunk2.obj@
+
+            rel material:binding = </World/Looks/wood>
+        }
+        def Mesh "leaf1"
+        {
+            custom asset engine:geometry:file = @./tropical_island/leaf1.obj@
+
+            rel material:binding = </World/Looks/palm>
+        }
+        def Mesh "leaf2"
+        {
+            custom asset engine:geometry:file = @./tropical_island/leaf2.obj@
+
+            rel material:binding = </World/Looks/palm>
+        }
+        def Mesh "leaf3"
+        {
+            custom asset engine:geometry:file = @./tropical_island/leaf3.obj@
+
+            rel material:binding = </World/Looks/palm>
+        }
+        def Mesh "leaf4"
+        {
+            custom asset engine:geometry:file = @./tropical_island/leaf4.obj@
+
+            rel material:binding = </World/Looks/palm>
+        }
+        def Mesh "leaf5"
+        {
+            custom asset engine:geometry:file = @./tropical_island/leaf5.obj@
+
+            rel material:binding = </World/Looks/palm>
+        }
+        def Mesh "leaf6"
+        {
+            custom asset engine:geometry:file = @./tropical_island/leaf6.obj@
+
+            rel material:binding = </World/Looks/palm>
+        }
+        def Mesh "leaf7"
+        {
+            custom asset engine:geometry:file = @./tropical_island/leaf7.obj@
+
+            rel material:binding = </World/Looks/palm>
+        }
+        def Mesh "leaf8"
+        {
+            custom asset engine:geometry:file = @./tropical_island/leaf8.obj@
+
+            rel material:binding = </World/Looks/palm>
+        }
+        def Mesh "leaf9"
+        {
+            custom asset engine:geometry:file = @./tropical_island/leaf9.obj@
+
+            rel material:binding = </World/Looks/palm>
+        }
+        def Mesh "leaf10"
+        {
+            custom asset engine:geometry:file = @./tropical_island/leaf10.obj@
+
+            rel material:binding = </World/Looks/palm>
+        }
+        def Mesh "leaf11"
+        {
+            custom asset engine:geometry:file = @./tropical_island/leaf11.obj@
+
+            rel material:binding = </World/Looks/palm>
+        }
+        def Mesh "leaf12"
+        {
+            custom asset engine:geometry:file = @./tropical_island/leaf12.obj@
+
+            rel material:binding = </World/Looks/palm>
+        }
+        def Mesh "leaf13"
+        {
+            custom asset engine:geometry:file = @./tropical_island/leaf13.obj@
+
+            rel material:binding = </World/Looks/palm>
+        }
+        def Mesh "leaf14"
+        {
+            custom asset engine:geometry:file = @./tropical_island/leaf14.obj@
+
+            rel material:binding = </World/Looks/palm>
+        }
+        def Mesh "leaf15"
+        {
+            custom asset engine:geometry:file = @./tropical_island/leaf15.obj@
+
+            rel material:binding = </World/Looks/palm>
+        }
+        def Mesh "leaf16"
+        {
+            custom asset engine:geometry:file = @./tropical_island/leaf16.obj@
+
+            rel material:binding = </World/Looks/palm>
+        }
+        def Mesh "leaf17"
+        {
+            custom asset engine:geometry:file = @./tropical_island/leaf17.obj@
+
+            rel material:binding = </World/Looks/palm>
+        }
+        def Mesh "leaf18"
+        {
+            custom asset engine:geometry:file = @./tropical_island/leaf18.obj@
+
+            rel material:binding = </World/Looks/palm>
+        }
+        def Mesh "leaf19"
+        {
+            custom asset engine:geometry:file = @./tropical_island/leaf19.obj@
+
+            rel material:binding = </World/Looks/palm>
+        }
+        def Mesh "leaf20"
+        {
+            custom asset engine:geometry:file = @./tropical_island/leaf20.obj@
+
+            rel material:binding = </World/Looks/palm>
+        }
+        def Mesh "leaf21"
+        {
+            custom asset engine:geometry:file = @./tropical_island/leaf21.obj@
+
+            rel material:binding = </World/Looks/palm>
+        }
+        def Mesh "leaf22"
+        {
+            custom asset engine:geometry:file = @./tropical_island/leaf22.obj@
+
+            rel material:binding = </World/Looks/palm>
+        }
+        def Mesh "leaf23"
+        {
+            custom asset engine:geometry:file = @./tropical_island/leaf23.obj@
+
+            rel material:binding = </World/Looks/palm>
+        }
+        def Mesh "leaf24"
+        {
+            custom asset engine:geometry:file = @./tropical_island/leaf24.obj@
+
+            rel material:binding = </World/Looks/palm>
+        }
+        def Mesh "leaf25"
+        {
+            custom asset engine:geometry:file = @./tropical_island/leaf25.obj@
+
+            rel material:binding = </World/Looks/palm>
+        }
+        def Mesh "shortleaf1"
+        {
+            custom asset engine:geometry:file = @./tropical_island/shortleaf1.obj@
+
+            rel material:binding = </World/Looks/grass>
+        }
+        def Mesh "shortleaf2"
+        {
+            custom asset engine:geometry:file = @./tropical_island/shortleaf2.obj@
+
+            rel material:binding = </World/Looks/grass>
+        }
+        def Mesh "shortleaf3"
+        {
+            custom asset engine:geometry:file = @./tropical_island/shortleaf3.obj@
+
+            rel material:binding = </World/Looks/grass>
+        }
+        def Mesh "shortleaf4"
+        {
+            custom asset engine:geometry:file = @./tropical_island/shortleaf4.obj@
+
+            rel material:binding = </World/Looks/grass>
+        }
+        def Mesh "shortleaf5"
+        {
+            custom asset engine:geometry:file = @./tropical_island/shortleaf5.obj@
+
+            rel material:binding = </World/Looks/grass>
+        }
+        def Mesh "shortleaf6"
+        {
+            custom asset engine:geometry:file = @./tropical_island/shortleaf6.obj@
+
+            rel material:binding = </World/Looks/grass>
+        }
+        def Mesh "shortleaf7"
+        {
+            custom asset engine:geometry:file = @./tropical_island/shortleaf7.obj@
+
+            rel material:binding = </World/Looks/grass>
+        }
+        def Mesh "shortleaf8"
+        {
+            custom asset engine:geometry:file = @./tropical_island/shortleaf8.obj@
+
+            rel material:binding = </World/Looks/grass>
+        }
+        def Mesh "shortleaf9"
+        {
+            custom asset engine:geometry:file = @./tropical_island/shortleaf9.obj@
+
+            rel material:binding = </World/Looks/grass>
+        }
+        def Mesh "shortleaf10"
+        {
+            custom asset engine:geometry:file = @./tropical_island/shortleaf10.obj@
+
+            rel material:binding = </World/Looks/grass>
+        }
+        def Mesh "shortleaf11"
+        {
+            custom asset engine:geometry:file = @./tropical_island/shortleaf11.obj@
+
+            rel material:binding = </World/Looks/grass>
+        }
+        def Mesh "shortleaf12"
+        {
+            custom asset engine:geometry:file = @./tropical_island/shortleaf12.obj@
+
+            rel material:binding = </World/Looks/grass>
+        }
+        def Mesh "shortleaf13"
+        {
+            custom asset engine:geometry:file = @./tropical_island/shortleaf13.obj@
+
+            rel material:binding = </World/Looks/grass>
+        }
+        def Mesh "shortleaf14"
+        {
+            custom asset engine:geometry:file = @./tropical_island/shortleaf14.obj@
+
+            rel material:binding = </World/Looks/grass>
+        }
+        def Mesh "shortleaf15"
+        {
+            custom asset engine:geometry:file = @./tropical_island/shortleaf15.obj@
+
+            rel material:binding = </World/Looks/grass>
+        }
+    }
+
+    def Scope "Lights"
+    {
+        def DomeLight "Environment"
+        {
+            asset inputs:texture:file = @./HDR/spiaggia_di_mondello_4k_new.hdr@
+            float inputs:intensity = 1
+            color3f inputs:color = (1, 1, 1)
+        }
+    }
+}

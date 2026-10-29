@@ -1,0 +1,77 @@
+renderer
+{
+	resolution 1280 720
+	maxdepth 3
+	tilewidth 240
+	tileheight 144
+}
+
+camera
+{
+	position 0.69 0.33 0.0
+	lookat 0.0 0.07 0.0
+	fov 22
+}
+
+material gold
+{
+	color 0.9 0.618 0.1
+	albedotexture renderman/textures/gold_base.png
+	metallicroughnesstexture renderman/textures/gold_mat_rgh.png
+	normaltexture renderman/textures/gold_normal.png
+}
+
+material base
+{
+	color 0.01 0.01 0.01
+	roughness 0.5
+	metallic 1.0
+}
+
+material checker
+{
+	roughness 0.5
+	metallic 0.0
+	albedotexture renderman/textures/checker.png
+}
+
+mesh
+{
+	name Background
+	file renderman/background.obj
+	material checker
+
+}
+
+mesh
+{
+	name Teapot
+	file renderman/teapot.obj
+	material gold
+}
+
+mesh
+{
+	name Base
+	file renderman/teapot_base.obj
+	material base
+}
+
+light
+{
+	position -0.103555 0.284840 0.606827
+	v1 -0.103555 0.465656 0.521355
+	v2 0.096445 0.284840 0.606827
+	emission 40 41 41
+	type quad
+}
+
+light
+{
+	position 0.303145 0.461806 -0.450967
+	v2 0.447143 0.461806 -0.306465
+	v1 0.362568 0.280251 -0.510182
+	emission 40 41 41
+	type quad
+}
+

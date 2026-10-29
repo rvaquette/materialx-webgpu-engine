@@ -27,6 +27,8 @@
 // one-sample MIS mirroring composeLobes + coatOverBase) and has the surface
 // module emit this library so both backends call one identical source.
 
+import { HAIR_WGSL } from '../render/bsdf/hair.ts';
+
 /** The lobe families in the library; each has an eval/pdf/sample fn. T056a ported
  *  the four isotropic families; T056b adds the Charlie sheen lobe. */
 export const CLOSURE_LIBRARY_LOBES = [
@@ -101,7 +103,7 @@ export interface ClosureDispatchSpec {
   thinFilm: boolean;
 }
 
-const ALL_DISPATCH: ClosureDispatchSpec = { kinds: new Set([0, 1, 2, 3, 4, 5, 6, 7, 8]), thinFilm: true };
+const ALL_DISPATCH: ClosureDispatchSpec = { kinds: new Set([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]), thinFilm: true };
 
 /** mx_closure_lobe_eval/sample restricted to `spec`; unreachable kinds fall to the zero default. */
 function lobeDispatch(spec: ClosureDispatchSpec): string {
@@ -152,6 +154,10 @@ function lobeDispatch(spec: ClosureDispatchSpec): string {
     evalCases.push('    case 8u: { return mx_dielectric_transmission_eval(ctx, wi); }');
     sampleCases.push('    case 8u: { return mx_dielectric_transmission_sample(ctx, u); }');
   }
+  if (has(9).length) {
+    evalCases.push('    case 9u: { return mx_hair_eval(lobe, wo, wi); }');
+    sampleCases.push('    case 9u: { return mx_hair_sample(lobe, wo, u); }');
+  }
   const film = spec.thinFilm ? '\n  let filmActive = c.hasThinFilm != 0u && c.thinFilm.weight > 0.0 && c.thinFilm.thickness > 0.0;' : '';
   return `fn mx_closure_lobe_eval(lobe: MxBsdfLobe, c: LayeredClosure, wo: vec3f, wi: vec3f) -> MxBsdfEval {
   let ctx = mx_closure_lobe_ctx(lobe, wo);${film}
@@ -169,7 +175,9 @@ ${[...sampleCases, '    default: { return MxBsdfSample(vec3f(0.0), vec3f(0.0), 0
 
 /** The closure library with its lobe dispatch restricted to the kinds a surface can reach. */
 export function closureLibraryPrelude(spec: ClosureDispatchSpec = ALL_DISPATCH): string {
-  return spec === ALL_DISPATCH ? CLOSURE_LIBRARY_PRELUDE : CLOSURE_LIBRARY_PRELUDE.replace(lobeDispatch(ALL_DISPATCH), lobeDispatch(spec));
+  if (spec === ALL_DISPATCH) return CLOSURE_LIBRARY_PRELUDE;
+  const code = CLOSURE_LIBRARY_PRELUDE.replace(lobeDispatch(ALL_DISPATCH), lobeDispatch(spec));
+  return spec.kinds.has(9) ? code : code.replace(HAIR_WGSL, '');
 }
 
 /** WGSL prelude: shared BSDF types, math helpers and the lobe triplets, plus the
@@ -780,6 +788,20 @@ fn mx_closure_spectral_channel(c: LayeredClosure, channel: u32) -> LayeredClosur
   }
   return result;
 }
+${HAIR_WGSL}
+fn mx_closure_has_hair(c: LayeredClosure) -> bool {
+  for (var i = 0u; i < c.lobeCount; i++) {
+    if (c.lobes[i].kind == MX_LOBE_CHIANG_HAIR && c.lobes[i].weight > 0.0) { return true; }
+  }
+  return false;
+}
+fn mx_closure_frame(c: LayeredClosure, n: vec3f, fallback: mat3x3f) -> mat3x3f {
+  if (c.hasShadingTangent == 0u) { return fallback; }
+  let t = c.shadingTangent - n * dot(c.shadingTangent, n);
+  if (dot(t, t) < 1e-10) { return fallback; }
+  let tangent = normalize(t);
+  return mat3x3f(tangent, cross(n, tangent), n);
+}
 fn mx_closure_shading_normal(c: LayeredClosure, geometricNormal: vec3f) -> vec3f {
   if (c.hasShadingNormal != 0u && dot(c.shadingNormal, c.shadingNormal) > 1e-12) {
     return normalize(c.shadingNormal);
@@ -947,7 +969,8 @@ fn mx_closure_specular_eval(c: LayeredClosure, wo: vec3f, wi: vec3f) -> MxBsdfEv
     let l = c.lobes[i];
     if (l.weight <= 0.0) { continue; }
     if (l.kind == MX_LOBE_DIELECTRIC_REFLECTION || l.kind == MX_LOBE_CONDUCTOR
-        || l.kind == MX_LOBE_GENERALIZED_SCHLICK || l.kind == MX_LOBE_DIELECTRIC_TRANSMISSION) {
+        || l.kind == MX_LOBE_GENERALIZED_SCHLICK || l.kind == MX_LOBE_DIELECTRIC_TRANSMISSION
+        || l.kind == MX_LOBE_CHIANG_HAIR) {
       specTotal = specTotal + l.weight;
     }
   }
@@ -958,7 +981,8 @@ fn mx_closure_specular_eval(c: LayeredClosure, wo: vec3f, wi: vec3f) -> MxBsdfEv
       let lobe = c.lobes[i];
       if (lobe.weight <= 0.0) { continue; }
       if (!(lobe.kind == MX_LOBE_DIELECTRIC_REFLECTION || lobe.kind == MX_LOBE_CONDUCTOR
-          || lobe.kind == MX_LOBE_GENERALIZED_SCHLICK || lobe.kind == MX_LOBE_DIELECTRIC_TRANSMISSION)) { continue; }
+          || lobe.kind == MX_LOBE_GENERALIZED_SCHLICK || lobe.kind == MX_LOBE_DIELECTRIC_TRANSMISSION
+          || lobe.kind == MX_LOBE_CHIANG_HAIR)) { continue; }
       let r = mx_closure_lobe_eval(lobe, c, wo, wi);
       value = value + r.value * lobe.weight;
       pdf = pdf + (lobe.weight / specTotal) * r.pdf;

@@ -1,0 +1,27 @@
+materialx_generator essl
+
+renderer
+{
+    resolution 1280 720
+    maxdepth 16
+    tilewidth 256
+    tileheight 144
+    envmapfile HDR/san_giuseppe_bridge_2k.hdr
+}
+camera
+{
+    position -0.05 1.05 3.58
+    lookat -0.05 1.05 -0.06
+    fov 45
+}
+material mtlx_test
+{
+    materialx_document ../materialx/materials/Examples/OpenPbr/open_pbr_honey.mtlx
+    materialx_surface Honey
+}
+mesh
+{
+    name shaderball
+    file materialx_test/ShaderBall.obj
+    material mtlx_test
+}

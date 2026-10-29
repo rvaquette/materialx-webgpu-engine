@@ -1,8 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { importUsdStage } from '../../src/usd/importer.ts';
 import { loadExternalMeshSource } from '../../src/geometry/external-mesh.ts';
 import { prepareMesh } from '../../src/geometry/prepare.ts';
 import type { Diagnostic } from '../../src/core/diagnostics.ts';
+import { importCameras } from '../../src/usd/cameras.ts';
+import { importLights } from '../../src/usd/lights.ts';
 
 const triangleObj = `o Triangle
 v 0 0 0
@@ -62,6 +66,23 @@ function glb(): ArrayBuffer {
 }
 
 describe('Three.js external geometry bridge', () => {
+  it('loads converted Ajax geometry with its authored material, camera and environment', async () => {
+    const text = readFileSync(join('scenes', 'pathtracer', 'ajax.usda'), 'utf8');
+    const scene = await importUsdStage('/scenes/pathtracer/ajax.usda', { reader: { read: async () => text } });
+    const read = vi.fn(async () => bytes(triangleObj));
+    const source = await loadExternalMeshSource(scene, empty, () => {}, read);
+    expect(read).toHaveBeenCalledWith('/scenes/pathtracer/ajax/ajax.obj');
+    expect(source.meshFor('/World/Geometry/ajax')?.faceVertexCounts).toEqual([3]);
+    expect(scene.prims.get('/World/Geometry/ajax')?.materialBinding?.target).toBe('/World/Looks/black');
+    const camera = importCameras(scene)[0]!;
+    expect(camera.fovY * 180 / Math.PI).toBeCloseTo(35);
+    expect(camera.transform[14]).toBeCloseTo(-1.8);
+    expect(camera.transform[10]).toBeCloseTo(-1);
+    const dome = importLights(scene).find(light => light.type === 'dome')!;
+    expect(dome.textureFile).toBe('./HDR/sunset.hdr');
+    expect(dome.intensity).toBe(5);
+  });
+
   it('loads OBJ positions, negative indices, authored normals and UVs', async () => {
     const scene = await stage('def Mesh "mesh" { asset engine:geometry:file = @./triangle.obj@ string engine:geometry:object = "Triangle" }');
     const read = vi.fn(async () => bytes(triangleObj));

@@ -1,0 +1,75 @@
+#usda 1.0
+(
+    defaultPrim = "World"
+    metersPerUnit = 1
+    upAxis = "Y"
+    doc = "teapot converted from GLSL-PathTracer .scene"
+)
+
+def Xform "World"
+{
+    custom string pathtracer:sourceScene = "teapot.scene"
+    custom int2 pathtracer:resolution = (1280, 720)
+    custom int pathtracer:maxDepth = 2
+    custom float pathtracer:environmentIntensity = 5
+    custom asset pathtracer:environment = @./HDR/sunset.hdr@
+
+    def Camera "Camera"
+    {
+        matrix4d xformOp:transform = ((0.00464168921129, 0, -0.999989227303, 0), (-0.424618766571, 0.90537010021, -0.00197096958036, 0), (0.905360346932, 0.42462334091, 0.00420244662637, 0), (20, 12, 0, 1))
+        uniform token[] xformOpOrder = ["xformOp:transform"]
+        token projection = "perspective"
+        float focalLength = 50
+        float horizontalAperture = 57.735026919
+        float verticalAperture = 32.4759526419
+        float2 clippingRange = (0.001, 1000000)
+        custom point3f pathtracer:lookAt = (-0.953633, 2.17253, -0.0972613)
+        custom float pathtracer:fov = 60
+    }
+
+    def Scope "Looks"
+    {
+        def Material "checker" (
+            prepend references = @./teapot.mtlx@</MaterialX/Materials/checker>
+        )
+        {
+        }
+        def Material "white" (
+            prepend references = @./teapot.mtlx@</MaterialX/Materials/white>
+        )
+        {
+        }
+    }
+
+    def Scope "Geometry"
+    {
+        def Mesh "Mesh000"
+        {
+            custom asset engine:geometry:file = @./teapot/Mesh000.obj@
+
+            rel material:binding = </World/Looks/white>
+        }
+        def Mesh "Mesh001"
+        {
+            custom asset engine:geometry:file = @./teapot/Mesh001.obj@
+
+            rel material:binding = </World/Looks/white>
+        }
+        def Mesh "Mesh050"
+        {
+            custom asset engine:geometry:file = @./teapot/Mesh050.obj@
+
+            rel material:binding = </World/Looks/checker>
+        }
+    }
+
+    def Scope "Lights"
+    {
+        def DomeLight "Environment"
+        {
+            asset inputs:texture:file = @./HDR/sunset.hdr@
+            float inputs:intensity = 5
+            color3f inputs:color = (1, 1, 1)
+        }
+    }
+}

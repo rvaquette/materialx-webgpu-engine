@@ -40,9 +40,11 @@ type LobeKind =
   | 'conductor'
   | 'generalized_schlick'
   | 'sheen'
+  | 'chiang_hair'
   | 'subsurface';
 
 const LOBE_KIND_CONST: Readonly<Record<LobeKind, string>> = {
+  chiang_hair: 'MX_LOBE_CHIANG_HAIR',
   oren_nayar_diffuse: 'MX_LOBE_OREN_NAYAR_DIFFUSE',
   burley_diffuse: 'MX_LOBE_BURLEY_DIFFUSE',
   translucent: 'MX_LOBE_TRANSLUCENT',
@@ -56,6 +58,7 @@ const LOBE_KIND_CONST: Readonly<Record<LobeKind, string>> = {
 
 /** Numeric values of the MX_LOBE_* constants below. */
 const LOBE_KIND_NUM: Readonly<Record<LobeKind, number>> = {
+  chiang_hair: 9,
   oren_nayar_diffuse: 0,
   burley_diffuse: 1,
   translucent: 2,
@@ -80,6 +83,7 @@ const MX_LOBE_GENERALIZED_SCHLICK: u32 = 5u;
 const MX_LOBE_SHEEN: u32 = 6u;
 const MX_LOBE_SUBSURFACE: u32 = 7u;
 const MX_LOBE_DIELECTRIC_TRANSMISSION: u32 = 8u;
+const MX_LOBE_CHIANG_HAIR: u32 = 9u;
 struct MxBsdfLobe {
   kind: u32,
   weight: f32,
@@ -92,6 +96,7 @@ struct MxBsdfLobe {
   extinction: vec3f,
   thin: f32,
   dispersion: f32,
+  hairTintTRT: vec3f,
 };
 struct MxCoatLayer { weight: f32, color: vec3f, roughness: f32, ior: f32 };
 struct MxSheenLayer { weight: f32, color: vec3f, roughness: f32 };
@@ -117,6 +122,8 @@ struct LayeredClosure {
   hasInterior: u32,
   shadingNormal: vec3f,
   hasShadingNormal: u32,
+  shadingTangent: vec3f,
+  hasShadingTangent: u32,
 };`;
 
 /** One BSDF lobe to assign into `c.lobes[i]`; fields are WGSL expression strings. */
@@ -125,6 +132,7 @@ interface LobeWgsl {
   weight: string;
   color: string;
   color90?: string;
+  hairTintTRT?: string;
   roughness?: string;
   anisotropy?: string;
   rotation?: string;
@@ -380,16 +388,24 @@ function usdPreviewSurface(c: Ctx): FamilyWgsl {
   const diffuse = c.col('diffuseColor', [0.18, 0.18, 0.18]);
   const useSpecular = c.lit('useSpecularWorkflow', 0) >= 0.5;
   const specColor = useSpecular ? c.col('specularColor', [0, 0, 0]) : 'vec3f(1.0)';
+  const mayTransmit = (c.dyn('opacity') || c.lit('opacity', 1) < 1)
+    && (c.dyn('opacityThreshold') || c.lit('opacityThreshold', 0) <= 0);
   const locals = [
     `  let mx_metal = ${clampExpr(c.s('metallic', 0))};`,
     `  let mx_diel = 1.0 - mx_metal;`,
+    `  let mx_opacity = ${clampExpr(c.s('opacity', 1))};`,
+    `  let mx_threshold = ${c.s('opacityThreshold', 0)};`,
+    `  let mx_diffuseShare = select(mx_opacity, 1.0, mx_threshold > 0.0);`,
   ];
   const lobes: LobeWgsl[] = [
     { kind: 'conductor', weight: 'mx_metal', color: diffuse, roughness: rough, active: mayWeigh(c, 'metallic', 0) },
-    { kind: 'dielectric_reflection', weight: 'mx_diel', color: specColor, roughness: rough, ior },
-    { kind: 'burley_diffuse', weight: 'mx_diel', color: diffuse, roughness: rough },
+    { kind: 'dielectric_reflection', weight: '(mx_diel * mx_diffuseShare)', color: specColor, roughness: rough, ior },
+    { kind: 'dielectric_transmission', weight: '(mx_diel * (1.0 - mx_diffuseShare))', color: 'vec3f(1.0)', roughness: rough, ior, active: mayTransmit },
+    { kind: 'burley_diffuse', weight: '(mx_diel * mx_diffuseShare)', color: diffuse, roughness: rough },
   ];
-  const out: FamilyWgsl = { locals, lobes, opacity: c.s('opacity', 1) };
+  const out: FamilyWgsl = { locals, lobes,
+    opacity: 'select(1.0, 0.0, mx_threshold > 0.0 && mx_opacity < mx_threshold)',
+    transmission: mayTransmit };
   if (presentWeighted(c, 'clearcoat')) out.coat = { weight: clampExpr(c.s('clearcoat', 0)), color: 'vec3f(1.0)', roughness: c.s('clearcoatRoughness', 0.01), ior: '1.5' };
   const emRgb = c.litRgb('emissiveColor', [0, 0, 0]);
   if (emRgb[0] > 0 || emRgb[1] > 0 || emRgb[2] > 0 || c.dyn('emissiveColor')) out.emission = c.col('emissiveColor', [0, 0, 0]);
@@ -426,6 +442,25 @@ function disneyPrincipled(c: Ctx): FamilyWgsl {
 
 function lowerFamily(family: SurfaceFamily, c: Ctx): FamilyWgsl {
   switch (family) {
+    case 'simple_hair':
+      return {
+        locals: [
+          `  let mx_hair_sigma = mix(mx_hair_absorption_color(${c.col('baseColor', [1, 1, 1])}, ${c.s('azimuthalRoughness', 0.1)}), mx_hair_absorption_melanin(${c.s('melaninConcentration', 0.5)}, ${c.s('melaninRedness', 0.5)}), ${clampExpr(c.s('melaninMix', 1))});`,
+        ],
+        lobes: [{
+          kind: 'chiang_hair', weight: '1.0',
+          color: c.col('tint_R', [1, 1, 1]),
+          color90: c.col('tint_TT', [1, 1, 1]),
+          hairTintTRT: c.col('tint_TRT', [1, 1, 1]),
+          extinction: 'mx_hair_sigma',
+          roughness: c.s('longitudinalRoughness', 0.1),
+          anisotropy: c.s('azimuthalRoughness', 0.1),
+          rotation: c.s('cuticleAngle', 0.5),
+          ior: c.s('ior', 1.55),
+        }],
+        opacity: '1.0',
+        transmission: false,
+      };
     case 'standard_surface':
       return standardSurface(c);
     case 'open_pbr_surface':
@@ -452,6 +487,7 @@ function lobeAssign(index: number, lobe: LobeWgsl): string {
     lobe.extinction ?? 'vec3f(0.0)',
     lobe.thin ?? '0.0',
     lobe.dispersion ?? '0.0',
+    lobe.hairTintTRT ?? 'vec3f(1.0)',
   ];
   return `  c.lobes[${index}] = MxBsdfLobe(${fields.join(', ')});`;
 }
@@ -511,6 +547,7 @@ function buildSurfaceFn(
   const exprs = lowerExprs(ir, handlePrefix, computeStage);
 
   const assigns: string[] = [`  c.lobeCount = ${lobes.length}u;`];
+  if (surface.family === 'simple_hair') assigns.push('  c.hasShadingTangent = 1u;', '  c.shadingTangent = vary.tangent;');
   if (shadingNormal !== undefined) assigns.push('  c.hasShadingNormal = 1u;', `  c.shadingNormal = ${shadingNormal};`);
   lobes.forEach((lobe, i) => assigns.push(lobeAssign(i, lobe)));
   if (fam.coat) assigns.push(`  c.hasCoat = 1u;`, `  c.coat = MxCoatLayer(${fam.coat.weight}, ${fam.coat.color}, ${fam.coat.roughness}, ${fam.coat.ior});`);

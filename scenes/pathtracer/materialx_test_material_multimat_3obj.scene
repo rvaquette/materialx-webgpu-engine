@@ -1,0 +1,59 @@
+renderer
+{
+	resolution 1280 720
+	maxdepth 8
+	tilewidth 256
+	tileheight 144
+    envmapfile HDR/san_giuseppe_bridge_split.hdr
+    envmapintensity 4.0
+    envmaprotation -90
+}
+
+camera
+{
+	position 7.5 5 7
+	lookat 0 0 0
+	fov 45
+}
+
+material mat_cube
+{
+	color 0.8 0.2 0.2
+	roughness 0.2
+	metallic 0.0
+}
+
+material mat_sphere
+{
+	color 0.2 0.8 0.2
+	roughness 0.2
+	metallic 0.0
+}
+
+material mat_ground
+{
+	color 0.5 0.5 0.5
+	roughness 0.5
+	specular 1.0
+}
+
+mesh
+{
+	name cube
+	file material_test/cube.obj
+	material mat_cube
+}
+
+mesh
+{
+	name sphere
+	file material_test/sphere.obj
+	material mat_sphere
+}
+
+mesh
+{
+	name ground
+	file material_test/floor.obj
+	material mat_ground
+}

@@ -1,0 +1,84 @@
+<?xml version="1.0"?>
+<materialx version="1.39" colorspace="lin_rec709">
+  <disney_principled name="floor_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" value="0, 0, 0" />
+    <input name="roughness" type="float" value="1" />
+  </disney_principled>
+  <surfacematerial name="floor" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="floor_surface" />
+  </surfacematerial>
+  <disney_principled name="black_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" value="0.008, 0.008, 0.008" />
+    <input name="roughness" type="float" value="1" />
+  </disney_principled>
+  <surfacematerial name="black" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="black_surface" />
+  </surfacematerial>
+  <disney_principled name="chrome_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" value="0.9, 0.9, 0.9" />
+    <input name="metallic" type="float" value="1" />
+    <input name="roughness" type="float" value="0" />
+  </disney_principled>
+  <surfacematerial name="chrome" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="chrome_surface" />
+  </surfacematerial>
+  <disney_principled name="glass_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" value="1, 1, 1" />
+    <input name="roughness" type="float" value="0" />
+    <input name="specTrans" type="float" value="1" />
+    <input name="ior" type="float" value="1.45" />
+  </disney_principled>
+  <surfacematerial name="glass" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="glass_surface" />
+  </surfacematerial>
+  <disney_principled name="headlight_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" value="1, 1, 1" />
+    <input name="roughness" type="float" value="0.1" />
+    <input name="specTrans" type="float" value="1" />
+    <input name="ior" type="float" value="1.45" />
+  </disney_principled>
+  <surfacematerial name="headlight" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="headlight_surface" />
+  </surfacematerial>
+  <disney_principled name="yellow_blinkers_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" value="1, 0.28, 0.122" />
+    <input name="roughness" type="float" value="0.156" />
+    <input name="specTrans" type="float" value="1" />
+    <input name="ior" type="float" value="1.45" />
+  </disney_principled>
+  <surfacematerial name="yellow_blinkers" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="yellow_blinkers_surface" />
+  </surfacematerial>
+  <disney_principled name="red_taillight_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" value="0.581, 0.009, 0.009" />
+    <input name="metallic" type="float" value="0.738" />
+    <input name="roughness" type="float" value="0" />
+  </disney_principled>
+  <surfacematerial name="red_taillight" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="red_taillight_surface" />
+  </surfacematerial>
+  <disney_principled name="paint_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" value="0.731, 0.677, 0.575" />
+    <input name="metallic" type="float" value="0.2" />
+    <input name="roughness" type="float" value="0" />
+    <input name="clearcoat" type="float" value="1" />
+  </disney_principled>
+  <surfacematerial name="paint" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="paint_surface" />
+  </surfacematerial>
+  <disney_principled name="red_interior_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" value="0.2, 0.02, 0.02" />
+    <input name="roughness" type="float" value="0.5" />
+    <input name="ior" type="float" value="1.1" />
+  </disney_principled>
+  <surfacematerial name="red_interior" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="red_interior_surface" />
+  </surfacematerial>
+  <disney_principled name="tyres_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" value="0.008, 0.008, 0.008" />
+    <input name="roughness" type="float" value="0.5" />
+  </disney_principled>
+  <surfacematerial name="tyres" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="tyres_surface" />
+  </surfacematerial>
+</materialx>

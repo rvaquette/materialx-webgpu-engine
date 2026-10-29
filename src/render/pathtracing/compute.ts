@@ -40,7 +40,7 @@ export function pathTraceClosureDispatch(dispatch: PtMaterialDispatch, materials
   let thinFilm = false;
   const variants = new Set(dispatch.variants.map(variant => variant.index));
   for (const variant of dispatch.variants) {
-    if (!variant.features) return { kinds: new Set([0, 1, 2, 3, 4, 5, 6, 7, 8]), thinFilm: true };
+    if (!variant.features) return { kinds: new Set([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]), thinFilm: true };
     variant.features.lobeKinds.forEach(kind => kinds.add(kind));
     thinFilm ||= variant.features.thinFilm;
   }
@@ -611,7 +611,7 @@ ${displayAovs ? `    if (cameraSegment) {
     if (spectralChannel < 3u) { c = mx_closure_spectral_channel(c, spectralChannel); }
     let authoredNormal = mx_closure_shading_normal(c, geometricNormal);
     let shadingNormal = mx_closure_oriented_normal(c, authoredNormal, -rd);
-    let frame = basis(shadingNormal);
+    let frame = mx_closure_frame(c, shadingNormal, basis(shadingNormal));
     let wo = transpose(frame) * (-rd);
 
     // Emitters have no NEE counterpart here, so add their radiance at full weight.
@@ -649,7 +649,7 @@ ${
         let uvS = env_map_binary_search(rng_next(state) * max(U.envExtra.z, 1.0e-6));
         let wiW = normalize(env_map_uv_to_dir(uvS));
         let wiLocal = transpose(frame) * wiW;
-        if (wiLocal.z > 0.0) {
+        if (wiLocal.z > 0.0 || mx_closure_has_hair(c)) {
           let colS = textureSampleLevel(envTex, envSampler, uvS, 0.0).xyz * U.envTexture.x;
           let envPdf = env_map_pdf_from_uv(uvS, colS);
           if (envPdf > 0.0) {
@@ -659,7 +659,7 @@ ${
               if (shFuzz) { ev = mx_closure_specular_eval(c, wo, wiLocal); }
               else { ev = mx_closure_eval(c, wo, wiLocal); }
               let w = power_heuristic(1.0, envPdf, 1.0, ev.pdf);
-              radiance = radiance + beta * ev.value * (colS * U.env.xyz * U.env.w) * (w * wiLocal.z * visibility / envPdf);
+              radiance = radiance + beta * ev.value * (colS * U.env.xyz * U.env.w) * (w * abs(wiLocal.z) * visibility / envPdf);
             }
           }
         }
@@ -757,7 +757,8 @@ fn camera_ray(px : vec2<f32>, dims : vec2<f32>, jitter : vec2<f32>) -> MxCameraR
     1.0 - ((px.y + jitter.y) / dims.y) * 2.0,
   );
   let near = U.invViewProj * vec4<f32>(ndc, 0.0, 1.0);
-  let far = U.invViewProj * vec4<f32>(ndc, 1.0, 1.0);
+  // An interior depth avoids a zero homogeneous w at distant far planes in f32.
+  let far = U.invViewProj * vec4<f32>(ndc, 0.5, 1.0);
   var ray : MxCameraRay;
   ray.origin = near.xyz / near.w;
   ray.direction = normalize(far.xyz / far.w - ray.origin);

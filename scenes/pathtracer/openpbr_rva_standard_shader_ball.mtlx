@@ -1,0 +1,17 @@
+<?xml version="1.0"?>
+<materialx version="1.39" colorspace="lin_rec709">
+  <!-- source MaterialX: ../materialx/materials/Examples/StandardSurface/standard_surface_glass.mtlx; surface: unspecified; converted to DisneyPrincipled -->
+  <disney_principled name="mtlx_test_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" value="0.8, 0.8, 0.8" />
+  </disney_principled>
+  <surfacematerial name="mtlx_test" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="mtlx_test_surface" />
+  </surfacematerial>
+  <!-- source MaterialX: ../materialx/materials/Examples/StandardSurface/standard_surface_default.mtlx; surface: unspecified; converted to DisneyPrincipled -->
+  <disney_principled name="mtlx_default_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" value="0.8, 0.8, 0.8" />
+  </disney_principled>
+  <surfacematerial name="mtlx_default" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="mtlx_default_surface" />
+  </surfacematerial>
+</materialx>

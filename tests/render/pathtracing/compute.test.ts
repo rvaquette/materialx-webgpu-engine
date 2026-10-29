@@ -10,7 +10,7 @@ import {
   PT_WORKGROUP_SIZE,
 } from '../../../src/render/pathtracing/compute.ts';
 import type { PathTraceScene } from '../../../src/render/pathtracing/scene-buffers.ts';
-import { IDENTITY4 } from '../../../src/scene/transforms.ts';
+import { IDENTITY4, inverse4, perspective4, orthographic4 } from '../../../src/scene/transforms.ts';
 import { vector, type IrType } from '../../../src/compiler/ir.ts';
 import { buildMaterialDispatch } from '../../../src/render/pathtracing/material-variant.ts';
 import { evaluateSurfaceToLayered } from '../../../src/compiler/surface-eval.ts';
@@ -127,7 +127,7 @@ describe('pathTraceComputeWgsl', () => {
     expect(shader).toContain('let geometricNormal = surface_hit_normal(hit);');
     expect(shader).toContain('let authoredNormal = mx_closure_shading_normal(c, geometricNormal);');
     expect(shader).toContain('let shadingNormal = mx_closure_oriented_normal(c, authoredNormal, -rd);');
-    expect(shader).toContain('let frame = basis(shadingNormal);');
+    expect(shader).toContain('let frame = mx_closure_frame(c, shadingNormal, basis(shadingNormal));');
     expect(shader).toContain('mx_sh_irradiance(shadingNormal)');
     expect(shader).toContain('let cosS = abs(dot(shadingNormal, wiWorld));');
   });
@@ -174,6 +174,23 @@ describe('pathTraceComputeWgsl', () => {
     expect(src).toContain('ray.direction = normalize(far.xyz / far.w - ray.origin);');
     expect(src).toContain('integrate(ray.origin, ray.direction, ray.backgroundDirection, &state)');
     expect(src).not.toContain('normalize(world - U.eye.xyz)');
+  });
+
+  it('unprojects an interior depth to keep wide-clipping camera rays finite in f32', () => {
+    expect(src).toContain('let far = U.invViewProj * vec4<f32>(ndc, 0.5, 1.0);');
+    const perspective = new Float32Array(inverse4(perspective4(40 * Math.PI / 180, 1, 0.001, 1_000_000)));
+    const wAt = (depth: number) => Math.fround(Math.fround(perspective[11]! * depth) + perspective[15]!);
+    expect(wAt(1)).toBe(0);
+    expect(wAt(0.5)).not.toBe(0);
+    for (const projection of [perspective, new Float32Array(inverse4(orthographic4(-1, 1, -1, 1, 0.001, 1_000_000)))]) {
+      const point = (z: number) => {
+        const w = Math.fround(Math.fround(projection[11]! * z) + projection[15]!);
+        return [0, 1, 2].map(row => Math.fround(Math.fround(projection[8 + row]! * z) + projection[12 + row]!) / w);
+      };
+      const near = point(0), middle = point(0.5);
+      expect([...near, ...middle].every(Number.isFinite)).toBe(true);
+      expect(middle[2]!).toBeLessThan(near[2]!);
+    }
   });
 
   it('wires NEE + MIS on the generated stack (environment next-event estimation)', () => {

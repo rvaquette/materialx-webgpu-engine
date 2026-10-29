@@ -1,0 +1,692 @@
+#usda 1.0
+(
+    defaultPrim = "World"
+    metersPerUnit = 1
+    upAxis = "Y"
+    doc = "hyperion_rect_lights converted from GLSL-PathTracer .scene"
+)
+
+def Xform "World"
+{
+    custom string pathtracer:sourceScene = "hyperion_rect_lights.scene"
+    custom int2 pathtracer:resolution = (1280, 720)
+    custom int pathtracer:maxDepth = 3
+
+    def Camera "Camera"
+    {
+        matrix4d xformOp:transform = ((0, 0, 1, 0), (0.707106781187, 0.707106781187, 0, 0), (-0.707106781187, 0.707106781187, 0, 0), (-15, 15, 0, 1))
+        uniform token[] xformOpOrder = ["xformOp:transform"]
+        token projection = "perspective"
+        float focalLength = 50
+        float horizontalAperture = 57.735026919
+        float verticalAperture = 32.4759526419
+        float2 clippingRange = (0.001, 1000000)
+        custom point3f pathtracer:lookAt = (0, 0, 0)
+        custom float pathtracer:fov = 60
+    }
+
+    def Scope "Looks"
+    {
+        def Material "black" (
+            prepend references = @./hyperion_rect_lights.mtlx@</MaterialX/Materials/black>
+        )
+        {
+        }
+        def Material "orange" (
+            prepend references = @./hyperion_rect_lights.mtlx@</MaterialX/Materials/orange>
+        )
+        {
+        }
+        def Material "glass" (
+            prepend references = @./hyperion_rect_lights.mtlx@</MaterialX/Materials/glass>
+        )
+        {
+        }
+        def Material "silver" (
+            prepend references = @./hyperion_rect_lights.mtlx@</MaterialX/Materials/silver>
+        )
+        {
+        }
+        def Material "ring_silver" (
+            prepend references = @./hyperion_rect_lights.mtlx@</MaterialX/Materials/ring_silver>
+        )
+        {
+        }
+        def Material "red" (
+            prepend references = @./hyperion_rect_lights.mtlx@</MaterialX/Materials/red>
+        )
+        {
+        }
+        def Material "off_white" (
+            prepend references = @./hyperion_rect_lights.mtlx@</MaterialX/Materials/off_white>
+        )
+        {
+        }
+        def Material "ping" (
+            prepend references = @./hyperion_rect_lights.mtlx@</MaterialX/Materials/ping>
+        )
+        {
+        }
+        def Material "marb1" (
+            prepend references = @./hyperion_rect_lights.mtlx@</MaterialX/Materials/marb1>
+        )
+        {
+        }
+        def Material "marb2" (
+            prepend references = @./hyperion_rect_lights.mtlx@</MaterialX/Materials/marb2>
+        )
+        {
+        }
+    }
+
+    def Scope "Geometry"
+    {
+        def Mesh "Glass_Ball"
+        {
+            custom asset engine:geometry:file = @./hyperion/glass.obj@
+            double3 xformOp:translate = (-0.57, 1.87, 6.55)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+            rel material:binding = </World/Looks/glass>
+        }
+        def Mesh "Chrome_Ball"
+        {
+            custom asset engine:geometry:file = @./hyperion/chrome.obj@
+            double3 xformOp:translate = (0.4, 1.86, -6.59)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+            rel material:binding = </World/Looks/silver>
+        }
+        def Mesh "Platform"
+        {
+            custom asset engine:geometry:file = @./hyperion/plate.obj@
+            double3 xformOp:translate = (0, 0.36, 0)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+            rel material:binding = </World/Looks/red>
+        }
+        def Mesh "Floor"
+        {
+            custom asset engine:geometry:file = @./hyperion/floor.obj@
+
+            rel material:binding = </World/Looks/red>
+        }
+        def Mesh "Orange_Ball"
+        {
+            custom asset engine:geometry:file = @./hyperion/orange.obj@
+            double3 xformOp:translate = (1.646, 1.6861, 3.5662)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+            rel material:binding = </World/Looks/orange>
+        }
+        def Mesh "Ring_1"
+        {
+            custom asset engine:geometry:file = @./hyperion/ring1.obj@
+            double3 xformOp:translate = (-0.308737, 0.805763, -1.42968)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+            rel material:binding = </World/Looks/ring_silver>
+        }
+        def Mesh "Ring_2"
+        {
+            custom asset engine:geometry:file = @./hyperion/ring2.obj@
+            double3 xformOp:translate = (-0.6706, 0.808472, 0.626798)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+            rel material:binding = </World/Looks/ring_silver>
+        }
+        def Mesh "Ring_3"
+        {
+            custom asset engine:geometry:file = @./hyperion/ring3.obj@
+            double3 xformOp:translate = (-1.44541, 0.808472, 1.72607)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+            rel material:binding = </World/Looks/ring_silver>
+        }
+        def Mesh "Marble_1"
+        {
+            custom asset engine:geometry:file = @./hyperion/marb1.obj@
+            double3 xformOp:translate = (-3.78, 0.88, -0.84)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+            rel material:binding = </World/Looks/marb1>
+        }
+        def Mesh "Marble_2"
+        {
+            custom asset engine:geometry:file = @./hyperion/marb2.obj@
+            double3 xformOp:translate = (-3.746, 0.969453, 0.974294)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+            rel material:binding = </World/Looks/marb2>
+        }
+        def Mesh "Ping_Pong"
+        {
+            custom asset engine:geometry:file = @./hyperion/pingpong.obj@
+            double3 xformOp:translate = (-3.14, 1.51, -4.12)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+            rel material:binding = </World/Looks/ping>
+        }
+    }
+
+    def Scope "Lights"
+    {
+        def RectLight "Light_001"
+        {
+            matrix4d xformOp:transform = ((1, 0, 0, 0), (0, 0, -1, 0), (0, 1, 0, 0), (-0.004865, 5, -7.75, 1))
+            uniform token[] xformOpOrder = ["xformOp:transform"]
+            color3f inputs:color = (1, 1, 1)
+            float inputs:intensity = 5
+            bool inputs:normalize = false
+            float inputs:width = 4.08973
+            float inputs:height = 0.5
+        }
+        def Material "Light_001_Material"
+        {
+            token outputs:surface.connect = </World/Lights/Light_001_Material/Surface.outputs:surface>
+            def Shader "Surface"
+            {
+                uniform token info:id = "UsdPreviewSurface"
+                color3f inputs:diffuseColor = (0, 0, 0)
+                int inputs:useSpecularWorkflow = 1
+                color3f inputs:specularColor = (0, 0, 0)
+                color3f inputs:emissiveColor = (5, 5, 5)
+                token outputs:surface
+            }
+        }
+        def Mesh "Light_001_Geometry"
+        {
+            point3f[] points = [(-2.04973, 5, -8), (2.04, 5, -8), (2.04, 5, -7.5), (-2.04973, 5, -7.5)]
+            int[] faceVertexCounts = [4]
+            int[] faceVertexIndices = [0, 1, 2, 3]
+            uniform token subdivisionScheme = "none"
+            rel material:binding = </World/Lights/Light_001_Material>
+        }
+        def RectLight "Light_002"
+        {
+            matrix4d xformOp:transform = ((1, 0, 0, 0), (0, 0, -1, 0), (0, 1, 0, 0), (-0.004865, 5, -6.75, 1))
+            uniform token[] xformOpOrder = ["xformOp:transform"]
+            color3f inputs:color = (1, 1, 1)
+            float inputs:intensity = 5
+            bool inputs:normalize = false
+            float inputs:width = 4.08973
+            float inputs:height = 0.5
+        }
+        def Material "Light_002_Material"
+        {
+            token outputs:surface.connect = </World/Lights/Light_002_Material/Surface.outputs:surface>
+            def Shader "Surface"
+            {
+                uniform token info:id = "UsdPreviewSurface"
+                color3f inputs:diffuseColor = (0, 0, 0)
+                int inputs:useSpecularWorkflow = 1
+                color3f inputs:specularColor = (0, 0, 0)
+                color3f inputs:emissiveColor = (5, 5, 5)
+                token outputs:surface
+            }
+        }
+        def Mesh "Light_002_Geometry"
+        {
+            point3f[] points = [(-2.04973, 5, -7), (2.04, 5, -7), (2.04, 5, -6.5), (-2.04973, 5, -6.5)]
+            int[] faceVertexCounts = [4]
+            int[] faceVertexIndices = [0, 1, 2, 3]
+            uniform token subdivisionScheme = "none"
+            rel material:binding = </World/Lights/Light_002_Material>
+        }
+        def RectLight "Light_003"
+        {
+            matrix4d xformOp:transform = ((1, 0, 0, 0), (0, 0, -1, 0), (0, 1, 0, 0), (-0.004865, 5, -5.75, 1))
+            uniform token[] xformOpOrder = ["xformOp:transform"]
+            color3f inputs:color = (1, 1, 1)
+            float inputs:intensity = 5
+            bool inputs:normalize = false
+            float inputs:width = 4.08973
+            float inputs:height = 0.5
+        }
+        def Material "Light_003_Material"
+        {
+            token outputs:surface.connect = </World/Lights/Light_003_Material/Surface.outputs:surface>
+            def Shader "Surface"
+            {
+                uniform token info:id = "UsdPreviewSurface"
+                color3f inputs:diffuseColor = (0, 0, 0)
+                int inputs:useSpecularWorkflow = 1
+                color3f inputs:specularColor = (0, 0, 0)
+                color3f inputs:emissiveColor = (5, 5, 5)
+                token outputs:surface
+            }
+        }
+        def Mesh "Light_003_Geometry"
+        {
+            point3f[] points = [(-2.04973, 5, -6), (2.04, 5, -6), (2.04, 5, -5.5), (-2.04973, 5, -5.5)]
+            int[] faceVertexCounts = [4]
+            int[] faceVertexIndices = [0, 1, 2, 3]
+            uniform token subdivisionScheme = "none"
+            rel material:binding = </World/Lights/Light_003_Material>
+        }
+        def RectLight "Light_004"
+        {
+            matrix4d xformOp:transform = ((1, 0, 0, 0), (0, 0, -1, 0), (0, 1, 0, 0), (-0.004865, 5, -4.75, 1))
+            uniform token[] xformOpOrder = ["xformOp:transform"]
+            color3f inputs:color = (1, 1, 1)
+            float inputs:intensity = 5
+            bool inputs:normalize = false
+            float inputs:width = 4.08973
+            float inputs:height = 0.5
+        }
+        def Material "Light_004_Material"
+        {
+            token outputs:surface.connect = </World/Lights/Light_004_Material/Surface.outputs:surface>
+            def Shader "Surface"
+            {
+                uniform token info:id = "UsdPreviewSurface"
+                color3f inputs:diffuseColor = (0, 0, 0)
+                int inputs:useSpecularWorkflow = 1
+                color3f inputs:specularColor = (0, 0, 0)
+                color3f inputs:emissiveColor = (5, 5, 5)
+                token outputs:surface
+            }
+        }
+        def Mesh "Light_004_Geometry"
+        {
+            point3f[] points = [(-2.04973, 5, -5), (2.04, 5, -5), (2.04, 5, -4.5), (-2.04973, 5, -4.5)]
+            int[] faceVertexCounts = [4]
+            int[] faceVertexIndices = [0, 1, 2, 3]
+            uniform token subdivisionScheme = "none"
+            rel material:binding = </World/Lights/Light_004_Material>
+        }
+        def RectLight "Light_005"
+        {
+            matrix4d xformOp:transform = ((1, 0, 0, 0), (0, 0, -1, 0), (0, 1, 0, 0), (-0.004865, 5, -3.75, 1))
+            uniform token[] xformOpOrder = ["xformOp:transform"]
+            color3f inputs:color = (1, 1, 1)
+            float inputs:intensity = 5
+            bool inputs:normalize = false
+            float inputs:width = 4.08973
+            float inputs:height = 0.5
+        }
+        def Material "Light_005_Material"
+        {
+            token outputs:surface.connect = </World/Lights/Light_005_Material/Surface.outputs:surface>
+            def Shader "Surface"
+            {
+                uniform token info:id = "UsdPreviewSurface"
+                color3f inputs:diffuseColor = (0, 0, 0)
+                int inputs:useSpecularWorkflow = 1
+                color3f inputs:specularColor = (0, 0, 0)
+                color3f inputs:emissiveColor = (5, 5, 5)
+                token outputs:surface
+            }
+        }
+        def Mesh "Light_005_Geometry"
+        {
+            point3f[] points = [(-2.04973, 5, -4), (2.04, 5, -4), (2.04, 5, -3.5), (-2.04973, 5, -3.5)]
+            int[] faceVertexCounts = [4]
+            int[] faceVertexIndices = [0, 1, 2, 3]
+            uniform token subdivisionScheme = "none"
+            rel material:binding = </World/Lights/Light_005_Material>
+        }
+        def RectLight "Light_006"
+        {
+            matrix4d xformOp:transform = ((1, 0, 0, 0), (0, 0, -1, 0), (0, 1, 0, 0), (-0.004865, 5, -2.75, 1))
+            uniform token[] xformOpOrder = ["xformOp:transform"]
+            color3f inputs:color = (1, 1, 1)
+            float inputs:intensity = 5
+            bool inputs:normalize = false
+            float inputs:width = 4.08973
+            float inputs:height = 0.5
+        }
+        def Material "Light_006_Material"
+        {
+            token outputs:surface.connect = </World/Lights/Light_006_Material/Surface.outputs:surface>
+            def Shader "Surface"
+            {
+                uniform token info:id = "UsdPreviewSurface"
+                color3f inputs:diffuseColor = (0, 0, 0)
+                int inputs:useSpecularWorkflow = 1
+                color3f inputs:specularColor = (0, 0, 0)
+                color3f inputs:emissiveColor = (5, 5, 5)
+                token outputs:surface
+            }
+        }
+        def Mesh "Light_006_Geometry"
+        {
+            point3f[] points = [(-2.04973, 5, -3), (2.04, 5, -3), (2.04, 5, -2.5), (-2.04973, 5, -2.5)]
+            int[] faceVertexCounts = [4]
+            int[] faceVertexIndices = [0, 1, 2, 3]
+            uniform token subdivisionScheme = "none"
+            rel material:binding = </World/Lights/Light_006_Material>
+        }
+        def RectLight "Light_007"
+        {
+            matrix4d xformOp:transform = ((1, 0, 0, 0), (0, 0, -1, 0), (0, 1, 0, 0), (-0.004865, 5, -1.75, 1))
+            uniform token[] xformOpOrder = ["xformOp:transform"]
+            color3f inputs:color = (1, 1, 1)
+            float inputs:intensity = 5
+            bool inputs:normalize = false
+            float inputs:width = 4.08973
+            float inputs:height = 0.5
+        }
+        def Material "Light_007_Material"
+        {
+            token outputs:surface.connect = </World/Lights/Light_007_Material/Surface.outputs:surface>
+            def Shader "Surface"
+            {
+                uniform token info:id = "UsdPreviewSurface"
+                color3f inputs:diffuseColor = (0, 0, 0)
+                int inputs:useSpecularWorkflow = 1
+                color3f inputs:specularColor = (0, 0, 0)
+                color3f inputs:emissiveColor = (5, 5, 5)
+                token outputs:surface
+            }
+        }
+        def Mesh "Light_007_Geometry"
+        {
+            point3f[] points = [(-2.04973, 5, -2), (2.04, 5, -2), (2.04, 5, -1.5), (-2.04973, 5, -1.5)]
+            int[] faceVertexCounts = [4]
+            int[] faceVertexIndices = [0, 1, 2, 3]
+            uniform token subdivisionScheme = "none"
+            rel material:binding = </World/Lights/Light_007_Material>
+        }
+        def RectLight "Light_008"
+        {
+            matrix4d xformOp:transform = ((1, 0, 0, 0), (0, 0, -1, 0), (0, 1, 0, 0), (-0.004865, 5, -0.75, 1))
+            uniform token[] xformOpOrder = ["xformOp:transform"]
+            color3f inputs:color = (1, 1, 1)
+            float inputs:intensity = 5
+            bool inputs:normalize = false
+            float inputs:width = 4.08973
+            float inputs:height = 0.5
+        }
+        def Material "Light_008_Material"
+        {
+            token outputs:surface.connect = </World/Lights/Light_008_Material/Surface.outputs:surface>
+            def Shader "Surface"
+            {
+                uniform token info:id = "UsdPreviewSurface"
+                color3f inputs:diffuseColor = (0, 0, 0)
+                int inputs:useSpecularWorkflow = 1
+                color3f inputs:specularColor = (0, 0, 0)
+                color3f inputs:emissiveColor = (5, 5, 5)
+                token outputs:surface
+            }
+        }
+        def Mesh "Light_008_Geometry"
+        {
+            point3f[] points = [(-2.04973, 5, -1), (2.04, 5, -1), (2.04, 5, -0.5), (-2.04973, 5, -0.5)]
+            int[] faceVertexCounts = [4]
+            int[] faceVertexIndices = [0, 1, 2, 3]
+            uniform token subdivisionScheme = "none"
+            rel material:binding = </World/Lights/Light_008_Material>
+        }
+        def RectLight "Light_009"
+        {
+            matrix4d xformOp:transform = ((1, 0, 0, 0), (0, 0, -1, 0), (0, 1, 0, 0), (-0.004865, 5, 0.25, 1))
+            uniform token[] xformOpOrder = ["xformOp:transform"]
+            color3f inputs:color = (1, 1, 1)
+            float inputs:intensity = 5
+            bool inputs:normalize = false
+            float inputs:width = 4.08973
+            float inputs:height = 0.5
+        }
+        def Material "Light_009_Material"
+        {
+            token outputs:surface.connect = </World/Lights/Light_009_Material/Surface.outputs:surface>
+            def Shader "Surface"
+            {
+                uniform token info:id = "UsdPreviewSurface"
+                color3f inputs:diffuseColor = (0, 0, 0)
+                int inputs:useSpecularWorkflow = 1
+                color3f inputs:specularColor = (0, 0, 0)
+                color3f inputs:emissiveColor = (5, 5, 5)
+                token outputs:surface
+            }
+        }
+        def Mesh "Light_009_Geometry"
+        {
+            point3f[] points = [(-2.04973, 5, 0), (2.04, 5, 0), (2.04, 5, 0.5), (-2.04973, 5, 0.5)]
+            int[] faceVertexCounts = [4]
+            int[] faceVertexIndices = [0, 1, 2, 3]
+            uniform token subdivisionScheme = "none"
+            rel material:binding = </World/Lights/Light_009_Material>
+        }
+        def RectLight "Light_010"
+        {
+            matrix4d xformOp:transform = ((1, 0, 0, 0), (0, 0, -1, 0), (0, 1, 0, 0), (-0.004865, 5, 1.25, 1))
+            uniform token[] xformOpOrder = ["xformOp:transform"]
+            color3f inputs:color = (1, 1, 1)
+            float inputs:intensity = 5
+            bool inputs:normalize = false
+            float inputs:width = 4.08973
+            float inputs:height = 0.5
+        }
+        def Material "Light_010_Material"
+        {
+            token outputs:surface.connect = </World/Lights/Light_010_Material/Surface.outputs:surface>
+            def Shader "Surface"
+            {
+                uniform token info:id = "UsdPreviewSurface"
+                color3f inputs:diffuseColor = (0, 0, 0)
+                int inputs:useSpecularWorkflow = 1
+                color3f inputs:specularColor = (0, 0, 0)
+                color3f inputs:emissiveColor = (5, 5, 5)
+                token outputs:surface
+            }
+        }
+        def Mesh "Light_010_Geometry"
+        {
+            point3f[] points = [(-2.04973, 5, 1), (2.04, 5, 1), (2.04, 5, 1.5), (-2.04973, 5, 1.5)]
+            int[] faceVertexCounts = [4]
+            int[] faceVertexIndices = [0, 1, 2, 3]
+            uniform token subdivisionScheme = "none"
+            rel material:binding = </World/Lights/Light_010_Material>
+        }
+        def RectLight "Light_011"
+        {
+            matrix4d xformOp:transform = ((1, 0, 0, 0), (0, 0, -1, 0), (0, 1, 0, 0), (-0.004865, 5, 2.25, 1))
+            uniform token[] xformOpOrder = ["xformOp:transform"]
+            color3f inputs:color = (1, 1, 1)
+            float inputs:intensity = 5
+            bool inputs:normalize = false
+            float inputs:width = 4.08973
+            float inputs:height = 0.5
+        }
+        def Material "Light_011_Material"
+        {
+            token outputs:surface.connect = </World/Lights/Light_011_Material/Surface.outputs:surface>
+            def Shader "Surface"
+            {
+                uniform token info:id = "UsdPreviewSurface"
+                color3f inputs:diffuseColor = (0, 0, 0)
+                int inputs:useSpecularWorkflow = 1
+                color3f inputs:specularColor = (0, 0, 0)
+                color3f inputs:emissiveColor = (5, 5, 5)
+                token outputs:surface
+            }
+        }
+        def Mesh "Light_011_Geometry"
+        {
+            point3f[] points = [(-2.04973, 5, 2), (2.04, 5, 2), (2.04, 5, 2.5), (-2.04973, 5, 2.5)]
+            int[] faceVertexCounts = [4]
+            int[] faceVertexIndices = [0, 1, 2, 3]
+            uniform token subdivisionScheme = "none"
+            rel material:binding = </World/Lights/Light_011_Material>
+        }
+        def RectLight "Light_012"
+        {
+            matrix4d xformOp:transform = ((1, 0, 0, 0), (0, 0, -1, 0), (0, 1, 0, 0), (-0.004865, 5, 3.25, 1))
+            uniform token[] xformOpOrder = ["xformOp:transform"]
+            color3f inputs:color = (1, 1, 1)
+            float inputs:intensity = 5
+            bool inputs:normalize = false
+            float inputs:width = 4.08973
+            float inputs:height = 0.5
+        }
+        def Material "Light_012_Material"
+        {
+            token outputs:surface.connect = </World/Lights/Light_012_Material/Surface.outputs:surface>
+            def Shader "Surface"
+            {
+                uniform token info:id = "UsdPreviewSurface"
+                color3f inputs:diffuseColor = (0, 0, 0)
+                int inputs:useSpecularWorkflow = 1
+                color3f inputs:specularColor = (0, 0, 0)
+                color3f inputs:emissiveColor = (5, 5, 5)
+                token outputs:surface
+            }
+        }
+        def Mesh "Light_012_Geometry"
+        {
+            point3f[] points = [(-2.04973, 5, 3), (2.04, 5, 3), (2.04, 5, 3.5), (-2.04973, 5, 3.5)]
+            int[] faceVertexCounts = [4]
+            int[] faceVertexIndices = [0, 1, 2, 3]
+            uniform token subdivisionScheme = "none"
+            rel material:binding = </World/Lights/Light_012_Material>
+        }
+        def RectLight "Light_013"
+        {
+            matrix4d xformOp:transform = ((1, 0, 0, 0), (0, 0, -1, 0), (0, 1, 0, 0), (-0.004865, 5, 4.25, 1))
+            uniform token[] xformOpOrder = ["xformOp:transform"]
+            color3f inputs:color = (1, 1, 1)
+            float inputs:intensity = 5
+            bool inputs:normalize = false
+            float inputs:width = 4.08973
+            float inputs:height = 0.5
+        }
+        def Material "Light_013_Material"
+        {
+            token outputs:surface.connect = </World/Lights/Light_013_Material/Surface.outputs:surface>
+            def Shader "Surface"
+            {
+                uniform token info:id = "UsdPreviewSurface"
+                color3f inputs:diffuseColor = (0, 0, 0)
+                int inputs:useSpecularWorkflow = 1
+                color3f inputs:specularColor = (0, 0, 0)
+                color3f inputs:emissiveColor = (5, 5, 5)
+                token outputs:surface
+            }
+        }
+        def Mesh "Light_013_Geometry"
+        {
+            point3f[] points = [(-2.04973, 5, 4), (2.04, 5, 4), (2.04, 5, 4.5), (-2.04973, 5, 4.5)]
+            int[] faceVertexCounts = [4]
+            int[] faceVertexIndices = [0, 1, 2, 3]
+            uniform token subdivisionScheme = "none"
+            rel material:binding = </World/Lights/Light_013_Material>
+        }
+        def RectLight "Light_014"
+        {
+            matrix4d xformOp:transform = ((1, 0, 0, 0), (0, 0, -1, 0), (0, 1, 0, 0), (-0.004865, 5, 5.25, 1))
+            uniform token[] xformOpOrder = ["xformOp:transform"]
+            color3f inputs:color = (1, 1, 1)
+            float inputs:intensity = 5
+            bool inputs:normalize = false
+            float inputs:width = 4.08973
+            float inputs:height = 0.5
+        }
+        def Material "Light_014_Material"
+        {
+            token outputs:surface.connect = </World/Lights/Light_014_Material/Surface.outputs:surface>
+            def Shader "Surface"
+            {
+                uniform token info:id = "UsdPreviewSurface"
+                color3f inputs:diffuseColor = (0, 0, 0)
+                int inputs:useSpecularWorkflow = 1
+                color3f inputs:specularColor = (0, 0, 0)
+                color3f inputs:emissiveColor = (5, 5, 5)
+                token outputs:surface
+            }
+        }
+        def Mesh "Light_014_Geometry"
+        {
+            point3f[] points = [(-2.04973, 5, 5), (2.04, 5, 5), (2.04, 5, 5.5), (-2.04973, 5, 5.5)]
+            int[] faceVertexCounts = [4]
+            int[] faceVertexIndices = [0, 1, 2, 3]
+            uniform token subdivisionScheme = "none"
+            rel material:binding = </World/Lights/Light_014_Material>
+        }
+        def RectLight "Light_015"
+        {
+            matrix4d xformOp:transform = ((1, 0, 0, 0), (0, 0, -1, 0), (0, 1, 0, 0), (-0.004865, 5, 6.25, 1))
+            uniform token[] xformOpOrder = ["xformOp:transform"]
+            color3f inputs:color = (1, 1, 1)
+            float inputs:intensity = 5
+            bool inputs:normalize = false
+            float inputs:width = 4.08973
+            float inputs:height = 0.5
+        }
+        def Material "Light_015_Material"
+        {
+            token outputs:surface.connect = </World/Lights/Light_015_Material/Surface.outputs:surface>
+            def Shader "Surface"
+            {
+                uniform token info:id = "UsdPreviewSurface"
+                color3f inputs:diffuseColor = (0, 0, 0)
+                int inputs:useSpecularWorkflow = 1
+                color3f inputs:specularColor = (0, 0, 0)
+                color3f inputs:emissiveColor = (5, 5, 5)
+                token outputs:surface
+            }
+        }
+        def Mesh "Light_015_Geometry"
+        {
+            point3f[] points = [(-2.04973, 5, 6), (2.04, 5, 6), (2.04, 5, 6.5), (-2.04973, 5, 6.5)]
+            int[] faceVertexCounts = [4]
+            int[] faceVertexIndices = [0, 1, 2, 3]
+            uniform token subdivisionScheme = "none"
+            rel material:binding = </World/Lights/Light_015_Material>
+        }
+        def RectLight "Light_016"
+        {
+            matrix4d xformOp:transform = ((1, 0, 0, 0), (0, 0, -1, 0), (0, 1, 0, 0), (-0.004865, 5, 7.25, 1))
+            uniform token[] xformOpOrder = ["xformOp:transform"]
+            color3f inputs:color = (1, 1, 1)
+            float inputs:intensity = 5
+            bool inputs:normalize = false
+            float inputs:width = 4.08973
+            float inputs:height = 0.5
+        }
+        def Material "Light_016_Material"
+        {
+            token outputs:surface.connect = </World/Lights/Light_016_Material/Surface.outputs:surface>
+            def Shader "Surface"
+            {
+                uniform token info:id = "UsdPreviewSurface"
+                color3f inputs:diffuseColor = (0, 0, 0)
+                int inputs:useSpecularWorkflow = 1
+                color3f inputs:specularColor = (0, 0, 0)
+                color3f inputs:emissiveColor = (5, 5, 5)
+                token outputs:surface
+            }
+        }
+        def Mesh "Light_016_Geometry"
+        {
+            point3f[] points = [(-2.04973, 5, 7), (2.04, 5, 7), (2.04, 5, 7.5), (-2.04973, 5, 7.5)]
+            int[] faceVertexCounts = [4]
+            int[] faceVertexIndices = [0, 1, 2, 3]
+            uniform token subdivisionScheme = "none"
+            rel material:binding = </World/Lights/Light_016_Material>
+        }
+        def RectLight "Light_017"
+        {
+            matrix4d xformOp:transform = ((1, 0, 0, 0), (0, 0, -1, 0), (0, 1, 0, 0), (-0.004865, 5, 8.25, 1))
+            uniform token[] xformOpOrder = ["xformOp:transform"]
+            color3f inputs:color = (1, 1, 1)
+            float inputs:intensity = 5
+            bool inputs:normalize = false
+            float inputs:width = 4.08973
+            float inputs:height = 0.5
+        }
+        def Material "Light_017_Material"
+        {
+            token outputs:surface.connect = </World/Lights/Light_017_Material/Surface.outputs:surface>
+            def Shader "Surface"
+            {
+                uniform token info:id = "UsdPreviewSurface"
+                color3f inputs:diffuseColor = (0, 0, 0)
+                int inputs:useSpecularWorkflow = 1
+                color3f inputs:specularColor = (0, 0, 0)
+                color3f inputs:emissiveColor = (5, 5, 5)
+                token outputs:surface
+            }
+        }
+        def Mesh "Light_017_Geometry"
+        {
+            point3f[] points = [(-2.04973, 5, 8), (2.04, 5, 8), (2.04, 5, 8.5), (-2.04973, 5, 8.5)]
+            int[] faceVertexCounts = [4]
+            int[] faceVertexIndices = [0, 1, 2, 3]
+            uniform token subdivisionScheme = "none"
+            rel material:binding = </World/Lights/Light_017_Material>
+        }
+    }
+}

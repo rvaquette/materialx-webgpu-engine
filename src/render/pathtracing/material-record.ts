@@ -18,8 +18,8 @@ import type {
 /** Max lobes packed per material; matches MX_MAX_LOBES in LAYERED_CLOSURE_PRELUDE. */
 export const PT_MAX_LOBES = 8;
 
-/** f32 stride of one packed lobe (kind, weight, flags, color, color90, scalars, extinction, medium). */
-export const PT_LOBE_FLOATS = 24;
+/** f32 stride of one packed lobe (kind, weight, flags, colors, scalars, extinction, medium, hair TRT tint). */
+export const PT_LOBE_FLOATS = 27;
 
 /** f32 count of the per-material header that precedes the lobe array. */
 export const PT_MATERIAL_HEADER_FLOATS = 29;
@@ -28,10 +28,7 @@ export const PT_MATERIAL_HEADER_FLOATS = 29;
 export const PT_MATERIAL_RECORD_FLOATS =
   PT_MATERIAL_HEADER_FLOATS + PT_MAX_LOBES * PT_LOBE_FLOATS;
 
-// Lobe-kind enum shared with LAYERED_CLOSURE_PRELUDE (0u..7u). dielectric_transmission
-// has no WGSL enum constant yet (the canonical lowering emits 'translucent' for
-// transmission, T056e), so it is assigned the CPU-only index 8 until the BTDF lobe
-// is wired into the WGSL assembler.
+// Lobe-kind indices shared with LAYERED_CLOSURE_PRELUDE (0u..9u).
 const KIND_TO_U32: Readonly<Record<BsdfLobeKind, number>> = {
   oren_nayar_diffuse: 0,
   burley_diffuse: 1,
@@ -42,6 +39,7 @@ const KIND_TO_U32: Readonly<Record<BsdfLobeKind, number>> = {
   sheen: 6,
   subsurface: 7,
   dielectric_transmission: 8,
+  chiang_hair: 9,
 };
 
 const U32_TO_KIND: readonly BsdfLobeKind[] = [
@@ -54,6 +52,7 @@ const U32_TO_KIND: readonly BsdfLobeKind[] = [
   'sheen',
   'subsurface',
   'dielectric_transmission',
+  'chiang_hair',
 ];
 
 /** Presence bits packed into each lobe's flags float. */
@@ -67,6 +66,7 @@ const LOBE_THIN_WALLED = 64;
 const LOBE_HAS_ATTENUATION = 128;
 const LOBE_HAS_SUBSURFACE_RADIUS = 256;
 const LOBE_HAS_DISPERSION = 512;
+const LOBE_HAS_HAIR_TRT = 1024;
 
 function rd(buf: ArrayLike<number>, i: number): number {
   return buf[i] ?? 0;
@@ -84,6 +84,7 @@ function writeLobe(out: Float32Array, base: number, lobe: LayeredBsdfLobe): void
   if (lobe.attenuationColor !== undefined && lobe.attenuationDistance !== undefined) flags |= LOBE_HAS_ATTENUATION;
   if (lobe.subsurfaceRadius !== undefined) flags |= LOBE_HAS_SUBSURFACE_RADIUS;
   if (lobe.dispersion !== undefined) flags |= LOBE_HAS_DISPERSION;
+  if (lobe.hairTintTRT !== undefined) flags |= LOBE_HAS_HAIR_TRT;
 
   out[base] = KIND_TO_U32[lobe.kind];
   out[base + 1] = lobe.weight;
@@ -113,6 +114,10 @@ function writeLobe(out: Float32Array, base: number, lobe: LayeredBsdfLobe): void
   out[base + 21] = radius[1];
   out[base + 22] = radius[2];
   out[base + 23] = lobe.dispersion ?? 0;
+  const trt = lobe.hairTintTRT ?? [1, 1, 1];
+  out[base + 24] = trt[0];
+  out[base + 25] = trt[1];
+  out[base + 26] = trt[2];
 }
 
 function readLobe(buf: ArrayLike<number>, base: number): LayeredBsdfLobe {
@@ -121,6 +126,9 @@ function readLobe(buf: ArrayLike<number>, base: number): LayeredBsdfLobe {
   const flags = Math.round(rd(buf, base + 2));
   const color: Rgb = [rd(buf, base + 3), rd(buf, base + 4), rd(buf, base + 5)];
   const lobe: LayeredBsdfLobe = { kind, weight: rd(buf, base + 1), color };
+  if ((flags & LOBE_HAS_HAIR_TRT) !== 0) {
+    lobe.hairTintTRT = [rd(buf, base + 24), rd(buf, base + 25), rd(buf, base + 26)];
+  }
   if ((flags & LOBE_HAS_DISPERSION) !== 0) lobe.dispersion = rd(buf, base + 23);
   if ((flags & LOBE_HAS_COLOR90) !== 0) {
     lobe.color90 = [rd(buf, base + 6), rd(buf, base + 7), rd(buf, base + 8)];
@@ -300,6 +308,7 @@ fn mx_material_lobe(base : u32) -> MxBsdfLobe {
   }
   lobe.thin = select(0.0, 1.0, (flags & MX_LOBE_THIN_WALLED) != 0u);
   lobe.dispersion = materials[base + 23u];
+  lobe.hairTintTRT = vec3f(materials[base + 24u], materials[base + 25u], materials[base + 26u]);
   return lobe;
 }
 fn mx_material_closure(matIndex : u32) -> LayeredClosure {

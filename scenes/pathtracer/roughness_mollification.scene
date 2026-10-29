@@ -1,0 +1,87 @@
+renderer
+{
+	resolution 1280 720
+	maxdepth 8
+	tilewidth 256
+	tileheight 144
+	enablerr false
+	rrdepth 3
+	enableroughnessmollification true
+	roughnessmollificationamt 1.0
+}
+
+camera
+{
+	position -40.0 10.0 0.0
+	lookat 0 7 0
+	fov 60
+}
+
+material glass
+{
+	color 1.0 1.0 1.0
+	roughness 0.1
+	ior 1.45
+	spectrans 1.0
+}
+
+material white
+{
+	color 1.0 1.0 1.0
+}
+
+mesh
+{
+	name box_and_spheres
+	file roughness_mollification/box_and_spheres.obj
+	material glass
+	position 0 0 0
+	scale 1 1 1
+}
+
+mesh
+{
+	name background
+	file roughness_mollification/background.obj
+	material white
+	position 0 0 0
+	scale 1 1 1
+}
+
+#light
+{
+	emission 10 10 10
+	position 0 20 -40
+	radius 10.0
+	type sphere
+}
+
+light
+{
+	emission 10 10 10
+	position -5 15 -40
+	v1 5 15 -40
+	v2 -5 25 -40
+	
+	type quad
+}
+
+light
+{
+	emission 5 5 5
+	position -5 40 5
+	v1 -5 40 -5
+	v2 5 40 5
+	
+	type quad
+}
+
+light
+{
+	emission 1 1 1
+	position 8 1 -5
+	v1 8 1 5
+	v2 8 11 -5
+	
+	type quad
+}

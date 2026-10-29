@@ -1,0 +1,85 @@
+<?xml version="1.0"?>
+<materialx version="1.39" colorspace="lin_rec709">
+  <disney_principled name="black_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" value="0, 0, 0" />
+    <input name="metallic" type="float" value="0.01" />
+    <input name="roughness" type="float" value="0.001" />
+  </disney_principled>
+  <surfacematerial name="black" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="black_surface" />
+  </surfacematerial>
+  <disney_principled name="orange_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" value="1, 0.186, 0" />
+    <input name="roughness" type="float" value="0.001" />
+    <input name="clearcoat" type="float" value="1" />
+    <input name="clearcoatGloss" type="float" value="1" />
+  </disney_principled>
+  <surfacematerial name="orange" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="orange_surface" />
+  </surfacematerial>
+  <disney_principled name="glass_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" value="1, 1, 1" />
+    <input name="roughness" type="float" value="0" />
+    <input name="specTrans" type="float" value="1" />
+    <input name="ior" type="float" value="1.45" />
+  </disney_principled>
+  <surfacematerial name="glass" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="glass_surface" />
+  </surfacematerial>
+  <disney_principled name="silver_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" value="0.9, 0.9, 0.9" />
+    <input name="metallic" type="float" value="1" />
+    <input name="roughness" type="float" value="0.001" />
+  </disney_principled>
+  <surfacematerial name="silver" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="silver_surface" />
+  </surfacematerial>
+  <disney_principled name="ring_silver_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" value="1, 1, 1" />
+    <input name="metallic" type="float" value="1" />
+    <input name="roughness" type="float" value="0.001" />
+  </disney_principled>
+  <surfacematerial name="ring_silver" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="ring_silver_surface" />
+  </surfacematerial>
+  <disney_principled name="red_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" value="1, 0, 0" />
+    <input name="metallic" type="float" value="0.2" />
+    <input name="roughness" type="float" value="0.5" />
+  </disney_principled>
+  <surfacematerial name="red" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="red_surface" />
+  </surfacematerial>
+  <disney_principled name="off_white_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" value="1, 0.94, 0.8" />
+  </disney_principled>
+  <surfacematerial name="off_white" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="off_white_surface" />
+  </surfacematerial>
+  <disney_principled name="ping_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" value="0.93, 0.89, 0.85" />
+    <input name="roughness" type="float" value="1" />
+    <input name="subsurface" type="float" value="1" />
+  </disney_principled>
+  <surfacematerial name="ping" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="ping_surface" />
+  </surfacematerial>
+  <disney_principled name="marb1_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" value="0.026, 0.147, 0.075" />
+    <input name="roughness" type="float" value="0.01" />
+    <input name="clearcoat" type="float" value="1" />
+    <input name="clearcoatGloss" type="float" value="1" />
+  </disney_principled>
+  <surfacematerial name="marb1" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="marb1_surface" />
+  </surfacematerial>
+  <disney_principled name="marb2_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" value="0.099, 0.24, 0.134" />
+    <input name="roughness" type="float" value="0.01" />
+    <input name="clearcoat" type="float" value="1" />
+    <input name="clearcoatGloss" type="float" value="1" />
+  </disney_principled>
+  <surfacematerial name="marb2" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="marb2_surface" />
+  </surfacematerial>
+</materialx>

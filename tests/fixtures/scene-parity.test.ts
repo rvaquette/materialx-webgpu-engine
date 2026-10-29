@@ -41,7 +41,7 @@ const TOL = nodeTolerance('closure');
 const entries = Object.entries(materials.scenes);
 
 // Fixture display name -> resolved SurfaceFamily.
-const FAMILY_OF: Readonly<Record<string, SurfaceFamily>> = {
+const FAMILY_OF: Readonly<Record<string, CanonicalFamily>> = {
   StandardSurface: 'standard_surface',
   OpenPbr: 'open_pbr_surface',
   DisneyPrincipled: 'disney_principled',
@@ -56,7 +56,9 @@ interface Rep {
   readonly canon: CanonicalSurfaceInputs;
 }
 
-const REPS: Readonly<Record<SurfaceFamily, Rep>> = {
+type CanonicalFamily = Exclude<SurfaceFamily, 'simple_hair'>;
+
+const REPS: Readonly<Record<CanonicalFamily, Rep>> = {
   standard_surface: {
     spec: {
       category: 'standard_surface',
@@ -115,7 +117,7 @@ const REPS: Readonly<Record<SurfaceFamily, Rep>> = {
   },
 };
 
-const FAMILIES = Object.keys(REPS) as SurfaceFamily[];
+const FAMILIES = Object.keys(REPS) as CanonicalFamily[];
 
 // A set of shading frames: head-on, oblique view, and a tilted normal.
 const GEOMS: readonly ShadingGeometry[] = [

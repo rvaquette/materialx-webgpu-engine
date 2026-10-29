@@ -30,6 +30,7 @@ export interface SerializedBsdfLobe {
   weight: number;
   color: Rgb3;
   color90?: Rgb3;
+  hairTintTRT?: Rgb3;
   roughness?: number;
   anisotropy?: number;
   rotation?: number;
@@ -76,6 +77,7 @@ export interface SerializedLayeredClosure {
 function serializeLobe(l: LayeredBsdfLobe, d: number): SerializedBsdfLobe {
   const out: SerializedBsdfLobe = { kind: l.kind, weight: roundTo(l.weight, d), color: rgb(l.color, d) };
   if (l.color90) out.color90 = rgb(l.color90, d);
+  if (l.hairTintTRT) out.hairTintTRT = rgb(l.hairTintTRT, d);
   if (l.roughness !== undefined) out.roughness = roundTo(l.roughness, d);
   if (l.anisotropy !== undefined) out.anisotropy = roundTo(l.anisotropy, d);
   if (l.rotation !== undefined) out.rotation = roundTo(l.rotation, d);
@@ -127,6 +129,7 @@ export function serializeLayeredClosure(closure: LayeredClosure, decimals = 6): 
 function deserializeLobe(l: SerializedBsdfLobe): LayeredBsdfLobe {
   const out: LayeredBsdfLobe = { kind: l.kind, weight: l.weight, color: tuple(l.color) };
   if (l.color90) out.color90 = tuple(l.color90);
+  if (l.hairTintTRT) out.hairTintTRT = tuple(l.hairTintTRT);
   if (l.roughness !== undefined) out.roughness = l.roughness;
   if (l.anisotropy !== undefined) out.anisotropy = l.anisotropy;
   if (l.rotation !== undefined) out.rotation = l.rotation;

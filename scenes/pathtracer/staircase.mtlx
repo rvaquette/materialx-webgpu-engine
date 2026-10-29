@@ -1,0 +1,168 @@
+<?xml version="1.0"?>
+<materialx version="1.39" colorspace="lin_rec709">
+  <disney_principled name="WoodFloor_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" nodename="WoodFloor_baseColorTexture" />
+    <input name="roughness" type="float" value="0.1" />
+  </disney_principled>
+  <image name="WoodFloor_baseColorTexture" type="color3">
+    <input name="file" type="filename" value="staircase/textures/WoodFloor.png" />
+  </image>
+  <surfacematerial name="WoodFloor" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="WoodFloor_surface" />
+  </surfacematerial>
+  <disney_principled name="Wallpaper_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" nodename="Wallpaper_baseColorTexture" />
+  </disney_principled>
+  <image name="Wallpaper_baseColorTexture" type="color3">
+    <input name="file" type="filename" value="staircase/textures/Wallpaper.png" />
+  </image>
+  <surfacematerial name="Wallpaper" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="Wallpaper_surface" />
+  </surfacematerial>
+  <disney_principled name="WoodStairs_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" nodename="WoodStairs_baseColorTexture" />
+    <input name="roughness" type="float" value="0.1" />
+  </disney_principled>
+  <image name="WoodStairs_baseColorTexture" type="color3">
+    <input name="file" type="filename" value="staircase/textures/WoodPanel.png" />
+  </image>
+  <surfacematerial name="WoodStairs" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="WoodStairs_surface" />
+  </surfacematerial>
+  <disney_principled name="WhitePaint_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" value="0.578596, 0.578596, 0.578596" />
+  </disney_principled>
+  <surfacematerial name="WhitePaint" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="WhitePaint_surface" />
+  </surfacematerial>
+  <disney_principled name="MagnoliaPaint_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" value="0.578596, 0.578596, 0.578596" />
+  </disney_principled>
+  <surfacematerial name="MagnoliaPaint" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="MagnoliaPaint_surface" />
+  </surfacematerial>
+  <disney_principled name="Painting1_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" nodename="Painting1_baseColorTexture" />
+  </disney_principled>
+  <image name="Painting1_baseColorTexture" type="color3">
+    <input name="file" type="filename" value="staircase/textures/Painting1.png" />
+  </image>
+  <surfacematerial name="Painting1" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="Painting1_surface" />
+  </surfacematerial>
+  <disney_principled name="Painting2_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" nodename="Painting2_baseColorTexture" />
+  </disney_principled>
+  <image name="Painting2_baseColorTexture" type="color3">
+    <input name="file" type="filename" value="staircase/textures/Painting2.png" />
+  </image>
+  <surfacematerial name="Painting2" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="Painting2_surface" />
+  </surfacematerial>
+  <disney_principled name="Painting3_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" nodename="Painting3_baseColorTexture" />
+  </disney_principled>
+  <image name="Painting3_baseColorTexture" type="color3">
+    <input name="file" type="filename" value="staircase/textures/Painting3.png" />
+  </image>
+  <surfacematerial name="Painting3" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="Painting3_surface" />
+  </surfacematerial>
+  <disney_principled name="Gold_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" value="1, 0.95, 0.35" />
+    <input name="metallic" type="float" value="1" />
+    <input name="roughness" type="float" value="0.05" />
+  </disney_principled>
+  <surfacematerial name="Gold" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="Gold_surface" />
+  </surfacematerial>
+  <disney_principled name="WoodChair_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" nodename="WoodChair_baseColorTexture" />
+    <input name="roughness" type="float" value="0.1" />
+  </disney_principled>
+  <image name="WoodChair_baseColorTexture" type="color3">
+    <input name="file" type="filename" value="staircase/textures/WoodChair.png" />
+  </image>
+  <surfacematerial name="WoodChair" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="WoodChair_surface" />
+  </surfacematerial>
+  <disney_principled name="ChairSeat_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" value="0.117647, 0.054902, 0.0666667" />
+    <input name="roughness" type="float" value="0.1" />
+  </disney_principled>
+  <surfacematerial name="ChairSeat" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="ChairSeat_surface" />
+  </surfacematerial>
+  <disney_principled name="WoodLamp_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" nodename="WoodLamp_baseColorTexture" />
+  </disney_principled>
+  <image name="WoodLamp_baseColorTexture" type="color3">
+    <input name="file" type="filename" value="staircase/textures/WoodChair.png" />
+  </image>
+  <surfacematerial name="WoodLamp" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="WoodLamp_surface" />
+  </surfacematerial>
+  <disney_principled name="Brass_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" value="0.27, 0.254, 0.15" />
+    <input name="metallic" type="float" value="1" />
+    <input name="roughness" type="float" value="0.01" />
+  </disney_principled>
+  <surfacematerial name="Brass" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="Brass_surface" />
+  </surfacematerial>
+  <disney_principled name="StainlessSteel_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" value="1, 1, 1" />
+    <input name="metallic" type="float" value="1" />
+    <input name="roughness" type="float" value="0.1" />
+  </disney_principled>
+  <surfacematerial name="StainlessSteel" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="StainlessSteel_surface" />
+  </surfacematerial>
+  <disney_principled name="WhitePlastic_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" value="1, 1, 1" />
+  </disney_principled>
+  <surfacematerial name="WhitePlastic" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="WhitePlastic_surface" />
+  </surfacematerial>
+  <disney_principled name="Lampshade_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" nodename="Lampshade_baseColorTexture" />
+  </disney_principled>
+  <image name="Lampshade_baseColorTexture" type="color3">
+    <input name="file" type="filename" value="staircase/textures/Fabric.png" />
+  </image>
+  <surfacematerial name="Lampshade" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="Lampshade_surface" />
+  </surfacematerial>
+  <disney_principled name="Black_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" value="0.01, 0.01, 0.01" />
+  </disney_principled>
+  <surfacematerial name="Black" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="Black_surface" />
+  </surfacematerial>
+  <disney_principled name="BrushedAluminium_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" nodename="BrushedAluminium_baseColorTexture" />
+    <input name="metallic" type="float" value="1" />
+    <input name="roughness" type="float" value="0.01" />
+  </disney_principled>
+  <image name="BrushedAluminium_baseColorTexture" type="color3">
+    <input name="file" type="filename" value="staircase/textures/BrushedAluminium.png" />
+  </image>
+  <surfacematerial name="BrushedAluminium" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="BrushedAluminium_surface" />
+  </surfacematerial>
+  <disney_principled name="Glass_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" value="1, 1, 1" />
+    <input name="roughness" type="float" value="0" />
+    <input name="specTrans" type="float" value="1" />
+    <input name="ior" type="float" value="1.45" />
+  </disney_principled>
+  <surfacematerial name="Glass" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="Glass_surface" />
+  </surfacematerial>
+  <disney_principled name="Candles_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" value="1, 1, 1" />
+  </disney_principled>
+  <surfacematerial name="Candles" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="Candles_surface" />
+  </surfacematerial>
+</materialx>

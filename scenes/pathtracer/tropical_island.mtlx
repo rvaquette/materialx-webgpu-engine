@@ -1,0 +1,55 @@
+<?xml version="1.0"?>
+<materialx version="1.39" colorspace="lin_rec709">
+  <disney_principled name="water_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" value="1, 1, 1" />
+    <input name="roughness" type="float" value="0" />
+    <input name="specTrans" type="float" value="1" />
+  </disney_principled>
+  <surfacematerial name="water" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="water_surface" />
+  </surfacematerial>
+  <disney_principled name="wood_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" value="0.582, 0.388, 0.164" />
+    <input name="roughness" type="float" value="0.25" />
+  </disney_principled>
+  <surfacematerial name="wood" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="wood_surface" />
+  </surfacematerial>
+  <disney_principled name="floor_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" value="0.73, 1, 0.721" />
+    <input name="roughness" type="float" value="0.5" />
+  </disney_principled>
+  <surfacematerial name="floor" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="floor_surface" />
+  </surfacematerial>
+  <disney_principled name="grass_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" value="0.104, 0.357, 0.092" />
+    <input name="roughness" type="float" value="0.5" />
+  </disney_principled>
+  <surfacematerial name="grass" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="grass_surface" />
+  </surfacematerial>
+  <disney_principled name="rock_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" value="0.815, 0.644, 0.366" />
+    <input name="roughness" type="float" value="0.4" />
+  </disney_principled>
+  <surfacematerial name="rock" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="rock_surface" />
+  </surfacematerial>
+  <disney_principled name="sand_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" value="0.973, 0.751, 0.571" />
+    <input name="roughness" type="float" value="0.25" />
+  </disney_principled>
+  <surfacematerial name="sand" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="sand_surface" />
+  </surfacematerial>
+  <disney_principled name="palm_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" nodename="palm_baseColorTexture" />
+  </disney_principled>
+  <image name="palm_baseColorTexture" type="color3">
+    <input name="file" type="filename" value="tropical_island/textures/palm.png" />
+  </image>
+  <surfacematerial name="palm" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="palm_surface" />
+  </surfacematerial>
+</materialx>

@@ -1,0 +1,31 @@
+<?xml version="1.0"?>
+<materialx version="1.39" colorspace="lin_rec709">
+  <disney_principled name="ground_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" value="0.7, 0.7, 0.7" />
+    <input name="roughness" type="float" value="0.85" />
+    <input name="specularTint" type="float" value="0" />
+  </disney_principled>
+  <surfacematerial name="ground" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="ground_surface" />
+  </surfacematerial>
+  <disney_principled name="glass_thin_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" value="1, 1, 1" />
+    <input name="metallic" type="float" value="0" />
+    <input name="roughness" type="float" value="0.02" />
+    <input name="specTrans" type="float" value="1" />
+    <input name="ior" type="float" value="1.52" />
+  </disney_principled>
+  <surfacematerial name="glass_thin" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="glass_thin_surface" />
+  </surfacematerial>
+  <disney_principled name="glass_solid_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" value="1, 1, 1" />
+    <input name="metallic" type="float" value="0" />
+    <input name="roughness" type="float" value="0.02" />
+    <input name="specTrans" type="float" value="1" />
+    <input name="ior" type="float" value="1.52" />
+  </disney_principled>
+  <surfacematerial name="glass_solid" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="glass_solid_surface" />
+  </surfacematerial>
+</materialx>

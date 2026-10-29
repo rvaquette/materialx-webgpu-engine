@@ -1,0 +1,30 @@
+renderer
+{
+    resolution 1280 720
+    maxdepth 20
+    rrdepth 6
+    tilewidth 256
+    tileheight 144
+    envmapfile HDR/san_giuseppe_bridge_split.hdr
+}
+
+camera
+{
+    position 0 1.5 6
+    lookat 0 0.5 0
+    fov 40
+}
+
+material glass
+{
+    materialx_document ../materialx/materials/showcase/open_pbr_surface/honey/honey.mtlx
+    materialx_surface PBR_Glass
+}
+
+mesh
+{
+    name glass_sphere
+    file material_test/sphere.obj
+    //file materialx_test/ShaderBall.obj
+    material glass
+}

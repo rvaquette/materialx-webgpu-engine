@@ -1,0 +1,63 @@
+renderer
+{
+	resolution 1280 720
+	maxdepth 2
+	tilewidth 256
+	tileheight 144
+	envmapfile HDR/material-test.hdr
+	envmapintensity 1.0
+}
+camera
+{
+	matrix -0.721367 -0.373123 -0.583445 3.04068 -8.26273e-008 0.842456 -0.538765 3.17153 0.692553 -0.388647 -0.60772 3.20454 0 0 0 1
+	#position 3.611353 4 4
+	#lookat 0.126194 0 0
+	fov 35
+}
+
+material stand
+{
+	color 0.2 0.2 0.2
+	roughness 0.5
+}
+
+material checker
+{
+	albedotexture tungsten-material-testball/textures/checker.png
+	roughness 0.5
+}
+
+material test
+{
+	color 0.245 0.0 1.0
+	metallic 0.0
+	roughness 0.0
+}
+
+mesh
+{
+	file tungsten-material-testball/models/Mesh000.obj
+	material stand
+	matrix 0.482906 0 0 0.110507 0 0.482906 0 0.494301 0 0 0.482906 0.126194 0 0 0 1
+}
+
+mesh
+{
+	file tungsten-material-testball/models/Mesh001.obj
+	material test
+	matrix 0.482906 0 0 0.0571719 0 0.482906 0 0.213656 0 0 0.482906 0.0682078 0 0 0 1
+}
+
+mesh
+{
+	file tungsten-material-testball/models/Mesh002.obj
+	material test
+	matrix 0.482906 0 0 0.156382 0 0.482906 0 0.777229 0 0 0.482906 0.161698 0 0 0 1
+}
+
+mesh
+{
+	file tungsten-material-testball/models/Plane.obj
+	material checker
+	matrix -1.88298 1.9602 2.50299e-007 -0.708772 -2.37623e-007 1.18811e-007 -2.71809 0 -1.9602 -1.88298 8.90586e-008 -0.732108 0 0 0 1
+}

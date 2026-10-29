@@ -21,6 +21,20 @@ describe('browser USD scene loading', () => {
       .toBe('https://cdn.test/base.png');
   });
 
+  it('resolves MaterialX file prefixes before anchoring relative texture paths', () => {
+    const directory = 'https://example.test/scenes/mtlx-library/Examples/GltfPbr/';
+    expect(resolveMaterialTextureUrl('BoomBox_baseColor.png', directory, undefined, 'boombox/'))
+      .toBe(`${directory}boombox/BoomBox_baseColor.png`);
+    expect(resolveMaterialTextureUrl('wood.png', directory, undefined, '../../../Images/'))
+      .toBe('https://example.test/scenes/Images/wood.png');
+    expect(resolveMaterialTextureUrl('base.png', directory, 'https://example.test/assets/', 'textures/'))
+      .toBe('https://example.test/assets/textures/base.png');
+    expect(resolveMaterialTextureUrl('https://cdn.test/base.png', directory, undefined, 'boombox/'))
+      .toBe('https://cdn.test/base.png');
+    expect(resolveMaterialTextureUrl('/textures/base.png', directory, undefined, 'boombox/'))
+      .toBe('https://example.test/textures/base.png');
+  });
+
   it('preserves HTTP origins, authorship, dictionaries, escaped strings and relationship strength', async () => {
     const root = 'https://example.test/playground/';
     const layers = new Map([
@@ -73,16 +87,23 @@ over "World" {
     } finally { vi.unstubAllGlobals(); }
   });
 
-  it('loads EXR lighting relative to its authoring USD layer and preserves HDR values', async () => {
+  it.each([
+    ['https://example.test/playground/lights/rig.usd', '../textures/absolute.exr', 'absolute.exr'],
+    ['/playground/lights/rig.usd', '../textures/root-relative.exr', 'root-relative.exr'],
+    ['lights/rig.usd', '../textures/relative.exr', 'relative.exr'],
+    [undefined, './textures/entry.exr', 'entry.exr'],
+  ])('loads EXR lighting relative to authoring layer %s and preserves HDR values', async (textureSourceLayer, textureFile, expectedFile) => {
     const fetch = vi.fn().mockResolvedValue(new Response(new Uint8Array(8)));
     vi.stubGlobal('fetch', fetch);
+    vi.stubGlobal('document', { baseURI: 'https://example.test/playground/index.html' });
     try {
       const environment = await loadEnvironment([{
         path: '/World/lightRig/dome', type: 'dome', usdType: 'DomeLight',
         color: [1, 1, 1], intensity: 1, exposure: 0, normalize: false, transform: IDENTITY4,
-        textureFile: '../textures/env.exr', textureSourceLayer: 'https://example.test/playground/lights/rig.usd',
+        textureFile,
+        ...(textureSourceLayer ? { textureSourceLayer } : {}),
       }], 'https://example.test/playground/stage.usda', vi.fn());
-      expect(fetch.mock.calls[0]?.[0]).toBe('https://example.test/playground/textures/env.exr');
+      expect(fetch.mock.calls[0]?.[0]).toBe(`https://example.test/playground/textures/${expectedFile}`);
       expect(environment?.image.data).toEqual(new Float32Array([8, 4, 2, 4, 2, 1]));
       expect(environment?.image.width).toBe(1);
       expect(environment?.image.height).toBe(2);

@@ -1,0 +1,39 @@
+<?xml version="1.0"?>
+<materialx version="1.39" colorspace="lin_rec709">
+  <disney_principled name="gold_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" nodename="gold_baseColorTexture" />
+    <input name="metallic" type="float" nodename="gold_metallicRoughnessChannels" output="outz" />
+    <input name="roughness" type="float" nodename="gold_metallicRoughnessChannels" output="outy" />
+  </disney_principled>
+  <image name="gold_baseColorTexture" type="color3">
+    <input name="file" type="filename" value="renderman/textures/gold_base.png" />
+  </image>
+  <image name="gold_metallicRoughnessTexture" type="color3">
+    <input name="file" type="filename" value="renderman/textures/gold_mat_rgh.png" />
+  </image>
+  <separate3 name="gold_metallicRoughnessChannels" type="multioutput">
+    <input name="in" type="color3" nodename="gold_metallicRoughnessTexture" />
+  </separate3>
+  <surfacematerial name="gold" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="gold_surface" />
+  </surfacematerial>
+  <disney_principled name="base_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" value="0.01, 0.01, 0.01" />
+    <input name="metallic" type="float" value="1" />
+    <input name="roughness" type="float" value="0.5" />
+  </disney_principled>
+  <surfacematerial name="base" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="base_surface" />
+  </surfacematerial>
+  <disney_principled name="checker_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" nodename="checker_baseColorTexture" />
+    <input name="metallic" type="float" value="0" />
+    <input name="roughness" type="float" value="0.5" />
+  </disney_principled>
+  <image name="checker_baseColorTexture" type="color3">
+    <input name="file" type="filename" value="renderman/textures/checker.png" />
+  </image>
+  <surfacematerial name="checker" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="checker_surface" />
+  </surfacematerial>
+</materialx>

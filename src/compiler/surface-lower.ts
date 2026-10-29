@@ -12,6 +12,7 @@
 
 import type { CoatLayer, FuzzLayer, LayeredBsdfLobe, LayeredClosure, Rgb, SheenLayer, ThinFilmLayer } from './ir.ts';
 import type { NormalizedSurfaceInput, ResolvedSurface } from '../materialx/surface-graph.ts';
+import { hairAbsorptionFromColor, hairAbsorptionFromMelanin } from '../render/bsdf/hair.ts';
 
 type Inputs = ReadonlyMap<string, NormalizedSurfaceInput>;
 
@@ -212,17 +213,21 @@ function lowerUsdPreviewSurface(m: Inputs): LayeredClosure {
   const useSpecular = scalarOf(m, 'useSpecularWorkflow', 0) >= 0.5;
   const specColor = useSpecular ? rgbOf(m, 'specularColor', [0, 0, 0]) : [1, 1, 1] as Rgb;
   const dielectricShare = 1 - metal;
+  const opacity = clamp01(scalarOf(m, 'opacity', 1));
+  const threshold = scalarOf(m, 'opacityThreshold', 0);
+  const diffuseShare = threshold > 0 ? 1 : opacity;
   const lobes: LayeredBsdfLobe[] = [
     { kind: 'conductor', weight: metal, color: diffuse, roughness: rough },
-    { kind: 'dielectric_reflection', weight: dielectricShare, color: specColor, roughness: rough, ior },
-    { kind: 'burley_diffuse', weight: dielectricShare, color: diffuse, roughness: rough },
+    { kind: 'dielectric_reflection', weight: dielectricShare * diffuseShare, color: specColor, roughness: rough, ior },
+    { kind: 'dielectric_transmission', weight: dielectricShare * (1 - diffuseShare), color: [1, 1, 1], roughness: rough, ior },
+    { kind: 'burley_diffuse', weight: dielectricShare * diffuseShare, color: diffuse, roughness: rough },
   ];
   const slots: Slots = {};
   const clearcoat = clamp01(scalarOf(m, 'clearcoat', 0));
   if (clearcoat > 0) slots.coat = { weight: clearcoat, color: [1, 1, 1], roughness: scalarOf(m, 'clearcoatRoughness', 0.01), ior: 1.5 };
   const emissive = rgbOf(m, 'emissiveColor', [0, 0, 0]);
   if (emissive[0] > 0 || emissive[1] > 0 || emissive[2] > 0) slots.emission = emissive;
-  return assemble(lobes, scalarOf(m, 'opacity', 1), slots);
+  return assemble(lobes, threshold > 0 && opacity < threshold ? 0 : 1, slots);
 }
 
 // --- disney_principled -------------------------------------------------------
@@ -269,6 +274,22 @@ function lowerDisneyPrincipled(m: Inputs): LayeredClosure {
 export function surfaceGraphToLayered(surface: ResolvedSurface): LayeredClosure {
   const m = surface.inputs;
   switch (surface.family) {
+    case 'simple_hair': {
+      const azimuthal = scalarOf(m, 'azimuthalRoughness', 0.1);
+      const fromColor = hairAbsorptionFromColor(rgbOf(m, 'baseColor', [1, 1, 1]), azimuthal);
+      const fromMelanin = hairAbsorptionFromMelanin(scalarOf(m, 'melaninConcentration', 0.5), scalarOf(m, 'melaninRedness', 0.5));
+      return assemble([{
+        kind: 'chiang_hair', weight: 1,
+        color: rgbOf(m, 'tint_R', [1, 1, 1]),
+        color90: rgbOf(m, 'tint_TT', [1, 1, 1]),
+        hairTintTRT: rgbOf(m, 'tint_TRT', [1, 1, 1]),
+        extinction: lerpRgb(fromColor, fromMelanin, clamp01(scalarOf(m, 'melaninMix', 1))),
+        roughness: scalarOf(m, 'longitudinalRoughness', 0.1),
+        anisotropy: azimuthal,
+        rotation: scalarOf(m, 'cuticleAngle', 0.5),
+        ior: scalarOf(m, 'ior', 1.55),
+      }], 1, {});
+    }
     case 'standard_surface':
       return lowerStandardSurface(m);
     case 'open_pbr_surface':

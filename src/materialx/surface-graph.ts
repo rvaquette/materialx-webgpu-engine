@@ -17,6 +17,7 @@ export type SurfaceFamily =
   | 'open_pbr_surface'
   | 'disney_principled'
   | 'gltf_pbr'
+  | 'simple_hair'
   | 'UsdPreviewSurface';
 
 export type SurfaceInputType = 'float' | 'color3' | 'vector3' | 'integer' | 'boolean';
@@ -249,7 +250,22 @@ const DISNEY_PRINCIPLED: readonly SurfaceInputDef[] = [
   c('subsurfaceDistance', 1, 1, 1),
 ];
 
+const SIMPLE_HAIR: readonly SurfaceInputDef[] = [
+  f('melaninConcentration', 0.5),
+  f('melaninRedness', 0.5),
+  f('melaninMix', 1),
+  c('baseColor', 1, 1, 1),
+  f('longitudinalRoughness', 0.1),
+  f('azimuthalRoughness', 0.1),
+  f('cuticleAngle', 0.5),
+  c('tint_R', 1, 1, 1),
+  c('tint_TT', 1, 1, 1),
+  c('tint_TRT', 1, 1, 1),
+  f('ior', 1.55),
+];
+
 const FAMILY_INPUTS: Record<SurfaceFamily, readonly SurfaceInputDef[]> = {
+  simple_hair: SIMPLE_HAIR,
   standard_surface: STANDARD_SURFACE_100,
   open_pbr_surface: OPEN_PBR_SURFACE,
   disney_principled: DISNEY_PRINCIPLED,

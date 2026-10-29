@@ -1,0 +1,167 @@
+#usda 1.0
+(
+    defaultPrim = "World"
+    metersPerUnit = 1
+    upAxis = "Y"
+    doc = "stormtrooper_simplified converted from GLSL-PathTracer .scene"
+)
+
+def Xform "World"
+{
+    custom string pathtracer:sourceScene = "stormtrooper_simplified.scene"
+    custom int2 pathtracer:resolution = (1280, 720)
+    custom int pathtracer:maxDepth = 2
+
+    def Camera "Camera"
+    {
+        matrix4d xformOp:transform = ((0.996669604055, 0, 0.0815456948772, 0), (-0.00295348328442, 0.999343885766, 0.0360981290318, 0), (-0.081492191586, -0.036218751816, 0.996015674941, 0), (-0.2, -0.5, 5.5, 1))
+        uniform token[] xformOpOrder = ["xformOp:transform"]
+        token projection = "perspective"
+        float focalLength = 50
+        float horizontalAperture = 57.735026919
+        float verticalAperture = 32.4759526419
+        float2 clippingRange = (0.001, 1000000)
+        custom point3f pathtracer:lookAt = (0.25, -0.3, 0)
+        custom float pathtracer:fov = 60
+        float focusDistance = 4.8
+        custom float pathtracer:aperture = 0.002
+    }
+
+    def Scope "Looks"
+    {
+        def Material "white_helmet" (
+            prepend references = @./stormtrooper_simplified.mtlx@</MaterialX/Materials/white_helmet>
+        )
+        {
+        }
+        def Material "white_box" (
+            prepend references = @./stormtrooper_simplified.mtlx@</MaterialX/Materials/white_box>
+        )
+        {
+        }
+        def Material "black_visor" (
+            prepend references = @./stormtrooper_simplified.mtlx@</MaterialX/Materials/black_visor>
+        )
+        {
+        }
+    }
+
+    def Scope "Geometry"
+    {
+        def Mesh "box"
+        {
+            custom asset engine:geometry:file = @./stormtrooper/box.obj@
+
+            rel material:binding = </World/Looks/white_box>
+        }
+        def Mesh "frame"
+        {
+            custom asset engine:geometry:file = @./stormtrooper/frame.obj@
+
+            rel material:binding = </World/Looks/black_visor>
+        }
+        def Mesh "helmets_simplified"
+        {
+            custom asset engine:geometry:file = @./stormtrooper/helmets_simplified.obj@
+
+            rel material:binding = </World/Looks/white_helmet>
+        }
+    }
+
+    def Scope "Lights"
+    {
+        def RectLight "Light_001"
+        {
+            matrix4d xformOp:transform = ((-0.547474513404, 0, -0.836822356999, 0), (-0.836822258228, 0, 0.547474664377, 0), (0, 1, 0, 0), (-0.100238, 2.998622, 1.944137, 1))
+            uniform token[] xformOpOrder = ["xformOp:transform"]
+            color3f inputs:color = (1, 1, 1)
+            float inputs:intensity = 20
+            bool inputs:normalize = false
+            float inputs:width = 5.85250257601
+            float inputs:height = 0.659341926646
+        }
+        def Material "Light_001_Material"
+        {
+            token outputs:surface.connect = </World/Lights/Light_001_Material/Surface.outputs:surface>
+            def Shader "Surface"
+            {
+                uniform token info:id = "UsdPreviewSurface"
+                color3f inputs:diffuseColor = (0, 0, 0)
+                int inputs:useSpecularWorkflow = 1
+                color3f inputs:specularColor = (0, 0, 0)
+                color3f inputs:emissiveColor = (20, 20, 20)
+                token outputs:surface
+            }
+        }
+        def Mesh "Light_001_Geometry"
+        {
+            point3f[] points = [(1.225934, 2.998622, 4.573376), (-1.978162, 2.998622, -0.324129), (-1.42641, 2.998622, -0.685102), (1.777686, 2.998622, 4.212403)]
+            int[] faceVertexCounts = [4]
+            int[] faceVertexIndices = [0, 1, 2, 3]
+            uniform token subdivisionScheme = "none"
+            rel material:binding = </World/Lights/Light_001_Material>
+        }
+        def RectLight "Light_002"
+        {
+            matrix4d xformOp:transform = ((-0.450349295134, 0, -0.892852458345, 0), (-0.836822258228, 0, 0.547474664377, 0), (0, 1, 0, 0), (-3.348867, 2.998622, -3.6236045, 1))
+            uniform token[] xformOpOrder = ["xformOp:transform"]
+            color3f inputs:color = (1, 1, 1)
+            float inputs:intensity = 20
+            bool inputs:normalize = false
+            float inputs:width = 5.8895262603
+            float inputs:height = 0.659341926646
+        }
+        def Material "Light_002_Material"
+        {
+            token outputs:surface.connect = </World/Lights/Light_002_Material/Surface.outputs:surface>
+            def Shader "Surface"
+            {
+                uniform token info:id = "UsdPreviewSurface"
+                color3f inputs:diffuseColor = (0, 0, 0)
+                int inputs:useSpecularWorkflow = 1
+                color3f inputs:specularColor = (0, 0, 0)
+                color3f inputs:emissiveColor = (20, 20, 20)
+                token outputs:surface
+            }
+        }
+        def Mesh "Light_002_Geometry"
+        {
+            point3f[] points = [(-2.298571, 2.998622, -0.813879), (-4.950915, 2.998622, -6.072357), (-4.399163, 2.998622, -6.43333), (-1.746819, 2.998622, -1.174852)]
+            int[] faceVertexCounts = [4]
+            int[] faceVertexIndices = [0, 1, 2, 3]
+            uniform token subdivisionScheme = "none"
+            rel material:binding = </World/Lights/Light_002_Material>
+        }
+        def RectLight "Light_003"
+        {
+            matrix4d xformOp:transform = ((-0.450349159777, 0, -0.892852526618, 0), (-0.836821563385, 0, 0.547475726452, 0), (0, 1, 0, 0), (-6.8733725, 2.998622, -9.01086, 1))
+            uniform token[] xformOpOrder = ["xformOp:transform"]
+            color3f inputs:color = (1, 1, 1)
+            float inputs:intensity = 20
+            bool inputs:normalize = false
+            float inputs:width = 5.88952580996
+            float inputs:height = 0.659342474121
+        }
+        def Material "Light_003_Material"
+        {
+            token outputs:surface.connect = </World/Lights/Light_003_Material/Surface.outputs:surface>
+            def Shader "Surface"
+            {
+                uniform token info:id = "UsdPreviewSurface"
+                color3f inputs:diffuseColor = (0, 0, 0)
+                int inputs:useSpecularWorkflow = 1
+                color3f inputs:specularColor = (0, 0, 0)
+                color3f inputs:emissiveColor = (20, 20, 20)
+                token outputs:surface
+            }
+        }
+        def Mesh "Light_003_Geometry"
+        {
+            point3f[] points = [(-5.823077, 2.998622, -6.201134), (-8.47542, 2.998622, -11.459612), (-7.923668, 2.998622, -11.820586), (-5.271325, 2.998622, -6.562108)]
+            int[] faceVertexCounts = [4]
+            int[] faceVertexIndices = [0, 1, 2, 3]
+            uniform token subdivisionScheme = "none"
+            rel material:binding = </World/Lights/Light_003_Material>
+        }
+    }
+}

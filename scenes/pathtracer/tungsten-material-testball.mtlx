@@ -1,0 +1,28 @@
+<?xml version="1.0"?>
+<materialx version="1.39" colorspace="lin_rec709">
+  <disney_principled name="stand_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" value="0.2, 0.2, 0.2" />
+    <input name="roughness" type="float" value="0.5" />
+  </disney_principled>
+  <surfacematerial name="stand" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="stand_surface" />
+  </surfacematerial>
+  <disney_principled name="checker_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" nodename="checker_baseColorTexture" />
+    <input name="roughness" type="float" value="0.5" />
+  </disney_principled>
+  <image name="checker_baseColorTexture" type="color3">
+    <input name="file" type="filename" value="tungsten-material-testball/textures/checker.png" />
+  </image>
+  <surfacematerial name="checker" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="checker_surface" />
+  </surfacematerial>
+  <disney_principled name="test_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" value="0.245, 0, 1" />
+    <input name="metallic" type="float" value="0" />
+    <input name="roughness" type="float" value="0" />
+  </disney_principled>
+  <surfacematerial name="test" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="test_surface" />
+  </surfacematerial>
+</materialx>

@@ -1,0 +1,164 @@
+#usda 1.0
+(
+    defaultPrim = "World"
+    metersPerUnit = 1
+    upAxis = "Y"
+    doc = "hyperion_distant_light converted from GLSL-PathTracer .scene"
+)
+
+def Xform "World"
+{
+    custom string pathtracer:sourceScene = "hyperion_distant_light.scene"
+    custom int2 pathtracer:resolution = (1280, 720)
+    custom int pathtracer:maxDepth = 3
+
+    def Camera "Camera"
+    {
+        matrix4d xformOp:transform = ((0, 0, 1, 0), (0.707106781187, 0.707106781187, 0, 0), (-0.707106781187, 0.707106781187, 0, 0), (-15, 15, 0, 1))
+        uniform token[] xformOpOrder = ["xformOp:transform"]
+        token projection = "perspective"
+        float focalLength = 50
+        float horizontalAperture = 57.735026919
+        float verticalAperture = 32.4759526419
+        float2 clippingRange = (0.001, 1000000)
+        custom point3f pathtracer:lookAt = (0, 0, 0)
+        custom float pathtracer:fov = 60
+    }
+
+    def Scope "Looks"
+    {
+        def Material "orange" (
+            prepend references = @./hyperion_distant_light.mtlx@</MaterialX/Materials/orange>
+        )
+        {
+        }
+        def Material "glass" (
+            prepend references = @./hyperion_distant_light.mtlx@</MaterialX/Materials/glass>
+        )
+        {
+        }
+        def Material "silver" (
+            prepend references = @./hyperion_distant_light.mtlx@</MaterialX/Materials/silver>
+        )
+        {
+        }
+        def Material "ring_silver" (
+            prepend references = @./hyperion_distant_light.mtlx@</MaterialX/Materials/ring_silver>
+        )
+        {
+        }
+        def Material "off_white" (
+            prepend references = @./hyperion_distant_light.mtlx@</MaterialX/Materials/off_white>
+        )
+        {
+        }
+        def Material "ping" (
+            prepend references = @./hyperion_distant_light.mtlx@</MaterialX/Materials/ping>
+        )
+        {
+        }
+        def Material "marb1" (
+            prepend references = @./hyperion_distant_light.mtlx@</MaterialX/Materials/marb1>
+        )
+        {
+        }
+        def Material "marb2" (
+            prepend references = @./hyperion_distant_light.mtlx@</MaterialX/Materials/marb2>
+        )
+        {
+        }
+    }
+
+    def Scope "Geometry"
+    {
+        def Mesh "Glass_Ball"
+        {
+            custom asset engine:geometry:file = @./hyperion/glass.obj@
+            double3 xformOp:translate = (-0.57, 1.87, 6.55)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+            rel material:binding = </World/Looks/glass>
+        }
+        def Mesh "Chrome_Ball"
+        {
+            custom asset engine:geometry:file = @./hyperion/chrome.obj@
+            double3 xformOp:translate = (0.4, 1.86, -6.59)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+            rel material:binding = </World/Looks/silver>
+        }
+        def Mesh "Platform"
+        {
+            custom asset engine:geometry:file = @./hyperion/plate.obj@
+            double3 xformOp:translate = (0, 0.36, 0)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+            rel material:binding = </World/Looks/off_white>
+        }
+        def Mesh "Floor"
+        {
+            custom asset engine:geometry:file = @./hyperion/floor.obj@
+
+            rel material:binding = </World/Looks/off_white>
+        }
+        def Mesh "Orange_Ball"
+        {
+            custom asset engine:geometry:file = @./hyperion/orange.obj@
+            double3 xformOp:translate = (1.646, 1.6861, 3.5662)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+            rel material:binding = </World/Looks/orange>
+        }
+        def Mesh "Ring_1"
+        {
+            custom asset engine:geometry:file = @./hyperion/ring1.obj@
+            double3 xformOp:translate = (-0.308737, 0.805763, -1.42968)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+            rel material:binding = </World/Looks/ring_silver>
+        }
+        def Mesh "Ring_2"
+        {
+            custom asset engine:geometry:file = @./hyperion/ring2.obj@
+            double3 xformOp:translate = (-0.6706, 0.808472, 0.626798)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+            rel material:binding = </World/Looks/ring_silver>
+        }
+        def Mesh "Ring_3"
+        {
+            custom asset engine:geometry:file = @./hyperion/ring3.obj@
+            double3 xformOp:translate = (-1.44541, 0.808472, 1.72607)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+            rel material:binding = </World/Looks/ring_silver>
+        }
+        def Mesh "Marble_1"
+        {
+            custom asset engine:geometry:file = @./hyperion/marb1.obj@
+            double3 xformOp:translate = (-3.78, 0.88, -0.84)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+            rel material:binding = </World/Looks/marb1>
+        }
+        def Mesh "Marble_2"
+        {
+            custom asset engine:geometry:file = @./hyperion/marb2.obj@
+            double3 xformOp:translate = (-3.746, 0.969453, 0.974294)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+            rel material:binding = </World/Looks/marb2>
+        }
+        def Mesh "Ping_Pong"
+        {
+            custom asset engine:geometry:file = @./hyperion/pingpong.obj@
+            double3 xformOp:translate = (-3.14, 1.51, -4.12)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+            rel material:binding = </World/Looks/ping>
+        }
+    }
+
+    def Scope "Lights"
+    {
+        def DistantLight "Light_001"
+        {
+            matrix4d xformOp:transform = ((1, 0, 0, 0), (0, 0.747597201052, -0.664152410957, 0), (0, 0.664152410957, 0.747597201052, 0), (0, 390, 439, 1))
+            uniform token[] xformOpOrder = ["xformOp:transform"]
+            color3f inputs:color = (1, 1, 1)
+            float inputs:intensity = 1
+            bool inputs:normalize = false
+            float inputs:angle = 0
+        }
+    }
+}

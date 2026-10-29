@@ -1,0 +1,65 @@
+<?xml version="1.0"?>
+<materialx version="1.39" colorspace="lin_rec709">
+  <disney_principled name="head_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" nodename="head_baseColorTexture" />
+    <input name="metallic" type="float" nodename="head_metallicRoughnessChannels" output="outz" />
+    <input name="roughness" type="float" nodename="head_metallicRoughnessChannels" output="outy" />
+  </disney_principled>
+  <image name="head_baseColorTexture" type="color3">
+    <input name="file" type="filename" value="substance_boy/textures/01_Head_Base_Color.png" />
+  </image>
+  <image name="head_metallicRoughnessTexture" type="color3">
+    <input name="file" type="filename" value="substance_boy/textures/01_Head_MetallicRoughness.png" />
+  </image>
+  <separate3 name="head_metallicRoughnessChannels" type="multioutput">
+    <input name="in" type="color3" nodename="head_metallicRoughnessTexture" />
+  </separate3>
+  <surfacematerial name="head" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="head_surface" />
+  </surfacematerial>
+  <disney_principled name="body_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" nodename="body_baseColorTexture" />
+    <input name="metallic" type="float" nodename="body_metallicRoughnessChannels" output="outz" />
+    <input name="roughness" type="float" nodename="body_metallicRoughnessChannels" output="outy" />
+  </disney_principled>
+  <image name="body_baseColorTexture" type="color3">
+    <input name="file" type="filename" value="substance_boy/textures/02_Body_Base_Color.png" />
+  </image>
+  <image name="body_metallicRoughnessTexture" type="color3">
+    <input name="file" type="filename" value="substance_boy/textures/02_Body_MetallicRoughness.png" />
+  </image>
+  <separate3 name="body_metallicRoughnessChannels" type="multioutput">
+    <input name="in" type="color3" nodename="body_metallicRoughnessTexture" />
+  </separate3>
+  <surfacematerial name="body" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="body_surface" />
+  </surfacematerial>
+  <disney_principled name="base_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" nodename="base_baseColorTexture" />
+    <input name="metallic" type="float" nodename="base_metallicRoughnessChannels" output="outz" />
+    <input name="roughness" type="float" nodename="base_metallicRoughnessChannels" output="outy" />
+  </disney_principled>
+  <image name="base_baseColorTexture" type="color3">
+    <input name="file" type="filename" value="substance_boy/textures/03_Base_Base_Color.png" />
+  </image>
+  <image name="base_metallicRoughnessTexture" type="color3">
+    <input name="file" type="filename" value="substance_boy/textures/03_Base_MetallicRoughness.png" />
+  </image>
+  <separate3 name="base_metallicRoughnessChannels" type="multioutput">
+    <input name="in" type="color3" nodename="base_metallicRoughnessTexture" />
+  </separate3>
+  <surfacematerial name="base" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="base_surface" />
+  </surfacematerial>
+  <disney_principled name="grid_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" nodename="grid_baseColorTexture" />
+    <input name="metallic" type="float" value="0" />
+    <input name="roughness" type="float" value="0.5" />
+  </disney_principled>
+  <image name="grid_baseColorTexture" type="color3">
+    <input name="file" type="filename" value="substance_boy/textures/grid.jpg" />
+  </image>
+  <surfacematerial name="grid" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="grid_surface" />
+  </surfacematerial>
+</materialx>

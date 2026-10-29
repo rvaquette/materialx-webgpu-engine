@@ -13,12 +13,19 @@ import type { MaterialXReference, SceneAsset, ScenePrim, XformOp } from '../../s
 import type { MaterialCompileUnit } from '../../src/usd/materials.ts';
 import {
   buildSceneResources,
+  requireCompiledMaterials,
   createSceneBindGroups,
   uploadGeometry,
   type MaterialBuild,
   type MaterialCompiler,
   type MeshSource,
 } from '../../src/render/scene-resources.ts';
+
+it('rejects rendering uncompiled bound materials instead of returning a blank or neutral result', () => {
+  expect(() => requireCompiledMaterials({ pendingMaterials: ['hair.mtlx::simple_hair_default'] }))
+    .toThrow('Material compilation failed: hair.mtlx::simple_hair_default');
+  expect(() => requireCompiledMaterials({ pendingMaterials: [] })).not.toThrow();
+});
 
 function prim(path: string, overrides: Partial<ScenePrim> = {}): ScenePrim {
   const name = path.split('/').filter(Boolean).pop() ?? '';

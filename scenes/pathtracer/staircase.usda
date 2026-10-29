@@ -1,0 +1,310 @@
+#usda 1.0
+(
+    defaultPrim = "World"
+    metersPerUnit = 1
+    upAxis = "Y"
+    doc = "staircase converted from GLSL-PathTracer .scene"
+)
+
+def Xform "World"
+{
+    custom string pathtracer:sourceScene = "staircase.scene"
+    custom int2 pathtracer:resolution = (640, 800)
+    custom int pathtracer:maxDepth = 3
+
+    def Camera "Camera"
+    {
+        matrix4d xformOp:transform = ((1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (0.05555139, 1.73679901, 4.94515045, 1))
+        uniform token[] xformOpOrder = ["xformOp:transform"]
+        token projection = "perspective"
+        float focalLength = 50
+        float horizontalAperture = 38.3864035035
+        float verticalAperture = 47.9830043794
+        float2 clippingRange = (0.001, 1000000)
+        custom point3f pathtracer:lookAt = (0.05555139, 1.73679901, 0.93515045)
+        custom float pathtracer:fov = 42
+    }
+
+    def Scope "Looks"
+    {
+        def Material "WoodFloor" (
+            prepend references = @./staircase.mtlx@</MaterialX/Materials/WoodFloor>
+        )
+        {
+        }
+        def Material "Wallpaper" (
+            prepend references = @./staircase.mtlx@</MaterialX/Materials/Wallpaper>
+        )
+        {
+        }
+        def Material "WoodStairs" (
+            prepend references = @./staircase.mtlx@</MaterialX/Materials/WoodStairs>
+        )
+        {
+        }
+        def Material "WhitePaint" (
+            prepend references = @./staircase.mtlx@</MaterialX/Materials/WhitePaint>
+        )
+        {
+        }
+        def Material "MagnoliaPaint" (
+            prepend references = @./staircase.mtlx@</MaterialX/Materials/MagnoliaPaint>
+        )
+        {
+        }
+        def Material "Painting1" (
+            prepend references = @./staircase.mtlx@</MaterialX/Materials/Painting1>
+        )
+        {
+        }
+        def Material "Painting2" (
+            prepend references = @./staircase.mtlx@</MaterialX/Materials/Painting2>
+        )
+        {
+        }
+        def Material "Painting3" (
+            prepend references = @./staircase.mtlx@</MaterialX/Materials/Painting3>
+        )
+        {
+        }
+        def Material "Gold" (
+            prepend references = @./staircase.mtlx@</MaterialX/Materials/Gold>
+        )
+        {
+        }
+        def Material "WoodChair" (
+            prepend references = @./staircase.mtlx@</MaterialX/Materials/WoodChair>
+        )
+        {
+        }
+        def Material "ChairSeat" (
+            prepend references = @./staircase.mtlx@</MaterialX/Materials/ChairSeat>
+        )
+        {
+        }
+        def Material "WoodLamp" (
+            prepend references = @./staircase.mtlx@</MaterialX/Materials/WoodLamp>
+        )
+        {
+        }
+        def Material "Brass" (
+            prepend references = @./staircase.mtlx@</MaterialX/Materials/Brass>
+        )
+        {
+        }
+        def Material "StainlessSteel" (
+            prepend references = @./staircase.mtlx@</MaterialX/Materials/StainlessSteel>
+        )
+        {
+        }
+        def Material "WhitePlastic" (
+            prepend references = @./staircase.mtlx@</MaterialX/Materials/WhitePlastic>
+        )
+        {
+        }
+        def Material "Lampshade" (
+            prepend references = @./staircase.mtlx@</MaterialX/Materials/Lampshade>
+        )
+        {
+        }
+        def Material "Black" (
+            prepend references = @./staircase.mtlx@</MaterialX/Materials/Black>
+        )
+        {
+        }
+        def Material "BrushedAluminium" (
+            prepend references = @./staircase.mtlx@</MaterialX/Materials/BrushedAluminium>
+        )
+        {
+        }
+        def Material "Glass" (
+            prepend references = @./staircase.mtlx@</MaterialX/Materials/Glass>
+        )
+        {
+        }
+        def Material "Candles" (
+            prepend references = @./staircase.mtlx@</MaterialX/Materials/Candles>
+        )
+        {
+        }
+    }
+
+    def Scope "Geometry"
+    {
+        def Mesh "Black"
+        {
+            custom asset engine:geometry:file = @./staircase/Black.obj@
+            float3 xformOp:scale = (0.01, 0.01, 0.01)
+            uniform token[] xformOpOrder = ["xformOp:scale"]
+            rel material:binding = </World/Looks/Black>
+        }
+        def Mesh "Brass"
+        {
+            custom asset engine:geometry:file = @./staircase/Brass.obj@
+            float3 xformOp:scale = (0.01, 0.01, 0.01)
+            uniform token[] xformOpOrder = ["xformOp:scale"]
+            rel material:binding = </World/Looks/Brass>
+        }
+        def Mesh "BrushedAluminium"
+        {
+            custom asset engine:geometry:file = @./staircase/BrushedAluminium.obj@
+            float3 xformOp:scale = (0.01, 0.01, 0.01)
+            uniform token[] xformOpOrder = ["xformOp:scale"]
+            rel material:binding = </World/Looks/BrushedAluminium>
+        }
+        def Mesh "Candles"
+        {
+            custom asset engine:geometry:file = @./staircase/Candles.obj@
+            float3 xformOp:scale = (0.01, 0.01, 0.01)
+            uniform token[] xformOpOrder = ["xformOp:scale"]
+            rel material:binding = </World/Looks/Candles>
+        }
+        def Mesh "ChairSeat"
+        {
+            custom asset engine:geometry:file = @./staircase/ChairSeat.obj@
+            float3 xformOp:scale = (0.01, 0.01, 0.01)
+            uniform token[] xformOpOrder = ["xformOp:scale"]
+            rel material:binding = </World/Looks/ChairSeat>
+        }
+        def Mesh "Glass"
+        {
+            custom asset engine:geometry:file = @./staircase/Glass.obj@
+            float3 xformOp:scale = (0.01, 0.01, 0.01)
+            uniform token[] xformOpOrder = ["xformOp:scale"]
+            rel material:binding = </World/Looks/Glass>
+        }
+        def Mesh "Gold"
+        {
+            custom asset engine:geometry:file = @./staircase/Gold.obj@
+            float3 xformOp:scale = (0.01, 0.01, 0.01)
+            uniform token[] xformOpOrder = ["xformOp:scale"]
+            rel material:binding = </World/Looks/Gold>
+        }
+        def Mesh "Lampshade"
+        {
+            custom asset engine:geometry:file = @./staircase/Lampshade.obj@
+            float3 xformOp:scale = (0.01, 0.01, 0.01)
+            uniform token[] xformOpOrder = ["xformOp:scale"]
+            rel material:binding = </World/Looks/Lampshade>
+        }
+        def Mesh "MagnoliaPaint"
+        {
+            custom asset engine:geometry:file = @./staircase/MagnoliaPaint.obj@
+            float3 xformOp:scale = (0.01, 0.01, 0.01)
+            uniform token[] xformOpOrder = ["xformOp:scale"]
+            rel material:binding = </World/Looks/MagnoliaPaint>
+        }
+        def Mesh "Painting1"
+        {
+            custom asset engine:geometry:file = @./staircase/Painting1.obj@
+            float3 xformOp:scale = (0.01, 0.01, 0.01)
+            uniform token[] xformOpOrder = ["xformOp:scale"]
+            rel material:binding = </World/Looks/Painting1>
+        }
+        def Mesh "Painting2"
+        {
+            custom asset engine:geometry:file = @./staircase/Painting2.obj@
+            float3 xformOp:scale = (0.01, 0.01, 0.01)
+            uniform token[] xformOpOrder = ["xformOp:scale"]
+            rel material:binding = </World/Looks/Painting2>
+        }
+        def Mesh "Painting3"
+        {
+            custom asset engine:geometry:file = @./staircase/Painting3.obj@
+            float3 xformOp:scale = (0.01, 0.01, 0.01)
+            uniform token[] xformOpOrder = ["xformOp:scale"]
+            rel material:binding = </World/Looks/Painting3>
+        }
+        def Mesh "StainlessSteel"
+        {
+            custom asset engine:geometry:file = @./staircase/StainlessSteel.obj@
+            float3 xformOp:scale = (0.01, 0.01, 0.01)
+            uniform token[] xformOpOrder = ["xformOp:scale"]
+            rel material:binding = </World/Looks/StainlessSteel>
+        }
+        def Mesh "Wallpaper"
+        {
+            custom asset engine:geometry:file = @./staircase/Wallpaper.obj@
+            float3 xformOp:scale = (0.01, 0.01, 0.01)
+            uniform token[] xformOpOrder = ["xformOp:scale"]
+            rel material:binding = </World/Looks/Wallpaper>
+        }
+        def Mesh "WhitePaint"
+        {
+            custom asset engine:geometry:file = @./staircase/WhitePaint.obj@
+            float3 xformOp:scale = (0.01, 0.01, 0.01)
+            uniform token[] xformOpOrder = ["xformOp:scale"]
+            rel material:binding = </World/Looks/WhitePaint>
+        }
+        def Mesh "WhitePlastic"
+        {
+            custom asset engine:geometry:file = @./staircase/WhitePlastic.obj@
+            float3 xformOp:scale = (0.01, 0.01, 0.01)
+            uniform token[] xformOpOrder = ["xformOp:scale"]
+            rel material:binding = </World/Looks/WhitePlastic>
+        }
+        def Mesh "WoodChair"
+        {
+            custom asset engine:geometry:file = @./staircase/WoodChair.obj@
+            float3 xformOp:scale = (0.01, 0.01, 0.01)
+            uniform token[] xformOpOrder = ["xformOp:scale"]
+            rel material:binding = </World/Looks/WoodChair>
+        }
+        def Mesh "WoodFloor"
+        {
+            custom asset engine:geometry:file = @./staircase/WoodFloor.obj@
+            float3 xformOp:scale = (0.01, 0.01, 0.01)
+            uniform token[] xformOpOrder = ["xformOp:scale"]
+            rel material:binding = </World/Looks/WoodFloor>
+        }
+        def Mesh "WoodLamp"
+        {
+            custom asset engine:geometry:file = @./staircase/WoodLamp.obj@
+            float3 xformOp:scale = (0.01, 0.01, 0.01)
+            uniform token[] xformOpOrder = ["xformOp:scale"]
+            rel material:binding = </World/Looks/WoodLamp>
+        }
+        def Mesh "WoodStairs"
+        {
+            custom asset engine:geometry:file = @./staircase/WoodStairs.obj@
+            float3 xformOp:scale = (0.01, 0.01, 0.01)
+            uniform token[] xformOpOrder = ["xformOp:scale"]
+            rel material:binding = </World/Looks/WoodStairs>
+        }
+    }
+
+    def Scope "Lights"
+    {
+        def RectLight "Light_001"
+        {
+            matrix4d xformOp:transform = ((0, -5.70696769623e-7, 1, 0), (1, 0, 0, 0), (0, 1, 5.70696769623e-7, 0), (-0.5, 7.1568689, -1.65734087, 1))
+            uniform token[] xformOpOrder = ["xformOp:transform"]
+            color3f inputs:color = (1, 1, 1)
+            float inputs:intensity = 50
+            bool inputs:normalize = false
+            float inputs:width = 2.1377377
+            float inputs:height = 2.0502871
+        }
+        def Material "Light_001_Material"
+        {
+            token outputs:surface.connect = </World/Lights/Light_001_Material/Surface.outputs:surface>
+            def Shader "Surface"
+            {
+                uniform token info:id = "UsdPreviewSurface"
+                color3f inputs:diffuseColor = (0, 0, 0)
+                int inputs:useSpecularWorkflow = 1
+                color3f inputs:specularColor = (0, 0, 0)
+                color3f inputs:emissiveColor = (50, 50, 50)
+                token outputs:surface
+            }
+        }
+        def Mesh "Light_001_Geometry"
+        {
+            point3f[] points = [(0.52514355, 7.15686951, -2.72620972), (0.52514355, 7.15686829, -0.58847202), (-1.52514355, 7.15686829, -0.58847202), (-1.52514355, 7.15686951, -2.72620972)]
+            int[] faceVertexCounts = [4]
+            int[] faceVertexIndices = [0, 1, 2, 3]
+            uniform token subdivisionScheme = "none"
+            rel material:binding = </World/Lights/Light_001_Material>
+        }
+    }
+}

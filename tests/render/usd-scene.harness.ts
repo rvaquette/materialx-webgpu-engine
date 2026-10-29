@@ -31,6 +31,7 @@ import {
 } from '../../src/render/raster/backend.ts';
 import {
   buildSceneResources,
+  requireCompiledMaterials,
   createSceneBindGroups,
   uploadGeometry,
   type MaterialResource,
@@ -47,7 +48,8 @@ import {
   GBUFFER_POSITION_FORMAT,
   GBUFFER_NORMAL_FORMAT,
 } from '../../src/render/hybrid/trace-pass.ts';
-import { buildPathTraceUniform, PathTraceBackend, PT_UNIFORM_SIZE } from '../../src/render/pathtracing/compute.ts';
+import { buildPathTraceUniform, pathTraceComputeWgsl, pathTraceClosureDispatch, PathTraceBackend, PT_UNIFORM_SIZE } from '../../src/render/pathtracing/compute.ts';
+import { maxRecordLobes } from '../../src/render/pathtracing/material-record.ts';
 import { packHdrTexture } from '../../src/assets/hdr-texture.ts';
 import { buildMaterialDispatch } from '../../src/render/pathtracing/material-variant.ts';
 import { buildPtDeviceBindings, type PtImageProvider } from '../../src/render/pathtracing/device-bindings.ts';
@@ -65,7 +67,7 @@ import {
 import { resolvePixel } from '../../src/render/output.ts';
 import { importCameras, type SceneCamera } from '../../src/usd/cameras.ts';
 import { importLights } from '../../src/usd/lights.ts';
-import { loadEnvironment, meshSourceFromScene, type LoadedEnvironment } from '../../src/render/usd-scene-assets.ts';
+import { loadEnvironment, meshSourceFromScene, resolveMaterialImageUrls, type LoadedEnvironment } from '../../src/render/usd-scene-assets.ts';
 import { loadExternalMeshSource } from '../../src/geometry/external-mesh.ts';
 import { importUsdStage, type UsdLayerReader } from '../../src/usd/importer.ts';
 import { lowerPreviewSurfaceMaterials } from '../../src/usd/preview-surface.ts';
@@ -400,11 +402,14 @@ async function loadMtlxSceneContext(
     const dir = dirOf(url);
     if (!materialDirs.includes(dir)) materialDirs.push(dir);
     try {
-      const text = await (await fetch(url)).text();
+      const response = await fetch(url);
+      if (!response.ok) throw new Error(`HTTP ${response.status}: ${url}`);
+      const text = resolveMaterialImageUrls(await response.text(), dir);
       texts.set(ref.assetPath, text);
       surfaces.set(ref.materialName, surfaceFromMtlx(text));
-    } catch {
+    } catch (error) {
       line(`MaterialX introuvable: ${ref.assetPath}`);
+      throw error;
     }
   }
   // Lower inline UsdPreviewSurface shaders (incl. UsdUVTexture) into synthetic
@@ -414,7 +419,7 @@ async function loadMtlxSceneContext(
   const lowered = lowerPreviewSurfaceMaterials(scene, sink);
   if (lowered.length > 0 && !materialDirs.includes(baseDir)) materialDirs.push(baseDir);
   for (const mat of lowered) {
-    texts.set(mat.reference.assetPath, mat.xml);
+    texts.set(mat.reference.assetPath, resolveMaterialImageUrls(mat.xml, baseDir));
     (scene.materials as MaterialXReference[]).push(mat.reference);
     try {
       surfaces.set(mat.reference.materialName, surfaceFromMtlx(mat.xml));
@@ -537,6 +542,7 @@ async function renderUsdRasterOnDevice(
     materialCompiler: createGraphMaterialCompiler({ documents, sink }),
     sink,
   });
+  requireCompiledMaterials(resources);
   line('diag step: scene resources built');
 
   const frameCamera = resolveFrameCamera(cameras, line, exposureOverride, camBackOverride);
@@ -1045,6 +1051,7 @@ async function renderUsdOnDevice(
     materialCompiler: createGraphMaterialCompiler({ documents, sink }),
     sink,
   });
+  requireCompiledMaterials(resources);
   line('diag step: scene resources built');
 
   const frameCamera = resolveFrameCamera(cameras, line, exposureOverride, camBackOverride);
@@ -1090,10 +1097,14 @@ async function renderUsdOnDevice(
 
   // Compute path tracer on the packed scene buffers, progressive accumulation.
   const backend = new PathTraceBackend(device, { dispatch, ...(envAsset ? { environment: true } : {}) });
-  device.pushErrorScope('validation');
-  const { pipeline, module } = backend.createPipeline();
-  const pipelineError = await device.popErrorScope();
-  if (pipelineError) line(`diag pipeline validation error: ${pipelineError.message}`);
+  const maxLobes = Math.max(
+    ...dispatch.variants.map(variant => variant.lobeCount),
+    maxRecordLobes(ptScene.materials, new Set(dispatch.variants.map(variant => variant.index))),
+  );
+  const module = device.createShaderModule({ code: pathTraceComputeWgsl({
+    dispatch, environment: envAsset !== undefined, maxLobes,
+    closureDispatch: pathTraceClosureDispatch(dispatch, ptScene.materials),
+  }) });
   if (typeof module.getCompilationInfo === 'function') {
     const info = await module.getCompilationInfo();
     for (const m of info.messages) {
@@ -1102,7 +1113,10 @@ async function renderUsdOnDevice(
       }
     }
     line(`diag wgsl messages=${info.messages.length}`);
+    const errors = info.messages.filter(message => message.type === 'error');
+    if (errors.length) throw new Error(`Path-tracing WGSL: ${errors.map(message => message.message).join('; ')}`);
   }
+  const { pipeline } = await backend.createPipelineAsync(module);
   const storage = (data: Float32Array | Uint32Array | Int32Array): GPUBuffer => {
     const buf = device.createBuffer({ size: data.byteLength, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
     device.queue.writeBuffer(buf, 0, data);

@@ -1,6 +1,7 @@
 // Re-run every render test of the standard-shader-ball USD scene on the local GPU
 // (headless Chrome) or on the connected mobile (Chrome over ADB): raster and path
-// tracing, optionally with OpenPBRMaterial overrides taken from scenes/mtlx-library.
+// tracing, preserving authored materials unless --materials explicitly selects
+// OpenPBRMaterial overrides taken from scenes/mtlx-library.
 // Each case drives usd-image-harness.html, saves a PNG and is checked for failure
 // or an (almost) black image; a JSON report summarizes the run.
 //
@@ -136,7 +137,7 @@ async function main() {
     entry: { type: 'string', default: DEFAULT_ENTRY },
     target: { type: 'string', default: 'local' },
     backends: { type: 'string', default: 'raster,pathtracing' },
-    materials: { type: 'string', default: 'all' },
+    materials: { type: 'string' },
     res: { type: 'string', default: '256' },
     spp: { type: 'string', default: '16' },
     timeout: { type: 'string', default: '600000' },
@@ -148,6 +149,7 @@ async function main() {
   } });
   if (values.help) {
     console.log('npm run test:shaderball -- [--entry /scenes/.../scene.usda] [--target mobile|local] [--backends raster,pathtracing] [--materials <filter>|all] [--res N] [--spp N] [--timeout ms] [--port N] [--device serial] [--out-dir dir] [--black-threshold fraction] [--max-recoveries N] [--resume] [--list]');
+    console.log('Without --materials, render only the scene with its authored materials and bindings (no override).');
     return;
   }
   if (!['mobile', 'local'].includes(values.target)) throw new Error('--target must be mobile or local');
@@ -159,12 +161,15 @@ async function main() {
   if (backends.length === 0 || backends.some((backend) => !['raster', 'pathtracing'].includes(backend))) throw new Error('--backends accepts raster and/or pathtracing');
 
   const overrides = [];
-  if (values.materials) {
+  if (values.materials !== undefined) {
+    if (!values.materials.trim()) throw new Error('--materials requires a non-empty filter or all');
     const filter = values.materials === 'all' ? '' : values.materials.replaceAll('\\', '/').toLowerCase();
     const library = findMaterials(LIBRARY).map((file) => '/' + relative(ROOT, file).split(sep).join('/'));
     overrides.push(...library.filter((file) => file.toLowerCase().includes(filter)));
+    if (overrides.length === 0) throw new Error(`No .mtlx in scenes/mtlx-library matches '${values.materials}'`);
+  } else {
+    overrides.push(undefined);
   }
-  if (overrides.length === 0) throw new Error(`No .mtlx in scenes/mtlx-library matches '${values.materials}'`);
   const cases = overrides.flatMap((override) => backends.map((backend) => ({ backend, override })));
   if (values.list) {
     for (const item of cases) console.log(caseName(item.override, item.backend));
@@ -301,6 +306,7 @@ async function main() {
         entry.file = relative(ROOT, file).split(sep).join('/');
         entry.renderMs = Math.round(result.renderMs);
         entry.stats = result.stats;
+        entry.pageLog = result.pageLog;
         entry.status = result.stats.litFraction < Number(values['black-threshold']) ? 'black' : 'ok';
         if (entry.status === 'black') entry.reason = lastLines(result.pageLog, 6);
       } else {

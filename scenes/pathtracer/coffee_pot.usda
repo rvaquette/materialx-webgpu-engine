@@ -1,0 +1,277 @@
+#usda 1.0
+(
+    defaultPrim = "World"
+    metersPerUnit = 1
+    upAxis = "Y"
+    doc = "coffee_pot converted from GLSL-PathTracer .scene"
+)
+
+def Xform "World"
+{
+    custom string pathtracer:sourceScene = "coffee_pot.scene"
+    custom int2 pathtracer:resolution = (700, 900)
+    custom int pathtracer:maxDepth = 5
+
+    def Camera "Camera"
+    {
+        matrix4d xformOp:transform = ((1, 0, 0, 0), (0, 0.992277876714, -0.124034734589, 0), (0, 0.124034734589, 0.992277876714, 0), (0, 0.26, 0.7, 1))
+        uniform token[] xformOpOrder = ["xformOp:transform"]
+        token projection = "perspective"
+        float focalLength = 50
+        float horizontalAperture = 26.7949192431
+        float verticalAperture = 34.4506104554
+        float2 clippingRange = (0.001, 1000000)
+        custom point3f pathtracer:lookAt = (0, 0.16, -0.1)
+        custom float pathtracer:fov = 30
+    }
+
+    def Scope "Looks"
+    {
+        def Material "Plastic_Orange" (
+            prepend references = @./coffee_pot.mtlx@</MaterialX/Materials/Plastic_Orange>
+        )
+        {
+        }
+        def Material "Plastic_Black" (
+            prepend references = @./coffee_pot.mtlx@</MaterialX/Materials/Plastic_Black>
+        )
+        {
+        }
+        def Material "Glass" (
+            prepend references = @./coffee_pot.mtlx@</MaterialX/Materials/Glass>
+        )
+        {
+        }
+        def Material "Metal" (
+            prepend references = @./coffee_pot.mtlx@</MaterialX/Materials/Metal>
+        )
+        {
+        }
+        def Material "Floor" (
+            prepend references = @./coffee_pot.mtlx@</MaterialX/Materials/Floor>
+        )
+        {
+        }
+    }
+
+    def Scope "Geometry"
+    {
+        def Mesh "Mesh003"
+        {
+            custom asset engine:geometry:file = @./coffee_maker/Mesh003.obj@
+
+            rel material:binding = </World/Looks/Plastic_Black>
+        }
+        def Mesh "Mesh005"
+        {
+            custom asset engine:geometry:file = @./coffee_maker/Mesh005.obj@
+
+            rel material:binding = </World/Looks/Plastic_Black>
+        }
+        def Mesh "Mesh007"
+        {
+            custom asset engine:geometry:file = @./coffee_maker/Mesh007.obj@
+
+            rel material:binding = </World/Looks/Plastic_Black>
+        }
+        def Mesh "Mesh008"
+        {
+            custom asset engine:geometry:file = @./coffee_maker/Mesh008.obj@
+
+            rel material:binding = </World/Looks/Plastic_Black>
+        }
+        def Mesh "Mesh011"
+        {
+            custom asset engine:geometry:file = @./coffee_maker/Mesh011.obj@
+
+            rel material:binding = </World/Looks/Plastic_Black>
+        }
+        def Mesh "Mesh013"
+        {
+            custom asset engine:geometry:file = @./coffee_maker/Mesh013.obj@
+
+            rel material:binding = </World/Looks/Plastic_Black>
+        }
+        def Mesh "Mesh014"
+        {
+            custom asset engine:geometry:file = @./coffee_maker/Mesh014.obj@
+
+            rel material:binding = </World/Looks/Plastic_Black>
+        }
+        def Mesh "Mesh017"
+        {
+            custom asset engine:geometry:file = @./coffee_maker/Mesh017.obj@
+
+            rel material:binding = </World/Looks/Plastic_Black>
+        }
+        def Mesh "Mesh018"
+        {
+            custom asset engine:geometry:file = @./coffee_maker/Mesh018.obj@
+
+            rel material:binding = </World/Looks/Plastic_Black>
+        }
+        def Mesh "Mesh019"
+        {
+            custom asset engine:geometry:file = @./coffee_maker/Mesh019.obj@
+
+            rel material:binding = </World/Looks/Plastic_Black>
+        }
+        def Mesh "Mesh000"
+        {
+            custom asset engine:geometry:file = @./coffee_maker/Mesh000.obj@
+
+            rel material:binding = </World/Looks/Plastic_Orange>
+        }
+        def Mesh "Mesh001"
+        {
+            custom asset engine:geometry:file = @./coffee_maker/Mesh001.obj@
+
+            rel material:binding = </World/Looks/Plastic_Orange>
+        }
+        def Mesh "Mesh006"
+        {
+            custom asset engine:geometry:file = @./coffee_maker/Mesh006.obj@
+
+            rel material:binding = </World/Looks/Plastic_Orange>
+        }
+        def Mesh "Mesh009"
+        {
+            custom asset engine:geometry:file = @./coffee_maker/Mesh009.obj@
+
+            rel material:binding = </World/Looks/Plastic_Orange>
+        }
+        def Mesh "Mesh012"
+        {
+            custom asset engine:geometry:file = @./coffee_maker/Mesh012.obj@
+
+            rel material:binding = </World/Looks/Plastic_Orange>
+        }
+        def Mesh "Mesh016"
+        {
+            custom asset engine:geometry:file = @./coffee_maker/Mesh016.obj@
+
+            rel material:binding = </World/Looks/Plastic_Orange>
+        }
+        def Mesh "Mesh010"
+        {
+            custom asset engine:geometry:file = @./coffee_maker/Mesh010.obj@
+
+            rel material:binding = </World/Looks/Glass>
+        }
+        def Mesh "Mesh002"
+        {
+            custom asset engine:geometry:file = @./coffee_maker/Mesh002.obj@
+
+            rel material:binding = </World/Looks/Metal>
+        }
+        def Mesh "Mesh015"
+        {
+            custom asset engine:geometry:file = @./coffee_maker/Mesh015.obj@
+
+            rel material:binding = </World/Looks/Metal>
+        }
+        def Mesh "Mesh004"
+        {
+            custom asset engine:geometry:file = @./coffee_maker/Mesh004.obj@
+
+            rel material:binding = </World/Looks/Floor>
+        }
+    }
+
+    def Scope "Lights"
+    {
+        def RectLight "Light_001"
+        {
+            matrix4d xformOp:transform = ((0.421745964123, 0, 0.906714035265, 0), (0, 1, 0, 0), (-0.906714035265, 0, 0.421745964123, 0), (-0.2779545, 0.238515, 0.1640955, 1))
+            uniform token[] xformOpOrder = ["xformOp:transform"]
+            color3f inputs:color = (1, 1, 1)
+            float inputs:intensity = 4
+            bool inputs:normalize = false
+            float inputs:width = 0.385798594038
+            float inputs:height = 0.422356
+        }
+        def Material "Light_001_Material"
+        {
+            token outputs:surface.connect = </World/Lights/Light_001_Material/Surface.outputs:surface>
+            def Shader "Surface"
+            {
+                uniform token info:id = "UsdPreviewSurface"
+                color3f inputs:diffuseColor = (0, 0, 0)
+                int inputs:useSpecularWorkflow = 1
+                color3f inputs:specularColor = (0, 0, 0)
+                color3f inputs:emissiveColor = (4, 4, 4)
+                token outputs:surface
+            }
+        }
+        def Mesh "Light_001_Geometry"
+        {
+            point3f[] points = [(-0.359309, 0.449693, -0.010809), (-0.1966, 0.449693, 0.339), (-0.1966, 0.027337, 0.339), (-0.359309, 0.027337, -0.010809)]
+            int[] faceVertexCounts = [4]
+            int[] faceVertexIndices = [0, 1, 2, 3]
+            uniform token subdivisionScheme = "none"
+            rel material:binding = </World/Lights/Light_001_Material>
+        }
+        def RectLight "Light_002"
+        {
+            matrix4d xformOp:transform = ((0, 1, 0, 0), (0, 0, 1, 0), (1, 0, 0, 0), (0.320673, 0.2516685, 0.0457375, 1))
+            uniform token[] xformOpOrder = ["xformOp:transform"]
+            color3f inputs:color = (1, 1, 1)
+            float inputs:intensity = 4
+            bool inputs:normalize = false
+            float inputs:width = 0.448663
+            float inputs:height = 0.366475
+        }
+        def Material "Light_002_Material"
+        {
+            token outputs:surface.connect = </World/Lights/Light_002_Material/Surface.outputs:surface>
+            def Shader "Surface"
+            {
+                uniform token info:id = "UsdPreviewSurface"
+                color3f inputs:diffuseColor = (0, 0, 0)
+                int inputs:useSpecularWorkflow = 1
+                color3f inputs:specularColor = (0, 0, 0)
+                color3f inputs:emissiveColor = (4, 4, 4)
+                token outputs:surface
+            }
+        }
+        def Mesh "Light_002_Geometry"
+        {
+            point3f[] points = [(0.320673, 0.027337, 0.228975), (0.320673, 0.476, 0.228975), (0.320673, 0.476, -0.1375), (0.320673, 0.027337, -0.1375)]
+            int[] faceVertexCounts = [4]
+            int[] faceVertexIndices = [0, 1, 2, 3]
+            uniform token subdivisionScheme = "none"
+            rel material:binding = </World/Lights/Light_002_Material>
+        }
+        def RectLight "Light_003"
+        {
+            matrix4d xformOp:transform = ((-1, 0, 0, 0), (0, 0, 1, 0), (0, 1, 0, 0), (0, 0.50385, 0.037336, 1))
+            uniform token[] xformOpOrder = ["xformOp:transform"]
+            color3f inputs:color = (1, 1, 1)
+            float inputs:intensity = 4
+            bool inputs:normalize = false
+            float inputs:width = 0.460256
+            float inputs:height = 0.460072
+        }
+        def Material "Light_003_Material"
+        {
+            token outputs:surface.connect = </World/Lights/Light_003_Material/Surface.outputs:surface>
+            def Shader "Surface"
+            {
+                uniform token info:id = "UsdPreviewSurface"
+                color3f inputs:diffuseColor = (0, 0, 0)
+                int inputs:useSpecularWorkflow = 1
+                color3f inputs:specularColor = (0, 0, 0)
+                color3f inputs:emissiveColor = (4, 4, 4)
+                token outputs:surface
+            }
+        }
+        def Mesh "Light_003_Geometry"
+        {
+            point3f[] points = [(0.230128, 0.50385, 0.267372), (-0.230128, 0.50385, 0.267372), (-0.230128, 0.50385, -0.1927), (0.230128, 0.50385, -0.1927)]
+            int[] faceVertexCounts = [4]
+            int[] faceVertexIndices = [0, 1, 2, 3]
+            uniform token subdivisionScheme = "none"
+            rel material:binding = </World/Lights/Light_003_Material>
+        }
+    }
+}

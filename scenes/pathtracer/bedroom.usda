@@ -1,0 +1,659 @@
+#usda 1.0
+(
+    defaultPrim = "World"
+    metersPerUnit = 1
+    upAxis = "Y"
+    doc = "bedroom converted from GLSL-PathTracer .scene"
+)
+
+def Xform "World"
+{
+    custom string pathtracer:sourceScene = "bedroom.scene"
+    custom int2 pathtracer:resolution = (1270, 720)
+    custom int pathtracer:maxDepth = 3
+
+    def Camera "Camera"
+    {
+        matrix4d xformOp:transform = ((0.758335564111, 0, -0.651864381758, 0), (-0.070406889344, 0.99414997133, -0.0819066812702, 0), (0.648050956436, 0.108008492739, 0.75389927932, 0), (3, 1.5, 3.8, 1))
+        uniform token[] xformOpOrder = ["xformOp:transform"]
+        token projection = "perspective"
+        float focalLength = 50
+        float horizontalAperture = 57.735026919
+        float verticalAperture = 32.7316688045
+        float2 clippingRange = (0.001, 1000000)
+        custom point3f pathtracer:lookAt = (0, 1, 0.31)
+        custom float pathtracer:fov = 60
+    }
+
+    def Scope "Looks"
+    {
+        def Material "Boxes" (
+            prepend references = @./bedroom.mtlx@</MaterialX/Materials/Boxes>
+        )
+        {
+        }
+        def Material "PlasticCable" (
+            prepend references = @./bedroom.mtlx@</MaterialX/Materials/PlasticCable>
+        )
+        {
+        }
+        def Material "LampEmitter" (
+            prepend references = @./bedroom.mtlx@</MaterialX/Materials/LampEmitter>
+        )
+        {
+        }
+        def Material "Blankets" (
+            prepend references = @./bedroom.mtlx@</MaterialX/Materials/Blankets>
+        )
+        {
+        }
+        def Material "Bedsheets" (
+            prepend references = @./bedroom.mtlx@</MaterialX/Materials/Bedsheets>
+        )
+        {
+        }
+        def Material "Window" (
+            prepend references = @./bedroom.mtlx@</MaterialX/Materials/Window>
+        )
+        {
+        }
+        def Material "PictureBacking" (
+            prepend references = @./bedroom.mtlx@</MaterialX/Materials/PictureBacking>
+        )
+        {
+        }
+        def Material "Picture" (
+            prepend references = @./bedroom.mtlx@</MaterialX/Materials/Picture>
+        )
+        {
+        }
+        def Material "Rocks1" (
+            prepend references = @./bedroom.mtlx@</MaterialX/Materials/Rocks1>
+        )
+        {
+        }
+        def Material "Rocks2" (
+            prepend references = @./bedroom.mtlx@</MaterialX/Materials/Rocks2>
+        )
+        {
+        }
+        def Material "Rocks3" (
+            prepend references = @./bedroom.mtlx@</MaterialX/Materials/Rocks3>
+        )
+        {
+        }
+        def Material "DecoPlant" (
+            prepend references = @./bedroom.mtlx@</MaterialX/Materials/DecoPlant>
+        )
+        {
+        }
+        def Material "Black" (
+            prepend references = @./bedroom.mtlx@</MaterialX/Materials/Black>
+        )
+        {
+        }
+        def Material "Carpet" (
+            prepend references = @./bedroom.mtlx@</MaterialX/Materials/Carpet>
+        )
+        {
+        }
+        def Material "Matress" (
+            prepend references = @./bedroom.mtlx@</MaterialX/Materials/Matress>
+        )
+        {
+        }
+        def Material "WoodFloor" (
+            prepend references = @./bedroom.mtlx@</MaterialX/Materials/WoodFloor>
+        )
+        {
+        }
+        def Material "Walls" (
+            prepend references = @./bedroom.mtlx@</MaterialX/Materials/Walls>
+        )
+        {
+        }
+        def Material "Walls2" (
+            prepend references = @./bedroom.mtlx@</MaterialX/Materials/Walls2>
+        )
+        {
+        }
+        def Material "WoodFurniture" (
+            prepend references = @./bedroom.mtlx@</MaterialX/Materials/WoodFurniture>
+        )
+        {
+        }
+        def Material "Mirror" (
+            prepend references = @./bedroom.mtlx@</MaterialX/Materials/Mirror>
+        )
+        {
+        }
+        def Material "Aluminium" (
+            prepend references = @./bedroom.mtlx@</MaterialX/Materials/Aluminium>
+        )
+        {
+        }
+        def Material "BookCover" (
+            prepend references = @./bedroom.mtlx@</MaterialX/Materials/BookCover>
+        )
+        {
+        }
+        def Material "BookPages" (
+            prepend references = @./bedroom.mtlx@</MaterialX/Materials/BookPages>
+        )
+        {
+        }
+        def Material "LampMetal" (
+            prepend references = @./bedroom.mtlx@</MaterialX/Materials/LampMetal>
+        )
+        {
+        }
+        def Material "Glass" (
+            prepend references = @./bedroom.mtlx@</MaterialX/Materials/Glass>
+        )
+        {
+        }
+        def Material "RoughGlass" (
+            prepend references = @./bedroom.mtlx@</MaterialX/Materials/RoughGlass>
+        )
+        {
+        }
+        def Material "PictureFrame" (
+            prepend references = @./bedroom.mtlx@</MaterialX/Materials/PictureFrame>
+        )
+        {
+        }
+        def Material "CurtainRod" (
+            prepend references = @./bedroom.mtlx@</MaterialX/Materials/CurtainRod>
+        )
+        {
+        }
+        def Material "Curtains" (
+            prepend references = @./bedroom.mtlx@</MaterialX/Materials/Curtains>
+        )
+        {
+        }
+        def Material "StainlessSmooth" (
+            prepend references = @./bedroom.mtlx@</MaterialX/Materials/StainlessSmooth>
+        )
+        {
+        }
+    }
+
+    def Scope "Geometry"
+    {
+        def Mesh "Mesh044"
+        {
+            custom asset engine:geometry:file = @./bedroom/Mesh044.obj@
+
+            rel material:binding = </World/Looks/Aluminium>
+        }
+        def Mesh "Mesh047"
+        {
+            custom asset engine:geometry:file = @./bedroom/Mesh047.obj@
+
+            rel material:binding = </World/Looks/Aluminium>
+        }
+        def Mesh "Mesh032"
+        {
+            custom asset engine:geometry:file = @./bedroom/Mesh032.obj@
+
+            rel material:binding = </World/Looks/WoodFurniture>
+        }
+        def Mesh "Mesh028"
+        {
+            custom asset engine:geometry:file = @./bedroom/Mesh028.obj@
+
+            rel material:binding = </World/Looks/StainlessSmooth>
+        }
+        def Mesh "Mesh046"
+        {
+            custom asset engine:geometry:file = @./bedroom/Mesh046.obj@
+
+            rel material:binding = </World/Looks/Aluminium>
+        }
+        def Mesh "Mesh027"
+        {
+            custom asset engine:geometry:file = @./bedroom/Mesh027.obj@
+
+            rel material:binding = </World/Looks/Aluminium>
+        }
+        def Mesh "Mesh022"
+        {
+            custom asset engine:geometry:file = @./bedroom/Mesh022.obj@
+
+            rel material:binding = </World/Looks/Aluminium>
+        }
+        def Mesh "Mesh042"
+        {
+            custom asset engine:geometry:file = @./bedroom/Mesh042.obj@
+
+            rel material:binding = </World/Looks/Aluminium>
+        }
+        def Mesh "Mesh036"
+        {
+            custom asset engine:geometry:file = @./bedroom/Mesh036.obj@
+
+            rel material:binding = </World/Looks/Aluminium>
+        }
+        def Mesh "Mesh043"
+        {
+            custom asset engine:geometry:file = @./bedroom/Mesh043.obj@
+
+            rel material:binding = </World/Looks/Aluminium>
+        }
+        def Mesh "Mesh040"
+        {
+            custom asset engine:geometry:file = @./bedroom/Mesh040.obj@
+
+            rel material:binding = </World/Looks/Aluminium>
+        }
+        def Mesh "Mesh037"
+        {
+            custom asset engine:geometry:file = @./bedroom/Mesh037.obj@
+
+            rel material:binding = </World/Looks/Glass>
+        }
+        def Mesh "Mesh026"
+        {
+            custom asset engine:geometry:file = @./bedroom/Mesh026.obj@
+
+            rel material:binding = </World/Looks/Glass>
+        }
+        def Mesh "Mesh023"
+        {
+            custom asset engine:geometry:file = @./bedroom/Mesh023.obj@
+
+            rel material:binding = </World/Looks/LampMetal>
+        }
+        def Mesh "Mesh059"
+        {
+            custom asset engine:geometry:file = @./bedroom/Mesh059.obj@
+
+            rel material:binding = </World/Looks/LampEmitter>
+        }
+        def Mesh "Mesh049"
+        {
+            custom asset engine:geometry:file = @./bedroom/Mesh049.obj@
+
+            rel material:binding = </World/Looks/RoughGlass>
+        }
+        def Mesh "Mesh060"
+        {
+            custom asset engine:geometry:file = @./bedroom/Mesh060.obj@
+
+            rel material:binding = </World/Looks/WoodFloor>
+        }
+        def Mesh "Mesh033"
+        {
+            custom asset engine:geometry:file = @./bedroom/Mesh033.obj@
+
+            rel material:binding = </World/Looks/DecoPlant>
+        }
+        def Mesh "Mesh025"
+        {
+            custom asset engine:geometry:file = @./bedroom/Mesh025.obj@
+
+            rel material:binding = </World/Looks/Rocks1>
+        }
+        def Mesh "Mesh055"
+        {
+            custom asset engine:geometry:file = @./bedroom/Mesh055.obj@
+
+            rel material:binding = </World/Looks/Rocks2>
+        }
+        def Mesh "Mesh035"
+        {
+            custom asset engine:geometry:file = @./bedroom/Mesh035.obj@
+
+            rel material:binding = </World/Looks/Rocks3>
+        }
+        def Mesh "Mesh048"
+        {
+            custom asset engine:geometry:file = @./bedroom/Mesh048.obj@
+
+            rel material:binding = </World/Looks/Glass>
+        }
+        def Mesh "Mesh056"
+        {
+            custom asset engine:geometry:file = @./bedroom/Mesh056.obj@
+
+            rel material:binding = </World/Looks/LampMetal>
+        }
+        def Mesh "Mesh058"
+        {
+            custom asset engine:geometry:file = @./bedroom/Mesh058.obj@
+
+            rel material:binding = </World/Looks/PlasticCable>
+        }
+        def Mesh "Mesh061"
+        {
+            custom asset engine:geometry:file = @./bedroom/Mesh061.obj@
+
+            rel material:binding = </World/Looks/LampEmitter>
+        }
+        def Mesh "Mesh051"
+        {
+            custom asset engine:geometry:file = @./bedroom/Mesh051.obj@
+
+            rel material:binding = </World/Looks/Glass>
+        }
+        def Mesh "Mesh066"
+        {
+            custom asset engine:geometry:file = @./bedroom/Mesh066.obj@
+
+            rel material:binding = </World/Looks/LampMetal>
+        }
+        def Mesh "Mesh062"
+        {
+            custom asset engine:geometry:file = @./bedroom/Mesh062.obj@
+
+            rel material:binding = </World/Looks/PlasticCable>
+        }
+        def Mesh "Mesh054"
+        {
+            custom asset engine:geometry:file = @./bedroom/Mesh054.obj@
+
+            rel material:binding = </World/Looks/LampEmitter>
+        }
+        def Mesh "Mesh063"
+        {
+            custom asset engine:geometry:file = @./bedroom/Mesh063.obj@
+
+            rel material:binding = </World/Looks/BookCover>
+        }
+        def Mesh "Mesh064"
+        {
+            custom asset engine:geometry:file = @./bedroom/Mesh064.obj@
+
+            rel material:binding = </World/Looks/BookPages>
+        }
+        def Mesh "Mesh041"
+        {
+            custom asset engine:geometry:file = @./bedroom/Mesh041.obj@
+
+            rel material:binding = </World/Looks/Bedsheets>
+        }
+        def Mesh "Mesh052"
+        {
+            custom asset engine:geometry:file = @./bedroom/Mesh052.obj@
+
+            rel material:binding = </World/Looks/Glass>
+        }
+        def Mesh "Mesh065"
+        {
+            custom asset engine:geometry:file = @./bedroom/Mesh065.obj@
+
+            rel material:binding = </World/Looks/Glass>
+        }
+        def Mesh "Mesh067"
+        {
+            custom asset engine:geometry:file = @./bedroom/Mesh067.obj@
+
+            rel material:binding = </World/Looks/Glass>
+        }
+        def Mesh "Mesh068"
+        {
+            custom asset engine:geometry:file = @./bedroom/Mesh068.obj@
+
+            rel material:binding = </World/Looks/Bedsheets>
+        }
+        def Mesh "Mesh034"
+        {
+            custom asset engine:geometry:file = @./bedroom/Mesh034.obj@
+
+            rel material:binding = </World/Looks/Bedsheets>
+        }
+        def Mesh "Mesh021"
+        {
+            custom asset engine:geometry:file = @./bedroom/Mesh021.obj@
+
+            rel material:binding = </World/Looks/Matress>
+        }
+        def Mesh "Mesh020"
+        {
+            custom asset engine:geometry:file = @./bedroom/Mesh020.obj@
+
+            rel material:binding = </World/Looks/Carpet>
+        }
+        def Mesh "Mesh019"
+        {
+            custom asset engine:geometry:file = @./bedroom/Mesh019.obj@
+
+            rel material:binding = </World/Looks/Carpet>
+        }
+        def Mesh "Mesh018"
+        {
+            custom asset engine:geometry:file = @./bedroom/Mesh018.obj@
+
+            rel material:binding = </World/Looks/Black>
+        }
+        def Mesh "Mesh017"
+        {
+            custom asset engine:geometry:file = @./bedroom/Mesh017.obj@
+
+            rel material:binding = </World/Looks/Black>
+        }
+        def Mesh "Mesh069"
+        {
+            custom asset engine:geometry:file = @./bedroom/Mesh069.obj@
+
+            rel material:binding = </World/Looks/Black>
+        }
+        def Mesh "Mesh015"
+        {
+            custom asset engine:geometry:file = @./bedroom/Mesh015.obj@
+
+            rel material:binding = </World/Looks/CurtainRod>
+        }
+        def Mesh "Mesh014"
+        {
+            custom asset engine:geometry:file = @./bedroom/Mesh014.obj@
+
+            rel material:binding = </World/Looks/CurtainRod>
+        }
+        def Mesh "Mesh012"
+        {
+            custom asset engine:geometry:file = @./bedroom/Mesh012.obj@
+
+            rel material:binding = </World/Looks/WoodFurniture>
+        }
+        def Mesh "Mesh011"
+        {
+            custom asset engine:geometry:file = @./bedroom/Mesh011.obj@
+
+            rel material:binding = </World/Looks/Mirror>
+        }
+        def Mesh "Mesh013"
+        {
+            custom asset engine:geometry:file = @./bedroom/Mesh013.obj@
+
+            rel material:binding = </World/Looks/Walls>
+        }
+        def Mesh "Mesh039"
+        {
+            custom asset engine:geometry:file = @./bedroom/Mesh039.obj@
+
+            rel material:binding = </World/Looks/Window>
+        }
+        def Mesh "Mesh010"
+        {
+            custom asset engine:geometry:file = @./bedroom/Mesh010.obj@
+
+            rel material:binding = </World/Looks/Window>
+        }
+        def Mesh "Mesh031"
+        {
+            custom asset engine:geometry:file = @./bedroom/Mesh031.obj@
+
+            rel material:binding = </World/Looks/WoodFurniture>
+        }
+        def Mesh "Mesh045"
+        {
+            custom asset engine:geometry:file = @./bedroom/Mesh045.obj@
+
+            rel material:binding = </World/Looks/StainlessSmooth>
+        }
+        def Mesh "Mesh038"
+        {
+            custom asset engine:geometry:file = @./bedroom/Mesh038.obj@
+
+            rel material:binding = </World/Looks/Mirror>
+        }
+        def Mesh "Mesh009"
+        {
+            custom asset engine:geometry:file = @./bedroom/Mesh009.obj@
+
+            rel material:binding = </World/Looks/WoodFurniture>
+        }
+        def Mesh "Mesh024"
+        {
+            custom asset engine:geometry:file = @./bedroom/Mesh024.obj@
+
+            rel material:binding = </World/Looks/StainlessSmooth>
+        }
+        def Mesh "Mesh030"
+        {
+            custom asset engine:geometry:file = @./bedroom/Mesh030.obj@
+
+            rel material:binding = </World/Looks/WoodFurniture>
+        }
+        def Mesh "Mesh029"
+        {
+            custom asset engine:geometry:file = @./bedroom/Mesh029.obj@
+
+            rel material:binding = </World/Looks/StainlessSmooth>
+        }
+        def Mesh "Mesh008"
+        {
+            custom asset engine:geometry:file = @./bedroom/Mesh008.obj@
+
+            rel material:binding = </World/Looks/Walls2>
+        }
+        def Mesh "Mesh007"
+        {
+            custom asset engine:geometry:file = @./bedroom/Mesh007.obj@
+
+            rel material:binding = </World/Looks/WoodFurniture>
+        }
+        def Mesh "Mesh006"
+        {
+            custom asset engine:geometry:file = @./bedroom/Mesh006.obj@
+
+            rel material:binding = </World/Looks/WoodFurniture>
+        }
+        def Mesh "Mesh005"
+        {
+            custom asset engine:geometry:file = @./bedroom/Mesh005.obj@
+
+            rel material:binding = </World/Looks/StainlessSmooth>
+        }
+        def Mesh "Mesh050"
+        {
+            custom asset engine:geometry:file = @./bedroom/Mesh050.obj@
+
+            rel material:binding = </World/Looks/PictureFrame>
+        }
+        def Mesh "Mesh053"
+        {
+            custom asset engine:geometry:file = @./bedroom/Mesh053.obj@
+
+            rel material:binding = </World/Looks/PictureBacking>
+        }
+        def Mesh "Mesh003"
+        {
+            custom asset engine:geometry:file = @./bedroom/Mesh003.obj@
+
+            rel material:binding = </World/Looks/Picture>
+        }
+        def Mesh "Mesh002"
+        {
+            custom asset engine:geometry:file = @./bedroom/Mesh002.obj@
+
+            rel material:binding = </World/Looks/Boxes>
+        }
+        def Mesh "Mesh016"
+        {
+            custom asset engine:geometry:file = @./bedroom/Mesh016.obj@
+
+            rel material:binding = </World/Looks/Blankets>
+        }
+        def Mesh "Mesh001"
+        {
+            custom asset engine:geometry:file = @./bedroom/Mesh001.obj@
+
+            rel material:binding = </World/Looks/Blankets>
+        }
+        def Mesh "Mesh000"
+        {
+            custom asset engine:geometry:file = @./bedroom/Mesh000.obj@
+
+            rel material:binding = </World/Looks/Blankets>
+        }
+    }
+
+    def Scope "Lights"
+    {
+        def RectLight "Light_001"
+        {
+            matrix4d xformOp:transform = ((1, 0, 0, 0), (0, -1, 0, 0), (0, 0, -1, 0), (-1.4754385, 1.189678, -1.26735, 1))
+            uniform token[] xformOpOrder = ["xformOp:transform"]
+            color3f inputs:color = (1, 1, 1)
+            float inputs:intensity = 16.4648
+            bool inputs:normalize = false
+            float inputs:width = 1.064823
+            float inputs:height = 1.815584
+        }
+        def Material "Light_001_Material"
+        {
+            token outputs:surface.connect = </World/Lights/Light_001_Material/Surface.outputs:surface>
+            def Shader "Surface"
+            {
+                uniform token info:id = "UsdPreviewSurface"
+                color3f inputs:diffuseColor = (0, 0, 0)
+                int inputs:useSpecularWorkflow = 1
+                color3f inputs:specularColor = (0, 0, 0)
+                color3f inputs:emissiveColor = (16.4648, 16.4648, 16.4648)
+                token outputs:surface
+            }
+        }
+        def Mesh "Light_001_Geometry"
+        {
+            point3f[] points = [(-2.00785, 0.281886, -1.26735), (-0.943027, 0.281886, -1.26735), (-0.943027, 2.09747, -1.26735), (-2.00785, 2.09747, -1.26735)]
+            int[] faceVertexCounts = [4]
+            int[] faceVertexIndices = [0, 1, 2, 3]
+            uniform token subdivisionScheme = "none"
+            rel material:binding = </World/Lights/Light_001_Material>
+        }
+        def RectLight "Light_002"
+        {
+            matrix4d xformOp:transform = ((1, 0, 0, 0), (0, -1, 0, 0), (0, 0, -1, 0), (1.443792, 1.189678, -1.26735, 1))
+            uniform token[] xformOpOrder = ["xformOp:transform"]
+            color3f inputs:color = (1, 1, 1)
+            float inputs:intensity = 16.4648
+            bool inputs:normalize = false
+            float inputs:width = 1.064816
+            float inputs:height = 1.815584
+        }
+        def Material "Light_002_Material"
+        {
+            token outputs:surface.connect = </World/Lights/Light_002_Material/Surface.outputs:surface>
+            def Shader "Surface"
+            {
+                uniform token info:id = "UsdPreviewSurface"
+                color3f inputs:diffuseColor = (0, 0, 0)
+                int inputs:useSpecularWorkflow = 1
+                color3f inputs:specularColor = (0, 0, 0)
+                color3f inputs:emissiveColor = (16.4648, 16.4648, 16.4648)
+                token outputs:surface
+            }
+        }
+        def Mesh "Light_002_Geometry"
+        {
+            point3f[] points = [(0.911384, 0.281886, -1.26735), (1.9762, 0.281886, -1.26735), (1.9762, 2.09747, -1.26735), (0.911384, 2.09747, -1.26735)]
+            int[] faceVertexCounts = [4]
+            int[] faceVertexIndices = [0, 1, 2, 3]
+            uniform token subdivisionScheme = "none"
+            rel material:binding = </World/Lights/Light_002_Material>
+        }
+    }
+}

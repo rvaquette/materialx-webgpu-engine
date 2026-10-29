@@ -1,0 +1,151 @@
+#usda 1.0
+(
+    defaultPrim = "World"
+    metersPerUnit = 1
+    upAxis = "Y"
+    doc = "panther converted from GLSL-PathTracer .scene"
+)
+
+def Xform "World"
+{
+    custom string pathtracer:sourceScene = "panther.scene"
+    custom int2 pathtracer:resolution = (1280, 720)
+    custom int pathtracer:maxDepth = 3
+
+    def Camera "Camera"
+    {
+        matrix4d xformOp:transform = ((0.997054485502, 0, 0.0766964988847, 0), (-0.0144427862938, 0.982109467978, 0.187756221819, 0), (-0.0753243577155, -0.188310894289, 0.979216650301, 0), (-0.3, 0.5, 1.6, 1))
+        uniform token[] xformOpOrder = ["xformOp:transform"]
+        token projection = "perspective"
+        float focalLength = 50
+        float horizontalAperture = 46.6307658155
+        float verticalAperture = 26.2298057712
+        float2 clippingRange = (0.001, 1000000)
+        custom point3f pathtracer:lookAt = (-0.1, 1, -1)
+        custom float pathtracer:fov = 50
+        float focusDistance = 2.57
+        custom float pathtracer:aperture = 0.0002
+    }
+
+    def Scope "Looks"
+    {
+        def Material "orange" (
+            prepend references = @./panther.mtlx@</MaterialX/Materials/orange>
+        )
+        {
+        }
+    }
+
+    def Scope "Geometry"
+    {
+        def Mesh "panther"
+        {
+            custom asset engine:geometry:file = @./panther/panther.obj@
+
+            rel material:binding = </World/Looks/orange>
+        }
+        def Mesh "background"
+        {
+            custom asset engine:geometry:file = @./panther/background.obj@
+
+            rel material:binding = </World/Looks/orange>
+        }
+    }
+
+    def Scope "Lights"
+    {
+        def RectLight "Light_001"
+        {
+            matrix4d xformOp:transform = ((0.618408366142, 0, -0.785856916166, 0), (0, -1, 0, 0), (-0.785856916166, 0, -0.618408366142, 0), (-2.27563, 1.768073, -2.241584, 1))
+            uniform token[] xformOpOrder = ["xformOp:transform"]
+            color3f inputs:color = (1, 1, 1)
+            float inputs:intensity = 3
+            bool inputs:normalize = false
+            float inputs:width = 2.6799993188
+            float inputs:height = 2.68
+        }
+        def Material "Light_001_Material"
+        {
+            token outputs:surface.connect = </World/Lights/Light_001_Material/Surface.outputs:surface>
+            def Shader "Surface"
+            {
+                uniform token info:id = "UsdPreviewSurface"
+                color3f inputs:diffuseColor = (0, 0, 0)
+                int inputs:useSpecularWorkflow = 1
+                color3f inputs:specularColor = (0, 0, 0)
+                color3f inputs:emissiveColor = (3, 3, 3)
+                token outputs:surface
+            }
+        }
+        def Mesh "Light_001_Geometry"
+        {
+            point3f[] points = [(-3.104297, 0.428073, -1.188536), (-1.446963, 0.428073, -3.294632), (-1.446963, 3.108073, -3.294632), (-3.104297, 3.108073, -1.188536)]
+            int[] faceVertexCounts = [4]
+            int[] faceVertexIndices = [0, 1, 2, 3]
+            uniform token subdivisionScheme = "none"
+            rel material:binding = </World/Lights/Light_001_Material>
+        }
+        def RectLight "Light_002"
+        {
+            matrix4d xformOp:transform = ((0, 0, -1, 0), (-1, 0, 0, 0), (0, 1, 0, 0), (-0.048198, 2.776746, -1.67928, 1))
+            uniform token[] xformOpOrder = ["xformOp:transform"]
+            color3f inputs:color = (1, 1, 1)
+            float inputs:intensity = 20
+            bool inputs:normalize = false
+            float inputs:width = 1.12
+            float inputs:height = 1.14
+        }
+        def Material "Light_002_Material"
+        {
+            token outputs:surface.connect = </World/Lights/Light_002_Material/Surface.outputs:surface>
+            def Shader "Surface"
+            {
+                uniform token info:id = "UsdPreviewSurface"
+                color3f inputs:diffuseColor = (0, 0, 0)
+                int inputs:useSpecularWorkflow = 1
+                color3f inputs:specularColor = (0, 0, 0)
+                color3f inputs:emissiveColor = (20, 20, 20)
+                token outputs:surface
+            }
+        }
+        def Mesh "Light_002_Geometry"
+        {
+            point3f[] points = [(-0.618198, 2.776746, -1.11928), (-0.618198, 2.776746, -2.23928), (0.521802, 2.776746, -2.23928), (0.521802, 2.776746, -1.11928)]
+            int[] faceVertexCounts = [4]
+            int[] faceVertexIndices = [0, 1, 2, 3]
+            uniform token subdivisionScheme = "none"
+            rel material:binding = </World/Lights/Light_002_Material>
+        }
+        def RectLight "Light_003"
+        {
+            matrix4d xformOp:transform = ((0, 0.733729041795, -0.679442192704, 0), (-1, 0, 0, 0), (0, 0.679442192704, 0.733729041795, 0), (-0.048198, 4.392422, -1.67928, 1))
+            uniform token[] xformOpOrder = ["xformOp:transform"]
+            color3f inputs:color = (1, 1, 1)
+            float inputs:intensity = 30
+            bool inputs:normalize = false
+            float inputs:width = 0.759999902192
+            float inputs:height = 0.76
+        }
+        def Material "Light_003_Material"
+        {
+            token outputs:surface.connect = </World/Lights/Light_003_Material/Surface.outputs:surface>
+            def Shader "Surface"
+            {
+                uniform token info:id = "UsdPreviewSurface"
+                color3f inputs:diffuseColor = (0, 0, 0)
+                int inputs:useSpecularWorkflow = 1
+                color3f inputs:specularColor = (0, 0, 0)
+                color3f inputs:emissiveColor = (30, 30, 30)
+                token outputs:surface
+            }
+        }
+        def Mesh "Light_003_Geometry"
+        {
+            point3f[] points = [(-0.428198, 4.113605, -1.421092), (-0.428198, 4.671239, -1.937468), (0.331802, 4.671239, -1.937468), (0.331802, 4.113605, -1.421092)]
+            int[] faceVertexCounts = [4]
+            int[] faceVertexIndices = [0, 1, 2, 3]
+            uniform token subdivisionScheme = "none"
+            rel material:binding = </World/Lights/Light_003_Material>
+        }
+    }
+}

@@ -14,6 +14,7 @@
 import type { Vec3 } from '../../scene/transforms.ts';
 import type { CoatLayer, LayeredBsdfLobe, LayeredClosure, ThinFilmLayer } from '../../compiler/ir.ts';
 import { dispersionIor, thinFilmTint } from './spectrum.ts';
+import { hairEval, hairSample } from '../bsdf/hair.ts';
 
 const PI = Math.PI;
 const INV_PI = 1 / Math.PI;
@@ -694,6 +695,25 @@ export function lobeFromLayered(l: LayeredBsdfLobe, film?: ThinFilmLayer): Lobe 
   const aniso = l.anisotropy ?? 0;
   const rotation = l.rotation ?? 0;
   switch (l.kind) {
+    case 'chiang_hair': {
+      const params = {
+        absorption: l.extinction ?? [0, 0, 0] as const,
+        tintR: l.color,
+        tintTT: l.color90 ?? [1, 1, 1] as const,
+        tintTRT: l.hairTintTRT ?? [1, 1, 1] as const,
+        longitudinalRoughness: roughness,
+        azimuthalRoughness: aniso,
+        cuticleAngle: rotation,
+        ior: l.ior ?? 1.55,
+      };
+      return {
+        eval: (wo, wi) => hairEval(params, wo, wi),
+        sample(wo, rng) {
+          const sample = hairSample(params, wo, [rng(), rng(), rng()]);
+          return sample.valid ? { wi: sample.wi, value: sample.value, pdf: sample.pdf, specular: false } : null;
+        },
+      };
+    }
     case 'oren_nayar_diffuse':
     case 'burley_diffuse':
       return lambertLobe(l.color);

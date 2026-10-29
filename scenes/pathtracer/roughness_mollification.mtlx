@@ -1,0 +1,18 @@
+<?xml version="1.0"?>
+<materialx version="1.39" colorspace="lin_rec709">
+  <disney_principled name="glass_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" value="1, 1, 1" />
+    <input name="roughness" type="float" value="0.1" />
+    <input name="specTrans" type="float" value="1" />
+    <input name="ior" type="float" value="1.45" />
+  </disney_principled>
+  <surfacematerial name="glass" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="glass_surface" />
+  </surfacematerial>
+  <disney_principled name="white_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" value="1, 1, 1" />
+  </disney_principled>
+  <surfacematerial name="white" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="white_surface" />
+  </surfacematerial>
+</materialx>

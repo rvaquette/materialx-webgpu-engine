@@ -1,0 +1,60 @@
+#usda 1.0
+(
+    defaultPrim = "World"
+    metersPerUnit = 1
+    upAxis = "Y"
+    doc = "materialx_glass_open_pbr_surface converted from GLSL-PathTracer .scene"
+)
+
+def Xform "World"
+{
+    custom string pathtracer:sourceScene = "materialx_glass_open_pbr_surface.scene"
+    custom int2 pathtracer:resolution = (1280, 720)
+    custom int pathtracer:maxDepth = 8
+    custom float pathtracer:environmentIntensity = 4
+    custom asset pathtracer:environment = @./HDR/san_giuseppe_bridge_split.hdr@
+
+    def Camera "Camera"
+    {
+        matrix4d xformOp:transform = ((1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (-0.05, 1.05, 3.58, 1))
+        uniform token[] xformOpOrder = ["xformOp:transform"]
+        token projection = "perspective"
+        float focalLength = 50
+        float horizontalAperture = 41.4213562373
+        float verticalAperture = 23.2995128835
+        float2 clippingRange = (0.001, 1000000)
+        custom point3f pathtracer:lookAt = (-0.05, 1.05, -0.06)
+        custom float pathtracer:fov = 45
+    }
+
+    def Scope "Looks"
+    {
+        def Material "mtlx_test" (
+            prepend references = @./materialx_glass_open_pbr_surface.mtlx@</MaterialX/Materials/mtlx_test>
+        )
+        {
+        }
+    }
+
+    def Scope "Geometry"
+    {
+        def Mesh "cube_onyx"
+        {
+            custom asset engine:geometry:file = @./materialx_test/ShaderBall.obj@
+
+            rel material:binding = </World/Looks/mtlx_test>
+        }
+    }
+
+    def Scope "Lights"
+    {
+        def DomeLight "Environment"
+        {
+            asset inputs:texture:file = @./HDR/san_giuseppe_bridge_split.hdr@
+            float inputs:intensity = 4
+            color3f inputs:color = (1, 1, 1)
+            float xformOp:rotateY = -90
+            uniform token[] xformOpOrder = ["xformOp:rotateY"]
+        }
+    }
+}

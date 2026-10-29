@@ -1,0 +1,70 @@
+renderer
+{
+	resolution 1280 720
+	maxdepth 8
+	tilewidth 256
+	tileheight 144
+	enabletonemap false
+}
+
+camera
+{
+	position 7.5 5 7
+	lookat 0 0 0
+	fov 45
+}
+
+material test
+{
+	color 0.8 0.0 0.0
+	roughness 0.01
+	metallic 0.0
+	speculartint 1.0
+	spectrans 1.0
+}
+
+material ground
+{
+	color 0.5 0.5 0.5
+	roughness 0.5
+	specular 1.0
+}
+
+mesh
+{
+	name cube
+	file material_test/cube.obj
+	material test
+}
+
+mesh
+{
+	name sphere
+	file material_test/sphere.obj
+	material test
+}
+
+mesh
+{
+	name ground
+	file material_test/floor.obj
+	material ground
+}
+
+light
+{
+	emission 5.0 5.0 5.0
+	#3.978 3.978 3.978
+	position 1 5 1
+	radius 1.0
+	type sphere
+}
+
+light
+{
+	emission 3.125 3.125 3.125
+	position -3.500000 2.500000 0.500000
+	v2 -1.500000 2.500000 0.500000
+	v1 -3.500000 2.500000 -1.500000
+	type quad
+}

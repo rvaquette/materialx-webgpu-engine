@@ -1,0 +1,594 @@
+#usda 1.0
+(
+    defaultPrim = "World"
+    metersPerUnit = 1
+    upAxis = "Y"
+    doc = "rank3police converted from GLSL-PathTracer .scene"
+)
+
+def Xform "World"
+{
+    custom string pathtracer:sourceScene = "rank3police.scene"
+    custom int2 pathtracer:resolution = (1280, 720)
+    custom int pathtracer:maxDepth = 2
+    custom asset pathtracer:environment = @./HDR/white_cliff_top_1k.hdr@
+
+    def Camera "Camera"
+    {
+        matrix4d xformOp:transform = ((0.703077780362, 0, -0.711112954995, 0), (-0.0106909583532, 0.999886981213, -0.0105701565639, 0), (0.711032585871, 0.0150341212013, 0.702998319364, 0), (70.8, -0.503, 70, 1))
+        uniform token[] xformOpOrder = ["xformOp:transform"]
+        token projection = "perspective"
+        float focalLength = 50
+        float horizontalAperture = 16.0174048786
+        float verticalAperture = 9.00979024421
+        float2 clippingRange = (0.001, 1000000)
+        custom point3f pathtracer:lookAt = (0, -2, 0)
+        custom float pathtracer:fov = 18.2
+    }
+
+    def Scope "Looks"
+    {
+        def Material "object10" (
+            prepend references = @./rank3police.mtlx@</MaterialX/Materials/object10>
+        )
+        {
+        }
+        def Material "object11" (
+            prepend references = @./rank3police.mtlx@</MaterialX/Materials/object11>
+        )
+        {
+        }
+        def Material "object12" (
+            prepend references = @./rank3police.mtlx@</MaterialX/Materials/object12>
+        )
+        {
+        }
+        def Material "object13" (
+            prepend references = @./rank3police.mtlx@</MaterialX/Materials/object13>
+        )
+        {
+        }
+        def Material "object14001" (
+            prepend references = @./rank3police.mtlx@</MaterialX/Materials/object14001>
+        )
+        {
+        }
+        def Material "object15" (
+            prepend references = @./rank3police.mtlx@</MaterialX/Materials/object15>
+        )
+        {
+        }
+        def Material "object16" (
+            prepend references = @./rank3police.mtlx@</MaterialX/Materials/object16>
+        )
+        {
+        }
+        def Material "object18" (
+            prepend references = @./rank3police.mtlx@</MaterialX/Materials/object18>
+        )
+        {
+        }
+        def Material "object19" (
+            prepend references = @./rank3police.mtlx@</MaterialX/Materials/object19>
+        )
+        {
+        }
+        def Material "object20" (
+            prepend references = @./rank3police.mtlx@</MaterialX/Materials/object20>
+        )
+        {
+        }
+        def Material "object21" (
+            prepend references = @./rank3police.mtlx@</MaterialX/Materials/object21>
+        )
+        {
+        }
+        def Material "object22" (
+            prepend references = @./rank3police.mtlx@</MaterialX/Materials/object22>
+        )
+        {
+        }
+        def Material "object23" (
+            prepend references = @./rank3police.mtlx@</MaterialX/Materials/object23>
+        )
+        {
+        }
+        def Material "object25" (
+            prepend references = @./rank3police.mtlx@</MaterialX/Materials/object25>
+        )
+        {
+        }
+        def Material "object26" (
+            prepend references = @./rank3police.mtlx@</MaterialX/Materials/object26>
+        )
+        {
+        }
+        def Material "object3" (
+            prepend references = @./rank3police.mtlx@</MaterialX/Materials/object3>
+        )
+        {
+        }
+        def Material "object32" (
+            prepend references = @./rank3police.mtlx@</MaterialX/Materials/object32>
+        )
+        {
+        }
+        def Material "object33" (
+            prepend references = @./rank3police.mtlx@</MaterialX/Materials/object33>
+        )
+        {
+        }
+        def Material "object35" (
+            prepend references = @./rank3police.mtlx@</MaterialX/Materials/object35>
+        )
+        {
+        }
+        def Material "object36" (
+            prepend references = @./rank3police.mtlx@</MaterialX/Materials/object36>
+        )
+        {
+        }
+        def Material "object37" (
+            prepend references = @./rank3police.mtlx@</MaterialX/Materials/object37>
+        )
+        {
+        }
+        def Material "object38" (
+            prepend references = @./rank3police.mtlx@</MaterialX/Materials/object38>
+        )
+        {
+        }
+        def Material "object39" (
+            prepend references = @./rank3police.mtlx@</MaterialX/Materials/object39>
+        )
+        {
+        }
+        def Material "object40" (
+            prepend references = @./rank3police.mtlx@</MaterialX/Materials/object40>
+        )
+        {
+        }
+        def Material "object42" (
+            prepend references = @./rank3police.mtlx@</MaterialX/Materials/object42>
+        )
+        {
+        }
+        def Material "object43" (
+            prepend references = @./rank3police.mtlx@</MaterialX/Materials/object43>
+        )
+        {
+        }
+        def Material "object44" (
+            prepend references = @./rank3police.mtlx@</MaterialX/Materials/object44>
+        )
+        {
+        }
+        def Material "object45" (
+            prepend references = @./rank3police.mtlx@</MaterialX/Materials/object45>
+        )
+        {
+        }
+        def Material "object46" (
+            prepend references = @./rank3police.mtlx@</MaterialX/Materials/object46>
+        )
+        {
+        }
+        def Material "object47" (
+            prepend references = @./rank3police.mtlx@</MaterialX/Materials/object47>
+        )
+        {
+        }
+        def Material "object48" (
+            prepend references = @./rank3police.mtlx@</MaterialX/Materials/object48>
+        )
+        {
+        }
+        def Material "object5" (
+            prepend references = @./rank3police.mtlx@</MaterialX/Materials/object5>
+        )
+        {
+        }
+        def Material "object51" (
+            prepend references = @./rank3police.mtlx@</MaterialX/Materials/object51>
+        )
+        {
+        }
+        def Material "object52" (
+            prepend references = @./rank3police.mtlx@</MaterialX/Materials/object52>
+        )
+        {
+        }
+        def Material "object53" (
+            prepend references = @./rank3police.mtlx@</MaterialX/Materials/object53>
+        )
+        {
+        }
+        def Material "object54" (
+            prepend references = @./rank3police.mtlx@</MaterialX/Materials/object54>
+        )
+        {
+        }
+        def Material "object57" (
+            prepend references = @./rank3police.mtlx@</MaterialX/Materials/object57>
+        )
+        {
+        }
+        def Material "object58" (
+            prepend references = @./rank3police.mtlx@</MaterialX/Materials/object58>
+        )
+        {
+        }
+        def Material "emissive" (
+            prepend references = @./rank3police.mtlx@</MaterialX/Materials/emissive>
+        )
+        {
+        }
+        def Material "emissive_red" (
+            prepend references = @./rank3police.mtlx@</MaterialX/Materials/emissive_red>
+        )
+        {
+        }
+    }
+
+    def Scope "Geometry"
+    {
+        def Mesh "object10"
+        {
+            custom asset engine:geometry:file = @./rank3police/object10.obj@
+
+            rel material:binding = </World/Looks/object10>
+        }
+        def Mesh "object11"
+        {
+            custom asset engine:geometry:file = @./rank3police/object11.obj@
+
+            rel material:binding = </World/Looks/object11>
+        }
+        def Mesh "object12"
+        {
+            custom asset engine:geometry:file = @./rank3police/object12.obj@
+
+            rel material:binding = </World/Looks/object12>
+        }
+        def Mesh "object13"
+        {
+            custom asset engine:geometry:file = @./rank3police/object13.obj@
+
+            rel material:binding = </World/Looks/object13>
+        }
+        def Mesh "object14001"
+        {
+            custom asset engine:geometry:file = @./rank3police/object14001.obj@
+
+            rel material:binding = </World/Looks/object14001>
+        }
+        def Mesh "object15"
+        {
+            custom asset engine:geometry:file = @./rank3police/object15.obj@
+
+            rel material:binding = </World/Looks/object15>
+        }
+        def Mesh "object16"
+        {
+            custom asset engine:geometry:file = @./rank3police/object16.obj@
+
+            rel material:binding = </World/Looks/object16>
+        }
+        def Mesh "object17"
+        {
+            custom asset engine:geometry:file = @./rank3police/object17.obj@
+
+            rel material:binding = </World/Looks/object16>
+        }
+        def Mesh "object18"
+        {
+            custom asset engine:geometry:file = @./rank3police/object18.obj@
+
+            rel material:binding = </World/Looks/object18>
+        }
+        def Mesh "object19"
+        {
+            custom asset engine:geometry:file = @./rank3police/object19.obj@
+
+            rel material:binding = </World/Looks/object19>
+        }
+        def Mesh "object20"
+        {
+            custom asset engine:geometry:file = @./rank3police/object20.obj@
+
+            rel material:binding = </World/Looks/object20>
+        }
+        def Mesh "object21"
+        {
+            custom asset engine:geometry:file = @./rank3police/object21.obj@
+
+            rel material:binding = </World/Looks/object21>
+        }
+        def Mesh "object22"
+        {
+            custom asset engine:geometry:file = @./rank3police/object22.obj@
+
+            rel material:binding = </World/Looks/object22>
+        }
+        def Mesh "object23"
+        {
+            custom asset engine:geometry:file = @./rank3police/object23.obj@
+
+            rel material:binding = </World/Looks/object23>
+        }
+        def Mesh "object24"
+        {
+            custom asset engine:geometry:file = @./rank3police/object24.obj@
+
+            rel material:binding = </World/Looks/object23>
+        }
+        def Mesh "object25"
+        {
+            custom asset engine:geometry:file = @./rank3police/object25.obj@
+
+            rel material:binding = </World/Looks/object25>
+        }
+        def Mesh "object26"
+        {
+            custom asset engine:geometry:file = @./rank3police/object26.obj@
+
+            rel material:binding = </World/Looks/object26>
+        }
+        def Mesh "object27"
+        {
+            custom asset engine:geometry:file = @./rank3police/object27.obj@
+
+            rel material:binding = </World/Looks/object26>
+        }
+        def Mesh "object28"
+        {
+            custom asset engine:geometry:file = @./rank3police/object28.obj@
+
+            rel material:binding = </World/Looks/object26>
+        }
+        def Mesh "object29"
+        {
+            custom asset engine:geometry:file = @./rank3police/object29.obj@
+
+            rel material:binding = </World/Looks/object26>
+        }
+        def Mesh "object30"
+        {
+            custom asset engine:geometry:file = @./rank3police/object30.obj@
+
+            rel material:binding = </World/Looks/object26>
+        }
+        def Mesh "object31"
+        {
+            custom asset engine:geometry:file = @./rank3police/object31.obj@
+
+            rel material:binding = </World/Looks/object26>
+        }
+        def Mesh "object32"
+        {
+            custom asset engine:geometry:file = @./rank3police/object32.obj@
+
+            rel material:binding = </World/Looks/object32>
+        }
+        def Mesh "object33"
+        {
+            custom asset engine:geometry:file = @./rank3police/object33.obj@
+
+            rel material:binding = </World/Looks/object33>
+        }
+        def Mesh "object34"
+        {
+            custom asset engine:geometry:file = @./rank3police/object34.obj@
+
+            rel material:binding = </World/Looks/object33>
+        }
+        def Mesh "object35"
+        {
+            custom asset engine:geometry:file = @./rank3police/object35.obj@
+
+            rel material:binding = </World/Looks/object35>
+        }
+        def Mesh "object36"
+        {
+            custom asset engine:geometry:file = @./rank3police/object36.obj@
+
+            rel material:binding = </World/Looks/object36>
+        }
+        def Mesh "object37"
+        {
+            custom asset engine:geometry:file = @./rank3police/object37.obj@
+
+            rel material:binding = </World/Looks/object37>
+        }
+        def Mesh "object38"
+        {
+            custom asset engine:geometry:file = @./rank3police/object38.obj@
+
+            rel material:binding = </World/Looks/object38>
+        }
+        def Mesh "object39"
+        {
+            custom asset engine:geometry:file = @./rank3police/object39.obj@
+
+            rel material:binding = </World/Looks/object39>
+        }
+        def Mesh "object4"
+        {
+            custom asset engine:geometry:file = @./rank3police/object4.obj@
+
+            rel material:binding = </World/Looks/object3>
+        }
+        def Mesh "object40"
+        {
+            custom asset engine:geometry:file = @./rank3police/object40.obj@
+
+            rel material:binding = </World/Looks/object40>
+        }
+        def Mesh "object41"
+        {
+            custom asset engine:geometry:file = @./rank3police/object41.obj@
+
+            rel material:binding = </World/Looks/object40>
+        }
+        def Mesh "object42"
+        {
+            custom asset engine:geometry:file = @./rank3police/object42.obj@
+
+            rel material:binding = </World/Looks/object42>
+        }
+        def Mesh "object43"
+        {
+            custom asset engine:geometry:file = @./rank3police/object43.obj@
+
+            rel material:binding = </World/Looks/object43>
+        }
+        def Mesh "object44"
+        {
+            custom asset engine:geometry:file = @./rank3police/object44.obj@
+
+            rel material:binding = </World/Looks/object44>
+        }
+        def Mesh "object45"
+        {
+            custom asset engine:geometry:file = @./rank3police/object45.obj@
+
+            rel material:binding = </World/Looks/object45>
+        }
+        def Mesh "object46"
+        {
+            custom asset engine:geometry:file = @./rank3police/object46.obj@
+
+            rel material:binding = </World/Looks/object46>
+        }
+        def Mesh "object47"
+        {
+            custom asset engine:geometry:file = @./rank3police/object47.obj@
+
+            rel material:binding = </World/Looks/object47>
+        }
+        def Mesh "object48"
+        {
+            custom asset engine:geometry:file = @./rank3police/object48.obj@
+
+            rel material:binding = </World/Looks/object48>
+        }
+        def Mesh "object49"
+        {
+            custom asset engine:geometry:file = @./rank3police/object49.obj@
+
+            rel material:binding = </World/Looks/object48>
+        }
+        def Mesh "object5"
+        {
+            custom asset engine:geometry:file = @./rank3police/object5.obj@
+
+            rel material:binding = </World/Looks/object5>
+        }
+        def Mesh "object50"
+        {
+            custom asset engine:geometry:file = @./rank3police/object50.obj@
+
+            rel material:binding = </World/Looks/object48>
+        }
+        def Mesh "object51"
+        {
+            custom asset engine:geometry:file = @./rank3police/object51.obj@
+
+            rel material:binding = </World/Looks/object51>
+        }
+        def Mesh "object52"
+        {
+            custom asset engine:geometry:file = @./rank3police/object52.obj@
+
+            rel material:binding = </World/Looks/object52>
+        }
+        def Mesh "object53"
+        {
+            custom asset engine:geometry:file = @./rank3police/object53.obj@
+
+            rel material:binding = </World/Looks/object53>
+        }
+        def Mesh "object54"
+        {
+            custom asset engine:geometry:file = @./rank3police/object54.obj@
+
+            rel material:binding = </World/Looks/object54>
+        }
+        def Mesh "object55"
+        {
+            custom asset engine:geometry:file = @./rank3police/object55.obj@
+
+            rel material:binding = </World/Looks/object48>
+        }
+        def Mesh "object56"
+        {
+            custom asset engine:geometry:file = @./rank3police/object56.obj@
+
+            rel material:binding = </World/Looks/object48>
+        }
+        def Mesh "object57"
+        {
+            custom asset engine:geometry:file = @./rank3police/object57.obj@
+
+            rel material:binding = </World/Looks/object57>
+        }
+        def Mesh "object58"
+        {
+            custom asset engine:geometry:file = @./rank3police/object58.obj@
+
+            rel material:binding = </World/Looks/object58>
+        }
+        def Mesh "object60"
+        {
+            custom asset engine:geometry:file = @./rank3police/object60.obj@
+
+            rel material:binding = </World/Looks/emissive_red>
+        }
+        def Mesh "object61"
+        {
+            custom asset engine:geometry:file = @./rank3police/object61.obj@
+
+            rel material:binding = </World/Looks/emissive>
+        }
+        def Mesh "object62"
+        {
+            custom asset engine:geometry:file = @./rank3police/object62.obj@
+
+            rel material:binding = </World/Looks/emissive>
+        }
+        def Mesh "object63"
+        {
+            custom asset engine:geometry:file = @./rank3police/object63.obj@
+
+            rel material:binding = </World/Looks/emissive>
+        }
+        def Mesh "object64"
+        {
+            custom asset engine:geometry:file = @./rank3police/object64.obj@
+
+            rel material:binding = </World/Looks/emissive>
+        }
+        def Mesh "object65"
+        {
+            custom asset engine:geometry:file = @./rank3police/object65.obj@
+
+            rel material:binding = </World/Looks/emissive>
+        }
+        def Mesh "object66"
+        {
+            custom asset engine:geometry:file = @./rank3police/object66.obj@
+
+            rel material:binding = </World/Looks/emissive>
+        }
+    }
+
+    def Scope "Lights"
+    {
+        def DomeLight "Environment"
+        {
+            asset inputs:texture:file = @./HDR/white_cliff_top_1k.hdr@
+            float inputs:intensity = 1
+            color3f inputs:color = (1, 1, 1)
+        }
+    }
+}

@@ -1,0 +1,640 @@
+renderer
+{
+	resolution 1280 720
+	maxdepth 2
+	tilewidth 256
+	tileheight 144
+	envmapfile HDR/white_cliff_top_1k.hdr
+	hideemitters true
+}
+
+camera
+{
+	position 70.8 -0.503 70
+	lookat 0 -2 0
+	fov 18.2
+}
+
+material object10
+{
+	albedotexture rank3police/textures/material_baseColor.png
+	metallicroughnesstexture rank3police/textures/material_metallicRoughness.png
+}
+
+mesh
+{
+	file rank3police/object10.obj
+	material object10
+}
+
+material object11
+{
+	albedotexture rank3police/textures/cam2_baseColor.png
+	metallicroughnesstexture rank3police/textures/cam2_metallicRoughness.png
+}
+
+mesh
+{
+	file rank3police/object11.obj
+	material object11
+}
+
+material object12
+{
+	albedotexture rank3police/textures/comm_block_baseColor.png
+	roughness 0.843492
+	metallic 0.0
+}
+
+mesh
+{
+	file rank3police/object12.obj
+	material object12
+}
+
+material object13
+{
+	albedotexture rank3police/textures/ctrl_eye_baseColor.png
+	metallicroughnesstexture rank3police/textures/ctrl_eye_metallicRoughness.png
+
+}
+
+mesh
+{
+	file rank3police/object13.obj
+	material object13
+}
+
+material object14001
+{
+	albedotexture rank3police/textures/glass_baseColor.png
+	#materialType 1.0
+	#ior 1.45
+	metallic 0.5
+	roughness 0.001
+}
+
+material object15
+{
+	color 0.0 0.0 0.0
+	metallic 1.0
+	roughness 0.5
+}
+
+mesh
+{
+	file rank3police/object14001.obj
+	material object14001
+}
+
+mesh
+{
+	file rank3police/object15.obj
+	material object15
+}
+
+material object16
+{
+	albedotexture rank3police/textures/helmet_baseColor.png
+	metallicroughnesstexture rank3police/textures/helmet_metallicRoughness.png
+
+}
+
+mesh
+{
+	file rank3police/object16.obj
+	material object16
+}
+
+mesh
+{
+	file rank3police/object17.obj
+	material object16
+}
+
+material object18
+{
+	albedotexture rank3police/textures/helmet_ad_01_baseColor.png
+	metallicroughnesstexture rank3police/textures/helmet_ad_01_metallicRoughness.png
+}
+
+mesh
+{
+	file rank3police/object18.obj
+	material object18
+}
+
+material object19
+{
+	albedotexture rank3police/textures/helmet_ad_02_baseColor.png
+	metallicroughnesstexture rank3police/textures/helmet_ad_02_metallicRoughness.png
+}
+
+mesh
+{
+	file rank3police/object19.obj
+	material object19
+}
+
+material object20
+{
+	albedotexture rank3police/textures/helmet_ad_03_baseColor.png
+	roughness 0.156508
+	metallic 0.0
+}
+
+mesh
+{
+	file rank3police/object20.obj
+	material object20
+}
+
+material object21
+{
+	albedotexture rank3police/textures/helmet_logo_baseColor.png
+	roughness 0.843
+	metallic 0.0
+}
+
+mesh
+{
+	file rank3police/object21.obj
+	material object21
+}
+
+material object22
+{
+	albedotexture rank3police/textures/helmet_sidelock_baseColor.png
+	metallicroughnesstexture rank3police/textures/helmet_sidelock_metallicRoughness.png
+}
+
+mesh
+{
+	file rank3police/object22.obj
+	material object22
+}
+
+material object23
+{
+	albedotexture rank3police/textures/helmet_sidepart_baseColor.png
+	metallicroughnesstexture rank3police/textures/helmet_sidepart_metallicRoughness.png
+
+}
+
+mesh
+{
+	file rank3police/object23.obj
+	material object23
+}
+
+mesh
+{
+	file rank3police/object24.obj
+	material object23
+}
+
+material object25
+{
+	albedotexture rank3police/textures/innerpart_baseColor.png
+	metallicroughnesstexture rank3police/textures/innerpart_metallicRoughness.png
+}
+
+mesh
+{
+	file rank3police/object25.obj
+	material object25
+}
+
+material object26
+{
+	albedotexture rank3police/textures/light_metal_baseColor.png
+	roughness 0.156508
+	metallic 1.0
+}
+
+mesh
+{
+	file rank3police/object26.obj
+	material object26
+}
+
+mesh
+{
+	file rank3police/object27.obj
+	material object26
+}
+
+
+mesh
+{
+	file rank3police/object28.obj
+	material object26
+}
+
+mesh
+{
+	file rank3police/object29.obj
+	material object26
+}
+
+material object3
+{
+	albedotexture rank3police/textures/add_details_baseColor.png
+	metallicroughnesstexture rank3police/textures/add_details_metallicRoughness.png
+
+}
+
+
+mesh
+{
+	file rank3police/object30.obj
+	material object26
+}
+
+mesh
+{
+	file rank3police/object31.obj
+	material object26
+}
+
+material object32
+{
+	albedotexture rank3police/textures/mask_ad_01_baseColor.png
+	metallicroughnesstexture rank3police/textures/mask_ad_01_metallicRoughness.png
+
+}
+
+mesh
+{
+	file rank3police/object32.obj
+	material object32
+}
+
+material object33
+{
+	albedotexture rank3police/textures/mask_big_lock_baseColor.png
+	metallicroughnesstexture rank3police/textures/mask_big_lock_metallicRoughness.png
+}
+
+mesh
+{
+	file rank3police/object33.obj
+	material object33
+}
+
+mesh
+{
+	file rank3police/object34.obj
+	material object33
+}
+
+material object35
+{
+	albedotexture rank3police/textures/mask_dron_baseColor.png
+	metallicroughnesstexture rank3police/textures/mask_dron_metallicRoughness.png
+
+}
+
+mesh
+{
+	file rank3police/object35.obj
+	material object35
+}
+
+material object36
+{
+	albedotexture rank3police/textures/mask_gen_baseColor.png
+	metallicroughnesstexture rank3police/textures/mask_gen_metallicRoughness.png
+}
+
+mesh
+{
+	file rank3police/object36.obj
+	material object36
+}
+
+material object37
+{
+	albedotexture rank3police/textures/mask_part_01_baseColor.png
+	metallicroughnesstexture rank3police/textures/mask_part_01_metallicRoughness.png
+}
+
+mesh
+{
+	file rank3police/object37.obj
+	material object37
+}
+
+material object38
+{
+	albedotexture rank3police/textures/mask_part_02_baseColor.png
+	metallicroughnesstexture rank3police/textures/mask_part_02_metallicRoughness.png
+}
+
+mesh
+{
+	file rank3police/object38.obj
+	material object38
+}
+
+material object39
+{
+	albedotexture rank3police/textures/mask_part_03_baseColor.png
+	metallicroughnesstexture rank3police/textures/mask_part_03_metallicRoughness.png
+}
+
+mesh
+{
+	file rank3police/object39.obj
+	material object39
+}
+
+mesh
+{
+	file rank3police/object4.obj
+	material object3
+}
+
+
+material object40
+{
+	albedotexture rank3police/textures/mask_part_04_baseColor.png
+	metallicroughnesstexture rank3police/textures/mask_part_04_metallicRoughness.png
+}
+
+mesh
+{
+	file rank3police/object40.obj
+	material object40
+}
+
+mesh
+{
+	file rank3police/object41.obj
+	material object40
+}
+
+material object42
+{
+	albedotexture rank3police/textures/mc_block_baseColor.png
+	metallicroughnesstexture rank3police/textures/mc_block_metallicRoughness.png
+
+}
+
+mesh
+{
+	file rank3police/object42.obj
+	material object42
+}
+
+material object43
+{
+	albedotexture rank3police/textures/nose_baseColor.png
+	metallicroughnesstexture rank3police/textures/nose_metallicRoughness.png
+}
+
+mesh
+{
+	file rank3police/object43.obj
+	material object43
+}
+
+material object44
+{
+	albedotexture rank3police/textures/red_parts_baseColor.png
+	metallicroughnesstexture rank3police/textures/red_parts_metallicRoughness.png
+
+}
+
+mesh
+{
+	file rank3police/object44.obj
+	material object44
+}
+
+material object45
+{
+	albedotexture rank3police/textures/sd_block_baseColor.png
+	metallicroughnesstexture rank3police/textures/sd_block_metallicRoughness.png
+
+}
+
+mesh
+{
+	file rank3police/object45.obj
+	material object45
+}
+
+material object46
+{
+	albedotexture rank3police/textures/skull_head_baseColor.png
+	metallicroughnesstexture rank3police/textures/skull_head_metallicRoughness.png
+	normaltexture rank3police/textures/skull_head_normal.png
+}
+
+mesh
+{
+	file rank3police/object46.obj
+	material object46
+}
+
+material object47
+{
+	albedotexture rank3police/textures/skull_jaw_baseColor.png
+	metallicroughnesstexture rank3police/textures/skull_jaw_metallicRoughness.png
+	normaltexture rank3police/textures/skull_jaw_normal.png
+
+}
+
+mesh
+{
+	file rank3police/object47.obj
+	material object47
+}
+
+material object48
+{
+	color 0.64 0.64 0.64
+	metallic 0.0
+	roughness 0.710
+}
+
+mesh
+{
+	file rank3police/object48.obj
+	material object48
+}
+
+mesh
+{
+	file rank3police/object49.obj
+	material object48
+}
+
+material object5
+{
+	albedotexture rank3police/textures/backpart_baseColor.png
+	metallicroughnesstexture rank3police/textures/backpart_metallicRoughness.png
+
+}
+
+mesh
+{
+	file rank3police/object5.obj
+	material object5
+}
+
+mesh
+{
+	file rank3police/object50.obj
+	material object48
+}
+
+material object51
+{
+	albedotexture rank3police/textures/suit_chest_baseColor.png
+	normaltexture rank3police/textures/suit_chest_normal.png
+	roughness 0.1
+	metallic 0.0
+}
+
+mesh
+{
+	file rank3police/object51.obj
+	material object51
+}
+
+material object52
+{
+	albedotexture rank3police/textures/suit_collar_baseColor.png
+	normaltexture rank3police/textures/suit_collar_normal.png
+	roughness 0.1
+	metallic 0.0
+}
+
+mesh
+{
+	file rank3police/object52.obj
+	material object52
+}
+
+material object53
+{
+	albedotexture rank3police/textures/suit_fabric_baseColor.png
+	metallicroughnesstexture rank3police/textures/suit_fabric_metallicRoughness.png
+	normaltexture rank3police/textures/suit_fabric_normal.png
+
+}
+
+mesh
+{
+	file rank3police/object53.obj
+	material object53
+}
+
+material object54
+{
+	albedotexture rank3police/textures/suit_front_stripe_baseColor.png
+	metallicroughnesstexture rank3police/textures/suit_front_stripe_metallicRoughness.png
+	normaltexture rank3police/textures/suit_front_stripe_normal.png
+
+}
+
+mesh
+{
+	file rank3police/object54.obj
+	material object54
+}
+
+mesh
+{
+	file rank3police/object55.obj
+	material object48
+}
+
+mesh
+{
+	file rank3police/object56.obj
+	material object48
+}
+
+
+material object57
+{
+	color 0.005 0.004 0.004
+	metallic 0.0
+	roughness 0.710
+}
+
+mesh
+{
+	file rank3police/object57.obj
+	material object57
+}
+
+material object58
+{
+	albedotexture rank3police/textures/suit_strap_baseColor.png
+	metallicroughnesstexture rank3police/textures/suit_strap_metallicRoughness.png
+}
+
+mesh
+{
+	file rank3police/object58.obj
+	material object58
+}
+
+material emissive
+{
+	color 0 0 0 
+	emission 5 5 20
+}
+
+material emissive_red
+{
+	color 0 0 0 
+	emission 20 0 0
+}
+
+
+mesh
+{
+	file rank3police/object60.obj
+	material emissive_red
+}
+
+mesh
+{
+	file rank3police/object61.obj
+	material emissive
+}
+
+mesh
+{
+	file rank3police/object62.obj
+	material emissive
+}
+
+mesh
+{
+	file rank3police/object63.obj
+	material emissive
+}
+
+mesh
+{
+	file rank3police/object64.obj
+	material emissive
+}
+
+mesh
+{
+	file rank3police/object65.obj
+	material emissive
+}
+
+mesh
+{
+	file rank3police/object66.obj
+	material emissive
+}

@@ -104,7 +104,7 @@ export function createGraphMaterialCompiler(options: GraphMaterialCompilerOption
           isCovered: (category) => isNodeCovered(category) || SURFACE_IR_UPSTREAM.has(category),
           ...(options.target !== undefined ? { target: options.target } : {}),
         });
-        const surface = resolveSurface(graph, { supportedUpstream: SURFACE_IR_UPSTREAM, ...options.surfaceOptions });
+        const surface = resolveSurface(graph, { onDiagnostic: emit, supportedUpstream: SURFACE_IR_UPSTREAM, ...options.surfaceOptions });
         if (!surface) {
           emit({ level: 'warning', message: `Unresolved surface for material ${unit.materialName}`, detail: { material: unit.materialName } });
           return undefined;

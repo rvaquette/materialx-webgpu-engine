@@ -1,0 +1,157 @@
+#usda 1.0
+(
+    defaultPrim = "World"
+    metersPerUnit = 1
+    upAxis = "Y"
+    doc = "mustang_white_orig converted from GLSL-PathTracer .scene"
+)
+
+def Xform "World"
+{
+    custom string pathtracer:sourceScene = "mustang_white_orig.scene"
+    custom int2 pathtracer:resolution = (1280, 720)
+    custom int pathtracer:maxDepth = 7
+    custom float pathtracer:environmentIntensity = 1
+    custom asset pathtracer:environment = @./HDR/Background_05_v2.hdr@
+
+    def Camera "Camera"
+    {
+        matrix4d xformOp:transform = ((0.70635252836, 0, -0.707860230328, 0), (-0.0121863898719, 0.999851796897, -0.0121604335557, 0), (0.707755323245, 0.0172158137296, 0.706247844723, 0), (11.913, 0.794643, 12.0872, 1))
+        uniform token[] xformOpOrder = ["xformOp:transform"]
+        token projection = "perspective"
+        float focalLength = 50
+        float horizontalAperture = 15.8384440325
+        float verticalAperture = 8.90912476826
+        float2 clippingRange = (0.001, 1000000)
+        custom point3f pathtracer:lookAt = (-0.2, 0.5, 0)
+        custom float pathtracer:fov = 18
+    }
+
+    def Scope "Looks"
+    {
+        def Material "floor" (
+            prepend references = @./mustang_white_orig.mtlx@</MaterialX/Materials/floor>
+        )
+        {
+        }
+        def Material "black" (
+            prepend references = @./mustang_white_orig.mtlx@</MaterialX/Materials/black>
+        )
+        {
+        }
+        def Material "chrome" (
+            prepend references = @./mustang_white_orig.mtlx@</MaterialX/Materials/chrome>
+        )
+        {
+        }
+        def Material "glass" (
+            prepend references = @./mustang_white_orig.mtlx@</MaterialX/Materials/glass>
+        )
+        {
+        }
+        def Material "headlight" (
+            prepend references = @./mustang_white_orig.mtlx@</MaterialX/Materials/headlight>
+        )
+        {
+        }
+        def Material "yellow_blinkers" (
+            prepend references = @./mustang_white_orig.mtlx@</MaterialX/Materials/yellow_blinkers>
+        )
+        {
+        }
+        def Material "red_taillight" (
+            prepend references = @./mustang_white_orig.mtlx@</MaterialX/Materials/red_taillight>
+        )
+        {
+        }
+        def Material "paint" (
+            prepend references = @./mustang_white_orig.mtlx@</MaterialX/Materials/paint>
+        )
+        {
+        }
+        def Material "red_interior" (
+            prepend references = @./mustang_white_orig.mtlx@</MaterialX/Materials/red_interior>
+        )
+        {
+        }
+        def Material "tyres" (
+            prepend references = @./mustang_white_orig.mtlx@</MaterialX/Materials/tyres>
+        )
+        {
+        }
+    }
+
+    def Scope "Geometry"
+    {
+        def Mesh "Black"
+        {
+            custom asset engine:geometry:file = @./Mustang/Black.obj@
+
+            rel material:binding = </World/Looks/black>
+        }
+        def Mesh "Body"
+        {
+            custom asset engine:geometry:file = @./Mustang/Body.obj@
+
+            rel material:binding = </World/Looks/paint>
+        }
+        def Mesh "Chrome"
+        {
+            custom asset engine:geometry:file = @./Mustang/Chrome.obj@
+
+            rel material:binding = </World/Looks/chrome>
+        }
+        def Mesh "Floor"
+        {
+            custom asset engine:geometry:file = @./Mustang/Floor.obj@
+
+            rel material:binding = </World/Looks/floor>
+        }
+        def Mesh "Front_Blinkers"
+        {
+            custom asset engine:geometry:file = @./Mustang/Front_Blinkers.obj@
+
+            rel material:binding = </World/Looks/yellow_blinkers>
+        }
+        def Mesh "Glass"
+        {
+            custom asset engine:geometry:file = @./Mustang/Glass.obj@
+
+            rel material:binding = </World/Looks/glass>
+        }
+        def Mesh "Lights"
+        {
+            custom asset engine:geometry:file = @./Mustang/Lights.obj@
+
+            rel material:binding = </World/Looks/headlight>
+        }
+        def Mesh "Red_Interior"
+        {
+            custom asset engine:geometry:file = @./Mustang/Red_Interior.obj@
+
+            rel material:binding = </World/Looks/red_interior>
+        }
+        def Mesh "Tail_Lights"
+        {
+            custom asset engine:geometry:file = @./Mustang/Tail_Lights.obj@
+
+            rel material:binding = </World/Looks/red_taillight>
+        }
+        def Mesh "Tyres"
+        {
+            custom asset engine:geometry:file = @./Mustang/Tyres.obj@
+
+            rel material:binding = </World/Looks/tyres>
+        }
+    }
+
+    def Scope "Lights"
+    {
+        def DomeLight "Environment"
+        {
+            asset inputs:texture:file = @./HDR/Background_05_v2.hdr@
+            float inputs:intensity = 1
+            color3f inputs:color = (1, 1, 1)
+        }
+    }
+}

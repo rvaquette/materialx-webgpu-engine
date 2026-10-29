@@ -1,0 +1,18 @@
+<?xml version="1.0"?>
+<materialx version="1.39" colorspace="lin_rec709">
+  <disney_principled name="gold_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" value="0.944, 0.776, 0.373" />
+    <input name="metallic" type="float" value="1" />
+    <input name="roughness" type="float" value="0.02" />
+  </disney_principled>
+  <surfacematerial name="gold" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="gold_surface" />
+  </surfacematerial>
+  <disney_principled name="ground_surface" type="surfaceshader">
+    <input name="baseColor" type="color3" value="0.5, 0.5, 0.5" />
+    <input name="roughness" type="float" value="0.5" />
+  </disney_principled>
+  <surfacematerial name="ground" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="ground_surface" />
+  </surfacematerial>
+</materialx>
