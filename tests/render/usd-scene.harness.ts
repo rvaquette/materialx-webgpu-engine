@@ -84,6 +84,7 @@ export interface UsdSceneImage {
   backend: 'raster' | 'pathtracing';
   /** GPU render wall-clock in milliseconds (submit -> onSubmittedWorkDone). */
   renderMs: number;
+  timings: Record<string, number>;
   /** OpenPBRMaterial override bound for this render, if any. */
   materialOverride?: string;
   /** Mean 8-bit luminance and fraction of pixels brighter than 2/255. */
@@ -518,6 +519,7 @@ async function renderUsdRasterOnDevice(
   dispScaleOverride?: number,
   tracedShadows?: boolean,
   lightDirOverride?: Vec3,
+  phase: (name: string) => void = () => {},
 ): Promise<{ rgba: Uint8ClampedArray; renderMs: number }> {
   const sink = (d: { level: string; message: string }): void => {
     if (d.level === 'warning' || d.level === 'error') line(`diag: ${d.message}`);
@@ -528,7 +530,9 @@ async function renderUsdRasterOnDevice(
   if (materialOverride) await overrideMaterialWithMtlx(scene, OPENPBR_MATERIAL_PATH, materialOverride, line);
   const lights = importLights(scene, { sink });
   const cameras = importCameras(scene, { sink });
+  phase('usdImport');
   const envAsset = await loadEnvironment(lights, entry, sink);
+  phase('environment');
   if (envAsset) line(`diag env ${envAsset.image.width}x${envAsset.image.height} intensity=${envAsset.intensity.toFixed(3)} (dome)`);
 
   // Compile every material through the real graph material compiler (same path as
@@ -536,13 +540,17 @@ async function renderUsdRasterOnDevice(
   // to the shared LayeredClosure, so the raster forward pass shades an arbitrary
   // mtlx faithfully instead of the retired fixed 7-parameter standard_surface.
   const { documents, imageProvider, surfaceFor } = await loadMtlxSceneContext(scene, entry, line, sink);
+  phase('materialDocuments');
 
+  const meshSource = await loadExternalMeshSource(scene, meshSourceFromScene(scene), sink);
+  phase('geometryLoading');
   const resources = await buildSceneResources(scene, {
-    meshSource: await loadExternalMeshSource(scene, meshSourceFromScene(scene), sink),
+    meshSource,
     materialCompiler: createGraphMaterialCompiler({ documents, sink }),
     sink,
   });
   requireCompiledMaterials(resources);
+  phase('sceneResources');
   line('diag step: scene resources built');
 
   const frameCamera = resolveFrameCamera(cameras, line, exposureOverride, camBackOverride);
@@ -847,6 +855,7 @@ async function renderUsdRasterOnDevice(
 
   // Record the opaque/transmission scene passes into HDR, then tonemap-resolve
   // into the rgba8unorm output texture and copy it back for PNG encoding.
+  phase('rasterPreparation');
   const renderStart = performance.now();
   const encoder = device.createCommandEncoder();
   let firstPass = true;
@@ -940,6 +949,7 @@ async function renderUsdRasterOnDevice(
   device.queue.submit([encoder.finish()]);
   await device.queue.onSubmittedWorkDone();
   const renderMs = performance.now() - renderStart;
+  phase('render');
 
   const bytesPerRow = res * 4;
   const readback = device.createBuffer({ size: bytesPerRow * res, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
@@ -952,6 +962,7 @@ async function renderUsdRasterOnDevice(
   let lit = 0;
   for (let p = 0; p < res * res; p++) if (Math.max(rgba[p * 4]!, rgba[p * 4 + 1]!, rgba[p * 4 + 2]!) > 0) lit++;
   line(`diag raster lit=${lit}/${res * res} exposure=${exposure} renderMs=${renderMs.toFixed(1)}`);
+  phase('readback');
   return { rgba, renderMs };
 }
 
@@ -1022,6 +1033,7 @@ async function renderUsdOnDevice(
   skyColorOverride?: Vec3,
   camBackOverride?: number,
   dispScaleOverride?: number,
+  phase: (name: string) => void = () => {},
 ): Promise<{ rgba: Uint8ClampedArray; renderMs: number }> {
   const sink = (d: { level: string; message: string; detail?: unknown }): void => {
     if (d.level === 'warning' || d.level === 'error') {
@@ -1036,7 +1048,9 @@ async function renderUsdOnDevice(
   if (materialOverride) await overrideMaterialWithMtlx(scene, OPENPBR_MATERIAL_PATH, materialOverride, line);
   const lights = importLights(scene, { sink });
   const cameras = importCameras(scene, { sink });
+  phase('usdImport');
   const envAsset = await loadEnvironment(lights, entry, sink);
+  phase('environment');
   if (envAsset) line(`diag env ${envAsset.image.width}x${envAsset.image.height} intensity=${envAsset.intensity.toFixed(3)} (dome)`);
 
   // Load the MaterialX Core WASM and standard libraries once, read every
@@ -1045,13 +1059,17 @@ async function renderUsdOnDevice(
   // procedural/textured material instead of the retired CPU bake path. Constant
   // materials keep the seven-parameter packed record through surfaceFor.
   const { documents, imageProvider, surfaceFor } = await loadMtlxSceneContext(scene, entry, line, sink);
+  phase('materialDocuments');
 
+  const meshSource = await loadExternalMeshSource(scene, meshSourceFromScene(scene), sink);
+  phase('geometryLoading');
   const resources = await buildSceneResources(scene, {
-    meshSource: await loadExternalMeshSource(scene, meshSourceFromScene(scene), sink),
+    meshSource,
     materialCompiler: createGraphMaterialCompiler({ documents, sink }),
     sink,
   });
   requireCompiledMaterials(resources);
+  phase('sceneResources');
   line('diag step: scene resources built');
 
   const frameCamera = resolveFrameCamera(cameras, line, exposureOverride, camBackOverride);
@@ -1067,6 +1085,7 @@ async function renderUsdOnDevice(
     ...(dispScaleOverride !== undefined ? { displacementScale: dispScaleOverride } : {}),
   });
   ptScene.environment.textureRadianceScale = envGpu?.radianceScale ?? 1;
+  phase('bvhAndEnvironmentUpload');
   line(`${resources.instances.length} instance(s), ${samples} spp`);
   line(
     `diag tris=${ptScene.triangleCount} mats=${ptScene.materialCount} ` +
@@ -1083,6 +1102,7 @@ async function renderUsdOnDevice(
   // bindings plan (T057m2); textures are decoded by the shared image provider.
   const dispatch = buildMaterialDispatch(ptScene.variantSources);
   const bindings = await buildPtDeviceBindings(dispatch, ptScene, imageProvider, { sink });
+  phase('materialDispatchAndTextures');
   const fireflyClamp = Number.isFinite(fireflyOverride) ? (fireflyOverride as number) : 0;
   const sky = ptScene.environment;
   const skyDiag =
@@ -1117,6 +1137,7 @@ async function renderUsdOnDevice(
     if (errors.length) throw new Error(`Path-tracing WGSL: ${errors.map(message => message.message).join('; ')}`);
   }
   const { pipeline } = await backend.createPipelineAsync(module);
+  phase('pipelineCompilation');
   const storage = (data: Float32Array | Uint32Array | Int32Array): GPUBuffer => {
     const buf = device.createBuffer({ size: data.byteLength, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
     device.queue.writeBuffer(buf, 0, data);
@@ -1272,6 +1293,7 @@ async function renderUsdOnDevice(
   }
 
   backend.resetAccumulation();
+  phase('gpuResources');
   const renderStart = performance.now();
   device.pushErrorScope('validation');
   const batch = 8;
@@ -1302,6 +1324,7 @@ async function renderUsdOnDevice(
   const frameError = await device.popErrorScope();
   if (frameError) line(`diag dispatch validation error: ${frameError.message}`);
   const renderMs = performance.now() - renderStart;
+  phase('render');
 
   // Read the accumulated mean back and tonemap through the shared output pipeline.
   const readback = device.createBuffer({ size: accumBytes, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
@@ -1351,6 +1374,7 @@ async function renderUsdOnDevice(
     line(`diag accum max=${accMax.toFixed(3)} mean=${(accSum / (res * res * 4)).toFixed(4)} nan=${nan} outMax=${outMax} lit=${outNonZero}/${res * res}`);
   }
   readback.unmap();
+  phase('readbackAndTonemap');
   return { rgba, renderMs };
 }
 
@@ -1369,12 +1393,21 @@ export async function bootstrapUsdImage(
   tracedShadows?: boolean,
   lightDir?: Vec3,
 ): Promise<UsdSceneImage | null> {
+  const started = performance.now();
+  let phaseStarted = started;
+  const timings: Record<string, number> = {};
   const root = typeof document !== 'undefined' ? document.getElementById('log') ?? document.body : undefined;
   const line = (msg: string): void => {
     if (!root) return;
     const p = document.createElement('p');
     p.textContent = msg;
     root.appendChild(p);
+  };
+  const phase = (name: string): void => {
+    const now = performance.now();
+    timings[name] = now - phaseStarted;
+    phaseStarted = now;
+    line(`timing ${name}: ${timings[name]!.toFixed(1)} ms`);
   };
   const fail = (): null => {
     (globalThis as { __MX_IMAGE__?: UsdSceneImage | null }).__MX_IMAGE__ = null;
@@ -1391,6 +1424,7 @@ export async function bootstrapUsdImage(
     return fail();
   }
   const device = await adapter.requestDevice();
+  phase('deviceInitialization');
   // Surface a GPU device loss (e.g. a Windows TDR watchdog reset after a long
   // megakernel dispatch) instead of hanging silently on onSubmittedWorkDone.
   device.lost.then((info) => line(`diag device lost: ${info.reason} ${info.message}`)).catch(() => undefined);
@@ -1401,10 +1435,10 @@ export async function bootstrapUsdImage(
   if (materialOverride) line(`OpenPBRMaterial override: ${materialOverride}`);
   if (backend === 'raster') {
     line(`Rendu raster GPU de ${entry} (${res}x${res})...`);
-    ({ rgba, renderMs } = await renderUsdRasterOnDevice(device, entry, res, line, materialOverride, exposure, camBack, dispScale, tracedShadows, lightDir));
+    ({ rgba, renderMs } = await renderUsdRasterOnDevice(device, entry, res, line, materialOverride, exposure, camBack, dispScale, tracedShadows, lightDir, phase));
   } else {
     line(`Rendu path-trace GPU de ${entry} (${res}x${res}, ${samples} spp)...`);
-    ({ rgba, renderMs } = await renderUsdOnDevice(device, entry, res, samples, line, materialOverride, exposure, firefly, skyPower, skyColor, camBack, dispScale));
+    ({ rgba, renderMs } = await renderUsdOnDevice(device, entry, res, samples, line, materialOverride, exposure, firefly, skyPower, skyColor, camBack, dispScale, phase));
   }
 
   const canvas = document.createElement('canvas');
@@ -1434,8 +1468,12 @@ export async function bootstrapUsdImage(
   }
   const pixels = Math.max(1, rgba.length / 4);
   const stats = { meanLuma: lumaSum / pixels, litFraction: lit / pixels };
+  phase('pngAndStatistics');
+  timings.total = performance.now() - started;
+  timings.pageLoadAndModules = started;
+  line(`timing total: ${timings.total.toFixed(1)} ms (page/modules: ${started.toFixed(1)} ms)`);
   const image: UsdSceneImage = {
-    entry, width: res, height: res, samples: effectiveSamples, dataUrl, backend, renderMs, stats,
+    entry, width: res, height: res, samples: effectiveSamples, dataUrl, backend, renderMs, stats, timings,
     ...(materialOverride !== undefined ? { materialOverride } : {}),
   };
   (globalThis as { __MX_IMAGE__?: UsdSceneImage | null }).__MX_IMAGE__ = image;

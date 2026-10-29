@@ -405,7 +405,57 @@ Les PNG et `report.json` sont écrits dans `renders/shaderball/<cible>/`. Un cas
 `ok`, `black` (moins de 2 % de pixels non noirs, réglable par `--black-threshold`)
 ou `failed` (exception, perte du device, délai `--timeout` de 600000 ms dépassé).
 Le code de sortie vaut 1 si un cas n'est pas `ok`. Autres options : `--res`
-(256), `--spp` (64), `--port`, `--device`, `--out-dir`.
+(256), `--spp` (16), `--port`, `--device`, `--out-dir`.
+Chrome démarre sur une page neutre : aucun rendu raster préalable n'est lancé,
+même pour une commande limitée au path tracing. Seuls les backends demandés
+sont exécutés.
+
+### Rendus sans serveur Vite
+
+Compiler une fois le harnais, puis utiliser le serveur HTTP Node statique :
+
+```sh
+npm run build:shaderball
+npm run test:shaderball -- --server static --target local --backends pathtracing --entry /scenes/pathtracer/ajax.usda
+```
+
+Le build utilise Vite, mais les rendus `--server static` ne le chargent pas.
+Recompiler après un changement du moteur ou du harnais. Les scènes et matériaux
+restent lus directement dans `scenes/` ; leur modification ne nécessite pas de
+rebuild. Les fichiers compilés sont dans `dist-shaderball/` (ignoré par Git).
+Ce mode est local, pas un paquet autonome : MaterialX/WASM et les bibliothèques
+restent accessibles via `MX_CORE_DIR`, `MX_LIB_ROOT` et `MX_PLAYGROUND_ROOT`,
+avec les mêmes valeurs par défaut que le serveur de développement. Aucun gros
+asset n'est recopié. Un build absent produit une erreur explicite.
+Le port statique demandé doit être disponible. Le mode `--server vite` reste
+le défaut pour le développement ; `--materials`, les backends, les chronos et
+les sorties PNG/JSON fonctionnent dans les deux modes.
+
+Les lignes `[shaderball] timing` détaillent les durées en millisecondes.
+En fin d'exécution, un tableau `Phase | Durée` récapitule ces mesures en
+secondes, démarrage et nettoyage inclus. Les phases sont cumulées pour les cas
+exécutés dans la commande courante (hors résultats conservés par `--resume`).
+La ligne « Autres opérations et nettoyage » est le reste du temps total :
+lecture des pixels, encodage/transfert/écriture PNG, attente, reprises et nettoyage.
+Les totaux intermédiaires ne sont pas additionnés aux phases.
+Chaque cas expose `timings` dans `report.json` : initialisation WebGPU, import
+USD, environnement, documents MaterialX, chargement de géométrie, ressources
+de scène (dont compilation des graphes), puis préparation du backend, rendu,
+lecture des pixels et encodage PNG. Pour le path tracing, la préparation sépare
+BVH/upload d'environnement, dispatch/textures, compilation du pipeline et
+ressources GPU restantes. Le raster regroupe sa préparation sous
+`rasterPreparation`.
+
+`total` couvre le harnais après le chargement des modules ;
+`pageLoadAndModules` couvre le temps écoulé depuis l'origine temporelle de la
+navigation jusqu'à son entrée. `caseWall` mesure le cas côté Node, navigation,
+attente de disponibilité, transfert CDP et écriture PNG inclus.
+Ces totaux se recouvrent : ne pas les additionner aux phases.
+Les durées globales du rapport séparent `serverStartup`, `browserStartup`,
+`cleanup` et `commandTotal`. Ce dernier couvre le script, pas le démarrage npm
+ou Node ; les éventuelles reprises y sont incluses. Les mesures sont des temps
+écoulés CPU/GPU avec synchronisation, pas des timestamps GPU purs.
+
 Le rapport est sauvegardé après chaque cas ; `--resume` (mêmes options, même
 `--res`/`--spp`) conserve les cas `ok`/`black` déjà rendus et relance les `failed`
 puis les cas restants.

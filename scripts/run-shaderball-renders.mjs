@@ -16,7 +16,8 @@ import { join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
 import { setTimeout as sleep } from 'node:timers/promises';
-import { createServer } from 'vite';
+import { createShaderballStaticServer } from './shaderball-static-server.mjs';
+import { formatTimingTable } from './shaderball-timing-table.mjs';
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url));
 const DEFAULT_ENTRY = '/scenes/standard-shader-ball/standard-shader-ball.usda';
@@ -94,11 +95,11 @@ async function renderCase(cdp, origin, { backend, override }, values) {
   const query = new URLSearchParams({ entry: values.entry, res: values.res, spp: values.spp, backend, _: String(Date.now()) });
   if (override) query.set('openpbr', override);
   const url = `${origin}${HARNESS}?${query}`;
-  await cdp.send('Page.navigate', { url });
   const expected = JSON.stringify({ e: values.entry, b: backend, o: override ?? null });
-  const started = Date.now();
+  const started = performance.now();
+  await cdp.send('Page.navigate', { url });
   let pageLog = '';
-  while (Date.now() - started < Number(values.timeout)) {
+  while (performance.now() - started < Number(values.timeout)) {
     await sleep(500);
     let state;
     try {
@@ -115,8 +116,10 @@ async function renderCase(cdp, origin, { backend, override }, values) {
     if (status.failed) return { status: 'failed', reason: lastLines(pageLog) };
     if (/diag device lost/i.test(pageLog)) return { status: 'failed', reason: `GPU device lost: ${lastLines(pageLog, 2)}` };
     if (status.key === expected) {
-      const image = await cdp.evaluate('JSON.stringify({ dataUrl: __MX_IMAGE__.dataUrl, renderMs: __MX_IMAGE__.renderMs, stats: __MX_IMAGE__.stats })');
-      return { status: 'rendered', ...JSON.parse(image), pageLog };
+      const transferStarted = performance.now();
+      const image = await cdp.evaluate('JSON.stringify({ dataUrl: __MX_IMAGE__.dataUrl, renderMs: __MX_IMAGE__.renderMs, stats: __MX_IMAGE__.stats, timings: __MX_IMAGE__.timings })');
+      return { status: 'rendered', ...JSON.parse(image), pageLog,
+        transferMs: performance.now() - transferStarted, caseMs: performance.now() - started };
     }
   }
   return { status: 'failed', reason: `timeout after ${values.timeout} ms; ${lastLines(pageLog)}` };
@@ -130,12 +133,14 @@ function lastLines(text, count = 4) {
 const INFRA_FAILURE = /CDP (connection closed|timeout)|Cannot connect|Target closed|crash|device lost|timeout after|ECONNRESET|fetch failed/i;
 
 async function main() {
+  const commandStarted = performance.now();
   const { values } = parseArgs({ options: {
     help: { type: 'boolean', short: 'h' },
     list: { type: 'boolean' },
     resume: { type: 'boolean' },
     entry: { type: 'string', default: DEFAULT_ENTRY },
     target: { type: 'string', default: 'local' },
+    server: { type: 'string', default: 'vite' },
     backends: { type: 'string', default: 'raster,pathtracing' },
     materials: { type: 'string' },
     res: { type: 'string', default: '256' },
@@ -148,11 +153,13 @@ async function main() {
     'max-recoveries': { type: 'string', default: '20' },
   } });
   if (values.help) {
+    console.log('--server vite|static (default vite). Static mode requires npm run build:shaderball.');
     console.log('npm run test:shaderball -- [--entry /scenes/.../scene.usda] [--target mobile|local] [--backends raster,pathtracing] [--materials <filter>|all] [--res N] [--spp N] [--timeout ms] [--port N] [--device serial] [--out-dir dir] [--black-threshold fraction] [--max-recoveries N] [--resume] [--list]');
     console.log('Without --materials, render only the scene with its authored materials and bindings (no override).');
     return;
   }
   if (!['mobile', 'local'].includes(values.target)) throw new Error('--target must be mobile or local');
+  if (!['vite', 'static'].includes(values.server)) throw new Error('--server must be vite or static');
   values.entry = values.entry.replaceAll('\\', '/');
   if (!values.entry.startsWith('/scenes/') || !/\.usda?$/i.test(values.entry) || values.entry.split('/').includes('..')) {
     throw new Error('--entry must be a workspace USDA URL path under /scenes/');
@@ -182,6 +189,7 @@ async function main() {
   mkdirSync(outDir, { recursive: true });
   const reportFile = join(outDir, 'report.json');
   const report = { startedAt: new Date().toISOString(), target: values.target, entry: values.entry, res: Number(values.res), spp: Number(values.spp), cases: [] };
+  report.timings = {};
   if (values.resume) {
     if (!existsSync(reportFile)) throw new Error(`--resume: no report at ${relative(ROOT, reportFile)}`);
     const previous = JSON.parse(readFileSync(reportFile, 'utf8'));
@@ -207,13 +215,41 @@ async function main() {
   const serial = values.device ?? process.env.MX_DEVICE;
   const adb = async (...command) => (await exec(adbPath, [...(serial ? ['-s', serial] : []), ...command])).stdout.trim();
 
+  const currentCases = [];
   let server, chrome, profile, cdp, forwardPort, reversePort;
   try {
-    server = await createServer({ root: ROOT, configFile: join(ROOT, 'vite.config.ts'), server: { host: '127.0.0.1', port: Number(values.port), strictPort: false, open: false, hmr: false } });
-    await server.listen();
+    let phaseStarted = performance.now();
+    if (values.server === 'static') {
+      server = await createShaderballStaticServer({
+        root: ROOT, port: Number(values.port),
+        coreRoot: process.env.MX_CORE_DIR ?? 'D:\\WebGL2\\MaterialX\\MaterialX-rva\\javascript\\build\\installed\\JavaScript\\MaterialX',
+        libraryRoot: process.env.MX_LIB_ROOT ?? 'D:\\WebGL2\\MaterialX\\MaterialX-rva\\libraries',
+        playgroundRoot: process.env.MX_PLAYGROUND_ROOT ?? 'D:\\WebGL2\\MaterialX\\OpenPBRShaderPlayground\\ShdrPlygrnd',
+      });
+    } else {
+      const { createServer } = await import('vite');
+      server = await createServer({
+        root: ROOT, configFile: join(ROOT, 'vite.config.ts'),
+        plugins: [{
+          name: 'shaderball-idle-page',
+          configureServer(vite) {
+            vite.middlewares.use((request, response, next) => {
+              if (request.url !== '/__shaderball_idle__') return next();
+              response.setHeader('Content-Type', 'text/html');
+              response.end('<!doctype html><title>Shaderball ready</title>');
+            });
+          },
+        }],
+        server: { host: '127.0.0.1', port: Number(values.port), strictPort: false, open: false, hmr: false },
+      });
+      await server.listen();
+    }
+    report.server = values.server;
+    report.timings.serverStartup = performance.now() - phaseStarted;
     const port = server.httpServer.address().port;
     const origin = `http://${values.target === 'mobile' ? 'localhost' : '127.0.0.1'}:${port}`;
-    const startUrl = `${origin}${HARNESS}?entry=${encodeURIComponent(values.entry)}&res=16&spp=1&backend=raster`;
+    // Start with no scene, WASM, GPU device or raster warmup.
+    const startUrl = `${origin}/__shaderball_idle__`;
     let debugPort;
     const chromePath = process.env.MX_CHROME ?? 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe';
     const launchBrowser = async () => {
@@ -243,7 +279,8 @@ async function main() {
     };
     const listPages = () => fetch(`http://127.0.0.1:${debugPort}/json/list`).then((response) => response.json()).catch(() => []);
     const attach = async () => {
-      const isHarnessPage = (entry) => entry.type === 'page' && entry.url?.startsWith(`${origin}${HARNESS}`);
+      const isHarnessPage = (entry) => entry.type === 'page'
+        && (entry.url === startUrl || entry.url?.startsWith(`${origin}${HARNESS}`));
       let page = (await listPages()).find(isHarnessPage);
       if (!page) {
         log('harness tab missing; reopening it');
@@ -275,10 +312,13 @@ async function main() {
       if (!serial && devices.length > 1) throw new Error('Several mobiles connected: use --device serial.');
       report.device = serial ?? devices[0].split('\t')[0];
     }
+    phaseStarted = performance.now();
     await launchBrowser();
-    await waitFor(async () => (await listPages()).some((entry) => entry.type === 'page' && entry.url?.includes(HARNESS)),
+    await waitFor(async () => (await listPages()).some((entry) => entry.type === 'page' && entry.url === startUrl),
       'harness tab (keep the phone unlocked)', 60000);
     await attach();
+    report.timings.browserStartup = performance.now() - phaseStarted;
+    log(`timing startup: ${values.server} ${report.timings.serverStartup.toFixed(0)} ms, browser/CDP ${report.timings.browserStartup.toFixed(0)} ms`);
     log(`${values.target}${report.device ? ` (${report.device})` : ''}: ${cases.length} render cases -> ${relative(ROOT, outDir)}`);
     if (values.resume) log(`resuming: ${done.size} saved results kept, ${cases.length - done.size} cases to render`);
 
@@ -302,7 +342,10 @@ async function main() {
       const entry = { name, backend: item.backend, override: item.override ?? null, status: result.status };
       if (result.status === 'rendered') {
         const file = join(outDir, `${name}.png`);
+        const writeStarted = performance.now();
         writeFileSync(file, Buffer.from(result.dataUrl.slice(result.dataUrl.indexOf(',') + 1), 'base64'));
+        entry.timings = { ...result.timings, imageTransfer: result.transferMs,
+          pngWrite: performance.now() - writeStarted, caseWall: result.caseMs + performance.now() - writeStarted };
         entry.file = relative(ROOT, file).split(sep).join('/');
         entry.renderMs = Math.round(result.renderMs);
         entry.stats = result.stats;
@@ -313,16 +356,19 @@ async function main() {
         entry.reason = result.reason;
       }
       report.cases.push(entry);
+      currentCases.push(entry);
       saveReport();
       const detail = entry.status === 'ok' || entry.status === 'black'
         ? `${entry.renderMs} ms, lit ${(entry.stats.litFraction * 100).toFixed(1)}%`
         : entry.reason;
       log(`${index + 1}/${cases.length} ${entry.status}: ${name} (${detail})`);
+      if (entry.timings) log(`timing ${name}: ${Object.entries(entry.timings).map(([key, ms]) => `${key}=${ms.toFixed(1)} ms`).join(', ')}`);
     }
   } catch (error) {
     report.error = String(error);
     throw error;
   } finally {
+    const cleanupStarted = performance.now();
     report.finishedAt = new Date().toISOString();
     saveReport();
     log(`summary: ${JSON.stringify(report.summary)}; report ${relative(ROOT, reportFile)}`);
@@ -336,6 +382,12 @@ async function main() {
     }
     if (profile) rmSync(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
     await server?.close();
+    report.timings.cleanup = performance.now() - cleanupStarted;
+    report.timings.commandTotal = performance.now() - commandStarted;
+    report.finishedAt = new Date().toISOString();
+    saveReport();
+    log(`timing command: ${report.timings.commandTotal.toFixed(0)} ms; cleanup ${report.timings.cleanup.toFixed(0)} ms (excludes npm/Node bootstrap)`);
+    console.log('\n' + formatTimingTable(report, currentCases));
   }
 }
 
