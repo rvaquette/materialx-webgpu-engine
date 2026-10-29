@@ -19,6 +19,7 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import { createShaderballStaticServer } from './shaderball-static-server.mjs';
 import { formatTimingTable } from './shaderball-timing-table.mjs';
 import { sampleCpuMemory } from './shaderball-cpu-memory.mjs';
+import { displayShaderball, displayUrls } from './shaderball-display.mjs';
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url));
 const DEFAULT_ENTRY = '/scenes/standard-shader-ball/standard-shader-ball.usda';
@@ -149,6 +150,8 @@ async function main() {
     help: { type: 'boolean', short: 'h' },
     list: { type: 'boolean' },
     resume: { type: 'boolean' },
+    headed: { type: 'boolean' },
+    integrated: { type: 'boolean' },
     entry: { type: 'string', default: DEFAULT_ENTRY },
     target: { type: 'string', default: 'local' },
     server: { type: 'string', default: 'vite' },
@@ -164,6 +167,7 @@ async function main() {
     'max-recoveries': { type: 'string', default: '20' },
   } });
   if (values.help) {
+    console.log('--headed: visible Chrome, no captures/report. --integrated: print URLs for VS Code, no Chrome/CDP or captures/report. Both keep the server alive until Ctrl+C.');
     console.log('--server vite|static (default vite). Static mode requires npm run build:shaderball.');
     console.log('npm run test:shaderball -- [--entry /scenes/.../scene.usda] [--target mobile|local] [--backends raster,pathtracing] [--materials <filter>|all] [--res N] [--spp N] [--timeout ms] [--port N] [--device serial] [--out-dir dir] [--black-threshold fraction] [--max-recoveries N] [--resume] [--list]');
     console.log('Without --materials, render only the scene with its authored materials and bindings (no override).');
@@ -171,6 +175,11 @@ async function main() {
   }
   if (!['mobile', 'local'].includes(values.target)) throw new Error('--target must be mobile or local');
   if (!['vite', 'static'].includes(values.server)) throw new Error('--server must be vite or static');
+  const displayMode = values.headed || values.integrated;
+  if (displayMode && ![256, 512, 1024].includes(Number(values.res))) throw new Error('Interactive --res must be 256, 512 or 1024');
+  if (values.headed && values.integrated) throw new Error('--headed and --integrated are mutually exclusive');
+  if (displayMode && values.target !== 'local') throw new Error('--headed/--integrated require --target local');
+  if (displayMode && values.resume) throw new Error('--resume is unavailable without captures/reports');
   values.entry = values.entry.replaceAll('\\', '/');
   if (!values.entry.startsWith('/scenes/') || !/\.usda?$/i.test(values.entry) || values.entry.split('/').includes('..')) {
     throw new Error('--entry must be a workspace USDA URL path under /scenes/');
@@ -197,7 +206,7 @@ async function main() {
 
   const sceneName = values.entry === DEFAULT_ENTRY ? undefined : values.entry.split('/').at(-1).replace(/\.usda?$/i, '');
   const outDir = resolve(ROOT, values['out-dir'], ...(sceneName ? [sceneName] : []), values.target);
-  mkdirSync(outDir, { recursive: true });
+  if (!displayMode) mkdirSync(outDir, { recursive: true });
   const reportFile = join(outDir, 'report.json');
   const report = { startedAt: new Date().toISOString(), target: values.target, entry: values.entry, res: Number(values.res), spp: Number(values.spp), cases: [] };
   report.timings = {};
@@ -259,6 +268,13 @@ async function main() {
     report.timings.serverStartup = performance.now() - phaseStarted;
     const port = server.httpServer.address().port;
     const origin = `http://${values.target === 'mobile' ? 'localhost' : '127.0.0.1'}:${port}`;
+    if (displayMode) {
+      await displayShaderball(displayUrls(origin, cases, values), {
+        integrated: values.integrated,
+        chromePath: process.env.MX_CHROME ?? 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
+      });
+      return;
+    }
     // Start with no scene, WASM, GPU device or raster warmup.
     const startUrl = `${origin}/__shaderball_idle__`;
     let debugPort;
@@ -390,27 +406,31 @@ async function main() {
     report.error = String(error);
     throw error;
   } finally {
-    report.memory = { cpu: await sampleCpuMemory(values.target === 'local' ? chrome?.pid : undefined) };
-    const cleanupStarted = performance.now();
-    report.finishedAt = new Date().toISOString();
-    saveReport();
-    log(`summary: ${JSON.stringify(report.summary)}; report ${relative(ROOT, reportFile)}`);
-    process.exitCode = report.error || report.summary.black || report.summary.failed ? 1 : 0;
-    cdp?.socket.close();
-    if (reversePort) await adb('reverse', '--remove', `tcp:${reversePort}`).catch(() => {});
-    if (forwardPort) await adb('forward', '--remove', `tcp:${forwardPort}`).catch(() => {});
-    if (chrome) {
-      chrome.kill();
-      await new Promise((done) => { if (chrome.exitCode !== null) done(); else chrome.once('close', done); });
+    if (displayMode) {
+      await server?.close();
+    } else {
+      report.memory = { cpu: await sampleCpuMemory(values.target === 'local' ? chrome?.pid : undefined) };
+      const cleanupStarted = performance.now();
+      report.finishedAt = new Date().toISOString();
+      saveReport();
+      log(`summary: ${JSON.stringify(report.summary)}; report ${relative(ROOT, reportFile)}`);
+      process.exitCode = report.error || report.summary.black || report.summary.failed ? 1 : 0;
+      cdp?.socket.close();
+      if (reversePort) await adb('reverse', '--remove', `tcp:${reversePort}`).catch(() => {});
+      if (forwardPort) await adb('forward', '--remove', `tcp:${forwardPort}`).catch(() => {});
+      if (chrome) {
+        chrome.kill();
+        await new Promise((done) => { if (chrome.exitCode !== null) done(); else chrome.once('close', done); });
+      }
+      if (profile) rmSync(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+      await server?.close();
+      report.timings.cleanup = performance.now() - cleanupStarted;
+      report.timings.commandTotal = performance.now() - commandStarted;
+      report.finishedAt = new Date().toISOString();
+      saveReport();
+      log(`timing command: ${report.timings.commandTotal.toFixed(0)} ms; cleanup ${report.timings.cleanup.toFixed(0)} ms (excludes npm/Node bootstrap)`);
+      console.log('\n' + formatTimingTable(report, currentCases));
     }
-    if (profile) rmSync(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
-    await server?.close();
-    report.timings.cleanup = performance.now() - cleanupStarted;
-    report.timings.commandTotal = performance.now() - commandStarted;
-    report.finishedAt = new Date().toISOString();
-    saveReport();
-    log(`timing command: ${report.timings.commandTotal.toFixed(0)} ms; cleanup ${report.timings.cleanup.toFixed(0)} ms (excludes npm/Node bootstrap)`);
-    console.log('\n' + formatTimingTable(report, currentCases));
   }
 }
 

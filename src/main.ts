@@ -39,6 +39,15 @@ function populateSelector(select: HTMLSelectElement): void {
 }
 
 async function main(): Promise<void> {
+  const params = new URLSearchParams(location.search);
+  const initialEntry = params.get('entry') ?? SCENE_CATALOG[0]!.entry;
+  const initialBackend = params.get('backend') ?? 'raster';
+  const initialResolution = Number(params.get('res') ?? 512);
+  if (!initialEntry.startsWith('/scenes/') || initialEntry.split('/').includes('..') || !/\.usda?$/i.test(initialEntry)) {
+    throw new Error('Invalid scene entry: expected a USD path under /scenes/.');
+  }
+  if (initialBackend !== 'raster' && initialBackend !== 'pathtracing') throw new Error('Unsupported backend.');
+  if (![256, 512, 1024].includes(initialResolution)) throw new Error('Interactive resolution must be 256, 512 or 1024.');
   if (!('gpu' in navigator)) {
     setStatus('WebGPU is not available in this browser.');
     return;
@@ -71,8 +80,8 @@ async function main(): Promise<void> {
     setStatus('WebGPU adapter ready; no canvas.');
     return;
   }
-  canvas.width = 512;
-  canvas.height = 512;
+  canvas.width = initialResolution;
+  canvas.height = initialResolution;
   const context = canvas.getContext('webgpu');
   if (!context) {
     setStatus('WebGPU adapter ready; no canvas context.');
@@ -93,6 +102,11 @@ async function main(): Promise<void> {
   const materialControls = document.getElementById('material-controls') as HTMLFieldSetElement | null;
   const parameterControls = document.getElementById('material-parameters') as HTMLFieldSetElement | null;
   if (select) populateSelector(select);
+  if (select) {
+    if (![...select.options].some(option => option.value === initialEntry)) select.add(new Option(initialEntry, initialEntry));
+    select.value = initialEntry;
+  }
+  if (resolution) resolution.value = String(initialResolution);
   const backendButtons = Array.from(document.querySelectorAll<HTMLButtonElement>('#backend-mode button[data-backend]'));
   const pathTracingToggle = document.getElementById('pathtracing-toggle') as HTMLButtonElement | null;
   let operationBusy = false;
@@ -135,6 +149,8 @@ async function main(): Promise<void> {
     },
   };
   let viewer = new InteractiveViewer({ device, context, outputFormat, canvas, ...viewerCallbacks });
+  viewer.setBackend(initialBackend);
+  for (const button of backendButtons) button.setAttribute('aria-pressed', String(button.dataset.backend === initialBackend));
   const parameterEditor = parameterControls ? new MaterialParameterEditor({
     container: parameterControls,
     parameters: () => viewer.objectParameters(objectSelect?.value ?? ''),
@@ -334,7 +350,25 @@ async function main(): Promise<void> {
     });
   }
 
-  await loadEntry(SCENE_CATALOG[0]!.entry);
+  await loadEntry(initialEntry);
+  const initialMaterial = params.get('openpbr');
+  if (initialMaterial && !statusIsError) {
+    setBusy(true);
+    try {
+      const assetPath = new URL(initialMaterial, document.baseURI).href;
+      const response = await fetch(assetPath);
+      if (!response.ok) throw new Error(`HTTP ${response.status}: ${assetPath}`);
+      const materialDocument = new DOMParser().parseFromString(await response.text(), 'application/xml');
+      if (materialDocument.querySelector('parsererror')) throw new Error('Invalid MaterialX XML.');
+      const materialName = materialDocument.getElementsByTagName('surfacematerial')[0]?.getAttribute('name');
+      if (!materialName) throw new Error('No surfacematerial in this MaterialX document.');
+      const overrides = new Map(viewer.objects.map(object => [object.path, { assetPath, materialName }]));
+      await viewer.load(new URL(initialEntry, document.baseURI).href, overrides, true);
+      refreshObjects();
+    } finally {
+      setBusy(false);
+    }
+  }
 }
 
 void main().catch((error: unknown) => {

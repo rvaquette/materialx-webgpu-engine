@@ -420,7 +420,29 @@ Ces caches ne persistent pas entre deux commandes ; les pipelines raster et
 compute restent distincts. La phase `pageLoadAndModules` n'est comptée que
 pour le premier rendu réussi de chaque page.
 
-### Rendus sans serveur Vite
+### Affichage sans capture
+
+```sh
+npm run test:shaderball -- --headed --server static --backends pathtracing --res 512 --spp 16 --entry /scenes/pathtracer/ajax.usda
+npm run test:shaderball -- --integrated --server static --backends pathtracing --res 512 --spp 16 --entry /scenes/pathtracer/ajax.usda
+```
+
+`--headed` ouvre Chrome visible avec un profil temporaire. `--integrated`
+ne lance pas Chrome : copier une URL affichée dans le navigateur intégré de
+VS Code (commande « Browser: Open Integrated Browser » ou « Simple Browser: Show »).
+Le support WebGPU dépend du navigateur intégré. Ces modes locaux sont exclusifs,
+ne sauvegardent ni PNG ni rapport JSON et ne prennent pas en charge `--resume`.
+Le serveur reste actif jusqu'à Ctrl+C ; fermer Chrome termine aussi `--headed`.
+Chaque combinaison matériau/backend dispose d'une URL (un onglet en mode headed).
+Ces modes ouvrent le viewer avec un vrai canvas WebGPU : rotation à la souris
+et zoom à la molette, rendu raster ou path tracing progressif. Les paramètres
+`--entry`, `--res` (256, 512 ou 1024), `--backends` et les overrides matériaux
+sont transmis au viewer. `--spp` ne limite pas le rendu interactif : les samples
+s'accumulent et repartent après un mouvement de caméra. Le mode statique doit
+être recompilé pour inclure le viewer (`npm run build:shaderball`).
+Sans ces options, le mode automatique headless reste inchangé.
+
+### Compilation statique
 
 Compiler une fois le harnais, puis utiliser le serveur HTTP Node statique :
 

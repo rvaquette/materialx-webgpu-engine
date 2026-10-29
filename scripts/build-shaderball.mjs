@@ -8,6 +8,6 @@ await build({
   configFile: join(root, 'vite.config.ts'),
   build: {
     outDir: 'dist-shaderball',
-    rollupOptions: { input: join(root, 'usd-image-harness.html') },
+    rollupOptions: { input: [join(root, 'usd-image-harness.html'), join(root, 'index.html')] },
   },
 });
