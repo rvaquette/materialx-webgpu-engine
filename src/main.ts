@@ -10,6 +10,7 @@ import { SCENE_CATALOG } from './scene/scene-catalog.ts';
 import { MATERIAL_CATALOG } from './scene/material-catalog.ts';
 import { buildMaterialTree } from './scene/material-tree.ts';
 import { MaterialParameterEditor } from './material-parameter-editor.ts';
+import { sceneDeviceDescriptor } from './gpu/device.ts';
 
 let statusIsError = false;
 
@@ -59,7 +60,7 @@ async function main(): Promise<void> {
     for (let attempt = 0; attempt < 5; attempt++) {
       if (attempt > 0) await new Promise((resolve) => setTimeout(resolve, 500 * attempt));
       const adapter = await withTimeout(navigator.gpu.requestAdapter({ powerPreference: 'high-performance' }), 10000);
-      const device = adapter ? await withTimeout(adapter.requestDevice(), 10000) : undefined;
+      const device = adapter ? await withTimeout(adapter.requestDevice(sceneDeviceDescriptor(adapter)), 10000) : undefined;
       if (adapter && device) return { adapter, device };
     }
     return undefined;

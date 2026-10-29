@@ -9,7 +9,7 @@ import { loadExternalMeshSource } from '../../src/geometry/external-mesh.ts';
 
 const directory = join('scenes', 'pathtracer');
 const files = readdirSync(directory).filter(file => file.endsWith('.usda')).sort();
-const knownMissing = new Set(['bedroom/Mesh019.obj', 'jinx.gltf', 'panther/panther.obj']);
+const knownMissing = new Set(['jinx.gltf', 'panther/panther.obj']);
 const read = (file: string) => readFileSync(join(directory, file), 'utf8');
 
 async function load(file: string) {
@@ -23,7 +23,7 @@ async function load(file: string) {
 }
 
 describe('converted pathtracer USDA scenes', () => {
-  it('covers all 59 stages and records only the three known missing assets', () => {
+  it('covers all 59 stages and records only the two known missing assets', () => {
     expect(files).toHaveLength(59);
     const missing = new Set<string>();
     for (const file of files) {

@@ -24,6 +24,8 @@
       const entry = params.get('entry') ?? '/scenes/test_material_disney_gold/test_material_disney_gold.usda';
       const res = Number(params.get('res') ?? 256);
       const spp = Number(params.get('spp') ?? 192);
+      const tileSpp = Number(params.get('tileSpp') ?? 1);
+      if (!Number.isInteger(tileSpp) || tileSpp < 1) throw new Error('tileSpp must be a positive integer');
       const backend = params.get('backend') === 'raster' ? 'raster' : 'pathtracing';
       const openpbr = params.get('openpbr') ?? undefined;
       const exposureParam = params.get('exposure');
@@ -45,7 +47,7 @@
       const lightDirParam = params.get('lightDir');
       const lightDir = lightDirParam ? lightDirParam.split(',').map(Number) : undefined;
       try {
-      await bootstrapUsdImage(entry, res, spp, backend, openpbr, exposure, firefly, skyPower, skyColor, camBack, dispScale, shadows, lightDir);
+      await bootstrapUsdImage(entry, res, spp, backend, openpbr, exposure, firefly, skyPower, skyColor, camBack, dispScale, shadows, lightDir, tileSpp);
       } catch (e) {
         globalThis.__MX_IMAGE__ = null;
         const p = document.createElement('p');

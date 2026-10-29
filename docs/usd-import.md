@@ -53,9 +53,14 @@ BSDF rays. Analytic light sampling remains the engine's directional
 approximation; this is not full area-light next-event sampling.
 The original converted DisneyPrincipled materials are retained, including their
 existing approximations of source MaterialX graphs.
-Three source geometry assets remain absent: `bedroom/Mesh019.obj`, `jinx.gltf`,
-and `panther/panther.obj`. Their unresolved references are deliberately preserved;
-these three stages will fail loading until the original assets are supplied.
+The bedroom mesh `bedroom/Mesh019.obj` is extracted from the supplied local
+`bedroom/Mesh019.7z` archive. Two source geometry assets remain absent:
+`jinx.gltf` and `panther/panther.obj`. Their unresolved references are deliberately
+preserved; these two stages will fail loading until the original assets are supplied.
+The viewer and image harness request the adapter's supported `maxBufferSize`
+and `maxStorageBufferBindingSize`, rather than retaining the default 128 MiB
+storage binding limit. Large scenes such as bedroom require this. Scene storage
+allocations exceeding the device limits are rejected explicitly.
 Depth-of-field aperture metadata and dome rotation are authored but are not
 implemented by the current image renderer.
 Legacy `pathtracer:*` metadata alone does not configure cameras or lighting,

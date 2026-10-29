@@ -95,6 +95,7 @@ function caseName(override, backend) {
 
 async function renderCase(cdp, origin, { backend, override }, values) {
   const query = new URLSearchParams({ entry: values.entry, res: values.res, spp: values.spp, backend, _: String(Date.now()) });
+  query.set('tileSpp', values.target === 'local' ? '4' : '1');
   if (override) query.set('openpbr', override);
   const url = `${origin}${HARNESS}?session=1`;
   const expected = JSON.stringify({ e: values.entry, b: backend, o: override ?? null });

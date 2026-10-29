@@ -821,11 +821,13 @@ ${displayAovs ? '    coverage += hitCoverage;' : ''}
 ${displayAovs ? '  let outputPixel = pixel * 2u;' : ''}
   let prev = accum[${displayAovs ? 'outputPixel' : 'pixel'}];
   let count = prev.w;
-  let mean = (prev.xyz * count + sample) / (count + 1.0);
-  accum[${displayAovs ? 'outputPixel' : 'pixel'}] = vec4<f32>(mean, count + 1.0);
+  let sampleCount = f32(spp);
+  let totalCount = count + sampleCount;
+  let mean = (prev.xyz * count + sample * sampleCount) / totalCount;
+  accum[${displayAovs ? 'outputPixel' : 'pixel'}] = vec4<f32>(mean, totalCount);
 ${displayAovs ? `  let oldCoverage = accum[outputPixel + 1u].x;
   let hits = coverage / f32(spp);
-  accum[outputPixel + 1u] = vec4f((oldCoverage * count + hits) / (count + 1.0), 0.0, 0.0, 0.0);` : ''}
+  accum[outputPixel + 1u] = vec4f((oldCoverage * count + hits * sampleCount) / totalCount, 0.0, 0.0, 0.0);` : ''}
 }
 `;
 }

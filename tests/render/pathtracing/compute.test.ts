@@ -149,6 +149,14 @@ describe('pathTraceComputeWgsl', () => {
     expect(src).toContain('@compute');
   });
 
+  it('weights progressive accumulation by the samples in each dispatch', () => {
+    expect(src).toContain('let sampleCount = f32(spp);');
+    expect(src).toContain('let totalCount = count + sampleCount;');
+    expect(src).toContain('sample * sampleCount');
+    const aovShader = pathTraceComputeWgsl({ displayAovs: true });
+    expect(aovShader).toContain('(oldCoverage * count + hits * sampleCount) / totalCount');
+  });
+
   it('includes BVH traversal, the shared closure library and the integrator', () => {
     expect(src).toContain('fn traverse(');
     expect(src).toContain('fn intersect_tri(');

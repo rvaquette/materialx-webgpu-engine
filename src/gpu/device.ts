@@ -32,6 +32,23 @@ export interface DeviceLostDetail {
 
 export type Unsubscribe = () => void;
 
+/** Large imported scenes need more than WebGPU's default 128 MiB storage binding limit. */
+export function sceneDeviceDescriptor(adapter: GPUAdapter): GPUDeviceDescriptor {
+  return {
+    requiredLimits: {
+      maxStorageBufferBindingSize: adapter.limits.maxStorageBufferBindingSize,
+      maxBufferSize: adapter.limits.maxBufferSize,
+    },
+  };
+}
+
+export function assertSceneStorageSize(device: GPUDevice, bytes: number): void {
+  const limit = Math.min(device.limits.maxStorageBufferBindingSize, device.limits.maxBufferSize);
+  if (bytes > limit) {
+    throw new Error(`Scene storage buffer requires ${bytes} bytes, exceeding the GPU device limit of ${limit} bytes.`);
+  }
+}
+
 /** Managed GPU device with loss/recovery and generation tracking. */
 export interface GpuContext {
   readonly device: GPUDevice;

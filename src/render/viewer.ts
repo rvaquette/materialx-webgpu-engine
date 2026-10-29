@@ -27,6 +27,7 @@ import { buildPtDeviceBindings } from './pathtracing/device-bindings.ts';
 import { maxRecordLobes } from './pathtracing/material-record.ts';
 import type { DecodedPixelImage } from '../assets/images.ts';
 import { loadUsdScene, uploadMaterialTextures, type ObjectMaterialOverride, type SceneLoadOptions } from './usd-scene-assets.ts';
+import { assertSceneStorageSize } from '../gpu/device.ts';
 import { OrbitCamera, attachOrbitControls } from '../scene/orbit-camera.ts';
 import { inverse4, lookAt4, multiply4, perspective4, type Vec3 } from '../scene/transforms.ts';
 import type { DiagnosticSink } from '../core/diagnostics.ts';
@@ -913,8 +914,10 @@ fn dir_to_uv(d: vec3<f32>) -> vec2<f32> {
       let measuredTime = 0;
       let ptWidth = Math.ceil(width / pixelScale);
       let ptHeight = Math.ceil(height / pixelScale);
-      const storage = (data: Float32Array | Uint32Array): GPUBuffer =>
-        track(device.createBuffer({ size: Math.max(data.byteLength, 4), usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST }));
+      const storage = (data: Float32Array | Uint32Array): GPUBuffer => {
+        assertSceneStorageSize(device, Math.max(data.byteLength, 4));
+        return track(device.createBuffer({ size: Math.max(data.byteLength, 4), usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST }));
+      };
       const storageData = (data: Float32Array | Uint32Array): GPUBuffer => {
         const safe = data.byteLength > 0 ? data : data instanceof Uint32Array ? new Uint32Array(1) : new Float32Array(1);
         const buf = storage(safe);

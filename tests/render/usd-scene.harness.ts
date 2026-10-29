@@ -76,6 +76,7 @@ import type { MaterialXReference, SceneAsset } from '../../src/scene/types.ts';
 
 import { trackGpuMemory, type GpuMemory } from './gpu-memory.ts';
 import { cacheGpuPipelines } from './gpu-session-cache.ts';
+import { sceneDeviceDescriptor, assertSceneStorageSize } from '../../src/gpu/device.ts';
 import { clearFallbackEnvironment } from '../../src/render/scene-resources.ts';
 
 let renderSession: {
@@ -1050,7 +1051,11 @@ async function renderUsdOnDevice(
   camBackOverride?: number,
   dispScaleOverride?: number,
   phase: (name: string) => void = () => {},
+  maxSamplesPerDispatch = 1,
 ): Promise<{ rgba: Uint8ClampedArray; renderMs: number }> {
+  if (!Number.isInteger(maxSamplesPerDispatch) || maxSamplesPerDispatch < 1) {
+    throw new Error(`maxSamplesPerDispatch must be a positive integer; got ${maxSamplesPerDispatch}`);
+  }
   const sink = (d: { level: string; message: string; detail?: unknown }): void => {
     if (d.level === 'warning' || d.level === 'error') {
       line(`diag: ${d.message}`);
@@ -1156,6 +1161,7 @@ async function renderUsdOnDevice(
   const { pipeline } = await backend.createPipelineAsync(module);
   phase('pipelineCompilation');
   const storage = (data: Float32Array | Uint32Array | Int32Array): GPUBuffer => {
+    assertSceneStorageSize(device, data.byteLength);
     const buf = device.createBuffer({ size: data.byteLength, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
     device.queue.writeBuffer(buf, 0, data);
     return buf;
@@ -1171,14 +1177,22 @@ async function renderUsdOnDevice(
     usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC,
   });
   device.queue.writeBuffer(accumBuffer, 0, new Float32Array(res * res * 4));
-  const uniform = device.createBuffer({ size: PT_UNIFORM_SIZE, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+  const tileUniforms = Array.from({ length: 16 }, () =>
+    device.createBuffer({ size: PT_UNIFORM_SIZE, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST }),
+  );
 
   // group-0: the per-frame uniform and accumulation buffers are data-less in the
   // plan (harness-sized), every other slot carries packed scene storage data.
+  // Each tile gets its own uniform buffer so all tile dispatches can be encoded
+  // and submitted together without later queue writes replacing earlier values.
   let triangleBuffer: GPUBuffer | undefined;
   let triangleUvBuffer: GPUBuffer | undefined;
+  let uniformBinding: number | undefined;
   const group0Entries: GPUBindGroupEntry[] = bindings.group0.map((slot) => {
-    if (slot.role === 'uniform') return { binding: slot.binding, resource: { buffer: uniform } };
+    if (slot.role === 'uniform') {
+      uniformBinding = slot.binding;
+      return { binding: slot.binding, resource: { buffer: tileUniforms[0]! } };
+    }
     if (slot.role === 'accum') return { binding: slot.binding, resource: { buffer: accumBuffer } };
     if (slot.role === 'mxUniforms') {
       // MxUniforms packing is not emitted yet (surface-ir folds constants); bind a
@@ -1191,7 +1205,15 @@ async function renderUsdOnDevice(
     if (slot.role === 'triangleUv') triangleUvBuffer = buf;
     return { binding: slot.binding, resource: { buffer: buf } };
   });
-  const group0 = device.createBindGroup({ layout: pipeline.getBindGroupLayout(0), entries: group0Entries });
+  if (uniformBinding === undefined) throw new Error('Path-tracing bind group has no frame uniform binding');
+  const group0s = tileUniforms.map((tileUniform) =>
+    device.createBindGroup({
+      layout: pipeline.getBindGroupLayout(0),
+      entries: group0Entries.map((entry) =>
+        entry.binding === uniformBinding ? { ...entry, resource: { buffer: tileUniform } } : entry,
+      ),
+    }),
+  );
 
   // group-1 textures + group-2 samplers (only bound when a material samples any).
   const textureViews = new Map<number, GPUTextureView>();
@@ -1314,32 +1336,42 @@ async function renderUsdOnDevice(
   const renderStart = performance.now();
   device.pushErrorScope('validation');
   const batch = 8;
-  for (let f = 0; f < samples; f++) {
+  for (let firstSample = 0, f = 0; firstSample < samples; firstSample += maxSamplesPerDispatch, f++) {
+    const frameSamples = Math.min(maxSamplesPerDispatch, samples - firstSample);
     // Match the viewer's tiled dispatch: full-image alpha/shadow work can exceed
-    // the mobile watchdog budget even for a single sample.
+    // the mobile watchdog budget even for a single sample. Local desktop renders
+    // can batch a few samples per tile to reduce dispatch and submission overhead.
+    const encoder = device.createCommandEncoder();
+    const compute = encoder.beginComputePass();
+    compute.setPipeline(pipeline);
+    let tileIndex = 0;
     while (backend.frameIndex === f) {
       const { tile, frameIndex } = backend.advanceTile(res, res);
       if (tile.width === 0 || tile.height === 0) { continue; }
       const [wgX, wgY] = PathTraceBackend.workgroupCount(tile.width, tile.height);
-      device.queue.writeBuffer(uniform, 0, buildPathTraceUniform(ptScene, frameIndex, 1, res, res, fireflyClamp, tile));
-      const encoder = device.createCommandEncoder();
-      const compute = encoder.beginComputePass();
-      compute.setPipeline(pipeline);
+      const tileUniform = tileUniforms[tileIndex];
+      const group0 = group0s[tileIndex];
+      if (!tileUniform || !group0) throw new Error(`Missing path-tracing resources for tile ${tileIndex}`);
+      device.queue.writeBuffer(tileUniform, 0, buildPathTraceUniform(ptScene, frameIndex, frameSamples, res, res, fireflyClamp, tile));
       compute.setBindGroup(0, group0);
       if (group1) compute.setBindGroup(1, group1);
       if (group2) compute.setBindGroup(2, group2);
       if (ptEnvGroup) compute.setBindGroup(3, ptEnvGroup);
       compute.dispatchWorkgroups(wgX, wgY, 1);
-      compute.end();
-      device.queue.submit([encoder.finish()]);
-      await device.queue.onSubmittedWorkDone();
+      tileIndex++;
     }
-    if ((f + 1) % batch === 0 || f === samples - 1) {
-      line(`diag pt frame ${f + 1}/${samples} @ ${(performance.now() - renderStart).toFixed(0)} ms`);
+    compute.end();
+    device.queue.submit([encoder.finish()]);
+    const completedSamples = firstSample + frameSamples;
+    if ((f + 1) % batch === 0 || completedSamples === samples) {
+      // Queue writes and dispatches in order; fence each batch of frames rather
+      // than each tile or frame, while keeping every dispatch watchdog-safe.
+      await device.queue.onSubmittedWorkDone();
+      line(`diag pt samples ${completedSamples}/${samples} @ ${(performance.now() - renderStart).toFixed(0)} ms`);
     }
   }
   const frameError = await device.popErrorScope();
-  if (frameError) line(`diag dispatch validation error: ${frameError.message}`);
+  if (frameError) throw new Error(`Path-tracing dispatch validation error: ${frameError.message}`);
   const renderMs = performance.now() - renderStart;
   phase('render');
 
@@ -1409,6 +1441,7 @@ export async function bootstrapUsdImage(
   dispScale?: number,
   tracedShadows?: boolean,
   lightDir?: Vec3,
+  maxSamplesPerDispatch = 1,
 ): Promise<UsdSceneImage | null> {
   const started = performance.now();
   let phaseStarted = started;
@@ -1442,7 +1475,7 @@ export async function bootstrapUsdImage(
       line('Aucun adaptateur WebGPU.');
       return fail();
     }
-    const device = await adapter.requestDevice();
+    const device = await adapter.requestDevice(sceneDeviceDescriptor(adapter));
     renderSession = { adapter, device, memory: trackGpuMemory(device), cache: cacheGpuPipelines(device) };
     const currentSession = renderSession;
     device.lost.then(info => {
@@ -1466,7 +1499,7 @@ export async function bootstrapUsdImage(
     ({ rgba, renderMs } = await renderUsdRasterOnDevice(device, entry, res, line, materialOverride, exposure, camBack, dispScale, tracedShadows, lightDir, phase));
   } else {
     line(`Rendu path-trace GPU de ${entry} (${res}x${res}, ${samples} spp)...`);
-    ({ rgba, renderMs } = await renderUsdOnDevice(device, entry, res, samples, line, materialOverride, exposure, firefly, skyPower, skyColor, camBack, dispScale, phase));
+    ({ rgba, renderMs } = await renderUsdOnDevice(device, entry, res, samples, line, materialOverride, exposure, firefly, skyPower, skyColor, camBack, dispScale, phase, maxSamplesPerDispatch));
   }
 
   const canvas = document.createElement('canvas');
