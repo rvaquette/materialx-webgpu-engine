@@ -22,23 +22,38 @@ async function fetchGeometry(uri: string): Promise<ArrayBuffer> {
   return response.arrayBuffer();
 }
 
-async function parseGeometry(bytes: ArrayBuffer, uri: string): Promise<{ root: Object3D; flipV: boolean }> {
+async function parseGeometry(bytes: ArrayBuffer, uri: string, read: GeometryReader): Promise<{ root: Object3D; flipV: boolean }> {
   const extension = new URL(uri, 'http://scene.local/').pathname.split('.').at(-1)?.toLowerCase();
   if (extension === 'obj') return { root: new OBJLoader().parse(new TextDecoder().decode(bytes)), flipV: false };
-  if (extension === 'glb') {
+  if (extension === 'glb' || extension === 'gltf') {
     // Geometry only: do not fetch or decode glTF materials/textures. USD owns shading.
     const loader = new GLTFLoader();
     const material = new MeshBasicMaterial();
-    loader.register(() => ({
-      name: 'EngineGeometryOnly',
-      loadMaterial: () => Promise.resolve(material),
-    }));
+    loader.register(parser => {
+      const loadBuffer = parser.loadBuffer.bind(parser);
+      parser.loadBuffer = async index => {
+        const json: unknown = parser.json;
+        if (typeof json !== 'object' || json === null || !('buffers' in json) || !Array.isArray(json.buffers)) {
+          throw new Error(`Missing glTF buffers: ${uri}`);
+        }
+        const buffer: unknown = json.buffers[index];
+        if (typeof buffer !== 'object' || buffer === null) throw new Error(`Invalid glTF buffer ${index}: ${uri}`);
+        if ('uri' in buffer && typeof buffer.uri === 'string' && !buffer.uri.startsWith('data:')) {
+          return read(resolveAsset(uri, buffer.uri));
+        }
+        return loadBuffer(index);
+      };
+      return {
+        name: 'EngineGeometryOnly',
+        loadMaterial: () => Promise.resolve(material),
+      };
+    });
     return { root: (await loader.parseAsync(bytes, uri.slice(0, uri.lastIndexOf('/') + 1))).scene, flipV: true };
   }
-  throw new Error(`Unsupported geometry format: ${uri} (expected .glb or .obj)`);
+  throw new Error(`Unsupported geometry format: ${uri} (expected .glb, .gltf or .obj)`);
 }
 
-function extractMesh(root: Object3D, objectName: string | undefined, sink: DiagnosticSink, flipV: boolean): RawMesh {
+export function extractMesh(root: Object3D, objectName: string | undefined, sink: DiagnosticSink, flipV: boolean): RawMesh {
   root.updateMatrixWorld(true);
   let selected = root;
   if (objectName) {
@@ -129,7 +144,7 @@ export async function loadExternalMeshSource(
       const uri = resolveAsset(attribute.sourceLayer ?? scene.entry, attribute.value);
       let file = files.get(uri);
       if (!file) {
-        file = read(uri).then((bytes) => parseGeometry(bytes, uri));
+        file = read(uri).then((bytes) => parseGeometry(bytes, uri, read));
         files.set(uri, file);
       }
       const { root, flipV } = await file;

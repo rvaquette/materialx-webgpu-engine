@@ -74,7 +74,7 @@ export function dirOf(path: string): string {
 
 /** Resolves a relative layer uri against a base directory (no .. handling needed). */
 export function joinUrl(baseDir: string, rel: string): string {
-  if (rel.startsWith('/') || /^https?:/.test(rel)) return rel;
+  if (rel.startsWith('/') || /^[a-z][a-z0-9+.-]*:/i.test(rel)) return rel;
   return baseDir + rel.replace(/^\.\//, '');
 }
 
@@ -189,6 +189,7 @@ export async function loadMtlxSceneContext(
   sink: DiagnosticSink,
   line: (m: string) => void = () => {},
   textureRoot?: string,
+  materialTexts?: ReadonlyMap<string, string>,
 ): Promise<MtlxSceneContext> {
   const baseDir = dirOf(entry);
   const surfaces = new Map<string, RasterSurface>();
@@ -199,9 +200,13 @@ export async function loadMtlxSceneContext(
     const dir = dirOf(url);
     if (!materialDirs.includes(dir)) materialDirs.push(dir);
     try {
-      const response = await fetch(url);
-      if (!response.ok) throw new Error(`HTTP ${response.status}: ${url}`);
-      const text = resolveMaterialImageUrls(await response.text(), dir, ref.authoringLayer ? textureRoot : undefined);
+      let xml = materialTexts?.get(ref.assetPath);
+      if (xml === undefined) {
+        const response = await fetch(url);
+        if (!response.ok) throw new Error(`HTTP ${response.status}: ${url}`);
+        xml = await response.text();
+      }
+      const text = resolveMaterialImageUrls(xml, dir, ref.authoringLayer ? textureRoot : undefined);
       texts.set(ref.assetPath, text);
       surfaces.set(ref.materialName, surfaceFromMtlx(text));
     } catch (error) {
@@ -422,6 +427,12 @@ export interface SceneLoadOptions {
   /** Explicit root for scene-authored MaterialX texture paths, not runtime overrides. */
   textureRoot?: string;
   loadCrateModule?: () => Promise<OpenUsdModule>;
+  /** In-memory scene import, sharing the USD material compiler and GPU resource path. */
+  imported?: {
+    scene: SceneAsset;
+    meshSource: MeshSource;
+    materialTexts: ReadonlyMap<string, string>;
+  };
 }
 
 export async function loadUsdScene(
@@ -437,7 +448,7 @@ export async function loadUsdScene(
     if (diagnostic.level === 'error') failedComposition = true;
     sink(diagnostic);
   };
-  const composed = await composeStage(entry, {
+  const composed = options.imported?.scene ?? await composeStage(entry, {
     resolver: new AssetResolver({ rootUrl: dirOf(entry), onDiagnostic: sceneSink }),
     source: { fetchBytes: async url => {
       const response = await fetch(url);
@@ -453,25 +464,30 @@ export async function loadUsdScene(
   performance.measure('usd:composition', { start: started, end: composedAt, detail: { entry, prims: scene.prims.size } });
   const lights = importLights(scene, { sink });
   const cameras = importCameras(scene, { sink });
-  const mtlx = await loadMtlxSceneContext(scene, entry, sink, line, options.textureRoot);
+  const mtlx = await loadMtlxSceneContext(scene, entry, sink, line, options.textureRoot, options.imported?.materialTexts);
   const materialsAt = performance.now();
   performance.measure('usd:materials', { start: composedAt, end: materialsAt, detail: { entry, documents: scene.materials.length } });
-  const built = await buildSceneResources(scene, {
-    meshSource: await loadExternalMeshSource(scene, meshSourceFromScene(scene), sink),
-    materialCompiler: createGraphMaterialCompiler({ documents: mtlx.documents, sink }),
-    sink,
-  });
-  requireCompiledMaterials(built);
-  const parameterResources = options.editableParameters ? editableSceneMaterials(built) : undefined;
-  const resources = await applySceneDisplacement(parameterResources ?? built, mtlx.imageProvider);
-  const environment = await loadEnvironment(lights, entry, sink);
-  performance.measure('usd:resources', { start: materialsAt, end: performance.now(), detail: {
-    entry, geometries: resources.geometries.size, materials: resources.materials.size,
-    pendingMaterials: resources.pendingMaterials.length,
-    triangles: [...resources.geometries.values()].reduce((sum, mesh) => sum + mesh.indices.length / 3, 0),
-    lights: lights.length, cameras: cameras.length, environment: environment !== undefined,
-  } });
-  return { entry, scene, resources, lights, cameras, mtlx, ...(parameterResources ? { parameterResources } : {}), ...(environment ? { environment } : {}) };
+  try {
+    const built = await buildSceneResources(scene, {
+      meshSource: options.imported?.meshSource ?? await loadExternalMeshSource(scene, meshSourceFromScene(scene), sink),
+      materialCompiler: createGraphMaterialCompiler({ documents: mtlx.documents, sink }),
+      sink,
+    });
+    requireCompiledMaterials(built);
+    const parameterResources = options.editableParameters ? editableSceneMaterials(built) : undefined;
+    const resources = await applySceneDisplacement(parameterResources ?? built, mtlx.imageProvider);
+    const environment = await loadEnvironment(lights, entry, sink);
+    performance.measure('usd:resources', { start: materialsAt, end: performance.now(), detail: {
+      entry, geometries: resources.geometries.size, materials: resources.materials.size,
+      pendingMaterials: resources.pendingMaterials.length,
+      triangles: [...resources.geometries.values()].reduce((sum, mesh) => sum + mesh.indices.length / 3, 0),
+      lights: lights.length, cameras: cameras.length, environment: environment !== undefined,
+    } });
+    return { entry, scene, resources, lights, cameras, mtlx, ...(parameterResources ? { parameterResources } : {}), ...(environment ? { environment } : {}) };
+  } catch (error) {
+    mtlx.documents.delete();
+    throw error;
+  }
 }
 
 export type { Diagnostic };

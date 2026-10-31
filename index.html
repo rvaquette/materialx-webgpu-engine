@@ -93,17 +93,21 @@
         min-height: 44px;
         max-width: 100%;
       }
-      #materials-panel, #shader-errors-panel {
+      #materials-panel, #shader-errors-panel, #import-warnings-panel {
         border-bottom: 1px solid #26262c;
         padding: 0 12px;
       }
-      #materials-panel summary, #shader-errors-panel summary {
+      #materials-panel summary, #shader-errors-panel summary, #import-warnings-panel summary {
         padding: 12px 0;
         cursor: pointer;
       }
       #shader-errors-panel {
         min-width: 0;
       }
+      #import-warnings-panel[hidden] { display: none; }
+      #import-warnings { white-space: pre-wrap; overflow-wrap: anywhere; color: #e8c782; font-size: 13px; }
+      .local-file-control { display: flex; flex-direction: column; gap: 4px; max-width: 260px; }
+      .local-file-control input { max-width: 100%; }
       #shader-errors {
         margin: 0 0 12px;
         max-height: 240px;
@@ -231,6 +235,12 @@
       <div id="toolbar">
         <label for="scene">Scene</label>
         <select id="scene"></select>
+        <label class="local-file-control">Ouvrir GLB/glTF + ressources
+          <input id="local-scene-files" type="file" multiple title="Sélectionner un GLB, ou un glTF avec ses fichiers .bin et textures." />
+        </label>
+        <label class="local-file-control">Ouvrir un dossier glTF
+          <input id="local-scene-folder" type="file" webkitdirectory multiple title="Sélectionner un dossier contenant une seule scène GLB/glTF et ses ressources." />
+        </label>
         <label for="resolution">Resolution</label>
         <select id="resolution">
           <option value="256">256 x 256</option>
@@ -272,6 +282,10 @@
       <details id="shader-errors-panel">
         <summary>Erreurs WGSL (<span id="shader-error-count" aria-live="polite">0</span>)</summary>
         <pre id="shader-errors">Aucune erreur WGSL.</pre>
+      </details>
+      <details id="import-warnings-panel" hidden open>
+        <summary>Avertissements d'import glTF</summary>
+        <pre id="import-warnings" role="status" aria-live="polite"></pre>
       </details>
       <div id="status" role="alert" hidden></div>
       <div id="canvas-container">

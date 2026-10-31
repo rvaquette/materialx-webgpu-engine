@@ -11,6 +11,7 @@ import { MATERIAL_CATALOG } from './scene/material-catalog.ts';
 import { buildMaterialTree } from './scene/material-tree.ts';
 import { MaterialParameterEditor } from './material-parameter-editor.ts';
 import { sceneDeviceDescriptor } from './gpu/device.ts';
+import type { LocalGltfScene } from './scene/local-gltf.ts';
 
 let statusIsError = false;
 
@@ -93,6 +94,9 @@ async function main(): Promise<void> {
   context.configure({ device, format: outputFormat, alphaMode: 'opaque' });
 
   const select = document.getElementById('scene') as HTMLSelectElement | null;
+  const localFiles = document.getElementById('local-scene-files') as HTMLInputElement | null;
+  const localFolder = document.getElementById('local-scene-folder') as HTMLInputElement | null;
+  let localScene: LocalGltfScene | undefined;
   const resolution = document.getElementById('resolution') as HTMLSelectElement | null;
   const rasterQuality = document.getElementById('raster-quality') as HTMLSelectElement | null;
   const ptDenoise = document.getElementById('pathtracing-denoise') as HTMLInputElement | null;
@@ -217,6 +221,8 @@ async function main(): Promise<void> {
     else if (!statusIsError) setStatus('', false);
     showBusy(!statusIsError && (operationBusy || shaderBusy));
     if (select) select.disabled = busy;
+    if (localFiles) localFiles.disabled = busy;
+    if (localFolder) localFolder.disabled = busy;
     if (resolution) resolution.disabled = busy;
     if (rasterQuality) rasterQuality.disabled = busy;
     if (ptDenoise) ptDenoise.disabled = busy;
@@ -296,21 +302,71 @@ async function main(): Promise<void> {
     }
   });
 
-  async function loadEntry(entry: string): Promise<void> {
+  async function loadEntry(entry: string): Promise<boolean> {
     setBusy(true);
     setStatus(`Chargement de ${entry}...`, false);
     try {
       const config = SCENE_CATALOG.find(scene => scene.entry === entry);
       await viewer.load(new URL(entry, document.baseURI).href, new Map(), false, {
+        ...(localScene?.entry === entry ? localScene.options : {}),
         ...(config?.textureRoot ? { textureRoot: new URL(config.textureRoot, document.baseURI).href } : {}),
       });
       refreshObjects();
+      if (localScene && localScene.entry !== entry) {
+        const previousEntry = localScene.entry;
+        localScene.dispose();
+        localScene = undefined;
+        select?.querySelector(`option[value="${previousEntry}"]`)?.remove();
+      }
+      const warningsPanel = document.getElementById('import-warnings-panel');
+      const warningsOutput = document.getElementById('import-warnings');
+      if (warningsPanel) warningsPanel.hidden = !localScene?.warnings.length;
+      if (warningsOutput) warningsOutput.textContent = localScene?.warnings.join('\n\n') ?? '';
+      return true;
     } catch (e) {
       if (!deviceLost) setStatus(`Echec du chargement: ${(e as Error)?.message ?? e}`);
+      return false;
     } finally {
       setBusy(false);
     }
   }
+
+  async function openLocalFiles(input: HTMLInputElement): Promise<void> {
+    const files = Array.from(input.files ?? []);
+    if (!files.length) return;
+    setBusy(true);
+    let imported: LocalGltfScene | undefined;
+    const previous = localScene;
+    try {
+      const { importLocalGltf } = await import('./scene/local-gltf.ts');
+      imported = await importLocalGltf(files);
+      localScene = imported;
+      if (!await loadEntry(imported.entry)) {
+        localScene = previous;
+        imported.dispose();
+        return;
+      }
+      if (select) {
+        for (const option of Array.from(select.options)) {
+          if (option.value === previous?.entry) option.remove();
+        }
+        select.add(new Option(`Local - ${imported.name}`, imported.entry));
+        select.value = imported.entry;
+      }
+      previous?.dispose();
+    } catch (error) {
+      localScene = previous;
+      imported?.dispose();
+      console.error('Local glTF import failed:', error);
+      setStatus(`Echec de l'import glTF : ${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      input.value = '';
+      setBusy(false);
+    }
+  }
+  localFiles?.addEventListener('change', () => void openLocalFiles(localFiles));
+  localFolder?.addEventListener('change', () => void openLocalFiles(localFolder));
+  globalThis.addEventListener?.('pagehide', () => localScene?.dispose());
 
   select?.addEventListener('change', () => void loadEntry(select.value));
   rasterQuality?.addEventListener('change', async () => {

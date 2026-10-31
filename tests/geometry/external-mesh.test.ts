@@ -66,6 +66,32 @@ function glb(): ArrayBuffer {
 }
 
 describe('Three.js external geometry bridge', () => {
+  it('loads a USDA glTF reference and its relative binary without importing glTF shading', async () => {
+    const scene = await stage(`def Mesh "Asset" {
+      custom asset engine:geometry:file = @./models/triangle.gltf@
+      rel material:binding = </Looks/UsdMaterial>
+    }`);
+    const positions = new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]);
+    const json = {
+      asset: { version: '2.0' }, scenes: [{ nodes: [0] }], scene: 0, nodes: [{ mesh: 0 }],
+      meshes: [{ primitives: [{ attributes: { POSITION: 0 }, material: 0 }] }],
+      accessors: [{ bufferView: 0, componentType: 5126, count: 3, type: 'VEC3', min: [0, 0, 0], max: [1, 1, 0] }],
+      bufferViews: [{ buffer: 0, byteOffset: 0, byteLength: 36 }],
+      buffers: [{ byteLength: 36, uri: 'triangle.bin' }],
+      materials: [{ pbrMetallicRoughness: { baseColorTexture: { index: 0 } } }],
+      textures: [{ source: 0 }], images: [{ uri: 'must-not-load.png' }],
+    };
+    const read = vi.fn(async (uri: string) => {
+      if (uri === '/scenes/models/triangle.gltf') return bytes(JSON.stringify(json));
+      if (uri === '/scenes/models/triangle.bin') return positions.buffer;
+      throw new Error(`Unexpected resource request: ${uri}`);
+    });
+    const source = await loadExternalMeshSource(scene, empty, () => {}, read);
+    expect(source.meshFor('/Asset')?.points).toEqual(Array.from(positions));
+    expect(scene.prims.get('/Asset')?.materialBinding?.target).toBe('/Looks/UsdMaterial');
+    expect(read.mock.calls.map(call => call[0])).toEqual(['/scenes/models/triangle.gltf', '/scenes/models/triangle.bin']);
+  });
+
   it('loads converted Ajax geometry with its authored material, camera and environment', async () => {
     const text = readFileSync(join('scenes', 'pathtracer', 'ajax.usda'), 'utf8');
     const scene = await importUsdStage('/scenes/pathtracer/ajax.usda', { reader: { read: async () => text } });
