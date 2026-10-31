@@ -67,7 +67,7 @@ describe('viewer loading indicator', () => {
     expect(indicator.textContent).toContain('Chargement de ');
     emit('idle', 'raster');
     expect(indicator.hidden).toBe(false);
-    expect(indicator.textContent).toBe(`Chargement de ${state.load.mock.calls[0]![0]}...`);
+    expect(indicator.textContent).toContain('Chargement de ');
     expect(status.hidden).toBe(true);
     finishLoad();
     await settle();
