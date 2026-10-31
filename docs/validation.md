@@ -402,6 +402,12 @@ reussie ne prouve ni la disponibilite des textures ni la fidelite du rendu.
 
 ## Rendus de la scène standard-shader-ball
 
+Les captures USD locales et mobiles utilisent désormais la commande
+`npm run test:shaderball`. Les anciens runners d'images séparés ont été retirés ;
+leurs options spécifiques ne sont pas toutes disponibles dans cette commande.
+Le harness d'images des scènes de contrôle reste disponible pour les diagnostics
+manuels, mais n'a plus de runner de capture dédié.
+
 `npm run test:shaderball` rend `scenes/standard-shader-ball/standard-shader-ball.usda`
 sur le GPU local (par défaut) ou le mobile, en raster et en path tracing, via
 `usd-image-harness.html`. `--materials <filtre>|all` sélectionne les fichiers

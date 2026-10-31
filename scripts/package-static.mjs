@@ -17,13 +17,6 @@ function requirePath(path, label) {
   if (!existsSync(path)) throw new Error(`Missing ${label}: ${path}`);
 }
 
-function replaceTree(source, destination, label) {
-  requirePath(source, label);
-  rmSync(destination, { recursive: true, force: true });
-  mkdirSync(dirname(destination), { recursive: true });
-  cpSync(source, destination, { recursive: true });
-}
-
 requirePath(distRoot, 'Vite build output');
 const scenesRoot = join(distRoot, 'scenes');
 rmSync(scenesRoot, { recursive: true, force: true });
