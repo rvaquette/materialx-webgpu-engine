@@ -55,7 +55,8 @@ export async function importLocalGltf(files: readonly File[], entryFile?: File):
   const manager = new LoadingManager();
   manager.onError = uri => { resourceError = new Error(`Failed to load glTF resource: ${uri}`); };
   manager.setURLModifier(uri => {
-    if (uri.startsWith('data:') || urls.includes(uri)) return uri;
+    // GLTFLoader creates its own blob URLs for embedded GLB images.
+    if (uri.startsWith('data:') || uri.startsWith('blob:')) return uri;
     let file: File;
     try { file = resolveLocalGltfFile(files, uri, entry); }
     catch (error) {
