@@ -10,6 +10,7 @@ import {
   CLOSURE_LIBRARY_LOBES,
   CLOSURE_LIBRARY_HELPERS,
   lobeFns,
+  closureLibraryPrelude,
 } from '../../src/compiler/closure-library.ts';
 import {
   lambertLobe,
@@ -29,6 +30,23 @@ const normalize = (a: V): V => {
 const WO: V = normalize([0.4, 0.1, 1.0]);
 
 describe('closure library prelude (T056a)', () => {
+  it('specializes absent fuzz to the exact base eval/sample paths, retaining all other formulas', () => {
+    const spec = { kinds: new Set([1, 3, 4, 8]), thinFilm: false };
+    const generic = closureLibraryPrelude(spec);
+    const specialized = closureLibraryPrelude({ ...spec, fuzz: false });
+    const evalFn = specialized.match(/fn mx_closure_eval\([^]*?\n}/)?.[0];
+    const sampleFn = specialized.match(/fn mx_closure_sample\([^]*?\n}/)?.[0];
+    expect(evalFn).toContain('return mx_closure_eval_base(c, wo, wi);');
+    expect(sampleFn).toContain('return mx_closure_sample_base(c, wo, u);');
+    expect(evalFn).not.toContain('fuzz');
+    expect(sampleFn).not.toContain('fuzz');
+    for (const name of ['mx_closure_base_eval', 'mx_closure_eval_base', 'mx_closure_sample_base', 'mx_dielectric_transmission_sample', 'mx_conductor_sample']) {
+      const body = generic.match(new RegExp(`fn ${name}\\([^]*?\\n}`))?.[0];
+      expect(body).toBeDefined();
+      expect(specialized).toContain(body!);
+    }
+    expect(closureLibraryPrelude({ ...spec, fuzz: true })).toBe(generic);
+  });
   it('evaluates the mixture once when sampling the base below a coat', () => {
     const direction = CLOSURE_LIBRARY_PRELUDE.match(/fn mx_closure_base_direction[\s\S]*?\n}/)?.[0];
     const coated = CLOSURE_LIBRARY_PRELUDE.match(/fn mx_closure_sample_base[\s\S]*?\n}/)?.[0];

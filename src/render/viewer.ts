@@ -889,6 +889,7 @@ fn dir_to_uv(d: vec3<f32>) -> vec2<f32> {
           closureDispatch: pathTraceClosureDispatch(dispatch, ptScene.materials),
           opaque: pathTraceOpaqueScene(dispatch, ptScene.materials),
           analyticLights: ptScene.analyticLights !== undefined,
+          pruneUnusedFunctions: true,
         }), 'Path tracing');
       if (ptCompilation.errors.length > 0) {
         this.#onShaderErrors?.([...rasterErrors, ...ptCompilation.errors]);

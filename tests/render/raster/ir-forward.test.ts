@@ -101,7 +101,7 @@ describe('assembleIrForwardShader (T058b)', () => {
   it('omits coat, smooth-sheet and dispersion paths a surface cannot reach', () => {
     const { surface, shader } = forward('gltf_pbr', [value('dispersion', 'float', '0.35')]);
     expect(surface.features).toEqual({
-      coat: false, transmission: false, dispersion: false, thinFilm: false, lobeKinds: [4, 3, 1],
+      opaque: true, fuzz: false, coat: false, transmission: false, dispersion: false, thinFilm: false, lobeKinds: [4, 3, 1],
     });
     expect(shader.code).not.toContain('mx_closure_has_dispersion(c)');
     expect(shader.code).not.toContain('mx_forward_coated_diffuse');

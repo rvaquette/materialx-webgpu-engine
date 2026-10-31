@@ -165,6 +165,8 @@ interface FamilyWgsl {
 export interface SurfaceFeatures {
   /** Proven coverage opacity of one; absent means the host must retain alpha traversal. */
   opaque?: boolean;
+  /** Absent metadata is conservative; false proves no fuzz layer is reachable. */
+  fuzz?: boolean;
   coat: boolean;
   transmission: boolean;
   dispersion: boolean;
@@ -584,6 +586,7 @@ function buildSurfaceFn(
   const transmission = fam.transmission ?? lobes.some((lobe) => lobe.kind === 'dielectric_transmission');
   const features: SurfaceFeatures = {
     opaque: opaqueSurface(surface.family, ctx),
+    fuzz: fam.fuzz !== undefined,
     coat: fam.coat !== undefined,
     transmission,
     dispersion: transmission && (fam.dispersion ?? lobes.some((lobe) => lobe.dispersion !== undefined)),

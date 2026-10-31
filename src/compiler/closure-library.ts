@@ -101,6 +101,8 @@ export const CLOSURE_LIBRARY_HELPERS = [
 export interface ClosureDispatchSpec {
   kinds: ReadonlySet<number>;
   thinFilm: boolean;
+  /** Undefined retains the full runtime path; false requires a scene-wide proof. */
+  fuzz?: boolean;
 }
 
 const ALL_DISPATCH: ClosureDispatchSpec = { kinds: new Set([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]), thinFilm: true };
@@ -176,9 +178,48 @@ ${[...sampleCases, '    default: { return MxBsdfSample(vec3f(0.0), vec3f(0.0), 0
 /** The closure library with its lobe dispatch restricted to the kinds a surface can reach. */
 export function closureLibraryPrelude(spec: ClosureDispatchSpec = ALL_DISPATCH): string {
   if (spec === ALL_DISPATCH) return CLOSURE_LIBRARY_PRELUDE;
-  const code = CLOSURE_LIBRARY_PRELUDE.replace(lobeDispatch(ALL_DISPATCH), lobeDispatch(spec));
+  let code = CLOSURE_LIBRARY_PRELUDE.replace(lobeDispatch(ALL_DISPATCH), lobeDispatch(spec));
+  if (spec.fuzz === false) {
+    code = code.replace(CLOSURE_FUZZ_EVAL, `fn mx_closure_eval(c: LayeredClosure, wo: vec3f, wi: vec3f) -> MxBsdfEval {
+  return mx_closure_eval_base(c, wo, wi);
+}`).replace(CLOSURE_FUZZ_SAMPLE, `fn mx_closure_sample(c: LayeredClosure, wo: vec3f, u: vec3f) -> MxBsdfSample {
+  return mx_closure_sample_base(c, wo, u);
+}`);
+  }
   return spec.kinds.has(9) ? code : code.replace(HAIR_WGSL, '');
 }
+
+const CLOSURE_FUZZ_EVAL = `fn mx_closure_eval(c: LayeredClosure, wo: vec3f, wi: vec3f) -> MxBsdfEval {
+  let base = mx_closure_eval_base(c, wo, wi);
+  if (c.hasFuzz == 0u || c.fuzz.weight <= 0.0) { return base; }
+  let fuzzW = clamp(c.fuzz.weight, 0.0, 1.0);
+  let fuzzCtx = MxLobeCtx(wo, c.fuzz.color, c.fuzz.roughness, 1.5, 0.0, 0.0, 0.0);
+  let fuzz = mx_fuzz_eval(fuzzCtx, wi);
+  let coverage = mx_closure_fuzz_coverage(c, wo);
+  return MxBsdfEval(fuzz.value * fuzzW + base.value * (1.0 - coverage), fuzz.pdf * coverage + base.pdf * (1.0 - coverage));
+}`;
+
+const CLOSURE_FUZZ_SAMPLE = `fn mx_closure_sample(c: LayeredClosure, wo: vec3f, u: vec3f) -> MxBsdfSample {
+  if (c.hasFuzz == 0u || c.fuzz.weight <= 0.0) { return mx_closure_sample_base(c, wo, u); }
+  if (wo.z == 0.0) { return MxBsdfSample(vec3f(0.0), vec3f(0.0), 0.0, false); }
+  let coverage = mx_closure_fuzz_coverage(c, wo);
+  var wi: vec3f;
+  if (u.z < coverage) {
+    let fuzzCtx = MxLobeCtx(wo, c.fuzz.color, c.fuzz.roughness, 1.5, 0.0, 0.0, 0.0);
+    let s = mx_fuzz_sample(fuzzCtx, u.xy);
+    if (!s.valid) { return MxBsdfSample(vec3f(0.0), vec3f(0.0), 0.0, false); }
+    wi = s.wi;
+  } else {
+    var baseU = u;
+    baseU.z = (u.z - coverage) / max(1.0 - coverage, 1.0e-6);
+    let s = mx_closure_sample_base(c, wo, baseU);
+    if (!s.valid) { return MxBsdfSample(vec3f(0.0), vec3f(0.0), 0.0, false); }
+    wi = s.wi;
+  }
+  let e = mx_closure_eval(c, wo, wi);
+  if (e.pdf <= 0.0) { return MxBsdfSample(vec3f(0.0), vec3f(0.0), 0.0, false); }
+  return MxBsdfSample(wi, e.value, e.pdf, true);
+}`;
 
 /** WGSL prelude: shared BSDF types, math helpers and the lobe triplets, plus the
  *  T056h full-stack assembler. The lobe library is self-contained (defines MX_PI,
@@ -848,15 +889,7 @@ fn mx_closure_eval_base(c: LayeredClosure, wo: vec3f, wi: vec3f) -> MxBsdfEval {
   let pdf = pCoat * cc.pdf + (1.0 - pCoat) * base.pdf;
   return MxBsdfEval(value, pdf);
 }
-fn mx_closure_eval(c: LayeredClosure, wo: vec3f, wi: vec3f) -> MxBsdfEval {
-  let base = mx_closure_eval_base(c, wo, wi);
-  if (c.hasFuzz == 0u || c.fuzz.weight <= 0.0) { return base; }
-  let fuzzW = clamp(c.fuzz.weight, 0.0, 1.0);
-  let fuzzCtx = MxLobeCtx(wo, c.fuzz.color, c.fuzz.roughness, 1.5, 0.0, 0.0, 0.0);
-  let fuzz = mx_fuzz_eval(fuzzCtx, wi);
-  let coverage = mx_closure_fuzz_coverage(c, wo);
-  return MxBsdfEval(fuzz.value * fuzzW + base.value * (1.0 - coverage), fuzz.pdf * coverage + base.pdf * (1.0 - coverage));
-}
+${CLOSURE_FUZZ_EVAL}
 fn mx_closure_fuzz_coverage(c: LayeredClosure, wo: vec3f) -> f32 {
   if (c.hasFuzz == 0u || c.fuzz.weight <= 0.0 || wo.z <= 0.0) { return 0.0; }
   return clamp(c.fuzz.weight, 0.0, 1.0) * mx_fuzz_dir_albedo(wo.z, c.fuzz.roughness);
@@ -1026,24 +1059,4 @@ fn mx_closure_sample_base(c: LayeredClosure, wo: vec3f, u: vec3f) -> MxBsdfSampl
   if (e.pdf <= 0.0) { return MxBsdfSample(vec3f(0.0), vec3f(0.0), 0.0, false); }
   return MxBsdfSample(wi, e.value, e.pdf, true);
 }
-fn mx_closure_sample(c: LayeredClosure, wo: vec3f, u: vec3f) -> MxBsdfSample {
-  if (c.hasFuzz == 0u || c.fuzz.weight <= 0.0) { return mx_closure_sample_base(c, wo, u); }
-  if (wo.z == 0.0) { return MxBsdfSample(vec3f(0.0), vec3f(0.0), 0.0, false); }
-  let coverage = mx_closure_fuzz_coverage(c, wo);
-  var wi: vec3f;
-  if (u.z < coverage) {
-    let fuzzCtx = MxLobeCtx(wo, c.fuzz.color, c.fuzz.roughness, 1.5, 0.0, 0.0, 0.0);
-    let s = mx_fuzz_sample(fuzzCtx, u.xy);
-    if (!s.valid) { return MxBsdfSample(vec3f(0.0), vec3f(0.0), 0.0, false); }
-    wi = s.wi;
-  } else {
-    var baseU = u;
-    baseU.z = (u.z - coverage) / max(1.0 - coverage, 1.0e-6);
-    let s = mx_closure_sample_base(c, wo, baseU);
-    if (!s.valid) { return MxBsdfSample(vec3f(0.0), vec3f(0.0), 0.0, false); }
-    wi = s.wi;
-  }
-  let e = mx_closure_eval(c, wo, wi);
-  if (e.pdf <= 0.0) { return MxBsdfSample(vec3f(0.0), vec3f(0.0), 0.0, false); }
-  return MxBsdfSample(wi, e.value, e.pdf, true);
-}`;
+${CLOSURE_FUZZ_SAMPLE}`;

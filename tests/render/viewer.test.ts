@@ -28,6 +28,7 @@ function fakeDevice() {
   };
   const textures: Array<{ destroy: ReturnType<typeof vi.fn> }> = [];
   const device = {
+    limits: { maxStorageBufferBindingSize: 1 << 28, maxBufferSize: 1 << 28 },
     createBuffer: vi.fn((desc: GPUBufferDescriptor) => ({
       destroy: vi.fn(), mapAsync: vi.fn(async () => {}), getMappedRange: () => new ArrayBuffer(desc.size), unmap: vi.fn(),
     })),
@@ -170,12 +171,12 @@ describe('interactive viewer resource lifecycle', () => {
     expect(viewer.objectParameters(path).find(parameter => parameter.id === 'surface:base_color')!.value).toEqual(original);
   });
 
-  it('rebuilds changed closure topology without reloading the document and retains parameter defaults', async () => {
+  it('keeps editable coat reachable without recompilation and retains parameter defaults', async () => {
     const { viewer, device } = await setup(false, true);
     const shaders = device.createShaderModule.mock.calls.length;
     const loads = vi.mocked(loadUsdScene).mock.calls.length;
     await viewer.setObjectParameters('/World/Ball', new Map([['surface:coat', [1]]]));
-    expect(device.createShaderModule.mock.calls.length).toBeGreaterThan(shaders);
+    expect(device.createShaderModule).toHaveBeenCalledTimes(shaders);
     expect(loadUsdScene).toHaveBeenCalledTimes(loads);
     const coat = viewer.objectParameters('/World/Ball').find(parameter => parameter.id === 'surface:coat')!;
     expect(coat.value).toEqual([1]);

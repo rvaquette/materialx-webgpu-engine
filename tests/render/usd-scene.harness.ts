@@ -1148,12 +1148,16 @@ async function renderUsdOnDevice(
     ...dispatch.variants.map(variant => variant.lobeCount),
     maxRecordLobes(ptScene.materials, new Set(dispatch.variants.map(variant => variant.index))),
   );
-  const module = device.createShaderModule({ code: pathTraceComputeWgsl({
+  const shaderCode = pathTraceComputeWgsl({
     dispatch, environment: envAsset !== undefined, maxLobes,
     closureDispatch: pathTraceClosureDispatch(dispatch, ptScene.materials),
     opaque,
     analyticLights: ptScene.analyticLights !== undefined,
-  }) });
+    pruneUnusedFunctions: true,
+  });
+  line(`diag shader bytes=${new TextEncoder().encode(shaderCode).byteLength} functions=${[...shaderCode.matchAll(/\bfn\s+/g)].length}`);
+  const moduleStarted = performance.now();
+  const module = device.createShaderModule({ code: shaderCode });
   if (!checkedPathTraceModules.has(module) && typeof module.getCompilationInfo === 'function') {
     const info = await module.getCompilationInfo();
     for (const m of info.messages) {
@@ -1166,7 +1170,10 @@ async function renderUsdOnDevice(
     if (errors.length) throw new Error(`Path-tracing WGSL: ${errors.map(message => message.message).join('; ')}`);
     checkedPathTraceModules.add(module);
   }
+  line(`diag shader validation ${(performance.now() - moduleStarted).toFixed(1)} ms`);
+  const pipelineStarted = performance.now();
   const { pipeline } = await backend.createPipelineAsync(module);
+  line(`diag pipeline creation ${(performance.now() - pipelineStarted).toFixed(1)} ms`);
   phase('pipelineCompilation');
   const storage = (data: Float32Array | Uint32Array | Int32Array): GPUBuffer => {
     assertSceneStorageSize(device, data.byteLength);

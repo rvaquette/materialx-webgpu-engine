@@ -68,6 +68,16 @@ function fakeScene(): PathTraceScene {
 
 describe('pathTraceComputeWgsl', () => {
   const src = pathTraceComputeWgsl();
+  it('removes only functions not reachable from the compute entry point', () => {
+    const original = pathTraceComputeWgsl({ analyticLights: true, opaque: true });
+    const pruned = pathTraceComputeWgsl({ analyticLights: true, opaque: true, pruneUnusedFunctions: true });
+    expect(pruned.length).toBeLessThan(original.length);
+    expect(pruned).not.toContain('fn mx_hit_closure(');
+    expect(pruned).toContain('fn mx_path_trace(');
+    expect(pruned).toContain('fn mx_visibility(');
+    const functionBodies = /fn\s+(\w+)\s*\([^]*?\n}/g;
+    for (const match of pruned.matchAll(functionBodies)) expect(original).toContain(match[0]);
+  });
 
   it('only specializes shadows when every material is proven opaque', () => {
     const opaque = packLayeredMaterial({ opacity: 1, lobes: [] });
@@ -84,6 +94,20 @@ describe('pathTraceComputeWgsl', () => {
     expect(visibility).toContain('true).hitAny');
     expect(visibility).not.toContain('mx_hit_closure');
     expect(shader).toContain('leftT <= rightT');
+  });
+  it('disables fuzz only with complete graph metadata and no record fallback fuzz', () => {
+    const graph = brickGraph();
+    const dispatch = buildMaterialDispatch([{ materialIndex: 0, graph, surface: resolveSurface(graph, {})! }]);
+    const record = packLayeredMaterial({ opacity: 1, lobes: [] });
+    expect(pathTraceClosureDispatch(dispatch, record).fuzz).toBe(false);
+    delete dispatch.variants[0]!.features!.fuzz;
+    expect(pathTraceClosureDispatch(dispatch, record).fuzz).toBe(true);
+    dispatch.variants[0]!.features!.fuzz = false;
+    const fallback = packLayeredMaterial({ opacity: 1, lobes: [], fuzz: { weight: 0.5, color: [1, 1, 1], roughness: 0.5 } });
+    const records = new Float32Array(record.length + fallback.length);
+    records.set(fallback, record.length);
+    expect(pathTraceClosureDispatch(dispatch, records).fuzz).toBe(true);
+    expect(pathTraceClosureDispatch(buildMaterialDispatch([]), fallback).fuzz).toBe(true);
   });
 
   it('specializes lobe dispatch without dropping constant-record or graph material features', () => {

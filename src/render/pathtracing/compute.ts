@@ -21,6 +21,7 @@ import type { IrType } from '../../compiler/ir.ts';
 import { materialClosureReaderWgsl, PT_MAX_LOBES, PT_MATERIAL_RECORD_FLOATS, PT_MATERIAL_HEADER_FLOATS, PT_LOBE_FLOATS } from './material-record.ts';
 import { PT_MATERIAL_DISPATCH_ENTRY, type PtMaterialDispatch } from './material-variant.ts';
 import { ANALYTIC_LIGHTS_WGSL } from './analytic-lights.ts';
+import { pruneWgslFunctions } from '../../compiler/wgsl-reachability.ts';
 
 /** Compute workgroup tile edge (threads per dimension). */
 export const PT_WORKGROUP_SIZE = 8;
@@ -40,22 +41,25 @@ export const PT_UNIFORM_SIZE = PT_UNIFORM_FLOATS * 4;
 export function pathTraceClosureDispatch(dispatch: PtMaterialDispatch, materials: Float32Array): ClosureDispatchSpec {
   const kinds = new Set<number>();
   let thinFilm = false;
+  let fuzz = false;
   const variants = new Set(dispatch.variants.map(variant => variant.index));
   for (const variant of dispatch.variants) {
     if (!variant.features) return { kinds: new Set([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]), thinFilm: true };
     variant.features.lobeKinds.forEach(kind => kinds.add(kind));
     thinFilm ||= variant.features.thinFilm;
+    fuzz ||= variant.features.fuzz !== false;
   }
 
   for (let base = 0, index = 0; base < materials.length; base += PT_MATERIAL_RECORD_FLOATS, index++) {
     if (variants.has(index)) continue;
     thinFilm ||= materials[base + 5]! !== 0;
+    fuzz ||= materials[base + 4]! !== 0;
     for (let lobe = 0; lobe < materials[base]!; lobe++) {
       const offset = base + PT_MATERIAL_HEADER_FLOATS + lobe * PT_LOBE_FLOATS;
       if (materials[offset + 1]! > 0) kinds.add(materials[offset]!);
     }
   }
-  return { kinds, thinFilm };
+  return { kinds, thinFilm, fuzz };
 }
 
 export function pathTraceOpaqueScene(dispatch: PtMaterialDispatch, materials: Float32Array): boolean {
@@ -896,6 +900,8 @@ export interface PathTraceComputeOptions {
     displayAovs?: boolean;
     opaque?: boolean;
     analyticLights?: boolean;
+    /** Remove unreachable functions without altering any reachable function body. */
+    pruneUnusedFunctions?: boolean;
 }
 
 /** Full WGSL source of the compute path tracer. */
@@ -909,7 +915,7 @@ export function pathTraceComputeWgsl(options: PathTraceComputeOptions = {}): str
   const varyings = dispatch
     ? { primvarFields: dispatch.primvarFields, extraInputs: dispatch.extraInputs }
     : options.varyings;
-  return [
+  const code = [
     wgslStructsAndBindings(textures, varyings !== undefined, environment),
     wgslRng(),
     wgslTraversal(),
@@ -920,6 +926,7 @@ export function pathTraceComputeWgsl(options: PathTraceComputeOptions = {}): str
     wgslIntegrator(textures, dispatch !== undefined, environment, options.displayAovs ?? false, options.opaque ?? false, options.analyticLights ?? false),
     wgslEntry(options.displayAovs ?? false),
   ].join('\n');
+  return options.pruneUnusedFunctions ? pruneWgslFunctions(code, [PT_COMPUTE_ENTRY]) : code;
 }
 
 function wgslDispatch(dispatch: PtMaterialDispatch): string {
