@@ -36,9 +36,17 @@ Il ne bloque pas les interactions, conserve son annonce accessible et disparaît
 à la fin du chargement ou de la compilation, y compris en cas d'erreur.
 
 À caméra immobile, le viewer path tracing calcule quatre tuiles par rafraîchissement
-et affiche le résultat une seule fois par lot. Chaque tuile conserve sa soumission
-GPU séparée et son échantillon ; une fence en fin de lot empêche l'accumulation de
-travaux en vol. L'aperçu pendant les mouvements et le premier aperçu restent à une
+et affiche le résultat une seule fois par lot. Chaque tuile conserve son dispatch
+GPU séparé et son échantillon ; quatre uniforms distincts permettent une seule
+soumission par lot, sans réécrire un uniform utilisé par un dispatch précédent.
+Une fence en fin de lot empêche l'accumulation de travaux en vol. Après la fence,
+une tâche différée relance la caméra immobile sans attendre un nouveau vsync,
+tout en laissant les événements de caméra, pause et redimensionnement s'exécuter.
+La boucle d'animation reste active pour les interactions ; les deux chemins
+partagent le même verrou, limité à un seul lot en vol.
+La relance différée s'arrête aussi quand le document est masqué ; le retour au
+premier plan reprend par la boucle d'animation.
+L'aperçu pendant les mouvements et le premier aperçu restent à une
 seule passe. Pause et denoising conservent leur logique existante.
 À 512 × 512, atteindre 16 spp demande 64 rafraîchissements au lieu de 256,
 sans modifier la séquence d'échantillonnage ni les shaders.
@@ -47,6 +55,36 @@ du premier dispatch pleine résolution à la fin du GPU à 16 spp, hors chargeme
 et compilation. Les buffers d'accumulation et les AOV sont identiques bit à bit.
 Ce gain dépend du GPU et de la fréquence d'affichage ; ce n'est pas une garantie
 de temps de rendu sur toutes les machines.
+
+Le contrôle du 31 octobre 2026 sur cette même scène à caméra fixe, 512 × 512,
+16 spp et denoising désactivé compare aussi les buffers bruts radiance/compte et
+couverture (8 388 608 octets), pas seulement les captures affichées.
+Le lot reste à quatre dispatches mono-échantillon : aucun changement de shader,
+RNG, accumulation, précision ou paramètres de transport. Les essais de 2 et 4
+échantillons séquentiels dans un dispatch sont rejetés : le shader expérimental
+échoue à créer son pipeline Vulkan sur le Samsung Z Flip5/Adreno 7xx.
+Huit tuiles par lot sont également rejetées : elles doublent le temps GPU avant
+qu'une nouvelle caméra puisse produire son aperçu, sans gain mobile significatif.
+
+Mesures avant/après de ce contrôle (hors chargement et compilation, du premier
+dispatch pleine résolution à la fin GPU ; avant : deux répétitions, après :
+trois ; température batterie mobile 29,8–30,0 °C) :
+
+| GPU | Médiane avant | Médiane après | Réduction |
+| --- | ---: | ---: | ---: |
+| Intel Iris Xe local | 2,119 s | 1,474 s | 30,4 % |
+| Samsung Z Flip5 / Adreno 7xx | 6,204 s | 5,699 s | 8,1 % |
+
+Pour 16 spp, les 256 dispatches restent inchangés ; les soumissions passent de
+256 à 64, avec toujours 64 fences. Les buffers bruts avant/après sont identiques
+bit à bit sur chaque appareil (SHA-256 différents entre GPU, ce qui est normal).
+Pendant quatre événements de caméra espacés de 25 ms, le premier aperçu GPU
+terminé est observé après 123–162 ms sur le téléphone avec ce build, contre
+173–181 ms sur le contrôle avant. Ces observations ne garantissent pas une
+latence maximale : une tuile ou un matériau plus coûteux peut toujours retarder
+l'aperçu ; le lot en vol reste borné, sans file de caméras obsolètes supplémentaire.
+Pause, reprise et redimensionnements 512 → 256 → 512 ont aussi été vérifiés sur
+les deux appareils, sans recompilation des pipelines.
 
 Les builds production et shaderball utilisent le découpage Rolldown configuré dans
 [`vite.config.ts`](../vite.config.ts) : compilateur MaterialX et helpers BSDF, chargement USD et

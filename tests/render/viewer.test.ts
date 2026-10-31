@@ -300,7 +300,7 @@ describe('interactive viewer resource lifecycle', () => {
     const refinement = device.createCommandEncoder.mock.results[0]!.value;
     expect(refinement.copyBufferToBuffer).toHaveBeenCalledWith(expect.anything(), 0, expect.anything(), 0, 128 * 128 * 32);
     expect(pass.dispatchWorkgroups.mock.calls).toEqual(Array(4).fill([16, 16, 1]));
-    expect(device.queue.submit).toHaveBeenCalledTimes(4);
+    expect(device.queue.submit).toHaveBeenCalledTimes(1);
     expect(device.queue.onSubmittedWorkDone).toHaveBeenCalledTimes(1);
     expect(pass.draw).toHaveBeenCalledTimes(1);
     const shaders = device.createShaderModule.mock.calls.length;
@@ -348,7 +348,7 @@ describe('interactive viewer resource lifecycle', () => {
       await Promise.resolve();
     }
     expect(statuses.at(-1)?.samples).toBe(16);
-    expect(device.queue.submit).toHaveBeenCalledTimes(256);
+    expect(device.queue.submit).toHaveBeenCalledTimes(64);
     expect(device.queue.onSubmittedWorkDone).toHaveBeenCalledTimes(64);
     const uniforms = device.queue.writeBuffer.mock.calls.map(call => call[2])
       .filter((data): data is Float32Array => data instanceof Float32Array && data.byteLength === PT_UNIFORM_SIZE);
@@ -359,9 +359,92 @@ describe('interactive viewer resource lifecycle', () => {
       expect(Array.from(data.slice(76, 80))).toEqual([tile.x, tile.y, tile.width, tile.height]);
       const writeIndex = device.queue.writeBuffer.mock.calls.findIndex(call => call[2] === data);
       const writeOrder = device.queue.writeBuffer.mock.invocationCallOrder[writeIndex]!;
-      const submitOrder = device.queue.submit.mock.invocationCallOrder[index]!;
+      const batch = Math.floor(index / 4);
+      const submitOrder = device.queue.submit.mock.invocationCallOrder[batch]!;
       expect(writeOrder).toBeLessThan(submitOrder);
-      if (index > 0) expect(writeOrder).toBeGreaterThan(device.queue.submit.mock.invocationCallOrder[index - 1]!);
+      if (batch > 0) expect(writeOrder).toBeGreaterThan(device.queue.submit.mock.invocationCallOrder[batch - 1]!);
+      const buffer = device.queue.writeBuffer.mock.calls[writeIndex]![0];
+      const batchBuffers = uniforms.slice(batch * 4, batch * 4 + 4).map(uniform =>
+        device.queue.writeBuffer.mock.calls.find(call => call[2] === uniform)![0]);
+      expect(new Set(batchBuffers).size).toBe(4);
+      expect(device.createBindGroup.mock.calls.some(([desc]) => Array.from(desc.entries).some(entry =>
+        'buffer' in entry.resource && entry.resource.buffer === buffer))).toBe(true);
+    }
+  });
+
+  it('refills after GPU completion without another animation frame, but yields and honors pause/dispose', async () => {
+    const actual = await vi.importActual<typeof import('../../src/render/pathtracing/scene-buffers.ts')>(
+      '../../src/render/pathtracing/scene-buffers.ts');
+    vi.mocked(buildCachedPathTraceScene).mockImplementation(actual.buildCachedPathTraceScene);
+    const { viewer, device, canvas } = await setup();
+    viewer.setBackend('pathtracing');
+    tick(0);
+    await new Promise(r => setTimeout(r, 20));
+    tick(1);
+    await Promise.resolve();
+    await new Promise(r => setTimeout(r, 220));
+    let complete!: () => void;
+    device.queue.onSubmittedWorkDone.mockImplementation(() => new Promise<void>(resolve => { complete = resolve; }));
+    device.queue.submit.mockClear();
+    tick(2);
+    expect(device.queue.submit).toHaveBeenCalledTimes(1);
+    tick(3);
+    expect(device.queue.submit).toHaveBeenCalledTimes(1);
+    complete();
+    await Promise.resolve();
+    expect(device.queue.submit).toHaveBeenCalledTimes(1);
+    await new Promise(r => setTimeout(r, 0));
+    expect(device.queue.submit).toHaveBeenCalledTimes(2);
+    complete();
+    await Promise.resolve();
+    viewer.setPathTracingPaused(true);
+    await new Promise(r => setTimeout(r, 0));
+    // Pause may redisplay once, never adding compute samples.
+    const writes = device.queue.writeBuffer.mock.calls.filter(call =>
+      call[2] instanceof Float32Array && call[2].byteLength === PT_UNIFORM_SIZE).length;
+    complete();
+    await Promise.resolve();
+    await new Promise(r => setTimeout(r, 0));
+    expect(device.queue.writeBuffer.mock.calls.filter(call =>
+      call[2] instanceof Float32Array && call[2].byteLength === PT_UNIFORM_SIZE)).toHaveLength(writes);
+    viewer.setPathTracingPaused(false);
+    tick(4);
+    complete();
+    await Promise.resolve();
+    const ownerDocument = { visibilityState: 'hidden' };
+    Object.defineProperty(canvas, 'ownerDocument', { value: ownerDocument });
+    const hiddenSubmits = device.queue.submit.mock.calls.length;
+    await new Promise(r => setTimeout(r, 0));
+    expect(device.queue.submit).toHaveBeenCalledTimes(hiddenSubmits);
+    ownerDocument.visibilityState = 'visible';
+    tick(5);
+    complete();
+    await Promise.resolve();
+    viewer.dispose();
+    const submits = device.queue.submit.mock.calls.length;
+    await new Promise(r => setTimeout(r, 0));
+    expect(device.queue.submit).toHaveBeenCalledTimes(submits);
+  });
+
+  it('rebinds all tile uniforms to the replacement accumulation after resize', async () => {
+    const actual = await vi.importActual<typeof import('../../src/render/pathtracing/scene-buffers.ts')>(
+      '../../src/render/pathtracing/scene-buffers.ts');
+    vi.mocked(buildCachedPathTraceScene).mockImplementation(actual.buildCachedPathTraceScene);
+    const { viewer, device } = await setup();
+    viewer.setBackend('pathtracing');
+    tick(0);
+    await new Promise(r => setTimeout(r, 20));
+    viewer.setPathTracingPaused(true);
+    device.createBindGroup.mockClear();
+    await viewer.resize(256);
+    const groups = device.createBindGroup.mock.calls.map(([desc]) => Array.from(desc.entries));
+    const compute = groups.filter(entries => entries.length > 6);
+    expect(compute).toHaveLength(4);
+    const buffers = compute.map(entries => entries.filter(entry => 'buffer' in entry.resource).map(entry => entry.resource));
+    expect(new Set(buffers.map(entries => (entries[0] as GPUBufferBinding).buffer)).size).toBe(4);
+    // Only the per-tile camera uniform differs; every scene/storage binding is shared.
+    for (let i = 1; i < buffers[0]!.length; i++) {
+      expect(new Set(buffers.map(entries => (entries[i] as GPUBufferBinding).buffer)).size).toBe(1);
     }
   });
 

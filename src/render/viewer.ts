@@ -118,6 +118,7 @@ export class InteractiveViewer {
   #warnings = 0;
   #rasterDirty = true;
   #framePending = false;
+  #pathTraceRefill: ReturnType<typeof setTimeout> | undefined;
   #disposed = false;
   #lastCameraChange = -Infinity;
   #detachControls: () => void;
@@ -296,6 +297,7 @@ export class InteractiveViewer {
   }
 
   dispose(): void {
+    if (this.#pathTraceRefill !== undefined) clearTimeout(this.#pathTraceRefill);
     this.#disposed = true;
     this.#detachControls();
     this.#current?.dispose();
@@ -456,6 +458,12 @@ export class InteractiveViewer {
 
   #loop = (): void => {
     if (this.#disposed) return;
+    this.#renderNextFrame();
+    requestAnimationFrame(this.#loop);
+  };
+
+  #renderNextFrame = (): void => {
+    if (this.#disposed) return;
     const current = this.#current;
     if (current && !this.#framePending) {
       let submitted = false;
@@ -485,13 +493,22 @@ export class InteractiveViewer {
           }
           if (pathTracingFrame) current.reportFrameTime(performance.now() - started);
           this.#framePending = false;
+          if (!this.#disposed && current === this.#current && this.#backend === 'pathtracing'
+            && !this.#pathTracingPaused && performance.now() - this.#lastCameraChange >= 200
+            && this.#pathTraceRefill === undefined) {
+            // Refill after a task-boundary yield, not another display-vsync wait.
+            // The same framePending gate keeps only one bounded batch in flight.
+            this.#pathTraceRefill = setTimeout(() => {
+              this.#pathTraceRefill = undefined;
+              if (this.#canvas.ownerDocument?.visibilityState !== 'hidden') this.#renderNextFrame();
+            }, 0);
+          }
         }, (error: unknown) => {
           this.#framePending = false;
           console.error('GPU frame failed:', error);
         });
       }
     }
-    requestAnimationFrame(this.#loop);
   };
 
   /** Build the raster forward + compute path-trace GPU state for one scene. */
@@ -955,6 +972,8 @@ fn dir_to_uv(d: vec3<f32>) -> vec2<f32> {
       let previewBuffer = accumulation(Math.ceil(width / 2), Math.ceil(height / 2));
       ptTrash.push({ destroy: () => previewBuffer.destroy() });
       const ptUniform = track(device.createBuffer({ size: PT_UNIFORM_SIZE, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST }));
+      const ptUniforms = [ptUniform, ...Array.from({ length: PATH_TRACE_TILES_PER_REFRESH - 1 }, () =>
+        track(device.createBuffer({ size: PT_UNIFORM_SIZE, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST })))];
 
       const group0Entries: GPUBindGroupEntry[] = bindings.group0.map((slot) => {
         if (slot.role === 'uniform') return { binding: slot.binding, resource: { buffer: ptUniform } };
@@ -968,7 +987,16 @@ fn dir_to_uv(d: vec3<f32>) -> vec2<f32> {
         }
         return { binding: slot.binding, resource: { buffer: storageData(slot.data ?? new Float32Array(1)) } };
       });
-      let group0 = device.createBindGroup({ layout: ptPipeline.getBindGroupLayout(0), entries: group0Entries });
+      const computeGroups = (accum: GPUBuffer): GPUBindGroup[] => ptUniforms.map(uniform =>
+        device.createBindGroup({
+          layout: ptPipeline.getBindGroupLayout(0),
+          entries: group0Entries.map(entry => {
+            const role = bindings.group0.find(slot => slot.binding === entry.binding)?.role;
+            return role === 'uniform' ? { ...entry, resource: { buffer: uniform } }
+              : role === 'accum' ? { ...entry, resource: { buffer: accum } } : entry;
+          }),
+        }));
+      let ptComputeGroups = computeGroups(accumBuffer);
 
       const textureViews = new Map<number, GPUTextureView>();
       for (const tex of bindings.textures) {
@@ -1072,10 +1100,7 @@ fn dir_to_uv(d: vec3<f32>) -> vec2<f32> {
         try {
           nextPreview = accumulation(Math.ceil(w / 2), Math.ceil(h / 2));
           nextNeural = neuralTarget(w, h);
-          const entries = group0Entries.map((entry) => bindings.group0.some(
-            (slot) => slot.role === 'accum' && slot.binding === entry.binding,
-          ) ? { binding: entry.binding, resource: { buffer: nextAccum } } : entry);
-          const nextGroup0 = device.createBindGroup({ layout: ptPipeline.getBindGroupLayout(0), entries });
+          const nextComputeGroups = computeGroups(nextAccum);
           const nextDisplay = displayGroup(nextAccum, nextPreview, nextNeural);
           accumBuffer.destroy();
           previewBuffer.destroy();
@@ -1083,7 +1108,7 @@ fn dir_to_uv(d: vec3<f32>) -> vec2<f32> {
           accumBuffer = nextAccum;
           previewBuffer = nextPreview;
           neuralTexture = nextNeural;
-          group0 = nextGroup0;
+          ptComputeGroups = nextComputeGroups;
           ptDisplayBindGroup = nextDisplay;
           ptWidth = Math.max(1, Math.ceil(w / pixelScale));
           ptHeight = Math.max(1, Math.ceil(h / pixelScale));
@@ -1096,7 +1121,7 @@ fn dir_to_uv(d: vec3<f32>) -> vec2<f32> {
         }
       };
       const renderPathTrace = (targetView: GPUTextureView, tiled: boolean, accumulate: boolean): void => {
-        let encoder = device.createCommandEncoder();
+        const encoder = device.createCommandEncoder();
         tiled = tiled && !needsPreview;
         const nextPixelScale = accumulate ? (tiled ? 1 : interactiveScale) : pixelScale;
         if (resetPending) {
@@ -1137,20 +1162,16 @@ fn dir_to_uv(d: vec3<f32>) -> vec2<f32> {
               ? ptBackend.advanceTile(ptWidth, ptHeight)
               : { tile: { x: 0, y: 0, width: ptWidth, height: ptHeight }, frameIndex: ptBackend.advanceFrame() };
             const [wgX, wgY] = PathTraceBackend.workgroupCount(tile.width, tile.height);
-            device.queue.writeBuffer(ptUniform, 0, buildPathTraceUniform(ptScene, frameIndex, 1, ptWidth, ptHeight, 0, tile));
+            // Distinct uniforms let all four watchdog-sized dispatches share a submission.
+            device.queue.writeBuffer(ptUniforms[i]!, 0, buildPathTraceUniform(ptScene, frameIndex, 1, ptWidth, ptHeight, 0, tile));
             const compute = encoder.beginComputePass();
             compute.setPipeline(ptPipeline);
-            compute.setBindGroup(0, group0);
+            compute.setBindGroup(0, ptComputeGroups[i]!);
             if (group1) compute.setBindGroup(1, group1);
             if (group2) compute.setBindGroup(2, group2);
             if (ptEnvGroup) compute.setBindGroup(3, ptEnvGroup);
             compute.dispatchWorkgroups(wgX, wgY, 1);
             compute.end();
-            if (i + 1 < tileCount) {
-              // Submit before reusing the uniform; keep each tile watchdog-safe.
-              device.queue.submit([encoder.finish()]);
-              encoder = device.createCommandEncoder();
-            }
           }
         }
         const renderPass = encoder.beginRenderPass({
