@@ -3,6 +3,20 @@ import { OrbitCamera, attachOrbitControls } from '../../src/scene/orbit-camera.t
 import { inverse4, transformPoint } from '../../src/scene/transforms.ts';
 
 describe('orbit camera clipping', () => {
+  it('supports converted perspective cameras without changing the default orthographic mode', () => {
+    const camera = OrbitCamera.fromEyeTarget([0, 0, 5], [0, 0, 0], 1);
+    expect(camera.projection).toBe('orthographic');
+    const orthoNear = transformPoint(camera.viewProj(), [1, 0, 0])[0];
+    const orthoFar = transformPoint(camera.viewProj(), [1, 0, -5])[0];
+    expect(orthoFar).toBeCloseTo(orthoNear, 12);
+    camera.projection = 'perspective';
+    const projection = camera.viewProj();
+    const screenX = (z: number) => transformPoint(projection, [1, 0, z])[0]
+      / (projection[3]! + projection[11]! * z + projection[15]!);
+    const near = screenX(0);
+    const far = screenX(-5);
+    expect(far).toBeCloseTo(near / 2, 12);
+  });
   it('displays a varying panorama behind orthographic geometry and preserves its FOV when zooming', () => {
     const camera = OrbitCamera.fromEyeTarget([0, 0, 5], [0, 0, 0], 1);
     const direction = (x: number) => {

@@ -49,8 +49,22 @@ Source FOV is horizontal; vertical aperture follows the source resolution.
 Row-major source mesh matrices are transposed to USD's matrix layout. Named GLB
 object assignments become separate bound Mesh prims. Finite lights also have
 matching emissive meshes (quad or tessellated sphere) reachable by path-traced
-BSDF rays. Analytic light sampling remains the engine's directional
-approximation; this is not full area-light next-event sampling.
+BSDF rays in raster/legacy import. In the GPU path tracer, stages marked with
+`pathtracer:sourceScene` instead use analytic rectangle/sphere intersections and
+uniform single-light next-event sampling with finite shadow distances and MIS.
+Their matching `${light.path}_Geometry` proxies are excluded from path-traced
+geometry (but kept for raster). Distant lights use delta sampling. Unsupported
+light shaping, non-uniform/sheared sphere transforms and degenerate lights are
+rejected explicitly. Sphere sampling uses the full sphere surface, not the source
+renderer's visible-hemisphere strategy; identical noise is not expected.
+For these converted stages, `pathtracer:maxDepth` (integer 0..64) controls the
+number of surface scattering events, roulette starts at depth 2, and an absent
+dome is black rather than the ordinary USD preview environment.
+`pathtracer:fov` on the camera preserves the source horizontal FOV at the target
+aspect ratio. Interactive converted cameras use perspective projection.
+Ordinary USD keeps its existing camera, preview lighting and transport defaults
+(64 loop iterations, roulette at depth 3). These changes do not make the CPU
+reference integrator an analytic-light renderer, or equate the two engines' BSDFs.
 The original converted DisneyPrincipled materials are retained, including their
 existing approximations of source MaterialX graphs.
 The bedroom mesh `bedroom/Mesh019.obj` is extracted from the supplied local
@@ -58,13 +72,13 @@ The bedroom mesh `bedroom/Mesh019.obj` is extracted from the supplied local
 `jinx.gltf` and `panther/panther.obj`. Their unresolved references are deliberately
 preserved; these two stages will fail loading until the original assets are supplied.
 The viewer and image harness request the adapter's supported `maxBufferSize`
-and `maxStorageBufferBindingSize`, rather than retaining the default 128 MiB
+and `maxStorageBufferBindingSize`, plus `maxStorageBuffersPerShaderStage`, rather than retaining the default 128 MiB
 storage binding limit. Large scenes such as bedroom require this. Scene storage
 allocations exceeding the device limits are rejected explicitly.
 Depth-of-field aperture metadata and dome rotation are authored but are not
 implemented by the current image renderer.
-Legacy `pathtracer:*` metadata alone does not configure cameras or lighting,
-and `engine:geometry:source` on an Xform is not a geometry-loading contract.
+Other legacy `pathtracer:*` metadata does not configure unsupported source
+features, and `engine:geometry:source` on an Xform is not a geometry-loading contract.
 
 Path-traced camera rays unproject an interior clip depth, not the far plane.
 This keeps directions finite in GPU f32 arithmetic even when a far/near ratio

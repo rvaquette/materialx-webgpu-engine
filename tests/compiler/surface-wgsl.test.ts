@@ -56,6 +56,36 @@ function emit(graph: ResolvedGraph, sink?: (d: Diagnostic) => void) {
 
 describe('emitLayeredSurface (T055d)', () => {
   it.each([
+    ['standard_surface', 'opacity', 'color3', '1,1,1', '0.5,1,1'],
+    ['open_pbr_surface', 'geometry_opacity', 'float', '1', '0.5'],
+    ['gltf_pbr', 'alpha', 'float', '1', '0.5'],
+  ])('proves %s opacity only from constant, non-editable coverage', (family, name, type, opaque, alpha) => {
+    const extra = family === 'gltf_pbr' ? [value('alpha_mode', 'integer', '2')] : [];
+    expect(emit(surfaceGraph(family, [...extra, value(name, type, opaque)])).features?.opaque).toBe(true);
+    expect(emit(surfaceGraph(family, [...extra, value(name, type, alpha)])).features?.opaque).toBe(false);
+    const connected = surfaceGraph(family, [...extra, conn(name, type, 'opacity')],
+      [upstream('opacity', 'constant', type, [value('value', type, opaque)])]);
+    expect(emit(connected).features?.opaque).toBe(false);
+    const graph = surfaceGraph(family, [...extra, value(name, type, opaque)]);
+    const surface = resolveSurface(graph)!;
+    const inputs = new Map(surface.inputs);
+    inputs.set(name, { ...inputs.get(name)!, parameter: 'editableOpacity' });
+    expect(emitSurfaceVariant(graph, { ...surface, inputs }, 0).features?.opaque).toBe(false);
+  });
+  it('preserves all potentially reachable lobes of an editable Disney metallic input', () => {
+    const graph = surfaceGraph('disney_principled', [conn('metallic', 'float', 'metallic')],
+      [upstream('metallic', 'constant', 'float', [value('value', 'float', '1')])]);
+    const variant = emitSurfaceVariant(graph, resolveSurface(graph)!, 0);
+    expect(variant.features?.lobeKinds).toContain(4);
+    expect(variant.features?.lobeKinds).toContain(1);
+    expect(variant.features?.lobeKinds).toContain(3);
+    const constant = surfaceGraph('disney_principled', [value('metallic', 'float', '1')]);
+    const surface = resolveSurface(constant)!;
+    const inputs = new Map(surface.inputs);
+    inputs.set('metallic', { ...inputs.get('metallic')!, parameter: 'editableMetallic' });
+    expect(emitSurfaceVariant(constant, { ...surface, inputs }, 0).features?.lobeKinds).toContain(1);
+  });
+  it.each([
     ['gltf_pbr', 'dispersion', 'transmission'],
     ['standard_surface', 'transmission_dispersion', 'transmission'],
     ['open_pbr_surface', 'transmission_dispersion_scale', 'transmission_weight'],

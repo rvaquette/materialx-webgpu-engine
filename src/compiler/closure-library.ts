@@ -864,7 +864,7 @@ fn mx_closure_fuzz_coverage(c: LayeredClosure, wo: vec3f) -> f32 {
 fn mx_closure_pdf(c: LayeredClosure, wo: vec3f, wi: vec3f) -> f32 {
   return mx_closure_eval(c, wo, wi).pdf;
 }
-fn mx_closure_base_sample(c: LayeredClosure, wo: vec3f, u: vec3f) -> MxBsdfSample {
+fn mx_closure_base_direction(c: LayeredClosure, wo: vec3f, u: vec3f) -> MxBsdfSample {
   let total = mx_closure_total_weight(c);
   // wo.z < 0 means a ray inside a refractive medium hitting the surface from the
   // dense side; the transmission lobe handles that, so only reject grazing.
@@ -880,7 +880,10 @@ fn mx_closure_base_sample(c: LayeredClosure, wo: vec3f, u: vec3f) -> MxBsdfSampl
       if (pick < w) { found = true; } else { pick = pick - w; }
     }
   }
-  let s = mx_closure_lobe_sample(c.lobes[chosen], wo, u);
+  return mx_closure_lobe_sample(c.lobes[chosen], wo, u);
+}
+fn mx_closure_base_sample(c: LayeredClosure, wo: vec3f, u: vec3f) -> MxBsdfSample {
+  let s = mx_closure_base_direction(c, wo, u);
   if (!s.valid) { return MxBsdfSample(vec3f(0.0), vec3f(0.0), 0.0, false); }
   let e = mx_closure_base_eval(c, wo, s.wi);
   if (e.pdf <= 0.0) { return MxBsdfSample(vec3f(0.0), vec3f(0.0), 0.0, false); }
@@ -1015,7 +1018,7 @@ fn mx_closure_sample_base(c: LayeredClosure, wo: vec3f, u: vec3f) -> MxBsdfSampl
     wi = s.wi;
   } else {
     let ru = vec3f(u.x, u.y, (u.z - pCoat) / max(1.0 - pCoat, 1.0e-6));
-    let s = mx_closure_base_sample(c, wo, ru);
+    let s = mx_closure_base_direction(c, wo, ru);
     if (!s.valid) { return MxBsdfSample(vec3f(0.0), vec3f(0.0), 0.0, false); }
     wi = s.wi;
   }

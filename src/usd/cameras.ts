@@ -33,6 +33,13 @@ export interface SceneCamera {
   aspectRatio: number;
   /** Projection matrix (column-major, WebGPU clip space). */
   projectionMatrix: Mat4;
+  /** Horizontal FOV carried by converted .scene cameras, in degrees. */
+  pathtracerFov?: number;
+}
+
+export function cameraFovY(camera: SceneCamera, aspect: number): number {
+  return camera.pathtracerFov === undefined ? camera.fovY
+    : 2 * Math.atan(Math.tan(camera.pathtracerFov * Math.PI / 360) / aspect);
 }
 
 export interface ImportCamerasOptions {
@@ -85,6 +92,10 @@ export function importCameras(scene: SceneAsset, options: ImportCamerasOptions =
     const fStop = readNumber(prim, 'fStop');
     const focusDistance = readNumber(prim, 'focusDistance');
     const exposure = readNumber(prim, 'exposure');
+    const pathtracerFov = readNumber(prim, 'pathtracer:fov');
+    if (pathtracerFov !== undefined && (!Number.isFinite(pathtracerFov) || pathtracerFov <= 0 || pathtracerFov >= 180)) {
+      throw new Error(`Invalid pathtracer:fov at ${path}; expected degrees between 0 and 180.`);
+    }
 
     const transform = world.get(path) ?? IDENTITY4;
     const view = inverse4(transform);
@@ -120,6 +131,7 @@ export function importCameras(scene: SceneAsset, options: ImportCamerasOptions =
       fovY,
       aspectRatio,
       projectionMatrix,
+      ...(pathtracerFov !== undefined ? { pathtracerFov } : {}),
     });
   }
 

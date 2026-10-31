@@ -163,6 +163,8 @@ interface FamilyWgsl {
 
 /** Closure features a surface can produce, known at compile time; lets hosts drop dead lighting paths. */
 export interface SurfaceFeatures {
+  /** Proven coverage opacity of one; absent means the host must retain alpha traversal. */
+  opaque?: boolean;
   coat: boolean;
   transmission: boolean;
   dispersion: boolean;
@@ -227,11 +229,11 @@ function makeCtx(surface: ResolvedSurface, inputs: ReadonlyMap<string, IrRef>, u
       return [fallback[0], fallback[1], fallback[2]];
     },
     dyn(name: string): boolean {
-      return source(name)?.kind === 'connection';
+      return source(name)?.kind === 'connection' || surface.inputs.get(name)?.parameter !== undefined;
     },
     literal(name: string): boolean {
       const kind = source(name)?.kind;
-      return kind === undefined || kind === 'value' || kind === 'default';
+      return surface.inputs.get(name)?.parameter === undefined && (kind === undefined || kind === 'value' || kind === 'default');
     },
   };
 }
@@ -254,6 +256,26 @@ function presentWeighted(c: Ctx, name: string, threshold = 0): boolean {
 /** A weight input that may be non-zero, given its family default when unauthored. */
 function mayWeigh(c: Ctx, name: string, fallback: number): boolean {
   return !c.literal(name) || c.lit(name, fallback) > 0;
+}
+
+function mayBeBelowOne(c: Ctx, name: string, fallback = 0): boolean {
+  return !c.literal(name) || c.lit(name, fallback) < 1;
+}
+
+function opaqueSurface(family: SurfaceFamily, c: Ctx): boolean {
+  if (family === 'disney_principled' || family === 'simple_hair') return true;
+  if (family === 'gltf_pbr') {
+    if (c.literal('alpha_mode') && c.lit('alpha_mode', 0) === 0) return true;
+    return c.literal('alpha') && c.lit('alpha', 1) >= 1
+      && c.literal('alpha_cutoff') && c.lit('alpha_cutoff', 0.5) <= 1;
+  }
+  if (family === 'UsdPreviewSurface') {
+    return c.literal('opacityThreshold') && c.lit('opacityThreshold', 0) <= 0
+      || c.literal('opacity') && c.lit('opacity', 1) >= 1
+        && c.literal('opacityThreshold') && c.lit('opacityThreshold', 0) <= 1;
+  }
+  if (family === 'open_pbr_surface') return c.literal('geometry_opacity') && c.lit('geometry_opacity', 1) >= 1;
+  return c.literal('opacity') && c.litRgb('opacity', [1, 1, 1]).every(x => x >= 1);
 }
 
 // --- standard_surface --------------------------------------------------------
@@ -427,12 +449,13 @@ function disneyPrincipled(c: Ctx): FamilyWgsl {
     `  let mx_sss = ${clampExpr(c.s('subsurface', 0))};`,
     `  let mx_diel = (1.0 - mx_metal) * (1.0 - mx_trans);`,
   ];
+  const dielectric = mayBeBelowOne(c, 'metallic') && mayBeBelowOne(c, 'specTrans');
   const lobes: LobeWgsl[] = [
     { kind: 'conductor', weight: 'mx_metal', color: baseColor, roughness: rough, anisotropy: aniso, active: mayWeigh(c, 'metallic', 0) },
-    { kind: 'dielectric_transmission', weight: '((1.0 - mx_metal) * mx_trans)', color: baseColor, roughness: rough, ior, active: mayWeigh(c, 'specTrans', 0) },
-    { kind: 'dielectric_reflection', weight: '(mx_diel * mx_spec)', color: specColor, roughness: rough, ior, anisotropy: aniso, active: mayWeigh(c, 'specular', 0.5) },
-    { kind: 'burley_diffuse', weight: 'mx_diel', color: baseColor, roughness: rough },
-    { kind: 'subsurface', weight: '(mx_diel * mx_sss)', color: baseColor, active: mayWeigh(c, 'subsurface', 0) },
+    { kind: 'dielectric_transmission', weight: '((1.0 - mx_metal) * mx_trans)', color: baseColor, roughness: rough, ior, active: mayBeBelowOne(c, 'metallic') && mayWeigh(c, 'specTrans', 0) },
+    { kind: 'dielectric_reflection', weight: '(mx_diel * mx_spec)', color: specColor, roughness: rough, ior, anisotropy: aniso, active: dielectric && mayWeigh(c, 'specular', 0.5) },
+    { kind: 'burley_diffuse', weight: 'mx_diel', color: baseColor, roughness: rough, active: dielectric },
+    { kind: 'subsurface', weight: '(mx_diel * mx_sss)', color: baseColor, active: dielectric && mayWeigh(c, 'subsurface', 0) },
   ];
   const out: FamilyWgsl = { locals, lobes, opacity: '1.0', transmission: presentWeighted(c, 'specTrans'), dispersion: false };
   if (presentWeighted(c, 'sheen')) out.sheen = { weight: clampExpr(c.s('sheen', 0)), color: `mix(vec3f(1.0), ${baseColor}, ${clampExpr(c.s('sheenTint', 0.5))})`, roughness: '0.3' };
@@ -560,6 +583,7 @@ function buildSurfaceFn(
   const fnCode = `fn ${entryName}(vary: MxVaryings) -> ${SURFACE_RETURN} {\n${exprs.body.join('\n')}\n${fam.locals.join('\n')}\n  var c: ${SURFACE_RETURN};\n${assigns.join('\n')}\n  return c;\n}`;
   const transmission = fam.transmission ?? lobes.some((lobe) => lobe.kind === 'dielectric_transmission');
   const features: SurfaceFeatures = {
+    opaque: opaqueSurface(surface.family, ctx),
     coat: fam.coat !== undefined,
     transmission,
     dispersion: transmission && (fam.dispersion ?? lobes.some((lobe) => lobe.dispersion !== undefined)),

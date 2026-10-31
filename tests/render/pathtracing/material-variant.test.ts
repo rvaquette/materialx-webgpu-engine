@@ -81,6 +81,16 @@ describe('emitSurfaceVariant (T057g)', () => {
 });
 
 describe('buildMaterialDispatch (T057g)', () => {
+  it('shares identical constant variants without changing material indices', () => {
+    const graph = surfaceGraph('disney_principled', [value('metallic', 'float', '1')]);
+    const dispatch = buildMaterialDispatch([source(0, graph), source(7, graph)]);
+    expect(dispatch.variants.map(v => v.index)).toEqual([0, 7]);
+    expect(dispatch.dispatcherWgsl.match(/fn mx_surface_layered_/g)).toHaveLength(1);
+    expect(dispatch.dispatcherWgsl).toContain('case 7u: { return mx_surface_layered_0(vary); }');
+    expect(dispatch.variants[0]!.lobeCount).toBe(1);
+    expect(dispatch.variants[0]!.features?.opaque).toBe(true);
+  });
+
   it('assembles a switch over graph materials with a constant-record fallback', () => {
     const dispatch = buildMaterialDispatch([
       source(2, surfaceGraph('standard_surface', [value('base_color', 'color3', '0.2, 0.4, 0.6')])),

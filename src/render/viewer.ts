@@ -21,7 +21,9 @@ import {
 import { createSceneBindGroups, uploadGeometry, type SceneDrawBuffers } from './scene-resources.ts';
 import { buildEnvCdf } from '../assets/environment-cdf.ts';
 import { buildCachedPathTraceScene, type PathTraceScene } from './pathtracing/scene-buffers.ts';
-import { buildPathTraceUniform, pathTraceComputeWgsl, pathTraceClosureDispatch, PathTraceBackend, PT_UNIFORM_SIZE } from './pathtracing/compute.ts';
+import { buildPathTraceUniform, pathTraceComputeWgsl, pathTraceClosureDispatch, pathTraceOpaqueScene, PathTraceBackend, PT_UNIFORM_SIZE } from './pathtracing/compute.ts';
+import { pathTraceSettings } from './pathtracing/scene-settings.ts';
+import { cameraFovY } from '../usd/cameras.ts';
 import { buildMaterialDispatch } from './pathtracing/material-variant.ts';
 import { buildPtDeviceBindings } from './pathtracing/device-bindings.ts';
 import { maxRecordLobes } from './pathtracing/material-record.ts';
@@ -312,6 +314,8 @@ export class InteractiveViewer {
     this.#canvas.height = size;
     this.#canvas.style.width = `${size}px`;
     this.#orbit.aspect = 1;
+    const camera = this.#loaded?.cameras[0];
+    if (camera?.pathtracerFov !== undefined) this.#orbit.fovY = cameraFovY(camera, 1);
     this.#onCameraChanged();
     this.#emitStatus();
   }
@@ -341,7 +345,7 @@ export class InteractiveViewer {
       const env = loaded.environment;
       const environment = env
         ? { radiance: env.averageRadiance, tint: env.tint, intensity: env.intensity, hasTexture: true, sh: env.sh }
-        : { radiance: PREVIEW_ENV };
+        : { radiance: pathTraceSettings(loaded.scene).converted ? [0, 0, 0] as Vec3 : PREVIEW_ENV };
       frame = buildSceneFrame(loaded.resources, {
         lights: loaded.lights,
         frameCamera: previewCamera(this.#width / this.#height, exposure),
@@ -401,7 +405,8 @@ export class InteractiveViewer {
           eye[1] - transform[9]! * distance / axisLength,
           eye[2] - transform[10]! * distance / axisLength,
         ];
-        this.#orbit = OrbitCamera.fromEyeTarget(eye, target, this.#width / this.#height, camera.fovY || 0.62);
+        this.#orbit = OrbitCamera.fromEyeTarget(eye, target, this.#width / this.#height, cameraFovY(camera, this.#width / this.#height) || 0.62);
+        if (pathTraceSettings(loaded.scene).converted) this.#orbit.projection = camera.projection;
       } else {
         this.#orbit = OrbitCamera.fromEyeTarget(frame.camera.eye, center, this.#width / this.#height);
       }
@@ -858,6 +863,7 @@ fn dir_to_uv(d: vec3<f32>) -> vec2<f32> {
         surfaceFor: loaded.mtlx.surfaceFor,
         frameCamera: { viewProj: cameraViewProj, eye: cameraEye, exposure },
         environment: frame.environment,
+        settings: pathTraceSettings(loaded.scene),
       });
       performance.measure('pathtracing:scene-build', {
         start: pathTraceBuildStarted,
@@ -881,6 +887,8 @@ fn dir_to_uv(d: vec3<f32>) -> vec2<f32> {
         device, pathTraceComputeWgsl({
           dispatch, environment: loaded.environment !== undefined, maxLobes, displayAovs: true,
           closureDispatch: pathTraceClosureDispatch(dispatch, ptScene.materials),
+          opaque: pathTraceOpaqueScene(dispatch, ptScene.materials),
+          analyticLights: ptScene.analyticLights !== undefined,
         }), 'Path tracing');
       if (ptCompilation.errors.length > 0) {
         this.#onShaderErrors?.([...rasterErrors, ...ptCompilation.errors]);

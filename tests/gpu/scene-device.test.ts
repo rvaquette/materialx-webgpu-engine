@@ -2,7 +2,7 @@ import { expect, it } from 'vitest';
 import { sceneDeviceDescriptor, assertSceneStorageSize } from '../../src/gpu/device.ts';
 
 it('requests actual adapter storage and allocation limits for large scenes', () => {
-  const adapter = { limits: { maxStorageBufferBindingSize: 2147483644, maxBufferSize: 2147483648 } };
+  const adapter = { limits: { maxStorageBufferBindingSize: 2147483644, maxBufferSize: 2147483648, maxStorageBuffersPerShaderStage: 10 } };
   expect(sceneDeviceDescriptor(adapter as GPUAdapter)).toEqual({ requiredLimits: adapter.limits });
   const device = { limits: adapter.limits } as GPUDevice;
   expect(() => assertSceneStorageSize(device, 143208384)).not.toThrow();

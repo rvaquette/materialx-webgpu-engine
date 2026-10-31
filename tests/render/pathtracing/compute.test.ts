@@ -8,6 +8,7 @@ import {
   PT_COMPUTE_ENTRY,
   PT_UNIFORM_FLOATS,
   PT_WORKGROUP_SIZE,
+  pathTraceOpaqueScene,
 } from '../../../src/render/pathtracing/compute.ts';
 import type { PathTraceScene } from '../../../src/render/pathtracing/scene-buffers.ts';
 import { IDENTITY4, inverse4, perspective4, orthographic4 } from '../../../src/scene/transforms.ts';
@@ -67,6 +68,23 @@ function fakeScene(): PathTraceScene {
 
 describe('pathTraceComputeWgsl', () => {
   const src = pathTraceComputeWgsl();
+
+  it('only specializes shadows when every material is proven opaque', () => {
+    const opaque = packLayeredMaterial({ opacity: 1, lobes: [] });
+    expect(pathTraceOpaqueScene(buildMaterialDispatch([]), opaque)).toBe(true);
+    const alpha = packLayeredMaterial({ opacity: 0.5, lobes: [] });
+    expect(pathTraceOpaqueScene(buildMaterialDispatch([]), alpha)).toBe(false);
+    const graph = brickGraph();
+    const dispatch = buildMaterialDispatch([{ materialIndex: 0, graph, surface: resolveSurface(graph, {})! }]);
+    expect(pathTraceOpaqueScene(dispatch, opaque)).toBe(true);
+    delete dispatch.variants[0]!.features;
+    expect(pathTraceOpaqueScene(dispatch, opaque)).toBe(false);
+    const shader = pathTraceComputeWgsl({ opaque: true });
+    const visibility = shader.slice(shader.indexOf('fn mx_visibility'), shader.indexOf('fn integrate'));
+    expect(visibility).toContain('true).hitAny');
+    expect(visibility).not.toContain('mx_hit_closure');
+    expect(shader).toContain('leftT <= rightT');
+  });
 
   it('specializes lobe dispatch without dropping constant-record or graph material features', () => {
     const graph = brickGraph();
@@ -437,6 +455,13 @@ describe('pathTraceComputeWgsl texture registry (T057j)', () => {
 
 
 describe('buildPathTraceUniform layout', () => {
+  it('packs converted transport without changing the ordinary USD defaults', () => {
+    const scene = fakeScene();
+    expect([...buildPathTraceUniform(scene, 0, 1, 512, 512).slice(100)]).toEqual([64, 3, 0, 0]);
+    scene.settings = { converted: true, maxDepth: 3, rouletteDepth: 2 };
+    scene.analyticLightCount = 17;
+    expect([...buildPathTraceUniform(scene, 0, 1, 512, 512).slice(100)]).toEqual([3, 2, 17, 1]);
+  });
   it('enables a display-only panorama camera without changing transport rays', () => {
     const scene = fakeScene();
     const normal = buildPathTraceUniform(scene, 0, 1, 512, 512);
@@ -535,6 +560,11 @@ describe('PathTraceBackend', () => {
     backend.createPipeline();
     backend.createPipeline();
     expect(createComputePipeline).toHaveBeenCalledOnce();
+  });
+  it('preserves specialization options when generating its own module', () => {
+    const { device, createShaderModule } = mockDevice();
+    new PathTraceBackend(device, { opaque: true, analyticLights: true, maxLobes: 1 }).createPipeline();
+    expect(createShaderModule.mock.calls[0]![0].code).toBe(pathTraceComputeWgsl({ opaque: true, analyticLights: true, maxLobes: 1 }));
   });
 
   it('tracks and resets the progressive frame counter', () => {

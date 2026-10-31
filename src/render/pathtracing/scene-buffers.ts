@@ -31,6 +31,8 @@ import { composeSurfaceLayered, prepareSurface, type PreparedSurface } from '../
 import type { IrEvalVaryings } from '../../compiler/ir-eval.ts';
 import { packLayeredMaterial, unpackLayeredMaterial, PT_MATERIAL_RECORD_FLOATS } from './material-record.ts';
 import type { PtVariantSource } from './material-variant.ts';
+import { packAnalyticLights } from './analytic-lights.ts';
+import type { PathTraceSettings } from './scene-settings.ts';
 import type {
   BsdfSample,
   LightSample,
@@ -84,6 +86,9 @@ export interface PathTraceScene {
   light: FrameLight;
   environment: FrameEnvironment;
   bounds: Aabb;
+  settings?: PathTraceSettings;
+  analyticLights?: Float32Array;
+  analyticLightCount?: number;
   /** GPU height-map displacement plan (T0xx): a single scalar map sampled along
    *  the shading normal, with a per-material scale (0 when the material has no
    *  displacement). BVH node bounds are already inflated by the max offset so a
@@ -120,7 +125,7 @@ function materialKeyOf(materialKey: string | undefined): string {
  */
 export function buildPathTraceScene(
   resources: SceneResources,
-  options: BuildSceneFrameOptions & { displacementScale?: number } = {},
+  options: BuildPathTraceSceneOptions = {},
   cachedBvh?: Bvh,
   cachedPositions?: Float32Array,
 ): PathTraceScene {
@@ -163,6 +168,7 @@ export function buildPathTraceScene(
   let hasTangents = false;
 
   for (const draw of frame.draws) {
+    if (isLightProxy(resources, draw.instanceId, options)) continue;
     const geom = resources.geometries.get(draw.prototypeId);
     if (!geom) continue;
     const position = geom.streams.find((s) => s.name === 'position');
@@ -248,7 +254,7 @@ export function buildPathTraceScene(
   let bvh = cachedBvh;
   if (!bvh) {
     const bvhStarted = performance.now();
-    bvh = buildBvh(positions, indices);
+    bvh = buildBvh(positions, indices, { splitStrategy: 'sah' });
     performance.measure('pathtracing:bvh-build', {
       start: bvhStarted,
       end: performance.now(),
@@ -291,8 +297,24 @@ export function buildPathTraceScene(
     light: frame.light,
     environment: frame.environment,
     bounds: bvh.bounds,
+    ...(options.settings ? { settings: options.settings } : {}),
+    ...(options.settings?.converted ? {
+      analyticLights: packAnalyticLights(options.lights ?? []),
+      analyticLightCount: options.lights?.filter(light => light.type !== 'dome').length ?? 0,
+    } : {}),
     ...(hasDisplacement ? { displacement: { mapFile: displaceMapFile!, midpoint, scale: displaceScaleArr } } : {}),
   };
+}
+
+export interface BuildPathTraceSceneOptions extends BuildSceneFrameOptions {
+  displacementScale?: number;
+  settings?: PathTraceSettings;
+}
+
+function isLightProxy(resources: SceneResources, instanceId: string, options: BuildPathTraceSceneOptions): boolean {
+  if (!options.settings?.converted) return false;
+  const path = resources.instances.find(instance => instance.id === instanceId)?.primPath;
+  return options.lights?.some(light => path === `${light.path}_Geometry`) ?? false;
 }
 
 /**
@@ -302,7 +324,7 @@ export function buildPathTraceScene(
  */
 export async function buildCachedPathTraceScene(
   resources: SceneResources,
-  options: BuildSceneFrameOptions & { displacementScale?: number } = {},
+  options: BuildPathTraceSceneOptions = {},
   suppliedCache?: PathTraceBvhCache,
 ): Promise<PathTraceScene> {
   const cacheStarted = performance.now();
@@ -319,6 +341,7 @@ export async function buildCachedPathTraceScene(
   const frame = buildSceneFrame(resources, options);
   const soup: number[] = [];
   for (const draw of frame.draws) {
+    if (isLightProxy(resources, draw.instanceId, options)) continue;
     const geometry = resources.geometries.get(draw.prototypeId);
     const position = geometry?.streams.find((stream) => stream.name === 'position');
     if (!geometry || !position) continue;
@@ -345,7 +368,7 @@ export async function buildCachedPathTraceScene(
     const indices = new Uint32Array(positions.length / 3);
     for (let i = 0; i < indices.length; i++) indices[i] = i;
     const bvhStarted = performance.now();
-    bvh = buildBvh(positions, indices);
+    bvh = buildBvh(positions, indices, { splitStrategy: 'sah' });
     performance.measure('pathtracing:bvh-build', {
       start: bvhStarted,
       end: performance.now(),

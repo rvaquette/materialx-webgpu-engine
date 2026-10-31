@@ -29,6 +29,15 @@ const normalize = (a: V): V => {
 const WO: V = normalize([0.4, 0.1, 1.0]);
 
 describe('closure library prelude (T056a)', () => {
+  it('evaluates the mixture once when sampling the base below a coat', () => {
+    const direction = CLOSURE_LIBRARY_PRELUDE.match(/fn mx_closure_base_direction[\s\S]*?\n}/)?.[0];
+    const coated = CLOSURE_LIBRARY_PRELUDE.match(/fn mx_closure_sample_base[\s\S]*?\n}/)?.[0];
+    expect(direction).toContain('mx_closure_lobe_sample');
+    expect(direction).not.toContain('mx_closure_base_eval');
+    expect(coated).toContain('mx_closure_base_direction(c, wo, ru)');
+    expect(coated).not.toContain('mx_closure_base_sample(c, wo, ru)');
+    expect(coated?.match(/let e = mx_closure_eval_base/g)).toHaveLength(1);
+  });
   it('faces the reflective half-vector toward the incident ray inside and outside glass', () => {
     const reflection = CLOSURE_LIBRARY_PRELUDE.match(/\/\/ Reflection branch([\s\S]*?)\/\/ Refraction branch/)?.[1];
     expect(reflection).toContain('if (dot(ctx.wo, wm) < 0.0) { wm = -wm; }');

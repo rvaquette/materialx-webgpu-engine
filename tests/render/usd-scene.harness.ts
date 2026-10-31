@@ -48,7 +48,9 @@ import {
   GBUFFER_POSITION_FORMAT,
   GBUFFER_NORMAL_FORMAT,
 } from '../../src/render/hybrid/trace-pass.ts';
-import { buildPathTraceUniform, pathTraceComputeWgsl, pathTraceClosureDispatch, PathTraceBackend, PT_UNIFORM_SIZE } from '../../src/render/pathtracing/compute.ts';
+import { buildPathTraceUniform, pathTraceComputeWgsl, pathTraceClosureDispatch, pathTraceOpaqueScene, PathTraceBackend, PT_UNIFORM_SIZE } from '../../src/render/pathtracing/compute.ts';
+import { pathTraceSettings } from '../../src/render/pathtracing/scene-settings.ts';
+import { cameraFovY } from '../../src/usd/cameras.ts';
 import { maxRecordLobes } from '../../src/render/pathtracing/material-record.ts';
 import { packHdrTexture } from '../../src/assets/hdr-texture.ts';
 import { buildMaterialDispatch } from '../../src/render/pathtracing/material-variant.ts';
@@ -183,11 +185,11 @@ function frameCameraFromUsd(camera: SceneCamera, aspect: number, dolly = 1): Fra
     const eye: Vec3 = [eye0[0] + bn[0] * back, eye0[1] + bn[1] * back, eye0[2] + bn[2] * back];
     const target: Vec3 = [eye[0] - bn[0], eye[1] - bn[1], eye[2] - bn[2]];
     const view = lookAt4(eye, target, up);
-    const projection = perspective4(camera.fovY, aspect, near, far);
+    const projection = perspective4(cameraFovY(camera, aspect), aspect, near, far);
     return { viewProj: multiply4(projection, view), eye, exposure: camera.exposure ?? 0 };
   }
   const projection =
-    camera.projection === 'orthographic' ? camera.projectionMatrix : perspective4(camera.fovY, aspect, near, far);
+    camera.projection === 'orthographic' ? camera.projectionMatrix : perspective4(cameraFovY(camera, aspect), aspect, near, far);
   return { viewProj: multiply4(projection, camera.view), eye: eye0, exposure: camera.exposure ?? 0 };
 }
 
@@ -203,7 +205,7 @@ function resolveFrameCamera(
   const camera = cameras[0];
   const back = dolly !== undefined && Number.isFinite(dolly) ? dolly : 1;
   if (back !== 1) line(`diag cam back=${back}`);
-  const base = camera ? (line(`diag camera=${camera.path} fovY=${camera.fovY.toFixed(3)} (USD)`), frameCameraFromUsd(camera, 1, back)) : previewCamera(0);
+  const base = camera ? (line(`diag camera=${camera.path} fovY=${cameraFovY(camera, 1).toFixed(3)} (USD)`), frameCameraFromUsd(camera, 1, back)) : previewCamera(0);
   if (exposureOverride !== undefined && Number.isFinite(exposureOverride)) {
     line(`diag exposure override=${exposureOverride}`);
     return { ...base, exposure: exposureOverride };
@@ -300,6 +302,7 @@ function envFrameConfig(
   cdfStats?: { width: number; height: number; totalSum: number },
   skyPower?: number,
   skyColor?: Vec3,
+  converted = false,
 ): {
   radiance: Vec3;
   tint?: Vec3;
@@ -310,7 +313,7 @@ function envFrameConfig(
   envTotalSum?: number;
   sh?: Float32Array;
 } {
-  if (!env) return { radiance: PREVIEW_ENV };
+  if (!env) return { radiance: converted ? [0, 0, 0] : PREVIEW_ENV };
   return {
     radiance: env.averageRadiance,
     tint: skyColor ?? env.tint,
@@ -1102,7 +1105,8 @@ async function renderUsdOnDevice(
     lights,
     surfaceFor,
     frameCamera,
-    environment: envFrameConfig(envAsset, envGpu?.cdfStats, skyPowerOverride, skyColorOverride),
+    environment: envFrameConfig(envAsset, envGpu?.cdfStats, skyPowerOverride, skyColorOverride, pathTraceSettings(scene).converted),
+    settings: pathTraceSettings(scene),
     ...(dispScaleOverride !== undefined ? { displacementScale: dispScaleOverride } : {}),
   });
   ptScene.environment.textureRadianceScale = envGpu?.radianceScale ?? 1;
@@ -1122,6 +1126,8 @@ async function renderUsdOnDevice(
   // Build the megakernel dispatch from the resolved variant sources and the device
   // bindings plan (T057m2); textures are decoded by the shared image provider.
   const dispatch = buildMaterialDispatch(ptScene.variantSources);
+  const opaque = pathTraceOpaqueScene(dispatch, ptScene.materials);
+  line(`diag transport depth=${ptScene.settings?.maxDepth ?? 64} rr=${ptScene.settings?.rouletteDepth ?? 3} analyticLights=${ptScene.analyticLightCount ?? 0} opaqueShadows=${opaque}`);
   const bindings = await buildPtDeviceBindings(dispatch, ptScene, imageProvider, { sink });
   phase('materialDispatchAndTextures');
   const fireflyClamp = Number.isFinite(fireflyOverride) ? (fireflyOverride as number) : 0;
@@ -1145,6 +1151,8 @@ async function renderUsdOnDevice(
   const module = device.createShaderModule({ code: pathTraceComputeWgsl({
     dispatch, environment: envAsset !== undefined, maxLobes,
     closureDispatch: pathTraceClosureDispatch(dispatch, ptScene.materials),
+    opaque,
+    analyticLights: ptScene.analyticLights !== undefined,
   }) });
   if (!checkedPathTraceModules.has(module) && typeof module.getCompilationInfo === 'function') {
     const info = await module.getCompilationInfo();
@@ -1183,8 +1191,8 @@ async function renderUsdOnDevice(
 
   // group-0: the per-frame uniform and accumulation buffers are data-less in the
   // plan (harness-sized), every other slot carries packed scene storage data.
-  // Each tile gets its own uniform buffer so all tile dispatches can be encoded
-  // and submitted together without later queue writes replacing earlier values.
+  // Submit each tile separately to stay within the GPU watchdog budget; the CPU
+  // only fences batches of samples, not individual tiles.
   let triangleBuffer: GPUBuffer | undefined;
   let triangleUvBuffer: GPUBuffer | undefined;
   let uniformBinding: number | undefined;
@@ -1341,9 +1349,6 @@ async function renderUsdOnDevice(
     // Match the viewer's tiled dispatch: full-image alpha/shadow work can exceed
     // the mobile watchdog budget even for a single sample. Local desktop renders
     // can batch a few samples per tile to reduce dispatch and submission overhead.
-    const encoder = device.createCommandEncoder();
-    const compute = encoder.beginComputePass();
-    compute.setPipeline(pipeline);
     let tileIndex = 0;
     while (backend.frameIndex === f) {
       const { tile, frameIndex } = backend.advanceTile(res, res);
@@ -1353,15 +1358,18 @@ async function renderUsdOnDevice(
       const group0 = group0s[tileIndex];
       if (!tileUniform || !group0) throw new Error(`Missing path-tracing resources for tile ${tileIndex}`);
       device.queue.writeBuffer(tileUniform, 0, buildPathTraceUniform(ptScene, frameIndex, frameSamples, res, res, fireflyClamp, tile));
+      const encoder = device.createCommandEncoder();
+      const compute = encoder.beginComputePass();
+      compute.setPipeline(pipeline);
       compute.setBindGroup(0, group0);
       if (group1) compute.setBindGroup(1, group1);
       if (group2) compute.setBindGroup(2, group2);
       if (ptEnvGroup) compute.setBindGroup(3, ptEnvGroup);
       compute.dispatchWorkgroups(wgX, wgY, 1);
+      compute.end();
+      device.queue.submit([encoder.finish()]);
       tileIndex++;
     }
-    compute.end();
-    device.queue.submit([encoder.finish()]);
     const completedSamples = firstSample + frameSamples;
     if ((f + 1) % batch === 0 || completedSamples === samples) {
       // Queue writes and dispatches in order; fence each batch of frames rather

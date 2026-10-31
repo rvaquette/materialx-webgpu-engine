@@ -25,6 +25,7 @@ export interface OrbitCameraOptions {
 
 /** Spherical-orbit camera; eye is derived from target + yaw/pitch/distance. */
 export class OrbitCamera {
+  projection: 'perspective' | 'orthographic' = 'orthographic';
   target: [number, number, number];
   distance: number;
   yaw: number;
@@ -77,6 +78,9 @@ export class OrbitCamera {
   }
 
   viewProj(): Mat4 {
+    if (this.projection === 'perspective') {
+      return multiply4(perspective4(this.fovY, this.aspect, this.near, this.far), this.view());
+    }
     // Orthographic framing: half-extents derived from distance/fovY so the
     // on-screen scale matches the former perspective at the target plane, and
     // dolly (distance) still zooms while pan stays pixel-accurate.

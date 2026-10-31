@@ -1,7 +1,7 @@
 // T057m2: assemble the path tracer graph-path device bindings as a pure plan the
 // harness turns into GPUBuffers/textures. The megakernel's group-0 layout is
 // fixed (uniform, nodes, tris, triOrder, materials, accum, triUv, triTangent, and
-// MxUniforms when present); group 1 holds the deduped textures and group 2 their
+// MxUniforms at 8 and converted analytic lights at 9 when present); group 1 holds the deduped textures and group 2 their
 // samplers (texture-registry, T057j). This maps each registry slot to its decoded
 // image -- decoding each unique file once via the injected provider so materials
 // sharing a file share a single upload -- and orders the scene storage buffers.
@@ -32,7 +32,8 @@ export type PtBufferRole =
   | 'accum'
   | 'triangleUv'
   | 'triangleTangent'
-  | 'mxUniforms';
+  | 'mxUniforms'
+  | 'analyticLights';
 
 export interface PtBufferSlot {
   binding: number;
@@ -62,7 +63,7 @@ export interface PtSamplerBinding {
 }
 
 export interface PtDeviceBindings {
-  /** group-0 slots in binding order (0..7, plus MxUniforms at 8 when present). */
+  /** group-0 slots in binding order (0..7, optional MxUniforms at 8 and lights at 9). */
   group0: PtBufferSlot[];
   /** group-1 texture slots; empty when no material references a texture. */
   textures: PtTextureBinding[];
@@ -92,6 +93,7 @@ function group0Slots(scene: PathTraceScene, dispatch: PtMaterialDispatch): PtBuf
   if (dispatch.uniforms.length > 0) {
     slots.push({ binding: 8, role: 'mxUniforms', usage: 'uniform', access: 'read' });
   }
+  if (scene.analyticLights) slots.push({ binding: 9, role: 'analyticLights', usage: 'storage', access: 'read', data: scene.analyticLights });
   return slots;
 }
 

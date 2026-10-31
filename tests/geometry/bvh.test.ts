@@ -11,6 +11,34 @@ function twoSeparatedTriangles(): { positions: Float32Array; indices: Uint32Arra
 }
 
 describe('buildBvh', () => {
+  it('uses SAH to separate an isolated primitive from a dense cluster', () => {
+    const positions = new Float32Array(Array.from({ length: 9 }, (_, i) => {
+      const x = i === 8 ? 100 : i * 0.1;
+      return [x, 0, 0, x + 0.01, 0, 0, x, 0.01, 0];
+    }).flat());
+    const indices = Uint32Array.from({ length: 27 }, (_, i) => i);
+    const bvh = buildBvh(positions, indices, { splitStrategy: 'sah', maxLeafTriangles: 1 });
+    const root = bvh.nodes[0]!;
+    const isolated = bvh.nodes[root.right]!;
+    expect(isolated.count).toBe(1);
+    expect(bvh.triangleOrder[isolated.start]).toBe(8);
+    expect([...bvh.triangleOrder].sort((a, b) => a - b)).toEqual(Array.from({ length: 9 }, (_, i) => i));
+  });
+
+  it('keeps coincident centroids finite, bounded and complete with SAH', () => {
+    const positions = new Float32Array(Array.from({ length: 129 }, () => [0, 0, 0, 1, 0, 0, 0, 1, 0]).flat());
+    const bvh = buildBvh(positions, Uint32Array.from({ length: 387 }, (_, i) => i), { splitStrategy: 'sah' });
+    expect(new Set(bvh.triangleOrder).size).toBe(129);
+    const visit = (index: number, depth: number): void => {
+      const n = bvh.nodes[index]!;
+      expect(depth).toBeLessThan(63);
+      expect(n.min.every(Number.isFinite)).toBe(true);
+      if (n.count) expect(n.count).toBeLessThanOrEqual(4);
+      else { visit(n.left, depth + 1); visit(n.right, depth + 1); }
+    };
+    visit(0, 0);
+  });
+
   it('splits separated triangles into leaves and keeps a permutation', () => {
     const { positions, indices } = twoSeparatedTriangles();
     const bvh = buildBvh(positions, indices, { maxLeafTriangles: 1 });

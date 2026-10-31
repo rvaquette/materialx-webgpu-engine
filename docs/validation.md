@@ -507,6 +507,26 @@ Les durées globales du rapport séparent `serverStartup`, `browserStartup`,
 ou Node ; les éventuelles reprises y sont incluses. Les mesures sont des temps
 écoulés CPU/GPU avec synchronisation, pas des timestamps GPU purs.
 
+Le path tracer construit un BVH SAH à 16 bins, parcourt le fils le plus proche
+en premier et invalide les anciens BVH persistants. Les ombres utilisent une
+traversée any-hit sans construction de closure uniquement si tous les matériaux
+sont prouvés opaques (opacité de couverture, pas transmission physique du verre).
+Les fonctions MaterialX constantes identiques sont mutualisées ; les lobes
+Disney de poids statiquement nul sont retirés, sans figer les paramètres éditables.
+L'échantillonnage sous un coat évite une évaluation redondante du mélange de base.
+
+Les soumissions restent séparées par tuile 4×4 pour limiter le risque watchdog.
+Le harnais local échantillonne jusqu'à 4 spp par dispatch et attend la file GPU
+par lot de 8 passes, ou au dernier échantillon, plutôt qu'après chaque tuile.
+À 512×512/16 spp cela représente 64 dispatches et une attente de fin de rendu,
+pas 256 synchronisations CPU. Les temps doivent être comparés après compilation
+statique à jour et sur des répétitions séparant préparation du pipeline et rendu :
+
+```powershell
+npm run build:shaderball
+npm run test:shaderball -- --target local --backends pathtracing --server static --res 512 --spp 16 --entry /scenes/pathtracer/hyperion_rect_lights.usda
+```
+
 Le rapport est sauvegardé après chaque cas ; `--resume` (mêmes options, même
 `--res`/`--spp`) conserve les cas `ok`/`black` déjà rendus et relance les `failed`
 puis les cas restants.

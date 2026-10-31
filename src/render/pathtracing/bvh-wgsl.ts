@@ -58,7 +58,7 @@ fn intersect_tri(tri : u32, ro : vec3<f32>, rd : vec3<f32>, tMax : f32) -> vec4<
   return vec4<f32>(t, u, vv, 1.0);
 }
 
-fn aabb_hit(node : u32, ro : vec3<f32>, invDir : vec3<f32>, tMax : f32) -> bool {
+fn aabb_hit(node : u32, ro : vec3<f32>, invDir : vec3<f32>, tMax : f32) -> f32 {
   let b = node * NODE_STRIDE;
   var tmin = RAY_EPS;
   var tmax = tMax;
@@ -67,9 +67,9 @@ fn aabb_hit(node : u32, ro : vec3<f32>, invDir : vec3<f32>, tMax : f32) -> bool 
     let hi = (nodes[b + 4u + a] - ro[a]) * invDir[a];
     tmin = max(tmin, min(lo, hi));
     tmax = min(tmax, max(lo, hi));
-    if (tmax < tmin) { return false; }
+    if (tmax < tmin) { return -1.0; }
   }
-  return true;
+  return tmin;
 }
 
 fn traverse(ro : vec3<f32>, rd : vec3<f32>, tMax : f32, anyHit : bool) -> Hit {
@@ -81,14 +81,10 @@ fn traverse(ro : vec3<f32>, rd : vec3<f32>, tMax : f32, anyHit : bool) -> Hit {
                          1.0 / select(rd.z, 1.0e-20, rd.z == 0.0));
   var stack : array<u32, 64>;
   var sp = 0;
-  stack[0] = 0u;
-  sp = 1;
+  var node = 0u;
   var closest = tMax;
+  if (arrayLength(&nodes) < NODE_STRIDE || aabb_hit(node, ro, invDir, closest) < 0.0) { return result; }
   loop {
-    if (sp <= 0) { break; }
-    sp = sp - 1;
-    let node = stack[sp];
-    if (!aabb_hit(node, ro, invDir, closest)) { continue; }
     let b = node * NODE_STRIDE;
     let count = u32(nodes[b + 9u]);
     if (count > 0u) {
@@ -112,13 +108,30 @@ fn traverse(ro : vec3<f32>, rd : vec3<f32>, tMax : f32, anyHit : bool) -> Hit {
         }
       }
     } else {
-      if (sp < 62) {
-        stack[sp] = u32(nodes[b + 3u]);
-        sp = sp + 1;
-        stack[sp] = u32(nodes[b + 7u]);
-        sp = sp + 1;
+      let left = u32(nodes[b + 3u]);
+      let right = u32(nodes[b + 7u]);
+      let leftT = aabb_hit(left, ro, invDir, closest);
+      let rightT = aabb_hit(right, ro, invDir, closest);
+      if (leftT >= 0.0 || rightT >= 0.0) {
+        if (leftT >= 0.0 && rightT >= 0.0) {
+          let leftFirst = leftT <= rightT;
+          stack[sp] = select(left, right, leftFirst);
+          sp = sp + 1;
+          node = select(right, left, leftFirst);
+        } else {
+          node = select(right, left, leftT >= 0.0);
+        }
+        continue;
       }
     }
+    var found = false;
+    loop {
+      if (sp <= 0) { break; }
+      sp = sp - 1;
+      node = stack[sp];
+      if (aabb_hit(node, ro, invDir, closest) >= 0.0) { found = true; break; }
+    }
+    if (!found) { break; }
   }
   return result;
 }

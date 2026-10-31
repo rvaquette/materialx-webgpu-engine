@@ -80,6 +80,32 @@ function build(surface?: RasterSurface): PathTraceScene {
 }
 
 describe('buildPathTraceScene packing', () => {
+  it('excludes only converted analytic emitter proxies in direct and cached builds', async () => {
+    const { resources } = sceneWith();
+    resources.instances[0]!.primPath = '/World/Panel_Geometry';
+    const light: SceneLight = {
+      path: '/World/Panel', type: 'rect', usdType: 'RectLight', transform: IDENTITY4,
+      width: 2, height: 2, color: [1, 1, 1], intensity: 1, exposure: 0, normalize: false,
+    };
+    const options = { lights: [light], settings: { converted: true, maxDepth: 3, rouletteDepth: 2 } };
+    const entries = new Map<string, Bvh>();
+    const cache: PathTraceBvhCache = {
+      get: async key => entries.get(key),
+      set: async (key, bvh) => { entries.set(key, bvh); },
+    };
+    const direct = buildPathTraceScene(resources, options);
+    const cached = await buildCachedPathTraceScene(resources, options, cache);
+    for (const scene of [direct, cached]) {
+      expect(scene.triangleCount).toBe(0);
+      expect(scene.variantSources).toHaveLength(0);
+      expect(scene.analyticLightCount).toBe(1);
+      expect(scene.analyticLights).toHaveLength(20);
+      expect(scene.settings).toEqual(options.settings);
+    }
+    expect(buildPathTraceScene(resources, { lights: [light] }).triangleCount).toBe(2);
+    resources.instances[0]!.primPath = '/World/Object';
+    expect(buildPathTraceScene(resources, options).triangleCount).toBe(2);
+  });
   it('reuses the world BVH for the same transformed geometry', async () => {
     const { resources, lights } = sceneWith();
     const entries = new Map<string, Bvh>();

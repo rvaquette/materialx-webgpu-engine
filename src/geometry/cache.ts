@@ -6,7 +6,7 @@ const CACHE_VERSION = 1;
 const DATABASE_NAME = 'materialx-webgpu-engine';
 const STORE_NAME = 'prepared-geometry';
 const CACHE_PREFIX = 'geometry:v1:';
-const BVH_CACHE_PREFIX = 'pathtrace-bvh:v1:';
+const BVH_CACHE_PREFIX = 'pathtrace-bvh:v2-sah:';
 
 export interface PreparedGeometryCache {
   get(key: string): Promise<PreparedMesh | undefined>;

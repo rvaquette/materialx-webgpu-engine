@@ -39,6 +39,7 @@ export interface Tlas {
 
 export interface BuildBvhOptions {
   maxLeafTriangles?: number;
+  splitStrategy?: 'median' | 'sah';
 }
 
 interface Primitive {
@@ -69,11 +70,64 @@ function unionInto(target: { min: number[]; max: number[] }, other: Aabb): void 
   }
 }
 
-function buildCore(primitives: Primitive[], maxLeaf: number): { nodes: BvhNode[]; order: Uint32Array } {
+function area(b: Aabb): number {
+  const x = b.max[0] - b.min[0], y = b.max[1] - b.min[1], z = b.max[2] - b.min[2];
+  return 2 * (x * y + x * z + y * z);
+}
+
+function sahPartition(items: Primitive[], centroids: Aabb): [Primitive[], Primitive[]] | undefined {
+  const bins = 16;
+  let bestCost = Infinity;
+  let bestAxis = -1;
+  let bestBin = -1;
+  for (let axis = 0; axis < 3; axis++) {
+    const extent = centroids.max[axis]! - centroids.min[axis]!;
+    if (extent <= 0) continue;
+    const buckets = Array.from({ length: bins }, () => ({ ...emptyBounds(), count: 0 }));
+    for (const item of items) {
+      const bin = Math.min(bins - 1, Math.floor((item.centroid[axis]! - centroids.min[axis]!) / extent * bins));
+      const bucket = buckets[bin]!;
+      expand(bucket, item.min);
+      expand(bucket, item.max);
+      bucket.count++;
+    }
+    const rightCosts = new Float64Array(bins);
+    const rightCounts = new Uint32Array(bins);
+    const right = emptyBounds();
+    let count = 0;
+    for (let i = bins - 1; i >= 0; i--) {
+      const bucket = buckets[i]!;
+      if (bucket.count) unionInto(right, bucket);
+      count += bucket.count;
+      rightCounts[i] = count;
+      rightCosts[i] = count ? area(right) * count : 0;
+    }
+    const left = emptyBounds();
+    count = 0;
+    for (let i = 0; i < bins - 1; i++) {
+      const bucket = buckets[i]!;
+      if (bucket.count) unionInto(left, bucket);
+      count += bucket.count;
+      if (!count || !rightCounts[i + 1]) continue;
+      const cost = area(left) * count + rightCosts[i + 1]!;
+      if (cost < bestCost) { bestCost = cost; bestAxis = axis; bestBin = i; }
+    }
+  }
+  if (bestAxis < 0) return undefined;
+  const extent = centroids.max[bestAxis]! - centroids.min[bestAxis]!;
+  const left: Primitive[] = [], right: Primitive[] = [];
+  for (const item of items) {
+    const bin = Math.min(bins - 1, Math.floor((item.centroid[bestAxis]! - centroids.min[bestAxis]!) / extent * bins));
+    (bin <= bestBin ? left : right).push(item);
+  }
+  return left.length && right.length ? [left, right] : undefined;
+}
+
+function buildCore(primitives: Primitive[], maxLeaf: number, strategy: 'median' | 'sah' = 'median'): { nodes: BvhNode[]; order: Uint32Array } {
   const nodes: BvhNode[] = [];
   const order: number[] = [];
 
-  const recurse = (items: Primitive[]): number => {
+  const recurse = (items: Primitive[], depth = 0): number => {
     const bounds = emptyBounds();
     const centroidBounds = emptyBounds();
     for (const it of items) {
@@ -112,10 +166,13 @@ function buildCore(primitives: Primitive[], maxLeaf: number): { nodes: BvhNode[]
         axis = a;
       }
     }
-    items.sort((p, q) => p.centroid[axis]! - q.centroid[axis]!);
+    // Switch to balanced splits before the shader's 64-entry traversal stack is exhausted.
+    const partition = strategy === 'sah' && depth < 40 ? sahPartition(items, centroidBounds) : undefined;
+    if (!partition) items.sort((p, q) => p.centroid[axis]! - q.centroid[axis]!);
     const mid = items.length >> 1;
-    node.left = recurse(items.slice(0, mid));
-    node.right = recurse(items.slice(mid));
+    const [left, right] = partition ?? [items.slice(0, mid), items.slice(mid)];
+    node.left = recurse(left, depth + 1);
+    node.right = recurse(right, depth + 1);
     return self;
   };
 
@@ -152,7 +209,7 @@ export function buildBvh(positions: Float32Array, indices: Uint32Array, options:
     const tb = triangleBounds(positions, indices, tri);
     primitives.push({ index: tri, min: tb.min, max: tb.max, centroid: tb.centroid });
   }
-  const { nodes, order } = buildCore(primitives, maxLeaf);
+  const { nodes, order } = buildCore(primitives, maxLeaf, options.splitStrategy);
   const rootBounds: Aabb = nodes.length > 0 ? { min: nodes[0]!.min, max: nodes[0]!.max } : { min: [0, 0, 0], max: [0, 0, 0] };
   return { nodes, triangleOrder: order, bounds: rootBounds };
 }
@@ -195,7 +252,7 @@ export function buildTlas(instanceBounds: readonly Aabb[], options: BuildBvhOpti
       (bounds.min[2]! + bounds.max[2]!) * 0.5,
     ],
   }));
-  const { nodes, order } = buildCore(primitives, maxLeaf);
+  const { nodes, order } = buildCore(primitives, maxLeaf, options.splitStrategy);
   const rootBounds: Aabb = nodes.length > 0 ? { min: nodes[0]!.min, max: nodes[0]!.max } : { min: [0, 0, 0], max: [0, 0, 0] };
   return { nodes, instanceOrder: order, bounds: rootBounds };
 }

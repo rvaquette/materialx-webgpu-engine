@@ -80,11 +80,24 @@ export function buildMaterialDispatch(sources: readonly PtVariantSource[]): PtMa
   const primvarFields = mergeMaps(variants.map((v) => v.primvarFields));
   const extraInputs = mergeMaps(variants.map((v) => v.extraInputs));
 
+  const shared = new Map<string, SurfaceVariantModule>();
+  const functionFor = new Map<number, string>();
+  const unique = new Map<string, SurfaceVariantModule>();
+  for (const variant of variants) {
+    const constant = variant.uniforms.length === 0 && variant.textures.length === 0 && variant.samplers.length === 0;
+    const key = variant.fnCode.replace(`fn ${variant.fnName}(`, 'fn surface(');
+    const previous = constant ? shared.get(key) : undefined;
+    functionFor.set(variant.index, previous?.fnName ?? variant.fnName);
+    if (!previous) {
+      unique.set(variant.fnName, variant);
+      if (constant) shared.set(key, variant);
+    }
+  }
   const switchBody = [
-    ...variants.map((v) => `    case ${v.index}u: { return ${v.fnName}(vary); }`),
+    ...variants.map((v) => `    case ${v.index}u: { return ${functionFor.get(v.index)}(vary); }`),
     `    default: { return ${PT_MATERIAL_FALLBACK}(matId); }`,
   ].join('\n');
-  const fns = variants.map((v) => v.fnCode).join('\n\n');
+  const fns = [...unique.values()].map((v) => v.fnCode).join('\n\n');
   const dispatcherWgsl = `${fns ? fns + '\n\n' : ''}fn ${PT_MATERIAL_DISPATCH_ENTRY}(matId: u32, vary: MxVaryings) -> LayeredClosure {\n  switch matId {\n${switchBody}\n  }\n}`;
 
   return { variants, dispatcherWgsl, preludes, textures, samplers, textureRegistry, uniforms, primvarFields, extraInputs };

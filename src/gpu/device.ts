@@ -38,6 +38,7 @@ export function sceneDeviceDescriptor(adapter: GPUAdapter): GPUDeviceDescriptor 
     requiredLimits: {
       maxStorageBufferBindingSize: adapter.limits.maxStorageBufferBindingSize,
       maxBufferSize: adapter.limits.maxBufferSize,
+      maxStorageBuffersPerShaderStage: adapter.limits.maxStorageBuffersPerShaderStage,
     },
   };
 }

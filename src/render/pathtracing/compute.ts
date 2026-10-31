@@ -20,6 +20,7 @@ import { emitVaryingsStruct } from '../../compiler/wgsl.ts';
 import type { IrType } from '../../compiler/ir.ts';
 import { materialClosureReaderWgsl, PT_MAX_LOBES, PT_MATERIAL_RECORD_FLOATS, PT_MATERIAL_HEADER_FLOATS, PT_LOBE_FLOATS } from './material-record.ts';
 import { PT_MATERIAL_DISPATCH_ENTRY, type PtMaterialDispatch } from './material-variant.ts';
+import { ANALYTIC_LIGHTS_WGSL } from './analytic-lights.ts';
 
 /** Compute workgroup tile edge (threads per dimension). */
 export const PT_WORKGROUP_SIZE = 8;
@@ -29,8 +30,9 @@ export const PT_COMPUTE_ENTRY = 'mx_path_trace';
  *  camera/light/env/frame blocks; 40..75 hold the 9 RGB SH irradiance coefficients
  *  (one vec4 per coefficient, w unused); 76..79 hold the tile and 80..83 the HDR
  *  texture radiance scale (x) and panorama flag (y); 84..99 hold the optional
- *  display-only inverse background view-projection. */
-export const PT_UNIFORM_FLOATS = 100;
+ *  display-only inverse background view-projection; 100..103 hold max depth,
+ *  roulette depth, analytic light count and converted primary-camera flag. */
+export const PT_UNIFORM_FLOATS = 104;
 /** Bytes in the path-trace uniform buffer. */
 export const PT_UNIFORM_SIZE = PT_UNIFORM_FLOATS * 4;
 
@@ -44,6 +46,7 @@ export function pathTraceClosureDispatch(dispatch: PtMaterialDispatch, materials
     variant.features.lobeKinds.forEach(kind => kinds.add(kind));
     thinFilm ||= variant.features.thinFilm;
   }
+
   for (let base = 0, index = 0; base < materials.length; base += PT_MATERIAL_RECORD_FLOATS, index++) {
     if (variants.has(index)) continue;
     thinFilm ||= materials[base + 5]! !== 0;
@@ -53,6 +56,15 @@ export function pathTraceClosureDispatch(dispatch: PtMaterialDispatch, materials
     }
   }
   return { kinds, thinFilm };
+}
+
+export function pathTraceOpaqueScene(dispatch: PtMaterialDispatch, materials: Float32Array): boolean {
+  if (dispatch.variants.some(v => v.features?.opaque !== true)) return false;
+  const variants = new Set(dispatch.variants.map(v => v.index));
+  for (let base = 0, index = 0; base < materials.length; base += PT_MATERIAL_RECORD_FLOATS, index++) {
+    if (!variants.has(index) && materials[base + 1] !== 1) return false;
+  }
+  return true;
 }
 
 export interface PathTraceTile {
@@ -115,6 +127,7 @@ struct Uniforms {
   tile : vec4<f32>,
   envTexture : vec4<f32>, // x = half-float texture radiance scale
   backgroundInvViewProj : mat4x4<f32>,
+  transport : vec4<f32>, // depth, roulette depth, analytic light count, converted camera
 };
 
 @group(0) @binding(0) var<uniform> U : Uniforms;
@@ -436,7 +449,7 @@ ${assigns.join('\n')}
   ].join('\n');
 }
 
-function wgslIntegrator(textures: boolean, dispatch: boolean, environment: boolean, displayAovs: boolean): string {
+function wgslIntegrator(textures: boolean, dispatch: boolean, environment: boolean, displayAovs: boolean, opaque: boolean, analyticLights: boolean): string {
   const envMiss = environment ? 'env_radiance(rd)' : 'U.env.xyz';
   const envNee = environment ? 'env_radiance(wiW)' : 'U.env.xyz';
   const texOverride = textures
@@ -490,11 +503,13 @@ ${closureBuild}
   return c;
 }
 
-fn mx_alpha_visibility(origin: vec3f, direction: vec3f) -> f32 {
+fn mx_visibility(origin: vec3f, direction: vec3f, distance: f32) -> f32 {
+${analyticLights ? '  if (mx_intersect_lights(origin, direction).distance < distance) { return 0.0; }' : ''}
+${opaque ? '  return select(1.0, 0.0, traverse(origin, direction, distance, true).hitAny);' : `
   var ro = origin;
   var visibility = 1.0;
   for (var layer = 0u; layer < 128u; layer++) {
-    let hit = traverse(ro, direction, 1.0e30, false);
+    let hit = traverse(ro, direction, distance - dot(ro - origin, direction), false);
     if (!hit.hitAny) { return visibility; }
     let pos = ro + direction * hit.t;
     let c = mx_hit_closure(hit, pos, direction);
@@ -503,6 +518,10 @@ fn mx_alpha_visibility(origin: vec3f, direction: vec3f) -> f32 {
     ro = pos + direction * RAY_EPS;
   }
   return 0.0;
+`}
+}
+fn mx_alpha_visibility(origin: vec3f, direction: vec3f) -> f32 {
+  return mx_visibility(origin, direction, 1.0e30);
 }
 
 fn integrate(ro0 : vec3<f32>, rd0 : vec3<f32>, backgroundDirection : vec3<f32>, state : ptr<function, u32>${displayAovs ? ', coverage: ptr<function, f32>' : ''}) -> vec3<f32> {
@@ -526,27 +545,31 @@ fn integrate(ro0 : vec3<f32>, rd0 : vec3<f32>, backgroundDirection : vec3<f32>, 
   // Select once, at the first dispersive interface, and reuse at every bounce.
   var spectralChannel = 3u;
   var cameraSegment = true;
+${analyticLights ? '  var analyticNee = false;' : ''}
 
   for (var bounce = 0; bounce < 64; bounce = bounce + 1) {
-    let hit = traverse(ro, rd, 1.0e30, false);
+${analyticLights ? `    let emitter = mx_intersect_lights(ro, rd);
+    let hit = traverse(ro, rd, emitter.distance, false);` : '    let hit = traverse(ro, rd, 1.0e30, false);'}
     // Free-flight sampling: when inside a medium, a collision before the surface
     // scatters off the Henyey-Greenstein phase (importance-sampled, f/pdf = 1);
     // otherwise beta carries the surface-reaching transmittance (media.ts).
-    let tMax = select(1.0e30, hit.t, hit.hitAny);
+    let tMax = select(${analyticLights ? 'emitter.distance' : '1.0e30'}, hit.t, hit.hitAny);
     if (inMedium) {
       let ms = mx_sample_homogeneous(medium, tMax, state);
       beta = beta * ms.weight;
       environmentBeta = environmentBeta * ms.weight;
       if (ms.scattered) {
+        if (bounce >= i32(U.transport.x)) { break; }
         let sp = ro + rd * ms.t;
         let wiM = mx_sample_hg(-rd, medium.g, rng_next(state), rng_next(state));
         specularBounce = false;
         diffuseBounce = false;
         splitFuzzEnvironment = false;
         bsdfPdf = 0.0;
+${analyticLights ? '        analyticNee = false; // No analytic-light NEE is performed at a volume collision.' : ''}
         ro = sp + wiM * RAY_EPS;
         rd = wiM;
-        if (bounce >= 3) {
+        if (bounce >= i32(U.transport.y)) {
           let q = clamp(max(beta.x, max(beta.y, beta.z)), 0.0, 0.95);
           if (rng_next(state) >= q) { break; }
           beta = beta / q;
@@ -554,6 +577,15 @@ fn integrate(ro0 : vec3<f32>, rd0 : vec3<f32>, backgroundDirection : vec3<f32>, 
         continue;
       }
     }
+${analyticLights ? `    if (!hit.hitAny && emitter.hit) {
+${displayAovs ? '      if (cameraSegment) { *coverage = 1.0; }' : ''}
+      var weight = 1.0;
+      if (analyticNee) {
+        weight = power_heuristic(1.0, bsdfPdf, 1.0, emitter.pdf);
+      }
+      radiance += beta * emitter.radiance * weight;
+      break;
+    }` : ''}
     if (!hit.hitAny) {
 ${displayAovs ? '      if (cameraSegment) { break; } // Visible dome is composited at display resolution.' : ''}
       // Environment reached by BSDF sampling; MIS-weight it against the env
@@ -616,6 +648,7 @@ ${displayAovs ? `    if (cameraSegment) {
 
     // Emitters have no NEE counterpart here, so add their radiance at full weight.
     if (c.hasEmission != 0u) { radiance = radiance + beta * c.emission; }
+    if (bounce >= i32(U.transport.x)) { break; }
 
     // A smooth dielectric (clear glass / mirror) is a near-delta BSDF: NEE can
     // only produce fireflies that the clamp removes, so skip it and treat the
@@ -624,7 +657,19 @@ ${displayAovs ? `    if (cameraSegment) {
 
     // Next-event estimation for the distant (delta) light: a delta direction has
     // no BSDF-sampling counterpart, so its MIS weight is 1 (no power heuristic).
-    if (!specular) {
+${analyticLights ? `    if (!specular && mx_light_count() > 0u) {
+      let light = mx_sample_light(pos, vec3f(rng_next(state), rng_next(state), rng_next(state)));
+      if (light.pdf > 0.0) {
+        let origin = pos + light.direction * RAY_EPS;
+        let visibility = mx_visibility(origin, light.direction, light.distance - 2.0 * RAY_EPS);
+        if (visibility > 0.0) {
+          let wi = transpose(frame) * light.direction;
+          let ev = mx_closure_eval(c, wo, wi);
+          let weight = select(power_heuristic(1.0, light.pdf, 1.0, ev.pdf), 1.0, light.delta);
+          radiance += beta * ev.value * light.radiance * (abs(wi.z) * visibility * weight / light.pdf);
+        }
+      }
+    }` : `    if (!specular && dot(lightRadiance, lightRadiance) > 0.0) {
       let visibility = mx_alpha_visibility(pos + toLight * RAY_EPS, toLight);
       if (visibility > 0.0) {
         let wiLight = transpose(frame) * toLight;
@@ -633,6 +678,7 @@ ${displayAovs ? `    if (cameraSegment) {
         radiance = radiance + beta * ev.value * lightRadiance * (cosL * visibility);
       }
     }
+`}
 
     // Diffuse illumination must test visibility too. Retain the separate SH/LTC
     // integration only for the existing fuzz path.
@@ -713,6 +759,7 @@ ${
     }
     beta = beta * bs.value * cosS / bs.pdf;
     bsdfPdf = bs.pdf;
+${analyticLights ? '    analyticNee = !specular && mx_light_count() > 0u;' : ''}
     specularBounce = specular;
     diffuseBounce = splitFuzzEnvironment && mx_closure_sampled_is_diffuse(c, wo, u.z);
     lastN = shadingNormal;
@@ -731,7 +778,7 @@ ${
       }
     }
 
-    if (bounce >= 3) {
+    if (bounce >= i32(U.transport.y)) {
       let q = clamp(max(beta.x, max(beta.y, beta.z)), 0.0, 0.95);
       if (rng_next(state) >= q) { break; }
       beta = beta / q;
@@ -762,6 +809,10 @@ fn camera_ray(px : vec2<f32>, dims : vec2<f32>, jitter : vec2<f32>) -> MxCameraR
   var ray : MxCameraRay;
   ray.origin = near.xyz / near.w;
   ray.direction = normalize(far.xyz / far.w - ray.origin);
+  if (U.transport.w > 0.5) {
+    ray.origin = U.eye.xyz;
+    ray.direction = normalize(far.xyz / far.w - ray.origin);
+  }
   ray.backgroundDirection = ray.direction;
   if (U.envTexture.y > 0.5) {
     let backgroundNear = U.backgroundInvViewProj * vec4<f32>(ndc, 0.0, 1.0);
@@ -832,9 +883,7 @@ ${displayAovs ? `  let oldCoverage = accum[outputPixel + 1u].x;
 `;
 }
 
-/** Full WGSL source of the compute path tracer. */
-export function pathTraceComputeWgsl(
-  options: {
+export interface PathTraceComputeOptions {
     textures?: boolean;
     varyings?: PtVaryings;
     dispatch?: PtMaterialDispatch;
@@ -845,8 +894,12 @@ export function pathTraceComputeWgsl(
     closureDispatch?: ClosureDispatchSpec;
     /** Viewer-only radiance/coverage records; reference layout stays unchanged. */
     displayAovs?: boolean;
-  } = {},
-): string {
+    opaque?: boolean;
+    analyticLights?: boolean;
+}
+
+/** Full WGSL source of the compute path tracer. */
+export function pathTraceComputeWgsl(options: PathTraceComputeOptions = {}): string {
   const textures = options.textures ?? false;
   const environment = options.environment ?? false;
   const dispatch = options.dispatch;
@@ -861,9 +914,10 @@ export function pathTraceComputeWgsl(
     wgslRng(),
     wgslTraversal(),
     wgslClosureSurface(textures, maxLobes, options.closureDispatch),
+    ...(options.analyticLights ? [ANALYTIC_LIGHTS_WGSL] : []),
     ...(varyings !== undefined ? [wgslVaryings(varyings)] : []),
     ...(dispatch !== undefined ? [wgslDispatch(dispatch)] : []),
-    wgslIntegrator(textures, dispatch !== undefined, environment, options.displayAovs ?? false),
+    wgslIntegrator(textures, dispatch !== undefined, environment, options.displayAovs ?? false, options.opaque ?? false, options.analyticLights ?? false),
     wgslEntry(options.displayAovs ?? false),
   ].join('\n');
 }
@@ -936,6 +990,7 @@ export function buildPathTraceUniform(
     d[81] = 1;
     d.set(scene.camera.backgroundInvViewProj, 84);
   }
+  d.set([scene.settings?.maxDepth ?? 64, scene.settings?.rouletteDepth ?? 3, scene.analyticLightCount ?? 0, scene.settings?.converted ? 1 : 0], 100);
   return d;
 }
 
@@ -956,18 +1011,14 @@ export interface PathTracePipeline {
  */
 export class PathTraceBackend {
   readonly #device: GPUDevice;
-  readonly #textures: boolean;
-  readonly #environment: boolean;
-  readonly #dispatch: PtMaterialDispatch | undefined;
+  readonly #options: PathTraceComputeOptions;
   #pipeline: PathTracePipeline | null = null;
   #frameIndex = 0;
   #tileIndex = 0;
 
-  constructor(device: GPUDevice, options: { textures?: boolean; dispatch?: PtMaterialDispatch; environment?: boolean } = {}) {
+  constructor(device: GPUDevice, options: PathTraceComputeOptions = {}) {
     this.#device = device;
-    this.#textures = options.textures ?? false;
-    this.#environment = options.environment ?? false;
-    this.#dispatch = options.dispatch;
+    this.#options = options;
   }
 
   get frameIndex(): number {
@@ -1002,11 +1053,7 @@ export class PathTraceBackend {
   /** Create (once) the compute pipeline from the generated WGSL. */
   createPipeline(checkedModule?: GPUShaderModule): PathTracePipeline {
     if (this.#pipeline) return this.#pipeline;
-    const code = pathTraceComputeWgsl({
-      textures: this.#textures,
-      environment: this.#environment,
-      ...(this.#dispatch ? { dispatch: this.#dispatch } : {}),
-    });
+    const code = pathTraceComputeWgsl(this.#options);
     const module = checkedModule ?? this.#device.createShaderModule({ code });
     const pipeline = this.#device.createComputePipeline({
       layout: 'auto',
