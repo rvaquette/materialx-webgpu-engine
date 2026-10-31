@@ -10,6 +10,7 @@ const libraryRoot = process.env.MX_LIB_ROOT ?? 'D:/WebGL2/MaterialX/MaterialX-rv
 const sceneNames = [
   'standard-shader-ball',
   'mtlx-library',
+  'pathtracer',
   'test_material_disney_gold',
   'test_material_brick_procedural',
   'test_material_brick_metal_mix',

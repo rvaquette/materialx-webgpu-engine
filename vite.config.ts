@@ -95,5 +95,17 @@ export default defineConfig({
   build: {
     target: 'es2022',
     sourcemap: true,
+    rolldownOptions: {
+      output: {
+        codeSplitting: {
+          includeDependenciesRecursively: false,
+          groups: [
+            { name: 'materialx-compiler', test: /[\\/]src[\\/](compiler|materialx|render[\\/]bsdf)[\\/]/ },
+            { name: 'scene-assets', test: /[\\/]src[\\/](usd|geometry|assets)[\\/]/ },
+            { name: 'pathtracing', test: /[\\/]src[\\/]render[\\/]pathtracing[\\/]/ },
+          ],
+        },
+      },
+    },
   },
 });

@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>MaterialX WebGPU Engine</title>
+    <style>html,body{color:#e6e6e6;background:#101014;height:100%;margin:0;font-family:system-ui,sans-serif}#app{flex-direction:column;height:100%;display:flex}canvas{aspect-ratio:1;object-fit:contain;touch-action:none;-webkit-user-select:none;user-select:none;flex:none;align-self:center;width:512px;max-width:100%;height:auto;display:block}#status{padding:8px 12px;font-size:13px}#busy-indicator{align-items:center;gap:8px;font-size:13px;display:inline-flex}#busy-indicator[hidden]{display:none}#busy-indicator:before{content:"";border:2px solid #3a3a44;border-top-color:#91d5c4;border-radius:50%;width:14px;height:14px;animation:.8s linear infinite busy-spin}@keyframes busy-spin{to{transform:rotate(360deg)}}@media (prefers-reduced-motion:reduce){#busy-indicator:before{animation:none}}#toolbar{border-bottom:1px solid #26262c;flex-wrap:wrap;align-items:center;gap:8px;padding:8px 12px;display:flex}#toolbar label{color:#a8a8b0;font-size:13px}#toolbar select,#material-controls select{color:#e6e6e6;background:#1c1c22;border:1px solid #3a3a44;border-radius:4px;max-width:100%;min-height:44px;padding:4px 8px;font-size:13px}#materials-panel,#shader-errors-panel{border-bottom:1px solid #26262c;padding:0 12px}#materials-panel summary,#shader-errors-panel summary{cursor:pointer;padding:12px 0}#shader-errors-panel{min-width:0}#shader-errors{white-space:pre-wrap;overflow-wrap:anywhere;color:#f3b6b6;max-height:240px;margin:0 0 12px;font:12px/1.5 ui-monospace,monospace;overflow:auto}#material-controls{border:0;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;min-width:0;margin:0;padding:0 0 12px;display:grid}#material-controls label{color:#a8a8b0;flex-direction:column;gap:6px;min-width:0;font-size:13px;display:flex}#material-folders{display:contents}#material-controls select{box-sizing:border-box;width:100%;min-width:0}#material-parameters{border:0;min-width:0;margin:0;padding:0 0 12px}#material-parameters p,.parameter-row small{color:#a8a8b0;font-size:12px}.parameter-grid{grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:8px;max-height:340px;margin-top:12px;display:grid;overflow:auto}.parameter-row{border:1px solid #3a3a44;border-radius:4px;min-width:0}.parameter-row legend{overflow-wrap:anywhere;font-size:12px}.parameter-values{align-items:center;gap:6px;margin-top:6px;display:flex}.parameter-values input{width:100%;min-width:0}.parameter-values input[type=checkbox]{width:auto;min-height:32px}.parameter-values input[type=color]{max-width:44px}.parameter-values input[type=number],#material-parameters button{color:#e6e6e6;background:#1c1c22;border:1px solid #3a3a44;border-radius:4px;min-height:32px;padding:6px}#material-parameters:disabled{opacity:.6}@media (max-width:600px){#material-controls{grid-template-columns:minmax(0,1fr)}}#backend-mode{border:1px solid #3a3a44;border-radius:4px;display:inline-flex;overflow:hidden}#backend-mode button,#pathtracing-toggle{color:#e6e6e6;min-height:36px;font:inherit;cursor:pointer;background:#1c1c22;border:0;padding:5px 10px}#pathtracing-toggle{border:1px solid #3a3a44;border-radius:4px;min-width:112px}#pathtracing-toggle:disabled{opacity:.4;cursor:default}#pathtracing-toggle:focus-visible{outline-offset:2px;outline:2px solid #91d5c4}#pathtracing-denoise-label{cursor:pointer;align-items:center;gap:6px;min-height:44px;display:inline-flex}#backend-mode button+button{border-left:1px solid #3a3a44}#backend-mode button[aria-pressed=true]{color:#fff;background:#315c53}#backend-mode button:focus-visible{outline-offset:-2px;outline:2px solid #91d5c4}</style>
+    <script type="module" crossorigin src="./assets/index-BiRCM0o6.js"></script>
+    <link rel="modulepreload" crossorigin href="./assets/environment-cdf-QOE8J7Pm.js">
+  </head>
+  <body>
+    <div id="app">
+      <div id="toolbar">
+        <span id="busy-indicator" role="status" aria-live="polite">Chargement / compilation...</span>
+        <label for="scene">Scene</label>
+        <select id="scene"></select>
+        <label for="resolution">Resolution</label>
+        <select id="resolution">
+          <option value="256">256 x 256</option>
+          <option value="512" selected>512 x 512</option>
+          <option value="1024">1024 x 1024</option>
+        </select>
+        <label for="raster-quality">Raster quality</label>
+        <select id="raster-quality" title="Interactive: 16 filtered environment samples. Reference: 64 samples with MIS, slower. Path tracing is unchanged.">
+          <option value="interactive" selected>Interactive (filtered IBL)</option>
+          <option value="reference">Reference (64 samples)</option>
+        </select>
+        <span id="backend-label">Mode</span>
+        <div id="backend-mode" role="group" aria-labelledby="backend-label">
+          <button type="button" data-backend="raster" aria-pressed="true">Raster</button>
+          <button type="button" data-backend="pathtracing" aria-pressed="false">Path tracing</button>
+        </div>
+        <button id="pathtracing-toggle" type="button" disabled title="Mettre le path tracer en pause">
+          <span id="pathtracing-toggle-icon" aria-hidden="true">&#10074;&#10074;</span>
+          <span id="pathtracing-toggle-label">Pause</span>
+        </button>
+        <span id="pathtracing-spp" hidden title="Samples par pixel"></span>
+        <label id="pathtracing-denoise-label" for="pathtracing-denoise" title="Denoiser JS neuronal sur WebGPU, chargé à la demande avec son modèle local. Approximation d'affichage LDR après un passage complet ; désactiver pour voir le rendu brut.">
+          <input id="pathtracing-denoise" type="checkbox" />
+          Denoiser JS (neural)
+        </label>
+      </div>
+      <details id="materials-panel">
+        <summary>Matériaux</summary>
+        <fieldset id="material-controls" disabled>
+          <label for="material-object">Objet<select id="material-object"></select></label>
+          <div id="material-folders"></div>
+          <label for="material-file">Matériau<select id="material-file"></select></label>
+        </fieldset>
+        <details id="parameters-panel">
+          <summary>Paramètres du matériau</summary>
+          <fieldset id="material-parameters" disabled aria-label="Paramètres du matériau"></fieldset>
+        </details>
+      </details>
+      <details id="shader-errors-panel">
+        <summary>Erreurs WGSL (<span id="shader-error-count" aria-live="polite">0</span>)</summary>
+        <pre id="shader-errors">Aucune erreur WGSL.</pre>
+      </details>
+      <div id="status" role="alert" hidden></div>
+      <canvas id="view" width="512" height="512" aria-busy="true"></canvas>
+    </div>
+  </body>
+</html>

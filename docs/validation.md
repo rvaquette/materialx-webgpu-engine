@@ -31,6 +31,24 @@ d'erreur :
 
 ## Profils raster et réactivité du viewer mobile
 
+Les builds production et shaderball utilisent le découpage Rolldown configuré dans
+[`vite.config.ts`](../vite.config.ts) : compilateur MaterialX, chargement USD et
+géométrie, et path tracing sont placés dans des chunks distincts. Les dépendances
+ne sont pas capturées récursivement par ces groupes. Le seuil Vite de 500 Ko reste
+inchangé ; contrôler les tailles affichées par `npm run build` et
+`npm run build:shaderball`. Ce découpage facilite le cache et réduit la taille
+maximale des chunks, mais ne constitue pas un chargement différé des backends :
+les imports statiques restent chargés au démarrage. Les shaders et les paramètres
+de rendu ne sont pas modifiés.
+
+Le sélecteur de scènes inclut automatiquement tous les fichiers `.usda` directement
+présents dans `scenes/pathtracer`, triés par nom et préfixés `Pathtracer -`.
+Le catalogue conserve les scènes existantes et leur choix par défaut. Recompiler
+l'application après ajout ou suppression d'une scène pour actualiser le build
+statique ; `npm run build` copie aussi ce dossier et ses ressources associées.
+L'inscription au catalogue ne garantit pas que les assets externes d'une scène
+sont disponibles : les erreurs de chargement restent affichées dans le viewer.
+
 Le viewer propose deux profils explicitement sélectionnables :
 
 - **Interactive (filtered IBL)**, par défaut dans le viewer : 16 échantillons

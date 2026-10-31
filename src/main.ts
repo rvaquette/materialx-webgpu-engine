@@ -44,7 +44,8 @@ async function main(): Promise<void> {
   const initialEntry = params.get('entry') ?? SCENE_CATALOG[0]!.entry;
   const initialBackend = params.get('backend') ?? 'raster';
   const initialResolution = Number(params.get('res') ?? 512);
-  if (!initialEntry.startsWith('/scenes/') || initialEntry.split('/').includes('..') || !/\.usda?$/i.test(initialEntry)) {
+  const scenePath = initialEntry.replace(/^\.\//, '/');
+  if (!scenePath.startsWith('/scenes/') || scenePath.split('/').includes('..') || !/\.usda?$/i.test(scenePath)) {
     throw new Error('Invalid scene entry: expected a USD path under /scenes/.');
   }
   if (initialBackend !== 'raster' && initialBackend !== 'pathtracing') throw new Error('Unsupported backend.');

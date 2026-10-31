@@ -10,6 +10,7 @@ vi.mock('../src/render/viewer.ts', () => ({
     objects = [];
     constructor(options: { onStatus: (status: ViewerStatus) => void }) { state.onStatus = options.onStatus; }
     load = state.load;
+    setBackend = vi.fn();
   },
 }));
 
@@ -32,6 +33,7 @@ describe('viewer loading indicator', () => {
     status.hidden = true;
     status.textContent = '';
     canvas.setAttribute.mockClear();
+    vi.stubGlobal('location', { search: '' });
     vi.stubGlobal('document', {
       baseURI: 'http://localhost/',
       getElementById: (id: string) => ({ view: canvas, status, 'busy-indicator': indicator, 'pathtracing-spp': spp })[id],
@@ -39,7 +41,10 @@ describe('viewer loading indicator', () => {
     });
     const device = { addEventListener: vi.fn(), lost: new Promise(() => {}) };
     vi.stubGlobal('navigator', { gpu: {
-      requestAdapter: async () => ({ requestDevice: async () => device }),
+      requestAdapter: async () => ({
+        limits: { maxStorageBufferBindingSize: 1 << 28, maxBufferSize: 1 << 28, maxStorageBuffersPerShaderStage: 8 },
+        requestDevice: async () => device,
+      }),
       getPreferredCanvasFormat: () => 'bgra8unorm',
     } });
     vi.spyOn(console, 'error').mockImplementation(() => {});

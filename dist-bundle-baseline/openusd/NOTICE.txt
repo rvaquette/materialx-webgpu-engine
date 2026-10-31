@@ -1,0 +1,11 @@
+OpenUSD browser bindings are copied unmodified from @needle-tools/usd@1.1.2
+by scripts/package-static.mjs. The scene assets are not included.
+
+Package author: Needle (https://needle.tools/)
+Package source: https://github.com/needle-tools/usd-viewer
+Package license: PolyForm-Noncommercial-1.0.0
+License terms: https://polyformproject.org/licenses/noncommercial/1.0.0
+License text mirror: https://github.com/spdx/license-list-data/blob/main/text/PolyForm-Noncommercial-1.0.0.txt
+
+This license restricts permitted uses, including commercial use.
+See docs/dependencies.md before distributing this runtime.

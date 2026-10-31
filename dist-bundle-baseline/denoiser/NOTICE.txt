@@ -1,0 +1,19 @@
+Vendored, unmodified files supplied with the local GLSL-PathTracer-JS project:
+
+denoiser.js:
+  src/external/denoiser/denoiser.js
+  SHA256 0362F90554F25660721233C26D975A8B47A1C7E0F929C8BE3038BB7CA644274D
+
+rt_ldr_small.tza:
+  chrome-extension-shadertoy/tzas/rt_ldr_small.tza
+  SHA256 D50AD6CA693EC8F2BDFAC5D4657C4CB7C0763B20A9768E66F0402A00046B704C
+
+The denoiser package is by Dennis Smolek (MIT); it bundles TensorFlow.js
+(Google LLC, Apache-2.0). Copyright and license notices embedded in the bundle
+are preserved. The neural model is an Open Image Denoise RT LDR model
+(Intel Corporation, Apache-2.0).
+Both license texts are included in this directory.
+
+Package provenance: https://www.npmjs.com/package/denoiser
+Open Image Denoise: https://github.com/RenderKit/oidn
+OIDN license: https://github.com/RenderKit/oidn/blob/master/LICENSE.txt
