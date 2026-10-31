@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { loadUsdScene, loadEnvironment, resolveMaterialTextureUrl, meshSourceFromScene } from '../../src/render/usd-scene-assets.ts';
+import { loadUsdScene, loadEnvironment, resolveMaterialTextureUrl, meshSourceFromScene, joinUrl } from '../../src/render/usd-scene-assets.ts';
 import { composeStage } from '../../src/usd/compose.ts';
 import { AssetResolver } from '../../src/assets/resolver.ts';
 import { IDENTITY4 } from '../../src/scene/transforms.ts';
@@ -12,6 +12,12 @@ vi.mock('three/addons/loaders/EXRLoader.js', () => ({
 }));
 
 describe('browser USD scene loading', () => {
+  it('retains absolute blob texture URLs for generated local MaterialX', () => {
+    expect(joinUrl('https://example.test/scenes/', 'blob:https://example.test/local-texture'))
+      .toBe('blob:https://example.test/local-texture');
+    expect(joinUrl('https://example.test/scenes/', 'data:image/png;base64,AAAA'))
+      .toBe('data:image/png;base64,AAAA');
+  });
   it('anchors material texture paths at the document by default or at an explicit scene root', () => {
     const directory = 'https://example.test/playground/materials/';
     expect(resolveMaterialTextureUrl('textures/base.png', directory)).toBe(`${directory}textures/base.png`);

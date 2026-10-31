@@ -1,9 +1,41 @@
 # USD import: loader qualification (T003)
 
-## Local GLB and OBJ geometry
+## Direct local GLB/glTF scenes in the UI
+
+Use **Ouvrir GLB/glTF + ressources** to select one `.glb`, or one `.gltf` together
+with its `.bin` and image files. **Ouvrir un dossier glTF** preserves directory
+paths, including textures with identical basenames in different subdirectories.
+The selected bundle must contain exactly one scene entry. Missing or ambiguous
+resources fail explicitly; local imports do not fall back to network downloads.
+
+The importer generates an in-memory MaterialX document per material, using
+`disney_principled`, and compiles it through the same graph path as USD materials.
+Base color (linear factor plus sRGB texture), metallic (B channel), roughness
+(G channel), clearcoat, transmission and IOR are mapped. Texture factors are
+applied in the shader, not baked into quantized pixels. Packed scalar channels
+are extracted from the decoded image; scale, offset and wrap mode are retained.
+Materials remain editable and replaceable in the existing material panel, in
+both raster and path tracing. Mesh transforms, normals, mirrored winding and
+material groups are preserved; shared materials are compiled once.
+
+This is a Disney approximation, not glTF rendering conformance. Visible import
+warnings report unsupported inputs: normal/bump maps, opacity/masking/blending,
+emission, baked occlusion, vertex colors, alternate UV sets, texture rotation,
+volume/attenuation and some material extensions. Unlit materials are approximated
+as lit Disney materials. Mip filtering is approximated by the existing engine
+sampler. glTF cameras and punctual lights currently produce warnings: the viewer
+uses bounds-based perspective framing and its default environment instead.
+Animations are not played; skinned, morphed and GPU-instanced meshes are rejected.
+
+Generated documents and texture URLs are kept for material changes and device
+recovery, then released when another scene successfully replaces the local scene.
+The local importer is loaded on demand; adding this feature does not change the
+shading of existing USD scenes.
+
+## Local GLB, glTF and OBJ geometry from USD
 
 The interactive viewer and USD image harness can load static geometry with
-Three.js `GLTFLoader` (GLB) and `OBJLoader` (OBJ). Author the engine-specific
+Three.js `GLTFLoader` (GLB/glTF) and `OBJLoader` (OBJ). Author the engine-specific
 attributes on a `Mesh` prim, retaining normal USD material bindings:
 
 ```usda
@@ -14,12 +46,26 @@ def Mesh "Preview" {
 }
 ```
 
+For a JSON glTF asset, use the same attribute with a `.gltf` filename:
+
+```usda
+def Mesh "Model" {
+    custom asset engine:geometry:file = @./model/model.gltf@
+    rel material:binding = </World/Looks/OpenPBRMaterial>
+}
+```
+
+External `.bin` paths are resolved relative to the glTF file and loaded through
+the geometry reader. The glTF materials and textures are not loaded in this mode:
+the USDA binding remains authoritative. This is an engine geometry attribute,
+not a standard USD composition reference to a glTF layer.
+
 `engine:geometry:object` optionally selects a uniquely named object and its
-descendants. Without it, all triangle meshes in the default GLB scene or OBJ are
+descendants. Without it, all triangle meshes in the default GLB/glTF scene or OBJ are
 merged. Asset paths resolve relative to the authoring USDA layer, including
-sublayers. Each asset is fetched/parsed once per scene load. GLB node/parent
+sublayers. Each asset is fetched/parsed once per scene load. GLB/glTF node/parent
 transforms are baked into the selected geometry; USD transforms are then applied
-normally. Normals are preserved. GLB UVs are converted from glTF's top-left
+normally. Normals are preserved. GLB/glTF UVs are converted from glTF's top-left
 origin to USD/MaterialX's bottom-left origin (`v = 1 - v`) before tangent
 generation and upload to either renderer; OBJ and inline USD UVs are unchanged.
 Inline USD PreviewSurface textures keep those bottom-left UVs when converted to

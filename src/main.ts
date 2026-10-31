@@ -366,7 +366,7 @@ async function main(): Promise<void> {
   }
   localFiles?.addEventListener('change', () => void openLocalFiles(localFiles));
   localFolder?.addEventListener('change', () => void openLocalFiles(localFolder));
-  globalThis.addEventListener?.('pagehide', () => localScene?.dispose());
+  globalThis.addEventListener?.('pagehide', event => { if (!event.persisted) localScene?.dispose(); });
 
   select?.addEventListener('change', () => void loadEntry(select.value));
   rasterQuality?.addEventListener('change', async () => {

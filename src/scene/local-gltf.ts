@@ -91,7 +91,7 @@ export async function importLocalGltf(files: readonly File[], entryFile?: File):
       if (!result) {
         result = (async () => {
           const image: unknown = texture.image;
-          if (!(image instanceof ImageBitmap) && !(image instanceof HTMLImageElement) && !(image instanceof HTMLCanvasElement)) {
+          if (!(typeof ImageBitmap !== 'undefined' && image instanceof ImageBitmap) && !(image instanceof HTMLImageElement) && !(image instanceof HTMLCanvasElement)) {
             throw new Error(`Unsupported decoded glTF texture: ${texture.name}`);
           }
           const canvas = document.createElement('canvas');
@@ -138,7 +138,9 @@ export async function importLocalGltf(files: readonly File[], entryFile?: File):
         throw new Error(`Skinned, morphed or GPU-instanced meshes are not supported: ${node.name}`);
       }
       if (node.geometry.hasAttribute('color')) warn(`${node.name}: vertex colors are not applied to the Disney material.`);
-      if (!node.visible) continue;
+      let visible = true;
+      for (let ancestor: typeof node.parent = node; ancestor; ancestor = ancestor.parent) visible = visible && ancestor.visible;
+      if (!visible) continue;
       const nodeMaterials = Array.isArray(node.material) ? node.material : [node.material];
       const groups = Array.isArray(node.material) ? node.geometry.groups : [{ start: 0, count: node.geometry.index?.count ?? node.geometry.getAttribute('position').count, materialIndex: 0 }];
       if (!groups.length) throw new Error(`Missing material groups: ${node.name}`);
@@ -146,18 +148,19 @@ export async function importLocalGltf(files: readonly File[], entryFile?: File):
         if (!group.count) continue;
         let material = nodeMaterials[group.materialIndex ?? 0];
         if (!material) throw new Error(`Missing material for mesh ${node.name}`);
+        const originalMaterial = material;
         if (material instanceof MeshBasicMaterial) {
           warn(`${node.name}: unlit material is approximated by a lit Disney material.`);
           const lit = new MeshStandardMaterial({ color: material.color, map: material.map, transparent: material.transparent, opacity: material.opacity, alphaTest: material.alphaTest });
           lit.name = material.name; material = lit;
         }
-        let materialPath = materialPaths.get(material);
+        let materialPath = materialPaths.get(originalMaterial);
         if (!materialPath) {
           const name = `material_${materialPaths.size}_${material.name.replace(/[^A-Za-z0-9_]/g, '_') || 'default'}`;
           materialPath = `/World/Looks/${name}`;
           const assetPath = new URL(`${name}.mtlx`, entryUri).href;
           materialTexts.set(assetPath, await gltfMaterialToMaterialX(material, name, exportTexture, warn));
-          materialPaths.set(material, materialPath);
+          materialPaths.set(originalMaterial, materialPath);
           prims.set(materialPath, prim(materialPath, 'Material'));
           materials.push({ primPath: materialPath, assetPath, referencedPrimPath: `/MaterialX/Materials/${name}`, materialName: name });
         }
@@ -196,7 +199,7 @@ export async function importLocalGltf(files: readonly File[], entryFile?: File):
         if (material instanceof MeshStandardMaterial || material instanceof MeshPhysicalMaterial || material instanceof MeshBasicMaterial) {
           for (const value of Object.values(material)) if (value instanceof Texture) {
             const image: unknown = value.image;
-            if (image instanceof ImageBitmap) images.add(image);
+            if (typeof ImageBitmap !== 'undefined' && image instanceof ImageBitmap) images.add(image);
             value.dispose();
           }
         }

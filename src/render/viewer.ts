@@ -409,7 +409,18 @@ export class InteractiveViewer {
         this.#orbit = OrbitCamera.fromEyeTarget(eye, target, this.#width / this.#height, cameraFovY(camera, this.#width / this.#height) || 0.62);
         if (pathTraceSettings(loaded.scene).converted) this.#orbit.projection = camera.projection;
       } else {
-        this.#orbit = OrbitCamera.fromEyeTarget(frame.camera.eye, center, this.#width / this.#height);
+        if (options.imported) {
+          const radius = Math.max(1e-6, Math.hypot(
+            bounds.max[0] - bounds.min[0], bounds.max[1] - bounds.min[1], bounds.max[2] - bounds.min[2],
+          ) / 2);
+          const fovY = Math.PI / 3;
+          const distance = 1.2 * radius / Math.sin(fovY / 2);
+          const eye: Vec3 = [center[0] + 0.657 * distance, center[1] + 0.438 * distance, center[2] + 0.613 * distance];
+          this.#orbit = OrbitCamera.fromEyeTarget(eye, center, this.#width / this.#height, fovY, radius / 1000, distance + radius * 100);
+          this.#orbit.projection = 'perspective';
+        } else {
+          this.#orbit = OrbitCamera.fromEyeTarget(frame.camera.eye, center, this.#width / this.#height);
+        }
       }
     }
     this.#detachControls();

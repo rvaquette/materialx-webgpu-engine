@@ -150,6 +150,23 @@ describe('interactive viewer resource lifecycle', () => {
     return { ...mock, loaded, canvas, statuses, viewer };
   }
 
+  it('frames imported local scenes from their bounds instead of using the fixed USD preview distance', async () => {
+    const { viewer, loaded, device } = await setup();
+    device.queue.writeBuffer.mockClear();
+    await viewer.load('scene.usda', new Map(), false, {
+      imported: { scene: loaded.scene, meshSource: { meshFor: () => undefined }, materialTexts: new Map() },
+    });
+    const eye = [...device.queue.writeBuffer.mock.calls].reverse().find(call =>
+      call[1] === 128 && call[2] instanceof Float32Array && call[2].length === 4)?.[2];
+    expect(eye).toBeInstanceOf(Float32Array);
+    if (!(eye instanceof Float32Array)) throw new Error('Missing camera eye uniform');
+    const bounds = loaded.resources.tlas.bounds;
+    const center = bounds.min.map((value, index) => (value + bounds.max[index]!) / 2);
+    const radius = Math.hypot(...bounds.min.map((value, index) => bounds.max[index]! - value)) / 2;
+    expect(Math.hypot(...Array.from(eye).slice(0, 3).map((value, index) => value - center[index]!)))
+      .toBeCloseTo(2.4 * radius, 2);
+  });
+
   it('updates live uniforms without reload, GPU recompilation or geometry upload', async () => {
     const { viewer, device, loaded } = await setup(false, true);
     const path = '/World/Ball';
