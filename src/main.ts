@@ -21,8 +21,14 @@ function showBusy(busy: boolean): void {
   document.getElementById('view')?.setAttribute('aria-busy', String(busy));
 }
 
+function setBusyMessage(text: string): void {
+  const indicator = document.getElementById('busy-indicator');
+  if (indicator && text) indicator.textContent = text;
+}
+
 function setStatus(text: string, error = true): void {
   statusIsError = error && text.length > 0;
+  if (!statusIsError) setBusyMessage(text);
   const el = document.getElementById('status');
   if (el) {
     el.textContent = text;
@@ -117,6 +123,7 @@ async function main(): Promise<void> {
   const pathTracingToggle = document.getElementById('pathtracing-toggle') as HTMLButtonElement | null;
   let operationBusy = false;
   let shaderBusy = false;
+  let shaderBusyMessage = 'Préparation du path tracer...';
 
   function updatePathTracingToggle(backend: string, paused: boolean): void {
     if (!pathTracingToggle) return;
@@ -137,6 +144,12 @@ async function main(): Promise<void> {
         spp.textContent = `${s.samples} spp${s.pathTracingPaused ? ' (pause)' : ''}`;
       }
       shaderBusy = s.backend === 'pathtracing' && (s.pathTracer === 'idle' || s.pathTracer === 'compiling');
+      if (shaderBusy) {
+        shaderBusyMessage = s.pathTracer === 'compiling'
+          ? 'Compilation des shaders du path tracer...'
+          : 'Préparation du path tracer...';
+        if (!operationBusy) setBusyMessage(shaderBusyMessage);
+      }
       showBusy(operationBusy || shaderBusy);
       if (s.backend === 'pathtracing' && s.pathTracer === 'error') {
         setStatus('Echec de compilation du path tracer. Consulter les erreurs WGSL.');
@@ -161,7 +174,7 @@ async function main(): Promise<void> {
     container: parameterControls,
     parameters: () => viewer.objectParameters(objectSelect?.value ?? ''),
     apply: async changes => {
-      setBusy(true);
+      setBusy(true, 'Application des paramètres du matériau...');
       try { await viewer.setObjectParameters(objectSelect?.value ?? '', changes); }
       finally { setBusy(false); }
     },
@@ -177,7 +190,7 @@ async function main(): Promise<void> {
       console.error(`WebGPU device lost (${info.reason}): ${info.message}`);
       if (info.reason === 'destroyed') return;
       deviceLost = true;
-      setBusy(true);
+      setBusy(true, 'Réinitialisation du moteur WebGPU...');
       if (++recoveries > 3) {
         setStatus(`GPU perdu (${info.message || info.reason}). Recharger la page.`);
         return;
@@ -215,8 +228,10 @@ async function main(): Promise<void> {
   });
   ptDenoise?.addEventListener('change', () => viewer.setPathTracingDenoise(ptDenoise.checked));
 
-  function setBusy(busy: boolean): void {
+  function setBusy(busy: boolean, message?: string): void {
     operationBusy = busy;
+    if (busy && message) setBusyMessage(message);
+    if (!busy && shaderBusy) setBusyMessage(shaderBusyMessage);
     if (busy) setStatus('', false);
     else if (!statusIsError) setStatus('', false);
     showBusy(!statusIsError && (operationBusy || shaderBusy));
@@ -289,7 +304,7 @@ async function main(): Promise<void> {
   objectSelect?.addEventListener('change', () => { refreshMaterials(); parameterEditor?.refresh(); });
   materialSelect?.addEventListener('change', async () => {
     if (!objectSelect) return;
-    setBusy(true);
+    setBusy(true, 'Compilation du matériau...');
     setStatus('Compilation du matériau...', false);
     try {
       await viewer.setObjectMaterial(objectSelect.value, materialSelect.value || undefined);
@@ -303,7 +318,7 @@ async function main(): Promise<void> {
   });
 
   async function loadEntry(entry: string): Promise<boolean> {
-    setBusy(true);
+    setBusy(true, `Chargement de ${entry}...`);
     setStatus(`Chargement de ${entry}...`, false);
     let imported: LocalGltfScene | undefined;
     try {
@@ -345,7 +360,7 @@ async function main(): Promise<void> {
   async function openLocalFiles(input: HTMLInputElement): Promise<void> {
     const files = Array.from(input.files ?? []);
     if (!files.length) return;
-    setBusy(true);
+    setBusy(true, 'Import des fichiers glTF...');
     let imported: LocalGltfScene | undefined;
     const previous = localScene;
     try {
@@ -384,7 +399,7 @@ async function main(): Promise<void> {
   select?.addEventListener('change', () => void loadEntry(select.value));
   rasterQuality?.addEventListener('change', async () => {
     const previous = viewer.rasterQuality;
-    setBusy(true);
+    setBusy(true, 'Compilation du profil raster...');
     setStatus('Compilation du profil raster...', false);
     try {
       const quality = rasterQuality.value;
@@ -399,7 +414,7 @@ async function main(): Promise<void> {
   });
   resolution?.addEventListener('change', async () => {
     const previousSize = canvas.width;
-    setBusy(true);
+    setBusy(true, 'Redimensionnement du rendu...');
     try {
       await viewer.resize(Number(resolution.value));
     } catch (error) {
@@ -424,7 +439,7 @@ async function main(): Promise<void> {
   await loadEntry(initialEntry);
   const initialMaterial = params.get('openpbr');
   if (initialMaterial && !statusIsError) {
-    setBusy(true);
+    setBusy(true, 'Chargement du matériau initial...');
     try {
       const assetPath = new URL(initialMaterial, document.baseURI).href;
       const response = await fetch(assetPath);

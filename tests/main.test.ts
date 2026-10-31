@@ -64,8 +64,10 @@ describe('viewer loading indicator', () => {
     await import('../src/main.ts');
     await settle();
     expect(state.load).toHaveBeenCalled();
+    expect(indicator.textContent).toContain('Chargement de ');
     emit('idle', 'raster');
     expect(indicator.hidden).toBe(false);
+    expect(indicator.textContent).toBe(`Chargement de ${state.load.mock.calls[0]![0]}...`);
     expect(status.hidden).toBe(true);
     finishLoad();
     await settle();
@@ -81,8 +83,10 @@ describe('viewer loading indicator', () => {
     await settle();
     emit('idle');
     expect(indicator.hidden).toBe(false);
+    expect(indicator.textContent).toBe('Préparation du path tracer...');
     emit('compiling');
     expect(indicator.hidden).toBe(false);
+    expect(indicator.textContent).toBe('Compilation des shaders du path tracer...');
     emit('ready');
     expect(indicator.hidden).toBe(true);
     expect(status.hidden).toBe(true);
