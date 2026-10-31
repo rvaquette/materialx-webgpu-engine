@@ -189,18 +189,24 @@ describe('interactive viewer resource lifecycle', () => {
     expect(viewer.objectParameters(path).find(parameter => parameter.id === 'surface:base_color')!.value).toEqual(original);
   });
 
-  it('keeps editable coat reachable without recompilation and retains parameter defaults', async () => {
+  it('rebuilds when an optional lobe activates or deactivates but keeps edits live while active', async () => {
     const { viewer, device } = await setup(false, true);
     const shaders = device.createShaderModule.mock.calls.length;
     const loads = vi.mocked(loadUsdScene).mock.calls.length;
     await viewer.setObjectParameters('/World/Ball', new Map([['surface:coat', [1]]]));
-    expect(device.createShaderModule).toHaveBeenCalledTimes(shaders);
+    expect(device.createShaderModule.mock.calls.length).toBeGreaterThan(shaders);
     expect(loadUsdScene).toHaveBeenCalledTimes(loads);
     const coat = viewer.objectParameters('/World/Ball').find(parameter => parameter.id === 'surface:coat')!;
     expect(coat.value).toEqual([1]);
     expect(coat.initial).toEqual([0]);
+    const activeShaders = device.createShaderModule.mock.calls.length;
+    await viewer.setObjectParameters('/World/Ball', new Map([['surface:coat', [0.5]]]));
+    expect(device.createShaderModule).toHaveBeenCalledTimes(activeShaders);
+    const deactivationShaders = device.createShaderModule.mock.calls.length;
+    await viewer.setObjectParameters('/World/Ball', new Map([['surface:coat', [0]]]));
+    expect(device.createShaderModule.mock.calls.length).toBeGreaterThan(deactivationShaders);
     await expect(viewer.setObjectParameters('/World/Ball', new Map([['surface:base_color', [NaN, 0, 0]]]))).rejects.toThrow();
-    expect(viewer.objectParameters('/World/Ball').find(parameter => parameter.id === 'surface:coat')!.value).toEqual([1]);
+    expect(viewer.objectParameters('/World/Ball').find(parameter => parameter.id === 'surface:coat')!.value).toEqual([0]);
   });
 
   it('updates PT material uniforms and resets accumulation without rebuilding the compute pipeline', async () => {

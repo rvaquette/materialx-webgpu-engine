@@ -70,7 +70,9 @@ export class MaterialParameterEditor {
       legend.textContent = parameter.label;
       row.appendChild(legend);
       const badge = document.createElement('small');
-      badge.textContent = parameter.update === 'uniform' ? `${parameter.type} - En direct, recompilation si nécessaire` : `${parameter.type} - Recalcul après modification`;
+      badge.textContent = parameter.update === 'uniform' ? `${parameter.type} - En direct`
+        : parameter.update === 'feature' ? `${parameter.type} - En direct, recompilation au changement de fonctionnalité`
+          : `${parameter.type} - Recalcul après modification`;
       row.appendChild(badge);
       const controls = document.createElement('div');
       controls.className = 'parameter-values';

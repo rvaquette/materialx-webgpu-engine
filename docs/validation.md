@@ -619,8 +619,13 @@ fonctions attribuées sont conservées ; les commentaires n'influencent pas cett
 analyse. Le générateur expose `pruneUnusedFunctions` pour les autres consommateurs.
 Le chemin eval/sample du fuzz est également remplacé par le chemin de base exact
 uniquement si toutes les variantes et tous les matériaux fallback prouvent son
-absence. Une métadonnée manquante conserve le chemin générique. Les entrées
-éditables restent dynamiques, même lorsque leur valeur initiale est zéro.
+absence. Une métadonnée manquante conserve le chemin générique. Les paramètres
+numériques ordinaires restent dynamiques ; les contrôles de fonctionnalité
+éditables sont compilés selon leur état courant (lobe absent ou actif,
+couverture opaque ou partielle). Seul un franchissement de frontière recompilé
+change la variante ; les valeurs restent uniformes à l'intérieur d'un même état.
+Les dépendances texturées ou connectées restent dynamiques et ne sont pas
+spécialisées à partir de leur valeur par défaut.
 Ni les formules BSDF/PDF, ni le nombre de samples, ni les graines RNG, ni la
 résolution ne sont simplifiés pour accélérer la compilation.
 
@@ -916,6 +921,27 @@ Seule une couverture partielle poursuit les 127 impacts restants, avec les memes
 distances, decalages et produits de transmittance. Cela evite d'imbriquer la
 traversee BVH dans la boucle d'alpha pour le cas courant, sans figer les uniformes
 editables ni remplacer les materiaux transparents par des materiaux opaques.
+Verification GPU isolee de cette boucle : 512 cas synthetiques (aucun impact,
+couverture nulle, opaque, partielle, plusieurs couches, segment fini et limite
+128 impacts), aucun ecart entre ancienne et nouvelle boucle, aucun non-fini.
+Ce test isole la logique de continuation ; il ne prouve pas a lui seul la parite
+de toute l'image ni les performances de toutes les scenes.
+
+Mesure viewer coffee pot sur Intel Iris Xe, camera fixe, 512 x 512, profondeur 5,
+denoiser desactive, onglet visible, hors chargement/compilation, jusqu'a 30 spp :
+ancienne version 29,76 / 26,58 s (~28,17 s) ; evaluateur d'opacite seul
+28,06 / 29,96 / 30,06 s (~29,36 s, pas de gain) ; evaluateur + premier impact
+hors boucle dans la version reconstruite 22,99 / 22,35 / 22,08 s (~22,47 s).
+Le gain observe par rapport aux mesures initiales est d'environ 20 % ; les essais
+ne sont pas interleaves, et restent sensibles a la charge et aux frequences GPU.
+La reference GLSL mesuree precedemment reste plus rapide (~5,7 s).
+Après spécialisation des paramètres éditables par état de fonctionnalité, le
+build de production a rendu le même coffee pot à 30 spp en 5,12 / 4,70 / 4,68 s
+lors de trois essais viewer (512 x 512, profondeur 5, denoiser désactivé,
+caméra fixe, compilation terminée). Le compteur a atteint 30 spp et aucun
+diagnostic WGSL n'était présent. Cette mesure dans le navigateur intégré n'était
+pas intercalée avec les mesures précédentes ; elle indique le résultat observé,
+pas une comparaison contrôlée ni une garantie sur d'autres GPU/scènes.
 Les limites de securite restent 64 intersections par trajet et 128 pour les
 rayons d'ombre ; les empilements au-dela de ces limites ne sont pas valides.
 Le raster rejette les fragments de couverture nulle et retourne l'alpha reel.

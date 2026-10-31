@@ -2,7 +2,7 @@ import { emitLayeredSurface } from '../compiler/surface-wgsl.ts';
 import { hashString } from '../compiler/cache.ts';
 import type { WgslUniformField } from '../compiler/wgsl.ts';
 import type { ResolvedGraph } from '../materialx/graph.ts';
-import type { ResolvedSurface } from '../materialx/surface-graph.ts';
+import type { NormalizedSurfaceInput, ResolvedSurface } from '../materialx/surface-graph.ts';
 import { assembleIrForwardShader } from './raster/ir-forward.ts';
 import type { MaterialResource, SceneResources } from './scene-resources.ts';
 import { extractDisplacement } from './graph-material-compiler.ts';
@@ -13,8 +13,8 @@ export interface MaterialParameter {
   type: 'float' | 'integer' | 'boolean' | 'color3' | 'vector2' | 'vector3' | 'vector4';
   value: readonly number[];
   initial: readonly number[];
-  /** Uniform edits are immediate; topology, upstream nodes and displacement rebuild. */
-  update: 'uniform' | 'rebuild';
+  /** Uniform edits are immediate; feature boundaries and topology rebuild. */
+  update: 'uniform' | 'feature' | 'rebuild';
   uniform?: string;
   nodeId?: string;
   input: string;
@@ -23,6 +23,119 @@ export interface MaterialParameter {
 const numericTypes = new Set(['float', 'integer', 'boolean', 'color3', 'vector2', 'vector3', 'vector4']);
 
 function isType(type: string): type is MaterialParameter['type'] { return numericTypes.has(type); }
+
+type FeatureRule = 'positive' | 'positive-color' | 'coverage';
+
+const POSITIVE_FEATURES: Partial<Record<ResolvedSurface['family'], ReadonlySet<string>>> = {
+  standard_surface: new Set(['base', 'metalness', 'transmission', 'specular', 'subsurface', 'coat', 'sheen', 'thin_film_thickness', 'emission', 'transmission_dispersion']),
+  open_pbr_surface: new Set(['base_weight', 'base_metalness', 'specular_weight', 'transmission_weight', 'subsurface_weight', 'coat_weight', 'fuzz_weight', 'thin_film_weight', 'emission_luminance', 'transmission_dispersion_scale']),
+  gltf_pbr: new Set(['metallic', 'transmission', 'specular', 'dispersion', 'clearcoat', 'iridescence']),
+  UsdPreviewSurface: new Set(['metallic', 'clearcoat']),
+  disney_principled: new Set(['metallic', 'specTrans', 'specular', 'subsurface', 'sheen', 'clearcoat']),
+};
+
+function featureRule(surface: ResolvedSurface, name: string, type: MaterialParameter['type']): FeatureRule | undefined {
+  if (POSITIVE_FEATURES[surface.family]?.has(name)) return 'positive';
+  if (surface.family === 'standard_surface' && name === 'opacity') return 'coverage';
+  if (surface.family === 'open_pbr_surface' && name === 'geometry_opacity') return 'coverage';
+  if (surface.family === 'gltf_pbr' && (name === 'alpha' || name === 'alpha_cutoff')) return 'coverage';
+  if (surface.family === 'UsdPreviewSurface' && (name === 'opacity' || name === 'opacityThreshold')) return 'coverage';
+  if (type === 'color3' && (
+    surface.family === 'gltf_pbr' && (name === 'sheen_color' || name === 'emissive')
+    || surface.family === 'UsdPreviewSurface' && name === 'emissiveColor'
+  )) return 'positive-color';
+  return undefined;
+}
+
+function inputValue(inputs: ReadonlyMap<string, NormalizedSurfaceInput>, name: string, fallback: readonly number[]): readonly number[] {
+  const source = inputs.get(name)?.source;
+  return source?.kind === 'value' || source?.kind === 'default' ? source.value : fallback;
+}
+
+function setFeatureInput(
+  inputs: Map<string, NormalizedSurfaceInput>,
+  parameters: readonly MaterialParameter[],
+  name: string,
+  active: boolean,
+  canonical: readonly number[],
+): void {
+  const input = inputs.get(name);
+  const parameter = parameters.find(candidate => !candidate.nodeId && candidate.input === name && candidate.update === 'feature');
+  if (!input || !parameter || input.source.kind === 'connection' || input.source.kind === 'geomprop') return;
+  if (active && parameter.uniform !== undefined) inputs.set(name, { ...input, parameter: parameter.uniform });
+  else {
+    const { parameter: _parameter, ...literal } = input;
+    inputs.set(name, { ...literal, source: { kind: 'value', value: canonical } });
+  }
+}
+
+/** Keep feature controls literal at their inactive/opaque states, but uniform
+ *  while a feature is active. Their editor values remain independent of the
+ *  canonical shader input so edits inside a state do not rebuild pipelines. */
+function applyFeatureStates(surface: ResolvedSurface, parameters: readonly MaterialParameter[]): ResolvedSurface {
+  const inputs = new Map(surface.inputs);
+  const values = new Map(parameters.filter(parameter => !parameter.nodeId).map(parameter => [parameter.input, parameter.value]));
+  const value = (name: string, fallback: readonly number[]): readonly number[] =>
+    values.get(name) ?? inputValue(inputs, name, fallback);
+
+  for (const parameter of parameters) {
+    if (parameter.nodeId || parameter.update !== 'feature') continue;
+    const rule = featureRule(surface, parameter.input, parameter.type);
+    if (rule === 'positive') {
+      const current = value(parameter.input, parameter.initial);
+      const active = current[0]! > 0;
+      setFeatureInput(inputs, parameters, parameter.input, active, [0]);
+    } else if (rule === 'positive-color') {
+      const current = value(parameter.input, parameter.initial);
+      const active = current.some(component => component > 0);
+      setFeatureInput(inputs, parameters, parameter.input, active, [0, 0, 0]);
+    }
+  }
+
+  const coverageInputs = surface.family === 'standard_surface' ? ['opacity']
+    : surface.family === 'open_pbr_surface' ? ['geometry_opacity']
+      : surface.family === 'gltf_pbr' ? ['alpha_mode', 'alpha', 'alpha_cutoff']
+        : surface.family === 'UsdPreviewSurface' ? ['opacity', 'opacityThreshold'] : [];
+  const dynamicCoverage = coverageInputs.some(name => {
+    const input = inputs.get(name);
+    return input && (input.source.kind !== 'value' && input.source.kind !== 'default'
+      || input.parameter !== undefined && !values.has(name));
+  });
+  if (dynamicCoverage) {
+    for (const name of coverageInputs) setFeatureInput(inputs, parameters, name, true, []);
+    return { ...surface, inputs };
+  }
+
+  if (surface.family === 'standard_surface') {
+    const opacity = value('opacity', [1, 1, 1]);
+    const opaque = opacity.every(component => component >= 1);
+    setFeatureInput(inputs, parameters, 'opacity', !opaque, [1, 1, 1]);
+  } else if (surface.family === 'open_pbr_surface') {
+    const opacity = value('geometry_opacity', [1])[0]!;
+    setFeatureInput(inputs, parameters, 'geometry_opacity', opacity < 1, [1]);
+  } else if (surface.family === 'gltf_pbr') {
+    const mode = value('alpha_mode', [0])[0]!;
+    const alpha = value('alpha', [1])[0]!;
+    const cutoff = value('alpha_cutoff', [0.5])[0]!;
+    const opaque = mode === 0 || (mode === 1 ? alpha >= cutoff : alpha >= 1);
+    setFeatureInput(inputs, parameters, 'alpha', !opaque, [1]);
+    setFeatureInput(inputs, parameters, 'alpha_cutoff', !opaque && mode === 1, [0.5]);
+  } else if (surface.family === 'UsdPreviewSurface') {
+    const opacity = value('opacity', [1])[0]!;
+    const threshold = value('opacityThreshold', [0])[0]!;
+    if (threshold <= 0) {
+      setFeatureInput(inputs, parameters, 'opacity', true, [1]);
+      setFeatureInput(inputs, parameters, 'opacityThreshold', false, [0]);
+    } else if (opacity >= threshold) {
+      setFeatureInput(inputs, parameters, 'opacity', false, [1]);
+      setFeatureInput(inputs, parameters, 'opacityThreshold', false, [0.5]);
+    } else {
+      setFeatureInput(inputs, parameters, 'opacity', true, [1]);
+      setFeatureInput(inputs, parameters, 'opacityThreshold', true, [0]);
+    }
+  }
+  return { ...surface, inputs };
+}
 
 export function visibleMaterialParameters(material: MaterialResource): readonly MaterialParameter[] {
   const surfaceNode = material.surfaceGraph?.nodes.get(material.resolvedSurface?.nodeId ?? '');
@@ -49,7 +162,7 @@ export function editableSceneMaterials(resources: SceneResources): SceneResource
     if (!material?.resolvedSurface || !material.surfaceGraph) return instance;
     const key = `${instance.materialKey}::editor::${instance.primPath}`;
     const parameters: MaterialParameter[] = [];
-    const inputs = new Map(material.resolvedSurface.inputs);
+    let inputs = new Map(material.resolvedSurface.inputs);
     const surfaceNode = material.surfaceGraph.nodes.get(material.resolvedSurface.nodeId);
     for (const [name, input] of inputs) {
       const authored = surfaceNode?.inputs.find(candidate => candidate.name === name);
@@ -57,12 +170,13 @@ export function editableSceneMaterials(resources: SceneResources): SceneResource
       if (input.source.kind !== 'value' && input.source.kind !== 'default') continue;
       const uniform = `parameter_${parameters.length}`;
       const rebuild = input.type === 'boolean' || input.type === 'integer';
+      const feature = featureRule(material.resolvedSurface, name, input.type);
       parameters.push({
         id: `surface:${name}`, label: name, type: input.type, input: name,
         value: [...input.source.value], initial: [...input.source.value],
-        update: rebuild ? 'rebuild' : 'uniform', ...(!rebuild ? { uniform } : {}),
+        update: rebuild ? 'rebuild' : feature ? 'feature' : 'uniform', ...(!rebuild ? { uniform } : {}),
       });
-      if (!rebuild) inputs.set(name, { ...input, parameter: uniform });
+      if (!rebuild && !feature) inputs.set(name, { ...input, parameter: uniform });
     }
     // Expose literal inputs of reachable upstream nodes; connections remain intact.
     for (const [nodeId, node] of material.surfaceGraph.nodes) {
@@ -87,7 +201,7 @@ export function editableSceneMaterials(resources: SceneResources): SceneResource
         parameters.push(parameter);
       }
     }
-    const surface = { ...material.resolvedSurface, inputs };
+    const surface = applyFeatureStates({ ...material.resolvedSurface, inputs }, parameters);
     materials.set(key, compileEditableMaterial({ ...material, unitKey: key, boundPrims: [instance.primPath], resolvedSurface: surface, parameters }));
     return { ...instance, materialKey: key };
   });
@@ -132,7 +246,7 @@ export function changeMaterialParameters(
     }
     return { ...parameter, value };
   });
-  const surface: ResolvedSurface = { ...material.resolvedSurface, inputs };
+  const surface = applyFeatureStates({ ...material.resolvedSurface, inputs }, parameters);
   const graph: ResolvedGraph = { ...material.surfaceGraph, nodes };
   // Displacement amplitude lives outside the surface shader.
   const displacement = material.displacement ? extractDisplacement(graph) : undefined;

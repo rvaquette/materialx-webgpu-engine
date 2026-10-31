@@ -65,6 +65,7 @@ describe('dynamic MaterialX parameters', () => {
     const resources = await fixture(false, graph => {
       graph.nodes.get('surface')!.inputs = [
         { name: 'base_color', type: 'color3', source: { kind: 'connection', nodeId: 'color' }, provenance: { namePath: '/surface/base_color' } },
+        { name: 'metalness', type: 'float', source: { kind: 'connection', nodeId: 'color' }, provenance: { namePath: '/surface/metalness' } },
         { name: 'specular_roughness', type: 'float', source: { kind: 'value', type: 'float', value: '0.45' }, provenance: { namePath: '/surface/specular_roughness' } },
         { name: 'specular', type: 'float', source: { kind: 'value', type: 'float', value: '0.5' }, provenance: { namePath: '/surface/specular' } },
       ];
@@ -79,6 +80,8 @@ describe('dynamic MaterialX parameters', () => {
       .toEqual([['specular', 'float', [0.5]], ['specular_roughness', 'float', [0.45]]]);
     expect(material.parameters!.some(parameter => parameter.nodeId === 'color')).toBe(true);
     expect(material.parameters!.some(parameter => parameter.input === 'base')).toBe(true);
+    expect(material.parameters!.some(parameter => parameter.input === 'metalness' && !parameter.nodeId)).toBe(false);
+    expect(material.surfaceModule!.features!.lobeKinds).toContain(4);
   });
   it('only exposes unbound inputs, not connections, resolved interfaces or implicit geometry properties', async () => {
     const resources = await fixture(false, graph => {
@@ -159,19 +162,122 @@ describe('dynamic MaterialX parameters', () => {
     expect(reset.parameters!.find(parameter => parameter.id === original.id)!.value).toEqual(original.initial);
   });
 
-  it('changes color and roughness uniforms without changing shader code; detects new lobes without a parameter-name catalogue', async () => {
+  it('keeps ordinary numeric edits live and specializes feature toggles at their boundaries', async () => {
     const material = [...(await fixture()).materials.values()][0]!;
     const updated = compileEditableMaterial(changeMaterialParameters(material, new Map([
       ['surface:base_color', [0.2, 0.4, 0.8]], ['surface:specular_roughness', [0.65]],
     ])));
     expect(updated.sceneShader!.code).toBe(material.sceneShader!.code);
     expect(new Uint8Array(materialUniformData(updated))).not.toEqual(new Uint8Array(materialUniformData(material)));
+
+    expect(material.surfaceModule!.features!.lobeKinds).not.toContain(4);
+    expect(material.surfaceModule!.features!.lobeKinds).not.toContain(8);
+    expect(material.surfaceModule!.features!.coat).toBe(false);
+    expect(material.surfaceModule!.features!.opaque).toBe(true);
+
+    const metal = compileEditableMaterial(changeMaterialParameters(material, new Map([['surface:metalness', [0.35]]])));
+    expect(metal.surfaceModule!.features!.lobeKinds).toContain(4);
+    expect(metal.sceneShader!.code).not.toBe(material.sceneShader!.code);
+    const metalLiveEdit = compileEditableMaterial(changeMaterialParameters(metal, new Map([['surface:metalness', [0.7]]])));
+    expect(metalLiveEdit.sceneShader!.code).toBe(metal.sceneShader!.code);
+    expect(new Uint8Array(materialUniformData(metalLiveEdit))).not.toEqual(new Uint8Array(materialUniformData(metal)));
+    const noMetal = compileEditableMaterial(changeMaterialParameters(metalLiveEdit, new Map([['surface:metalness', [0]]])));
+    expect(noMetal.surfaceModule!.features!.lobeKinds).not.toContain(4);
+    expect(noMetal.sceneShader!.code).not.toBe(metalLiveEdit.sceneShader!.code);
+
     const coat = compileEditableMaterial(changeMaterialParameters(updated, new Map([['surface:coat', [1]]])));
     expect(coat.surfaceModule!.features!.coat).toBe(true);
     expect(coat.sceneShader!.code).not.toBe(updated.sceneShader!.code);
+    const coatLiveEdit = compileEditableMaterial(changeMaterialParameters(coat, new Map([['surface:coat', [0.5]]])));
+    expect(coatLiveEdit.sceneShader!.code).toBe(coat.sceneShader!.code);
+    expect(new Uint8Array(materialUniformData(coatLiveEdit))).not.toEqual(new Uint8Array(materialUniformData(coat)));
+    const noCoat = compileEditableMaterial(changeMaterialParameters(coatLiveEdit, new Map([['surface:coat', [0]]])));
+    expect(noCoat.surfaceModule!.features!.coat).toBe(false);
+    expect(noCoat.sceneShader!.code).not.toBe(coatLiveEdit.sceneShader!.code);
+
     const trans = compileEditableMaterial(changeMaterialParameters(updated, new Map([['surface:transmission', [1]]])));
     expect(trans.surfaceModule!.features!.transmission).toBe(true);
     expect(trans.sceneShader!.code).not.toBe(updated.sceneShader!.code);
+
+    const transparent = compileEditableMaterial(changeMaterialParameters(material, new Map([['surface:opacity', [0.7, 0.7, 0.7]]])));
+    expect(transparent.surfaceModule!.features!.opaque).toBe(false);
+    expect(transparent.sceneShader!.code).not.toBe(material.sceneShader!.code);
+    const opacityEdit = compileEditableMaterial(changeMaterialParameters(transparent, new Map([['surface:opacity', [0.4, 0.4, 0.4]]])));
+    expect(opacityEdit.sceneShader!.code).toBe(transparent.sceneShader!.code);
+    const opaque = compileEditableMaterial(changeMaterialParameters(opacityEdit, new Map([['surface:opacity', [1, 1, 1]]])));
+    expect(opaque.surfaceModule!.features!.opaque).toBe(true);
+    expect(opaque.sceneShader!.code).not.toBe(opacityEdit.sceneShader!.code);
+  });
+
+  it('specializes open PBR fuzz only for literal zero/nonzero values', async () => {
+    const material = [...(await fixture(false, graph => {
+      graph.nodes.get('surface')!.category = 'open_pbr_surface';
+    })).materials.values()][0]!;
+    expect(material.surfaceModule!.features!.fuzz).toBe(false);
+    const fuzz = compileEditableMaterial(changeMaterialParameters(material, new Map([['surface:fuzz_weight', [0.4]]])));
+    expect(fuzz.surfaceModule!.features!.fuzz).toBe(true);
+    const liveEdit = compileEditableMaterial(changeMaterialParameters(fuzz, new Map([['surface:fuzz_weight', [0.8]]])));
+    expect(liveEdit.sceneShader!.code).toBe(fuzz.sceneShader!.code);
+    const noFuzz = compileEditableMaterial(changeMaterialParameters(liveEdit, new Map([['surface:fuzz_weight', [0]]])));
+    expect(noFuzz.surfaceModule!.features!.fuzz).toBe(false);
+    expect(noFuzz.sceneShader!.code).not.toBe(liveEdit.sceneShader!.code);
+  });
+
+  it('retains editable alpha thresholds when coverage depends on an upstream graph', async () => {
+    for (const category of ['gltf_pbr', 'UsdPreviewSurface']) {
+      const alpha = category === 'gltf_pbr' ? 'alpha' : 'opacity';
+      const threshold = category === 'gltf_pbr' ? 'alpha_cutoff' : 'opacityThreshold';
+      const resources = await fixture(false, graph => {
+        const node = graph.nodes.get('surface')!;
+        node.category = category;
+        node.inputs = [
+          { name: alpha, type: 'float', source: { kind: 'connection', nodeId: 'coverage' }, provenance: { namePath: `/surface/${alpha}` } },
+          { name: threshold, type: 'float', source: { kind: 'value', type: 'float', value: '0.2' }, provenance: { namePath: `/surface/${threshold}` } },
+          ...(category === 'gltf_pbr' ? [{
+            name: 'alpha_mode', type: 'integer', source: { kind: 'value' as const, type: 'integer', value: '1' }, provenance: { namePath: '/surface/alpha_mode' },
+          }] : []),
+        ];
+        graph.nodes.set('coverage', {
+          id: 'coverage', category: 'constant', type: 'float', provenance: { namePath: '/coverage' },
+          inputs: [{ name: 'value', type: 'float', source: { kind: 'value', type: 'float', value: '0.3' }, provenance: { namePath: '/coverage/value' } }],
+        });
+      });
+      const material = [...resources.materials.values()][0]!;
+      expect(material.resolvedSurface!.inputs.get(alpha)!.source.kind).toBe('connection');
+      expect(material.resolvedSurface!.inputs.get(threshold)!.parameter).toBeDefined();
+      const edited = compileEditableMaterial(changeMaterialParameters(material, new Map([[`surface:${threshold}`, [0.4]]])));
+      expect(edited.resolvedSurface!.inputs.get(alpha)!.source.kind).toBe('connection');
+      expect(edited.resolvedSurface!.inputs.get(threshold)!.parameter).toBeDefined();
+      expect(edited.sceneShader!.code).toBe(material.sceneShader!.code);
+      expect(edited.parameters!.find(parameter => parameter.input === threshold)!.value).toEqual([0.4]);
+    }
+  });
+
+  it('specializes glTF mask and USD opacity coverage from current values', async () => {
+    const gltf = [...(await fixture(false, graph => {
+      graph.nodes.get('surface')!.category = 'gltf_pbr';
+      graph.nodes.get('surface')!.inputs = [
+        { name: 'alpha_mode', type: 'integer', source: { kind: 'value', type: 'integer', value: '1' }, provenance: { namePath: '/surface/alpha_mode' } },
+        { name: 'alpha', type: 'float', source: { kind: 'value', type: 'float', value: '0.75' }, provenance: { namePath: '/surface/alpha' } },
+        { name: 'alpha_cutoff', type: 'float', source: { kind: 'value', type: 'float', value: '0.5' }, provenance: { namePath: '/surface/alpha_cutoff' } },
+      ];
+    })).materials.values()][0]!;
+    expect(gltf.surfaceModule!.features!.opaque).toBe(true);
+    const masked = compileEditableMaterial(changeMaterialParameters(gltf, new Map([['surface:alpha', [0.25]]])));
+    expect(masked.surfaceModule!.features!.opaque).toBe(false);
+    expect(masked.sceneShader!.code).not.toBe(gltf.sceneShader!.code);
+
+    const usd = [...(await fixture(false, graph => {
+      graph.nodes.get('surface')!.category = 'UsdPreviewSurface';
+      graph.nodes.get('surface')!.inputs = [
+        { name: 'opacity', type: 'float', source: { kind: 'value', type: 'float', value: '0.5' }, provenance: { namePath: '/surface/opacity' } },
+        { name: 'opacityThreshold', type: 'float', source: { kind: 'value', type: 'float', value: '0.2' }, provenance: { namePath: '/surface/opacityThreshold' } },
+      ];
+    })).materials.values()][0]!;
+    expect(usd.surfaceModule!.features!.opaque).toBe(true);
+    const cutout = compileEditableMaterial(changeMaterialParameters(usd, new Map([['surface:opacity', [0.1]]])));
+    expect(cutout.surfaceModule!.features!.opaque).toBe(false);
+    expect(cutout.sceneShader!.code).not.toBe(usd.sceneShader!.code);
   });
 
   it('namespaces uniforms for multi-material path tracing', async () => {
