@@ -1,5 +1,6 @@
 <?xml version="1.0"?>
 <materialx version="1.39" colorspace="lin_rec709">
+  <!-- water: scatter volume remains uncorrected; surface-only conversion cannot preserve it -->
   <disney_principled name="water_surface" type="surfaceshader">
     <input name="baseColor" type="color3" value="1, 1, 1" />
     <input name="roughness" type="float" value="0" />
@@ -8,47 +9,105 @@
   <surfacematerial name="water" type="material">
     <input name="surfaceshader" type="surfaceshader" nodename="water_surface" />
   </surfacematerial>
-  <disney_principled name="wood_surface" type="surfaceshader">
-    <input name="baseColor" type="color3" value="0.582, 0.388, 0.164" />
-    <input name="roughness" type="float" value="0.25" />
-  </disney_principled>
+  <standard_surface name="wood_surface" type="surfaceshader">
+    <input name="base_color" type="color3" value="0.582, 0.388, 0.164" />
+    <input name="specular_roughness" type="float" value="0.5" />
+    <input name="diffuse_roughness" type="float" value="0.25" />
+    <input name="transmission_color" type="color3" value="0.582, 0.388, 0.164" />
+    <input name="subsurface_color" type="color3" value="0.582, 0.388, 0.164" />
+    <input name="coat_roughness" type="float" value="0.316227766017" />
+    <input name="emission" type="float" value="1" />
+    <input name="emission_color" type="color3" value="0, 0, 0" />
+  </standard_surface>
   <surfacematerial name="wood" type="material">
     <input name="surfaceshader" type="surfaceshader" nodename="wood_surface" />
   </surfacematerial>
-  <disney_principled name="floor_surface" type="surfaceshader">
-    <input name="baseColor" type="color3" value="0.73, 1, 0.721" />
-    <input name="roughness" type="float" value="0.5" />
-  </disney_principled>
+  <standard_surface name="floor_surface" type="surfaceshader">
+    <input name="base_color" type="color3" value="0.73, 1, 0.721" />
+    <input name="specular_roughness" type="float" value="0.707106781187" />
+    <input name="diffuse_roughness" type="float" value="0.5" />
+    <input name="transmission_color" type="color3" value="0.73, 1, 0.721" />
+    <input name="subsurface_color" type="color3" value="0.73, 1, 0.721" />
+    <input name="coat_roughness" type="float" value="0.316227766017" />
+    <input name="emission" type="float" value="1" />
+    <input name="emission_color" type="color3" value="0, 0, 0" />
+  </standard_surface>
   <surfacematerial name="floor" type="material">
     <input name="surfaceshader" type="surfaceshader" nodename="floor_surface" />
   </surfacematerial>
-  <disney_principled name="grass_surface" type="surfaceshader">
-    <input name="baseColor" type="color3" value="0.104, 0.357, 0.092" />
-    <input name="roughness" type="float" value="0.5" />
-  </disney_principled>
+  <standard_surface name="grass_surface" type="surfaceshader">
+    <input name="base_color" type="color3" value="0.104, 0.357, 0.092" />
+    <input name="specular_roughness" type="float" value="0.707106781187" />
+    <input name="diffuse_roughness" type="float" value="0.5" />
+    <input name="transmission_color" type="color3" value="0.104, 0.357, 0.092" />
+    <input name="subsurface_color" type="color3" value="0.104, 0.357, 0.092" />
+    <input name="coat_roughness" type="float" value="0.316227766017" />
+    <input name="emission" type="float" value="1" />
+    <input name="emission_color" type="color3" value="0, 0, 0" />
+  </standard_surface>
   <surfacematerial name="grass" type="material">
     <input name="surfaceshader" type="surfaceshader" nodename="grass_surface" />
   </surfacematerial>
-  <disney_principled name="rock_surface" type="surfaceshader">
-    <input name="baseColor" type="color3" value="0.815, 0.644, 0.366" />
-    <input name="roughness" type="float" value="0.4" />
-  </disney_principled>
+  <standard_surface name="rock_surface" type="surfaceshader">
+    <input name="base_color" type="color3" value="0.815, 0.644, 0.366" />
+    <input name="specular_roughness" type="float" value="0.632455532034" />
+    <input name="diffuse_roughness" type="float" value="0.4" />
+    <input name="transmission_color" type="color3" value="0.815, 0.644, 0.366" />
+    <input name="subsurface_color" type="color3" value="0.815, 0.644, 0.366" />
+    <input name="coat_roughness" type="float" value="0.316227766017" />
+    <input name="emission" type="float" value="1" />
+    <input name="emission_color" type="color3" value="0, 0, 0" />
+  </standard_surface>
   <surfacematerial name="rock" type="material">
     <input name="surfaceshader" type="surfaceshader" nodename="rock_surface" />
   </surfacematerial>
-  <disney_principled name="sand_surface" type="surfaceshader">
-    <input name="baseColor" type="color3" value="0.973, 0.751, 0.571" />
-    <input name="roughness" type="float" value="0.25" />
-  </disney_principled>
+  <standard_surface name="sand_surface" type="surfaceshader">
+    <input name="base_color" type="color3" value="0.973, 0.751, 0.571" />
+    <input name="specular_roughness" type="float" value="0.5" />
+    <input name="diffuse_roughness" type="float" value="0.25" />
+    <input name="transmission_color" type="color3" value="0.973, 0.751, 0.571" />
+    <input name="subsurface_color" type="color3" value="0.973, 0.751, 0.571" />
+    <input name="coat_roughness" type="float" value="0.316227766017" />
+    <input name="emission" type="float" value="1" />
+    <input name="emission_color" type="color3" value="0, 0, 0" />
+  </standard_surface>
   <surfacematerial name="sand" type="material">
     <input name="surfaceshader" type="surfaceshader" nodename="sand_surface" />
   </surfacematerial>
-  <disney_principled name="palm_surface" type="surfaceshader">
-    <input name="baseColor" type="color3" nodename="palm_baseColorTexture" />
-  </disney_principled>
-  <image name="palm_baseColorTexture" type="color3">
+  <standard_surface name="palm_surface" type="surfaceshader">
+    <input name="base_color" type="color3" nodename="palm_albedo_factor" />
+    <input name="specular_roughness" type="float" value="0.707106781187" />
+    <input name="diffuse_roughness" type="float" value="0.5" />
+    <input name="subsurface_color" type="color3" nodename="palm_albedo_factor" />
+    <input name="coat_roughness" type="float" value="0.316227766017" />
+    <input name="emission" type="float" value="1" />
+    <input name="emission_color" type="color3" value="0, 0, 0" />
+    <input name="opacity" type="color3" nodename="palm_opacity_color" />
+  </standard_surface>
+  <image name="palm_albedotexture_color3" type="color3">
     <input name="file" type="filename" value="tropical_island/textures/palm.png" />
   </image>
+  <power name="palm_albedo_linear" type="color3">
+    <input name="in1" type="color3" nodename="palm_albedotexture_color3" />
+    <input name="in2" type="color3" value="2.2, 2.2, 2.2" />
+  </power>
+  <multiply name="palm_albedo_factor" type="color3">
+    <input name="in1" type="color3" nodename="palm_albedo_linear" />
+    <input name="in2" type="color3" value="1, 1, 1" />
+  </multiply>
+  <image name="palm_albedotexture_color4" type="color4">
+    <input name="file" type="filename" value="tropical_island/textures/palm.png" />
+  </image>
+  <separate4 name="palm_alpha_channels" type="multioutput">
+    <input name="in" type="color4" nodename="palm_albedotexture_color4" />
+  </separate4>
+  <multiply name="palm_alpha_factor" type="float">
+    <input name="in1" type="float" nodename="palm_alpha_channels" output="outw" />
+    <input name="in2" type="float" value="1" />
+  </multiply>
+  <convert name="palm_opacity_color" type="color3">
+    <input name="in" type="float" nodename="palm_alpha_factor" />
+  </convert>
   <surfacematerial name="palm" type="material">
     <input name="surfaceshader" type="surfaceshader" nodename="palm_surface" />
   </surfacematerial>

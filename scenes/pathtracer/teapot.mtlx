@@ -1,19 +1,38 @@
 <?xml version="1.0"?>
 <materialx version="1.39" colorspace="lin_rec709">
-  <disney_principled name="checker_surface" type="surfaceshader">
-    <input name="baseColor" type="color3" nodename="checker_baseColorTexture" />
-    <input name="roughness" type="float" value="0.5" />
-  </disney_principled>
-  <image name="checker_baseColorTexture" type="color3">
+  <standard_surface name="checker_surface" type="surfaceshader">
+    <input name="base_color" type="color3" nodename="checker_albedo_factor" />
+    <input name="specular_roughness" type="float" value="0.707106781187" />
+    <input name="diffuse_roughness" type="float" value="0.5" />
+    <input name="subsurface_color" type="color3" nodename="checker_albedo_factor" />
+    <input name="coat_roughness" type="float" value="0.316227766017" />
+    <input name="emission" type="float" value="1" />
+    <input name="emission_color" type="color3" value="0, 0, 0" />
+  </standard_surface>
+  <image name="checker_albedotexture_color3" type="color3">
     <input name="file" type="filename" value="teapot/checker.png" />
   </image>
+  <power name="checker_albedo_linear" type="color3">
+    <input name="in1" type="color3" nodename="checker_albedotexture_color3" />
+    <input name="in2" type="color3" value="2.2, 2.2, 2.2" />
+  </power>
+  <multiply name="checker_albedo_factor" type="color3">
+    <input name="in1" type="color3" nodename="checker_albedo_linear" />
+    <input name="in2" type="color3" value="1, 1, 1" />
+  </multiply>
   <surfacematerial name="checker" type="material">
     <input name="surfaceshader" type="surfaceshader" nodename="checker_surface" />
   </surfacematerial>
-  <disney_principled name="white_surface" type="surfaceshader">
-    <input name="baseColor" type="color3" value="0, 0.29, 0.88" />
-    <input name="roughness" type="float" value="0" />
-  </disney_principled>
+  <standard_surface name="white_surface" type="surfaceshader">
+    <input name="base_color" type="color3" value="0, 0.29, 0.88" />
+    <input name="specular_roughness" type="float" value="0.0316227766017" />
+    <input name="diffuse_roughness" type="float" value="0.001" />
+    <input name="transmission_color" type="color3" value="0, 0.29, 0.88" />
+    <input name="subsurface_color" type="color3" value="0, 0.29, 0.88" />
+    <input name="coat_roughness" type="float" value="0.316227766017" />
+    <input name="emission" type="float" value="1" />
+    <input name="emission_color" type="color3" value="0, 0, 0" />
+  </standard_surface>
   <surfacematerial name="white" type="material">
     <input name="surfaceshader" type="surfaceshader" nodename="white_surface" />
   </surfacematerial>

@@ -61,6 +61,9 @@ que leurs constantes WGSL soient initialisées avant l'assemblage des bibliothè
 
 Le sélecteur de scènes inclut automatiquement tous les fichiers `.usda` directement
 présents dans `scenes/pathtracer`, triés par nom et préfixés `Pathtracer -`.
+Il inclut également les fichiers `.glb` et `.gltf` directement dans ce dossier,
+sans ses sous-dossiers, avec leur extension dans le libellé. Leur sélection convertit les
+matériaux en MaterialX `gltf_pbr` et affiche les avertissements d'import.
 Le catalogue conserve les scènes existantes et leur choix par défaut. Recompiler
 l'application après ajout ou suppression d'une scène pour actualiser le build
 statique ; `npm run build` copie aussi ce dossier et ses ressources associées.

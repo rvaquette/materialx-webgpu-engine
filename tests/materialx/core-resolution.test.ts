@@ -129,4 +129,44 @@ describe.skipIf(!existsSync(coreFile) || !existsSync(libraryRoot))('installed Ma
       libraries.delete();
     }
   }, 30000);
+
+  it('compiles every MaterialX binding in the converted Pathtracer USDA corpus', async () => {
+    const module = await import(/* @vite-ignore */ pathToFileURL(coreFile).href) as { default: MaterialXModuleFactory };
+    const core = new MaterialXCore(await module.default());
+    const libraries = new MaterialXLibraries(core);
+    await libraries.load({
+      sources: defaultLibrarySources(libraryRoot),
+      fetchText: async path => readFileSync(path, 'utf8'),
+    });
+    const root = join('scenes', 'pathtracer');
+    const texts = new Map<string, string>();
+    const bindings: { assetPath: string; materialName: string }[] = [];
+    const files = readdirSync(root).filter(file => file.endsWith('.usda'));
+    for (const file of files) {
+      const stage = readFileSync(join(root, file), 'utf8');
+      for (const match of stage.matchAll(/@([^@]+\.mtlx)@<\/MaterialX\/Materials\/([^>]+)>/g)) {
+        const assetPath = join(root, match[1]!);
+        texts.set(assetPath, readFileSync(assetPath, 'utf8'));
+        bindings.push({ assetPath, materialName: match[2]! });
+      }
+    }
+    const diagnostics: Diagnostic[] = [];
+    const documents = await loadMaterialXDocuments({ core, libraries, texts, sink: d => diagnostics.push(d) });
+    try {
+      const compiler = createGraphMaterialCompiler({ documents, sink: d => diagnostics.push(d) });
+      for (const binding of bindings) {
+        const build = await compiler.compile({
+          ...binding, referencedPrimPath: `/MaterialX/Materials/${binding.materialName}`, boundPrims: [],
+        });
+        expect(build?.surface, `${binding.assetPath}/${binding.materialName}`).toBeDefined();
+        expect(build?.layered, `${binding.assetPath}/${binding.materialName}`).toBeDefined();
+      }
+      expect(files).toHaveLength(45);
+      expect(bindings.length).toBeGreaterThanOrEqual(294);
+      expect(diagnostics).toEqual([]);
+    } finally {
+      documents.delete();
+      libraries.delete();
+    }
+  }, 120000);
 });

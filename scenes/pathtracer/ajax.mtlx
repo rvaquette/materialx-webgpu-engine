@@ -1,50 +1,78 @@
 <?xml version="1.0"?>
 <materialx version="1.39" colorspace="lin_rec709">
-  <disney_principled name="silver_surface" type="surfaceshader">
-    <input name="baseColor" type="color3" value="1, 1, 1" />
-    <input name="metallic" type="float" value="1" />
-    <input name="roughness" type="float" value="0.1" />
-  </disney_principled>
+  <standard_surface name="silver_surface" type="surfaceshader">
+    <input name="base_color" type="color3" value="1, 1, 1" />
+    <input name="metalness" type="float" value="1" />
+    <input name="specular_roughness" type="float" value="0.316227766017" />
+    <input name="diffuse_roughness" type="float" value="0.1" />
+    <input name="coat_roughness" type="float" value="0.316227766017" />
+    <input name="emission" type="float" value="1" />
+    <input name="emission_color" type="color3" value="0, 0, 0" />
+  </standard_surface>
   <surfacematerial name="silver" type="material">
     <input name="surfaceshader" type="surfaceshader" nodename="silver_surface" />
   </surfacematerial>
-  <disney_principled name="gold_surface" type="surfaceshader">
-    <input name="baseColor" type="color3" value="1, 0.71, 0.29" />
-    <input name="metallic" type="float" value="1" />
-    <input name="roughness" type="float" value="0.1" />
-  </disney_principled>
+  <standard_surface name="gold_surface" type="surfaceshader">
+    <input name="base_color" type="color3" value="1, 0.71, 0.29" />
+    <input name="metalness" type="float" value="1" />
+    <input name="specular_roughness" type="float" value="0.316227766017" />
+    <input name="diffuse_roughness" type="float" value="0.1" />
+    <input name="transmission_color" type="color3" value="1, 0.71, 0.29" />
+    <input name="subsurface_color" type="color3" value="1, 0.71, 0.29" />
+    <input name="coat_roughness" type="float" value="0.316227766017" />
+    <input name="emission" type="float" value="1" />
+    <input name="emission_color" type="color3" value="0, 0, 0" />
+  </standard_surface>
   <surfacematerial name="gold" type="material">
     <input name="surfaceshader" type="surfaceshader" nodename="gold_surface" />
   </surfacematerial>
-  <disney_principled name="redPlastic_surface" type="surfaceshader">
-    <input name="baseColor" type="color3" value="1, 0, 0" />
-    <input name="metallic" type="float" value="0" />
-    <input name="roughness" type="float" value="0.01" />
-  </disney_principled>
+  <standard_surface name="redPlastic_surface" type="surfaceshader">
+    <input name="base_color" type="color3" value="1, 0, 0" />
+    <input name="specular_roughness" type="float" value="0.1" />
+    <input name="diffuse_roughness" type="float" value="0.01" />
+    <input name="transmission_color" type="color3" value="1, 0, 0" />
+    <input name="subsurface_color" type="color3" value="1, 0, 0" />
+    <input name="coat_roughness" type="float" value="0.316227766017" />
+    <input name="emission" type="float" value="1" />
+    <input name="emission_color" type="color3" value="0, 0, 0" />
+  </standard_surface>
   <surfacematerial name="redPlastic" type="material">
     <input name="surfaceshader" type="surfaceshader" nodename="redPlastic_surface" />
   </surfacematerial>
-  <disney_principled name="white_surface" type="surfaceshader">
-    <input name="baseColor" type="color3" value="1, 1, 1" />
-    <input name="metallic" type="float" value="0" />
-    <input name="roughness" type="float" value="0.01" />
-  </disney_principled>
+  <standard_surface name="white_surface" type="surfaceshader">
+    <input name="base_color" type="color3" value="1, 1, 1" />
+    <input name="specular_roughness" type="float" value="0.1" />
+    <input name="diffuse_roughness" type="float" value="0.01" />
+    <input name="coat_roughness" type="float" value="0.316227766017" />
+    <input name="emission" type="float" value="1" />
+    <input name="emission_color" type="color3" value="0, 0, 0" />
+  </standard_surface>
   <surfacematerial name="white" type="material">
     <input name="surfaceshader" type="surfaceshader" nodename="white_surface" />
   </surfacematerial>
-  <disney_principled name="black_surface" type="surfaceshader">
-    <input name="baseColor" type="color3" value="0.1, 0.1, 0.1" />
-    <input name="metallic" type="float" value="1" />
-    <input name="roughness" type="float" value="0.01" />
-  </disney_principled>
+  <standard_surface name="black_surface" type="surfaceshader">
+    <input name="base_color" type="color3" value="0.1, 0.1, 0.1" />
+    <input name="metalness" type="float" value="1" />
+    <input name="specular_roughness" type="float" value="0.1" />
+    <input name="diffuse_roughness" type="float" value="0.01" />
+    <input name="transmission_color" type="color3" value="0.1, 0.1, 0.1" />
+    <input name="subsurface_color" type="color3" value="0.1, 0.1, 0.1" />
+    <input name="coat_roughness" type="float" value="0.316227766017" />
+    <input name="emission" type="float" value="1" />
+    <input name="emission_color" type="color3" value="0, 0, 0" />
+  </standard_surface>
   <surfacematerial name="black" type="material">
     <input name="surfaceshader" type="surfaceshader" nodename="black_surface" />
   </surfacematerial>
-  <disney_principled name="glass_surface" type="surfaceshader">
-    <input name="baseColor" type="color3" value="1, 1, 1" />
-    <input name="specTrans" type="float" value="1" />
-    <input name="ior" type="float" value="1.45" />
-  </disney_principled>
+  <standard_surface name="glass_surface" type="surfaceshader">
+    <input name="base_color" type="color3" value="1, 1, 1" />
+    <input name="specular_roughness" type="float" value="0.707106781187" />
+    <input name="diffuse_roughness" type="float" value="0.5" />
+    <input name="specular_IOR" type="float" value="1.45" />
+    <input name="coat_roughness" type="float" value="0.316227766017" />
+    <input name="emission" type="float" value="1" />
+    <input name="emission_color" type="color3" value="0, 0, 0" />
+  </standard_surface>
   <surfacematerial name="glass" type="material">
     <input name="surfaceshader" type="surfaceshader" nodename="glass_surface" />
   </surfacematerial>

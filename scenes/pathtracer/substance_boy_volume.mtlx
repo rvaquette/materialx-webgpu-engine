@@ -1,5 +1,6 @@
 <?xml version="1.0"?>
 <materialx version="1.39" colorspace="lin_rec709">
+  <!-- volume_scatter: scatter volume remains uncorrected; surface-only conversion cannot preserve it -->
   <disney_principled name="volume_scatter_surface" type="surfaceshader">
     <input name="baseColor" type="color3" value="0.8, 0.8, 0.8" />
   </disney_principled>

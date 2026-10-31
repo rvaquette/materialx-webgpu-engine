@@ -1,6 +1,63 @@
 # USD import: loader qualification (T003)
 
+## Converted GLSL-PathTracer scenes
+
+The 45 local Pathtracer USDA files were audited against their `.scene` sources.
+Use `node scripts/repair-pathtracer-materials.mjs <source-scene-directory>` for a
+dry run, or append `--apply` to regenerate their material descriptions. This is
+separate from `repair-pathtracer-usda.mjs`, which repairs geometry, lights and cameras.
+Missing resources and unhandled material fields are errors.
+
+Regeneration omits literal surface inputs equal to their installed MaterialX
+NodeDef defaults, including inherited defaults. To simplify already corrected
+documents, run `node scripts/simplify-pathtracer-materials.mjs --apply`
+(omit `--apply` for a dry run). Set `MX_LIB_ROOT` to select the MaterialX libraries.
+Version-specific defaults are respected: for example, `standard_surface` 1.0.1
+defaults to base color 0.8, not the white default of 1.0.0. Connections, textures,
+non-default values and inputs carrying additional attributes are retained.
+Only the corrected `standard_surface` and `open_pbr_surface` inputs are simplified;
+utility nodes and unsupported legacy volumes are left untouched.
+
+Legacy Disney materials are mapped to **standard_surface**, not gltf_pbr:
+this is an approximation of the original Disney BSDF using standard MaterialX
+nodes. Thin-walled glass uses **open_pbr_surface**, whose thin-wall flag is
+implemented by the engine. Existing authored MaterialX documents retain their
+original types and material bindings, including the shader-ball glass/default
+examples that previously became gray Disney placeholders.
+
+The conversion retains linear color factors, the source texture gamma of 2.2,
+linear metallic B/roughness G channels, tangent-space normal maps and the
+source renderer's `openglnormalmap` Y-flip option (enabled by default).
+Source constant GGX alpha is converted to MaterialX perceptual roughness with
+a square root; packed roughness uses the source's squared-G convention.
+Clearcoat gloss, specular/sheens tints, emission and alpha coverage are also mapped.
+Absorbing media use equivalent Beer-Lambert extinction through transmission
+color/depth. The original Disney sheen, GTR1 clearcoat and empirical subsurface
+model are not reproduced exactly. This changes the appearance of existing
+converted scenes intentionally; earlier bit-identical Hyperion baselines no
+longer describe these newly authored materials.
+
+**Outstanding cases:** scattering volumes in `substance_boy_volume`,
+`tropical_island` (water) and `volume_cube` cannot be faithfully lowered by
+the current surface compiler. Their previous material definitions are retained,
+marked in XML and reported by the repair command rather than silently claiming
+volume support. `jinx.usda` still has its legacy default-material placeholder:
+its source relies entirely on embedded glTF material assignments, which this
+named-material repair does not reconstruct. The source `staircase` WoodLamp
+contains an orphan `0.1` line, ignored by its loader and reported during repair.
+No height/bump texture fields were found in the named `.scene` materials;
+normal maps must not be interpreted as height maps. Raster alpha blending,
+subsurface and volume transport remain backend approximations.
+
 ## Direct local GLB/glTF scenes in the UI
+
+The scene selector also lists all `.glb` and `.gltf` assets under
+`scenes/pathtracer`, excluding subdirectories. Format extensions remain in their
+labels to distinguish them from USDA variants. Selecting these entries fetches
+the scene and its relative resources from the application server and uses the
+same `gltf_pbr` MaterialX conversion as the local file picker. Rebuild after adding
+or removing assets to refresh the static catalog. Unsupported or missing assets
+remain explicit loading errors, even when their filename is listed.
 
 Use **Ouvrir GLB/glTF + ressources** to select one `.glb`, or one `.gltf` together
 with its `.bin` and image files. **Ouvrir un dossier glTF** preserves directory
@@ -9,20 +66,24 @@ The selected bundle must contain exactly one scene entry. Missing or ambiguous
 resources fail explicitly; local imports do not fall back to network downloads.
 
 The importer generates an in-memory MaterialX document per material, using
-`disney_principled`, and compiles it through the same graph path as USD materials.
+`gltf_pbr`, and compiles it through the same graph path as USD materials.
 Base color (linear factor plus sRGB texture), metallic (B channel), roughness
-(G channel), clearcoat, transmission and IOR are mapped. Texture factors are
+(G channel), clearcoat, transmission, IOR, specular, sheen, iridescence and dispersion
+are mapped. Normal textures are connected through a `normalmap` node, read as
+linear data and scaled using glTF normal strength. Emissive factors/textures and
+strength are preserved. Alpha uses the base-color A channel and the glTF
+OPAQUE/MASK/BLEND mode and cutoff. Texture factors are
 applied in the shader, not baked into quantized pixels. Packed scalar channels
 are extracted from the decoded image; scale, offset and wrap mode are retained.
 Materials remain editable and replaceable in the existing material panel, in
 both raster and path tracing. Mesh transforms, normals, mirrored winding and
 material groups are preserved; shared materials are compiled once.
 
-This is a Disney approximation, not glTF rendering conformance. Visible import
-warnings report unsupported inputs: normal/bump maps, opacity/masking/blending,
-emission, baked occlusion, vertex colors, alternate UV sets, texture rotation,
+The engine's `gltf_pbr` implementation is not full glTF rendering conformance. Visible import
+warnings report unsupported inputs: height/bump maps, separate clearcoat normals,
+baked occlusion, vertex colors, alternate UV sets, texture rotation,
 volume/attenuation and some material extensions. Unlit materials are approximated
-as lit Disney materials. Mip filtering is approximated by the existing engine
+as lit `gltf_pbr` materials. Mip filtering is approximated by the existing engine
 sampler. glTF cameras and punctual lights currently produce warnings: the viewer
 uses bounds-based perspective framing and its default environment instead.
 Animations are not played; skinned, morphed and GPU-instanced meshes are rejected.

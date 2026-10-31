@@ -37,10 +37,11 @@ const prim = (path: string, typeName: string): ScenePrim => ({
   attributes: new Map(), relationships: new Map(), xformOps: [], children: [],
 });
 
-export async function importLocalGltf(files: readonly File[], entryFile?: File): Promise<LocalGltfScene> {
+export async function importLocalGltf(files: readonly File[], entryFile?: File, sourceUrl?: string): Promise<LocalGltfScene> {
   const entries = files.filter(file => /\.(glb|gltf)$/i.test(file.name));
-  const entry = entryFile ?? (entries.length === 1 ? entries[0] : undefined);
-  if (!entry || !files.includes(entry)) throw new Error('Select exactly one .glb or .gltf scene and its resources.');
+  const entry = sourceUrl ? new File([], decodeURIComponent(new URL(sourceUrl).pathname.split('/').at(-1)!))
+    : entryFile ?? (entries.length === 1 ? entries[0] : undefined);
+  if (!entry || (!sourceUrl && !files.includes(entry))) throw new Error('Select exactly one .glb or .gltf scene and its resources.');
   const urls: string[] = [];
   const warnings = new Set<string>();
   const warn = (message: string): void => { warnings.add(message); };
@@ -57,6 +58,7 @@ export async function importLocalGltf(files: readonly File[], entryFile?: File):
   manager.setURLModifier(uri => {
     // GLTFLoader creates its own blob URLs for embedded GLB images.
     if (uri.startsWith('data:') || uri.startsWith('blob:')) return uri;
+    if (sourceUrl) return uri;
     let file: File;
     try { file = resolveLocalGltfFile(files, uri, entry); }
     catch (error) {
@@ -69,17 +71,25 @@ export async function importLocalGltf(files: readonly File[], entryFile?: File):
   });
   let gltf: Awaited<ReturnType<GLTFLoader['parseAsync']>> | undefined;
   try {
-    gltf = await new GLTFLoader(manager).parseAsync(await entry.arrayBuffer(), '');
+    let bytes: ArrayBuffer;
+    if (sourceUrl) {
+      const response = await fetch(sourceUrl);
+      if (!response.ok) throw new Error(`HTTP ${response.status}: ${sourceUrl}`);
+      bytes = await response.arrayBuffer();
+    } else {
+      bytes = await entry.arrayBuffer();
+    }
+    gltf = await new GLTFLoader(manager).parseAsync(bytes, sourceUrl ? new URL('.', sourceUrl).href : '');
     if (resourceError) throw resourceError;
     const root = gltf.scene;
     root.updateMatrixWorld(true);
     if (gltf.animations.length) warn('Animations are not played; the scene uses its initial static pose.');
-    warn('glTF PBR is converted to Disney Principled; BRDF and transmission behavior are not an exact glTF reference.');
+    warn('Materials use MaterialX gltf_pbr; the engine BRDF and transmission implementation is not an exact glTF reference.');
     const json: unknown = gltf.parser.json;
     if (typeof json === 'object' && json !== null && 'extensionsUsed' in json && Array.isArray(json.extensionsUsed)) {
-      const supported = new Set(['KHR_materials_clearcoat', 'KHR_materials_transmission', 'KHR_materials_ior', 'KHR_texture_transform']);
+      const supported = new Set(['KHR_materials_clearcoat', 'KHR_materials_transmission', 'KHR_materials_ior', 'KHR_texture_transform', 'KHR_materials_specular', 'KHR_materials_sheen', 'KHR_materials_emissive_strength', 'KHR_materials_dispersion', 'KHR_materials_iridescence']);
       for (const extension of json.extensionsUsed) {
-        if (typeof extension === 'string' && !supported.has(extension)) warn(`${extension}: support may be partial or absent in the Disney conversion.`);
+        if (typeof extension === 'string' && !supported.has(extension)) warn(`${extension}: support may be partial or absent in the gltf_pbr conversion.`);
       }
     }
     const textureCache = new Map<Texture, Map<number, Promise<string>>>();
@@ -114,7 +124,7 @@ export async function importLocalGltf(files: readonly File[], entryFile?: File):
       }
       return result;
     };
-    const entryUri = new URL(`./__local_gltf__/${crypto.randomUUID()}/scene.usda`, document.baseURI).href;
+    const entryUri = sourceUrl ?? new URL(`./__local_gltf__/${crypto.randomUUID()}/scene.usda`, document.baseURI).href;
     const materialTexts = new Map<string, string>();
     const materialPaths = new Map<Material, string>();
     const scene: SceneAsset = {
@@ -137,7 +147,7 @@ export async function importLocalGltf(files: readonly File[], entryFile?: File):
       if (node instanceof SkinnedMesh || node instanceof InstancedMesh || node.geometry.morphAttributes.position?.length) {
         throw new Error(`Skinned, morphed or GPU-instanced meshes are not supported: ${node.name}`);
       }
-      if (node.geometry.hasAttribute('color')) warn(`${node.name}: vertex colors are not applied to the Disney material.`);
+      if (node.geometry.hasAttribute('color')) warn(`${node.name}: vertex colors are not applied to the MaterialX material.`);
       let visible = true;
       for (let ancestor: typeof node.parent = node; ancestor; ancestor = ancestor.parent) visible = visible && ancestor.visible;
       if (!visible) continue;
@@ -150,7 +160,7 @@ export async function importLocalGltf(files: readonly File[], entryFile?: File):
         if (!material) throw new Error(`Missing material for mesh ${node.name}`);
         const originalMaterial = material;
         if (material instanceof MeshBasicMaterial) {
-          warn(`${node.name}: unlit material is approximated by a lit Disney material.`);
+          warn(`${node.name}: unlit material is approximated by a lit gltf_pbr material.`);
           const lit = new MeshStandardMaterial({ color: material.color, map: material.map, transparent: material.transparent, opacity: material.opacity, alphaTest: material.alphaTest });
           lit.name = material.name; material = lit;
         }

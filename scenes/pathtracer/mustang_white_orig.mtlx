@@ -1,83 +1,143 @@
 <?xml version="1.0"?>
 <materialx version="1.39" colorspace="lin_rec709">
-  <disney_principled name="floor_surface" type="surfaceshader">
-    <input name="baseColor" type="color3" value="0, 0, 0" />
-    <input name="roughness" type="float" value="1" />
-    <input name="ior" type="float" value="1.45" />
-  </disney_principled>
+  <standard_surface name="floor_surface" type="surfaceshader">
+    <input name="base_color" type="color3" value="0, 0, 0" />
+    <input name="specular_roughness" type="float" value="1" />
+    <input name="diffuse_roughness" type="float" value="1" />
+    <input name="specular_IOR" type="float" value="1.45" />
+    <input name="transmission_color" type="color3" value="0, 0, 0" />
+    <input name="subsurface_color" type="color3" value="0, 0, 0" />
+    <input name="coat_roughness" type="float" value="0.316227766017" />
+    <input name="emission" type="float" value="1" />
+    <input name="emission_color" type="color3" value="0, 0, 0" />
+  </standard_surface>
   <surfacematerial name="floor" type="material">
     <input name="surfaceshader" type="surfaceshader" nodename="floor_surface" />
   </surfacematerial>
-  <disney_principled name="black_surface" type="surfaceshader">
-    <input name="baseColor" type="color3" value="0.008, 0.008, 0.008" />
-    <input name="roughness" type="float" value="1" />
-  </disney_principled>
+  <standard_surface name="black_surface" type="surfaceshader">
+    <input name="base_color" type="color3" value="0.008, 0.008, 0.008" />
+    <input name="specular_roughness" type="float" value="1" />
+    <input name="diffuse_roughness" type="float" value="1" />
+    <input name="transmission_color" type="color3" value="0.008, 0.008, 0.008" />
+    <input name="subsurface_color" type="color3" value="0.008, 0.008, 0.008" />
+    <input name="coat_roughness" type="float" value="0.316227766017" />
+    <input name="emission" type="float" value="1" />
+    <input name="emission_color" type="color3" value="0, 0, 0" />
+  </standard_surface>
   <surfacematerial name="black" type="material">
     <input name="surfaceshader" type="surfaceshader" nodename="black_surface" />
   </surfacematerial>
-  <disney_principled name="chrome_surface" type="surfaceshader">
-    <input name="baseColor" type="color3" value="0.903, 0.903, 0.903" />
-    <input name="metallic" type="float" value="1" />
-    <input name="roughness" type="float" value="0" />
-  </disney_principled>
+  <standard_surface name="chrome_surface" type="surfaceshader">
+    <input name="base_color" type="color3" value="0.903, 0.903, 0.903" />
+    <input name="metalness" type="float" value="1" />
+    <input name="specular_roughness" type="float" value="0.0316227766017" />
+    <input name="diffuse_roughness" type="float" value="0.001" />
+    <input name="transmission_color" type="color3" value="0.903, 0.903, 0.903" />
+    <input name="subsurface_color" type="color3" value="0.903, 0.903, 0.903" />
+    <input name="coat_roughness" type="float" value="0.316227766017" />
+    <input name="emission" type="float" value="1" />
+    <input name="emission_color" type="color3" value="0, 0, 0" />
+  </standard_surface>
   <surfacematerial name="chrome" type="material">
     <input name="surfaceshader" type="surfaceshader" nodename="chrome_surface" />
   </surfacematerial>
-  <disney_principled name="glass_surface" type="surfaceshader">
-    <input name="baseColor" type="color3" value="0.903, 0.903, 0.903" />
-    <input name="roughness" type="float" value="0" />
-    <input name="specTrans" type="float" value="1" />
-    <input name="ior" type="float" value="1.45" />
-  </disney_principled>
+  <standard_surface name="glass_surface" type="surfaceshader">
+    <input name="base_color" type="color3" value="0.903, 0.903, 0.903" />
+    <input name="specular_roughness" type="float" value="0.0316227766017" />
+    <input name="diffuse_roughness" type="float" value="0.001" />
+    <input name="specular_IOR" type="float" value="1.45" />
+    <input name="transmission" type="float" value="1" />
+    <input name="transmission_color" type="color3" value="0.903, 0.903, 0.903" />
+    <input name="subsurface_color" type="color3" value="0.903, 0.903, 0.903" />
+    <input name="coat_roughness" type="float" value="0.316227766017" />
+    <input name="emission" type="float" value="1" />
+    <input name="emission_color" type="color3" value="0, 0, 0" />
+  </standard_surface>
   <surfacematerial name="glass" type="material">
     <input name="surfaceshader" type="surfaceshader" nodename="glass_surface" />
   </surfacematerial>
-  <disney_principled name="headlight_surface" type="surfaceshader">
-    <input name="baseColor" type="color3" value="0.903, 0.903, 0.903" />
-    <input name="roughness" type="float" value="0.1" />
-    <input name="specTrans" type="float" value="1" />
-    <input name="ior" type="float" value="1.45" />
-  </disney_principled>
+  <standard_surface name="headlight_surface" type="surfaceshader">
+    <input name="base_color" type="color3" value="0.903, 0.903, 0.903" />
+    <input name="specular_roughness" type="float" value="0.316227766017" />
+    <input name="diffuse_roughness" type="float" value="0.1" />
+    <input name="specular_IOR" type="float" value="1.45" />
+    <input name="transmission" type="float" value="1" />
+    <input name="transmission_color" type="color3" value="0.903, 0.903, 0.903" />
+    <input name="subsurface_color" type="color3" value="0.903, 0.903, 0.903" />
+    <input name="coat_roughness" type="float" value="0.316227766017" />
+    <input name="emission" type="float" value="1" />
+    <input name="emission_color" type="color3" value="0, 0, 0" />
+  </standard_surface>
   <surfacematerial name="headlight" type="material">
     <input name="surfaceshader" type="surfaceshader" nodename="headlight_surface" />
   </surfacematerial>
-  <disney_principled name="yellow_blinkers_surface" type="surfaceshader">
-    <input name="baseColor" type="color3" value="1, 0.28, 0.122" />
-    <input name="roughness" type="float" value="0.156" />
-    <input name="specTrans" type="float" value="1" />
-    <input name="ior" type="float" value="1.45" />
-  </disney_principled>
+  <standard_surface name="yellow_blinkers_surface" type="surfaceshader">
+    <input name="base_color" type="color3" value="1, 0.28, 0.122" />
+    <input name="specular_roughness" type="float" value="0.394968353163" />
+    <input name="diffuse_roughness" type="float" value="0.156" />
+    <input name="specular_IOR" type="float" value="1.45" />
+    <input name="transmission" type="float" value="1" />
+    <input name="transmission_color" type="color3" value="1, 0.28, 0.122" />
+    <input name="subsurface_color" type="color3" value="1, 0.28, 0.122" />
+    <input name="coat_roughness" type="float" value="0.316227766017" />
+    <input name="emission" type="float" value="1" />
+    <input name="emission_color" type="color3" value="0, 0, 0" />
+  </standard_surface>
   <surfacematerial name="yellow_blinkers" type="material">
     <input name="surfaceshader" type="surfaceshader" nodename="yellow_blinkers_surface" />
   </surfacematerial>
-  <disney_principled name="red_taillight_surface" type="surfaceshader">
-    <input name="baseColor" type="color3" value="0.581, 0.009, 0.009" />
-    <input name="metallic" type="float" value="0.738" />
-    <input name="roughness" type="float" value="0" />
-  </disney_principled>
+  <standard_surface name="red_taillight_surface" type="surfaceshader">
+    <input name="base_color" type="color3" value="0.581, 0.009, 0.009" />
+    <input name="metalness" type="float" value="0.738" />
+    <input name="specular_roughness" type="float" value="0.0316227766017" />
+    <input name="diffuse_roughness" type="float" value="0.001" />
+    <input name="transmission_color" type="color3" value="0.581, 0.009, 0.009" />
+    <input name="subsurface_color" type="color3" value="0.581, 0.009, 0.009" />
+    <input name="coat_roughness" type="float" value="0.316227766017" />
+    <input name="emission" type="float" value="1" />
+    <input name="emission_color" type="color3" value="0, 0, 0" />
+  </standard_surface>
   <surfacematerial name="red_taillight" type="material">
     <input name="surfaceshader" type="surfaceshader" nodename="red_taillight_surface" />
   </surfacematerial>
-  <disney_principled name="paint_surface" type="surfaceshader">
-    <input name="baseColor" type="color3" value="0.867, 0.837, 0.7776" />
-    <input name="metallic" type="float" value="0.2" />
-    <input name="roughness" type="float" value="0" />
-  </disney_principled>
+  <standard_surface name="paint_surface" type="surfaceshader">
+    <input name="base_color" type="color3" value="0.867, 0.837, 0.7776" />
+    <input name="metalness" type="float" value="0.2" />
+    <input name="specular_roughness" type="float" value="0.0316227766017" />
+    <input name="diffuse_roughness" type="float" value="0.001" />
+    <input name="transmission_color" type="color3" value="0.867, 0.837, 0.7776" />
+    <input name="subsurface_color" type="color3" value="0.867, 0.837, 0.7776" />
+    <input name="coat_roughness" type="float" value="0.316227766017" />
+    <input name="emission" type="float" value="1" />
+    <input name="emission_color" type="color3" value="0, 0, 0" />
+  </standard_surface>
   <surfacematerial name="paint" type="material">
     <input name="surfaceshader" type="surfaceshader" nodename="paint_surface" />
   </surfacematerial>
-  <disney_principled name="red_interior_surface" type="surfaceshader">
-    <input name="baseColor" type="color3" value="0.9035, 0.2515, 0.2608" />
-    <input name="roughness" type="float" value="0.5" />
-    <input name="ior" type="float" value="1.1" />
-  </disney_principled>
+  <standard_surface name="red_interior_surface" type="surfaceshader">
+    <input name="base_color" type="color3" value="0.9035, 0.2515, 0.2608" />
+    <input name="specular_roughness" type="float" value="0.707106781187" />
+    <input name="diffuse_roughness" type="float" value="0.5" />
+    <input name="specular_IOR" type="float" value="1.1" />
+    <input name="transmission_color" type="color3" value="0.9035, 0.2515, 0.2608" />
+    <input name="subsurface_color" type="color3" value="0.9035, 0.2515, 0.2608" />
+    <input name="coat_roughness" type="float" value="0.316227766017" />
+    <input name="emission" type="float" value="1" />
+    <input name="emission_color" type="color3" value="0, 0, 0" />
+  </standard_surface>
   <surfacematerial name="red_interior" type="material">
     <input name="surfaceshader" type="surfaceshader" nodename="red_interior_surface" />
   </surfacematerial>
-  <disney_principled name="tyres_surface" type="surfaceshader">
-    <input name="baseColor" type="color3" value="0.008, 0.008, 0.008" />
-    <input name="roughness" type="float" value="0.25" />
-  </disney_principled>
+  <standard_surface name="tyres_surface" type="surfaceshader">
+    <input name="base_color" type="color3" value="0.008, 0.008, 0.008" />
+    <input name="specular_roughness" type="float" value="0.5" />
+    <input name="diffuse_roughness" type="float" value="0.25" />
+    <input name="transmission_color" type="color3" value="0.008, 0.008, 0.008" />
+    <input name="subsurface_color" type="color3" value="0.008, 0.008, 0.008" />
+    <input name="coat_roughness" type="float" value="0.316227766017" />
+    <input name="emission" type="float" value="1" />
+    <input name="emission_color" type="color3" value="0, 0, 0" />
+  </standard_surface>
   <surfacematerial name="tyres" type="material">
     <input name="surfaceshader" type="surfaceshader" nodename="tyres_surface" />
   </surfacematerial>

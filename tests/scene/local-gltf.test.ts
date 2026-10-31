@@ -62,7 +62,7 @@ describe('local glTF resources', () => {
       expect(source.meshFor(geometries[0]!.path)?.points).toEqual([2, 0, 0, 3, 0, 0, 2, 1, 0]);
       expect(source.meshFor(geometries[1]!.path)?.faceVertexIndices).toEqual([0, 2, 1]);
       const xml = [...scene.materialTexts.values()][0]!;
-      expect(xml).toContain('disney_principled');
+      expect(xml).toContain('gltf_pbr');
       expect(xml).toContain('Copper');
       expect(xml).toContain('value="0.9"');
       expect(scene.warnings.length).toBeGreaterThan(0);
@@ -73,5 +73,25 @@ describe('local glTF resources', () => {
     await expect(importLocalGltf([glb(), glb()])).rejects.toThrow('exactly one');
     const { json } = fixture('missing.bin');
     await expect(importLocalGltf([new File([JSON.stringify(json)], 'scene.gltf')])).rejects.toThrow('Missing or ambiguous');
+  });
+
+  it('loads a served catalog GLB and keeps its scene URL for device recovery', async () => {
+    vi.stubGlobal('document', { baseURI: 'http://localhost/app/' });
+    const file = glb();
+    const fetch = vi.fn(async () => new Response(await file.arrayBuffer()));
+    vi.stubGlobal('fetch', fetch);
+    const url = 'http://localhost/app/scenes/pathtracer/fixture.glb';
+    const imported = await importLocalGltf([], undefined, url);
+    try {
+      expect(fetch).toHaveBeenCalledWith(url);
+      expect(imported.entry).toBe(url);
+      expect(imported.options.imported?.scene.materials).toHaveLength(1);
+      expect(imported.materialTexts.size).toBe(1);
+    } finally { imported.dispose(); }
+  });
+
+  it('reports a missing served catalog asset explicitly', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('', { status: 404 })));
+    await expect(importLocalGltf([], undefined, 'http://localhost/missing.gltf')).rejects.toThrow('HTTP 404');
   });
 });

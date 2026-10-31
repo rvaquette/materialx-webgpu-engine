@@ -1,38 +1,92 @@
 <?xml version="1.0"?>
 <materialx version="1.39" colorspace="lin_rec709">
-  <disney_principled name="blue_tiles_surface" type="surfaceshader">
-    <input name="baseColor" type="color3" nodename="blue_tiles_baseColorTexture" />
-    <input name="metallic" type="float" nodename="blue_tiles_metallicRoughnessChannels" output="outz" />
-    <input name="roughness" type="float" nodename="blue_tiles_metallicRoughnessChannels" output="outy" />
-  </disney_principled>
-  <image name="blue_tiles_baseColorTexture" type="color3">
+  <standard_surface name="blue_tiles_surface" type="surfaceshader">
+    <input name="base_color" type="color3" nodename="blue_tiles_albedo_factor" />
+    <input name="metalness" type="float" nodename="blue_tiles_metallic_roughness_channels" output="outz" />
+    <input name="specular_roughness" type="float" nodename="blue_tiles_roughness_minimum" />
+    <input name="diffuse_roughness" type="float" nodename="blue_tiles_diffuse_roughness" />
+    <input name="subsurface_color" type="color3" nodename="blue_tiles_albedo_factor" />
+    <input name="coat_roughness" type="float" value="0.316227766017" />
+    <input name="normal" type="vector3" nodename="blue_tiles_normal_mapped" />
+    <input name="emission" type="float" value="1" />
+    <input name="emission_color" type="color3" value="0, 0, 0" />
+  </standard_surface>
+  <image name="blue_tiles_albedotexture_color3" type="color3">
     <input name="file" type="filename" value="renderman/textures/tiles_base.png" />
   </image>
-  <image name="blue_tiles_metallicRoughnessTexture" type="color3">
+  <power name="blue_tiles_albedo_linear" type="color3">
+    <input name="in1" type="color3" nodename="blue_tiles_albedotexture_color3" />
+    <input name="in2" type="color3" value="2.2, 2.2, 2.2" />
+  </power>
+  <multiply name="blue_tiles_albedo_factor" type="color3">
+    <input name="in1" type="color3" nodename="blue_tiles_albedo_linear" />
+    <input name="in2" type="color3" value="1, 1, 1" />
+  </multiply>
+  <image name="blue_tiles_metallicroughnesstexture_color3" type="color3">
     <input name="file" type="filename" value="renderman/textures/tiles_mat_rgh.png" />
   </image>
-  <separate3 name="blue_tiles_metallicRoughnessChannels" type="multioutput">
-    <input name="in" type="color3" nodename="blue_tiles_metallicRoughnessTexture" />
+  <separate3 name="blue_tiles_metallic_roughness_channels" type="multioutput">
+    <input name="in" type="color3" nodename="blue_tiles_metallicroughnesstexture_color3" />
   </separate3>
+  <max name="blue_tiles_roughness_minimum" type="float">
+    <input name="in1" type="float" nodename="blue_tiles_metallic_roughness_channels" output="outy" />
+    <input name="in2" type="float" value="0.0316227766017" />
+  </max>
+  <multiply name="blue_tiles_diffuse_roughness" type="float">
+    <input name="in1" type="float" nodename="blue_tiles_roughness_minimum" />
+    <input name="in2" type="float" nodename="blue_tiles_roughness_minimum" />
+  </multiply>
+  <image name="blue_tiles_normaltexture_vector3" type="vector3">
+    <input name="file" type="filename" value="renderman/textures/tiles_normal.png" />
+  </image>
+  <multiply name="blue_tiles_normal_flip" type="vector3">
+    <input name="in1" type="vector3" nodename="blue_tiles_normaltexture_vector3" />
+    <input name="in2" type="vector3" value="1, -1, 1" />
+  </multiply>
+  <add name="blue_tiles_normal_encoded" type="vector3">
+    <input name="in1" type="vector3" nodename="blue_tiles_normal_flip" />
+    <input name="in2" type="vector3" value="0, 1, 0" />
+  </add>
+  <normalmap name="blue_tiles_normal_mapped" type="vector3">
+    <input name="in" type="vector3" nodename="blue_tiles_normal_encoded" />
+  </normalmap>
   <surfacematerial name="blue_tiles" type="material">
     <input name="surfaceshader" type="surfaceshader" nodename="blue_tiles_surface" />
   </surfacematerial>
-  <disney_principled name="base_surface" type="surfaceshader">
-    <input name="baseColor" type="color3" value="0.01, 0.01, 0.01" />
-    <input name="metallic" type="float" value="1" />
-    <input name="roughness" type="float" value="0.5" />
-  </disney_principled>
+  <standard_surface name="base_surface" type="surfaceshader">
+    <input name="base_color" type="color3" value="0.01, 0.01, 0.01" />
+    <input name="metalness" type="float" value="1" />
+    <input name="specular_roughness" type="float" value="0.707106781187" />
+    <input name="diffuse_roughness" type="float" value="0.5" />
+    <input name="transmission_color" type="color3" value="0.01, 0.01, 0.01" />
+    <input name="subsurface_color" type="color3" value="0.01, 0.01, 0.01" />
+    <input name="coat_roughness" type="float" value="0.316227766017" />
+    <input name="emission" type="float" value="1" />
+    <input name="emission_color" type="color3" value="0, 0, 0" />
+  </standard_surface>
   <surfacematerial name="base" type="material">
     <input name="surfaceshader" type="surfaceshader" nodename="base_surface" />
   </surfacematerial>
-  <disney_principled name="checker_surface" type="surfaceshader">
-    <input name="baseColor" type="color3" nodename="checker_baseColorTexture" />
-    <input name="metallic" type="float" value="0" />
-    <input name="roughness" type="float" value="0.5" />
-  </disney_principled>
-  <image name="checker_baseColorTexture" type="color3">
+  <standard_surface name="checker_surface" type="surfaceshader">
+    <input name="base_color" type="color3" nodename="checker_albedo_factor" />
+    <input name="specular_roughness" type="float" value="0.707106781187" />
+    <input name="diffuse_roughness" type="float" value="0.5" />
+    <input name="subsurface_color" type="color3" nodename="checker_albedo_factor" />
+    <input name="coat_roughness" type="float" value="0.316227766017" />
+    <input name="emission" type="float" value="1" />
+    <input name="emission_color" type="color3" value="0, 0, 0" />
+  </standard_surface>
+  <image name="checker_albedotexture_color3" type="color3">
     <input name="file" type="filename" value="renderman/textures/checker.png" />
   </image>
+  <power name="checker_albedo_linear" type="color3">
+    <input name="in1" type="color3" nodename="checker_albedotexture_color3" />
+    <input name="in2" type="color3" value="2.2, 2.2, 2.2" />
+  </power>
+  <multiply name="checker_albedo_factor" type="color3">
+    <input name="in1" type="color3" nodename="checker_albedo_linear" />
+    <input name="in2" type="color3" value="1, 1, 1" />
+  </multiply>
   <surfacematerial name="checker" type="material">
     <input name="surfaceshader" type="surfaceshader" nodename="checker_surface" />
   </surfacematerial>

@@ -1,64 +1,184 @@
 <?xml version="1.0"?>
 <materialx version="1.39" colorspace="lin_rec709">
-  <disney_principled name="head_surface" type="surfaceshader">
-    <input name="baseColor" type="color3" nodename="head_baseColorTexture" />
-    <input name="metallic" type="float" nodename="head_metallicRoughnessChannels" output="outz" />
-    <input name="roughness" type="float" nodename="head_metallicRoughnessChannels" output="outy" />
-  </disney_principled>
-  <image name="head_baseColorTexture" type="color3">
+  <standard_surface name="head_surface" type="surfaceshader">
+    <input name="base_color" type="color3" nodename="head_albedo_factor" />
+    <input name="metalness" type="float" nodename="head_metallic_roughness_channels" output="outz" />
+    <input name="specular_roughness" type="float" nodename="head_roughness_minimum" />
+    <input name="diffuse_roughness" type="float" nodename="head_diffuse_roughness" />
+    <input name="subsurface_color" type="color3" nodename="head_albedo_factor" />
+    <input name="coat_roughness" type="float" value="0.316227766017" />
+    <input name="normal" type="vector3" nodename="head_normal_mapped" />
+    <input name="emission" type="float" value="1" />
+    <input name="emission_color" type="color3" value="0, 0, 0" />
+  </standard_surface>
+  <image name="head_albedotexture_color3" type="color3">
     <input name="file" type="filename" value="substance_boy/textures/01_Head_Base_Color.png" />
   </image>
-  <image name="head_metallicRoughnessTexture" type="color3">
+  <power name="head_albedo_linear" type="color3">
+    <input name="in1" type="color3" nodename="head_albedotexture_color3" />
+    <input name="in2" type="color3" value="2.2, 2.2, 2.2" />
+  </power>
+  <multiply name="head_albedo_factor" type="color3">
+    <input name="in1" type="color3" nodename="head_albedo_linear" />
+    <input name="in2" type="color3" value="1, 1, 1" />
+  </multiply>
+  <image name="head_metallicroughnesstexture_color3" type="color3">
     <input name="file" type="filename" value="substance_boy/textures/01_Head_MetallicRoughness.png" />
   </image>
-  <separate3 name="head_metallicRoughnessChannels" type="multioutput">
-    <input name="in" type="color3" nodename="head_metallicRoughnessTexture" />
+  <separate3 name="head_metallic_roughness_channels" type="multioutput">
+    <input name="in" type="color3" nodename="head_metallicroughnesstexture_color3" />
   </separate3>
+  <max name="head_roughness_minimum" type="float">
+    <input name="in1" type="float" nodename="head_metallic_roughness_channels" output="outy" />
+    <input name="in2" type="float" value="0.0316227766017" />
+  </max>
+  <multiply name="head_diffuse_roughness" type="float">
+    <input name="in1" type="float" nodename="head_roughness_minimum" />
+    <input name="in2" type="float" nodename="head_roughness_minimum" />
+  </multiply>
+  <image name="head_normaltexture_vector3" type="vector3">
+    <input name="file" type="filename" value="substance_boy/textures/01_Head_Normal_DirectX.png" />
+  </image>
+  <multiply name="head_normal_flip" type="vector3">
+    <input name="in1" type="vector3" nodename="head_normaltexture_vector3" />
+    <input name="in2" type="vector3" value="1, -1, 1" />
+  </multiply>
+  <add name="head_normal_encoded" type="vector3">
+    <input name="in1" type="vector3" nodename="head_normal_flip" />
+    <input name="in2" type="vector3" value="0, 1, 0" />
+  </add>
+  <normalmap name="head_normal_mapped" type="vector3">
+    <input name="in" type="vector3" nodename="head_normal_encoded" />
+  </normalmap>
   <surfacematerial name="head" type="material">
     <input name="surfaceshader" type="surfaceshader" nodename="head_surface" />
   </surfacematerial>
-  <disney_principled name="body_surface" type="surfaceshader">
-    <input name="baseColor" type="color3" nodename="body_baseColorTexture" />
-    <input name="metallic" type="float" nodename="body_metallicRoughnessChannels" output="outz" />
-    <input name="roughness" type="float" nodename="body_metallicRoughnessChannels" output="outy" />
-  </disney_principled>
-  <image name="body_baseColorTexture" type="color3">
+  <standard_surface name="body_surface" type="surfaceshader">
+    <input name="base_color" type="color3" nodename="body_albedo_factor" />
+    <input name="metalness" type="float" nodename="body_metallic_roughness_channels" output="outz" />
+    <input name="specular_roughness" type="float" nodename="body_roughness_minimum" />
+    <input name="diffuse_roughness" type="float" nodename="body_diffuse_roughness" />
+    <input name="subsurface_color" type="color3" nodename="body_albedo_factor" />
+    <input name="coat_roughness" type="float" value="0.316227766017" />
+    <input name="normal" type="vector3" nodename="body_normal_mapped" />
+    <input name="emission" type="float" value="1" />
+    <input name="emission_color" type="color3" value="0, 0, 0" />
+  </standard_surface>
+  <image name="body_albedotexture_color3" type="color3">
     <input name="file" type="filename" value="substance_boy/textures/02_Body_Base_Color.png" />
   </image>
-  <image name="body_metallicRoughnessTexture" type="color3">
+  <power name="body_albedo_linear" type="color3">
+    <input name="in1" type="color3" nodename="body_albedotexture_color3" />
+    <input name="in2" type="color3" value="2.2, 2.2, 2.2" />
+  </power>
+  <multiply name="body_albedo_factor" type="color3">
+    <input name="in1" type="color3" nodename="body_albedo_linear" />
+    <input name="in2" type="color3" value="1, 1, 1" />
+  </multiply>
+  <image name="body_metallicroughnesstexture_color3" type="color3">
     <input name="file" type="filename" value="substance_boy/textures/02_Body_MetallicRoughness.png" />
   </image>
-  <separate3 name="body_metallicRoughnessChannels" type="multioutput">
-    <input name="in" type="color3" nodename="body_metallicRoughnessTexture" />
+  <separate3 name="body_metallic_roughness_channels" type="multioutput">
+    <input name="in" type="color3" nodename="body_metallicroughnesstexture_color3" />
   </separate3>
+  <max name="body_roughness_minimum" type="float">
+    <input name="in1" type="float" nodename="body_metallic_roughness_channels" output="outy" />
+    <input name="in2" type="float" value="0.0316227766017" />
+  </max>
+  <multiply name="body_diffuse_roughness" type="float">
+    <input name="in1" type="float" nodename="body_roughness_minimum" />
+    <input name="in2" type="float" nodename="body_roughness_minimum" />
+  </multiply>
+  <image name="body_normaltexture_vector3" type="vector3">
+    <input name="file" type="filename" value="substance_boy/textures/02_Body_Normal_DirectX.png" />
+  </image>
+  <multiply name="body_normal_flip" type="vector3">
+    <input name="in1" type="vector3" nodename="body_normaltexture_vector3" />
+    <input name="in2" type="vector3" value="1, -1, 1" />
+  </multiply>
+  <add name="body_normal_encoded" type="vector3">
+    <input name="in1" type="vector3" nodename="body_normal_flip" />
+    <input name="in2" type="vector3" value="0, 1, 0" />
+  </add>
+  <normalmap name="body_normal_mapped" type="vector3">
+    <input name="in" type="vector3" nodename="body_normal_encoded" />
+  </normalmap>
   <surfacematerial name="body" type="material">
     <input name="surfaceshader" type="surfaceshader" nodename="body_surface" />
   </surfacematerial>
-  <disney_principled name="base_surface" type="surfaceshader">
-    <input name="baseColor" type="color3" nodename="base_baseColorTexture" />
-    <input name="metallic" type="float" nodename="base_metallicRoughnessChannels" output="outz" />
-    <input name="roughness" type="float" nodename="base_metallicRoughnessChannels" output="outy" />
-  </disney_principled>
-  <image name="base_baseColorTexture" type="color3">
+  <standard_surface name="base_surface" type="surfaceshader">
+    <input name="base_color" type="color3" nodename="base_albedo_factor" />
+    <input name="metalness" type="float" nodename="base_metallic_roughness_channels" output="outz" />
+    <input name="specular_roughness" type="float" nodename="base_roughness_minimum" />
+    <input name="diffuse_roughness" type="float" nodename="base_diffuse_roughness" />
+    <input name="subsurface_color" type="color3" nodename="base_albedo_factor" />
+    <input name="coat_roughness" type="float" value="0.316227766017" />
+    <input name="normal" type="vector3" nodename="base_normal_mapped" />
+    <input name="emission" type="float" value="1" />
+    <input name="emission_color" type="color3" value="0, 0, 0" />
+  </standard_surface>
+  <image name="base_albedotexture_color3" type="color3">
     <input name="file" type="filename" value="substance_boy/textures/03_Base_Base_Color.png" />
   </image>
-  <image name="base_metallicRoughnessTexture" type="color3">
+  <power name="base_albedo_linear" type="color3">
+    <input name="in1" type="color3" nodename="base_albedotexture_color3" />
+    <input name="in2" type="color3" value="2.2, 2.2, 2.2" />
+  </power>
+  <multiply name="base_albedo_factor" type="color3">
+    <input name="in1" type="color3" nodename="base_albedo_linear" />
+    <input name="in2" type="color3" value="1, 1, 1" />
+  </multiply>
+  <image name="base_metallicroughnesstexture_color3" type="color3">
     <input name="file" type="filename" value="substance_boy/textures/03_Base_MetallicRoughness.png" />
   </image>
-  <separate3 name="base_metallicRoughnessChannels" type="multioutput">
-    <input name="in" type="color3" nodename="base_metallicRoughnessTexture" />
+  <separate3 name="base_metallic_roughness_channels" type="multioutput">
+    <input name="in" type="color3" nodename="base_metallicroughnesstexture_color3" />
   </separate3>
+  <max name="base_roughness_minimum" type="float">
+    <input name="in1" type="float" nodename="base_metallic_roughness_channels" output="outy" />
+    <input name="in2" type="float" value="0.0316227766017" />
+  </max>
+  <multiply name="base_diffuse_roughness" type="float">
+    <input name="in1" type="float" nodename="base_roughness_minimum" />
+    <input name="in2" type="float" nodename="base_roughness_minimum" />
+  </multiply>
+  <image name="base_normaltexture_vector3" type="vector3">
+    <input name="file" type="filename" value="substance_boy/textures/03_Base_Normal_DirectX.png" />
+  </image>
+  <multiply name="base_normal_flip" type="vector3">
+    <input name="in1" type="vector3" nodename="base_normaltexture_vector3" />
+    <input name="in2" type="vector3" value="1, -1, 1" />
+  </multiply>
+  <add name="base_normal_encoded" type="vector3">
+    <input name="in1" type="vector3" nodename="base_normal_flip" />
+    <input name="in2" type="vector3" value="0, 1, 0" />
+  </add>
+  <normalmap name="base_normal_mapped" type="vector3">
+    <input name="in" type="vector3" nodename="base_normal_encoded" />
+  </normalmap>
   <surfacematerial name="base" type="material">
     <input name="surfaceshader" type="surfaceshader" nodename="base_surface" />
   </surfacematerial>
-  <disney_principled name="grid_surface" type="surfaceshader">
-    <input name="baseColor" type="color3" nodename="grid_baseColorTexture" />
-    <input name="metallic" type="float" value="0" />
-    <input name="roughness" type="float" value="0.5" />
-  </disney_principled>
-  <image name="grid_baseColorTexture" type="color3">
+  <standard_surface name="grid_surface" type="surfaceshader">
+    <input name="base_color" type="color3" nodename="grid_albedo_factor" />
+    <input name="specular_roughness" type="float" value="0.707106781187" />
+    <input name="diffuse_roughness" type="float" value="0.5" />
+    <input name="subsurface_color" type="color3" nodename="grid_albedo_factor" />
+    <input name="coat_roughness" type="float" value="0.316227766017" />
+    <input name="emission" type="float" value="1" />
+    <input name="emission_color" type="color3" value="0, 0, 0" />
+  </standard_surface>
+  <image name="grid_albedotexture_color3" type="color3">
     <input name="file" type="filename" value="substance_boy/textures/grid.jpg" />
   </image>
+  <power name="grid_albedo_linear" type="color3">
+    <input name="in1" type="color3" nodename="grid_albedotexture_color3" />
+    <input name="in2" type="color3" value="2.2, 2.2, 2.2" />
+  </power>
+  <multiply name="grid_albedo_factor" type="color3">
+    <input name="in1" type="color3" nodename="grid_albedo_linear" />
+    <input name="in2" type="color3" value="1, 1, 1" />
+  </multiply>
   <surfacematerial name="grid" type="material">
     <input name="surfaceshader" type="surfaceshader" nodename="grid_surface" />
   </surfacematerial>

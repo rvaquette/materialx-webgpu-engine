@@ -1,167 +1,360 @@
 <?xml version="1.0"?>
 <materialx version="1.39" colorspace="lin_rec709">
-  <disney_principled name="WoodFloor_surface" type="surfaceshader">
-    <input name="baseColor" type="color3" nodename="WoodFloor_baseColorTexture" />
-    <input name="roughness" type="float" value="0.1" />
-  </disney_principled>
-  <image name="WoodFloor_baseColorTexture" type="color3">
+  <standard_surface name="WoodFloor_surface" type="surfaceshader">
+    <input name="base_color" type="color3" nodename="WoodFloor_albedo_factor" />
+    <input name="specular_roughness" type="float" value="0.316227766017" />
+    <input name="diffuse_roughness" type="float" value="0.1" />
+    <input name="subsurface_color" type="color3" nodename="WoodFloor_albedo_factor" />
+    <input name="coat_roughness" type="float" value="0.316227766017" />
+    <input name="emission" type="float" value="1" />
+    <input name="emission_color" type="color3" value="0, 0, 0" />
+  </standard_surface>
+  <image name="WoodFloor_albedotexture_color3" type="color3">
     <input name="file" type="filename" value="staircase/textures/WoodFloor.png" />
   </image>
+  <power name="WoodFloor_albedo_linear" type="color3">
+    <input name="in1" type="color3" nodename="WoodFloor_albedotexture_color3" />
+    <input name="in2" type="color3" value="2.2, 2.2, 2.2" />
+  </power>
+  <multiply name="WoodFloor_albedo_factor" type="color3">
+    <input name="in1" type="color3" nodename="WoodFloor_albedo_linear" />
+    <input name="in2" type="color3" value="1, 1, 1" />
+  </multiply>
   <surfacematerial name="WoodFloor" type="material">
     <input name="surfaceshader" type="surfaceshader" nodename="WoodFloor_surface" />
   </surfacematerial>
-  <disney_principled name="Wallpaper_surface" type="surfaceshader">
-    <input name="baseColor" type="color3" nodename="Wallpaper_baseColorTexture" />
-  </disney_principled>
-  <image name="Wallpaper_baseColorTexture" type="color3">
+  <standard_surface name="Wallpaper_surface" type="surfaceshader">
+    <input name="base_color" type="color3" nodename="Wallpaper_albedo_factor" />
+    <input name="specular_roughness" type="float" value="0.707106781187" />
+    <input name="diffuse_roughness" type="float" value="0.5" />
+    <input name="subsurface_color" type="color3" nodename="Wallpaper_albedo_factor" />
+    <input name="coat_roughness" type="float" value="0.316227766017" />
+    <input name="emission" type="float" value="1" />
+    <input name="emission_color" type="color3" value="0, 0, 0" />
+  </standard_surface>
+  <image name="Wallpaper_albedotexture_color3" type="color3">
     <input name="file" type="filename" value="staircase/textures/Wallpaper.png" />
   </image>
+  <power name="Wallpaper_albedo_linear" type="color3">
+    <input name="in1" type="color3" nodename="Wallpaper_albedotexture_color3" />
+    <input name="in2" type="color3" value="2.2, 2.2, 2.2" />
+  </power>
+  <multiply name="Wallpaper_albedo_factor" type="color3">
+    <input name="in1" type="color3" nodename="Wallpaper_albedo_linear" />
+    <input name="in2" type="color3" value="1, 1, 1" />
+  </multiply>
   <surfacematerial name="Wallpaper" type="material">
     <input name="surfaceshader" type="surfaceshader" nodename="Wallpaper_surface" />
   </surfacematerial>
-  <disney_principled name="WoodStairs_surface" type="surfaceshader">
-    <input name="baseColor" type="color3" nodename="WoodStairs_baseColorTexture" />
-    <input name="roughness" type="float" value="0.1" />
-  </disney_principled>
-  <image name="WoodStairs_baseColorTexture" type="color3">
+  <standard_surface name="WoodStairs_surface" type="surfaceshader">
+    <input name="base_color" type="color3" nodename="WoodStairs_albedo_factor" />
+    <input name="specular_roughness" type="float" value="0.316227766017" />
+    <input name="diffuse_roughness" type="float" value="0.1" />
+    <input name="subsurface_color" type="color3" nodename="WoodStairs_albedo_factor" />
+    <input name="coat_roughness" type="float" value="0.316227766017" />
+    <input name="emission" type="float" value="1" />
+    <input name="emission_color" type="color3" value="0, 0, 0" />
+  </standard_surface>
+  <image name="WoodStairs_albedotexture_color3" type="color3">
     <input name="file" type="filename" value="staircase/textures/WoodPanel.png" />
   </image>
+  <power name="WoodStairs_albedo_linear" type="color3">
+    <input name="in1" type="color3" nodename="WoodStairs_albedotexture_color3" />
+    <input name="in2" type="color3" value="2.2, 2.2, 2.2" />
+  </power>
+  <multiply name="WoodStairs_albedo_factor" type="color3">
+    <input name="in1" type="color3" nodename="WoodStairs_albedo_linear" />
+    <input name="in2" type="color3" value="1, 1, 1" />
+  </multiply>
   <surfacematerial name="WoodStairs" type="material">
     <input name="surfaceshader" type="surfaceshader" nodename="WoodStairs_surface" />
   </surfacematerial>
-  <disney_principled name="WhitePaint_surface" type="surfaceshader">
-    <input name="baseColor" type="color3" value="0.578596, 0.578596, 0.578596" />
-  </disney_principled>
+  <standard_surface name="WhitePaint_surface" type="surfaceshader">
+    <input name="base_color" type="color3" value="0.578596, 0.578596, 0.578596" />
+    <input name="specular_roughness" type="float" value="0.707106781187" />
+    <input name="diffuse_roughness" type="float" value="0.5" />
+    <input name="transmission_color" type="color3" value="0.578596, 0.578596, 0.578596" />
+    <input name="subsurface_color" type="color3" value="0.578596, 0.578596, 0.578596" />
+    <input name="coat_roughness" type="float" value="0.316227766017" />
+    <input name="emission" type="float" value="1" />
+    <input name="emission_color" type="color3" value="0, 0, 0" />
+  </standard_surface>
   <surfacematerial name="WhitePaint" type="material">
     <input name="surfaceshader" type="surfaceshader" nodename="WhitePaint_surface" />
   </surfacematerial>
-  <disney_principled name="MagnoliaPaint_surface" type="surfaceshader">
-    <input name="baseColor" type="color3" value="0.578596, 0.578596, 0.578596" />
-  </disney_principled>
+  <standard_surface name="MagnoliaPaint_surface" type="surfaceshader">
+    <input name="base_color" type="color3" value="0.578596, 0.578596, 0.578596" />
+    <input name="specular_roughness" type="float" value="0.707106781187" />
+    <input name="diffuse_roughness" type="float" value="0.5" />
+    <input name="transmission_color" type="color3" value="0.578596, 0.578596, 0.578596" />
+    <input name="subsurface_color" type="color3" value="0.578596, 0.578596, 0.578596" />
+    <input name="coat_roughness" type="float" value="0.316227766017" />
+    <input name="emission" type="float" value="1" />
+    <input name="emission_color" type="color3" value="0, 0, 0" />
+  </standard_surface>
   <surfacematerial name="MagnoliaPaint" type="material">
     <input name="surfaceshader" type="surfaceshader" nodename="MagnoliaPaint_surface" />
   </surfacematerial>
-  <disney_principled name="Painting1_surface" type="surfaceshader">
-    <input name="baseColor" type="color3" nodename="Painting1_baseColorTexture" />
-  </disney_principled>
-  <image name="Painting1_baseColorTexture" type="color3">
+  <standard_surface name="Painting1_surface" type="surfaceshader">
+    <input name="base_color" type="color3" nodename="Painting1_albedo_factor" />
+    <input name="specular_roughness" type="float" value="0.707106781187" />
+    <input name="diffuse_roughness" type="float" value="0.5" />
+    <input name="subsurface_color" type="color3" nodename="Painting1_albedo_factor" />
+    <input name="coat_roughness" type="float" value="0.316227766017" />
+    <input name="emission" type="float" value="1" />
+    <input name="emission_color" type="color3" value="0, 0, 0" />
+  </standard_surface>
+  <image name="Painting1_albedotexture_color3" type="color3">
     <input name="file" type="filename" value="staircase/textures/Painting1.png" />
   </image>
+  <power name="Painting1_albedo_linear" type="color3">
+    <input name="in1" type="color3" nodename="Painting1_albedotexture_color3" />
+    <input name="in2" type="color3" value="2.2, 2.2, 2.2" />
+  </power>
+  <multiply name="Painting1_albedo_factor" type="color3">
+    <input name="in1" type="color3" nodename="Painting1_albedo_linear" />
+    <input name="in2" type="color3" value="1, 1, 1" />
+  </multiply>
   <surfacematerial name="Painting1" type="material">
     <input name="surfaceshader" type="surfaceshader" nodename="Painting1_surface" />
   </surfacematerial>
-  <disney_principled name="Painting2_surface" type="surfaceshader">
-    <input name="baseColor" type="color3" nodename="Painting2_baseColorTexture" />
-  </disney_principled>
-  <image name="Painting2_baseColorTexture" type="color3">
+  <standard_surface name="Painting2_surface" type="surfaceshader">
+    <input name="base_color" type="color3" nodename="Painting2_albedo_factor" />
+    <input name="specular_roughness" type="float" value="0.707106781187" />
+    <input name="diffuse_roughness" type="float" value="0.5" />
+    <input name="subsurface_color" type="color3" nodename="Painting2_albedo_factor" />
+    <input name="coat_roughness" type="float" value="0.316227766017" />
+    <input name="emission" type="float" value="1" />
+    <input name="emission_color" type="color3" value="0, 0, 0" />
+  </standard_surface>
+  <image name="Painting2_albedotexture_color3" type="color3">
     <input name="file" type="filename" value="staircase/textures/Painting2.png" />
   </image>
+  <power name="Painting2_albedo_linear" type="color3">
+    <input name="in1" type="color3" nodename="Painting2_albedotexture_color3" />
+    <input name="in2" type="color3" value="2.2, 2.2, 2.2" />
+  </power>
+  <multiply name="Painting2_albedo_factor" type="color3">
+    <input name="in1" type="color3" nodename="Painting2_albedo_linear" />
+    <input name="in2" type="color3" value="1, 1, 1" />
+  </multiply>
   <surfacematerial name="Painting2" type="material">
     <input name="surfaceshader" type="surfaceshader" nodename="Painting2_surface" />
   </surfacematerial>
-  <disney_principled name="Painting3_surface" type="surfaceshader">
-    <input name="baseColor" type="color3" nodename="Painting3_baseColorTexture" />
-  </disney_principled>
-  <image name="Painting3_baseColorTexture" type="color3">
+  <standard_surface name="Painting3_surface" type="surfaceshader">
+    <input name="base_color" type="color3" nodename="Painting3_albedo_factor" />
+    <input name="specular_roughness" type="float" value="0.707106781187" />
+    <input name="diffuse_roughness" type="float" value="0.5" />
+    <input name="subsurface_color" type="color3" nodename="Painting3_albedo_factor" />
+    <input name="coat_roughness" type="float" value="0.316227766017" />
+    <input name="emission" type="float" value="1" />
+    <input name="emission_color" type="color3" value="0, 0, 0" />
+  </standard_surface>
+  <image name="Painting3_albedotexture_color3" type="color3">
     <input name="file" type="filename" value="staircase/textures/Painting3.png" />
   </image>
+  <power name="Painting3_albedo_linear" type="color3">
+    <input name="in1" type="color3" nodename="Painting3_albedotexture_color3" />
+    <input name="in2" type="color3" value="2.2, 2.2, 2.2" />
+  </power>
+  <multiply name="Painting3_albedo_factor" type="color3">
+    <input name="in1" type="color3" nodename="Painting3_albedo_linear" />
+    <input name="in2" type="color3" value="1, 1, 1" />
+  </multiply>
   <surfacematerial name="Painting3" type="material">
     <input name="surfaceshader" type="surfaceshader" nodename="Painting3_surface" />
   </surfacematerial>
-  <disney_principled name="Gold_surface" type="surfaceshader">
-    <input name="baseColor" type="color3" value="1, 0.95, 0.35" />
-    <input name="metallic" type="float" value="1" />
-    <input name="roughness" type="float" value="0.05" />
-  </disney_principled>
+  <standard_surface name="Gold_surface" type="surfaceshader">
+    <input name="base_color" type="color3" value="1, 0.95, 0.35" />
+    <input name="metalness" type="float" value="1" />
+    <input name="specular_roughness" type="float" value="0.22360679775" />
+    <input name="diffuse_roughness" type="float" value="0.05" />
+    <input name="transmission_color" type="color3" value="1, 0.95, 0.35" />
+    <input name="subsurface_color" type="color3" value="1, 0.95, 0.35" />
+    <input name="coat_roughness" type="float" value="0.316227766017" />
+    <input name="emission" type="float" value="1" />
+    <input name="emission_color" type="color3" value="0, 0, 0" />
+  </standard_surface>
   <surfacematerial name="Gold" type="material">
     <input name="surfaceshader" type="surfaceshader" nodename="Gold_surface" />
   </surfacematerial>
-  <disney_principled name="WoodChair_surface" type="surfaceshader">
-    <input name="baseColor" type="color3" nodename="WoodChair_baseColorTexture" />
-    <input name="roughness" type="float" value="0.1" />
-  </disney_principled>
-  <image name="WoodChair_baseColorTexture" type="color3">
+  <standard_surface name="WoodChair_surface" type="surfaceshader">
+    <input name="base_color" type="color3" nodename="WoodChair_albedo_factor" />
+    <input name="specular_roughness" type="float" value="0.316227766017" />
+    <input name="diffuse_roughness" type="float" value="0.1" />
+    <input name="subsurface_color" type="color3" nodename="WoodChair_albedo_factor" />
+    <input name="coat_roughness" type="float" value="0.316227766017" />
+    <input name="emission" type="float" value="1" />
+    <input name="emission_color" type="color3" value="0, 0, 0" />
+  </standard_surface>
+  <image name="WoodChair_albedotexture_color3" type="color3">
     <input name="file" type="filename" value="staircase/textures/WoodChair.png" />
   </image>
+  <power name="WoodChair_albedo_linear" type="color3">
+    <input name="in1" type="color3" nodename="WoodChair_albedotexture_color3" />
+    <input name="in2" type="color3" value="2.2, 2.2, 2.2" />
+  </power>
+  <multiply name="WoodChair_albedo_factor" type="color3">
+    <input name="in1" type="color3" nodename="WoodChair_albedo_linear" />
+    <input name="in2" type="color3" value="1, 1, 1" />
+  </multiply>
   <surfacematerial name="WoodChair" type="material">
     <input name="surfaceshader" type="surfaceshader" nodename="WoodChair_surface" />
   </surfacematerial>
-  <disney_principled name="ChairSeat_surface" type="surfaceshader">
-    <input name="baseColor" type="color3" value="0.117647, 0.054902, 0.0666667" />
-    <input name="roughness" type="float" value="0.1" />
-  </disney_principled>
+  <standard_surface name="ChairSeat_surface" type="surfaceshader">
+    <input name="base_color" type="color3" value="0.117647, 0.054902, 0.0666667" />
+    <input name="specular_roughness" type="float" value="0.316227766017" />
+    <input name="diffuse_roughness" type="float" value="0.1" />
+    <input name="transmission_color" type="color3" value="0.117647, 0.054902, 0.0666667" />
+    <input name="subsurface_color" type="color3" value="0.117647, 0.054902, 0.0666667" />
+    <input name="coat_roughness" type="float" value="0.316227766017" />
+    <input name="emission" type="float" value="1" />
+    <input name="emission_color" type="color3" value="0, 0, 0" />
+  </standard_surface>
   <surfacematerial name="ChairSeat" type="material">
     <input name="surfaceshader" type="surfaceshader" nodename="ChairSeat_surface" />
   </surfacematerial>
-  <disney_principled name="WoodLamp_surface" type="surfaceshader">
-    <input name="baseColor" type="color3" nodename="WoodLamp_baseColorTexture" />
-  </disney_principled>
-  <image name="WoodLamp_baseColorTexture" type="color3">
+  <standard_surface name="WoodLamp_surface" type="surfaceshader">
+    <input name="base_color" type="color3" nodename="WoodLamp_albedo_factor" />
+    <input name="specular_roughness" type="float" value="0.707106781187" />
+    <input name="diffuse_roughness" type="float" value="0.5" />
+    <input name="subsurface_color" type="color3" nodename="WoodLamp_albedo_factor" />
+    <input name="coat_roughness" type="float" value="0.316227766017" />
+    <input name="emission" type="float" value="1" />
+    <input name="emission_color" type="color3" value="0, 0, 0" />
+  </standard_surface>
+  <image name="WoodLamp_albedotexture_color3" type="color3">
     <input name="file" type="filename" value="staircase/textures/WoodChair.png" />
   </image>
+  <power name="WoodLamp_albedo_linear" type="color3">
+    <input name="in1" type="color3" nodename="WoodLamp_albedotexture_color3" />
+    <input name="in2" type="color3" value="2.2, 2.2, 2.2" />
+  </power>
+  <multiply name="WoodLamp_albedo_factor" type="color3">
+    <input name="in1" type="color3" nodename="WoodLamp_albedo_linear" />
+    <input name="in2" type="color3" value="1, 1, 1" />
+  </multiply>
   <surfacematerial name="WoodLamp" type="material">
     <input name="surfaceshader" type="surfaceshader" nodename="WoodLamp_surface" />
   </surfacematerial>
-  <disney_principled name="Brass_surface" type="surfaceshader">
-    <input name="baseColor" type="color3" value="0.27, 0.254, 0.15" />
-    <input name="metallic" type="float" value="1" />
-    <input name="roughness" type="float" value="0.01" />
-  </disney_principled>
+  <standard_surface name="Brass_surface" type="surfaceshader">
+    <input name="base_color" type="color3" value="0.27, 0.254, 0.15" />
+    <input name="metalness" type="float" value="1" />
+    <input name="specular_roughness" type="float" value="0.1" />
+    <input name="diffuse_roughness" type="float" value="0.01" />
+    <input name="transmission_color" type="color3" value="0.27, 0.254, 0.15" />
+    <input name="subsurface_color" type="color3" value="0.27, 0.254, 0.15" />
+    <input name="coat_roughness" type="float" value="0.316227766017" />
+    <input name="emission" type="float" value="1" />
+    <input name="emission_color" type="color3" value="0, 0, 0" />
+  </standard_surface>
   <surfacematerial name="Brass" type="material">
     <input name="surfaceshader" type="surfaceshader" nodename="Brass_surface" />
   </surfacematerial>
-  <disney_principled name="StainlessSteel_surface" type="surfaceshader">
-    <input name="baseColor" type="color3" value="1, 1, 1" />
-    <input name="metallic" type="float" value="1" />
-    <input name="roughness" type="float" value="0.1" />
-  </disney_principled>
+  <standard_surface name="StainlessSteel_surface" type="surfaceshader">
+    <input name="base_color" type="color3" value="1, 1, 1" />
+    <input name="metalness" type="float" value="1" />
+    <input name="specular_roughness" type="float" value="0.316227766017" />
+    <input name="diffuse_roughness" type="float" value="0.1" />
+    <input name="coat_roughness" type="float" value="0.316227766017" />
+    <input name="emission" type="float" value="1" />
+    <input name="emission_color" type="color3" value="0, 0, 0" />
+  </standard_surface>
   <surfacematerial name="StainlessSteel" type="material">
     <input name="surfaceshader" type="surfaceshader" nodename="StainlessSteel_surface" />
   </surfacematerial>
-  <disney_principled name="WhitePlastic_surface" type="surfaceshader">
-    <input name="baseColor" type="color3" value="1, 1, 1" />
-  </disney_principled>
+  <standard_surface name="WhitePlastic_surface" type="surfaceshader">
+    <input name="base_color" type="color3" value="1, 1, 1" />
+    <input name="specular_roughness" type="float" value="0.707106781187" />
+    <input name="diffuse_roughness" type="float" value="0.5" />
+    <input name="coat_roughness" type="float" value="0.316227766017" />
+    <input name="emission" type="float" value="1" />
+    <input name="emission_color" type="color3" value="0, 0, 0" />
+  </standard_surface>
   <surfacematerial name="WhitePlastic" type="material">
     <input name="surfaceshader" type="surfaceshader" nodename="WhitePlastic_surface" />
   </surfacematerial>
-  <disney_principled name="Lampshade_surface" type="surfaceshader">
-    <input name="baseColor" type="color3" nodename="Lampshade_baseColorTexture" />
-  </disney_principled>
-  <image name="Lampshade_baseColorTexture" type="color3">
+  <standard_surface name="Lampshade_surface" type="surfaceshader">
+    <input name="base_color" type="color3" nodename="Lampshade_albedo_factor" />
+    <input name="specular_roughness" type="float" value="0.707106781187" />
+    <input name="diffuse_roughness" type="float" value="0.5" />
+    <input name="subsurface_color" type="color3" nodename="Lampshade_albedo_factor" />
+    <input name="coat_roughness" type="float" value="0.316227766017" />
+    <input name="emission" type="float" value="1" />
+    <input name="emission_color" type="color3" value="0, 0, 0" />
+  </standard_surface>
+  <image name="Lampshade_albedotexture_color3" type="color3">
     <input name="file" type="filename" value="staircase/textures/Fabric.png" />
   </image>
+  <power name="Lampshade_albedo_linear" type="color3">
+    <input name="in1" type="color3" nodename="Lampshade_albedotexture_color3" />
+    <input name="in2" type="color3" value="2.2, 2.2, 2.2" />
+  </power>
+  <multiply name="Lampshade_albedo_factor" type="color3">
+    <input name="in1" type="color3" nodename="Lampshade_albedo_linear" />
+    <input name="in2" type="color3" value="1, 1, 1" />
+  </multiply>
   <surfacematerial name="Lampshade" type="material">
     <input name="surfaceshader" type="surfaceshader" nodename="Lampshade_surface" />
   </surfacematerial>
-  <disney_principled name="Black_surface" type="surfaceshader">
-    <input name="baseColor" type="color3" value="0.01, 0.01, 0.01" />
-  </disney_principled>
+  <standard_surface name="Black_surface" type="surfaceshader">
+    <input name="base_color" type="color3" value="0.01, 0.01, 0.01" />
+    <input name="specular_roughness" type="float" value="0.707106781187" />
+    <input name="diffuse_roughness" type="float" value="0.5" />
+    <input name="transmission_color" type="color3" value="0.01, 0.01, 0.01" />
+    <input name="subsurface_color" type="color3" value="0.01, 0.01, 0.01" />
+    <input name="coat_roughness" type="float" value="0.316227766017" />
+    <input name="emission" type="float" value="1" />
+    <input name="emission_color" type="color3" value="0, 0, 0" />
+  </standard_surface>
   <surfacematerial name="Black" type="material">
     <input name="surfaceshader" type="surfaceshader" nodename="Black_surface" />
   </surfacematerial>
-  <disney_principled name="BrushedAluminium_surface" type="surfaceshader">
-    <input name="baseColor" type="color3" nodename="BrushedAluminium_baseColorTexture" />
-    <input name="metallic" type="float" value="1" />
-    <input name="roughness" type="float" value="0.01" />
-  </disney_principled>
-  <image name="BrushedAluminium_baseColorTexture" type="color3">
+  <standard_surface name="BrushedAluminium_surface" type="surfaceshader">
+    <input name="base_color" type="color3" nodename="BrushedAluminium_albedo_factor" />
+    <input name="metalness" type="float" value="1" />
+    <input name="specular_roughness" type="float" value="0.1" />
+    <input name="diffuse_roughness" type="float" value="0.01" />
+    <input name="subsurface_color" type="color3" nodename="BrushedAluminium_albedo_factor" />
+    <input name="coat_roughness" type="float" value="0.316227766017" />
+    <input name="emission" type="float" value="1" />
+    <input name="emission_color" type="color3" value="0, 0, 0" />
+  </standard_surface>
+  <image name="BrushedAluminium_albedotexture_color3" type="color3">
     <input name="file" type="filename" value="staircase/textures/BrushedAluminium.png" />
   </image>
+  <power name="BrushedAluminium_albedo_linear" type="color3">
+    <input name="in1" type="color3" nodename="BrushedAluminium_albedotexture_color3" />
+    <input name="in2" type="color3" value="2.2, 2.2, 2.2" />
+  </power>
+  <multiply name="BrushedAluminium_albedo_factor" type="color3">
+    <input name="in1" type="color3" nodename="BrushedAluminium_albedo_linear" />
+    <input name="in2" type="color3" value="1, 1, 1" />
+  </multiply>
   <surfacematerial name="BrushedAluminium" type="material">
     <input name="surfaceshader" type="surfaceshader" nodename="BrushedAluminium_surface" />
   </surfacematerial>
-  <disney_principled name="Glass_surface" type="surfaceshader">
-    <input name="baseColor" type="color3" value="1, 1, 1" />
-    <input name="roughness" type="float" value="0" />
-    <input name="specTrans" type="float" value="1" />
-    <input name="ior" type="float" value="1.45" />
-  </disney_principled>
+  <standard_surface name="Glass_surface" type="surfaceshader">
+    <input name="base_color" type="color3" value="1, 1, 1" />
+    <input name="specular_roughness" type="float" value="0.0316227766017" />
+    <input name="diffuse_roughness" type="float" value="0.001" />
+    <input name="specular_IOR" type="float" value="1.45" />
+    <input name="transmission" type="float" value="1" />
+    <input name="coat_roughness" type="float" value="0.316227766017" />
+    <input name="emission" type="float" value="1" />
+    <input name="emission_color" type="color3" value="0, 0, 0" />
+  </standard_surface>
   <surfacematerial name="Glass" type="material">
     <input name="surfaceshader" type="surfaceshader" nodename="Glass_surface" />
   </surfacematerial>
-  <disney_principled name="Candles_surface" type="surfaceshader">
-    <input name="baseColor" type="color3" value="1, 1, 1" />
-  </disney_principled>
+  <standard_surface name="Candles_surface" type="surfaceshader">
+    <input name="base_color" type="color3" value="1, 1, 1" />
+    <input name="specular_roughness" type="float" value="0.707106781187" />
+    <input name="diffuse_roughness" type="float" value="0.5" />
+    <input name="coat_roughness" type="float" value="0.316227766017" />
+    <input name="emission" type="float" value="1" />
+    <input name="emission_color" type="color3" value="0, 0, 0" />
+  </standard_surface>
   <surfacematerial name="Candles" type="material">
     <input name="surfaceshader" type="surfaceshader" nodename="Candles_surface" />
   </surfacematerial>

@@ -46,8 +46,8 @@ async function main(): Promise<void> {
   const initialBackend = params.get('backend') ?? 'raster';
   const initialResolution = Number(params.get('res') ?? 512);
   const scenePath = initialEntry.replace(/^\.\//, '/');
-  if (!scenePath.startsWith('/scenes/') || scenePath.split('/').includes('..') || !/\.usda?$/i.test(scenePath)) {
-    throw new Error('Invalid scene entry: expected a USD path under /scenes/.');
+  if (!scenePath.startsWith('/scenes/') || scenePath.split('/').includes('..') || !/\.(usda?|gltf|glb)$/i.test(scenePath)) {
+    throw new Error('Invalid scene entry: expected a USD, glTF or GLB path under /scenes/.');
   }
   if (initialBackend !== 'raster' && initialBackend !== 'pathtracing') throw new Error('Unsupported backend.');
   if (![256, 512, 1024].includes(initialResolution)) throw new Error('Interactive resolution must be 256, 512 or 1024.');
@@ -305,25 +305,36 @@ async function main(): Promise<void> {
   async function loadEntry(entry: string): Promise<boolean> {
     setBusy(true);
     setStatus(`Chargement de ${entry}...`, false);
+    let imported: LocalGltfScene | undefined;
     try {
       const config = SCENE_CATALOG.find(scene => scene.entry === entry);
+      const url = new URL(entry, document.baseURI).href;
+      if (/\.(gltf|glb)$/i.test(new URL(url).pathname)) {
+        const { importLocalGltf } = await import('./scene/local-gltf.ts');
+        imported = await importLocalGltf([], undefined, url);
+      }
       await viewer.load(new URL(entry, document.baseURI).href, new Map(), false, {
-        ...(localScene?.entry === entry ? localScene.options : {}),
+        ...(imported ? imported.options : {}),
+        ...(!imported && localScene?.entry === entry ? localScene.options : {}),
         ...(config?.textureRoot ? { textureRoot: new URL(config.textureRoot, document.baseURI).href } : {}),
       });
       refreshObjects();
-      if (localScene && localScene.entry !== entry) {
+      if (localScene && (imported || localScene.entry !== entry)) {
         const previousEntry = localScene.entry;
         localScene.dispose();
         localScene = undefined;
-        select?.querySelector(`option[value="${previousEntry}"]`)?.remove();
+        if (select) for (const option of Array.from(select.options)) {
+          if (option.value === previousEntry && option.textContent?.startsWith('Local - ')) option.remove();
+        }
       }
+      if (imported) localScene = imported;
       const warningsPanel = document.getElementById('import-warnings-panel');
       const warningsOutput = document.getElementById('import-warnings');
       if (warningsPanel) warningsPanel.hidden = !localScene?.warnings.length;
       if (warningsOutput) warningsOutput.textContent = localScene?.warnings.join('\n\n') ?? '';
       return true;
     } catch (e) {
+      imported?.dispose();
       if (!deviceLost) setStatus(`Echec du chargement: ${(e as Error)?.message ?? e}`);
       return false;
     } finally {

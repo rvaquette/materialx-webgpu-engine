@@ -1,53 +1,100 @@
 <?xml version="1.0"?>
 <materialx version="1.39" colorspace="lin_rec709">
-  <disney_principled name="ceiling_white_surface" type="surfaceshader">
-    <input name="baseColor" type="color3" value="0.8, 0.8, 0.8" />
-  </disney_principled>
+  <standard_surface name="ceiling_white_surface" type="surfaceshader">
+    <input name="specular_roughness" type="float" value="0.707106781187" />
+    <input name="diffuse_roughness" type="float" value="0.5" />
+    <input name="transmission_color" type="color3" value="0.8, 0.8, 0.8" />
+    <input name="subsurface_color" type="color3" value="0.8, 0.8, 0.8" />
+    <input name="coat_roughness" type="float" value="0.316227766017" />
+    <input name="emission" type="float" value="1" />
+    <input name="emission_color" type="color3" value="0, 0, 0" />
+  </standard_surface>
   <surfacematerial name="ceiling_white" type="material">
     <input name="surfaceshader" type="surfaceshader" nodename="ceiling_white_surface" />
   </surfacematerial>
-  <disney_principled name="back_wall_white_surface" type="surfaceshader">
-    <input name="baseColor" type="color3" value="0.8, 0.8, 0.8" />
-  </disney_principled>
+  <standard_surface name="back_wall_white_surface" type="surfaceshader">
+    <input name="specular_roughness" type="float" value="0.707106781187" />
+    <input name="diffuse_roughness" type="float" value="0.5" />
+    <input name="transmission_color" type="color3" value="0.8, 0.8, 0.8" />
+    <input name="subsurface_color" type="color3" value="0.8, 0.8, 0.8" />
+    <input name="coat_roughness" type="float" value="0.316227766017" />
+    <input name="emission" type="float" value="1" />
+    <input name="emission_color" type="color3" value="0, 0, 0" />
+  </standard_surface>
   <surfacematerial name="back_wall_white" type="material">
     <input name="surfaceshader" type="surfaceshader" nodename="back_wall_white_surface" />
   </surfacematerial>
-  <disney_principled name="floor_white_surface" type="surfaceshader">
-    <input name="baseColor" type="color3" value="0.8, 0.8, 0.8" />
-  </disney_principled>
+  <standard_surface name="floor_white_surface" type="surfaceshader">
+    <input name="specular_roughness" type="float" value="0.707106781187" />
+    <input name="diffuse_roughness" type="float" value="0.5" />
+    <input name="transmission_color" type="color3" value="0.8, 0.8, 0.8" />
+    <input name="subsurface_color" type="color3" value="0.8, 0.8, 0.8" />
+    <input name="coat_roughness" type="float" value="0.316227766017" />
+    <input name="emission" type="float" value="1" />
+    <input name="emission_color" type="color3" value="0, 0, 0" />
+  </standard_surface>
   <surfacematerial name="floor_white" type="material">
     <input name="surfaceshader" type="surfaceshader" nodename="floor_white_surface" />
   </surfacematerial>
-  <disney_principled name="small_box_white_surface" type="surfaceshader">
-    <input name="baseColor" type="color3" value="0.8, 0.8, 0.8" />
-  </disney_principled>
+  <standard_surface name="small_box_white_surface" type="surfaceshader">
+    <input name="specular_roughness" type="float" value="0.707106781187" />
+    <input name="diffuse_roughness" type="float" value="0.5" />
+    <input name="transmission_color" type="color3" value="0.8, 0.8, 0.8" />
+    <input name="subsurface_color" type="color3" value="0.8, 0.8, 0.8" />
+    <input name="coat_roughness" type="float" value="0.316227766017" />
+    <input name="emission" type="float" value="1" />
+    <input name="emission_color" type="color3" value="0, 0, 0" />
+  </standard_surface>
   <surfacematerial name="small_box_white" type="material">
     <input name="surfaceshader" type="surfaceshader" nodename="small_box_white_surface" />
   </surfacematerial>
-  <disney_principled name="large_box_white_surface" type="surfaceshader">
-    <input name="baseColor" type="color3" value="0.8, 0.8, 0.8" />
-  </disney_principled>
+  <standard_surface name="large_box_white_surface" type="surfaceshader">
+    <input name="specular_roughness" type="float" value="0.707106781187" />
+    <input name="diffuse_roughness" type="float" value="0.5" />
+    <input name="transmission_color" type="color3" value="0.8, 0.8, 0.8" />
+    <input name="subsurface_color" type="color3" value="0.8, 0.8, 0.8" />
+    <input name="coat_roughness" type="float" value="0.316227766017" />
+    <input name="emission" type="float" value="1" />
+    <input name="emission_color" type="color3" value="0, 0, 0" />
+  </standard_surface>
   <surfacematerial name="large_box_white" type="material">
     <input name="surfaceshader" type="surfaceshader" nodename="large_box_white_surface" />
   </surfacematerial>
-  <disney_principled name="red_surface" type="surfaceshader">
-    <input name="baseColor" type="color3" value="0.93, 0.065, 0.05" />
-  </disney_principled>
+  <standard_surface name="red_surface" type="surfaceshader">
+    <input name="base_color" type="color3" value="0.93, 0.065, 0.05" />
+    <input name="specular_roughness" type="float" value="0.707106781187" />
+    <input name="diffuse_roughness" type="float" value="0.5" />
+    <input name="transmission_color" type="color3" value="0.93, 0.065, 0.05" />
+    <input name="subsurface_color" type="color3" value="0.93, 0.065, 0.05" />
+    <input name="coat_roughness" type="float" value="0.316227766017" />
+    <input name="emission" type="float" value="1" />
+    <input name="emission_color" type="color3" value="0, 0, 0" />
+  </standard_surface>
   <surfacematerial name="red" type="material">
     <input name="surfaceshader" type="surfaceshader" nodename="red_surface" />
   </surfacematerial>
-  <disney_principled name="green_surface" type="surfaceshader">
-    <input name="baseColor" type="color3" value="0.14, 0.95, 0.091" />
-  </disney_principled>
+  <standard_surface name="green_surface" type="surfaceshader">
+    <input name="base_color" type="color3" value="0.14, 0.95, 0.091" />
+    <input name="specular_roughness" type="float" value="0.707106781187" />
+    <input name="diffuse_roughness" type="float" value="0.5" />
+    <input name="transmission_color" type="color3" value="0.14, 0.95, 0.091" />
+    <input name="subsurface_color" type="color3" value="0.14, 0.95, 0.091" />
+    <input name="coat_roughness" type="float" value="0.316227766017" />
+    <input name="emission" type="float" value="1" />
+    <input name="emission_color" type="color3" value="0, 0, 0" />
+  </standard_surface>
   <surfacematerial name="green" type="material">
     <input name="surfaceshader" type="surfaceshader" nodename="green_surface" />
   </surfacematerial>
-  <disney_principled name="glass_surface" type="surfaceshader">
-    <input name="baseColor" type="color3" value="1, 1, 1" />
-    <input name="roughness" type="float" value="0.03" />
-    <input name="specTrans" type="float" value="1" />
-    <input name="ior" type="float" value="1.5" />
-  </disney_principled>
+  <standard_surface name="glass_surface" type="surfaceshader">
+    <input name="base_color" type="color3" value="1, 1, 1" />
+    <input name="specular_roughness" type="float" value="0.173205080757" />
+    <input name="diffuse_roughness" type="float" value="0.03" />
+    <input name="transmission" type="float" value="1" />
+    <input name="coat_roughness" type="float" value="0.316227766017" />
+    <input name="emission" type="float" value="1" />
+    <input name="emission_color" type="color3" value="0, 0, 0" />
+  </standard_surface>
   <surfacematerial name="glass" type="material">
     <input name="surfaceshader" type="surfaceshader" nodename="glass_surface" />
   </surfacematerial>

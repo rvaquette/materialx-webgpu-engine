@@ -29,12 +29,12 @@ def Xform "World"
     def Scope "Looks"
     {
         def Material "mtlx_test" (
-            prepend references = @./openpbr_rva_standard_shader_ball.mtlx@</MaterialX/Materials/mtlx_test>
+            prepend references = @../mtlx-library/Examples/StandardSurface/standard_surface_glass.mtlx@</MaterialX/Materials/Glass>
         )
         {
         }
         def Material "mtlx_default" (
-            prepend references = @./openpbr_rva_standard_shader_ball.mtlx@</MaterialX/Materials/mtlx_default>
+            prepend references = @../mtlx-library/Examples/StandardSurface/standard_surface_default.mtlx@</MaterialX/Materials/Default>
         )
         {
         }
