@@ -324,3 +324,77 @@ describe('emitLayeredSurface (T055d)', () => {
     expect(mod.code).toContain('vec3f(0.0, 0.0, 0.0)');
   });
 });
+
+describe('emitSurfaceVariant opacity-only evaluator', () => {
+  const image = (id: string, type: string, file: string) => upstream(id, 'image', type, [value('file', 'filename', file)]);
+  const variant = (graph: ResolvedGraph, index = 0) => emitSurfaceVariant(graph, resolveSurface(graph)!, index);
+
+  it('lowers only the textured glTF alpha and cutoff, excluding lobe inputs and their textures', () => {
+    const v = variant(surfaceGraph('gltf_pbr', [
+      value('alpha_mode', 'integer', '1'),
+      conn('alpha', 'float', 'alphaTex'),
+      value('alpha_cutoff', 'float', '0.37'),
+      conn('base_color', 'color3', 'albedoTex'),
+      conn('roughness', 'float', 'roughTex'),
+    ], [image('alphaTex', 'float', 'alpha.png'), image('albedoTex', 'color3', 'albedo.png'), image('roughTex', 'float', 'rough.png')]), 3);
+    const opacity = v.opacity!;
+    expect(opacity.fnName).toBe('mx_surface_opacity_3');
+    expect(opacity.fnCode.startsWith('fn mx_surface_opacity_3(vary: MxVaryings) -> f32 {')).toBe(true);
+    expect(opacity.fnCode).toContain('m3_tex_alphaTex');
+    expect(opacity.fnCode).toContain('0.37');
+    expect(opacity.fnCode).toMatch(/return clamp\(select\(select\(clamp\(e\d+, 0\.0, 1\.0\), select\(0\.0, 1\.0, clamp\(e\d+, 0\.0, 1\.0\) >= e\d+\), e\d+ == 1\), 1\.0, e\d+ == 0\), 0\.0, 1\.0\);/);
+    expect(opacity.readsVaryings).toBe(true);
+    for (const excluded of ['m3_tex_albedoTex', 'm3_tex_roughTex', 'MxBsdfLobe', 'LayeredClosure', 'mx_metal']) {
+      expect(opacity.fnCode).not.toContain(excluded);
+      if (excluded.startsWith('m3_tex')) expect(v.fnCode).toContain(excluded);
+    }
+    // The opacity rule text is identical to the closure fill function's assignment.
+    const rule = /return clamp\((.*), 0\.0, 1\.0\);/.exec(opacity.fnCode)![1]!;
+    expect(v.fnCode).toContain(`c.opacity = ${rule};`);
+  });
+
+  it('keeps an editable opacity parameter dynamic without reading varyings', () => {
+    const graph = surfaceGraph('open_pbr_surface', [value('geometry_opacity', 'float', '1'), conn('base_color', 'color3', 'albedoTex')],
+      [image('albedoTex', 'color3', 'albedo.png')]);
+    const surface = resolveSurface(graph)!;
+    const inputs = new Map(surface.inputs);
+    inputs.set('geometry_opacity', { ...inputs.get('geometry_opacity')!, parameter: 'editableOpacity' });
+    const v = emitSurfaceVariant(graph, { ...surface, inputs }, 2);
+    expect(v.features?.opaque).toBe(false);
+    expect(v.opacity!.fnCode).toContain('u.m2_editableOpacity');
+    expect(v.opacity!.fnCode).not.toContain('albedoTex');
+    expect(v.opacity!.readsVaryings).toBe(false);
+  });
+
+  it('averages a textured standard_surface opacity colour', () => {
+    const v = variant(surfaceGraph('standard_surface', [conn('opacity', 'color3', 'opacityTex'), conn('base_color', 'color3', 'albedoTex')],
+      [image('opacityTex', 'color3', 'opacity.png'), image('albedoTex', 'color3', 'albedo.png')]));
+    expect(v.opacity!.fnCode).toMatch(/return clamp\(\(\(e\d+\)\.x \+ \(e\d+\)\.y \+ \(e\d+\)\.z\) \/ 3\.0, 0\.0, 1\.0\);/);
+    expect(v.opacity!.fnCode).toContain('m0_tex_opacityTex');
+    expect(v.opacity!.fnCode).not.toContain('albedoTex');
+  });
+
+  it('emits only the UsdPreviewSurface threshold helpers it needs', () => {
+    const v = variant(surfaceGraph('UsdPreviewSurface', [
+      conn('opacity', 'float', 'opacityTex'), value('opacityThreshold', 'float', '0.5'), value('metallic', 'float', '0.25'),
+    ], [image('opacityTex', 'float', 'opacity.png')]));
+    const code = v.opacity!.fnCode;
+    expect(code).toMatch(/let mx_opacity = clamp\(e\d+, 0\.0, 1\.0\);/);
+    expect(code).toContain('let mx_threshold = ');
+    expect(code).toContain('return clamp(select(1.0, 0.0, mx_threshold > 0.0 && mx_opacity < mx_threshold), 0.0, 1.0);');
+    expect(code).not.toContain('mx_metal');
+    expect(code).not.toContain('mx_diffuseShare');
+  });
+
+  it('short-circuits proven opaque coverage, even with a connected glTF alpha in OPAQUE mode', () => {
+    const v = variant(surfaceGraph('gltf_pbr', [value('alpha_mode', 'integer', '0'), conn('alpha', 'float', 'alphaTex')],
+      [image('alphaTex', 'float', 'alpha.png')]));
+    expect(v.features?.opaque).toBe(true);
+    expect(v.opacity!.fnCode).toBe('fn mx_surface_opacity_0(vary: MxVaryings) -> f32 {\n  return clamp(1.0, 0.0, 1.0);\n}');
+    expect(v.opacity!.readsVaryings).toBe(false);
+    const blend = variant(surfaceGraph('gltf_pbr', [value('alpha_mode', 'integer', '2'), value('alpha', 'float', '0.5')]));
+    expect(blend.features?.opaque).toBe(false);
+    expect(blend.opacity!.fnCode).toContain('0.5');
+    expect(blend.opacity!.fnCode).not.toContain('return clamp(1.0, 0.0, 1.0);');
+  });
+});

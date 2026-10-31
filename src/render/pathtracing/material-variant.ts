@@ -10,6 +10,9 @@
 // prefixes them `m<index>_`) so distinct materials never collide; sharing one GPU
 // texture across materials that reference the same file is a later optimization
 // (T057j). Additive and pure-string (Node-testable): compute.ts wires it in T057i.
+// A parallel `mx_eval_material_opacity(matId, vary) -> f32` switch calls each
+// variant's dependency-pruned opacity-only function (emitSurfaceVariant) and the
+// packed record's opacity slot, so alpha visibility rays never rebuild lobes.
 
 import type { ResolvedGraph } from '../../materialx/graph.ts';
 import type { ResolvedSurface } from '../../materialx/surface-graph.ts';
@@ -22,6 +25,12 @@ import { buildTextureRegistry, type PtTextureRegistry } from './texture-registry
 export const PT_MATERIAL_DISPATCH_ENTRY = 'mx_eval_material';
 /** Constant-record fallback the dispatcher calls for materials without a graph. */
 const PT_MATERIAL_FALLBACK = 'mx_material_closure';
+/** Opacity-only dispatcher used by alpha visibility rays. */
+export const PT_MATERIAL_OPACITY_ENTRY = 'mx_eval_material_opacity';
+/** Present only when some variant's opacity reads MxVaryings; record/constant cases do not. */
+export const PT_MATERIAL_OPACITY_VARYINGS = 'mx_material_opacity_reads_varyings';
+/** Packed-record opacity reader (material-record.ts, slot 1). */
+const PT_MATERIAL_OPACITY_FALLBACK = 'mx_material_opacity';
 
 /** One scene material to lower as a megakernel variant, keyed by its index in the
  *  packed materials buffer (the same id the megakernel dispatches on). */
@@ -38,6 +47,11 @@ export interface PtMaterialDispatch {
   variants: SurfaceVariantModule[];
   /** Per-variant fill functions followed by the mx_eval_material switch. */
   dispatcherWgsl: string;
+  /** Per-variant opacity-only functions followed by the mx_eval_material_opacity
+   *  switch (and PT_MATERIAL_OPACITY_VARYINGS when opacityReadsVaryings). */
+  opacityDispatcherWgsl: string;
+  /** True when at least one variant's opacity depends on hit varyings. */
+  opacityReadsVaryings: boolean;
   /** Node helper preludes required by the variants (deduplicated). */
   preludes: string[];
   /** Texture bindings across all variants, renumbered to a global binding layout. */
@@ -99,6 +113,47 @@ export function buildMaterialDispatch(sources: readonly PtVariantSource[]): PtMa
   ].join('\n');
   const fns = [...unique.values()].map((v) => v.fnCode).join('\n\n');
   const dispatcherWgsl = `${fns ? fns + '\n\n' : ''}fn ${PT_MATERIAL_DISPATCH_ENTRY}(matId: u32, vary: MxVaryings) -> LayeredClosure {\n  switch matId {\n${switchBody}\n  }\n}`;
+  const { opacityDispatcherWgsl, opacityReadsVaryings } = buildOpacityDispatch(variants, functionFor);
 
-  return { variants, dispatcherWgsl, preludes, textures, samplers, textureRegistry, uniforms, primvarFields, extraInputs };
+  return {
+    variants, dispatcherWgsl, opacityDispatcherWgsl, opacityReadsVaryings,
+    preludes, textures, samplers, textureRegistry, uniforms, primvarFields, extraInputs,
+  };
+}
+
+/** Assemble the opacity-only dispatcher; `closureFor` names each variant's closure
+ *  function (shared constant variants) for modules lacking an opacity evaluator. */
+export function buildOpacityDispatch(
+  variants: readonly SurfaceVariantModule[],
+  closureFor: ReadonlyMap<number, string> = new Map(variants.map((v) => [v.index, v.fnName])),
+): { opacityDispatcherWgsl: string; opacityReadsVaryings: boolean } {
+  const shared = new Map<string, string>();
+  const fns: string[] = [];
+  const cases: string[] = [];
+  const varying: number[] = [];
+  for (const variant of variants) {
+    const opacity = variant.opacity;
+    if (opacity === undefined) {
+      // Hand-built module without an opacity evaluator: read the full closure.
+      cases.push(`    case ${variant.index}u: { return clamp(${closureFor.get(variant.index)}(vary).opacity, 0.0, 1.0); }`);
+      varying.push(variant.index);
+      continue;
+    }
+    const constant = variant.uniforms.length === 0 && variant.textures.length === 0 && variant.samplers.length === 0;
+    const key = opacity.fnCode.replace(`fn ${opacity.fnName}(`, 'fn opacity(');
+    let name = constant ? shared.get(key) : undefined;
+    if (name === undefined) {
+      name = opacity.fnName;
+      fns.push(opacity.fnCode);
+      if (constant) shared.set(key, name);
+    }
+    cases.push(`    case ${variant.index}u: { return ${name}(vary); }`);
+    if (opacity.readsVaryings) varying.push(variant.index);
+  }
+  cases.push(`    default: { return clamp(${PT_MATERIAL_OPACITY_FALLBACK}(matId), 0.0, 1.0); }`);
+  const parts = [...fns, `fn ${PT_MATERIAL_OPACITY_ENTRY}(matId: u32, vary: MxVaryings) -> f32 {\n  switch matId {\n${cases.join('\n')}\n  }\n}`];
+  if (varying.length > 0) {
+    parts.push(`fn ${PT_MATERIAL_OPACITY_VARYINGS}(matId: u32) -> bool {\n  switch matId {\n    case ${varying.map((i) => `${i}u`).join(', ')}: { return true; }\n    default: { return false; }\n  }\n}`);
+  }
+  return { opacityDispatcherWgsl: parts.join('\n\n'), opacityReadsVaryings: varying.length > 0 };
 }

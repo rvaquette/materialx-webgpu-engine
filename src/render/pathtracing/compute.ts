@@ -19,7 +19,12 @@ import { closureLibraryPrelude, type ClosureDispatchSpec } from '../../compiler/
 import { emitVaryingsStruct } from '../../compiler/wgsl.ts';
 import type { IrType } from '../../compiler/ir.ts';
 import { materialClosureReaderWgsl, PT_MAX_LOBES, PT_MATERIAL_RECORD_FLOATS, PT_MATERIAL_HEADER_FLOATS, PT_LOBE_FLOATS } from './material-record.ts';
-import { PT_MATERIAL_DISPATCH_ENTRY, type PtMaterialDispatch } from './material-variant.ts';
+import {
+  PT_MATERIAL_DISPATCH_ENTRY,
+  PT_MATERIAL_OPACITY_ENTRY,
+  PT_MATERIAL_OPACITY_VARYINGS,
+  type PtMaterialDispatch,
+} from './material-variant.ts';
 import { ANALYTIC_LIGHTS_WGSL } from './analytic-lights.ts';
 import { pruneWgslFunctions } from '../../compiler/wgsl-reachability.ts';
 
@@ -453,7 +458,7 @@ ${assigns.join('\n')}
   ].join('\n');
 }
 
-function wgslIntegrator(textures: boolean, dispatch: boolean, environment: boolean, displayAovs: boolean, opaque: boolean, analyticLights: boolean): string {
+function wgslIntegrator(textures: boolean, dispatch: PtMaterialDispatch | undefined, environment: boolean, displayAovs: boolean, opaque: boolean, analyticLights: boolean): string {
   const envMiss = environment ? 'env_radiance(rd)' : 'U.env.xyz';
   const envNee = environment ? 'env_radiance(wiW)' : 'U.env.xyz';
   const texOverride = textures
@@ -472,6 +477,21 @@ function wgslIntegrator(textures: boolean, dispatch: boolean, environment: boole
     ? /* wgsl */ `    let vary = mx_hit_varyings(hit, pos, n, normalize(-rd));
     var c = ${PT_MATERIAL_DISPATCH_ENTRY}(tri_material(hit.tri), vary);`
     : /* wgsl */ `    var c = mx_material_closure(tri_material(hit.tri));${texOverride}`;
+  // Opacity-only path: the dispatcher's dependency-pruned per-variant opacity
+  // functions, or the packed record's opacity slot (baked textures never alter
+  // opacity). Varyings are interpolated only for materials whose opacity reads them.
+  const opacityBuild = !dispatch
+    ? '  return clamp(mx_material_opacity(tri_material(hit.tri)), 0.0, 1.0);'
+    : [
+      '  let matId = tri_material(hit.tri);',
+      ...(dispatch.opacityReadsVaryings
+        ? [`  if (${PT_MATERIAL_OPACITY_VARYINGS}(matId)) {`,
+          `    return ${PT_MATERIAL_OPACITY_ENTRY}(matId, mx_hit_varyings(hit, pos, surface_hit_normal(hit), normalize(-rd)));`,
+          '  }']
+        : []),
+      '  var vary: MxVaryings;',
+      `  return ${PT_MATERIAL_OPACITY_ENTRY}(matId, vary);`,
+    ].join('\n');
   const texHelpers = textures
     ? /* wgsl */ `
 fn tri_uv(tri : u32, slot : u32) -> vec2<f32> {
@@ -507,17 +527,26 @@ ${closureBuild}
   return c;
 }
 
+// Coverage opacity only (alpha visibility): never rebuilds the hit's lobes.
+fn mx_hit_opacity(hit: Hit, pos: vec3f, rd: vec3f) -> f32 {
+${opacityBuild}
+}
+
 fn mx_visibility(origin: vec3f, direction: vec3f, distance: f32) -> f32 {
 ${analyticLights ? '  if (mx_intersect_lights(origin, direction).distance < distance) { return 0.0; }' : ''}
 ${opaque ? '  return select(1.0, 0.0, traverse(origin, direction, distance, true).hitAny);' : `
-  var ro = origin;
-  var visibility = 1.0;
-  for (var layer = 0u; layer < 128u; layer++) {
+  // Keep the common opaque first hit outside the nested alpha/BVH loops.
+  let first = traverse(origin, direction, distance, false);
+  if (!first.hitAny) { return 1.0; }
+  let firstPos = origin + direction * first.t;
+  var visibility = 1.0 - mx_hit_opacity(first, firstPos, direction);
+  if (visibility <= 0.0) { return 0.0; }
+  var ro = firstPos + direction * RAY_EPS;
+  for (var layer = 1u; layer < 128u; layer++) {
     let hit = traverse(ro, direction, distance - dot(ro - origin, direction), false);
     if (!hit.hitAny) { return visibility; }
     let pos = ro + direction * hit.t;
-    let c = mx_hit_closure(hit, pos, direction);
-    visibility = visibility * (1.0 - clamp(c.opacity, 0.0, 1.0));
+    visibility = visibility * (1.0 - mx_hit_opacity(hit, pos, direction));
     if (visibility <= 0.0) { return 0.0; }
     ro = pos + direction * RAY_EPS;
   }
@@ -923,7 +952,7 @@ export function pathTraceComputeWgsl(options: PathTraceComputeOptions = {}): str
     ...(options.analyticLights ? [ANALYTIC_LIGHTS_WGSL] : []),
     ...(varyings !== undefined ? [wgslVaryings(varyings)] : []),
     ...(dispatch !== undefined ? [wgslDispatch(dispatch)] : []),
-    wgslIntegrator(textures, dispatch !== undefined, environment, options.displayAovs ?? false, options.opaque ?? false, options.analyticLights ?? false),
+    wgslIntegrator(textures, dispatch, environment, options.displayAovs ?? false, options.opaque ?? false, options.analyticLights ?? false),
     wgslEntry(options.displayAovs ?? false),
   ].join('\n');
   return options.pruneUnusedFunctions ? pruneWgslFunctions(code, [PT_COMPUTE_ENTRY]) : code;
@@ -951,6 +980,7 @@ function wgslDispatch(dispatch: PtMaterialDispatch): string {
     parts.push(`@group(${s.group}) @binding(${s.binding}) var ${s.handle}: sampler;`);
   }
   parts.push(dispatch.dispatcherWgsl);
+  parts.push(dispatch.opacityDispatcherWgsl);
   return parts.join('\n\n');
 }
 

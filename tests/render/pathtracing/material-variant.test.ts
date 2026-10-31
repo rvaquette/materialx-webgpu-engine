@@ -16,6 +16,9 @@ import { resolveSurface } from '../../../src/materialx/surface-graph.ts';
 import { emitSurfaceVariant } from '../../../src/compiler/surface-wgsl.ts';
 import {
   buildMaterialDispatch,
+  buildOpacityDispatch,
+  PT_MATERIAL_OPACITY_ENTRY,
+  PT_MATERIAL_OPACITY_VARYINGS,
   type PtVariantSource,
 } from '../../../src/render/pathtracing/material-variant.ts';
 
@@ -134,5 +137,56 @@ describe('buildMaterialDispatch (T057g)', () => {
     expect(dispatch.dispatcherWgsl).toContain('m1_tex_tex');
     // The textured input forces the st primvar into the merged varyings.
     expect(dispatch.primvarFields.has('st')).toBe(true);
+  });
+});
+
+describe('buildMaterialDispatch opacity-only dispatcher', () => {
+  const texturedAlpha = () => surfaceGraph('gltf_pbr', [
+    value('alpha_mode', 'integer', '1'), conn('alpha', 'float', 'alphaTex'), conn('base_color', 'color3', 'albedoTex'),
+  ], [
+    upstream('alphaTex', 'image', 'float', [value('file', 'filename', 'alpha.png')]),
+    upstream('albedoTex', 'image', 'color3', [value('file', 'filename', 'albedo.png')]),
+  ]);
+
+  it('switches mixed graph materials to opacity-only functions with a packed-record fallback', () => {
+    const constant = surfaceGraph('open_pbr_surface', [value('geometry_opacity', 'float', '0.4')]);
+    const dispatch = buildMaterialDispatch([source(0, texturedAlpha()), source(2, constant), source(5, constant)]);
+    const wgsl = dispatch.opacityDispatcherWgsl;
+    expect(wgsl).toContain(`fn ${PT_MATERIAL_OPACITY_ENTRY}(matId: u32, vary: MxVaryings) -> f32 {`);
+    expect(wgsl).toContain('case 0u: { return mx_surface_opacity_0(vary); }');
+    // Identical constant opacity functions are shared like the closure functions.
+    expect(wgsl).toContain('case 2u: { return mx_surface_opacity_2(vary); }');
+    expect(wgsl).toContain('case 5u: { return mx_surface_opacity_2(vary); }');
+    expect(wgsl.match(/fn mx_surface_opacity_/g)).toHaveLength(2);
+    expect(wgsl).toContain('0.4');
+    expect(wgsl).toContain('default: { return clamp(mx_material_opacity(matId), 0.0, 1.0); }');
+    // Only the textured material needs interpolated hit varyings.
+    expect(dispatch.opacityReadsVaryings).toBe(true);
+    expect(wgsl).toContain(`fn ${PT_MATERIAL_OPACITY_VARYINGS}(matId: u32) -> bool {`);
+    expect(wgsl).toContain('case 0u: { return true; }');
+    // Opacity never reconstructs lobes nor samples the albedo texture.
+    expect(wgsl).not.toContain('LayeredClosure');
+    expect(wgsl).not.toContain('MxBsdfLobe');
+    expect(wgsl).not.toContain('m0_tex_albedoTex');
+    expect(wgsl).toContain('m0_tex_alphaTex');
+    expect(dispatch.dispatcherWgsl).toContain('m0_tex_albedoTex');
+  });
+
+  it('falls back to the packed opacity slot only when no material has a graph', () => {
+    const dispatch = buildMaterialDispatch([]);
+    expect(dispatch.opacityReadsVaryings).toBe(false);
+    expect(dispatch.opacityDispatcherWgsl).toBe(
+      'fn mx_eval_material_opacity(matId: u32, vary: MxVaryings) -> f32 {\n  switch matId {\n    default: { return clamp(mx_material_opacity(matId), 0.0, 1.0); }\n  }\n}',
+    );
+  });
+
+  it('reads the full closure opacity for hand-built variants without an opacity evaluator', () => {
+    const graph = surfaceGraph('standard_surface', [value('opacity', 'color3', '0.5, 0.5, 0.5')]);
+    const variant = emitSurfaceVariant(graph, resolveSurface(graph, {})!, 1);
+    expect(variant.opacity?.fnName).toBe('mx_surface_opacity_1');
+    delete variant.opacity;
+    const { opacityDispatcherWgsl, opacityReadsVaryings } = buildOpacityDispatch([variant]);
+    expect(opacityDispatcherWgsl).toContain('case 1u: { return clamp(mx_surface_layered_1(vary).opacity, 0.0, 1.0); }');
+    expect(opacityReadsVaryings).toBe(true);
   });
 });

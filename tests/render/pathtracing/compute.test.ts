@@ -46,6 +46,14 @@ function brickGraph(): ResolvedGraph {
 }
 
 
+function surfaceGraph(category: string, inputs: ResolvedNode['inputs'], upstream: ResolvedNode[]): ResolvedGraph {
+  const surfaceNode: ResolvedNode = { id: 'SR', category, type: 'surfaceshader', inputs, provenance: { namePath: '/mat/SR' } };
+  return {
+    terminals: [{ name: 'surfaceshader', type: 'surfaceshader', nodeId: 'SR', provenance: { namePath: '/mat/SR' } }],
+    nodes: new Map<string, ResolvedNode>([['SR', surfaceNode], ...upstream.map((node): [string, ResolvedNode] => [node.id, node])]),
+  };
+}
+
 function fakeScene(): PathTraceScene {
   return {
     nodes: new Float32Array(),
@@ -152,8 +160,67 @@ describe('pathTraceComputeWgsl', () => {
     expect(nullEvent).not.toContain('beta =');
     expect(nullEvent).not.toContain('specularBounce =');
     expect(start).toBeLessThan(src.indexOf('if (c.hasEmission != 0u)'));
-    expect(src).toContain('visibility = visibility * (1.0 - clamp(c.opacity');
+    expect(src).toContain('visibility = visibility * (1.0 - mx_hit_opacity(hit, pos, direction));');
     expect(src).toContain('mx_alpha_visibility(pos + toLight * RAY_EPS, toLight)');
+  });
+
+  it('evaluates alpha visibility from opacity only, never rebuilding the hit closure', () => {
+    const sliceFn = (shader: string, name: string) => shader.slice(shader.indexOf(`fn ${name}(`), shader.indexOf('\n}\n', shader.indexOf(`fn ${name}(`)));
+    const visibility = (shader: string) => shader.slice(shader.indexOf('fn mx_visibility('), shader.indexOf('fn integrate('));
+    // Packed-record fallback (with and without baked textures, which never alter opacity).
+    for (const shader of [src, pathTraceComputeWgsl({ textures: true })]) {
+      expect(visibility(shader)).not.toContain('mx_hit_closure');
+      expect(sliceFn(shader, 'mx_hit_opacity')).toContain('return clamp(mx_material_opacity(tri_material(hit.tri)), 0.0, 1.0);');
+    }
+    const textured = surfaceGraph('gltf_pbr', [
+      { name: 'alpha_mode', type: 'integer', source: { kind: 'value', value: '1', type: 'integer' }, provenance: { namePath: '/mat/alpha_mode' } },
+      { name: 'alpha', type: 'float', source: { kind: 'connection', nodeId: 'alphaTex' }, provenance: { namePath: '/mat/alpha' } },
+    ], [{ id: 'alphaTex', category: 'image', type: 'float', provenance: { namePath: '/mat/alphaTex' }, inputs: [
+      { name: 'file', type: 'filename', source: { kind: 'value', value: 'alpha.png', type: 'filename' }, provenance: { namePath: '/mat/file' } },
+    ] }]);
+    const brick = brickGraph();
+    // Mixed scene: textured alpha (varyings), constant graph and record fallback.
+    const mixed = buildMaterialDispatch([
+      { materialIndex: 0, graph: textured, surface: resolveSurface(textured, {})! },
+      { materialIndex: 1, graph: brick, surface: resolveSurface(brick, {})! },
+    ]);
+    const shader = pathTraceComputeWgsl({ dispatch: mixed });
+    const hitOpacity = sliceFn(shader, 'mx_hit_opacity');
+    expect(hitOpacity).toContain('if (mx_material_opacity_reads_varyings(matId)) {');
+    expect(hitOpacity).toContain('return mx_eval_material_opacity(matId, mx_hit_varyings(hit, pos, surface_hit_normal(hit), normalize(-rd)));');
+    expect(hitOpacity).toContain('return mx_eval_material_opacity(matId, vary);');
+    expect(visibility(shader)).not.toContain('mx_hit_closure');
+    expect(shader).toContain(mixed.opacityDispatcherWgsl);
+    expect(shader).toContain('fn mx_surface_opacity_0(vary: MxVaryings) -> f32 {');
+    expect(shader).toContain('case 1u: { return mx_surface_opacity_1(vary); }');
+    const pruned = pathTraceComputeWgsl({ dispatch: mixed, pruneUnusedFunctions: true });
+    expect(pruned).not.toContain('fn mx_hit_closure(');
+    expect(pruned).toContain('fn mx_eval_material_opacity(');
+    expect(pruned).toContain('fn mx_eval_material(');
+    // Constant-only opacity skips varyings interpolation for shadow rays.
+    const constant = buildMaterialDispatch([{ materialIndex: 0, graph: brick, surface: resolveSurface(brick, {})! }]);
+    expect(constant.opacityReadsVaryings).toBe(false);
+    const constantOpacity = sliceFn(pathTraceComputeWgsl({ dispatch: constant }), 'mx_hit_opacity');
+    expect(constantOpacity).not.toContain('mx_hit_varyings');
+    expect(constantOpacity).toContain('var vary: MxVaryings;');
+    // The proven-opaque any-hit specialization is unchanged.
+    expect(visibility(pathTraceComputeWgsl({ dispatch: constant, opaque: true }))).toContain('true).hitAny');
+  });
+
+  it('handles the first alpha shadow hit outside the continuation loop without changing its 128-hit limit', () => {
+    const visibility = src.slice(src.indexOf('fn mx_visibility('), src.indexOf('fn mx_alpha_visibility('));
+    const loop = visibility.indexOf('for (var layer = 1u; layer < 128u; layer++)');
+    const first = visibility.slice(0, loop);
+    expect(loop).toBeGreaterThan(0);
+    expect(first).toContain('let first = traverse(origin, direction, distance, false);');
+    expect(first).toContain('if (!first.hitAny) { return 1.0; }');
+    expect(first).toContain('var visibility = 1.0 - mx_hit_opacity(first, firstPos, direction);');
+    expect(first).toContain('if (visibility <= 0.0) { return 0.0; }');
+    expect(first).toContain('var ro = firstPos + direction * RAY_EPS;');
+    expect(visibility.slice(loop)).toContain('distance - dot(ro - origin, direction)');
+    expect(visibility.slice(loop)).toContain('visibility = visibility * (1.0 - mx_hit_opacity(hit, pos, direction));');
+    expect(visibility.slice(loop)).toContain('if (!hit.hitAny) { return visibility; }');
+    expect(visibility.trim()).toMatch(/return 0\.0;\s*}$/);
   });
 
   it('selects a compensated RGB channel once per path and reuses it across interfaces', () => {

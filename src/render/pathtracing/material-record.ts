@@ -268,7 +268,8 @@ export function unpackLayeredMaterial(
  * binding and rebuilds the LayeredClosure struct (LAYERED_CLOSURE_PRELUDE). The
  * byte layout mirrors this module exactly; numeric CPU<->WGSL parity is validated
  * at device level (T059). The caller must emit LAYERED_CLOSURE_PRELUDE and declare
- * the `materials` storage buffer before this function.
+ * the `materials` storage buffer before this function. `mx_material_opacity(matIndex)`
+ * reads only the opacity slot for alpha visibility rays (no lobe reconstruction).
  */
 export function materialClosureReaderWgsl(): string {
   const stride = PT_MATERIAL_RECORD_FLOATS;
@@ -310,6 +311,9 @@ fn mx_material_lobe(base : u32) -> MxBsdfLobe {
   lobe.dispersion = materials[base + 23u];
   lobe.hairTintTRT = vec3f(materials[base + 24u], materials[base + 25u], materials[base + 26u]);
   return lobe;
+}
+fn mx_material_opacity(matIndex : u32) -> f32 {
+  return materials[matIndex * MX_MATERIAL_RECORD_FLOATS + 1u];
 }
 fn mx_material_closure(matIndex : u32) -> LayeredClosure {
   var c : LayeredClosure;

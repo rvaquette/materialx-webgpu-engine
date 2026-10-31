@@ -249,6 +249,15 @@ describe('T057b material-record WGSL reader', () => {
     expect(wgsl).toContain('MxThinFilmLayer(');
   });
 
+  it('reads only the packed opacity slot for alpha visibility', () => {
+    const record = packLayeredMaterial({ opacity: 0.25, lobes: [{ kind: 'burley_diffuse', weight: 1, color: [1, 1, 1] }] });
+    expect(record[1]).toBeCloseTo(0.25);
+    expect(unpackLayeredMaterial(record).opacity).toBeCloseTo(0.25);
+    const fn = wgsl.slice(wgsl.indexOf('fn mx_material_opacity('), wgsl.indexOf('fn mx_material_closure('));
+    expect(fn).toBe('fn mx_material_opacity(matIndex : u32) -> f32 {\n  return materials[matIndex * MX_MATERIAL_RECORD_FLOATS + 1u];\n}\n');
+    expect(wgsl).toContain('c.opacity = materials[base + 1u];');
+  });
+
   it('decodes the per-lobe presence bitmask', () => {
     expect(wgsl).toContain('MX_LOBE_HAS_COLOR90');
     expect(wgsl).toContain('MX_LOBE_HAS_EXTINCTION');

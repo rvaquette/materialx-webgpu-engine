@@ -17,7 +17,7 @@ import type {
   SurfaceFamily,
 } from '../materialx/surface-graph.ts';
 import { closureLibraryPrelude } from './closure-library.ts';
-import { FLOAT, IrModuleBuilder, type IrRef, type IrType } from './ir.ts';
+import { FLOAT, IrModuleBuilder, type IrRef, type IrType, type ShaderIr } from './ir.ts';
 import { lowerSurfaceInputsToIr } from './surface-ir.ts';
 import {
   emitVaryingsStruct,
@@ -29,6 +29,7 @@ import {
 
 const SURFACE_ENTRY = 'mx_surface_layered';
 const SURFACE_RETURN = 'LayeredClosure';
+const SURFACE_OPACITY_ENTRY = 'mx_surface_opacity';
 
 /** The eight BSDF lobe kinds of the layered model (ir.ts), as WGSL u32 constants. */
 type LobeKind =
@@ -280,6 +281,40 @@ function opaqueSurface(family: SurfaceFamily, c: Ctx): boolean {
   return c.literal('opacity') && c.litRgb('opacity', [1, 1, 1]).every(x => x >= 1);
 }
 
+/** Coverage opacity of one family: optional `let mx_*` helpers plus the expression.
+ *  Shared by the full closure fill and the opacity-only visibility evaluator so the
+ *  alpha/cutoff/threshold rules live in exactly one place. */
+interface OpacityWgsl {
+  locals: string[];
+  expr: string;
+}
+
+function familyOpacity(family: SurfaceFamily, c: Ctx): OpacityWgsl {
+  switch (family) {
+    case 'standard_surface':
+      return { locals: [], expr: avgOpacity(c.col('opacity', [1, 1, 1])) };
+    case 'open_pbr_surface':
+      return { locals: [], expr: c.s('geometry_opacity', 1) };
+    case 'gltf_pbr': {
+      const alpha = clampExpr(c.s('alpha', 1));
+      const mode = c.s('alpha_mode', 0);
+      const cutoff = c.s('alpha_cutoff', 0.5);
+      return { locals: [], expr: `select(select(${alpha}, select(0.0, 1.0, ${alpha} >= ${cutoff}), ${mode} == 1), 1.0, ${mode} == 0)` };
+    }
+    case 'UsdPreviewSurface':
+      return {
+        locals: [
+          `  let mx_opacity = ${clampExpr(c.s('opacity', 1))};`,
+          `  let mx_threshold = ${c.s('opacityThreshold', 0)};`,
+        ],
+        expr: 'select(1.0, 0.0, mx_threshold > 0.0 && mx_opacity < mx_threshold)',
+      };
+    case 'disney_principled':
+    case 'simple_hair':
+      return { locals: [], expr: '1.0' };
+  }
+}
+
 // --- standard_surface --------------------------------------------------------
 
 function standardSurface(c: Ctx): FamilyWgsl {
@@ -309,7 +344,7 @@ function standardSurface(c: Ctx): FamilyWgsl {
     { kind: 'burley_diffuse', weight: '(mx_diel * mx_base)', color: baseColor, roughness: diffRough, active: mayWeigh(c, 'base', 1) },
     { kind: 'subsurface', weight: '(mx_diel * mx_sss)', color: sssColor, active: mayWeigh(c, 'subsurface', 0) },
   ];
-  const out: FamilyWgsl = { locals, lobes, opacity: avgOpacity(c.col('opacity', [1, 1, 1])),
+  const out: FamilyWgsl = { locals, lobes, opacity: familyOpacity('standard_surface', c).expr,
     transmission: presentWeighted(c, 'transmission'), dispersion: presentWeighted(c, 'transmission_dispersion') };
   if (presentWeighted(c, 'coat')) out.coat = { weight: clampExpr(c.s('coat', 0)), color: c.col('coat_color', [1, 1, 1]), roughness: c.s('coat_roughness', 0.1), ior: c.s('coat_IOR', 1.5) };
   if (presentWeighted(c, 'sheen')) out.sheen = { weight: clampExpr(c.s('sheen', 0)), color: c.col('sheen_color', [1, 1, 1]), roughness: c.s('sheen_roughness', 0.3) };
@@ -352,7 +387,7 @@ function openPbrSurface(c: Ctx): FamilyWgsl {
     { kind: 'burley_diffuse', weight: '(mx_diel * mx_baseW)', color: baseColor, roughness: diffRough, active: mayWeigh(c, 'base_weight', 1) },
     { kind: 'subsurface', weight: '(mx_diel * mx_sss)', color: sssColor, active: mayWeigh(c, 'subsurface_weight', 0) },
   ];
-  const out: FamilyWgsl = { locals, lobes, opacity: c.s('geometry_opacity', 1),
+  const out: FamilyWgsl = { locals, lobes, opacity: familyOpacity('open_pbr_surface', c).expr,
     transmission: presentWeighted(c, 'transmission_weight'),
     dispersion: !thinWalled && presentWeighted(c, 'transmission_dispersion_scale') };
   if (presentWeighted(c, 'coat_weight')) out.coat = { weight: clampExpr(c.s('coat_weight', 0)), color: c.col('coat_color', [1, 1, 1]), roughness: c.s('coat_roughness', 0), ior: c.s('coat_ior', 1.6) };
@@ -383,12 +418,9 @@ function gltfPbr(c: Ctx): FamilyWgsl {
     { kind: 'dielectric_reflection', weight: '(mx_diel * mx_spec)', color: specColor, roughness: rough, ior, anisotropy: aniso, rotation: rot, active: mayWeigh(c, 'specular', 1) },
     { kind: 'burley_diffuse', weight: 'mx_diel', color: baseColor, roughness: rough },
   ];
-  const alpha = clampExpr(c.s('alpha', 1));
-  const mode = c.s('alpha_mode', 0);
-  const cutoff = c.s('alpha_cutoff', 0.5);
   const out: FamilyWgsl = {
     locals, lobes,
-    opacity: `select(select(${alpha}, select(0.0, 1.0, ${alpha} >= ${cutoff}), ${mode} == 1), 1.0, ${mode} == 0)`,
+    opacity: familyOpacity('gltf_pbr', c).expr,
     transmission: presentWeighted(c, 'transmission'),
     dispersion: presentWeighted(c, 'dispersion'),
   };
@@ -414,11 +446,12 @@ function usdPreviewSurface(c: Ctx): FamilyWgsl {
   const specColor = useSpecular ? c.col('specularColor', [0, 0, 0]) : 'vec3f(1.0)';
   const mayTransmit = (c.dyn('opacity') || c.lit('opacity', 1) < 1)
     && (c.dyn('opacityThreshold') || c.lit('opacityThreshold', 0) <= 0);
+  const metal = `  let mx_metal = ${clampExpr(c.s('metallic', 0))};`;
+  const opacity = familyOpacity('UsdPreviewSurface', c);
   const locals = [
-    `  let mx_metal = ${clampExpr(c.s('metallic', 0))};`,
+    metal,
     `  let mx_diel = 1.0 - mx_metal;`,
-    `  let mx_opacity = ${clampExpr(c.s('opacity', 1))};`,
-    `  let mx_threshold = ${c.s('opacityThreshold', 0)};`,
+    ...opacity.locals,
     `  let mx_diffuseShare = select(mx_opacity, 1.0, mx_threshold > 0.0);`,
   ];
   const lobes: LobeWgsl[] = [
@@ -428,7 +461,7 @@ function usdPreviewSurface(c: Ctx): FamilyWgsl {
     { kind: 'burley_diffuse', weight: '(mx_diel * mx_diffuseShare)', color: diffuse, roughness: rough },
   ];
   const out: FamilyWgsl = { locals, lobes,
-    opacity: 'select(1.0, 0.0, mx_threshold > 0.0 && mx_opacity < mx_threshold)',
+    opacity: opacity.expr,
     transmission: mayTransmit };
   if (presentWeighted(c, 'clearcoat')) out.coat = { weight: clampExpr(c.s('clearcoat', 0)), color: 'vec3f(1.0)', roughness: c.s('clearcoatRoughness', 0.01), ior: '1.5' };
   const emRgb = c.litRgb('emissiveColor', [0, 0, 0]);
@@ -459,7 +492,7 @@ function disneyPrincipled(c: Ctx): FamilyWgsl {
     { kind: 'burley_diffuse', weight: 'mx_diel', color: baseColor, roughness: rough, active: dielectric },
     { kind: 'subsurface', weight: '(mx_diel * mx_sss)', color: baseColor, active: dielectric && mayWeigh(c, 'subsurface', 0) },
   ];
-  const out: FamilyWgsl = { locals, lobes, opacity: '1.0', transmission: presentWeighted(c, 'specTrans'), dispersion: false };
+  const out: FamilyWgsl = { locals, lobes, opacity: familyOpacity('disney_principled', c).expr, transmission: presentWeighted(c, 'specTrans'), dispersion: false };
   if (presentWeighted(c, 'sheen')) out.sheen = { weight: clampExpr(c.s('sheen', 0)), color: `mix(vec3f(1.0), ${baseColor}, ${clampExpr(c.s('sheenTint', 0.5))})`, roughness: '0.3' };
   if (presentWeighted(c, 'clearcoat')) out.coat = { weight: clampExpr(c.s('clearcoat', 0)), color: 'vec3f(1.0)', roughness: `(1.0 - ${clampExpr(c.s('clearcoatGloss', 1))})`, ior: '1.5' };
   return out;
@@ -483,7 +516,7 @@ function lowerFamily(family: SurfaceFamily, c: Ctx): FamilyWgsl {
           rotation: c.s('cuticleAngle', 0.5),
           ior: c.s('ior', 1.55),
         }],
-        opacity: '1.0',
+        opacity: familyOpacity('simple_hair', c).expr,
         transmission: false,
       };
     case 'standard_surface':
@@ -534,6 +567,16 @@ interface SurfaceFnParts {
   usesLighting: boolean;
   features: SurfaceFeatures;
   lobeCount: number;
+  opacity?: SurfaceOpacityFn;
+}
+
+/** Opacity-only evaluator emitted beside a variant's closure fill function. */
+export interface SurfaceOpacityFn {
+  fnName: string;
+  /** `fn <name>(vary: MxVaryings) -> f32` returning the clamped coverage opacity. */
+  fnCode: string;
+  /** False when the body never reads `vary` (constant, parameter-only or proven opaque). */
+  readsVaryings: boolean;
 }
 
 /** Lower a resolved surface to a single `fn <entryName>(vary) -> LayeredClosure`
@@ -547,6 +590,7 @@ function buildSurfaceFn(
   handlePrefix = '',
   computeStage = false,
   pruneInactiveLobes = false,
+  opacityEntryName?: string,
 ): SurfaceFnParts {
   const builder = new IrModuleBuilder();
   const lowered = lowerSurfaceInputsToIr(graph, surface, builder, sink);
@@ -594,7 +638,12 @@ function buildSurfaceFn(
     lobeKinds: [...new Set(lobes.filter((lobe) => lobe.active !== false).map((lobe) => LOBE_KIND_NUM[lobe.kind]))],
   };
 
+  const opacity = opacityEntryName === undefined
+    ? undefined
+    : buildOpacityFn(ir, surface, lowered.inputs, opacityEntryName, handlePrefix, computeStage, features.opaque === true);
+
   return {
+    ...(opacity !== undefined ? { opacity } : {}),
     fnName: entryName,
     fnCode,
     family: surface.family,
@@ -608,6 +657,34 @@ function buildSurfaceFn(
     features,
     lobeCount: lobes.length,
   };
+}
+
+/** Emit `fn <entryName>(vary) -> f32` evaluating only the coverage opacity. It reuses
+ *  the surface's lowered IR (same refs, texture handles and params as the closure
+ *  fill function) but lowers just the sub-graphs reachable from the family opacity
+ *  rule, so shadow/visibility rays never rebuild lobes or sample unrelated inputs. */
+function buildOpacityFn(
+  ir: ShaderIr,
+  surface: ResolvedSurface,
+  inputs: ReadonlyMap<string, IrRef>,
+  entryName: string,
+  handlePrefix: string,
+  computeStage: boolean,
+  provenOpaque: boolean,
+): SurfaceOpacityFn {
+  const lines: string[] = [];
+  let expr = '1.0';
+  // A statically proven opaque surface clamps to 1 for every input value.
+  if (!provenOpaque) {
+    const used = new Set<IrRef>();
+    const opacity = familyOpacity(surface.family, makeCtx(surface, inputs, used));
+    const exprs = lowerExprs({ ...ir, outputs: [...used].map((ref) => ({ name: ref, type: FLOAT, ref })) }, handlePrefix, computeStage);
+    lines.push(...exprs.body, ...opacity.locals);
+    expr = opacity.expr;
+  }
+  lines.push(`  return clamp(${expr}, 0.0, 1.0);`);
+  const fnCode = `fn ${entryName}(vary: MxVaryings) -> f32 {\n${lines.join('\n')}\n}`;
+  return { fnName: entryName, fnCode, readsVaryings: /\bvary\./.test(fnCode) };
 }
 
 /**
@@ -674,6 +751,8 @@ export interface SurfaceVariantModule {
   /** Lobes assigned by fnCode (zero-weight lobes pruned). */
   lobeCount: number;
   features?: SurfaceFeatures;
+  /** Opacity-only evaluator; absent for hand-built modules (dispatch then reads the full closure). */
+  opacity?: SurfaceOpacityFn;
 }
 
 /** Lower a resolved surface to a megakernel variant keyed by its scene material
@@ -685,8 +764,9 @@ export function emitSurfaceVariant(
   index: number,
   sink: DiagnosticSink = defaultDiagnosticSink,
 ): SurfaceVariantModule {
-  const fn = buildSurfaceFn(graph, surface, `${SURFACE_ENTRY}_${index}`, sink, `m${index}_`, true, true);
+  const fn = buildSurfaceFn(graph, surface, `${SURFACE_ENTRY}_${index}`, sink, `m${index}_`, true, true, `${SURFACE_OPACITY_ENTRY}_${index}`);
   return {
+    ...(fn.opacity !== undefined ? { opacity: fn.opacity } : {}),
     index,
     family: fn.family,
     fnName: fn.fnName,

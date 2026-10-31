@@ -897,6 +897,25 @@ l'acceptation de chaque intersection selon cette couverture avant toute emission
 ou evaluation BSDF. Un rejet continue le rayon droit sans changer le throughput,
 la PDF precedente ou l'etat MIS. Les rayons d'ombre accumulent le produit des
 `1 - opacite` le long du segment vers la lumiere ou l'environnement.
+Ces rayons n'evaluent que l'opacite, sans reconstruire la fermeture complete :
+chaque variante de graphe emet `mx_surface_opacity_<index>`, abaissee depuis le
+meme IR et la meme regle d'opacite par famille que la fermeture, mais limitee aux
+sous-graphes atteignables depuis l'opacite (les textures ou entrees des lobes ne
+sont ni echantillonnees ni evaluees). `mx_eval_material_opacity` aiguille par
+materiau et retombe sur l'emplacement d'opacite (slot 1) de l'enregistrement
+compact via `mx_material_opacity`. Les parametres editables restent des uniformes
+dynamiques, l'alpha texture/graphe, les seuils MASK/`opacityThreshold` et les
+scenes mixtes sont conserves ; seule une couverture prouvee opaque se reduit a 1.
+Les varyings du point d'impact ne sont interpoles que pour les materiaux dont
+l'opacite les lit. La specialisation any-hit des scenes entierement opaques est
+inchangee. Tests : `tests/compiler/surface-wgsl.test.ts`,
+`tests/render/pathtracing/{material-variant,material-record,compute}.test.ts`.
+Le premier impact d'ombre utilise la traversee closest-hit hors de la boucle
+d'alpha : une absence d'impact ou une couverture opaque retourne immediatement.
+Seule une couverture partielle poursuit les 127 impacts restants, avec les memes
+distances, decalages et produits de transmittance. Cela evite d'imbriquer la
+traversee BVH dans la boucle d'alpha pour le cas courant, sans figer les uniformes
+editables ni remplacer les materiaux transparents par des materiaux opaques.
 Les limites de securite restent 64 intersections par trajet et 128 pour les
 rayons d'ombre ; les empilements au-dela de ces limites ne sont pas valides.
 Le raster rejette les fragments de couverture nulle et retourne l'alpha reel.
