@@ -18,13 +18,17 @@
         flex-direction: column;
         height: 100%;
       }
-      canvas {
+      #canvas-container {
+        position: relative;
         flex: none;
         width: 512px;
         max-width: 100%;
+        align-self: center;
+      }
+      canvas {
+        width: 100%;
         height: auto;
         aspect-ratio: 1;
-        align-self: center;
         display: block;
         object-fit: contain;
         touch-action: none;
@@ -35,9 +39,21 @@
         font-size: 13px;
       }
       #busy-indicator {
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        z-index: 1;
         display: inline-flex;
         align-items: center;
         gap: 8px;
+        box-sizing: border-box;
+        max-width: 100%;
+        width: max-content;
+        padding: 12px 16px;
+        border-radius: 8px;
+        background: rgba(16, 16, 20, 0.85);
+        pointer-events: none;
         font-size: 13px;
       }
       #busy-indicator[hidden] { display: none; }
@@ -45,6 +61,7 @@
         content: "";
         width: 14px;
         height: 14px;
+        flex-shrink: 0;
         border: 2px solid #3a3a44;
         border-top-color: #91d5c4;
         border-radius: 50%;
@@ -212,7 +229,6 @@
   <body>
     <div id="app">
       <div id="toolbar">
-        <span id="busy-indicator" role="status" aria-live="polite">Chargement / compilation...</span>
         <label for="scene">Scene</label>
         <select id="scene"></select>
         <label for="resolution">Resolution</label>
@@ -258,7 +274,10 @@
         <pre id="shader-errors">Aucune erreur WGSL.</pre>
       </details>
       <div id="status" role="alert" hidden></div>
-      <canvas id="view" width="512" height="512" aria-busy="true"></canvas>
+      <div id="canvas-container">
+        <canvas id="view" width="512" height="512" aria-busy="true"></canvas>
+        <span id="busy-indicator" role="status" aria-live="polite">Chargement / compilation...</span>
+      </div>
     </div>
     <script type="module" src="/src/main.ts"></script>
   </body>

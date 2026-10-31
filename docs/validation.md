@@ -31,15 +31,20 @@ d'erreur :
 
 ## Profils raster et réactivité du viewer mobile
 
+L'indicateur de chargement et de compilation est superposé au centre du canvas.
+Il ne bloque pas les interactions, conserve son annonce accessible et disparaît
+à la fin du chargement ou de la compilation, y compris en cas d'erreur.
+
 Les builds production et shaderball utilisent le découpage Rolldown configuré dans
-[`vite.config.ts`](../vite.config.ts) : compilateur MaterialX, chargement USD et
+[`vite.config.ts`](../vite.config.ts) : compilateur MaterialX et helpers BSDF, chargement USD et
 géométrie, et path tracing sont placés dans des chunks distincts. Les dépendances
 ne sont pas capturées récursivement par ces groupes. Le seuil Vite de 500 Ko reste
 inchangé ; contrôler les tailles affichées par `npm run build` et
 `npm run build:shaderball`. Ce découpage facilite le cache et réduit la taille
 maximale des chunks, mais ne constitue pas un chargement différé des backends :
 les imports statiques restent chargés au démarrage. Les shaders et les paramètres
-de rendu ne sont pas modifiés.
+de rendu ne sont pas modifiés. Les helpers BSDF restent avec le compilateur pour
+que leurs constantes WGSL soient initialisées avant l'assemblage des bibliothèques.
 
 Le sélecteur de scènes inclut automatiquement tous les fichiers `.usda` directement
 présents dans `scenes/pathtracer`, triés par nom et préfixés `Pathtracer -`.
