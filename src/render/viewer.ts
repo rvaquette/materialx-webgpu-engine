@@ -46,6 +46,7 @@ import type { MaterialResource } from './scene-resources.ts';
 /** Preview fill + framing shared with the capture harness so the live view matches. */
 const PREVIEW_ENV: Vec3 = [0.65, 0.68, 0.72];
 const RASTER_BAND_PIXELS = 256 * 256;
+const PATH_TRACE_TILES_PER_REFRESH = 4;
 function previewCamera(aspect: number, exposure: number): FrameCamera {
   const target: Vec3 = [0, 0.3, 0];
   const dir: Vec3 = [0.657, 0.438, 0.613];
@@ -1084,7 +1085,7 @@ fn dir_to_uv(d: vec3<f32>) -> vec2<f32> {
         }
       };
       const renderPathTrace = (targetView: GPUTextureView, tiled: boolean, accumulate: boolean): void => {
-        const encoder = device.createCommandEncoder();
+        let encoder = device.createCommandEncoder();
         tiled = tiled && !needsPreview;
         const nextPixelScale = accumulate ? (tiled ? 1 : interactiveScale) : pixelScale;
         if (resetPending) {
@@ -1119,19 +1120,27 @@ fn dir_to_uv(d: vec3<f32>) -> vec2<f32> {
         lastPreview = accumulate && !tiled;
         if (accumulate) {
           needsPreview = false;
-          const { tile, frameIndex } = tiled
-            ? ptBackend.advanceTile(ptWidth, ptHeight)
-            : { tile: { x: 0, y: 0, width: ptWidth, height: ptHeight }, frameIndex: ptBackend.advanceFrame() };
-          const [wgX, wgY] = PathTraceBackend.workgroupCount(tile.width, tile.height);
-          device.queue.writeBuffer(ptUniform, 0, buildPathTraceUniform(ptScene, frameIndex, 1, ptWidth, ptHeight, 0, tile));
-          const compute = encoder.beginComputePass();
-          compute.setPipeline(ptPipeline);
-          compute.setBindGroup(0, group0);
-          if (group1) compute.setBindGroup(1, group1);
-          if (group2) compute.setBindGroup(2, group2);
-          if (ptEnvGroup) compute.setBindGroup(3, ptEnvGroup);
-          compute.dispatchWorkgroups(wgX, wgY, 1);
-          compute.end();
+          const tileCount = tiled ? PATH_TRACE_TILES_PER_REFRESH : 1;
+          for (let i = 0; i < tileCount; i++) {
+            const { tile, frameIndex } = tiled
+              ? ptBackend.advanceTile(ptWidth, ptHeight)
+              : { tile: { x: 0, y: 0, width: ptWidth, height: ptHeight }, frameIndex: ptBackend.advanceFrame() };
+            const [wgX, wgY] = PathTraceBackend.workgroupCount(tile.width, tile.height);
+            device.queue.writeBuffer(ptUniform, 0, buildPathTraceUniform(ptScene, frameIndex, 1, ptWidth, ptHeight, 0, tile));
+            const compute = encoder.beginComputePass();
+            compute.setPipeline(ptPipeline);
+            compute.setBindGroup(0, group0);
+            if (group1) compute.setBindGroup(1, group1);
+            if (group2) compute.setBindGroup(2, group2);
+            if (ptEnvGroup) compute.setBindGroup(3, ptEnvGroup);
+            compute.dispatchWorkgroups(wgX, wgY, 1);
+            compute.end();
+            if (i + 1 < tileCount) {
+              // Submit before reusing the uniform; keep each tile watchdog-safe.
+              device.queue.submit([encoder.finish()]);
+              encoder = device.createCommandEncoder();
+            }
+          }
         }
         const renderPass = encoder.beginRenderPass({
           colorAttachments: [{ view: targetView, loadOp: 'clear', storeOp: 'store', clearValue: { r: 0, g: 0, b: 0, a: 1 } }],

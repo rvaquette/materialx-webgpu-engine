@@ -10,6 +10,7 @@ import { projectIrradianceSH } from '../../src/render/env/irradiance.ts';
 import { buildEnvCdf } from '../../src/assets/environment-cdf.ts';
 import { JsDenoiser } from '../../src/render/pathtracing/js-denoiser.ts';
 import { editableSceneMaterials, materialUniformData } from '../../src/render/material-parameters.ts';
+import { PT_UNIFORM_SIZE, pathTraceTile } from '../../src/render/pathtracing/compute.ts';
 
 vi.mock('../../src/render/usd-scene-assets.ts', async (original) => ({
   ...await original<typeof import('../../src/render/usd-scene-assets.ts')>(),
@@ -272,10 +273,19 @@ describe('interactive viewer resource lifecycle', () => {
     const previewDispatch = pass.dispatchWorkgroups.mock.calls.at(-1);
     expect(previewDispatch).toEqual([16, 16, 1]); // 512 / 4 / workgroup 8
     await new Promise(r => setTimeout(r, 220));
+    device.createCommandEncoder.mockClear();
+    device.queue.submit.mockClear();
+    device.queue.onSubmittedWorkDone.mockClear();
+    pass.dispatchWorkgroups.mockClear();
+    pass.draw.mockClear();
     tick(2);
     await Promise.resolve();
-    const refinement = device.createCommandEncoder.mock.results.at(-1)!.value;
+    const refinement = device.createCommandEncoder.mock.results[0]!.value;
     expect(refinement.copyBufferToBuffer).toHaveBeenCalledWith(expect.anything(), 0, expect.anything(), 0, 128 * 128 * 32);
+    expect(pass.dispatchWorkgroups.mock.calls).toEqual(Array(4).fill([16, 16, 1]));
+    expect(device.queue.submit).toHaveBeenCalledTimes(4);
+    expect(device.queue.onSubmittedWorkDone).toHaveBeenCalledTimes(1);
+    expect(pass.draw).toHaveBeenCalledTimes(1);
     const shaders = device.createShaderModule.mock.calls.length;
     const dispatches = pass.dispatchWorkgroups.mock.calls.length;
     viewer.setPathTracingPaused(true);
@@ -297,6 +307,45 @@ describe('interactive viewer resource lifecycle', () => {
     await Promise.resolve();
     expect(device.createCommandEncoder.mock.results.reduce((sum, result) =>
       sum + result.value.copyBufferToBuffer.mock.calls.length, 0)).toBe(copyCalls);
+  });
+
+  it('reaches 16 spp in 64 refreshes with unchanged tile/sample order and bounded work in flight', async () => {
+    const actual = await vi.importActual<typeof import('../../src/render/pathtracing/scene-buffers.ts')>(
+      '../../src/render/pathtracing/scene-buffers.ts');
+    vi.mocked(buildCachedPathTraceScene).mockImplementation(actual.buildCachedPathTraceScene);
+    const { viewer, device, statuses } = await setup();
+    viewer.setBackend('pathtracing');
+    tick(0);
+    await new Promise(r => setTimeout(r, 20));
+    tick(1);
+    await Promise.resolve();
+    await new Promise(r => setTimeout(r, 220));
+    device.queue.writeBuffer.mockClear();
+    device.queue.submit.mockClear();
+    device.queue.onSubmittedWorkDone.mockClear();
+    for (let refresh = 0; refresh < 64; refresh++) {
+      tick(refresh + 2);
+      const submits = device.queue.submit.mock.calls.length;
+      tick(refresh + 2);
+      expect(device.queue.submit).toHaveBeenCalledTimes(submits);
+      await Promise.resolve();
+    }
+    expect(statuses.at(-1)?.samples).toBe(16);
+    expect(device.queue.submit).toHaveBeenCalledTimes(256);
+    expect(device.queue.onSubmittedWorkDone).toHaveBeenCalledTimes(64);
+    const uniforms = device.queue.writeBuffer.mock.calls.map(call => call[2])
+      .filter((data): data is Float32Array => data instanceof Float32Array && data.byteLength === PT_UNIFORM_SIZE);
+    expect(uniforms).toHaveLength(256);
+    for (const [index, data] of uniforms.entries()) {
+      expect(Array.from(data.slice(32, 36))).toEqual([Math.floor(index / 16), 1, 512, 512]);
+      const tile = pathTraceTile(512, 512, index % 16);
+      expect(Array.from(data.slice(76, 80))).toEqual([tile.x, tile.y, tile.width, tile.height]);
+      const writeIndex = device.queue.writeBuffer.mock.calls.findIndex(call => call[2] === data);
+      const writeOrder = device.queue.writeBuffer.mock.invocationCallOrder[writeIndex]!;
+      const submitOrder = device.queue.submit.mock.invocationCallOrder[index]!;
+      expect(writeOrder).toBeLessThan(submitOrder);
+      if (index > 0) expect(writeOrder).toBeGreaterThan(device.queue.submit.mock.invocationCallOrder[index - 1]!);
+    }
   });
 
   it('redisplays a paused replacement scene when an older scene releases the denoiser', async () => {

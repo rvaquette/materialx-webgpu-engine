@@ -35,6 +35,19 @@ L'indicateur de chargement et de compilation est superposé au centre du canvas.
 Il ne bloque pas les interactions, conserve son annonce accessible et disparaît
 à la fin du chargement ou de la compilation, y compris en cas d'erreur.
 
+À caméra immobile, le viewer path tracing calcule quatre tuiles par rafraîchissement
+et affiche le résultat une seule fois par lot. Chaque tuile conserve sa soumission
+GPU séparée et son échantillon ; une fence en fin de lot empêche l'accumulation de
+travaux en vol. L'aperçu pendant les mouvements et le premier aperçu restent à une
+seule passe. Pause et denoising conservent leur logique existante.
+À 512 × 512, atteindre 16 spp demande 64 rafraîchissements au lieu de 256,
+sans modifier la séquence d'échantillonnage ni les shaders.
+Un contrôle local Hyperion Rect Lights a mesuré 4,27 s avant contre 2,12 s après,
+du premier dispatch pleine résolution à la fin du GPU à 16 spp, hors chargement
+et compilation. Les buffers d'accumulation et les AOV sont identiques bit à bit.
+Ce gain dépend du GPU et de la fréquence d'affichage ; ce n'est pas une garantie
+de temps de rendu sur toutes les machines.
+
 Les builds production et shaderball utilisent le découpage Rolldown configuré dans
 [`vite.config.ts`](../vite.config.ts) : compilateur MaterialX et helpers BSDF, chargement USD et
 géométrie, et path tracing sont placés dans des chunks distincts. Les dépendances
