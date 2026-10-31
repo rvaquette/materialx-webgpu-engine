@@ -1,9 +1,17 @@
 import { describe, expect, it } from 'vitest';
-import { readFileSync, readdirSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { materialBlocks, standardMaterial } from '../../scripts/repair-pathtracer-materials.mjs';
+import { materialBlocks, standardMaterial, repairMaterials } from '../../scripts/repair-pathtracer-materials.mjs';
+
+const sourceRoot = 'D:\\WebGL2\\GLSL-PathTracer-JS\\scenes\\pathtracer';
 
 describe('Pathtracer standard MaterialX conversion', () => {
+  it.skipIf(!existsSync(sourceRoot))('regenerates compact materials and restored bindings without further changes', () => {
+    const reports = repairMaterials(sourceRoot);
+    expect(reports).toHaveLength(45);
+    expect(reports.filter(report => report.changed || report.stageChanged)).toEqual([]);
+  });
+
   it('parses named materials without activating commented maps and records malformed source lines', () => {
     const blocks = materialBlocks('material Test {\ncolor 1 0 0\n# normaltexture ignored.png\n0.1\n}');
     expect(blocks).toEqual([{ name: 'Test', values: { color: '1 0 0' }, ignored: ['0.1'] }]);

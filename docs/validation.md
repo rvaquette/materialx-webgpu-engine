@@ -450,7 +450,21 @@ Les PNG et `report.json` sont écrits dans `renders/shaderball/<cible>/`. Un cas
 `ok`, `black` (moins de 2 % de pixels non noirs, réglable par `--black-threshold`)
 ou `failed` (exception, perte du device, délai `--timeout` de 600000 ms dépassé).
 Le code de sortie vaut 1 si un cas n'est pas `ok`. Autres options : `--res`
-(256), `--spp` (16), `--port`, `--device`, `--out-dir`.
+(256), `--spp` (16), `--tilespp` (4 en local, 1 sur mobile), `--port`,
+`--device`, `--out-dir`.
+
+`--tilespp N` est un entier strictement positif indiquant le nombre de samples
+par dispatch de tuile dans les captures path tracing, sans changer le total
+`--spp`. Le dernier dispatch utilise les samples restants si nécessaire.
+Utiliser la même valeur sur les deux cibles permet de comparer leurs performances
+à regroupement identique. Une valeur élevée peut dépasser le budget watchdog
+GPU sur mobile. Cette option ne modifie pas le raster ni le viewer interactif
+(`--headed`/`--integrated`). La valeur effective est enregistrée sous `tileSpp`
+dans le rapport ; `--resume` exige de conserver cette valeur.
+
+```bash
+npm run test:shaderball -- --target mobile --backends pathtracing --server static --res 512 --spp 16 --tilespp 4 --entry /scenes/pathtracer/hyperion_rect_lights.usda
+```
 Chrome démarre sur une page neutre : aucun rendu raster préalable n'est lancé,
 même pour une commande limitée au path tracing. Seuls les backends demandés
 sont exécutés.

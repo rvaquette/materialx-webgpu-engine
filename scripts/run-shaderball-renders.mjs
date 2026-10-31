@@ -6,7 +6,7 @@
 // or an (almost) black image; a JSON report summarizes the run.
 //
 // Usage: npm run test:shaderball -- [--entry /scenes/.../scene.usda] [--target mobile|local] [--backends raster,pathtracing]
-//          [--materials <filter>|all] [--res N] [--spp N] [--timeout ms] [--port N]
+//          [--materials <filter>|all] [--res N] [--spp N] [--tilespp N] [--timeout ms] [--port N]
 //          [--device serial] [--out-dir renders/shaderball] [--list]
 
 import { execFile, spawn } from 'node:child_process';
@@ -95,7 +95,7 @@ function caseName(override, backend) {
 
 async function renderCase(cdp, origin, { backend, override }, values) {
   const query = new URLSearchParams({ entry: values.entry, res: values.res, spp: values.spp, backend, _: String(Date.now()) });
-  query.set('tileSpp', values.target === 'local' ? '4' : '1');
+  query.set('tileSpp', values.tilespp);
   if (override) query.set('openpbr', override);
   const url = `${origin}${HARNESS}?session=1`;
   const expected = JSON.stringify({ e: values.entry, b: backend, o: override ?? null });
@@ -160,6 +160,7 @@ async function main() {
     materials: { type: 'string' },
     res: { type: 'string', default: '256' },
     spp: { type: 'string', default: '16' },
+    tilespp: { type: 'string' },
     timeout: { type: 'string', default: '600000' },
     port: { type: 'string', default: '5176' },
     device: { type: 'string' },
@@ -170,11 +171,16 @@ async function main() {
   if (values.help) {
     console.log('--headed: visible Chrome, no captures/report. --integrated: print URLs for VS Code, no Chrome/CDP or captures/report. Both keep the server alive until Ctrl+C.');
     console.log('--server vite|static (default vite). Static mode requires npm run build:shaderball.');
-    console.log('npm run test:shaderball -- [--entry /scenes/.../scene.usda] [--target mobile|local] [--backends raster,pathtracing] [--materials <filter>|all] [--res N] [--spp N] [--timeout ms] [--port N] [--device serial] [--out-dir dir] [--black-threshold fraction] [--max-recoveries N] [--resume] [--list]');
+    console.log('npm run test:shaderball -- [--entry /scenes/.../scene.usda] [--target mobile|local] [--backends raster,pathtracing] [--materials <filter>|all] [--res N] [--spp N] [--tilespp N] [--timeout ms] [--port N] [--device serial] [--out-dir dir] [--black-threshold fraction] [--max-recoveries N] [--resume] [--list]');
+    console.log('--tilespp: positive integer samples per tile dispatch (default 4 local, 1 mobile); pathtracing captures only. Larger values can exceed the mobile GPU watchdog budget.');
     console.log('Without --materials, render only the scene with its authored materials and bindings (no override).');
     return;
   }
   if (!['mobile', 'local'].includes(values.target)) throw new Error('--target must be mobile or local');
+  values.tilespp ??= values.target === 'local' ? '4' : '1';
+  if (!/^\d+$/.test(values.tilespp) || !Number.isSafeInteger(Number(values.tilespp)) || Number(values.tilespp) < 1) {
+    throw new Error('--tilespp must be a positive safe integer');
+  }
   if (!['vite', 'static'].includes(values.server)) throw new Error('--server must be vite or static');
   const displayMode = values.headed || values.integrated;
   if (displayMode && ![256, 512, 1024].includes(Number(values.res))) throw new Error('Interactive --res must be 256, 512 or 1024');
@@ -201,7 +207,7 @@ async function main() {
   const cases = overrides.flatMap((override) => backends.map((backend) => ({ backend, override })));
   if (values.list) {
     for (const item of cases) console.log(caseName(item.override, item.backend));
-    log(`${cases.length} render cases for ${values.entry}`);
+    log(`${cases.length} render cases for ${values.entry} (tilespp=${values.tilespp})`);
     return;
   }
 
@@ -209,7 +215,7 @@ async function main() {
   const outDir = resolve(ROOT, values['out-dir'], ...(sceneName ? [sceneName] : []), values.target);
   if (!displayMode) mkdirSync(outDir, { recursive: true });
   const reportFile = join(outDir, 'report.json');
-  const report = { startedAt: new Date().toISOString(), target: values.target, entry: values.entry, res: Number(values.res), spp: Number(values.spp), cases: [] };
+  const report = { startedAt: new Date().toISOString(), target: values.target, entry: values.entry, res: Number(values.res), spp: Number(values.spp), tileSpp: Number(values.tilespp), cases: [] };
   report.timings = {};
   if (values.resume) {
     if (!existsSync(reportFile)) throw new Error(`--resume: no report at ${relative(ROOT, reportFile)}`);
@@ -219,6 +225,10 @@ async function main() {
     }
     if (previous.res !== report.res || previous.spp !== report.spp) {
       throw new Error(`--resume requires the same --res/--spp as the saved report (${previous.res}/${previous.spp})`);
+    }
+    const previousTileSpp = previous.tileSpp ?? (previous.target === 'local' ? 4 : 1);
+    if (previousTileSpp !== report.tileSpp) {
+      throw new Error(`--resume requires the same --tilespp as the saved report (${previousTileSpp})`);
     }
     // Failed cases are dropped so they are rendered again.
     const wanted = new Set(cases.map((item) => caseName(item.override, item.backend)));
