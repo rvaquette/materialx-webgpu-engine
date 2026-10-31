@@ -26,6 +26,7 @@ export function pruneWgslFunctions(code: string, entryPoints: readonly string[])
   if (blockDepth) throw new Error('Unterminated WGSL block comment.');
   const masked = chars.join('');
   const functions = new Map<string, { start: number; end: number; identifiers: string[] }>();
+  const attributed = new Set<string>();
   const declarations = /\bfn\s+([A-Za-z_]\w*)\s*\(/g;
   for (let match = declarations.exec(masked); match; match = declarations.exec(masked)) {
     const start = match.index;
@@ -39,13 +40,17 @@ export function pruneWgslFunctions(code: string, entryPoints: readonly string[])
     }
     if (depth) throw new Error(`Unterminated WGSL function: ${match[1]}`);
     const name = match[1]!;
+    const previousDeclaration = Math.max(masked.lastIndexOf(';', start), masked.lastIndexOf('}', start));
+    // Keep attributed functions conservatively so an orphaned attribute cannot
+    // attach to the following declaration after removing a function body.
+    if (masked.slice(previousDeclaration + 1, start).includes('@')) attributed.add(name);
     if (functions.has(name)) throw new Error(`Duplicate WGSL function: ${name}`);
     functions.set(name, { start, end, identifiers: masked.slice(start, end).match(/\b[A-Za-z_]\w*\b/g) ?? [] });
     declarations.lastIndex = end;
   }
   const globals = masked.split('');
   for (const { start, end } of functions.values()) globals.fill(' ', start, end);
-  const pending = [...entryPoints, ...(globals.join('').match(/\b[A-Za-z_]\w*\b/g) ?? [])];
+  const pending = [...entryPoints, ...attributed, ...(globals.join('').match(/\b[A-Za-z_]\w*\b/g) ?? [])];
   for (const entry of entryPoints) {
     if (!functions.has(entry)) throw new Error(`Unknown WGSL entry point: ${entry}`);
   }

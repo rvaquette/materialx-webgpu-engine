@@ -515,6 +515,25 @@ Les fonctions MaterialX constantes identiques sont mutualisées ; les lobes
 Disney de poids statiquement nul sont retirés, sans figer les paramètres éditables.
 L'échantillonnage sous un coat évite une évaluation redondante du mélange de base.
 
+Pour réduire la compilation, le viewer et le harnais retirent les fonctions WGSL
+inaccessibles depuis l'entrée compute. Les corps des fonctions conservées et les
+déclarations du module ne sont pas réécrits. Les références transitives et les
+fonctions attribuées sont conservées ; les commentaires n'influencent pas cette
+analyse. Le générateur expose `pruneUnusedFunctions` pour les autres consommateurs.
+Le chemin eval/sample du fuzz est également remplacé par le chemin de base exact
+uniquement si toutes les variantes et tous les matériaux fallback prouvent son
+absence. Une métadonnée manquante conserve le chemin générique. Les entrées
+éditables restent dynamiques, même lorsque leur valeur initiale est zéro.
+Ni les formules BSDF/PDF, ni le nombre de samples, ni les graines RNG, ni la
+résolution ne sont simplifiés pour accélérer la compilation.
+
+`pipelineCompilation` conserve son périmètre historique. Le journal sépare
+désormais `diag shader validation` (création du module et compilation info) de
+`diag pipeline creation` (création asynchrone du pipeline), et donne la taille et
+le nombre de fonctions du shader. Mesurer des compilations à froid séparément des
+réutilisations du cache de session ; aucune persistance de binaire GPU n'est
+promise entre devices ou redémarrages.
+
 Les soumissions restent séparées par tuile 4×4 pour limiter le risque watchdog.
 Le harnais local échantillonne jusqu'à 4 spp par dispatch et attend la file GPU
 par lot de 8 passes, ou au dernier échantillon, plutôt qu'après chaque tuile.
@@ -537,7 +556,7 @@ sont recréés et le cas est retenté une fois. Au-delà de `--max-recoveries` (
 reprises, le run s'arrête ; `--resume` permet alors de continuer.
 
 Le harness path tracing utilise le meme decoupage 4x4 que le viewer, avec attente
-de fin GPU entre les tuiles. Chaque pixel conserve son indice global, sa graine
+de fin GPU par lot de passes, pas entre les tuiles. Chaque pixel conserve son indice global, sa graine
 aleatoire et tous ses echantillons ; le compteur de samples n'avance qu'apres
 les 16 tuiles. Il ne s'agit ni d'une reduction de resolution ni d'une diminution
 du nombre de rebonds ou des tests de visibilite alpha. L'ancien dispatch

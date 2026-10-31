@@ -33,6 +33,13 @@ leaf(); }`;
     expect(result).toContain('fn second');
     expect(result).not.toContain('fn dead');
   });
+  it('keeps attributed functions and handles non-BMP Unicode comments without offset drift', () => {
+    const code = '// \u{1f600} diagnostic\nfn dead() {}\n@must_use fn retained() -> f32 { return 1.0; }\nfn main() {}';
+    const result = pruneWgslFunctions(code, ['main']);
+    expect(result).not.toContain('fn dead');
+    expect(result).toContain('@must_use fn retained() -> f32 { return 1.0; }');
+    expect(result).toContain('fn main() {}');
+  });
   it('fails explicitly on invalid generated input', () => {
     expect(() => pruneWgslFunctions('fn main() {}', ['missing'])).toThrow('Unknown');
     expect(() => pruneWgslFunctions('fn main() {', ['main'])).toThrow('Unterminated');

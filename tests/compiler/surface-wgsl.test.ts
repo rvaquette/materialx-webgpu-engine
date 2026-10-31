@@ -55,6 +55,19 @@ function emit(graph: ResolvedGraph, sink?: (d: Diagnostic) => void) {
 }
 
 describe('emitLayeredSurface (T055d)', () => {
+  it('retains fuzz for connected and editable weights even when their initial value is zero', () => {
+    const graph = surfaceGraph('open_pbr_surface', [value('fuzz_weight', 'float', '0')]);
+    const surface = resolveSurface(graph)!;
+    expect(emitSurfaceVariant(graph, surface, 0).features?.fuzz).toBe(false);
+    const inputs = new Map(surface.inputs);
+    inputs.set('fuzz_weight', { ...inputs.get('fuzz_weight')!, parameter: 'editableFuzz' });
+    const editable = emitSurfaceVariant(graph, { ...surface, inputs }, 0);
+    expect(editable.features?.fuzz).toBe(true);
+    expect(editable.fnCode).toContain('c.hasFuzz = 1u;');
+    const connected = surfaceGraph('open_pbr_surface', [conn('fuzz_weight', 'float', 'weight')],
+      [upstream('weight', 'constant', 'float', [value('value', 'float', '0')])]);
+    expect(emitSurfaceVariant(connected, resolveSurface(connected)!, 0).features?.fuzz).toBe(true);
+  });
   it.each([
     ['standard_surface', 'opacity', 'color3', '1,1,1', '0.5,1,1'],
     ['open_pbr_surface', 'geometry_opacity', 'float', '1', '0.5'],
