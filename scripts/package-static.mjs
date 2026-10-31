@@ -10,12 +10,7 @@ const libraryRoot = process.env.MX_LIB_ROOT ?? 'D:/WebGL2/MaterialX/MaterialX-rv
 const sceneNames = [
   'standard-shader-ball',
   'mtlx-library',
-  'pathtracer',
-  'test_material_disney_gold',
-  'test_material_brick_procedural',
-  'test_material_brick_metal_mix',
-  'test_material_metal_brushed',
-  'test_material_velvet',
+  'pathtracer'
 ];
 
 function requirePath(path, label) {
