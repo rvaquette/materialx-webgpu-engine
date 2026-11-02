@@ -9,7 +9,7 @@ import type { DiagnosticSink } from '../core/diagnostics.ts';
 import type { SceneAsset, ScenePrim } from '../scene/types.ts';
 import { computeWorldTransforms, IDENTITY4, type Mat4 } from '../scene/transforms.ts';
 
-export type LightType = 'sphere' | 'distant' | 'rect' | 'disk' | 'cylinder' | 'dome' | 'unknown';
+export type LightType = 'sphere' | 'distant' | 'rect' | 'disk' | 'cylinder' | 'dome' | 'point' | 'spot' | 'unknown';
 
 export interface SceneLight {
   path: string;
@@ -38,6 +38,12 @@ export interface SceneLight {
   iesFile?: string;
   coneAngle?: number;
   coneSoftness?: number;
+  /** Decay rate for point and spot lights (defaults to 2.0 for quadratic falloff). */
+  decayRate?: number;
+  /** Inner cone angle in degrees for spot lights. */
+  innerAngle?: number;
+  /** Outer cone angle in degrees for spot lights. */
+  outerAngle?: number;
   /** World transform (column-major). */
   transform: Mat4;
 }
@@ -55,6 +61,8 @@ const TYPE_MAP: Record<string, LightType> = {
   DiskLight: 'disk',
   CylinderLight: 'cylinder',
   DomeLight: 'dome',
+  PointLight: 'point',
+  SpotLight: 'spot',
 };
 
 function readNumber(prim: ScenePrim, name: string): number | undefined {
@@ -107,6 +115,9 @@ export function importLights(scene: SceneAsset, options: ImportLightsOptions = {
     const iesFile = readString(prim, 'inputs:shaping:ies:file');
     const coneAngle = readNumber(prim, 'inputs:shaping:cone:angle');
     const coneSoftness = readNumber(prim, 'inputs:shaping:cone:softness');
+    const decayRate = readNumber(prim, 'inputs:decayRate') ?? 2.0;
+    const innerAngle = readNumber(prim, 'inputs:shaping:cone:innerAngle');
+    const outerAngle = readNumber(prim, 'inputs:shaping:cone:outerAngle');
 
     if (textureFile !== undefined) {
       options.sink?.({ level: 'info', message: `Light texture referenced (not loaded) at ${path}`, detail: textureFile });
@@ -137,6 +148,9 @@ export function importLights(scene: SceneAsset, options: ImportLightsOptions = {
       ...(iesFile !== undefined ? { iesFile } : {}),
       ...(coneAngle !== undefined ? { coneAngle } : {}),
       ...(coneSoftness !== undefined ? { coneSoftness } : {}),
+      ...(decayRate !== undefined ? { decayRate } : {}),
+      ...(innerAngle !== undefined ? { innerAngle } : {}),
+      ...(outerAngle !== undefined ? { outerAngle } : {}),
       transform: world.get(path) ?? IDENTITY4,
     });
   }

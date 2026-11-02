@@ -194,6 +194,9 @@ function lightArea(light: SceneLight): number {
       return light.treatAsPoint ? 0 : 4 * Math.PI * (light.radius ?? 1) ** 2;
     case 'cylinder':
       return 2 * Math.PI * (light.radius ?? 1) * (light.length ?? 1);
+    case 'point':
+    case 'spot':
+      return 0;
     default:
       return 0;
   }
