@@ -64,8 +64,10 @@ async function connect(url) {
   const socket = new WebSocket(url);
   let id = 0;
   const pending = new Map();
+  const diagnostics = [];
   socket.addEventListener('message', event => {
     const response = JSON.parse(event.data);
+    if (response.method === 'Runtime.exceptionThrown' || response.method === 'Log.entryAdded') diagnostics.push(response);
     const request = pending.get(response.id);
     if (!request) return;
     pending.delete(response.id);
@@ -85,6 +87,7 @@ async function connect(url) {
     socket.addEventListener('error', () => reject(new Error('CDP connection failed')), { once: true });
   });
   const send = (method, params = {}) => new Promise((resolveRequest, reject) => {
+    if (socket.readyState !== WebSocket.OPEN) { reject(new Error('CDP connection closed')); return; }
     const key = ++id;
     const timer = setTimeout(() => { pending.delete(key); reject(new Error(`CDP timeout: ${method}`)); }, 60000);
     pending.set(key, { resolve: resolveRequest, reject, timer });
@@ -95,7 +98,7 @@ async function connect(url) {
     if (result.exceptionDetails) throw new Error(result.exceptionDetails.exception?.description ?? result.exceptionDetails.text);
     return result.result.value;
   };
-  return { socket, send, evaluate };
+  return { socket, send, evaluate, diagnostics };
 }
 
 function decodeHdr(encoded) {
@@ -188,6 +191,9 @@ async function main() {
     pageId = page.id;
     cdp = await connect(page.webSocketDebuggerUrl);
     await cdp.send('Runtime.enable');
+    await cdp.send('Log.enable');
+    await cdp.send('Page.enable');
+    await cdp.send('Page.bringToFront');
     await waitFor(() => cdp.evaluate("typeof globalThis.__MX_RENDER__ === 'function'"), 'render harness');
     for (const scene of scenes) {
       let expected;
@@ -195,6 +201,7 @@ async function main() {
         const rotation = (round + 1) % VARIANTS.length;
         const variants = round < 0 ? VARIANTS : [...VARIANTS.slice(rotation), ...VARIANTS.slice(0, rotation)];
         for (const variant of variants) {
+          if (!await cdp.evaluate("document.visibilityState === 'visible'")) throw new Error('Benchmark tab hidden; keep the mobile unlocked and Chrome foregrounded');
           const entry = `/scenes/pathtracer/${scene}.usda`;
           const query = new URLSearchParams({ entry, res: String(res),
             spp: String(spp), tileSpp: '1', backend: 'pathtracing', benchmark: '1', workgroup: variant, firefly: '0' });
@@ -239,26 +246,39 @@ async function main() {
   } catch (error) {
     report.status = 'failed';
     report.error = error.stack ?? String(error);
+    if (cdp) {
+      report.diagnostics = cdp.diagnostics;
+      try { report.page = await cdp.evaluate('({ url: location.href, text: document.body.innerText })'); }
+      catch (pageError) { report.pageError = pageError.message; }
+    }
     save();
     throw error;
   } finally {
-    if (cdp) {
-      try { await cdp.evaluate('globalThis.__MX_IMAGE__ = undefined'); } catch (error) { console.error(`Page cleanup: ${error.message}`); }
-      cdp.socket.close();
-    }
-    if (values.target === 'mobile' && pageId) {
-      try { await fetch(`${debugOrigin}/json/close/${pageId}`, { signal: AbortSignal.timeout(10000) }); }
-      catch (error) { console.error(`Tab cleanup: ${error.message}`); }
-    }
-    if (forwardPort) await adb('forward', '--remove', `tcp:${forwardPort}`);
-    if (reversePort) await adb('reverse', '--remove', `tcp:${reversePort}`);
-    if (chrome?.exitCode === null) {
+    const cleanup = async (label, action) => {
+      try { await action(); }
+      catch (error) {
+        console.error(`${label}: ${error.message}`);
+        (report.cleanupErrors ??= []).push(`${label}: ${error.message}`);
+        process.exitCode = 1;
+      }
+    };
+    if (chrome && cdp) await cleanup('Browser close', () => cdp.send('Browser.close'));
+    cdp?.socket.close();
+    if (values.target === 'mobile' && pageId) await cleanup('Tab close',
+      () => fetch(`${debugOrigin}/json/close/${pageId}`, { signal: AbortSignal.timeout(10000) }));
+    if (forwardPort) await cleanup('ADB forward removal', () => adb('forward', '--remove', `tcp:${forwardPort}`));
+    if (reversePort) await cleanup('ADB reverse removal', () => adb('reverse', '--remove', `tcp:${reversePort}`));
+    if (chrome?.exitCode === null && chrome.signalCode === null) await cleanup('Chrome exit', async () => {
+      await sleep(500);
+      if (chrome.exitCode !== null || chrome.signalCode !== null) return;
       const closed = new Promise(resolveClose => chrome.once('close', resolveClose));
       chrome.kill();
       await closed;
-    }
-    if (profile) rmSync(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
-    await server?.close();
+    });
+    if (profile) await cleanup('Temporary profile removal',
+      () => rmSync(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }));
+    await cleanup('Server close', async () => server?.close());
+    if (report.cleanupErrors) save();
   }
 }
 

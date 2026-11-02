@@ -13,6 +13,36 @@ Il est la contrepartie lisible des fixtures et des tests :
 
 ## Principe général
 
+### Banc d'optimisation du path tracer (PC et mobile)
+
+Le [plan d'optimisation](pathtracer-optimization-plan.md) impose une validation sur
+les deux appareils avant toute activation par défaut. Exécuter séquentiellement :
+
+```powershell
+node scripts\benchmark-pathtracer.mjs --target local
+node scripts\benchmark-pathtracer.mjs --target mobile
+```
+
+Le mobile doit être déverrouillé et autorisé par `D:\platform-tools\adb.exe`
+(`MX_ADB` permet de changer ce chemin). Plusieurs mobiles nécessitent `--device`.
+Le banc crée ses propres ports ADB/CDP et ferme uniquement sa page et ses ressources.
+Utiliser un nouveau `--out-dir` pour une nouvelle session : les rapports précédents
+ne sont pas écrasés.
+
+Le même harness USD compare 8×8, 4×4, 16×4 et 16×8 à 128×128, 8 spp, sans clamp
+ni débruitage. Une chauffe par variante est exclue, puis cinq répétitions utilisent
+un ordre tournant. Les rapports JSON, PNG et buffers HDR `.f32` sont conservés sous
+`renders/pathtracer-benchmark/`. Ils distinguent compilation, temps mural de rendu
+et somme des durées des passes compute mesurées par `timestamp-query`. Si cette
+feature manque, le temps GPU vaut explicitement `null` ; le temps mural ne le remplace pas.
+Les pixels RGB finis et les compteurs d'échantillons sont comparés exactement
+à la référence 8×8 du même appareil. La parité entre GPU différents n'est pas exigée.
+
+Le banc mesure le transport dans le harness de référence, pas la réactivité du
+viewer : son agencement des soumissions et son absence d'AOV de couverture diffèrent
+du viewer. Tout candidat prometteur doit donc aussi passer la qualification viewer
+(AOV, caméra, pause/reprise et redimensionnement) avant adoption.
+
 La validation repose sur une **comparaison oracle** : chaque sortie (une valeur de
 nœud, un pixel raster, un pixel path-tracé) est confrontée à une référence calculée
 indépendamment, et l'écart doit rester sous une tolérance déclarée.
