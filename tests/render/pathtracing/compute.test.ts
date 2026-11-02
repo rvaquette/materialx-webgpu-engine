@@ -76,6 +76,22 @@ function fakeScene(): PathTraceScene {
 
 describe('pathTraceComputeWgsl', () => {
   const src = pathTraceComputeWgsl();
+  it('changes only the workgroup declaration and covers partial tiles', () => {
+    const variant = pathTraceComputeWgsl({ workgroupSize: [16, 4] });
+    expect(variant.replace('@workgroup_size(16, 4, 1)', '@workgroup_size(8, 8, 1)')).toBe(src);
+    expect(PathTraceBackend.workgroupCount(33, 17, [16, 4])).toEqual([3, 5]);
+    const backend = new PathTraceBackend({} as GPUDevice, { workgroupSize: [4, 4] });
+    expect(backend.workgroupCount(33, 17)).toEqual([9, 5]);
+    expect(PathTraceBackend.workgroupCount(33, 17)).toEqual([5, 3]);
+  });
+
+  it.each([[0, 8], [-1, 8], [2.5, 8], [32, 32], [NaN, 4], [Infinity, 4]])(
+    'rejects invalid workgroup dimensions %s x %s',
+    (x, y) => {
+      expect(() => pathTraceComputeWgsl({ workgroupSize: [x, y] })).toThrow(/workgroup dimensions/);
+      expect(() => PathTraceBackend.workgroupCount(64, 64, [x, y])).toThrow(/workgroup dimensions/);
+    },
+  );
   it('removes only functions not reachable from the compute entry point', () => {
     const original = pathTraceComputeWgsl({ analyticLights: true, opaque: true });
     const pruned = pathTraceComputeWgsl({ analyticLights: true, opaque: true, pruneUnusedFunctions: true });

@@ -1,0 +1,23 @@
+metadata:
+  generated: "2026-11-02"
+  source_plan: "docs/pathtracer-optimization-plan.md"
+  target_tasks: "docs/pathtracer-optimization-plan.md"
+summary:
+  total_plan_items: 5
+  covered_plan_items: 5
+  missing_plan_items: 0
+  coverage_percentage: 100
+  total_tasks_generated: 11
+  orphan_tasks: 0
+phases:
+  - { phase_id: P1, tasks: [T001, T002, T003] }
+  - { phase_id: P2, tasks: [T004, T005, T006] }
+  - { phase_id: P3, tasks: [T007, T008] }
+  - { phase_id: P4, tasks: [T009, T010] }
+  - { phase_id: P5, tasks: [T011] }
+missing_plan_items: []
+orphan_tasks: []
+validation:
+  passed: true
+  errors: []
+  warnings: []

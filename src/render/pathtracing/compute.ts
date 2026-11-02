@@ -30,6 +30,15 @@ import { pruneWgslFunctions } from '../../compiler/wgsl-reachability.ts';
 
 /** Compute workgroup tile edge (threads per dimension). */
 export const PT_WORKGROUP_SIZE = 8;
+export type PathTraceWorkgroupSize = readonly [number, number];
+
+function checkedWorkgroupSize(size: PathTraceWorkgroupSize = [PT_WORKGROUP_SIZE, PT_WORKGROUP_SIZE]): PathTraceWorkgroupSize {
+  const [x, y] = size;
+  if (!Number.isInteger(x) || !Number.isInteger(y) || x < 1 || y < 1 || x * y > 256) {
+    throw new Error('Path-tracing workgroup dimensions must be positive integers with at most 256 invocations.');
+  }
+  return size;
+}
 /** Entry point name of the generated compute shader. */
 export const PT_COMPUTE_ENTRY = 'mx_path_trace';
 /** Floats in the path-trace uniform (PT_UNIFORM_SIZE / 4). Slots 0..39 hold the
@@ -823,7 +832,7 @@ ${analyticLights ? '    analyticNee = !specular && mx_light_count() > 0u;' : ''}
 `;
 }
 
-function wgslEntry(displayAovs: boolean): string {
+function wgslEntry(displayAovs: boolean, workgroupSize: PathTraceWorkgroupSize): string {
   return /* wgsl */ `
 struct MxCameraRay {
   origin: vec3<f32>,
@@ -869,7 +878,7 @@ fn camera_jitter(index: u32, pixel: u32) -> vec2f {
 }
 ` : ''}
 
-@compute @workgroup_size(${PT_WORKGROUP_SIZE}, ${PT_WORKGROUP_SIZE}, 1)
+@compute @workgroup_size(${workgroupSize[0]}, ${workgroupSize[1]}, 1)
 fn ${PT_COMPUTE_ENTRY}(@builtin(global_invocation_id) gid : vec3<u32>) {
   let width = u32(U.frame.z);
   let height = u32(U.frame.w);
@@ -917,6 +926,7 @@ ${displayAovs ? `  let oldCoverage = accum[outputPixel + 1u].x;
 }
 
 export interface PathTraceComputeOptions {
+    workgroupSize?: PathTraceWorkgroupSize;
     textures?: boolean;
     varyings?: PtVaryings;
     dispatch?: PtMaterialDispatch;
@@ -953,7 +963,7 @@ export function pathTraceComputeWgsl(options: PathTraceComputeOptions = {}): str
     ...(varyings !== undefined ? [wgslVaryings(varyings)] : []),
     ...(dispatch !== undefined ? [wgslDispatch(dispatch)] : []),
     wgslIntegrator(textures, dispatch, environment, options.displayAovs ?? false, options.opaque ?? false, options.analyticLights ?? false),
-    wgslEntry(options.displayAovs ?? false),
+    wgslEntry(options.displayAovs ?? false, checkedWorkgroupSize(options.workgroupSize)),
   ].join('\n');
   return options.pruneUnusedFunctions ? pruneWgslFunctions(code, [PT_COMPUTE_ENTRY]) : code;
 }
@@ -1112,10 +1122,15 @@ export class PathTraceBackend {
   }
 
   /** Number of workgroups to dispatch to cover a width x height image. */
-  static workgroupCount(width: number, height: number): [number, number] {
+  static workgroupCount(width: number, height: number, size?: PathTraceWorkgroupSize): [number, number] {
+    const [x, y] = checkedWorkgroupSize(size);
     return [
-      Math.ceil(width / PT_WORKGROUP_SIZE),
-      Math.ceil(height / PT_WORKGROUP_SIZE),
+      Math.ceil(width / x),
+      Math.ceil(height / y),
     ];
+  }
+
+  workgroupCount(width: number, height: number): [number, number] {
+    return PathTraceBackend.workgroupCount(width, height, this.#options.workgroupSize);
   }
 }

@@ -48,7 +48,7 @@ import {
   GBUFFER_POSITION_FORMAT,
   GBUFFER_NORMAL_FORMAT,
 } from '../../src/render/hybrid/trace-pass.ts';
-import { buildPathTraceUniform, pathTraceComputeWgsl, pathTraceClosureDispatch, pathTraceOpaqueScene, PathTraceBackend, PT_UNIFORM_SIZE } from '../../src/render/pathtracing/compute.ts';
+import { buildPathTraceUniform, pathTraceComputeWgsl, pathTraceClosureDispatch, pathTraceOpaqueScene, PathTraceBackend, PT_UNIFORM_SIZE, type PathTraceWorkgroupSize } from '../../src/render/pathtracing/compute.ts';
 import { pathTraceSettings } from '../../src/render/pathtracing/scene-settings.ts';
 import { cameraFovY } from '../../src/usd/cameras.ts';
 import { maxRecordLobes } from '../../src/render/pathtracing/material-record.ts';
@@ -91,6 +91,17 @@ let sessionLine: (message: string) => void = () => {};
 let completedCases = 0;
 const checkedPathTraceModules = new WeakSet<GPUShaderModule>();
 
+export interface PathTraceBenchmarkOptions {
+  workgroupSize: PathTraceWorkgroupSize;
+}
+
+export interface PathTraceBenchmarkResult {
+  gpuMs: number | null;
+  timestampStatus: 'available' | 'unsupported';
+  hdrBase64: string;
+  workgroupSize: PathTraceWorkgroupSize;
+}
+
 export interface UsdSceneImage {
   entry: string;
   width: number;
@@ -101,6 +112,9 @@ export interface UsdSceneImage {
   backend: 'raster' | 'pathtracing';
   /** GPU render wall-clock in milliseconds (submit -> onSubmittedWorkDone). */
   renderMs: number;
+  benchmark?: PathTraceBenchmarkResult;
+  adapter: { vendor: string; architecture: string; device: string; description: string };
+  userAgent: string;
   timings: Record<string, number>;
   memory: { gpu: GpuMemory };
   sessionCache: { hits: number; misses: number };
@@ -1055,7 +1069,8 @@ async function renderUsdOnDevice(
   dispScaleOverride?: number,
   phase: (name: string) => void = () => {},
   maxSamplesPerDispatch = 1,
-): Promise<{ rgba: Uint8ClampedArray; renderMs: number }> {
+  benchmarkOptions?: PathTraceBenchmarkOptions,
+): Promise<{ rgba: Uint8ClampedArray; renderMs: number; benchmark?: PathTraceBenchmarkResult }> {
   if (!Number.isInteger(maxSamplesPerDispatch) || maxSamplesPerDispatch < 1) {
     throw new Error(`maxSamplesPerDispatch must be a positive integer; got ${maxSamplesPerDispatch}`);
   }
@@ -1143,7 +1158,8 @@ async function renderUsdOnDevice(
   );
 
   // Compute path tracer on the packed scene buffers, progressive accumulation.
-  const backend = new PathTraceBackend(device, { dispatch, ...(envAsset ? { environment: true } : {}) });
+  const workgroupOptions = benchmarkOptions ? { workgroupSize: benchmarkOptions.workgroupSize } : {};
+  const backend = new PathTraceBackend(device, { dispatch, ...workgroupOptions, ...(envAsset ? { environment: true } : {}) });
   const maxLobes = Math.max(
     ...dispatch.variants.map(variant => variant.lobeCount),
     maxRecordLobes(ptScene.materials, new Set(dispatch.variants.map(variant => variant.index))),
@@ -1154,6 +1170,7 @@ async function renderUsdOnDevice(
     opaque,
     analyticLights: ptScene.analyticLights !== undefined,
     pruneUnusedFunctions: true,
+    ...workgroupOptions,
   });
   line(`diag shader bytes=${new TextEncoder().encode(shaderCode).byteLength} functions=${[...shaderCode.matchAll(/\bfn\s+/g)].length}`);
   const moduleStarted = performance.now();
@@ -1348,6 +1365,13 @@ async function renderUsdOnDevice(
 
   backend.resetAccumulation();
   phase('gpuResources');
+  const queryCount = Math.ceil(samples / maxSamplesPerDispatch) * 16 * 2;
+  if (benchmarkOptions && queryCount > 8192) throw new Error('Benchmark exceeds the 8192 timestamp query limit; reduce spp.');
+  const timestampSupported = device.features.has('timestamp-query');
+  const queries = benchmarkOptions && timestampSupported
+    ? device.createQuerySet({ type: 'timestamp', count: queryCount }) : undefined;
+  let queryIndex = 0;
+  if (benchmarkOptions && !timestampSupported) line('diag benchmark timestamp-query unsupported; GPU time unavailable');
   const renderStart = performance.now();
   device.pushErrorScope('validation');
   const batch = 8;
@@ -1360,13 +1384,16 @@ async function renderUsdOnDevice(
     while (backend.frameIndex === f) {
       const { tile, frameIndex } = backend.advanceTile(res, res);
       if (tile.width === 0 || tile.height === 0) { continue; }
-      const [wgX, wgY] = PathTraceBackend.workgroupCount(tile.width, tile.height);
+      const [wgX, wgY] = backend.workgroupCount(tile.width, tile.height);
       const tileUniform = tileUniforms[tileIndex];
       const group0 = group0s[tileIndex];
       if (!tileUniform || !group0) throw new Error(`Missing path-tracing resources for tile ${tileIndex}`);
       device.queue.writeBuffer(tileUniform, 0, buildPathTraceUniform(ptScene, frameIndex, frameSamples, res, res, fireflyClamp, tile));
       const encoder = device.createCommandEncoder();
-      const compute = encoder.beginComputePass();
+      const compute = encoder.beginComputePass(queries ? {
+        timestampWrites: { querySet: queries, beginningOfPassWriteIndex: queryIndex, endOfPassWriteIndex: queryIndex + 1 },
+      } : {});
+      if (queries) queryIndex += 2;
       compute.setPipeline(pipeline);
       compute.setBindGroup(0, group0);
       if (group1) compute.setBindGroup(1, group1);
@@ -1390,6 +1417,32 @@ async function renderUsdOnDevice(
   const renderMs = performance.now() - renderStart;
   phase('render');
 
+  let gpuMs: number | null = null;
+  if (queries) {
+    const bytes = queryIndex * 8;
+    const resolved = device.createBuffer({ size: bytes, usage: GPUBufferUsage.QUERY_RESOLVE | GPUBufferUsage.COPY_SRC });
+    const timestamps = device.createBuffer({ size: bytes, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
+    try {
+      const encoder = device.createCommandEncoder();
+      encoder.resolveQuerySet(queries, 0, queryIndex, resolved, 0);
+      encoder.copyBufferToBuffer(resolved, 0, timestamps, 0, bytes);
+      device.queue.submit([encoder.finish()]);
+      await timestamps.mapAsync(GPUMapMode.READ);
+      const values = new BigUint64Array(timestamps.getMappedRange());
+      let nanoseconds = 0n;
+      for (let i = 0; i < values.length; i += 2) {
+        if (values[i + 1]! < values[i]!) throw new Error('GPU timestamps are not monotonic.');
+        nanoseconds += values[i + 1]! - values[i]!;
+      }
+      gpuMs = Number(nanoseconds) / 1e6;
+      if (gpuMs <= 0) throw new Error('GPU timestamp measurement is empty.');
+    } finally {
+      timestamps.destroy();
+      resolved.destroy();
+      queries.destroy();
+    }
+  }
+
   // Read the accumulated mean back and tonemap through the shared output pipeline.
   const readback = device.createBuffer({ size: accumBytes, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
   const copy = device.createCommandEncoder();
@@ -1405,6 +1458,17 @@ async function renderUsdOnDevice(
   if (nonFinite > 0) {
     readback.unmap();
     throw new Error(`Pathtracing accumulation contains ${nonFinite} non-finite RGB components`);
+  }
+  let benchmark: PathTraceBenchmarkResult | undefined;
+  if (benchmarkOptions) {
+    for (let p = 0; p < res * res; p++) {
+      if (mean[p * 4 + 3] !== samples) throw new Error(`Invalid sample count at pixel ${p}: ${mean[p * 4 + 3]} != ${samples}`);
+    }
+    const bytes = new Uint8Array(mean.buffer, mean.byteOffset, mean.byteLength);
+    let binary = '';
+    for (let i = 0; i < bytes.length; i += 8192) binary += String.fromCharCode(...bytes.subarray(i, i + 8192));
+    benchmark = { gpuMs, timestampStatus: timestampSupported ? 'available' : 'unsupported',
+      hdrBase64: btoa(binary), workgroupSize: benchmarkOptions.workgroupSize };
   }
   const rgba = new Uint8ClampedArray(res * res * 4);
   for (let p = 0; p < res * res; p++) {
@@ -1439,7 +1503,7 @@ async function renderUsdOnDevice(
   }
   readback.unmap();
   phase('readbackAndTonemap');
-  return { rgba, renderMs };
+  return { rgba, renderMs, ...(benchmark ? { benchmark } : {}) };
 }
 
 export async function bootstrapUsdImage(
@@ -1457,6 +1521,7 @@ export async function bootstrapUsdImage(
   tracedShadows?: boolean,
   lightDir?: Vec3,
   maxSamplesPerDispatch = 1,
+  benchmarkOptions?: PathTraceBenchmarkOptions,
 ): Promise<UsdSceneImage | null> {
   const started = performance.now();
   let phaseStarted = started;
@@ -1490,7 +1555,9 @@ export async function bootstrapUsdImage(
       line('Aucun adaptateur WebGPU.');
       return fail();
     }
-    const device = await adapter.requestDevice(sceneDeviceDescriptor(adapter));
+    const descriptor = sceneDeviceDescriptor(adapter);
+    if (adapter.features.has('timestamp-query')) descriptor.requiredFeatures = ['timestamp-query'];
+    const device = await adapter.requestDevice(descriptor);
     renderSession = { adapter, device, memory: trackGpuMemory(device), cache: cacheGpuPipelines(device) };
     const currentSession = renderSession;
     device.lost.then(info => {
@@ -1508,13 +1575,14 @@ export async function bootstrapUsdImage(
 
   let rgba: Uint8ClampedArray;
   let renderMs: number;
+  let benchmark: PathTraceBenchmarkResult | undefined;
   if (materialOverride) line(`OpenPBRMaterial override: ${materialOverride}`);
   if (backend === 'raster') {
     line(`Rendu raster GPU de ${entry} (${res}x${res})...`);
     ({ rgba, renderMs } = await renderUsdRasterOnDevice(device, entry, res, line, materialOverride, exposure, camBack, dispScale, tracedShadows, lightDir, phase));
   } else {
     line(`Rendu path-trace GPU de ${entry} (${res}x${res}, ${samples} spp)...`);
-    ({ rgba, renderMs } = await renderUsdOnDevice(device, entry, res, samples, line, materialOverride, exposure, firefly, skyPower, skyColor, camBack, dispScale, phase, maxSamplesPerDispatch));
+    ({ rgba, renderMs, benchmark } = await renderUsdOnDevice(device, entry, res, samples, line, materialOverride, exposure, firefly, skyPower, skyColor, camBack, dispScale, phase, maxSamplesPerDispatch, benchmarkOptions));
   }
 
   const canvas = document.createElement('canvas');
@@ -1550,6 +1618,9 @@ export async function bootstrapUsdImage(
   line(`timing total: ${timings.total.toFixed(1)} ms (page/modules: ${timings.pageLoadAndModules.toFixed(1)} ms)`);
   const image: UsdSceneImage = {
     entry, width: res, height: res, samples: effectiveSamples, dataUrl, backend, renderMs, stats, timings,
+    adapter: { vendor: info.vendor, architecture: info.architecture, device: info.device, description: info.description },
+    userAgent: navigator.userAgent,
+    ...(benchmark ? { benchmark } : {}),
     memory: { gpu: gpuMemory() },
     sessionCache: { hits: cache().hits - cacheBefore.hits, misses: cache().misses - cacheBefore.misses },
     ...(materialOverride !== undefined ? { materialOverride } : {}),
