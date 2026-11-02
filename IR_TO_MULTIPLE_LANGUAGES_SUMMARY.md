@@ -239,6 +239,45 @@ export async function compileMaterialXToGlsl(mtlxPath: string): Promise<string> 
 
 ## 4. État Actuel des Backends
 
+### Exécution web ou native par cible
+
+Ce tableau décrit les environnements capables d'exécuter chaque cible, pas les backends déjà implémentés dans ce moteur. Générer du code dans un navigateur ne signifie pas que celui-ci peut l'exécuter.
+
+| Cible | Web (navigateur) | Natif | Conditions |
+|---|---|---|---|
+| **WGSL** | **Oui**, via WebGPU | **Oui**, via une implémentation WebGPU native acceptant WGSL, comme Dawn ou wgpu | Cible actuelle du moteur. WebGPU permet le raster et le compute, sous réserve de disponibilité dans le navigateur et sur le matériel. |
+| **GLSL ES** | **Oui**, via WebGL 1 (GLSL ES 1.00) ou WebGL 2 (GLSL ES 3.00) | **Oui**, via OpenGL ES | Il faut un émetteur adapté au profil WebGL : le GLSL desktop n'est pas accepté tel quel. WebGL ne fournit pas de compute shaders. |
+| **GLSL desktop** | **Non**, pas directement | **Oui**, via OpenGL ; via Vulkan après compilation vers SPIR-V avec un profil adapté | L'exemple `#version 450` de ce document est une cible native, pas WebGL. Les compute shaders sont disponibles à partir d'OpenGL 4.3. |
+| **HLSL** | **Non**, pas directement | **Oui**, via Direct3D après compilation ; via Vulkan après compilation vers SPIR-V avec un compilateur adapté | Pour le web, une chaîne de traduction vers WGSL ou GLSL ES est nécessaire : le navigateur n'exécute alors plus du HLSL. |
+| **OSL** | **Non**, pas via WebGL/WebGPU | **Oui**, dans un moteur de rendu intégrant OSL | Le support CPU/GPU dépend du moteur. Un éventuel portage de l'exécution en WebAssembly serait un projet distinct, pas un backend shader web directement utilisable. |
+| **Metal Shading Language (MSL)** | **Non**, pas directement | **Oui**, via Metal sur les plateformes Apple | Safari peut utiliser Metal en interne pour WebGPU, mais l'application web fournit du WGSL, pas du MSL. |
+| **SPIR-V** (format binaire intermédiaire) | **Non**, pas accepté directement par les API WebGL/WebGPU standard | **Oui**, principalement via Vulkan | Cible supplémentaire envisageable, généralement obtenue en compilant GLSL ou HLSL. Pour le navigateur, il faut traduire vers WGSL ou GLSL ES. |
+| **MDL** (cible supplémentaire envisageable) | **Non**, pas directement | **Oui**, via un environnement intégrant le SDK MDL et ses backends | Langage de description de matériaux, pas un remplacement direct de WGSL. Une intégration dédiée est nécessaire pour ses sémantiques et son exécution. |
+
+**Pour ce moteur web :** conserver WGSL/WebGPU pour le raster et le path tracing compute. GLSL ES/WebGL peut constituer une cible de compatibilité pour le raster, mais ne permet pas de réutiliser directement le path tracer compute actuel. Les autres cibles servent principalement à des intégrations natives.
+
+### Compatibilité avec ce poste Windows et le Samsung Galaxy Z Flip5
+
+Le système de ce poste est Windows, mais son GPU, ses pilotes et les capacités de son navigateur n'ont pas été vérifiés. Le Galaxy Z Flip5 dispose d'un Snapdragon 8 Gen 2 for Galaxy avec GPU Adreno 740 : c'est une plateforme adaptée à OpenGL ES et Vulkan, et à WebGPU dans un navigateur Android compatible. Les mentions « oui » ci-dessous indiquent une voie d'exécution disponible sur la plateforme, pas un test réussi sur ces deux appareils.
+
+| Cible | Ce poste Windows : web | Ce poste Windows : natif | Galaxy Z Flip5 : web | Galaxy Z Flip5 : natif |
+|---|---|---|---|---|
+| **WGSL** | Oui, avec WebGPU dans Chrome/Edge compatibles, sous réserve du GPU et des pilotes | Oui, avec Dawn/wgpu et un backend GPU compatible, généralement Direct3D 12 ou Vulkan | Oui, avec WebGPU dans un Chrome Android compatible ; à vérifier selon la version Android, le navigateur et les pilotes | Oui, avec une intégration WebGPU native compatible Android, par exemple wgpu sur Vulkan |
+| **GLSL ES** | Oui, via WebGL 1/2 si activé | Oui, notamment via ANGLE traduisant OpenGL ES vers une API Windows | Oui, via WebGL 1/2 dans un navigateur compatible | Oui, via OpenGL ES ; le compute nécessite OpenGL ES 3.1+ et n'est pas exposé par WebGL |
+| **GLSL desktop** | Non directement | Oui, via OpenGL si le pilote expose la version requise | Non directement | Pas via l'API OpenGL desktop standard ; possible après compilation d'un profil Vulkan adapté vers SPIR-V, ou adaptation vers GLSL ES |
+| **HLSL** | Non directement | Oui, via Direct3D, selon le shader model et le GPU | Non directement | Pas via Direct3D ; oui après compilation compatible vers SPIR-V pour Vulkan |
+| **OSL** | Non directement | Oui, dans un moteur intégrant OSL ; accélération GPU selon le moteur et le matériel | Non directement | Pas une voie prête à l'emploi : nécessite un portage d'un environnement OSL compatible Android |
+| **Metal / MSL** | Non | Non, Metal est une API Apple | Non | Non, Metal est une API Apple |
+| **SPIR-V** | Non directement | Oui, via Vulkan si GPU/pilotes compatibles | Non directement | Oui, via Vulkan avec des shaders respectant les fonctionnalités et limites de l'appareil |
+| **MDL** | Non directement | Oui, avec un SDK/moteur MDL compatible ; exigences GPU selon le backend | Non directement | Pas une voie Android standard prête à l'emploi ; nécessite une chaîne de génération et une intégration compatibles, à valider séparément |
+
+**Choix recommandé pour les deux appareils :**
+
+- **Même application web : WGSL + WebGPU**, pour conserver le raster et le path tracer compute actuels. Détecter `navigator.gpu`, puis vérifier que `requestAdapter()` renvoie un adaptateur et que `requestDevice()` réussit. L'exposition de l'API seule ne garantit pas l'exécution. Utiliser HTTPS (ou localhost pour le développement).
+- **Compatibilité web plus large : GLSL ES + WebGL 2**, avec un backend à implémenter et un chemin raster adapté, sans réutilisation directe du path tracer compute.
+- **Application native commune Windows/Android : Vulkan + SPIR-V**, ou une couche WebGPU native acceptant WGSL, avec intégration et validation sur les deux plateformes.
+- **Sur le Z Flip5 :** prévoir une résolution et un nombre d'échantillons réduits pour le path tracing ; compatibilité compute ne signifie pas performances équivalentes au PC, notamment avec les limites thermiques et énergétiques du mobile.
+
 ### ✅ WGSL (PRODUCTION)
 - **Status:** Complètement implémenté
 - **Utilisé pour:** Path tracer et forward raster
@@ -248,7 +287,7 @@ export async function compileMaterialXToGlsl(mtlxPath: string): Promise<string> 
 ### 🔲 GLSL (READY TO IMPLEMENT)
 - **Status:** Template ready
 - **Avantages:** Compatibilité desktop, ancien matériel
-- **Challenges:** Pas de compute shaders, limite de versions
+- **Challenges:** Distinguer GLSL desktop (natif, compute dès OpenGL 4.3) et GLSL ES pour WebGL (web, sans compute)
 - **Effort:** ~500 lignes de code
 - **Code template:** Fourni ci-dessus
 
@@ -403,7 +442,7 @@ Si vous voulez ajouter GLSL:
 ## 10. Limitations Actuelles
 
 1. **Pas de GLSL/HLSL:** Seulement WGSL en production
-2. **Compute Shaders:** WGSL only (GLSL 4.3+ support mais limité)
+2. **Compute Shaders:** Implémentés seulement en WGSL dans ce moteur. WebGL n'en propose pas ; les API natives OpenGL 4.3+, Vulkan, Direct3D et Metal en proposent.
 3. **Closures Complexes:** OSL/MDL incompatibles avec BSDF standard
 4. **Texture Binding:** Modèles différents par langage
 
