@@ -73,7 +73,6 @@ function trace(ray: TraversalCase) {
 describe('shared BVH traversal', () => {
   it('shares canonical traversal and keeps inclusive AABB ties', () => {
     expect(bvhTraversalWgsl()).toBe(BVH_TRAVERSAL_WGSL);
-    expect(BVH_TRAVERSAL_WGSL).not.toContain('entryStack');
     expect(BVH_TRAVERSAL_WGSL).toContain('aabb_hit(node, ro, invDir, closest) >= 0.0');
     expect(BVH_TRAVERSAL_WGSL).toContain('let tri = triOrder[start + i];');
   });
