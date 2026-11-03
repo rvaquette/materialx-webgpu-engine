@@ -57,6 +57,8 @@ The scene selector lists `scenes/OpenPBRShaderPlayground/*_grp/*_grp.usda`.
 material layers and textures. Rebuild after adding or removing scenes, and
 serve the complete `dist` directory rather than only its HTML and JavaScript.
 These bundled scenes are separate from the development-only external playground.
+MaterialX filename attributes escape UDIM placeholders as `&lt;UDIM&gt;`;
+XML parsing restores `<UDIM>` for tile resolution without changing texture names.
 
 ## Direct local GLB/glTF scenes in the UI
 
