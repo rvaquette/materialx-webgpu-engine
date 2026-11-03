@@ -13,7 +13,7 @@
 // uploads and dispatch run in the browser (src/main.ts) and are device-only.
 
 import type { PathTraceScene } from './scene-buffers.ts';
-import { BVH_TRAVERSAL_WGSL } from './bvh-wgsl.ts';
+import { bvhTraversalWgsl, type BvhTraversalVariant } from './bvh-wgsl.ts';
 import { LAYERED_CLOSURE_PRELUDE } from '../../compiler/surface-wgsl.ts';
 import { closureLibraryPrelude, type ClosureDispatchSpec } from '../../compiler/closure-library.ts';
 import { emitVaryingsStruct } from '../../compiler/wgsl.ts';
@@ -113,7 +113,9 @@ export interface PtVaryings {
   extraInputs: Map<string, IrType>;
 }
 
-function wgslStructsAndBindings(textures: boolean, varyings: boolean, environment: boolean): string {
+function wgslStructsAndBindings(
+  textures: boolean, varyings: boolean, environment: boolean, hasTriangleOrder = true, hasTriangleEdges = false,
+): string {
   // The baked path binds the full UV + baked-texture group; a graph path only
   // needs the per-triangle UVs (binding 6) to interpolate texcoords.
   const texBindings = textures
@@ -151,9 +153,10 @@ struct Uniforms {
 @group(0) @binding(0) var<uniform> U : Uniforms;
 @group(0) @binding(1) var<storage, read> nodes : array<f32>;
 @group(0) @binding(2) var<storage, read> tris : array<f32>;
-@group(0) @binding(3) var<storage, read> triOrder : array<u32>;
+${hasTriangleOrder ? '@group(0) @binding(3) var<storage, read> triOrder : array<u32>;' : ''}
 @group(0) @binding(4) var<storage, read> materials : array<f32>;
 @group(0) @binding(5) var<storage, read_write> accum : array<vec4<f32>>;
+${hasTriangleEdges ? '@group(0) @binding(10) var<storage, read> triEdges : array<f32>;' : ''}
 ${texBindings}
 const PI : f32 = 3.14159265358979;
 const NODE_STRIDE : u32 = 12u;
@@ -274,8 +277,8 @@ fn rng_next(state : ptr<function, u32>) -> f32 {
 `;
 }
 
-function wgslTraversal(): string {
-  return BVH_TRAVERSAL_WGSL;
+function wgslTraversal(variant?: BvhTraversalVariant): string {
+  return bvhTraversalWgsl(variant);
 }
 
 // Homogeneous participating-medium helpers shared by the packed material reader
@@ -927,6 +930,8 @@ ${displayAovs ? `  let oldCoverage = accum[outputPixel + 1u].x;
 
 export interface PathTraceComputeOptions {
     workgroupSize?: PathTraceWorkgroupSize;
+    /** Opt-in BVH traversal experiment; default remains the reference layout. */
+    bvhTraversal?: BvhTraversalVariant;
     textures?: boolean;
     varyings?: PtVaryings;
     dispatch?: PtMaterialDispatch;
@@ -955,9 +960,10 @@ export function pathTraceComputeWgsl(options: PathTraceComputeOptions = {}): str
     ? { primvarFields: dispatch.primvarFields, extraInputs: dispatch.extraInputs }
     : options.varyings;
   const code = [
-    wgslStructsAndBindings(textures, varyings !== undefined, environment),
+    wgslStructsAndBindings(textures, varyings !== undefined, environment,
+      options.bvhTraversal !== 'leafOrder', options.bvhTraversal === 'triangleEdges'),
     wgslRng(),
-    wgslTraversal(),
+    wgslTraversal(options.bvhTraversal),
     wgslClosureSurface(textures, maxLobes, options.closureDispatch),
     ...(options.analyticLights ? [ANALYTIC_LIGHTS_WGSL] : []),
     ...(varyings !== undefined ? [wgslVaryings(varyings)] : []),

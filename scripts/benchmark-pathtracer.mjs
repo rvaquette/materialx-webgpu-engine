@@ -3,13 +3,21 @@ import { promisify, parseArgs } from 'node:util';
 import { mkdirSync, writeFileSync, mkdtempSync, readFileSync, existsSync, rmSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { tmpdir } from 'node:os';
 import { setTimeout as sleep } from 'node:timers/promises';
+import { platform, release, version } from 'node:os';
+import { sceneBufferCachePlugin } from './pathtracer-cache-server.mjs';
 
 const exec = promisify(execFile);
 const ROOT = fileURLToPath(new URL('../', import.meta.url));
 const HARNESS = '/usd-image-harness.html?session=1';
 const VARIANTS = ['8x8', '4x4', '16x4', '16x8'];
+const BVH_VARIANTS = ['reference', 'triangleEdges'];
+
+export function experimentVariants(bvhTest, cacheTest, round) {
+  const all = bvhTest ? BVH_VARIANTS : cacheTest ? ['8x8'] : VARIANTS;
+  const rotation = (round + 1) % all.length;
+  return round < 0 ? [...all] : [...all.slice(rotation), ...all.slice(0, rotation)];
+}
 
 export function median(values) {
   if (!values.length || values.some(value => !Number.isFinite(value))) throw new Error('Expected finite measurements');
@@ -46,6 +54,20 @@ export function summarize(results) {
       gpuMinMs: gpu.length === group.length ? Math.min(...gpu) : null,
       gpuMaxMs: gpu.length === group.length ? Math.max(...gpu) : null,
       identical: group.every(row => row.parity?.identical === true),
+    };
+  });
+}
+
+export function compareBvhSummaries(summary, candidateVariant = 'triangleEdges') {
+  return summary.filter(row => row.variant === 'reference').map(reference => {
+    const candidate = summary.find(row => row.scene === reference.scene && row.variant === candidateVariant);
+    const gain = (a, b) => a !== null && b !== null ? (a - b) / a * 100 : null;
+    return {
+      scene: reference.scene, candidateVariant,
+      referenceGpuMedianMs: reference.gpuMedianMs, candidateGpuMedianMs: candidate?.gpuMedianMs ?? null,
+      gpuGainPercent: gain(reference.gpuMedianMs, candidate?.gpuMedianMs ?? null),
+      wallGainPercent: candidate ? gain(reference.wallMedianMs, candidate.wallMedianMs) : null,
+      identical: reference.identical && candidate?.identical === true,
     };
   });
 }
@@ -116,9 +138,13 @@ async function main() {
     scenes: { type: 'string', default: 'test_material_disney_gold,renderman_teapot_cloth,renderman_teapot_tiles' },
     'out-dir': { type: 'string' },
     device: { type: 'string' },
+    'cache-test': { type: 'boolean', default: false },
+    'bvh-test': { type: 'boolean', default: false },
   } });
   if (!['local', 'mobile'].includes(values.target)) throw new Error('--target must be local or mobile');
   const res = Number(values.res), spp = Number(values.spp), repeats = Number(values.repeats);
+  if (values['bvh-test'] && values['cache-test']) throw new Error('Choose --bvh-test or --cache-test, not both');
+  if (values['bvh-test'] && repeats < 5) throw new Error('--bvh-test requires at least five repeats');
   if (![res, spp, repeats].every(value => Number.isInteger(value) && value > 0) || res < 4 || spp > 256) {
     throw new Error('Expected res >= 4, 1 <= spp <= 256, repeats >= 1 (integers)');
   }
@@ -134,10 +160,13 @@ async function main() {
   let serial = values.device;
   const adb = async (...args) => (await exec(adbPath, [...(serial ? ['-s', serial] : []), ...args], { timeout: 20000, maxBuffer: 2 ** 20 })).stdout.trim();
   const report = { target: values.target, startedAt: new Date().toISOString(), status: 'running',
-    settings: { res, spp, repeats, variants: VARIANTS, warmups: 1, fireflyClamp: 0, denoise: false, tileSpp: 1 },
-    environment: {}, results: [], summary: [] };
+    settings: { res, spp, repeats, variants: values['bvh-test'] ? BVH_VARIANTS : values['cache-test'] ? ['8x8'] : VARIANTS,
+      cacheTest: values['cache-test'], bvhTest: values['bvh-test'], ...(values['bvh-test'] ? { workgroup: '8x8' } : {}),
+      warmups: 1, fireflyClamp: 0, denoise: false, tileSpp: 1 },
+    environment: { host: { platform: platform(), release: release(), version: version() } }, results: [], summary: [] };
   const save = () => {
     report.summary = summarize(report.results);
+    if (values['bvh-test']) report.comparison = compareBvhSummaries(report.summary);
     writeFileSync(join(outDir, 'report.json'), JSON.stringify(report, null, 2) + '\n');
   };
   const thermal = async () => ({
@@ -158,9 +187,14 @@ async function main() {
       report.environment.before = await thermal();
     }
     const { createServer } = await import('vite');
-    server = await createServer({ root: ROOT, configFile: join(ROOT, 'vite.config.ts'),
-      server: { host: '127.0.0.1', port: 0, strictPort: false, open: false, hmr: false } });
-    await server.listen();
+    const startServer = async (port = 0) => {
+      const instance = await createServer({ root: ROOT, configFile: join(ROOT, 'vite.config.ts'),
+        plugins: [sceneBufferCachePlugin(ROOT)],
+        server: { host: '127.0.0.1', port, strictPort: true, open: false, hmr: false } });
+      await instance.listen();
+      return instance;
+    };
+    server = await startServer();
     const port = server.httpServer.address().port;
     const origin = `http://${values.target === 'mobile' ? 'localhost' : '127.0.0.1'}:${port}`;
     const pageUrl = `${origin}${HARNESS}`;
@@ -173,7 +207,8 @@ async function main() {
       debugOrigin = `http://127.0.0.1:${forwardPort}`;
       await adb('shell', 'am', 'start', '-W', '-a', 'android.intent.action.VIEW', '-d', `'${pageUrl}'`, 'com.android.chrome');
     } else {
-      profile = mkdtempSync(join(tmpdir(), 'mx-pathtracer-benchmark-'));
+      mkdirSync(join(ROOT, '.cache'), { recursive: true });
+      profile = mkdtempSync(join(ROOT, '.cache', 'mx-pathtracer-benchmark-'));
       chrome = spawn(process.env.MX_CHROME ?? 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
         ['--headless=new', '--enable-unsafe-webgpu', '--remote-debugging-port=0', `--user-data-dir=${profile}`, pageUrl],
         { stdio: 'ignore' });
@@ -197,15 +232,57 @@ async function main() {
     await waitFor(() => cdp.evaluate("typeof globalThis.__MX_RENDER__ === 'function'"), 'render harness');
     for (const scene of scenes) {
       let expected;
-      for (let round = -1; round < repeats; round++) {
-        const rotation = (round + 1) % VARIANTS.length;
-        const variants = round < 0 ? VARIANTS : [...VARIANTS.slice(rotation), ...VARIANTS.slice(0, rotation)];
+      for (let round = -1; round < (values['cache-test'] ? 3 : repeats); round++) {
+        const variants = experimentVariants(values['bvh-test'], values['cache-test'], round);
+        const roundThermal = values.target === 'mobile' ? await thermal() : undefined;
         for (const variant of variants) {
+          const cacheMode = values['cache-test'] ? ['refresh', 'use', 'verify', 'bypass'][round + 1] : 'use';
+          if (values['cache-test'] && round === 0) {
+            await server.close();
+            server = await startServer(port);
+            const response = await fetch(`http://127.0.0.1:${port}${HARNESS}`);
+            if (!response.ok) throw new Error('Cache server restart failed readiness');
+            report.environment.cacheServerRestarted = true;
+          }
+          if (values['cache-test'] && round >= 0) {
+            const reloadUrl = `${pageUrl}&cacheReload=${scene}-${round}`;
+            (report.diagnostics ??= []).push(...cdp.diagnostics);
+            cdp.socket.close();
+            await fetch(`${debugOrigin}/json/close/${pageId}`, { signal: AbortSignal.timeout(10000) });
+            pageId = undefined;
+            if (values.target === 'mobile') {
+              await adb('shell', 'am', 'start', '-W', '-a', 'android.intent.action.VIEW', '-d', `'${reloadUrl}'`, 'com.android.chrome');
+            } else {
+              const response = await fetch(`${debugOrigin}/json/new?${encodeURIComponent(reloadUrl)}`, { method: 'PUT', signal: AbortSignal.timeout(10000) });
+              if (!response.ok) throw new Error('Could not create reload tab');
+            }
+            const reloadPage = await waitFor(async () => {
+              const response = await fetch(`${debugOrigin}/json/list`, { signal: AbortSignal.timeout(10000) });
+              return (await response.json()).find(item => item.type === 'page' && item.url === reloadUrl);
+            }, 'reload tab');
+            pageId = reloadPage.id;
+            cdp = await connect(reloadPage.webSocketDebuggerUrl);
+            await cdp.send('Runtime.enable');
+            await cdp.send('Log.enable');
+            await cdp.send('Page.enable');
+            await cdp.send('Page.bringToFront');
+            await waitFor(async () => {
+              try {
+                return await cdp.evaluate(`location.href === ${JSON.stringify(reloadUrl)} && document.readyState === 'complete' && typeof globalThis.__MX_RENDER__ === 'function'`);
+              } catch (error) {
+                if (/Not attached to an active page|context.*destroyed|Cannot find context/i.test(error.message)) return false;
+                throw error;
+              }
+            }, 'reloaded render harness');
+          }
           if (!await cdp.evaluate("document.visibilityState === 'visible'")) throw new Error('Benchmark tab hidden; keep the mobile unlocked and Chrome foregrounded');
           const entry = `/scenes/pathtracer/${scene}.usda`;
           const query = new URLSearchParams({ entry, res: String(res),
-            spp: String(spp), tileSpp: '1', backend: 'pathtracing', benchmark: '1', workgroup: variant, firefly: '0' });
-          console.log(`[pathtracer-benchmark] ${values.target} ${scene} ${variant} ${round < 0 ? 'warmup' : `round ${round + 1}/${repeats}`}`);
+            spp: String(spp), tileSpp: '1', backend: 'pathtracing', benchmark: '1',
+            workgroup: values['bvh-test'] ? '8x8' : variant,
+            bvh: values['bvh-test'] ? variant : 'reference', firefly: '0', cache: cacheMode });
+          if (values['bvh-test']) query.set('bvhCheck', '1');
+          console.log(`[pathtracer-benchmark] ${values.target} ${scene} ${variant} ${values['cache-test'] ? `cache ${cacheMode}` : round < 0 ? 'warmup' : `round ${round + 1}/${repeats}`}`);
           await cdp.evaluate(`void globalThis.__MX_RENDER__(${JSON.stringify(query.toString())})`);
           const image = await waitFor(async () => {
             const state = await cdp.evaluate(`(() => {
@@ -216,18 +293,35 @@ async function main() {
             return state;
           }, `${scene}/${variant}`, 600000);
           if (!image.benchmark) throw new Error('Missing benchmark payload');
+          const fileCache = image.benchmark.sceneBufferCache;
+          if (values['cache-test']) {
+            const expectedStatus = { refresh: 'refresh', use: 'hit', verify: 'hit', bypass: 'bypass' }[cacheMode];
+            if (fileCache?.status !== expectedStatus) throw new Error(`Expected cache ${expectedStatus}: ${JSON.stringify(fileCache)}`);
+            if (cacheMode === 'verify' && fileCache.geometryIdentical !== true) throw new Error('Missing byte-for-byte geometry verification');
+          }
           if (image.entry !== entry || image.width !== res || image.samples !== spp) throw new Error('Unexpected image identity');
           if (image.stats.litFraction <= 0.01) throw new Error('Unexpected black image');
           const hdr = decodeHdr(image.benchmark.hdrBase64);
           if (hdr.length !== res * res * 4) throw new Error('Unexpected HDR dimensions');
           expected ??= hdr;
           const parity = compareHdr(expected, hdr, spp);
-          if (!parity.identical) throw new Error(`HDR differs for ${scene}/${variant}: ${parity.maxAbsoluteError}`);
           report.environment.adapter = image.adapter;
           report.environment.userAgent = image.userAgent;
           const { hdrBase64, ...measurement } = image.benchmark;
-          report.results.push({ scene, variant, round, warmup: round < 0, renderMs: image.renderMs,
-            ...measurement, parity, timings: image.timings, memory: image.memory, stats: image.stats });
+          report.results.push({ scene, variant, round, cacheMode, warmup: round < 0, renderMs: image.renderMs,
+            ...measurement, parity, timings: image.timings, memory: image.memory, stats: image.stats,
+            ...(roundThermal ? { thermal: roundThermal } : {}) });
+          save();
+          if (!parity.identical) throw new Error(`HDR differs for ${scene}/${variant}: ${parity.maxAbsoluteError}`);
+          if (values['bvh-test'] && (image.benchmark.bvhTraversal !== variant ||
+            image.benchmark.workgroupSize.join('x') !== '8x8')) throw new Error('Unexpected BVH/workgroup variant');
+          if (values['bvh-test'] && (image.benchmark.counters?.samplesPerPixel !== spp ||
+            image.benchmark.counters?.totalSamples !== res * res * spp)) throw new Error('Unexpected sample counters');
+          if (values['bvh-test'] && (!image.benchmark.traversalChecks?.identical ||
+            !image.benchmark.traversalChecks?.semanticTriangleIds ||
+            !image.benchmark.traversalChecks?.displacementEdgeUpdate)) {
+            throw new Error('Missing exact BVH/displacement GPU corpus parity');
+          }
           if (round === 0) {
             const stem = join(outDir, `${scene}-${variant}`);
             writeFileSync(`${stem}.png`, Buffer.from(image.dataUrl.split(',')[1], 'base64'));
@@ -238,6 +332,7 @@ async function main() {
       }
     }
     if (values.target === 'mobile') report.environment.after = await thermal();
+    (report.diagnostics ??= []).push(...cdp.diagnostics);
     report.status = 'passed';
     report.finishedAt = new Date().toISOString();
     save();
@@ -247,7 +342,7 @@ async function main() {
     report.status = 'failed';
     report.error = error.stack ?? String(error);
     if (cdp) {
-      report.diagnostics = cdp.diagnostics;
+      (report.diagnostics ??= []).push(...cdp.diagnostics);
       try { report.page = await cdp.evaluate('({ url: location.href, text: document.body.innerText })'); }
       catch (pageError) { report.pageError = pageError.message; }
     }
@@ -262,7 +357,13 @@ async function main() {
         process.exitCode = 1;
       }
     };
-    if (chrome && cdp) await cleanup('Browser close', () => cdp.send('Browser.close'));
+    if (chrome && cdp) await cleanup('Browser close', async () => {
+      try { await cdp.send('Browser.close'); }
+      catch (error) {
+        if (error.message !== 'CDP connection closed') throw error;
+        await waitFor(() => chrome.exitCode !== null || chrome.signalCode !== null, 'Chrome exit after CDP disconnect', 10000);
+      }
+    });
     cdp?.socket.close();
     if (values.target === 'mobile' && pageId) await cleanup('Tab close',
       () => fetch(`${debugOrigin}/json/close/${pageId}`, { signal: AbortSignal.timeout(10000) }));
@@ -278,7 +379,7 @@ async function main() {
     if (profile) await cleanup('Temporary profile removal',
       () => rmSync(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }));
     await cleanup('Server close', async () => server?.close());
-    if (report.cleanupErrors) save();
+    if (report.cleanupErrors) { report.status = 'failed'; save(); }
   }
 }
 

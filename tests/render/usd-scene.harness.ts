@@ -37,6 +37,9 @@ import {
   type MaterialResource,
 } from '../../src/render/scene-resources.ts';
 import { buildPathTraceScene } from '../../src/render/pathtracing/scene-buffers.ts';
+import type { BvhTraversalVariant } from '../../src/render/pathtracing/bvh-wgsl.ts';
+import { checkBvhTraversalGpu, type TraversalChecks } from './pathtracing/bvh-traversal-gpu.ts';
+import { buildFileCachedPathTraceScene, type SceneBufferCacheMode, type SceneBufferCacheReport } from '../../src/render/pathtracing/scene-buffer-cache.ts';
 import {
   emitHybridShadowPass,
   emitGBufferPass,
@@ -50,6 +53,7 @@ import {
 } from '../../src/render/hybrid/trace-pass.ts';
 import { buildPathTraceUniform, pathTraceComputeWgsl, pathTraceClosureDispatch, pathTraceOpaqueScene, PathTraceBackend, PT_UNIFORM_SIZE, type PathTraceWorkgroupSize } from '../../src/render/pathtracing/compute.ts';
 import { pathTraceSettings } from '../../src/render/pathtracing/scene-settings.ts';
+import { pathTraceDisplacementWgsl } from '../../src/render/pathtracing/displacement-wgsl.ts';
 import { cameraFovY } from '../../src/usd/cameras.ts';
 import { maxRecordLobes } from '../../src/render/pathtracing/material-record.ts';
 import { packHdrTexture } from '../../src/assets/hdr-texture.ts';
@@ -90,9 +94,13 @@ let renderSession: {
 let sessionLine: (message: string) => void = () => {};
 let completedCases = 0;
 const checkedPathTraceModules = new WeakSet<GPUShaderModule>();
+const checkedBvhDevices = new WeakMap<GPUDevice, TraversalChecks>();
 
 export interface PathTraceBenchmarkOptions {
   workgroupSize: PathTraceWorkgroupSize;
+  cacheMode?: SceneBufferCacheMode;
+  bvhTraversal?: BvhTraversalVariant;
+  checkBvh?: boolean;
 }
 
 export interface PathTraceBenchmarkResult {
@@ -100,6 +108,11 @@ export interface PathTraceBenchmarkResult {
   timestampStatus: 'available' | 'unsupported';
   hdrBase64: string;
   workgroupSize: PathTraceWorkgroupSize;
+  sceneBufferCache: SceneBufferCacheReport;
+  bvhTraversal: BvhTraversalVariant;
+  sceneMetadata: { triangleCount: number; nodeCount: number; materialCount: number; maxDepth: number; opaque: boolean; triangleLayout: string };
+  counters: { pixels: number; samplesPerPixel: number; totalSamples: number };
+  traversalChecks?: TraversalChecks;
 }
 
 export interface UsdSceneImage {
@@ -1000,59 +1013,6 @@ async function renderUsdRasterOnDevice(
   return { rgba, renderMs };
 }
 
-/** GPU height-map displacement pre-pass: rewrites the packed triangle vertex
- *  buffer in place. Packed triangle stride is 24 floats (v0,v1,v2, n0,n1,n2,
- *  materialIndex, pad); triangleUv stride is 6 floats (u0,v0,u1,v1,u2,v2). */
-const DISPLACE_WGSL = /* wgsl */ `
-struct DispInfo { triCount: u32, midpoint: f32, pad0: u32, pad1: u32 };
-
-@group(0) @binding(0) var<storage, read_write> tris: array<f32>;
-@group(0) @binding(1) var<storage, read> uvs: array<f32>;
-@group(0) @binding(2) var<storage, read> scales: array<f32>;
-@group(0) @binding(3) var<uniform> info: DispInfo;
-@group(0) @binding(4) var dispTex: texture_2d<f32>;
-@group(0) @binding(5) var dispSamp: sampler;
-
-const STRIDE: u32 = 24u;
-
-@compute @workgroup_size(64)
-fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
-  let t = gid.x;
-  if (t >= info.triCount) { return; }
-  let base = t * STRIDE;
-  let matIdx = u32(tris[base + 18u]);
-  let scale = scales[matIdx];
-  if (scale == 0.0) { return; }
-  let ub = t * 6u;
-  var p0 = vec3<f32>(tris[base + 0u], tris[base + 1u], tris[base + 2u]);
-  var p1 = vec3<f32>(tris[base + 3u], tris[base + 4u], tris[base + 5u]);
-  var p2 = vec3<f32>(tris[base + 6u], tris[base + 7u], tris[base + 8u]);
-  let n0 = vec3<f32>(tris[base + 9u], tris[base + 10u], tris[base + 11u]);
-  let n1 = vec3<f32>(tris[base + 12u], tris[base + 13u], tris[base + 14u]);
-  let n2 = vec3<f32>(tris[base + 15u], tris[base + 16u], tris[base + 17u]);
-  let uv0 = vec2<f32>(uvs[ub + 0u], uvs[ub + 1u]);
-  let uv1 = vec2<f32>(uvs[ub + 2u], uvs[ub + 3u]);
-  let uv2 = vec2<f32>(uvs[ub + 4u], uvs[ub + 5u]);
-  let h0 = textureSampleLevel(dispTex, dispSamp, uv0, 0.0).r;
-  let h1 = textureSampleLevel(dispTex, dispSamp, uv1, 0.0).r;
-  let h2 = textureSampleLevel(dispTex, dispSamp, uv2, 0.0).r;
-  p0 = p0 + n0 * ((h0 - info.midpoint) * scale);
-  p1 = p1 + n1 * ((h1 - info.midpoint) * scale);
-  p2 = p2 + n2 * ((h2 - info.midpoint) * scale);
-  tris[base + 0u] = p0.x; tris[base + 1u] = p0.y; tris[base + 2u] = p0.z;
-  tris[base + 3u] = p1.x; tris[base + 4u] = p1.y; tris[base + 5u] = p1.z;
-  tris[base + 6u] = p2.x; tris[base + 7u] = p2.y; tris[base + 8u] = p2.z;
-  // Recompute a flat geometric normal from the displaced positions, keeping the
-  // winding-consistent orientation of the original interpolated normals.
-  let faceN = normalize(cross(p1 - p0, p2 - p0));
-  let orient = sign(dot(faceN, n0 + n1 + n2));
-  let gn = faceN * orient;
-  tris[base + 9u] = gn.x; tris[base + 10u] = gn.y; tris[base + 11u] = gn.z;
-  tris[base + 12u] = gn.x; tris[base + 13u] = gn.y; tris[base + 14u] = gn.z;
-  tris[base + 15u] = gn.x; tris[base + 16u] = gn.y; tris[base + 17u] = gn.z;
-}
-`;
-
 /** Path-traces the real USDA geometry on the device GPU and returns display RGBA. */
 async function renderUsdOnDevice(
   device: GPUDevice,
@@ -1073,6 +1033,9 @@ async function renderUsdOnDevice(
 ): Promise<{ rgba: Uint8ClampedArray; renderMs: number; benchmark?: PathTraceBenchmarkResult }> {
   if (!Number.isInteger(maxSamplesPerDispatch) || maxSamplesPerDispatch < 1) {
     throw new Error(`maxSamplesPerDispatch must be a positive integer; got ${maxSamplesPerDispatch}`);
+  }
+  if (benchmarkOptions?.checkBvh && !checkedBvhDevices.has(device)) {
+    checkedBvhDevices.set(device, await checkBvhTraversalGpu(device));
   }
   const sink = (d: { level: string; message: string; detail?: unknown }): void => {
     if (d.level === 'warning' || d.level === 'error') {
@@ -1116,14 +1079,18 @@ async function renderUsdOnDevice(
   // Upload the dome texture + luminance CDF up front so the frame environment config
   // can carry the CDF dimensions/sum used by the tracer's importance sampling.
   const envGpu = envAsset ? uploadEnvTexture(device, envAsset) : undefined;
-  const ptScene = buildPathTraceScene(resources, {
+  const { scene: ptScene, cache: sceneBufferCache } = await buildFileCachedPathTraceScene(resources, {
     lights,
     surfaceFor,
     frameCamera,
     environment: envFrameConfig(envAsset, envGpu?.cdfStats, skyPowerOverride, skyColorOverride, pathTraceSettings(scene).converted),
     settings: pathTraceSettings(scene),
+    ...(benchmarkOptions?.bvhTraversal === 'leafOrder' ? { triangleLayout: 'leafOrder' as const } :
+      benchmarkOptions?.bvhTraversal === 'triangleEdges' ? { triangleLayout: 'triangleEdges' as const } : {}),
     ...(dispScaleOverride !== undefined ? { displacementScale: dispScaleOverride } : {}),
-  });
+  }, benchmarkOptions?.cacheMode ?? 'use');
+  for (const diagnostic of sceneBufferCache.diagnostics) line(`diag file-cache: ${diagnostic}`);
+  line(`diag file-cache ${sceneBufferCache.status} key=${sceneBufferCache.key} bytes=${sceneBufferCache.bytes}`);
   ptScene.environment.textureRadianceScale = envGpu?.radianceScale ?? 1;
   phase('bvhAndEnvironmentUpload');
   line(`${resources.instances.length} instance(s), ${samples} spp`);
@@ -1158,7 +1125,9 @@ async function renderUsdOnDevice(
   );
 
   // Compute path tracer on the packed scene buffers, progressive accumulation.
-  const workgroupOptions = benchmarkOptions ? { workgroupSize: benchmarkOptions.workgroupSize } : {};
+  const workgroupOptions = benchmarkOptions ? {
+    workgroupSize: benchmarkOptions.workgroupSize, bvhTraversal: benchmarkOptions.bvhTraversal ?? 'reference',
+  } : {};
   const backend = new PathTraceBackend(device, { dispatch, ...workgroupOptions, ...(envAsset ? { environment: true } : {}) });
   const maxLobes = Math.max(
     ...dispatch.variants.map(variant => variant.lobeCount),
@@ -1219,6 +1188,7 @@ async function renderUsdOnDevice(
   // only fences batches of samples, not individual tiles.
   let triangleBuffer: GPUBuffer | undefined;
   let triangleUvBuffer: GPUBuffer | undefined;
+  let triangleEdgesBuffer: GPUBuffer | undefined;
   let uniformBinding: number | undefined;
   const group0Entries: GPUBindGroupEntry[] = bindings.group0.map((slot) => {
     if (slot.role === 'uniform') {
@@ -1232,9 +1202,15 @@ async function renderUsdOnDevice(
       const mx = device.createBuffer({ size: 256, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
       return { binding: slot.binding, resource: { buffer: mx } };
     }
+    const uploadStarted = performance.now();
     const buf = storageData(slot.data ?? new Float32Array(1));
+    // CPU allocation/enqueue only; GPU execution remains separately timestamped.
+    if (['nodes', 'triangles', 'triangleOrder', 'triangleUv', 'triangleTangent', 'triangleEdges'].includes(slot.role)) {
+      sceneBufferCache.timings.upload = (sceneBufferCache.timings.upload ?? 0) + performance.now() - uploadStarted;
+    }
     if (slot.role === 'triangles') triangleBuffer = buf;
     if (slot.role === 'triangleUv') triangleUvBuffer = buf;
+    if (slot.role === 'triangleEdges') triangleEdgesBuffer = buf;
     return { binding: slot.binding, resource: { buffer: buf } };
   });
   if (uniformBinding === undefined) throw new Error('Path-tracing bind group has no frame uniform binding');
@@ -1335,7 +1311,8 @@ async function renderUsdOnDevice(
       const dispInfo = device.createBuffer({ size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
       device.queue.writeBuffer(dispInfo, 0, new Uint32Array([ptScene.triangleCount, 0, 0, 0]));
       device.queue.writeBuffer(dispInfo, 4, new Float32Array([ptScene.displacement.midpoint]));
-      const dispModule = device.createShaderModule({ code: DISPLACE_WGSL });
+      const updateEdges = ptScene.triangleLayout === 'triangleEdges' && triangleEdgesBuffer !== undefined;
+      const dispModule = device.createShaderModule({ code: pathTraceDisplacementWgsl(updateEdges) });
       const dispPipeline = device.createComputePipeline({
         layout: 'auto',
         compute: { module: dispModule, entryPoint: 'main' },
@@ -1349,6 +1326,7 @@ async function renderUsdOnDevice(
           { binding: 3, resource: { buffer: dispInfo } },
           { binding: 4, resource: dispTex.createView() },
           { binding: 5, resource: dispSampler },
+          ...(updateEdges ? [{ binding: 6, resource: { buffer: triangleEdgesBuffer! } }] : []),
         ],
       });
       const encoder = device.createCommandEncoder();
@@ -1468,7 +1446,13 @@ async function renderUsdOnDevice(
     let binary = '';
     for (let i = 0; i < bytes.length; i += 8192) binary += String.fromCharCode(...bytes.subarray(i, i + 8192));
     benchmark = { gpuMs, timestampStatus: timestampSupported ? 'available' : 'unsupported',
-      hdrBase64: btoa(binary), workgroupSize: benchmarkOptions.workgroupSize };
+      hdrBase64: btoa(binary), workgroupSize: benchmarkOptions.workgroupSize, sceneBufferCache,
+      bvhTraversal: benchmarkOptions.bvhTraversal ?? 'reference',
+      sceneMetadata: { triangleCount: ptScene.triangleCount, nodeCount: ptScene.nodeCount,
+        materialCount: ptScene.materialCount, maxDepth: ptScene.settings?.maxDepth ?? 64, opaque,
+        triangleLayout: ptScene.triangleLayout ?? 'reference' },
+      counters: { pixels: res * res, samplesPerPixel: samples, totalSamples: res * res * samples },
+      ...(benchmarkOptions.checkBvh ? { traversalChecks: checkedBvhDevices.get(device)! } : {}) };
   }
   const rgba = new Uint8ClampedArray(res * res * 4);
   for (let p = 0; p < res * res; p++) {

@@ -11,9 +11,11 @@ import {
 } from '../../../src/render/pathtracing/scene-buffers.ts';
 import type { PathTraceBvhCache } from '../../../src/geometry/cache.ts';
 import type { Bvh } from '../../../src/geometry/bvh.ts';
+import { buildBvh } from '../../../src/geometry/bvh.ts';
 import type { GeometryResource, MaterialResource, SceneResources } from '../../../src/render/scene-resources.ts';
 import type { RasterSurface } from '../../../src/render/raster/scene-frame.ts';
 import type { SceneLight } from '../../../src/usd/lights.ts';
+import { PT_LIGHT_FLOATS } from '../../../src/render/pathtracing/analytic-lights.ts';
 import { createPcg32, integratePath, type Ray } from '../../../src/render/pathtracing/integrator.ts';
 import { evalWorld, layeredSurfaceBsdf, surfaceBsdf } from '../../../src/render/pathtracing/bsdf.ts';
 import { canonicalSurfaceToLayered, type LayeredClosure } from '../../../src/compiler/ir.ts';
@@ -99,7 +101,7 @@ describe('buildPathTraceScene packing', () => {
       expect(scene.triangleCount).toBe(0);
       expect(scene.variantSources).toHaveLength(0);
       expect(scene.analyticLightCount).toBe(1);
-      expect(scene.analyticLights).toHaveLength(20);
+      expect(scene.analyticLights).toHaveLength(PT_LIGHT_FLOATS);
       expect(scene.settings).toEqual(options.settings);
     }
     expect(buildPathTraceScene(resources, { lights: [light] }).triangleCount).toBe(2);
@@ -131,6 +133,90 @@ describe('buildPathTraceScene packing', () => {
     expect(scene.nodeCount).toBeGreaterThan(0);
     expect(scene.materialCount).toBe(1);
     expect(scene.materials.length).toBe(PT_MATERIAL_FLOATS);
+  });
+  it('precomputes float32 v0/e1/e2 without changing canonical geometry streams', () => {
+    const { resources } = sceneWith();
+    const reference = buildPathTraceScene(resources);
+    const prepared = buildPathTraceScene(resources, { triangleLayout: 'triangleEdges' });
+    expect(prepared.triangles).toEqual(reference.triangles);
+    expect(prepared.triangleUv).toEqual(reference.triangleUv);
+    expect(prepared.triangleTangent).toEqual(reference.triangleTangent);
+    expect(prepared.triangleEdges).toHaveLength(prepared.triangleCount * 9);
+    for (let tri = 0; tri < prepared.triangleCount; tri++) {
+      const source = tri * PT_TRIANGLE_FLOATS, target = tri * 9;
+      for (let axis = 0; axis < 3; axis++) {
+        const v0 = Math.fround(prepared.triangles[source + axis]!);
+        expect(prepared.triangleEdges![target + axis]).toBe(v0);
+        expect(prepared.triangleEdges![target + 3 + axis]).toBe(
+          Math.fround(Math.fround(prepared.triangles[source + 3 + axis]!) - v0),
+        );
+        expect(prepared.triangleEdges![target + 6 + axis]).toBe(
+          Math.fround(Math.fround(prepared.triangles[source + 6 + axis]!) - v0),
+        );
+      }
+    }
+    expect(prepared.triangleLayout).toBe('triangleEdges');
+  });
+  it('keeps CPU geometry canonical while reordering position, normal, material, UV and tangent streams', () => {
+    const { resources, lights } = sceneWith();
+    const streams = [
+      { position: [-0.5, -0.5, 0, 0.5, -0.5, 0, 0, 0.5, 0], normal: [0, 0, 1], uv: [0, 0, 1, 0, 0.5, 1], tangent: [1, 0, 0, 1] },
+      { position: [-0.5, -0.5, 0, 0.5, -0.5, 0, 0, 0.5, 0], normal: [0, 1, 0], uv: [0.2, 0.3, 0.8, 0.3, 0.5, 0.9], tangent: [0, 1, 0, -1] },
+      { position: [-0.5, -0.5, 0, 0.5, -0.5, 0, 0, 0.5, 0], normal: [1, 0, 0], uv: [0.1, 0.7, 0.7, 0.1, 0.9, 0.4], tangent: [0, 0, 1, 1] },
+    ];
+    resources.geometries = new Map(streams.map((data, i) => [`/proto${i}`, {
+      prototypeId: `/proto${i}`,
+      streams: [
+        { name: 'position', components: 3, data: new Float32Array(data.position) },
+        { name: 'normal', components: 3, data: new Float32Array([...data.normal, ...data.normal, ...data.normal]) },
+        { name: 'uv', components: 2, data: new Float32Array(data.uv) },
+        { name: 'tangent', components: 4, data: new Float32Array([...data.tangent, ...data.tangent, ...data.tangent]) },
+      ],
+      indices: new Uint32Array([0, 1, 2]), vertexCount: 3, triangleCount: 1,
+    } as unknown as GeometryResource]));
+    resources.materials = new Map(streams.map((_, i) => [`mat${i}`, {
+      unitKey: `mat${i}`, features: { passes: [] },
+    } as unknown as MaterialResource]));
+    const offsets = [8, -8, 0];
+    resources.instances = offsets.map((x, i) => ({
+      id: `/tri${i}`, prototypeId: `/proto${i}`, primPath: `/tri${i}`, hasGeometry: true,
+      materialKey: `mat${i}`,
+      transform: [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, x, 0, 0, 1],
+    })) as unknown as SceneResources['instances'];
+    const baseScene = buildPathTraceScene(resources, { lights });
+    const worldPositions = new Float32Array(baseScene.triangleCount * 9);
+    for (let tri = 0; tri < baseScene.triangleCount; tri++) {
+      worldPositions.set(baseScene.triangles.subarray(tri * PT_TRIANGLE_FLOATS, tri * PT_TRIANGLE_FLOATS + 9), tri * 9);
+    }
+    const indices = Uint32Array.from({ length: worldPositions.length / 3 }, (_, i) => i);
+    const bvh = buildBvh(worldPositions, indices, { splitStrategy: 'sah' });
+    const orderedBvh: Bvh = {
+      ...bvh, triangleOrder: new Uint32Array([2, 1, 0]),
+    };
+    const reference = buildPathTraceScene(resources, { lights }, orderedBvh);
+    const candidate = buildPathTraceScene(resources, { lights, triangleLayout: 'leafOrder' }, orderedBvh);
+    expect(candidate.triangleLayout).toBe('leafOrder');
+    expect(candidate.triangleOrder).not.toEqual(new Uint32Array([0, 1, 2]));
+    expect(candidate.triangles).toEqual(reference.triangles);
+    expect(candidate.triangleUv).toEqual(reference.triangleUv);
+    expect(candidate.triangleTangent).toEqual(reference.triangleTangent);
+    expect(candidate.triangleOrder).toEqual(reference.triangleOrder);
+    expect(candidate.gpuTriangles).toBeDefined();
+    expect(candidate.gpuTriangleUv).toBeDefined();
+    expect(candidate.gpuTriangleTangent).toBeDefined();
+    for (let leaf = 0; leaf < candidate.triangleCount; leaf++) {
+      const source = candidate.triangleOrder[leaf]!;
+      expect(candidate.gpuTriangles!.slice(leaf * PT_TRIANGLE_FLOATS, (leaf + 1) * PT_TRIANGLE_FLOATS))
+        .toEqual(reference.triangles.slice(source * PT_TRIANGLE_FLOATS, (source + 1) * PT_TRIANGLE_FLOATS));
+      expect(candidate.gpuTriangleUv!.slice(leaf * 6, (leaf + 1) * 6))
+        .toEqual(reference.triangleUv.slice(source * 6, (source + 1) * 6));
+      expect(candidate.gpuTriangleTangent!.slice(leaf * 12, (leaf + 1) * 12))
+        .toEqual(reference.triangleTangent.slice(source * 12, (source + 1) * 12));
+      expect(candidate.gpuTriangles![leaf * PT_TRIANGLE_FLOATS + 18])
+        .toBe(reference.triangles[source * PT_TRIANGLE_FLOATS + 18]);
+    }
+    expect(createSceneSampler(candidate).intersect({ origin: [0, 0, 2], direction: [0, 0, -1] }))
+      .toEqual(createSceneSampler(reference).intersect({ origin: [0, 0, 2], direction: [0, 0, -1] }));
   });
 
   it('round-trips a custom OpenPBR surface as a LayeredClosure record', () => {

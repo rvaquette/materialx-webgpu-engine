@@ -32,6 +32,7 @@ export type PtBufferRole =
   | 'accum'
   | 'triangleUv'
   | 'triangleTangent'
+  | 'triangleEdges'
   | 'mxUniforms'
   | 'analyticLights';
 
@@ -82,12 +83,17 @@ function group0Slots(scene: PathTraceScene, dispatch: PtMaterialDispatch): PtBuf
   const slots: PtBufferSlot[] = [
     { binding: 0, role: 'uniform', usage: 'uniform', access: 'read' },
     { binding: 1, role: 'nodes', usage: 'storage', access: 'read', data: scene.nodes },
-    { binding: 2, role: 'triangles', usage: 'storage', access: 'read', data: scene.triangles },
-    { binding: 3, role: 'triangleOrder', usage: 'storage', access: 'read', data: scene.triangleOrder },
+    { binding: 2, role: 'triangles', usage: 'storage', access: 'read', data: scene.gpuTriangles ?? scene.triangles },
+    ...(scene.triangleLayout === 'leafOrder' ? [] : [
+      { binding: 3, role: 'triangleOrder' as const, usage: 'storage' as const, access: 'read' as const, data: scene.triangleOrder },
+    ]),
     { binding: 4, role: 'materials', usage: 'storage', access: 'read', data: scene.materials },
     { binding: 5, role: 'accum', usage: 'storage', access: 'read_write' },
-    { binding: 6, role: 'triangleUv', usage: 'storage', access: 'read', data: scene.triangleUv },
-    { binding: 7, role: 'triangleTangent', usage: 'storage', access: 'read', data: scene.triangleTangent },
+    { binding: 6, role: 'triangleUv', usage: 'storage', access: 'read', data: scene.gpuTriangleUv ?? scene.triangleUv },
+    { binding: 7, role: 'triangleTangent', usage: 'storage', access: 'read', data: scene.gpuTriangleTangent ?? scene.triangleTangent },
+    ...(scene.triangleLayout === 'triangleEdges' ? [
+      { binding: 10, role: 'triangleEdges' as const, usage: 'storage' as const, access: 'read' as const, data: scene.triangleEdges! },
+    ] : []),
   ];
   // The editable-params block sits past the scene buffers (currently empty, T057i3).
   if (dispatch.uniforms.length > 0) {

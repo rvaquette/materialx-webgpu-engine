@@ -38,6 +38,48 @@ feature manque, le temps GPU vaut explicitement `null` ; le temps mural ne le re
 Les pixels RGB finis et les compteurs d'échantillons sont comparés exactement
 à la référence 8×8 du même appareil. La parité entre GPU différents n'est pas exigée.
 
+Le banc sauvegarde désormais les buffers géométriques préparés dans un fichier
+binaire versionné sous `.cache/pathtracer/`, partagé entre PC et mobile par le
+serveur local. Un hit évite le packing des triangles et la construction du BVH ;
+les données sources sont hachées pour invalider le fichier quand elles changent.
+La caméra, les paramètres de matériaux et les pipelines GPU ne sont pas figés
+dans ce fichier. Les rapports exposent `sceneBufferCache.status` et les temps de
+clé, lecture, décodage, calcul, écriture et upload.
+
+`--cache-test` compare successivement refresh, hit après redémarrage du serveur
+et rechargement de page, vérification contre reconstruction, puis bypass :
+
+```powershell
+node scripts\benchmark-pathtracer.mjs --target local --res 64 --spp 2 --repeats 1 --scenes test_material_disney_gold --cache-test --out-dir renders\pathtracer-benchmark\cache-check-local
+node scripts\benchmark-pathtracer.mjs --target mobile --res 64 --spp 2 --repeats 1 --scenes test_material_disney_gold --cache-test --out-dir renders\pathtracer-benchmark\cache-check-mobile
+npx vitest run tests\render\pathtracing\scene-buffer-cache.test.ts tests\render\pathtracing\scene-buffer-cache-server.test.mjs
+```
+
+Un fichier absent ou corrompu déclenche un diagnostic et une reconstruction.
+Le cache ne garantit pas un gain sur une petite scène : réseau local, hachage
+et validation peuvent coûter plus cher que le BVH. Mesurer le temps de préparation
+complet séparément du temps GPU. Le viewer n'utilise pas encore ce cache fichier.
+
+`--bvh-test` isole l'expérience de pile BVH `reference` / `cachedEntry`, toutes
+deux en 8×8. La référence reste le défaut du compute et du rendu hybride.
+Au moins cinq répétitions sont imposées, après une chauffe exclue par variante ;
+l'ordre des deux variantes alterne. Ne pas combiner avec `--cache-test`.
+
+```powershell
+node scripts\benchmark-pathtracer.mjs --target local --bvh-test --out-dir renders\pathtracer-benchmark\bvh-entry-local
+node scripts\benchmark-pathtracer.mjs --target mobile --bvh-test --out-dir renders\pathtracer-benchmark\bvh-entry-mobile
+```
+
+Le rapport ajoute `comparison` (gains des médianes GPU et murales par scène),
+`sceneMetadata` (triangles, nœuds, matériaux, profondeur, opacité), les compteurs
+d'échantillons vérifiés et les relevés thermiques Android par tour. Un corpus GPU
+hors chronométrage vérifie aussi distances, IDs et barycentriques exacts en
+closest-hit, ordre any-hit, rayons parallèles, limites et scène vide. Les buffers
+géométriques et leur format de cache restent inchangés. Aucun compteur de rayons
+ou d'AABB n'est ajouté au shader chronométré pour ne pas en perturber le coût.
+Les cas limites préservent les conventions de la référence, y compris les rayons
+parallèles situés exactement sur la face maximale d'une boîte.
+
 Le banc mesure le transport dans le harness de référence, pas la réactivité du
 viewer : son agencement des soumissions et son absence d'AOV de couverture diffèrent
 du viewer. Tout candidat prometteur doit donc aussi passer la qualification viewer

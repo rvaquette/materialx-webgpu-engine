@@ -76,6 +76,30 @@ function fakeScene(): PathTraceScene {
 
 describe('pathTraceComputeWgsl', () => {
   const src = pathTraceComputeWgsl();
+  it('keeps reference traversal by default and exposes the cached-entry experiment only on request', () => {
+    expect(pathTraceComputeWgsl({ bvhTraversal: 'reference' })).toBe(src);
+    const candidate = pathTraceComputeWgsl({ bvhTraversal: 'cachedEntry' });
+    expect(candidate).toContain('var entryStack : array<f32, 64>');
+    expect(candidate).toContain('entryStack[sp] = select(leftT, rightT, leftFirst)');
+    expect(candidate).toContain('entryStack[sp] <= closest');
+    expect(src).not.toContain('entryStack');
+    expect(candidate).not.toContain('aabb_hit(node, ro, invDir, closest) >= 0.0');
+  });
+  it('uses physical leaf-order indices without a triOrder binding only when requested', () => {
+    const candidate = pathTraceComputeWgsl({ bvhTraversal: 'leafOrder' });
+    expect(candidate).toContain('let tri = start + i;');
+    expect(candidate).not.toContain('var<storage, read> triOrder');
+    expect(candidate).toContain('@group(0) @binding(4) var<storage, read> materials');
+    expect(src).toContain('var<storage, read> triOrder');
+  });
+  it('uses a separately bound precomputed v0/e1/e2 stream only for the edge experiment', () => {
+    const candidate = pathTraceComputeWgsl({ bvhTraversal: 'triangleEdges' });
+    expect(candidate).toContain('@group(0) @binding(10) var<storage, read> triEdges');
+    expect(candidate).toContain('let e1 = tri_edge(tri, 1u);');
+    expect(candidate).toContain('let e2 = tri_edge(tri, 2u);');
+    expect(candidate).toContain('var<storage, read> triOrder');
+    expect(src).not.toContain('triEdges');
+  });
   it('changes only the workgroup declaration and covers partial tiles', () => {
     const variant = pathTraceComputeWgsl({ workgroupSize: [16, 4] });
     expect(variant.replace('@workgroup_size(16, 4, 1)', '@workgroup_size(8, 8, 1)')).toBe(src);

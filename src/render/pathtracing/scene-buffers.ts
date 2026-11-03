@@ -48,6 +48,7 @@ export const PT_NODE_FLOATS = 12;
 export const PT_TRIANGLE_FLOATS = 24;
 /** Floats per packed material: the flat LayeredClosure record (T057b, megakernel-ready). */
 export const PT_MATERIAL_FLOATS = PT_MATERIAL_RECORD_FLOATS;
+export type PathTraceTriangleLayout = 'reference' | 'leafOrder' | 'triangleEdges';
 
 export interface PathTraceCamera {
   viewProj: Mat4;
@@ -67,6 +68,13 @@ export interface PathTraceScene {
   triangles: Float32Array;
   /** BVH leaf-order permutation of triangle ordinals (node start/count index this). */
   triangleOrder: Uint32Array;
+  /** Selects an optional GPU traversal-only stream layout; CPU and hybrid buffers remain canonical. */
+  triangleLayout?: PathTraceTriangleLayout;
+  gpuTriangles?: Float32Array;
+  gpuTriangleUv?: Float32Array;
+  gpuTriangleTangent?: Float32Array;
+  /** Optional GPU-only v0/e1/e2 stream. Canonical vertices remain in `triangles`. */
+  triangleEdges?: Float32Array;
   triangleCount: number;
   /** Packed LayeredClosure records (PT_MATERIAL_FLOATS each, T057b). */
   materials: Float32Array;
@@ -95,6 +103,10 @@ export interface PathTraceScene {
    *  compute pre-pass can rewrite the vertex buffer without rebuilding the BVH. */
   displacement?: { mapFile: string; midpoint: number; scale: Float32Array };
 }
+
+export type PreparedPathTraceGeometry = Pick<PathTraceScene,
+  'nodes' | 'nodeCount' | 'triangles' | 'triangleOrder' | 'triangleCount' |
+  'triangleUv' | 'triangleTangent' | 'triangleEdges' | 'triangleLayout' | 'bounds'>;
 
 // --- small vec helpers -------------------------------------------------------
 
@@ -128,6 +140,7 @@ export function buildPathTraceScene(
   options: BuildPathTraceSceneOptions = {},
   cachedBvh?: Bvh,
   cachedPositions?: Float32Array,
+  preparedGeometry?: PreparedPathTraceGeometry,
 ): PathTraceScene {
   const frame = buildSceneFrame(resources, options);
 
@@ -178,6 +191,8 @@ export function buildPathTraceScene(
     const tangent = geom.streams.find((s) => s.name === 'tangent');
     if (tangent) hasTangents = true;
     const matIdx = indexFor(materialKeyOf(draw.materialKey), draw.surface, draw.materialKey);
+    // A file-cache hit still rebuilds live materials/frame, but never visits vertices.
+    if (preparedGeometry) continue;
     const model = draw.model;
     const idx = geom.indices;
     for (let t = 0; t + 2 < idx.length; t += 3) {
@@ -249,10 +264,10 @@ export function buildPathTraceScene(
   }
 
   const positions = cachedPositions ?? new Float32Array(soup);
-  const indices = new Uint32Array(triCount * 3);
+  const indices = new Uint32Array(preparedGeometry ? 0 : triCount * 3);
   for (let i = 0; i < indices.length; i++) indices[i] = i;
   let bvh = cachedBvh;
-  if (!bvh) {
+  if (!bvh && !preparedGeometry) {
     const bvhStarted = performance.now();
     bvh = buildBvh(positions, indices, { splitStrategy: 'sah' });
     performance.measure('pathtracing:bvh-build', {
@@ -273,19 +288,30 @@ export function buildPathTraceScene(
   for (const s of displaceScaleArr) maxDisp = Math.max(maxDisp, Math.max(midpoint, 1 - midpoint) * Math.abs(s));
   const hasDisplacement = displaceMapFile !== undefined && maxDisp > 0;
 
-  const nodes = packNodes(bvh, hasDisplacement ? maxDisp : 0);
+  const nodes = preparedGeometry?.nodes ?? packNodes(bvh!, hasDisplacement ? maxDisp : 0);
   const materials = packMaterials(surfaces);
+  const triangles = preparedGeometry?.triangles ?? new Float32Array(triFloats);
+  const triangleOrder = preparedGeometry?.triangleOrder ?? bvh!.triangleOrder;
+  const triangleUv = preparedGeometry?.triangleUv ?? new Float32Array(uvFloats);
+  const triangleTangent = preparedGeometry?.triangleTangent ?? (hasTangents ? new Float32Array(tanFloats) : new Float32Array(0));
+  const triangleEdges = preparedGeometry?.triangleEdges ??
+    (options.triangleLayout === 'triangleEdges' ? packTriangleEdges(triangles) : undefined);
+  const gpuLayout = options.triangleLayout === 'leafOrder'
+    ? reorderTriangleStreams(triangles, triangleUv, triangleTangent, triangleOrder)
+    : undefined;
 
   return {
     nodes,
-    nodeCount: bvh.nodes.length,
-    triangles: new Float32Array(triFloats),
-    triangleOrder: bvh.triangleOrder,
-    triangleCount: triCount,
+    nodeCount: preparedGeometry?.nodeCount ?? bvh!.nodes.length,
+    triangles,
+    triangleOrder,
+    ...(gpuLayout ? { triangleLayout: 'leafOrder' as const, ...gpuLayout } :
+      triangleEdges ? { triangleLayout: 'triangleEdges' as const, triangleEdges } : {}),
+    triangleCount: preparedGeometry?.triangleCount ?? triCount,
     materials,
     materialCount: surfaces.length,
-    triangleUv: new Float32Array(uvFloats),
-    triangleTangent: hasTangents ? new Float32Array(tanFloats) : new Float32Array(0),
+    triangleUv,
+    triangleTangent,
     materialKeys,
     variantSources,
     camera: {
@@ -296,7 +322,7 @@ export function buildPathTraceScene(
     },
     light: frame.light,
     environment: frame.environment,
-    bounds: bvh.bounds,
+    bounds: preparedGeometry?.bounds ?? bvh!.bounds,
     ...(options.settings ? { settings: options.settings } : {}),
     ...(options.settings?.converted ? {
       analyticLights: packAnalyticLights(options.lights ?? []),
@@ -306,12 +332,51 @@ export function buildPathTraceScene(
   };
 }
 
+function packTriangleEdges(triangles: Float32Array): Float32Array {
+  const edges = new Float32Array((triangles.length / PT_TRIANGLE_FLOATS) * 9);
+  for (let tri = 0; tri < edges.length / 9; tri++) {
+    const source = tri * PT_TRIANGLE_FLOATS, target = tri * 9;
+    for (let axis = 0; axis < 3; axis++) {
+      const v0 = Math.fround(triangles[source + axis]!);
+      const v1 = Math.fround(triangles[source + 3 + axis]!);
+      const v2 = Math.fround(triangles[source + 6 + axis]!);
+      edges[target + axis] = v0;
+      edges[target + 3 + axis] = Math.fround(v1 - v0);
+      edges[target + 6 + axis] = Math.fround(v2 - v0);
+    }
+  }
+  return edges;
+}
+
+function reorderTriangleStreams(
+  triangles: Float32Array,
+  triangleUv: Float32Array,
+  triangleTangent: Float32Array,
+  triangleOrder: Uint32Array,
+): Pick<PathTraceScene, 'gpuTriangles' | 'gpuTriangleUv' | 'gpuTriangleTangent'> {
+  const gpuTriangles = new Float32Array(triangles.length);
+  const gpuTriangleUv = new Float32Array(triangleUv.length);
+  const gpuTriangleTangent = new Float32Array(triangleTangent.length);
+  for (let leaf = 0; leaf < triangleOrder.length; leaf++) {
+    const source = triangleOrder[leaf]!;
+    gpuTriangles.set(triangles.subarray(source * PT_TRIANGLE_FLOATS, (source + 1) * PT_TRIANGLE_FLOATS),
+      leaf * PT_TRIANGLE_FLOATS);
+    gpuTriangleUv.set(triangleUv.subarray(source * 6, (source + 1) * 6), leaf * 6);
+    if (triangleTangent.length) {
+      gpuTriangleTangent.set(triangleTangent.subarray(source * PT_TAN_STRIDE, (source + 1) * PT_TAN_STRIDE),
+        leaf * PT_TAN_STRIDE);
+    }
+  }
+  return { gpuTriangles, gpuTriangleUv, gpuTriangleTangent };
+}
+
 export interface BuildPathTraceSceneOptions extends BuildSceneFrameOptions {
   displacementScale?: number;
   settings?: PathTraceSettings;
+  triangleLayout?: PathTraceTriangleLayout;
 }
 
-function isLightProxy(resources: SceneResources, instanceId: string, options: BuildPathTraceSceneOptions): boolean {
+export function isLightProxy(resources: SceneResources, instanceId: string, options: BuildPathTraceSceneOptions): boolean {
   if (!options.settings?.converted) return false;
   const path = resources.instances.find(instance => instance.id === instanceId)?.primPath;
   return options.lights?.some(light => path === `${light.path}_Geometry`) ?? false;

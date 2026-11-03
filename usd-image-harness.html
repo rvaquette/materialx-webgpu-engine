@@ -52,7 +52,12 @@
       if (dimensions && (dimensions.length !== 2 || dimensions.some(n => !Number.isInteger(n) || n < 1) || dimensions[0] * dimensions[1] > 256)) {
         throw new Error('workgroup must be WIDTHxHEIGHT with at most 256 invocations');
       }
-      const benchmark = params.has('benchmark') ? { workgroupSize: dimensions ?? [8, 8] } : undefined;
+      const cacheMode = params.get('cache') ?? 'use';
+      if (!['use', 'bypass', 'refresh', 'verify'].includes(cacheMode)) throw new Error('Invalid cache mode');
+      const bvhTraversal = params.get('bvh') ?? 'reference';
+      if (!['reference', 'cachedEntry', 'leafOrder', 'triangleEdges'].includes(bvhTraversal)) throw new Error('Invalid BVH traversal');
+      const benchmark = params.has('benchmark') ? { workgroupSize: dimensions ?? [8, 8], cacheMode, bvhTraversal,
+        checkBvh: params.has('bvhCheck') } : undefined;
       await bootstrapUsdImage(entry, res, spp, backend, openpbr, exposure, firefly, skyPower, skyColor, camBack, dispScale, shadows, lightDir, tileSpp, benchmark);
       } catch (e) {
         globalThis.__MX_IMAGE__ = null;
