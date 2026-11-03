@@ -64,6 +64,9 @@ import { MaterialXLibraries, defaultLibrarySources } from '../../src/materialx/l
 import type { DecodedPixelImage } from '../../src/assets/images.ts';
 import { decodeBrowserImage } from '../../src/assets/browser-image.ts';
 import { imageSamplerDescriptor } from '../../src/assets/samplers.ts';
+import { withUdimImages } from '../../src/assets/udim.ts';
+import { sceneUdimIndex } from '../../src/assets/scene-udim.ts';
+import { uploadMaterialImage } from '../../src/gpu/material-texture.ts';
 import {
   parseSurfaceInputsFromMtlx,
   parsedSurfaceToCanonical,
@@ -484,7 +487,7 @@ async function loadMtlxSceneContext(
   line('diag step: libraries loaded');
   const documents = await loadMaterialXDocuments({ core, libraries, texts, sink });
   line('diag step: documents loaded');
-  const imageProvider: PtImageProvider = {
+  const singleImageProvider: PtImageProvider = {
     async decode(fileRef: string): Promise<DecodedPixelImage | undefined> {
       for (const dir of materialDirs) {
         const url = joinUrl(dir, fileRef);
@@ -501,6 +504,10 @@ async function loadMtlxSceneContext(
       line(`Texture introuvable: ${fileRef}`);
       return undefined;
     },
+  };
+  const imageProvider: PtImageProvider = {
+    decode: withUdimImages(async file => singleImageProvider.decode(file),
+      () => sceneUdimIndex(document.baseURI), baseDir, sink),
   };
   const surfaceFor = (material: MaterialResource): RasterSurface => surfaces.get(material.materialName) ?? NEUTRAL_SURFACE;
   return { documents, imageProvider, surfaceFor };
@@ -528,17 +535,9 @@ async function uploadMaterialTextures(
       image = (await imageProvider.decode(fileRef)) ?? undefined;
       cache.set(fileRef, image);
     }
-    const width = image?.width ?? 1;
-    const height = image?.height ?? 1;
-    const gpuTex = device.createTexture({
-      size: [width, height],
-      format: t.colorSpace === 'srgb_texture' ? 'rgba8unorm-srgb' : 'rgba8unorm',
-      usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
-    });
-    if (image && image.componentType === 'uint8' && image.channels === 4) {
-      device.queue.writeTexture({ texture: gpuTex }, image.data, { bytesPerRow: width * 4, rowsPerImage: height }, [width, height, 1]);
-    }
-    textureViews.set(t.name, gpuTex.createView());
+    const gpuTex = uploadMaterialImage(device, image,
+      t.colorSpace === 'srgb_texture' ? 'rgba8unorm-srgb' : 'rgba8unorm', t.textureKind);
+    textureViews.set(t.name, gpuTex.createView(t.textureKind === 'udim' ? { dimension: '2d-array' } : {}));
   }
   for (const s of module.samplers) {
     samplers.set(s.name, device.createSampler(imageSamplerDescriptor(s.sampler ?? {})));
@@ -1213,22 +1212,8 @@ async function renderUsdOnDevice(
   const textureViews = new Map<number, GPUTextureView>();
   for (const tex of bindings.textures) {
     const image = bindings.images[tex.imageIndex];
-    const width = image?.width ?? 1;
-    const height = image?.height ?? 1;
-    const gpuTex = device.createTexture({
-      size: [width, height],
-      format: tex.format,
-      usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
-    });
-    if (image && image.componentType === 'uint8' && image.channels === 4) {
-      device.queue.writeTexture(
-        { texture: gpuTex },
-        image.data,
-        { bytesPerRow: width * 4, rowsPerImage: height },
-        [width, height, 1],
-      );
-    }
-    textureViews.set(tex.binding, gpuTex.createView());
+    const gpuTex = uploadMaterialImage(device, image, tex.format, tex.textureKind);
+    textureViews.set(tex.binding, gpuTex.createView(tex.textureKind === 'udim' ? { dimension: '2d-array' } : {}));
   }
   const group1 =
     bindings.textures.length > 0

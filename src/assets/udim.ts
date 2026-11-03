@@ -1,5 +1,6 @@
 import type { DecodedPixelImage } from './images.ts';
 import { AssetResolver } from './resolver.ts';
+import type { DiagnosticSink } from '../core/diagnostics.ts';
 
 export const UDIM_COLUMNS = 10;
 export const UDIM_ROWS = 100;
@@ -61,4 +62,29 @@ export function udimLayerIndex(image: DecodedPixelImage): Uint32Array {
   const index = new Uint32Array(UDIM_COLUMNS * UDIM_ROWS);
   image.udim.forEach(({ tile }, layer) => { index[tile - 1001] = layer + 1; });
   return index;
+}
+
+export function withUdimImages(
+  decode: (file: string) => Promise<DecodedPixelImage | undefined>,
+  inventory: () => ReadonlyMap<string, readonly number[]>,
+  base: string,
+  sink: DiagnosticSink,
+): (file: string) => Promise<DecodedPixelImage | undefined> {
+  const cache = new Map<string, Promise<DecodedPixelImage>>();
+  let index: ReturnType<typeof inventory> | undefined;
+  return async file => {
+    if (!AssetResolver.hasUdim(file)) return decode(file);
+    const url = new URL(file, base).href;
+    let image = cache.get(url);
+    if (!image) {
+      index ??= inventory();
+      image = decodeUdimImage(url, index.get(url) ?? [], decode).catch(error => {
+        cache.delete(url);
+        sink({ level: 'error', message: `UDIM texture load failed: ${url}`, detail: String(error) });
+        throw error;
+      });
+      cache.set(url, image);
+    }
+    return image;
+  };
 }

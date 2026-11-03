@@ -45,6 +45,9 @@ import { loadExternalMeshSource } from '../geometry/external-mesh.ts';
 import { composeStage } from '../usd/compose.ts';
 import { loadBrowserOpenUsd } from '../usd/browser-loader.ts';
 import { AssetResolver } from '../assets/resolver.ts';
+import { withUdimImages } from '../assets/udim.ts';
+import { sceneUdimIndex } from '../assets/scene-udim.ts';
+import { uploadMaterialImage } from '../gpu/material-texture.ts';
 import type { OpenUsdModule } from '../usd/crate.ts';
 import { FloatType } from 'three';
 import { applySceneDisplacement } from './displacement.ts';
@@ -236,7 +239,7 @@ export async function loadMtlxSceneContext(
     onDiagnostic: sink,
   });
   const documents = await loadMaterialXDocuments({ core, libraries, texts, sink });
-  const imageProvider: PtImageProvider = {
+  const singleImageProvider: PtImageProvider = {
     async decode(fileRef: string): Promise<DecodedPixelImage | undefined> {
       for (const dir of materialDirs) {
         const url = joinUrl(dir, fileRef);
@@ -260,6 +263,10 @@ export async function loadMtlxSceneContext(
       line(`Texture introuvable: ${fileRef}`);
       return undefined;
     },
+  };
+  const imageProvider: PtImageProvider = {
+    decode: withUdimImages(async file => singleImageProvider.decode(file),
+      () => sceneUdimIndex(document.baseURI), baseDir, sink),
   };
   const surfaceFor = (material: MaterialResource): RasterSurface => surfaces.get(material.materialName) ?? NEUTRAL_SURFACE;
   return { documents, imageProvider, surfaceFor };
@@ -286,18 +293,10 @@ export async function uploadMaterialTextures(
       image = (await imageProvider.decode(fileRef)) ?? undefined;
       cache.set(fileRef, image);
     }
-    const width = image?.width ?? 1;
-    const height = image?.height ?? 1;
-    const gpuTex = device.createTexture({
-      size: [width, height],
-      format: t.colorSpace === 'srgb_texture' ? 'rgba8unorm-srgb' : 'rgba8unorm',
-      usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
-    });
+    const gpuTex = uploadMaterialImage(device, image,
+      t.colorSpace === 'srgb_texture' ? 'rgba8unorm-srgb' : 'rgba8unorm', t.textureKind);
     textures.push(gpuTex);
-    if (image && image.componentType === 'uint8' && image.channels === 4) {
-      device.queue.writeTexture({ texture: gpuTex }, image.data, { bytesPerRow: width * 4, rowsPerImage: height }, [width, height, 1]);
-    }
-    textureViews.set(t.name, gpuTex.createView());
+    textureViews.set(t.name, gpuTex.createView(t.textureKind === 'udim' ? { dimension: '2d-array' } : {}));
   }
   for (const s of module.samplers) {
     samplers.set(s.name, device.createSampler(imageSamplerDescriptor(s.sampler ?? {})));
@@ -444,8 +443,13 @@ export async function loadUsdScene(
 ): Promise<LoadedUsdScene> {
   const started = performance.now();
   let failedComposition = false;
+  let compositionCause: unknown;
   const sceneSink: DiagnosticSink = diagnostic => {
     if (diagnostic.level === 'error') failedComposition = true;
+    if (diagnostic.message.startsWith('Arc layer unavailable (')) {
+      failedComposition = true;
+      compositionCause ??= diagnostic.detail;
+    }
     sink(diagnostic);
   };
   const composed = options.imported?.scene ?? await composeStage(entry, {
@@ -458,7 +462,10 @@ export async function loadUsdScene(
     loadCrateModule: options.loadCrateModule ?? loadBrowserOpenUsd,
     sink: sceneSink,
   });
-  if (failedComposition) throw new Error('USD composition failed. See scene diagnostics.');
+  if (failedComposition) {
+    if (compositionCause instanceof Error) throw compositionCause;
+    throw new Error('USD composition failed. See scene diagnostics.');
+  }
   const scene = applyObjectMaterialOverrides(composed, overrides);
   const composedAt = performance.now();
   performance.measure('usd:composition', { start: started, end: composedAt, detail: { entry, prims: scene.prims.size } });

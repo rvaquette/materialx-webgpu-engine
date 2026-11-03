@@ -82,6 +82,24 @@ function lowerAndEmit(
 }
 
 describe('lowerSurfaceInputsToIr (T055c)', () => {
+  it('selects UDIM arrays with original UVs, local V flip and authored missing-tile default', () => {
+    const graph = surfaceGraph([conn('base_color', 'color3', 'color')], [
+      upstream('color', 'image', 'color3', [
+        value('file', 'filename', 'color.%3CUDIM%3E.jpg'),
+        value('default', 'color3', '0.2, 0.3, 0.4'),
+        value('uaddressmode', 'string', 'constant'),
+      ]),
+    ]);
+    const module = lowerAndEmit(graph, [{ name: 'base_color', type: COLOR3 }]).module;
+    expect(module.textures.map(texture => texture.textureKind)).toEqual(['udim', 'udim-index']);
+    expect(module.samplers[0]!.sampler).toMatchObject({ addressU: 'clamp', addressV: 'clamp' });
+    expect(module.code).toContain('texture_2d_array<f32>');
+    expect(module.code).toContain('texture_2d<u32>');
+    expect(module.code).toContain('vec2i(floor(uv))');
+    expect(module.code).toContain('1.0 - local.y');
+    expect(module.code).toContain('vec3f(0.2, 0.3, 0.4)');
+    expect(module.code).not.toContain('vec2f(1.0, -1.0)');
+  });
   it.each(['st', 'UV0'])('lowers geompropvalue(%s) to the interpolated UV stream', (name) => {
     const diagnostics: Diagnostic[] = [];
     const graph = surfaceGraph([conn('base_color', 'color3', 'color')], [

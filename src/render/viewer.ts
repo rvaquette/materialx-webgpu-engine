@@ -30,6 +30,7 @@ import { maxRecordLobes } from './pathtracing/material-record.ts';
 import type { DecodedPixelImage } from '../assets/images.ts';
 import { loadUsdScene, uploadMaterialTextures, type ObjectMaterialOverride, type SceneLoadOptions } from './usd-scene-assets.ts';
 import { assertSceneStorageSize } from '../gpu/device.ts';
+import { uploadMaterialImage } from '../gpu/material-texture.ts';
 import { OrbitCamera, attachOrbitControls } from '../scene/orbit-camera.ts';
 import { inverse4, lookAt4, multiply4, perspective4, type Vec3 } from '../scene/transforms.ts';
 import type { DiagnosticSink } from '../core/diagnostics.ts';
@@ -1001,17 +1002,8 @@ fn dir_to_uv(d: vec3<f32>) -> vec2<f32> {
       const textureViews = new Map<number, GPUTextureView>();
       for (const tex of bindings.textures) {
         const image = bindings.images[tex.imageIndex];
-        const w = image?.width ?? 1;
-        const h = image?.height ?? 1;
-        const gpuTex = track(device.createTexture({
-          size: [w, h],
-          format: tex.format,
-          usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
-        }));
-        if (image && image.componentType === 'uint8' && image.channels === 4) {
-          device.queue.writeTexture({ texture: gpuTex }, image.data, { bytesPerRow: w * 4, rowsPerImage: h }, [w, h, 1]);
-        }
-        textureViews.set(tex.binding, gpuTex.createView());
+        const gpuTex = track(uploadMaterialImage(device, image, tex.format, tex.textureKind));
+        textureViews.set(tex.binding, gpuTex.createView(tex.textureKind === 'udim' ? { dimension: '2d-array' } : {}));
       }
       const group1 =
         bindings.textures.length > 0

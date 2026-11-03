@@ -4,8 +4,15 @@ import { prepareMesh } from '../geometry/prepare.ts';
 import { assembleIrForwardShader } from './raster/ir-forward.ts';
 import { buildGeometry, transformBounds, type GeometryResource, type SceneResources, type MaterialDisplacement } from './scene-resources.ts';
 import type { PtImageProvider } from './pathtracing/device-bindings.ts';
+import { udimTileAt } from '../assets/udim.ts';
 
 function heightAt(image: DecodedPixelImage, u: number, v: number): number {
+  if (image.udim) {
+    const tile = udimTileAt(u, v);
+    const pixels = image.udim.find(layer => layer.tile === tile)?.image;
+    if (!pixels) throw new Error(`Missing displacement UDIM tile at UV (${u}, ${v}).`);
+    return heightAt(pixels, u - Math.floor(u), 1 - (v - Math.floor(v)));
+  }
   const x = (u - Math.floor(u)) * image.width - 0.5;
   const y = (v - Math.floor(v)) * image.height - 0.5;
   const ix = Math.floor(x), iy = Math.floor(y);

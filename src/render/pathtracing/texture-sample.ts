@@ -8,6 +8,7 @@
 import type { DecodedPixelImage } from '../../assets/images.ts';
 import { imageSamplerDescriptor } from '../../assets/samplers.ts';
 import type { SamplerResource } from '../../compiler/ir.ts';
+import { udimTileAt } from '../../assets/udim.ts';
 
 /** Bilinear RGBA sampler at normalized uv; returns four components in [0,1]. */
 export type ImageSampler = (u: number, v: number) => number[];
@@ -35,6 +36,16 @@ export function createImageSampler(
   sampler: Pick<SamplerResource, 'addressU' | 'addressV' | 'filter'> = {},
   border: readonly number[] = [0, 0, 0, 1],
 ): ImageSampler {
+  if (image.udim) {
+    const tiles = new Map(image.udim.map(({ tile, image: pixels }) => [
+      tile, createImageSampler(pixels, { ...sampler, addressU: 'clamp', addressV: 'clamp' }, border),
+    ]));
+    return (u, v) => {
+      const tile = udimTileAt(u, v);
+      const sample = tile === undefined ? undefined : tiles.get(tile);
+      return sample ? sample(u - Math.floor(u), 1 - (v - Math.floor(v))) : [...border];
+    };
+  }
   const descriptor = imageSamplerDescriptor(sampler);
   const { data, width, height, channels, componentType } = image;
   const address = (i: number, size: number, mode: GPUAddressMode): number => {
