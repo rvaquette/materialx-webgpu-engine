@@ -130,36 +130,6 @@ describe('buildPtDeviceBindings (T057m2)', () => {
     expect(bindings.group0[5]!.data).toBeUndefined();
     expect(bindings.group0[5]!.access).toBe('read_write');
   });
-  it('binds only the optional wide nodes while retaining canonical geometry and ordering', async () => {
-    const scene = fakeScene();
-    scene.bvhLayout = 'bvh4';
-    scene.wideNodes = new Float32Array(48);
-    const bindings = await buildPtDeviceBindings(buildMaterialDispatch([]), scene, countingProvider(fakeImage()).provider);
-    expect(bindings.group0.find(slot => slot.role === 'nodes')?.data).toBe(scene.wideNodes);
-    expect(bindings.group0.find(slot => slot.role === 'triangles')?.data).toBe(scene.triangles);
-    expect(bindings.group0.find(slot => slot.role === 'triangleOrder')?.data).toBe(scene.triangleOrder);
-  });
-  it('omits the triangle-order buffer for physically leaf-ordered GPU geometry', async () => {
-    const scene = fakeScene();
-    scene.triangleLayout = 'leafOrder';
-    scene.gpuTriangles = new Float32Array([20]);
-    scene.gpuTriangleUv = new Float32Array([60]);
-    scene.gpuTriangleTangent = new Float32Array([70]);
-    const bindings = await buildPtDeviceBindings(buildMaterialDispatch([]), scene, countingProvider(fakeImage()).provider);
-    expect(bindings.group0.map(slot => slot.binding)).toEqual([0, 1, 2, 4, 5, 6, 7]);
-    expect(bindings.group0.map(slot => slot.role)).not.toContain('triangleOrder');
-    expect(bindings.group0.find(slot => slot.role === 'triangles')?.data).toBe(scene.gpuTriangles);
-    expect(bindings.group0.find(slot => slot.role === 'triangleUv')?.data).toBe(scene.gpuTriangleUv);
-    expect(bindings.group0.find(slot => slot.role === 'triangleTangent')?.data).toBe(scene.gpuTriangleTangent);
-  });
-  it('adds precomputed triangle edges only for the opt-in edge representation', async () => {
-    const scene = fakeScene();
-    scene.triangleLayout = 'triangleEdges';
-    scene.triangleEdges = new Float32Array([1, 2, 3]);
-    const bindings = await buildPtDeviceBindings(buildMaterialDispatch([]), scene, countingProvider(fakeImage()).provider);
-    expect(bindings.group0.map(slot => slot.binding)).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 10]);
-    expect(bindings.group0.find(slot => slot.role === 'triangleEdges')?.data).toBe(scene.triangleEdges);
-  });
 
   it('maps every texture slot to its image and decodes shared files once', async () => {
     const dispatch = buildMaterialDispatch([

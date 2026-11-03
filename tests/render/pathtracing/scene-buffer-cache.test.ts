@@ -42,39 +42,6 @@ function memoryStore() {
 }
 
 describe('prepared scene buffer file cache', () => {
-  it('isolates, persists and validates BVH4 including displacement-inflated bounds', async () => {
-    const { resources } = fixture(), { store } = memoryStore();
-    const reference = await buildFileCachedPathTraceScene(resources, {}, 'use', store);
-    const cold = await buildFileCachedPathTraceScene(resources, { bvhLayout: 'bvh4' }, 'use', store);
-    expect(cold.cache.key).not.toBe(reference.cache.key);
-    expect(cold.scene.nodes).toEqual(reference.scene.nodes);
-    expect(cold.scene.triangles).toEqual(reference.scene.triangles);
-    expect(cold.scene.triangleUv).toEqual(reference.scene.triangleUv);
-    expect(cold.scene.triangleTangent).toEqual(reference.scene.triangleTangent);
-    expect(cold.scene.wideNodes).toBeDefined();
-    const warm = await buildFileCachedPathTraceScene(resources, {
-      bvhLayout: 'bvh4', frameCamera: { viewProj: IDENTITY4, eye: [3, 4, 5], exposure: 2 },
-    }, 'verify', store);
-    expect(warm.cache.status).toBe('hit');
-    expect(warm.cache.geometryIdentical).toBe(true);
-    expect(warm.scene.wideNodes).toEqual(cold.scene.wideNodes);
-    expect(warm.scene.camera.eye).toEqual([3, 4, 5]);
-    expect(warm.scene.displacement?.scale[0]).toBe(0.25);
-    const bytes = await encodeSceneBufferCache(cold.scene, cold.cache.key, cold.scene.materialCount);
-    await expect(decodeSceneBufferCache(bytes, cold.cache.key)).rejects.toThrow(/BVH representation/);
-    cold.scene.wideNodes![0] = -42;
-    expect(() => validatePreparedGeometry(cold.scene, cold.scene.materialCount)).toThrow(/invalid geometry/);
-  });
-
-  it('round trips empty BVH4 geometry', async () => {
-    const { resources } = fixture(), { store } = memoryStore();
-    resources.instances = [];
-    const cold = await buildFileCachedPathTraceScene(resources, { bvhLayout: 'bvh4' }, 'use', store);
-    const warm = await buildFileCachedPathTraceScene(resources, { bvhLayout: 'bvh4' }, 'verify', store);
-    expect(warm.cache.geometryIdentical).toBe(true);
-    expect(warm.scene.wideNodes).toEqual(new Float32Array());
-    expect(cold.cache.status).toBe('miss');
-  });
   it('round trips all geometry bytes including UVs/tangents and inflated bounds', async () => {
     const { resources } = fixture();
     const scene = buildPathTraceScene(resources);
@@ -90,13 +57,6 @@ describe('prepared scene buffer file cache', () => {
     resources.instances = [];
     const scene = buildPathTraceScene(resources), key = await sceneBufferCacheKey(resources);
     expect(equalPreparedGeometry(scene, await decodeSceneBufferCache(await encodeSceneBufferCache(scene, key, 0), key))).toBe(true);
-  });
-  it('rejects cached edges that were not derived from the exact float32 vertices', async () => {
-    const { resources } = fixture();
-    const scene = buildPathTraceScene(resources, { triangleLayout: 'triangleEdges' });
-    const edge = scene.triangleEdges!;
-    edge[3] = Math.fround(edge[3]! + 0.125);
-    expect(() => validatePreparedGeometry(scene, scene.materialCount)).toThrow(/invalid geometry/);
   });
 
   it('cold writes, warm skips BVH and packing, verification compares bytes, bypass does no IO', async () => {
@@ -116,41 +76,6 @@ describe('prepared scene buffer file cache', () => {
     expect((await buildFileCachedPathTraceScene(resources, {}, 'bypass', store)).cache.status).toBe('bypass');
     expect(vi.mocked(store.read).mock.calls.length).toBe(reads);
     expect(vi.mocked(store.write).mock.calls.length).toBe(writes);
-  });
-  it('isolates cached geometry keys and entries by triangle layout', async () => {
-    const { resources } = fixture(), { store } = memoryStore();
-    const reference = await buildFileCachedPathTraceScene(resources, {}, 'use', store);
-    const leafOrder = await buildFileCachedPathTraceScene(resources, { triangleLayout: 'leafOrder' }, 'use', store);
-    const triangleEdges = await buildFileCachedPathTraceScene(resources, { triangleLayout: 'triangleEdges' }, 'use', store);
-    expect(leafOrder.cache.key).not.toBe(reference.cache.key);
-    expect(leafOrder.cache.status).toBe('miss');
-    expect(triangleEdges.cache.key).not.toBe(reference.cache.key);
-    expect(triangleEdges.cache.key).not.toBe(leafOrder.cache.key);
-    expect(triangleEdges.cache.status).toBe('miss');
-    expect(leafOrder.scene.triangleLayout).toBe('leafOrder');
-    expect(triangleEdges.scene.triangleLayout).toBe('triangleEdges');
-    expect(leafOrder.scene.triangles).toEqual(reference.scene.triangles);
-    expect(leafOrder.scene.gpuTriangles).toBeDefined();
-    expect(triangleEdges.scene.triangles).toEqual(reference.scene.triangles);
-    expect(triangleEdges.scene.triangleEdges).toHaveLength(triangleEdges.scene.triangleCount * 9);
-    expect(leafOrder.scene.displacement?.mapFile).toBe('height.png');
-    expect(leafOrder.scene.displacement?.scale[0]).toBe(0.25);
-    expect((await buildFileCachedPathTraceScene(resources, { triangleLayout: 'leafOrder' }, 'use', store)).cache.status)
-      .toBe('hit');
-    const edgeHit = await buildFileCachedPathTraceScene(resources, { triangleLayout: 'triangleEdges' }, 'verify', store);
-    expect(edgeHit.cache.status).toBe('hit');
-    expect(edgeHit.cache.geometryIdentical).toBe(true);
-    expect(edgeHit.scene.triangleEdges).toEqual(triangleEdges.scene.triangleEdges);
-    expect(edgeHit.scene.displacement?.mapFile).toBe('height.png');
-    const warm = await buildFileCachedPathTraceScene(resources, {
-      triangleLayout: 'leafOrder',
-      frameCamera: { viewProj: IDENTITY4, eye: [9, 8, 7], exposure: 3 },
-      surfaceFor: () => ({ ...NEUTRAL_SURFACE, roughness: 0.9 }),
-    }, 'use', store);
-    expect(warm.cache.status).toBe('hit');
-    expect(warm.scene.camera.eye).toEqual([9, 8, 7]);
-    expect(warm.scene.materials).not.toEqual(leafOrder.scene.materials);
-    expect(warm.scene.gpuTriangles).toEqual(leafOrder.scene.gpuTriangles);
   });
 
   it.each(['position', 'normal', 'uv', 'tangent'])('invalidates exact %s source bytes', async name => {
@@ -247,7 +172,7 @@ describe('prepared scene buffer file cache', () => {
     expect(warm.scene.variantSources[0]!.surface).toBe(material.resolvedSurface);
   });
 
-  it.each(['type', 'size', 'index', 'bounds', 'count', 'metadata'])('rejects well-checksummed malformed binary %s', async mutation => {
+  it.each(['type', 'size', 'index', 'bounds', 'count', 'metadata', 'triangle representation', 'BVH representation'])('rejects well-checksummed malformed binary %s', async mutation => {
     const { resources } = fixture(), scene = buildPathTraceScene(resources);
     const key = await sceneBufferCacheKey(resources);
     const original = await encodeSceneBufferCache(scene, key, scene.materialCount);
@@ -256,6 +181,8 @@ describe('prepared scene buffer file cache', () => {
     if (mutation === 'type') meta.arrays[2].type = 'f32';
     if (mutation === 'size') meta.arrays[3].length += 1;
     if (mutation === 'count') meta.nodeCount = '1';
+    if (mutation === 'triangle representation') meta.triangleLayout = 'unsupported';
+    if (mutation === 'BVH representation') meta.bvhLayout = 'unsupported';
     if (mutation === 'metadata') meta = null;
     const json = new TextEncoder().encode(JSON.stringify(meta));
     const offset = (16 + json.length + 3) & ~3;
@@ -272,6 +199,6 @@ describe('prepared scene buffer file cache', () => {
     const checksum = new Uint8Array(await crypto.subtle.digest('SHA-256', body));
     const bytes = new Uint8Array(body.length + checksum.length);
     bytes.set(body); bytes.set(checksum, body.length);
-    await expect(decodeSceneBufferCache(bytes, key)).rejects.toThrow('Corrupt');
+    await expect(decodeSceneBufferCache(bytes, key)).rejects.toThrow(mutation.endsWith('representation') ? 'Obsolete' : 'Corrupt');
   });
 });

@@ -1,9 +1,7 @@
 import { buildSceneFrame } from '../raster/scene-frame.ts';
 import type { SceneResources } from '../scene-resources.ts';
-import { packBvh4 } from './bvh4.ts';
 import {
   buildPathTraceScene, isLightProxy, PT_NODE_FLOATS, PT_TRIANGLE_FLOATS,
-  type PathTraceTriangleLayout,
   type BuildPathTraceSceneOptions, type PreparedPathTraceGeometry,
 } from './scene-buffers.ts';
 
@@ -12,7 +10,7 @@ import {
 export const SCENE_BUFFER_CACHE_VERSION = 3;
 export const SCENE_BUFFER_CACHE_MAX_BYTES = 512 * 1024 * 1024;
 const MAGIC = 0x4d585054;
-const baseFields = ['nodes', 'triangles', 'triangleOrder', 'triangleUv', 'triangleTangent'] as const;
+const fields = ['nodes', 'triangles', 'triangleOrder', 'triangleUv', 'triangleTangent'] as const;
 const encoder = new TextEncoder();
 const bytesOf = (array: ArrayBufferView) => new Uint8Array(array.buffer, array.byteOffset, array.byteLength);
 const hex = (bytes: Uint8Array) => Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('');
@@ -39,9 +37,8 @@ export async function sceneBufferCacheKey(resources: SceneResources, options: Bu
     text([array.constructor.name, array.byteLength]);
     parts.push(bytesOf(array));
   };
-  text(['scene-buffer-cache', SCENE_BUFFER_CACHE_VERSION, 'sah', options.displacementScale ?? 1,
-    options.triangleLayout ?? 'reference']);
-  if (options.bvhLayout === 'bvh4') text(['bvh4', 1]);
+  // Preserve the key and metadata of existing canonical v3 cache files.
+  text(['scene-buffer-cache', SCENE_BUFFER_CACHE_VERSION, 'sah', options.displacementScale ?? 1, 'reference']);
   const seen = new Set<string>();
   for (const draw of buildSceneFrame(resources, options).draws) {
     if (isLightProxy(resources, draw.instanceId, options)) continue;
@@ -63,12 +60,6 @@ export async function sceneBufferCacheKey(resources: SceneResources, options: Bu
   return hex(await digest(concat(parts)));
 }
 
-function fieldsFor(layout: PathTraceTriangleLayout, bvhLayout: 'reference' | 'bvh4' = 'reference'):
-readonly (typeof baseFields[number] | 'triangleEdges' | 'wideNodes')[] {
-  return [...baseFields, ...(layout === 'triangleEdges' ? ['triangleEdges' as const] : []),
-    ...(bvhLayout === 'bvh4' ? ['wideNodes' as const] : [])];
-}
-
 function integer(value: number, min: number, max: number): boolean {
   return Number.isSafeInteger(value) && value >= min && value <= max;
 }
@@ -76,13 +67,6 @@ function integer(value: number, min: number, max: number): boolean {
 /** Validate traversal topology and every referenced record before GPU upload. */
 export function validatePreparedGeometry(g: PreparedPathTraceGeometry, materialCount: number): void {
   const fail = (): never => { throw new Error('Corrupt scene cache: invalid geometry, indices or bounds'); };
-  const layout = g.triangleLayout ?? 'reference';
-  const bvhLayout = g.bvhLayout ?? 'reference';
-  if (!['reference', 'bvh4'].includes(bvhLayout) ||
-      (bvhLayout === 'bvh4') !== (g.wideNodes !== undefined)) fail();
-  if (!['reference', 'leafOrder', 'triangleEdges'].includes(layout) ||
-      (layout === 'triangleEdges') !== (g.triangleEdges !== undefined)) fail();
-  const fields = fieldsFor(layout, bvhLayout);
   if (!integer(g.triangleCount, 0, 2 ** 24 - 1) || !integer(g.nodeCount, 0, 2 ** 24 - 1) ||
       g.nodes.length !== g.nodeCount * PT_NODE_FLOATS ||
       g.triangles.length !== g.triangleCount * PT_TRIANGLE_FLOATS ||
@@ -94,26 +78,11 @@ export function validatePreparedGeometry(g: PreparedPathTraceGeometry, materialC
     if (field === 'triangleOrder' ? !(array instanceof Uint32Array) : !(array instanceof Float32Array)) fail();
     for (const value of array!) if (!Number.isFinite(value)) fail();
   }
-  if (g.triangleEdges) {
-    if (g.triangleEdges.length !== g.triangleCount * 9) fail();
-    for (let tri = 0; tri < g.triangleCount; tri++) {
-      const source = tri * PT_TRIANGLE_FLOATS, target = tri * 9;
-      for (let axis = 0; axis < 3; axis++) {
-        const v0 = Math.fround(g.triangles[source + axis]!);
-        const v1 = Math.fround(g.triangles[source + 3 + axis]!);
-        const v2 = Math.fround(g.triangles[source + 6 + axis]!);
-        if (g.triangleEdges[target + axis] !== v0 ||
-            g.triangleEdges[target + 3 + axis] !== Math.fround(v1 - v0) ||
-            g.triangleEdges[target + 6 + axis] !== Math.fround(v2 - v0)) fail();
-      }
-    }
-  }
   if (!g.bounds || !Array.isArray(g.bounds.min) || !Array.isArray(g.bounds.max) ||
       g.bounds.min.length !== 3 || g.bounds.max.length !== 3) fail();
   // Empty BVHs retain the builder's zero AABB.
   if (g.triangleCount === 0) {
     if (g.nodeCount !== 0) fail();
-    if (g.wideNodes?.length) fail();
     for (let axis = 0; axis < 3; axis++) {
       if (g.bounds.min[axis] !== 0 || g.bounds.max[axis] !== 0) fail();
     }
@@ -174,22 +143,14 @@ export function validatePreparedGeometry(g: PreparedPathTraceGeometry, materialC
     }
   }
   if (visited.some(v => !v) || covered.some(v => !v)) fail();
-  if (g.wideNodes) {
-    const expected = packBvh4(g.nodes);
-    if (g.wideNodes.length !== expected.length ||
-        g.wideNodes.some((value, i) => value !== expected[i])) fail();
-  }
 }
 
 export async function encodeSceneBufferCache(g: PreparedPathTraceGeometry, key: string, materialCount: number): Promise<Uint8Array<ArrayBuffer>> {
   if (!/^[a-f0-9]{64}$/.test(key)) throw new Error('Invalid cache key');
   validatePreparedGeometry(g, materialCount);
-  const layout = g.triangleLayout ?? 'reference';
-  const fields = fieldsFor(layout, g.bvhLayout);
   const metadata = encoder.encode(JSON.stringify({
     key, materialCount, nodeCount: g.nodeCount, triangleCount: g.triangleCount,
-    triangleLayout: layout,
-    ...(g.bvhLayout === 'bvh4' ? { bvhLayout: 'bvh4' } : {}),
+    triangleLayout: 'reference',
     bounds: g.bounds,
     arrays: fields.map(name => ({ name, type: name === 'triangleOrder' ? 'u32' : 'f32', length: g[name]!.length })),
   }));
@@ -206,8 +167,7 @@ export async function encodeSceneBufferCache(g: PreparedPathTraceGeometry, key: 
 }
 
 export async function decodeSceneBufferCache(
-  bytes: Uint8Array, expectedKey: string, expectedLayout: PathTraceTriangleLayout = 'reference',
-  expectedBvhLayout: 'reference' | 'bvh4' = 'reference',
+  bytes: Uint8Array, expectedKey: string,
 ): Promise<PreparedPathTraceGeometry> {
   if (bytes.length < 48 || bytes.length > SCENE_BUFFER_CACHE_MAX_BYTES) throw new Error('Corrupt scene cache: size');
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
@@ -224,14 +184,12 @@ export async function decodeSceneBufferCache(
   }
   if (!meta || typeof meta !== 'object' || Array.isArray(meta)) throw new Error('Corrupt scene cache: metadata');
   if (meta.key !== expectedKey) throw new Error('Obsolete scene cache: content key');
-  if (meta.triangleLayout !== expectedLayout) throw new Error('Obsolete scene cache: triangle representation');
-  if ((meta.bvhLayout ?? 'reference') !== expectedBvhLayout) throw new Error('Obsolete scene cache: BVH representation');
-  const fields = fieldsFor(expectedLayout, expectedBvhLayout);
+  if (meta.triangleLayout !== 'reference') throw new Error('Obsolete scene cache: triangle representation');
+  if ((meta.bvhLayout ?? 'reference') !== 'reference') throw new Error('Obsolete scene cache: BVH representation');
   if (!integer(meta.materialCount, 0, 2 ** 24 - 1) || !Array.isArray(meta.arrays) || meta.arrays.length !== fields.length) throw new Error('Corrupt scene cache: metadata');
   const g = {
     nodeCount: meta.nodeCount, triangleCount: meta.triangleCount,
-    bounds: meta.bounds, triangleLayout: expectedLayout,
-    ...(expectedBvhLayout === 'bvh4' ? { bvhLayout: 'bvh4' as const } : {}),
+    bounds: meta.bounds,
   } as PreparedPathTraceGeometry;
   let cursor = offset;
   for (const [i, name] of fields.entries()) {
@@ -249,10 +207,6 @@ export async function decodeSceneBufferCache(
 }
 
 export function equalPreparedGeometry(a: PreparedPathTraceGeometry, b: PreparedPathTraceGeometry): boolean {
-  const layoutA = a.triangleLayout ?? 'reference', layoutB = b.triangleLayout ?? 'reference';
-  if (layoutA !== layoutB) return false;
-  if ((a.bvhLayout ?? 'reference') !== (b.bvhLayout ?? 'reference')) return false;
-  const fields = fieldsFor(layoutA, a.bvhLayout);
   return a.nodeCount === b.nodeCount && a.triangleCount === b.triangleCount &&
     a.bounds.min.every((v, i) => v === b.bounds.min[i]) && a.bounds.max.every((v, i) => v === b.bounds.max[i]) &&
     fields.every(name => {
@@ -327,8 +281,7 @@ export async function buildFileCachedPathTraceScene(
       const bytes = await timed('read', () => store.read(report.key));
       if (bytes) {
         report.bytes = bytes.length;
-        geometry = await timed('decode', () => decodeSceneBufferCache(bytes, report.key,
-          options.triangleLayout ?? 'reference', options.bvhLayout ?? 'reference'));
+        geometry = await timed('decode', () => decodeSceneBufferCache(bytes, report.key));
         report.status = 'hit';
       } else report.diagnostics.push('Cache absent: rebuilding prepared geometry');
     } catch (error) {

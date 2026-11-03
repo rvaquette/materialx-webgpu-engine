@@ -12,7 +12,6 @@
 // writes live in the browser bootstrap and the backend (compute.ts).
 
 import { buildBvh, type Aabb, type Bvh } from '../../geometry/bvh.ts';
-import { packBvh4 } from './bvh4.ts';
 import { openPathTraceBvhCache, pathTraceBvhCacheKey, type PathTraceBvhCache } from '../../geometry/cache.ts';
 import { inverse4, transformDirection, transformPoint, type Mat4, type Vec3 } from '../../scene/transforms.ts';
 import type { SceneResources } from '../scene-resources.ts';
@@ -49,7 +48,6 @@ export const PT_NODE_FLOATS = 12;
 export const PT_TRIANGLE_FLOATS = 24;
 /** Floats per packed material: the flat LayeredClosure record (T057b, megakernel-ready). */
 export const PT_MATERIAL_FLOATS = PT_MATERIAL_RECORD_FLOATS;
-export type PathTraceTriangleLayout = 'reference' | 'leafOrder' | 'triangleEdges';
 
 export interface PathTraceCamera {
   viewProj: Mat4;
@@ -65,20 +63,10 @@ export interface PathTraceScene {
   /** Packed BVH nodes (PT_NODE_FLOATS each), world-space over all triangles. */
   nodes: Float32Array;
   nodeCount: number;
-  /** Optional uncompressed four-way GPU hierarchy; binary nodes remain canonical. */
-  bvhLayout?: 'reference' | 'bvh4';
-  wideNodes?: Float32Array;
   /** Packed triangles in original soup order (PT_TRIANGLE_FLOATS each). */
   triangles: Float32Array;
   /** BVH leaf-order permutation of triangle ordinals (node start/count index this). */
   triangleOrder: Uint32Array;
-  /** Selects an optional GPU traversal-only stream layout; CPU and hybrid buffers remain canonical. */
-  triangleLayout?: PathTraceTriangleLayout;
-  gpuTriangles?: Float32Array;
-  gpuTriangleUv?: Float32Array;
-  gpuTriangleTangent?: Float32Array;
-  /** Optional GPU-only v0/e1/e2 stream. Canonical vertices remain in `triangles`. */
-  triangleEdges?: Float32Array;
   triangleCount: number;
   /** Packed LayeredClosure records (PT_MATERIAL_FLOATS each, T057b). */
   materials: Float32Array;
@@ -110,7 +98,7 @@ export interface PathTraceScene {
 
 export type PreparedPathTraceGeometry = Pick<PathTraceScene,
   'nodes' | 'nodeCount' | 'triangles' | 'triangleOrder' | 'triangleCount' |
-  'triangleUv' | 'triangleTangent' | 'triangleEdges' | 'triangleLayout' | 'bvhLayout' | 'wideNodes' | 'bounds'>;
+  'triangleUv' | 'triangleTangent' | 'bounds'>;
 
 // --- small vec helpers -------------------------------------------------------
 
@@ -293,26 +281,17 @@ export function buildPathTraceScene(
   const hasDisplacement = displaceMapFile !== undefined && maxDisp > 0;
 
   const nodes = preparedGeometry?.nodes ?? packNodes(bvh!, hasDisplacement ? maxDisp : 0);
-  const wideNodes = preparedGeometry?.wideNodes ?? (options.bvhLayout === 'bvh4' ? packBvh4(nodes) : undefined);
   const materials = packMaterials(surfaces);
   const triangles = preparedGeometry?.triangles ?? new Float32Array(triFloats);
   const triangleOrder = preparedGeometry?.triangleOrder ?? bvh!.triangleOrder;
   const triangleUv = preparedGeometry?.triangleUv ?? new Float32Array(uvFloats);
   const triangleTangent = preparedGeometry?.triangleTangent ?? (hasTangents ? new Float32Array(tanFloats) : new Float32Array(0));
-  const triangleEdges = preparedGeometry?.triangleEdges ??
-    (options.triangleLayout === 'triangleEdges' ? packTriangleEdges(triangles) : undefined);
-  const gpuLayout = options.triangleLayout === 'leafOrder'
-    ? reorderTriangleStreams(triangles, triangleUv, triangleTangent, triangleOrder)
-    : undefined;
 
   return {
     nodes,
     nodeCount: preparedGeometry?.nodeCount ?? bvh!.nodes.length,
-    ...(wideNodes ? { bvhLayout: 'bvh4' as const, wideNodes } : {}),
     triangles,
     triangleOrder,
-    ...(gpuLayout ? { triangleLayout: 'leafOrder' as const, ...gpuLayout } :
-      triangleEdges ? { triangleLayout: 'triangleEdges' as const, triangleEdges } : {}),
     triangleCount: preparedGeometry?.triangleCount ?? triCount,
     materials,
     materialCount: surfaces.length,
@@ -338,77 +317,9 @@ export function buildPathTraceScene(
   };
 }
 
-function packTriangleEdges(triangles: Float32Array): Float32Array {
-  const edges = new Float32Array((triangles.length / PT_TRIANGLE_FLOATS) * 9);
-  for (let tri = 0; tri < edges.length / 9; tri++) {
-    const source = tri * PT_TRIANGLE_FLOATS, target = tri * 9;
-    for (let axis = 0; axis < 3; axis++) {
-      const v0 = Math.fround(triangles[source + axis]!);
-      const v1 = Math.fround(triangles[source + 3 + axis]!);
-      const v2 = Math.fround(triangles[source + 6 + axis]!);
-      edges[target + axis] = v0;
-      edges[target + 3 + axis] = Math.fround(v1 - v0);
-      edges[target + 6 + axis] = Math.fround(v2 - v0);
-    }
-  }
-  return edges;
-}
-
-function reorderTriangleStreams(
-  triangles: Float32Array,
-  triangleUv: Float32Array,
-  triangleTangent: Float32Array,
-  triangleOrder: Uint32Array,
-): Pick<PathTraceScene, 'gpuTriangles' | 'gpuTriangleUv' | 'gpuTriangleTangent'> {
-  const gpuTriangles = new Float32Array(triangles.length);
-  const gpuTriangleUv = new Float32Array(triangleUv.length);
-  const gpuTriangleTangent = new Float32Array(triangleTangent.length);
-  for (let leaf = 0; leaf < triangleOrder.length; leaf++) {
-    const source = triangleOrder[leaf]!;
-    gpuTriangles.set(triangles.subarray(source * PT_TRIANGLE_FLOATS, (source + 1) * PT_TRIANGLE_FLOATS),
-      leaf * PT_TRIANGLE_FLOATS);
-    gpuTriangleUv.set(triangleUv.subarray(source * 6, (source + 1) * 6), leaf * 6);
-    if (triangleTangent.length) {
-      gpuTriangleTangent.set(triangleTangent.subarray(source * PT_TAN_STRIDE, (source + 1) * PT_TAN_STRIDE),
-        leaf * PT_TAN_STRIDE);
-    }
-  }
-  return { gpuTriangles, gpuTriangleUv, gpuTriangleTangent };
-}
-
 export interface BuildPathTraceSceneOptions extends BuildSceneFrameOptions {
   displacementScale?: number;
   settings?: PathTraceSettings;
-  triangleLayout?: PathTraceTriangleLayout;
-  bvhLayout?: 'reference' | 'bvh4';
-}
-
-/** Prototype identity is the sharing key, not geometric similarity. This counts
- *  potential triangle reuse only, before transforms, materials and displacement. */
-export function pathTraceInstancingInventory(resources: SceneResources, options: BuildPathTraceSceneOptions = {}) {
-  const prototypes = new Map<string, { instances: number; triangles: number }>();
-  for (const draw of buildSceneFrame(resources, options).draws) {
-    if (isLightProxy(resources, draw.instanceId, options)) continue;
-    const geometry = resources.geometries.get(draw.prototypeId);
-    if (!geometry?.streams.some(stream => stream.name === 'position')) continue;
-    const triangles = Math.floor(geometry.indices.length / 3);
-    if (triangles === 0) continue;
-    const group = prototypes.get(draw.prototypeId);
-    if (group) group.instances++;
-    else prototypes.set(draw.prototypeId, { instances: 1, triangles });
-  }
-  const groups = [...prototypes.values()];
-  const renderedInstances = groups.reduce((sum, group) => sum + group.instances, 0);
-  const uniqueTriangles = groups.reduce((sum, group) => sum + group.triangles, 0);
-  const expandedTriangles = groups.reduce((sum, group) => sum + group.triangles * group.instances, 0);
-  return {
-    renderedInstances, uniquePrototypes: groups.length,
-    reusedPrototypes: groups.filter(group => group.instances > 1).length,
-    instancesOfReusedPrototypes: groups.filter(group => group.instances > 1).reduce((sum, group) => sum + group.instances, 0),
-    maxInstancesPerPrototype: groups.reduce((max, group) => Math.max(max, group.instances), 0),
-    uniqueTriangles, expandedTriangles, duplicateTriangles: expandedTriangles - uniqueTriangles,
-    potentialTriangleReusePercent: expandedTriangles ? (expandedTriangles - uniqueTriangles) / expandedTriangles * 100 : 0,
-  };
 }
 
 export function isLightProxy(resources: SceneResources, instanceId: string, options: BuildPathTraceSceneOptions): boolean {

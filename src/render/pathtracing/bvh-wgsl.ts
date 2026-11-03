@@ -6,37 +6,21 @@
 // The caller must declare, before including this source:
 //   @group(..) var<storage, read> nodes : array<f32>;    // packed BVH nodes
 //   @group(..) var<storage, read> tris : array<f32>;      // packed triangles
-//   @group(..) var<storage, read> triOrder : array<u32>;  // reference layout only
+//   @group(..) var<storage, read> triOrder : array<u32>;
 //   const NODE_STRIDE : u32 = 12u;  // PT_NODE_FLOATS
 //   const TRI_STRIDE : u32 = 24u;   // PT_TRIANGLE_FLOATS
 //   const RAY_EPS : f32 = 1.0e-4;
 // Binding indices are the caller's choice; only the symbol names are fixed.
-import { bvh4TraversalWgsl } from './bvh4.ts';
 
 /** Node floats per BVH node (PT_NODE_FLOATS); callers declare `NODE_STRIDE` with this value. */
 export const BVH_NODE_STRIDE = 12;
 /** Floats per packed triangle (PT_TRIANGLE_FLOATS); callers declare `TRI_STRIDE` with this value. */
 export const BVH_TRI_STRIDE = 24;
 
-export type BvhTraversalVariant = 'reference' | 'cachedEntry' | 'leafOrder' | 'triangleEdges' | 'bvh4';
-
 /** Traversal + Moller-Trumbore triangle test over the packed buffers. `anyHit`
  *  returns at the first intersection (shadow/occlusion rays); otherwise the
- *  closest hit is kept. `leafOrder` expects the packed streams to follow BVH
- *  leaf order. `triangleEdges` requires the caller to bind `triEdges` as a
- *  packed v0/e1/e2 stream. Cached-entry pruning is inclusive with the slab test;
- *  triangle hit bounds remain strict. */
-export function bvhTraversalWgsl(variant: BvhTraversalVariant = 'reference'): string {
-  if (variant === 'bvh4') {
-    const reference = bvhTraversalWgsl();
-    return reference.slice(0, reference.indexOf('fn aabb_hit(')) + bvh4TraversalWgsl();
-  }
-  if (variant !== 'reference' && variant !== 'cachedEntry' && variant !== 'leafOrder' && variant !== 'triangleEdges') {
-    throw new Error(`Invalid BVH traversal: ${variant}`);
-  }
-  const cached = variant === 'cachedEntry';
-  const leafOrder = variant === 'leafOrder';
-  const triangleEdges = variant === 'triangleEdges';
+ *  closest hit is kept. */
+export function bvhTraversalWgsl(): string {
   return /* wgsl */ `
 struct Hit { t : f32, tri : u32, u : f32, v : f32, hitAny : bool };
 
@@ -45,11 +29,6 @@ fn tri_vertex(tri : u32, slot : u32) -> vec3<f32> {
   return vec3<f32>(tris[b], tris[b + 1u], tris[b + 2u]);
 }
 
-${triangleEdges ? `fn tri_edge(tri : u32, slot : u32) -> vec3<f32> {
-  let b = tri * 9u + slot * 3u;
-  return vec3<f32>(triEdges[b], triEdges[b + 1u], triEdges[b + 2u]);
-}
-` : ''}
 fn tri_normal(tri : u32, slot : u32) -> vec3<f32> {
   let b = tri * TRI_STRIDE + 9u + slot * 3u;
   return vec3<f32>(tris[b], tris[b + 1u], tris[b + 2u]);
@@ -60,11 +39,11 @@ fn tri_material(tri : u32) -> u32 {
 }
 
 fn intersect_tri(tri : u32, ro : vec3<f32>, rd : vec3<f32>, tMax : f32) -> vec4<f32> {
-${triangleEdges ? '  let v0 = tri_edge(tri, 0u);\n  let e1 = tri_edge(tri, 1u);\n  let e2 = tri_edge(tri, 2u);' : `  let v0 = tri_vertex(tri, 0u);
+  let v0 = tri_vertex(tri, 0u);
   let v1 = tri_vertex(tri, 1u);
   let v2 = tri_vertex(tri, 2u);
   let e1 = v1 - v0;
-  let e2 = v2 - v0;`}
+  let e2 = v2 - v0;
   let p = cross(rd, e2);
   let det = dot(e1, p);
   if (abs(det) < 1.0e-9) { return vec4<f32>(-1.0, 0.0, 0.0, 0.0); }
@@ -102,7 +81,6 @@ fn traverse(ro : vec3<f32>, rd : vec3<f32>, tMax : f32, anyHit : bool) -> Hit {
                          1.0 / select(rd.y, 1.0e-20, rd.y == 0.0),
                          1.0 / select(rd.z, 1.0e-20, rd.z == 0.0));
   var stack : array<u32, 64>;
-${cached ? '  var entryStack : array<f32, 64>;\n' : ''}\
   var sp = 0;
   var node = 0u;
   var closest = tMax;
@@ -113,7 +91,7 @@ ${cached ? '  var entryStack : array<f32, 64>;\n' : ''}\
     if (count > 0u) {
       let start = u32(nodes[b + 8u]);
       for (var i = 0u; i < count; i = i + 1u) {
-        let tri = ${leafOrder ? 'start + i' : 'triOrder[start + i]'};
+        let tri = triOrder[start + i];
         let h = intersect_tri(tri, ro, rd, closest);
         if (h.w > 0.5) {
           if (anyHit) {
@@ -139,7 +117,6 @@ ${cached ? '  var entryStack : array<f32, 64>;\n' : ''}\
         if (leftT >= 0.0 && rightT >= 0.0) {
           let leftFirst = leftT <= rightT;
           stack[sp] = select(left, right, leftFirst);
-${cached ? '          entryStack[sp] = select(leftT, rightT, leftFirst);\n' : ''}\
           sp = sp + 1;
           node = select(right, left, leftFirst);
         } else {
@@ -153,7 +130,7 @@ ${cached ? '          entryStack[sp] = select(leftT, rightT, leftFirst);\n' : ''
       if (sp <= 0) { break; }
       sp = sp - 1;
       node = stack[sp];
-      if (${cached ? 'entryStack[sp] <= closest' : 'aabb_hit(node, ro, invDir, closest) >= 0.0'}) { found = true; break; }
+      if (aabb_hit(node, ro, invDir, closest) >= 0.0) { found = true; break; }
     }
     if (!found) { break; }
   }
@@ -162,5 +139,4 @@ ${cached ? '          entryStack[sp] = select(leftT, rightT, leftFirst);\n' : ''
 `;
 }
 
-// Hybrid and all callers without an explicit experiment keep the reference.
 export const BVH_TRAVERSAL_WGSL = bvhTraversalWgsl();

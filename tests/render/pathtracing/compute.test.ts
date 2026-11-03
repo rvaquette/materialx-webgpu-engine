@@ -76,81 +76,19 @@ function fakeScene(): PathTraceScene {
 
 describe('pathTraceComputeWgsl', () => {
   const src = pathTraceComputeWgsl();
-  it('keeps existing camera sampling defaults and reuses viewer Halton only on request', () => {
-    expect(pathTraceComputeWgsl({ cameraSampler: 'pcg', seededSampling: false })).toBe(src);
+  it('keeps PCG sampling for the reference and Halton for viewer display AOVs', () => {
     expect(src).not.toContain('fn camera_jitter');
-    const candidate = pathTraceComputeWgsl({ cameraSampler: 'halton', seededSampling: true });
-    expect(candidate).toContain('fn camera_jitter');
-    expect(candidate).toContain('let samplePixel = pixel ^ U.sampleSeed;');
-    expect(candidate).toContain('sampleSeed : u32');
-    expect(candidate).toContain('let pcgJitter = vec2<f32>(rng_next(&state), rng_next(&state));');
-    expect(candidate).toContain('let jitter = camera_jitter(frameIndex * spp + i, samplePixel);');
+    expect(src).toContain('let jitter = vec2<f32>(rng_next(&state), rng_next(&state));');
     const viewer = pathTraceComputeWgsl({ displayAovs: true });
     expect(viewer).toContain('let jitter = camera_jitter(frameIndex * spp + i, pixel);');
     expect(viewer).not.toContain('pcgJitter');
   });
-  it.each([-1, 0.5, NaN, Infinity, 4294967296])('rejects invalid sampling seed %s', sampleSeed => {
-    expect(() => buildPathTraceUniform(fakeScene(), 0, 1, 8, 8, 0, undefined, sampleSeed)).toThrow(/sampling seed/);
-  });
-  it('packs a full uint32 seed in padding without changing any other uniform byte', () => {
-    const baseline = buildPathTraceUniform(fakeScene(), 0, 1, 8, 8);
-    const seeded = buildPathTraceUniform(fakeScene(), 0, 1, 8, 8, 0, undefined, 0xffffffff);
-    const words = new Uint32Array(seeded.buffer);
-    expect(words[82]).toBe(0xffffffff);
-    words[82] = 0;
-    expect(new Uint8Array(seeded.buffer)).toEqual(new Uint8Array(baseline.buffer));
-  });
-  it('uses only uniform padding for diagnostic mode without changing the production payload', () => {
-    const baseline = buildPathTraceUniform(fakeScene(), 0, 1, 8, 8);
-    const profiled = buildPathTraceUniform(fakeScene(), 0, 1, 8, 8, 0, undefined, 0, 3);
-    const words = new Uint32Array(profiled.buffer);
-    expect(words[83]).toBe(3);
-    words[83] = 0;
-    expect(new Uint8Array(profiled.buffer)).toEqual(new Uint8Array(baseline.buffer));
-    for (const mode of [-1, 0.5, 4, NaN]) {
-      expect(() => buildPathTraceUniform(fakeScene(), 0, 1, 8, 8, 0, undefined, 0, mode)).toThrow(/profile mode/);
-    }
-  });
-  it('keeps reference traversal by default and exposes the cached-entry experiment only on request', () => {
-    expect(pathTraceComputeWgsl({ bvhTraversal: 'reference' })).toBe(src);
-    const candidate = pathTraceComputeWgsl({ bvhTraversal: 'cachedEntry' });
-    expect(candidate).toContain('var entryStack : array<f32, 64>');
-    expect(candidate).toContain('entryStack[sp] = select(leftT, rightT, leftFirst)');
-    expect(candidate).toContain('entryStack[sp] <= closest');
-    expect(src).not.toContain('entryStack');
-    expect(candidate).not.toContain('aabb_hit(node, ro, invDir, closest) >= 0.0');
-  });
-  it('uses physical leaf-order indices without a triOrder binding only when requested', () => {
-    const candidate = pathTraceComputeWgsl({ bvhTraversal: 'leafOrder' });
-    expect(candidate).toContain('let tri = start + i;');
-    expect(candidate).not.toContain('var<storage, read> triOrder');
-    expect(candidate).toContain('@group(0) @binding(4) var<storage, read> materials');
-    expect(src).toContain('var<storage, read> triOrder');
-  });
-  it('uses a separately bound precomputed v0/e1/e2 stream only for the edge experiment', () => {
-    const candidate = pathTraceComputeWgsl({ bvhTraversal: 'triangleEdges' });
-    expect(candidate).toContain('@group(0) @binding(10) var<storage, read> triEdges');
-    expect(candidate).toContain('let e1 = tri_edge(tri, 1u);');
-    expect(candidate).toContain('let e2 = tri_edge(tri, 2u);');
-    expect(candidate).toContain('var<storage, read> triOrder');
-    expect(src).not.toContain('triEdges');
-  });
-  it('changes only the workgroup declaration and covers partial tiles', () => {
-    const variant = pathTraceComputeWgsl({ workgroupSize: [16, 4] });
-    expect(variant.replace('@workgroup_size(16, 4, 1)', '@workgroup_size(8, 8, 1)')).toBe(src);
-    expect(PathTraceBackend.workgroupCount(33, 17, [16, 4])).toEqual([3, 5]);
-    const backend = new PathTraceBackend({} as GPUDevice, { workgroupSize: [4, 4] });
-    expect(backend.workgroupCount(33, 17)).toEqual([9, 5]);
+  it('covers partial tiles with the fixed production workgroup', () => {
+    const backend = new PathTraceBackend({} as GPUDevice);
+    expect(backend.workgroupCount(33, 17)).toEqual([5, 3]);
     expect(PathTraceBackend.workgroupCount(33, 17)).toEqual([5, 3]);
   });
 
-  it.each([[0, 8], [-1, 8], [2.5, 8], [32, 32], [NaN, 4], [Infinity, 4]])(
-    'rejects invalid workgroup dimensions %s x %s',
-    (x, y) => {
-      expect(() => pathTraceComputeWgsl({ workgroupSize: [x, y] })).toThrow(/workgroup dimensions/);
-      expect(() => PathTraceBackend.workgroupCount(64, 64, [x, y])).toThrow(/workgroup dimensions/);
-    },
-  );
   it('removes only functions not reachable from the compute entry point', () => {
     const original = pathTraceComputeWgsl({ analyticLights: true, opaque: true });
     const pruned = pathTraceComputeWgsl({ analyticLights: true, opaque: true, pruneUnusedFunctions: true });

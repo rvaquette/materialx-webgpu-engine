@@ -47,27 +47,14 @@
       const lightDirParam = params.get('lightDir');
       const lightDir = lightDirParam ? lightDirParam.split(',').map(Number) : undefined;
       try {
-      const workgroup = params.get('workgroup');
-      const dimensions = workgroup?.split('x').map(Number);
-      if (dimensions && (dimensions.length !== 2 || dimensions.some(n => !Number.isInteger(n) || n < 1) || dimensions[0] * dimensions[1] > 256)) {
-        throw new Error('workgroup must be WIDTHxHEIGHT with at most 256 invocations');
-      }
+      const removedOptions = ['workgroup', 'bvh', 'sampler', 'seed', 'bsdf', 'profileTraversal',
+        'profileShading', 'profileReplayFirst', 'bvhCheck', 'bvhTest', 'samplingTest',
+        'profileTest', 'shadingProfile', 'bsdfTest', 'architectureTest', 'referenceSpp'];
+      const removedOption = removedOptions.find(option => params.has(option));
+      if (removedOption) throw new Error(`Unsupported benchmark option: ${removedOption}`);
       const cacheMode = params.get('cache') ?? 'use';
       if (!['use', 'bypass', 'refresh', 'verify'].includes(cacheMode)) throw new Error('Invalid cache mode');
-      const bvhTraversal = params.get('bvh') ?? 'reference';
-      if (!['reference', 'cachedEntry', 'leafOrder', 'triangleEdges', 'bvh4'].includes(bvhTraversal)) throw new Error('Invalid BVH traversal');
-      const cameraSampler = params.get('sampler') ?? 'pcg';
-      const bsdfEvaluation = params.get('bsdf') ?? 'reference';
-      if (!['reference', 'unrolled'].includes(bsdfEvaluation)) throw new Error('Invalid BSDF evaluation');
-      if (!['pcg', 'halton'].includes(cameraSampler)) throw new Error('Invalid camera sampler');
-      const sampleSeed = Number(params.get('seed') ?? 0);
-      if (!Number.isInteger(sampleSeed) || sampleSeed < 0 || sampleSeed > 0xffffffff) throw new Error('seed must be a uint32');
-      const benchmark = params.has('benchmark') ? { workgroupSize: dimensions ?? [8, 8], cacheMode, bvhTraversal,
-        cameraSampler, sampleSeed, bsdfEvaluation,
-        profileTraversal: params.has('profileTraversal'),
-        profileShading: params.has('profileShading'),
-        profileReplayFirst: params.has('profileReplayFirst'),
-        checkBvh: params.has('bvhCheck') } : undefined;
+      const benchmark = params.has('benchmark') ? { cacheMode } : undefined;
       await bootstrapUsdImage(entry, res, spp, backend, openpbr, exposure, firefly, skyPower, skyColor, camBack, dispScale, shadows, lightDir, tileSpp, benchmark);
       } catch (e) {
         globalThis.__MX_IMAGE__ = null;

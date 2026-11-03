@@ -13,7 +13,7 @@
 // uploads and dispatch run in the browser (src/main.ts) and are device-only.
 
 import type { PathTraceScene } from './scene-buffers.ts';
-import { bvhTraversalWgsl, type BvhTraversalVariant } from './bvh-wgsl.ts';
+import { BVH_TRAVERSAL_WGSL } from './bvh-wgsl.ts';
 import { LAYERED_CLOSURE_PRELUDE } from '../../compiler/surface-wgsl.ts';
 import { closureLibraryPrelude, type ClosureDispatchSpec } from '../../compiler/closure-library.ts';
 import { emitVaryingsStruct } from '../../compiler/wgsl.ts';
@@ -27,27 +27,15 @@ import {
 } from './material-variant.ts';
 import { ANALYTIC_LIGHTS_WGSL } from './analytic-lights.ts';
 import { pruneWgslFunctions } from '../../compiler/wgsl-reachability.ts';
-import { traversalProfileWgsl } from './traversal-profile.ts';
-import { instrumentShadingIntegrator, shadingProfileWgsl } from './shading-profile.ts';
 
 /** Compute workgroup tile edge (threads per dimension). */
 export const PT_WORKGROUP_SIZE = 8;
-export type PathTraceWorkgroupSize = readonly [number, number];
-
-function checkedWorkgroupSize(size: PathTraceWorkgroupSize = [PT_WORKGROUP_SIZE, PT_WORKGROUP_SIZE]): PathTraceWorkgroupSize {
-  const [x, y] = size;
-  if (!Number.isInteger(x) || !Number.isInteger(y) || x < 1 || y < 1 || x * y > 256) {
-    throw new Error('Path-tracing workgroup dimensions must be positive integers with at most 256 invocations.');
-  }
-  return size;
-}
 /** Entry point name of the generated compute shader. */
 export const PT_COMPUTE_ENTRY = 'mx_path_trace';
 /** Floats in the path-trace uniform (PT_UNIFORM_SIZE / 4). Slots 0..39 hold the
  *  camera/light/env/frame blocks; 40..75 hold the 9 RGB SH irradiance coefficients
  *  (one vec4 per coefficient, w unused); 76..79 hold the tile and 80..83 the HDR
- *  texture radiance scale (x), panorama flag (y) and optional uint32 sampling
- *  seed (slot 82); 84..99 hold the optional
+ *  texture radiance scale (x) and panorama flag (y); 84..99 hold the optional
  *  display-only inverse background view-projection; 100..103 hold max depth,
  *  roulette depth, analytic light count and converted primary-camera flag. */
 export const PT_UNIFORM_FLOATS = 104;
@@ -117,9 +105,7 @@ export interface PtVaryings {
 }
 
 function wgslStructsAndBindings(
-  textures: boolean, varyings: boolean, environment: boolean, hasTriangleOrder = true, hasTriangleEdges = false,
-  seededSampling = false,
-  traversalProfile = false,
+  textures: boolean, varyings: boolean, environment: boolean,
 ): string {
   // The baked path binds the full UV + baked-texture group; a graph path only
   // needs the per-triangle UVs (binding 6) to interpolate texcoords.
@@ -150,9 +136,7 @@ struct Uniforms {
   envExtra : vec4<f32>, // x = envResX, y = envResY, z = envTotalSum, w = hasEnvCdf
   sh : array<vec4<f32>, 9>, // 9 RGB SH9 irradiance coefficients (.xyz), w unused
   tile : vec4<f32>,
-${seededSampling || traversalProfile ? `  envTexture : vec2<f32>,
-  sampleSeed : u32,
-  ${traversalProfile ? 'profileMode' : 'seedPadding'} : u32,` : '  envTexture : vec4<f32>, // x = half-float texture radiance scale'}
+  envTexture : vec4<f32>, // x = half-float texture radiance scale
   backgroundInvViewProj : mat4x4<f32>,
   transport : vec4<f32>, // depth, roulette depth, analytic light count, converted camera
 };
@@ -160,10 +144,9 @@ ${seededSampling || traversalProfile ? `  envTexture : vec2<f32>,
 @group(0) @binding(0) var<uniform> U : Uniforms;
 @group(0) @binding(1) var<storage, read> nodes : array<f32>;
 @group(0) @binding(2) var<storage, read> tris : array<f32>;
-${hasTriangleOrder ? '@group(0) @binding(3) var<storage, read> triOrder : array<u32>;' : ''}
+@group(0) @binding(3) var<storage, read> triOrder : array<u32>;
 @group(0) @binding(4) var<storage, read> materials : array<f32>;
 @group(0) @binding(5) var<storage, read_write> accum : array<vec4<f32>>;
-${hasTriangleEdges ? '@group(0) @binding(10) var<storage, read> triEdges : array<f32>;' : ''}
 ${texBindings}
 const PI : f32 = 3.14159265358979;
 const NODE_STRIDE : u32 = 12u;
@@ -284,10 +267,6 @@ fn rng_next(state : ptr<function, u32>) -> f32 {
 `;
 }
 
-function wgslTraversal(variant?: BvhTraversalVariant): string {
-  return bvhTraversalWgsl(variant);
-}
-
 // Homogeneous participating-medium helpers shared by the packed material reader
 // (interior-medium derivation) and the integrator free-flight sampler. Mirrors
 // media.ts / subsurface.ts on the CPU reference; rng_next is defined earlier.
@@ -374,7 +353,7 @@ const MEDIA_PHASE_PRELUDE = /* wgsl */ `fn mx_sample_hg(wo : vec3f, g : f32, u1 
   return basis(w) * local;
 }`;
 
-function wgslClosureSurface(textures: boolean, maxLobes: number, closureDispatch?: ClosureDispatchSpec, unrollEvaluation = false): string {
+function wgslClosureSurface(textures: boolean, maxLobes: number, closureDispatch?: ClosureDispatchSpec): string {
   // Shared layered-closure shading: the struct family (LAYERED_CLOSURE_PRELUDE),
   // the runtime lobe library plus the mx_closure_eval/pdf/sample assembler
   // (CLOSURE_LIBRARY_PRELUDE, T056) and the megakernel material-record reader
@@ -399,7 +378,7 @@ fn mx_apply_baked(c : ptr<function, LayeredClosure>, albedo : vec3<f32>, rough :
     : '';
   return [
     LAYERED_CLOSURE_PRELUDE.replace('const MX_MAX_LOBES: u32 = 8u;', `const MX_MAX_LOBES: u32 = ${maxLobes}u;`),
-    closureLibraryPrelude(closureDispatch, unrollEvaluation ? maxLobes : undefined),
+    closureLibraryPrelude(closureDispatch),
     MEDIA_HELPERS_PRELUDE,
     materialClosureReaderWgsl(),
     /* wgsl */ `
@@ -842,12 +821,7 @@ ${analyticLights ? '    analyticNee = !specular && mx_light_count() > 0u;' : ''}
 `;
 }
 
-function wgslEntry(
-  displayAovs: boolean, workgroupSize: PathTraceWorkgroupSize,
-  cameraSampler: 'pcg' | 'halton', seededSampling: boolean,
-  traversalProfile: boolean,
-): string {
-  const samplePixel = seededSampling ? 'samplePixel' : 'pixel';
+function wgslEntry(displayAovs: boolean): string {
   return /* wgsl */ `
 struct MxCameraRay {
   origin: vec3<f32>,
@@ -878,7 +852,7 @@ fn camera_ray(px : vec2<f32>, dims : vec2<f32>, jitter : vec2<f32>) -> MxCameraR
   return ray;
 }
 
-${cameraSampler === 'halton' ? `
+${displayAovs ? `
 fn camera_jitter(index: u32, pixel: u32) -> vec2f {
   var n = index + 1u;
   var base3 = 0.0;
@@ -893,7 +867,7 @@ fn camera_jitter(index: u32, pixel: u32) -> vec2f {
 }
 ` : ''}
 
-@compute @workgroup_size(${workgroupSize[0]}, ${workgroupSize[1]}, 1)
+@compute @workgroup_size(${PT_WORKGROUP_SIZE}, ${PT_WORKGROUP_SIZE}, 1)
 fn ${PT_COMPUTE_ENTRY}(@builtin(global_invocation_id) gid : vec3<u32>) {
   let width = u32(U.frame.z);
   let height = u32(U.frame.w);
@@ -905,21 +879,17 @@ fn ${PT_COMPUTE_ENTRY}(@builtin(global_invocation_id) gid : vec3<u32>) {
   let spp = max(u32(U.frame.y), 1u);
   let dims = vec2<f32>(U.frame.z, U.frame.w);
 
-${seededSampling ? '  let samplePixel = pixel ^ U.sampleSeed;\n' : ''}  var state = pcg_hash(${samplePixel} + 0x9e3779b9u * (frameIndex + 1u));
+  var state = pcg_hash(pixel + 0x9e3779b9u * (frameIndex + 1u));
   // eye.w carries an optional per-sample luminance clamp; 0 keeps the tracer
   // unbiased, > 0 tames glossy/env fireflies (hue-preserving down-scale).
   let fireflyMax = U.eye.w;
   var sample = vec3<f32>(0.0);
 ${displayAovs ? '  var coverage = 0.0;' : ''}
   for (var i = 0u; i < spp; i = i + 1u) {
-${traversalProfile ? `    profileBase = (pixel * PROFILE_SPP + frameIndex * spp + i) * PROFILE_WORDS;
-    profileCursor = 0u;` : ''}
-${cameraSampler === 'halton' && !displayAovs ? '    // Keep transport RNG dimensions aligned with the PCG baseline.\n    let pcgJitter = vec2<f32>(rng_next(&state), rng_next(&state));\n' : ''}    let jitter = ${cameraSampler === 'halton' ? `camera_jitter(frameIndex * spp + i, ${samplePixel})` : 'vec2<f32>(rng_next(&state), rng_next(&state))'};
+    let jitter = ${displayAovs ? 'camera_jitter(frameIndex * spp + i, pixel)' : 'vec2<f32>(rng_next(&state), rng_next(&state))'};
     let ray = camera_ray(vec2<f32>(pixelCoord), dims, jitter);
 ${displayAovs ? '    var hitCoverage = 0.0;' : ''}
     var radiance = integrate(ray.origin, ray.direction, ray.backgroundDirection, &state${displayAovs ? ', &hitCoverage' : ''});
-${traversalProfile ? `    if (U.profileMode == 1u) { profileLog[profileBase] = profileCursor; }
-    if (U.profileMode >= 2u) { profileLog[profileBase + 3u] = profileCursor; }` : ''}
 ${displayAovs ? '    coverage += hitCoverage;' : ''}
     if (fireflyMax > 0.0) {
       let lum = dot(radiance, vec3<f32>(0.2126, 0.7152, 0.0722));
@@ -945,19 +915,6 @@ ${displayAovs ? `  let oldCoverage = accum[outputPixel + 1u].x;
 }
 
 export interface PathTraceComputeOptions {
-    /** Isolated benchmark candidate; static indices in weight/base-eval loops only. */
-    bsdfEvaluation?: 'reference' | 'unrolled';
-    workgroupSize?: PathTraceWorkgroupSize;
-    /** Benchmark experiment; the viewer already uses Halton primary jitter. */
-    cameraSampler?: 'pcg' | 'halton';
-    /** Read a uint32 seed from uniform slot 82 without recompiling per seed. */
-    seededSampling?: boolean;
-    /** Diagnostic capture/replay only, never a renderer optimization. */
-    traversalProfileSamples?: number;
-    /** Diagnostic replay of integrator-facing BSDF eval/sample calls only. */
-    shadingProfileSamples?: number;
-    /** Opt-in BVH traversal experiment; default remains the reference layout. */
-    bvhTraversal?: BvhTraversalVariant;
     textures?: boolean;
     varyings?: PtVaryings;
     dispatch?: PtMaterialDispatch;
@@ -976,19 +933,6 @@ export interface PathTraceComputeOptions {
 
 /** Full WGSL source of the compute path tracer. */
 export function pathTraceComputeWgsl(options: PathTraceComputeOptions = {}): string {
-  const traversalProfile = options.traversalProfileSamples !== undefined;
-  const shadingProfile = options.shadingProfileSamples !== undefined;
-  if (traversalProfile && shadingProfile) throw new Error('Choose only one profiling diagnostic.');
-  if (shadingProfile && (options.displayAovs || options.bvhTraversal && options.bvhTraversal !== 'reference')) {
-    throw new Error('Shading profiling requires reference traversal without display AOVs.');
-  }
-  const profile = traversalProfile || shadingProfile;
-  if (profile && options.bsdfEvaluation === 'unrolled') {
-    throw new Error('Profiling diagnostics require reference BSDF evaluation.');
-  }
-  if (traversalProfile && options.bvhTraversal !== undefined && options.bvhTraversal !== 'reference') {
-    throw new Error('Traversal profiling requires reference traversal.');
-  }
   const textures = options.textures ?? false;
   const environment = options.environment ?? false;
   const dispatch = options.dispatch;
@@ -999,19 +943,15 @@ export function pathTraceComputeWgsl(options: PathTraceComputeOptions = {}): str
     ? { primvarFields: dispatch.primvarFields, extraInputs: dispatch.extraInputs }
     : options.varyings;
   const code = [
-    wgslStructsAndBindings(textures, varyings !== undefined, environment,
-      options.bvhTraversal !== 'leafOrder', options.bvhTraversal === 'triangleEdges', options.seededSampling, profile),
+    wgslStructsAndBindings(textures, varyings !== undefined, environment),
     wgslRng(),
-    traversalProfile ? traversalProfileWgsl(options.traversalProfileSamples!) : wgslTraversal(options.bvhTraversal),
-    wgslClosureSurface(textures, maxLobes, options.closureDispatch, options.bsdfEvaluation === 'unrolled'),
+    BVH_TRAVERSAL_WGSL,
+    wgslClosureSurface(textures, maxLobes, options.closureDispatch),
     ...(options.analyticLights ? [ANALYTIC_LIGHTS_WGSL] : []),
     ...(varyings !== undefined ? [wgslVaryings(varyings)] : []),
     ...(dispatch !== undefined ? [wgslDispatch(dispatch)] : []),
-    ...(shadingProfile ? [shadingProfileWgsl(options.shadingProfileSamples!, maxLobes)] : []),
-    (shadingProfile ? instrumentShadingIntegrator : (source: string) => source)(
-      wgslIntegrator(textures, dispatch, environment, options.displayAovs ?? false, options.opaque ?? false, options.analyticLights ?? false)),
-    wgslEntry(options.displayAovs ?? false, checkedWorkgroupSize(options.workgroupSize),
-      options.cameraSampler ?? (options.displayAovs ? 'halton' : 'pcg'), options.seededSampling ?? false, profile),
+    wgslIntegrator(textures, dispatch, environment, options.displayAovs ?? false, options.opaque ?? false, options.analyticLights ?? false),
+    wgslEntry(options.displayAovs ?? false),
   ].join('\n');
   return options.pruneUnusedFunctions ? pruneWgslFunctions(code, [PT_COMPUTE_ENTRY]) : code;
 }
@@ -1056,15 +996,7 @@ export function buildPathTraceUniform(
   height: number,
   fireflyClamp = 0,
   tile?: PathTraceTile,
-  sampleSeed = 0,
-  profileMode = 0,
 ): Float32Array {
-  if (!Number.isInteger(sampleSeed) || sampleSeed < 0 || sampleSeed > 0xffffffff) {
-    throw new Error('Path-tracing sampling seed must be a uint32.');
-  }
-  if (!Number.isInteger(profileMode) || profileMode < 0 || profileMode > 3) {
-    throw new Error('Traversal profile mode must be an integer from 0 to 3.');
-  }
   const d = new Float32Array(PT_UNIFORM_FLOATS);
   d.set(scene.camera.invViewProj, 0);
   d.set([scene.camera.eye[0], scene.camera.eye[1], scene.camera.eye[2], fireflyClamp], 16);
@@ -1089,8 +1021,6 @@ export function buildPathTraceUniform(
   }
   d.set(tile ? [tile.x, tile.y, tile.width, tile.height] : [0, 0, width, height], 76);
   d[80] = env.textureRadianceScale ?? 1;
-  if (sampleSeed !== 0) new Uint32Array(d.buffer)[82] = sampleSeed;
-  if (profileMode !== 0) new Uint32Array(d.buffer)[83] = profileMode;
   if (scene.camera.backgroundInvViewProj) {
     d[81] = 1;
     d.set(scene.camera.backgroundInvViewProj, 84);
@@ -1180,15 +1110,14 @@ export class PathTraceBackend {
   }
 
   /** Number of workgroups to dispatch to cover a width x height image. */
-  static workgroupCount(width: number, height: number, size?: PathTraceWorkgroupSize): [number, number] {
-    const [x, y] = checkedWorkgroupSize(size);
+  static workgroupCount(width: number, height: number): [number, number] {
     return [
-      Math.ceil(width / x),
-      Math.ceil(height / y),
+      Math.ceil(width / PT_WORKGROUP_SIZE),
+      Math.ceil(height / PT_WORKGROUP_SIZE),
     ];
   }
 
   workgroupCount(width: number, height: number): [number, number] {
-    return PathTraceBackend.workgroupCount(width, height, this.#options.workgroupSize);
+    return PathTraceBackend.workgroupCount(width, height);
   }
 }

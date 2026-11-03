@@ -1,5 +1,5 @@
-/** GPU displacement pre-pass; optional edge output stays synchronized with displaced vertices. */
-export function pathTraceDisplacementWgsl(updateEdges = false): string {
+/** GPU displacement pre-pass. */
+export function pathTraceDisplacementWgsl(): string {
   return /* wgsl */ `
 struct DispInfo { triCount: u32, midpoint: f32, pad0: u32, pad1: u32 };
 
@@ -9,7 +9,6 @@ struct DispInfo { triCount: u32, midpoint: f32, pad0: u32, pad1: u32 };
 @group(0) @binding(3) var<uniform> info: DispInfo;
 @group(0) @binding(4) var dispTex: texture_2d<f32>;
 @group(0) @binding(5) var dispSamp: sampler;
-${updateEdges ? '@group(0) @binding(6) var<storage, read_write> triEdges: array<f32>;' : ''}
 
 const STRIDE: u32 = 24u;
 
@@ -48,10 +47,6 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
   tris[base + 9u] = gn.x; tris[base + 10u] = gn.y; tris[base + 11u] = gn.z;
   tris[base + 12u] = gn.x; tris[base + 13u] = gn.y; tris[base + 14u] = gn.z;
   tris[base + 15u] = gn.x; tris[base + 16u] = gn.y; tris[base + 17u] = gn.z;
-${updateEdges ? `  let edgeBase = t * 9u;
-  triEdges[edgeBase + 0u] = p0.x; triEdges[edgeBase + 1u] = p0.y; triEdges[edgeBase + 2u] = p0.z;
-  triEdges[edgeBase + 3u] = p1.x - p0.x; triEdges[edgeBase + 4u] = p1.y - p0.y; triEdges[edgeBase + 5u] = p1.z - p0.z;
-  triEdges[edgeBase + 6u] = p2.x - p0.x; triEdges[edgeBase + 7u] = p2.y - p0.y; triEdges[edgeBase + 8u] = p2.z - p0.z;` : ''}
 }
 `;
 }

@@ -13,10 +13,9 @@ Il est la contrepartie lisible des fixtures et des tests :
 
 ## Principe général
 
-### Banc d'optimisation du path tracer (PC et mobile)
+### Banc de reference du path tracer (PC et mobile)
 
-Le [plan d'optimisation](pathtracer-optimization-plan.md) impose une validation sur
-les deux appareils avant toute activation par défaut. Exécuter séquentiellement :
+Valider le rendu sur les deux appareils. Executer sequentiellement :
 
 ```powershell
 node scripts\benchmark-pathtracer.mjs --target local
@@ -29,9 +28,9 @@ Le banc crée ses propres ports ADB/CDP et ferme uniquement sa page et ses resso
 Utiliser un nouveau `--out-dir` pour une nouvelle session : les rapports précédents
 ne sont pas écrasés.
 
-Le même harness USD compare 8×8, 4×4, 16×4 et 16×8 à 128×128, 8 spp, sans clamp
-ni débruitage. Une chauffe par variante est exclue, puis cinq répétitions utilisent
-un ordre tournant. Les rapports JSON, PNG et buffers HDR `.f32` sont conservés sous
+Le meme harness USD mesure le moteur de reference en 8x8 a 128x128, 8 spp,
+sans clamp ni debruitage. Une chauffe est exclue, puis cinq repetitions sont
+mesurees. Les rapports JSON, PNG et buffers HDR `.f32` sont conserves sous
 `renders/pathtracer-benchmark/`. Ils distinguent compilation, temps mural de rendu
 et somme des durées des passes compute mesurées par `timestamp-query`. Si cette
 feature manque, le temps GPU vaut explicitement `null` ; le temps mural ne le remplace pas.
@@ -60,200 +59,13 @@ Le cache ne garantit pas un gain sur une petite scène : réseau local, hachage
 et validation peuvent coûter plus cher que le BVH. Mesurer le temps de préparation
 complet séparément du temps GPU. Le viewer n'utilise pas encore ce cache fichier.
 
-`--sampling-test` lance une experience de convergence distincte : PCG contre
-le jitter primaire Halton deja utilise par le viewer (aucune modification de
-ses valeurs par defaut). Le banc conserve les deux tirages PCG du jitter pour
-ne pas decaler artificiellement les dimensions aleatoires du transport.
-Deux images PCG de 256 spp avec seeds disjointes forment la reference 512 spp ;
-cinq seeds appariees, differentes de celles des references, mesurent la RMSE
-RGB lineaire et sa dispersion a 8 spp. La comparaison exclut les compteurs,
-mais verifie leur exactitude, les valeurs finies et la reproductibilite apres chauffe.
-Les HDR de toutes les seeds et des references sont sauvegardes.
+Le banc utilise le parcours BVH binaire et le BSDF de production, sans variante
+ni journal capture/rejeu. Il rapporte les metadata de scene, compteurs de samples
+et releves thermiques Android. Le jitter primaire du harness reste PCG ; celui
+du viewer avec AOV reste Halton. Leurs soumissions et buffers de sortie different :
+le temps du harness ne mesure pas la reactivite du viewer.
 
-```powershell
-node scripts\benchmark-pathtracer.mjs --target local --sampling-test --out-dir renders\pathtracer-benchmark\sampling-local
-node scripts\benchmark-pathtracer.mjs --target mobile --sampling-test --out-dir renders\pathtracer-benchmark\sampling-mobile
-```
-
-Le rapport ajoute `qualityReferences` (bruit estime par les deux references,
-pas une borne d'erreur), les erreurs par seed et leurs medianes/min/max.
-Il n'exige pas l'identite HDR entre estimateurs differents. Un candidat est
-seulement eligible a confirmation si la RMSE mediane baisse d'au moins 5 % et
-les medianes GPU different d'au plus 3 %. Sinon le resultat a temps egal est
-non concluant, sans normalisation artificielle erreur/temps. Une activation
-exigerait aussi confirmation independante, bruit de reference suffisamment
-faible et absence de regression sur les autres scenes et appareils.
-L'experience n'evalue pas les dimensions BSDF/NEE ni l'echantillonnage adaptatif.
-Ne pas combiner avec les autres modes d'experience.
-
-`--profile-test` est un diagnostic capture/rejeu des rayons reels, pas un
-candidat d'optimisation. Par defaut : 64x64, 2 spp, 8x8, une chauffe et cinq
-repetitions par variante. La reference sans instrumentation et le pipeline
-instrumente alternent ; dans ce dernier, controle/parcours reel et rejeu des
-hits captures alternent aussi. Le transport et ses tirages restent inchanges.
-
-```powershell
-node scripts\benchmark-pathtracer.mjs --target local --profile-test --out-dir renders\pathtracer-benchmark\profile-local-new
-node scripts\benchmark-pathtracer.mjs --target mobile --profile-test --scenes test_material_disney_gold --out-dir renders\pathtracer-benchmark\profile-mobile-gold-new
-```
-
-Le rapport `traversalProfiles` distingue reference, controle, capture,
-verification et rejeu. Les temps de la ligne `profile` sont ceux du controle,
-pas le total du diagnostic. La verification exige l'identite bit a bit des
-entrees des rayons, des comptes d'evenements et du HDR/compteurs de chaque
-etape sur le meme GPU. Un autotest corrompt volontairement un bit d'origine
-du premier rayon par device, exige sa detection, puis restaure le journal
-avant les mesures normales. Son temps est exclu des stages rapportes.
-
-Le journal compte les appels AABB, tests de triangles et visites de noeuds ;
-ces compteurs doivent rester identiques entre repetitions d'un meme appareil.
-Il reserve 128 evenements de 64 octets et 16 octets d'en-tete par pixel/sample :
-64,125 MiB a 64x64/2 spp. La limite est 128 MiB et la limite storage du device
-est verifiee avant allocation. Dimensions invalides, debordement, donnees non
-finies, divergence de rayons/comptes/HDR ou autotest negatif invalide font
-echouer explicitement la campagne. Un seul sample par dispatch est accepte.
-Les readbacks sont hors temps GPU mesure et les ressources temporaires liberees.
-
-La reduction controle/rejeu est une **sensibilite** au remplacement du parcours,
-pas une part additive du temps BVH ni une acceleration livree. Le rejeu inclut
-encore transport, shading, lumieres analytiques et acces au journal. Le controle
-instrumente peut lui-meme differer fortement de la reference : reporter cet
-ecart et la dispersion, sans l'attribuer a des registres, a l'occupation ou a
-la bande passante faute de compteurs materiels. Aucun shader de production
-n'inclut ce journal sans l'option explicite. Ce mode est exclusif des autres
-experiences et ne change aucun defaut du viewer.
-
-`--bvh-test` isole par defaut `reference` / `triangleEdges`, toutes
-deux en 8×8. La référence reste le défaut du compute et du rendu hybride.
-Au moins cinq répétitions sont imposées, après une chauffe exclue par variante ;
-l'ordre des deux variantes alterne. Ne pas combiner avec `--cache-test`.
-
-```powershell
-node scripts\benchmark-pathtracer.mjs --target local --bvh-test --out-dir renders\pathtracer-benchmark\triangle-edges-local
-node scripts\benchmark-pathtracer.mjs --target mobile --bvh-test --out-dir renders\pathtracer-benchmark\triangle-edges-mobile
-node scripts\benchmark-pathtracer.mjs --target local --bvh-test --bvh-candidate bvh4 --out-dir renders\pathtracer-benchmark\bvh4-local
-node scripts\benchmark-pathtracer.mjs --target mobile --bvh-test --bvh-candidate bvh4 --out-dir renders\pathtracer-benchmark\bvh4-mobile
-```
-
-`--bvh-candidate` exige `--bvh-test` et selectionne un seul candidat parmi
-`cachedEntry`, `leafOrder`, `triangleEdges` et `bvh4`. Le protocole et les seuils
-de qualification restent identiques ; choisir un nouveau repertoire par session.
-BVH4 est non compresse : deux niveaux du SAH binaire deviennent quatre enfants
-par noeud large, avec tests de slabs vectoriels et pile bornee a 96 entrees
-(au plus trois attentes par paire de niveaux ; profondeur binaire < 64).
-Les groupes de fratrie conservent l'ordre near-first binaire, ses egalites et
-les IDs any-hit. Les unions de bornes reconstruites doivent etre exactes,
-y compris apres inflation displacement. Le BVH binaire CPU/hybride, triangles,
-UV, tangentes et IDs restent canoniques ; seul le buffer de noeuds lie au GPU
-change. Le fichier cache distinct conserve aussi ce stream large, le valide
-contre les noeuds canoniques et le recharge aux essais suivants.
-`sceneMetadata` rapporte `bvhLayout`, `gpuNodeBytes` et `canonicalNodeBytes` ;
-la limite storage du device est controlee avant upload.
-
-Le rapport ajoute `comparison` (gains des médianes GPU et murales par scène),
-`sceneMetadata` (triangles, nœuds, matériaux, profondeur, opacité), les compteurs
-d'échantillons vérifiés et les relevés thermiques Android par tour. Un corpus GPU
-hors chronométrage vérifie aussi distances, IDs et barycentriques exacts en
-closest-hit, ordre any-hit, rayons parallèles, limites et scène vide. Les buffers
-canoniques restent inchanges ; les streams experimentaux utilisent des cles de
-cache distinctes. Le corpus comprend aussi quatre enfants actifs et 256 requetes
-closest/any-hit a travers plusieurs couches dans un BVH profond : 290 cas et
-614 evaluations comparees exactement. Les rayons sont charges depuis un buffer,
-pas developpes dans un grand switch susceptible d'exploser la compilation.
-Les pipelines du corpus sont reutilises entre fixtures d'un meme device :
-le shader est identique, seuls les buffers de rayons et de geometrie changent.
-Le tri des groupes BVH4 utilise des valeurs scalaires plutot que de petits
-tableaux locaux temporaires ; cette version a passe la compilation Android.
-Ces couches testent les intersections successives, pas le transport optique
-complet de materiaux transparents. Aucun compteur de rayons
-ou d'AABB n'est ajouté au shader chronométré pour ne pas en perturber le coût.
-Les cas limites préservent les conventions de la référence, y compris les rayons
-parallèles situés exactement sur la face maximale d'une boîte.
-
-Le banc mesure le transport dans le harness de référence, pas la réactivité du
-viewer : son agencement des soumissions et son absence d'AOV de couverture diffèrent
-du viewer. Tout candidat prometteur doit donc aussi passer la qualification viewer
-(AOV, caméra, pause/reprise et redimensionnement) avant adoption.
-
-### Diagnostic BSDF
-
-`--shading-profile` est exclusif des autres experiences. Defaults : 32x32,
-1 spp, 8x8, une chauffe et au moins cinq repetitions. Il capture/rejoue uniquement
-les appels BSDF eval/specular-eval/sample de l'integrateur, pas les graphes,
-textures, closures, opacite, reperes, MIS, lumieres ou parcours. Les appels BSDF
-internes sont inclus dans l'appel parent, sans double journalisation.
-
-```powershell
-node scripts\benchmark-pathtracer.mjs --target local --shading-profile --out-dir renders\pathtracer-benchmark\shading-local-new
-node scripts\benchmark-pathtracer.mjs --target mobile --shading-profile --scenes test_material_disney_gold --out-dir renders\pathtracer-benchmark\shading-mobile-gold-new
-```
-
-Le rapport `shadingProfiles` expose reference, controle, capture, verification,
-rejeu, reductions appariees par ordre, perturbation et workload (types d'appels,
-somme des lobes actifs par appel, maximum d'evenements par sample et octets).
-Chaque evenement compare tous les scalaires de closure, wo et wi/tirage sans
-hash ni padding. HDR et compteurs exigent les memes bits sur le meme GPU ;
-l'autotest corrompt un bit de wo.x du premier appel non vide et exige sa detection.
-Un sample peut etre vide ; une campagne entierement vide ne valide pas l'autotest.
-64 evenements/sample, limite 128 MiB et limite storage device : tout depassement,
-divergence, NaN ou autotest invalide echoue explicitement. Les tableaux de lobes
-inactifs sont aussi captures. L'evolution non supportee du schema echoue.
-Le controle/rejeu alterne apres capture/verification ; readbacks et autotest sont
-hors timestamps. Le temps `profile` est celui du controle, pas du diagnostic entier.
-La sensibilite BSDF n'est ni un temps shading additif ni une acceleration livree.
-Les shaders de production et le viewer restent inchanges.
-
-### Candidat BSDF a indices statiques
-
-`--bsdf-test` compare `reference` / `unrolled`, 8x8, par defaut 128x128 et
-8 spp. Il deroule seulement la somme des poids et l'evaluation du melange de
-base jusqu'a la capacite closure calculee pour la scene, avec gardes du compte
-runtime et ordre arithmetique conserves. Il ne supprime aucun lobe ou couche,
-ne change pas la selection aleatoire et n'utilise aucun journal de profiling.
-La reference, le raster/hybride et le viewer gardent leurs shaders habituels.
-
-```powershell
-node scripts\benchmark-pathtracer.mjs --target local --bsdf-test --scenes test_material_disney_gold --out-dir renders\pathtracer-benchmark\bsdf-unrolled-local-new
-node scripts\benchmark-pathtracer.mjs --target mobile --bsdf-test --scenes test_material_disney_gold --out-dir renders\pathtracer-benchmark\bsdf-unrolled-mobile-new
-```
-
-Le mode est exclusif des autres experiences ; au moins cinq repetitions apres
-une chauffe exclue par variante, ordre alterne. Executer cloth et tiles dans
-des sessions distinctes, sans benchmark GPU concurrent. Metadata `bsdfEvaluation`
-doit correspondre a la variante, avec parcours reference et workgroup 8x8.
-HDR brut et compteurs doivent rester exacts ; comparer aussi les fichiers
-`.f32` persistes en octets. Le rapport `comparison` selectionne uniquement
-`unrolled` et expose medianes/gain GPU et mural, sans utiliser le temps mural
-comme substitut aux timestamps. Scenes/camera/spp/depth/seed identiques,
-clamp et denoising desactives. Seuils : gain GPU >= 5 %, aucune regression
-mediane > 3 % sur le corpus PC/mobile, puis confirmation independante et
-qualification viewer avant toute adoption. Un smoke 32x32/1 spp ne qualifie
-pas une acceleration a la resolution normale.
-
-### Inventaire d'architecture T010
-
-`--architecture-test` collecte des metadata avec le shader **reference seul** :
-par defaut 32x32/1 spp, 8x8. Ce n'est pas un prototype BLAS/TLAS ou wavefront,
-ni une mesure de leurs performances. Les metadata sont calculees hors temps
-GPU, a partir des memes draws et filtres de geometrie/proxies que le packing.
-Elles sont aussi disponibles dans `sceneMetadata.instancing` des autres nouveaux
-rapports du banc. Aucun buffer, shader ou format de cache GPU n'est modifie.
-
-```powershell
-node scripts\benchmark-pathtracer.mjs --target local --architecture-test --repeats 1 --scenes test_material_disney_gold --out-dir renders\pathtracer-benchmark\architecture-pc-gold-new
-node scripts\benchmark-pathtracer.mjs --target mobile --architecture-test --repeats 1 --scenes test_material_disney_gold --out-dir renders\pathtracer-benchmark\architecture-mobile-gold-new
-```
-
-Executer cloth/tiles separement. Une chauffe et une repetition suffisent pour
-la reproductibilite de cet inventaire deterministe, pas pour qualifier un gain.
-Le rapport `architectureInventory` exige une reference 8x8 sans diagnostic,
-parite HDR, inventaire stable et `expandedTriangles === triangleCount`.
-`potentialTriangleReusePercent` compte la duplication par identite de prototype,
-pas un gain d'octets ou de traversal : transformations, compatibilite des
-materiaux/displacement, TLAS et couts des queues ne sont pas mesures.
-L'absence de prototype reutilise dans ces scenes ne vaut pas pour toute autre
-scene ; l'absence de preuve d'amortissement wavefront ne prouve pas sa lenteur.
-Voir le verdict final T010 dans [le plan](pathtracer-optimization-plan.md).
+### Comparaison oracle
 
 La validation repose sur une **comparaison oracle** : chaque sortie (une valeur de
 nœud, un pixel raster, un pixel path-tracé) est confrontée à une référence calculée
