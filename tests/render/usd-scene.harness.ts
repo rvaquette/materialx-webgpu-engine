@@ -36,9 +36,12 @@ import {
   uploadGeometry,
   type MaterialResource,
 } from '../../src/render/scene-resources.ts';
-import { buildPathTraceScene } from '../../src/render/pathtracing/scene-buffers.ts';
+import { buildPathTraceScene, pathTraceInstancingInventory } from '../../src/render/pathtracing/scene-buffers.ts';
 import type { BvhTraversalVariant } from '../../src/render/pathtracing/bvh-wgsl.ts';
 import { checkBvhTraversalGpu, type TraversalChecks } from './pathtracing/bvh-traversal-gpu.ts';
+import { traversalProfileBytes, readTraversalProfile, PT_PROFILE_HEADER_WORDS, PT_PROFILE_SAMPLE_WORDS, type TraversalWorkload } from '../../src/render/pathtracing/traversal-profile.ts';
+import { shadingProfileBytes, shadingProfileLayout, readShadingProfile, SHADING_PROFILE_HEADER_WORDS,
+  type ShadingWorkload } from '../../src/render/pathtracing/shading-profile.ts';
 import { buildFileCachedPathTraceScene, type SceneBufferCacheMode, type SceneBufferCacheReport } from '../../src/render/pathtracing/scene-buffer-cache.ts';
 import {
   emitHybridShadowPass,
@@ -95,24 +98,54 @@ let sessionLine: (message: string) => void = () => {};
 let completedCases = 0;
 const checkedPathTraceModules = new WeakSet<GPUShaderModule>();
 const checkedBvhDevices = new WeakMap<GPUDevice, TraversalChecks>();
+const checkedReplayDevices = new WeakSet<GPUDevice>();
+const checkedShadingReplayDevices = new WeakSet<GPUDevice>();
 
 export interface PathTraceBenchmarkOptions {
+  bsdfEvaluation?: 'reference' | 'unrolled';
   workgroupSize: PathTraceWorkgroupSize;
   cacheMode?: SceneBufferCacheMode;
   bvhTraversal?: BvhTraversalVariant;
   checkBvh?: boolean;
+  cameraSampler?: 'pcg' | 'halton';
+  sampleSeed?: number;
+  profileTraversal?: boolean;
+  profileShading?: boolean;
+  profileReplayFirst?: boolean;
 }
 
 export interface PathTraceBenchmarkResult {
+  bsdfEvaluation: 'reference' | 'unrolled';
   gpuMs: number | null;
   timestampStatus: 'available' | 'unsupported';
   hdrBase64: string;
   workgroupSize: PathTraceWorkgroupSize;
   sceneBufferCache: SceneBufferCacheReport;
   bvhTraversal: BvhTraversalVariant;
-  sceneMetadata: { triangleCount: number; nodeCount: number; materialCount: number; maxDepth: number; opaque: boolean; triangleLayout: string };
+  cameraSampler: 'pcg' | 'halton';
+  sampleSeed: number;
+  sceneMetadata: { triangleCount: number; nodeCount: number; materialCount: number; maxDepth: number; opaque: boolean;
+    triangleLayout: string; bvhLayout: string; gpuNodeBytes: number; canonicalNodeBytes: number;
+    instancing: ReturnType<typeof pathTraceInstancingInventory> };
   counters: { pixels: number; samplesPerPixel: number; totalSamples: number };
   traversalChecks?: TraversalChecks;
+  traversalProfile?: {
+    workload: TraversalWorkload;
+    stages: { mode: number; gpuMs: number | null; renderMs: number; identical: boolean }[];
+    rayInputsIdentical: boolean;
+    eventCountsIdentical: boolean;
+    replayFirst: boolean;
+    replayMismatchDetected: boolean;
+  };
+  shadingProfile?: {
+    workload: ShadingWorkload;
+    stages: { mode: number; gpuMs: number | null; renderMs: number; identical: boolean }[];
+    inputsIdentical: boolean;
+    eventCountsIdentical: boolean;
+    replayFirst: boolean;
+    replayMismatchDetected: boolean;
+    maxLobes: number;
+  };
 }
 
 export interface UsdSceneImage {
@@ -1034,8 +1067,15 @@ async function renderUsdOnDevice(
   if (!Number.isInteger(maxSamplesPerDispatch) || maxSamplesPerDispatch < 1) {
     throw new Error(`maxSamplesPerDispatch must be a positive integer; got ${maxSamplesPerDispatch}`);
   }
+  const shadingDiagnostic = benchmarkOptions?.profileShading ?? false;
+  if (shadingDiagnostic && benchmarkOptions?.profileTraversal) throw new Error('Choose only one profiling diagnostic.');
+  if ((benchmarkOptions?.profileTraversal || shadingDiagnostic) && maxSamplesPerDispatch !== 1) {
+    throw new Error('Profiling requires exactly one sample per dispatch.');
+  }
+  let profileBytes = benchmarkOptions?.profileTraversal ? traversalProfileBytes(res, res, samples) : 0;
+  if (profileBytes) assertSceneStorageSize(device, profileBytes);
   if (benchmarkOptions?.checkBvh && !checkedBvhDevices.has(device)) {
-    checkedBvhDevices.set(device, await checkBvhTraversalGpu(device));
+    checkedBvhDevices.set(device, await checkBvhTraversalGpu(device, line));
   }
   const sink = (d: { level: string; message: string; detail?: unknown }): void => {
     if (d.level === 'warning' || d.level === 'error') {
@@ -1085,6 +1125,7 @@ async function renderUsdOnDevice(
     frameCamera,
     environment: envFrameConfig(envAsset, envGpu?.cdfStats, skyPowerOverride, skyColorOverride, pathTraceSettings(scene).converted),
     settings: pathTraceSettings(scene),
+    ...(benchmarkOptions?.bvhTraversal === 'bvh4' ? { bvhLayout: 'bvh4' as const } : {}),
     ...(benchmarkOptions?.bvhTraversal === 'leafOrder' ? { triangleLayout: 'leafOrder' as const } :
       benchmarkOptions?.bvhTraversal === 'triangleEdges' ? { triangleLayout: 'triangleEdges' as const } : {}),
     ...(dispScaleOverride !== undefined ? { displacementScale: dispScaleOverride } : {}),
@@ -1092,6 +1133,12 @@ async function renderUsdOnDevice(
   for (const diagnostic of sceneBufferCache.diagnostics) line(`diag file-cache: ${diagnostic}`);
   line(`diag file-cache ${sceneBufferCache.status} key=${sceneBufferCache.key} bytes=${sceneBufferCache.bytes}`);
   ptScene.environment.textureRadianceScale = envGpu?.radianceScale ?? 1;
+  const instancing = benchmarkOptions ? pathTraceInstancingInventory(resources, {
+    lights, surfaceFor, frameCamera, settings: pathTraceSettings(scene),
+  }) : undefined;
+  if (instancing && instancing.expandedTriangles !== ptScene.triangleCount) {
+    throw new Error('Instancing inventory differs from the prepared triangle count.');
+  }
   phase('bvhAndEnvironmentUpload');
   line(`${resources.instances.length} instance(s), ${samples} spp`);
   line(
@@ -1127,13 +1174,21 @@ async function renderUsdOnDevice(
   // Compute path tracer on the packed scene buffers, progressive accumulation.
   const workgroupOptions = benchmarkOptions ? {
     workgroupSize: benchmarkOptions.workgroupSize, bvhTraversal: benchmarkOptions.bvhTraversal ?? 'reference',
+    cameraSampler: benchmarkOptions.cameraSampler ?? 'pcg', seededSampling: (benchmarkOptions.sampleSeed ?? 0) !== 0,
+    ...(benchmarkOptions.profileTraversal ? { traversalProfileSamples: samples } : {}),
+    ...(shadingDiagnostic ? { shadingProfileSamples: samples } : {}),
   } : {};
   const backend = new PathTraceBackend(device, { dispatch, ...workgroupOptions, ...(envAsset ? { environment: true } : {}) });
   const maxLobes = Math.max(
     ...dispatch.variants.map(variant => variant.lobeCount),
     maxRecordLobes(ptScene.materials, new Set(dispatch.variants.map(variant => variant.index))),
   );
+  if (shadingDiagnostic) {
+    profileBytes = shadingProfileBytes(res, res, samples, Math.max(1, maxLobes));
+    assertSceneStorageSize(device, profileBytes);
+  }
   const shaderCode = pathTraceComputeWgsl({
+    bsdfEvaluation: benchmarkOptions?.bsdfEvaluation ?? 'reference',
     dispatch, environment: envAsset !== undefined, maxLobes,
     closureDispatch: pathTraceClosureDispatch(dispatch, ptScene.materials),
     opaque,
@@ -1173,6 +1228,9 @@ async function renderUsdOnDevice(
     storage(data.byteLength > 0 ? data : data instanceof Uint32Array ? new Uint32Array(1) : new Float32Array(1));
 
   const accumBytes = res * res * 16;
+  const profileBuffer = profileBytes ? device.createBuffer({
+    size: profileBytes, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC,
+  }) : undefined;
   const accumBuffer = device.createBuffer({
     size: accumBytes,
     usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC,
@@ -1203,6 +1261,10 @@ async function renderUsdOnDevice(
       return { binding: slot.binding, resource: { buffer: mx } };
     }
     const uploadStarted = performance.now();
+    if (slot.role === 'nodes' && slot.data && slot.data.byteLength >
+        Math.min(device.limits.maxStorageBufferBindingSize, device.limits.maxBufferSize)) {
+      throw new Error('Path-tracing BVH exceeds the GPU storage buffer limit.');
+    }
     const buf = storageData(slot.data ?? new Float32Array(1));
     // CPU allocation/enqueue only; GPU execution remains separately timestamped.
     if (['nodes', 'triangles', 'triangleOrder', 'triangleUv', 'triangleTangent', 'triangleEdges'].includes(slot.role)) {
@@ -1213,6 +1275,7 @@ async function renderUsdOnDevice(
     if (slot.role === 'triangleEdges') triangleEdgesBuffer = buf;
     return { binding: slot.binding, resource: { buffer: buf } };
   });
+  if (profileBuffer) group0Entries.push({ binding: 11, resource: { buffer: profileBuffer } });
   if (uniformBinding === undefined) throw new Error('Path-tracing bind group has no frame uniform binding');
   const group0s = tileUniforms.map((tileUniform) =>
     device.createBindGroup({
@@ -1341,104 +1404,201 @@ async function renderUsdOnDevice(
     }
   }
 
-  backend.resetAccumulation();
   phase('gpuResources');
-  const queryCount = Math.ceil(samples / maxSamplesPerDispatch) * 16 * 2;
-  if (benchmarkOptions && queryCount > 8192) throw new Error('Benchmark exceeds the 8192 timestamp query limit; reduce spp.');
   const timestampSupported = device.features.has('timestamp-query');
-  const queries = benchmarkOptions && timestampSupported
-    ? device.createQuerySet({ type: 'timestamp', count: queryCount }) : undefined;
-  let queryIndex = 0;
-  if (benchmarkOptions && !timestampSupported) line('diag benchmark timestamp-query unsupported; GPU time unavailable');
-  const renderStart = performance.now();
-  device.pushErrorScope('validation');
-  const batch = 8;
-  for (let firstSample = 0, f = 0; firstSample < samples; firstSample += maxSamplesPerDispatch, f++) {
-    const frameSamples = Math.min(maxSamplesPerDispatch, samples - firstSample);
-    // Match the viewer's tiled dispatch: full-image alpha/shadow work can exceed
-    // the mobile watchdog budget even for a single sample. Local desktop renders
-    // can batch a few samples per tile to reduce dispatch and submission overhead.
-    let tileIndex = 0;
-    while (backend.frameIndex === f) {
-      const { tile, frameIndex } = backend.advanceTile(res, res);
-      if (tile.width === 0 || tile.height === 0) { continue; }
-      const [wgX, wgY] = backend.workgroupCount(tile.width, tile.height);
-      const tileUniform = tileUniforms[tileIndex];
-      const group0 = group0s[tileIndex];
-      if (!tileUniform || !group0) throw new Error(`Missing path-tracing resources for tile ${tileIndex}`);
-      device.queue.writeBuffer(tileUniform, 0, buildPathTraceUniform(ptScene, frameIndex, frameSamples, res, res, fireflyClamp, tile));
-      const encoder = device.createCommandEncoder();
-      const compute = encoder.beginComputePass(queries ? {
-        timestampWrites: { querySet: queries, beginningOfPassWriteIndex: queryIndex, endOfPassWriteIndex: queryIndex + 1 },
-      } : {});
-      if (queries) queryIndex += 2;
-      compute.setPipeline(pipeline);
-      compute.setBindGroup(0, group0);
-      if (group1) compute.setBindGroup(1, group1);
-      if (group2) compute.setBindGroup(2, group2);
-      if (ptEnvGroup) compute.setBindGroup(3, ptEnvGroup);
-      compute.dispatchWorkgroups(wgX, wgY, 1);
-      compute.end();
-      device.queue.submit([encoder.finish()]);
-      tileIndex++;
-    }
-    const completedSamples = firstSample + frameSamples;
-    if ((f + 1) % batch === 0 || completedSamples === samples) {
-      // Queue writes and dispatches in order; fence each batch of frames rather
-      // than each tile or frame, while keeping every dispatch watchdog-safe.
-      await device.queue.onSubmittedWorkDone();
-      line(`diag pt samples ${completedSamples}/${samples} @ ${(performance.now() - renderStart).toFixed(0)} ms`);
-    }
-  }
-  const frameError = await device.popErrorScope();
-  if (frameError) throw new Error(`Path-tracing dispatch validation error: ${frameError.message}`);
-  const renderMs = performance.now() - renderStart;
-  phase('render');
-
-  let gpuMs: number | null = null;
-  if (queries) {
-    const bytes = queryIndex * 8;
-    const resolved = device.createBuffer({ size: bytes, usage: GPUBufferUsage.QUERY_RESOLVE | GPUBufferUsage.COPY_SRC });
-    const timestamps = device.createBuffer({ size: bytes, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
+  const trace = async (profileMode: number, reportRenderPhase = false): Promise<{ renderMs: number; gpuMs: number | null; mean: Float32Array<ArrayBuffer> }> => {
+    backend.resetAccumulation();
+    device.queue.writeBuffer(accumBuffer, 0, new Float32Array(res * res * 4));
+    const queryCount = Math.ceil(samples / maxSamplesPerDispatch) * 16 * 2;
+    if (benchmarkOptions && queryCount > 8192) throw new Error('Benchmark exceeds its 8192 timestamp query budget; reduce spp.');
+    // WebGPU limits each query set to 4096 entries; high-spp references need more.
+    const queriesPerSet = 4096;
+    const querySets = benchmarkOptions && timestampSupported
+      ? Array.from({ length: Math.ceil(queryCount / queriesPerSet) }, (_, index) =>
+        device.createQuerySet({ type: 'timestamp', count: Math.min(queriesPerSet, queryCount - index * queriesPerSet) })) : [];
     try {
-      const encoder = device.createCommandEncoder();
-      encoder.resolveQuerySet(queries, 0, queryIndex, resolved, 0);
-      encoder.copyBufferToBuffer(resolved, 0, timestamps, 0, bytes);
-      device.queue.submit([encoder.finish()]);
-      await timestamps.mapAsync(GPUMapMode.READ);
-      const values = new BigUint64Array(timestamps.getMappedRange());
-      let nanoseconds = 0n;
-      for (let i = 0; i < values.length; i += 2) {
-        if (values[i + 1]! < values[i]!) throw new Error('GPU timestamps are not monotonic.');
-        nanoseconds += values[i + 1]! - values[i]!;
+      let queryIndex = 0;
+      if (benchmarkOptions && !timestampSupported) line('diag benchmark timestamp-query unsupported; GPU time unavailable');
+      const renderStart = performance.now();
+      device.pushErrorScope('validation');
+      const batch = 8;
+      try {
+        for (let firstSample = 0, f = 0; firstSample < samples; firstSample += maxSamplesPerDispatch, f++) {
+          const frameSamples = Math.min(maxSamplesPerDispatch, samples - firstSample);
+          // Keep the viewer's tiles to respect the mobile GPU watchdog.
+          let tileIndex = 0;
+          while (backend.frameIndex === f) {
+            const { tile, frameIndex } = backend.advanceTile(res, res);
+            if (tile.width === 0 || tile.height === 0) { continue; }
+            const [wgX, wgY] = backend.workgroupCount(tile.width, tile.height);
+            const tileUniform = tileUniforms[tileIndex];
+            const group0 = group0s[tileIndex];
+            if (!tileUniform || !group0) throw new Error(`Missing path-tracing resources for tile ${tileIndex}`);
+            device.queue.writeBuffer(tileUniform, 0, buildPathTraceUniform(
+              ptScene, frameIndex, frameSamples, res, res, fireflyClamp, tile, benchmarkOptions?.sampleSeed ?? 0, profileMode,
+            ));
+            const encoder = device.createCommandEncoder();
+            const queries = querySets[Math.floor(queryIndex / queriesPerSet)];
+            const localQueryIndex = queryIndex % queriesPerSet;
+            const compute = encoder.beginComputePass(queries ? {
+              timestampWrites: { querySet: queries, beginningOfPassWriteIndex: localQueryIndex, endOfPassWriteIndex: localQueryIndex + 1 },
+            } : {});
+            if (queries) queryIndex += 2;
+            compute.setPipeline(pipeline);
+            compute.setBindGroup(0, group0);
+            if (group1) compute.setBindGroup(1, group1);
+            if (group2) compute.setBindGroup(2, group2);
+            if (ptEnvGroup) compute.setBindGroup(3, ptEnvGroup);
+            compute.dispatchWorkgroups(wgX, wgY, 1);
+            compute.end();
+            device.queue.submit([encoder.finish()]);
+            tileIndex++;
+          }
+          const completedSamples = firstSample + frameSamples;
+          if ((f + 1) % batch === 0 || completedSamples === samples) {
+            await device.queue.onSubmittedWorkDone();
+            line(`diag pt samples ${completedSamples}/${samples} @ ${(performance.now() - renderStart).toFixed(0)} ms`);
+          }
+        }
+      } finally {
+        const frameError = await device.popErrorScope();
+        if (frameError) throw new Error(`Path-tracing dispatch validation error: ${frameError.message}`);
       }
-      gpuMs = Number(nanoseconds) / 1e6;
-      if (gpuMs <= 0) throw new Error('GPU timestamp measurement is empty.');
-    } finally {
-      timestamps.destroy();
-      resolved.destroy();
-      queries.destroy();
-    }
-  }
+      const renderMs = performance.now() - renderStart;
+      if (reportRenderPhase) phase('render');
 
-  // Read the accumulated mean back and tonemap through the shared output pipeline.
-  const readback = device.createBuffer({ size: accumBytes, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
-  const copy = device.createCommandEncoder();
-  copy.copyBufferToBuffer(accumBuffer, 0, readback, 0, accumBytes);
-  device.queue.submit([copy.finish()]);
-  await readback.mapAsync(GPUMapMode.READ);
-  const mean = new Float32Array(readback.getMappedRange());
+      let gpuMs: number | null = null;
+      if (querySets.length) {
+        const bytes = queryIndex * 8;
+        const resolved = device.createBuffer({ size: bytes, usage: GPUBufferUsage.QUERY_RESOLVE | GPUBufferUsage.COPY_SRC });
+        const timestamps = device.createBuffer({ size: bytes, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
+        try {
+          const encoder = device.createCommandEncoder();
+          for (let index = 0; index < querySets.length; index++) {
+            const offset = index * queriesPerSet;
+            const used = Math.min(queriesPerSet, queryIndex - offset);
+            if (used > 0) encoder.resolveQuerySet(querySets[index]!, 0, used, resolved, offset * 8);
+          }
+          encoder.copyBufferToBuffer(resolved, 0, timestamps, 0, bytes);
+          device.queue.submit([encoder.finish()]);
+          await timestamps.mapAsync(GPUMapMode.READ);
+          const values = new BigUint64Array(timestamps.getMappedRange());
+          let nanoseconds = 0n;
+          for (let i = 0; i < values.length; i += 2) {
+            if (values[i + 1]! < values[i]!) throw new Error('GPU timestamps are not monotonic.');
+            nanoseconds += values[i + 1]! - values[i]!;
+          }
+          gpuMs = Number(nanoseconds) / 1e6;
+          if (gpuMs <= 0) throw new Error('GPU timestamp measurement is empty.');
+        } finally {
+          timestamps.destroy();
+          resolved.destroy();
+        }
+      }
+
+      const readback = device.createBuffer({ size: accumBytes, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
+      try {
+        const copy = device.createCommandEncoder();
+        copy.copyBufferToBuffer(accumBuffer, 0, readback, 0, accumBytes);
+        device.queue.submit([copy.finish()]);
+        await readback.mapAsync(GPUMapMode.READ);
+        return { renderMs, gpuMs, mean: new Float32Array(readback.getMappedRange()).slice() };
+      } finally {
+        readback.destroy();
+      }
+    } finally {
+      querySets.forEach(queries => queries.destroy());
+    }
+  };
+  const initialTrace = await trace(0, true);
+  let { renderMs, gpuMs } = initialTrace;
+  const { mean } = initialTrace;
+  let traversalProfile: PathTraceBenchmarkResult['traversalProfile'];
+  let shadingProfile: PathTraceBenchmarkResult['shadingProfile'];
+  if (profileBuffer) {
+    phase('profilePreparation');
+    const readLog = async (): Promise<Uint32Array<ArrayBuffer>> => {
+      const readback = device.createBuffer({ size: profileBytes, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
+      try {
+        const encoder = device.createCommandEncoder();
+        encoder.copyBufferToBuffer(profileBuffer, 0, readback, 0, profileBytes);
+        device.queue.submit([encoder.finish()]);
+        await readback.mapAsync(GPUMapMode.READ);
+        return new Uint32Array(readback.getMappedRange()).slice();
+      } finally {
+        readback.destroy();
+      }
+    };
+    const stages: NonNullable<typeof traversalProfile>['stages'] = [];
+    try {
+      let workload: TraversalWorkload | ShadingWorkload | undefined;
+      const replayDevices = shadingDiagnostic ? checkedShadingReplayDevices : checkedReplayDevices;
+      const sampleWords = shadingDiagnostic ? shadingProfileLayout(Math.max(1, maxLobes)).sampleWords : PT_PROFILE_SAMPLE_WORDS;
+      const replayFirst = benchmarkOptions?.profileReplayFirst ?? false;
+      for (const mode of [1, 3, ...(replayFirst ? [2, 0] : [0, 2])]) {
+        const stage = await trace(mode);
+        const expectedBits = new Uint32Array(mean.buffer, mean.byteOffset, mean.length);
+        const actualBits = new Uint32Array(stage.mean.buffer, stage.mean.byteOffset, stage.mean.length);
+        let identical = true;
+        for (let i = 0; i < mean.length; i++) {
+          if (!Number.isFinite(stage.mean[i]) || actualBits[i] !== expectedBits[i]) { identical = false; break; }
+        }
+        if (!identical) throw new Error(`Profile mode ${mode} changed raw HDR/sample bits.`);
+        if (mode !== 0) {
+          const words = await readLog();
+          workload = shadingDiagnostic ? readShadingProfile(words, res * res * samples, Math.max(1, maxLobes), mode >= 2) :
+            readTraversalProfile(words, res * res * samples, mode >= 2);
+          if (mode === 1 && !replayDevices.has(device)) {
+            // Corrupt an input without changing the saved output.
+            let firstSample = 0;
+            while (firstSample < words.length && words[firstSample] === 0) firstSample += sampleWords;
+            if (firstSample >= words.length) throw new Error('Profiling self-test requires at least one captured event.');
+            const inputIndex = firstSample + (shadingDiagnostic ? SHADING_PROFILE_HEADER_WORDS + 1 : PT_PROFILE_HEADER_WORDS);
+            const originWord = words[inputIndex]!;
+            device.queue.writeBuffer(profileBuffer, inputIndex * 4, new Uint32Array([originWord ^ 1]));
+            await trace(3);
+            const corrupted = await readLog();
+            for (let base = 0; base < corrupted.length; base += sampleWords) {
+              if (corrupted[base + 2] !== (base === firstSample ? 1 : 0)) {
+                throw new Error('Profile replay failed its deliberate one-bit input corruption check.');
+              }
+            }
+            device.queue.writeBuffer(profileBuffer, inputIndex * 4, new Uint32Array([originWord]));
+            device.queue.writeBuffer(profileBuffer, (firstSample + 2) * 4, new Uint32Array([0]));
+            replayDevices.add(device);
+            line('diag profile replay corruption check passed');
+          }
+        }
+        if (mode === 0) { renderMs = stage.renderMs; gpuMs = stage.gpuMs; }
+        stages.push({ mode, gpuMs: stage.gpuMs, renderMs: stage.renderMs, identical });
+        line(`diag ${shadingDiagnostic ? 'BSDF' : 'traversal'} profile mode=${mode} gpuMs=${stage.gpuMs} exact=true`);
+      }
+      if (!workload) throw new Error('Profile did not capture any workload.');
+      if (shadingDiagnostic) {
+        if (!('calls' in workload)) throw new Error('Missing BSDF profiling workload.');
+        shadingProfile = { workload, stages, inputsIdentical: true, eventCountsIdentical: true, replayFirst,
+          replayMismatchDetected: replayDevices.has(device), maxLobes: Math.max(1, maxLobes) };
+      } else {
+        if (!('rays' in workload)) throw new Error('Missing traversal profiling workload.');
+        traversalProfile = { workload, stages, rayInputsIdentical: true, eventCountsIdentical: true, replayFirst,
+          replayMismatchDetected: replayDevices.has(device) };
+      }
+    } finally {
+      profileBuffer.destroy();
+    }
+    phase(shadingDiagnostic ? 'shadingProfile' : 'traversalProfile');
+  }
   let nonFinite = 0;
   for (let p = 0; p < res * res; p++) {
     for (let c = 0; c < 3; c++) if (!Number.isFinite(mean[p * 4 + c])) nonFinite++;
   }
   line(`diag accum nonfinite=${nonFinite}`);
   if (nonFinite > 0) {
-    readback.unmap();
     throw new Error(`Pathtracing accumulation contains ${nonFinite} non-finite RGB components`);
   }
   let benchmark: PathTraceBenchmarkResult | undefined;
   if (benchmarkOptions) {
+    if (!instancing) throw new Error('Missing path-tracing instancing inventory.');
     for (let p = 0; p < res * res; p++) {
       if (mean[p * 4 + 3] !== samples) throw new Error(`Invalid sample count at pixel ${p}: ${mean[p * 4 + 3]} != ${samples}`);
     }
@@ -1446,13 +1606,18 @@ async function renderUsdOnDevice(
     let binary = '';
     for (let i = 0; i < bytes.length; i += 8192) binary += String.fromCharCode(...bytes.subarray(i, i + 8192));
     benchmark = { gpuMs, timestampStatus: timestampSupported ? 'available' : 'unsupported',
+      bsdfEvaluation: benchmarkOptions.bsdfEvaluation ?? 'reference',
       hdrBase64: btoa(binary), workgroupSize: benchmarkOptions.workgroupSize, sceneBufferCache,
       bvhTraversal: benchmarkOptions.bvhTraversal ?? 'reference',
-      sceneMetadata: { triangleCount: ptScene.triangleCount, nodeCount: ptScene.nodeCount,
+      cameraSampler: benchmarkOptions.cameraSampler ?? 'pcg', sampleSeed: benchmarkOptions.sampleSeed ?? 0,
+      sceneMetadata: { triangleCount: ptScene.triangleCount, nodeCount: ptScene.nodeCount, instancing,
         materialCount: ptScene.materialCount, maxDepth: ptScene.settings?.maxDepth ?? 64, opaque,
-        triangleLayout: ptScene.triangleLayout ?? 'reference' },
+        triangleLayout: ptScene.triangleLayout ?? 'reference', bvhLayout: ptScene.bvhLayout ?? 'reference',
+        gpuNodeBytes: (ptScene.wideNodes ?? ptScene.nodes).byteLength, canonicalNodeBytes: ptScene.nodes.byteLength },
       counters: { pixels: res * res, samplesPerPixel: samples, totalSamples: res * res * samples },
       ...(benchmarkOptions.checkBvh ? { traversalChecks: checkedBvhDevices.get(device)! } : {}) };
+    if (traversalProfile) benchmark.traversalProfile = traversalProfile;
+    if (shadingProfile) benchmark.shadingProfile = shadingProfile;
   }
   const rgba = new Uint8ClampedArray(res * res * 4);
   for (let p = 0; p < res * res; p++) {
@@ -1485,7 +1650,6 @@ async function renderUsdOnDevice(
     }
     line(`diag accum max=${accMax.toFixed(3)} mean=${(accSum / (res * res * 4)).toFixed(4)} nan=${nan} outMax=${outMax} lit=${outNonZero}/${res * res}`);
   }
-  readback.unmap();
   phase('readbackAndTonemap');
   return { rgba, renderMs, ...(benchmark ? { benchmark } : {}) };
 }

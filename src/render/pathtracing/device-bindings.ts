@@ -82,7 +82,7 @@ export interface BuildPtDeviceBindingsOptions {
 function group0Slots(scene: PathTraceScene, dispatch: PtMaterialDispatch): PtBufferSlot[] {
   const slots: PtBufferSlot[] = [
     { binding: 0, role: 'uniform', usage: 'uniform', access: 'read' },
-    { binding: 1, role: 'nodes', usage: 'storage', access: 'read', data: scene.nodes },
+    { binding: 1, role: 'nodes', usage: 'storage', access: 'read', data: scene.wideNodes ?? scene.nodes },
     { binding: 2, role: 'triangles', usage: 'storage', access: 'read', data: scene.gpuTriangles ?? scene.triangles },
     ...(scene.triangleLayout === 'leafOrder' ? [] : [
       { binding: 3, role: 'triangleOrder' as const, usage: 'storage' as const, access: 'read' as const, data: scene.triangleOrder },

@@ -30,6 +30,37 @@ const normalize = (a: V): V => {
 const WO: V = normalize([0.4, 0.1, 1.0]);
 
 describe('closure library prelude (T056a)', () => {
+  it('unrolls only bounded weight/eval loops with static indices, guards and ordered arithmetic', () => {
+    const spec = { kinds: new Set([1, 3, 4]), thinFilm: false, fuzz: false };
+    const reference = closureLibraryPrelude(spec);
+    for (const capacity of [1, 3, 8]) {
+      const code = closureLibraryPrelude(spec, capacity);
+      for (const name of ['mx_closure_total_weight', 'mx_closure_base_eval']) {
+        const fn = code.match(new RegExp(`fn ${name}\\([^]*?\\n}`))![0];
+        expect(fn).not.toContain('c.lobes[i]');
+        expect(fn).not.toContain('continue');
+        expect(fn.match(/if \(\d+u < c.lobeCount\)/g)).toHaveLength(capacity);
+        for (let i = 0; i < capacity; i++) expect(fn).toContain(`c.lobes[${i}u]`);
+        expect(fn).not.toContain(`c.lobes[${capacity}u]`);
+      }
+      const evalFn = code.match(/fn mx_closure_base_eval\([^]*?\n}/)![0];
+      const changedFunctions = /fn mx_closure_(?:total_weight|base_eval)\([^]*?\n}/g;
+      expect(code.replace(changedFunctions, '')).toBe(reference.replace(changedFunctions, ''));
+      expect(evalFn).toContain('if (total <= 0.0) { return MxBsdfEval(value, pdf); }');
+      for (let i = 1; i < capacity; i++) {
+        expect(evalFn.indexOf(`if (${i}u < c.lobeCount)`))
+          .toBeGreaterThan(evalFn.indexOf(`if (${i - 1}u < c.lobeCount)`));
+      }
+      expect(evalFn.match(/value = value \+ r.value \* lobe.weight;/g)).toHaveLength(capacity);
+      expect(evalFn.match(/pdf = pdf \+ \(lobe.weight \/ total\) \* r.pdf;/g)).toHaveLength(capacity);
+      expect(evalFn.match(/if \(!\(lobe.weight <= 0.0\)\)/g)).toHaveLength(capacity);
+      for (const name of ['mx_closure_base_direction', 'mx_closure_sample_base', 'mx_conductor_eval', 'mx_closure_eval_base']) {
+        expect(code).toContain(reference.match(new RegExp(`fn ${name}\\([^]*?\\n}`))![0]);
+      }
+    }
+    expect(closureLibraryPrelude()).toBe(CLOSURE_LIBRARY_PRELUDE);
+    for (const capacity of [0, 9, 1.5, NaN]) expect(() => closureLibraryPrelude(spec, capacity)).toThrow(/capacity/);
+  });
   it('specializes absent fuzz to the exact base eval/sample paths, retaining all other formulas', () => {
     const spec = { kinds: new Set([1, 3, 4, 8]), thinFilm: false };
     const generic = closureLibraryPrelude(spec);

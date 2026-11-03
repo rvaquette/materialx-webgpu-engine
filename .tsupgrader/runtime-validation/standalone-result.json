@@ -1,8 +1,8 @@
 {
-  "planHash": "90c0935f59e0f00a8b49f0e1de2828d4f871daa36779951d1d1ff955bce3e871",
+  "planHash": "67fde26fa59ffa25b0003b6f96761ec99bcf4a0c3363bc9a57dca0bd876a2516",
   "phase": "standalone",
-  "recordedAtUtc": "2026-10-23T16:21:49.8526121Z",
-  "retryCount": 0,
+  "recordedAtUtc": "2026-11-03T08:12:57.5695917Z",
+  "retryCount": 3,
   "resetBaseline": false,
   "complete": true,
   "result": {
@@ -19,29 +19,62 @@
         "skipped": false,
         "skippedReason": null,
         "exitCode": 0,
-        "outputSample": "\r\n\u003E materialx-webgpu-engine@0.0.0 typecheck\r\n\u003E tsc --noEmit\r\n\r\n",
-        "durationMs": 24229
+        "outputSample": "npm warn Unknown env config \u0022scripts-prepend-node-path\u0022. This will stop working in the next major version of npm.\r\n\r\n\u003E materialx-webgpu-engine@0.0.0 typecheck\r\n\u003E tsc --noEmit\r\n\r\n",
+        "durationMs": 16000
       },
       {
         "name": "tests-pass",
         "kind": "process",
         "verificationMethod": "test-results",
-        "passed": false,
+        "passed": true,
         "timedOut": false,
         "skipped": false,
         "skippedReason": null,
-        "exitCode": 1,
-        "outputSample": "\r\n\u003E materialx-webgpu-engine@0.0.0 test\r\n\u003E vitest run tests\\geometry\\external-mesh.test.ts tests\\geometry\\shaderball-assets.test.ts\r\n\r\n\r\n RUN  v5.0.3 D:/WebGL2/MaterialX/materialx-webgpu-engine\r\n\r\n \u276F tests/geometry/external-mesh.test.ts (0 test)\r\n \u276F tests/geometry/shaderball-assets.test.ts (0 test)\r\n\r\n\u23AF\u23AF\u23AF\u23AF\u23AF\u23AF Failed Suites 2 \u23AF\u23AF\u23AF\u23AF\u23AF\u23AF\u23AF\r\n\r\n FAIL  tests/geometry/external-mesh.test.ts [ tests/geometry/external-mesh.test.ts ]\r\nTypeError: Cannot read properties of undefined (reading \u0027config\u0027)\r\n \u276F tests/geometry/external-mesh.test.ts:64:1\r\n     62| }\r\n     63|\r\n     64| describe(\u0027Three.js external geometry bridge\u0027, () =\u003E {\r\n       | ^\r\n     65|   it(\u0027loads OBJ positions, negative indices, authored normals and UVs\u0027\u2026\r\n     66|     const scene = await stage(\u0027def Mesh \u0022mesh\u0022 { asset engine:geometry\u2026\r\n\r\n\u23AF\u23AF\u23AF\u23AF\u23AF\u23AF\u23AF\u23AF\u23AF\u23AF\u23AF\u23AF\u23AF\u23AF\u23AF\u23AF\u23AF\u23AF\u23AF\u23AF\u23AF\u23AF\u23AF\u23AF[1/2]\u23AF\r\n\r\n FAIL  tests/geometry/shaderball-assets.test.ts [ tests/geometry/shaderball-assets.test.ts ]\r\nTypeError: Cannot read properties of undefined (reading \u0027config\u0027)\r\n \u276F tests/geometry/shaderball-assets.test.ts:18:1\r\n     16| };\r\n     17|\r\n     18| describe(\u0027local shaderball geometry assets\u0027, () =\u003E {\r\n       | ^\r\n     19|   it.each([\r\n     20|     [\u0027standard-shader-ball.usda\u0027, [\r\n\r\n\u23AF\u23AF\u23AF\u23AF\u23AF\u23AF\u23AF\u23AF\u23AF\u23AF\u23AF\u23AF\u23AF\u23AF\u23AF\u23AF\u23AF\u23AF\u23AF\u23AF\u23AF\u23AF\u23AF\u23AF[2/2]\u23AF\r\n\r\n\r\n Test Files  2 failed (2)\r\n      Tests  no tests\r\n   Start at  18:21:34\r\n   Duration  1.88s (worker 96%, environment 4%)\r\n\r\n",
-        "durationMs": 6220,
+        "exitCode": 0,
+        "outputSample": "npm warn Unknown env config \u0022scripts-prepend-node-path\u0022. This will stop working in the next major version of npm.\r\n\r\n\u003E materialx-webgpu-engine@0.0.0 test\r\n\u003E vitest run tests\\geometry\\external-mesh.test.ts tests\\geometry\\shaderball-assets.test.ts\r\n\r\n\r\n RUN  v5.0.3 D:/WebGL2/MaterialX/materialx-webgpu-engine\r\n\r\n\r\n Test Files  2 passed (2)\r\n      Tests  17 passed (17)\r\n   Start at  09:12:32\r\n   Duration  1.70s (import 41%, tests 30%, transform 27%, worker 2%)\r\n\r\n",
+        "durationMs": 4565,
         "testResults": {
           "testFramework": "vitest",
           "runnerDetectedFrom": "package_json",
-          "testsTotal": 0,
-          "testsPassed": 0,
+          "testsTotal": 17,
+          "testsPassed": 17,
           "testsFailed": 0,
           "testsSkipped": 0,
-          "parseFailed": true
+          "parseFailed": false
         }
+      },
+      {
+        "name": "pathtracing-tests-pass",
+        "kind": "process",
+        "verificationMethod": "test-results",
+        "passed": true,
+        "timedOut": false,
+        "skipped": false,
+        "skippedReason": null,
+        "exitCode": 0,
+        "outputSample": "npm warn Unknown env config \u0022scripts-prepend-node-path\u0022. This will stop working in the next major version of npm.\r\n\r\n\u003E materialx-webgpu-engine@0.0.0 test\r\n\u003E vitest run tests\\render\\pathtracing\r\n\r\n\r\n RUN  v5.0.3 D:/WebGL2/MaterialX/materialx-webgpu-engine\r\n\r\n\r\n Test Files  28 passed (28)\r\n      Tests  346 passed (346)\r\n   Start at  09:12:36\r\n   Duration  9.84s (tests 74%, import 15%, transform 9%, worker 2%)\r\n\r\n    Isolate  28 workers spawned \u00B7 ~918ms startup each (spawn \u002B environment, per file)\r\n             at least ~2.75s faster with isolate: false \u2014 reuses workers across files instead of one per file\r\n\r\n",
+        "durationMs": 12726,
+        "testResults": {
+          "testFramework": "vitest",
+          "runnerDetectedFrom": "package_json",
+          "testsTotal": 346,
+          "testsPassed": 346,
+          "testsFailed": 0,
+          "testsSkipped": 0,
+          "parseFailed": false
+        }
+      },
+      {
+        "name": "benchmark-tests-pass",
+        "kind": "process",
+        "verificationMethod": "exit-code",
+        "passed": true,
+        "timedOut": false,
+        "skipped": false,
+        "skippedReason": null,
+        "exitCode": 0,
+        "outputSample": "\u2714 CDP startup retries transient Android tunnel errors with an explicit diagnostic (6.9557ms)\r\n\u2714 CDP startup does not hide HTTP errors (1.1137ms)\r\n\u2714 quality reference averages independent HDR means and sums sample counts (0.9542ms)\r\n\u2714 HDR error excludes sample counters, validates finite values and reports linear RGB RMSE (0.5523ms)\r\n\u2714 convergence qualification requires comparable measured GPU budgets, not a time-normalized proxy (0.6966ms)\r\n\u2714 quality summaries exclude high-spp references and report error dispersion without claiming exact HDR parity (0.9153ms)\r\n\u2714 triangle-edge experiment warms both variants and alternates their order (0.3687ms)\r\n\u2714 median validates measurements without mutating input (0.3434ms)\r\n\u2714 HDR comparison checks exact RGB and sample counts (0.5487ms)\r\n\u2714 summaries exclude warmup and never substitute wall time for GPU time (0.5424ms)\r\n\u2714 triangle-edge comparisons report scene-specific gain without inventing unsupported GPU measurements (0.5997ms)\r\n\u2139 tests 11\r\n\u2139 suites 0\r\n\u2139 pass 11\r\n\u2139 fail 0\r\n\u2139 cancelled 0\r\n\u2139 skipped 0\r\n\u2139 todo 0\r\n\u2139 duration_ms 305.7108\r\n",
+        "durationMs": 633
       },
       {
         "name": "usd-render-harness-served",
@@ -52,40 +85,113 @@
         "skipped": false,
         "skippedReason": null,
         "exitCode": null,
-        "outputSample": "HTTP 200\n\u003C!doctype html\u003E\r\n\u003Chtml lang=\u0022fr\u0022\u003E\r\n  \u003Chead\u003E\n    \u003Cscript type=\u0022module\u0022 src=\u0022/@vite/client\u0022\u003E\u003C/script\u003E\n\r\n    \u003Cmeta charset=\u0022utf-8\u0022 /\u003E\r\n    \u003Cmeta name=\u0022viewport\u0022 content=\u0022width=device-width, initial-scale=1\u0022 /\u003E\r\n    \u003Ctitle\u003EMaterialX - rendu raster/path-trace USD sur GPU device\u003C/title\u003E\r\n    \u003Cstyle\u003E\n      body { font-family: system-ui, sans-serif; margin: 1rem; background: #111; color: #eee; }\n      img { image-rendering: pixelated; border: 1px solid #333; }\n    \u003C/style\u003E\r\n  \u003C/head\u003E\r\n  \u003Cbody\u003E\r\n    \u003Ch1\u003EScene USD rendue sur le GPU (raster ou path-trace)\u003C/h1\u003E\r\n    \u003Cdiv id=\u0022log\u0022\u003E\u003C/div\u003E\r\n    \u003Cscript type=\u0022module\u0022 src=\u0022/usd-image-harness.html?html-proxy\u0026index=0.js\u0022\u003E\u003C/script\u003E\r\n  \u003C/body\u003E\r\n\u003C/html\u003E\r\n\n--- server output ---\n\r\n\u003E materialx-webgpu-engine@0.0.0 dev\r\n\u003E vite --host 127.0.0.1 --port 5194 --strictPort\r\n\r\n\u001B[2m18:21:40\u001B[22m \u001B[36m\u001B[1m[vite]\u001B[22m\u001B[39m \u001B[90m\u001B[2m(client)\u001B[22m\u001B[39m Re-optimizing dependencies because vite config has changed\r\n\r\n  \u001B[32m\u001B[1mVITE\u001B[22m v8.3.4\u001B[39m  \u001B[2mready in \u001B[0m\u001B[1m878\u001B[22m\u001B[2m\u001B[0m ms\u001B[22m\r\n\r\n  \u001B[32m\u279C\u001B[39m  \u001B[1mLocal\u001B[22m:   \u001B[36mhttp://127.0.0.1:\u001B[1m5194\u001B[22m/\u001B[39m\r\n\u001B[2m18:21:41\u001B[22m \u001B[36m\u001B[1m[vite]\u001B[22m\u001B[39m \u001B[90m\u001B[2m(client)\u001B[22m\u001B[39m [optimizer] scanning dependencies...\r\n\u001B[2m18:21:49\u001B[22m \u001B[36m\u001B[1m[vite]\u001B[22m\u001B[39m \u001B[90m\u001B[2m(client)\u001B[22m\u001B[39m [optimizer] bundling dependencies...\r\n",
-        "durationMs": 12425
+        "outputSample": "HTTP 200\n\u003C!doctype html\u003E\r\n\u003Chtml lang=\u0022fr\u0022\u003E\r\n  \u003Chead\u003E\n    \u003Cscript type=\u0022module\u0022 src=\u0022/@vite/client\u0022\u003E\u003C/script\u003E\n\r\n    \u003Cmeta charset=\u0022utf-8\u0022 /\u003E\r\n    \u003Cmeta name=\u0022viewport\u0022 content=\u0022width=device-width, initial-scale=1\u0022 /\u003E\r\n    \u003Ctitle\u003EMaterialX - rendu raster/path-trace USD sur GPU device\u003C/title\u003E\r\n    \u003Cstyle\u003E\n      body { font-family: system-ui, sans-serif; margin: 1rem; background: #111; color: #eee; }\n      img { image-rendering: pixelated; border: 1px solid #333; }\n    \u003C/style\u003E\r\n  \u003C/head\u003E\r\n  \u003Cbody\u003E\r\n    \u003Ch1\u003EScene USD rendue sur le GPU (raster ou path-trace)\u003C/h1\u003E\r\n    \u003Cdiv id=\u0022log\u0022\u003E\u003C/div\u003E\r\n    \u003Cscript type=\u0022module\u0022 src=\u0022/usd-image-harness.html?html-proxy\u0026index=0.js\u0022\u003E\u003C/script\u003E\r\n  \u003C/body\u003E\r\n\u003C/html\u003E\r\n\n--- server output ---\nnpm warn Unknown env config \u0022scripts-prepend-node-path\u0022. This will stop working in the next major version of npm.\r\n\r\n\u003E materialx-webgpu-engine@0.0.0 dev\r\n\u003E vite --host 127.0.0.1 --port 5194 --strictPort\r\n\r\n\u001B[2m09:12:50\u001B[22m \u001B[36m\u001B[1m[vite]\u001B[22m\u001B[39m \u001B[90m\u001B[2m(client)\u001B[22m\u001B[39m Re-optimizing dependencies because vite config has changed\r\n\r\n  \u001B[32m\u001B[1mVITE\u001B[22m v8.3.4\u001B[39m  \u001B[2mready in \u001B[0m\u001B[1m1060\u001B[22m\u001B[2m\u001B[0m ms\u001B[22m\r\n\r\n  \u001B[32m\u279C\u001B[39m  \u001B[1mLocal\u001B[22m:   \u001B[36mhttp://127.0.0.1:\u001B[1m5194\u001B[22m/\u001B[39m\r\n\u001B[2m09:12:51\u001B[22m \u001B[36m\u001B[1m[vite]\u001B[22m\u001B[39m \u001B[90m\u001B[2m(client)\u001B[22m\u001B[39m [optimizer] scanning dependencies...\r\n\u001B[2m09:12:56\u001B[22m \u001B[36m\u001B[1m[vite]\u001B[22m\u001B[39m \u001B[90m\u001B[2m(client)\u001B[22m\u001B[39m [optimizer] bundling dependencies...\r\n",
+        "durationMs": 10088
       }
     ],
     "executions": [
       {
         "source": "tsc-no-emit",
-        "resolvedExecutable": "C:\\nvm4w\\nodejs\\npm.CMD",
+        "resolvedExecutable": "C:\\nvm4w\\nodejs\\npm.cmd",
         "args": [
           "run",
           "typecheck"
         ],
-        "cwd": "d:\\WebGL2\\MaterialX\\materialx-webgpu-engine",
+        "cwd": "D:\\WebGL2\\MaterialX\\materialx-webgpu-engine",
         "env": {},
         "prependPath": [],
-        "platform": "win32"
+        "platform": "win32",
+        "nodeExecutable": "C:\\nvm4w\\nodejs\\node.EXE",
+        "nodeVersion": "v25.2.1",
+        "packageManager": "npm",
+        "packageManagerExecutable": "C:\\nvm4w\\nodejs\\npm.cmd",
+        "packageManagerVersion": "11.6.2",
+        "cleanup": {
+          "RootProcessId": 22364,
+          "Completed": true,
+          "ProcessesObserved": 7,
+          "ProcessesTerminated": 1,
+          "Failure": null
+        }
       },
       {
         "source": "tests-pass",
-        "resolvedExecutable": "C:\\nvm4w\\nodejs\\npm.CMD",
+        "resolvedExecutable": "C:\\nvm4w\\nodejs\\npm.cmd",
         "args": [
           "test",
           "--",
           "tests\\geometry\\external-mesh.test.ts",
           "tests\\geometry\\shaderball-assets.test.ts"
         ],
-        "cwd": "d:\\WebGL2\\MaterialX\\materialx-webgpu-engine",
+        "cwd": "D:\\WebGL2\\MaterialX\\materialx-webgpu-engine",
         "env": {},
         "prependPath": [],
-        "platform": "win32"
+        "platform": "win32",
+        "nodeExecutable": "C:\\nvm4w\\nodejs\\node.EXE",
+        "nodeVersion": "v25.2.1",
+        "packageManager": "npm",
+        "packageManagerExecutable": "C:\\nvm4w\\nodejs\\npm.cmd",
+        "packageManagerVersion": "11.6.2",
+        "cleanup": {
+          "RootProcessId": 37852,
+          "Completed": true,
+          "ProcessesObserved": 12,
+          "ProcessesTerminated": 1,
+          "Failure": null
+        }
+      },
+      {
+        "source": "pathtracing-tests-pass",
+        "resolvedExecutable": "C:\\nvm4w\\nodejs\\npm.cmd",
+        "args": [
+          "test",
+          "--",
+          "tests\\render\\pathtracing"
+        ],
+        "cwd": "D:\\WebGL2\\MaterialX\\materialx-webgpu-engine",
+        "env": {},
+        "prependPath": [],
+        "platform": "win32",
+        "nodeExecutable": "C:\\nvm4w\\nodejs\\node.EXE",
+        "nodeVersion": "v25.2.1",
+        "packageManager": "npm",
+        "packageManagerExecutable": "C:\\nvm4w\\nodejs\\npm.cmd",
+        "packageManagerVersion": "11.6.2",
+        "cleanup": {
+          "RootProcessId": 12096,
+          "Completed": true,
+          "ProcessesObserved": 38,
+          "ProcessesTerminated": 1,
+          "Failure": null
+        }
+      },
+      {
+        "source": "benchmark-tests-pass",
+        "resolvedExecutable": "C:\\nvm4w\\nodejs\\node.EXE",
+        "args": [
+          "--test",
+          "scripts\\benchmark-pathtracer.test.mjs"
+        ],
+        "cwd": "D:\\WebGL2\\MaterialX\\materialx-webgpu-engine",
+        "env": {},
+        "prependPath": [],
+        "platform": "win32",
+        "nodeExecutable": null,
+        "nodeVersion": null,
+        "packageManager": null,
+        "packageManagerExecutable": null,
+        "packageManagerVersion": null,
+        "cleanup": {
+          "RootProcessId": 51648,
+          "Completed": true,
+          "ProcessesObserved": 3,
+          "ProcessesTerminated": 1,
+          "Failure": null
+        }
       },
       {
         "source": "usd-render-harness-served",
-        "resolvedExecutable": "C:\\nvm4w\\nodejs\\npm.CMD",
+        "resolvedExecutable": "C:\\nvm4w\\nodejs\\npm.cmd",
         "args": [
           "run",
           "dev",
@@ -96,10 +202,22 @@
           "5194",
           "--strictPort"
         ],
-        "cwd": "d:\\WebGL2\\MaterialX\\materialx-webgpu-engine",
+        "cwd": "D:\\WebGL2\\MaterialX\\materialx-webgpu-engine",
         "env": {},
         "prependPath": [],
-        "platform": "win32"
+        "platform": "win32",
+        "nodeExecutable": "C:\\nvm4w\\nodejs\\node.EXE",
+        "nodeVersion": "v25.2.1",
+        "packageManager": "npm",
+        "packageManagerExecutable": "C:\\nvm4w\\nodejs\\npm.cmd",
+        "packageManagerVersion": "11.6.2",
+        "cleanup": {
+          "RootProcessId": 12984,
+          "Completed": true,
+          "ProcessesObserved": 10,
+          "ProcessesTerminated": 5,
+          "Failure": null
+        }
       }
     ]
   }

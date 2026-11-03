@@ -130,6 +130,15 @@ describe('buildPtDeviceBindings (T057m2)', () => {
     expect(bindings.group0[5]!.data).toBeUndefined();
     expect(bindings.group0[5]!.access).toBe('read_write');
   });
+  it('binds only the optional wide nodes while retaining canonical geometry and ordering', async () => {
+    const scene = fakeScene();
+    scene.bvhLayout = 'bvh4';
+    scene.wideNodes = new Float32Array(48);
+    const bindings = await buildPtDeviceBindings(buildMaterialDispatch([]), scene, countingProvider(fakeImage()).provider);
+    expect(bindings.group0.find(slot => slot.role === 'nodes')?.data).toBe(scene.wideNodes);
+    expect(bindings.group0.find(slot => slot.role === 'triangles')?.data).toBe(scene.triangles);
+    expect(bindings.group0.find(slot => slot.role === 'triangleOrder')?.data).toBe(scene.triangleOrder);
+  });
   it('omits the triangle-order buffer for physically leaf-ordered GPU geometry', async () => {
     const scene = fakeScene();
     scene.triangleLayout = 'leafOrder';

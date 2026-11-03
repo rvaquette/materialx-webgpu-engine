@@ -42,6 +42,39 @@ function memoryStore() {
 }
 
 describe('prepared scene buffer file cache', () => {
+  it('isolates, persists and validates BVH4 including displacement-inflated bounds', async () => {
+    const { resources } = fixture(), { store } = memoryStore();
+    const reference = await buildFileCachedPathTraceScene(resources, {}, 'use', store);
+    const cold = await buildFileCachedPathTraceScene(resources, { bvhLayout: 'bvh4' }, 'use', store);
+    expect(cold.cache.key).not.toBe(reference.cache.key);
+    expect(cold.scene.nodes).toEqual(reference.scene.nodes);
+    expect(cold.scene.triangles).toEqual(reference.scene.triangles);
+    expect(cold.scene.triangleUv).toEqual(reference.scene.triangleUv);
+    expect(cold.scene.triangleTangent).toEqual(reference.scene.triangleTangent);
+    expect(cold.scene.wideNodes).toBeDefined();
+    const warm = await buildFileCachedPathTraceScene(resources, {
+      bvhLayout: 'bvh4', frameCamera: { viewProj: IDENTITY4, eye: [3, 4, 5], exposure: 2 },
+    }, 'verify', store);
+    expect(warm.cache.status).toBe('hit');
+    expect(warm.cache.geometryIdentical).toBe(true);
+    expect(warm.scene.wideNodes).toEqual(cold.scene.wideNodes);
+    expect(warm.scene.camera.eye).toEqual([3, 4, 5]);
+    expect(warm.scene.displacement?.scale[0]).toBe(0.25);
+    const bytes = await encodeSceneBufferCache(cold.scene, cold.cache.key, cold.scene.materialCount);
+    await expect(decodeSceneBufferCache(bytes, cold.cache.key)).rejects.toThrow(/BVH representation/);
+    cold.scene.wideNodes![0] = -42;
+    expect(() => validatePreparedGeometry(cold.scene, cold.scene.materialCount)).toThrow(/invalid geometry/);
+  });
+
+  it('round trips empty BVH4 geometry', async () => {
+    const { resources } = fixture(), { store } = memoryStore();
+    resources.instances = [];
+    const cold = await buildFileCachedPathTraceScene(resources, { bvhLayout: 'bvh4' }, 'use', store);
+    const warm = await buildFileCachedPathTraceScene(resources, { bvhLayout: 'bvh4' }, 'verify', store);
+    expect(warm.cache.geometryIdentical).toBe(true);
+    expect(warm.scene.wideNodes).toEqual(new Float32Array());
+    expect(cold.cache.status).toBe('miss');
+  });
   it('round trips all geometry bytes including UVs/tangents and inflated bounds', async () => {
     const { resources } = fixture();
     const scene = buildPathTraceScene(resources);

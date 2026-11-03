@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   buildCachedPathTraceScene,
   buildPathTraceScene,
+  pathTraceInstancingInventory,
   createSceneSampler,
   directLighting,
   readLayeredClosure,
@@ -82,6 +83,39 @@ function build(surface?: RasterSurface): PathTraceScene {
 }
 
 describe('buildPathTraceScene packing', () => {
+  it('counts prototype reuse and expanded triangles, not matching shapes under different prototype identities', () => {
+    const { resources } = sceneWith();
+    const first = resources.instances[0]!;
+    const second = { ...first, id: '/second', primPath: '/second' };
+    const third = { ...first, id: '/third', primPath: '/third', prototypeId: '/other' };
+    const reused = { ...resources, instances: [first, second, third],
+      geometries: new Map([...resources.geometries, ['/other', quadGeometry('/other')] as const]) };
+    expect(pathTraceInstancingInventory(reused)).toEqual({
+      renderedInstances: 3, uniquePrototypes: 2, reusedPrototypes: 1,
+      instancesOfReusedPrototypes: 2, maxInstancesPerPrototype: 2,
+      uniqueTriangles: 4, expandedTriangles: 6, duplicateTriangles: 2,
+      potentialTriangleReusePercent: 2 / 6 * 100,
+    });
+    expect(pathTraceInstancingInventory(reused).expandedTriangles).toBe(buildPathTraceScene(reused).triangleCount);
+    expect(pathTraceInstancingInventory({ ...reused, instances: [] })).toEqual({
+      renderedInstances: 0, uniquePrototypes: 0, reusedPrototypes: 0,
+      instancesOfReusedPrototypes: 0, maxInstancesPerPrototype: 0,
+      uniqueTriangles: 0, expandedTriangles: 0, duplicateTriangles: 0, potentialTriangleReusePercent: 0,
+    });
+  });
+  it('uses the path tracer light-proxy and missing-position filters for its inventory', () => {
+    const { resources } = sceneWith();
+    const first = resources.instances[0]!;
+    const light: SceneLight = {
+      path: '/World/Panel', type: 'rect', usdType: 'RectLight', transform: IDENTITY4,
+      width: 2, height: 2, color: [1, 1, 1], intensity: 1, exposure: 0, normalize: false,
+    };
+    const filtered = { ...resources, instances: [{ ...first, primPath: '/World/Panel_Geometry' }] };
+    expect(pathTraceInstancingInventory(filtered, { lights: [light], settings: { converted: true, maxDepth: 64, rouletteDepth: 2 } }).renderedInstances).toBe(0);
+    expect(pathTraceInstancingInventory(filtered).renderedInstances).toBe(1);
+    const noPosition = { ...resources, geometries: new Map([['/proto', { ...quadGeometry('/proto'), streams: [] }]]) };
+    expect(pathTraceInstancingInventory(noPosition).renderedInstances).toBe(0);
+  });
   it('excludes only converted analytic emitter proxies in direct and cached builds', async () => {
     const { resources } = sceneWith();
     resources.instances[0]!.primPath = '/World/Panel_Geometry';

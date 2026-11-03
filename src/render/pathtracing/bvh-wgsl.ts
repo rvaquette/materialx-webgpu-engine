@@ -11,13 +11,14 @@
 //   const TRI_STRIDE : u32 = 24u;   // PT_TRIANGLE_FLOATS
 //   const RAY_EPS : f32 = 1.0e-4;
 // Binding indices are the caller's choice; only the symbol names are fixed.
+import { bvh4TraversalWgsl } from './bvh4.ts';
 
 /** Node floats per BVH node (PT_NODE_FLOATS); callers declare `NODE_STRIDE` with this value. */
 export const BVH_NODE_STRIDE = 12;
 /** Floats per packed triangle (PT_TRIANGLE_FLOATS); callers declare `TRI_STRIDE` with this value. */
 export const BVH_TRI_STRIDE = 24;
 
-export type BvhTraversalVariant = 'reference' | 'cachedEntry' | 'leafOrder' | 'triangleEdges';
+export type BvhTraversalVariant = 'reference' | 'cachedEntry' | 'leafOrder' | 'triangleEdges' | 'bvh4';
 
 /** Traversal + Moller-Trumbore triangle test over the packed buffers. `anyHit`
  *  returns at the first intersection (shadow/occlusion rays); otherwise the
@@ -26,6 +27,10 @@ export type BvhTraversalVariant = 'reference' | 'cachedEntry' | 'leafOrder' | 't
  *  packed v0/e1/e2 stream. Cached-entry pruning is inclusive with the slab test;
  *  triangle hit bounds remain strict. */
 export function bvhTraversalWgsl(variant: BvhTraversalVariant = 'reference'): string {
+  if (variant === 'bvh4') {
+    const reference = bvhTraversalWgsl();
+    return reference.slice(0, reference.indexOf('fn aabb_hit(')) + bvh4TraversalWgsl();
+  }
   if (variant !== 'reference' && variant !== 'cachedEntry' && variant !== 'leafOrder' && variant !== 'triangleEdges') {
     throw new Error(`Invalid BVH traversal: ${variant}`);
   }

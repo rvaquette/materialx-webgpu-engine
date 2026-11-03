@@ -12,6 +12,7 @@
 // writes live in the browser bootstrap and the backend (compute.ts).
 
 import { buildBvh, type Aabb, type Bvh } from '../../geometry/bvh.ts';
+import { packBvh4 } from './bvh4.ts';
 import { openPathTraceBvhCache, pathTraceBvhCacheKey, type PathTraceBvhCache } from '../../geometry/cache.ts';
 import { inverse4, transformDirection, transformPoint, type Mat4, type Vec3 } from '../../scene/transforms.ts';
 import type { SceneResources } from '../scene-resources.ts';
@@ -64,6 +65,9 @@ export interface PathTraceScene {
   /** Packed BVH nodes (PT_NODE_FLOATS each), world-space over all triangles. */
   nodes: Float32Array;
   nodeCount: number;
+  /** Optional uncompressed four-way GPU hierarchy; binary nodes remain canonical. */
+  bvhLayout?: 'reference' | 'bvh4';
+  wideNodes?: Float32Array;
   /** Packed triangles in original soup order (PT_TRIANGLE_FLOATS each). */
   triangles: Float32Array;
   /** BVH leaf-order permutation of triangle ordinals (node start/count index this). */
@@ -106,7 +110,7 @@ export interface PathTraceScene {
 
 export type PreparedPathTraceGeometry = Pick<PathTraceScene,
   'nodes' | 'nodeCount' | 'triangles' | 'triangleOrder' | 'triangleCount' |
-  'triangleUv' | 'triangleTangent' | 'triangleEdges' | 'triangleLayout' | 'bounds'>;
+  'triangleUv' | 'triangleTangent' | 'triangleEdges' | 'triangleLayout' | 'bvhLayout' | 'wideNodes' | 'bounds'>;
 
 // --- small vec helpers -------------------------------------------------------
 
@@ -289,6 +293,7 @@ export function buildPathTraceScene(
   const hasDisplacement = displaceMapFile !== undefined && maxDisp > 0;
 
   const nodes = preparedGeometry?.nodes ?? packNodes(bvh!, hasDisplacement ? maxDisp : 0);
+  const wideNodes = preparedGeometry?.wideNodes ?? (options.bvhLayout === 'bvh4' ? packBvh4(nodes) : undefined);
   const materials = packMaterials(surfaces);
   const triangles = preparedGeometry?.triangles ?? new Float32Array(triFloats);
   const triangleOrder = preparedGeometry?.triangleOrder ?? bvh!.triangleOrder;
@@ -303,6 +308,7 @@ export function buildPathTraceScene(
   return {
     nodes,
     nodeCount: preparedGeometry?.nodeCount ?? bvh!.nodes.length,
+    ...(wideNodes ? { bvhLayout: 'bvh4' as const, wideNodes } : {}),
     triangles,
     triangleOrder,
     ...(gpuLayout ? { triangleLayout: 'leafOrder' as const, ...gpuLayout } :
@@ -374,6 +380,35 @@ export interface BuildPathTraceSceneOptions extends BuildSceneFrameOptions {
   displacementScale?: number;
   settings?: PathTraceSettings;
   triangleLayout?: PathTraceTriangleLayout;
+  bvhLayout?: 'reference' | 'bvh4';
+}
+
+/** Prototype identity is the sharing key, not geometric similarity. This counts
+ *  potential triangle reuse only, before transforms, materials and displacement. */
+export function pathTraceInstancingInventory(resources: SceneResources, options: BuildPathTraceSceneOptions = {}) {
+  const prototypes = new Map<string, { instances: number; triangles: number }>();
+  for (const draw of buildSceneFrame(resources, options).draws) {
+    if (isLightProxy(resources, draw.instanceId, options)) continue;
+    const geometry = resources.geometries.get(draw.prototypeId);
+    if (!geometry?.streams.some(stream => stream.name === 'position')) continue;
+    const triangles = Math.floor(geometry.indices.length / 3);
+    if (triangles === 0) continue;
+    const group = prototypes.get(draw.prototypeId);
+    if (group) group.instances++;
+    else prototypes.set(draw.prototypeId, { instances: 1, triangles });
+  }
+  const groups = [...prototypes.values()];
+  const renderedInstances = groups.reduce((sum, group) => sum + group.instances, 0);
+  const uniqueTriangles = groups.reduce((sum, group) => sum + group.triangles, 0);
+  const expandedTriangles = groups.reduce((sum, group) => sum + group.triangles * group.instances, 0);
+  return {
+    renderedInstances, uniquePrototypes: groups.length,
+    reusedPrototypes: groups.filter(group => group.instances > 1).length,
+    instancesOfReusedPrototypes: groups.filter(group => group.instances > 1).reduce((sum, group) => sum + group.instances, 0),
+    maxInstancesPerPrototype: groups.reduce((max, group) => Math.max(max, group.instances), 0),
+    uniqueTriangles, expandedTriangles, duplicateTriangles: expandedTriangles - uniqueTriangles,
+    potentialTriangleReusePercent: expandedTriangles ? (expandedTriangles - uniqueTriangles) / expandedTriangles * 100 : 0,
+  };
 }
 
 export function isLightProxy(resources: SceneResources, instanceId: string, options: BuildPathTraceSceneOptions): boolean {

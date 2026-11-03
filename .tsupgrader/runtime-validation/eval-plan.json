@@ -21,6 +21,24 @@
       "timeoutSeconds": 120
     },
     {
+      "name": "pathtracing-tests-pass",
+      "kind": "process",
+      "command": "npm",
+      "args": ["test", "--", "tests\\render\\pathtracing"],
+      "verificationMethod": "test-results",
+      "expected": "0",
+      "timeoutSeconds": 120
+    },
+    {
+      "name": "benchmark-tests-pass",
+      "kind": "process",
+      "command": "node",
+      "args": ["--test", "scripts\\benchmark-pathtracer.test.mjs"],
+      "verificationMethod": "exit-code",
+      "expected": "0",
+      "timeoutSeconds": 60
+    },
+    {
       "name": "usd-render-harness-served",
       "kind": "http-probe",
       "startCommand": "npm",

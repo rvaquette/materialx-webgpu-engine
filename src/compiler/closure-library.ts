@@ -175,9 +175,10 @@ ${[...sampleCases, '    default: { return MxBsdfSample(vec3f(0.0), vec3f(0.0), 0
 }`;
 }
 
-/** The closure library with its lobe dispatch restricted to the kinds a surface can reach. */
-export function closureLibraryPrelude(spec: ClosureDispatchSpec = ALL_DISPATCH): string {
-  if (spec === ALL_DISPATCH) return CLOSURE_LIBRARY_PRELUDE;
+/** Restrict dispatch to reachable kinds. Optional unrolling requires the proven
+ *  closure capacity used to emit MX_MAX_LOBES, not an observed active count. */
+export function closureLibraryPrelude(spec: ClosureDispatchSpec = ALL_DISPATCH, unrolledLobes?: number): string {
+  if (spec === ALL_DISPATCH && unrolledLobes === undefined) return CLOSURE_LIBRARY_PRELUDE;
   let code = CLOSURE_LIBRARY_PRELUDE.replace(lobeDispatch(ALL_DISPATCH), lobeDispatch(spec));
   if (spec.fuzz === false) {
     code = code.replace(CLOSURE_FUZZ_EVAL, `fn mx_closure_eval(c: LayeredClosure, wo: vec3f, wi: vec3f) -> MxBsdfEval {
@@ -186,7 +187,31 @@ export function closureLibraryPrelude(spec: ClosureDispatchSpec = ALL_DISPATCH):
   return mx_closure_sample_base(c, wo, u);
 }`);
   }
-  return spec.kinds.has(9) ? code : code.replace(HAIR_WGSL, '');
+  code = spec.kinds.has(9) ? code : code.replace(HAIR_WGSL, '');
+  if (unrolledLobes !== undefined) {
+    if (!Number.isInteger(unrolledLobes) || unrolledLobes < 1 || unrolledLobes > 8) {
+      throw new Error('Unrolled BSDF capacity must be an integer from 1 to 8.');
+    }
+    for (const name of ['mx_closure_total_weight', 'mx_closure_base_eval']) {
+      const pattern = new RegExp(`fn ${name}\\([^]*?\\n}`);
+      const fn = code.match(pattern)?.[0];
+      const loop = fn?.match(/  for \(var i = 0u; i < c.lobeCount; i = i \+ 1u\) \{([^]*?)\s*\}/);
+      // The eval loop has a one-line continue guard; match its full loop separately.
+      const fullLoop = name === 'mx_closure_base_eval'
+        ? fn?.match(/  for \(var i = 0u; i < c.lobeCount; i = i \+ 1u\) \{([^]*?)\n  \}/) : loop;
+      if (!fn || !fullLoop) throw new Error(`Unrolled BSDF source no longer matches ${name}.`);
+      let body = fullLoop[1]!;
+      if (name === 'mx_closure_base_eval') {
+        const guard = 'if (lobe.weight <= 0.0) { continue; }';
+        if (!body.includes(guard)) throw new Error('Unrolled BSDF weight guard changed.');
+        body = body.replace(guard, 'if (!(lobe.weight <= 0.0)) {') + '\n    }';
+      }
+      const blocks = Array.from({ length: unrolledLobes }, (_, i) =>
+        `  if (${i}u < c.lobeCount) {${body.replace(/\bi\b/g, `${i}u`)}\n  }`).join('\n');
+      code = code.replace(fn, fn.replace(fullLoop[0], blocks));
+    }
+  }
+  return code;
 }
 
 const CLOSURE_FUZZ_EVAL = `fn mx_closure_eval(c: LayeredClosure, wo: vec3f, wi: vec3f) -> MxBsdfEval {
