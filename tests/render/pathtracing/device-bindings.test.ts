@@ -117,14 +117,15 @@ describe('buildPtDeviceBindings (T057m2)', () => {
     const { calls, provider } = countingProvider(image);
     const bindings = await buildPtDeviceBindings(dispatch, fakeScene(), provider);
     expect(calls).toEqual(['color.%3CUDIM%3E.jpg']);
-    expect(bindings.textures.map(texture => texture.imageIndex)).toEqual([0, 0, 0, 0]);
-    expect(bindings.textures.map(texture => texture.textureKind)).toEqual(['udim', 'udim-index', 'udim', 'udim-index']);
-    expect(bindings.textures.map(texture => texture.format)).toEqual(['rgba8unorm-srgb', 'r32uint', 'rgba8unorm-srgb', 'r32uint']);
-    expect(bindings.samplers).toHaveLength(2);
+    expect(bindings.textures.map(texture => texture.imageIndex)).toEqual([0, 0]);
+    expect(bindings.textures.map(texture => texture.textureKind)).toEqual(['udim', 'udim-index']);
+    expect(bindings.textures.map(texture => texture.format)).toEqual(['rgba8unorm-srgb', 'r32uint']);
+    expect(bindings.samplers).toHaveLength(1);
     const code = pathTraceComputeWgsl({ dispatch });
     expect(code).toContain('var m0_tex_tex: texture_2d_array<f32>');
     expect(code).toContain('var m0_tex_tex_udim_index: texture_2d<u32>');
     expect(code.match(/fn mx_sample_udim\(/g)).toHaveLength(1);
+    expect(code).not.toMatch(/\bm1_tex_tex\b|\bm1_samp_tex\b/);
   });
   it('adds converted analytic lights without moving the existing scene slots', async () => {
     const scene = fakeScene();

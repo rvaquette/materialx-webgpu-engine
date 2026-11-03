@@ -29,7 +29,7 @@ import { buildPtDeviceBindings } from './pathtracing/device-bindings.ts';
 import { maxRecordLobes } from './pathtracing/material-record.ts';
 import type { DecodedPixelImage } from '../assets/images.ts';
 import { loadUsdScene, uploadMaterialTextures, type ObjectMaterialOverride, type SceneLoadOptions } from './usd-scene-assets.ts';
-import { assertSceneStorageSize } from '../gpu/device.ts';
+import { assertSceneStorageSize, assertSceneTextureBindings } from '../gpu/device.ts';
 import { uploadMaterialImage } from '../gpu/material-texture.ts';
 import { OrbitCamera, attachOrbitControls } from '../scene/orbit-camera.ts';
 import { inverse4, lookAt4, multiply4, perspective4, type Vec3 } from '../scene/transforms.ts';
@@ -909,6 +909,7 @@ fn dir_to_uv(d: vec3<f32>) -> vec2<f32> {
         return o;
       };
       // Mobile drivers reserve per-thread stack for the by-value lobe array: size it to the scene.
+      assertSceneTextureBindings(device, dispatch.textures.length + (envAsset ? 1 : 0), dispatch.samplers.length + (envAsset ? 1 : 0));
       const maxLobes = Math.max(
         ...dispatch.variants.map((variant) => variant.lobeCount),
         maxRecordLobes(ptScene.materials, new Set(dispatch.variants.map((variant) => variant.index))),

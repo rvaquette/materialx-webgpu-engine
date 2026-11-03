@@ -32,15 +32,26 @@ export interface DeviceLostDetail {
 
 export type Unsubscribe = () => void;
 
-/** Large imported scenes need more than WebGPU's default 128 MiB storage binding limit. */
+/** Imported scenes negotiate storage and shared material texture capacity. */
 export function sceneDeviceDescriptor(adapter: GPUAdapter): GPUDeviceDescriptor {
   return {
     requiredLimits: {
       maxStorageBufferBindingSize: adapter.limits.maxStorageBufferBindingSize,
       maxBufferSize: adapter.limits.maxBufferSize,
       maxStorageBuffersPerShaderStage: adapter.limits.maxStorageBuffersPerShaderStage,
+      maxSampledTexturesPerShaderStage: adapter.limits.maxSampledTexturesPerShaderStage,
+      maxSamplersPerShaderStage: adapter.limits.maxSamplersPerShaderStage,
     },
   };
+}
+
+export function assertSceneTextureBindings(device: GPUDevice, textures: number, samplers: number): void {
+  if (textures > device.limits.maxSampledTexturesPerShaderStage || samplers > device.limits.maxSamplersPerShaderStage) {
+    throw new Error(
+      `Scene requires ${textures} sampled textures and ${samplers} samplers; ` +
+      `device limits are ${device.limits.maxSampledTexturesPerShaderStage} textures and ${device.limits.maxSamplersPerShaderStage} samplers.`,
+    );
+  }
 }
 
 export function assertSceneStorageSize(device: GPUDevice, bytes: number): void {

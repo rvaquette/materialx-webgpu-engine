@@ -24,6 +24,8 @@ export interface PtTextureRegistry {
   /** For each `textures[i]`, the index into `images` it samples. Bindings that
    *  resolve to the same file share an image index (device decode dedup). */
   textureImage: number[];
+  /** Shared UDIM resources use one binding; variant source handles are remapped. */
+  bindingAliases?: ReadonlyMap<string, string>;
 }
 
 /** Collect and dedup the texture/sampler bindings of every graph-backed material. */
@@ -32,8 +34,24 @@ export function buildTextureRegistry(variants: readonly SurfaceVariantModule[]):
   const byFile = new Map<string, number>();
   const textureImage: number[] = [];
 
-  const allTextures = variants.flatMap((v) => v.textures);
-  for (const t of allTextures) {
+  const textures: WgslBinding[] = [];
+  const bindingAliases = new Map<string, string>();
+  const byUdim = new Map<string, WgslBinding>();
+  for (const t of variants.flatMap((v) => v.textures)) {
+    const key = t.textureKind && t.fileRef
+      ? JSON.stringify([t.fileRef, t.textureKind, t.textureKind === 'udim' ? t.colorSpace : undefined]) : undefined;
+    const shared = key === undefined ? undefined : byUdim.get(key);
+    if (shared) {
+      bindingAliases.set(t.handle, shared.handle);
+      continue;
+    }
+    const binding: WgslBinding = {
+      name: t.name, handle: t.handle, group: 1, binding: textures.length,
+      ...(t.colorSpace !== undefined ? { colorSpace: t.colorSpace } : {}),
+      ...(t.textureKind !== undefined ? { textureKind: t.textureKind } : {}),
+    };
+    textures.push(binding);
+    if (key !== undefined) byUdim.set(key, binding);
     if (t.fileRef !== undefined) {
       let idx = byFile.get(t.fileRef);
       if (idx === undefined) {
@@ -48,14 +66,22 @@ export function buildTextureRegistry(variants: readonly SurfaceVariantModule[]):
     }
   }
 
-  const textures = allTextures.map((t, i) => ({
-    name: t.name, handle: t.handle, group: 1, binding: i,
-    ...(t.colorSpace !== undefined ? { colorSpace: t.colorSpace } : {}),
-    ...(t.textureKind !== undefined ? { textureKind: t.textureKind } : {}),
-  }));
-  const samplers = variants
-    .flatMap((v) => v.samplers)
-    .map((s, i) => ({ ...s, group: 2, binding: i }));
+  const samplers: WgslBinding[] = [];
+  const byUdimSampler = new Map<string, WgslBinding>();
+  for (const variant of variants) {
+    for (const sampler of variant.samplers) {
+      const texture = variant.textures.find(t => t.name === sampler.name && t.textureKind === 'udim');
+      const key = texture?.fileRef ? JSON.stringify([texture.fileRef, sampler.sampler]) : undefined;
+      const shared = key === undefined ? undefined : byUdimSampler.get(key);
+      if (shared) {
+        bindingAliases.set(sampler.handle, shared.handle);
+        continue;
+      }
+      const binding = { ...sampler, group: 2, binding: samplers.length };
+      samplers.push(binding);
+      if (key !== undefined) byUdimSampler.set(key, binding);
+    }
+  }
 
-  return { textures, samplers, images, textureImage };
+  return { textures, samplers, images, textureImage, bindingAliases };
 }

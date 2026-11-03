@@ -88,6 +88,15 @@ export function buildMaterialDispatch(sources: readonly PtVariantSource[]): PtMa
 
   const preludes = [...new Set(variants.flatMap((v) => v.preludes))];
   const textureRegistry = buildTextureRegistry(variants);
+  const aliases = textureRegistry.bindingAliases;
+  if (aliases?.size) {
+    const handles = new RegExp(`\\b(${[...aliases.keys()].join('|')})\\b`, 'g');
+    const remap = (code: string): string => code.replace(handles, handle => aliases.get(handle)!);
+    for (const variant of variants) {
+      variant.fnCode = remap(variant.fnCode);
+      if (variant.opacity) variant.opacity = { ...variant.opacity, fnCode: remap(variant.opacity.fnCode) };
+    }
+  }
   const textures = textureRegistry.textures;
   const samplers = textureRegistry.samplers;
   const uniforms = dedupUniforms(variants.flatMap((v) => v.uniforms));
