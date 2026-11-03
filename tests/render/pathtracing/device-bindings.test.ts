@@ -22,6 +22,7 @@ import type {
 } from '../../../src/materialx/graph.ts';
 import type { PathTraceScene } from '../../../src/render/pathtracing/scene-buffers.ts';
 import type { DecodedPixelImage } from '../../../src/assets/images.ts';
+import { pathTraceComputeWgsl } from '../../../src/render/pathtracing/compute.ts';
 
 const IDENTITY4: [number, number, number, number, number, number, number, number, number, number, number, number, number, number, number, number] =
   [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
@@ -106,6 +107,25 @@ function fakeScene(): PathTraceScene {
 }
 
 describe('buildPtDeviceBindings (T057m2)', () => {
+  it('shares UDIM tile decoding while preserving array and integer-index binding types', async () => {
+    const dispatch = buildMaterialDispatch([
+      source(0, texturedBaseColor('color.%3CUDIM%3E.jpg')),
+      source(1, texturedBaseColor('color.%3CUDIM%3E.jpg')),
+    ]);
+    const first = fakeImage();
+    const image: DecodedPixelImage = { ...first, udim: [{ tile: 1001, image: first }, { tile: 1012, image: first }] };
+    const { calls, provider } = countingProvider(image);
+    const bindings = await buildPtDeviceBindings(dispatch, fakeScene(), provider);
+    expect(calls).toEqual(['color.%3CUDIM%3E.jpg']);
+    expect(bindings.textures.map(texture => texture.imageIndex)).toEqual([0, 0, 0, 0]);
+    expect(bindings.textures.map(texture => texture.textureKind)).toEqual(['udim', 'udim-index', 'udim', 'udim-index']);
+    expect(bindings.textures.map(texture => texture.format)).toEqual(['rgba8unorm-srgb', 'r32uint', 'rgba8unorm-srgb', 'r32uint']);
+    expect(bindings.samplers).toHaveLength(2);
+    const code = pathTraceComputeWgsl({ dispatch });
+    expect(code).toContain('var m0_tex_tex: texture_2d_array<f32>');
+    expect(code).toContain('var m0_tex_tex_udim_index: texture_2d<u32>');
+    expect(code.match(/fn mx_sample_udim\(/g)).toHaveLength(1);
+  });
   it('adds converted analytic lights without moving the existing scene slots', async () => {
     const scene = fakeScene();
     scene.analyticLights = new Float32Array(17 * 20);

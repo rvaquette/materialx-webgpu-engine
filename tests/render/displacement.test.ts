@@ -22,6 +22,18 @@ function geometry() {
 }
 
 describe('shared displacement geometry', () => {
+  it('selects the authored UDIM tile instead of repeating the first tile', () => {
+    const source = geometry();
+    const uv = source.streams.find(s => s.name === 'uv')!.data;
+    for (let i = 0; i < uv.length; i += 2) { uv[i] = 1.5; uv[i + 1] = 0.5; }
+    const low: DecodedPixelImage = { ...image, width: 1, data: new Uint8Array([0, 0, 0, 255]) };
+    const high: DecodedPixelImage = { ...image, width: 1, data: new Uint8Array([255, 255, 255, 255]) };
+    const tiled: DecodedPixelImage = { ...low, udim: [{ tile: 1001, image: low }, { tile: 1002, image: high }] };
+    const result = displaceGeometry(source, tiled, 2, 'displaced');
+    expect(result.streams[0]!.data[5]).toBe(1);
+    uv.fill(2.5);
+    expect(() => displaceGeometry(source, tiled, 2, 'missing')).toThrow('Missing displacement UDIM tile');
+  });
   it('keeps UV/hard-normal seam duplicates coincident and leaves the source untouched', () => {
     const source = geometry();
     const result = displaceGeometry(source, image, 1, 'displaced');

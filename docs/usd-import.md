@@ -60,6 +60,24 @@ These bundled scenes are separate from the development-only external playground.
 MaterialX filename attributes escape UDIM placeholders as `&lt;UDIM&gt;`;
 XML parsing restores `<UDIM>` for tile resolution without changing texture names.
 
+UDIM images in bundled scenes are inventoried at build time from the texture
+files under `scenes` (JPEG, PNG, TIFF, EXR and HDR extensions). Rebuild after
+adding or removing tiles. Image references retain their escaped placeholders.
+The raster and compute path tracer upload the decoded tiles as sparse 2D
+texture arrays and bind a separate integer tile-to-layer index. Tile selection
+uses `1001 + floor(U) + 10 * floor(V)`; V is flipped only within the selected
+tile. A missing tile or out-of-range UV returns the MaterialX image's `default`,
+not a repeated 1001 tile. Filtering clamps to each tile's edges, without
+interpolating unrelated array layers. The CPU sampler uses the same mapping,
+and displacement requires the requested tile to exist.
+
+Tiles currently require matching dimensions and decoded RGBA8 pixels; their
+declared sRGB/data interpretation is preserved. Invalid inventories, missing
+files and device texture-size/array-layer limit violations are explicit errors.
+Non-bundled assets require an explicit tile inventory via the `withUdimImages`
+provider adapter; HTTP directory enumeration or guessed tile URL probing is
+not used.
+
 ## Direct local GLB/glTF scenes in the UI
 
 The scene selector also lists all `.glb` and `.gltf` assets under
