@@ -6,19 +6,19 @@ import { buildGeometry, transformBounds, type GeometryResource, type SceneResour
 import type { PtImageProvider } from './pathtracing/device-bindings.ts';
 import { udimTileAt } from '../assets/udim.ts';
 
-function heightAt(image: DecodedPixelImage, u: number, v: number): number {
+function heightAt(image: DecodedPixelImage, u: number, v: number, clamp = false): number {
   if (image.udim) {
     const tile = udimTileAt(u, v);
     const pixels = image.udim.find(layer => layer.tile === tile)?.image;
     if (!pixels) throw new Error(`Missing displacement UDIM tile at UV (${u}, ${v}).`);
-    return heightAt(pixels, u - Math.floor(u), 1 - (v - Math.floor(v)));
+    return heightAt(pixels, u - Math.floor(u), 1 - (v - Math.floor(v)), true);
   }
   const x = (u - Math.floor(u)) * image.width - 0.5;
   const y = (v - Math.floor(v)) * image.height - 0.5;
   const ix = Math.floor(x), iy = Math.floor(y);
   const texel = (px: number, py: number): number => {
-    px = (px % image.width + image.width) % image.width;
-    py = (py % image.height + image.height) % image.height;
+    px = clamp ? Math.min(Math.max(px, 0), image.width - 1) : (px % image.width + image.width) % image.width;
+    py = clamp ? Math.min(Math.max(py, 0), image.height - 1) : (py % image.height + image.height) % image.height;
     return image.data[(py * image.width + px) * 4]! / 255;
   };
   const fx = x - ix, fy = y - iy;

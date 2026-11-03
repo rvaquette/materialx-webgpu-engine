@@ -507,7 +507,7 @@ async function loadMtlxSceneContext(
   };
   const imageProvider: PtImageProvider = {
     decode: withUdimImages(async file => singleImageProvider.decode(file),
-      () => sceneUdimIndex(document.baseURI), baseDir, sink),
+      () => sceneUdimIndex(document.baseURI), new URL(baseDir, document.baseURI).href, sink),
   };
   const surfaceFor = (material: MaterialResource): RasterSurface => surfaces.get(material.materialName) ?? NEUTRAL_SURFACE;
   return { documents, imageProvider, surfaceFor };

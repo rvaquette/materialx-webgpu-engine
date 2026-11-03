@@ -78,6 +78,11 @@ Non-bundled assets require an explicit tile inventory via the `withUdimImages`
 provider adapter; HTTP directory enumeration or guessed tile URL probing is
 not used.
 
+To validate actual GPU tile selection, start `npm run dev` and open
+`tests/render/udim-device.harness.html`. It reads back seven samples from both
+fragment and compute pipelines, covering horizontal/vertical tiles, local V
+orientation, missing tiles, negative UVs and sRGB decoding.
+
 ## Direct local GLB/glTF scenes in the UI
 
 The scene selector also lists all `.glb` and `.gltf` assets under

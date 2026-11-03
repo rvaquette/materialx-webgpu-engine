@@ -2,9 +2,14 @@ import type { DecodedPixelImage } from '../assets/images.ts';
 import { UDIM_COLUMNS, UDIM_ROWS, udimLayerIndex } from '../assets/udim.ts';
 import type { WgslBinding } from '../compiler/wgsl.ts';
 
+type MaterialTextureDevice = Pick<GPUDevice, 'createTexture'> & {
+  limits: Pick<GPUSupportedLimits, 'maxTextureDimension2D' | 'maxTextureArrayLayers'>;
+  queue: Pick<GPUQueue, 'writeTexture'>;
+};
+
 /** Shared raster/compute upload; UDIM indices are integer textures, never sRGB. */
 export function uploadMaterialImage(
-  device: GPUDevice,
+  device: MaterialTextureDevice,
   image: DecodedPixelImage | undefined,
   format: GPUTextureFormat,
   textureKind?: WgslBinding['textureKind'],

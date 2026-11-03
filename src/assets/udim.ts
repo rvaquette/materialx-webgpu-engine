@@ -74,7 +74,7 @@ export function withUdimImages(
   let index: ReturnType<typeof inventory> | undefined;
   return async file => {
     if (!AssetResolver.hasUdim(file)) return decode(file);
-    const url = new URL(file, base).href;
+    const url = new URL(AssetResolver.normalizeUdim(file), base).href;
     let image = cache.get(url);
     if (!image) {
       index ??= inventory();

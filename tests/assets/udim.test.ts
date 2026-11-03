@@ -87,6 +87,7 @@ describe('UDIM assets', () => {
     const load = withUdimImages(decode, () => index, base, sink);
     const [a, b] = await Promise.all([load('c.<UDIM>.jpg'), load('c.%3CUDIM%3E.jpg')]);
     expect(a).toBe(b);
+    expect(await load('c.%3cudim%3e.jpg')).toBe(a);
     expect(decode).toHaveBeenCalledOnce();
     const unavailable = withUdimImages(decode, () => new Map(), base, sink);
     await expect(unavailable('c.<UDIM>.jpg')).rejects.toThrow('No UDIM tiles');

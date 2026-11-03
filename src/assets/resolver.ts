@@ -82,6 +82,10 @@ export class AssetResolver {
     return ref.replace(UDIM_TOKEN, String(tile));
   }
 
+  static normalizeUdim(ref: string): string {
+    return ref.replace(UDIM_TOKEN, '<UDIM>');
+  }
+
   /**
    * Resolve `ref` (optionally relative to the authoring document `baseKey`) to a
    * fetchable URL. Throws AssetResolutionError on unresolved/out-of-policy paths.
