@@ -10,8 +10,13 @@ describe('UDIM GPU uploads', () => {
       kind: 'pixels', componentType: 'uint8', channels: 4, width: 1, height: 1,
       colorSpace: 'raw', data: new Uint8Array([255, 0, 0, 255]),
     }));
-    const destroy = vi.fn();
-    const texture = { destroy } as GPUTexture;
+    const destroy = vi.fn<GPUTexture['destroy']>(() => undefined);
+    const texture: GPUTexture = {
+      __brand: 'GPUTexture', label: '', destroy,
+      createView: () => ({ __brand: 'GPUTextureView', label: '' }),
+      width: 1, height: 1, depthOrArrayLayers: 2, mipLevelCount: 1, sampleCount: 1,
+      dimension: '2d', format: 'rgba8unorm-srgb', usage: 6,
+    };
     const createTexture = vi.fn<GPUDevice['createTexture']>(() => texture);
     const writeTexture = vi.fn();
     vi.stubGlobal('GPUTextureUsage', { TEXTURE_BINDING: 4, COPY_DST: 2 });
