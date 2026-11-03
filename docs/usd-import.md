@@ -49,6 +49,15 @@ No height/bump texture fields were found in the named `.scene` materials;
 normal maps must not be interpreted as height maps. Raster alpha blending,
 subsurface and volume transport remain backend approximations.
 
+## Bundled OpenPBR Shader Playground scenes
+
+The scene selector lists `scenes/OpenPBRShaderPlayground/*_grp/*_grp.usda`.
+`npm run build` copies the entire `OpenPBRShaderPlayground` directory into
+`dist/scenes`, preserving the relative paths of referenced USD geometry,
+material layers and textures. Rebuild after adding or removing scenes, and
+serve the complete `dist` directory rather than only its HTML and JavaScript.
+These bundled scenes are separate from the development-only external playground.
+
 ## Direct local GLB/glTF scenes in the UI
 
 The scene selector also lists all `.glb` and `.gltf` assets under
