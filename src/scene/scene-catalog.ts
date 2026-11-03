@@ -19,11 +19,22 @@ const gltfScenes = Object.keys(import.meta.glob('/scenes/pathtracer/*.{gltf,glb}
     entry: `.${path}`,
   }));
 
+const openPbrScenes = Object.keys(import.meta.glob('/scenes/OpenPBRShaderPlayground/*_grp/*_grp.usda', { query: '?raw', import: 'default' }))
+  .sort()
+  .map((path): SceneCatalogEntry => {
+    const name = path.match(/\/([^/]+)_grp\/\1_grp\.usda$/)?.[1] ?? 'Unknown';
+    return {
+      label: `OpenPBR Shader Playground - ${name.replace(/([A-Z])/g, ' $1').trim()}`,
+      entry: `.${path}`,
+    };
+  });
+
 export const SCENE_CATALOG: readonly SceneCatalogEntry[] = [
   { label: 'Standard shader ball', entry: './scenes/standard-shader-ball/standard-shader-ball.usda' },
   { label: 'Simple shader ball', entry: './scenes/standard-shader-ball/openpbr-rva-standard-shader-ball.usda' },
   ...pathTracerScenes,
   ...gltfScenes,
+  ...openPbrScenes,
   ...(import.meta.env.DEV ? [{
     label: 'OpenPBR Shader Playground (local)',
     entry: './playground/ShdrPlygrnd_OpenPBR.usda',
