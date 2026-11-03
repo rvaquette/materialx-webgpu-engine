@@ -3,19 +3,10 @@ import { defineConfig } from 'vite';
 import { existsSync, readFileSync } from 'fs';
 import { extname, join, normalize } from 'path';
 
-// Cross-origin isolation (COOP/COEP) enables SharedArrayBuffer and threaded
-// WASM. It is opt-in: the engine must keep a non-shared-memory fallback
-// (plan section 10), so these headers are a dev-server convenience, not a
-// hard requirement.
-const crossOriginIsolation = {
-  name: 'cross-origin-isolation',
-  configureServer(server: { middlewares: { use: (fn: (req: unknown, res: { setHeader: (k: string, v: string) => void }, next: () => void) => void) => void } }) {
-    server.middlewares.use((_req, res, next) => {
-      res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
-      res.setHeader('Cross-Origin-Embedder-Policy', 'require-corp');
-      next();
-    });
-  },
+// The installed OpenUSD crate runtime requires shared memory and isolation.
+const crossOriginIsolationHeaders = {
+  'Cross-Origin-Opener-Policy': 'same-origin',
+  'Cross-Origin-Embedder-Policy': 'require-corp',
 };
 
 // Serve the real MaterialX Core WASM module and standard library .mtlx tree at
@@ -86,7 +77,9 @@ const materialxAssets = {
 
 export default defineConfig({
   base: './',
-  plugins: [crossOriginIsolation, materialxAssets],
+  plugins: [materialxAssets],
+  server: { headers: crossOriginIsolationHeaders },
+  preview: { headers: crossOriginIsolationHeaders },
   // MaterialX ships a .wasm binary that must be served as an asset, not inlined.
   assetsInclude: ['**/*.wasm'],
   worker: {

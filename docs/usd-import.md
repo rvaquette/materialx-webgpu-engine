@@ -439,6 +439,16 @@ stage, so paths such as `../textures/env.exr` are not rewritten into the tempora
 WASM filesystem. The standalone `flattenCrate()`/`importCrate()` APIs retain
 their original stage-flattening default.
 
+The installed browser OpenUSD runtime uses shared-memory workers, so binary USD
+layers require `crossOriginIsolated` and `SharedArrayBuffer`. The server must send
+`Cross-Origin-Opener-Policy: same-origin` and
+`Cross-Origin-Embedder-Policy: require-corp` over HTTPS or localhost.
+Both `npm run dev` and `npm run preview` set these headers. For the built app,
+run `npm run build`, then `npm run preview`, and open the preview URL.
+Plain static servers (including Live Server without these headers) cannot load
+binary USD layers; the loader reports this requirement before starting WASM.
+Text-only USDA and glTF scenes do not require the OpenUSD runtime.
+
 MaterialX references record their authoring layer. Their XML is fetched relative
 to that layer; texture filenames normally resolve relative to that XML document.
 `SceneLoadOptions.textureRoot` explicitly selects a different root for
