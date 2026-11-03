@@ -28,6 +28,7 @@ import {
 } from './ir.ts';
 import { coveredCategories, getNodeLowering } from './nodes.ts';
 import { lowerHexTiledImage, type HexTileInputs } from './hextile.ts';
+import { AssetResolver } from '../assets/resolver.ts';
 
 export interface LoweredSurfaceInputs {
   readonly family: SurfaceFamily;
@@ -174,6 +175,7 @@ export function lowerSurfaceInputsToIr(
     // Record the image reference so the PT texture registry can dedup shared
     // files across materials (T057j).
     const fileRef = file?.source.kind === 'value' ? file.source.value : undefined;
+    const udim = AssetResolver.hasUdim(fileRef ?? '');
     builder.declareTexture({
       name: nodeId,
       valueType,
@@ -190,7 +192,7 @@ export function lowerSurfaceInputsToIr(
     const filter = stringInput('filtertype');
     builder.declareSampler({
       name: nodeId,
-      ...(node.category === 'tiledimage' ? { addressU: 'periodic', addressV: 'periodic' } : {
+      ...(udim ? { addressU: 'clamp', addressV: 'clamp' } : node.category === 'tiledimage' ? { addressU: 'periodic', addressV: 'periodic' } : {
         ...(addressU !== undefined ? { addressU } : {}),
         ...(addressV !== undefined ? { addressV } : {}),
       }),
@@ -249,14 +251,18 @@ export function lowerSurfaceInputsToIr(
       if (scale !== undefined) uv = callRef('multiply', uvType, { in1: coerce(uv, uvType), in2: scale });
       if (offset !== undefined) uv = callRef('add', uvType, { in1: coerce(uv, uvType), in2: offset });
     }
-    if (node.category === 'image' || node.category === 'tiledimage') {
+    if (!udim && (node.category === 'image' || node.category === 'tiledimage')) {
       uv = callRef('add', uvType, {
         in1: callRef('multiply', uvType, { in1: coerce(uv, uvType), in2: builder.constant(uvType, [1, -1]) }),
         in2: builder.constant(uvType, [0, 1]),
       });
     }
-    let sample = builder.add({ kind: 'texture', type: valueType, texture: nodeId, uv: coerce(uv, uvType), sampler: nodeId });
+    let sample = builder.add({
+      kind: 'texture', type: valueType, texture: nodeId, uv: coerce(uv, uvType), sampler: nodeId,
+      ...(udim ? { fallback: authoredRef(nodeId, 'default', valueType) ?? constOfIrType(builder, valueType, [0]) } : {}),
+    });
     for (const [axis, mode] of [['x', addressU], ['y', addressV]] as const) {
+      if (udim) continue;
       if (mode !== 'constant') continue;
       const coord = builder.add({ kind: 'swizzle', type: FLOAT, source: uv, pattern: axis });
       const fallback = authoredRef(nodeId, 'default', valueType) ?? constOfIrType(builder, valueType, [0]);

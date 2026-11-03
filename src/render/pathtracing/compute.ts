@@ -16,7 +16,7 @@ import type { PathTraceScene } from './scene-buffers.ts';
 import { BVH_TRAVERSAL_WGSL } from './bvh-wgsl.ts';
 import { LAYERED_CLOSURE_PRELUDE } from '../../compiler/surface-wgsl.ts';
 import { closureLibraryPrelude, type ClosureDispatchSpec } from '../../compiler/closure-library.ts';
-import { emitVaryingsStruct } from '../../compiler/wgsl.ts';
+import { emitVaryingsStruct, textureWgslType } from '../../compiler/wgsl.ts';
 import type { IrType } from '../../compiler/ir.ts';
 import { materialClosureReaderWgsl, PT_MAX_LOBES, PT_MATERIAL_RECORD_FLOATS, PT_MATERIAL_HEADER_FLOATS, PT_LOBE_FLOATS } from './material-record.ts';
 import {
@@ -972,7 +972,7 @@ function wgslDispatch(dispatch: PtMaterialDispatch): string {
   // lays textures in group 1 and samplers in group 2 so the megakernel binds
   // every material's textures at once. Sampling is wired in T057k.
   for (const t of dispatch.textures) {
-    parts.push(`@group(${t.group}) @binding(${t.binding}) var ${t.handle}: texture_2d<f32>;`);
+    parts.push(`@group(${t.group}) @binding(${t.binding}) var ${t.handle}: ${textureWgslType(t)};`);
   }
   for (const s of dispatch.samplers) {
     parts.push(`@group(${s.group}) @binding(${s.binding}) var ${s.handle}: sampler;`);

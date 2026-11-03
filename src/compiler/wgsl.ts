@@ -12,6 +12,7 @@ import type {
   ShaderIr,
   SamplerResource,
 } from './ir.ts';
+import { AssetResolver } from '../assets/resolver.ts';
 import {
   CLOSURE_PRELUDE,
   LIGHTING_PRELUDE,
@@ -40,7 +41,24 @@ export interface WgslBinding {
   fileRef?: string;
   colorSpace?: string;
   sampler?: Omit<SamplerResource, 'name'>;
+  textureKind?: 'udim' | 'udim-index';
 }
+
+export function textureWgslType(binding: WgslBinding): string {
+  return binding.textureKind === 'udim-index' ? 'texture_2d<u32>'
+    : binding.textureKind === 'udim' ? 'texture_2d_array<f32>' : 'texture_2d<f32>';
+}
+
+const UDIM_SAMPLE_PRELUDE = `
+fn mx_sample_udim(tex: texture_2d_array<f32>, tiles: texture_2d<u32>, samp: sampler,
+                  uv: vec2f, level: f32, fallback: vec4f) -> vec4f {
+  if (!(uv.x >= 0.0 && uv.x < 10.0 && uv.y >= 0.0 && uv.y < 100.0)) { return fallback; }
+  let cell = vec2i(floor(uv));
+  let mapped = textureLoad(tiles, cell, 0).r;
+  if (mapped == 0u) { return fallback; }
+  let local = fract(uv);
+  return textureSampleLevel(tex, samp, vec2f(local.x, 1.0 - local.y), i32(mapped - 1u), level);
+}`;
 
 export interface WgslOutput {
   name: string;
@@ -125,6 +143,7 @@ function childRefs(expr: IrExpr): IrRef[] {
       if (expr.lod) refs.push(expr.lod);
       if (expr.bias) refs.push(expr.bias);
       if (expr.gradient) refs.push(expr.gradient.ddx, expr.gradient.ddy);
+      if (expr.fallback) refs.push(expr.fallback);
       return refs;
     }
     case 'call':
@@ -234,12 +253,19 @@ function emitTexture(
   varName: (r: IrRef) => string,
   prefix: string,
   computeStage: boolean,
+  udim: boolean,
 ): string {
   const tex = `${prefix}tex_${ident(expr.texture)}`;
   const samp = `${prefix}samp_${ident(expr.sampler)}`;
   const uv = varName(expr.uv);
   let sample: string;
-  if (expr.gradient) {
+  if (udim) {
+    const fallback = expr.fallback ? varName(expr.fallback) : '0.0';
+    const pad = expr.type.kind === 'vector'
+      ? expr.type.size === 4 ? fallback : expr.type.size === 3 ? `vec4f(${fallback}, 0.0)` : `vec4f(${fallback}, 0.0, 0.0)`
+      : `vec4f(${fallback})`;
+    sample = `mx_sample_udim(${tex}, ${tex}_udim_index, ${samp}, ${uv}, ${expr.lod ? varName(expr.lod) : '0.0'}, ${pad})`;
+  } else if (expr.gradient) {
     sample = `textureSampleGrad(${tex}, ${samp}, ${uv}, ${varName(expr.gradient.ddx)}, ${varName(expr.gradient.ddy)})`;
   } else if (expr.lod) {
     sample = `textureSampleLevel(${tex}, ${samp}, ${uv}, ${varName(expr.lod)})`;
@@ -354,7 +380,11 @@ export function lowerExprs(
         rhs = `${varName(expr.source)}.${expr.pattern}`;
         break;
       case 'texture':
-        rhs = emitTexture(expr, varName, handlePrefix, computeStage);
+        {
+          const udim = AssetResolver.hasUdim(ir.textures.find(texture => texture.name === expr.texture)?.fileRef ?? '');
+          if (udim) preludes.add(UDIM_SAMPLE_PRELUDE);
+          rhs = emitTexture(expr, varName, handlePrefix, computeStage, udim);
+        }
         usedTextures.add(expr.texture);
         usedSamplers.add(expr.sampler);
         break;
@@ -447,11 +477,21 @@ export function lowerExprs(
   // declared WGSL bindings match what auto-layout keeps (and the device plan).
   const usedTex = ir.textures.filter((t) => usedTextures.has(t.name));
   const usedSamp = ir.samplers.filter((s) => usedSamplers.has(s.name));
-  const textures: WgslBinding[] = usedTex.map((t, i) => ({
-    name: t.name, handle: `${handlePrefix}tex_${ident(t.name)}`, group: 1, binding: i,
-    ...(t.fileRef !== undefined ? { fileRef: t.fileRef } : {}),
-    ...(t.colorSpace !== undefined ? { colorSpace: t.colorSpace } : {}),
-  }));
+  const textures: WgslBinding[] = [];
+  for (const t of usedTex) {
+    const udim = AssetResolver.hasUdim(t.fileRef ?? '');
+    const binding: WgslBinding = {
+      name: t.name, handle: `${handlePrefix}tex_${ident(t.name)}`, group: 1, binding: textures.length,
+      ...(t.fileRef !== undefined ? { fileRef: t.fileRef } : {}),
+      ...(t.colorSpace !== undefined ? { colorSpace: t.colorSpace } : {}),
+      ...(udim ? { textureKind: 'udim' as const } : {}),
+    };
+    textures.push(binding);
+    if (udim) textures.push({
+      ...binding, name: `${t.name}_udim_index`, handle: `${binding.handle}_udim_index`,
+      binding: textures.length, textureKind: 'udim-index',
+    });
+  }
   const samplers: WgslBinding[] = usedSamp.map(({ name, ...sampler }, i) => ({
     name, handle: `${handlePrefix}samp_${ident(name)}`, group: 2, binding: i,
     ...(Object.keys(sampler).length > 0 ? { sampler } : {}),
@@ -553,7 +593,7 @@ function assembleModule(a: AssembleArgs): string {
     );
   }
 
-  for (const t of a.textures) parts.push(`@group(${t.group}) @binding(${t.binding}) var ${t.handle}: texture_2d<f32>;`);
+  for (const t of a.textures) parts.push(`@group(${t.group}) @binding(${t.binding}) var ${t.handle}: ${textureWgslType(t)};`);
   for (const s of a.samplers) parts.push(`@group(${s.group}) @binding(${s.binding}) var ${s.handle}: sampler;`);
 
   parts.push(emitVaryingsStruct(a.primvarFields, a.extraInputs));

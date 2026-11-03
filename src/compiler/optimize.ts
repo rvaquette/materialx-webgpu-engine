@@ -69,6 +69,7 @@ function childRefs(expr: IrExpr): IrRef[] {
       if (expr.lod) refs.push(expr.lod);
       if (expr.bias) refs.push(expr.bias);
       if (expr.gradient) refs.push(expr.gradient.ddx, expr.gradient.ddy);
+      if (expr.fallback) refs.push(expr.fallback);
       return refs;
     }
     case 'call':
@@ -93,6 +94,7 @@ function remapChildren(expr: IrExpr, remap: (ref: IrRef) => IrRef): IrExpr {
       if (expr.lod) next.lod = remap(expr.lod);
       if (expr.bias) next.bias = remap(expr.bias);
       if (expr.gradient) next.gradient = { ddx: remap(expr.gradient.ddx), ddy: remap(expr.gradient.ddy) };
+      if (expr.fallback) next.fallback = remap(expr.fallback);
       return next;
     }
     case 'call':
@@ -198,7 +200,7 @@ function structuralKey(expr: IrExpr): string {
     case 'swizzle':
       return `${base}|${expr.pattern}|${expr.source}`;
     case 'texture':
-      return `${base}|${expr.texture}|${expr.sampler}|${expr.uv}|${expr.lod ?? ''}|${expr.bias ?? ''}|${expr.gradient ? `${expr.gradient.ddx},${expr.gradient.ddy}` : ''}`;
+      return `${base}|${expr.texture}|${expr.sampler}|${expr.uv}|${expr.lod ?? ''}|${expr.bias ?? ''}|${expr.gradient ? `${expr.gradient.ddx},${expr.gradient.ddy}` : ''}|${expr.fallback ?? ''}`;
     case 'call':
       return `${base}|${expr.op}|${expr.args.join(',')}|${expr.namedArgs === undefined ? 'positional' : JSON.stringify(Object.entries(expr.namedArgs).sort(([first], [second]) => first.localeCompare(second)))}`;
     case 'closure': {

@@ -127,6 +127,8 @@ export type IrExpr =
       lod?: IrRef;
       bias?: IrRef;
       gradient?: { ddx: IrRef; ddy: IrRef };
+      /** MaterialX default for an absent UDIM tile. */
+      fallback?: IrRef;
       meta?: IrMeta;
     }
   | { kind: 'call'; type: IrType; op: string; args: IrRef[]; namedArgs?: Record<string, IrRef>; nodeDef?: ResolvedNodeDefRef; meta?: IrMeta }

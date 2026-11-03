@@ -12,6 +12,7 @@ import type { Diagnostic, DiagnosticSink } from '../../core/diagnostics.ts';
 import type { PtMaterialDispatch } from './material-variant.ts';
 import type { PathTraceScene } from './scene-buffers.ts';
 import { imageSamplerDescriptor, type ImageSamplerDescriptor } from '../../assets/samplers.ts';
+import type { WgslBinding } from '../../compiler/wgsl.ts';
 
 /** Decodes a texture file reference to pixels; injected so the resolver/decoder
  *  (and its colorspace policy) stay out of this pure planner. Called once per
@@ -52,7 +53,8 @@ export interface PtTextureBinding {
   handle: string;
   /** Index into `images` (shared when materials reference the same file). */
   imageIndex: number;
-  format: 'rgba8unorm' | 'rgba8unorm-srgb';
+  format: 'rgba8unorm' | 'rgba8unorm-srgb' | 'r32uint';
+  textureKind?: WgslBinding['textureKind'];
 }
 
 export interface PtSamplerBinding {
@@ -126,7 +128,8 @@ export async function buildPtDeviceBindings(
     binding: t.binding,
     handle: t.handle,
     imageIndex: registry.textureImage[i]!,
-    format: registry.textures[i]!.colorSpace === 'srgb_texture' ? 'rgba8unorm-srgb' : 'rgba8unorm',
+    format: t.textureKind === 'udim-index' ? 'r32uint' : t.colorSpace === 'srgb_texture' ? 'rgba8unorm-srgb' : 'rgba8unorm',
+    ...(t.textureKind !== undefined ? { textureKind: t.textureKind } : {}),
   }));
   const samplers: PtSamplerBinding[] = registry.samplers.map((s) => ({
     binding: s.binding,

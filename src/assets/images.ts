@@ -34,6 +34,8 @@ export interface DecodedPixelImage {
   height: number;
   /** Declared colorspace carried from the MaterialX input. */
   colorSpace: string;
+  /** Sparse UDIM tiles; the parent pixels describe the first tile, not an atlas. */
+  udim?: readonly { tile: number; image: DecodedPixelImage }[];
 }
 
 export type DecodedImage = DecodedBitmapImage | DecodedPixelImage;

@@ -23,6 +23,7 @@ import {
   emitVaryingsStruct,
   litFloat,
   lowerExprs,
+  textureWgslType,
   type WgslBinding,
   type WgslUniformField,
 } from './wgsl.ts';
@@ -713,7 +714,7 @@ export function emitLayeredSurface(
       `struct MxUniforms {\n${fn.uniforms.map((u) => `  ${u.field}: ${u.wgslType},`).join('\n')}\n};\n@group(0) @binding(0) var<uniform> u: MxUniforms;`,
     );
   }
-  for (const t of fn.textures) parts.push(`@group(${t.group}) @binding(${t.binding}) var ${t.handle}: texture_2d<f32>;`);
+  for (const t of fn.textures) parts.push(`@group(${t.group}) @binding(${t.binding}) var ${t.handle}: ${textureWgslType(t)};`);
   for (const s of fn.samplers) parts.push(`@group(${s.group}) @binding(${s.binding}) var ${s.handle}: sampler;`);
   parts.push(emitVaryingsStruct(fn.primvarFields, fn.extraInputs));
   parts.push(fn.fnCode);

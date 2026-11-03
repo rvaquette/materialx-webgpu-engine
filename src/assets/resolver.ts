@@ -26,7 +26,7 @@ export class AssetResolutionError extends Error {
   override readonly name = 'AssetResolutionError';
 }
 
-const UDIM_TOKEN = /<UDIM>/gi;
+const UDIM_TOKEN = /(?:<UDIM>|%3CUDIM%3E)/gi;
 const READY_SCHEME = /^(https?:|blob:|data:)/i;
 const DRIVE_PATH = /^[a-zA-Z]:[\\/]/;
 
