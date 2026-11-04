@@ -5,8 +5,8 @@
 // mx_surface_layered(vary) -> LayeredClosure fill function. This builder appends a
 // dedicated frame uniform block on a distinct bind group, an orthonormal basis
 // helper and the vertex/fragment stages. The fragment reconstructs the surface
-// LayeredClosure and evaluates it against the single directional light plus the
-// environment through the shared closures. Reference quadrature retains 64
+// LayeredClosure and evaluates analytic lights (or the directional fallback) and
+// the environment through the shared closures. Reference quadrature retains 64
 // BSDF/environment MIS samples; interactive IBL uses 16 mip-filtered BSDF samples.
 
 import type { LayeredSurfaceModule, SurfaceFeatures } from '../../compiler/surface-wgsl.ts';

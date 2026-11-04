@@ -119,9 +119,9 @@ restent défilables dans la zone de rendu ; les panneaux vides sont masqués.
 Dans le viewer GPU, les scènes USD contenant des lumières rectangulaires ou
 sphériques utilisent les lumières analytiques dans les deux modes, sans dépendre
 du marqueur de conversion `pathtracer:sourceScene`. Intensité, exposition,
-surface transformée, normalisation et atténuation par distance sont conservées ;
-les booléens USD `normalize = 1/0` sont reconnus comme `true/false`.
-le dome reste traité séparément par l'IBL. Le path tracing utilise les rayons
+surface transformée, normalisation et atténuation par distance sont conservées.
+Les booléens USD `normalize = 1/0` sont reconnus comme `true/false`.
+Le dome reste traité séparément par l'IBL. Le path tracing utilise les rayons
 d'ombre et le MIS existants. Le raster utilise une quadrature déterministe de
 16 échantillons par lumière de surface, sans ombres ni rebonds indirects.
 La lumière directionnelle de prévisualisation n'est pas ajoutée dans ces chemins.

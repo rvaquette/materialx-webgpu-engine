@@ -2,7 +2,7 @@
 // SceneResources (T050, src/render/scene-resources.ts) plus the imported USD
 // cameras and lights into a flat, GPU-free render plan the executable raster
 // backend consumes: a camera uniform (view-projection + eye), a dominant
-// directional light, a constant environment radiance, and a per-instance draw
+// directional fallback, optional analytic lights, environment, and a per-instance draw
 // list sorted into the effectively-active passes (opaque, transmission). Each
 // draw carries the instance model matrix and the OpenPBR surface constants the
 // material chain resolved; a material whose effective passes include transmission
@@ -89,6 +89,7 @@ export interface SceneDraw {
 export interface SceneFramePlan {
   camera: FrameCamera;
   light: FrameLight;
+  /** Packed world-space emitters; when present, GPU shading replaces the fallback light. */
   analyticLights?: Float32Array;
   environment: FrameEnvironment;
   draws: readonly SceneDraw[];
