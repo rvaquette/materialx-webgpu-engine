@@ -98,15 +98,14 @@ The scene selector also lists all `.glb` and `.gltf` assets under
 `scenes/pathtracer`, excluding subdirectories. Format extensions remain in their
 labels to distinguish them from USDA variants. Selecting these entries fetches
 the scene and its relative resources from the application server and uses the
-same `gltf_pbr` MaterialX conversion as the local file picker. Rebuild after adding
+same `gltf_pbr` MaterialX conversion as the local importer. Rebuild after adding
 or removing assets to refresh the static catalog. Unsupported or missing assets
 remain explicit loading errors, even when their filename is listed.
 
-Use **Ouvrir GLB/glTF + ressources** to select one `.glb`, or one `.gltf` together
-with its `.bin` and image files. **Ouvrir un dossier glTF** preserves directory
-paths, including textures with identical basenames in different subdirectories.
-The selected bundle must contain exactly one scene entry. Missing or ambiguous
-resources fail explicitly; local imports do not fall back to network downloads.
+The UI exposes scene selection only, without local file or folder import buttons.
+The underlying local importer still supports bundles with exactly one scene entry
+and preserves directory paths. Missing or ambiguous resources fail explicitly;
+local imports do not fall back to network downloads.
 
 The importer generates an in-memory MaterialX document per material, using
 `gltf_pbr`, and compiles it through the same graph path as USD materials.

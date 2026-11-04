@@ -177,17 +177,22 @@ describe('Dear ImGui viewer controls', () => {
     stop();
   });
 
-  it('renders the environment checkbox, native import buttons and all rendering controls', async () => {
+  it('renders the environment and rendering controls without local import buttons', async () => {
     const f = fixture();
     const stop = await startViewerUi(f.canvas, f.state, f.actions, f.parameters);
     controls.checkbox = 'Envmap';
     f.render();
     expect(f.actions.environment).toHaveBeenCalledWith(false);
-    expect(ImGui.Button).toHaveBeenCalledWith('Ouvrir GLB/glTF + ressources');
-    expect(ImGui.Button).toHaveBeenCalledWith('Ouvrir un dossier glTF');
+    expect(ImGui.Button).not.toHaveBeenCalledWith('Ouvrir GLB/glTF + ressources');
+    expect(ImGui.Button).not.toHaveBeenCalledWith('Ouvrir un dossier glTF');
     expect(ImGui.RadioButton).toHaveBeenCalledWith('Raster', true);
     expect(ImGui.RadioButton).toHaveBeenCalledWith('Path tracing', false);
     expect(ImGui.Checkbox).toHaveBeenCalledWith('Denoiser JS (neural)', [false]);
+    const radioCalls = vi.mocked(ImGui.RadioButton).mock.invocationCallOrder;
+    const checkboxCalls = vi.mocked(ImGui.Checkbox).mock.invocationCallOrder;
+    const sameLineCalls = vi.mocked(ImGui.SameLine).mock.invocationCallOrder;
+    expect(sameLineCalls.some(order => order > radioCalls[0]! && order < radioCalls[1]!)).toBe(true);
+    expect(sameLineCalls.some(order => order > checkboxCalls[0]! && order < checkboxCalls[1]!)).toBe(true);
     expect(f.canvas.width).toBe(800);
     expect(f.canvas.height).toBe(1400);
     expect(controls.io.ConfigFlags & 1).toBe(1);

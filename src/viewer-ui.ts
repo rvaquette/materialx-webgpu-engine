@@ -116,8 +116,6 @@ export async function startViewerUi(
         ImGui.BeginDisabled(state.busy);
         ImGui.SeparatorText('Scene');
         combo('##scene', state.entry, state.scenes.map(scene => ({ label: scene.label, value: scene.entry })), actions.scene);
-        if (ImGui.Button('Ouvrir GLB/glTF + ressources')) actions.openFiles(false);
-        if (ImGui.Button('Ouvrir un dossier glTF')) actions.openFiles(true);
         ImGui.SeparatorText('Rendu');
         combo('##resolution', String(state.resolution), [256, 512, 1024].map(size => ({ label: `${size} x ${size}`, value: String(size) })), value => actions.resolution(Number(value)));
         combo('##quality', state.rasterQuality, [
@@ -129,6 +127,7 @@ export async function startViewerUi(
         if (ImGui.RadioButton('Path tracing', state.backend === 'pathtracing')) actions.backend('pathtracing');
         const environment: [boolean] = [state.environmentEnabled];
         if (ImGui.Checkbox('Envmap', environment)) actions.environment(environment[0]);
+        ImGui.SameLine();
         const denoise: [boolean] = [state.denoise];
         if (ImGui.Checkbox('Denoiser JS (neural)', denoise)) actions.denoise(denoise[0]);
         ImGui.BeginDisabled(state.backend !== 'pathtracing');
