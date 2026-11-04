@@ -119,22 +119,20 @@ describe('buildMaterialDispatch (T057g)', () => {
     );
   });
 
-  it('namespaces handles per material so distinct materials never collide', () => {
+  it('remaps compatible bindings while keeping independent material functions', () => {
     const dispatch = buildMaterialDispatch([
       source(0, texturedBaseColor('albedo.png')),
       source(1, texturedBaseColor('albedo.png')),
     ]);
-    // Same image node id in two materials stays separate (prefixed per material);
-    // sharing one GPU texture by file identity is deferred to T057j.
-    expect(dispatch.textures).toHaveLength(2);
-    expect(dispatch.textures.map((t) => t.binding)).toEqual([0, 1]);
-    expect(dispatch.textures[0]!.handle).not.toBe(dispatch.textures[1]!.handle);
-    expect(dispatch.samplers).toHaveLength(2);
+    expect(dispatch.textures).toHaveLength(1);
+    expect(dispatch.textures.map((t) => t.binding)).toEqual([0]);
+    expect(dispatch.samplers).toHaveLength(1);
     expect(dispatch.textures[0]!.group).toBe(1);
     expect(dispatch.samplers[0]!.group).toBe(2);
-    // The per-material prefixed handle appears in the generated fill function.
     expect(dispatch.dispatcherWgsl).toContain('m0_tex_tex');
-    expect(dispatch.dispatcherWgsl).toContain('m1_tex_tex');
+    expect(dispatch.dispatcherWgsl).not.toContain('m1_tex_tex');
+    expect(dispatch.dispatcherWgsl).not.toContain('m1_samp_tex');
+    expect(dispatch.dispatcherWgsl).toContain('fn mx_surface_layered_1(');
     // The textured input forces the st primvar into the merged varyings.
     expect(dispatch.primvarFields.has('st')).toBe(true);
   });
@@ -147,6 +145,20 @@ describe('buildMaterialDispatch opacity-only dispatcher', () => {
     upstream('alphaTex', 'image', 'float', [value('file', 'filename', 'alpha.png')]),
     upstream('albedoTex', 'image', 'color3', [value('file', 'filename', 'albedo.png')]),
   ]);
+
+  it('remaps shared regular textures and samplers in both surface and opacity functions', () => {
+    const dispatch = buildMaterialDispatch([source(0, texturedAlpha()), source(1, texturedAlpha())]);
+    expect(dispatch.textures).toHaveLength(2);
+    expect(dispatch.samplers).toHaveLength(1);
+    expect(dispatch.opacityDispatcherWgsl).toContain('m0_tex_alphaTex');
+    expect(dispatch.opacityDispatcherWgsl).not.toContain('m0_tex_albedoTex');
+    for (const code of [dispatch.dispatcherWgsl, dispatch.opacityDispatcherWgsl]) {
+      expect(code).not.toMatch(/\bm1_(tex|samp)_(alphaTex|albedoTex)\b/);
+      expect(code).toContain('m0_samp_');
+    }
+    expect(dispatch.dispatcherWgsl).toContain('case 1u:');
+    expect(dispatch.opacityDispatcherWgsl).toContain('case 1u:');
+  });
 
   it('switches mixed graph materials to opacity-only functions with a packed-record fallback', () => {
     const constant = surfaceGraph('open_pbr_surface', [value('geometry_opacity', 'float', '0.4')]);

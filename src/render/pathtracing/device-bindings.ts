@@ -69,7 +69,7 @@ export interface PtDeviceBindings {
   group0: PtBufferSlot[];
   /** group-1 texture slots; empty when no material references a texture. */
   textures: PtTextureBinding[];
-  /** group-2 sampler slots, one per texture slot. */
+  /** group-2 sampler slots, shared by effective addressing/filtering descriptor. */
   samplers: PtSamplerBinding[];
   /** Unique decoded images aligned to the registry (deduped by file); `undefined`
    *  marks a file that failed to decode (diagnostic emitted) or a fileless slot. */

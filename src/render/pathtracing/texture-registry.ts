@@ -1,22 +1,20 @@
 // T057j: path tracer texture registry. The megakernel binds every graph-backed
 // material's textures at once, so this collects all variant texture/sampler
 // bindings into one sequential layout (textures group 1, samplers group 2) and
-// deduplicates the underlying images by file reference: materials that sample the
-// same file share a single decoded GPU texture (the bind group binds it to each
-// slot that references it) instead of uploading it once per material. Handles stay
-// per-material (emitSurfaceVariant prefixes them `m<index>_`) so the variant fill
-// functions keep referencing their own bindings; only the device-side image
-// decode/upload is shared. Pure data (Node-testable); the device bind group is
-// built from this layout by scene-buffers/the harness (T057m).
+// shares compatible texture bindings by file, view kind and GPU color decoding.
+// Samplers are shared by their effective GPU descriptor, independently of images.
+// Per-material source handles are remapped to the retained bindings by the
+// material dispatcher. Image decoding remains deduplicated by file reference.
 
 import type { SurfaceVariantModule } from '../../compiler/surface-wgsl.ts';
 import type { WgslBinding } from '../../compiler/wgsl.ts';
+import { imageSamplerDescriptor } from '../../assets/samplers.ts';
 
 /** Deduplicated texture layout shared by all megakernel material variants. */
 export interface PtTextureRegistry {
-  /** Every variant texture binding, renumbered to a sequential group-1 layout. */
+  /** Shared texture bindings, renumbered to a sequential group-1 layout. */
   textures: WgslBinding[];
-  /** Every variant sampler binding, renumbered to a sequential group-2 layout. */
+  /** Shared sampler bindings, renumbered to a sequential group-2 layout. */
   samplers: WgslBinding[];
   /** Unique images referenced across all materials (deduped by file reference);
    *  an `undefined` entry is a distinct slot with no file (never dedups). */
@@ -24,7 +22,7 @@ export interface PtTextureRegistry {
   /** For each `textures[i]`, the index into `images` it samples. Bindings that
    *  resolve to the same file share an image index (device decode dedup). */
   textureImage: number[];
-  /** Shared UDIM resources use one binding; variant source handles are remapped. */
+  /** Shared resources use one binding; variant source handles are remapped. */
   bindingAliases?: ReadonlyMap<string, string>;
 }
 
@@ -36,11 +34,11 @@ export function buildTextureRegistry(variants: readonly SurfaceVariantModule[]):
 
   const textures: WgslBinding[] = [];
   const bindingAliases = new Map<string, string>();
-  const byUdim = new Map<string, WgslBinding>();
+  const byTexture = new Map<string, WgslBinding>();
   for (const t of variants.flatMap((v) => v.textures)) {
-    const key = t.textureKind && t.fileRef
-      ? JSON.stringify([t.fileRef, t.textureKind, t.textureKind === 'udim' ? t.colorSpace : undefined]) : undefined;
-    const shared = key === undefined ? undefined : byUdim.get(key);
+    const key = t.fileRef === undefined ? undefined
+      : JSON.stringify([t.fileRef, t.textureKind ?? '2d', t.textureKind !== 'udim-index' && t.colorSpace === 'srgb_texture']);
+    const shared = key === undefined ? undefined : byTexture.get(key);
     if (shared) {
       bindingAliases.set(t.handle, shared.handle);
       continue;
@@ -51,7 +49,7 @@ export function buildTextureRegistry(variants: readonly SurfaceVariantModule[]):
       ...(t.textureKind !== undefined ? { textureKind: t.textureKind } : {}),
     };
     textures.push(binding);
-    if (key !== undefined) byUdim.set(key, binding);
+    if (key !== undefined) byTexture.set(key, binding);
     if (t.fileRef !== undefined) {
       let idx = byFile.get(t.fileRef);
       if (idx === undefined) {
@@ -67,19 +65,18 @@ export function buildTextureRegistry(variants: readonly SurfaceVariantModule[]):
   }
 
   const samplers: WgslBinding[] = [];
-  const byUdimSampler = new Map<string, WgslBinding>();
+  const bySampler = new Map<string, WgslBinding>();
   for (const variant of variants) {
     for (const sampler of variant.samplers) {
-      const texture = variant.textures.find(t => t.name === sampler.name && t.textureKind === 'udim');
-      const key = texture?.fileRef ? JSON.stringify([texture.fileRef, sampler.sampler]) : undefined;
-      const shared = key === undefined ? undefined : byUdimSampler.get(key);
+      const key = JSON.stringify(imageSamplerDescriptor(sampler.sampler ?? {}));
+      const shared = bySampler.get(key);
       if (shared) {
         bindingAliases.set(sampler.handle, shared.handle);
         continue;
       }
       const binding = { ...sampler, group: 2, binding: samplers.length };
       samplers.push(binding);
-      if (key !== undefined) byUdimSampler.set(key, binding);
+      bySampler.set(key, binding);
     }
   }
 

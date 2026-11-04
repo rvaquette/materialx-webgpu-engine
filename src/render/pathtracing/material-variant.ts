@@ -7,9 +7,9 @@
 // for materials without a graph. Preludes, texture/sampler bindings and the
 // MxVaryings fields are merged across variants so the megakernel can declare each
 // once. Texture/sampler handles are namespaced per material (emitSurfaceVariant
-// prefixes them `m<index>_`) so distinct materials never collide; sharing one GPU
-// texture across materials that reference the same file is a later optimization
-// (T057j). Additive and pure-string (Node-testable): compute.ts wires it in T057i.
+// prefixes them `m<index>_`) so distinct materials never collide; compatible
+// texture/sampler handles are then remapped to shared bindings (T057j).
+// Additive and pure-string (Node-testable): compute.ts wires it in T057i.
 // A parallel `mx_eval_material_opacity(matId, vary) -> f32` switch calls each
 // variant's dependency-pruned opacity-only function (emitSurfaceVariant) and the
 // packed record's opacity slot, so alpha visibility rays never rebuild lobes.

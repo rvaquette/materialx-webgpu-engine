@@ -11,6 +11,7 @@ import { buildEnvCdf } from '../../src/assets/environment-cdf.ts';
 import { JsDenoiser } from '../../src/render/pathtracing/js-denoiser.ts';
 import { editableSceneMaterials, materialUniformData } from '../../src/render/material-parameters.ts';
 import { PT_UNIFORM_SIZE, pathTraceTile } from '../../src/render/pathtracing/compute.ts';
+import type { ShaderCompilationError } from '../../src/gpu/shader-diagnostics.ts';
 
 vi.mock('../../src/render/usd-scene-assets.ts', async (original) => ({
   ...await original<typeof import('../../src/render/usd-scene-assets.ts')>(),
@@ -38,7 +39,9 @@ function fakeDevice() {
       textures.push(texture);
       return texture;
     }),
-    createShaderModule: vi.fn(() => ({ getCompilationInfo: async () => ({ messages: [] }) })),
+    createShaderModule: vi.fn(() => ({
+      getCompilationInfo: async (): Promise<Pick<GPUCompilationInfo, 'messages'>> => ({ messages: [] }),
+    })),
     createRenderPipeline: vi.fn(() => ({ getBindGroupLayout: vi.fn(() => ({})) })),
     createComputePipelineAsync: vi.fn(async () => ({ getBindGroupLayout: vi.fn(() => ({})) })),
     createBindGroup: vi.fn((_desc: GPUBindGroupDescriptor) => ({})),
@@ -142,13 +145,77 @@ describe('interactive viewer resource lifecycle', () => {
       width: 512, height: 512, style: {}, addEventListener: vi.fn(), removeEventListener: vi.fn(),
     } as unknown as HTMLCanvasElement;
     const statuses: ViewerStatus[] = [];
+    const diagnostics: Array<readonly ShaderCompilationError[]> = [];
     viewer = new InteractiveViewer({
       device: mock.gpu, context: { getCurrentTexture: () => ({ createView: () => ({}) }) } as unknown as GPUCanvasContext,
       outputFormat: 'bgra8unorm', canvas, onStatus: (status) => statuses.push(status),
+      onShaderErrors: errors => diagnostics.push(errors),
     });
     await viewer.load('scene.usda');
-    return { ...mock, loaded, canvas, statuses, viewer };
+    return { ...mock, loaded, canvas, statuses, diagnostics, viewer };
   }
+
+  it('reports texture/sampler capability failures in shader diagnostics before compilation starts', async () => {
+    const actual = await vi.importActual<typeof import('../../src/render/pathtracing/scene-buffers.ts')>(
+      '../../src/render/pathtracing/scene-buffers.ts');
+    vi.mocked(buildCachedPathTraceScene).mockImplementation(actual.buildCachedPathTraceScene);
+    const { viewer, device, diagnostics, statuses } = await setup(true);
+    Object.assign(device.limits, { maxSampledTexturesPerShaderStage: 0, maxSamplersPerShaderStage: 0 });
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      viewer.setBackend('pathtracing');
+      tick(0);
+      await vi.waitFor(() => expect(statuses.at(-1)?.pathTracer).toBe('error'));
+      expect(device.createComputePipelineAsync).not.toHaveBeenCalled();
+      expect(diagnostics.at(-1)).toEqual([{
+        shader: 'Path tracing - preparation / pipeline',
+        message: 'Scene requires 1 sampled textures and 1 samplers; device limits are 0 textures and 0 samplers.',
+        line: 0, column: 0, source: '',
+      }]);
+      expect(log).toHaveBeenCalled();
+    } finally { log.mockRestore(); }
+  });
+
+  it('reports driver pipeline rejections even when WGSL compilation info has no errors', async () => {
+    const actual = await vi.importActual<typeof import('../../src/render/pathtracing/scene-buffers.ts')>(
+      '../../src/render/pathtracing/scene-buffers.ts');
+    vi.mocked(buildCachedPathTraceScene).mockImplementation(actual.buildCachedPathTraceScene);
+    const { viewer, device, diagnostics, statuses } = await setup();
+    device.createComputePipelineAsync.mockRejectedValueOnce(new Error('Driver rejected compute pipeline'));
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      viewer.setBackend('pathtracing');
+      tick(0);
+      await vi.waitFor(() => expect(statuses.at(-1)?.pathTracer).toBe('error'));
+      expect(diagnostics.at(-1)?.[0]?.message).toBe('Driver rejected compute pipeline');
+      expect(diagnostics.at(-1)?.[0]?.line).toBe(0);
+    } finally { log.mockRestore(); }
+  });
+
+  it('retains the original WGSL source error instead of replacing it with a generic startup failure', async () => {
+    const actual = await vi.importActual<typeof import('../../src/render/pathtracing/scene-buffers.ts')>(
+      '../../src/render/pathtracing/scene-buffers.ts');
+    vi.mocked(buildCachedPathTraceScene).mockImplementation(actual.buildCachedPathTraceScene);
+    const { viewer, device, diagnostics, statuses } = await setup();
+    const shaderError: GPUCompilationMessage = {
+      type: 'error', message: 'Invalid call', lineNum: 2, linePos: 3, offset: 1, length: 1,
+      __brand: 'GPUCompilationMessage',
+    };
+    device.createShaderModule.mockImplementation(() => ({
+      getCompilationInfo: async () => ({ messages: [shaderError] }),
+    }));
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      viewer.setBackend('pathtracing');
+      tick(0);
+      await vi.waitFor(() => expect(statuses.at(-1)?.pathTracer).toBe('error'));
+      expect(diagnostics.at(-1)).toHaveLength(1);
+      expect(diagnostics.at(-1)?.[0]).toMatchObject({
+        shader: 'Path tracing', message: 'Invalid call', line: 2, column: 3,
+      });
+      expect(device.createComputePipelineAsync).not.toHaveBeenCalled();
+    } finally { log.mockRestore(); }
+  });
 
   it('toggles environment uniforms without reloading geometry or recompiling and preserves it on reload', async () => {
     const { viewer, device, statuses } = await setup(true);

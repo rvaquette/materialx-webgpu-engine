@@ -567,6 +567,7 @@ export class InteractiveViewer {
     let uploadPtParameters: (() => void) | undefined;
     this.#onShaderErrors?.([]);
     let rasterErrors: ShaderCompilationError[] = [];
+    let pathTraceErrors: ShaderCompilationError[] = [];
     const track = <T extends { destroy(): void }>(o: T): T => {
       trash.push(o);
       return o;
@@ -940,7 +941,8 @@ fn dir_to_uv(d: vec3<f32>) -> vec2<f32> {
           pruneUnusedFunctions: true,
         }), 'Path tracing');
       if (ptCompilation.errors.length > 0) {
-        this.#onShaderErrors?.([...rasterErrors, ...ptCompilation.errors]);
+        pathTraceErrors = ptCompilation.errors;
+        this.#onShaderErrors?.([...rasterErrors, ...pathTraceErrors]);
         throw new Error(`WGSL: ${ptCompilation.errors.length} erreur(s) de compilation (path tracing).`);
       }
       const bindings = await buildPtDeviceBindings(dispatch, ptScene, loaded.mtlx.imageProvider, { sink });
@@ -956,7 +958,8 @@ fn dir_to_uv(d: vec3<f32>) -> vec2<f32> {
       const displayCompilation = await compileShaderWithDiagnostics(
         device, pathTraceDisplayWgsl(envAsset !== undefined), 'Path tracing display');
       if (displayCompilation.errors.length > 0) {
-        this.#onShaderErrors?.([...rasterErrors, ...displayCompilation.errors]);
+        pathTraceErrors = displayCompilation.errors;
+        this.#onShaderErrors?.([...rasterErrors, ...pathTraceErrors]);
         throw new Error(`WGSL: ${displayCompilation.errors.length} erreur(s) de compilation (path tracing display).`);
       }
       if (disposed) throw new Error('Viewer disposed during path tracer compilation.');
@@ -1303,7 +1306,12 @@ fn dir_to_uv(d: vec3<f32>) -> vec2<f32> {
         for (const o of ptTrash) o.destroy();
         if (disposed) return;
         ptState = 'error';
-        console.error(`Path tracer: ${(error as Error)?.message ?? error}`);
+        const message = error instanceof Error ? error.message : String(error);
+        if (!pathTraceErrors.length) {
+          pathTraceErrors = [{ shader: 'Path tracing - preparation / pipeline', message, line: 0, column: 0, source: '' }];
+          this.#onShaderErrors?.([...rasterErrors, ...pathTraceErrors]);
+        }
+        console.error(`Path tracer: ${message}`);
         this.#emitStatus();
       });
     };

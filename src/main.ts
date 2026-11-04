@@ -62,6 +62,7 @@ async function main(): Promise<void> {
   const reportGpuError = (event: Event): void => {
     const message = (event as GPUUncapturedErrorEvent).error.message;
     console.error(`WebGPU error: ${message}`);
+    if (ui) ui.shaderErrors += `${ui.shaderErrors ? '\n\n' : ''}WebGPU - validation\n${message}`;
     setStatus(`WebGPU : ${message}`);
   };
   device.addEventListener('uncapturederror', reportGpuError);
@@ -104,11 +105,11 @@ async function main(): Promise<void> {
         if (!operationBusy) setBusyMessage(shaderBusyMessage);
       } else if (!operationBusy) setBusyMessage('');
       showBusy(operationBusy || shaderBusy);
-      if (status.backend === 'pathtracing' && status.pathTracer === 'error') setStatus('Echec de compilation du path tracer. Consulter les erreurs WGSL.');
+      if (status.backend === 'pathtracing' && status.pathTracer === 'error') setStatus('Echec de preparation ou de compilation du path tracer. Consulter les erreurs WGSL.');
       else if (status.backend === 'pathtracing' && status.denoiser.state === 'error') setStatus(`Echec denoiser JS : ${status.denoiser.error}`);
     },
     onShaderErrors: errors => {
-      state.shaderErrors = errors.map(error => `${error.shader} (${error.line}:${error.column})\n${error.message}${error.source ? `\n> ${error.source}` : ''}`).join('\n\n');
+      state.shaderErrors = errors.map(error => `${error.shader}${error.line > 0 ? ` (${error.line}:${error.column})` : ''}\n${error.message}${error.source ? `\n> ${error.source}` : ''}`).join('\n\n');
     },
   };
   let viewer = new InteractiveViewer({ device, context, outputFormat, canvas, ...viewerCallbacks });

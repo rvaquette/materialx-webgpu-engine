@@ -1,9 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ViewerStatus } from '../src/render/viewer.ts';
 import type { ViewerUiState, ViewerUiActions } from '../src/viewer-ui.ts';
+import type { ShaderCompilationError } from '../src/gpu/shader-diagnostics.ts';
 
 const state = vi.hoisted(() => ({
   onStatus: undefined as ((status: ViewerStatus) => void) | undefined,
+  onShaderErrors: undefined as ((errors: readonly ShaderCompilationError[]) => void) | undefined,
+  gpuError: undefined as ((event: Event) => void) | undefined,
   load: vi.fn(),
   ui: undefined as ViewerUiState | undefined,
   actions: undefined as ViewerUiActions | undefined,
@@ -19,7 +22,10 @@ vi.mock('../src/viewer-ui.ts', () => ({
 vi.mock('../src/render/viewer.ts', () => ({
   InteractiveViewer: class {
     objects = [];
-    constructor(options: { onStatus: (status: ViewerStatus) => void }) { state.onStatus = options.onStatus; }
+    constructor(options: { onStatus: (status: ViewerStatus) => void; onShaderErrors: (errors: readonly ShaderCompilationError[]) => void }) {
+      state.onStatus = options.onStatus;
+      state.onShaderErrors = options.onShaderErrors;
+    }
     load = state.load;
     setBackend = vi.fn();
     setEnvironmentEnabled = state.environment;
@@ -40,6 +46,8 @@ describe('viewer loading indicator', () => {
   beforeEach(() => {
     vi.resetModules();
     state.onStatus = undefined;
+    state.onShaderErrors = undefined;
+    state.gpuError = undefined;
     state.ui = undefined;
     state.actions = undefined;
     state.environment.mockClear();
@@ -54,7 +62,9 @@ describe('viewer loading indicator', () => {
       getElementById: (id: string) => ({ view: canvas, ui: canvas, status, 'busy-indicator': indicator, 'pathtracing-spp': spp })[id],
       querySelectorAll: () => [],
     });
-    const device = { addEventListener: vi.fn(), lost: new Promise(() => {}) };
+    const device = { addEventListener: vi.fn((type: string, handler: (event: Event) => void) => {
+      if (type === 'uncapturederror') state.gpuError = handler;
+    }), lost: new Promise(() => {}) };
     vi.stubGlobal('navigator', { gpu: {
       requestAdapter: async () => ({
         limits: { maxStorageBufferBindingSize: 1 << 28, maxBufferSize: 1 << 28, maxStorageBuffersPerShaderStage: 8 },
@@ -118,7 +128,7 @@ describe('viewer loading indicator', () => {
     emit('error');
     expect(indicator.hidden).toBe(true);
     expect(status.hidden).toBe(false);
-    expect(status.textContent).toContain('Echec de compilation');
+    expect(status.textContent).toContain('Echec de preparation ou de compilation');
   });
 
   it('shows live spp only for a ready path tracer and preserves its count in pause', async () => {
@@ -160,5 +170,32 @@ describe('viewer loading indicator', () => {
     state.actions!.environment(true);
     expect(state.environment).toHaveBeenLastCalledWith(true);
     expect(state.ui?.environmentEnabled).toBe(true);
+  });
+
+  it('displays pipeline failures without fake source coordinates and keeps genuine WGSL locations', async () => {
+    await import('../src/main.ts');
+    await settle();
+    const limit = 'Scene requires 80 sampled textures and 75 samplers; device limits are 48 textures and 16 samplers.';
+    state.onShaderErrors!([{ shader: 'Path tracing - preparation / pipeline', message: limit, line: 0, column: 0, source: '' }]);
+    emit('error');
+    expect(state.ui?.shaderErrors).toContain(limit);
+    expect(state.ui?.shaderErrors).not.toContain('(0:0)');
+    expect(state.ui?.error).toContain('preparation ou de compilation');
+    state.onShaderErrors!([{ shader: 'Path tracing', message: 'Invalid call', line: 12, column: 3, source: '  invalid();' }]);
+    expect(state.ui?.shaderErrors).toBe('Path tracing (12:3)\nInvalid call\n>   invalid();');
+    state.onShaderErrors!([]);
+    expect(state.ui?.shaderErrors).toBe('');
+    finishLoad();
+    await settle();
+  });
+
+  it('includes uncaptured WebGPU validation errors in the diagnostics panel', async () => {
+    await import('../src/main.ts');
+    await settle();
+    state.gpuError!(Object.assign(new Event('uncapturederror'), { error: { message: 'Invalid bind group layout' } }));
+    expect(state.ui?.shaderErrors).toContain('WebGPU - validation\nInvalid bind group layout');
+    expect(status.textContent).toContain('Invalid bind group layout');
+    finishLoad();
+    await settle();
   });
 });

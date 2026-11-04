@@ -3,6 +3,46 @@ import { OrbitCamera, attachOrbitControls } from '../../src/scene/orbit-camera.t
 import { inverse4, transformPoint } from '../../src/scene/transforms.ts';
 
 describe('orbit camera clipping', () => {
+  it('zooms orthographic geometry without moving the near plane through the subject', () => {
+    const camera = OrbitCamera.fromEyeTarget([0, 0, 5], [0, 0, 0], 1);
+    const before = camera.viewProj();
+    const eye = camera.eye;
+    camera.dolly(0.01);
+    expect(camera.eye).toEqual(eye);
+    const after = camera.viewProj();
+    expect(after[0]).toBeCloseTo(before[0]! * 100, 8);
+    for (const z of [-1, 0, 1, 4]) {
+      const depth = transformPoint(after, [0, 0, z])[2];
+      expect(depth).toBeCloseTo(transformPoint(before, [0, 0, z])[2], 12);
+      expect(depth).toBeGreaterThan(0);
+      expect(depth).toBeLessThan(1);
+    }
+    const origin = transformPoint(inverse4(after), [0, 0, 0]);
+    expect(origin[2]).toBeCloseTo(5 - camera.near, 8);
+    expect(origin[2]).toBeGreaterThan(4);
+    camera.dolly(10000);
+    expect(camera.eye).toEqual(eye);
+  });
+
+  it('continues to move the eye when dollying in perspective mode', () => {
+    const camera = OrbitCamera.fromEyeTarget([0, 0, 5], [0, 0, 0], 1);
+    camera.projection = 'perspective';
+    camera.dolly(0.1);
+    expect(camera.eye).toEqual([0, 0, 0.5]);
+    expect(camera.distance).toBe(0.5);
+  });
+
+  it('keeps orbit and pan usable after an orthographic close-up', () => {
+    const camera = OrbitCamera.fromEyeTarget([0, 0, 5], [0, 0, 0], 1);
+    camera.dolly(0.01);
+    camera.orbit(Math.PI / 2, 0);
+    expect(camera.eye[0]).toBeCloseTo(5);
+    expect(camera.eye[2]).toBeCloseTo(0);
+    camera.pan(20, 10, 512);
+    expect(Math.hypot(...camera.eye.map((value, i) => value - camera.target[i]!))).toBeCloseTo(5);
+    expect(camera.target).not.toEqual([0, 0, 0]);
+  });
+
   it('supports converted perspective cameras without changing the default orthographic mode', () => {
     const camera = OrbitCamera.fromEyeTarget([0, 0, 5], [0, 0, 0], 1);
     expect(camera.projection).toBe('orthographic');

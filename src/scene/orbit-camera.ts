@@ -1,4 +1,4 @@
-// Interactive orbit camera controller (mouse-driven). Owns its own perspective
+// Interactive orbit camera controller (mouse-driven). Owns its own
 // projection and a yaw/pitch/distance orbit around a target point, and produces
 // the same FrameCamera data (viewProj + eye) both the raster and path-tracing
 // backends consume (src/main.ts). It is seeded from the scene's initial camera so
@@ -23,10 +23,11 @@ export interface OrbitCameraOptions {
   far: number;
 }
 
-/** Spherical-orbit camera; eye is derived from target + yaw/pitch/distance. */
+/** Spherical-orbit camera with orthographic framing independent of eye distance. */
 export class OrbitCamera {
   projection: 'perspective' | 'orthographic' = 'orthographic';
   target: [number, number, number];
+  /** Framing distance; also the eye distance in perspective mode. */
   distance: number;
   yaw: number;
   pitch: number;
@@ -34,10 +35,12 @@ export class OrbitCamera {
   aspect: number;
   near: number;
   far: number;
+  readonly #orthographicEyeDistance: number;
 
   constructor(opts: OrbitCameraOptions) {
     this.target = [opts.target[0], opts.target[1], opts.target[2]];
     this.distance = opts.distance;
+    this.#orthographicEyeDistance = opts.distance;
     this.yaw = opts.yaw;
     this.pitch = clamp(opts.pitch, -PITCH_LIMIT, PITCH_LIMIT);
     this.fovY = opts.fovY;
@@ -66,10 +69,13 @@ export class OrbitCamera {
 
   get eye(): [number, number, number] {
     const cp = Math.cos(this.pitch);
+    // Orthographic zoom changes the view extents, not the camera's depth:
+    // moving the eye inward would push the near plane through the subject.
+    const distance = this.projection === 'orthographic' ? this.#orthographicEyeDistance : this.distance;
     return [
-      this.target[0] + this.distance * cp * Math.sin(this.yaw),
-      this.target[1] + this.distance * Math.sin(this.pitch),
-      this.target[2] + this.distance * cp * Math.cos(this.yaw),
+      this.target[0] + distance * cp * Math.sin(this.yaw),
+      this.target[1] + distance * Math.sin(this.pitch),
+      this.target[2] + distance * cp * Math.cos(this.yaw),
     ];
   }
 
@@ -100,7 +106,7 @@ export class OrbitCamera {
     this.pitch = clamp(this.pitch + dPitch, -PITCH_LIMIT, PITCH_LIMIT);
   }
 
-  /** Zoom by scaling the orbit radius (factor > 1 moves away). */
+  /** Scale orthographic framing or the perspective orbit radius (factor > 1 zooms out). */
   dolly(factor: number): void {
     this.distance = clamp(this.distance * factor, this.near * 2, this.far * 0.9);
   }

@@ -160,13 +160,12 @@ describe('buildPtDeviceBindings (T057m2)', () => {
     const { calls, provider } = countingProvider(fakeImage());
     const bindings = await buildPtDeviceBindings(dispatch, fakeScene(), provider);
 
-    // Two materials, two texture slots, but the shared file decodes once.
-    expect(bindings.textures.map((t) => t.binding)).toEqual([0, 1]);
-    expect(bindings.textures.map((t) => t.imageIndex)).toEqual([0, 0]);
+    // Two materials share one texture binding and one decoded image.
+    expect(bindings.textures.map((t) => t.binding)).toEqual([0]);
+    expect(bindings.textures.map((t) => t.imageIndex)).toEqual([0]);
     expect(bindings.images).toHaveLength(1);
     expect(calls).toEqual(['brick_base.jpg']);
-    // One sampler per texture slot, repeat + linear.
-    expect(bindings.samplers.map((s) => s.binding)).toEqual([0, 1]);
+    expect(bindings.samplers.map((s) => s.binding)).toEqual([0]);
     expect(bindings.samplers[0]!.descriptor).toEqual({
       addressModeU: 'repeat', addressModeV: 'repeat', magFilter: 'linear', minFilter: 'linear',
     });
@@ -193,8 +192,8 @@ describe('buildPtDeviceBindings (T057m2)', () => {
     const { calls, provider } = countingProvider(fakeImage());
     const bindings = await buildPtDeviceBindings(dispatch, fakeScene(), provider);
     expect(calls).toEqual(['shared.png']);
-    expect(bindings.textures.map((t) => t.imageIndex)).toEqual([0, 0, 0]);
-    expect(bindings.textures.map((t) => t.format)).toEqual(['rgba8unorm-srgb', 'rgba8unorm', 'rgba8unorm']);
+    expect(bindings.textures.map((t) => t.imageIndex)).toEqual([0, 0]);
+    expect(bindings.textures.map((t) => t.format)).toEqual(['rgba8unorm-srgb', 'rgba8unorm']);
   });
 
   it('warns and leaves the image undefined when a file fails to decode', async () => {
@@ -221,7 +220,7 @@ describe('buildPtDeviceBindings (T057m2)', () => {
     const { calls, provider } = countingProvider(fakeImage());
     const bindings = await buildPtDeviceBindings(dispatch, fakeScene(), provider);
     expect(calls).toEqual(['shared.png']);
-    expect(bindings.textures.map((t) => t.imageIndex)).toEqual([0, 0]);
+    expect(bindings.textures.map((t) => t.imageIndex)).toEqual([0]);
     expect(bindings.samplers.map((s) => s.descriptor)).toEqual([
       { addressModeU: 'clamp-to-edge', addressModeV: 'mirror-repeat', magFilter: 'nearest', minFilter: 'nearest' },
       { addressModeU: 'repeat', addressModeV: 'repeat', magFilter: 'linear', minFilter: 'linear' },

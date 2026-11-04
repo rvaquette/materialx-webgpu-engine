@@ -527,14 +527,17 @@ describe('pathTraceComputeWgsl texture registry (T057j)', () => {
     const src = pathTraceComputeWgsl({ dispatch });
     expect(src).toContain('@group(1) @binding(0) var m0_tex_tex: texture_2d<f32>;');
     expect(src).toContain('@group(1) @binding(1) var m1_tex_tex: texture_2d<f32>;');
-    expect(src).toContain('@group(2) @binding(1) var m1_samp_tex: sampler;');
+    expect(src).toContain('@group(2) @binding(0) var m0_samp_tex: sampler;');
+    expect(src).not.toContain('m1_samp_tex');
   });
 
-  it('deduplicates shared images in the registry while keeping both bindings', () => {
+  it('shares image bindings and remaps every material sampling reference', () => {
     const dispatch = imageDispatch(['brick.png', 'brick.png']);
     expect(dispatch.textureRegistry.images).toEqual(['brick.png']);
-    expect(dispatch.textureRegistry.textureImage).toEqual([0, 0]);
-    expect(dispatch.textures).toHaveLength(2);
+    expect(dispatch.textureRegistry.textureImage).toEqual([0]);
+    expect(dispatch.textures).toHaveLength(1);
+    const src = pathTraceComputeWgsl({ dispatch });
+    expect(src).not.toMatch(/\bm1_tex_tex\b|\bm1_samp_tex\b/);
   });
 
   it('emits no texture bindings when no material samples an image', () => {

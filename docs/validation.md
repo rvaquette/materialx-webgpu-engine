@@ -85,12 +85,31 @@ d'erreur :
 
 ## Profils raster et réactivité du viewer mobile
 
+En projection orthographique, le zoom (molette ou pincement) modifie uniquement
+les dimensions de la vue, sans avancer le plan proche dans la géométrie.
+La distance de prise de vue initiale est conservée pendant le zoom ; l'orbite et
+le déplacement restent actifs. En perspective, le zoom conserve son déplacement
+physique de la caméra. Raster et path tracing utilisent la même caméra.
+
 Les contrôles du viewer sont rendus par Dear ImGui, dans un canvas WebGL2 séparé
 du rendu WebGPU : scènes, fichiers locaux, résolution, qualité raster, backend,
 pause, denoiser, matériaux, paramètres et diagnostics. Les sélecteurs de fichiers
 restent natifs au navigateur. Le panneau se place au-dessus du rendu sur mobile.
 Les messages de chargement et de compilation apparaissent dans le panneau, avec
 des annonces HTML accessibles ; les erreurs restent visibles.
+Le panneau « Erreurs WGSL » inclut aussi les échecs de préparation du path tracer
+(limites de textures/samplers, par exemple), les rejets de pipeline par le pilote
+et les erreurs de validation WebGPU. Les erreurs sans position source ne portent
+pas de coordonnées fictives ; les diagnostics WGSL conservent ligne, colonne et
+extrait de code.
+
+Le path tracer partage les bindings de textures entre variantes de matériaux
+lorsque le fichier, le type de vue (2D, tableau UDIM ou index) et le décodage GPU
+sRGB/linéaire sont identiques. Les samplers sont partagés selon leur descripteur
+GPU effectif, indépendamment du fichier ; les modes d'adressage et de filtrage
+incompatibles restent distincts. Les paramètres éditables restent propres à chaque
+objet ; seules les ressources image/sampler sont mutualisées. Les fonctions de
+surface et d'opacité utilisent toutes deux les handles partagés.
 
 Sur écran tactile, les gestes sont transmis une seule fois à ImGui par les
 événements touch du backend (clavier virtuel compris), sans le doublon pointer.
