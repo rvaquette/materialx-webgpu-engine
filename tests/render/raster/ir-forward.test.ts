@@ -48,6 +48,18 @@ function forward(category: string, inputs: ResolvedInput[]) {
 }
 
 describe('assembleIrForwardShader (T058b)', () => {
+  it.each(['interactive', 'reference'] as const)('uses physical area-light sampling in %s without the directional fallback', quality => {
+    const { surface } = forward('standard_surface', []);
+    const shader = assembleIrForwardShader(surface, { rasterQuality: quality, analyticLights: true });
+    expect(shader.analyticLights).toBe(true);
+    expect(shader.code).toContain('@group(3) @binding(7) var<storage, read> analyticLights');
+    expect(shader.code).toContain('arrayLength(&analyticLights) / 7u');
+    expect(shader.code).toContain('mx_sample_light(position,');
+    expect(shader.code).toContain('light.pdf * f32(count * sampleCount)');
+    expect(shader.code).not.toContain('fu.lightColor.xyz * fu.lightColor.w');
+    expect(shader.code).not.toContain('U.transport');
+    expect(shader.code).not.toContain('RAY_EPS');
+  });
   it('corrects front-face shading normals continuously without changing back-face glass orientation', () => {
     const { shader } = forward('standard_surface', []);
     expect(shader.code).toContain('@builtin(front_facing) frontFacing: bool');
@@ -96,7 +108,7 @@ describe('assembleIrForwardShader (T058b)', () => {
     expect(shader.code).toContain('if (mx_closure_has_dispersion(c))');
     expect(shader.code).toContain('let spectral = mx_closure_spectral_channel(c, channel);');
     expect(shader.code).toContain('radiance[channel] = light[channel];');
-    expect(shader.code).toContain('radiance = mx_forward_lighting(c, n, wo, sframe);');
+    expect(shader.code).toContain('radiance = mx_forward_lighting(c, n, wo, sframe, fin.worldPos);');
   });
   it('omits coat, smooth-sheet and dispersion paths a surface cannot reach', () => {
     const { surface, shader } = forward('gltf_pbr', [value('dispersion', 'float', '0.35')]);
@@ -110,7 +122,7 @@ describe('assembleIrForwardShader (T058b)', () => {
     expect(shader.code).not.toContain('case 8u: { return mx_dielectric_transmission_eval(ctx, wi); }');
     expect(shader.code).not.toContain('mx_microfacet_eval_tf(wo, wi');
     expect(shader.code).toContain('case 4u: { return mx_conductor_eval(ctx, wi); }');
-    expect(shader.code).toContain('radiance = mx_forward_lighting(c, n, wo, sframe);');
+    expect(shader.code).toContain('radiance = mx_forward_lighting(c, n, wo, sframe, fin.worldPos);');
     expect(shader.code).toContain('if (dielectricIndex >= 0) {');
   });
   it('discards zero coverage and outputs straight alpha for blending', () => {

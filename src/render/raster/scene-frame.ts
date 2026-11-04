@@ -17,6 +17,7 @@ import type { SceneCamera } from '../../usd/cameras.ts';
 import type { SceneLight } from '../../usd/lights.ts';
 import { multiply4, transformDirection, type Mat4, type Vec3 } from '../../scene/transforms.ts';
 import { surfaceGraphToLayered } from '../../compiler/surface-lower.ts';
+import { packAnalyticLights } from '../pathtracing/analytic-lights.ts';
 
 /** OpenPBR surface constants consumed by the analytic raster fragment shader. */
 export interface RasterSurface {
@@ -88,6 +89,7 @@ export interface SceneDraw {
 export interface SceneFramePlan {
   camera: FrameCamera;
   light: FrameLight;
+  analyticLights?: Float32Array;
   environment: FrameEnvironment;
   draws: readonly SceneDraw[];
   /** Active pass kinds present in the draw list, opaque first. */
@@ -227,7 +229,9 @@ export function buildSceneFrame(resources: SceneResources, options: BuildSceneFr
   if (hasMasked) passes.push('masked');
   if (hasTransmission) passes.push('transmission');
 
-  return { camera, light, environment, draws, passes, skipped };
+  const analyticLights = lights.some(light => light.type === 'rect' || light.type === 'sphere')
+    ? packAnalyticLights(lights) : undefined;
+  return { camera, light, environment, draws, passes, skipped, ...(analyticLights ? { analyticLights } : {}) };
 }
 
 /** Floats in a scene forward frame uniform (SCENE_FRAME_UNIFORM_SIZE / 4). */

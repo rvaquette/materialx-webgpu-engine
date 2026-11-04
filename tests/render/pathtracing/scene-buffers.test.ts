@@ -81,6 +81,32 @@ function build(surface?: RasterSurface): PathTraceScene {
 }
 
 describe('buildPathTraceScene packing', () => {
+  it('packs ordinary USD area lights without enabling converted camera or transport settings', async () => {
+    const { resources } = sceneWith();
+    const sphere: SceneLight = {
+      path: '/World/LEDmeetMat', type: 'sphere', usdType: 'SphereLight',
+      transform: IDENTITY4, radius: 3, color: [1, 0.8, 0.1],
+      intensity: 400, exposure: 2.6, normalize: true,
+    };
+    const rect: SceneLight = {
+      ...sphere, path: '/World/Panel', type: 'rect', usdType: 'RectLight',
+      width: 2, height: 2, intensity: 900, exposure: 5,
+    };
+    const settings = { converted: false, maxDepth: 64, rouletteDepth: 3 };
+    const options = { lights: [sphere, rect, { ...sphere, type: 'dome' as const }], settings };
+    const direct = buildPathTraceScene(resources, options);
+    const cached = await buildCachedPathTraceScene(resources, options);
+    for (const scene of [direct, cached]) {
+      expect(scene.analyticLightCount).toBe(2);
+      expect(scene.analyticLights).toHaveLength(2 * PT_LIGHT_FLOATS);
+      expect(scene.analyticLights![4]).toBeCloseTo(400 * 2 ** 2.6 / (4 * Math.PI * 9), 4);
+      expect(scene.analyticLights![PT_LIGHT_FLOATS + 4]).toBe(900 * 2 ** 5 / 4);
+      expect(scene.settings).toEqual(settings);
+      expect(scene.camera).toEqual(buildPathTraceScene(resources, { lights: [] }).camera);
+      expect(scene.triangleCount).toBe(2);
+    }
+  });
+
   it('excludes only converted analytic emitter proxies in direct and cached builds', async () => {
     const { resources } = sceneWith();
     resources.instances[0]!.primPath = '/World/Panel_Geometry';

@@ -309,8 +309,8 @@ export function buildPathTraceScene(
     environment: frame.environment,
     bounds: preparedGeometry?.bounds ?? bvh!.bounds,
     ...(options.settings ? { settings: options.settings } : {}),
-    ...(options.settings?.converted ? {
-      analyticLights: packAnalyticLights(options.lights ?? []),
+    ...(options.settings?.converted || frame.analyticLights ? {
+      analyticLights: frame.analyticLights ?? packAnalyticLights(options.lights ?? []),
       analyticLightCount: options.lights?.filter(light => light.type !== 'dome').length ?? 0,
     } : {}),
     ...(hasDisplacement ? { displacement: { mapFile: displaceMapFile!, midpoint, scale: displaceScaleArr } } : {}),

@@ -672,6 +672,10 @@ export class InteractiveViewer {
     const zeroTexcoords = new Map<string, GPUBuffer>();
     const zeroTangents = new Map<string, GPUBuffer>();
     const frameUniforms: Array<{ buffer: GPUBuffer; draw: SceneFramePlan['draws'][number] }> = [];
+    const rasterLights = frame.analyticLights
+      ? track(device.createBuffer({ size: frame.analyticLights.byteLength, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST }))
+      : undefined;
+    if (rasterLights && frame.analyticLights) device.queue.writeBuffer(rasterLights, 0, frame.analyticLights);
     const rasterSets = new Map<RasterQuality, { backend: RasterBackend; draws: Map<ScenePassKind, SceneDrawCall[]> }>();
     const buildRasterQuality = async (quality: RasterQuality): Promise<void> => {
       const cached = rasterSets.get(quality);
@@ -687,6 +691,7 @@ export class InteractiveViewer {
         if (!material?.surfaceModule || shaders.has(material.variant.pipelineKey)) continue;
         const shader = assembleIrForwardShader(material.surfaceModule, {
           displacement: material.displacement !== undefined, rasterQuality: quality,
+          analyticLights: rasterLights !== undefined,
         });
         const compiled = await compileShaderWithDiagnostics(device, shader.code, `Raster ${quality}: ${material.materialName}`);
         if (disposed) throw new Error('Viewer disposed during raster compilation.');
@@ -743,6 +748,7 @@ export class InteractiveViewer {
           {
             frame: frameUniform,
             material: materialUniform,
+            ...(rasterLights ? { analyticLights: rasterLights } : {}),
             ...(textures ? { textureViews: textures.textureViews, samplers: textures.samplers } : {}),
             ...(displacement ? { displacement } : {}),
             ...(envTextureView && envSampler && envCdfBuffer ? { environment: { textureView: envTextureView, sampler: envSampler, cdf: envCdfBuffer } } : {}),

@@ -350,12 +350,15 @@ describe('buildSceneResources (T050)', () => {
     expect(mat.surfaceModule).toBeUndefined();
   });
 
-  it.each([false, true])('builds material and frame bind groups with displacement=%s', async (withDisplacement) => {
+  it.each([
+    [false, false], [true, false], [false, true], [true, true],
+  ])('builds frame bindings with displacement=%s and analytic lights=%s', async (withDisplacement, withLights) => {
     const resources = await buildSceneResources(demoScene(), {
       meshSource: meshSource({ '/World/floor': quad() }),
       materialCompiler: layeredCompiler(),
     });
     const mat = resources.materials.get(FLOOR_KEY)!;
+    mat.sceneShader!.analyticLights = withLights;
 
     const groups: number[] = [];
     const descriptors: GPUBindGroupDescriptor[] = [];
@@ -375,6 +378,7 @@ describe('buildSceneResources (T050)', () => {
     const buffers = {
       frame: { id: 'f' } as unknown as GPUBuffer,
       material: { id: 'm' } as unknown as GPUBuffer,
+      ...(withLights ? { analyticLights: { id: 'lights' } as unknown as GPUBuffer } : {}),
       environment: {
         textureView: { id: 'env' } as unknown as GPUTextureView,
         sampler: { id: 'env-sampler' } as unknown as GPUSampler,
@@ -398,6 +402,7 @@ describe('buildSceneResources (T050)', () => {
       { binding: 4, resource: buffers.environment.textureView },
       { binding: 5, resource: buffers.environment.sampler },
       { binding: 6, resource: { buffer: buffers.environment.cdf } },
+      ...(withLights ? [{ binding: 7, resource: { buffer: buffers.analyticLights } }] : []),
       ...(withDisplacement ? [
         { binding: 1, resource: displacement.textureView },
         { binding: 2, resource: displacement.sampler },

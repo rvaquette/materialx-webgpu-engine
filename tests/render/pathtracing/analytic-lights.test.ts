@@ -5,6 +5,8 @@ import { IDENTITY4 } from '../../../src/scene/transforms.ts';
 import type { SceneLight } from '../../../src/usd/lights.ts';
 import { cameraFovY, importCameras } from '../../../src/usd/cameras.ts';
 import { importUsdStage } from '../../../src/usd/importer.ts';
+import { importLights } from '../../../src/usd/lights.ts';
+import orangeJuice from '../../../scenes/OpenPBRShaderPlayground/orangeJuice_grp/orangeJuice_grp.usda?raw';
 
 const rect: SceneLight = {
   path: '/World/Lights/Panel', type: 'rect', usdType: 'RectLight',
@@ -12,6 +14,23 @@ const rect: SceneLight = {
   width: 4, height: 2, transform: IDENTITY4,
 };
 describe('analytic converted lights', () => {
+  it('imports all five normalized Orange juice emitters with their world-space areas', async () => {
+    const scene = await importUsdStage('orangeJuice.usda', {
+      reader: { read: async uri => uri === 'orangeJuice.usda' ? orangeJuice : '#usda 1.0' },
+    });
+    const lights = importLights(scene);
+    const emitters = lights.filter(light => light.type !== 'dome');
+    expect(emitters).toHaveLength(5);
+    expect(emitters.every(light => light.normalize)).toBe(true);
+    const packed = packAnalyticLights(lights);
+    expect(packed).toHaveLength(5 * PT_LIGHT_FLOATS);
+    const sphere = emitters[0]!;
+    expect(sphere.path).toContain('LEDmeetMat');
+    expect(packed[4]).toBeCloseTo(sphere.color[0] * 400 * 2 ** 2.6 / (36 * Math.PI), 4);
+    const moonArea = 4 * 60.003628 * 75.95271;
+    expect(packed[PT_LIGHT_FLOATS + 7]).toBeCloseTo(moonArea, 2);
+    expect(packed[PT_LIGHT_FLOATS + 4]).toBeCloseTo(0.42299998 * 28800 / moonArea, 5);
+  });
   it('packs rectangle orientation, true area and exposed radiance', () => {
     const data = packAnalyticLights([rect]);
     expect(data.length).toBe(PT_LIGHT_FLOATS);

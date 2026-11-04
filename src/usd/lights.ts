@@ -71,7 +71,9 @@ function readNumber(prim: ScenePrim, name: string): number | undefined {
 }
 
 function readBool(prim: ScenePrim, name: string): boolean | undefined {
-  const value = prim.attributes.get(name)?.value;
+  const attribute = prim.attributes.get(name);
+  const value = attribute?.value;
+  if (attribute?.typeName === 'bool' && (value === 0 || value === 1)) return value === 1;
   return typeof value === 'boolean' ? value : undefined;
 }
 

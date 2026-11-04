@@ -92,11 +92,12 @@ export function packAnalyticLights(lights: readonly SceneLight[]): Float32Array 
   return data;
 }
 
-export const ANALYTIC_LIGHTS_WGSL = /* wgsl */ `
-@group(0) @binding(9) var<storage, read> analyticLights: array<vec4f>;
+export function analyticLightsWgsl(group = 0, binding = 9, count = 'u32(U.transport.z)', pi = 'PI', epsilon = 'RAY_EPS'): string {
+  return /* wgsl */ `
+@group(${group}) @binding(${binding}) var<storage, read> analyticLights: array<vec4f>;
 struct MxLightSample { direction: vec3f, distance: f32, radiance: vec3f, pdf: f32, delta: bool };
 struct MxLightHit { distance: f32, radiance: vec3f, pdf: f32, hit: bool };
-fn mx_light_count() -> u32 { return u32(U.transport.z); }
+fn mx_light_count() -> u32 { return ${count}; }
 fn mx_light_pdf(index: u32, origin: vec3f, point: vec3f, normal: vec3f) -> f32 {
   let b = index * 7u;
   let offset = point - origin;
@@ -130,11 +131,11 @@ fn mx_sample_light(origin: vec3f, u: vec3f) -> MxLightSample {
   } else if (lightType == 1u) {
     let z = 1.0 - 2.0 * u.x;
     let r = sqrt(max(0.0, 1.0 - z * z));
-    let phi = 2.0 * PI * u.y;
+    let phi = 2.0 * ${pi} * u.y;
     normal = vec3f(r * cos(phi), r * sin(phi), z);
     point = posType.xyz + normal * analyticLights[b + 2u].w;
   } else if (lightType == 3u) {
-    let theta = 2.0 * PI * u.x;
+    let theta = 2.0 * ${pi} * u.x;
     let phi = acos(1.0 - 2.0 * u.y);
     normal = vec3f(sin(phi) * cos(theta), sin(phi) * sin(theta), cos(phi));
     point = posType.xyz + normal * 0.01;
@@ -142,7 +143,7 @@ fn mx_sample_light(origin: vec3f, u: vec3f) -> MxLightSample {
     let direction = analyticLights[b + 5u].xyz;
     let cosInner = analyticLights[b + 6u].x;
     let cosOuter = analyticLights[b + 6u].y;
-    let theta = 2.0 * PI * u.x;
+    let theta = 2.0 * ${pi} * u.x;
     let cosAngle = mix(cosOuter, cosInner, u.y);
     let sinAngle = sqrt(max(0.0, 1.0 - cosAngle * cosAngle));
     var localDir = vec3f(sinAngle * cos(theta), sinAngle * sin(theta), cosAngle);
@@ -187,13 +188,13 @@ fn mx_intersect_lights(origin: vec3f, direction: vec3f) -> MxLightHit {
       let discriminant = along * along - dot(offset, offset) + radius * radius;
       if (discriminant < 0.0) { continue; }
       distance = -along - sqrt(discriminant);
-      if (distance <= RAY_EPS) { continue; }
+      if (distance <= ${epsilon}) { continue; }
       normal = normalize(origin + direction * distance - posType.xyz);
     } else if (lightType == 3u || lightType == 4u) {
       continue;
     }
     
-    if (distance <= RAY_EPS || distance >= result.distance) { continue; }
+    if (distance <= ${epsilon} || distance >= result.distance) { continue; }
     result.distance = distance;
     result.radiance = analyticLights[b + 1u].xyz;
     result.pdf = mx_light_pdf(index, origin, origin + direction * distance, normal);
@@ -202,3 +203,6 @@ fn mx_intersect_lights(origin: vec3f, direction: vec3f) -> MxLightHit {
   return result;
 }
 `;
+}
+
+export const ANALYTIC_LIGHTS_WGSL = analyticLightsWgsl();

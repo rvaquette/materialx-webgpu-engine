@@ -29,6 +29,16 @@ function scene(prims: ScenePrim[]): SceneAsset {
 }
 
 describe('importLights', () => {
+  it.each([true, false, 1, 0] as const)('reads authored USD boolean %s for light normalization', value => {
+    const lamp = prim('/Lamp', 'SphereLight', [
+      attr('inputs:normalize', 'bool', value),
+      attr('treatAsPoint', 'bool', value),
+    ]);
+    const [light] = importLights(scene([lamp]));
+    expect(light!.normalize).toBe(Boolean(value));
+    expect(light!.treatAsPoint).toBe(Boolean(value));
+  });
+
   it('reads shape and radiometric parameters per light type', () => {
     const sun = prim('/Sun', 'DistantLight', [
       attr('inputs:angle', 'float', 0.53),

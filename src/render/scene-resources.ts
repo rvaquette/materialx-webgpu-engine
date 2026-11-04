@@ -455,6 +455,7 @@ export interface SceneDrawBuffers {
   /** Resolved samplers by MaterialX sampler handle name. */
   samplers?: ReadonlyMap<string, GPUSampler>;
   environment?: { textureView: GPUTextureView; sampler: GPUSampler; cdf: GPUBuffer };
+  analyticLights?: GPUBuffer;
   /** Vertex-displacement resources (VTF), bound at the scene shader's displacement
    *  group: a MxDisp uniform (scale, midpoint), the height map and its sampler.
    *  Present only for a material whose sceneShader declares displacementGroup. */
@@ -530,6 +531,10 @@ export function createSceneBindGroups(
   push(frameGroup, { binding: 5, resource: environment.sampler });
   if (material.sceneShader?.rasterQuality !== 'interactive') {
     push(frameGroup, { binding: 6, resource: { buffer: environment.cdf } });
+  }
+  if (material.sceneShader?.analyticLights) {
+    if (!buffers.analyticLights) throw new Error('Missing raster analytic light buffer.');
+    push(frameGroup, { binding: 7, resource: { buffer: buffers.analyticLights } });
   }
 
   // Optional vertex-displacement (VTF): the height map, its sampler and the MxDisp

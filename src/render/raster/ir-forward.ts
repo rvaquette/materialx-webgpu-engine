@@ -10,6 +10,7 @@
 // BSDF/environment MIS samples; interactive IBL uses 16 mip-filtered BSDF samples.
 
 import type { LayeredSurfaceModule, SurfaceFeatures } from '../../compiler/surface-wgsl.ts';
+import { analyticLightsWgsl } from '../pathtracing/analytic-lights.ts';
 
 const ALL_FEATURES: SurfaceFeatures = { coat: true, transmission: true, dispersion: true, thinFilm: true, lobeKinds: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9] };
 
@@ -37,6 +38,7 @@ export interface IrForwardShader {
   frameGroup: number;
   frameBinding: number;
   rasterQuality?: RasterQuality;
+  analyticLights?: boolean;
   /** Set to IR_FORWARD_DISP_GROUP when the vertex stage samples a displacement map. */
   displacementGroup?: number;
 }
@@ -388,7 +390,7 @@ ${dispOffset}
 }
 
 /** Rebuild the material closure, shade direct light and integrate dome IBL. */
-function fragmentStage(surfaceEntry: string, primvarNames: readonly string[], f: SurfaceFeatures, quality: RasterQuality): string {
+function fragmentStage(surfaceEntry: string, primvarNames: readonly string[], f: SurfaceFeatures, quality: RasterQuality, analyticLights: boolean): string {
   const reference = quality === 'reference';
   const samples = reference ? 64 : 16;
   // Feed the MxVaryings primvar fields the surface fn reads. 'st' is the default
@@ -433,16 +435,33 @@ fn ${IR_FORWARD_FRAGMENT_ENTRY}(fin: MxVertexOut, @builtin(front_facing) frontFa
 ${f.dispersion ? `  if (mx_closure_has_dispersion(c)) {
     for (var channel = 0u; channel < 3u; channel++) {
       let spectral = mx_closure_spectral_channel(c, channel);
-      let light = mx_forward_lighting(spectral, n, wo, sframe);
+      let light = mx_forward_lighting(spectral, n, wo, sframe, fin.worldPos);
       radiance[channel] = light[channel];
     }
   } else {
-    radiance = mx_forward_lighting(c, n, wo, sframe);
-  }` : '  radiance = mx_forward_lighting(c, n, wo, sframe);'}
+    radiance = mx_forward_lighting(c, n, wo, sframe, fin.worldPos);
+  }` : '  radiance = mx_forward_lighting(c, n, wo, sframe, fin.worldPos);'}
   return vec4f(radiance, clamp(c.opacity, 0.0, 1.0));
 }
 
-fn mx_forward_lighting(c: LayeredClosure, n: vec3f, wo: vec3f, sframe: mat3x3f) -> vec3f {
+fn mx_forward_lighting(c: LayeredClosure, n: vec3f, wo: vec3f, sframe: mat3x3f, position: vec3f) -> vec3f {
+${analyticLights ? `  var radiance = vec3f(0.0);
+  let count = mx_light_count();
+  // Deterministic area-light quadrature, without raster shadow rays.
+  for (var index = 0u; index < count; index++) {
+    let lightType = u32(analyticLights[index * 7u].w);
+    let sampleCount = select(16u, 1u, lightType == 2u);
+    for (var sampleIndex = 0u; sampleIndex < sampleCount; sampleIndex++) {
+      let uv = vec2f((f32(sampleIndex % 4u) + 0.5) / 4.0, (f32(sampleIndex / 4u) + 0.5) / 4.0);
+      let light = mx_sample_light(position, vec3f(uv, (f32(index) + 0.5) / f32(count)));
+      if (light.pdf > 0.0) {
+        let wi = transpose(sframe) * light.direction;
+        let ev = mx_closure_eval(c, wo, wi);
+        let cosine = ${f.lobeKinds.includes(9) ? 'abs(dot(n, light.direction))' : 'max(dot(n, light.direction), 0.0)'};
+        radiance += ev.value * light.radiance * (cosine / (light.pdf * f32(count * sampleCount)));
+      }
+    }
+  }` : `
   // Direct next-event term for the distant (delta) light: a delta direction has
   // no BSDF-sampling counterpart, mirroring the delta light in compute.ts. Raster
   // omits the shadow ray (no occlusion test in the forward pass).
@@ -451,6 +470,7 @@ fn mx_forward_lighting(c: LayeredClosure, n: vec3f, wo: vec3f, sframe: mat3x3f) 
   let ev = mx_closure_eval(c, wo, wiLight);
   let cosL = ${f.lobeKinds.includes(9) ? 'abs(dot(n, toLight))' : 'max(dot(n, toLight), 0.0)'};
   var radiance = ev.value * (fu.lightColor.xyz * fu.lightColor.w) * cosL;
+`}
 
   // Diffuse environment IBL read analytically from the SH9 irradiance probe (the
   // same noise-free term the path tracer uses), so textured albedo reads at the
@@ -513,16 +533,17 @@ ${reference ? `      if (!deltaSpecular && fu.envMap.w != 0.0 && fu.envInfo.z > 
  * uniform, basis helper and vertex/fragment stages. Captures default to reference
  * quality; the interactive viewer explicitly selects filtered IBL.
  */
-export function assembleIrForwardShader(surface: LayeredSurfaceModule, options: { displacement?: boolean; rasterQuality?: RasterQuality } = {}): IrForwardShader {
+export function assembleIrForwardShader(surface: LayeredSurfaceModule, options: { displacement?: boolean; rasterQuality?: RasterQuality; analyticLights?: boolean } = {}): IrForwardShader {
   const displacement = options.displacement === true;
   const rasterQuality = options.rasterQuality ?? 'reference';
   const features = surface.features ?? ALL_FEATURES;
   const code = [
     surface.code.trimEnd(),
     frameBlock(features, rasterQuality),
+    ...(options.analyticLights ? [analyticLightsWgsl(IR_FORWARD_FRAME_GROUP, 7, 'arrayLength(&analyticLights) / 7u', 'MX_PI', '1e-4')] : []),
     basisHelper(),
     vertexStage(displacement),
-    fragmentStage(surface.entryPoint, [...surface.primvarFields.keys()], features, rasterQuality),
+    fragmentStage(surface.entryPoint, [...surface.primvarFields.keys()], features, rasterQuality, options.analyticLights === true),
   ].join('\n\n') + '\n';
   return {
     code,
@@ -531,6 +552,7 @@ export function assembleIrForwardShader(surface: LayeredSurfaceModule, options: 
     frameGroup: IR_FORWARD_FRAME_GROUP,
     frameBinding: IR_FORWARD_FRAME_BINDING,
     rasterQuality,
+    ...(options.analyticLights ? { analyticLights: true } : {}),
     ...(displacement ? { displacementGroup: IR_FORWARD_DISP_GROUP } : {}),
   };
 }
