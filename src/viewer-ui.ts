@@ -162,10 +162,6 @@ export async function startViewerUi(
           ImGui.EndDisabled();
         }
         ImGui.EndDisabled();
-        if (state.busyMessage) ImGui.TextWrapped(state.busyMessage);
-        if (state.error) { ImGui.SeparatorText('Erreur'); ImGui.TextWrapped(state.error); }
-        if (ImGui.CollapsingHeader('Erreurs WGSL')) ImGui.TextWrapped(state.shaderErrors || 'Aucune erreur WGSL.');
-        if (state.warnings && ImGui.CollapsingHeader("Avertissements d'import glTF")) ImGui.TextWrapped(state.warnings);
       }
       ImGui.End();
       ImGuiImplWeb.EndRender();

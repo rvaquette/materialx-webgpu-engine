@@ -40,6 +40,10 @@ describe('viewer loading indicator', () => {
   const indicator = element();
   const status = element();
   const spp = element();
+  const shaderMessages = element();
+  const shaderDiagnostics = element();
+  const importMessages = element();
+  const importDiagnostics = element();
   const canvas = { ...element(), getContext: () => ({ configure: vi.fn() }) };
   let finishLoad: () => void;
 
@@ -55,11 +59,19 @@ describe('viewer loading indicator', () => {
     indicator.hidden = false;
     status.hidden = true;
     status.textContent = '';
+    for (const output of [shaderMessages, shaderDiagnostics, importMessages, importDiagnostics]) {
+      output.hidden = true;
+      output.textContent = '';
+    }
     canvas.setAttribute.mockClear();
     vi.stubGlobal('location', { search: '' });
     vi.stubGlobal('document', {
       baseURI: 'http://localhost/',
-      getElementById: (id: string) => ({ view: canvas, ui: canvas, status, 'busy-indicator': indicator, 'pathtracing-spp': spp })[id],
+      getElementById: (id: string) => ({
+        view: canvas, ui: canvas, status, 'busy-indicator': indicator, 'pathtracing-spp': spp,
+        'shader-messages': shaderMessages, 'shader-diagnostics': shaderDiagnostics,
+        'import-messages': importMessages, 'import-diagnostics': importDiagnostics,
+      })[id],
       querySelectorAll: () => [],
     });
     const device = { addEventListener: vi.fn((type: string, handler: (event: Event) => void) => {
@@ -181,10 +193,14 @@ describe('viewer loading indicator', () => {
     expect(state.ui?.shaderErrors).toContain(limit);
     expect(state.ui?.shaderErrors).not.toContain('(0:0)');
     expect(state.ui?.error).toContain('preparation ou de compilation');
+    expect(shaderDiagnostics.hidden).toBe(false);
+    expect(shaderMessages.textContent).toContain(limit);
     state.onShaderErrors!([{ shader: 'Path tracing', message: 'Invalid call', line: 12, column: 3, source: '  invalid();' }]);
     expect(state.ui?.shaderErrors).toBe('Path tracing (12:3)\nInvalid call\n>   invalid();');
     state.onShaderErrors!([]);
     expect(state.ui?.shaderErrors).toBe('');
+    expect(shaderDiagnostics.hidden).toBe(true);
+    expect(shaderMessages.textContent).toBe('');
     finishLoad();
     await settle();
   });
@@ -194,6 +210,8 @@ describe('viewer loading indicator', () => {
     await settle();
     state.gpuError!(Object.assign(new Event('uncapturederror'), { error: { message: 'Invalid bind group layout' } }));
     expect(state.ui?.shaderErrors).toContain('WebGPU - validation\nInvalid bind group layout');
+    expect(shaderMessages.textContent).toContain('WebGPU - validation\nInvalid bind group layout');
+    expect(shaderDiagnostics.hidden).toBe(false);
     expect(status.textContent).toContain('Invalid bind group layout');
     finishLoad();
     await settle();

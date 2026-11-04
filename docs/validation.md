@@ -111,6 +111,11 @@ incompatibles restent distincts. Les paramètres éditables restent propres à c
 objet ; seules les ressources image/sampler sont mutualisées. Les fonctions de
 surface et d'opacité utilisent toutes deux les handles partagés.
 
+Les messages de chargement, erreurs, diagnostics WGSL et avertissements d'import
+s'affichent en surimpression sur le canvas de rendu, indépendamment du défilement
+des contrôles ImGui. Les diagnostics sont repliables et les messages longs
+restent défilables dans la zone de rendu ; les panneaux vides sont masqués.
+
 Sur écran tactile, les gestes sont transmis une seule fois à ImGui par les
 événements touch du backend (clavier virtuel compris), sans le doublon pointer.
 Les barres de défilement et leurs poignées mesurent au moins 28 pixels CSS ;

@@ -10,6 +10,13 @@ import type { LocalGltfScene } from './scene/local-gltf.ts';
 let ui: ViewerUiState | undefined;
 let statusIsError = false;
 
+function setDiagnostics(kind: 'shader' | 'import', text: string): void {
+  const messages = document.getElementById(`${kind}-messages`);
+  if (messages) messages.textContent = text;
+  const panel = document.getElementById(`${kind}-diagnostics`);
+  if (panel) panel.hidden = !text;
+}
+
 function showBusy(busy: boolean): void {
   const indicator = document.getElementById('busy-indicator');
   if (indicator) indicator.hidden = !busy;
@@ -62,7 +69,10 @@ async function main(): Promise<void> {
   const reportGpuError = (event: Event): void => {
     const message = (event as GPUUncapturedErrorEvent).error.message;
     console.error(`WebGPU error: ${message}`);
-    if (ui) ui.shaderErrors += `${ui.shaderErrors ? '\n\n' : ''}WebGPU - validation\n${message}`;
+    if (ui) {
+      ui.shaderErrors += `${ui.shaderErrors ? '\n\n' : ''}WebGPU - validation\n${message}`;
+      setDiagnostics('shader', ui.shaderErrors);
+    }
     setStatus(`WebGPU : ${message}`);
   };
   device.addEventListener('uncapturederror', reportGpuError);
@@ -110,6 +120,7 @@ async function main(): Promise<void> {
     },
     onShaderErrors: errors => {
       state.shaderErrors = errors.map(error => `${error.shader}${error.line > 0 ? ` (${error.line}:${error.column})` : ''}\n${error.message}${error.source ? `\n> ${error.source}` : ''}`).join('\n\n');
+      setDiagnostics('shader', state.shaderErrors);
     },
   };
   let viewer = new InteractiveViewer({ device, context, outputFormat, canvas, ...viewerCallbacks });
@@ -174,6 +185,7 @@ async function main(): Promise<void> {
       }
       if (imported) localScene = imported;
       state.warnings = localScene?.warnings.join('\n\n') ?? '';
+      setDiagnostics('import', state.warnings);
       return true;
     } catch (error) {
       imported?.dispose();

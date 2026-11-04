@@ -8,10 +8,14 @@
       html, body { margin: 0; height: 100%; background: #101014; color: #e6e6e6; font-family: system-ui, sans-serif; }
       #app { display: flex; height: 100%; }
       #ui { width: clamp(320px, 35vw, 480px); height: 100%; flex: none; display: block; touch-action: none; }
-      #canvas-container { flex: 1; min-width: 0; display: flex; align-items: center; justify-content: center; overflow: hidden; }
+      #canvas-container { position: relative; flex: 1; min-width: 0; min-height: 0; display: flex; align-items: center; justify-content: center; overflow: hidden; }
       #view { width: min(100%, 100vh); max-height: 100%; aspect-ratio: 1; object-fit: contain; touch-action: none; user-select: none; }
-      #status { position: fixed; bottom: 8px; left: 8px; padding: 8px; max-width: 90vw; background: #331818; z-index: 1; }
-      .sr-only, .ui-ready #status { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
+      #messages { position: absolute; top: 8px; left: 8px; right: 8px; z-index: 1; max-height: calc(100% - 16px); overflow: auto; pointer-events: none; }
+      #messages > :not([hidden]) { display: block; margin: 0 0 6px; padding: 8px; background: #17171fed; border-radius: 4px; white-space: pre-wrap; overflow-wrap: anywhere; pointer-events: auto; }
+      #messages #status, #messages #shader-diagnostics { background: #331818ed; }
+      #messages summary { cursor: pointer; font-weight: bold; }
+      #messages pre { margin: 8px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }
+      .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
       @media (max-width: 700px) {
         #app { flex-direction: column; }
         #ui { width: 100%; height: 45%; }
@@ -24,11 +28,21 @@
       <canvas id="ui" aria-label="Contrôles Dear ImGui" tabindex="0"></canvas>
       <div id="canvas-container">
         <canvas id="view" width="512" height="512" aria-label="Rendu de la scène" aria-busy="true"></canvas>
+        <div id="messages" aria-label="Messages du viewer">
+          <div id="status" role="alert" hidden></div>
+          <div id="busy-indicator" role="status" aria-live="polite">Initialisation de WebGPU...</div>
+          <details id="shader-diagnostics" open hidden>
+            <summary>Erreurs WGSL</summary>
+            <pre id="shader-messages"></pre>
+          </details>
+          <details id="import-diagnostics" open hidden>
+            <summary>Avertissements d'import glTF</summary>
+            <pre id="import-messages"></pre>
+          </details>
+        </div>
       </div>
       <input id="local-scene-files" type="file" multiple hidden />
       <input id="local-scene-folder" type="file" webkitdirectory multiple hidden />
-      <div id="status" role="alert" hidden></div>
-      <span id="busy-indicator" class="sr-only" role="status" aria-live="polite">Initialisation de WebGPU...</span>
       <span id="pathtracing-spp" class="sr-only" aria-live="polite" hidden></span>
     </div>
     <script type="module" src="/src/main.ts"></script>

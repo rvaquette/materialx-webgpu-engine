@@ -195,7 +195,7 @@ describe('Dear ImGui viewer controls', () => {
     expect(ImGui.DestroyContext).toHaveBeenCalled();
   });
 
-  it('routes scene and material choices through engine callbacks and renders diagnostics', async () => {
+  it('routes scene and material choices without duplicating overlay messages in the controls', async () => {
     const f = fixture();
     const draw = vi.spyOn(f.parameters, 'draw').mockImplementation(() => {});
     controls.header = true;
@@ -210,9 +210,7 @@ describe('Dear ImGui viewer controls', () => {
     f.render();
     expect(f.actions.material).toHaveBeenCalledWith('./gold.mtlx');
     expect(draw).toHaveBeenCalledTimes(2);
-    expect(ImGui.TextWrapped).toHaveBeenCalledWith('Import failed');
-    expect(ImGui.TextWrapped).toHaveBeenCalledWith('WGSL error');
-    expect(ImGui.TextWrapped).toHaveBeenCalledWith('Missing texture');
+    expect(ImGui.TextWrapped).not.toHaveBeenCalled();
     f.state.busy = true;
     f.render();
     expect(ImGui.BeginDisabled).toHaveBeenCalledWith(true);
