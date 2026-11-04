@@ -19,7 +19,7 @@
 def Xform "World"
 {
     over "wallsFloor_grp" (
-        prepend references = @wallsFloor_grp.usd@</World/wallsFloor_grp>
+        prepend references = @wallsFloor_grp_geometry.usda@</World/wallsFloor_grp>
     )
     {
         over "wallRGT"

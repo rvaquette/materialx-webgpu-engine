@@ -15,7 +15,7 @@
 def Xform "World"
 {
     over "crmpledPaper_grp" (
-        prepend references = @crmpledPaper_grp.usd@</World/crmpledPaper_grp>
+        prepend references = @crmpledPaper_grp_geometry.usda@</World/crmpledPaper_grp>
     )
     {
         token visibility = "invisible"

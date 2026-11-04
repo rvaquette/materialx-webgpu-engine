@@ -16,7 +16,7 @@ def Xform "World"
 {
     over "tube_mug_grp" (
         prepend apiSchemas = ["MaterialBindingAPI"]
-        prepend references = @tube_mug_grp.usd@</World/tube_mug_grp>
+        prepend references = @tube_mug_grp_geometry.usda@</World/tube_mug_grp>
     )
     {
         rel material:binding = </World/Looks/tube> (

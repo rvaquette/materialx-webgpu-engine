@@ -15,7 +15,7 @@
 def Xform "World"
 {
     over "chairB_grp" (
-        prepend references = @chairB_grp.usd@</World/chairB_grp>
+        prepend references = @chairB_grp_geometry.usda@</World/chairB_grp>
     )
     {
         over "wood_chair_back_mesh"

@@ -15,7 +15,7 @@
 def Xform "World"
 {
     over "stars_grp" (
-        prepend references = @stars_grp.usd@</World/stars_grp>
+        prepend references = @stars_grp_geometry.usda@</World/stars_grp>
     )
     {
         over "groupNumber_2"

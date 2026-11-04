@@ -16,7 +16,7 @@
 def Xform "World"
 {
     over "tape_grp" (
-        prepend references = @tape_grp.usd@</World/tape_grp>
+        prepend references = @tape_grp_geometry.usda@</World/tape_grp>
     )
     {
         over "roll_geo5" (

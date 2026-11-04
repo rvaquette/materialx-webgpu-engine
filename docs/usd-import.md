@@ -57,6 +57,15 @@ The scene selector lists `scenes/OpenPBRShaderPlayground/*_grp/*_grp.usda`.
 material layers and textures. Rebuild after adding or removing scenes, and
 serve the complete `dist` directory rather than only its HTML and JavaScript.
 These bundled scenes are separate from the development-only external playground.
+Their 27 geometry references use `*_grp_geometry.usda` text layers rather than
+the original binary `.usd` layers. These bundled scenes therefore load on plain
+static servers without COOP/COEP, SharedArrayBuffer or browser OpenUSD WASM.
+The original binaries are not included in the repository. Conversion used
+OpenUSD Python bindings (`pxr.Sdf`) to export authored layers without flattening;
+each text layer was checked against the original layer's USDA export before
+removing the binary.
+Geometry layers are not additional scene-selector entries.
+
 MaterialX filename attributes escape UDIM placeholders as `&lt;UDIM&gt;`;
 XML parsing restores `<UDIM>` for tile resolution without changing texture names.
 

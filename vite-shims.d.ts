@@ -19,11 +19,16 @@ declare module 'node:path' {
   export function join(...parts: string[]): string;
 }
 declare module 'node:fs' {
+  export function readFileSync(path: string): Uint8Array;
   export function readFileSync(path: string, encoding: 'utf8'): string;
   export function existsSync(path: string): boolean;
   export function readdirSync(path: string): string[];
+  export function openSync(path: string, flags: string): number;
+  export function readSync(fd: number, buffer: Uint8Array, offset: number, length: number, position: number): number;
+  export function closeSync(fd: number): void;
 }
 declare module 'node:url' {
   export function pathToFileURL(path: string): URL;
+  export function fileURLToPath(url: string | URL): string;
 }
 declare const process: { env: Record<string, string | undefined> };

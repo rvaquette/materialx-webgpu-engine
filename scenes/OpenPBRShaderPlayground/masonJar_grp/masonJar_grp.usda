@@ -16,7 +16,7 @@
 def Xform "World"
 {
     over "masonJar_grp" (
-        prepend references = @masonJar_grp.usd@</World/masonJar_grp>
+        prepend references = @masonJar_grp_geometry.usda@</World/masonJar_grp>
     )
     {
         over "jar_geo_n3d" (

@@ -15,7 +15,7 @@
 def Xform "World"
 {
     over "books_grp" (
-        prepend references = @books_grp.usd@</World/books_grp>
+        prepend references = @books_grp_geometry.usda@</World/books_grp>
     )
     {
         over "book_006_mesh"

@@ -15,7 +15,7 @@
 def Xform "World"
 {
     over "meetMAT_grp" (
-        prepend references = @meetMAT_grp.usd@</World/meetMAT_grp>
+        prepend references = @meetMAT_grp_geometry.usda@</World/meetMAT_grp>
     )
     {
         over "Mesh_01_Head_n3d2"

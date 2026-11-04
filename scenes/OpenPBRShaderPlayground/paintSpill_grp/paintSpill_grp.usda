@@ -15,7 +15,7 @@
 def Xform "World"
 {
     over "paintSpill_grp" (
-        prepend references = @paintSpill_grp.usd@</World/paintSpill_grp>
+        prepend references = @paintSpill_grp_geometry.usda@</World/paintSpill_grp>
     )
     {
         double3 xformOp:translate = (-36.02248782624915, -8.3, 0.5509552123613731)

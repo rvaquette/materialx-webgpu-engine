@@ -15,7 +15,7 @@
 def Xform "World"
 {
     over "octopus_grp" (
-        prepend references = @octopus_grp.usd@</World/octopus_grp>
+        prepend references = @octopus_grp_geometry.usda@</World/octopus_grp>
     )
     {
         over "octoBody_geo"

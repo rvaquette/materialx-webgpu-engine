@@ -16,7 +16,7 @@
 def Xform "World"
 {
     over "tube_grp" (
-        prepend references = @tube_grp.usd@</World/tube_grp>
+        prepend references = @tube_grp_geometry.usda@</World/tube_grp>
     )
     {
         over "group1tube48_n3d2" (

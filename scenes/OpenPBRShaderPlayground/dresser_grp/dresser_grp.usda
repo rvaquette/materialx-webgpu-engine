@@ -15,7 +15,7 @@
 def Xform "World"
 {
     over "dresser_grp" (
-        prepend references = @dresser_grp.usd@</World/dresser_grp>
+        prepend references = @dresser_grp_geometry.usda@</World/dresser_grp>
     )
     {
         over "dresserFrame_geo"

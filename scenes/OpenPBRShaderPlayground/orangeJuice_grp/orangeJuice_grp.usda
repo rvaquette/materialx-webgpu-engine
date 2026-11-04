@@ -18,7 +18,7 @@
 def Xform "World"
 {
     over "orangeJuice_grp" (
-        prepend references = @orangeJuice_grp.usd@</World/orangeJuice_grp>
+        prepend references = @orangeJuice_grp_geometry.usda@</World/orangeJuice_grp>
     )
     {
         token visibility = "inherited"

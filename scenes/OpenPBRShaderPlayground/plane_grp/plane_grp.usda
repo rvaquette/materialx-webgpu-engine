@@ -20,7 +20,7 @@
 def Xform "World"
 {
     over "plane_grp" (
-        prepend references = @plane_grp.usd@</World/plane_grp>
+        prepend references = @plane_grp_geometry.usda@</World/plane_grp>
     )
     {
         over "mainBody_grp"

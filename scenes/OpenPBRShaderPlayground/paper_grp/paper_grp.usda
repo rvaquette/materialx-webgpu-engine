@@ -15,7 +15,7 @@
 def Xform "World"
 {
     over "paper_grp" (
-        prepend references = @paper_grp.usd@</World/paper_grp>
+        prepend references = @paper_grp_geometry.usda@</World/paper_grp>
     )
     {
         over "paperWallsB_geo3" (

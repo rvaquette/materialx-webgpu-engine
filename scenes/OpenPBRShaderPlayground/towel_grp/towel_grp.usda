@@ -15,7 +15,7 @@
 def Xform "World"
 {
     over "towel_grp" (
-        prepend references = @towel_grp.usd@</World/towel_grp>
+        prepend references = @towel_grp_geometry.usda@</World/towel_grp>
     )
     {
         over "towel_rolled_001_mesh"

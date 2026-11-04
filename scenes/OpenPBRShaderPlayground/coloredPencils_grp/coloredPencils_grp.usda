@@ -15,7 +15,7 @@
 def Xform "World"
 {
     over "coloredPencils_grp" (
-        prepend references = @coloredPencils_grp.usd@</World/coloredPencils_grp>
+        prepend references = @coloredPencils_grp_geometry.usda@</World/coloredPencils_grp>
     )
     {
         over "group48"

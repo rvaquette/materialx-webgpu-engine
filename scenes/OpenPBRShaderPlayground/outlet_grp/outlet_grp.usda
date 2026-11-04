@@ -16,7 +16,7 @@
 def Xform "World"
 {
     over "outlet_grp" (
-        prepend references = @outlet_grp.usd@</World/outlet_grp>
+        prepend references = @outlet_grp_geometry.usda@</World/outlet_grp>
     )
     {
         over "base_geo"

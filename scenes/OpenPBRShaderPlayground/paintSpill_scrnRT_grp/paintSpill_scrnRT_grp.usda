@@ -15,7 +15,7 @@
 def Xform "World"
 {
     over "paintSpill_scrnRT_grp" (
-        prepend references = @paintSpill_scrnRT_grp.usd@</World/paintSpill_scrnRT_grp>
+        prepend references = @paintSpill_scrnRT_grp_geometry.usda@</World/paintSpill_scrnRT_grp>
     )
     {
         over "polySurface4"

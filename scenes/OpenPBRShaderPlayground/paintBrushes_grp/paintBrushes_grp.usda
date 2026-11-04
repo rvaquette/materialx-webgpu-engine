@@ -16,7 +16,7 @@
 def Xform "World"
 {
     over "paintBrushes_grp" (
-        prepend references = @paintBrushes_grp.usd@</World/paintBrushes_grp>
+        prepend references = @paintBrushes_grp_geometry.usda@</World/paintBrushes_grp>
     )
     {
         over "group26"

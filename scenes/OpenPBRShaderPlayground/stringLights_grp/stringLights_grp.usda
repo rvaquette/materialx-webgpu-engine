@@ -17,7 +17,7 @@
 def Xform "World"
 {
     over "stringLights_grp" (
-        prepend references = @stringLights_grp.usd@</World/stringLights_grp>
+        prepend references = @stringLights_grp_geometry.usda@</World/stringLights_grp>
     )
     {
         over "group38"

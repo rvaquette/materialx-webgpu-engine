@@ -15,7 +15,7 @@
 def Xform "World"
 {
     over "powerPlug_grp" (
-        prepend references = @powerPlug_grp.usd@</World/powerPlug_grp>
+        prepend references = @powerPlug_grp_geometry.usda@</World/powerPlug_grp>
     )
     {
         over "cap_007_mesh"

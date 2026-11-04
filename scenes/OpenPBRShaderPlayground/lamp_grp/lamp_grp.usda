@@ -15,7 +15,7 @@
 def Xform "World"
 {
     over "lamp_grp" (
-        prepend references = @lamp_grp.usd@</World/lamp_grp>
+        prepend references = @lamp_grp_geometry.usda@</World/lamp_grp>
     )
     {
         over "office_lamp_03_stand_007_mesh"

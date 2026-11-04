@@ -15,7 +15,7 @@
 def Xform "World"
 {
     over "sneakers_grp" (
-        prepend references = @sneakers_grp.usd@</World/sneakers_grp>
+        prepend references = @sneakers_grp_geometry.usda@</World/sneakers_grp>
     )
     {
         over "babySneakers_lft_grp"

@@ -16,7 +16,7 @@
 def Xform "World"
 {
     over "mug_grp" (
-        prepend references = @mug_grp.usd@</World/mug_grp>
+        prepend references = @mug_grp_geometry.usda@</World/mug_grp>
     )
     {
         over "cermaicCup_geo"
