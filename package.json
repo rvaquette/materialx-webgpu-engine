@@ -30,6 +30,7 @@
     "validate:scene": "vite-node scripts/validate-disney-gold.ts"
   },
   "dependencies": {
+    "@mori2003/jsimgui": "0.14.0",
     "comlink": "4.4.2",
     "idb": "8.0.1",
     "three": "^0.186.1",

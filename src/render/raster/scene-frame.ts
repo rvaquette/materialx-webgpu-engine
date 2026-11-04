@@ -54,6 +54,7 @@ export interface FrameLight {
 }
 
 export interface FrameEnvironment {
+  enabled?: boolean;
   /** Flat ambient radiance (DC term): the average env colour when textured, or a
    *  dim constant otherwise. The analytic raster forward shader reflects this. */
   radiance: Vec3;
@@ -250,7 +251,7 @@ export function buildSceneFrameUniform(frame: SceneFramePlan, draw: SceneDraw): 
   // env.xyz: constant dome radiance folded with tint*intensity (specular mirror term);
   // sh[0..8].xyz: SH9 radiance coefficients likewise folded, consumed by the diffuse probe.
   const env = frame.environment;
-  const gain = env.intensity ?? 1;
+  const gain = env.enabled === false ? 0 : env.intensity ?? 1;
   const tint = env.tint ?? [1, 1, 1];
   const er = env.radiance[0] * tint[0] * gain;
   const eg = env.radiance[1] * tint[1] * gain;

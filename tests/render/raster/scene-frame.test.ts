@@ -88,6 +88,20 @@ describe('camera/light/environment derivation', () => {
 });
 
 describe('buildSceneFrame', () => {
+  it.each([false, true])('mutes constant, SH and textured illumination reversibly (textured=%s)', hasTexture => {
+    const frame = buildSceneFrame(resources(new Map(), []), {
+      environment: { radiance: [1, 2, 3], intensity: 2, tint: [0.3, 0.6, 0.9], hasTexture, sh: new Float32Array(27).fill(1) },
+    });
+    const draw = { instanceId: 'i', prototypeId: 'p', pass: 'opaque' as const, model: IDENTITY4, surface: NEUTRAL_SURFACE };
+    const enabled = buildSceneFrameUniform(frame, draw);
+    frame.environment.enabled = false;
+    const disabled = buildSceneFrameUniform(frame, draw);
+    expect([...disabled.slice(44, 84)]).toEqual(Array(40).fill(0));
+    expect([...disabled.slice(84, 87)]).toEqual([0, 0, 0]);
+    expect(disabled.slice(36, 44)).toEqual(enabled.slice(36, 44));
+    frame.environment.enabled = true;
+    expect(buildSceneFrameUniform(frame, draw)).toEqual(enabled);
+  });
   it.each([featureTransmissionXml, featureDispersionXml])(
     'keeps a default-metallic glTF feature in the depth-writing opaque pass',
     (xml) => {

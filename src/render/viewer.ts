@@ -64,6 +64,7 @@ export type DenoiserStatus =
   | { state: 'error'; error: string };
 
 export interface ViewerStatus {
+  environmentEnabled: boolean;
   backend: BackendKind;
   pathTracingPaused: boolean;
   pathTracer: PathTracerState;
@@ -78,6 +79,7 @@ export interface ViewerStatus {
 
 /** A disposable per-scene GPU render set (raster + lazily built path tracer) for one loaded USD. */
 interface SceneRender {
+  setEnvironmentEnabled: (enabled: boolean) => void;
   updateMaterial: (key: string, material: MaterialResource) => void;
   frame: SceneFramePlan;
   resize: (width: number, height: number) => void;
@@ -106,6 +108,7 @@ export class InteractiveViewer {
   #rasterQuality: RasterQuality = 'interactive';
   #pathTracingPaused = false;
   #pathTracingDenoise = false;
+  #environmentEnabled = true;
   readonly #jsDenoiser: JsDenoiser;
   #ptDisplayDirty = true;
   #orbit: OrbitCamera;
@@ -154,6 +157,18 @@ export class InteractiveViewer {
 
   get rasterQuality(): RasterQuality {
     return this.#rasterQuality;
+  }
+
+  get environmentEnabled(): boolean { return this.#environmentEnabled; }
+
+  setEnvironmentEnabled(enabled: boolean): void {
+    if (enabled === this.#environmentEnabled) return;
+    this.#environmentEnabled = enabled;
+    this.#current?.setEnvironmentEnabled(enabled);
+    this.#current?.resetPathTrace();
+    this.#rasterDirty = true;
+    this.#ptDisplayDirty = true;
+    this.#emitStatus();
   }
 
   async setRasterQuality(quality: RasterQuality): Promise<void> {
@@ -350,6 +365,7 @@ export class InteractiveViewer {
       const environment = env
         ? { radiance: env.averageRadiance, tint: env.tint, intensity: env.intensity, hasTexture: true, sh: env.sh }
         : { radiance: pathTraceSettings(loaded.scene).converted ? [0, 0, 0] as Vec3 : PREVIEW_ENV };
+      Object.assign(environment, { enabled: this.#environmentEnabled });
       frame = buildSceneFrame(loaded.resources, {
         lights: loaded.lights,
         frameCamera: previewCamera(this.#width / this.#height, exposure),
@@ -444,6 +460,7 @@ export class InteractiveViewer {
   #emitStatus(): void {
     if (!this.#onStatus || !this.#current) return;
     this.#onStatus({
+      environmentEnabled: this.#environmentEnabled,
       backend: this.#backend,
       pathTracingPaused: this.#pathTracingPaused,
       pathTracer: this.#current.pathTracerState(),
@@ -653,7 +670,7 @@ export class InteractiveViewer {
     let drawsByPass = new Map<ScenePassKind, SceneDrawCall[]>();
     const zeroTexcoords = new Map<string, GPUBuffer>();
     const zeroTangents = new Map<string, GPUBuffer>();
-    const frameUniforms: GPUBuffer[] = [];
+    const frameUniforms: Array<{ buffer: GPUBuffer; draw: SceneFramePlan['draws'][number] }> = [];
     const rasterSets = new Map<RasterQuality, { backend: RasterBackend; draws: Map<ScenePassKind, SceneDrawCall[]> }>();
     const buildRasterQuality = async (quality: RasterQuality): Promise<void> => {
       const cached = rasterSets.get(quality);
@@ -708,7 +725,7 @@ export class InteractiveViewer {
           zeroTangents.set(draw.prototypeId, tangent);
         }
         device.queue.writeBuffer(frameUniform, 0, buildSceneFrameUniform(frame, draw));
-        frameUniforms.push(frameUniform);
+        frameUniforms.push({ buffer: frameUniform, draw });
         const materialData = material.parameters ? materialUniformData(material) : buildSceneMaterialUniform(draw);
         const materialUniform = track(device.createBuffer({ size: Math.max(SCENE_MATERIAL_UNIFORM_SIZE, materialData.byteLength), usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST }));
         device.queue.writeBuffer(materialUniform, 0, materialData);
@@ -790,7 +807,7 @@ export class InteractiveViewer {
     };
     let targets = createRasterTargets(width, height);
     trash.push({ destroy: () => targets.destroy() });
-    const rasterBackground = frame.environment.radiance;
+    const rasterBackground = (): Vec3 => frame.environment.enabled === false ? [0, 0, 0] : frame.environment.radiance;
 
     // Optional raster environment background: a fullscreen pass that samples the
     // equirect dome texture along each pixel's world ray, cleared behind geometry.
@@ -855,7 +872,7 @@ fn dir_to_uv(d: vec3<f32>) -> vec2<f32> {
       const bandRows = rasterQuality === 'interactive' ? height : Math.max(1, Math.floor(RASTER_BAND_PIXELS / width));
       let encoder = device.createCommandEncoder();
       let first = true;
-      if (envBgPipeline && envBgBindGroup) {
+      if (frame.environment.enabled !== false && envBgPipeline && envBgBindGroup) {
         const pass = encoder.beginRenderPass({
           colorAttachments: [{ view: hdrView, clearValue: { r: 0, g: 0, b: 0, a: 1 }, loadOp: 'clear', storeOp: 'store' }],
           depthStencilAttachment: { view: depthView, depthClearValue: 1, depthLoadOp: 'clear', depthStoreOp: 'store' },
@@ -871,7 +888,7 @@ fn dir_to_uv(d: vec3<f32>) -> vec2<f32> {
         for (const pass of frame.passes) {
           const draws = drawsByPass.get(pass) ?? [];
           if (draws.length === 0) continue;
-          backend.recordScenePass(encoder, { pass, hdrView, depthView, draws, clear: first, clearColor: rasterBackground, scissor });
+          backend.recordScenePass(encoder, { pass, hdrView, depthView, draws, clear: first, clearColor: rasterBackground(), scissor });
           first = false;
         }
         if (y + bandRows < height) {
@@ -1143,8 +1160,8 @@ fn dir_to_uv(d: vec3<f32>) -> vec2<f32> {
         floats.set(backgroundInvViewProj, 8);
         floats.set([...cameraEye, 0], 24);
         const tint = envAsset?.tint ?? [1, 1, 1];
-        floats.set(tint.map((v) => v * (envAsset?.intensity ?? 1) * envRadianceScale), 28);
-        floats.set(frame.environment.radiance, 32);
+        floats.set(tint.map((v) => frame.environment.enabled === false ? 0 : v * (envAsset?.intensity ?? 1) * envRadianceScale), 28);
+        floats.set(rasterBackground(), 32);
         device.queue.writeBuffer(ptInfo, 0, info);
         lastPreview = accumulate && !tiled;
         if (accumulate) {
@@ -1297,7 +1314,7 @@ fn dir_to_uv(d: vec3<f32>) -> vec2<f32> {
       backgroundInvViewProj = backgroundInverse;
       const viewProjArray = new Float32Array(viewProj);
       const eyeArray = new Float32Array([eye[0], eye[1], eye[2], 0]);
-      for (const buf of frameUniforms) {
+      for (const { buffer: buf } of frameUniforms) {
         device.queue.writeBuffer(buf, 16 * 4, viewProjArray);
         device.queue.writeBuffer(buf, 32 * 4, eyeArray);
       }
@@ -1315,6 +1332,14 @@ fn dir_to_uv(d: vec3<f32>) -> vec2<f32> {
     };
 
     return {
+      setEnvironmentEnabled: (enabled) => {
+        frame.environment.enabled = enabled;
+        if (pathTraceScene) pathTraceScene.environment.enabled = enabled;
+        for (const { buffer, draw } of frameUniforms) {
+          const data = buildSceneFrameUniform(frame, draw);
+          device.queue.writeBuffer(buffer, 44 * 4, data.subarray(44));
+        }
+      },
       updateMaterial: (key, material) => {
         resources.materials.set(key, material);
         const data = materialUniformData(material);
@@ -1348,10 +1373,10 @@ fn dir_to_uv(d: vec3<f32>) -> vec2<f32> {
           startPathTracer();
           const encoder = device.createCommandEncoder();
           const pass = encoder.beginRenderPass({
-            colorAttachments: [{ view: targets.hdrView, clearValue: { r: rasterBackground[0], g: rasterBackground[1], b: rasterBackground[2], a: 1 }, loadOp: 'clear', storeOp: 'store' }],
+            colorAttachments: [{ view: targets.hdrView, clearValue: { r: rasterBackground()[0], g: rasterBackground()[1], b: rasterBackground()[2], a: 1 }, loadOp: 'clear', storeOp: 'store' }],
             depthStencilAttachment: { view: targets.depthView, depthClearValue: 1, depthLoadOp: 'clear', depthStoreOp: 'store' },
           });
-          if (envBgPipeline && envBgBindGroup) {
+          if (frame.environment.enabled !== false && envBgPipeline && envBgBindGroup) {
             pass.setPipeline(envBgPipeline);
             pass.setBindGroup(0, envBgBindGroup);
             pass.draw(3);

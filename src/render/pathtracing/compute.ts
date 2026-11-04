@@ -1003,18 +1003,20 @@ export function buildPathTraceUniform(
   d.set([scene.light.direction[0], scene.light.direction[1], scene.light.direction[2], 0], 20);
   d.set([scene.light.color[0], scene.light.color[1], scene.light.color[2], scene.light.intensity], 24);
   const env = scene.environment;
-  if (env.hasTexture) {
+  if (env.enabled === false) {
+    d.set([0, 0, 0, 0], 28);
+  } else if (env.hasTexture) {
     const tint = env.tint ?? [1, 1, 1];
     d.set([tint[0], tint[1], tint[2], env.intensity ?? 1], 28);
   } else {
     d.set([env.radiance[0], env.radiance[1], env.radiance[2], 0], 28);
   }
   d.set([frameIndex, samplesPerFrame, width, height], 32);
-  const hasCdf = env.hasTexture && (env.envTotalSum ?? 0) > 0 && (env.envResX ?? 0) > 0 ? 1 : 0;
+  const hasCdf = env.enabled !== false && env.hasTexture && (env.envTotalSum ?? 0) > 0 && (env.envResX ?? 0) > 0 ? 1 : 0;
   d.set([env.envResX ?? 0, env.envResY ?? 0, env.envTotalSum ?? 0, hasCdf], 36);
   // SH9 irradiance coefficients (9 RGB), one vec4 per coefficient from offset 40.
   const sh = env.sh;
-  if (sh) {
+  if (sh && env.enabled !== false) {
     for (let k = 0; k < 9; k++) {
       d.set([sh[k * 3] ?? 0, sh[k * 3 + 1] ?? 0, sh[k * 3 + 2] ?? 0, 0], 40 + k * 4);
     }

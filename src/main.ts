@@ -1,18 +1,13 @@
-// Browser entry point. Drives the interactive on-canvas viewer (src/render/
-// viewer.ts) on real USD scenes: a scene selector in index.html lets the user
-// pick which .usda to load, and the viewer renders it with an orbit camera in
-// either backend -- raster forward [r] or the WebGPU compute path tracer [p] --
-// on the SAME imported resources (no reimport on backend switch). Loading a new
-// scene disposes the previous GPU state and rebuilds both backends.
-
 import { InteractiveViewer } from './render/viewer.ts';
 import { SCENE_CATALOG } from './scene/scene-catalog.ts';
 import { MATERIAL_CATALOG } from './scene/material-catalog.ts';
 import { buildMaterialTree } from './scene/material-tree.ts';
 import { MaterialParameterEditor } from './material-parameter-editor.ts';
 import { sceneDeviceDescriptor } from './gpu/device.ts';
+import { startViewerUi, type ViewerUiState, type ViewerUiActions } from './viewer-ui.ts';
 import type { LocalGltfScene } from './scene/local-gltf.ts';
 
+let ui: ViewerUiState | undefined;
 let statusIsError = false;
 
 function showBusy(busy: boolean): void {
@@ -24,26 +19,16 @@ function showBusy(busy: boolean): void {
 function setBusyMessage(text: string): void {
   const indicator = document.getElementById('busy-indicator');
   if (indicator && text) indicator.textContent = text;
+  if (ui) ui.busyMessage = text;
 }
 
 function setStatus(text: string, error = true): void {
   statusIsError = error && text.length > 0;
+  if (ui) ui.error = statusIsError ? text : '';
   if (!statusIsError) setBusyMessage(text);
-  const el = document.getElementById('status');
-  if (el) {
-    el.textContent = text;
-    el.hidden = !statusIsError;
-  }
+  const output = document.getElementById('status');
+  if (output) { output.textContent = text; output.hidden = !statusIsError; }
   if (statusIsError) showBusy(false);
-}
-
-function populateSelector(select: HTMLSelectElement): void {
-  for (const { label, entry } of SCENE_CATALOG) {
-    const opt = document.createElement('option');
-    opt.value = entry;
-    opt.textContent = label;
-    select.appendChild(opt);
-  }
 }
 
 async function main(): Promise<void> {
@@ -57,16 +42,12 @@ async function main(): Promise<void> {
   }
   if (initialBackend !== 'raster' && initialBackend !== 'pathtracing') throw new Error('Unsupported backend.');
   if (![256, 512, 1024].includes(initialResolution)) throw new Error('Interactive resolution must be 256, 512 or 1024.');
-  if (!('gpu' in navigator)) {
-    setStatus('WebGPU is not available in this browser.');
-    return;
-  }
-  // Chrome Android can return null (or hang) while the previous adapter is still being released.
+  if (!('gpu' in navigator)) { setStatus('WebGPU is not available in this browser.'); return; }
   const withTimeout = <T>(promise: Promise<T>, ms: number): Promise<T | undefined> =>
-    Promise.race([promise, new Promise<undefined>((resolve) => setTimeout(() => resolve(undefined), ms))]);
+    Promise.race([promise, new Promise<undefined>(resolve => setTimeout(() => resolve(undefined), ms))]);
   async function requestGpu(): Promise<{ adapter: GPUAdapter; device: GPUDevice } | undefined> {
     for (let attempt = 0; attempt < 5; attempt++) {
-      if (attempt > 0) await new Promise((resolve) => setTimeout(resolve, 500 * attempt));
+      if (attempt > 0) await new Promise(resolve => setTimeout(resolve, 500 * attempt));
       const adapter = await withTimeout(navigator.gpu.requestAdapter({ powerPreference: 'high-performance' }), 10000);
       const device = adapter ? await withTimeout(adapter.requestDevice(sceneDeviceDescriptor(adapter)), 10000) : undefined;
       if (adapter && device) return { adapter, device };
@@ -74,252 +55,102 @@ async function main(): Promise<void> {
     return undefined;
   }
   const gpu = await requestGpu();
-  if (!gpu) {
-    setStatus('No WebGPU adapter found.');
-    return;
-  }
+  if (!gpu) { setStatus('No WebGPU adapter found.'); return; }
   const { device } = gpu;
   (globalThis as { __mxGpu?: unknown }).__mxGpu = gpu;
   let deviceLost = false;
-  device.addEventListener('uncapturederror', (event) => {
-    console.error(`WebGPU error: ${(event as GPUUncapturedErrorEvent).error.message}`);
-  });
+  const reportGpuError = (event: Event): void => {
+    const message = (event as GPUUncapturedErrorEvent).error.message;
+    console.error(`WebGPU error: ${message}`);
+    setStatus(`WebGPU : ${message}`);
+  };
+  device.addEventListener('uncapturederror', reportGpuError);
   const canvas = document.getElementById('view') as HTMLCanvasElement | null;
-  if (!canvas) {
-    setStatus('WebGPU adapter ready; no canvas.');
-    return;
-  }
-  canvas.width = initialResolution;
-  canvas.height = initialResolution;
+  const uiCanvas = document.getElementById('ui') as HTMLCanvasElement | null;
+  if (!canvas || !uiCanvas) throw new Error('Viewer canvases are missing.');
+  canvas.width = canvas.height = initialResolution;
   const context = canvas.getContext('webgpu');
-  if (!context) {
-    setStatus('WebGPU adapter ready; no canvas context.');
-    return;
-  }
+  if (!context) throw new Error('No WebGPU canvas context.');
   const outputFormat = navigator.gpu.getPreferredCanvasFormat();
   context.configure({ device, format: outputFormat, alphaMode: 'opaque' });
-
-  const select = document.getElementById('scene') as HTMLSelectElement | null;
   const localFiles = document.getElementById('local-scene-files') as HTMLInputElement | null;
   const localFolder = document.getElementById('local-scene-folder') as HTMLInputElement | null;
   let localScene: LocalGltfScene | undefined;
-  const resolution = document.getElementById('resolution') as HTMLSelectElement | null;
-  const rasterQuality = document.getElementById('raster-quality') as HTMLSelectElement | null;
-  const ptDenoise = document.getElementById('pathtracing-denoise') as HTMLInputElement | null;
-  const objectSelect = document.getElementById('material-object') as HTMLSelectElement | null;
-  const materialSelect = document.getElementById('material-file') as HTMLSelectElement | null;
-  const materialFolders = document.getElementById('material-folders');
-  const materialTree = buildMaterialTree(MATERIAL_CATALOG);
-  let materialFolderPath: string[] = [];
-  const materialControls = document.getElementById('material-controls') as HTMLFieldSetElement | null;
-  const parameterControls = document.getElementById('material-parameters') as HTMLFieldSetElement | null;
-  if (select) populateSelector(select);
-  if (select) {
-    if (![...select.options].some(option => option.value === initialEntry)) select.add(new Option(initialEntry, initialEntry));
-    select.value = initialEntry;
-  }
-  if (resolution) resolution.value = String(initialResolution);
-  const backendButtons = Array.from(document.querySelectorAll<HTMLButtonElement>('#backend-mode button[data-backend]'));
-  const pathTracingToggle = document.getElementById('pathtracing-toggle') as HTMLButtonElement | null;
+  const state: ViewerUiState = {
+    entry: initialEntry, scenes: [...SCENE_CATALOG], resolution: initialResolution,
+    rasterQuality: 'interactive', backend: initialBackend, environmentEnabled: true, denoise: false,
+    status: undefined, busy: true, busyMessage: 'Initialisation...', error: '', shaderErrors: '', warnings: '',
+    objectPath: '', objects: [], materialFolderPath: [], materialTree: buildMaterialTree(MATERIAL_CATALOG), materialPath: '',
+  };
+  ui = state;
+  if (!state.scenes.some(scene => scene.entry === initialEntry)) state.scenes.push({ entry: initialEntry, label: initialEntry });
   let operationBusy = false;
   let shaderBusy = false;
   let shaderBusyMessage = 'Préparation du path tracer...';
-
-  function updatePathTracingToggle(backend: string, paused: boolean): void {
-    if (!pathTracingToggle) return;
-    pathTracingToggle.disabled = backend !== 'pathtracing';
-    pathTracingToggle.title = paused ? 'Reprendre le path tracer' : 'Mettre le path tracer en pause';
-    const label = document.getElementById('pathtracing-toggle-label');
-    const icon = document.getElementById('pathtracing-toggle-icon');
-    if (label) label.textContent = paused ? 'Reprendre' : 'Pause';
-    if (icon) icon.textContent = paused ? '\u25b6' : '\u275a\u275a';
-  }
-
   const viewerCallbacks: Pick<ConstructorParameters<typeof InteractiveViewer>[0], 'onStatus' | 'onShaderErrors'> = {
-    onStatus: (s) => {
+    onStatus: status => {
       if (deviceLost) return;
+      state.status = status;
+      state.backend = status.backend;
+      state.environmentEnabled = status.environmentEnabled;
       const spp = document.getElementById('pathtracing-spp');
       if (spp) {
-        spp.hidden = s.backend !== 'pathtracing' || s.pathTracer !== 'ready';
-        spp.textContent = `${s.samples} spp${s.pathTracingPaused ? ' (pause)' : ''}`;
+        spp.hidden = status.backend !== 'pathtracing' || status.pathTracer !== 'ready';
+        spp.textContent = `${status.samples} spp${status.pathTracingPaused ? ' (pause)' : ''}`;
       }
-      shaderBusy = s.backend === 'pathtracing' && (s.pathTracer === 'idle' || s.pathTracer === 'compiling');
+      shaderBusy = status.backend === 'pathtracing' && (status.pathTracer === 'idle' || status.pathTracer === 'compiling');
       if (shaderBusy) {
-        shaderBusyMessage = s.pathTracer === 'compiling'
-          ? 'Compilation des shaders du path tracer...'
-          : 'Préparation du path tracer...';
+        shaderBusyMessage = status.pathTracer === 'compiling' ? 'Compilation des shaders du path tracer...' : 'Préparation du path tracer...';
         if (!operationBusy) setBusyMessage(shaderBusyMessage);
-      }
+      } else if (!operationBusy) setBusyMessage('');
       showBusy(operationBusy || shaderBusy);
-      if (s.backend === 'pathtracing' && s.pathTracer === 'error') {
-        setStatus('Echec de compilation du path tracer. Consulter les erreurs WGSL.');
-      } else if (s.backend === 'pathtracing' && s.denoiser.state === 'error') {
-        setStatus(`Echec denoiser JS : ${s.denoiser.error}`);
-      }
-      updatePathTracingToggle(s.backend, s.pathTracingPaused);
+      if (status.backend === 'pathtracing' && status.pathTracer === 'error') setStatus('Echec de compilation du path tracer. Consulter les erreurs WGSL.');
+      else if (status.backend === 'pathtracing' && status.denoiser.state === 'error') setStatus(`Echec denoiser JS : ${status.denoiser.error}`);
     },
-    onShaderErrors: (errors) => {
-      const count = document.getElementById('shader-error-count');
-      const output = document.getElementById('shader-errors');
-      if (count) count.textContent = String(errors.length);
-      if (output) output.textContent = errors.length > 0
-        ? errors.map((error) => `${error.shader} (${error.line}:${error.column})\n${error.message}${error.source ? `\n> ${error.source}` : ''}`).join('\n\n')
-        : 'Aucune erreur WGSL.';
+    onShaderErrors: errors => {
+      state.shaderErrors = errors.map(error => `${error.shader} (${error.line}:${error.column})\n${error.message}${error.source ? `\n> ${error.source}` : ''}`).join('\n\n');
     },
   };
   let viewer = new InteractiveViewer({ device, context, outputFormat, canvas, ...viewerCallbacks });
   viewer.setBackend(initialBackend);
-  for (const button of backendButtons) button.setAttribute('aria-pressed', String(button.dataset.backend === initialBackend));
-  const parameterEditor = parameterControls ? new MaterialParameterEditor({
-    container: parameterControls,
-    parameters: () => viewer.objectParameters(objectSelect?.value ?? ''),
+  const parameterEditor = new MaterialParameterEditor({
+    parameters: () => viewer.objectParameters(state.objectPath),
     apply: async changes => {
       setBusy(true, 'Application des paramètres du matériau...');
-      try { await viewer.setObjectParameters(objectSelect?.value ?? '', changes); }
+      try { await viewer.setObjectParameters(state.objectPath, changes); }
       finally { setBusy(false); }
     },
     error: error => setStatus(`Echec du paramètre : ${error instanceof Error ? error.message : String(error)}`),
-  }) : undefined;
-  const viewCanvas = canvas;
-  const viewContext = context;
-
-  // Chrome Android may drop the WebGPU instance (e.g. right after a reload): rebuild on a new device.
-  let recoveries = 0;
-  function watchDevice(watched: GPUDevice): void {
-    void watched.lost.then(async (info) => {
-      console.error(`WebGPU device lost (${info.reason}): ${info.message}`);
-      if (info.reason === 'destroyed') return;
-      deviceLost = true;
-      setBusy(true, 'Réinitialisation du moteur WebGPU...');
-      if (++recoveries > 3) {
-        setStatus(`GPU perdu (${info.message || info.reason}). Recharger la page.`);
-        return;
-      }
-      setStatus('GPU perdu, réinitialisation...', false);
-      const backend = viewer.backend;
-      const quality = viewer.rasterQuality;
-      const denoise = viewer.pathTracingDenoise;
-      viewer.dispose();
-      const next = await requestGpu();
-      if (!next) {
-        setStatus('GPU perdu et aucun adaptateur WebGPU disponible. Recharger la page.');
-        return;
-      }
-      (globalThis as { __mxGpu?: unknown }).__mxGpu = next;
-      next.device.addEventListener('uncapturederror', (event) => {
-        console.error(`WebGPU error: ${(event as GPUUncapturedErrorEvent).error.message}`);
-      });
-      viewContext.configure({ device: next.device, format: outputFormat, alphaMode: 'opaque' });
-      viewer = new InteractiveViewer({ device: next.device, context: viewContext, outputFormat, canvas: viewCanvas, ...viewerCallbacks });
-      await viewer.setRasterQuality(quality);
-      viewer.setPathTracingDenoise(denoise);
-      viewer.setBackend(backend);
-      deviceLost = false;
-      watchDevice(next.device);
-      await loadEntry(select?.value ?? SCENE_CATALOG[0]!.entry);
-      if (!deviceLost) recoveries = 0;
-    });
-  }
-  watchDevice(device);
-
-  pathTracingToggle?.addEventListener('click', () => {
-    viewer.setPathTracingPaused(!viewer.pathTracingPaused);
-    updatePathTracingToggle(viewer.backend, viewer.pathTracingPaused);
   });
-  ptDenoise?.addEventListener('change', () => viewer.setPathTracingDenoise(ptDenoise.checked));
 
   function setBusy(busy: boolean, message?: string): void {
     operationBusy = busy;
-    if (busy && message) setBusyMessage(message);
-    if (!busy && shaderBusy) setBusyMessage(shaderBusyMessage);
+    state.busy = busy;
     if (busy) setStatus('', false);
-    else if (!statusIsError) setStatus('', false);
+    if (busy && message) setBusyMessage(message);
+    if (!busy && !statusIsError) setStatus('', false);
+    if (!busy && shaderBusy) setBusyMessage(shaderBusyMessage);
     showBusy(!statusIsError && (operationBusy || shaderBusy));
-    if (select) select.disabled = busy;
     if (localFiles) localFiles.disabled = busy;
     if (localFolder) localFolder.disabled = busy;
-    if (resolution) resolution.disabled = busy;
-    if (rasterQuality) rasterQuality.disabled = busy;
-    if (ptDenoise) ptDenoise.disabled = busy;
-    if (materialControls) materialControls.disabled = busy || viewer.objects.length === 0;
-    if (parameterControls) parameterControls.disabled = busy || viewer.objects.length === 0;
   }
 
-  function refreshMaterials(restoreSelection = true): void {
-    if (!materialSelect) return;
-    const selected = viewer.objects.find((object) => object.path === objectSelect?.value)?.assetPath ?? '';
-    if (restoreSelection) {
-      const current = MATERIAL_CATALOG.find(material => new URL(material.path, document.baseURI).href === selected);
-      materialFolderPath = current ? current.path.split('/mtlx-library/')[1]!.split('/').slice(0, -1) : [];
-    }
-    materialFolders?.replaceChildren();
-    let folder = materialTree;
-    for (let depth = 0; folder.folders.size; depth++) {
-      const label = document.createElement('label');
-      label.textContent = depth === 0 ? 'Catégorie' : `Sous-dossier ${depth}`;
-      const select = document.createElement('select');
-      select.id = `material-folder-${depth}`;
-      label.htmlFor = select.id;
-      select.appendChild(new Option('Choisir un dossier…', ''));
-      for (const name of [...folder.folders.keys()].sort()) select.appendChild(new Option(name, name));
-      const name = materialFolderPath[depth];
-      select.value = name ?? '';
-      select.addEventListener('change', () => {
-        materialFolderPath = [...materialFolderPath.slice(0, depth), ...(select.value ? [select.value] : [])];
-        refreshMaterials(false);
-      });
-      label.appendChild(select);
-      materialFolders?.appendChild(label);
-      if (!name) break;
-      const child = folder.folders.get(name);
-      if (!child) throw new Error(`Unknown material folder: ${name}`);
-      folder = child;
-    }
-    const placeholder = new Option('Choisir un matériau…', '', true, true);
-    placeholder.disabled = true;
-    materialSelect.replaceChildren(placeholder, new Option("Matériau d'origine", ''));
-    for (const material of folder.materials) {
-      const url = new URL(material.path, document.baseURI).href;
-      const option = new Option(material.label, url);
-      option.selected = url === selected;
-      materialSelect.appendChild(option);
-    }
-    if (!selected) materialSelect.selectedIndex = 1;
+  function refreshMaterialSelection(): void {
+    const selected = viewer.objects.find(object => object.path === state.objectPath)?.assetPath;
+    const material = MATERIAL_CATALOG.find(item => new URL(item.path, document.baseURI).href === selected);
+    state.materialPath = material?.path ?? '';
+    state.materialFolderPath = material ? material.path.split('/mtlx-library/')[1]!.split('/').slice(0, -1) : [];
+    parameterEditor.refresh();
   }
 
   function refreshObjects(): void {
-    if (!objectSelect) return;
-    const selected = objectSelect.value;
-    objectSelect.replaceChildren();
-    for (const object of viewer.objects) {
-      const option = new Option(`${object.path.split('/').at(-1)} (${object.material})`, object.path);
-      option.title = object.path;
-      objectSelect.appendChild(option);
-    }
-    if (viewer.objects.some((object) => object.path === selected)) objectSelect.value = selected;
-    refreshMaterials();
-    parameterEditor?.refresh();
+    state.objects = viewer.objects;
+    if (!state.objects.some(object => object.path === state.objectPath)) state.objectPath = state.objects[0]?.path ?? '';
+    refreshMaterialSelection();
   }
-
-  objectSelect?.addEventListener('change', () => { refreshMaterials(); parameterEditor?.refresh(); });
-  materialSelect?.addEventListener('change', async () => {
-    if (!objectSelect) return;
-    setBusy(true, 'Compilation du matériau...');
-    setStatus('Compilation du matériau...', false);
-    try {
-      await viewer.setObjectMaterial(objectSelect.value, materialSelect.value || undefined);
-      refreshObjects();
-    } catch (error) {
-      refreshMaterials();
-      setStatus(`Echec du matériau: ${(error as Error)?.message ?? error}`);
-    } finally {
-      setBusy(false);
-    }
-  });
 
   async function loadEntry(entry: string): Promise<boolean> {
     setBusy(true, `Chargement de ${entry}...`);
-    setStatus(`Chargement de ${entry}...`, false);
     let imported: LocalGltfScene | undefined;
     try {
       const config = SCENE_CATALOG.find(scene => scene.entry === entry);
@@ -328,38 +159,32 @@ async function main(): Promise<void> {
         const { importLocalGltf } = await import('./scene/local-gltf.ts');
         imported = await importLocalGltf([], undefined, url);
       }
-      await viewer.load(new URL(entry, document.baseURI).href, new Map(), false, {
+      await viewer.load(url, new Map(), false, {
         ...(imported ? imported.options : {}),
         ...(!imported && localScene?.entry === entry ? localScene.options : {}),
         ...(config?.textureRoot ? { textureRoot: new URL(config.textureRoot, document.baseURI).href } : {}),
       });
+      state.entry = entry;
       refreshObjects();
       if (localScene && (imported || localScene.entry !== entry)) {
-        const previousEntry = localScene.entry;
+        state.scenes = state.scenes.filter(scene => scene.entry !== localScene?.entry || !scene.label.startsWith('Local - '));
         localScene.dispose();
         localScene = undefined;
-        if (select) for (const option of Array.from(select.options)) {
-          if (option.value === previousEntry && option.textContent?.startsWith('Local - ')) option.remove();
-        }
       }
       if (imported) localScene = imported;
-      const warningsPanel = document.getElementById('import-warnings-panel');
-      const warningsOutput = document.getElementById('import-warnings');
-      if (warningsPanel) warningsPanel.hidden = !localScene?.warnings.length;
-      if (warningsOutput) warningsOutput.textContent = localScene?.warnings.join('\n\n') ?? '';
+      state.warnings = localScene?.warnings.join('\n\n') ?? '';
       return true;
-    } catch (e) {
+    } catch (error) {
       imported?.dispose();
-      if (!deviceLost) setStatus(`Echec du chargement: ${(e as Error)?.message ?? e}`);
+      if (!deviceLost) setStatus(`Echec du chargement: ${error instanceof Error ? error.message : String(error)}`);
       return false;
-    } finally {
-      setBusy(false);
-    }
+    } finally { setBusy(false); }
   }
 
   async function openLocalFiles(input: HTMLInputElement): Promise<void> {
     const files = Array.from(input.files ?? []);
     if (!files.length) return;
+    parameterEditor.refresh();
     setBusy(true, 'Import des fichiers glTF...');
     let imported: LocalGltfScene | undefined;
     const previous = localScene;
@@ -372,88 +197,100 @@ async function main(): Promise<void> {
         imported.dispose();
         return;
       }
-      if (select) {
-        for (const option of Array.from(select.options)) {
-          if (option.value === previous?.entry) option.remove();
-        }
-        select.add(new Option(`Local - ${imported.name}`, imported.entry));
-        select.value = imported.entry;
-      }
+      state.scenes = state.scenes.filter(scene => scene.entry !== previous?.entry);
+      state.scenes.push({ label: `Local - ${imported.name}`, entry: imported.entry });
       previous?.dispose();
     } catch (error) {
       localScene = previous;
       imported?.dispose();
       console.error('Local glTF import failed:', error);
       setStatus(`Echec de l'import glTF : ${error instanceof Error ? error.message : String(error)}`);
-    } finally {
-      input.value = '';
-      setBusy(false);
-    }
+    } finally { input.value = ''; setBusy(false); }
   }
   localFiles?.addEventListener('change', () => void openLocalFiles(localFiles));
   localFolder?.addEventListener('change', () => void openLocalFiles(localFolder));
-  globalThis.addEventListener?.('pagehide', event => {
-    if (!(event instanceof PageTransitionEvent) || !event.persisted) localScene?.dispose();
-  });
 
-  select?.addEventListener('change', () => void loadEntry(select.value));
-  rasterQuality?.addEventListener('change', async () => {
-    const previous = viewer.rasterQuality;
-    setBusy(true, 'Compilation du profil raster...');
-    setStatus('Compilation du profil raster...', false);
-    try {
-      const quality = rasterQuality.value;
-      if (quality !== 'interactive' && quality !== 'reference') throw new Error('Unsupported raster quality.');
-      await viewer.setRasterQuality(quality);
-    } catch (error) {
-      rasterQuality.value = previous;
-      setStatus(`Echec du profil raster: ${(error as Error)?.message ?? error}`);
-    } finally {
-      setBusy(false);
-    }
-  });
-  resolution?.addEventListener('change', async () => {
-    const previousSize = canvas.width;
-    setBusy(true, 'Redimensionnement du rendu...');
-    try {
-      await viewer.resize(Number(resolution.value));
-    } catch (error) {
-      resolution.value = String(previousSize);
-      setStatus(`Echec du redimensionnement: ${(error as Error)?.message ?? error}`);
-    } finally {
-      setBusy(false);
-    }
-  });
-  for (const button of backendButtons) {
-    button.addEventListener('click', () => {
-      const backend = button.dataset.backend;
-      if (backend !== 'raster' && backend !== 'pathtracing') return;
-      viewer.setBackend(backend);
-      updatePathTracingToggle(backend, viewer.pathTracingPaused);
-      for (const modeButton of backendButtons) {
-        modeButton.setAttribute('aria-pressed', String(modeButton === button));
-      }
+  async function operation(message: string, action: () => Promise<void>): Promise<void> {
+    setBusy(true, message);
+    try { await action(); }
+    catch (error) { setStatus(`${message} ${error instanceof Error ? error.message : String(error)}`); }
+    finally { setBusy(false); }
+  }
+  const actions: ViewerUiActions = {
+    scene: entry => { parameterEditor.refresh(); void loadEntry(entry); },
+    resolution: size => { void operation('Redimensionnement du rendu...', async () => { await viewer.resize(size); state.resolution = size; }); },
+    quality: quality => { void operation('Compilation du profil raster...', async () => { await viewer.setRasterQuality(quality); state.rasterQuality = quality; }); },
+    backend: backend => { viewer.setBackend(backend); state.backend = backend; },
+    environment: enabled => { viewer.setEnvironmentEnabled(enabled); state.environmentEnabled = enabled; },
+    denoise: enabled => { viewer.setPathTracingDenoise(enabled); state.denoise = enabled; },
+    pause: () => viewer.setPathTracingPaused(!viewer.pathTracingPaused),
+    openFiles: folder => (folder ? localFolder : localFiles)?.click(),
+    object: path => { state.objectPath = path; refreshMaterialSelection(); },
+    material: path => { void operation('Compilation du matériau...', async () => {
+      try { await viewer.setObjectMaterial(state.objectPath, path ? new URL(path, document.baseURI).href : undefined); }
+      finally { refreshObjects(); }
+    }); },
+  };
+  const stopUi = await startViewerUi(uiCanvas, state, actions, parameterEditor);
+  document.getElementById('app')?.classList.add('ui-ready');
+
+  let recoveries = 0;
+  function watchDevice(watched: GPUDevice): void {
+    void watched.lost.then(async info => {
+      if (info.reason === 'destroyed') return;
+      console.error(`WebGPU device lost (${info.reason}): ${info.message}`);
+      deviceLost = true;
+      setBusy(true, 'Réinitialisation du moteur WebGPU...');
+      if (++recoveries > 3) { setStatus(`GPU perdu (${info.message || info.reason}). Recharger la page.`); return; }
+      const backend = viewer.backend;
+      const quality = viewer.rasterQuality;
+      const denoise = viewer.pathTracingDenoise;
+      const environment = viewer.environmentEnabled;
+      const paused = viewer.pathTracingPaused;
+      viewer.dispose();
+      try {
+        const next = await requestGpu();
+        if (!next) throw new Error('Aucun adaptateur WebGPU disponible.');
+        (globalThis as { __mxGpu?: unknown }).__mxGpu = next;
+        next.device.addEventListener('uncapturederror', reportGpuError);
+        context!.configure({ device: next.device, format: outputFormat, alphaMode: 'opaque' });
+        viewer = new InteractiveViewer({ device: next.device, context: context!, outputFormat, canvas: canvas!, ...viewerCallbacks });
+        await viewer.setRasterQuality(quality);
+        viewer.setPathTracingDenoise(denoise);
+        viewer.setEnvironmentEnabled(environment);
+        viewer.setPathTracingPaused(paused);
+        viewer.setBackend(backend);
+        deviceLost = false;
+        watchDevice(next.device);
+        if (await loadEntry(state.entry)) recoveries = 0;
+      } catch (error) { setStatus(`GPU perdu : ${String(error)}. Recharger la page.`); }
     });
   }
+  watchDevice(device);
+  globalThis.addEventListener?.('pagehide', event => {
+    if (!(event instanceof PageTransitionEvent) || !event.persisted) {
+      parameterEditor.refresh();
+      stopUi();
+      viewer.dispose();
+      localScene?.dispose();
+    }
+  });
 
   await loadEntry(initialEntry);
   const initialMaterial = params.get('openpbr');
   if (initialMaterial && !statusIsError) {
-    setBusy(true, 'Chargement du matériau initial...');
-    try {
+    await operation('Chargement du matériau initial...', async () => {
       const assetPath = new URL(initialMaterial, document.baseURI).href;
       const response = await fetch(assetPath);
       if (!response.ok) throw new Error(`HTTP ${response.status}: ${assetPath}`);
-      const materialDocument = new DOMParser().parseFromString(await response.text(), 'application/xml');
-      if (materialDocument.querySelector('parsererror')) throw new Error('Invalid MaterialX XML.');
-      const materialName = materialDocument.getElementsByTagName('surfacematerial')[0]?.getAttribute('name');
+      const documentXml = new DOMParser().parseFromString(await response.text(), 'application/xml');
+      if (documentXml.querySelector('parsererror')) throw new Error('Invalid MaterialX XML.');
+      const materialName = documentXml.getElementsByTagName('surfacematerial')[0]?.getAttribute('name');
       if (!materialName) throw new Error('No surfacematerial in this MaterialX document.');
-      const overrides = new Map(viewer.objects.map(object => [object.path, { assetPath, materialName }]));
-      await viewer.load(new URL(initialEntry, document.baseURI).href, overrides, true);
+      await viewer.load(new URL(initialEntry, document.baseURI).href,
+        new Map(viewer.objects.map(object => [object.path, { assetPath, materialName }])), true);
       refreshObjects();
-    } finally {
-      setBusy(false);
-    }
+    });
   }
 }
 

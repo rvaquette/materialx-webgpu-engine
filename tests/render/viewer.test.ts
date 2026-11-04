@@ -150,6 +150,67 @@ describe('interactive viewer resource lifecycle', () => {
     return { ...mock, loaded, canvas, statuses, viewer };
   }
 
+  it('toggles environment uniforms without reloading geometry or recompiling and preserves it on reload', async () => {
+    const { viewer, device, statuses } = await setup(true);
+    const builds = device.createRenderPipeline.mock.calls.length;
+    const textureCount = device.createTexture.mock.calls.length;
+    device.queue.writeBuffer.mockClear();
+    viewer.setEnvironmentEnabled(false);
+    expect(viewer.environmentEnabled).toBe(false);
+    expect(statuses.at(-1)?.environmentEnabled).toBe(false);
+    const updates = device.queue.writeBuffer.mock.calls.filter(call => call[1] === 44 * 4);
+    expect(updates.length).toBeGreaterThan(0);
+    for (const update of updates) {
+      const data = update[2] as Float32Array;
+      expect(data.slice(0, 40).every(value => value === 0)).toBe(true);
+      expect([...data.slice(40, 43)]).toEqual([0, 0, 0]);
+    }
+    viewer.setEnvironmentEnabled(true);
+    expect(device.createRenderPipeline).toHaveBeenCalledTimes(builds);
+    expect(device.createTexture).toHaveBeenCalledTimes(textureCount);
+    viewer.setEnvironmentEnabled(false);
+    await viewer.load('scene.usda');
+    expect(viewer.environmentEnabled).toBe(false);
+    const uniforms = device.queue.writeBuffer.mock.calls.map(call => call[2])
+      .filter((data): data is Float32Array => data instanceof Float32Array && data.length === 92);
+    expect(uniforms.length).toBeGreaterThan(0);
+    expect(uniforms.at(-1)!.slice(44, 84).every(value => value === 0)).toBe(true);
+  });
+
+  it('removes the raster panorama and clears path tracing transport/display when toggled while paused', async () => {
+    const actual = await vi.importActual<typeof import('../../src/render/pathtracing/scene-buffers.ts')>(
+      '../../src/render/pathtracing/scene-buffers.ts');
+    vi.mocked(buildCachedPathTraceScene).mockImplementation(actual.buildCachedPathTraceScene);
+    const { viewer, device, pass, statuses } = await setup(true);
+    pass.draw.mockClear();
+    tick(0);
+    await Promise.resolve();
+    const enabledDraws = pass.draw.mock.calls.length;
+    pass.draw.mockClear();
+    viewer.setEnvironmentEnabled(false);
+    tick(1);
+    await Promise.resolve();
+    expect(pass.draw).toHaveBeenCalledTimes(enabledDraws - 1);
+    viewer.setEnvironmentEnabled(true);
+    viewer.setBackend('pathtracing');
+    tick(2);
+    await new Promise(resolve => setTimeout(resolve, 20));
+    tick(3);
+    await Promise.resolve();
+    viewer.setPathTracingPaused(true);
+    viewer.setEnvironmentEnabled(false);
+    expect(statuses.at(-1)?.samples).toBe(0);
+    expect(viewer.pathTracingPaused).toBe(true);
+    device.queue.writeBuffer.mockClear();
+    tick(4);
+    await Promise.resolve();
+    const info = device.queue.writeBuffer.mock.calls.map(call => call[2])
+      .find((data): data is ArrayBuffer => data instanceof ArrayBuffer);
+    expect(info).toBeDefined();
+    expect([...new Float32Array(info!).slice(28, 35)]).toEqual(Array(7).fill(0));
+    expect(device.createComputePipelineAsync).toHaveBeenCalledTimes(1);
+  });
+
   it('frames imported local scenes from their bounds instead of using the fixed USD preview distance', async () => {
     const { viewer, loaded, device } = await setup();
     device.queue.writeBuffer.mockClear();

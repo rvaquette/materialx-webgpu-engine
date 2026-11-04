@@ -559,6 +559,22 @@ describe('pathTraceComputeWgsl texture registry (T057j)', () => {
 
 
 describe('buildPathTraceUniform layout', () => {
+  it.each([false, true])('disables all environment transport without changing other lights (textured=%s)', hasTexture => {
+    const scene = fakeScene();
+    scene.environment = {
+      radiance: [1, 2, 3], hasTexture, intensity: 3, tint: [0.3, 0.6, 0.9],
+      sh: new Float32Array(27).fill(2), envResX: 4, envResY: 2, envTotalSum: 8,
+    };
+    const enabled = buildPathTraceUniform(scene, 0, 1, 256, 256);
+    scene.environment.enabled = false;
+    const disabled = buildPathTraceUniform(scene, 0, 1, 256, 256);
+    expect([...disabled.slice(28, 32)]).toEqual([0, 0, 0, 0]);
+    expect(disabled[39]).toBe(0);
+    expect([...disabled.slice(40, 76)]).toEqual(Array(36).fill(0));
+    expect(disabled.slice(20, 28)).toEqual(enabled.slice(20, 28));
+    scene.environment.enabled = true;
+    expect(buildPathTraceUniform(scene, 0, 1, 256, 256)).toEqual(enabled);
+  });
   it('packs converted transport without changing the ordinary USD defaults', () => {
     const scene = fakeScene();
     expect([...buildPathTraceUniform(scene, 0, 1, 512, 512).slice(100)]).toEqual([64, 3, 0, 0]);

@@ -85,9 +85,19 @@ d'erreur :
 
 ## Profils raster et réactivité du viewer mobile
 
-L'indicateur de chargement et de compilation est superposé au centre du canvas.
-Il ne bloque pas les interactions, conserve son annonce accessible et disparaît
-à la fin du chargement ou de la compilation, y compris en cas d'erreur.
+Les contrôles du viewer sont rendus par Dear ImGui, dans un canvas WebGL2 séparé
+du rendu WebGPU : scènes, fichiers locaux, résolution, qualité raster, backend,
+pause, denoiser, matériaux, paramètres et diagnostics. Les sélecteurs de fichiers
+restent natifs au navigateur. Le panneau se place au-dessus du rendu sur mobile.
+Les messages de chargement et de compilation apparaissent dans le panneau, avec
+des annonces HTML accessibles ; les erreurs restent visibles.
+
+La case **Envmap**, cochée par défaut, active ou coupe ensemble l'éclairage
+environnemental (y compris les harmoniques sphériques et les réflexions) et
+l'arrière-plan, en raster comme en path tracing. Elle ne modifie ni les autres
+lumières ni l'émission des matériaux. Le changement réinitialise l'accumulation
+et le denoiser sans recharger la scène ou recompiler les shaders. Son état est
+conservé lors d'un changement de scène, de backend ou d'une récupération du GPU.
 
 À caméra immobile, le viewer path tracing calcule quatre tuiles par rafraîchissement
 et affiche le résultat une seule fois par lot. Chaque tuile conserve son dispatch

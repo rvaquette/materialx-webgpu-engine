@@ -1,3 +1,14 @@
+# Viewer UI
+
+The viewer uses `@mori2003/jsimgui` (MIT), pinned in the dependency manifest.
+Dear ImGui runs on its own WebGL2 canvas, independently of the scene's WebGPU
+device. UI state and engine callbacks are separated from the browser backend in
+`src/viewer-ui.ts`; native browser file dialogs are the only HTML input controls.
+The single-threaded ImGui WASM loader is bundled locally by Vite: no CDN or
+cross-origin isolation is needed for the UI. The optional FreeType/extensions
+loader has a reversed filename in the published 0.14 package; a targeted Vite
+alias resolves the published file without modifying installed dependencies.
+
 # MaterialX JavaScript Core WASM
 
 ## Scope

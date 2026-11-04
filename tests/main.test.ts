@@ -1,9 +1,20 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ViewerStatus } from '../src/render/viewer.ts';
+import type { ViewerUiState, ViewerUiActions } from '../src/viewer-ui.ts';
 
 const state = vi.hoisted(() => ({
   onStatus: undefined as ((status: ViewerStatus) => void) | undefined,
   load: vi.fn(),
+  ui: undefined as ViewerUiState | undefined,
+  actions: undefined as ViewerUiActions | undefined,
+  environment: vi.fn(),
+}));
+vi.mock('../src/viewer-ui.ts', () => ({
+  startViewerUi: vi.fn(async (_canvas: unknown, ui: ViewerUiState, actions: ViewerUiActions) => {
+    state.ui = ui;
+    state.actions = actions;
+    return vi.fn();
+  }),
 }));
 vi.mock('../src/render/viewer.ts', () => ({
   InteractiveViewer: class {
@@ -11,6 +22,7 @@ vi.mock('../src/render/viewer.ts', () => ({
     constructor(options: { onStatus: (status: ViewerStatus) => void }) { state.onStatus = options.onStatus; }
     load = state.load;
     setBackend = vi.fn();
+    setEnvironmentEnabled = state.environment;
   },
 }));
 
@@ -28,6 +40,9 @@ describe('viewer loading indicator', () => {
   beforeEach(() => {
     vi.resetModules();
     state.onStatus = undefined;
+    state.ui = undefined;
+    state.actions = undefined;
+    state.environment.mockClear();
     state.load.mockReset().mockImplementation(() => new Promise<void>(resolve => { finishLoad = resolve; }));
     indicator.hidden = false;
     status.hidden = true;
@@ -36,7 +51,7 @@ describe('viewer loading indicator', () => {
     vi.stubGlobal('location', { search: '' });
     vi.stubGlobal('document', {
       baseURI: 'http://localhost/',
-      getElementById: (id: string) => ({ view: canvas, status, 'busy-indicator': indicator, 'pathtracing-spp': spp })[id],
+      getElementById: (id: string) => ({ view: canvas, ui: canvas, status, 'busy-indicator': indicator, 'pathtracing-spp': spp })[id],
       querySelectorAll: () => [],
     });
     const device = { addEventListener: vi.fn(), lost: new Promise(() => {}) };
@@ -55,6 +70,7 @@ describe('viewer loading indicator', () => {
   const emit = (pathTracer: ViewerStatus['pathTracer'], backend: ViewerStatus['backend'] = 'pathtracing', samples = 0, paused = true) => {
     state.onStatus!({
       backend, pathTracer, pathTracingPaused: paused, rasterQuality: 'interactive',
+      environmentEnabled: true,
       pathTracingDenoise: false, denoiser: { state: 'off' }, drawCount: 2, passes: [],
       samples, warnings: 0,
     });
@@ -130,5 +146,19 @@ describe('viewer loading indicator', () => {
     expect(indicator.hidden).toBe(true);
     expect(status.hidden).toBe(false);
     expect(status.textContent).toContain('WebGPU is not available');
+  });
+
+  it('wires the ImGui environment checkbox to the renderer and keeps its state', async () => {
+    await import('../src/main.ts');
+    await settle();
+    finishLoad();
+    await settle();
+    expect(state.ui?.environmentEnabled).toBe(true);
+    state.actions!.environment(false);
+    expect(state.environment).toHaveBeenLastCalledWith(false);
+    expect(state.ui?.environmentEnabled).toBe(false);
+    state.actions!.environment(true);
+    expect(state.environment).toHaveBeenLastCalledWith(true);
+    expect(state.ui?.environmentEnabled).toBe(true);
   });
 });

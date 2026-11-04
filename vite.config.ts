@@ -2,6 +2,7 @@
 import { defineConfig } from 'vite';
 import { existsSync, readFileSync } from 'fs';
 import { extname, join, normalize } from 'path';
+import { fileURLToPath } from 'node:url';
 
 // The installed OpenUSD crate runtime requires shared memory and isolation.
 const crossOriginIsolationHeaders = {
@@ -77,6 +78,13 @@ const materialxAssets = {
 
 export default defineConfig({
   base: './',
+  resolve: {
+    alias: [{
+      // jsimgui 0.14 publishes this optional loader with the words reversed.
+      find: './loader-freetype-extensions.js',
+      replacement: fileURLToPath(new URL('./node_modules/@mori2003/jsimgui/build/loader-extensions-freetype.js', import.meta.url)),
+    }],
+  },
   plugins: [materialxAssets],
   server: { headers: crossOriginIsolationHeaders },
   preview: { headers: crossOriginIsolationHeaders },

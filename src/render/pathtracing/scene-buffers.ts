@@ -628,7 +628,7 @@ export function createSceneSampler(scene: PathTraceScene): SceneSampler {
     scene.light.color[1] * scene.light.intensity,
     scene.light.color[2] * scene.light.intensity,
   ];
-  const env = scene.environment.radiance;
+  const env: Vec3 = scene.environment.enabled === false ? [0, 0, 0] : scene.environment.radiance;
   const hasEnv = env[0] > 0 || env[1] > 0 || env[2] > 0;
 
   // Prepare the procedural surface oracle once per variant material (T057i3): its
