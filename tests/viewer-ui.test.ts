@@ -126,6 +126,15 @@ function fixture() {
 }
 
 describe('Dear ImGui viewer controls', () => {
+  it('offers the rectangular 1024x768 resolution and preserves its dimensions in the callback', async () => {
+    const f = fixture();
+    const stop = await startViewerUi(f.canvas, f.state, f.actions, f.parameters);
+    controls.selection = '1024 x 768##1024x768';
+    f.render();
+    expect(f.actions.resolution).toHaveBeenCalledWith('1024x768');
+    stop();
+  });
+
   const pointer = (type: string, pointerType: string): Event => Object.assign(new Event(type), {
     pointerType, clientX: 45, clientY: 70,
   });

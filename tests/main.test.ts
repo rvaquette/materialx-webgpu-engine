@@ -98,6 +98,16 @@ describe('viewer loading indicator', () => {
     });
   };
 
+  it('accepts 1024x768 from the URL without making the canvas square', async () => {
+    vi.stubGlobal('location', { search: '?res=1024x768' });
+    await import('../src/main.ts');
+    await settle();
+    expect(state.ui?.resolution).toBe('1024x768');
+    expect(canvas).toMatchObject({ width: 1024, height: 768 });
+    finishLoad();
+    await settle();
+  });
+
   it('stays busy throughout loading and hides the normal descriptive status after success', async () => {
     await import('../src/main.ts');
     await settle();

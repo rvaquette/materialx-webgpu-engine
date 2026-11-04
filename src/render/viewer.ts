@@ -323,18 +323,17 @@ export class InteractiveViewer {
     this.#loaded = undefined;
   }
 
-  async resize(size: number): Promise<void> {
-    if (![256, 512, 1024].includes(size)) throw new Error('Unsupported render resolution.');
-    if (size === this.#width && size === this.#height) return;
-    this.#current?.resize(size, size);
-    this.#width = size;
-    this.#height = size;
-    this.#canvas.width = size;
-    this.#canvas.height = size;
-    this.#canvas.style.width = `${size}px`;
-    this.#orbit.aspect = 1;
+  async resize(width: number, height = width): Promise<void> {
+    if (!(width === height && [256, 512, 1024].includes(width)) && !(width === 1024 && height === 768)) throw new Error('Unsupported render resolution.');
+    if (width === this.#width && height === this.#height) return;
+    this.#current?.resize(width, height);
+    this.#width = width;
+    this.#height = height;
+    this.#canvas.width = width;
+    this.#canvas.height = height;
+    this.#orbit.aspect = width / height;
     const camera = this.#loaded?.cameras[0];
-    if (camera?.pathtracerFov !== undefined) this.#orbit.fovY = cameraFovY(camera, 1);
+    if (camera?.pathtracerFov !== undefined) this.#orbit.fovY = cameraFovY(camera, width / height);
     this.#onCameraChanged();
     this.#emitStatus();
   }

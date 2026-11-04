@@ -7,7 +7,7 @@ import type { MaterialFolder } from './scene/material-tree.ts';
 export interface ViewerUiState {
   entry: string;
   scenes: Array<{ label: string; entry: string }>;
-  resolution: number;
+  resolution: number | '1024x768';
   rasterQuality: RasterQuality;
   backend: BackendKind;
   environmentEnabled: boolean;
@@ -27,7 +27,7 @@ export interface ViewerUiState {
 
 export interface ViewerUiActions {
   scene: (entry: string) => void;
-  resolution: (size: number) => void;
+  resolution: (size: number | '1024x768') => void;
   quality: (quality: RasterQuality) => void;
   backend: (backend: BackendKind) => void;
   environment: (enabled: boolean) => void;
@@ -117,7 +117,10 @@ export async function startViewerUi(
         ImGui.SeparatorText('Scene');
         combo('##scene', state.entry, state.scenes.map(scene => ({ label: scene.label, value: scene.entry })), actions.scene);
         ImGui.SeparatorText('Rendu');
-        combo('##resolution', String(state.resolution), [256, 512, 1024].map(size => ({ label: `${size} x ${size}`, value: String(size) })), value => actions.resolution(Number(value)));
+        combo('##resolution', String(state.resolution), [
+          ...[256, 512, 1024].map(size => ({ label: `${size} x ${size}`, value: String(size) })),
+          { label: '1024 x 768', value: '1024x768' },
+        ], value => actions.resolution(value === '1024x768' ? value : Number(value)));
         combo('##quality', state.rasterQuality, [
           { label: 'Interactive (filtered IBL)', value: 'interactive' },
           { label: 'Reference (64 samples)', value: 'reference' },

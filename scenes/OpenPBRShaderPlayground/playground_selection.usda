@@ -1,0 +1,21 @@
+#usda 1.0
+(
+    defaultPrim = "World"
+    metersPerUnit = 0.01
+    upAxis = "Y"
+    startTimeCode = 0
+    endTimeCode = 100
+    framesPerSecond = 30
+    timeCodesPerSecond = 30
+    subLayers = [
+        @chairA_grp/chairA_grp.usda@,
+        @tube_grp/tube_grp.usda@,
+        @orangeJuice_grp/orangeJuice_grp.usda@,
+        @meetMAT_grp/meetMAT_grp.usda@,
+        @paintSpill_grp/paintSpill_grp.usda@,
+        @masonJar_grp/masonJar_grp.usda@,
+        @paintBrushes_grp/paintBrushes_grp.usda@,
+        @paper_grp/paper_grp.usda@,
+        @dresser_grp/dresser_grp.usda@
+    ]
+)

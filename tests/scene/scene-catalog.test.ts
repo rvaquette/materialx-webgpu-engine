@@ -24,4 +24,12 @@ describe('scene selector catalog', () => {
     expect(SCENE_CATALOG.find(scene => scene.entry.endsWith('/hyperion_rect_lights.usda'))?.label)
       .toBe('Pathtracer - hyperion rect lights');
   });
+  it('includes the composed Playground selection exactly once', () => {
+    expect(SCENE_CATALOG.filter(scene => scene.entry === './scenes/OpenPBRShaderPlayground/playground_selection.usda'))
+      .toEqual([{ label: 'OpenPBR Shader Playground - Selection (9 groups)', entry: './scenes/OpenPBRShaderPlayground/playground_selection.usda' }]);
+  });
+  it('includes the second composed Playground selection exactly once', () => {
+    expect(SCENE_CATALOG.filter(scene => scene.entry === './scenes/OpenPBRShaderPlayground/playground_selection_2.usda'))
+      .toEqual([{ label: 'OpenPBR Shader Playground - Selection 2 (8 groups)', entry: './scenes/OpenPBRShaderPlayground/playground_selection_2.usda' }]);
+  });
 });

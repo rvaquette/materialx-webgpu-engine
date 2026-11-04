@@ -1,0 +1,44 @@
+#usda 1.0
+(
+    defaultPrim = "World"
+    metersPerUnit = 0.01
+    upAxis = "Y"
+    startTimeCode = 0
+    endTimeCode = 100
+    framesPerSecond = 30
+    timeCodesPerSecond = 30
+    subLayers = [
+        @chairB_grp/chairB_grp.usda@,
+        @plane_grp/plane_grp.usda@,
+        @mug_grp/mug_grp.usda@,
+        @paintSpill_scrnRT_grp/paintSpill_scrnRT_grp.usda@,
+        @powerPlug_grp/powerPlug_grp.usda@,
+        @outlet_grp/outlet_grp.usda@
+    ]
+)
+
+over "World"
+{
+    over "plane_grp"
+    {
+        over "pencils_grp"
+        {
+            token visibility = "invisible"
+        }
+
+        over "cardboard_grp"
+        {
+            token visibility = "invisible"
+        }
+
+        over "hotglue_grp"
+        {
+            token visibility = "invisible"
+        }
+
+        over "lids_grp"
+        {
+            token visibility = "invisible"
+        }
+    }
+}

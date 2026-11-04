@@ -34,6 +34,8 @@ export const SCENE_CATALOG: readonly SceneCatalogEntry[] = [
   { label: 'Simple shader ball', entry: './scenes/standard-shader-ball/openpbr-rva-standard-shader-ball.usda' },
   ...pathTracerScenes,
   ...gltfScenes,
+  { label: 'OpenPBR Shader Playground - Selection (9 groups)', entry: './scenes/OpenPBRShaderPlayground/playground_selection.usda' },
+  { label: 'OpenPBR Shader Playground - Selection 2 (8 groups)', entry: './scenes/OpenPBRShaderPlayground/playground_selection_2.usda' },
   ...openPbrScenes,
   ...(import.meta.env.DEV ? [{
     label: 'OpenPBR Shader Playground (local)',

@@ -85,6 +85,10 @@ d'erreur :
 
 ## Profils raster et réactivité du viewer mobile
 
+Le sélecteur de résolution propose 256², 512², 1024² et 1024 × 768 (4:3).
+Le format rectangulaire est aussi accessible via `?res=1024x768` ; raster et
+path tracing conservent les dimensions et le rapport de projection choisis.
+
 En projection orthographique, le zoom (molette ou pincement) modifie uniquement
 les dimensions de la vue, sans avancer le plan proche dans la géométrie.
 La distance de prise de vue initiale est conservée pendant le zoom ; l'orbite et

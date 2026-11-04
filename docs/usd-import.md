@@ -51,6 +51,19 @@ subsurface and volume transport remain backend approximations.
 
 ## Bundled OpenPBR Shader Playground scenes
 
+`scenes/OpenPBRShaderPlayground/playground_selection.usda` combines chairA, tube,
+orangeJuice, meetMAT, paintSpill, masonJar, paintBrushes, paper and dresser in
+their original positions. It sublayers the existing scene entries, preserving
+materials and relative assets while composing the common lighting rig once.
+The viewer lists it as **OpenPBR Shader Playground - Selection (9 groups)**.
+
+`playground_selection_2.usda` combines chairB, mug, paintSpill_scrnRT, powerPlug,
+outlet and the airplane's mainBody, plasticCaps and tape groups, also in their
+original positions. The airplane parent is retained to preserve its transforms;
+its pencils, cardboard, hotglue and lids branches are hidden. The standalone
+tape scene is not included. The viewer lists this composition as
+**OpenPBR Shader Playground - Selection 2 (8 groups)**.
+
 The scene selector lists `scenes/OpenPBRShaderPlayground/*_grp/*_grp.usda`.
 `npm run build` copies the entire `OpenPBRShaderPlayground` directory into
 `dist/scenes`, preserving the relative paths of referenced USD geometry,

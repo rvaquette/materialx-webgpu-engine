@@ -42,13 +42,14 @@ async function main(): Promise<void> {
   const params = new URLSearchParams(location.search);
   const initialEntry = params.get('entry') ?? SCENE_CATALOG[0]!.entry;
   const initialBackend = params.get('backend') ?? 'raster';
-  const initialResolution = Number(params.get('res') ?? 512);
+  const resolutionParam = params.get('res') ?? '512';
+  const initialResolution = resolutionParam === '1024x768' ? resolutionParam : Number(resolutionParam);
   const scenePath = initialEntry.replace(/^\.\//, '/');
   if (!scenePath.startsWith('/scenes/') || scenePath.split('/').includes('..') || !/\.(usda?|gltf|glb)$/i.test(scenePath)) {
     throw new Error('Invalid scene entry: expected a USD, glTF or GLB path under /scenes/.');
   }
   if (initialBackend !== 'raster' && initialBackend !== 'pathtracing') throw new Error('Unsupported backend.');
-  if (![256, 512, 1024].includes(initialResolution)) throw new Error('Interactive resolution must be 256, 512 or 1024.');
+  if (initialResolution !== '1024x768' && ![256, 512, 1024].includes(initialResolution)) throw new Error('Interactive resolution must be 256, 512, 1024 or 1024x768.');
   if (!('gpu' in navigator)) { setStatus('WebGPU is not available in this browser.'); return; }
   const withTimeout = <T>(promise: Promise<T>, ms: number): Promise<T | undefined> =>
     Promise.race([promise, new Promise<undefined>(resolve => setTimeout(() => resolve(undefined), ms))]);
@@ -79,7 +80,8 @@ async function main(): Promise<void> {
   const canvas = document.getElementById('view') as HTMLCanvasElement | null;
   const uiCanvas = document.getElementById('ui') as HTMLCanvasElement | null;
   if (!canvas || !uiCanvas) throw new Error('Viewer canvases are missing.');
-  canvas.width = canvas.height = initialResolution;
+  canvas.width = initialResolution === '1024x768' ? 1024 : initialResolution;
+  canvas.height = initialResolution === '1024x768' ? 768 : initialResolution;
   const context = canvas.getContext('webgpu');
   if (!context) throw new Error('No WebGPU canvas context.');
   const outputFormat = navigator.gpu.getPreferredCanvasFormat();
@@ -231,7 +233,10 @@ async function main(): Promise<void> {
   }
   const actions: ViewerUiActions = {
     scene: entry => { parameterEditor.refresh(); void loadEntry(entry); },
-    resolution: size => { void operation('Redimensionnement du rendu...', async () => { await viewer.resize(size); state.resolution = size; }); },
+    resolution: size => { void operation('Redimensionnement du rendu...', async () => {
+      await viewer.resize(size === '1024x768' ? 1024 : size, size === '1024x768' ? 768 : size);
+      state.resolution = size;
+    }); },
     quality: quality => { void operation('Compilation du profil raster...', async () => { await viewer.setRasterQuality(quality); state.rasterQuality = quality; }); },
     backend: backend => { viewer.setBackend(backend); state.backend = backend; },
     environment: enabled => { viewer.setEnvironmentEnabled(enabled); state.environmentEnabled = enabled; },
