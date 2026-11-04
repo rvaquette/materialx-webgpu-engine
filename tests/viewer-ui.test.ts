@@ -8,16 +8,18 @@ const controls = vi.hoisted(() => ({
   checkbox: '',
   selection: '',
   header: false,
-  io: { ConfigFlags: 0 },
+  io: { ConfigFlags: 0, AddMouseSourceEvent: vi.fn(), AddMousePosEvent: vi.fn() },
+  style: { ScrollbarSize: 14, GrabMinSize: 12, FramePadding: {}, ItemSpacing: {} },
   number: undefined as number | undefined,
 }));
 vi.mock('@mori2003/jsimgui', () => ({
   ImVec2: class { constructor(public x: number, public y: number) {} },
   ImGuiWindowFlags: { NoMove: 1, NoResize: 2, NoCollapse: 4, NoSavedSettings: 8 },
   ImGuiConfigFlags: { NavEnableKeyboard: 1 },
+  ImGuiMouseSource: { _Mouse: 0, _TouchScreen: 1, _Pen: 2 },
   ImGuiImplWeb: { Init: vi.fn(async () => {}), BeginRender: vi.fn(), EndRender: vi.fn() },
   ImGui: {
-    StyleColorsDark: vi.fn(), GetIO: () => controls.io, SetNextWindowPos: vi.fn(), SetNextWindowSize: vi.fn(),
+    StyleColorsDark: vi.fn(), GetIO: () => controls.io, GetStyle: () => controls.style, SetNextWindowPos: vi.fn(), SetNextWindowSize: vi.fn(),
     Begin: () => true, End: vi.fn(), BeginDisabled: vi.fn(), EndDisabled: vi.fn(),
     SeparatorText: vi.fn(), Text: vi.fn(), TextWrapped: vi.fn(), SameLine: vi.fn(),
     SetNextItemWidth: vi.fn(), SetItemDefaultFocus: vi.fn(), EndCombo: vi.fn(), BeginCombo: () => true,
@@ -38,6 +40,7 @@ vi.mock('@mori2003/jsimgui', () => ({
       if (controls.number === undefined) return false;
       value[0] = controls.number;
       controls.number = undefined;
+      controls.style.ScrollbarSize = 14;
       return true;
     }),
   },
@@ -115,11 +118,61 @@ function fixture() {
   vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => { tick = callback; return 1; });
   vi.stubGlobal('cancelAnimationFrame', vi.fn());
   vi.stubGlobal('devicePixelRatio', 2);
-  const canvas = { width: 1, height: 1, clientWidth: 400, clientHeight: 700 } as HTMLCanvasElement;
+  const canvas = Object.assign(new EventTarget(), {
+    width: 1, height: 1, clientWidth: 400, clientHeight: 700,
+    getBoundingClientRect: () => ({ left: 10, top: 20 }),
+  }) as HTMLCanvasElement;
   return { state, actions, parameters, canvas, render: () => tick(0) };
 }
 
 describe('Dear ImGui viewer controls', () => {
+  const pointer = (type: string, pointerType: string): Event => Object.assign(new Event(type), {
+    pointerType, clientX: 45, clientY: 70,
+  });
+
+  it('lets the touch backend handle each gesture exactly once, including scrollbar drags', async () => {
+    const f = fixture();
+    const stop = await startViewerUi(f.canvas, f.state, f.actions, f.parameters);
+    const backendPointer = vi.fn();
+    const backendTouch = vi.fn();
+    for (const type of ['pointerdown', 'pointermove', 'pointerup']) f.canvas.addEventListener(type, backendPointer);
+    for (const type of ['touchstart', 'touchmove', 'touchend', 'touchcancel']) f.canvas.addEventListener(type, backendTouch);
+    for (const type of ['pointerdown', 'pointermove', 'pointerup']) f.canvas.dispatchEvent(pointer(type, 'touch'));
+    for (const type of ['touchstart', 'touchmove', 'touchend', 'touchcancel']) f.canvas.dispatchEvent(new Event(type));
+    expect(backendPointer).not.toHaveBeenCalled();
+    expect(backendTouch).toHaveBeenCalledTimes(4);
+    expect(controls.io.AddMouseSourceEvent).toHaveBeenCalledWith(1);
+    expect(controls.style.ScrollbarSize).toBe(28);
+    f.render();
+    expect(ImGui.Selectable).toHaveBeenCalledWith('Books##books.usda', true, 0, { x: 0, y: 36 });
+    stop();
+    f.canvas.dispatchEvent(pointer('pointerdown', 'touch'));
+    expect(backendPointer).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['mouse', 'pen'])('sets the current %s position before the backend processes a press', async pointerType => {
+    const f = fixture();
+    const stop = await startViewerUi(f.canvas, f.state, f.actions, f.parameters);
+    const backend = vi.fn(() => {
+      expect(controls.io.AddMousePosEvent).toHaveBeenLastCalledWith(35, 50);
+    });
+    f.canvas.addEventListener('pointerdown', backend);
+    f.canvas.dispatchEvent(pointer('pointerdown', pointerType));
+    expect(backend).toHaveBeenCalledTimes(1);
+    expect(controls.io.AddMouseSourceEvent).toHaveBeenLastCalledWith(pointerType === 'pen' ? 2 : 0);
+    stop();
+  });
+
+  it('uses larger scrollbars and list entries from startup on a coarse-pointer device', async () => {
+    vi.stubGlobal('matchMedia', () => ({ matches: true }));
+    const f = fixture();
+    const stop = await startViewerUi(f.canvas, f.state, f.actions, f.parameters);
+    f.render();
+    expect(controls.style.ScrollbarSize).toBe(28);
+    expect(ImGui.Selectable).toHaveBeenCalledWith('Books##books.usda', true, 0, { x: 0, y: 36 });
+    stop();
+  });
+
   it('renders the environment checkbox, native import buttons and all rendering controls', async () => {
     const f = fixture();
     const stop = await startViewerUi(f.canvas, f.state, f.actions, f.parameters);
