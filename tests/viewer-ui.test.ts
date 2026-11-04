@@ -2,12 +2,14 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { startViewerUi, type ViewerUiState, type ViewerUiActions } from '../src/viewer-ui.ts';
 import { MaterialParameterEditor } from '../src/material-parameter-editor.ts';
 import { ImGui } from '@mori2003/jsimgui';
+import type { MaterialParameter } from '../src/render/material-parameters.ts';
 
 const controls = vi.hoisted(() => ({
   checkbox: '',
   selection: '',
   header: false,
   io: { ConfigFlags: 0 },
+  number: undefined as number | undefined,
 }));
 vi.mock('@mori2003/jsimgui', () => ({
   ImVec2: class { constructor(public x: number, public y: number) {} },
@@ -31,6 +33,13 @@ vi.mock('@mori2003/jsimgui', () => ({
       return true;
     }),
     CollapsingHeader: () => controls.header, DestroyContext: vi.fn(),
+    PushID: vi.fn(), PopID: vi.fn(), SliderFloat: () => false,
+    InputFloat: vi.fn((_label: string, value: [number]) => {
+      if (controls.number === undefined) return false;
+      value[0] = controls.number;
+      controls.number = undefined;
+      return true;
+    }),
   },
 }));
 
@@ -40,6 +49,53 @@ afterEach(() => {
   controls.checkbox = '';
   controls.selection = '';
   controls.header = false;
+  controls.number = undefined;
+  vi.useRealTimers();
+});
+
+describe('ImGui material parameter editing', () => {
+  it('coalesces edits and cancels pending rebuilds when the selected object changes', async () => {
+    vi.useFakeTimers();
+    const parameter: MaterialParameter = {
+      id: 'roughness', input: 'roughness', label: 'Roughness', type: 'float',
+      value: [0.2], initial: [0.2], update: 'rebuild',
+    };
+    const apply = vi.fn(async () => {});
+    const editor = new MaterialParameterEditor({ parameters: () => [parameter], apply, error: vi.fn() });
+    controls.number = 0.4;
+    editor.draw();
+    controls.number = 0.7;
+    editor.draw();
+    expect(apply).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(180);
+    expect(apply).toHaveBeenCalledTimes(1);
+    expect(apply.mock.calls[0]).toEqual([new Map([['roughness', [0.7]]])]);
+    controls.number = 0.9;
+    editor.draw();
+    editor.refresh();
+    await vi.advanceTimersByTimeAsync(180);
+    expect(apply).toHaveBeenCalledTimes(1);
+  });
+
+  it('surfaces failed edits and restores authoritative values instead of keeping a success-shaped draft', async () => {
+    vi.useFakeTimers();
+    const failure = new Error('Material compilation failed');
+    const error = vi.fn();
+    const parameter: MaterialParameter = {
+      id: 'roughness', input: 'roughness', label: 'Roughness', type: 'float',
+      value: [0.2], initial: [0.2], update: 'uniform',
+    };
+    const editor = new MaterialParameterEditor({
+      parameters: () => [parameter], apply: vi.fn(async () => { throw failure; }), error,
+    });
+    controls.number = 0.8;
+    editor.draw();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(error).toHaveBeenCalledWith(failure);
+    vi.mocked(ImGui.InputFloat).mockClear();
+    editor.draw();
+    expect(ImGui.InputFloat).toHaveBeenCalledWith('Valeur 1', [0.2], 0, 0, '%.6g');
+  });
 });
 
 function fixture() {
