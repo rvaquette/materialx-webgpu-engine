@@ -41,12 +41,13 @@ export interface WgslBinding {
   fileRef?: string;
   colorSpace?: string;
   sampler?: Omit<SamplerResource, 'name'>;
-  textureKind?: 'udim' | 'udim-index';
+  textureKind?: 'udim' | 'udim-index' | 'array' | 'index-array';
 }
 
 export function textureWgslType(binding: WgslBinding): string {
-  return binding.textureKind === 'udim-index' ? 'texture_2d<u32>'
-    : binding.textureKind === 'udim' ? 'texture_2d_array<f32>' : 'texture_2d<f32>';
+  return binding.textureKind === 'index-array' ? 'texture_2d_array<u32>'
+    : binding.textureKind === 'udim-index' ? 'texture_2d<u32>'
+    : binding.textureKind === 'udim' || binding.textureKind === 'array' ? 'texture_2d_array<f32>' : 'texture_2d<f32>';
 }
 
 const UDIM_SAMPLE_PRELUDE = `

@@ -7,6 +7,41 @@ type MaterialTextureDevice = Pick<GPUDevice, 'createTexture'> & {
   queue: Pick<GPUQueue, 'writeTexture'>;
 };
 
+/** Upload compatible views as separate layers, preserving their original pixels. */
+export function uploadMaterialImageArray(
+  device: MaterialTextureDevice, images: readonly (DecodedPixelImage | undefined)[],
+  format: GPUTextureFormat, index = false,
+): GPUTexture {
+  const first = images[0];
+  if (!first || images.some(image => !image)) throw new Error('Texture array requires decoded images.');
+  const width = index ? UDIM_COLUMNS : first.width;
+  const height = index ? UDIM_ROWS : first.height;
+  if (width > device.limits.maxTextureDimension2D || height > device.limits.maxTextureDimension2D
+    || images.length > device.limits.maxTextureArrayLayers) {
+    throw new Error(`Material texture array exceeds device limits: ${width} x ${height} x ${images.length}.`);
+  }
+  for (const image of images) {
+    if (index ? !image!.udim?.length
+      : image!.width !== width || image!.height !== height || image!.channels !== 4 || image!.componentType !== 'uint8') {
+      throw new Error('Incompatible image in material texture array.');
+    }
+  }
+  const texture = device.createTexture({
+    size: [width, height, images.length], format,
+    usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
+  });
+  try {
+    images.forEach((image, layer) => {
+      device.queue.writeTexture({ texture, origin: [0, 0, layer] }, index ? udimLayerIndex(image!) : image!.data,
+        { bytesPerRow: width * 4, rowsPerImage: height }, [width, height, 1]);
+    });
+    return texture;
+  } catch (error) {
+    texture.destroy();
+    throw error;
+  }
+}
+
 /** Shared raster/compute upload; UDIM indices are integer textures, never sRGB. */
 export function uploadMaterialImage(
   device: MaterialTextureDevice,

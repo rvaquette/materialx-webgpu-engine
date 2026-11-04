@@ -30,7 +30,8 @@ import { maxRecordLobes } from './pathtracing/material-record.ts';
 import type { DecodedPixelImage } from '../assets/images.ts';
 import { loadUsdScene, uploadMaterialTextures, type ObjectMaterialOverride, type SceneLoadOptions } from './usd-scene-assets.ts';
 import { assertSceneStorageSize, assertSceneTextureBindings } from '../gpu/device.ts';
-import { uploadMaterialImage } from '../gpu/material-texture.ts';
+import { uploadMaterialImage, uploadMaterialImageArray } from '../gpu/material-texture.ts';
+import { packPtTextureArrays } from './pathtracing/texture-arrays.ts';
 import { OrbitCamera, attachOrbitControls } from '../scene/orbit-camera.ts';
 import { inverse4, lookAt4, multiply4, perspective4, type Vec3 } from '../scene/transforms.ts';
 import type { DiagnosticSink } from '../core/diagnostics.ts';
@@ -926,7 +927,9 @@ fn dir_to_uv(d: vec3<f32>) -> vec2<f32> {
       ptScene.environment.textureRadianceScale = envRadianceScale;
       ptScene.camera.backgroundInvViewProj = backgroundInvViewProj;
       pathTraceScene = ptScene;
-      const dispatch = buildMaterialDispatch(ptScene.variantSources);
+      const sourceDispatch = buildMaterialDispatch(ptScene.variantSources);
+      const sourceBindings = await buildPtDeviceBindings(sourceDispatch, ptScene, loaded.mtlx.imageProvider, { sink });
+      const { dispatch, bindings } = packPtTextureArrays(sourceDispatch, sourceBindings, device.limits.maxTextureArrayLayers);
       const track = <T extends { destroy(): void }>(o: T): T => {
         ptTrash.push(o);
         return o;
@@ -950,7 +953,6 @@ fn dir_to_uv(d: vec3<f32>) -> vec2<f32> {
         this.#onShaderErrors?.([...rasterErrors, ...pathTraceErrors]);
         throw new Error(`WGSL: ${ptCompilation.errors.length} erreur(s) de compilation (path tracing).`);
       }
-      const bindings = await buildPtDeviceBindings(dispatch, ptScene, loaded.mtlx.imageProvider, { sink });
       const ptParameterData = (): ArrayBuffer => packParameterUniforms(dispatch.uniforms, field => {
         const index = /^m(\d+)_/.exec(field.field)?.[1];
         const key = index === undefined ? undefined : ptScene.materialKeys[Number(index)];
@@ -1028,8 +1030,10 @@ fn dir_to_uv(d: vec3<f32>) -> vec2<f32> {
       const textureViews = new Map<number, GPUTextureView>();
       for (const tex of bindings.textures) {
         const image = bindings.images[tex.imageIndex];
-        const gpuTex = track(uploadMaterialImage(device, image, tex.format, tex.textureKind));
-        textureViews.set(tex.binding, gpuTex.createView(tex.textureKind === 'udim' ? { dimension: '2d-array' } : {}));
+        const gpuTex = track(tex.arrayImages
+          ? uploadMaterialImageArray(device, tex.arrayImages.map(index => bindings.images[index]), tex.format, tex.textureKind === 'index-array')
+          : uploadMaterialImage(device, image, tex.format, tex.textureKind));
+        textureViews.set(tex.binding, gpuTex.createView(tex.arrayImages || tex.textureKind === 'udim' ? { dimension: '2d-array' } : {}));
       }
       const group1 =
         bindings.textures.length > 0

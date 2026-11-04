@@ -30,7 +30,7 @@ function fakeDevice() {
   };
   const textures: Array<{ destroy: ReturnType<typeof vi.fn> }> = [];
   const device = {
-    limits: { maxStorageBufferBindingSize: 1 << 28, maxBufferSize: 1 << 28 },
+    limits: { maxStorageBufferBindingSize: 1 << 28, maxBufferSize: 1 << 28, maxTextureArrayLayers: 256 },
     createBuffer: vi.fn((desc: GPUBufferDescriptor) => ({
       destroy: vi.fn(), mapAsync: vi.fn(async () => {}), getMappedRange: () => new ArrayBuffer(desc.size), unmap: vi.fn(),
     })),

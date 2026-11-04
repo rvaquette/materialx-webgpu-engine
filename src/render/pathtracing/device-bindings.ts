@@ -55,6 +55,8 @@ export interface PtTextureBinding {
   imageIndex: number;
   format: 'rgba8unorm' | 'rgba8unorm-srgb' | 'r32uint';
   textureKind?: WgslBinding['textureKind'];
+  /** Image indices in array-layer order; absent for ordinary and UDIM bindings. */
+  arrayImages?: number[];
 }
 
 export interface PtSamplerBinding {
@@ -128,8 +130,9 @@ export async function buildPtDeviceBindings(
     binding: t.binding,
     handle: t.handle,
     imageIndex: registry.textureImage[i]!,
-    format: t.textureKind === 'udim-index' ? 'r32uint' : t.colorSpace === 'srgb_texture' ? 'rgba8unorm-srgb' : 'rgba8unorm',
+    format: t.textureKind === 'udim-index' || t.textureKind === 'index-array' ? 'r32uint' : t.colorSpace === 'srgb_texture' ? 'rgba8unorm-srgb' : 'rgba8unorm',
     ...(t.textureKind !== undefined ? { textureKind: t.textureKind } : {}),
+    ...(registry.textureArrayImages?.[i] ? { arrayImages: [...registry.textureArrayImages[i]!] } : {}),
   }));
   const samplers: PtSamplerBinding[] = registry.samplers.map((s) => ({
     binding: s.binding,

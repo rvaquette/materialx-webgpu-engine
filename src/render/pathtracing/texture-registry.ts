@@ -22,6 +22,8 @@ export interface PtTextureRegistry {
   /** For each `textures[i]`, the index into `images` it samples. Bindings that
    *  resolve to the same file share an image index (device decode dedup). */
   textureImage: number[];
+  /** Packed array-layer image indices, aligned with textures when arrays are enabled. */
+  textureArrayImages?: (readonly number[] | undefined)[];
   /** Shared resources use one binding; variant source handles are remapped. */
   bindingAliases?: ReadonlyMap<string, string>;
 }

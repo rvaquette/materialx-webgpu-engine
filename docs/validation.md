@@ -115,6 +115,24 @@ incompatibles restent distincts. Les paramètres éditables restent propres à c
 objet ; seules les ressources image/sampler sont mutualisées. Les fonctions de
 surface et d'opacité utilisent toutes deux les handles partagés.
 
+Dans le viewer, le path tracer regroupe ensuite les images RGBA8 de dimensions
+et de format GPU identiques dans des tableaux `texture_2d_array`. Les vues sRGB
+et linéaires restent séparées : aucun redimensionnement ni changement des pixels
+n'est effectué. Chaque matériau conserve son sampler et une couche fixe, dans
+ses fonctions de surface comme d'opacité. Les calculs de dimensions des textures
+restent valides. Les tableaux sont scindés à `maxTextureArrayLayers`.
+Les tables d'indices UDIM sont regroupées dans des tableaux entiers séparés ;
+les tableaux de couleurs UDIM restent indépendants, avec les mêmes indices de
+tuiles et valeurs de repli. Les images absentes ou incompatibles ne sont pas
+regroupées. Le contrôle des limites de bindings porte sur les ressources finales,
+en incluant l'environnement ; le nombre de samplers n'est pas modifié.
+
+Validation de `playground_selection.usda` (9 groupes), à 256 x 256 :
+65 textures avant regroupement, 31 après regroupement, environnement compris,
+pour une limite GPU de 48. Les 3 samplers restent sous la limite de 16.
+Le shader et le pipeline path tracing compilent ; le rendu dépasse 16 spp sans
+erreur WebGPU. Ce contrôle confirme le démarrage, pas une parité visuelle complète.
+
 Les messages de chargement, erreurs, diagnostics WGSL et avertissements d'import
 s'affichent en surimpression sur le canvas de rendu, indépendamment du défilement
 des contrôles ImGui. Les diagnostics sont repliables et les messages longs

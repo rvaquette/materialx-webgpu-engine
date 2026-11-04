@@ -14,6 +14,8 @@ import type {
 } from '../../../src/materialx/graph.ts';
 import { resolveSurface } from '../../../src/materialx/surface-graph.ts';
 import { emitSurfaceVariant } from '../../../src/compiler/surface-wgsl.ts';
+import { packPtTextureArrays } from '../../../src/render/pathtracing/texture-arrays.ts';
+import type { PtDeviceBindings } from '../../../src/render/pathtracing/device-bindings.ts';
 import {
   buildMaterialDispatch,
   buildOpacityDispatch,
@@ -145,6 +147,38 @@ describe('buildMaterialDispatch opacity-only dispatcher', () => {
     upstream('alphaTex', 'image', 'float', [value('file', 'filename', 'alpha.png')]),
     upstream('albedoTex', 'image', 'color3', [value('file', 'filename', 'albedo.png')]),
   ]);
+
+  it.each([false, true])('packs compiled image graphs in surface and opacity dispatchers (UDIM: %s)', udim => {
+    const graph = texturedAlpha();
+    if (udim) {
+      for (const id of ['alphaTex', 'albedoTex']) {
+        graph.nodes.get(id)!.inputs = [value('file', 'filename', `${id}.<UDIM>.png`)];
+      }
+    }
+    const dispatch = buildMaterialDispatch([source(0, graph), source(1, graph)]);
+    const pixel = {
+      kind: 'pixels' as const, componentType: 'uint8' as const, channels: 4 as const,
+      width: 1, height: 1, colorSpace: 'raw', data: new Uint8Array([128, 128, 128, 255]),
+    };
+    const bindings: PtDeviceBindings = {
+      group0: [], samplers: [],
+      images: dispatch.textureRegistry.images.map(() => udim ? { ...pixel, udim: [{ tile: 1001, image: pixel }] } : pixel),
+      textures: dispatch.textures.map(t => ({
+        binding: t.binding, handle: t.handle, imageIndex: dispatch.textureRegistry.textureImage[t.binding]!,
+        format: t.textureKind === 'udim-index' ? 'r32uint' : 'rgba8unorm',
+        ...(t.textureKind ? { textureKind: t.textureKind } : {}),
+      })),
+    };
+    const packed = packPtTextureArrays(dispatch, bindings, 256);
+    expect(packed.dispatch.textures).toHaveLength(udim ? 3 : 1);
+    expect(packed.dispatch.opacityDispatcherWgsl).toContain('pt_array_');
+    expect(packed.dispatch.dispatcherWgsl).toContain('pt_array_');
+    expect(packed.dispatch.samplers).toBe(dispatch.samplers);
+    for (const binding of bindings.textures.filter(t => udim ? t.textureKind === 'udim-index' : true)) {
+      expect(packed.dispatch.dispatcherWgsl).not.toContain(binding.handle);
+      expect(packed.dispatch.opacityDispatcherWgsl).not.toContain(binding.handle);
+    }
+  });
 
   it('remaps shared regular textures and samplers in both surface and opacity functions', () => {
     const dispatch = buildMaterialDispatch([source(0, texturedAlpha()), source(1, texturedAlpha())]);
