@@ -38,12 +38,12 @@ export interface ViewerUiActions {
   material: (path: string) => void;
 }
 
-function combo(label: string, value: string, options: readonly { label: string; value: string }[], change: (value: string) => void, touch = false): void {
+function combo(label: string, value: string, options: readonly { label: string; value: string }[], change: (value: string) => void): void {
   const selected = options.find(option => option.value === value);
   ImGui.SetNextItemWidth(-1);
   if (ImGui.BeginCombo(label, selected?.label ?? value)) {
     for (const option of options) {
-      if (ImGui.Selectable(`${option.label}##${option.value}`, option.value === value, 0, new ImVec2(0, touch ? 36 : 0))) change(option.value);
+      if (ImGui.Selectable(`${option.label}##${option.value}`, option.value === value, 0, new ImVec2(0, 0))) change(option.value);
       if (option.value === value) ImGui.SetItemDefaultFocus();
     }
     ImGui.EndCombo();
@@ -94,8 +94,6 @@ export async function startViewerUi(
     const style = ImGui.GetStyle();
     style.ScrollbarSize = 28;
     style.GrabMinSize = 28;
-    style.FramePadding = new ImVec2(8, 10);
-    style.ItemSpacing = new ImVec2(8, 8);
   };
   if (globalThis.matchMedia?.('(pointer: coarse)').matches) enableTouch();
   const detachInput = attachPointerInput(canvas, enableTouch);
@@ -117,15 +115,15 @@ export async function startViewerUi(
       if (ImGui.Begin('MaterialX', undefined, ImGuiWindowFlags.NoMove | ImGuiWindowFlags.NoResize | ImGuiWindowFlags.NoCollapse | ImGuiWindowFlags.NoSavedSettings)) {
         ImGui.BeginDisabled(state.busy);
         ImGui.SeparatorText('Scene');
-        combo('##scene', state.entry, state.scenes.map(scene => ({ label: scene.label, value: scene.entry })), actions.scene, touchControls);
+        combo('##scene', state.entry, state.scenes.map(scene => ({ label: scene.label, value: scene.entry })), actions.scene);
         if (ImGui.Button('Ouvrir GLB/glTF + ressources')) actions.openFiles(false);
         if (ImGui.Button('Ouvrir un dossier glTF')) actions.openFiles(true);
         ImGui.SeparatorText('Rendu');
-        combo('##resolution', String(state.resolution), [256, 512, 1024].map(size => ({ label: `${size} x ${size}`, value: String(size) })), value => actions.resolution(Number(value)), touchControls);
+        combo('##resolution', String(state.resolution), [256, 512, 1024].map(size => ({ label: `${size} x ${size}`, value: String(size) })), value => actions.resolution(Number(value)));
         combo('##quality', state.rasterQuality, [
           { label: 'Interactive (filtered IBL)', value: 'interactive' },
           { label: 'Reference (64 samples)', value: 'reference' },
-        ], value => { if (value === 'interactive' || value === 'reference') actions.quality(value); }, touchControls);
+        ], value => { if (value === 'interactive' || value === 'reference') actions.quality(value); });
         if (ImGui.RadioButton('Raster', state.backend === 'raster')) actions.backend('raster');
         ImGui.SameLine();
         if (ImGui.RadioButton('Path tracing', state.backend === 'pathtracing')) actions.backend('pathtracing');
@@ -144,14 +142,14 @@ export async function startViewerUi(
           ImGui.BeginDisabled(!state.objects.length);
           combo('##object', state.objectPath, state.objects.map(object => ({
             label: `${object.path.split('/').at(-1)} (${object.material})`, value: object.path,
-          })), actions.object, touchControls);
+          })), actions.object);
           let folder = state.materialTree;
           for (let depth = 0; folder.folders.size; depth++) {
             const index = depth;
             combo(`##folder-${depth}`, state.materialFolderPath[depth] ?? '', [
               { label: 'Choisir un dossier...', value: '' },
               ...[...folder.folders.keys()].sort().map(name => ({ label: name, value: name })),
-            ], value => { state.materialFolderPath = [...state.materialFolderPath.slice(0, index), ...(value ? [value] : [])]; }, touchControls);
+            ], value => { state.materialFolderPath = [...state.materialFolderPath.slice(0, index), ...(value ? [value] : [])]; });
             const child = folder.folders.get(state.materialFolderPath[depth] ?? '');
             if (!child) break;
             folder = child;
@@ -159,7 +157,7 @@ export async function startViewerUi(
           combo('##material', state.materialPath, [
             { label: "Materiau d'origine", value: '' },
             ...folder.materials.map(material => ({ label: material.label, value: material.path })),
-          ], actions.material, touchControls);
+          ], actions.material);
           if (ImGui.CollapsingHeader('Parametres du materiau')) parameters.draw();
           ImGui.EndDisabled();
         }

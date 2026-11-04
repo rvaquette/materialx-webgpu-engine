@@ -144,7 +144,9 @@ describe('Dear ImGui viewer controls', () => {
     expect(controls.io.AddMouseSourceEvent).toHaveBeenCalledWith(1);
     expect(controls.style.ScrollbarSize).toBe(28);
     f.render();
-    expect(ImGui.Selectable).toHaveBeenCalledWith('Books##books.usda', true, 0, { x: 0, y: 36 });
+    expect(ImGui.Selectable).toHaveBeenCalledWith('Books##books.usda', true, 0, { x: 0, y: 0 });
+    expect(controls.style.FramePadding).toEqual({});
+    expect(controls.style.ItemSpacing).toEqual({});
     stop();
     f.canvas.dispatchEvent(pointer('pointerdown', 'touch'));
     expect(backendPointer).toHaveBeenCalledTimes(1);
@@ -163,13 +165,15 @@ describe('Dear ImGui viewer controls', () => {
     stop();
   });
 
-  it('uses larger scrollbars and list entries from startup on a coarse-pointer device', async () => {
+  it('keeps initial control heights and spacing with wider scrollbars on a coarse-pointer device', async () => {
     vi.stubGlobal('matchMedia', () => ({ matches: true }));
     const f = fixture();
     const stop = await startViewerUi(f.canvas, f.state, f.actions, f.parameters);
     f.render();
     expect(controls.style.ScrollbarSize).toBe(28);
-    expect(ImGui.Selectable).toHaveBeenCalledWith('Books##books.usda', true, 0, { x: 0, y: 36 });
+    expect(ImGui.Selectable).toHaveBeenCalledWith('Books##books.usda', true, 0, { x: 0, y: 0 });
+    expect(controls.style.FramePadding).toEqual({});
+    expect(controls.style.ItemSpacing).toEqual({});
     stop();
   });
 

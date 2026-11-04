@@ -114,7 +114,8 @@ surface et d'opacité utilisent toutes deux les handles partagés.
 Sur écran tactile, les gestes sont transmis une seule fois à ImGui par les
 événements touch du backend (clavier virtuel compris), sans le doublon pointer.
 Les barres de défilement et leurs poignées mesurent au moins 28 pixels CSS ;
-les entrées des listes déroulantes ont une hauteur de 36 pixels. Faire glisser
+les contrôles et les entrées des listes conservent leur hauteur et leur espacement
+ImGui initiaux, y compris au toucher. Faire glisser
 la poignée pour parcourir les listes ; le défilement à deux doigts du backend
 reste disponible. À la souris et au stylet, la position est mise à jour avant
 l'appui, même en l'absence de mouvement préalable.
