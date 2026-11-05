@@ -21,6 +21,7 @@ import {
   type NodeEmitContext,
   type NodeInputs,
 } from './nodes.ts';
+import { VOLUME_MEDIUM_PRELUDE } from './volume-wgsl.ts';
 
 export class WgslEmitError extends Error {
   override readonly name = 'WgslEmitError';
@@ -503,6 +504,12 @@ export function lowerExprs(
 export function emitWgsl(ir: ShaderIr): WgslModule {
   const lowered = lowerExprs(ir);
   const { uniforms, textures, samplers, preludes, primvarFields, extraInputs, body, usesLighting } = lowered;
+
+  // Check if this shader has volumeshader output
+  const hasVolumeOutput = ir.outputs.some((o) => o.name === 'volumeshader');
+  if (hasVolumeOutput) {
+    preludes.add(VOLUME_MEDIUM_PRELUDE);
+  }
 
   // Outputs.
   const seenFields = new Set<string>();
