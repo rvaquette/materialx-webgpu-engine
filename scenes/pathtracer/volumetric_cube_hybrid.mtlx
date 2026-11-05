@@ -1,0 +1,40 @@
+<?xml version="1.0"?>
+<materialx version="1.39" colorspace="lin_rec709">
+  <!-- Hybrid volumetric cube: transmissive surface with volumetric scattering inside -->
+  <!-- This uses standard_surface with transmission + internal volume parameters -->
+  
+  <!-- Define VDF for volumetric medium inside the surface -->
+  <anisotropic_vdf name="cube_volume_vdf" type="VDF">
+    <input name="absorption" type="color3" value="0.05, 0.05, 0.08" />
+    <input name="scattering" type="color3" value="0.2, 0.25, 0.2" />
+    <input name="anisotropy" type="float" value="0.5" />
+  </anisotropic_vdf>
+  
+  <!-- Transmissive surface that includes volume -->
+  <standard_surface name="volume_surface" type="surfaceshader">
+    <input name="base_color" type="color3" value="1, 1, 1" />
+    <input name="base" type="float" value="0" />
+    <input name="roughness" type="float" value="0.0" />
+    <input name="transmission" type="float" value="1.0" />
+    <input name="transmission_color" type="color3" value="1, 1, 1" />
+    <!-- Using subsurface inputs to approximate volume -->
+    <input name="subsurface" type="float" value="1.0" />
+    <input name="subsurface_color" type="color3" value="0.8, 0.9, 0.8" />
+    <input name="subsurface_radius" type="color3" value="1, 1, 1" />
+  </standard_surface>
+  
+  <!-- Material definition -->
+  <surfacematerial name="volumetric_cube" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="volume_surface" />
+  </surfacematerial>
+  
+  <!-- Dark floor (regular surface material) -->
+  <standard_surface name="floor_surface" type="surfaceshader">
+    <input name="base_color" type="color3" value="0.15, 0.15, 0.15" />
+    <input name="specular_roughness" type="float" value="0.707" />
+  </standard_surface>
+  
+  <surfacematerial name="floor" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="floor_surface" />
+  </surfacematerial>
+</materialx>

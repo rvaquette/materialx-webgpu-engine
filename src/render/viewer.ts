@@ -44,6 +44,8 @@ import { JsDenoiser } from './pathtracing/js-denoiser.ts';
 import { changeMaterialParameters, compileEditableMaterial, materialUniformData, packParameterUniforms, visibleMaterialParameters, type MaterialParameter } from './material-parameters.ts';
 import { applySceneDisplacement } from './displacement.ts';
 import type { MaterialResource } from './scene-resources.ts';
+import { compiledRasterShaderKey, exportCompiledScene, loadCompiledScene } from '../scene/compiled-scene.ts';
+import { writeCompiledScene, type SceneDirectory } from '../scene/compiled-scene-codec.ts';
 
 /** Preview fill + framing shared with the capture harness so the live view matches. */
 const PREVIEW_ENV: Vec3 = [0.65, 0.68, 0.72];
@@ -192,6 +194,18 @@ export class InteractiveViewer {
     return material ? visibleMaterialParameters(material) : [];
   }
 
+  get isCompiledScene(): boolean {
+    return this.#loaded?.precompiled === true;
+  }
+
+  async exportScene(directory: SceneDirectory): Promise<void> {
+    const loaded = this.#loaded;
+    if (!loaded || this.#disposed) throw new Error('Load a scene before exporting.');
+    const scene = await exportCompiledScene(loaded);
+    if (loaded !== this.#loaded || this.#disposed) throw new Error('Scene changed during export.');
+    await writeCompiledScene(directory, scene);
+  }
+
   async setObjectParameters(path: string, changes: ReadonlyMap<string, readonly number[]>): Promise<void> {
     const loaded = this.#loaded;
     const source = loaded?.parameterResources;
@@ -225,6 +239,7 @@ export class InteractiveViewer {
       bakedMaterials.set(key, baked);
       loaded.resources = { ...loaded.resources, materials: bakedMaterials };
       loaded.parameterResources = parameterResources;
+      delete loaded.compiled;
       this.#rasterDirty = true;
       this.#ptDisplayDirty = true;
       this.#current.resetPathTrace();
@@ -233,6 +248,7 @@ export class InteractiveViewer {
     }
     const resources = await applySceneDisplacement(parameterResources, loaded.mtlx.imageProvider);
     const candidate = { ...loaded, resources, parameterResources };
+    delete candidate.compiled;
     const exposure = loaded.cameras[0]?.exposure ?? 0;
     const frame = buildSceneFrame(resources, {
       lights: loaded.lights, surfaceFor: loaded.mtlx.surfaceFor,
@@ -262,6 +278,7 @@ export class InteractiveViewer {
   }
 
   async setObjectMaterial(path: string, assetPath?: string): Promise<void> {
+    if (this.isCompiledScene) throw new Error('Material replacement requires the original USD scene. Compiled scenes support parameter edits only.');
     if (!this.#sceneEntry || !this.#objects.some((object) => object.path === path)) {
       throw new Error(`Unknown object: ${path}`);
     }
@@ -320,7 +337,7 @@ export class InteractiveViewer {
     this.#current?.dispose();
     this.#current = null;
     this.#jsDenoiser.dispose();
-    this.#loaded?.mtlx.documents.delete();
+    this.#loaded?.mtlx.documents?.delete();
     this.#loaded = undefined;
   }
 
@@ -353,7 +370,11 @@ export class InteractiveViewer {
       if (d.level === 'error') console.error(d.message, d.detail ?? '');
       else if (d.level === 'warning') console.warn(d.message, d.detail ?? '');
     };
-    const loaded = await loadUsdScene(entry, sink, () => { }, overrides, { ...options, editableParameters: true });
+    const compiledEntry = /(?:^|\/)scene\.json(?:[?#]|$)/i.test(entry);
+    if (compiledEntry && (overrides.size || options.imported)) throw new Error('Compiled scenes cannot import source material overrides.');
+    const loaded = compiledEntry
+      ? await loadCompiledScene(entry, sink)
+      : await loadUsdScene(entry, sink, () => { }, overrides, { ...options, editableParameters: true });
     const exposure = loaded.cameras[0]?.exposure ?? 0;
     let frame: SceneFramePlan;
     let render: SceneRender;
@@ -380,17 +401,17 @@ export class InteractiveViewer {
       render = await this.#buildSceneRender(loaded, frame, exposure, sink);
       performance.measure('viewer:raster-build', { start: gpuBuildStarted, end: performance.now(), detail: { entry } });
     } catch (error) {
-      loaded.mtlx.documents.delete();
+      loaded.mtlx.documents?.delete();
       throw error;
     }
     if (this.#disposed) {
       render.dispose();
-      loaded.mtlx.documents.delete();
+      loaded.mtlx.documents?.delete();
       throw new Error('Viewer disposed during load.');
     }
     this.#current = render;
     this.#firstFrameStart = loadStarted;
-    this.#loaded?.mtlx.documents.delete();
+    this.#loaded?.mtlx.documents?.delete();
     this.#loaded = loaded;
     this.#loadOptions = options;
     this.#sceneEntry = entry;
@@ -592,7 +613,7 @@ export class InteractiveViewer {
       const packed = packHdrTexture(envAsset.image);
       envRadianceScale = packed.radianceScale;
       frame.environment.textureRadianceScale = envRadianceScale;
-      const cdf = buildEnvCdf(envAsset.image);
+      const cdf = loaded.compiled?.environmentCdf ?? buildEnvCdf(envAsset.image);
       frame.environment.envResX = cdf.width;
       frame.environment.envResY = cdf.height;
       frame.environment.envTotalSum = cdf.totalSum;
@@ -697,7 +718,8 @@ export class InteractiveViewer {
         for (const draw of frame.draws) {
           const material = draw.materialKey ? resources.materials.get(draw.materialKey) : undefined;
           if (!material?.surfaceModule || shaders.has(material.variant.pipelineKey)) continue;
-          const shader = assembleIrForwardShader(material.surfaceModule, {
+          const shader = loaded.compiled?.rasterShaders.get(compiledRasterShaderKey(material.unitKey, quality)) ??
+            assembleIrForwardShader(material.surfaceModule, {
             displacement: material.displacement !== undefined, rasterQuality: quality,
             analyticLights: rasterLights !== undefined,
           });
@@ -950,13 +972,20 @@ export class InteractiveViewer {
       await new Promise((resolve) => setTimeout(resolve, 0));
       if (disposed) throw new Error('Viewer disposed during path tracer preparation.');
       const pathTraceBuildStarted = performance.now();
-      const ptScene = await buildCachedPathTraceScene(resources, {
+      const ptOptions = {
         lights: loaded.lights,
         surfaceFor: loaded.mtlx.surfaceFor,
         frameCamera: { viewProj: cameraViewProj, eye: cameraEye, exposure },
         environment: frame.environment,
         settings: pathTraceSettings(loaded.scene),
-      });
+      };
+      const ptScene: PathTraceScene = loaded.compiled
+        ? {
+          ...loaded.compiled.pathTrace,
+          camera: { ...loaded.compiled.pathTrace.camera, ...ptOptions.frameCamera, invViewProj: inverse4(cameraViewProj) },
+          environment: frame.environment,
+        }
+        : await buildCachedPathTraceScene(resources, ptOptions);
       performance.measure('pathtracing:scene-build', {
         start: pathTraceBuildStarted,
         end: performance.now(),
@@ -965,7 +994,7 @@ export class InteractiveViewer {
       ptScene.environment.textureRadianceScale = envRadianceScale;
       ptScene.camera.backgroundInvViewProj = backgroundInvViewProj;
       pathTraceScene = ptScene;
-      const sourceDispatch = buildMaterialDispatch(ptScene.variantSources);
+      const sourceDispatch = loaded.compiled?.dispatch ?? buildMaterialDispatch(ptScene.variantSources);
       const sourceBindings = await buildPtDeviceBindings(sourceDispatch, ptScene, loaded.mtlx.imageProvider, { sink });
       const { dispatch, bindings } = packPtTextureArrays(sourceDispatch, sourceBindings, device.limits.maxTextureArrayLayers);
       for (const slot of bindings.group0) {

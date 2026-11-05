@@ -54,6 +54,12 @@ export function uploadMaterialImage(
   const layers = textureKind === 'udim' ? image!.udim!.length : 1;
   const width = isIndex ? UDIM_COLUMNS : image?.width ?? 1;
   const height = isIndex ? UDIM_ROWS : image?.height ?? 1;
+  const images = textureKind === 'udim' ? image!.udim!.map(tile => tile.image) : [image];
+  if (!isIndex && images.some(pixels => pixels !== undefined &&
+      (pixels.componentType !== 'uint8' || pixels.channels !== 4 || !(pixels.data instanceof Uint8Array) ||
+       pixels.width !== width || pixels.height !== height || pixels.data.length !== width * height * 4))) {
+    throw new Error('Material texture upload requires matching decoded RGBA8 pixels; higher precision is preserved in compiled scenes but not supported by this GPU upload path.');
+  }
   if (width > device.limits.maxTextureDimension2D || height > device.limits.maxTextureDimension2D ||
       layers > device.limits.maxTextureArrayLayers) {
     throw new Error(`Material texture exceeds device limits: ${width} x ${height} x ${layers}.`);
@@ -67,7 +73,6 @@ export function uploadMaterialImage(
     if (isIndex) {
       device.queue.writeTexture({ texture }, udimLayerIndex(image!), { bytesPerRow: width * 4, rowsPerImage: height }, [width, height, 1]);
     } else {
-      const images = textureKind === 'udim' ? image!.udim!.map(tile => tile.image) : [image];
       images.forEach((pixels, layer) => {
         if (pixels?.componentType === 'uint8' && pixels.channels === 4) {
           device.queue.writeTexture({ texture, origin: [0, 0, layer] }, pixels.data,

@@ -24,8 +24,8 @@ rmSync(scenesRoot, { recursive: true, force: true });
 for (const name of sceneNames) {
   const source = join(projectRoot, 'scenes', name);
   requirePath(source, `built-in scene ${name}`);
-  cpSync(source, join(scenesRoot, name), { recursive: true });
 }
+cpSync(join(projectRoot, 'scenes'), scenesRoot, { recursive: true });
 
 const materialxRoot = join(distRoot, 'materialx');
 rmSync(materialxRoot, { recursive: true, force: true });

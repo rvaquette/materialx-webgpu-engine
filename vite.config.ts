@@ -78,6 +78,7 @@ const materialxAssets = {
 
 export default defineConfig({
   base: './',
+  optimizeDeps: { exclude: ['@bokuweb/zstd-wasm'] },
   resolve: {
     alias: [{
       // jsimgui 0.14 publishes this optional loader with the words reversed.

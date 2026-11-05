@@ -104,14 +104,14 @@ describe('ImGui material parameter editing', () => {
 function fixture() {
   const state: ViewerUiState = {
     entry: 'books.usda', scenes: [{ label: 'Books', entry: 'books.usda' }, { label: 'Chair', entry: 'chair.usda' }],
-    resolution: 256, rasterQuality: 'interactive', backend: 'raster', environmentEnabled: true, denoise: false,
+    resolution: 256, rasterQuality: 'interactive', backend: 'raster', environmentEnabled: true, denoise: false, compiled: false,
     status: undefined, busy: false, busyMessage: '', error: '', shaderErrors: '', warnings: '',
     objectPath: '/Book', objects: [{ path: '/Book', material: 'Paper' }], materialPath: '',
     materialFolderPath: [], materialTree: { folders: new Map(), materials: [{ label: 'Gold', path: './gold.mtlx' }] },
   };
   const actions: ViewerUiActions = {
     scene: vi.fn(), resolution: vi.fn(), quality: vi.fn(), backend: vi.fn(), environment: vi.fn(),
-    denoise: vi.fn(), pause: vi.fn(), openFiles: vi.fn(), object: vi.fn(), material: vi.fn(),
+    denoise: vi.fn(), pause: vi.fn(), openFiles: vi.fn(), exportScene: vi.fn(), object: vi.fn(), material: vi.fn(),
   };
   const parameters = new MaterialParameterEditor({ parameters: () => [], apply: vi.fn(), error: vi.fn() });
   let tick!: FrameRequestCallback;
@@ -126,6 +126,20 @@ function fixture() {
 }
 
 describe('Dear ImGui viewer controls', () => {
+  it('exposes scene export and gates source-material replacement for compiled entries', async () => {
+    const f = fixture();
+    f.state.compiled = true;
+    controls.header = true;
+    vi.mocked(ImGui.Button).mockImplementation(label => label === 'Exporter la scene compilee...');
+    const stop = await startViewerUi(f.canvas, f.state, f.actions, f.parameters);
+    f.render();
+    expect(f.actions.exportScene).toHaveBeenCalledTimes(1);
+    expect(ImGui.Text).toHaveBeenCalledWith('Scene compilee : remplacement via le USD source.');
+    expect(ImGui.BeginDisabled).toHaveBeenCalledWith(true);
+    vi.mocked(ImGui.Button).mockImplementation(() => false);
+    stop();
+  });
+
   it('offers the rectangular 1024x768 resolution and preserves its dimensions in the callback', async () => {
     const f = fixture();
     const stop = await startViewerUi(f.canvas, f.state, f.actions, f.parameters);

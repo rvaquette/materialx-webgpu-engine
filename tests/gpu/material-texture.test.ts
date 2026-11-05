@@ -5,6 +5,18 @@ import { decodeUdimImage } from '../../src/assets/udim.ts';
 afterEach(() => { vi.unstubAllGlobals(); });
 
 describe('UDIM GPU uploads', () => {
+  it('rejects archived high-precision material pixels instead of uploading an empty texture or truncating them', () => {
+    const device = {
+      limits: { maxTextureDimension2D: 8192, maxTextureArrayLayers: 256 },
+      createTexture: vi.fn<GPUDevice['createTexture']>(), queue: { writeTexture: vi.fn() },
+    };
+    expect(() => uploadMaterialImage(device, {
+      kind: 'pixels', componentType: 'float32', channels: 4, width: 1, height: 1,
+      colorSpace: 'lin_rec709', data: new Float32Array([0.12345, 70, -2, 1]),
+    }, 'rgba8unorm')).toThrow('higher precision is preserved');
+    expect(device.createTexture).not.toHaveBeenCalled();
+  });
+
   it('uploads independent images and sparse UDIM lookup maps to distinct array layers', async () => {
     vi.stubGlobal('GPUTextureUsage', { TEXTURE_BINDING: 4, COPY_DST: 2 });
     const image = await decodeUdimImage('a.<UDIM>.jpg', [1001, 1012], async () => ({

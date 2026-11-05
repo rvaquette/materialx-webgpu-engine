@@ -52,6 +52,7 @@ import type { OpenUsdModule } from '../usd/crate.ts';
 import { FloatType } from 'three';
 import { applySceneDisplacement } from './displacement.ts';
 import { editableSceneMaterials } from './material-parameters.ts';
+import type { CompiledSceneRuntime } from '../scene/compiled-scene.ts';
 
 /** App-relative paths also work when dist/ is served below the workspace root. */
 const MATERIALX_ROOT = `${import.meta.env.BASE_URL}materialx/`;
@@ -157,7 +158,7 @@ export function surfaceFromMtlx(text: string): RasterSurface {
 }
 
 export interface MtlxSceneContext {
-  documents: Awaited<ReturnType<typeof loadMaterialXDocuments>>;
+  documents?: Awaited<ReturnType<typeof loadMaterialXDocuments>>;
   imageProvider: PtImageProvider;
   surfaceFor: (material: MaterialResource) => RasterSurface;
 }
@@ -193,7 +194,7 @@ export async function loadMtlxSceneContext(
   line: (m: string) => void = () => {},
   textureRoot?: string,
   materialTexts?: ReadonlyMap<string, string>,
-): Promise<MtlxSceneContext> {
+): Promise<MtlxSceneContext & { documents: Awaited<ReturnType<typeof loadMaterialXDocuments>> }> {
   const baseDir = dirOf(entry);
   const surfaces = new Map<string, RasterSurface>();
   const texts = new Map<string, string>();
@@ -387,6 +388,10 @@ export async function loadEnvironment(
 }
 
 export interface LoadedUsdScene {
+  /** Prepared buffers and generated WGSL; absent after an explicit material edit. */
+  compiled?: CompiledSceneRuntime;
+  /** Compiled entries have no source-document dependency for material replacement. */
+  precompiled?: boolean;
   /** Original positions plus editable material state, before displacement baking. */
   parameterResources?: SceneResources;
   entry: string;

@@ -16,6 +16,7 @@ import { isNodeCovered } from '../compiler/nodes.ts';
 import { SURFACE_IR_UPSTREAM } from '../compiler/surface-ir.ts';
 import { resolveGraph } from '../materialx/graph.ts';
 import { resolveSurface, type ResolveSurfaceOptions } from '../materialx/surface-graph.ts';
+import { resolveVolume, hasVolumeTerminal } from '../materialx/volume-graph.ts';
 import type { Diagnostic, DiagnosticSink } from '../core/diagnostics.ts';
 import { materialGraphRoots, type MaterialCompileUnit, type MtlxDocumentView } from '../usd/materials.ts';
 import type { ResolvedGraph } from '../materialx/graph.ts';
@@ -41,6 +42,15 @@ function neutralSurfaceIr(): ShaderIr {
   const opacity = b.constant(FLOAT, 1);
   const ref = b.add({ kind: 'closure', type: shaderType('surface'), closure: 'bsdf', op: 'surface', params: { opacity } });
   b.output({ name: 'surfaceshader', type: shaderType('surface'), ref });
+  return b.build();
+}
+
+/** Minimal opaque volume IR for volumeshaders. */
+function neutralVolumeIr(): ShaderIr {
+  const b = new IrModuleBuilder();
+  const zero = b.constant(FLOAT, 0);
+  const ref = b.add({ kind: 'closure', type: shaderType('volume'), closure: 'vdf', op: 'anisotropic_vdf', params: { absorption: zero, scattering: zero, anisotropy: zero } });
+  b.output({ name: 'volumeshader', type: shaderType('volume'), ref });
   return b.build();
 }
 
@@ -104,6 +114,26 @@ export function createGraphMaterialCompiler(options: GraphMaterialCompilerOption
           isCovered: (category) => isNodeCovered(category) || SURFACE_IR_UPSTREAM.has(category),
           ...(options.target !== undefined ? { target: options.target } : {}),
         });
+
+        // Try to resolve a volumeshader first
+        const hasVolume = hasVolumeTerminal(graph);
+        if (hasVolume) {
+          const volume = resolveVolume(graph, { onDiagnostic: emit });
+          if (volume) {
+            // Volume shader: mark features and generate volume IR
+            const ir = neutralVolumeIr();
+            const displacement = extractDisplacement(graph);
+            return { 
+              ir, 
+              module: emitWgsl(ir), 
+              volume,
+              graph, 
+              ...(displacement ? { displacement } : {}) 
+            };
+          }
+        }
+
+        // Fall back to surface shader
         const surface = resolveSurface(graph, { onDiagnostic: emit, supportedUpstream: SURFACE_IR_UPSTREAM, ...options.surfaceOptions });
         if (!surface) {
           emit({ level: 'warning', message: `Unresolved surface for material ${unit.materialName}`, detail: { material: unit.materialName } });

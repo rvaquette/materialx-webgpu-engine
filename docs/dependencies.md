@@ -9,6 +9,16 @@ cross-origin isolation is needed for the UI. The optional FreeType/extensions
 loader has a reversed filename in the published 0.14 package; a targeted Vite
 alias resolves the published file without modifying installed dependencies.
 
+# Precompiled scene compression
+
+`@bokuweb/zstd-wasm` (MIT) provides the same Zstandard encoder/decoder in the
+browser and Node tests. Exports use level 22 for a high compression ratio without
+loss of prepared buffer or texture bytes; compression time and size savings are
+scene-dependent. Vite bundles its WASM locally, with no CDN dependency. The
+package is excluded from dependency prebundling so its WASM URL is resolved as a
+normal Vite asset. See [precompiled scenes](usd-import.md#precompiled-scenes-v10)
+for the format and loading workflow.
+
 # MaterialX JavaScript Core WASM
 
 ## Scope

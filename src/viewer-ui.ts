@@ -23,6 +23,7 @@ export interface ViewerUiState {
   materialFolderPath: string[];
   materialTree: MaterialFolder;
   materialPath: string;
+  compiled: boolean;
 }
 
 export interface ViewerUiActions {
@@ -34,6 +35,7 @@ export interface ViewerUiActions {
   denoise: (enabled: boolean) => void;
   pause: () => void;
   openFiles: (folder: boolean) => void;
+  exportScene: () => void;
   object: (path: string) => void;
   material: (path: string) => void;
 }
@@ -116,6 +118,7 @@ export async function startViewerUi(
         ImGui.BeginDisabled(state.busy);
         ImGui.SeparatorText('Scene');
         combo('##scene', state.entry, state.scenes.map(scene => ({ label: scene.label, value: scene.entry })), actions.scene);
+        if (ImGui.Button('Exporter la scene compilee...')) actions.exportScene();
         ImGui.SeparatorText('Rendu');
         combo('##resolution', String(state.resolution), [
           ...[256, 512, 1024].map(size => ({ label: `${size} x ${size}`, value: String(size) })),
@@ -145,6 +148,8 @@ export async function startViewerUi(
           combo('##object', state.objectPath, state.objects.map(object => ({
             label: `${object.path.split('/').at(-1)} (${object.material})`, value: object.path,
           })), actions.object);
+          if (state.compiled) ImGui.Text('Scene compilee : remplacement via le USD source.');
+          ImGui.BeginDisabled(state.compiled);
           let folder = state.materialTree;
           for (let depth = 0; folder.folders.size; depth++) {
             const index = depth;
@@ -160,6 +165,7 @@ export async function startViewerUi(
             { label: "Materiau d'origine", value: '' },
             ...folder.materials.map(material => ({ label: material.label, value: material.path })),
           ], actions.material);
+          ImGui.EndDisabled();
           if (ImGui.CollapsingHeader('Parametres du materiau')) parameters.draw();
           ImGui.EndDisabled();
         }

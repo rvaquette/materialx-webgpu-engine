@@ -1,5 +1,77 @@
 # USD import: loader qualification (T003)
 
+## Precompiled scenes (v1.0)
+
+Load a USD scene normally, then select **Exporter la scene compilee...** and
+choose a dedicated directory such as `scenes/my-scene-compiled`. Export uses
+the File System Access directory picker (Chrome/Edge on HTTPS or localhost);
+unsupported browsers report an explicit error. Export can take substantially
+longer than loading: it builds any still-lazy BVHs and uses Zstandard level 22.
+It does not modify the source USD/MaterialX files.
+
+The output contains:
+
+```text
+scenes/my-scene-compiled/
+  scene.json
+  metadata/<sha256>.json.zst
+  buffers/<sha256>.bin.zst
+  shaders/<sha256>.wgsl.zst
+  textures/<sha256>.bin.zst
+```
+
+`scene.json` identifies `materialx-compiled-scene`, version `1.0`, the engine
+ABI, little-endian byte order, the metadata path, and every payload's path,
+SHA-256, compressed size and uncompressed size. Paths are relative to the
+manifest, not to the app or the original `.mtlx`. Metadata records typed-array
+types, counts, maps, material bindings, UV/sampler/color-space settings, cameras
+and lights. Payloads are content-addressed and byte-identical data is stored once.
+Large authored numeric arrays and CPU BLAS/TLAS nodes also live in binary payloads
+(float64 records retain JavaScript precision), rather than expanding into JSON.
+Payload downloads/decompression use batches of up to four resources.
+The manifest is written last; failed writes are reported, not marked successful.
+Re-exporting does not delete old unreferenced files; use a fresh directory to
+avoid retaining those files.
+
+The snapshot contains prepared vertex/index streams, prototype BLAS and instance
+TLAS data, already-displaced geometry, the world-space path-tracing BVH and its
+triangle permutation/UV/tangent streams, material records, material WGSL dispatch,
+and both interactive/reference raster WGSL variants. Camera framing and canvas
+resolution remain runtime choices. Sources/graphs and pre-displacement resources
+needed for existing parameter editing are retained as engine-owned data, not
+MaterialX WASM objects.
+
+Material textures are collected after normal MaterialX path resolution. The
+snapshot preserves the **decoded pixels**, their precision and color-space
+metadata, including explicitly enumerated sparse UDIM tiles. Procedural graphs
+are not baked. HDR environment pixels, SH and the importance-sampling CDF are
+also saved. Compression is lossless; it cannot recover precision already lost
+by the source decoder. This format does not add new source image decoders or
+GPU texture formats: the current material upload path requires RGBA8, whereas
+HDR environments use the existing floating-point path.
+
+Rebuild/restart scene discovery after exporting; all `scenes/**/scene.json`
+entries appear as **Compiled - ...**. A direct URL also works:
+`?entry=./scenes/my-scene-compiled/scene.json&backend=pathtracing`.
+Static packaging copies the complete `scenes` tree, including custom compiled
+directories and all their payloads. Serve the full directory over HTTP(S);
+absolute local filesystem paths are not browser-fetchable assets.
+
+Loading restores the snapshot without importing USD, reading `.mtlx`, initializing
+MaterialX Core, preparing geometry, building BVHs or regenerating material WGSL.
+GPU uploads, device-specific WebGPU shader/pipeline compilation and environment
+GPU mipmap generation still happen. Existing material-parameter edits remain
+available and explicitly invalidate the prepared snapshot, allowing the ordinary
+rebuild path when needed. Replacing a whole material requires loading the
+original USD scene; the compiled-scene UI disables this source-dependent action.
+
+Unknown format/ABI/buffer layouts, missing files, inconsistent lengths,
+checksums and invalid packed traversal indices are errors; there is no silent
+fallback to the source scene. The v1.0 limits are 512 MiB per uncompressed
+payload, 64 MiB of metadata and 2 GiB total uncompressed payload data. Bump the
+engine ABI when serialized engine structures or shader interfaces change, and
+regenerate snapshots when incompatible with the current renderer.
+
 ## Converted GLSL-PathTracer scenes
 
 The 45 local Pathtracer USDA files were audited against their `.scene` sources.

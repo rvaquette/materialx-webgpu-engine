@@ -12,6 +12,7 @@ import { JsDenoiser } from '../../src/render/pathtracing/js-denoiser.ts';
 import { editableSceneMaterials, materialUniformData } from '../../src/render/material-parameters.ts';
 import { PT_UNIFORM_SIZE, pathTraceTile } from '../../src/render/pathtracing/compute.ts';
 import type { ShaderCompilationError } from '../../src/gpu/shader-diagnostics.ts';
+import { exportCompiledScene } from '../../src/scene/compiled-scene.ts';
 
 vi.mock('../../src/render/usd-scene-assets.ts', async (original) => ({
   ...await original<typeof import('../../src/render/usd-scene-assets.ts')>(),
@@ -208,6 +209,39 @@ describe('interactive viewer resource lifecycle', () => {
     expect(device.createShaderModule.mock.calls.some(call =>
       /^Raster/.test(call[0].label ?? ''))).toBe(false);
     viewer.dispose();
+  });
+
+  it('loads compiled entries into both backends without invoking USD import or the path-trace scene builder', async () => {
+    const actual = await vi.importActual<typeof import('../../src/render/pathtracing/scene-buffers.ts')>(
+      '../../src/render/pathtracing/scene-buffers.ts');
+    vi.mocked(buildCachedPathTraceScene).mockImplementation(actual.buildCachedPathTraceScene);
+    const { viewer, loaded, device, statuses } = await setup(true, true, 'pathtracing');
+    const compiled = await exportCompiledScene(loaded);
+    vi.mocked(buildCachedPathTraceScene).mockReset();
+    vi.mocked(loadUsdScene).mockClear();
+    const requests: string[] = [];
+    vi.stubGlobal('fetch', async (input: string) => {
+      requests.push(input);
+      if (input.endsWith('/scene.json')) return new Response(JSON.stringify(compiled.manifest));
+      const path = new URL(input).pathname.slice('/scenes/prepared/'.length);
+      const bytes = compiled.files.get(path);
+      return bytes ? new Response(bytes) : new Response(null, { status: 404 });
+    });
+    await viewer.load('https://example.test/scenes/prepared/scene.json');
+    expect(viewer.isCompiledScene).toBe(true);
+    tick(0);
+    await vi.waitFor(() => expect(statuses.at(-1)?.pathTracer).toBe('ready'));
+    expect(buildCachedPathTraceScene).not.toHaveBeenCalled();
+    expect(loadUsdScene).not.toHaveBeenCalled();
+    expect(requests.every(url => url.startsWith('https://example.test/scenes/prepared/'))).toBe(true);
+    viewer.setBackend('raster');
+    tick(1);
+    await vi.waitFor(() => expect(device.createRenderPipeline).toHaveBeenCalled());
+    await expect(viewer.setObjectMaterial('/World/Ball', 'new.mtlx')).rejects.toThrow('original USD');
+    vi.mocked(buildCachedPathTraceScene).mockImplementation(actual.buildCachedPathTraceScene);
+    await viewer.setObjectParameters('/World/Ball', new Map([['surface:specular_roughness', [0.7]]]));
+    expect(viewer.objectParameters('/World/Ball').find(parameter => parameter.id === 'surface:specular_roughness')?.value).toEqual([0.7]);
+    expect(viewer.isCompiledScene).toBe(true);
   });
 
   it('names an oversized scene buffer and rejects it before compiling the compute shader', async () => {

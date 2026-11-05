@@ -6,6 +6,7 @@ import { MaterialParameterEditor } from './material-parameter-editor.ts';
 import { sceneDeviceDescriptor } from './gpu/device.ts';
 import { startViewerUi, type ViewerUiState, type ViewerUiActions } from './viewer-ui.ts';
 import type { LocalGltfScene } from './scene/local-gltf.ts';
+import type { SceneDirectory } from './scene/compiled-scene-codec.ts';
 
 let ui: ViewerUiState | undefined;
 let statusIsError = false;
@@ -45,8 +46,9 @@ async function main(): Promise<void> {
   const resolutionParam = params.get('res') ?? '512';
   const initialResolution = resolutionParam === '1024x768' ? resolutionParam : Number(resolutionParam);
   const scenePath = initialEntry.replace(/^\.\//, '/');
-  if (!scenePath.startsWith('/scenes/') || scenePath.split('/').includes('..') || !/\.(usda?|gltf|glb)$/i.test(scenePath)) {
-    throw new Error('Invalid scene entry: expected a USD, glTF or GLB path under /scenes/.');
+  if (!scenePath.startsWith('/scenes/') || scenePath.split('/').includes('..') ||
+      !(/\.((usda?)|gltf|glb)$/i.test(scenePath) || /\/scene\.json$/i.test(scenePath))) {
+    throw new Error('Invalid scene entry: expected USD, glTF, GLB or scene.json under /scenes/.');
   }
   if (initialBackend !== 'raster' && initialBackend !== 'pathtracing') throw new Error('Unsupported backend.');
   if (initialResolution !== '1024x768' && ![256, 512, 1024].includes(initialResolution)) throw new Error('Interactive resolution must be 256, 512, 1024 or 1024x768.');
@@ -94,6 +96,7 @@ async function main(): Promise<void> {
     rasterQuality: 'interactive', backend: initialBackend, environmentEnabled: true, denoise: false,
     status: undefined, busy: true, busyMessage: 'Initialisation...', error: '', shaderErrors: '', warnings: '',
     objectPath: '', objects: [], materialFolderPath: [], materialTree: buildMaterialTree(MATERIAL_CATALOG), materialPath: '',
+    compiled: false,
   };
   ui = state;
   if (!state.scenes.some(scene => scene.entry === initialEntry)) state.scenes.push({ entry: initialEntry, label: initialEntry });
@@ -179,6 +182,7 @@ async function main(): Promise<void> {
         ...(config?.textureRoot ? { textureRoot: new URL(config.textureRoot, document.baseURI).href } : {}),
       });
       state.entry = entry;
+      state.compiled = viewer.isCompiledScene;
       refreshObjects();
       if (localScene && (imported || localScene.entry !== entry)) {
         state.scenes = state.scenes.filter(scene => scene.entry !== localScene?.entry || !scene.label.startsWith('Local - '));
@@ -243,6 +247,24 @@ async function main(): Promise<void> {
     denoise: enabled => { viewer.setPathTracingDenoise(enabled); state.denoise = enabled; },
     pause: () => viewer.setPathTracingPaused(!viewer.pathTracingPaused),
     openFiles: folder => (folder ? localFolder : localFiles)?.click(),
+    exportScene: () => {
+      const picker = (window as Window & {
+        showDirectoryPicker?: (options: { mode: 'readwrite' }) => Promise<SceneDirectory>;
+      }).showDirectoryPicker;
+      if (!picker) {
+        setStatus("L'export nécessite un navigateur compatible File System Access (Chrome ou Edge, HTTPS ou localhost).");
+        return;
+      }
+      void operation('Export de la scene (Zstandard niveau 22)...', async () => {
+        let directory: SceneDirectory;
+        try { directory = await picker.call(window, { mode: 'readwrite' }); }
+        catch (error) {
+          if (error instanceof DOMException && error.name === 'AbortError') return;
+          throw error;
+        }
+        await viewer.exportScene(directory);
+      });
+    },
     object: path => { state.objectPath = path; refreshMaterialSelection(); },
     material: path => { void operation('Compilation du matériau...', async () => {
       try { await viewer.setObjectMaterial(state.objectPath, path ? new URL(path, document.baseURI).href : undefined); }

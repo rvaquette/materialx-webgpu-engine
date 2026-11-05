@@ -30,6 +30,7 @@
     "validate:scene": "vite-node scripts/validate-disney-gold.ts"
   },
   "dependencies": {
+    "@bokuweb/zstd-wasm": "0.0.27",
     "@mori2003/jsimgui": "0.14.0",
     "comlink": "4.4.2",
     "idb": "8.0.1",

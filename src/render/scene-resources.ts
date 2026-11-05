@@ -17,6 +17,7 @@ import type { WgslModule } from '../compiler/wgsl.ts';
 import type { LayeredSurfaceModule } from '../compiler/surface-wgsl.ts';
 import type { ResolvedGraph } from '../materialx/graph.ts';
 import type { ResolvedSurface } from '../materialx/surface-graph.ts';
+import type { ResolvedVolume } from '../materialx/volume-graph.ts';
 import type { Diagnostic, DiagnosticSink } from '../core/diagnostics.ts';
 import { buildBvh, buildTlas, type Aabb, type Bvh, type Tlas } from '../geometry/bvh.ts';
 import { openPreparedGeometryCache, preparedGeometryCacheKey, type PreparedGeometryCache } from '../geometry/cache.ts';
@@ -47,6 +48,10 @@ export interface MaterialBuild {
    *  constant-only or legacy builds, which keep the packed constant record. */
   graph?: ResolvedGraph;
   surface?: ResolvedSurface;
+  /** The resolved volume shader (volumeshader terminal): contains VDF closure
+   *  and volumetric parameters for participating media. Absent for non-volumetric
+   *  materials. */
+  volume?: ResolvedVolume;
   /** Height-map displacement extracted from the displacementshader terminal: a
    *  scalar texture sampled along the shading normal, scaled by `scale`. Absent
    *  when the material has no displacement or only a constant (map-less) one. */

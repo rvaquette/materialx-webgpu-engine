@@ -1,0 +1,32 @@
+<?xml version="1.0"?>
+<materialx version="1.39" colorspace="lin_rec709">
+  <!-- Pure volumeshader rendering example: a participating medium with anisotropic scattering -->
+  
+  <!-- VDF closure for volumetric scattering (not inside a surface, just standalone) -->
+  <anisotropic_vdf name="cube_vdf" type="VDF">
+    <input name="absorption" type="color3" value="0.02, 0.02, 0.03" />
+    <input name="scattering" type="color3" value="0.2, 0.25, 0.2" />
+    <input name="anisotropy" type="float" value="0.5" />
+  </anisotropic_vdf>
+  
+  <!-- Volume shader terminal: takes the VDF directly as input -->
+  <!-- Note: ND_volumeshader is the standard MaterialX volumeshader node type -->
+  <volumeshader name="cube_volume" type="volumeshader">
+    <input name="vdf" type="VDF" nodename="cube_vdf" />
+  </volumeshader>
+  
+  <!-- Material with volumeshader output (NOT surfaceshader) -->
+  <volumematerial name="volumetric_cube" type="material">
+    <input name="volumeshader" type="volumeshader" nodename="cube_volume" />
+  </volumematerial>
+  
+  <!-- Dark floor (regular surface material for reference) -->
+  <standard_surface name="floor_surface" type="surfaceshader">
+    <input name="base_color" type="color3" value="0.15, 0.15, 0.15" />
+    <input name="specular_roughness" type="float" value="0.707" />
+  </standard_surface>
+  
+  <surfacematerial name="floor" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="floor_surface" />
+  </surfacematerial>
+</materialx>
