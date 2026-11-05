@@ -1,0 +1,32 @@
+<?xml version="1.0"?>
+<materialx version="1.39" colorspace="lin_rec709">
+  <!-- Pure volumeshader test scene: participating media only (no surface) -->
+  <!-- This tests the volumeshader compilation pipeline directly -->
+  
+  <!-- Define VDF closure for volume -->
+  <anisotropic_vdf name="test_volume_vdf" type="VDF">
+    <input name="absorption" type="color3" value="0.02, 0.02, 0.05" />
+    <input name="scattering" type="color3" value="0.3, 0.35, 0.3" />
+    <input name="anisotropy" type="float" value="0.6" />
+  </anisotropic_vdf>
+  
+  <!-- Pure volumeshader (no surface) -->
+  <volumeshader name="test_volume" type="volumeshader">
+    <input name="vdf" type="VDF" nodename="test_volume_vdf" />
+  </volumeshader>
+  
+  <!-- Volume material (MaterialX 1.39 compatible) -->
+  <volumematerial name="test_volumetric_medium" type="material">
+    <input name="volumeshader" type="volumeshader" nodename="test_volume" />
+  </volumematerial>
+  
+  <!-- Optional: background surface for reference -->
+  <standard_surface name="background_surface" type="surfaceshader">
+    <input name="base_color" type="color3" value="0.1, 0.1, 0.15" />
+    <input name="roughness" type="float" value="0.95" />
+  </standard_surface>
+  
+  <surfacematerial name="background" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="background_surface" />
+  </surfacematerial>
+</materialx>
