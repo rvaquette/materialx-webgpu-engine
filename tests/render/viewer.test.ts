@@ -39,7 +39,7 @@ function fakeDevice() {
       textures.push(texture);
       return texture;
     }),
-    createShaderModule: vi.fn(() => ({
+    createShaderModule: vi.fn((_desc: GPUShaderModuleDescriptor) => ({
       getCompilationInfo: async (): Promise<Pick<GPUCompilationInfo, 'messages'>> => ({ messages: [] }),
     })),
     createRenderPipeline: vi.fn(() => ({ getBindGroupLayout: vi.fn(() => ({})) })),
@@ -131,7 +131,7 @@ describe('interactive viewer resource lifecycle', () => {
   });
   afterEach(() => { viewer?.dispose(); vi.unstubAllGlobals(); });
 
-  async function setup(environment = false, editable = false) {
+  async function setup(environment = false, editable = false, backend: 'raster' | 'pathtracing' = 'raster') {
     const loaded = await sceneFixture(editable);
     if (environment) {
       const image = { width: 4, height: 2, data: new Float32Array(24).fill(1) };
@@ -151,9 +151,80 @@ describe('interactive viewer resource lifecycle', () => {
       outputFormat: 'bgra8unorm', canvas, onStatus: (status) => statuses.push(status),
       onShaderErrors: errors => diagnostics.push(errors),
     });
+    viewer.setBackend(backend);
     await viewer.load('scene.usda');
     return { ...mock, loaded, canvas, statuses, diagnostics, viewer };
   }
+
+  it('does not allocate raster textures, geometry or pipelines on a path-tracing-only load', async () => {
+    const { viewer, device } = await setup(false, false, 'pathtracing');
+    expect(device.createRenderPipeline).not.toHaveBeenCalled();
+    expect(device.createTexture).not.toHaveBeenCalled();
+    expect(device.createBuffer).not.toHaveBeenCalled();
+    await viewer.resize(256);
+    await viewer.setRasterQuality('reference');
+    expect(device.createRenderPipeline).not.toHaveBeenCalled();
+    expect(device.createTexture).not.toHaveBeenCalled();
+  });
+
+  it('builds raster once when switching from path tracing and reuses it on subsequent switches', async () => {
+    const { viewer, device, pass } = await setup(false, false, 'pathtracing');
+    viewer.setBackend('raster');
+    tick(0);
+    await vi.waitFor(() => expect(device.createRenderPipeline).toHaveBeenCalled());
+    await new Promise(resolve => setTimeout(resolve, 10));
+    tick(1);
+    await Promise.resolve();
+    expect(pass.drawIndexed).toHaveBeenCalled();
+    const pipelines = device.createRenderPipeline.mock.calls.length;
+    viewer.setBackend('pathtracing');
+    viewer.setBackend('raster');
+    tick(2);
+    expect(device.createRenderPipeline).toHaveBeenCalledTimes(pipelines);
+  });
+
+  it('reports deferred raster preparation errors without retrying every frame', async () => {
+    const { viewer, device, diagnostics } = await setup(false, false, 'pathtracing');
+    device.createRenderPipeline.mockImplementationOnce(() => { throw new Error('Raster driver failure'); });
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      viewer.setBackend('raster');
+      tick(0);
+      await vi.waitFor(() => expect(diagnostics.at(-1)?.[0]?.message).toBe('Raster driver failure'));
+      tick(1);
+      expect(device.createRenderPipeline).toHaveBeenCalledTimes(1);
+      expect(log).toHaveBeenCalled();
+    } finally { log.mockRestore(); }
+  });
+
+  it('starts the path tracer without building raster pipelines', async () => {
+    const actual = await vi.importActual<typeof import('../../src/render/pathtracing/scene-buffers.ts')>(
+      '../../src/render/pathtracing/scene-buffers.ts');
+    vi.mocked(buildCachedPathTraceScene).mockImplementation(actual.buildCachedPathTraceScene);
+    const { viewer, device, statuses } = await setup(false, false, 'pathtracing');
+    tick(0);
+    await vi.waitFor(() => expect(statuses.at(-1)?.pathTracer).toBe('ready'));
+    expect(device.createComputePipelineAsync).toHaveBeenCalledTimes(1);
+    expect(device.createShaderModule.mock.calls.some(call =>
+      /^Raster/.test(call[0].label ?? ''))).toBe(false);
+    viewer.dispose();
+  });
+
+  it('names an oversized scene buffer and rejects it before compiling the compute shader', async () => {
+    const actual = await vi.importActual<typeof import('../../src/render/pathtracing/scene-buffers.ts')>(
+      '../../src/render/pathtracing/scene-buffers.ts');
+    vi.mocked(buildCachedPathTraceScene).mockImplementation(actual.buildCachedPathTraceScene);
+    const { device, statuses, diagnostics } = await setup(false, false, 'pathtracing');
+    Object.assign(device.limits, { maxStorageBufferBindingSize: 64 });
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      tick(0);
+      await vi.waitFor(() => expect(statuses.at(-1)?.pathTracer).toBe('error'));
+      expect(diagnostics.at(-1)?.[0]?.message).toContain('Scene storage buffer "triangles" requires 76 bytes');
+      expect(device.createShaderModule).not.toHaveBeenCalled();
+      expect(device.createComputePipelineAsync).not.toHaveBeenCalled();
+    } finally { log.mockRestore(); }
+  });
 
   it('reports texture/sampler capability failures in shader diagnostics before compilation starts', async () => {
     const actual = await vi.importActual<typeof import('../../src/render/pathtracing/scene-buffers.ts')>(

@@ -54,10 +54,10 @@ export function assertSceneTextureBindings(device: GPUDevice, textures: number, 
   }
 }
 
-export function assertSceneStorageSize(device: GPUDevice, bytes: number): void {
+export function assertSceneStorageSize(device: GPUDevice, bytes: number, role?: string): void {
   const limit = Math.min(device.limits.maxStorageBufferBindingSize, device.limits.maxBufferSize);
   if (bytes > limit) {
-    throw new Error(`Scene storage buffer requires ${bytes} bytes, exceeding the GPU device limit of ${limit} bytes.`);
+    throw new Error(`Scene storage buffer${role ? ` "${role}"` : ''} requires ${bytes} bytes, exceeding the GPU device limit of ${limit} bytes.`);
   }
 }
 

@@ -1,7 +1,7 @@
 // Interactive on-canvas viewer (T051/T052 live counterpart of the offscreen USD
 // capture harness). Loads a USD scene through the shared asset loader (usd-scene-
-// assets.ts). Raster resources are built on load, path-tracing CPU/GPU resources
-// on first use. Resolution changes replace targets, not scene data or pipelines.
+// assets.ts). Each backend's resources are built on first use. Resolution
+// changes replace targets, not scene data or pipelines.
 
 import {
   buildSceneFrame,
@@ -564,11 +564,17 @@ export class InteractiveViewer {
     const outputFormat = this.#outputFormat;
     const resources = { ...loaded.resources, materials: new Map(loaded.resources.materials) };
     const parameterBuffers = new Map<string, GPUBuffer[]>();
+    const frameUniforms: Array<{ buffer: GPUBuffer; draw: SceneFramePlan['draws'][number] }> = [];
+    let envBgUniform: GPUBuffer | undefined;
     let uploadPtParameters: (() => void) | undefined;
     this.#onShaderErrors?.([]);
     let rasterErrors: ShaderCompilationError[] = [];
     let pathTraceErrors: ShaderCompilationError[] = [];
     const track = <T extends { destroy(): void }>(o: T): T => {
+      if (disposed) {
+        o.destroy();
+        throw new Error('Viewer disposed during resource preparation.');
+      }
       trash.push(o);
       return o;
     };
@@ -615,295 +621,327 @@ export class InteractiveViewer {
       });
     }
 
-    // --- raster ---------------------------------------------------------------
-    let backend = new RasterBackend({ device, outputFormat, tonemap: 'acesFilmic' });
-    const resolveBackend = backend;
-    const resolvePipeline = resolveBackend.createResolvePipeline();
-
-    const imageCache = new Map<string, DecodedPixelImage | undefined>();
-    const materialTextures = new Map<string, { textureViews: Map<string, GPUTextureView>; samplers: Map<string, GPUSampler> }>();
-    for (const [key, material] of resources.materials) {
-      if (material.surfaceModule && material.surfaceModule.textures.length > 0) {
-        const uploadedTextures = await uploadMaterialTextures(device, material, loaded.mtlx.imageProvider, imageCache);
-        uploadedTextures.textures.forEach(track);
-        materialTextures.set(key, uploadedTextures);
-      }
-    }
-
-    const materialDisplacement = new Map<string, NonNullable<SceneDrawBuffers['displacement']>>();
-    for (const [key, material] of resources.materials) {
-      const group = material.sceneShader?.displacementGroup;
-      if (group === undefined || !material.displacement) continue;
-      const file = material.displacement.file;
-      if (!imageCache.has(file)) imageCache.set(file, await loaded.mtlx.imageProvider.decode(file));
-      const image = imageCache.get(file);
-      if (!image || image.componentType !== 'uint8' || image.channels !== 4) {
-        throw new Error(`Invalid displacement map: ${file}`);
-      }
-      const texture = track(device.createTexture({
-        size: [image.width, image.height],
-        format: 'rgba8unorm',
-        usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
-      }));
-      device.queue.writeTexture(
-        { texture }, image.data,
-        { bytesPerRow: image.width * 4, rowsPerImage: image.height },
-        [image.width, image.height, 1],
-      );
-      const params = track(device.createBuffer({ size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST }));
-      device.queue.writeBuffer(params, 0, new Float32Array([material.displacement.scale, 0.5, 0, 0]));
-      materialDisplacement.set(key, {
-        group,
-        params,
-        textureView: texture.createView(),
-        sampler: device.createSampler({ addressModeU: 'repeat', addressModeV: 'repeat', magFilter: 'linear', minFilter: 'linear' }),
-      });
-    }
-
-    const uploaded = new Map<string, ReturnType<typeof uploadGeometry>>();
-    for (const [id, geometry] of resources.geometries) {
-      const buffers = uploadGeometry(device, geometry, id);
-      track(buffers.indexBuffer);
-      for (const vb of buffers.vertexBuffers.values()) track(vb);
-      uploaded.set(id, buffers);
-    }
-
-    let drawsByPass = new Map<ScenePassKind, SceneDrawCall[]>();
-    const zeroTexcoords = new Map<string, GPUBuffer>();
-    const zeroTangents = new Map<string, GPUBuffer>();
-    const frameUniforms: Array<{ buffer: GPUBuffer; draw: SceneFramePlan['draws'][number] }> = [];
-    const rasterLights = frame.analyticLights
-      ? track(device.createBuffer({ size: frame.analyticLights.byteLength, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST }))
-      : undefined;
-    if (rasterLights && frame.analyticLights) device.queue.writeBuffer(rasterLights, 0, frame.analyticLights);
-    const rasterSets = new Map<RasterQuality, { backend: RasterBackend; draws: Map<ScenePassKind, SceneDrawCall[]> }>();
-    const buildRasterQuality = async (quality: RasterQuality): Promise<void> => {
-      const cached = rasterSets.get(quality);
-      if (cached) {
-        backend = cached.backend;
-        drawsByPass = cached.draws;
-        return;
-      }
-      const nextBackend = new RasterBackend({ device, outputFormat, tonemap: 'acesFilmic' });
-      const shaders = new Map<string, ReturnType<typeof assembleIrForwardShader>>();
-      for (const draw of frame.draws) {
-        const material = draw.materialKey ? resources.materials.get(draw.materialKey) : undefined;
-        if (!material?.surfaceModule || shaders.has(material.variant.pipelineKey)) continue;
-        const shader = assembleIrForwardShader(material.surfaceModule, {
-          displacement: material.displacement !== undefined, rasterQuality: quality,
-          analyticLights: rasterLights !== undefined,
-        });
-        const compiled = await compileShaderWithDiagnostics(device, shader.code, `Raster ${quality}: ${material.materialName}`);
-        if (disposed) throw new Error('Viewer disposed during raster compilation.');
-        rasterErrors = compiled.errors;
-        this.#onShaderErrors?.(rasterErrors);
-        if (rasterErrors.length > 0) throw new Error(`WGSL: ${rasterErrors.length} erreur(s) de compilation.`);
-        shaders.set(material.variant.pipelineKey, shader);
-        nextBackend.createSceneVariantPipeline(draw.pass, material.variant.pipelineKey, shader.code, compiled.module);
-      }
-      const nextDraws = new Map<ScenePassKind, SceneDrawCall[]>();
-      for (const draw of frame.draws) {
-        const buffers = uploaded.get(draw.prototypeId);
-        const geometry = resources.geometries.get(draw.prototypeId);
-        const position = buffers?.vertexBuffers.get('position');
-        const normal = buffers?.vertexBuffers.get('normal');
-        if (!buffers || !geometry || !position || !normal) continue;
-        const material = draw.materialKey ? resources.materials.get(draw.materialKey) : undefined;
-        if (!material?.sceneShader) continue;
-        const shader = shaders.get(material.variant.pipelineKey);
-        if (!shader) throw new Error(`Missing raster shader: ${material.materialName}`);
-        const pipeline = nextBackend.sceneVariantPipeline(draw.pass, material.variant.pipelineKey)
-          ?? nextBackend.createSceneVariantPipeline(draw.pass, material.variant.pipelineKey, shader.code);
-        if (!pipeline) continue;
-        let texcoord = buffers.vertexBuffers.get('uv');
-        if (!texcoord) {
-          texcoord = zeroTexcoords.get(draw.prototypeId);
-          if (!texcoord) {
-            texcoord = track(device.createBuffer({ size: geometry.vertexCount * 8, usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST }));
-            device.queue.writeBuffer(texcoord, 0, new Float32Array(geometry.vertexCount * 2));
-            zeroTexcoords.set(draw.prototypeId, texcoord);
-          }
-        }
-        const frameUniform = track(device.createBuffer({ size: SCENE_FRAME_UNIFORM_SIZE, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST }));
-        let tangent = buffers.vertexBuffers.get('tangent') ?? zeroTangents.get(draw.prototypeId);
-        if (!tangent) {
-          tangent = track(device.createBuffer({ size: geometry.vertexCount * 16, usage: GPUBufferUsage.VERTEX }));
-          zeroTangents.set(draw.prototypeId, tangent);
-        }
-        device.queue.writeBuffer(frameUniform, 0, buildSceneFrameUniform(frame, draw));
-        frameUniforms.push({ buffer: frameUniform, draw });
-        const materialData = material.parameters ? materialUniformData(material) : buildSceneMaterialUniform(draw);
-        const materialUniform = track(device.createBuffer({ size: Math.max(SCENE_MATERIAL_UNIFORM_SIZE, materialData.byteLength), usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST }));
-        device.queue.writeBuffer(materialUniform, 0, materialData);
-        if (draw.materialKey && material.parameters) {
-          const buffers = parameterBuffers.get(draw.materialKey) ?? [];
-          buffers.push(materialUniform);
-          parameterBuffers.set(draw.materialKey, buffers);
-        }
-        const textures = draw.materialKey ? materialTextures.get(draw.materialKey) : undefined;
-        const displacement = draw.materialKey ? materialDisplacement.get(draw.materialKey) : undefined;
-        const bindGroups = createSceneBindGroups(
-          device,
-          { ...material, sceneShader: shader },
-          {
-            frame: frameUniform,
-            material: materialUniform,
-            ...(rasterLights ? { analyticLights: rasterLights } : {}),
-            ...(textures ? { textureViews: textures.textureViews, samplers: textures.samplers } : {}),
-            ...(displacement ? { displacement } : {}),
-            ...(envTextureView && envSampler && envCdfBuffer ? { environment: { textureView: envTextureView, sampler: envSampler, cdf: envCdfBuffer } } : {}),
-          },
-          (group) => pipeline.getBindGroupLayout(group),
-        );
-        const textureBindGroups = new Map<number, GPUBindGroup>();
-        for (const [group, bindGroup] of bindGroups.byGroup) {
-          if (bindGroup !== bindGroups.materialBindGroup && bindGroup !== bindGroups.frameBindGroup) {
-            textureBindGroups.set(group, bindGroup);
-          }
-        }
-        const list = nextDraws.get(draw.pass) ?? [];
-        list.push({
-          materialBindGroup: bindGroups.materialBindGroup,
-          frameBindGroup: bindGroups.frameBindGroup,
-          positionBuffer: position,
-          normalBuffer: normal,
-          texcoordBuffer: texcoord,
-          tangentBuffer: tangent,
-          indexBuffer: buffers.indexBuffer,
-          indexCount: buffers.indexCount,
-          pipelineKey: material.variant.pipelineKey,
-          ...(textureBindGroups.size > 0 ? { textureBindGroups } : {}),
-        });
-        nextDraws.set(draw.pass, list);
-      }
-      rasterSets.set(quality, { backend: nextBackend, draws: nextDraws });
-      backend = nextBackend;
-      drawsByPass = nextDraws;
-    };
-    await buildRasterQuality(rasterQuality);
-
-    const resolveUniform = track(device.createBuffer({ size: RESOLVE_UNIFORM_SIZE, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST }));
-    device.queue.writeBuffer(resolveUniform, 0, new Float32Array([frame.camera.exposure]));
-    const sampler = device.createSampler({ magFilter: 'linear', minFilter: 'linear' });
-    const createRasterTargets = (w: number, h: number) => {
-      const hdr = device.createTexture({
-        size: [w, h], format: backend.hdrFormat,
-        usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
-      });
-      let depth: GPUTexture | undefined;
-      try {
-        depth = device.createTexture({
-          size: [w, h], format: backend.depthFormat, usage: GPUTextureUsage.RENDER_ATTACHMENT,
-        });
-        const hdrView = hdr.createView();
-        const resolveBindGroup = device.createBindGroup({
-          layout: resolvePipeline.getBindGroupLayout(0),
-          entries: [
-            { binding: 0, resource: hdrView }, { binding: 1, resource: sampler },
-            { binding: 2, resource: { buffer: resolveUniform } },
-          ],
-        });
-        const depthView = depth.createView();
-        const depthTexture = depth;
-        return { hdrView, depthView, resolveBindGroup, destroy: () => { hdr.destroy(); depthTexture.destroy(); } };
-      } catch (error) {
-        hdr.destroy();
-        depth?.destroy();
-        throw error;
-      }
-    };
-    let targets = createRasterTargets(width, height);
-    trash.push({ destroy: () => targets.destroy() });
     const rasterBackground = (): Vec3 => frame.environment.enabled === false ? [0, 0, 0] : frame.environment.radiance;
 
-    // Optional raster environment background: a fullscreen pass that samples the
-    // equirect dome texture along each pixel's world ray, cleared behind geometry.
-    let envBgUniform: GPUBuffer | undefined;
-    let envBgBindGroup: GPUBindGroup | undefined;
-    let envBgPipeline: GPURenderPipeline | undefined;
-    if (envAsset && envTextureView && envSampler) {
-      const envBgModule = device.createShaderModule({
-        code: `
-struct EnvBg { invViewProj: mat4x4<f32>, eye: vec4<f32>, tint: vec4<f32> };
-@group(0) @binding(0) var<uniform> E : EnvBg;
-@group(0) @binding(1) var envTex : texture_2d<f32>;
-@group(0) @binding(2) var envSamp : sampler;
-const PI : f32 = 3.14159265358979;
-struct VO { @builtin(position) pos: vec4<f32>, @location(0) ndc: vec2<f32> };
-@vertex fn vs(@builtin(vertex_index) i: u32) -> VO {
-  var p = array<vec2<f32>, 3>(vec2<f32>(-1.0, -3.0), vec2<f32>(-1.0, 1.0), vec2<f32>(3.0, 1.0));
-  var o: VO;
-  o.pos = vec4<f32>(p[i], 1.0, 1.0);
-  o.ndc = p[i];
-  return o;
-}
-fn dir_to_uv(d: vec3<f32>) -> vec2<f32> {
-  let n = normalize(d);
-  let u = atan2(n.z, n.x) * (0.5 / PI) + 0.5;
-  let v = acos(clamp(n.y, -1.0, 1.0)) / PI;
-  return vec2<f32>(u, v);
-}
-@fragment fn fs(in: VO) -> @location(0) vec4<f32> {
-  let near = E.invViewProj * vec4<f32>(in.ndc, 0.0, 1.0);
-  let world = near.xyz / near.w;
-  let dir = world - E.eye.xyz;
-  let c = textureSample(envTex, envSamp, dir_to_uv(dir)).xyz;
-  return vec4<f32>(c * E.tint.xyz, 1.0);
-}
-`,
-      });
-      envBgPipeline = device.createRenderPipeline({
-        layout: 'auto',
-        vertex: { module: envBgModule, entryPoint: 'vs' },
-        fragment: { module: envBgModule, entryPoint: 'fs', targets: [{ format: backend.hdrFormat }] },
-        primitive: { topology: 'triangle-list' },
-        depthStencil: { format: backend.depthFormat, depthWriteEnabled: false, depthCompare: 'always' },
-      });
-      envBgUniform = track(device.createBuffer({ size: 96, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST }));
-      const inten = envAsset.intensity * envRadianceScale;
-      const t = envAsset.tint;
-      device.queue.writeBuffer(envBgUniform, 80, new Float32Array([t[0] * inten, t[1] * inten, t[2] * inten, 1]));
-      envBgBindGroup = device.createBindGroup({
-        layout: envBgPipeline.getBindGroupLayout(0),
-        entries: [
-          { binding: 0, resource: { buffer: envBgUniform } },
-          { binding: 1, resource: envTextureView },
-          { binding: 2, resource: envSampler },
-        ],
-      });
-    }
+    // Keep material textures, geometry buffers and driver pipelines out of a PT-only load.
+    const buildRaster = async () => {
+      let backend = new RasterBackend({ device, outputFormat, tonemap: 'acesFilmic' });
+      const resolveBackend = backend;
+      const resolvePipeline = resolveBackend.createResolvePipeline();
 
-    // Keep watchdog-safe bands for reference quadrature, not interactive IBL.
-    const renderRaster = (targetView: GPUTextureView): void => {
-      const { hdrView, depthView, resolveBindGroup } = targets;
-      const bandRows = rasterQuality === 'interactive' ? height : Math.max(1, Math.floor(RASTER_BAND_PIXELS / width));
-      let encoder = device.createCommandEncoder();
-      let first = true;
-      if (frame.environment.enabled !== false && envBgPipeline && envBgBindGroup) {
-        const pass = encoder.beginRenderPass({
-          colorAttachments: [{ view: hdrView, clearValue: { r: 0, g: 0, b: 0, a: 1 }, loadOp: 'clear', storeOp: 'store' }],
-          depthStencilAttachment: { view: depthView, depthClearValue: 1, depthLoadOp: 'clear', depthStoreOp: 'store' },
-        });
-        pass.setPipeline(envBgPipeline);
-        pass.setBindGroup(0, envBgBindGroup);
-        pass.draw(3);
-        pass.end();
-        first = false;
+      const imageCache = new Map<string, DecodedPixelImage | undefined>();
+      const materialTextures = new Map<string, { textureViews: Map<string, GPUTextureView>; samplers: Map<string, GPUSampler> }>();
+      for (const [key, material] of resources.materials) {
+        if (material.surfaceModule && material.surfaceModule.textures.length > 0) {
+          const uploadedTextures = await uploadMaterialTextures(device, material, loaded.mtlx.imageProvider, imageCache);
+          uploadedTextures.textures.forEach(track);
+          materialTextures.set(key, uploadedTextures);
+        }
       }
-      for (let y = 0;y < height;y += bandRows) {
-        const scissor = { x: 0, y, width, height: Math.min(bandRows, height - y) };
-        for (const pass of frame.passes) {
-          const draws = drawsByPass.get(pass) ?? [];
-          if (draws.length === 0) continue;
-          backend.recordScenePass(encoder, { pass, hdrView, depthView, draws, clear: first, clearColor: rasterBackground(), scissor });
+
+      const materialDisplacement = new Map<string, NonNullable<SceneDrawBuffers['displacement']>>();
+      for (const [key, material] of resources.materials) {
+        const group = material.sceneShader?.displacementGroup;
+        if (group === undefined || !material.displacement) continue;
+        const file = material.displacement.file;
+        if (!imageCache.has(file)) imageCache.set(file, await loaded.mtlx.imageProvider.decode(file));
+        const image = imageCache.get(file);
+        if (!image || image.componentType !== 'uint8' || image.channels !== 4) {
+          throw new Error(`Invalid displacement map: ${file}`);
+        }
+        const texture = track(device.createTexture({
+          size: [image.width, image.height],
+          format: 'rgba8unorm',
+          usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
+        }));
+        device.queue.writeTexture(
+          { texture }, image.data,
+          { bytesPerRow: image.width * 4, rowsPerImage: image.height },
+          [image.width, image.height, 1],
+        );
+        const params = track(device.createBuffer({ size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST }));
+        device.queue.writeBuffer(params, 0, new Float32Array([material.displacement.scale, 0.5, 0, 0]));
+        materialDisplacement.set(key, {
+          group,
+          params,
+          textureView: texture.createView(),
+          sampler: device.createSampler({ addressModeU: 'repeat', addressModeV: 'repeat', magFilter: 'linear', minFilter: 'linear' }),
+        });
+      }
+
+      const uploaded = new Map<string, ReturnType<typeof uploadGeometry>>();
+      for (const [id, geometry] of resources.geometries) {
+        const buffers = uploadGeometry(device, geometry, id);
+        track(buffers.indexBuffer);
+        for (const vb of buffers.vertexBuffers.values()) track(vb);
+        uploaded.set(id, buffers);
+      }
+
+      let drawsByPass = new Map<ScenePassKind, SceneDrawCall[]>();
+      const zeroTexcoords = new Map<string, GPUBuffer>();
+      const zeroTangents = new Map<string, GPUBuffer>();
+      const rasterLights = frame.analyticLights
+        ? track(device.createBuffer({ size: frame.analyticLights.byteLength, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST }))
+        : undefined;
+      if (rasterLights && frame.analyticLights) device.queue.writeBuffer(rasterLights, 0, frame.analyticLights);
+      const rasterSets = new Map<RasterQuality, { backend: RasterBackend; draws: Map<ScenePassKind, SceneDrawCall[]> }>();
+      const buildRasterQuality = async (quality: RasterQuality): Promise<void> => {
+        const cached = rasterSets.get(quality);
+        if (cached) {
+          backend = cached.backend;
+          drawsByPass = cached.draws;
+          return;
+        }
+        const nextBackend = new RasterBackend({ device, outputFormat, tonemap: 'acesFilmic' });
+        const shaders = new Map<string, ReturnType<typeof assembleIrForwardShader>>();
+        for (const draw of frame.draws) {
+          const material = draw.materialKey ? resources.materials.get(draw.materialKey) : undefined;
+          if (!material?.surfaceModule || shaders.has(material.variant.pipelineKey)) continue;
+          const shader = assembleIrForwardShader(material.surfaceModule, {
+            displacement: material.displacement !== undefined, rasterQuality: quality,
+            analyticLights: rasterLights !== undefined,
+          });
+          const compiled = await compileShaderWithDiagnostics(device, shader.code, `Raster ${quality}: ${material.materialName}`);
+          if (disposed) throw new Error('Viewer disposed during raster compilation.');
+          rasterErrors = compiled.errors;
+          this.#onShaderErrors?.(rasterErrors);
+          if (rasterErrors.length > 0) throw new Error(`WGSL: ${rasterErrors.length} erreur(s) de compilation.`);
+          shaders.set(material.variant.pipelineKey, shader);
+          nextBackend.createSceneVariantPipeline(draw.pass, material.variant.pipelineKey, shader.code, compiled.module);
+        }
+        const nextDraws = new Map<ScenePassKind, SceneDrawCall[]>();
+        for (const draw of frame.draws) {
+          const buffers = uploaded.get(draw.prototypeId);
+          const geometry = resources.geometries.get(draw.prototypeId);
+          const position = buffers?.vertexBuffers.get('position');
+          const normal = buffers?.vertexBuffers.get('normal');
+          if (!buffers || !geometry || !position || !normal) continue;
+          const material = draw.materialKey ? resources.materials.get(draw.materialKey) : undefined;
+          if (!material?.sceneShader) continue;
+          const shader = shaders.get(material.variant.pipelineKey);
+          if (!shader) throw new Error(`Missing raster shader: ${material.materialName}`);
+          const pipeline = nextBackend.sceneVariantPipeline(draw.pass, material.variant.pipelineKey)
+            ?? nextBackend.createSceneVariantPipeline(draw.pass, material.variant.pipelineKey, shader.code);
+          if (!pipeline) continue;
+          let texcoord = buffers.vertexBuffers.get('uv');
+          if (!texcoord) {
+            texcoord = zeroTexcoords.get(draw.prototypeId);
+            if (!texcoord) {
+              texcoord = track(device.createBuffer({ size: geometry.vertexCount * 8, usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST }));
+              device.queue.writeBuffer(texcoord, 0, new Float32Array(geometry.vertexCount * 2));
+              zeroTexcoords.set(draw.prototypeId, texcoord);
+            }
+          }
+          const frameUniform = track(device.createBuffer({ size: SCENE_FRAME_UNIFORM_SIZE, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST }));
+          let tangent = buffers.vertexBuffers.get('tangent') ?? zeroTangents.get(draw.prototypeId);
+          if (!tangent) {
+            tangent = track(device.createBuffer({ size: geometry.vertexCount * 16, usage: GPUBufferUsage.VERTEX }));
+            zeroTangents.set(draw.prototypeId, tangent);
+          }
+          device.queue.writeBuffer(frameUniform, 0, buildSceneFrameUniform(frame, draw));
+          frameUniforms.push({ buffer: frameUniform, draw });
+          const materialData = material.parameters ? materialUniformData(material) : buildSceneMaterialUniform(draw);
+          const materialUniform = track(device.createBuffer({ size: Math.max(SCENE_MATERIAL_UNIFORM_SIZE, materialData.byteLength), usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST }));
+          device.queue.writeBuffer(materialUniform, 0, materialData);
+          if (draw.materialKey && material.parameters) {
+            const buffers = parameterBuffers.get(draw.materialKey) ?? [];
+            buffers.push(materialUniform);
+            parameterBuffers.set(draw.materialKey, buffers);
+          }
+          const textures = draw.materialKey ? materialTextures.get(draw.materialKey) : undefined;
+          const displacement = draw.materialKey ? materialDisplacement.get(draw.materialKey) : undefined;
+          const bindGroups = createSceneBindGroups(
+            device,
+            { ...material, sceneShader: shader },
+            {
+              frame: frameUniform,
+              material: materialUniform,
+              ...(rasterLights ? { analyticLights: rasterLights } : {}),
+              ...(textures ? { textureViews: textures.textureViews, samplers: textures.samplers } : {}),
+              ...(displacement ? { displacement } : {}),
+              ...(envTextureView && envSampler && envCdfBuffer ? { environment: { textureView: envTextureView, sampler: envSampler, cdf: envCdfBuffer } } : {}),
+            },
+            (group) => pipeline.getBindGroupLayout(group),
+          );
+          const textureBindGroups = new Map<number, GPUBindGroup>();
+          for (const [group, bindGroup] of bindGroups.byGroup) {
+            if (bindGroup !== bindGroups.materialBindGroup && bindGroup !== bindGroups.frameBindGroup) {
+              textureBindGroups.set(group, bindGroup);
+            }
+          }
+          const list = nextDraws.get(draw.pass) ?? [];
+          list.push({
+            materialBindGroup: bindGroups.materialBindGroup,
+            frameBindGroup: bindGroups.frameBindGroup,
+            positionBuffer: position,
+            normalBuffer: normal,
+            texcoordBuffer: texcoord,
+            tangentBuffer: tangent,
+            indexBuffer: buffers.indexBuffer,
+            indexCount: buffers.indexCount,
+            pipelineKey: material.variant.pipelineKey,
+            ...(textureBindGroups.size > 0 ? { textureBindGroups } : {}),
+          });
+          nextDraws.set(draw.pass, list);
+        }
+        rasterSets.set(quality, { backend: nextBackend, draws: nextDraws });
+        backend = nextBackend;
+        drawsByPass = nextDraws;
+      };
+      await buildRasterQuality(rasterQuality);
+
+      const resolveUniform = track(device.createBuffer({ size: RESOLVE_UNIFORM_SIZE, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST }));
+      device.queue.writeBuffer(resolveUniform, 0, new Float32Array([frame.camera.exposure]));
+      const sampler = device.createSampler({ magFilter: 'linear', minFilter: 'linear' });
+      const createRasterTargets = (w: number, h: number) => {
+        const hdr = device.createTexture({
+          size: [w, h], format: backend.hdrFormat,
+          usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
+        });
+        let depth: GPUTexture | undefined;
+        try {
+          depth = device.createTexture({
+            size: [w, h], format: backend.depthFormat, usage: GPUTextureUsage.RENDER_ATTACHMENT,
+          });
+          const hdrView = hdr.createView();
+          const resolveBindGroup = device.createBindGroup({
+            layout: resolvePipeline.getBindGroupLayout(0),
+            entries: [
+              { binding: 0, resource: hdrView }, { binding: 1, resource: sampler },
+              { binding: 2, resource: { buffer: resolveUniform } },
+            ],
+          });
+          const depthView = depth.createView();
+          const depthTexture = depth;
+          return { hdrView, depthView, resolveBindGroup, destroy: () => { hdr.destroy(); depthTexture.destroy(); } };
+        } catch (error) {
+          hdr.destroy();
+          depth?.destroy();
+          throw error;
+        }
+      };
+      let targets = createRasterTargets(width, height);
+      trash.push({ destroy: () => targets.destroy() });
+
+      // Optional raster environment background: a fullscreen pass that samples the
+      // equirect dome texture along each pixel's world ray, cleared behind geometry.
+      let envBgBindGroup: GPUBindGroup | undefined;
+      let envBgPipeline: GPURenderPipeline | undefined;
+      if (envAsset && envTextureView && envSampler) {
+        const envBgModule = device.createShaderModule({
+          code: `
+  struct EnvBg { invViewProj: mat4x4<f32>, eye: vec4<f32>, tint: vec4<f32> };
+  @group(0) @binding(0) var<uniform> E : EnvBg;
+  @group(0) @binding(1) var envTex : texture_2d<f32>;
+  @group(0) @binding(2) var envSamp : sampler;
+  const PI : f32 = 3.14159265358979;
+  struct VO { @builtin(position) pos: vec4<f32>, @location(0) ndc: vec2<f32> };
+  @vertex fn vs(@builtin(vertex_index) i: u32) -> VO {
+    var p = array<vec2<f32>, 3>(vec2<f32>(-1.0, -3.0), vec2<f32>(-1.0, 1.0), vec2<f32>(3.0, 1.0));
+    var o: VO;
+    o.pos = vec4<f32>(p[i], 1.0, 1.0);
+    o.ndc = p[i];
+    return o;
+  }
+  fn dir_to_uv(d: vec3<f32>) -> vec2<f32> {
+    let n = normalize(d);
+    let u = atan2(n.z, n.x) * (0.5 / PI) + 0.5;
+    let v = acos(clamp(n.y, -1.0, 1.0)) / PI;
+    return vec2<f32>(u, v);
+  }
+  @fragment fn fs(in: VO) -> @location(0) vec4<f32> {
+    let near = E.invViewProj * vec4<f32>(in.ndc, 0.0, 1.0);
+    let world = near.xyz / near.w;
+    let dir = world - E.eye.xyz;
+    let c = textureSample(envTex, envSamp, dir_to_uv(dir)).xyz;
+    return vec4<f32>(c * E.tint.xyz, 1.0);
+  }
+  `,
+        });
+        envBgPipeline = device.createRenderPipeline({
+          layout: 'auto',
+          vertex: { module: envBgModule, entryPoint: 'vs' },
+          fragment: { module: envBgModule, entryPoint: 'fs', targets: [{ format: backend.hdrFormat }] },
+          primitive: { topology: 'triangle-list' },
+          depthStencil: { format: backend.depthFormat, depthWriteEnabled: false, depthCompare: 'always' },
+        });
+        envBgUniform = track(device.createBuffer({ size: 96, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST }));
+        const inten = envAsset.intensity * envRadianceScale;
+        const t = envAsset.tint;
+        device.queue.writeBuffer(envBgUniform, 80, new Float32Array([t[0] * inten, t[1] * inten, t[2] * inten, 1]));
+        envBgBindGroup = device.createBindGroup({
+          layout: envBgPipeline.getBindGroupLayout(0),
+          entries: [
+            { binding: 0, resource: { buffer: envBgUniform } },
+            { binding: 1, resource: envTextureView },
+            { binding: 2, resource: envSampler },
+          ],
+        });
+      }
+
+      // Keep watchdog-safe bands for reference quadrature, not interactive IBL.
+      const renderRaster = (targetView: GPUTextureView): void => {
+        const { hdrView, depthView, resolveBindGroup } = targets;
+        const bandRows = rasterQuality === 'interactive' ? height : Math.max(1, Math.floor(RASTER_BAND_PIXELS / width));
+        let encoder = device.createCommandEncoder();
+        let first = true;
+        if (frame.environment.enabled !== false && envBgPipeline && envBgBindGroup) {
+          const pass = encoder.beginRenderPass({
+            colorAttachments: [{ view: hdrView, clearValue: { r: 0, g: 0, b: 0, a: 1 }, loadOp: 'clear', storeOp: 'store' }],
+            depthStencilAttachment: { view: depthView, depthClearValue: 1, depthLoadOp: 'clear', depthStoreOp: 'store' },
+          });
+          pass.setPipeline(envBgPipeline);
+          pass.setBindGroup(0, envBgBindGroup);
+          pass.draw(3);
+          pass.end();
           first = false;
         }
-        if (y + bandRows < height) {
-          device.queue.submit([encoder.finish()]);
-          encoder = device.createCommandEncoder();
+        for (let y = 0;y < height;y += bandRows) {
+          const scissor = { x: 0, y, width, height: Math.min(bandRows, height - y) };
+          for (const pass of frame.passes) {
+            const draws = drawsByPass.get(pass) ?? [];
+            if (draws.length === 0) continue;
+            backend.recordScenePass(encoder, { pass, hdrView, depthView, draws, clear: first, clearColor: rasterBackground(), scissor });
+            first = false;
+          }
+          if (y + bandRows < height) {
+            device.queue.submit([encoder.finish()]);
+            encoder = device.createCommandEncoder();
+          }
         }
+        resolveBackend.recordResolvePass(encoder, { outputView: targetView, bindGroup: resolveBindGroup });
+        device.queue.submit([encoder.finish()]);
+      };
+      return {
+        render: renderRaster,
+        resize: (w: number, h: number) => {
+          const next = createRasterTargets(w, h);
+          targets.destroy();
+          targets = next;
+        },
+        setQuality: buildRasterQuality,
+      };
+    };
+    let raster: Awaited<ReturnType<typeof buildRaster>> | undefined;
+    let rasterBuild: Promise<void> | undefined;
+    const ensureRaster = (): Promise<void> => {
+      if (!rasterBuild) {
+        rasterBuild = buildRaster().then(built => {
+          if (disposed) throw new Error('Viewer disposed during raster preparation.');
+          raster = built;
+          applyCamera(cameraViewProj, cameraEye, backgroundInvViewProj);
+          this.#rasterDirty = true;
+        });
       }
-      resolveBackend.recordResolvePass(encoder, { outputView: targetView, bindGroup: resolveBindGroup });
+      return rasterBuild;
+    };
+    const clearOutput = (targetView: GPUTextureView): void => {
+      const color = rasterBackground();
+      const encoder = device.createCommandEncoder();
+      const pass = encoder.beginRenderPass({
+        colorAttachments: [{ view: targetView, clearValue: { r: color[0], g: color[1], b: color[2], a: 1 }, loadOp: 'clear', storeOp: 'store' }],
+      });
+      pass.end();
       device.queue.submit([encoder.finish()]);
     };
 
@@ -930,6 +968,11 @@ fn dir_to_uv(d: vec3<f32>) -> vec2<f32> {
       const sourceDispatch = buildMaterialDispatch(ptScene.variantSources);
       const sourceBindings = await buildPtDeviceBindings(sourceDispatch, ptScene, loaded.mtlx.imageProvider, { sink });
       const { dispatch, bindings } = packPtTextureArrays(sourceDispatch, sourceBindings, device.limits.maxTextureArrayLayers);
+      for (const slot of bindings.group0) {
+        if (slot.usage === 'storage' && slot.data) {
+          assertSceneStorageSize(device, Math.max(slot.data.byteLength, 4), slot.role);
+        }
+      }
       const track = <T extends { destroy(): void }>(o: T): T => {
         ptTrash.push(o);
         return o;
@@ -1351,6 +1394,8 @@ fn dir_to_uv(d: vec3<f32>) -> vec2<f32> {
       }
     };
 
+    if (this.#backend === 'raster') await ensureRaster();
+
     return {
       setEnvironmentEnabled: (enabled) => {
         frame.environment.enabled = enabled;
@@ -1368,42 +1413,43 @@ fn dir_to_uv(d: vec3<f32>) -> vec2<f32> {
       },
       frame,
       resize: (w, h) => {
-        const next = createRasterTargets(w, h);
-        try {
-          pathTracer?.resize(w, h);
-        } catch (error) {
-          next.destroy();
-          throw error;
-        }
-        targets.destroy();
-        targets = next;
+        pathTracer?.resize(w, h);
+        raster?.resize(w, h);
         width = w;
         height = h;
       },
       setRasterQuality: async (quality) => {
-        await buildRasterQuality(quality);
+        if (this.#backend === 'raster' || raster) {
+          await ensureRaster();
+          if (!raster) throw new Error('Raster preparation did not produce a renderer.');
+          await raster.setQuality(quality);
+        }
         if (disposed) throw new Error('Viewer disposed during raster compilation.');
         rasterQuality = quality;
         applyCamera(cameraViewProj, cameraEye, backgroundInvViewProj);
       },
-      renderRaster,
+      renderRaster: targetView => {
+        if (raster) raster.render(targetView);
+        else {
+          clearOutput(targetView);
+          if (!rasterBuild) {
+            void ensureRaster().catch((error: unknown) => {
+              if (disposed) return;
+              const message = error instanceof Error ? error.message : String(error);
+              if (!rasterErrors.length) {
+                rasterErrors = [{ shader: 'Raster - preparation / pipeline', message, line: 0, column: 0, source: '' }];
+              }
+              this.#onShaderErrors?.([...rasterErrors, ...pathTraceErrors]);
+              console.error(`Raster: ${message}`);
+            });
+          }
+        }
+      },
       renderPathTrace: (targetView, tiled, accumulate) => {
         if (pathTracer) pathTracer.renderPathTrace(targetView, tiled, accumulate);
         else {
           startPathTracer();
-          const encoder = device.createCommandEncoder();
-          const pass = encoder.beginRenderPass({
-            colorAttachments: [{ view: targets.hdrView, clearValue: { r: rasterBackground()[0], g: rasterBackground()[1], b: rasterBackground()[2], a: 1 }, loadOp: 'clear', storeOp: 'store' }],
-            depthStencilAttachment: { view: targets.depthView, depthClearValue: 1, depthLoadOp: 'clear', depthStoreOp: 'store' },
-          });
-          if (frame.environment.enabled !== false && envBgPipeline && envBgBindGroup) {
-            pass.setPipeline(envBgPipeline);
-            pass.setBindGroup(0, envBgBindGroup);
-            pass.draw(3);
-          }
-          pass.end();
-          resolveBackend.recordResolvePass(encoder, { outputView: targetView, bindGroup: targets.resolveBindGroup });
-          device.queue.submit([encoder.finish()]);
+          clearOutput(targetView);
         }
       },
       reportFrameTime: (milliseconds) => pathTracer?.reportFrameTime(milliseconds),

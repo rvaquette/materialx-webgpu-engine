@@ -42,6 +42,15 @@ function memoryStore() {
 }
 
 describe('prepared scene buffer file cache', () => {
+  it('rejects the obsolete padded-triangle v3 format', async () => {
+    const { resources } = fixture();
+    const scene = buildPathTraceScene(resources);
+    const key = await sceneBufferCacheKey(resources);
+    const bytes = await encodeSceneBufferCache(scene, key, scene.materialCount);
+    new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength).setUint32(4, 3, true);
+    await expect(decodeSceneBufferCache(bytes, key)).rejects.toThrow('Obsolete scene cache: version');
+  });
+
   it('round trips all geometry bytes including UVs/tangents and inflated bounds', async () => {
     const { resources } = fixture();
     const scene = buildPathTraceScene(resources);

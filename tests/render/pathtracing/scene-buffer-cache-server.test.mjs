@@ -14,7 +14,7 @@ describe('loopback file-cache server persistence', () => {
     const scene = {
       nodeCount: 1, triangleCount: 1, bounds: { min: [0, 0, 0], max: [1, 1, 0] },
       nodes: new Float32Array([0, 0, 0, -1, 1, 1, 0, -1, 0, 1, 0, 0]),
-      triangles: new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0, ...Array(15).fill(0)]),
+      triangles: new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0, ...Array(10).fill(0)]),
       triangleOrder: new Uint32Array([0]), triangleUv: new Float32Array(6), triangleTangent: new Float32Array(),
     };
     const bytes = await encodeSceneBufferCache(scene, key, 1);

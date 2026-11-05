@@ -13,7 +13,7 @@
 // uploads and dispatch run in the browser (src/main.ts) and are device-only.
 
 import type { PathTraceScene } from './scene-buffers.ts';
-import { BVH_TRAVERSAL_WGSL } from './bvh-wgsl.ts';
+import { BVH_TRI_STRIDE, BVH_TRAVERSAL_WGSL } from './bvh-wgsl.ts';
 import { LAYERED_CLOSURE_PRELUDE } from '../../compiler/surface-wgsl.ts';
 import { closureLibraryPrelude, type ClosureDispatchSpec } from '../../compiler/closure-library.ts';
 import { emitVaryingsStruct, textureWgslType } from '../../compiler/wgsl.ts';
@@ -150,7 +150,7 @@ struct Uniforms {
 ${texBindings}
 const PI : f32 = 3.14159265358979;
 const NODE_STRIDE : u32 = 12u;
-const TRI_STRIDE : u32 = 24u;
+const TRI_STRIDE : u32 = ${BVH_TRI_STRIDE}u;
 const RAY_EPS : f32 = 1.0e-4;
 ${environment ? envBindings() : ''}`;
 }

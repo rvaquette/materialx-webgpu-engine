@@ -81,6 +81,20 @@ function build(surface?: RasterSurface): PathTraceScene {
 }
 
 describe('buildPathTraceScene packing', () => {
+  it('packs adjacent triangles into exactly 19 scalar floats without losing positions or normals', () => {
+    const scene = build();
+    expect(PT_TRIANGLE_FLOATS).toBe(19);
+    expect(scene.triangles.byteLength).toBe(scene.triangleCount * 76);
+    expect([...scene.triangles]).toEqual([
+      -1, -1, 0, 1, -1, 0, 1, 1, 0,
+      0, 0, 1, 0, 0, 1, 0, 0, 1, 0,
+      -1, -1, 0, 1, 1, 0, -1, 1, 0,
+      0, 0, 1, 0, 0, 1, 0, 0, 1, 0,
+    ]);
+    expect(1_413_713 * PT_TRIANGLE_FLOATS * 4).toBe(107_442_188);
+    expect(1_413_713 * PT_TRIANGLE_FLOATS * 4).toBeLessThan(128 * 1024 * 1024);
+  });
+
   it('packs ordinary USD area lights without enabling converted camera or transport settings', async () => {
     const { resources } = sceneWith();
     const sphere: SceneLight = {

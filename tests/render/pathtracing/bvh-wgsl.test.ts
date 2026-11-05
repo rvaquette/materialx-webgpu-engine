@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { BVH_TRAVERSAL_WGSL, bvhTraversalWgsl } from '../../../src/render/pathtracing/bvh-wgsl.ts';
+import { BVH_TRI_STRIDE, BVH_TRAVERSAL_WGSL, bvhTraversalWgsl } from '../../../src/render/pathtracing/bvh-wgsl.ts';
 import { traversalCases, traversalFixture, type TraversalCase } from './bvh-traversal-cases.ts';
 
 const EPS = 1e-4;
@@ -20,7 +20,7 @@ function boxEntry(node: number, ray: TraversalCase, limit: number): number {
 
 // Independent analytic triangle oracle for the fixture's parallel z planes.
 function triangleHit(tri: number, ray: TraversalCase, limit: number) {
-  const b = tri * 24;
+  const b = tri * BVH_TRI_STRIDE;
   const t = (fixture.triangles[b + 2]! - ray.origin[2]) / ray.direction[2];
   if (!Number.isFinite(t) || t <= EPS || t >= limit) return null;
   const x = ray.origin[0] + ray.direction[0] * t;

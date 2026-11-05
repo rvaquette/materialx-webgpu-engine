@@ -7,7 +7,7 @@ import {
 
 // Bump for changes to geometry packing, BVH construction or displacement bounds.
 // File: 16-byte LE header, padded JSON descriptors, typed-array bytes, SHA-256 trailer.
-export const SCENE_BUFFER_CACHE_VERSION = 3;
+export const SCENE_BUFFER_CACHE_VERSION = 4;
 export const SCENE_BUFFER_CACHE_MAX_BYTES = 512 * 1024 * 1024;
 const MAGIC = 0x4d585054;
 const fields = ['nodes', 'triangles', 'triangleOrder', 'triangleUv', 'triangleTangent'] as const;
@@ -37,7 +37,6 @@ export async function sceneBufferCacheKey(resources: SceneResources, options: Bu
     text([array.constructor.name, array.byteLength]);
     parts.push(bytesOf(array));
   };
-  // Preserve the key and metadata of existing canonical v3 cache files.
   text(['scene-buffer-cache', SCENE_BUFFER_CACHE_VERSION, 'sah', options.displacementScale ?? 1, 'reference']);
   const seen = new Set<string>();
   for (const draw of buildSceneFrame(resources, options).draws) {

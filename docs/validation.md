@@ -115,6 +115,28 @@ incompatibles restent distincts. Les paramètres éditables restent propres à c
 objet ; seules les ressources image/sampler sont mutualisées. Les fonctions de
 surface et d'opacité utilisent toutes deux les handles partagés.
 
+Un chargement initial en path tracing ne prépare plus les textures de matériaux,
+les buffers de géométrie ni les pipelines raster. Ceux-ci sont créés au premier
+passage en raster, puis réutilisés ; le choix de qualité et la résolution sont
+conservés. Pendant la préparation du path tracer, le canvas affiche une couleur
+de fond sans nécessiter les passes raster.
+
+Sur le mobile Adreno testé, ce chargement différé évite le plantage Android
+`LOW_MEMORY` observé pendant la préparation raster de la sélection Playground.
+Le contrôle des buffers de scène nomme le binding dépassant la limite et
+s'effectue avant la compilation du compute shader.
+
+Le buffer `triangles` de cette sélection contient 1 413 713 triangles.
+Son packing passe de 24 à 19 floats par triangle : les cinq floats de padding
+inutilisés sont supprimés, sans modifier positions, normales ni indices de
+matériaux. Le stockage WGSL reste un `array<f32>` ; les lecteurs CPU, traversal
+BVH, passe hybride et displacement partagent le même stride. Le cache de scène
+passe en version 4 pour rejeter les anciens buffers paddés.
+La taille passe de 135 716 448 à 107 442 188 octets (-20,8 %), sous la limite
+mobile de 134 217 728 octets. Vérification sur le Samsung SM-F731B (Adreno 7xx) :
+compilation du pipeline et rendu à 16 spp sans diagnostic WGSL ni crash observé.
+Ce contrôle valide le démarrage, pas une parité visuelle complète.
+
 Dans le viewer, le path tracer regroupe ensuite les images RGBA8 de dimensions
 et de format GPU identiques dans des tableaux `texture_2d_array`. Les vues sRGB
 et linéaires restent séparées : aucun redimensionnement ni changement des pixels

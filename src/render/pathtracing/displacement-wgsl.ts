@@ -1,3 +1,5 @@
+import { BVH_TRI_STRIDE } from './bvh-wgsl.ts';
+
 /** GPU displacement pre-pass. */
 export function pathTraceDisplacementWgsl(): string {
   return /* wgsl */ `
@@ -10,7 +12,7 @@ struct DispInfo { triCount: u32, midpoint: f32, pad0: u32, pad1: u32 };
 @group(0) @binding(4) var dispTex: texture_2d<f32>;
 @group(0) @binding(5) var dispSamp: sampler;
 
-const STRIDE: u32 = 24u;
+const STRIDE: u32 = ${BVH_TRI_STRIDE}u;
 
 @compute @workgroup_size(64)
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {

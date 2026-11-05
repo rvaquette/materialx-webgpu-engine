@@ -8,14 +8,14 @@
 //   @group(..) var<storage, read> tris : array<f32>;      // packed triangles
 //   @group(..) var<storage, read> triOrder : array<u32>;
 //   const NODE_STRIDE : u32 = 12u;  // PT_NODE_FLOATS
-//   const TRI_STRIDE : u32 = 24u;   // PT_TRIANGLE_FLOATS
+//   const TRI_STRIDE : u32 = 19u;   // PT_TRIANGLE_FLOATS
 //   const RAY_EPS : f32 = 1.0e-4;
 // Binding indices are the caller's choice; only the symbol names are fixed.
 
 /** Node floats per BVH node (PT_NODE_FLOATS); callers declare `NODE_STRIDE` with this value. */
 export const BVH_NODE_STRIDE = 12;
 /** Floats per packed triangle (PT_TRIANGLE_FLOATS); callers declare `TRI_STRIDE` with this value. */
-export const BVH_TRI_STRIDE = 24;
+export const BVH_TRI_STRIDE = 19;
 
 /** Traversal + Moller-Trumbore triangle test over the packed buffers. `anyHit`
  *  returns at the first intersection (shadow/occlusion rays); otherwise the

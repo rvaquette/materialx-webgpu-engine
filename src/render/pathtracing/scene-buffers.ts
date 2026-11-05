@@ -12,6 +12,7 @@
 // writes live in the browser bootstrap and the backend (compute.ts).
 
 import { buildBvh, type Aabb, type Bvh } from '../../geometry/bvh.ts';
+import { BVH_TRI_STRIDE } from './bvh-wgsl.ts';
 import { openPathTraceBvhCache, pathTraceBvhCacheKey, type PathTraceBvhCache } from '../../geometry/cache.ts';
 import { inverse4, transformDirection, transformPoint, type Mat4, type Vec3 } from '../../scene/transforms.ts';
 import type { SceneResources } from '../scene-resources.ts';
@@ -44,8 +45,8 @@ import type {
 
 /** Floats per packed BVH node: min(3), left, max(3), right, start, count, pad, pad. */
 export const PT_NODE_FLOATS = 12;
-/** Floats per packed triangle: v0,v1,v2, n0,n1,n2 (18) + materialIndex + 5 pad. */
-export const PT_TRIANGLE_FLOATS = 24;
+/** Scalar array packing: v0,v1,v2, n0,n1,n2 (18) + materialIndex; no struct padding. */
+export const PT_TRIANGLE_FLOATS = BVH_TRI_STRIDE;
 /** Floats per packed material: the flat LayeredClosure record (T057b, megakernel-ready). */
 export const PT_MATERIAL_FLOATS = PT_MATERIAL_RECORD_FLOATS;
 
@@ -222,7 +223,6 @@ export function buildPathTraceScene(
       triFloats[base + 12] = nb[0]; triFloats[base + 13] = nb[1]; triFloats[base + 14] = nb[2];
       triFloats[base + 15] = nc[0]; triFloats[base + 16] = nc[1]; triFloats[base + 17] = nc[2];
       triFloats[base + 18] = matIdx;
-      for (let p = 19; p < PT_TRIANGLE_FLOATS; p++) triFloats[base + p] = 0;
       const ub = triCount * 6;
       if (uv) {
         const ua = readVec2(uv.data, ia);
