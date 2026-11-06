@@ -18,6 +18,7 @@ import type { LayeredSurfaceModule } from '../compiler/surface-wgsl.ts';
 import type { ResolvedGraph } from '../materialx/graph.ts';
 import type { ResolvedSurface } from '../materialx/surface-graph.ts';
 import type { ResolvedVolume } from '../materialx/volume-graph.ts';
+import { evaluateVolumeIr, type VolumeMedium } from '../compiler/volume-ir.ts';
 import type { Diagnostic, DiagnosticSink } from '../core/diagnostics.ts';
 import { buildBvh, buildTlas, type Aabb, type Bvh, type Tlas } from '../geometry/bvh.ts';
 import { openPreparedGeometryCache, preparedGeometryCacheKey, type PreparedGeometryCache } from '../geometry/cache.ts';
@@ -93,6 +94,8 @@ export interface MaterialDisplacement {
 }
 
 export interface MaterialResource {
+  volumeMedium?: VolumeMedium;
+  volumeBoundary?: boolean;
   parameters?: readonly import('./material-parameters.ts').MaterialParameter[];
   unitKey: string;
   materialName: string;
@@ -380,6 +383,7 @@ export async function buildSceneResources(
       features,
       variant,
       boundPrims: unit.boundPrims,
+      ...(build.volume ? { volumeMedium: evaluateVolumeIr(build.ir), volumeBoundary: !build.surface } : {}),
       ...(sceneShader ? { sceneShader } : {}),
       ...(build.layered ? { surfaceModule: build.layered } : {}),
       ...(build.graph ? { surfaceGraph: build.graph } : {}),

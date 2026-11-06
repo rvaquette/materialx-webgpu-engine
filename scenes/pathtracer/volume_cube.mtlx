@@ -1,13 +1,15 @@
 <?xml version="1.0"?>
 <materialx version="1.39" colorspace="lin_rec709">
-  <!-- volume: scatter volume remains uncorrected; surface-only conversion cannot preserve it -->
-  <disney_principled name="volume_surface" type="surfaceshader">
-    <input name="baseColor" type="color3" value="1, 1, 1" />
-    <input name="roughness" type="float" value="0" />
-    <input name="specTrans" type="float" value="1" />
-  </disney_principled>
+  <anisotropic_vdf name="volume_vdf" type="VDF">
+    <input name="absorption" type="vector3" value="0.08, 0.3, 0.6" />
+    <input name="scattering" type="vector3" value="0.4, 0.4, 0.4" />
+    <input name="anisotropy" type="float" value="0.3" />
+  </anisotropic_vdf>
+  <volume name="volume_shader" type="volumeshader">
+    <input name="vdf" type="VDF" nodename="volume_vdf" />
+  </volume>
   <surfacematerial name="volume" type="material">
-    <input name="surfaceshader" type="surfaceshader" nodename="volume_surface" />
+    <input name="volumeshader" type="volumeshader" nodename="volume_shader" />
   </surfacematerial>
   <standard_surface name="black_surface" type="surfaceshader">
     <input name="base_color" type="color3" value="0.1, 0.1, 0.1" />

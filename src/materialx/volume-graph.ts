@@ -38,10 +38,12 @@ export interface ResolveVolumeOptions {
   supportedUpstream?: ReadonlySet<string>;
 }
 
-function parseVolumeValue(raw: string): number[] {
-  const parts = raw.split(',').map((s) => Number.parseFloat(s.trim()));
-  const finite = (x: number | undefined): number => (x !== undefined && Number.isFinite(x) ? x : 0);
-  return [finite(parts[0]), finite(parts[1]), finite(parts[2])];
+function parseVolumeValue(raw: string, size: number): number[] {
+  const parts = raw.split(',').map((s) => Number(s.trim()));
+  if (parts.length !== size || parts.some(n => !Number.isFinite(n)) || !raw.trim()) {
+    throw new Error(`Invalid volume value '${raw}': expected ${size} finite component(s).`);
+  }
+  return parts;
 }
 
 function volumeSourceFromResolved(
@@ -49,14 +51,14 @@ function volumeSourceFromResolved(
 ): NormalizedVolumeSource {
   switch (input.source.kind) {
     case 'value':
-      return { kind: 'value', value: parseVolumeValue(input.source.value) };
+      return { kind: 'value', value: parseVolumeValue(input.source.value, input.type === 'float' ? 1 : 3) };
     case 'connection':
       return input.source.output
         ? { kind: 'connection', nodeId: input.source.nodeId, output: input.source.output }
         : { kind: 'connection', nodeId: input.source.nodeId };
     case 'interface':
+      throw new Error(`Unresolved volume interface '${input.name}'.`);
     case 'default':
-      // Default values for volume parameters
       return { kind: 'default', value: [0, 0, 0] };
   }
 }
@@ -83,21 +85,27 @@ export function resolveVolume(
     return null;
   }
 
-  const inputs = new Map<string, NormalizedVolumeInput>();
-
-  // Process all inputs from the volumeshader node
-  for (const input of node.inputs) {
-    const normalized: NormalizedVolumeInput = {
-      name: input.name,
-      type: (input.type as 'float' | 'color3' | 'vector3') ?? 'float',
-      source: volumeSourceFromResolved(input),
-    };
-    inputs.set(input.name, normalized);
+  if (node.inputs.some(i => i.name === 'edf' && i.source.kind === 'connection')) {
+    throw new Error('Emissive volumeshaders are not supported yet.');
   }
-
-  // Check if there's a VDF connection (typically named 'vdf' or 'distribution')
   const vdfInput = node.inputs.find((i) => i.name === 'vdf' || i.name === 'distribution');
   const vdfNodeId = vdfInput?.source.kind === 'connection' ? vdfInput.source.nodeId : undefined;
+  const vdf = vdfNodeId ? graph.nodes.get(vdfNodeId) : undefined;
+  if (!vdf || vdf.category !== 'anisotropic_vdf') {
+    throw new Error('Volumeshaders currently require an anisotropic_vdf connection.');
+  }
+  const inputs = new Map<string, NormalizedVolumeInput>();
+  for (const name of ['absorption', 'scattering', 'anisotropy']) {
+    const type = name === 'anisotropy' ? 'float' : 'vector3';
+    const input = vdf.inputs.find(i => i.name === name);
+    const declaredDefault = vdf.nodeDef?.inputs?.find(i => i.name === name)?.value;
+    const source = input && input.source.kind !== 'default'
+      ? volumeSourceFromResolved(input)
+      : { kind: 'default' as const, value: declaredDefault
+        ? parseVolumeValue(declaredDefault, type === 'float' ? 1 : 3)
+        : type === 'float' ? [0] : [0, 0, 0] };
+    inputs.set(name, { name, type, source });
+  }
 
   return {
     nodeId: node.id,

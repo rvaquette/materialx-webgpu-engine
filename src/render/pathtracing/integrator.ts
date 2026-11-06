@@ -109,6 +109,8 @@ export interface SurfaceHit {
   emission?: Vec3;
   /** Homogeneous medium filling the interior side of this surface; entered on transmission. */
   interiorMedium?: HomogeneousMedium;
+  /** Invisible closed boundary of a pure volumeshader (no BSDF event). */
+  volumeBoundary?: boolean;
 }
 
 export interface BsdfSample {
@@ -235,6 +237,11 @@ export function integratePath(
       break;
     }
 
+    if (hit.volumeBoundary) {
+      medium = dot(ray.direction, hit.normal) < 0 ? hit.interiorMedium ?? null : null;
+      ray = { origin: add(hit.position, scale(ray.direction, 1e-4)), direction: ray.direction };
+      continue;
+    }
     const opacity = Math.min(Math.max(hit.opacity ?? 1, 0), 1);
     if (opacity <= 0 || (opacity < 1 && rng() >= opacity)) {
       ray = { origin: add(hit.position, scale(ray.direction, 1e-4)), direction: ray.direction };

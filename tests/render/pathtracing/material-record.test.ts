@@ -12,6 +12,8 @@ import {
   maxRecordLobes,
   packLayeredMaterial,
   unpackLayeredMaterial,
+  unpackMaterialMedium,
+  isVolumeBoundary,
 } from '../../../src/render/pathtracing/material-record.ts';
 
 function expectLobesClose(a: LayeredClosure, b: LayeredClosure): void {
@@ -30,6 +32,22 @@ function expectLobesClose(a: LayeredClosure, b: LayeredClosure): void {
 }
 
 describe('T057b material-record codec', () => {
+  it('packs explicit media independently of surface lobes and identifies pure boundaries', () => {
+    const medium = { absorption: [0.1, 0.2, 0.3] as const, scattering: [0.4, 0.5, 0.6] as const, anisotropy: 0.7 };
+    const closure: LayeredClosure = { lobes: [], opacity: 1 };
+    const record = packLayeredMaterial(closure, medium, true);
+    const back = unpackMaterialMedium(record)!;
+    for (let i = 0; i < 3; i++) {
+      expect(back.absorption[i]).toBeCloseTo(medium.absorption[i]!);
+      expect(back.scattering[i]).toBeCloseTo(medium.scattering[i]!);
+    }
+    expect(back.anisotropy).toBeCloseTo(0.7);
+    expect(isVolumeBoundary(record)).toBe(true);
+    expect(unpackLayeredMaterial(record).lobes).toEqual([]);
+    expect(unpackMaterialMedium(packLayeredMaterial(closure))).toBeNull();
+    expect(isVolumeBoundary(packLayeredMaterial(closure, medium))).toBe(false);
+    expect(materialClosureReaderWgsl()).toContain('return mx_material_apply_volume(matIndex, c)');
+  });
   it('reports the largest packed lobe count, skipping graph-backed materials', () => {
     const lobe = { kind: 'burley_diffuse' as const, weight: 1, color: [1, 1, 1] as [number, number, number] };
     const one = packLayeredMaterial({ opacity: 1, lobes: [lobe] });
@@ -249,12 +267,14 @@ describe('T057b material-record WGSL reader', () => {
     expect(wgsl).toContain('MxThinFilmLayer(');
   });
 
-  it('reads only the packed opacity slot for alpha visibility', () => {
+  it('reads the packed opacity without lobes, treating pure-volume boundaries as null surfaces', () => {
     const record = packLayeredMaterial({ opacity: 0.25, lobes: [{ kind: 'burley_diffuse', weight: 1, color: [1, 1, 1] }] });
     expect(record[1]).toBeCloseTo(0.25);
     expect(unpackLayeredMaterial(record).opacity).toBeCloseTo(0.25);
-    const fn = wgsl.slice(wgsl.indexOf('fn mx_material_opacity('), wgsl.indexOf('fn mx_material_closure('));
-    expect(fn).toBe('fn mx_material_opacity(matIndex : u32) -> f32 {\n  return materials[matIndex * MX_MATERIAL_RECORD_FLOATS + 1u];\n}\n');
+    const fn = wgsl.slice(wgsl.indexOf('fn mx_material_opacity('), wgsl.indexOf('fn mx_material_volume_boundary('));
+    expect(fn).toContain('if (mx_material_volume_boundary(matIndex)) { return 0.0; }');
+    expect(fn).toContain('return materials[matIndex * MX_MATERIAL_RECORD_FLOATS + 1u];');
+    expect(fn).not.toContain('mx_material_closure');
     expect(wgsl).toContain('c.opacity = materials[base + 1u];');
   });
 

@@ -473,7 +473,8 @@ function wgslIntegrator(textures: boolean, dispatch: PtMaterialDispatch | undefi
   // record. Falls back to mx_material_closure internally for non-graph materials.
   const closureBuild = dispatch
     ? /* wgsl */ `    let vary = mx_hit_varyings(hit, pos, n, normalize(-rd));
-    var c = ${PT_MATERIAL_DISPATCH_ENTRY}(tri_material(hit.tri), vary);`
+    var c = ${PT_MATERIAL_DISPATCH_ENTRY}(tri_material(hit.tri), vary);
+    c = mx_material_apply_volume(tri_material(hit.tri), c);`
     : /* wgsl */ `    var c = mx_material_closure(tri_material(hit.tri));${texOverride}`;
   // Opacity-only path: the dispatcher's dependency-pruned per-variant opacity
   // functions, or the packed record's opacity slot (baked textures never alter
@@ -653,6 +654,13 @@ ${
     let geometricNormal = surface_hit_normal(hit);
     let n = geometricNormal;
 ${closureBuild}
+    if (mx_material_volume_boundary(tri_material(hit.tri))) {
+      inMedium = dot(rd, geometricNormal) < 0.0;
+      medium = MxMedium(c.interiorSigmaA, c.interiorSigmaS, c.interiorG);
+${displayAovs ? '      if (inMedium && cameraSegment) { *coverage = 1.0; cameraSegment = false; }' : ''}
+      ro = pos + rd * RAY_EPS;
+      continue;
+    }
     let opacity = clamp(c.opacity, 0.0, 1.0);
     // Null events preserve throughput, MIS state and direction; alpha is
     // coverage, not coloured transmission or a refractive interface.

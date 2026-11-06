@@ -9,6 +9,7 @@ import type { VolumeMaterial } from './volume.ts';
 import type { Vec3 } from '../../scene/transforms.ts';
 import type { MaterialBuild } from '../scene-resources.ts';
 import type { IrEvalVaryings } from '../../compiler/ir-eval.ts';
+import { evaluateVolumeIr } from '../../compiler/volume-ir.ts';
 
 /**
  * Evaluate a volumeshader MaterialBuild at constant varyings and extract
@@ -17,26 +18,9 @@ import type { IrEvalVaryings } from '../../compiler/ir-eval.ts';
  */
 export function evaluateVolumeMaterial(
   build: MaterialBuild,
-  _varyings: IrEvalVaryings,
+  varyings: IrEvalVaryings,
 ): VolumeMaterial | null {
-  if (!build.volume || !build.module) return null;
-
-  // For now: placeholder that returns neutral material.
-  // Full implementation requires:
-  // 1. Create IR evaluator for the volumeshader (parallel to surface evaluation)
-  // 2. Sample textures at the varyings (if any volume inputs reference textures)
-  // 3. Evaluate input expressions and extract absorption/scattering/anisotropy
-  // 4. Pack into VolumeMaterial
-  //
-  // For Phase 3: assume volumeshaders are constant (no texture inputs),
-  // so we can read parameters directly from the IR constants.
-
-  // Placeholder: Neutral material (no absorption, no scattering, isotropic)
-  return {
-    absorption: [0, 0, 0],
-    scattering: [0, 0, 0],
-    anisotropy: 0,
-  };
+  return build.volume ? evaluateVolumeIr(build.ir, varyings) : null;
 }
 
 /**

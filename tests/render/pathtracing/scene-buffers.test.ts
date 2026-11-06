@@ -18,7 +18,7 @@ import { PT_LIGHT_FLOATS } from '../../../src/render/pathtracing/analytic-lights
 import { createPcg32, integratePath, type Ray } from '../../../src/render/pathtracing/integrator.ts';
 import { evalWorld, layeredSurfaceBsdf, surfaceBsdf } from '../../../src/render/pathtracing/bsdf.ts';
 import { canonicalSurfaceToLayered, type LayeredClosure } from '../../../src/compiler/ir.ts';
-import { packLayeredMaterial } from '../../../src/render/pathtracing/material-record.ts';
+import { packLayeredMaterial, unpackMaterialMedium, isVolumeBoundary } from '../../../src/render/pathtracing/material-record.ts';
 import { evaluateSurfaceToLayered } from '../../../src/compiler/surface-eval.ts';
 import { IDENTITY4 } from '../../../src/scene/transforms.ts';
 import { resolveSurface, type ResolvedSurface } from '../../../src/materialx/surface-graph.ts';
@@ -81,6 +81,18 @@ function build(surface?: RasterSurface): PathTraceScene {
 }
 
 describe('buildPathTraceScene packing', () => {
+  it('threads explicit volume coefficients from resources into GPU records and CPU hits', () => {
+    const medium = { absorption: [0.1, 0.2, 0.3] as const, scattering: [0.4, 0.4, 0.4] as const, anisotropy: 0.5 };
+    for (const volumeBoundary of [false, true]) {
+      const { resources, lights } = sceneWith({ volumeMedium: medium, volumeBoundary });
+      const scene = buildPathTraceScene(resources, { lights });
+      expect(unpackMaterialMedium(scene.materials)?.anisotropy).toBeCloseTo(0.5);
+      expect(isVolumeBoundary(scene.materials)).toBe(volumeBoundary);
+      const hit = createSceneSampler(scene).intersect({ origin: [0, 0, 1], direction: [0, 0, -1] });
+      expect(hit?.interiorMedium?.absorption[1]).toBeCloseTo(0.2);
+      expect(hit?.volumeBoundary ?? false).toBe(volumeBoundary);
+    }
+  });
   it('packs adjacent triangles into exactly 19 scalar floats without losing positions or normals', () => {
     const scene = build();
     expect(PT_TRIANGLE_FLOATS).toBe(19);

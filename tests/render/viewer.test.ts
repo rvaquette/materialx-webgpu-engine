@@ -168,6 +168,15 @@ describe('interactive viewer resource lifecycle', () => {
     expect(device.createTexture).not.toHaveBeenCalled();
   });
 
+  it('rejects an unsupported volumetric raster preview rather than showing a neutral surface', async () => {
+    const { loaded, viewer } = await setup(false, false, 'pathtracing');
+    for (const material of loaded.resources.materials.values()) {
+      material.volumeMedium = { absorption: [0.1, 0.2, 0.3], scattering: [0.4, 0.4, 0.4], anisotropy: 0 };
+    }
+    expect(() => viewer.setBackend('raster')).toThrow('Volumetric raster rendering is not implemented yet');
+    expect(viewer.backend).toBe('pathtracing');
+  });
+
   it('builds raster once when switching from path tracing and reuses it on subsequent switches', async () => {
     const { viewer, device, pass } = await setup(false, false, 'pathtracing');
     viewer.setBackend('raster');

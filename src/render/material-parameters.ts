@@ -6,6 +6,9 @@ import type { NormalizedSurfaceInput, ResolvedSurface } from '../materialx/surfa
 import { assembleIrForwardShader } from './raster/ir-forward.ts';
 import type { MaterialResource, SceneResources } from './scene-resources.ts';
 import { extractDisplacement } from './graph-material-compiler.ts';
+import { resolveVolume } from '../materialx/volume-graph.ts';
+import { appendVolumeIr, evaluateVolumeIr } from '../compiler/volume-ir.ts';
+import { IrModuleBuilder } from '../compiler/ir.ts';
 
 export interface MaterialParameter {
   id: string;
@@ -250,7 +253,19 @@ export function changeMaterialParameters(
   const graph: ResolvedGraph = { ...material.surfaceGraph, nodes };
   // Displacement amplitude lives outside the surface shader.
   const displacement = material.displacement ? extractDisplacement(graph) : undefined;
-  return { ...material, parameters, resolvedSurface: surface, surfaceGraph: graph, ...(displacement ? { displacement } : {}) };
+  let volumeMedium = material.volumeMedium;
+  if (volumeMedium) {
+    const volume = resolveVolume(graph);
+    if (!volume) throw new Error('Missing volumeshader in edited material.');
+    const builder = new IrModuleBuilder();
+    appendVolumeIr(volume, builder);
+    volumeMedium = evaluateVolumeIr(builder.build());
+  }
+  return {
+    ...material, parameters, resolvedSurface: surface, surfaceGraph: graph,
+    ...(volumeMedium ? { volumeMedium } : {}),
+    ...(displacement ? { displacement } : {}),
+  };
 }
 
 /** WGSL uniform layout: vec3 aligns to 16 but occupies 12 bytes; structs round to 16. */

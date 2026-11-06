@@ -1,5 +1,17 @@
 # Volumeshader Support Implementation
 
+> Correction du statut : les captures blanches uniformes precedentes montraient
+> une scene sans geometrie importee, pas un volume valide. Le support actuellement
+> raccorde concerne les coefficients constants de `anisotropic_vdf` dans le path
+> tracer : materiaux surface + volume et volumes purs sur des maillages fermes.
+> Les scenes utilisent `volume` (type `volumeshader`), des coefficients `vector3`,
+> des references MaterialX et des geometries `Mesh`/OBJ.
+> Les entrees spatiales/procedurales et les volumes emissifs sont rejetes
+> explicitement. Le rendu volumetrique raster reste a raccorder au GPU : son
+> adaptateur de parametres et sa reference CPU ne constituent pas un rendu valide.
+> Les annonces de support complet ci-dessous et dans les rapports historiques
+> sont donc depassees.
+
 > **Status**: ✅ Phase 1 Complete - Architectural foundation ready for rendering
 
 This directory contains the implementation of volumeshader (volumetric rendering) support for the MaterialX WebGPU engine.

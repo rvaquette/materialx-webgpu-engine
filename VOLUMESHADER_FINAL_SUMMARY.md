@@ -1,5 +1,9 @@
 # 🎉 Volumeshader Support - Phase Finale
 
+> Rectification : ce rapport surestimait l'avancement. Le carre blanc uniforme
+> n'etait pas une sphere et ne validait pas la diffusion volumetrique.
+> Voir [le statut corrige](./VOLUMESHADER_README.md) pour les limites actuelles.
+
 ## Résumé Exécutif
 
 Votre question originale: **"Est-ce que materialx est capable de gérer des shaders volume?"**

@@ -318,6 +318,9 @@ export class InteractiveViewer {
   }
 
   setBackend(kind: BackendKind): void {
+    if (kind === 'raster' && [...this.#loaded?.resources.materials.values() ?? []].some(m => m.volumeMedium)) {
+      throw new Error('Volumetric raster rendering is not implemented yet. Use path tracing.');
+    }
     if (kind === this.#backend) return;
     this.#backend = kind;
     this.#canvas.style.imageRendering = 'auto';
@@ -379,6 +382,9 @@ export class InteractiveViewer {
     let frame: SceneFramePlan;
     let render: SceneRender;
     try {
+      if (this.#backend === 'raster' && [...loaded.resources.materials.values()].some(m => m.volumeMedium)) {
+        throw new Error('Volumetric raster rendering is not implemented yet. Use path tracing.');
+      }
       if (overrides.size > 0 && loaded.resources.pendingMaterials.length > 0) {
         throw new Error('MaterialX compilation failed.');
       }

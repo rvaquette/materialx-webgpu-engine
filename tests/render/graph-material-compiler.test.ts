@@ -10,6 +10,8 @@ import { describe, it, expect } from 'vitest';
 import { createGraphMaterialCompiler } from '../../src/render/graph-material-compiler.ts';
 import type { MaterialBuild } from '../../src/render/scene-resources.ts';
 import { buildMaterialDispatch } from '../../src/render/pathtracing/material-variant.ts';
+import { evaluateVolumeMedium } from '../../src/render/pathtracing/volume-material.ts';
+import { evaluateVolumeMaterial } from '../../src/render/raster/volume-material.ts';
 import type {
   MxInput,
   MxInterfaceElement,
@@ -99,11 +101,14 @@ function materialInput(name: string, type: string, node: MxNode | null): MtlxMat
 }
 
 /** A document whose material connects its surfaceshader terminal to `surface`. */
-function fakeDocument(materialName: string, surface: MxNode | null): MtlxDocumentView {
+function fakeDocument(materialName: string, surface: MxNode | null, volume?: MxNode): MtlxDocumentView {
   const material = {
     getName: () => materialName,
     getNamePath: () => `/mat/${materialName}`,
-    getInputs: () => [materialInput('surfaceshader', 'surfaceshader', surface)],
+    getInputs: () => [
+      ...(surface ? [materialInput('surfaceshader', 'surfaceshader', surface)] : []),
+      ...(volume ? [materialInput('volumeshader', 'volumeshader', volume)] : []),
+    ],
     validate: () => true,
     delete: () => {},
   } as unknown as MtlxMaterialNode;
@@ -128,6 +133,50 @@ const UNIT: MaterialCompileUnit = {
 };
 
 describe('createGraphMaterialCompiler (T057m1)', () => {
+  function volumeNode(absorption = '0.08, 0.3, 0.6'): MxNode {
+    const vdf = fakeNode('anisotropic_vdf', 'VDF', fakeImpl('implementation', 'anisotropic_vdf'), [
+      fakeInput({ name: 'absorption', type: 'vector3', value: absorption }),
+      fakeInput({ name: 'scattering', type: 'vector3', value: '0.4, 0.4, 0.4' }),
+      fakeInput({ name: 'anisotropy', type: 'float', value: '0.5' }),
+    ]);
+    return fakeNode('volume', 'volumeshader', fakeImpl('implementation', 'volume'), [
+      fakeInput({ name: 'vdf', type: 'VDF', connected: vdf }),
+    ]);
+  }
+
+  it('compiles actual homogeneous coefficients rather than a neutral medium', () => {
+    const doc = fakeDocument('brick', null, volumeNode());
+    const build = createGraphMaterialCompiler({ documents: { documentFor: () => doc } }).compile(UNIT) as MaterialBuild;
+    expect(build.volume).toBeDefined();
+    expect(build.surface).toBeUndefined();
+    const expected = { absorption: [0.08, 0.3, 0.6], scattering: [0.4, 0.4, 0.4], anisotropy: 0.5 };
+    expect(evaluateVolumeMedium(build, {})).toEqual(expected);
+    expect(evaluateVolumeMaterial(build, {})).toEqual(expected);
+    expect(build.module.outputs[0]?.wgslType).toBe('MxVolumeMedium');
+    expect(build.module.code).toContain('MxVolumeMedium(');
+  });
+
+  it('retains the surface and volume of a combined material', () => {
+    const doc = fakeDocument('brick', brickSurfaceNode('brick.jpg'), volumeNode());
+    const build = createGraphMaterialCompiler({ documents: { documentFor: () => doc } }).compile(UNIT) as MaterialBuild;
+    expect(build.surface).toBeDefined();
+    expect(build.layered).toBeDefined();
+    expect(build.volume).toBeDefined();
+    expect(build.ir.outputs.map(o => o.name)).toEqual(['surfaceshader', 'volumeshader']);
+    expect(evaluateVolumeMedium(build, {})?.absorption).toEqual([0.08, 0.3, 0.6]);
+  });
+
+  it('reports invalid coefficients instead of substituting vacuum', () => {
+    const errors: string[] = [];
+    const doc = fakeDocument('brick', null, volumeNode('-1, 0, 0'));
+    const compiler = createGraphMaterialCompiler({
+      documents: { documentFor: () => doc },
+      sink: diagnostic => errors.push(diagnostic.message),
+    });
+    expect(compiler.compile(UNIT)).toBeUndefined();
+    expect(errors.some(message => message.includes("Invalid volume coefficient 'absorption'"))).toBe(true);
+  });
+
   it('lowers the full procedural network into build.graph/build.surface', () => {
     const doc = fakeDocument('brick', brickSurfaceNode('brick_base_gray.jpg'));
     const compiler = createGraphMaterialCompiler({ documents: { documentFor: () => doc } });

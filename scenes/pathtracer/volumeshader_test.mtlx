@@ -1,32 +1,42 @@
 <?xml version="1.0"?>
 <materialx version="1.39" colorspace="lin_rec709">
-  <!-- Pure volumeshader test scene: participating media only (no surface) -->
-  <!-- This tests the volumeshader compilation pipeline directly -->
+  <!-- Volumeshader test: transmissive sphere with volumetric interior -->
+  <!-- Demonstrates participating media rendering in path tracer -->
   
-  <!-- Define VDF closure for volume -->
-  <anisotropic_vdf name="test_volume_vdf" type="VDF">
-    <input name="absorption" type="color3" value="0.02, 0.02, 0.05" />
-    <input name="scattering" type="color3" value="0.3, 0.35, 0.3" />
-    <input name="anisotropy" type="float" value="0.6" />
+  <!-- Define VDF closure for volume inside sphere -->
+  <anisotropic_vdf name="sphere_volume_vdf" type="VDF">
+    <input name="absorption" type="vector3" value="0.08, 0.3, 0.6" />
+    <input name="scattering" type="vector3" value="0.4, 0.4, 0.4" />
+    <input name="anisotropy" type="float" value="0.5" />
   </anisotropic_vdf>
   
-  <!-- Pure volumeshader (no surface) -->
-  <volumeshader name="test_volume" type="volumeshader">
-    <input name="vdf" type="VDF" nodename="test_volume_vdf" />
-  </volumeshader>
+  <!-- Volumeshader for interior -->
+  <volume name="sphere_volume" type="volumeshader">
+    <input name="vdf" type="VDF" nodename="sphere_volume_vdf" />
+  </volume>
   
-  <!-- Volume material (MaterialX 1.39 compatible) -->
-  <volumematerial name="test_volumetric_medium" type="material">
-    <input name="volumeshader" type="volumeshader" nodename="test_volume" />
-  </volumematerial>
-  
-  <!-- Optional: background surface for reference -->
-  <standard_surface name="background_surface" type="surfaceshader">
-    <input name="base_color" type="color3" value="0.1, 0.1, 0.15" />
-    <input name="roughness" type="float" value="0.95" />
+  <!-- Transmissive surface with volume inside -->
+  <standard_surface name="glass_sphere_surface" type="surfaceshader">
+    <input name="base_color" type="color3" value="1, 1, 1" />
+    <input name="base" type="float" value="0" />
+    <input name="specular_roughness" type="float" value="0.01" />
+    <input name="transmission" type="float" value="1.0" />
+    <input name="transmission_color" type="color3" value="1, 1, 1" />
   </standard_surface>
   
-  <surfacematerial name="background" type="material">
-    <input name="surfaceshader" type="surfaceshader" nodename="background_surface" />
+  <!-- Material combining geometry + volumeshader -->
+  <surfacematerial name="volumetric_sphere" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="glass_sphere_surface" />
+    <input name="volumeshader" type="volumeshader" nodename="sphere_volume" />
+  </surfacematerial>
+  
+  <!-- Floor material for reference geometry -->
+  <standard_surface name="floor_surface" type="surfaceshader">
+    <input name="base_color" type="color3" value="0.2, 0.2, 0.22" />
+    <input name="specular_roughness" type="float" value="0.7" />
+  </standard_surface>
+  
+  <surfacematerial name="floor" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="floor_surface" />
   </surfacematerial>
 </materialx>

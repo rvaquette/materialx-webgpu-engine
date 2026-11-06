@@ -17,6 +17,8 @@ import { SURFACE_IR_UPSTREAM } from '../compiler/surface-ir.ts';
 import { resolveGraph } from '../materialx/graph.ts';
 import { resolveSurface, type ResolveSurfaceOptions } from '../materialx/surface-graph.ts';
 import { resolveVolume, hasVolumeTerminal } from '../materialx/volume-graph.ts';
+import { appendVolumeIr } from '../compiler/volume-ir.ts';
+import type { ResolvedVolume } from '../materialx/volume-graph.ts';
 import type { Diagnostic, DiagnosticSink } from '../core/diagnostics.ts';
 import { materialGraphRoots, type MaterialCompileUnit, type MtlxDocumentView } from '../usd/materials.ts';
 import type { ResolvedGraph } from '../materialx/graph.ts';
@@ -37,20 +39,19 @@ export interface GraphMaterialCompilerOptions {
 
 /** Minimal opaque surface IR so buildSceneResources can extract features and key
  *  the pipeline; the real shading rides on the layered module and resolved graph. */
-function neutralSurfaceIr(): ShaderIr {
+function neutralSurfaceIr(volume?: ResolvedVolume): ShaderIr {
   const b = new IrModuleBuilder();
   const opacity = b.constant(FLOAT, 1);
   const ref = b.add({ kind: 'closure', type: shaderType('surface'), closure: 'bsdf', op: 'surface', params: { opacity } });
   b.output({ name: 'surfaceshader', type: shaderType('surface'), ref });
+  if (volume) appendVolumeIr(volume, b);
   return b.build();
 }
 
 /** Minimal opaque volume IR for volumeshaders. */
-function neutralVolumeIr(): ShaderIr {
+function volumeIr(volume: ResolvedVolume): ShaderIr {
   const b = new IrModuleBuilder();
-  const zero = b.constant(FLOAT, 0);
-  const ref = b.add({ kind: 'closure', type: shaderType('volume'), closure: 'vdf', op: 'anisotropic_vdf', params: { absorption: zero, scattering: zero, anisotropy: zero } });
-  b.output({ name: 'volumeshader', type: shaderType('volume'), ref });
+  appendVolumeIr(volume, b);
   return b.build();
 }
 
@@ -115,34 +116,20 @@ export function createGraphMaterialCompiler(options: GraphMaterialCompilerOption
           ...(options.target !== undefined ? { target: options.target } : {}),
         });
 
-        // Try to resolve a volumeshader first
-        const hasVolume = hasVolumeTerminal(graph);
-        if (hasVolume) {
-          const volume = resolveVolume(graph, { onDiagnostic: emit });
-          if (volume) {
-            // Volume shader: mark features and generate volume IR
-            const ir = neutralVolumeIr();
-            const displacement = extractDisplacement(graph);
-            return { 
-              ir, 
-              module: emitWgsl(ir), 
-              volume,
-              graph, 
-              ...(displacement ? { displacement } : {}) 
-            };
-          }
+        const volume = hasVolumeTerminal(graph) ? resolveVolume(graph, { onDiagnostic: emit }) : null;
+        if (volume && !graph.terminals.some(t => t.type === 'surfaceshader' && t.nodeId)) {
+          const ir = volumeIr(volume);
+          return { ir, module: emitWgsl(ir), volume, graph };
         }
-
-        // Fall back to surface shader
         const surface = resolveSurface(graph, { onDiagnostic: emit, supportedUpstream: SURFACE_IR_UPSTREAM, ...options.surfaceOptions });
         if (!surface) {
           emit({ level: 'warning', message: `Unresolved surface for material ${unit.materialName}`, detail: { material: unit.materialName } });
           return undefined;
         }
         const layered = emitLayeredSurface(graph, surface, emit);
-        const ir = neutralSurfaceIr();
+        const ir = neutralSurfaceIr(volume ?? undefined);
         const displacement = extractDisplacement(graph);
-        return { ir, module: emitWgsl(ir), layered, graph, surface, ...(displacement ? { displacement } : {}) };
+        return { ir, module: emitWgsl(ir), layered, graph, surface, ...(volume ? { volume } : {}), ...(displacement ? { displacement } : {}) };
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         const stack = error instanceof Error ? (error.stack ?? '') : '';

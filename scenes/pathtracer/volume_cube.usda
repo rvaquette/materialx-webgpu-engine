@@ -10,7 +10,7 @@ def Xform "World"
 {
     custom string pathtracer:sourceScene = "volume_cube.scene"
     custom int2 pathtracer:resolution = (1280, 720)
-    custom int pathtracer:maxDepth = 5
+    custom int pathtracer:maxDepth = 16
 
     def Camera "Camera"
     {

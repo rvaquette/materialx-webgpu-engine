@@ -97,8 +97,9 @@ export function wgslType(type: IrType): string {
     case 'matrix':
       return `mat${type.size}x${type.size}f`;
     case 'closure':
-    case 'shader':
       return 'Closure';
+    case 'shader':
+      return type.shader === 'volume' ? 'MxVolumeMedium' : 'Closure';
     case 'string':
     case 'filename':
       throw new WgslEmitError(`type ${type.kind} has no WGSL representation`);
@@ -454,6 +455,11 @@ export function lowerExprs(
         break;
       }
       case 'closure': {
+        if (expr.type.kind === 'shader' && expr.type.shader === 'volume' && expr.op === 'anisotropic_vdf') {
+          preludes.add(VOLUME_MEDIUM_PRELUDE);
+          rhs = `MxVolumeMedium(${varName(expr.params.absorption!)}, ${varName(expr.params.scattering!)}, ${varName(expr.params.anisotropy!)})`;
+          break;
+        }
         const lowering = getNodeLowering(expr.op);
         if (!lowering) throw new WgslEmitError(`no WGSL lowering for closure '${expr.op}'`);
         if (closureUsesLighting(expr.op)) {

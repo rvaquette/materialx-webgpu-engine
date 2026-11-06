@@ -14,6 +14,7 @@ import type {
   LayeredClosure,
   Rgb,
 } from '../../compiler/ir.ts';
+import type { VolumeMedium } from '../../compiler/volume-ir.ts';
 
 /** Max lobes packed per material; matches MX_MAX_LOBES in LAYERED_CLOSURE_PRELUDE. */
 export const PT_MAX_LOBES = 8;
@@ -22,7 +23,7 @@ export const PT_MAX_LOBES = 8;
 export const PT_LOBE_FLOATS = 27;
 
 /** f32 count of the per-material header that precedes the lobe array. */
-export const PT_MATERIAL_HEADER_FLOATS = 29;
+export const PT_MATERIAL_HEADER_FLOATS = 38;
 
 /** f32 stride of one complete packed material record. */
 export const PT_MATERIAL_RECORD_FLOATS =
@@ -152,11 +153,11 @@ function readLobe(buf: ArrayLike<number>, base: number): LayeredBsdfLobe {
 }
 
 /** Pack one LayeredClosure into a flat record of PT_MATERIAL_RECORD_FLOATS floats. */
-export function packLayeredMaterial(closure: LayeredClosure): Float32Array {
+export function packLayeredMaterial(closure: LayeredClosure, medium?: VolumeMedium, volumeBoundary = false): Float32Array {
   const out = new Float32Array(PT_MATERIAL_RECORD_FLOATS);
   const lobeCount = Math.min(closure.lobes.length, PT_MAX_LOBES);
   out[0] = lobeCount;
-  out[1] = closure.opacity;
+  out[1] = volumeBoundary ? 0 : closure.opacity;
   out[2] = closure.coat !== undefined ? 1 : 0;
   out[3] = closure.sheen !== undefined ? 1 : 0;
   out[4] = closure.fuzz !== undefined ? 1 : 0;
@@ -196,6 +197,13 @@ export function packLayeredMaterial(closure: LayeredClosure): Float32Array {
     out[26] = t.weight;
     out[27] = t.thickness;
     out[28] = t.ior;
+  }
+  if (medium) {
+    out[29] = 1;
+    out.set(medium.absorption, 30);
+    out.set(medium.scattering, 33);
+    out[36] = medium.anisotropy;
+    out[37] = volumeBoundary ? 1 : 0;
   }
   for (let i = 0; i < lobeCount; i++) {
     const lobe = closure.lobes[i];
@@ -262,6 +270,20 @@ export function unpackLayeredMaterial(
   return closure;
 }
 
+export function unpackMaterialMedium(buf: ArrayLike<number>, index = 0): VolumeMedium | null {
+  const base = index * PT_MATERIAL_RECORD_FLOATS;
+  if (rd(buf, base + 29) === 0) return null;
+  return {
+    absorption: [rd(buf, base + 30), rd(buf, base + 31), rd(buf, base + 32)],
+    scattering: [rd(buf, base + 33), rd(buf, base + 34), rd(buf, base + 35)],
+    anisotropy: rd(buf, base + 36),
+  };
+}
+
+export function isVolumeBoundary(buf: ArrayLike<number>, index = 0): boolean {
+  return rd(buf, index * PT_MATERIAL_RECORD_FLOATS + 37) !== 0;
+}
+
 /**
  * WGSL reader `mx_material_closure(matIndex) -> LayeredClosure`. It reads the flat
  * record packed by packLayeredMaterial from the `materials : array<f32>` storage
@@ -313,7 +335,22 @@ fn mx_material_lobe(base : u32) -> MxBsdfLobe {
   return lobe;
 }
 fn mx_material_opacity(matIndex : u32) -> f32 {
+  if (mx_material_volume_boundary(matIndex)) { return 0.0; }
   return materials[matIndex * MX_MATERIAL_RECORD_FLOATS + 1u];
+}
+fn mx_material_volume_boundary(matIndex : u32) -> bool {
+  return materials[matIndex * MX_MATERIAL_RECORD_FLOATS + 37u] != 0.0;
+}
+fn mx_material_apply_volume(matIndex : u32, surface : LayeredClosure) -> LayeredClosure {
+  var c = surface;
+  let base = matIndex * MX_MATERIAL_RECORD_FLOATS;
+  if (materials[base + 29u] != 0.0) {
+    c.interiorSigmaA = vec3f(materials[base + 30u], materials[base + 31u], materials[base + 32u]);
+    c.interiorSigmaS = vec3f(materials[base + 33u], materials[base + 34u], materials[base + 35u]);
+    c.interiorG = materials[base + 36u];
+    c.hasInterior = 1u;
+  }
+  return c;
 }
 fn mx_material_closure(matIndex : u32) -> LayeredClosure {
   var c : LayeredClosure;
@@ -373,6 +410,6 @@ fn mx_material_closure(matIndex : u32) -> LayeredClosure {
       }
     }
   }
-  return c;
+  return mx_material_apply_volume(matIndex, c);
 }`;
 }

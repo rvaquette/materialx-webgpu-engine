@@ -16,6 +16,7 @@ import { BVH_TRI_STRIDE } from './bvh-wgsl.ts';
 import { openPathTraceBvhCache, pathTraceBvhCacheKey, type PathTraceBvhCache } from '../../geometry/cache.ts';
 import { inverse4, transformDirection, transformPoint, type Mat4, type Vec3 } from '../../scene/transforms.ts';
 import type { SceneResources } from '../scene-resources.ts';
+import type { VolumeMedium } from '../../compiler/volume-ir.ts';
 import {
   buildSceneFrame,
   NEUTRAL_SURFACE,
@@ -30,7 +31,7 @@ import { subsurfaceMedium } from './subsurface.ts';
 import { canonicalSurfaceToLayered, type LayeredClosure } from '../../compiler/ir.ts';
 import { composeSurfaceLayered, prepareSurface, type PreparedSurface } from '../../compiler/surface-eval.ts';
 import type { IrEvalVaryings } from '../../compiler/ir-eval.ts';
-import { packLayeredMaterial, unpackLayeredMaterial, PT_MATERIAL_RECORD_FLOATS } from './material-record.ts';
+import { packLayeredMaterial, unpackLayeredMaterial, unpackMaterialMedium, isVolumeBoundary, PT_MATERIAL_RECORD_FLOATS } from './material-record.ts';
 import type { PtVariantSource } from './material-variant.ts';
 import { packAnalyticLights } from './analytic-lights.ts';
 import type { PathTraceSettings } from './scene-settings.ts';
@@ -140,6 +141,8 @@ export function buildPathTraceScene(
   // Dedup material surfaces in first-seen draw order.
   const materialIndex = new Map<string, number>();
   const surfaces: RasterSurface[] = [];
+  const media: (VolumeMedium | undefined)[] = [];
+  const volumeBoundaries: boolean[] = [];
   const materialKeys: string[] = [];
   const variantSources: PtVariantSource[] = [];
   const displaceScales: number[] = [];
@@ -155,6 +158,8 @@ export function buildPathTraceScene(
     // graph becomes a megakernel variant source (T057i1); constant-only or
     // neutral materials keep the packed constant record.
     const material = materialKey !== undefined ? resources.materials.get(materialKey) : undefined;
+    media.push(material?.volumeMedium);
+    volumeBoundaries.push(material?.volumeBoundary ?? false);
     if (material?.surfaceGraph && material.resolvedSurface) {
       variantSources.push({ materialIndex: idx, graph: material.surfaceGraph, surface: material.resolvedSurface });
     }
@@ -281,7 +286,7 @@ export function buildPathTraceScene(
   const hasDisplacement = displaceMapFile !== undefined && maxDisp > 0;
 
   const nodes = preparedGeometry?.nodes ?? packNodes(bvh!, hasDisplacement ? maxDisp : 0);
-  const materials = packMaterials(surfaces);
+  const materials = packMaterials(surfaces, media, volumeBoundaries);
   const triangles = preparedGeometry?.triangles ?? new Float32Array(triFloats);
   const triangleOrder = preparedGeometry?.triangleOrder ?? bvh!.triangleOrder;
   const triangleUv = preparedGeometry?.triangleUv ?? new Float32Array(uvFloats);
@@ -432,13 +437,18 @@ function packNodes(bvh: Bvh, inflate = 0): Float32Array {
   return out;
 }
 
-function packMaterials(surfaces: readonly RasterSurface[]): Float32Array {
+function packMaterials(
+  surfaces: readonly RasterSurface[],
+  media: readonly (VolumeMedium | undefined)[],
+  volumeBoundaries: readonly boolean[],
+): Float32Array {
   const out = new Float32Array(Math.max(surfaces.length, 1) * PT_MATERIAL_FLOATS);
   for (let i = 0; i < surfaces.length; i++) {
     // Lower the constant surface to a LayeredClosure and pack the flat record.
     // canonicalSurfaceToLayered is the T054 non-regression anchor, so the packed
     // record evaluates byte-for-byte like the former seven-parameter surface.
-    out.set(packLayeredMaterial(canonicalSurfaceToLayered(surfaces[i]!)), i * PT_MATERIAL_FLOATS);
+    const closure = volumeBoundaries[i] ? { lobes: [], opacity: 1 } : canonicalSurfaceToLayered(surfaces[i]!);
+    out.set(packLayeredMaterial(closure, media[i], volumeBoundaries[i]), i * PT_MATERIAL_FLOATS);
   }
   return out;
 }
@@ -649,6 +659,8 @@ export function createSceneSampler(scene: PathTraceScene): SceneSampler {
   // Interior entered on transmission: volumetric subsurface takes priority, then
   // glass absorption; a closure with neither returns no medium (vacuum interior).
   function interiorMediumFor(hit: PtHit): HomogeneousMedium | null {
+    const explicit = unpackMaterialMedium(scene.materials, hit.materialIndex);
+    if (explicit) return explicit;
     const closure = closureFor(hit);
     const sss = closure.lobes.find((l) => l.kind === 'subsurface' && l.subsurfaceRadius !== undefined);
     if (sss?.subsurfaceRadius) return subsurfaceMedium(sss.color, sss.subsurfaceRadius, sss.anisotropy ?? 0);
@@ -667,7 +679,11 @@ export function createSceneSampler(scene: PathTraceScene): SceneSampler {
       if (!hit) return null;
       const surface = hitSurface(scene, hit, ray);
       const medium = interiorMediumFor(surface as PtHit);
-      return medium ? { ...surface, interiorMedium: medium } : surface;
+      return {
+        ...surface,
+        ...(medium ? { interiorMedium: medium } : {}),
+        ...(isVolumeBoundary(scene.materials, surface.materialIndex) ? { volumeBoundary: true } : {}),
+      };
     },
     sampleBsdf(hit: SurfaceHit, wo: Vec3, rng: Rng): BsdfSample | null {
       const s = sampleWorld(lobeFor(hit), hit.normal, wo, rng);
