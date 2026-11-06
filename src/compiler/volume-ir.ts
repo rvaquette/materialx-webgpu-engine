@@ -16,7 +16,7 @@ export function lowerVolumeInputsToIr(volume: ResolvedVolume, builder: IrModuleB
       throw new Error(`Spatial/procedural volume input '${name}' is not supported yet.`);
     }
     const value = input.source.value;
-    if (value.some(n => !Number.isFinite(n)) ||
+    if (value.length !== (input.type === 'float' ? 1 : 3) || value.some(n => !Number.isFinite(n)) ||
         (name === 'anisotropy' ? Math.abs(value[0]!) >= 1 : value.some(n => n < 0))) {
       throw new Error(`Invalid volume coefficient '${name}'.`);
     }

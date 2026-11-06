@@ -9,6 +9,8 @@ import { buildSceneResources } from '../../src/render/scene-resources.ts';
 import { buildMaterialDispatch } from '../../src/render/pathtracing/material-variant.ts';
 import { changeMaterialParameters, compileEditableMaterial, editableSceneMaterials, materialUniformData, packParameterUniforms, parameterValues, visibleMaterialParameters } from '../../src/render/material-parameters.ts';
 import { applySceneDisplacement } from '../../src/render/displacement.ts';
+import { resolveVolume } from '../../src/materialx/volume-graph.ts';
+import { appendVolumeIr } from '../../src/compiler/volume-ir.ts';
 
 async function fixture(displacement = false, configure?: (graph: ResolvedGraph) => void) {
   const graph: ResolvedGraph = {
@@ -45,6 +47,8 @@ async function fixture(displacement = false, configure?: (graph: ResolvedGraph) 
   const surface = resolveSurface(graph, {})!;
   const builder = new IrModuleBuilder();
   builder.output({ name: 'color', type: FLOAT, ref: builder.constant(FLOAT, 1) });
+  const volume = resolveVolume(graph);
+  if (volume) appendVolumeIr(volume, builder);
   const ir = builder.build();
   const scene = await importUsdStage('test.usda', { reader: { read: async () => `#usda 1.0
 def Material "Mat" (prepend references = @mat.mtlx@</Mat>) {}
@@ -56,11 +60,31 @@ def Mesh "b" { rel material:binding = </Mat> }` } });
       primvars: [{ name: 'st', interpolation: 'vertex', elementSize: 2, values: [0, 0, 1, 0, 0, 1] }],
     }) },
     materialCompiler: { compile: () => ({ ir, module: emitWgsl(ir), graph, surface, layered: emitLayeredSurface(graph, surface),
+      ...(volume ? { volume } : {}),
       ...(displacement ? { displacement: { file: 'height.png', scale: 0.1 } } : {}) }) },
   }));
 }
 
 describe('dynamic MaterialX parameters', () => {
+  it('rebuilds explicit volume coefficients when an upstream VDF parameter changes', async () => {
+    const resources = await fixture(false, graph => {
+      graph.terminals = [...graph.terminals, { name: 'volumeshader', type: 'volumeshader', nodeId: 'volume', provenance: { namePath: '/volume' } }];
+      graph.nodes.set('volume', {
+        id: 'volume', category: 'volume', type: 'volumeshader', provenance: { namePath: '/volume' },
+        inputs: [{ name: 'vdf', type: 'VDF', source: { kind: 'connection', nodeId: 'vdf' }, provenance: { namePath: '/volume/vdf' } }],
+      });
+      graph.nodes.set('vdf', {
+        id: 'vdf', category: 'anisotropic_vdf', type: 'VDF', provenance: { namePath: '/vdf' },
+        inputs: [{ name: 'absorption', type: 'vector3', source: { kind: 'value', type: 'vector3', value: '0.1, 0.2, 0.3' }, provenance: { namePath: '/vdf/absorption' } }],
+      });
+    });
+    const material = [...resources.materials.values()][0]!;
+    const parameter = material.parameters!.find(p => p.nodeId === 'vdf' && p.input === 'absorption')!;
+    const changed = changeMaterialParameters(material, new Map([[parameter.id, [0.4, 0.5, 0.6]]]));
+    expect(changed.volumeMedium?.absorption).toEqual([0.4, 0.5, 0.6]);
+    expect(material.volumeMedium?.absorption).toEqual([0.1, 0.2, 0.3]);
+    expect(() => changeMaterialParameters(material, new Map([[parameter.id, [-1, 0, 0]]]))).toThrow('Invalid volume coefficient');
+  });
   it('shows only authored unbound surface inputs, as in absval, not implicit defaults or graph internals', async () => {
     const resources = await fixture(false, graph => {
       graph.nodes.get('surface')!.inputs = [

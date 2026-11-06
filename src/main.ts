@@ -242,7 +242,10 @@ async function main(): Promise<void> {
       state.resolution = size;
     }); },
     quality: quality => { void operation('Compilation du profil raster...', async () => { await viewer.setRasterQuality(quality); state.rasterQuality = quality; }); },
-    backend: backend => { viewer.setBackend(backend); state.backend = backend; },
+    backend: backend => { void operation('Changement du moteur de rendu...', async () => {
+      viewer.setBackend(backend);
+      state.backend = backend;
+    }); },
     environment: enabled => { viewer.setEnvironmentEnabled(enabled); state.environmentEnabled = enabled; },
     denoise: enabled => { viewer.setPathTracingDenoise(enabled); state.denoise = enabled; },
     pause: () => viewer.setPathTracingPaused(!viewer.pathTracingPaused),

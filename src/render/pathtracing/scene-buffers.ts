@@ -700,13 +700,23 @@ export function createSceneSampler(scene: PathTraceScene): SceneSampler {
       return { direction: toLight, radiance, pdf: 1, distance: Infinity };
     },
     occluded(from: Vec3, direction: Vec3, distance: number): boolean {
-      const origin: V3 = [
+      let origin: V3 = [
         from[0] + direction[0] * RAY_EPS,
         from[1] + direction[1] * RAY_EPS,
         from[2] + direction[2] * RAY_EPS,
       ];
-      const tMax = Number.isFinite(distance) ? distance - RAY_EPS : Infinity;
-      return traverse(scene, { origin, direction }, tMax, true) !== null;
+      let tMax = Number.isFinite(distance) ? distance - RAY_EPS : Infinity;
+      for (let crossings = 0; crossings <= scene.triangleCount; crossings++) {
+        const hit = traverse(scene, { origin, direction }, tMax, false);
+        if (!hit) return false;
+        const surface = hitSurface(scene, hit, { origin, direction });
+        if (!isVolumeBoundary(scene.materials, surface.materialIndex)) return true;
+        const step = hit.t + RAY_EPS;
+        origin = [origin[0] + direction[0] * step, origin[1] + direction[1] * step, origin[2] + direction[2] * step];
+        tMax -= step;
+        if (tMax <= 0) return false;
+      }
+      throw new Error('Volume visibility traversal exceeded the scene boundary count.');
     },
     // A directional delta light cannot be hit by BSDF sampling, so its MIS pdf is 0.
     lightPdf(): number {
