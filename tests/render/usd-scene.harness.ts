@@ -36,7 +36,7 @@ import {
   uploadGeometry,
   type MaterialResource,
 } from '../../src/render/scene-resources.ts';
-import { buildPathTraceScene } from '../../src/render/pathtracing/scene-buffers.ts';
+import { buildPathTraceScene, type PathTraceScene } from '../../src/render/pathtracing/scene-buffers.ts';
 import { buildFileCachedPathTraceScene, type SceneBufferCacheMode, type SceneBufferCacheReport } from '../../src/render/pathtracing/scene-buffer-cache.ts';
 import {
   emitHybridShadowPass,
@@ -85,6 +85,10 @@ import { trackGpuMemory, type GpuMemory } from './gpu-memory.ts';
 import { cacheGpuPipelines } from './gpu-session-cache.ts';
 import { sceneDeviceDescriptor, assertSceneStorageSize } from '../../src/gpu/device.ts';
 import { clearFallbackEnvironment } from '../../src/render/scene-resources.ts';
+import { compiledRasterShaderKey, loadCompiledScene } from '../../src/scene/compiled-scene.ts';
+import type { CompiledSceneRuntime } from '../../src/scene/compiled-scene.ts';
+import { rasterVolumeWgsl, RASTER_VOLUME_UNIFORM_BYTES } from '../../src/render/raster/volume-pass.ts';
+import { materialUniformData, packParameterUniforms } from '../../src/render/material-parameters.ts';
 
 let renderSession: {
   adapter: GPUAdapter;
@@ -294,6 +298,7 @@ import { buildEnvCdf } from '../../src/assets/environment-cdf.ts';
 function uploadEnvTexture(
   device: GPUDevice,
   env: LoadedEnvironment,
+  preparedCdf?: ReturnType<typeof buildEnvCdf>,
 ): { view: GPUTextureView; sampler: GPUSampler; radianceScale: number; cdfBuffer: GPUBuffer; cdfStats: { width: number; height: number; totalSum: number } } {
   const { width: ew, height: eh } = env.image;
   const packed = packHdrTexture(env.image);
@@ -303,7 +308,7 @@ function uploadEnvTexture(
     usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
   });
   device.queue.writeTexture({ texture }, packed.data, { bytesPerRow: ew * 8, rowsPerImage: eh }, [ew, eh, 1]);
-  const { cdf, totalSum, width, height } = buildEnvCdf(env.image);
+  const { cdf, totalSum, width, height } = preparedCdf ?? buildEnvCdf(env.image);
   const cdfBuffer = device.createBuffer({
     size: Math.max(16, cdf.byteLength),
     usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
@@ -545,6 +550,55 @@ async function uploadMaterialTextures(
   return { textureViews, samplers };
 }
 
+export async function loadRenderScene(
+  entry: string,
+  line: (message: string) => void,
+  sink: (diagnostic: { level: string; message: string }) => void,
+  phase: (name: string) => void,
+  materialOverride?: string,
+) {
+  if (/(?:^|\/)scene\.json$/i.test(entry)) {
+    if (materialOverride !== undefined) throw new Error('Compiled scenes cannot use source material overrides.');
+    const loaded = await loadCompiledScene(new URL(entry,document.baseURI).href,sink);
+    phase('compiledSceneLoad');
+    line('diag step: compiled scene restored (no USD/MaterialX import or BVH build)');
+    return {
+      scene:loaded.scene,lights:loaded.lights,cameras:loaded.cameras,envAsset:loaded.environment,
+      resources:loaded.resources,...loaded.mtlx,compiled:loaded.compiled,
+    };
+  }
+  const scene = await importUsdStage(entry,{ reader:httpReader(entry),sink });
+  if (materialOverride) await overrideMaterialWithMtlx(scene,OPENPBR_MATERIAL_PATH,materialOverride,line);
+  const lights = importLights(scene,{ sink });
+  const cameras = importCameras(scene,{ sink });
+  phase('usdImport');
+  const envAsset = await loadEnvironment(lights,entry,sink);
+  phase('environment');
+  const mtlx = await loadMtlxSceneContext(scene,entry,line,sink);
+  phase('materialDocuments');
+  const meshSource = await loadExternalMeshSource(scene,meshSourceFromScene(scene),sink);
+  phase('geometryLoading');
+  const resources = await buildSceneResources(scene,{
+    meshSource,materialCompiler:createGraphMaterialCompiler({ documents:mtlx.documents,sink }),sink,
+  });
+  requireCompiledMaterials(resources);
+  phase('sceneResources');
+  line('diag step: scene resources built');
+  return { scene,lights,cameras,envAsset,resources,...mtlx,compiled:undefined };
+}
+
+export function compiledPathTraceInput(compiled: CompiledSceneRuntime, options: {
+  frameCamera: FrameCamera;
+  environment: PathTraceScene['environment'];
+}): { scene: PathTraceScene; cache: SceneBufferCacheReport } {
+  const prepared = compiled.pathTrace;
+  return {
+    scene: { ...prepared,camera:{ ...prepared.camera,...options.frameCamera,invViewProj:inverse4(options.frameCamera.viewProj) },
+      environment:options.environment },
+    cache: { status:'bypass',key:'compiled-scene',bytes:0,diagnostics:[],timings:{} },
+  };
+}
+
 /** Raster-renders the real USDA geometry offscreen on the device GPU (T058 path)
  *  and returns display RGBA plus the GPU wall-clock in milliseconds. */
 async function renderUsdRasterOnDevice(
@@ -564,40 +618,24 @@ async function renderUsdRasterOnDevice(
     if (d.level === 'warning' || d.level === 'error') line(`diag: ${d.message}`);
   };
 
-  const reader = httpReader(entry);
-  const scene = await importUsdStage(entry, { reader, sink });
-  if (materialOverride) await overrideMaterialWithMtlx(scene, OPENPBR_MATERIAL_PATH, materialOverride, line);
-  const lights = importLights(scene, { sink });
-  const cameras = importCameras(scene, { sink });
-  phase('usdImport');
-  const envAsset = await loadEnvironment(lights, entry, sink);
-  phase('environment');
+  const loaded = await loadRenderScene(entry,line,sink,phase,materialOverride);
+  const { scene,lights,cameras,envAsset,imageProvider,surfaceFor,compiled } = loaded;
+  const resources = compiled ? {
+    ...loaded.resources,materials:new Map([...loaded.resources.materials].map(([key,material]) => {
+      const shader = compiled.rasterShaders.get(compiledRasterShaderKey(key,'interactive'));
+      if (material.surfaceModule && !shader) throw new Error(`Missing compiled raster shader: ${key}`);
+      return [key,shader ? { ...material,sceneShader:shader } : material];
+    })),
+  } : loaded.resources;
   if (envAsset) line(`diag env ${envAsset.image.width}x${envAsset.image.height} intensity=${envAsset.intensity.toFixed(3)} (dome)`);
-
-  // Compile every material through the real graph material compiler (same path as
-  // the path tracer, T057m1): constant, procedural AND textured nodegraphs lower
-  // to the shared LayeredClosure, so the raster forward pass shades an arbitrary
-  // mtlx faithfully instead of the retired fixed 7-parameter standard_surface.
-  const { documents, imageProvider, surfaceFor } = await loadMtlxSceneContext(scene, entry, line, sink);
-  phase('materialDocuments');
-
-  const meshSource = await loadExternalMeshSource(scene, meshSourceFromScene(scene), sink);
-  phase('geometryLoading');
-  const resources = await buildSceneResources(scene, {
-    meshSource,
-    materialCompiler: createGraphMaterialCompiler({ documents, sink }),
-    sink,
-  });
-  requireCompiledMaterials(resources);
-  phase('sceneResources');
-  line('diag step: scene resources built');
+  if (compiled && dispScaleOverride !== undefined) throw new Error('Compiled geometry cannot override displacement scale; load the source USD.');
 
   const frameCamera = resolveFrameCamera(cameras, line, exposureOverride, camBackOverride);
   const exposure = frameCamera.exposure;
   const frame = buildSceneFrame(resources, {
     lights,
     frameCamera,
-    environment: envFrameConfig(envAsset),
+    environment: compiled ? compiled.pathTrace.environment : envFrameConfig(envAsset),
     surfaceFor,
   });
   // Override the dominant light direction (travel direction) so cast shadows are
@@ -607,16 +645,20 @@ async function renderUsdRasterOnDevice(
 
   const outputFormat: GPUTextureFormat = 'rgba8unorm';
   const backend = new RasterBackend({ device, outputFormat, tonemap: 'acesFilmic' });
+  const rasterLights = frame.analyticLights
+    ? device.createBuffer({ size:frame.analyticLights.byteLength,usage:GPUBufferUsage.STORAGE|GPUBufferUsage.COPY_DST })
+    : undefined;
+  if (rasterLights && frame.analyticLights) device.queue.writeBuffer(rasterLights,0,frame.analyticLights);
   for (const draw of frame.draws) {
     const material = draw.materialKey ? resources.materials.get(draw.materialKey) : undefined;
-    if (material?.sceneShader) {
+    if (material?.sceneShader && !material.volumeBoundary) {
       backend.createSceneVariantPipeline(draw.pass, material.variant.pipelineKey, material.sceneShader.code);
     }
   }
   const resolvePipeline = backend.createResolvePipeline();
 
   // Dome envmap: upload once, shown as the raster background and reused as IBL fill.
-  const envGpu = envAsset ? uploadEnvTexture(device, envAsset) : undefined;
+  const envGpu = envAsset ? uploadEnvTexture(device, envAsset,compiled?.environmentCdf) : undefined;
   frame.environment.textureRadianceScale = envGpu?.radianceScale ?? 1;
   if (envGpu) {
     frame.environment.envResX = envGpu.cdfStats.width;
@@ -706,7 +748,7 @@ async function renderUsdRasterOnDevice(
       }
     | undefined;
   if (tracedShadows) {
-    const ptScene = buildPathTraceScene(resources, {
+    const ptScene = compiled?.pathTrace ?? buildPathTraceScene(resources, {
       lights,
       surfaceFor,
       frameCamera,
@@ -789,7 +831,7 @@ async function renderUsdRasterOnDevice(
     const normal = buffers?.vertexBuffers.get('normal');
     if (!buffers || !geometry || !position || !normal) continue;
     const material = draw.materialKey ? resources.materials.get(draw.materialKey) : undefined;
-    if (!material?.sceneShader) continue;
+    if (!material?.sceneShader || material.volumeBoundary) continue;
     const pipeline = backend.sceneVariantPipeline(draw.pass, material.variant.pipelineKey);
     if (!pipeline) continue;
     let texcoord = buffers.vertexBuffers.get('uv');
@@ -808,8 +850,9 @@ async function renderUsdRasterOnDevice(
       zeroTangents.set(draw.prototypeId, tangent);
     }
     device.queue.writeBuffer(frameUniform, 0, buildSceneFrameUniform(frame, draw));
-    const materialUniform = device.createBuffer({ size: SCENE_MATERIAL_UNIFORM_SIZE, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
-    device.queue.writeBuffer(materialUniform, 0, buildSceneMaterialUniform(draw));
+    const materialData = material.parameters ? materialUniformData(material) : buildSceneMaterialUniform(draw);
+    const materialUniform = device.createBuffer({ size: Math.max(SCENE_MATERIAL_UNIFORM_SIZE,materialData.byteLength), usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+    device.queue.writeBuffer(materialUniform, 0, materialData);
     const textures = draw.materialKey ? materialTextures.get(draw.materialKey) : undefined;
     const displacement = draw.materialKey ? materialDisplacement.get(draw.materialKey) : undefined;
     const bindGroups = createSceneBindGroups(
@@ -818,6 +861,7 @@ async function renderUsdRasterOnDevice(
       {
         frame: frameUniform,
         material: materialUniform,
+        ...(rasterLights ? { analyticLights:rasterLights } : {}),
         ...(textures ? { textureViews: textures.textureViews, samplers: textures.samplers } : {}),
         ...(displacement ? { displacement } : {}),
         ...(envGpu ? { environment: { textureView: envGpu.view, sampler: envGpu.sampler, cdf: envGpu.cdfBuffer } } : {}),
@@ -857,6 +901,7 @@ async function renderUsdRasterOnDevice(
         {
           frame: frameUniformIbl,
           material: materialUniform,
+          ...(rasterLights ? { analyticLights:rasterLights } : {}),
           ...(textures ? { textureViews: textures.textureViews, samplers: textures.samplers } : {}),
           ...(displacement ? { displacement } : {}),
           ...(envGpu ? { environment: { textureView: envGpu.view, sampler: envGpu.sampler, cdf: envGpu.cdfBuffer } } : {}),
@@ -880,13 +925,54 @@ async function renderUsdRasterOnDevice(
     }
   }
 
+  let volume: { pipeline:GPURenderPipeline; bindGroup:GPUBindGroup; view:GPUTextureView } | undefined;
+  if ([...resources.materials.values()].some(material => material.volumeIr)) {
+    const volumeScene = compiled?.pathTrace ?? buildPathTraceScene(resources,{
+      lights,surfaceFor,frameCamera,environment:frame.environment,settings:pathTraceSettings(scene),
+    });
+    const module = device.createShaderModule({ code:rasterVolumeWgsl(volumeScene.volumeData !== undefined,rasterLights !== undefined) });
+    const info = await module.getCompilationInfo();
+    const errors = info.messages.filter(message => message.type === 'error');
+    if (errors.length) throw new Error(`Raster volume WGSL: ${errors.map(message => message.message).join('; ')}`);
+    const pipeline = device.createRenderPipeline({
+      layout:'auto',vertex:{ module,entryPoint:'vs' },
+      fragment:{ module,entryPoint:'fs',targets:[{ format:backend.hdrFormat }] },
+      primitive:{ topology:'triangle-list' },
+    });
+    const texture = device.createTexture({ size:[res,res],format:backend.hdrFormat,
+      usage:GPUTextureUsage.RENDER_ATTACHMENT|GPUTextureUsage.TEXTURE_BINDING });
+    const view = texture.createView();
+    const camera = device.createBuffer({ size:RASTER_VOLUME_UNIFORM_BYTES,usage:GPUBufferUsage.UNIFORM|GPUBufferUsage.COPY_DST });
+    const direction = frame.light.direction;
+    device.queue.writeBuffer(camera,0,new Float32Array([
+      ...inverse4(frameCamera.viewProj),...frameCamera.eye,0,
+      -direction[0],-direction[1],-direction[2],0,
+      ...frame.light.color.map(c => c*frame.light.intensity),0,
+      ...frame.environment.radiance,0,res,res,64,(frame.analyticLights?.length ?? 0)/28,
+    ]));
+    const entries:GPUBindGroupEntry[] = [
+      { binding:0,resource:shadow?.hdr2View ?? hdrView },{ binding:5,resource:{ buffer:camera } },
+    ];
+    const arrays:Array<[number,Float32Array|Uint32Array]> = [
+      [1,volumeScene.nodes],[2,volumeScene.triangles],[3,volumeScene.triangleOrder],[4,volumeScene.materials],
+    ];
+    if (volumeScene.volumeData) arrays.push([10,volumeScene.volumeData]);
+    for (const [binding,data] of arrays) {
+      assertSceneStorageSize(device,Math.max(4,data.byteLength));
+      const buffer = device.createBuffer({ size:Math.max(4,data.byteLength),usage:GPUBufferUsage.STORAGE|GPUBufferUsage.COPY_DST });
+      device.queue.writeBuffer(buffer,0,data);
+      entries.push({ binding,resource:{ buffer } });
+    }
+    if (rasterLights) entries.push({ binding:9,resource:{ buffer:rasterLights } });
+    volume = { pipeline,view,bindGroup:device.createBindGroup({ layout:pipeline.getBindGroupLayout(0),entries }) };
+  }
   const resolveUniform = device.createBuffer({ size: RESOLVE_UNIFORM_SIZE, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
   device.queue.writeBuffer(resolveUniform, 0, new Float32Array([frame.camera.exposure]));
   const sampler = device.createSampler({ magFilter: 'linear', minFilter: 'linear' });
   const resolveBindGroup = device.createBindGroup({
     layout: resolvePipeline.getBindGroupLayout(0),
     entries: [
-      { binding: 0, resource: shadow ? shadow.hdr2View : hdrView },
+      { binding: 0, resource: volume?.view ?? (shadow ? shadow.hdr2View : hdrView) },
       { binding: 1, resource: sampler },
       { binding: 2, resource: { buffer: resolveUniform } },
     ],
@@ -914,6 +1000,12 @@ async function renderUsdRasterOnDevice(
     if (draws.length === 0) continue;
     backend.recordScenePass(encoder, { pass, hdrView, depthView, draws, clear: firstPass, clearColor: frame.environment.radiance });
     firstPass = false;
+  }
+  if (firstPass) {
+    const bg = frame.environment.radiance;
+    const clear = encoder.beginRenderPass({ colorAttachments:[{ view:hdrView,
+      clearValue:{ r:bg[0],g:bg[1],b:bg[2],a:1 },loadOp:'clear',storeOp:'store' }] });
+    clear.end();
   }
   if (shadow) {
     // G-buffer: redraw the geometry writing world position (.w = surface mask) and
@@ -984,6 +1076,13 @@ async function renderUsdRasterOnDevice(
     compPass.draw(3);
     compPass.end();
   }
+  if (volume) {
+    const pass = encoder.beginRenderPass({ colorAttachments:[{ view:volume.view,loadOp:'clear',storeOp:'store' }] });
+    pass.setPipeline(volume.pipeline);
+    pass.setBindGroup(0,volume.bindGroup);
+    pass.draw(3);
+    pass.end();
+  }
   backend.recordResolvePass(encoder, { outputView, bindGroup: resolveBindGroup });
   device.queue.submit([encoder.finish()]);
   await device.queue.onSubmittedWorkDone();
@@ -1034,52 +1133,39 @@ async function renderUsdOnDevice(
     }
   };
 
-  const reader = httpReader(entry);
-  const scene = await importUsdStage(entry, { reader, sink });
-  if (materialOverride) await overrideMaterialWithMtlx(scene, OPENPBR_MATERIAL_PATH, materialOverride, line);
-  const lights = importLights(scene, { sink });
-  const cameras = importCameras(scene, { sink });
-  phase('usdImport');
-  const envAsset = await loadEnvironment(lights, entry, sink);
-  phase('environment');
+  const { scene,lights,cameras,envAsset,resources,imageProvider,surfaceFor,compiled } =
+    await loadRenderScene(entry,line,sink,phase,materialOverride);
   if (envAsset) line(`diag env ${envAsset.image.width}x${envAsset.image.height} intensity=${envAsset.intensity.toFixed(3)} (dome)`);
-
-  // Load the MaterialX Core WASM and standard libraries once, read every
-  // referenced .mtlx into a document source (T057m3a), and feed the graph material
-  // compiler (T057m1) so the path tracer builds a megakernel variant per
-  // procedural/textured material instead of the retired CPU bake path. Constant
-  // materials keep the seven-parameter packed record through surfaceFor.
-  const { documents, imageProvider, surfaceFor } = await loadMtlxSceneContext(scene, entry, line, sink);
-  phase('materialDocuments');
-
-  const meshSource = await loadExternalMeshSource(scene, meshSourceFromScene(scene), sink);
-  phase('geometryLoading');
-  const resources = await buildSceneResources(scene, {
-    meshSource,
-    materialCompiler: createGraphMaterialCompiler({ documents, sink }),
-    sink,
-  });
-  requireCompiledMaterials(resources);
-  phase('sceneResources');
-  line('diag step: scene resources built');
+  if (compiled && dispScaleOverride !== undefined) throw new Error('Compiled geometry cannot override displacement scale; load the source USD.');
+  if (compiled && benchmarkOptions?.cacheMode && benchmarkOptions.cacheMode !== 'use') {
+    throw new Error('Compiled scenes use their embedded BVH; source geometry cache options are unavailable.');
+  }
 
   const frameCamera = resolveFrameCamera(cameras, line, exposureOverride, camBackOverride);
   const exposure = frameCamera.exposure;
   // Upload the dome texture + luminance CDF up front so the frame environment config
   // can carry the CDF dimensions/sum used by the tracer's importance sampling.
-  const envGpu = envAsset ? uploadEnvTexture(device, envAsset) : undefined;
-  const { scene: ptScene, cache: sceneBufferCache } = await buildFileCachedPathTraceScene(resources, {
+  const envGpu = envAsset ? uploadEnvTexture(device, envAsset,compiled?.environmentCdf) : undefined;
+  const environment = compiled ? {
+    ...compiled.pathTrace.environment,
+    ...(envGpu ? { envResX:envGpu.cdfStats.width,envResY:envGpu.cdfStats.height,envTotalSum:envGpu.cdfStats.totalSum } : {}),
+    ...(skyPowerOverride !== undefined ? { intensity:skyPowerOverride } : {}),
+    ...(skyColorOverride ? { tint:skyColorOverride } : {}),
+  } : envFrameConfig(envAsset,envGpu?.cdfStats,skyPowerOverride,skyColorOverride,pathTraceSettings(scene).converted);
+  const { scene: ptScene, cache: sceneBufferCache } = compiled
+    ? compiledPathTraceInput(compiled,{ frameCamera,environment })
+    : await buildFileCachedPathTraceScene(resources, {
     lights,
     surfaceFor,
     frameCamera,
-    environment: envFrameConfig(envAsset, envGpu?.cdfStats, skyPowerOverride, skyColorOverride, pathTraceSettings(scene).converted),
+    environment,
     settings: pathTraceSettings(scene),
     ...(dispScaleOverride !== undefined ? { displacementScale: dispScaleOverride } : {}),
   }, benchmarkOptions?.cacheMode ?? 'use');
   for (const diagnostic of sceneBufferCache.diagnostics) line(`diag file-cache: ${diagnostic}`);
   line(`diag file-cache ${sceneBufferCache.status} key=${sceneBufferCache.key} bytes=${sceneBufferCache.bytes}`);
   ptScene.environment.textureRadianceScale = envGpu?.radianceScale ?? 1;
-  phase('bvhAndEnvironmentUpload');
+  phase(compiled ? 'environmentUpload' : 'bvhAndEnvironmentUpload');
   line(`${resources.instances.length} instance(s), ${samples} spp`);
   line(
     `diag tris=${ptScene.triangleCount} mats=${ptScene.materialCount} ` +
@@ -1094,11 +1180,11 @@ async function renderUsdOnDevice(
 
   // Build the megakernel dispatch from the resolved variant sources and the device
   // bindings plan (T057m2); textures are decoded by the shared image provider.
-  const dispatch = buildMaterialDispatch(ptScene.variantSources);
+  const dispatch = compiled?.dispatch ?? buildMaterialDispatch(ptScene.variantSources);
   const opaque = pathTraceOpaqueScene(dispatch, ptScene.materials);
   line(`diag transport depth=${ptScene.settings?.maxDepth ?? 64} rr=${ptScene.settings?.rouletteDepth ?? 3} analyticLights=${ptScene.analyticLightCount ?? 0} opaqueShadows=${opaque}`);
   const bindings = await buildPtDeviceBindings(dispatch, ptScene, imageProvider, { sink });
-  phase('materialDispatchAndTextures');
+  phase(compiled ? 'materialBindingsAndTextures' : 'materialDispatchAndTextures');
   const fireflyClamp = Number.isFinite(fireflyOverride) ? (fireflyOverride as number) : 0;
   const sky = ptScene.environment;
   const skyDiag =
@@ -1112,13 +1198,13 @@ async function renderUsdOnDevice(
   );
 
   // Compute path tracer on the packed scene buffers, progressive accumulation.
-  const backend = new PathTraceBackend(device, { dispatch, ...(envAsset ? { environment: true } : {}) });
+  const backend = new PathTraceBackend(device, { dispatch,volumeGrid:ptScene.volumeData !== undefined, ...(envAsset ? { environment: true } : {}) });
   const maxLobes = Math.max(
     ...dispatch.variants.map(variant => variant.lobeCount),
     maxRecordLobes(ptScene.materials, new Set(dispatch.variants.map(variant => variant.index))),
   );
   const shaderCode = pathTraceComputeWgsl({
-    dispatch, environment: envAsset !== undefined, maxLobes,
+    dispatch, environment: envAsset !== undefined, maxLobes,volumeGrid:ptScene.volumeData !== undefined,
     closureDispatch: pathTraceClosureDispatch(dispatch, ptScene.materials),
     opaque,
     analyticLights: ptScene.analyticLights !== undefined,
@@ -1179,9 +1265,15 @@ async function renderUsdOnDevice(
     }
     if (slot.role === 'accum') return { binding: slot.binding, resource: { buffer: accumBuffer } };
     if (slot.role === 'mxUniforms') {
-      // MxUniforms packing is not emitted yet (surface-ir folds constants); bind a
-      // zeroed placeholder so the layout stays valid if a variant ever needs it.
-      const mx = device.createBuffer({ size: 256, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+      const data = packParameterUniforms(dispatch.uniforms,field => {
+        const index = /^m(\d+)_/.exec(field.field)?.[1];
+        const key = index === undefined ? undefined : ptScene.materialKeys[Number(index)];
+        const parameter = key ? resources.materials.get(key)?.parameters?.find(parameter => parameter.uniform === field.name) : undefined;
+        if (!parameter) throw new Error(`Missing path-tracing parameter: ${field.field}`);
+        return parameter.value;
+      });
+      const mx = device.createBuffer({ size: data.byteLength, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+      device.queue.writeBuffer(mx,0,data);
       return { binding: slot.binding, resource: { buffer: mx } };
     }
     const uploadStarted = performance.now();
@@ -1256,7 +1348,7 @@ async function renderUsdOnDevice(
   // already inflated by the max offset in scene-buffers so traversal stays valid
   // without a GPU BVH rebuild. Shared vertices duplicated across soup triangles
   // carry identical UV+normal, so they displace identically -> no cracks.
-  if (ptScene.displacement && triangleBuffer && triangleUvBuffer) {
+  if (!compiled && ptScene.displacement && triangleBuffer && triangleUvBuffer) {
     const map = await imageProvider.decode(ptScene.displacement.mapFile);
     if (!map) {
       line(`diag displacement map introuvable: ${ptScene.displacement.mapFile}`);

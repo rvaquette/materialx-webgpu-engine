@@ -6,7 +6,6 @@ import { MaterialParameterEditor } from './material-parameter-editor.ts';
 import { sceneDeviceDescriptor } from './gpu/device.ts';
 import { startViewerUi, type ViewerUiState, type ViewerUiActions } from './viewer-ui.ts';
 import type { LocalGltfScene } from './scene/local-gltf.ts';
-import type { SceneDirectory } from './scene/compiled-scene-codec.ts';
 
 let ui: ViewerUiState | undefined;
 let statusIsError = false;
@@ -250,24 +249,6 @@ async function main(): Promise<void> {
     denoise: enabled => { viewer.setPathTracingDenoise(enabled); state.denoise = enabled; },
     pause: () => viewer.setPathTracingPaused(!viewer.pathTracingPaused),
     openFiles: folder => (folder ? localFolder : localFiles)?.click(),
-    exportScene: () => {
-      const picker = (window as Window & {
-        showDirectoryPicker?: (options: { mode: 'readwrite' }) => Promise<SceneDirectory>;
-      }).showDirectoryPicker;
-      if (!picker) {
-        setStatus("L'export nécessite un navigateur compatible File System Access (Chrome ou Edge, HTTPS ou localhost).");
-        return;
-      }
-      void operation('Export de la scene (Zstandard niveau 22)...', async () => {
-        let directory: SceneDirectory;
-        try { directory = await picker.call(window, { mode: 'readwrite' }); }
-        catch (error) {
-          if (error instanceof DOMException && error.name === 'AbortError') return;
-          throw error;
-        }
-        await viewer.exportScene(directory);
-      });
-    },
     object: path => { state.objectPath = path; refreshMaterialSelection(); },
     material: path => { void operation('Compilation du matériau...', async () => {
       try { await viewer.setObjectMaterial(state.objectPath, path ? new URL(path, document.baseURI).href : undefined); }

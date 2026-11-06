@@ -1,0 +1,160 @@
+{
+  "planHash": "d19694d4809ed8cd9ddeed5f766dc6dfa9f9077670cad83989ca0c61d8501fa1",
+  "phase": "standalone",
+  "recordedAtUtc": "2026-11-06T16:38:29.6745955Z",
+  "retryCount": 1,
+  "resetBaseline": false,
+  "complete": true,
+  "result": {
+    "setupSucceeded": true,
+    "setupDurationMs": 0,
+    "setupFailureOutput": null,
+    "assertions": [
+      {
+        "name": "build-render-harness",
+        "kind": "process",
+        "verificationMethod": "exit-code",
+        "passed": true,
+        "timedOut": false,
+        "skipped": false,
+        "skippedReason": null,
+        "exitCode": 0,
+        "outputSample": "\r\n\u003E materialx-webgpu-engine@0.0.0 build:shaderball\r\n\u003E tsc --noEmit \u0026\u0026 node scripts/build-shaderball.mjs\r\n\r\n\u001B[36mvite v8.3.4 \u001B[32mbuilding client environment for production...\u001B[36m\u001B[39m\r\ntransforming...\r\n\u2713 133 modules transformed.\r\nrendering chunks...\r\ncomputing gzip size...\r\ndist-shaderball/usd-image-harness.html                             1.02 kB \u2502 gzip:     0.52 kB\r\ndist-shaderball/index.html                                         3.11 kB \u2502 gzip:     1.32 kB\r\ndist-shaderball/assets/zstd-CV7N7xSg.wasm                        251.80 kB \u2502 gzip:    80.99 kB\r\ndist-shaderball/assets/local-gltf-D8skyYky.js                     12.73 kB \u2502 gzip:     4.88 kB \u2502 map:    36.00 kB\r\ndist-shaderball/assets/EXRLoader-c-9CdfVs.js                      31.99 kB \u2502 gzip:    11.35 kB \u2502 map:   250.90 kB\r\ndist-shaderball/assets/usd-image-harness-Cn9ToQHg.js              46.60 kB \u2502 gzip:    15.85 kB \u2502 map:   171.09 kB\r\ndist-shaderball/assets/scene-assets-DNfz4q3C.js                   67.14 kB \u2502 gzip:    19.80 kB \u2502 map:   230.65 kB\r\ndist-shaderball/assets/pathtracing-B4cXYZ6O.js                    84.87 kB \u2502 gzip:    27.34 kB \u2502 map:   233.80 kB\r\ndist-shaderball/assets/volume-pass-DT1zrxq9.js                   152.54 kB \u2502 gzip:    48.62 kB \u2502 map:   646.12 kB\r\ndist-shaderball/assets/materialx-compiler-s8CsfRUV.js            187.45 kB \u2502 gzip:    51.70 kB \u2502 map:   543.18 kB\r\ndist-shaderball/assets/three.core-BJFBs3yj.js                    193.99 kB \u2502 gzip:    51.29 kB \u2502 map: 1,858.88 kB\r\ndist-shaderball/assets/index-BaaHm35p.js                         226.98 kB \u2502 gzip:    44.95 kB \u2502 map:   721.83 kB\r\ndist-shaderball/assets/loader-4z2onVLQ.js                      1,303.21 kB \u2502 gzip:   492.67 kB \u2502 map: 3,025.02 kB\r\ndist-shaderball/assets/loader-freetype-Cbs4EZ-c.js             2,094.27 kB \u2502 gzip:   775.62 kB \u2502 map: 4,944.36 kB\r\ndist-shaderball/assets/loader-extensions-jUYnE4_M.js           2,348.47 kB \u2502 gzip:   717.67 kB \u2502 map: 5,549.23 kB\r\ndist-shaderball/assets/loader-extensions-freetype-NxtsCgIX.js  3,136.42 kB \u2502 gzip: 1,001.21 kB \u2502 map: 7,454.04 kB\r\n\r\n\u001B[32m\u2713 built in 3.91s\u001B[39m\r\n\u001B[33m[plugin builtin:vite-reporter] \r\n(!) Some chunks are larger than 500 kB after minification. Consider:\r\n- Using dynamic import() to code-split the application\r\n- Use build.rolldownOptions.output.codeSplitting to improve chunking: https://rolldown.rs/reference/OutputOptions.codeSplitting\r\n- Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.\u001B[39m\r\n\u001B[33m\u001B[33m[PLUGIN_TIMINGS] \u001B[0mJavaScript callbacks ran for 1.3s of this 3.9s build (35%).\r\n2 callbacks are listed without a time. Their calls overlapped, so the time inside one call includes work from other calls. To find their cost, profile the build with \u0060node --cpu-prof\u0060:\r\n  - plugin vite:css transform (2 calls)\r\n  - plugin vite:build-html transform (2 calls)\r\nSee https://rolldown.rs/reference/InputOptions.checks#bundlertimings for more details.\r\n\u001B[39m\r\n",
+        "durationMs": 36388
+      },
+      {
+        "name": "tests-pass",
+        "kind": "process",
+        "verificationMethod": "test-results",
+        "passed": true,
+        "timedOut": false,
+        "skipped": false,
+        "skippedReason": null,
+        "exitCode": 0,
+        "outputSample": "\r\n\u003E materialx-webgpu-engine@0.0.0 test\r\n\u003E vitest run tests/scene/shaderball-cli.test.mjs tests/scene/compiled-scene.test.ts tests/render/viewer.test.ts tests/viewer-ui.test.ts\r\n\r\n\r\n RUN  v5.0.3 D:/WebGL2/MaterialX/materialx-webgpu-engine\r\n\r\n\r\n Test Files  4 passed (4)\r\n      Tests  68 passed (68)\r\n   Start at  17:35:31\r\n   Duration  16.09s (tests 62%, transform 23%, import 15%)\r\n\r\n",
+        "durationMs": 21296,
+        "testResults": {
+          "testFramework": "vitest",
+          "runnerDetectedFrom": "package_json",
+          "testsTotal": 68,
+          "testsPassed": 68,
+          "testsFailed": 0,
+          "testsSkipped": 0,
+          "parseFailed": false
+        }
+      },
+      {
+        "name": "compiled-scene-gpu-capture",
+        "kind": "process",
+        "verificationMethod": "exit-code",
+        "passed": true,
+        "timedOut": false,
+        "skipped": false,
+        "skippedReason": null,
+        "exitCode": 0,
+        "outputSample": "[shaderball] timing startup: static 58 ms, browser/CDP 6767 ms\r\n[shaderball] local: 2 render cases -\u003E C:\\Users\\R\u00E9gisVAQUETTE\\.copilot\\session-state\\cf879aff-5742-4458-9ec1-c3440072cfff\\files\\compiled-render-validation\\__compiled_render_validation\\local\r\n[shaderball] 1/2 ok: scene__raster (1135 ms, lit 100.0%)\r\n[shaderball] timing scene__raster: deviceInitialization=544.5 ms, compiledSceneLoad=258.7 ms, rasterPreparation=151.5 ms, render=1134.9 ms, readback=19.9 ms, pngAndStatistics=93.6 ms, total=2203.1 ms, pageLoadAndModules=554.7 ms, imageTransfer=30.6 ms, pngWrite=1.5 ms, caseWall=3187.0 ms\r\n[shaderball] GPU session cache: 0 hits, 4 misses\r\n[shaderball] 2/2 ok: scene__pathtracing (438 ms, lit 100.0%)\r\n[shaderball] timing scene__pathtracing: deviceInitialization=1.5 ms, compiledSceneLoad=1449.3 ms, environmentUpload=0.5 ms, materialBindingsAndTextures=0.7 ms, pipelineCompilation=7638.7 ms, gpuResources=12.6 ms, render=442.5 ms, readbackAndTonemap=107.3 ms, pngAndStatistics=9.3 ms, total=9662.4 ms, pageLoadAndModules=0.0 ms, imageTransfer=8.3 ms, pngWrite=3.9 ms, caseWall=10027.0 ms\r\n[shaderball] GPU session cache: 0 hits, 2 misses\r\n[shaderball] summary: {\u0022ok\u0022:2,\u0022black\u0022:0,\u0022failed\u0022:0}; report C:\\Users\\R\u00E9gisVAQUETTE\\.copilot\\session-state\\cf879aff-5742-4458-9ec1-c3440072cfff\\files\\compiled-render-validation\\__compiled_render_validation\\local\\report.json\r\n[shaderball] timing command: 89185 ms; cleanup 42701 ms (excludes npm/Node bootstrap)\r\n\r\n| Phase                                   |  Dur\u00E9e |\r\n| --------------------------------------- | ------ |\r\n| D\u00E9marrage serveur statique \u002B Chrome/CDP |  6,8 s |\r\n| Chargement page/modules                 |  0,6 s |\r\n| Initialisation GPU, import USD et HDR   |  0,5 s |\r\n| Compilation du pipeline GPU             |  7,6 s |\r\n| Ressources GPU                          |  0,0 s |\r\n| Pr\u00E9paration raster                      |  0,2 s |\r\n| Rendu                                   |  1,6 s |\r\n| Autres op\u00E9rations et nettoyage          | 71,9 s |\r\n| Total du script                         | 89,2 s |\r\n\r\n| M\u00E9moire                                             |     Valeur |\r\n| --------------------------------------------------- | ---------- |\r\n| CPU Node : RSS (max. relev\u00E9)                        |   73,7 Mio |\r\n| CPU Node : pic RSS processus                        |   87,9 Mio |\r\n| CPU Node : tas JS utilis\u00E9 (max. relev\u00E9)             |   10,3 Mio |\r\n| CPU Node : m\u00E9moire externe (max. relev\u00E9)            |    8,4 Mio |\r\n| CPU Node : ArrayBuffers (inclus dans externe)       |    4,8 Mio |\r\n| CPU Chrome \u002B enfants : RSS (max. relev\u00E9)            | 1210,3 Mio |\r\n| CPU Chrome \u002B enfants : m\u00E9moire priv\u00E9e (max. relev\u00E9) |  650,7 Mio |\r\n| GPU estim\u00E9 : pic buffers                            |    2,7 Mio |\r\n| GPU estim\u00E9 : pic textures                           |    1,5 Mio |\r\n| GPU estim\u00E9 : pic total simultan\u00E9                    |    2,7 Mio |\r\n",
+        "durationMs": 89928
+      },
+      {
+        "name": "compiled-surface-gpu-capture",
+        "kind": "process",
+        "verificationMethod": "exit-code",
+        "passed": true,
+        "timedOut": false,
+        "skipped": false,
+        "skippedReason": null,
+        "exitCode": 0,
+        "outputSample": "[shaderball] timing startup: static 59 ms, browser/CDP 1630 ms\r\n[shaderball] local: 2 render cases -\u003E C:\\Users\\R\u00E9gisVAQUETTE\\.copilot\\session-state\\cf879aff-5742-4458-9ec1-c3440072cfff\\files\\compiled-surface-validation\\__compiled_surface_validation\\local\r\n[shaderball] 1/2 ok: scene__raster (16167 ms, lit 100.0%)\r\n[shaderball] timing scene__raster: deviceInitialization=518.2 ms, compiledSceneLoad=434.6 ms, rasterPreparation=41.2 ms, render=16167.4 ms, readback=45.6 ms, pngAndStatistics=105.5 ms, total=17312.5 ms, pageLoadAndModules=643.1 ms, imageTransfer=7.0 ms, pngWrite=31.9 ms, caseWall=18236.7 ms\r\n[shaderball] GPU session cache: 0 hits, 8 misses\r\n[shaderball] 2/2 ok: scene__pathtracing (1066 ms, lit 100.0%)\r\n[shaderball] timing scene__pathtracing: deviceInitialization=1.9 ms, compiledSceneLoad=542.1 ms, environmentUpload=2.8 ms, materialBindingsAndTextures=1.0 ms, pipelineCompilation=14043.8 ms, gpuResources=6.9 ms, render=1069.6 ms, readbackAndTonemap=110.3 ms, pngAndStatistics=22.0 ms, total=15800.5 ms, pageLoadAndModules=0.0 ms, imageTransfer=25.7 ms, pngWrite=11.1 ms, caseWall=16014.5 ms\r\n[shaderball] GPU session cache: 0 hits, 2 misses\r\n[shaderball] summary: {\u0022ok\u0022:2,\u0022black\u0022:0,\u0022failed\u0022:0}; report C:\\Users\\R\u00E9gisVAQUETTE\\.copilot\\session-state\\cf879aff-5742-4458-9ec1-c3440072cfff\\files\\compiled-surface-validation\\__compiled_surface_validation\\local\\report.json\r\n[shaderball] timing command: 70952 ms; cleanup 2806 ms (excludes npm/Node bootstrap)\r\n\r\n| Phase                                   |  Dur\u00E9e |\r\n| --------------------------------------- | ------ |\r\n| D\u00E9marrage serveur statique \u002B Chrome/CDP |  1,7 s |\r\n| Chargement page/modules                 |  0,6 s |\r\n| Initialisation GPU, import USD et HDR   |  0,5 s |\r\n| Compilation du pipeline GPU             | 14,0 s |\r\n| Ressources GPU                          |  0,0 s |\r\n| Pr\u00E9paration raster                      |  0,0 s |\r\n| Rendu                                   | 17,2 s |\r\n| Autres op\u00E9rations et nettoyage          | 36,8 s |\r\n| Total du script                         | 71,0 s |\r\n\r\n| M\u00E9moire                                             |     Valeur |\r\n| --------------------------------------------------- | ---------- |\r\n| CPU Node : RSS (max. relev\u00E9)                        |   69,4 Mio |\r\n| CPU Node : pic RSS processus                        |   87,9 Mio |\r\n| CPU Node : tas JS utilis\u00E9 (max. relev\u00E9)             |    9,5 Mio |\r\n| CPU Node : m\u00E9moire externe (max. relev\u00E9)            |    4,5 Mio |\r\n| CPU Node : ArrayBuffers (inclus dans externe)       |    0,8 Mio |\r\n| CPU Chrome \u002B enfants : RSS (max. relev\u00E9)            | 1138,3 Mio |\r\n| CPU Chrome \u002B enfants : m\u00E9moire priv\u00E9e (max. relev\u00E9) |  587,2 Mio |\r\n| GPU estim\u00E9 : pic buffers                            |    2,2 Mio |\r\n| GPU estim\u00E9 : pic textures                           |    1,0 Mio |\r\n| GPU estim\u00E9 : pic total simultan\u00E9                    |    2,2 Mio |\r\n",
+        "durationMs": 71651
+      }
+    ],
+    "executions": [
+      {
+        "source": "build-render-harness",
+        "resolvedExecutable": "C:\\nvm4w\\nodejs\\npm.CMD",
+        "args": [
+          "run",
+          "build:shaderball"
+        ],
+        "cwd": "D:\\WebGL2\\MaterialX\\materialx-webgpu-engine",
+        "env": {},
+        "prependPath": [],
+        "platform": "win32"
+      },
+      {
+        "source": "tests-pass",
+        "resolvedExecutable": "C:\\nvm4w\\nodejs\\npm.CMD",
+        "args": [
+          "test",
+          "--",
+          "tests/scene/shaderball-cli.test.mjs",
+          "tests/scene/compiled-scene.test.ts",
+          "tests/render/viewer.test.ts",
+          "tests/viewer-ui.test.ts"
+        ],
+        "cwd": "D:\\WebGL2\\MaterialX\\materialx-webgpu-engine",
+        "env": {},
+        "prependPath": [],
+        "platform": "win32"
+      },
+      {
+        "source": "compiled-scene-gpu-capture",
+        "resolvedExecutable": "C:\\nvm4w\\nodejs\\node.EXE",
+        "args": [
+          "scripts/run-shaderball-renders.mjs",
+          "--entry",
+          "/scenes/__compiled_render_validation/scene.json",
+          "--target",
+          "local",
+          "--server",
+          "static",
+          "--backends",
+          "raster,pathtracing",
+          "--res",
+          "256",
+          "--spp",
+          "32",
+          "--timeout",
+          "90000",
+          "--max-recoveries",
+          "0",
+          "--out-dir",
+          "C:\\Users\\R\u00E9gisVAQUETTE\\.copilot\\session-state\\cf879aff-5742-4458-9ec1-c3440072cfff\\files\\compiled-render-validation"
+        ],
+        "cwd": "D:\\WebGL2\\MaterialX\\materialx-webgpu-engine",
+        "env": {},
+        "prependPath": [],
+        "platform": "win32"
+      },
+      {
+        "source": "compiled-surface-gpu-capture",
+        "resolvedExecutable": "C:\\nvm4w\\nodejs\\node.EXE",
+        "args": [
+          "scripts/run-shaderball-renders.mjs",
+          "--entry",
+          "/scenes/__compiled_surface_validation/scene.json",
+          "--target",
+          "local",
+          "--server",
+          "static",
+          "--backends",
+          "raster,pathtracing",
+          "--res",
+          "256",
+          "--spp",
+          "32",
+          "--timeout",
+          "90000",
+          "--max-recoveries",
+          "0",
+          "--out-dir",
+          "C:\\Users\\R\u00E9gisVAQUETTE\\.copilot\\session-state\\cf879aff-5742-4458-9ec1-c3440072cfff\\files\\compiled-surface-validation"
+        ],
+        "cwd": "D:\\WebGL2\\MaterialX\\materialx-webgpu-engine",
+        "env": {},
+        "prependPath": [],
+        "platform": "win32"
+      }
+    ]
+  }
+}

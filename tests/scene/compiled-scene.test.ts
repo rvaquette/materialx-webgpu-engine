@@ -18,8 +18,10 @@ import * as materialCompiler from '../../src/compiler/surface-wgsl.ts';
 import { IDENTITY4 } from '../../src/scene/transforms.ts';
 import { projectIrradianceSH } from '../../src/render/env/irradiance.ts';
 import { buildEnvCdf } from '../../src/assets/environment-cdf.ts';
+import { compiledPathTraceInput, loadRenderScene } from '../render/usd-scene.harness.ts';
+import * as usdImporter from '../../src/usd/importer.ts';
 
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
 const readPackage = (scene: CompiledScenePackage) => async (path: string): Promise<Uint8Array<ArrayBuffer>> => {
   const bytes = scene.files.get(path);
@@ -149,6 +151,41 @@ describe('compiled scene binary codec', () => {
 });
 
 describe('prepared scene export and direct loading', () => {
+  it('restores a render-harness snapshot without source imports and retains prepared PT arrays', async () => {
+    const scene = await exportCompiledScene(await fixture());
+    const fetchResource = packageFetch(scene);
+    vi.stubGlobal('document',{ baseURI:'https://example.test/usd-image-harness.html' });
+    vi.stubGlobal('fetch',fetchResource);
+    const usd = vi.spyOn(usdImporter,'importUsdStage');
+    const bvh = vi.spyOn(acceleration,'buildBvh');
+    const lower = vi.spyOn(materialCompiler,'emitSurfaceVariant');
+    const phase = vi.fn();
+    const loaded = await loadRenderScene('/scenes/compiled/scene.json',vi.fn(),vi.fn(),phase);
+    expect(usd).not.toHaveBeenCalled();
+    expect(bvh).not.toHaveBeenCalled();
+    expect(lower).not.toHaveBeenCalled();
+    expect(phase.mock.calls).toEqual([['compiledSceneLoad']]);
+    expect(fetchResource.mock.calls.every(([url]) => String(url).startsWith('https://example.test/scenes/compiled/'))).toBe(true);
+    if (!loaded.compiled) throw new Error('Missing compiled snapshot.');
+    const prepared = loaded.compiled.pathTrace;
+    const originalCamera = prepared.camera;
+    const frameCamera = { ...originalCamera,eye:[5,6,7] as [number,number,number],exposure:2 };
+    const environment = { ...prepared.environment,intensity:0.25 };
+    const input = compiledPathTraceInput(loaded.compiled,{ frameCamera,environment });
+    expect(input.cache.status).toBe('bypass');
+    expect(input.scene.nodes).toBe(prepared.nodes);
+    expect(input.scene.triangles).toBe(prepared.triangles);
+    expect(input.scene.materials).toBe(prepared.materials);
+    expect(input.scene.camera.eye).toEqual([5,6,7]);
+    expect(input.scene.camera.exposure).toBe(2);
+    expect(input.scene.environment).toBe(environment);
+    expect(prepared.camera).toBe(originalCamera);
+    expect(originalCamera.eye).not.toEqual([5,6,7]);
+    fetchResource.mockClear();
+    await expect(loadRenderScene('/scenes/compiled/scene.json',vi.fn(),vi.fn(),vi.fn(),'source.mtlx'))
+      .rejects.toThrow('cannot use source material overrides');
+    expect(fetchResource).not.toHaveBeenCalled();
+  });
   it('persists a volume atlas and rejects missing grids or unsafe majorants', async () => {
     const loaded = await fixture();
     const pathTrace = buildPathTraceScene(loaded.resources,{ surfaceFor:loaded.mtlx.surfaceFor });

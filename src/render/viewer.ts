@@ -45,8 +45,7 @@ import { JsDenoiser } from './pathtracing/js-denoiser.ts';
 import { changeMaterialParameters, compileEditableMaterial, materialUniformData, packParameterUniforms, visibleMaterialParameters, type MaterialParameter } from './material-parameters.ts';
 import { applySceneDisplacement } from './displacement.ts';
 import type { MaterialResource } from './scene-resources.ts';
-import { compiledRasterShaderKey, exportCompiledScene, loadCompiledScene } from '../scene/compiled-scene.ts';
-import { writeCompiledScene, type SceneDirectory } from '../scene/compiled-scene-codec.ts';
+import { compiledRasterShaderKey, loadCompiledScene } from '../scene/compiled-scene.ts';
 
 /** Preview fill + framing shared with the capture harness so the live view matches. */
 const PREVIEW_ENV: Vec3 = [0.65, 0.68, 0.72];
@@ -197,14 +196,6 @@ export class InteractiveViewer {
 
   get isCompiledScene(): boolean {
     return this.#loaded?.precompiled === true;
-  }
-
-  async exportScene(directory: SceneDirectory): Promise<void> {
-    const loaded = this.#loaded;
-    if (!loaded || this.#disposed) throw new Error('Load a scene before exporting.');
-    const scene = await exportCompiledScene(loaded);
-    if (loaded !== this.#loaded || this.#disposed) throw new Error('Scene changed during export.');
-    await writeCompiledScene(directory, scene);
   }
 
   async setObjectParameters(path: string, changes: ReadonlyMap<string, readonly number[]>): Promise<void> {

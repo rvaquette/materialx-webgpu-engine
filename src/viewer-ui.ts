@@ -35,7 +35,6 @@ export interface ViewerUiActions {
   denoise: (enabled: boolean) => void;
   pause: () => void;
   openFiles: (folder: boolean) => void;
-  exportScene: () => void;
   object: (path: string) => void;
   material: (path: string) => void;
 }
@@ -118,7 +117,6 @@ export async function startViewerUi(
         ImGui.BeginDisabled(state.busy);
         ImGui.SeparatorText('Scene');
         combo('##scene', state.entry, state.scenes.map(scene => ({ label: scene.label, value: scene.entry })), actions.scene);
-        if (ImGui.Button('Exporter la scene compilee...')) actions.exportScene();
         ImGui.SeparatorText('Rendu');
         combo('##resolution', String(state.resolution), [
           ...[256, 512, 1024].map(size => ({ label: `${size} x ${size}`, value: String(size) })),

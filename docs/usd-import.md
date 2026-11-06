@@ -2,12 +2,26 @@
 
 ## Precompiled scenes (v1.0)
 
-Load a USD scene normally, then select **Exporter la scene compilee...** and
-choose a dedicated directory such as `scenes/my-scene-compiled`. Export uses
-the File System Access directory picker (Chrome/Edge on HTTPS or localhost);
-unsupported browsers report an explicit error. Export can take substantially
+Export is an offline command, not a viewer UI action:
+
+```powershell
+npm run export:scene -- --entry scenes\pathtracer\volume_cube.usda --out scenes\compiled\volume_cube
+```
+
+Run it from the project directory with Node.js >=22 and Chrome or Edge installed.
+Set `MX_CHROME` to the browser executable if automatic discovery does not find it;
+`MX_CORE_DIR` and `MX_LIB_ROOT` have the same meaning as in the dev server.
+The source must be a USD/USDA/USDC file inside the project. The output directory
+must be absent or empty; existing exports are never overwritten.
+
+The script starts its own loopback Vite server and isolated headless browser,
+uses the ordinary USD/MaterialX/texture loaders, then exports the prepared scene
+without opening the viewer, initializing WebGPU or rendering frames. Both helper
+processes are closed afterwards. Browser-based loading preserves the same WASM
+and image decoder behavior as the application. Export can take substantially
 longer than loading: it builds any still-lazy BVHs and uses Zstandard level 22.
-It does not modify the source USD/MaterialX files.
+It does not modify the source USD/MaterialX files. A failed export exits nonzero
+and does not publish `scene.json`; choose a fresh directory before retrying.
 
 The output contains:
 
@@ -30,8 +44,7 @@ Large authored numeric arrays and CPU BLAS/TLAS nodes also live in binary payloa
 (float64 records retain JavaScript precision), rather than expanding into JSON.
 Payload downloads/decompression use batches of up to four resources.
 The manifest is written last; failed writes are reported, not marked successful.
-Re-exporting does not delete old unreferenced files; use a fresh directory to
-avoid retaining those files.
+The command requires a fresh directory to avoid mixing payloads from older exports.
 
 The snapshot contains prepared vertex/index streams, prototype BLAS and instance
 TLAS data, already-displaced geometry, the world-space path-tracing BVH and its
@@ -50,9 +63,19 @@ by the source decoder. This format does not add new source image decoders or
 GPU texture formats: the current material upload path requires RGBA8, whereas
 HDR environments use the existing floating-point path.
 
-Rebuild/restart scene discovery after exporting; all `scenes/**/scene.json`
-entries appear as **Compiled - ...**. A direct URL also works:
-`?entry=./scenes/my-scene-compiled/scene.json&backend=pathtracing`.
+### Loading through the UI
+
+There is no separate compiled-scene import dialog. Export under `scenes/`,
+then restart `npm run dev`, or rebuild with `npm run build` for static hosting.
+In the viewer's **Scene** drop-down, select **Compiled - compiled/volume_cube**
+for the command above. All `scenes/**/scene.json` entries are discovered at
+dev-server startup/build time, not by scanning a user's filesystem at runtime.
+The local file/folder buttons import source glTF assets, not compiled packages.
+
+A direct URL also works (without adding an entry to the drop-down):
+`?entry=./scenes/compiled/volume_cube/scene.json&backend=pathtracing`.
+To load an export made outside `scenes/`, first copy its entire directory there;
+selecting only the manifest without its payload directories is not sufficient.
 Static packaging copies the complete `scenes` tree, including custom compiled
 directories and all their payloads. Serve the full directory over HTTP(S);
 absolute local filesystem paths are not browser-fetchable assets.
@@ -64,6 +87,31 @@ GPU mipmap generation still happen. Existing material-parameter edits remain
 available and explicitly invalidate the prepared snapshot, allowing the ordinary
 rebuild path when needed. Replacing a whole material requires loading the
 original USD scene; the compiled-scene UI disables this source-dependent action.
+
+### Rendering a compiled scene from the command line
+
+The capture script accepts the same manifest instead of a source USD:
+
+```powershell
+npm run build:shaderball
+npm run test:shaderball -- --entry /scenes/compiled/volume_cube/scene.json --target local --server static --backends raster,pathtracing --res 512 --spp 64
+```
+
+For development, omit `--server static` to use Vite without a harness build.
+The entry is a server URL under `/scenes/`, not an absolute filesystem path.
+Keep the complete exported directory there. Both raster and path tracing use
+the embedded resources, shaders, decoded images and BVH; the path tracer also
+restores its prepared material dispatch and volume atlas. GPU compilation and
+uploads still run. Captures and the report use the export directory's name
+(nested directory names are joined with `__`), rather than the shared `scene.json`
+filename. `--target mobile`, `--headed`, `--integrated`, `--resume` and the usual
+resolution/sample options remain available.
+
+`--materials` is rejected for compiled scenes: an offline snapshot cannot
+replace materials from a source `.mtlx`. The lower-level harness also rejects
+displacement-scale overrides and source BVH cache refresh/verification modes.
+Its timings report `compiledSceneLoad`, not USD import/material lowering, and
+its geometry-cache status is `bypass` because the BVH comes from the package.
 
 Unknown format/ABI/buffer layouts, missing files, inconsistent lengths,
 checksums and invalid packed traversal indices are errors; there is no silent

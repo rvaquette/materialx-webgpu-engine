@@ -5,7 +5,7 @@
 // Each case drives usd-image-harness.html, saves a PNG and is checked for failure
 // or an (almost) black image; a JSON report summarizes the run.
 //
-// Usage: npm run test:shaderball -- [--entry /scenes/.../scene.usda] [--target mobile|local] [--backends raster,pathtracing]
+// Usage: npm run test:shaderball -- [--entry /scenes/.../scene.usda|/scenes/.../scene.json] [--target mobile|local] [--backends raster,pathtracing]
 //          [--materials <filter>|all] [--res N] [--spp N] [--tilespp N] [--timeout ms] [--port N]
 //          [--device serial] [--out-dir renders/shaderball] [--list]
 
@@ -171,7 +171,8 @@ async function main() {
   if (values.help) {
     console.log('--headed: visible Chrome, no captures/report. --integrated: print URLs for VS Code, no Chrome/CDP or captures/report. Both keep the server alive until Ctrl+C.');
     console.log('--server vite|static (default vite). Static mode requires npm run build:shaderball.');
-    console.log('npm run test:shaderball -- [--entry /scenes/.../scene.usda] [--target mobile|local] [--backends raster,pathtracing] [--materials <filter>|all] [--res N] [--spp N] [--tilespp N] [--timeout ms] [--port N] [--device serial] [--out-dir dir] [--black-threshold fraction] [--max-recoveries N] [--resume] [--list]');
+    console.log('npm run test:shaderball -- [--entry /scenes/.../scene.usda|/scenes/.../scene.json] [--target mobile|local] [--backends raster,pathtracing] [--materials <filter>|all] [--res N] [--spp N] [--tilespp N] [--timeout ms] [--port N] [--device serial] [--out-dir dir] [--black-threshold fraction] [--max-recoveries N] [--resume] [--list]');
+    console.log('Compiled scene.json entries restore their prepared resources without USD/MaterialX import. --materials cannot be used with compiled scenes.');
     console.log('--tilespp: positive integer samples per tile dispatch (default 4 local, 1 mobile); pathtracing captures only. Larger values can exceed the mobile GPU watchdog budget.');
     console.log('Without --materials, render only the scene with its authored materials and bindings (no override).');
     return;
@@ -188,9 +189,12 @@ async function main() {
   if (displayMode && values.target !== 'local') throw new Error('--headed/--integrated require --target local');
   if (displayMode && values.resume) throw new Error('--resume is unavailable without captures/reports');
   values.entry = values.entry.replaceAll('\\', '/');
-  if (!values.entry.startsWith('/scenes/') || !/\.usda?$/i.test(values.entry) || values.entry.split('/').includes('..')) {
-    throw new Error('--entry must be a workspace USDA URL path under /scenes/');
+  const compiledEntry = /\/scene\.json$/i.test(values.entry);
+  if (!values.entry.startsWith('/scenes/') || !(/\.usda?$/i.test(values.entry) || compiledEntry) ||
+      values.entry.split('/').some(part => part === '..' || part === '.') || /[%?#\0]/.test(values.entry)) {
+    throw new Error('--entry must be a workspace USD/USDA or scene.json URL path under /scenes/');
   }
+  if (compiledEntry && values.materials !== undefined) throw new Error('--materials is unavailable for compiled scenes; load the source USD instead.');
   const backends = values.backends.split(',').map((backend) => backend.trim()).filter(Boolean);
   if (backends.length === 0 || backends.some((backend) => !['raster', 'pathtracing'].includes(backend))) throw new Error('--backends accepts raster and/or pathtracing');
 
@@ -211,7 +215,9 @@ async function main() {
     return;
   }
 
-  const sceneName = values.entry === DEFAULT_ENTRY ? undefined : values.entry.split('/').at(-1).replace(/\.usda?$/i, '');
+  const sceneName = values.entry === DEFAULT_ENTRY ? undefined : compiledEntry
+    ? values.entry.slice('/scenes/'.length,-'/scene.json'.length).replaceAll('/','__') || 'compiled-scene'
+    : values.entry.split('/').at(-1).replace(/\.usda?$/i, '');
   const outDir = resolve(ROOT, values['out-dir'], ...(sceneName ? [sceneName] : []), values.target);
   if (!displayMode) mkdirSync(outDir, { recursive: true });
   const reportFile = join(outDir, 'report.json');
