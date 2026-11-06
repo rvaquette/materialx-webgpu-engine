@@ -613,12 +613,13 @@ async function renderUsdRasterOnDevice(
   tracedShadows?: boolean,
   lightDirOverride?: Vec3,
   phase: (name: string) => void = () => {},
+  preparedScene?: Awaited<ReturnType<typeof loadRenderScene>>,
 ): Promise<{ rgba: Uint8ClampedArray; renderMs: number }> {
   const sink = (d: { level: string; message: string }): void => {
     if (d.level === 'warning' || d.level === 'error') line(`diag: ${d.message}`);
   };
 
-  const loaded = await loadRenderScene(entry,line,sink,phase,materialOverride);
+  const loaded = preparedScene ?? await loadRenderScene(entry,line,sink,phase,materialOverride);
   const { scene,lights,cameras,envAsset,imageProvider,surfaceFor,compiled } = loaded;
   const resources = compiled ? {
     ...loaded.resources,materials:new Map([...loaded.resources.materials].map(([key,material]) => {
@@ -1121,6 +1122,7 @@ async function renderUsdOnDevice(
   phase: (name: string) => void = () => {},
   maxSamplesPerDispatch = 1,
   benchmarkOptions?: PathTraceBenchmarkOptions,
+  preparedScene?: Awaited<ReturnType<typeof loadRenderScene>>,
 ): Promise<{ rgba: Uint8ClampedArray; renderMs: number; benchmark?: PathTraceBenchmarkResult }> {
   if (!Number.isInteger(maxSamplesPerDispatch) || maxSamplesPerDispatch < 1) {
     throw new Error(`maxSamplesPerDispatch must be a positive integer; got ${maxSamplesPerDispatch}`);
@@ -1134,7 +1136,7 @@ async function renderUsdOnDevice(
   };
 
   const { scene,lights,cameras,envAsset,resources,imageProvider,surfaceFor,compiled } =
-    await loadRenderScene(entry,line,sink,phase,materialOverride);
+    preparedScene ?? await loadRenderScene(entry,line,sink,phase,materialOverride);
   if (envAsset) line(`diag env ${envAsset.image.width}x${envAsset.image.height} intensity=${envAsset.intensity.toFixed(3)} (dome)`);
   if (compiled && dispScaleOverride !== undefined) throw new Error('Compiled geometry cannot override displacement scale; load the source USD.');
   if (compiled && benchmarkOptions?.cacheMode && benchmarkOptions.cacheMode !== 'use') {
@@ -1605,8 +1607,28 @@ export async function bootstrapUsdImage(
     return null;
   };
 
+  const state = globalThis as {
+    __MX_IMAGE__?: UsdSceneImage | null;
+    __MX_SKIPPED__?: { entry: string; backend: string; materialOverride: string | undefined; reason: string };
+  };
+  delete state.__MX_IMAGE__;
+  delete state.__MX_SKIPPED__;
+  const loaded = await loadRenderScene(entry, line, diagnostic => {
+    if (diagnostic.level === 'warning' || diagnostic.level === 'error') line(`diag: ${diagnostic.message}`);
+  }, phase, materialOverride);
+  const hasGeometry = loaded.resources.instances.some(instance =>
+    instance.hasGeometry && (loaded.resources.geometries.get(instance.prototypeId)?.triangleCount ?? 0) > 0);
+  if (!hasGeometry) {
+    const reason = 'Scene has no drawable geometry';
+    line(`skipped: ${reason} (${entry})`);
+    state.__MX_SKIPPED__ = { entry, backend, materialOverride, reason };
+    loaded.documents?.delete();
+    return null;
+  }
+
   if (typeof navigator === 'undefined' || !navigator.gpu) {
     line('WebGPU indisponible sur cet appareil.');
+    loaded.documents?.delete();
     return fail();
   }
   sessionLine = line;
@@ -1614,6 +1636,7 @@ export async function bootstrapUsdImage(
     const adapter = await navigator.gpu.requestAdapter({ powerPreference: 'high-performance' });
     if (!adapter) {
       line('Aucun adaptateur WebGPU.');
+      loaded.documents?.delete();
       return fail();
     }
     const descriptor = sceneDeviceDescriptor(adapter);
@@ -1640,10 +1663,10 @@ export async function bootstrapUsdImage(
   if (materialOverride) line(`OpenPBRMaterial override: ${materialOverride}`);
   if (backend === 'raster') {
     line(`Rendu raster GPU de ${entry} (${res}x${res})...`);
-    ({ rgba, renderMs } = await renderUsdRasterOnDevice(device, entry, res, line, materialOverride, exposure, camBack, dispScale, tracedShadows, lightDir, phase));
+    ({ rgba, renderMs } = await renderUsdRasterOnDevice(device, entry, res, line, materialOverride, exposure, camBack, dispScale, tracedShadows, lightDir, phase, loaded));
   } else {
     line(`Rendu path-trace GPU de ${entry} (${res}x${res}, ${samples} spp)...`);
-    ({ rgba, renderMs, benchmark } = await renderUsdOnDevice(device, entry, res, samples, line, materialOverride, exposure, firefly, skyPower, skyColor, camBack, dispScale, phase, maxSamplesPerDispatch, benchmarkOptions));
+    ({ rgba, renderMs, benchmark } = await renderUsdOnDevice(device, entry, res, samples, line, materialOverride, exposure, firefly, skyPower, skyColor, camBack, dispScale, phase, maxSamplesPerDispatch, benchmarkOptions, loaded));
   }
 
   const canvas = document.createElement('canvas');

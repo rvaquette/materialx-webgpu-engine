@@ -14,6 +14,27 @@ Set `MX_CHROME` to the browser executable if automatic discovery does not find i
 The source must be a USD/USDA/USDC file inside the project. The output directory
 must be absent or empty; existing exports are never overwritten.
 
+To recursively export every USDA under `scenes`, preserving its relative directory:
+
+```powershell
+.\scripts\export-scenes.ps1
+```
+
+For example, `scenes\pathtracer\volume_cube.usda` is exported to
+`scenes\compiled\pathtracer\volume_cube\scene.json`. The script excludes
+`scenes\compiled`, never overwrites existing packages and stops on the first failure.
+It uses `GetFileNameWithoutExtension` to avoid trailing dots in Windows directory names.
+Material-only layers and empty stages can also be exported, but contain no drawable
+geometry: select the composed parent stage (for example `books_grp.usda`, not
+`materials\books.usda`) to render the complete asset with its materials.
+The image harness checks the loaded geometry before requesting a GPU.
+`test:shaderball` reports stages without drawable triangles as `skipped`, for
+both source USD and compiled scenes, without saving a PNG or treating them as failures.
+
+Vite may report missing sourcemap sources in `@bokuweb/zstd-wasm`. These warnings
+refer to debugging metadata shipped by the dependency, not missing runtime modules
+or scene resources; they do not prevent compression or export.
+
 The script starts its own loopback Vite server and isolated headless browser,
 uses the ordinary USD/MaterialX/texture loaders, then exports the prepared scene
 without opening the viewer, initializing WebGPU or rendering frames. Both helper

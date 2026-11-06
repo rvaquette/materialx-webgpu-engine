@@ -3,7 +3,7 @@ import { decodeCompiledScene, encodeCompiledScene, writeCompiledScene, type Comp
 import { compiledRasterShaderKey, exportCompiledScene, loadCompiledScene } from '../../src/scene/compiled-scene.ts';
 import { importUsdStage } from '../../src/usd/importer.ts';
 import { buildSceneResources } from '../../src/render/scene-resources.ts';
-import { buildPathTraceScene } from '../../src/render/pathtracing/scene-buffers.ts';
+import { buildPathTraceScene, PT_MATERIAL_FLOATS } from '../../src/render/pathtracing/scene-buffers.ts';
 import { buildMaterialDispatch } from '../../src/render/pathtracing/material-variant.ts';
 import { NEUTRAL_SURFACE } from '../../src/render/raster/scene-frame.ts';
 import { IrModuleBuilder, FLOAT } from '../../src/compiler/ir.ts';
@@ -18,7 +18,7 @@ import * as materialCompiler from '../../src/compiler/surface-wgsl.ts';
 import { IDENTITY4 } from '../../src/scene/transforms.ts';
 import { projectIrradianceSH } from '../../src/render/env/irradiance.ts';
 import { buildEnvCdf } from '../../src/assets/environment-cdf.ts';
-import { compiledPathTraceInput, loadRenderScene } from '../render/usd-scene.harness.ts';
+import { bootstrapUsdImage, compiledPathTraceInput, loadRenderScene } from '../render/usd-scene.harness.ts';
 import * as usdImporter from '../../src/usd/importer.ts';
 
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); });
@@ -151,6 +151,67 @@ describe('compiled scene binary codec', () => {
 });
 
 describe('prepared scene export and direct loading', () => {
+  it.each([
+    '#usda 1.0\ndef Xform "World" {}',
+    `#usda 1.0
+over "World" {
+  over "Looks" {
+    def Material "books" {}
+  }
+  over "books_grp" {
+    rel material:binding = </World/Looks/books>
+  }
+}`,
+  ])('round trips a stage without drawable geometry: %s', async source => {
+    const loaded = await fixture();
+    loaded.scene = await importUsdStage(loaded.entry, { reader: { read: async () => source } });
+    loaded.resources = await buildSceneResources(loaded.scene, {
+      meshSource: { meshFor: () => { throw new Error('Unexpected mesh request'); } },
+      materialCompiler: { compile: () => { throw new Error('Unexpected material compilation'); } },
+    });
+    loaded.parameterResources = loaded.resources;
+    const scene = await exportCompiledScene(loaded);
+    const restored = await loadCompiledScene('https://example.test/scenes/compiled/scene.json', vi.fn(), packageFetch(scene));
+    const pathTrace = restored.compiled!.pathTrace;
+    expect(pathTrace.triangleCount).toBe(0);
+    expect(pathTrace.nodeCount).toBe(0);
+    expect(pathTrace.materialCount).toBe(0);
+    expect(pathTrace.materialKeys).toEqual([]);
+    expect(pathTrace.materials).toEqual(new Float32Array(PT_MATERIAL_FLOATS));
+    expect(restored.resources).toEqual(loaded.resources);
+  });
+
+  it('rejects a material buffer with an incorrect record count', async () => {
+    const loaded = await fixture();
+    const pathTrace = buildPathTraceScene(loaded.resources, { surfaceFor: loaded.mtlx.surfaceFor });
+    pathTrace.materials = new Float32Array(pathTrace.materials.length + PT_MATERIAL_FLOATS);
+    loaded.compiled = { pathTrace, dispatch: buildMaterialDispatch(pathTrace.variantSources), rasterShaders: new Map() };
+    await expect(exportCompiledScene(loaded)).rejects.toThrow('path tracing buffers');
+  });
+
+  it.each(['raster', 'pathtracing'] as const)('skips empty compiled scenes before requesting a GPU: %s', async backend => {
+    const loaded = await fixture();
+    loaded.scene = await importUsdStage(loaded.entry, { reader: { read: async () => '#usda 1.0\ndef Xform "World" {}' } });
+    loaded.resources = await buildSceneResources(loaded.scene, {
+      meshSource: { meshFor: () => { throw new Error('Unexpected mesh request'); } },
+      materialCompiler: { compile: () => { throw new Error('Unexpected material compilation'); } },
+    });
+    loaded.parameterResources = loaded.resources;
+    const scene = await exportCompiledScene(loaded);
+    vi.stubGlobal('document', { baseURI: 'https://example.test/usd-image-harness.html', getElementById: () => undefined });
+    vi.stubGlobal('fetch', packageFetch(scene));
+    const requestAdapter = vi.fn(() => { throw new Error('GPU must not be requested'); });
+    vi.stubGlobal('navigator', { gpu: { requestAdapter } });
+    vi.stubGlobal('__MX_IMAGE__', { stale: true });
+    vi.stubGlobal('__MX_SKIPPED__', { stale: true });
+    await expect(bootstrapUsdImage('/scenes/compiled/scene.json', 256, 16, backend)).resolves.toBeNull();
+    expect(requestAdapter).not.toHaveBeenCalled();
+    expect(Reflect.get(globalThis, '__MX_IMAGE__')).toBeUndefined();
+    expect(Reflect.get(globalThis, '__MX_SKIPPED__')).toEqual({
+      entry: '/scenes/compiled/scene.json', backend, materialOverride: undefined, reason: 'Scene has no drawable geometry',
+    });
+  });
+
   it('restores a render-harness snapshot without source imports and retains prepared PT arrays', async () => {
     const scene = await exportCompiledScene(await fixture());
     const fetchResource = packageFetch(scene);

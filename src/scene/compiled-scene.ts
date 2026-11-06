@@ -185,7 +185,7 @@ function validateData(value: unknown): asserts value is CompiledSceneData {
       !(value.pathTrace.triangleUv instanceof Float32Array) || !(value.pathTrace.triangleTangent instanceof Float32Array) ||
       !uint(value.pathTrace.nodeCount) || !uint(value.pathTrace.triangleCount) ||
       !(value.pathTrace.materials instanceof Float32Array) || !uint(value.pathTrace.materialCount) ||
-      value.pathTrace.materials.length !== value.pathTrace.materialCount * PT_MATERIAL_FLOATS ||
+      value.pathTrace.materials.length !== Math.max(value.pathTrace.materialCount, 1) * PT_MATERIAL_FLOATS ||
       !Array.isArray(value.pathTrace.materialKeys) || value.pathTrace.materialKeys.length !== value.pathTrace.materialCount ||
       !Array.isArray(value.pathTrace.variantSources)) fail('path tracing buffers');
   const atlas = value.pathTrace.volumeData;

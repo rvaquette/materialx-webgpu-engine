@@ -19,6 +19,7 @@
       if (rendering) throw new Error('A render is already running');
       rendering = true;
       delete globalThis.__MX_IMAGE__;
+      delete globalThis.__MX_SKIPPED__;
       document.getElementById('log').replaceChildren();
       const params = new URLSearchParams(search);
       const entry = params.get('entry') ?? '/scenes/test_material_disney_gold/test_material_disney_gold.usda';

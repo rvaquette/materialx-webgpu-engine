@@ -117,7 +117,9 @@ async function renderCase(cdp, origin, { backend, override }, values) {
     let state;
     try {
       state = await cdp.evaluate(`JSON.stringify((() => { const i = globalThis.__MX_IMAGE__;
+        const skipped = globalThis.__MX_SKIPPED__;
         return { key: i ? JSON.stringify({ e: i.entry, b: i.backend, o: i.materialOverride ?? null }) : null,
+          skipped: skipped ? { key: JSON.stringify({ e: skipped.entry, b: skipped.backend, o: skipped.materialOverride ?? null }), reason: skipped.reason } : null,
           failed: ('__MX_IMAGE__' in globalThis) && i === null, href: location.href, log: document.body ? document.body.innerText : '' }; })())`);
     } catch (error) {
       if (/context|navigat/i.test(error.message)) continue;
@@ -126,6 +128,7 @@ async function renderCase(cdp, origin, { backend, override }, values) {
     const status = JSON.parse(state);
     if (status.href !== url) continue;
     pageLog = status.log;
+    if (status.skipped?.key === expected) return { status: 'skipped', reason: status.skipped.reason, pageLog };
     if (status.failed) return { status: 'failed', reason: lastLines(pageLog) };
     if (/diag device lost/i.test(pageLog)) return { status: 'failed', reason: `GPU device lost: ${lastLines(pageLog, 2)}` };
     if (status.key === expected) {
@@ -244,7 +247,7 @@ async function main() {
   }
   const done = new Set(report.cases.map((entry) => entry.name));
   const saveReport = () => {
-    report.summary = { ok: 0, black: 0, failed: 0 };
+    report.summary = { ok: 0, black: 0, failed: 0, skipped: 0 };
     for (const entry of report.cases) report.summary[entry.status]++;
     writeFileSync(reportFile, JSON.stringify(report, null, 2) + '\n');
   };
