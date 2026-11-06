@@ -39,19 +39,19 @@ export interface GraphMaterialCompilerOptions {
 
 /** Minimal opaque surface IR so buildSceneResources can extract features and key
  *  the pipeline; the real shading rides on the layered module and resolved graph. */
-function neutralSurfaceIr(volume?: ResolvedVolume): ShaderIr {
+function neutralSurfaceIr(volume?: ResolvedVolume, graph?: ResolvedGraph): ShaderIr {
   const b = new IrModuleBuilder();
   const opacity = b.constant(FLOAT, 1);
   const ref = b.add({ kind: 'closure', type: shaderType('surface'), closure: 'bsdf', op: 'surface', params: { opacity } });
   b.output({ name: 'surfaceshader', type: shaderType('surface'), ref });
-  if (volume) appendVolumeIr(volume, b);
+  if (volume) appendVolumeIr(volume, b, graph);
   return b.build();
 }
 
-/** Minimal opaque volume IR for volumeshaders. */
-function volumeIr(volume: ResolvedVolume): ShaderIr {
+/** Preserve homogeneous VDF coefficients in the compiled IR. */
+function volumeIr(volume: ResolvedVolume, graph: ResolvedGraph): ShaderIr {
   const b = new IrModuleBuilder();
-  appendVolumeIr(volume, b);
+  appendVolumeIr(volume, b, graph);
   return b.build();
 }
 
@@ -112,13 +112,13 @@ export function createGraphMaterialCompiler(options: GraphMaterialCompilerOption
         const graph = resolveGraph({
           roots,
           onDiagnostic: emit,
-          isCovered: (category) => isNodeCovered(category) || SURFACE_IR_UPSTREAM.has(category),
+          isCovered: (category) => category === 'volume' || isNodeCovered(category) || SURFACE_IR_UPSTREAM.has(category),
           ...(options.target !== undefined ? { target: options.target } : {}),
         });
 
         const volume = hasVolumeTerminal(graph) ? resolveVolume(graph, { onDiagnostic: emit }) : null;
         if (volume && !graph.terminals.some(t => t.type === 'surfaceshader' && t.nodeId)) {
-          const ir = volumeIr(volume);
+          const ir = volumeIr(volume, graph);
           return { ir, module: emitWgsl(ir), volume, graph };
         }
         const surface = resolveSurface(graph, { onDiagnostic: emit, supportedUpstream: SURFACE_IR_UPSTREAM, ...options.surfaceOptions });
@@ -127,7 +127,7 @@ export function createGraphMaterialCompiler(options: GraphMaterialCompilerOption
           return undefined;
         }
         const layered = emitLayeredSurface(graph, surface, emit);
-        const ir = neutralSurfaceIr(volume ?? undefined);
+        const ir = neutralSurfaceIr(volume ?? undefined, graph);
         const displacement = extractDisplacement(graph);
         return { ir, module: emitWgsl(ir), layered, graph, surface, ...(volume ? { volume } : {}), ...(displacement ? { displacement } : {}) };
       } catch (error) {

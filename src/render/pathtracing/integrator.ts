@@ -9,6 +9,7 @@
 import type { Vec3 } from '../../scene/transforms.ts';
 import type { HomogeneousMedium } from './media.ts';
 import { phaseHG, sampleHenyeyGreenstein, sampleHomogeneous } from './media.ts';
+import { sampleVolumeTransport, type VolumeField } from '../volume-field.ts';
 
 export type Rng = () => number;
 
@@ -98,6 +99,7 @@ export class RadianceAccumulator {
 export interface Ray {
   origin: Vec3;
   direction: Vec3;
+  minDistance?: number;
 }
 
 export interface SurfaceHit {
@@ -111,6 +113,7 @@ export interface SurfaceHit {
   interiorMedium?: HomogeneousMedium;
   /** Invisible closed boundary of a pure volumeshader (no BSDF event). */
   volumeBoundary?: boolean;
+  interiorField?: VolumeField;
 }
 
 export interface BsdfSample {
@@ -186,14 +189,22 @@ export function integratePath(
   let bsdfPdf = 0;
   let prevHit: SurfaceHit | null = null;
   let medium: HomogeneousMedium | null = options.initialMedium ?? null;
+  let field: VolumeField | undefined;
 
   for (let bounces = 0; bounces <= maxBounces; bounces++) {
     const hit = scene.intersect(ray);
     const tMax = hit ? distanceBetween(ray.origin, hit.position) : Infinity;
+    if (bounces === 0 && hit?.volumeBoundary && dot(ray.direction,hit.normal) > 0) {
+      field = hit.interiorField;
+      medium = hit.interiorMedium ?? null;
+    }
 
-    if (medium) {
-      const mi = sampleHomogeneous(medium, tMax, rng);
+    if (medium || field) {
+      const volumeSample = field ? sampleVolumeTransport(field,ray.origin,ray.direction,tMax,rng) : undefined;
+      const mi = volumeSample ?? sampleHomogeneous(medium!, tMax, rng);
+      if (volumeSample) radiance = add(radiance, mul(beta,volumeSample.emission));
       beta = mul(beta, mi.weight);
+      const g = volumeSample?.anisotropy ?? medium!.anisotropy;
       if (mi.scattered) {
         const point: V = add(ray.origin, scale(ray.direction, mi.t));
         const wo = neg(ray.direction);
@@ -202,18 +213,18 @@ export function integratePath(
           if (ls && ls.pdf > 0) {
             const tr = scene.transmittance(point, ls.direction, ls.distance);
             if (maxComponent(tr) > 0) {
-              const phase = phaseHG(dot(wo, ls.direction), medium.anisotropy);
+              const phase = phaseHG(dot(wo, ls.direction), g);
               const contrib = scale(mul(tr, ls.radiance), phase / ls.pdf);
               radiance = add(radiance, mul(beta, contrib));
             }
           }
         }
         // Phase is importance-sampled, so f/pdf = 1 and beta is unchanged here.
-        const ps = sampleHenyeyGreenstein(wo, medium.anisotropy, rng(), rng());
+        const ps = sampleHenyeyGreenstein(wo, g, rng(), rng());
         bsdfPdf = ps.pdf;
         specularBounce = false;
         prevHit = null;
-        ray = { origin: point, direction: ps.wi };
+        ray = { origin: point, direction: ps.wi, ...(field ? { minDistance:1e-7 } : {}) };
         if (bounces >= minBounces) {
           const rr = russianRoulette(beta, rng());
           if (!rr.survive) break;
@@ -239,6 +250,7 @@ export function integratePath(
 
     if (hit.volumeBoundary) {
       medium = dot(ray.direction, hit.normal) < 0 ? hit.interiorMedium ?? null : null;
+      field = dot(ray.direction,hit.normal) < 0 ? hit.interiorField : undefined;
       ray = { origin: add(hit.position, scale(ray.direction, 1e-4)), direction: ray.direction };
       continue;
     }
@@ -281,7 +293,9 @@ export function integratePath(
 
     if (bs.transmission) {
       // Convex-interface assumption: entering adopts the interior medium, exiting clears it.
-      medium = medium ? null : hit.interiorMedium ?? null;
+      const exiting = medium || field;
+      medium = exiting ? null : hit.interiorMedium ?? null;
+      field = exiting ? undefined : hit.interiorField;
     }
 
     if (bounces >= minBounces) {

@@ -1,0 +1,33 @@
+#usda 1.0
+(
+    defaultPrim = "World"
+    metersPerUnit = 1
+    upAxis = "Y"
+)
+def Xform "World"
+{
+    custom string pathtracer:sourceScene = "volume_emission"
+    custom int pathtracer:maxDepth = 16
+    def Camera "Camera"
+    {
+        double3 xformOp:translate = (0, 1, 6)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        token projection = "perspective"
+        float focalLength = 50
+        float horizontalAperture = 41.4213562373
+        float verticalAperture = 41.4213562373
+        float2 clippingRange = (0.001, 10000)
+    }
+    def Material "Volume" (
+        prepend references = @./volume_emission.mtlx@</MaterialX/Materials/volume>
+    )
+    {
+    }
+    def Mesh "Sphere"
+    {
+        custom asset engine:geometry:file = @./furnace/sphere.obj@
+        double3 xformOp:translate = (0, 1, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        rel material:binding = </World/Volume>
+    }
+}

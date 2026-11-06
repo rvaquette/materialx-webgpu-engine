@@ -1,16 +1,57 @@
-# Volumeshader Support Implementation
+# Support des volumes MaterialX
 
-> Correction du statut : les captures blanches uniformes precedentes montraient
-> une scene sans geometrie importee, pas un volume valide. Le support actuellement
-> raccorde concerne les coefficients constants de `anisotropic_vdf` dans le path
-> tracer : materiaux surface + volume et volumes purs sur des maillages fermes.
-> Les scenes utilisent `volume` (type `volumeshader`), des coefficients `vector3`,
-> des references MaterialX et des geometries `Mesh`/OBJ.
-> Les entrees spatiales/procedurales et les volumes emissifs sont rejetes
-> explicitement. Le rendu volumetrique raster reste a raccorder au GPU : son
-> adaptateur de parametres et sa reference CPU ne constituent pas un rendu valide.
-> Les annonces de support complet ci-dessous et dans les rapports historiques
-> sont donc depassees.
+## Statut actuel
+
+- `anisotropic_vdf` : absorption/scattering `vector3`, anisotropie dans (-1, 1).
+- `volume` de type `volumeshader`, seul ou avec une surface.
+- `uniform_edf` connecte au volume : emission RGB par unite de distance monde,
+  y compris lorsque l'extinction est nulle.
+- Path tracer CPU/GPU : transport RGB par delta tracking pondere pour les
+  milieux explicites. Les anciennes voies verre/SSS restent disponibles.
+- Raster GPU : integration Beer-Lambert, emission et diffusion simple avec
+  ombres, sur les frontieres reelles du maillage, puis composition en HDR avant
+  le tonemapping. Les frontieres des volumes purs ne sont pas dessinees opaques.
+- Champs proceduraux : echantillonnage en coordonnees monde sur une grille
+  32 x 32 x 32 par materiau, interpolation trilineaire commune aux deux backends,
+  majorant calculé sur le champ reconstruit. Les changements des parametres
+  d'un materiau surface + volume reconstruisent aussi son champ.
+
+Les anciens carres blancs uniformes etaient des scenes sans geometrie :
+ils ne prouvaient pas le fonctionnement des volumes.
+
+## Scenes de verification
+
+Avec le serveur statique servant `dist` :
+
+1. Raster homogene :
+   `?entry=./scenes/pathtracer/volume_cube.usda&backend=raster&res=512`
+2. Heterogene, bandes de densite spatiale :
+   `?entry=./scenes/pathtracer/volume_heterogeneous.usda&backend=pathtracing&res=512`
+3. Emission, sphere sans luminaire :
+   `?entry=./scenes/pathtracer/volume_emission.usda&backend=pathtracing&res=512`
+
+Les deux nouvelles scenes sont aussi utilisables avec `backend=raster`.
+Les geometries sont des `Mesh`/OBJ, avec de vraies references MaterialX.
+
+## Limites explicites
+
+- Maillages fermes et correctement orientes ; pas de pile de milieux imbriques.
+- Raster : diffusion simple, sans trajet refracte pour le verre + volume ni
+  diffusion multiple. 64 pas par segment camera, 12 pour l'attenuation lumineuse.
+- Le champ rendu est la grille reconstruite, pas le procede continu exact :
+  les details plus fins que la grille peuvent etre perdus.
+- Seul `uniform_edf` est accepte ; le constructeur demande encore un VDF
+  (qui peut avoir une absorption et une diffusion nulles).
+- Images volumetriques/3D non prises en charge ; les textures du volume et les
+  operations sans interpreteur CPU sont refusees, sans remplacement neutre.
+- Les espaces autres que les coordonnees monde et les primvars par instance
+  ne sont pas une representation volumetrique prise en charge.
+- Le parcours GPU borne les segments au domaine fini et utilise un seuil
+  d'intersection reduit apres une collision, sans plafond silencieux de collisions.
+
+## Historique (obsolete, conserve pour contexte)
+
+Les sections suivantes decrivent la premiere architecture, pas le statut actuel.
 
 > **Status**: ✅ Phase 1 Complete - Architectural foundation ready for rendering
 

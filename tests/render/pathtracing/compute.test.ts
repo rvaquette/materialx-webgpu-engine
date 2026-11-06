@@ -372,7 +372,7 @@ describe('pathTraceComputeWgsl participating media (increment 4)', () => {
   it('runs free-flight sampling and toggles the medium on transmission', () => {
     expect(src).toContain('var inMedium = false;');
     expect(src).toContain('mx_sample_homogeneous(medium, tMax, state)');
-    expect(src).toContain('mx_sample_hg(-rd, medium.g');
+    expect(src).toContain('mx_sample_hg(-rd, g');
     expect(src).toContain('(wo.z > 0.0) != (bs.wi.z > 0.0)');
     expect(src).toContain('medium = MxMedium(c.interiorSigmaA, c.interiorSigmaS, c.interiorG);');
   });

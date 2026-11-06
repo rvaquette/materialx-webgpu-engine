@@ -34,7 +34,8 @@ export type PtBufferRole =
   | 'triangleUv'
   | 'triangleTangent'
   | 'mxUniforms'
-  | 'analyticLights';
+  | 'analyticLights'
+  | 'volumeData';
 
 export interface PtBufferSlot {
   binding: number;
@@ -98,6 +99,7 @@ function group0Slots(scene: PathTraceScene, dispatch: PtMaterialDispatch): PtBuf
     slots.push({ binding: 8, role: 'mxUniforms', usage: 'uniform', access: 'read' });
   }
   if (scene.analyticLights) slots.push({ binding: 9, role: 'analyticLights', usage: 'storage', access: 'read', data: scene.analyticLights });
+  if (scene.volumeData) slots.push({ binding: 10, role: 'volumeData', usage: 'storage', access: 'read', data: scene.volumeData });
   return slots;
 }
 

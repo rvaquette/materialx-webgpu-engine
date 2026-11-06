@@ -39,6 +39,7 @@ import { compileShaderWithDiagnostics, type ShaderCompilationError } from '../gp
 import { packHdrTexture } from '../assets/hdr-texture.ts';
 import { generateEnvironmentMipmaps } from './env/mipmaps.ts';
 import { assembleIrForwardShader, type RasterQuality } from './raster/ir-forward.ts';
+import { rasterVolumeWgsl, RASTER_VOLUME_UNIFORM_BYTES } from './raster/volume-pass.ts';
 import { pathTraceDisplayWgsl, previewScale, PT_DISPLAY_INFO_BYTES, PT_DISPLAY_PIXEL_BYTES } from './pathtracing/display.ts';
 import { JsDenoiser } from './pathtracing/js-denoiser.ts';
 import { changeMaterialParameters, compileEditableMaterial, materialUniformData, packParameterUniforms, visibleMaterialParameters, type MaterialParameter } from './material-parameters.ts';
@@ -224,7 +225,7 @@ export class InteractiveViewer {
     probeMaterials.set(key, compiled);
     const after = buildSceneFrame({ ...source, materials: probeMaterials }, { surfaceFor: loaded.mtlx.surfaceFor })
       .draws.find(draw => draw.materialKey === key);
-    const rebuild = material.parameters?.some(parameter => changes.has(parameter.id) && parameter.update === 'rebuild')
+    const rebuild = material.volumeIr !== undefined || material.parameters?.some(parameter => changes.has(parameter.id) && parameter.update === 'rebuild')
       || compiled.sceneShader?.code !== material.sceneShader?.code || before?.pass !== after?.pass;
     if (rebuild) updated = compiled;
     const materials = new Map(source.materials);
@@ -318,9 +319,6 @@ export class InteractiveViewer {
   }
 
   setBackend(kind: BackendKind): void {
-    if (kind === 'raster' && [...this.#loaded?.resources.materials.values() ?? []].some(m => m.volumeMedium)) {
-      throw new Error('Volumetric raster rendering is not implemented yet. Use path tracing.');
-    }
     if (kind === this.#backend) return;
     this.#backend = kind;
     this.#canvas.style.imageRendering = 'auto';
@@ -382,9 +380,6 @@ export class InteractiveViewer {
     let frame: SceneFramePlan;
     let render: SceneRender;
     try {
-      if (this.#backend === 'raster' && [...loaded.resources.materials.values()].some(m => m.volumeMedium)) {
-        throw new Error('Volumetric raster rendering is not implemented yet. Use path tracing.');
-      }
       if (overrides.size > 0 && loaded.resources.pendingMaterials.length > 0) {
         throw new Error('MaterialX compilation failed.');
       }
@@ -593,6 +588,7 @@ export class InteractiveViewer {
     const parameterBuffers = new Map<string, GPUBuffer[]>();
     const frameUniforms: Array<{ buffer: GPUBuffer; draw: SceneFramePlan['draws'][number] }> = [];
     let envBgUniform: GPUBuffer | undefined;
+    let volumeUniform: GPUBuffer | undefined;
     let uploadPtParameters: (() => void) | undefined;
     this.#onShaderErrors?.([]);
     let rasterErrors: ShaderCompilationError[] = [];
@@ -723,6 +719,7 @@ export class InteractiveViewer {
         const shaders = new Map<string, ReturnType<typeof assembleIrForwardShader>>();
         for (const draw of frame.draws) {
           const material = draw.materialKey ? resources.materials.get(draw.materialKey) : undefined;
+          if (material?.volumeBoundary) continue;
           if (!material?.surfaceModule || shaders.has(material.variant.pipelineKey)) continue;
           const shader = loaded.compiled?.rasterShaders.get(compiledRasterShaderKey(material.unitKey, quality)) ??
             assembleIrForwardShader(material.surfaceModule, {
@@ -745,6 +742,7 @@ export class InteractiveViewer {
           const normal = buffers?.vertexBuffers.get('normal');
           if (!buffers || !geometry || !position || !normal) continue;
           const material = draw.materialKey ? resources.materials.get(draw.materialKey) : undefined;
+          if (material?.volumeBoundary) continue;
           if (!material?.sceneShader) continue;
           const shader = shaders.get(material.variant.pipelineKey);
           if (!shader) throw new Error(`Missing raster shader: ${material.materialName}`);
@@ -821,30 +819,75 @@ export class InteractiveViewer {
       const resolveUniform = track(device.createBuffer({ size: RESOLVE_UNIFORM_SIZE, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST }));
       device.queue.writeBuffer(resolveUniform, 0, new Float32Array([frame.camera.exposure]));
       const sampler = device.createSampler({ magFilter: 'linear', minFilter: 'linear' });
+      let volumePipeline: GPURenderPipeline | undefined;
+      const volumeEntries: GPUBindGroupEntry[] = [];
+      if ([...resources.materials.values()].some(material => material.volumeIr)) {
+        const volumeScene = loaded.compiled?.pathTrace ?? await buildCachedPathTraceScene(resources, {
+          lights: loaded.lights, surfaceFor: loaded.mtlx.surfaceFor,
+          frameCamera: { viewProj: cameraViewProj, eye: cameraEye, exposure },
+          environment: frame.environment, settings: pathTraceSettings(loaded.scene),
+        });
+        const code = rasterVolumeWgsl(volumeScene.volumeData !== undefined,rasterLights !== undefined);
+        const compiled = await compileShaderWithDiagnostics(device,code,'Raster volume');
+        rasterErrors = compiled.errors;
+        this.#onShaderErrors?.(rasterErrors);
+        if (rasterErrors.length) throw new Error(`WGSL volume raster: ${rasterErrors.length} erreur(s).`);
+        volumePipeline = device.createRenderPipeline({
+          layout: 'auto', vertex: { module: compiled.module, entryPoint: 'vs' },
+          fragment: { module: compiled.module, entryPoint: 'fs', targets: [{ format: backend.hdrFormat }] },
+          primitive: { topology: 'triangle-list' },
+        });
+        const storage: Array<[number, Float32Array | Uint32Array]> = [
+          [1,volumeScene.nodes],[2,volumeScene.triangles],[3,volumeScene.triangleOrder],[4,volumeScene.materials],
+        ];
+        if (volumeScene.volumeData) storage.push([10,volumeScene.volumeData]);
+        for (const [binding,data] of storage) {
+          assertSceneStorageSize(device,Math.max(data.byteLength,4),'raster volume');
+          const buffer = track(device.createBuffer({ size: Math.max(data.byteLength,4),usage: GPUBufferUsage.STORAGE|GPUBufferUsage.COPY_DST }));
+          device.queue.writeBuffer(buffer,0,data);
+          volumeEntries.push({ binding,resource: { buffer } });
+        }
+        volumeUniform = track(device.createBuffer({ size: RASTER_VOLUME_UNIFORM_BYTES,usage: GPUBufferUsage.UNIFORM|GPUBufferUsage.COPY_DST }));
+        volumeEntries.push({ binding: 5,resource: { buffer: volumeUniform } });
+        if (rasterLights) volumeEntries.push({ binding: 9,resource: { buffer: rasterLights } });
+      }
       const createRasterTargets = (w: number, h: number) => {
         const hdr = device.createTexture({
           size: [w, h], format: backend.hdrFormat,
           usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
         });
         let depth: GPUTexture | undefined;
+        let volumeHdr: GPUTexture | undefined;
         try {
           depth = device.createTexture({
             size: [w, h], format: backend.depthFormat, usage: GPUTextureUsage.RENDER_ATTACHMENT,
           });
           const hdrView = hdr.createView();
+          let volumeView: GPUTextureView | undefined;
+          let volumeBindGroup: GPUBindGroup | undefined;
+          if (volumePipeline) {
+            volumeHdr = device.createTexture({ size: [w,h],format: backend.hdrFormat,
+              usage: GPUTextureUsage.RENDER_ATTACHMENT|GPUTextureUsage.TEXTURE_BINDING });
+            volumeView = volumeHdr.createView();
+            volumeBindGroup = device.createBindGroup({ layout: volumePipeline.getBindGroupLayout(0),
+              entries: [{ binding: 0,resource: hdrView },...volumeEntries] });
+          }
           const resolveBindGroup = device.createBindGroup({
             layout: resolvePipeline.getBindGroupLayout(0),
             entries: [
-              { binding: 0, resource: hdrView }, { binding: 1, resource: sampler },
+              { binding: 0, resource: volumeView ?? hdrView }, { binding: 1, resource: sampler },
               { binding: 2, resource: { buffer: resolveUniform } },
             ],
           });
           const depthView = depth.createView();
           const depthTexture = depth;
-          return { hdrView, depthView, resolveBindGroup, destroy: () => { hdr.destroy(); depthTexture.destroy(); } };
+          const volumeTexture = volumeHdr;
+          return { hdrView, depthView, resolveBindGroup, volumeView, volumeBindGroup,
+            destroy: () => { hdr.destroy(); depthTexture.destroy(); volumeTexture?.destroy(); } };
         } catch (error) {
           hdr.destroy();
           depth?.destroy();
+          volumeHdr?.destroy();
           throw error;
         }
       };
@@ -937,6 +980,20 @@ export class InteractiveViewer {
             encoder = device.createCommandEncoder();
           }
         }
+        if (first) {
+          const bg = rasterBackground();
+          const clear = encoder.beginRenderPass({ colorAttachments: [{ view: hdrView,
+            clearValue: { r:bg[0],g:bg[1],b:bg[2],a:1 },loadOp:'clear',storeOp:'store' }] });
+          clear.end();
+        }
+        if (volumePipeline && targets.volumeView && targets.volumeBindGroup && volumeUniform) {
+          device.queue.writeBuffer(volumeUniform,112,new Float32Array([...rasterBackground(),0,width,height,64,(frame.analyticLights?.length ?? 0)/28]));
+          const pass = encoder.beginRenderPass({ colorAttachments: [{ view: targets.volumeView,loadOp:'clear',storeOp:'store' }] });
+          pass.setPipeline(volumePipeline);
+          pass.setBindGroup(0,targets.volumeBindGroup);
+          pass.draw(3);
+          pass.end();
+        }
         resolveBackend.recordResolvePass(encoder, { outputView: targetView, bindGroup: resolveBindGroup });
         device.queue.submit([encoder.finish()]);
       };
@@ -1003,6 +1060,10 @@ export class InteractiveViewer {
       const sourceDispatch = loaded.compiled?.dispatch ?? buildMaterialDispatch(ptScene.variantSources);
       const sourceBindings = await buildPtDeviceBindings(sourceDispatch, ptScene, loaded.mtlx.imageProvider, { sink });
       const { dispatch, bindings } = packPtTextureArrays(sourceDispatch, sourceBindings, device.limits.maxTextureArrayLayers);
+      const storageSlots = bindings.group0.filter(slot => slot.usage === 'storage').length;
+      if (storageSlots > device.limits.maxStorageBuffersPerShaderStage) {
+        throw new Error(`Path tracing requires ${storageSlots} storage buffers; this GPU supports ${device.limits.maxStorageBuffersPerShaderStage}.`);
+      }
       for (const slot of bindings.group0) {
         if (slot.usage === 'storage' && slot.data) {
           assertSceneStorageSize(device, Math.max(slot.data.byteLength, 4), slot.role);
@@ -1023,6 +1084,7 @@ export class InteractiveViewer {
       );
       const ptCompilation = await compileShaderWithDiagnostics(
         device, pathTraceComputeWgsl({
+          volumeGrid: ptScene.volumeData !== undefined,
           dispatch, environment: loaded.environment !== undefined, maxLobes, displayAovs: true,
           closureDispatch: pathTraceClosureDispatch(dispatch, ptScene.materials),
           opaque: pathTraceOpaqueScene(dispatch, ptScene.materials),
@@ -1417,6 +1479,13 @@ export class InteractiveViewer {
         device.queue.writeBuffer(buf, 32 * 4, eyeArray);
       }
       const invViewProj = inverse4(viewProj);
+      if (volumeUniform) {
+        device.queue.writeBuffer(volumeUniform,0,new Float32Array(invViewProj));
+        device.queue.writeBuffer(volumeUniform,64,eyeArray);
+        device.queue.writeBuffer(volumeUniform,80,new Float32Array([
+          -frame.light.direction[0],-frame.light.direction[1],-frame.light.direction[2],0,
+          ...frame.light.color.map(c => c*frame.light.intensity),0]));
+      }
       if (envBgUniform) {
         device.queue.writeBuffer(envBgUniform, 0, new Float32Array(backgroundInvViewProj));
         device.queue.writeBuffer(envBgUniform, 64, eyeArray);

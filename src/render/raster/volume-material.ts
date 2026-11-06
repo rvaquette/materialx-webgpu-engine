@@ -1,9 +1,4 @@
-// Raster volume material support (Phase 3). Bridges MaterialBuild.volume
-// (compiled volumeshader) to VolumeMaterial (ray marching). Evaluates
-// the volumeshader for constant parameters and extracts the material properties.
-//
-// Note: Phase 3 implementation focuses on constant volumeshaders.
-// Textured volumeshaders can be evaluated per-pixel in WGSL (future phase).
+// Point-sampled parameter adapter for the raster CPU reference.
 
 import type { VolumeMaterial } from './volume.ts';
 import type { Vec3 } from '../../scene/transforms.ts';
@@ -14,7 +9,7 @@ import { evaluateVolumeIr } from '../../compiler/volume-ir.ts';
 /**
  * Evaluate a volumeshader MaterialBuild at constant varyings and extract
  * the VolumeMaterial parameters (absorption, scattering, anisotropy, emission).
- * Returns null if the build has no volume or evaluation fails.
+ * Returns null only for materials without a volume; invalid IR throws.
  */
 export function evaluateVolumeMaterial(
   build: MaterialBuild,

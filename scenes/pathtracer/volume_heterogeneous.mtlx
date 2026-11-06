@@ -1,0 +1,46 @@
+<?xml version="1.0"?>
+<materialx version="1.39" colorspace="lin_rec709">
+  <position name="world_position" type="vector3">
+    <input name="space" type="string" value="world" />
+  </position>
+  <extract name="height" type="float">
+    <input name="in" type="vector3" nodename="world_position" />
+    <input name="index" type="integer" value="1" />
+  </extract>
+  <multiply name="frequency" type="float">
+    <input name="in1" type="float" nodename="height" />
+    <input name="in2" type="float" value="12" />
+  </multiply>
+  <sin name="wave" type="float">
+    <input name="in" type="float" nodename="frequency" />
+  </sin>
+  <add name="positive_wave" type="float">
+    <input name="in1" type="float" nodename="wave" />
+    <input name="in2" type="float" value="0.15" />
+  </add>
+  <clamp name="density" type="float">
+    <input name="in" type="float" nodename="positive_wave" />
+    <input name="low" type="float" value="0" />
+    <input name="high" type="float" value="1" />
+  </clamp>
+  <combine3 name="density_rgb" type="vector3">
+    <input name="in1" type="float" nodename="density" />
+    <input name="in2" type="float" nodename="density" />
+    <input name="in3" type="float" nodename="density" />
+  </combine3>
+  <multiply name="extinction" type="vector3">
+    <input name="in1" type="vector3" nodename="density_rgb" />
+    <input name="in2" type="vector3" value="0.12, 0.24, 0.5" />
+  </multiply>
+  <anisotropic_vdf name="vdf" type="VDF">
+    <input name="absorption" type="vector3" nodename="extinction" />
+    <input name="scattering" type="vector3" nodename="density_rgb" />
+    <input name="anisotropy" type="float" value="0" />
+  </anisotropic_vdf>
+  <volume name="volume_shader" type="volumeshader">
+    <input name="vdf" type="VDF" nodename="vdf" />
+  </volume>
+  <surfacematerial name="volume" type="material">
+    <input name="volumeshader" type="volumeshader" nodename="volume_shader" />
+  </surfacematerial>
+</materialx>

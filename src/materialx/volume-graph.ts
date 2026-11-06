@@ -85,9 +85,6 @@ export function resolveVolume(
     return null;
   }
 
-  if (node.inputs.some(i => i.name === 'edf' && i.source.kind === 'connection')) {
-    throw new Error('Emissive volumeshaders are not supported yet.');
-  }
   const vdfInput = node.inputs.find((i) => i.name === 'vdf' || i.name === 'distribution');
   const vdfNodeId = vdfInput?.source.kind === 'connection' ? vdfInput.source.nodeId : undefined;
   const vdf = vdfNodeId ? graph.nodes.get(vdfNodeId) : undefined;
@@ -105,6 +102,17 @@ export function resolveVolume(
         ? parseVolumeValue(declaredDefault, type === 'float' ? 1 : 3)
         : type === 'float' ? [0] : [0, 0, 0] };
     inputs.set(name, { name, type, source });
+  }
+  const edfInput = node.inputs.find(i => i.name === 'edf');
+  if (edfInput?.source.kind === 'connection') {
+    const edf = graph.nodes.get(edfInput.source.nodeId);
+    if (!edf || edf.category !== 'uniform_edf') {
+      throw new Error('Volume emission requires uniform_edf.');
+    }
+    const color = edf.inputs.find(i => i.name === 'color');
+    const fallback = edf.nodeDef?.inputs?.find(i => i.name === 'color')?.value ?? '1, 1, 1';
+    inputs.set('emission', { name: 'emission', type: 'color3',
+      source: color ? volumeSourceFromResolved(color) : { kind: 'default', value: parseVolumeValue(fallback, 3) } });
   }
 
   return {

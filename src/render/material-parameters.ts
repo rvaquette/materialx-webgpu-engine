@@ -7,7 +7,7 @@ import { assembleIrForwardShader } from './raster/ir-forward.ts';
 import type { MaterialResource, SceneResources } from './scene-resources.ts';
 import { extractDisplacement } from './graph-material-compiler.ts';
 import { resolveVolume } from '../materialx/volume-graph.ts';
-import { appendVolumeIr, evaluateVolumeIr } from '../compiler/volume-ir.ts';
+import { appendVolumeIr, evaluateVolumeIr, isSpatialVolumeIr } from '../compiler/volume-ir.ts';
 import { IrModuleBuilder } from '../compiler/ir.ts';
 
 export interface MaterialParameter {
@@ -254,16 +254,18 @@ export function changeMaterialParameters(
   // Displacement amplitude lives outside the surface shader.
   const displacement = material.displacement ? extractDisplacement(graph) : undefined;
   let volumeMedium = material.volumeMedium;
-  if (volumeMedium) {
+  let volumeIr = material.volumeIr;
+  if (volumeMedium || volumeIr) {
     const volume = resolveVolume(graph);
     if (!volume) throw new Error('Missing volumeshader in edited material.');
     const builder = new IrModuleBuilder();
-    appendVolumeIr(volume, builder);
-    volumeMedium = evaluateVolumeIr(builder.build());
+    appendVolumeIr(volume, builder, graph);
+    volumeIr = builder.build();
+    volumeMedium = isSpatialVolumeIr(volumeIr) ? undefined : evaluateVolumeIr(volumeIr);
   }
   return {
     ...material, parameters, resolvedSurface: surface, surfaceGraph: graph,
-    ...(volumeMedium ? { volumeMedium } : {}),
+    ...(volumeIr ? { volumeIr, volumeMedium } : {}),
     ...(displacement ? { displacement } : {}),
   };
 }

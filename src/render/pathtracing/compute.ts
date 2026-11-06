@@ -19,6 +19,7 @@ import { closureLibraryPrelude, type ClosureDispatchSpec } from '../../compiler/
 import { emitVaryingsStruct, textureWgslType } from '../../compiler/wgsl.ts';
 import type { IrType } from '../../compiler/ir.ts';
 import { materialClosureReaderWgsl, PT_MAX_LOBES, PT_MATERIAL_RECORD_FLOATS, PT_MATERIAL_HEADER_FLOATS, PT_LOBE_FLOATS } from './material-record.ts';
+import { volumeFieldWgsl, VOLUME_TRANSPORT_WGSL } from '../volume-field.ts';
 import {
   PT_MATERIAL_DISPATCH_ENTRY,
   PT_MATERIAL_OPACITY_ENTRY,
@@ -574,6 +575,7 @@ fn integrate(ro0 : vec3<f32>, rd0 : vec3<f32>, backgroundDirection : vec3<f32>, 
   // Active interior medium (entered through a transmissive/subsurface interface).
   var inMedium = false;
   var medium : MxMedium;
+  var volumeIndex = 0xffffffffu;
   // Select once, at the first dispersive interface, and reuse at every bounce.
   var spectralChannel = 3u;
   var cameraSegment = true;
@@ -581,25 +583,40 @@ ${analyticLights ? '  var analyticNee = false;' : ''}
 
   for (var bounce = 0; bounce < 64; bounce = bounce + 1) {
 ${analyticLights ? `    let emitter = mx_intersect_lights(ro, rd);
-    let hit = traverse(ro, rd, emitter.distance, false);` : '    let hit = traverse(ro, rd, 1.0e30, false);'}
+    let hit = traverse_min(ro, rd, emitter.distance, false,select(RAY_EPS,1e-7,inMedium));` : '    let hit = traverse_min(ro, rd, 1.0e30, false,select(RAY_EPS,1e-7,inMedium));'}
     // Free-flight sampling: when inside a medium, a collision before the surface
     // scatters off the Henyey-Greenstein phase (importance-sampled, f/pdf = 1);
     // otherwise beta carries the surface-reaching transmittance (media.ts).
     let tMax = select(${analyticLights ? 'emitter.distance' : '1.0e30'}, hit.t, hit.hitAny);
+    if (bounce == 0 && hit.hitAny && mx_material_volume_boundary(tri_material(hit.tri)) &&
+        dot(rd,surface_hit_normal(hit)) > 0.0) {
+      inMedium = true;
+      volumeIndex = tri_material(hit.tri);
+${displayAovs ? '      *coverage = 1.0; cameraSegment = false;' : ''}
+    }
     if (inMedium) {
-      let ms = mx_sample_homogeneous(medium, tMax, state);
+      var ms: MxMediumSample;
+      var g = medium.g;
+      if (volumeIndex != 0xffffffffu) {
+        let vs = volume_sample(volumeIndex,ro,rd,tMax,state);
+        radiance += beta*vs.emission;
+        ms = MxMediumSample(vs.scattered,vs.t,vs.weight);
+        g = vs.g;
+      } else {
+        ms = mx_sample_homogeneous(medium, tMax, state);
+      }
       beta = beta * ms.weight;
       environmentBeta = environmentBeta * ms.weight;
       if (ms.scattered) {
         if (bounce >= i32(U.transport.x)) { break; }
         let sp = ro + rd * ms.t;
-        let wiM = mx_sample_hg(-rd, medium.g, rng_next(state), rng_next(state));
+        let wiM = mx_sample_hg(-rd, g, rng_next(state), rng_next(state));
         specularBounce = false;
         diffuseBounce = false;
         splitFuzzEnvironment = false;
         bsdfPdf = 0.0;
 ${analyticLights ? '        analyticNee = false; // No analytic-light NEE is performed at a volume collision.' : ''}
-        ro = sp + wiM * RAY_EPS;
+        ro = sp;
         rd = wiM;
         if (bounce >= i32(U.transport.y)) {
           let q = clamp(max(beta.x, max(beta.y, beta.z)), 0.0, 0.95);
@@ -656,6 +673,7 @@ ${
 ${closureBuild}
     if (mx_material_volume_boundary(tri_material(hit.tri))) {
       inMedium = dot(rd, geometricNormal) < 0.0;
+      volumeIndex = select(0xffffffffu,tri_material(hit.tri),inMedium);
       medium = MxMedium(c.interiorSigmaA, c.interiorSigmaS, c.interiorG);
 ${displayAovs ? '      if (inMedium && cameraSegment) { *coverage = 1.0; cameraSegment = false; }' : ''}
       ro = pos + rd * RAY_EPS;
@@ -811,9 +829,12 @@ ${analyticLights ? '    analyticNee = !specular && mx_light_count() > 0u;' : ''}
     if (transmitted) {
       if (inMedium) {
         inMedium = false;
+        volumeIndex = 0xffffffffu;
       } else if (c.hasInterior != 0u) {
         medium = MxMedium(c.interiorSigmaA, c.interiorSigmaS, c.interiorG);
         inMedium = true;
+        let matBase = tri_material(hit.tri)*${PT_MATERIAL_RECORD_FLOATS}u;
+        volumeIndex = select(0xffffffffu,tri_material(hit.tri),materials[matBase+29u] != 0.0);
       }
     }
 
@@ -923,6 +944,7 @@ ${displayAovs ? `  let oldCoverage = accum[outputPixel + 1u].x;
 }
 
 export interface PathTraceComputeOptions {
+    volumeGrid?: boolean;
     textures?: boolean;
     varyings?: PtVaryings;
     dispatch?: PtMaterialDispatch;
@@ -955,6 +977,8 @@ export function pathTraceComputeWgsl(options: PathTraceComputeOptions = {}): str
     wgslRng(),
     BVH_TRAVERSAL_WGSL,
     wgslClosureSurface(textures, maxLobes, options.closureDispatch),
+    volumeFieldWgsl(options.volumeGrid ?? false),
+    VOLUME_TRANSPORT_WGSL,
     ...(options.analyticLights ? [ANALYTIC_LIGHTS_WGSL] : []),
     ...(varyings !== undefined ? [wgslVaryings(varyings)] : []),
     ...(dispatch !== undefined ? [wgslDispatch(dispatch)] : []),

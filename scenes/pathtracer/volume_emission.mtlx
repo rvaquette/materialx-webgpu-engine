@@ -1,0 +1,18 @@
+<?xml version="1.0"?>
+<materialx version="1.39" colorspace="lin_rec709">
+  <anisotropic_vdf name="vdf" type="VDF">
+    <input name="absorption" type="vector3" value="0.7, 0.35, 0.15" />
+    <input name="scattering" type="vector3" value="0, 0, 0" />
+    <input name="anisotropy" type="float" value="0" />
+  </anisotropic_vdf>
+  <uniform_edf name="glow" type="EDF">
+    <input name="color" type="color3" value="0.2, 1.2, 3" />
+  </uniform_edf>
+  <volume name="volume_shader" type="volumeshader">
+    <input name="vdf" type="VDF" nodename="vdf" />
+    <input name="edf" type="EDF" nodename="glow" />
+  </volume>
+  <surfacematerial name="volume" type="material">
+    <input name="volumeshader" type="volumeshader" nodename="volume_shader" />
+  </surfacematerial>
+</materialx>

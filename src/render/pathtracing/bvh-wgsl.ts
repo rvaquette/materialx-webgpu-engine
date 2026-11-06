@@ -39,6 +39,9 @@ fn tri_material(tri : u32) -> u32 {
 }
 
 fn intersect_tri(tri : u32, ro : vec3<f32>, rd : vec3<f32>, tMax : f32) -> vec4<f32> {
+  return intersect_tri_min(tri,ro,rd,tMax,RAY_EPS);
+}
+fn intersect_tri_min(tri : u32, ro : vec3<f32>, rd : vec3<f32>, tMax : f32, tMin: f32) -> vec4<f32> {
   let v0 = tri_vertex(tri, 0u);
   let v1 = tri_vertex(tri, 1u);
   let v2 = tri_vertex(tri, 2u);
@@ -55,13 +58,16 @@ fn intersect_tri(tri : u32, ro : vec3<f32>, rd : vec3<f32>, tMax : f32) -> vec4<
   let vv = dot(rd, q) * inv;
   if (vv < 0.0 || u + vv > 1.0) { return vec4<f32>(-1.0, 0.0, 0.0, 0.0); }
   let t = dot(e2, q) * inv;
-  if (t <= RAY_EPS || t >= tMax) { return vec4<f32>(-1.0, 0.0, 0.0, 0.0); }
+  if (t <= tMin || t >= tMax) { return vec4<f32>(-1.0, 0.0, 0.0, 0.0); }
   return vec4<f32>(t, u, vv, 1.0);
 }
 
 fn aabb_hit(node : u32, ro : vec3<f32>, invDir : vec3<f32>, tMax : f32) -> f32 {
+  return aabb_hit_min(node,ro,invDir,tMax,RAY_EPS);
+}
+fn aabb_hit_min(node : u32, ro : vec3<f32>, invDir : vec3<f32>, tMax : f32, tMin: f32) -> f32 {
   let b = node * NODE_STRIDE;
-  var tmin = RAY_EPS;
+  var tmin = tMin;
   var tmax = tMax;
   for (var a = 0u; a < 3u; a = a + 1u) {
     let lo = (nodes[b + a] - ro[a]) * invDir[a];
@@ -74,6 +80,9 @@ fn aabb_hit(node : u32, ro : vec3<f32>, invDir : vec3<f32>, tMax : f32) -> f32 {
 }
 
 fn traverse(ro : vec3<f32>, rd : vec3<f32>, tMax : f32, anyHit : bool) -> Hit {
+  return traverse_min(ro,rd,tMax,anyHit,RAY_EPS);
+}
+fn traverse_min(ro : vec3<f32>, rd : vec3<f32>, tMax : f32, anyHit : bool, tMin: f32) -> Hit {
   var result : Hit;
   result.t = tMax;
   result.hitAny = false;
@@ -84,7 +93,7 @@ fn traverse(ro : vec3<f32>, rd : vec3<f32>, tMax : f32, anyHit : bool) -> Hit {
   var sp = 0;
   var node = 0u;
   var closest = tMax;
-  if (arrayLength(&nodes) < NODE_STRIDE || aabb_hit(node, ro, invDir, closest) < 0.0) { return result; }
+  if (arrayLength(&nodes) < NODE_STRIDE || aabb_hit_min(node, ro, invDir, closest,tMin) < 0.0) { return result; }
   loop {
     let b = node * NODE_STRIDE;
     let count = u32(nodes[b + 9u]);
@@ -92,7 +101,7 @@ fn traverse(ro : vec3<f32>, rd : vec3<f32>, tMax : f32, anyHit : bool) -> Hit {
       let start = u32(nodes[b + 8u]);
       for (var i = 0u; i < count; i = i + 1u) {
         let tri = triOrder[start + i];
-        let h = intersect_tri(tri, ro, rd, closest);
+        let h = intersect_tri_min(tri, ro, rd, closest,tMin);
         if (h.w > 0.5) {
           if (anyHit) {
             result.hitAny = true;
@@ -111,8 +120,8 @@ fn traverse(ro : vec3<f32>, rd : vec3<f32>, tMax : f32, anyHit : bool) -> Hit {
     } else {
       let left = u32(nodes[b + 3u]);
       let right = u32(nodes[b + 7u]);
-      let leftT = aabb_hit(left, ro, invDir, closest);
-      let rightT = aabb_hit(right, ro, invDir, closest);
+      let leftT = aabb_hit_min(left, ro, invDir, closest,tMin);
+      let rightT = aabb_hit_min(right, ro, invDir, closest,tMin);
       if (leftT >= 0.0 || rightT >= 0.0) {
         if (leftT >= 0.0 && rightT >= 0.0) {
           let leftFirst = leftT <= rightT;
@@ -130,7 +139,7 @@ fn traverse(ro : vec3<f32>, rd : vec3<f32>, tMax : f32, anyHit : bool) -> Hit {
       if (sp <= 0) { break; }
       sp = sp - 1;
       node = stack[sp];
-      if (aabb_hit(node, ro, invDir, closest) >= 0.0) { found = true; break; }
+      if (aabb_hit_min(node, ro, invDir, closest,tMin) >= 0.0) { found = true; break; }
     }
     if (!found) { break; }
   }

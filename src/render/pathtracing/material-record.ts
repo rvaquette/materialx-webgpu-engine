@@ -23,7 +23,7 @@ export const PT_MAX_LOBES = 8;
 export const PT_LOBE_FLOATS = 27;
 
 /** f32 count of the per-material header that precedes the lobe array. */
-export const PT_MATERIAL_HEADER_FLOATS = 38;
+export const PT_MATERIAL_HEADER_FLOATS = 51;
 
 /** f32 stride of one complete packed material record. */
 export const PT_MATERIAL_RECORD_FLOATS =
@@ -204,6 +204,10 @@ export function packLayeredMaterial(closure: LayeredClosure, medium?: VolumeMedi
     out.set(medium.scattering, 33);
     out[36] = medium.anisotropy;
     out[37] = volumeBoundary ? 1 : 0;
+    out.set(medium.emission ?? [0, 0, 0], 38);
+    if (!out.slice(30,41).every(Number.isFinite) || Math.abs(out[36]!) >= 1) {
+      throw new Error('Volume coefficients exceed the float32 transport range.');
+    }
   }
   for (let i = 0; i < lobeCount; i++) {
     const lobe = closure.lobes[i];
@@ -277,6 +281,8 @@ export function unpackMaterialMedium(buf: ArrayLike<number>, index = 0): VolumeM
     absorption: [rd(buf, base + 30), rd(buf, base + 31), rd(buf, base + 32)],
     scattering: [rd(buf, base + 33), rd(buf, base + 34), rd(buf, base + 35)],
     anisotropy: rd(buf, base + 36),
+    ...(rd(buf, base + 38) || rd(buf, base + 39) || rd(buf, base + 40)
+      ? { emission: [rd(buf, base + 38), rd(buf, base + 39), rd(buf, base + 40)] as const } : {}),
   };
 }
 

@@ -17,6 +17,7 @@ import { openPathTraceBvhCache, pathTraceBvhCacheKey, type PathTraceBvhCache } f
 import { inverse4, transformDirection, transformPoint, type Mat4, type Vec3 } from '../../scene/transforms.ts';
 import type { SceneResources } from '../scene-resources.ts';
 import type { VolumeMedium } from '../../compiler/volume-ir.ts';
+import { bakeVolumeGrid, sampleVolumeGrid, type VolumeField } from '../volume-field.ts';
 import {
   buildSceneFrame,
   NEUTRAL_SURFACE,
@@ -62,6 +63,7 @@ export interface PathTraceCamera {
 }
 
 export interface PathTraceScene {
+  volumeData?: Float32Array;
   /** Packed BVH nodes (PT_NODE_FLOATS each), world-space over all triangles. */
   nodes: Float32Array;
   nodeCount: number;
@@ -143,6 +145,19 @@ export function buildPathTraceScene(
   const surfaces: RasterSurface[] = [];
   const media: (VolumeMedium | undefined)[] = [];
   const volumeBoundaries: boolean[] = [];
+  const volumeBounds = new Map<string, Aabb>();
+  for (const draw of frame.draws) {
+    if (!draw.materialKey || !resources.materials.get(draw.materialKey)?.volumeIr) continue;
+    const geom = resources.geometries.get(draw.prototypeId);
+    if (!geom) continue;
+    const bounds = volumeBounds.get(draw.materialKey) ?? { min: [Infinity, Infinity, Infinity], max: [-Infinity, -Infinity, -Infinity] };
+    for (let corner = 0; corner < 8; corner++) {
+      const p = transformPoint(draw.model, [0, 1, 2].map(i => (corner & (1 << i)) ? geom.bounds.max[i]! : geom.bounds.min[i]!) as V3);
+      bounds.min = [Math.min(bounds.min[0], p[0]), Math.min(bounds.min[1], p[1]), Math.min(bounds.min[2], p[2])];
+      bounds.max = [Math.max(bounds.max[0], p[0]), Math.max(bounds.max[1], p[1]), Math.max(bounds.max[2], p[2])];
+    }
+    volumeBounds.set(draw.materialKey, bounds);
+  }
   const materialKeys: string[] = [];
   const variantSources: PtVariantSource[] = [];
   const displaceScales: number[] = [];
@@ -287,12 +302,38 @@ export function buildPathTraceScene(
 
   const nodes = preparedGeometry?.nodes ?? packNodes(bvh!, hasDisplacement ? maxDisp : 0);
   const materials = packMaterials(surfaces, media, volumeBoundaries);
+  const grids: Float32Array[] = [];
+  let gridLength = 0;
+  for (let i = 0; i < materialKeys.length; i++) {
+    const material = resources.materials.get(materialKeys[i]!);
+    if (!material?.volumeIr) continue;
+    const bounds = volumeBounds.get(materialKeys[i]!);
+    if (!bounds) throw new Error(`Missing volume domain for ${materialKeys[i]}`);
+    const base = i * PT_MATERIAL_FLOATS;
+    materials.set(bounds.min, base + 43);
+    materials.set(bounds.max.map((v, a) => 1 / (v - bounds.min[a]!)), base + 46);
+    if (material.volumeMedium) continue;
+    const grid = bakeVolumeGrid(material.volumeIr, bounds);
+    materials[base + 29] = 1;
+    materials[base + 37] = material.volumeBoundary ? 1 : 0;
+    materials[base + 1] = material.volumeBoundary ? 0 : materials[base + 1]!;
+    materials[base + 41] = grid.size;
+    materials[base + 42] = gridLength;
+    materials[base + 49] = grid.majorant;
+    grids.push(grid.data);
+    gridLength += grid.data.length;
+    if (gridLength > 2 ** 24) throw new Error('Volume atlas offsets exceed the material record float32 precision.');
+  }
+  const volumeData = new Float32Array(gridLength);
+  let gridOffset = 0;
+  for (const grid of grids) { volumeData.set(grid, gridOffset); gridOffset += grid.length; }
   const triangles = preparedGeometry?.triangles ?? new Float32Array(triFloats);
   const triangleOrder = preparedGeometry?.triangleOrder ?? bvh!.triangleOrder;
   const triangleUv = preparedGeometry?.triangleUv ?? new Float32Array(uvFloats);
   const triangleTangent = preparedGeometry?.triangleTangent ?? (hasTangents ? new Float32Array(tanFloats) : new Float32Array(0));
 
   return {
+    ...(volumeData.length ? { volumeData } : {}),
     nodes,
     nodeCount: preparedGeometry?.nodeCount ?? bvh!.nodes.length,
     triangles,
@@ -504,14 +545,14 @@ function triIntersect(scene: PathTraceScene, tri: number, ray: Ray): { t: number
   const v = dot3(ray.direction, q) * inv;
   if (v < 0 || u + v > 1) return null;
   const t = dot3(e2, q) * inv;
-  if (t <= RAY_EPS) return null;
+  if (t <= (ray.minDistance ?? RAY_EPS)) return null;
   return { t, u, v };
 }
 
 function aabbHit(scene: PathTraceScene, node: number, ray: Ray, invDir: V3, tMax: number): boolean {
   const b = node * PT_NODE_FLOATS;
   const n = scene.nodes;
-  let tmin = RAY_EPS;
+  let tmin = ray.minDistance ?? RAY_EPS;
   let tmax = tMax;
   for (let a = 0; a < 3; a++) {
     const lo = (n[b + a]! - ray.origin[a]!) * invDir[a]!;
@@ -670,7 +711,19 @@ export function createSceneSampler(scene: PathTraceScene): SceneSampler {
     if (glass?.attenuationColor && glass.attenuationDistance !== undefined) {
       return absorbingMedium(glass.attenuationColor, glass.attenuationDistance);
     }
+
     return null;
+  }
+
+  function fieldFor(hit: PtHit): VolumeField | undefined {
+      const base = hit.materialIndex * PT_MATERIAL_FLOATS;
+      if (!scene.materials[base + 29]) return undefined;
+      if (scene.materials[base + 41] && scene.volumeData) {
+        return { majorant: scene.materials[base + 49]!,
+          sample: position => sampleVolumeGrid(scene.materials, scene.volumeData!, hit.materialIndex, position) };
+      }
+      const m = unpackMaterialMedium(scene.materials, hit.materialIndex)!;
+      return { majorant: Math.max(...m.absorption.map((v, i) => v + m.scattering[i]!)) * (1 + 1e-6), sample: () => m };
   }
 
   const sampler: SceneSampler = {
@@ -679,9 +732,11 @@ export function createSceneSampler(scene: PathTraceScene): SceneSampler {
       if (!hit) return null;
       const surface = hitSurface(scene, hit, ray);
       const medium = interiorMediumFor(surface as PtHit);
+      const field = fieldFor(surface);
       return {
         ...surface,
         ...(medium ? { interiorMedium: medium } : {}),
+        ...(field ? { interiorField: field } : {}),
         ...(isVolumeBoundary(scene.materials, surface.materialIndex) ? { volumeBoundary: true } : {}),
       };
     },

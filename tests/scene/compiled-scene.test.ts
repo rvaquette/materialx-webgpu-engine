@@ -149,6 +149,26 @@ describe('compiled scene binary codec', () => {
 });
 
 describe('prepared scene export and direct loading', () => {
+  it('persists a volume atlas and rejects missing grids or unsafe majorants', async () => {
+    const loaded = await fixture();
+    const pathTrace = buildPathTraceScene(loaded.resources,{ surfaceFor:loaded.mtlx.surfaceFor });
+    const atlas = new Float32Array(80);
+    for (let offset=0;offset<atlas.length;offset+=10) atlas.set([0.5,0.5,0.5,0,0,0,0,2,3,4],offset);
+    pathTrace.volumeData = atlas;
+    pathTrace.materials[29] = 1;
+    pathTrace.materials[41] = 2;
+    pathTrace.materials.set([1,1,1],46);
+    pathTrace.materials[49] = 0.500001;
+    loaded.compiled = { pathTrace,dispatch:buildMaterialDispatch(pathTrace.variantSources),rasterShaders:new Map() };
+    const scene = await exportCompiledScene(loaded);
+    const restored = await loadCompiledScene('https://example.test/scenes/compiled/scene.json',vi.fn(),packageFetch(scene));
+    expect(restored.compiled?.pathTrace.volumeData).toEqual(atlas);
+    expect(restored.compiled?.pathTrace.materials).toEqual(pathTrace.materials);
+    pathTrace.materials[49] = 0.1;
+    await expect(exportCompiledScene(loaded)).rejects.toThrow('majorant');
+    delete pathTrace.volumeData;
+    await expect(exportCompiledScene(loaded)).rejects.toThrow('volume grid layout');
+  });
   it('restores raster/PT resources and generated WGSL without building any BVH or lowering shaders', async () => {
     const loaded = await fixture();
     const expected = buildPathTraceScene(loaded.resources, { surfaceFor: loaded.mtlx.surfaceFor });

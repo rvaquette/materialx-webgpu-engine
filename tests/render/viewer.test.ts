@@ -168,13 +168,32 @@ describe('interactive viewer resource lifecycle', () => {
     expect(device.createTexture).not.toHaveBeenCalled();
   });
 
-  it('rejects an unsupported volumetric raster preview rather than showing a neutral surface', async () => {
-    const { loaded, viewer } = await setup(false, false, 'pathtracing');
+  it('composites pure volumes in HDR without drawing their boundaries as opaque surfaces', async () => {
+    const { loaded, viewer, device, pass } = await setup(false, false, 'pathtracing');
+    const { IrModuleBuilder, FLOAT, vector, shaderType } = await import('../../src/compiler/ir.ts');
+    const builder = new IrModuleBuilder();
+    const ref = builder.add({ kind:'closure',type:shaderType('volume'),closure:'vdf',op:'anisotropic_vdf',
+      params: { absorption:builder.constant(vector(3),[0.1,0.2,0.3]),scattering:builder.constant(vector(3),[0.4,0.4,0.4]),
+        anisotropy:builder.constant(FLOAT,0) } });
+    builder.output({ name:'volumeshader',type:shaderType('volume'),ref });
     for (const material of loaded.resources.materials.values()) {
       material.volumeMedium = { absorption: [0.1, 0.2, 0.3], scattering: [0.4, 0.4, 0.4], anisotropy: 0 };
+      material.volumeIr = builder.build();
+      material.volumeBoundary = true;
     }
-    expect(() => viewer.setBackend('raster')).toThrow('Volumetric raster rendering is not implemented yet');
-    expect(viewer.backend).toBe('pathtracing');
+    const { buildPathTraceScene } = await import('../../src/render/pathtracing/scene-buffers.ts');
+    vi.mocked(buildCachedPathTraceScene).mockResolvedValue(buildPathTraceScene(loaded.resources));
+    viewer.setBackend('raster');
+    tick(0);
+    await vi.waitFor(() => expect(device.createShaderModule.mock.calls.some(([desc]) => desc.label === 'Raster volume')).toBe(true));
+    await new Promise(resolve => setTimeout(resolve,10));
+    tick(1);
+    expect(viewer.backend).toBe('raster');
+    expect(pass.drawIndexed).not.toHaveBeenCalled();
+    expect(pass.draw).toHaveBeenCalled();
+    const targets = device.createTexture.mock.calls.length;
+    await viewer.resize(256);
+    expect(device.createTexture.mock.calls.length).toBeGreaterThan(targets);
   });
 
   it('builds raster once when switching from path tracing and reuses it on subsequent switches', async () => {

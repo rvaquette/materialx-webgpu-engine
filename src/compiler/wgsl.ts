@@ -457,7 +457,7 @@ export function lowerExprs(
       case 'closure': {
         if (expr.type.kind === 'shader' && expr.type.shader === 'volume' && expr.op === 'anisotropic_vdf') {
           preludes.add(VOLUME_MEDIUM_PRELUDE);
-          rhs = `MxVolumeMedium(${varName(expr.params.absorption!)}, ${varName(expr.params.scattering!)}, ${varName(expr.params.anisotropy!)})`;
+          rhs = `MxVolumeMedium(${varName(expr.params.absorption!)}, ${varName(expr.params.scattering!)}, ${varName(expr.params.anisotropy!)}, ${expr.params.emission ? varName(expr.params.emission) : 'vec3f(0.0)'})`;
           break;
         }
         const lowering = getNodeLowering(expr.op);

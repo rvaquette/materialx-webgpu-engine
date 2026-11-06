@@ -13,6 +13,7 @@ import type {
   ResolvedSurface,
   SurfaceFamily,
   SurfaceInputType,
+  NormalizedSurfaceInput,
 } from '../materialx/surface-graph.ts';
 import {
   COLOR3,
@@ -116,6 +117,17 @@ export function lowerSurfaceInputsToIr(
   builder: IrModuleBuilder,
   sink: DiagnosticSink = defaultDiagnosticSink,
 ): LoweredSurfaceInputs {
+  return { family: surface.family, nodeId: surface.nodeId,
+    inputs: lowerValueInputsToIr(graph, surface.inputs, builder, sink) };
+}
+
+/** Shared numeric graph lowering for surface and volume coefficients. */
+export function lowerValueInputsToIr(
+  graph: ResolvedGraph,
+  declaredInputs: ReadonlyMap<string, NormalizedSurfaceInput>,
+  builder: IrModuleBuilder,
+  sink: DiagnosticSink = defaultDiagnosticSink,
+): ReadonlyMap<string, IrRef> {
   const nodeMemo = new Map<string, IrRef>();
   const geomMemo = new Map<string, IrRef>();
   let uvRef: IrRef | undefined;
@@ -428,7 +440,7 @@ export function lowerSurfaceInputsToIr(
   }
 
   const inputs = new Map<string, IrRef>();
-  for (const [name, ni] of surface.inputs) {
+  for (const [name, ni] of declaredInputs) {
     let ref: IrRef;
     switch (ni.source.kind) {
       case 'value':
@@ -451,5 +463,5 @@ export function lowerSurfaceInputsToIr(
     inputs.set(name, ref);
   }
 
-  return { family: surface.family, nodeId: surface.nodeId, inputs };
+  return inputs;
 }

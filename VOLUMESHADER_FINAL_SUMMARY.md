@@ -3,12 +3,18 @@
 > Rectification : ce rapport surestimait l'avancement. Le carre blanc uniforme
 > n'etait pas une sphere et ne validait pas la diffusion volumetrique.
 > Voir [le statut corrige](./VOLUMESHADER_README.md) pour les limites actuelles.
+>
+> Les volumes raster, les champs proceduraux sur grille et `uniform_edf` sont
+> maintenant raccordes aux ressources et au GPU. Le raster reste une approximation
+> de diffusion simple, et les milieux imbriques/images 3D ne sont pas supportes.
+> La suite est un rapport historique, pas une annonce de support MaterialX complet.
 
 ## Résumé Exécutif
 
 Votre question originale: **"Est-ce que materialx est capable de gérer des shaders volume?"**
 
-**Réponse complète:** Oui! Et pas seulement supporté - intégralement implémenté et testé! ✅
+**Reponse actuelle :** oui, pour `anisotropic_vdf` et `uniform_edf`, avec les
+limites detaillees dans [le README](./VOLUMESHADER_README.md).
 
 ## 🚀 Ce qui a été accompli
 

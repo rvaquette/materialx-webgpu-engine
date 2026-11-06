@@ -10,6 +10,7 @@ struct MxVolumeMedium {
   absorption: vec3f,    // sigma_a: absorption coefficient (per channel)
   scattering: vec3f,    // sigma_s: scattering coefficient (per channel)
   anisotropy: f32,      // g: Henyey-Greenstein anisotropy in [-1, 1]
+  emission: vec3f,
 };
 
 // Helper: extinction coefficient (sigma_t = sigma_a + sigma_s)
@@ -30,4 +31,3 @@ fn mx_transmittance(medium: MxVolumeMedium, distance: f32) -> vec3f {
   return exp(-sigma_t * d);
 }
 `;
-

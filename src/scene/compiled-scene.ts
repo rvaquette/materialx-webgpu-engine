@@ -188,6 +188,25 @@ function validateData(value: unknown): asserts value is CompiledSceneData {
       value.pathTrace.materials.length !== value.pathTrace.materialCount * PT_MATERIAL_FLOATS ||
       !Array.isArray(value.pathTrace.materialKeys) || value.pathTrace.materialKeys.length !== value.pathTrace.materialCount ||
       !Array.isArray(value.pathTrace.variantSources)) fail('path tracing buffers');
+  const atlas = value.pathTrace.volumeData;
+  if (atlas !== undefined && (!(atlas instanceof Float32Array) || !atlas.length || !finiteArray(atlas))) fail('volume atlas');
+  for (let index = 0; index < value.pathTrace.materialCount; index++) {
+    const b = index*PT_MATERIAL_FLOATS;
+    const records = value.pathTrace.materials;
+    const size = records[b+41]!;
+    if (size === 0) continue;
+    const offset = records[b+42]!, majorant = records[b+49]!;
+    if (!(atlas instanceof Float32Array) || !uint(size) || size < 2 || !uint(offset) ||
+        offset+size**3*10 > atlas.length || !Number.isFinite(majorant) || majorant < 0 ||
+        [46,47,48].some(slot => !(records[b+slot]! > 0))) fail('volume grid layout');
+    for (let voxel = offset; voxel < offset+size**3*10; voxel += 10) {
+      for (let c=0;c<3;c++) {
+        if (atlas[voxel+c]! < 0 || atlas[voxel+3+c]! < 0 || atlas[voxel+7+c]! < 0 ||
+            atlas[voxel+c]!+atlas[voxel+3+c]! > majorant*(1+1e-5)) fail('volume coefficients or majorant');
+      }
+      if (Math.abs(atlas[voxel+6]!) >= 1) fail('volume anisotropy');
+    }
+  }
   validateBounds(value.pathTrace.bounds);
   const bounds = value.pathTrace.bounds;
   // Bounds have been checked above; build the strongly typed view for the shared validator.
