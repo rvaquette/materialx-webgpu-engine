@@ -14,12 +14,17 @@ const controls = vi.hoisted(() => ({
 }));
 vi.mock('@mori2003/jsimgui', () => ({
   ImVec2: class { constructor(public x: number, public y: number) {} },
-  ImGuiWindowFlags: { NoMove: 1, NoResize: 2, NoCollapse: 4, NoSavedSettings: 8 },
+  ImVec4: class { constructor(public x: number, public y: number, public z: number, public w: number) {} },
+  ImGuiCol: { ScrollbarBg: 14, ScrollbarGrab: 15, ScrollbarGrabHovered: 16, ScrollbarGrabActive: 17 },
+  ImGuiWindowFlags: { NoMove: 1, NoResize: 2, NoCollapse: 4, NoSavedSettings: 8, AlwaysVerticalScrollbar: 16384 },
+  ImGuiChildFlags: { None: 0 },
   ImGuiConfigFlags: { NavEnableKeyboard: 1 },
   ImGuiMouseSource: { _Mouse: 0, _TouchScreen: 1, _Pen: 2 },
   ImGuiImplWeb: { Init: vi.fn(async () => {}), BeginRender: vi.fn(), EndRender: vi.fn() },
   ImGui: {
     StyleColorsDark: vi.fn(), GetIO: () => controls.io, GetStyle: () => controls.style, SetNextWindowPos: vi.fn(), SetNextWindowSize: vi.fn(),
+    PushStyleColorImVec4: vi.fn(), PopStyleColor: vi.fn(),
+    BeginChild: vi.fn(() => true), EndChild: vi.fn(),
     Begin: () => true, End: vi.fn(), BeginDisabled: vi.fn(), EndDisabled: vi.fn(),
     SeparatorText: vi.fn(), Text: vi.fn(), TextWrapped: vi.fn(), SameLine: vi.fn(),
     SetNextItemWidth: vi.fn(), SetItemDefaultFocus: vi.fn(), EndCombo: vi.fn(), BeginCombo: () => true,
@@ -145,6 +150,10 @@ describe('Dear ImGui viewer controls', () => {
     controls.selection = '1024 x 768##1024x768';
     f.render();
     expect(f.actions.resolution).toHaveBeenCalledWith('1024x768');
+    expect(ImGui.BeginChild).toHaveBeenCalledWith('##scene-options', { x: 0, y: 0 }, 0, 16384);
+    expect(ImGui.EndChild).toHaveBeenCalled();
+    expect(ImGui.PushStyleColorImVec4).toHaveBeenCalledWith(17, { x: 0.78, y: 0.78, z: 0.78, w: 1 });
+    expect(ImGui.PopStyleColor).toHaveBeenCalledWith(4);
     stop();
   });
 
@@ -177,6 +186,8 @@ describe('Dear ImGui viewer controls', () => {
   it.each(['mouse', 'pen'])('sets the current %s position before the backend processes a press', async pointerType => {
     const f = fixture();
     const stop = await startViewerUi(f.canvas, f.state, f.actions, f.parameters);
+    expect(controls.style.ScrollbarSize).toBe(20);
+    expect(controls.style.GrabMinSize).toBe(24);
     const backend = vi.fn(() => {
       expect(controls.io.AddMousePosEvent).toHaveBeenLastCalledWith(35, 50);
     });

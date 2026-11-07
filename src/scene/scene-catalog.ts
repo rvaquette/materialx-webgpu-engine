@@ -21,10 +21,10 @@ const gltfScenes = Object.keys(import.meta.glob('/scenes/pathtracer/*.{gltf,glb}
 
 const compiledScenes = Object.keys(import.meta.glob('/scenes/**/scene.json', { query: '?url', import: 'default' }))
   .sort()
-  .map((path): SceneCatalogEntry => ({
-    label: `Compiled - ${path.slice('/scenes/'.length, -'/scene.json'.length)}`,
-    entry: `.${path}`,
-  }));
+  .map((path): SceneCatalogEntry => {
+    const name = path.slice('/scenes/'.length, -'/scene.json'.length).split('/').at(-1) ?? 'Unknown';
+    return { label: `Compiled - ${name}`, entry: `.${path}` };
+  });
 
 const openPbrScenes = Object.keys(import.meta.glob('/scenes/OpenPBRShaderPlayground/*_grp/*_grp.usda', { query: '?raw', import: 'default' }))
   .sort()

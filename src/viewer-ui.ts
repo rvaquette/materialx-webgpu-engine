@@ -1,4 +1,4 @@
-import { ImGui, ImGuiImplWeb, ImVec2, ImGuiWindowFlags, ImGuiConfigFlags, ImGuiMouseSource } from '@mori2003/jsimgui';
+import { ImGui, ImGuiImplWeb, ImVec2, ImVec4, ImGuiCol, ImGuiWindowFlags, ImGuiChildFlags, ImGuiConfigFlags, ImGuiMouseSource } from '@mori2003/jsimgui';
 import type { ViewerStatus, BackendKind } from './render/viewer.ts';
 import type { RasterQuality } from './render/raster/ir-forward.ts';
 import type { MaterialParameterEditor } from './material-parameter-editor.ts';
@@ -39,16 +39,25 @@ export interface ViewerUiActions {
   material: (path: string) => void;
 }
 
-function combo(label: string, value: string, options: readonly { label: string; value: string }[], change: (value: string) => void): void {
+function combo(label: string, value: string, options: readonly { label: string; value: string }[], change: (value: string) => void, alwaysShowScrollbar = false): void {
   const selected = options.find(option => option.value === value);
   ImGui.SetNextItemWidth(-1);
+  ImGui.PushStyleColorImVec4(ImGuiCol.ScrollbarBg, new ImVec4(0.06, 0.06, 0.06, 0.95));
+  ImGui.PushStyleColorImVec4(ImGuiCol.ScrollbarGrab, new ImVec4(0.48, 0.48, 0.48, 1));
+  ImGui.PushStyleColorImVec4(ImGuiCol.ScrollbarGrabHovered, new ImVec4(0.64, 0.64, 0.64, 1));
+  ImGui.PushStyleColorImVec4(ImGuiCol.ScrollbarGrabActive, new ImVec4(0.78, 0.78, 0.78, 1));
   if (ImGui.BeginCombo(label, selected?.label ?? value)) {
+    if (alwaysShowScrollbar) {
+      ImGui.BeginChild('##scene-options', new ImVec2(0, 0), ImGuiChildFlags.None, ImGuiWindowFlags.AlwaysVerticalScrollbar);
+    }
     for (const option of options) {
       if (ImGui.Selectable(`${option.label}##${option.value}`, option.value === value, 0, new ImVec2(0, 0))) change(option.value);
       if (option.value === value) ImGui.SetItemDefaultFocus();
     }
+    if (alwaysShowScrollbar) ImGui.EndChild();
     ImGui.EndCombo();
   }
+  ImGui.PopStyleColor(4);
 }
 
 function attachPointerInput(canvas: HTMLCanvasElement, enableTouch: () => void): () => void {
@@ -88,11 +97,13 @@ export async function startViewerUi(
   await ImGuiImplWeb.Init({ canvas, backend: 'webgl2' });
   ImGui.StyleColorsDark();
   ImGui.GetIO().ConfigFlags |= ImGuiConfigFlags.NavEnableKeyboard;
+  const style = ImGui.GetStyle();
+  style.ScrollbarSize = 20;
+  style.GrabMinSize = 24;
   let touchControls = false;
   const enableTouch = (): void => {
     if (touchControls) return;
     touchControls = true;
-    const style = ImGui.GetStyle();
     style.ScrollbarSize = 28;
     style.GrabMinSize = 28;
   };
@@ -116,7 +127,7 @@ export async function startViewerUi(
       if (ImGui.Begin('MaterialX', undefined, ImGuiWindowFlags.NoMove | ImGuiWindowFlags.NoResize | ImGuiWindowFlags.NoCollapse | ImGuiWindowFlags.NoSavedSettings)) {
         ImGui.BeginDisabled(state.busy);
         ImGui.SeparatorText('Scene');
-        combo('##scene', state.entry, state.scenes.map(scene => ({ label: scene.label, value: scene.entry })), actions.scene);
+        combo('##scene', state.entry, state.scenes.map(scene => ({ label: scene.label, value: scene.entry })), actions.scene, true);
         ImGui.SeparatorText('Rendu');
         combo('##resolution', String(state.resolution), [
           ...[256, 512, 1024].map(size => ({ label: `${size} x ${size}`, value: String(size) })),
