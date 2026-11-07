@@ -5,7 +5,7 @@ import { promisify } from 'node:util';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { decodeCompiledScene, encodeCompiledScene, writeCompiledScene, type CompiledScenePackage, type SceneDirectory } from '../../src/scene/compiled-scene-codec.ts';
-import { compiledRasterShaderKey, exportCompiledScene, loadCompiledScene } from '../../src/scene/compiled-scene.ts';
+import { compiledRasterShaderKey, compiledSceneAssetUrl, exportCompiledScene, loadCompiledScene } from '../../src/scene/compiled-scene.ts';
 import { importUsdStage } from '../../src/usd/importer.ts';
 import { buildSceneResources } from '../../src/render/scene-resources.ts';
 import { buildPathTraceScene, PT_MATERIAL_FLOATS } from '../../src/render/pathtracing/scene-buffers.ts';
@@ -94,6 +94,21 @@ def Xform "World" {
 }
 
 describe('compiled scene binary codec', () => {
+  it('resolves root-relative original assets beneath the deployed application base', () => {
+    expect(compiledSceneAssetUrl(
+      '/scenes/pathtracer/HDR/sunset.hdr',
+      'https://rvaquette.github.io/materialx-webgpu-engine/scenes/compiled/ajax/scene.json',
+      '/materialx-webgpu-engine/',
+      'https://rvaquette.github.io/materialx-webgpu-engine/',
+    )).toBe('https://rvaquette.github.io/materialx-webgpu-engine/scenes/pathtracer/HDR/sunset.hdr');
+    expect(compiledSceneAssetUrl(
+      '/scenes/pathtracer/HDR/sunset.hdr',
+      'https://example.test/scenes/compiled/ajax/scene.json',
+      './',
+      'https://example.test/',
+    )).toBe('https://example.test/scenes/pathtracer/HDR/sunset.hdr');
+  });
+
   it('loads a v1 package converted by the merge script without changing its data', async () => {
     const original = { data: new Float32Array([1, 2, 3]), other: new Uint32Array([4, 5]), code: 'fn preserved() {}' };
     const scene = await encodeCompiledScene(original, 'scene.usda', { compressionLevel: 3 });

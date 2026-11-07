@@ -48,6 +48,15 @@ export function compiledRasterShaderKey(materialKey: string, quality: RasterQual
   return `${quality}:${materialKey}`;
 }
 
+export function compiledSceneAssetUrl(
+  reference: string, manifestUrl: string, appBase: string, documentBase: string,
+): string {
+  if (reference.startsWith('/')) {
+    return new URL(`${appBase}${reference.slice(1)}`, documentBase).href;
+  }
+  return new URL(reference, manifestUrl).href;
+}
+
 /** Snapshot after import/displacement; material graphs are kept for explicit later edits. */
 export async function exportCompiledScene(
   loaded: LoadedUsdScene, options: CompiledSceneEncodeOptions = {},
@@ -292,11 +301,13 @@ export async function loadCompiledScene(
       return new Uint8Array(await resource.arrayBuffer());
     });
     validateData(data);
+    const appBase = typeof document === 'undefined' ? '/' : import.meta.env.BASE_URL;
+    const documentBase = typeof document === 'undefined' ? response.url || entry : document.baseURI;
     if (data.environmentSource) {
       const { url, ...parameters } = data.environmentSource;
       const dome = data.lights.find(light => light.type === 'dome');
       if (!dome) throw new Error('Missing dome light for external environment.');
-      const imageUrl = new URL(url, response.url || entry).href;
+      const imageUrl = compiledSceneAssetUrl(url, response.url || entry, appBase, documentBase);
       const environmentLight = { ...dome, textureFile: imageUrl, textureSourceLayer: imageUrl };
       delete environmentLight.irradianceFile;
       const environment = await loadEnvironment([environmentLight], imageUrl, sink, fetchResource);
@@ -315,7 +326,7 @@ export async function loadCompiledScene(
         return decodeBrowserImage(await resource.blob(), url);
       };
       for (const reference of image.urls) {
-        const url = new URL(reference, base).href;
+        const url = compiledSceneAssetUrl(reference, base, appBase, documentBase);
         if (image.tiles) {
           const first = await decode(AssetResolver.expandUdim(url, image.tiles[0]!));
           if (!first) continue;
