@@ -19,19 +19,19 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout application
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           lfs: true
 
       - name: Checkout MaterialX
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           repository: rvaquette/MaterialX
           ref: bea1e9251d8f936a73930ad19a6f3b37265d46f5
           path: materialx
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: npm
@@ -65,10 +65,10 @@ jobs:
           MX_LIB_ROOT: ${{ github.workspace }}/materialx/libraries
 
       - name: Configure Pages
-        uses: actions/configure-pages@v5
+        uses: actions/configure-pages@v6
 
       - name: Upload Pages artifact
-        uses: actions/upload-pages-artifact@v3
+        uses: actions/upload-pages-artifact@v5
         with:
           path: dist
 
