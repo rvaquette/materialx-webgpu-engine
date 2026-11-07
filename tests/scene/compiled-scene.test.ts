@@ -1,4 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { mkdtemp, mkdir, readFile, writeFile, rm } from 'node:fs/promises';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { decodeCompiledScene, encodeCompiledScene, writeCompiledScene, type CompiledScenePackage, type SceneDirectory } from '../../src/scene/compiled-scene-codec.ts';
 import { compiledRasterShaderKey, exportCompiledScene, loadCompiledScene } from '../../src/scene/compiled-scene.ts';
 import { importUsdStage } from '../../src/usd/importer.ts';
@@ -20,6 +25,8 @@ import { projectIrradianceSH } from '../../src/render/env/irradiance.ts';
 import { buildEnvCdf } from '../../src/assets/environment-cdf.ts';
 import { bootstrapUsdImage, compiledPathTraceInput, loadRenderScene } from '../render/usd-scene.harness.ts';
 import * as usdImporter from '../../src/usd/importer.ts';
+import * as browserImage from '../../src/assets/browser-image.ts';
+import * as sceneAssets from '../../src/render/usd-scene-assets.ts';
 
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
@@ -87,6 +94,40 @@ def Xform "World" {
 }
 
 describe('compiled scene binary codec', () => {
+  it('loads a v1 package converted by the merge script without changing its data', async () => {
+    const original = { data: new Float32Array([1, 2, 3]), other: new Uint32Array([4, 5]), code: 'fn preserved() {}' };
+    const scene = await encodeCompiledScene(original, 'scene.usda', { compressionLevel: 3 });
+    const directory = await mkdtemp(join(tmpdir(), 'merged-scene-codec-'));
+    try {
+      const resources = scene.manifest.resources.map(({ file, offset, ...resource }) => resource);
+      for (const resource of scene.manifest.resources) {
+        const target = join(directory, resource.path);
+        await mkdir(join(directory, resource.path.split('/')[0]!), { recursive: true });
+        await writeFile(target, scene.files.get(resource.file)!.subarray(resource.offset, resource.offset + resource.compressedByteLength));
+      }
+      const manifestPath = join(directory, 'scene.json');
+      const { files, ...manifest } = scene.manifest;
+      await writeFile(manifestPath, JSON.stringify({ ...manifest, version: '1.0', resources }));
+      await promisify(execFile)(process.execPath, ['scripts/merge-compiled-scenes.mjs', '--entry', manifestPath]);
+      const converted: unknown = JSON.parse(await readFile(manifestPath, 'utf8'));
+      expect(await decodeCompiledScene(converted, async path => new Uint8Array(await readFile(join(directory, path))))).toEqual(original);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it.each([1, 3, 22])('losslessly round trips with compression level %s', async compressionLevel => {
+    const original = { data: new Float32Array(Array.from({ length: 1024 }, (_, index) => index * 0.125)) };
+    const onProgress = vi.fn();
+    const scene = await encodeCompiledScene(original, 'scene.usda', { compressionLevel, onProgress });
+    expect(await decodeCompiledScene(scene.manifest, readPackage(scene))).toEqual(original);
+    expect(onProgress).toHaveBeenCalledWith(expect.stringContaining(`Zstandard ${compressionLevel}`));
+  });
+
+  it.each([0, 23, 1.5, NaN])('rejects invalid compression level %s', async compressionLevel => {
+    await expect(encodeCompiledScene({}, 'scene.usda', { compressionLevel })).rejects.toThrow('Compression level');
+  });
+
   it('losslessly round trips typed bytes, subviews, maps, sets and optional values', async () => {
     const original = {
       floats: new Float32Array([-0, 0.125, -4, 1e-20]), half: new Uint16Array([0x3c00, 0xbc00]),
@@ -101,22 +142,52 @@ describe('compiled scene binary codec', () => {
     const scene = await encodeCompiledScene(original, 'original.usda');
     expect(await decodeCompiledScene(scene.manifest, readPackage(scene))).toEqual(original);
     expect(scene.manifest.resources.some(resource => resource.path.startsWith('shaders/'))).toBe(true);
-    expect(scene.manifest.version).toBe('1.0');
+    expect(scene.manifest.version).toBe('2.0');
     expect(scene.manifest.compression).toBe('zstd');
   });
 
-  it('deduplicates byte-identical payloads, including shared texture pixels', async () => {
+  it('deduplicates byte-identical buffers inside the packed file', async () => {
     const bytes = new Uint8Array(4096).fill(17);
-    const scene = await encodeCompiledScene({ images: { a: { data: bytes }, b: { data: bytes.slice() } } }, 'scene.usda');
-    const textures = scene.manifest.resources.filter(resource => resource.path.startsWith('textures/'));
-    expect(textures).toHaveLength(1);
-    expect(textures[0]!.compressedByteLength).toBeLessThan(4096);
+    const scene = await encodeCompiledScene({ a: bytes, b: bytes.slice() }, 'scene.usda');
+    const buffers = scene.manifest.resources.filter(resource => resource.file === 'buffers.bin.zst');
+    expect(buffers).toHaveLength(1);
+    expect(buffers[0]!.compressedByteLength).toBeLessThan(4096);
+    expect([...scene.files.keys()]).toEqual(['buffers.bin.zst', 'shaders.wgsl.zst', 'metadata.json.zst']);
+  });
+
+  it('reads each of the three files only once for multiple indexed resources', async () => {
+    const original = {
+      a: new Float32Array([1, 2]), b: new Uint32Array([3, 4, 5]),
+      code: 'fn first() {}', fnCode: 'fn second() {}',
+    };
+    const scene = await encodeCompiledScene(original, 'scene.usda', { compressionLevel: 3 });
+    const read = vi.fn(readPackage(scene));
+    expect(await decodeCompiledScene(scene.manifest, read)).toEqual(original);
+    expect(read).toHaveBeenCalledTimes(3);
+    expect(read.mock.calls.map(([path]) => path).sort()).toEqual([...scene.files.keys()].sort());
+    for (const file of scene.manifest.files) {
+      const resources = scene.manifest.resources.filter(resource => resource.file === file.path);
+      expect(resources.reduce((sum, resource) => sum + resource.compressedByteLength, 0)).toBe(file.byteLength);
+    }
+  });
+
+  it.each(['offset', 'overlap', 'file-path', 'missing-file', 'trailing-bytes'])('rejects invalid packed index %s before reading files', async mutation => {
+    const scene = await encodeCompiledScene({ a: new Uint8Array([1]), b: new Uint8Array([2]) }, 'scene.usda');
+    const manifest = structuredClone(scene.manifest);
+    if (mutation === 'offset') manifest.resources[0]!.offset = -1;
+    if (mutation === 'overlap') manifest.resources[1]!.offset = 0;
+    if (mutation === 'file-path') manifest.resources[0]!.file = '../buffers.bin.zst';
+    if (mutation === 'missing-file') manifest.files.pop();
+    if (mutation === 'trailing-bytes') manifest.files[0]!.byteLength++;
+    const read = vi.fn(readPackage(scene));
+    await expect(decodeCompiledScene(manifest, read)).rejects.toThrow();
+    expect(read).not.toHaveBeenCalled();
   });
 
   it.each(['version', 'abi', 'path', 'size', 'missing-state', 'duplicate'])('rejects invalid manifest %s before reading payloads', async mutation => {
     const scene = await encodeCompiledScene({ data: new Uint8Array([1, 2]) }, 'scene.usda');
     const manifest = structuredClone(scene.manifest);
-    if (mutation === 'version') Object.assign(manifest, { version: '2.0' });
+    if (mutation === 'version') Object.assign(manifest, { version: '99.0' });
     if (mutation === 'abi') manifest.engineAbi++;
     if (mutation === 'path') manifest.resources[0]!.path = '../outside.bin.zst';
     if (mutation === 'size') manifest.resources[0]!.byteLength = 2 ** 40;
@@ -131,14 +202,15 @@ describe('compiled scene binary codec', () => {
     const scene = await encodeCompiledScene({ data: new Uint8Array(128).fill(3) }, 'scene.usda');
     const resource = scene.manifest.resources[0]!;
     const damaged = new Map(scene.files);
-    const bytes = damaged.get(resource.path)!.slice();
-    bytes[bytes.length - 1] = bytes[bytes.length - 1]! ^ 1;
-    damaged.set(resource.path, bytes);
+    const bytes = damaged.get(resource.file)!.slice();
+    const last = resource.offset + resource.compressedByteLength - 1;
+    bytes[last] = bytes[last]! ^ 1;
+    damaged.set(resource.file, bytes);
     await expect(decodeCompiledScene(scene.manifest, readPackage({ ...scene, files: damaged }))).rejects.toThrow();
     const manifest = structuredClone(scene.manifest);
     manifest.resources[0]!.byteLength++;
     await expect(decodeCompiledScene(manifest, readPackage(scene))).rejects.toThrow('Zstandard frame size');
-    damaged.set(resource.path, bytes.subarray(0, -1));
+    damaged.set(resource.file, bytes.subarray(0, -1));
     await expect(decodeCompiledScene(scene.manifest, readPackage({ ...scene, files: damaged }))).rejects.toThrow('Truncated');
   });
 
@@ -298,7 +370,7 @@ over "World" {
     expect(() => restored.mtlx.imageProvider.decode('missing.png')).toThrow('Texture absent');
   });
 
-  it('bundles sparse UDIMs, float HDR data, precision, bindings and environment importance sampling', async () => {
+  it('references original textures and sparse UDIM tiles instead of bundling decoded pixels', async () => {
     const loaded = await fixture();
     const material = [...loaded.resources.materials.values()][0]!;
     if (!material.surfaceModule) throw new Error('Missing fixture surface module.');
@@ -322,15 +394,38 @@ over "World" {
     };
     loaded.lights = [{
       path: '/World/Dome', type: 'dome', usdType: 'DomeLight', transform: IDENTITY4, color: [1, 1, 1],
-      intensity: 1, exposure: 0, normalize: false,
+      intensity: 1, exposure: 0, normalize: false, textureFile: 'source/environment.hdr',
     }];
     const scene = await exportCompiledScene(loaded);
-    const restored = await loadCompiledScene('https://example.test/scenes/compiled/scene.json', vi.fn(), packageFetch(scene));
+    const snapshot = await decodeCompiledScene(scene.manifest, readPackage(scene)) as {
+      images: Map<string, unknown>; environment?: unknown; environmentCdf?: unknown; environmentSource: { url: string };
+    };
+    expect(snapshot.images.get('source/<UDIM>.png')).toEqual({
+      kind: 'external', urls: ['/original/source/%3CUDIM%3E.png'], tiles: [1001, 1011],
+    });
+    const decodeImage = vi.spyOn(browserImage, 'decodeBrowserImage').mockImplementation(async (_blob, url) =>
+      url.endsWith('.exr') ? hdr : tile);
+    const loadEnvironment = vi.spyOn(sceneAssets, 'loadEnvironment').mockResolvedValue(loaded.environment);
+    expect(snapshot.environment).toBeUndefined();
+    expect(snapshot.environmentCdf).toBeUndefined();
+    expect(snapshot.environmentSource.url).toBe('/original/source/environment.hdr');
+    const fetchPackage = packageFetch(scene);
+    const fetchResource = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.startsWith('https://relocated.test/original/source/')) return new Response('original image');
+      return fetchPackage(input);
+    });
+    const restored = await loadCompiledScene('https://relocated.test/scenes/compiled/scene.json', vi.fn(), fetchResource);
     expect(await restored.mtlx.imageProvider.decode('source/<UDIM>.png')).toEqual(udim);
     expect(await restored.mtlx.imageProvider.decode('source/height.exr')).toEqual(hdr);
+    expect(await restored.mtlx.imageProvider.decode('source/height.exr')).toEqual(hdr);
+    expect(decodeImage).toHaveBeenCalledTimes(3);
     expect(restored.environment).toEqual(loaded.environment);
     expect(restored.compiled?.environmentCdf).toEqual(buildEnvCdf(envImage));
-    expect(scene.manifest.resources.filter(resource => resource.path.startsWith('textures/'))).toHaveLength(3);
+    expect(loadEnvironment).toHaveBeenCalledWith([
+      expect.objectContaining({ textureFile: 'https://relocated.test/original/source/environment.hdr' }),
+    ], 'https://relocated.test/original/source/environment.hdr', expect.any(Function), fetchResource);
+    expect(scene.manifest.resources.filter(resource => resource.path.startsWith('textures/'))).toHaveLength(0);
   });
 
   it('fails export when a referenced texture is missing', async () => {
@@ -338,6 +433,28 @@ over "World" {
     const material = [...loaded.resources.materials.values()][0]!;
     material.surfaceModule?.textures.push({ name: 'missing', handle: 'missing', group: 1, binding: 0, fileRef: 'missing.png' });
     await expect(exportCompiledScene(loaded)).rejects.toThrow('Cannot export missing texture');
+  });
+
+  it('reports missing original textures and allows retrying after they become available', async () => {
+    const loaded = await fixture();
+    const material = [...loaded.resources.materials.values()][0]!;
+    material.surfaceModule?.textures.push({ name: 'image', handle: 'image', group: 1, binding: 0, fileRef: 'albedo.png' });
+    const pixels: DecodedPixelImage = {
+      kind: 'pixels', width: 1, height: 1, channels: 4, componentType: 'uint8',
+      colorSpace: 'lin_rec709', data: new Uint8Array([10, 20, 30, 255]),
+    };
+    loaded.mtlx.imageProvider.decode = () => pixels;
+    const scene = await exportCompiledScene(loaded);
+    const fetchPackage = packageFetch(scene);
+    let available = false;
+    const fetchResource = vi.fn(async (input: RequestInfo | URL) => String(input).endsWith('/original/albedo.png')
+      ? new Response(available ? 'original image' : null, { status: available ? 200 : 404 }) : fetchPackage(input));
+    vi.spyOn(browserImage, 'decodeBrowserImage').mockResolvedValue(pixels);
+    const restored = await loadCompiledScene('https://example.test/scenes/compiled/scene.json', vi.fn(), fetchResource);
+    await expect(restored.mtlx.imageProvider.decode('albedo.png')).rejects.toThrow('Missing external texture');
+    available = true;
+    await expect(restored.mtlx.imageProvider.decode('albedo.png')).resolves.toEqual(pixels);
+    expect(scene.manifest.resources.some(resource => resource.path.startsWith('textures/'))).toBe(false);
   });
 
   it('reports load errors explicitly without fetching the original USDA', async () => {

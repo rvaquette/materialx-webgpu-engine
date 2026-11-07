@@ -65,17 +65,17 @@ function integer(value: number, min: number, max: number): boolean {
 
 /** Validate traversal topology and every referenced record before GPU upload. */
 export function validatePreparedGeometry(g: PreparedPathTraceGeometry, materialCount: number): void {
-  const fail = (): never => { throw new Error('Corrupt scene cache: invalid geometry, indices or bounds'); };
+  const fail = (detail = 'invalid geometry, indices or bounds'): never => { throw new Error(`Corrupt scene cache: ${detail}`); };
   if (!integer(g.triangleCount, 0, 2 ** 24 - 1) || !integer(g.nodeCount, 0, 2 ** 24 - 1) ||
       g.nodes.length !== g.nodeCount * PT_NODE_FLOATS ||
       g.triangles.length !== g.triangleCount * PT_TRIANGLE_FLOATS ||
       g.triangleOrder.length !== g.triangleCount || g.triangleUv.length !== g.triangleCount * 6 ||
-      (g.triangleTangent.length !== 0 && g.triangleTangent.length !== g.triangleCount * 12)) fail();
+      (g.triangleTangent.length !== 0 && g.triangleTangent.length !== g.triangleCount * 12)) fail('geometry buffer sizes');
   for (const field of fields) {
     const array = g[field];
     if (!array) fail();
     if (field === 'triangleOrder' ? !(array instanceof Uint32Array) : !(array instanceof Float32Array)) fail();
-    for (const value of array!) if (!Number.isFinite(value)) fail();
+    for (const value of array!) if (!Number.isFinite(value)) fail(`non-finite value in ${field}`);
   }
   if (!g.bounds || !Array.isArray(g.bounds.min) || !Array.isArray(g.bounds.max) ||
       g.bounds.min.length !== 3 || g.bounds.max.length !== 3) fail();
@@ -102,7 +102,7 @@ export function validatePreparedGeometry(g: PreparedPathTraceGeometry, materialC
     for (let p = 0; p < 9; p++) {
       const axis = p % 3, value = g.triangles[t * PT_TRIANGLE_FLOATS + p]!;
       // The builder's soup and bounds use the same Float32 positions.
-      if (value < g.bounds.min[axis]! || value > g.bounds.max[axis]!) fail();
+      if (value < g.bounds.min[axis]! || value > g.bounds.max[axis]!) fail(`triangle ${t} axis ${axis}: ${value} outside scene bounds [${g.bounds.min[axis]}, ${g.bounds.max[axis]}]`);
     }
   }
   const visited = new Uint8Array(g.nodeCount), covered = new Uint8Array(g.triangleCount);
@@ -127,7 +127,7 @@ export function validatePreparedGeometry(g: PreparedPathTraceGeometry, materialC
         const tri = g.triangleOrder[i]! * PT_TRIANGLE_FLOATS;
         for (let p = 0; p < 9; p++) {
           const axis = p % 3, value = g.triangles[tri + p]!;
-          if (value < g.nodes[base + axis]! || value > g.nodes[base + 4 + axis]!) fail();
+          if (value < g.nodes[base + axis]! || value > g.nodes[base + 4 + axis]!) fail(`triangle ${g.triangleOrder[i]} axis ${axis}: ${value} outside leaf ${index} bounds [${g.nodes[base + axis]}, ${g.nodes[base + 4 + axis]}]`);
         }
       }
     } else {

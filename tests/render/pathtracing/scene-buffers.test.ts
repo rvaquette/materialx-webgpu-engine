@@ -10,6 +10,7 @@ import {
   type PathTraceScene,
 } from '../../../src/render/pathtracing/scene-buffers.ts';
 import type { PathTraceBvhCache } from '../../../src/geometry/cache.ts';
+import { validatePreparedGeometry } from '../../../src/render/pathtracing/scene-buffer-cache.ts';
 import type { Bvh } from '../../../src/geometry/bvh.ts';
 import type { GeometryResource, MaterialResource, SceneResources } from '../../../src/render/scene-resources.ts';
 import type { RasterSurface } from '../../../src/render/raster/scene-frame.ts';
@@ -288,6 +289,22 @@ describe('buildPathTraceScene tangent packing (T057l)', () => {
   it('leaves the tangent buffer empty when no geometry authored tangents', () => {
     const scene = build();
     expect(scene.triangleTangent.length).toBe(0);
+  });
+
+  it.each([false, true])('zero-fills missing tangents in mixed geometry (tangents first: %s)', tangentFirst => {
+    const { resources, lights } = sceneWith();
+    const geometries = new Map(resources.geometries);
+    geometries.set('/tangent', quadGeometryTangent('/tangent', [1, 0, 0, 1]));
+    const tangentInstance = { ...resources.instances[0]!, id: '/tangent', primPath: '/tangent', prototypeId: '/tangent' };
+    const instances = tangentFirst ? [tangentInstance, ...resources.instances] : [...resources.instances, tangentInstance];
+    const scene = buildPathTraceScene({ ...resources, geometries, instances }, { lights });
+    expect(scene.triangleTangent.length).toBe(scene.triangleCount * 12);
+    expect([...scene.triangleTangent].every(Number.isFinite)).toBe(true);
+    const missingOffset = tangentFirst ? 24 : 0;
+    const authoredOffset = tangentFirst ? 0 : 24;
+    expect([...scene.triangleTangent.slice(missingOffset, missingOffset + 24)]).toEqual(Array(24).fill(0));
+    expect([...scene.triangleTangent.slice(authoredOffset, authoredOffset + 24)]).toEqual(Array(6).fill([1, 0, 0, 1]).flat());
+    expect(() => validatePreparedGeometry(scene, scene.materialCount)).not.toThrow();
   });
 });
 

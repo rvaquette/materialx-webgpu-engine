@@ -1,6 +1,6 @@
 # USD import: loader qualification (T003)
 
-## Precompiled scenes (v1.0)
+## Precompiled scenes (v2.0)
 
 Export is an offline command, not a viewer UI action:
 
@@ -20,6 +20,18 @@ To recursively export every USDA under `scenes`, preserving its relative directo
 .\scripts\export-scenes.ps1
 ```
 
+For a faster lossless export, use Zstandard level 3 and skip completed scenes:
+
+```powershell
+.\scripts\export-scenes.ps1 -SkipExisting -CompressionLevel 3
+```
+
+`-CompressionLevel` accepts 1 through 22 (default 22); lower levels normally
+produce larger packages but encode much faster. `-TimeoutMs` controls the scene
+compilation timeout (default 1800000, or 30 minutes). The single-scene command
+accepts equivalent `--compression-level` and `--timeout` options. Progress logs
+separate BVH preparation, validation and compression, with per-resource timings.
+
 For example, `scenes\pathtracer\volume_cube.usda` is exported to
 `scenes\compiled\pathtracer\volume_cube\scene.json`. The script excludes
 `scenes\compiled`, never overwrites existing packages and stops on the first failure.
@@ -38,34 +50,70 @@ or scene resources; they do not prevent compression or export.
 The script starts its own loopback Vite server and isolated headless browser,
 uses the ordinary USD/MaterialX/texture loaders, then exports the prepared scene
 without opening the viewer, initializing WebGPU or rendering frames. Both helper
-processes are closed afterwards. Browser-based loading preserves the same WASM
+processes are closed afterwards. HMR and file watching are disabled so source
+changes cannot reload the export page during a long calculation. Browser-based loading preserves the same WASM
 and image decoder behavior as the application. Export can take substantially
-longer than loading: it builds any still-lazy BVHs and uses Zstandard level 22.
+longer than loading: it builds any still-lazy BVHs and defaults to Zstandard level 22.
 It does not modify the source USD/MaterialX files. A failed export exits nonzero
 and does not publish `scene.json`; choose a fresh directory before retrying.
+
+External geometry archives must be extracted before export. For example,
+`scenes/pathtracer/panther/panther.7z` contains `panther.obj`, which the USDA
+references directly. An HTML response to an OBJ request is rejected explicitly
+rather than passed to the geometry parser. Prepared geometry cache keys are
+hashed in bounded blocks to avoid building one enormous JSON string for large meshes.
 
 The output contains:
 
 ```text
 scenes/my-scene-compiled/
   scene.json
-  metadata/<sha256>.json.zst
-  buffers/<sha256>.bin.zst
-  shaders/<sha256>.wgsl.zst
-  textures/<sha256>.bin.zst
+  metadata.json.zst
+  buffers.bin.zst
+  shaders.wgsl.zst
 ```
 
-`scene.json` identifies `materialx-compiled-scene`, version `1.0`, the engine
-ABI, little-endian byte order, the metadata path, and every payload's path,
-SHA-256, compressed size and uncompressed size. Paths are relative to the
-manifest, not to the app or the original `.mtlx`. Metadata records typed-array
+`scene.json` identifies `materialx-compiled-scene`, version `2.0`, the engine
+ABI, little-endian byte order, the three physical files, and every logical block's
+identifier, physical file, byte offset, SHA-256, compressed size and uncompressed
+size. Physical file paths are relative to the manifest. Metadata records typed-array
 types, counts, maps, material bindings, UV/sampler/color-space settings, cameras
-and lights. Payloads are content-addressed and byte-identical data is stored once.
+and lights. Logical blocks are content-addressed and byte-identical data is stored once.
+Each physical file concatenates independently compressed Zstandard frames. The
+loader uses the manifest index to decode and verify each block; the shaders file
+is a container of separate WGSL sources, not a single combined WGSL module.
+All three files are emitted, including empty containers when a scene has no
+buffers or shaders. The manifest is written last, for four files in total.
 Large authored numeric arrays and CPU BLAS/TLAS nodes also live in binary payloads
 (float64 records retain JavaScript precision), rather than expanding into JSON.
-Payload downloads/decompression use batches of up to four resources.
+Each physical file is downloaded at most once; block decompression uses batches
+of up to four resources. Offsets, contiguity and file sizes are checked before loading.
 The manifest is written last; failed writes are reported, not marked successful.
 The command requires a fresh directory to avoid mixing payloads from older exports.
+Earlier v1 packages must be converted or regenerated; this loader does not read
+the old per-resource directory layout. `-SkipExisting` does not upgrade existing packages.
+
+### Merging Existing v1 Packages
+
+Convert existing packages in place without USD import, decompression or recompression:
+
+```powershell
+node scripts/merge-compiled-scenes.mjs --root scenes/compiled --dry-run
+node scripts/merge-compiled-scenes.mjs --root scenes/compiled
+```
+
+The script validates the v1 index and input file sizes, copies compressed blocks
+using streams, and prepares the three containers before publishing the v2
+manifest. Offsets and original SHA-256 values are retained. `scene.v1.json`
+backs up the previous manifest, and original resource files are kept by default.
+Existing v2 packages are skipped; errors are reported per scene and cause a
+nonzero final exit code without stopping conversion of other scenes.
+
+Use `--entry scenes/compiled/pathtracer/panther/scene.json` instead of `--root`
+to convert one package. Add `--remove-originals` to delete only indexed v1 blocks
+after conversion. This also works on previously converted packages whose backup
+matches the v2 manifest. The backup manifest remains, but is not a complete backup
+once the original blocks have been deleted. Unrelated files are never deleted.
 
 The snapshot contains prepared vertex/index streams, prototype BLAS and instance
 TLAS data, already-displaced geometry, the world-space path-tracing BVH and its
@@ -76,13 +124,18 @@ needed for existing parameter editing are retained as engine-owned data, not
 MaterialX WASM objects.
 
 Material textures are collected after normal MaterialX path resolution. The
-snapshot preserves the **decoded pixels**, their precision and color-space
-metadata, including explicitly enumerated sparse UDIM tiles. Procedural graphs
-are not baked. HDR environment pixels, SH and the importance-sampling CDF are
-also saved. Compression is lossless; it cannot recover precision already lost
-by the source decoder. This format does not add new source image decoders or
-GPU texture formats: the current material upload path requires RGBA8, whereas
-HDR environments use the existing floating-point path.
+snapshot stores **references to the original image files**, including explicitly
+enumerated sparse UDIM tile numbers, not decoded pixel buffers. Same-origin image
+URLs retain their paths but not the temporary export server's host or port.
+Textures are fetched and decoded on demand, with decoded results cached per scene.
+Procedural graphs are not baked. HDR environment images are also external; SH,
+tint, intensity and average radiance are retained, while the importance-sampling
+CDF is rebuilt after decoding the original environment image. No texture pixel
+payloads are compressed into the package. Original image files must remain
+available at their recorded paths when serving or distributing the scene.
+This format does not add new source image decoders or GPU texture formats:
+the current material upload path requires RGBA8, whereas HDR environments use
+the existing floating-point path.
 
 ### Loading through the UI
 
@@ -96,13 +149,14 @@ The local file/folder buttons import source glTF assets, not compiled packages.
 A direct URL also works (without adding an entry to the drop-down):
 `?entry=./scenes/compiled/volume_cube/scene.json&backend=pathtracing`.
 To load an export made outside `scenes/`, first copy its entire directory there;
-selecting only the manifest without its payload directories is not sufficient.
+selecting only the manifest without its three sibling files is not sufficient.
 Static packaging copies the complete `scenes` tree, including custom compiled
 directories and all their payloads. Serve the full directory over HTTP(S);
 absolute local filesystem paths are not browser-fetchable assets.
 
 Loading restores the snapshot without importing USD, reading `.mtlx`, initializing
 MaterialX Core, preparing geometry, building BVHs or regenerating material WGSL.
+Original texture/environment downloads and decoding, environment CDF generation,
 GPU uploads, device-specific WebGPU shader/pipeline compilation and environment
 GPU mipmap generation still happen. Existing material-parameter edits remain
 available and explicitly invalidate the prepared snapshot, allowing the ordinary

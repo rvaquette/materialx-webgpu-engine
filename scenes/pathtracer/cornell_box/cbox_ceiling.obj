@@ -1,11 +1,3 @@
-# Blender v2.93.1 OBJ File: ''
-# www.blender.org
-o cbox_ceiling
-v 27.800001 -0.000017 27.965000
-v -27.800001 0.000010 -27.955000
-v 27.800001 0.000010 -27.955000
-v -27.800001 -0.000017 27.965000
-vn 0.0000 -1.0000 -0.0000
-s 1
-f 1//1 2//1 3//1
-f 1//1 4//1 2//1
+version https://git-lfs.github.com/spec/v1
+oid sha256:efb415a5094ac7aae0833f4b2d959dc969fabeee6e652660c2dc20c7f261700a
+size 269

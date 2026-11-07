@@ -12,7 +12,7 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const harnessPath = '/__export_scene.html';
 const browserModule = '/scripts/export-scene-browser.ts';
 
-function connect(url) {
+function connect(url, onEvent = () => {}) {
   const socket = new WebSocket(url);
   const pending = new Map();
   let nextId = 0;
@@ -23,6 +23,7 @@ function connect(url) {
   socket.addEventListener('close', () => rejectAll(new Error('Export browser disconnected.')));
   socket.addEventListener('message', event => {
     const message = JSON.parse(event.data);
+    if (message.method) onEvent(message);
     const request = pending.get(message.id);
     if (!request) return;
     pending.delete(message.id);
@@ -35,13 +36,13 @@ function connect(url) {
       socket.addEventListener('open', resolve, { once: true });
       socket.addEventListener('error', () => reject(new Error('Cannot connect to export browser.')), { once: true });
     }),
-    send(method, params = {}) {
+    send(method, params = {}, timeout = 10 * 60 * 1000) {
       return new Promise((resolve, reject) => {
         const id = ++nextId;
         const timer = setTimeout(() => {
           pending.delete(id);
           reject(new Error(`Export browser timed out: ${method}`));
-        }, 10 * 60 * 1000);
+        }, timeout);
         pending.set(id, { resolve, reject, timer });
         socket.send(JSON.stringify({ id, method, params }));
       });
@@ -53,15 +54,22 @@ function connect(url) {
 async function main() {
   const { values } = parseArgs({ options: {
     entry: { type: 'string' }, out: { type: 'string' }, help: { type: 'boolean', short: 'h' },
+    'compression-level': { type: 'string', default: '22' },
+    timeout: { type: 'string', default: '1800000' },
   } });
   if (values.help) {
     console.log('Usage: npm run export:scene -- --entry scenes\\pathtracer\\volume_cube.usda --out scenes\\compiled\\volume_cube\n' +
       'Requires Node.js >=22 and Chrome/Edge (MX_CHROME overrides its executable).\n' +
       'Loads and compiles USD/USDA/USDC using the shared browser loaders, without opening the viewer UI.\n' +
+      'Options: --compression-level 1..22 (default 22), --timeout milliseconds (default 1800000).\n' +
       'The output directory must be empty or absent. No source files are modified.');
     return;
   }
   if (!values.entry || !values.out) throw new Error('Both --entry and --out are required. Use --help.');
+  const compressionLevel = Number(values['compression-level']);
+  const timeout = Number(values.timeout);
+  if (!Number.isInteger(compressionLevel) || compressionLevel < 1 || compressionLevel > 22) throw new Error('--compression-level must be an integer between 1 and 22.');
+  if (!Number.isSafeInteger(timeout) || timeout <= 0 || timeout > 2147483647) throw new Error('--timeout must be a positive integer no greater than 2147483647.');
   if (typeof WebSocket === 'undefined') throw new Error('export:scene requires Node.js >=22 (built-in WebSocket).');
   const entry = resolve(values.entry);
   const entryRelative = relative(root, entry);
@@ -80,7 +88,7 @@ async function main() {
   if (!chromePath || !existsSync(chromePath)) throw new Error('Chrome/Edge not found. Set MX_CHROME to its executable.');
 
   const server = await createServer({
-    root, server: { host: '127.0.0.1', port: 0, open: false },
+    root, server: { host: '127.0.0.1', port: 0, open: false, hmr: false, watch: null },
     optimizeDeps: { noDiscovery: true, entries: [] },
     plugins: [{
       name: 'compiled-scene-export',
@@ -129,19 +137,31 @@ async function main() {
       if (!page) await sleep(100);
     }
     if (!page) throw new Error('Timed out starting the export browser.');
-    connection = connect(page.webSocketDebuggerUrl);
+    connection = connect(page.webSocketDebuggerUrl, message => {
+      if (message.method === 'Runtime.consoleAPICalled') {
+        const text = message.params.args.map(arg => arg.value ?? arg.description ?? '').join(' ');
+        console.log(`[export-browser:${message.params.type}] ${text}`);
+      } else if (message.method === 'Runtime.exceptionThrown') {
+        const details = message.params.exceptionDetails;
+        console.error(`[export-browser] ${details.exception?.description ?? details.text}`);
+      } else if (message.method === 'Inspector.targetCrashed') {
+        console.error('[export-browser] Browser tab crashed.');
+      }
+    });
     await connection.ready;
-    const evaluate = async expression => {
-      const result = await connection.send('Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true });
+    await connection.send('Runtime.enable');
+    await connection.send('Inspector.enable');
+    const evaluate = async (expression, evaluationTimeout) => {
+      const result = await connection.send('Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true }, evaluationTimeout);
       if (result.exceptionDetails) throw new Error(result.exceptionDetails.exception?.description ?? result.exceptionDetails.text);
       return result.result.value;
     };
     const entryUrl = `${origin}/${entryRelative.split(sep).map(encodeURIComponent).join('/')}`;
-    console.log(`[export-scene] Compiling ${entryRelative} (Zstandard level 22)...`);
-    const result = await evaluate(`import(${JSON.stringify(browserModule)}).then(module => module.compileScene(${JSON.stringify(entryUrl)}))`);
+    console.log(`[export-scene] Compiling ${entryRelative} (Zstandard level ${compressionLevel})...`);
+    const result = await evaluate(`import(${JSON.stringify(browserModule)}).then(module => module.compileScene(${JSON.stringify(entryUrl)},${compressionLevel}))`, timeout);
     await mkdir(out, { recursive: true });
     for (const { path, byteLength } of result.files) {
-      if (!/^(buffers|textures|shaders|metadata)\/[a-f0-9]{64}\.(bin|wgsl|json)\.zst$/.test(path)) {
+      if (!['buffers.bin.zst', 'shaders.wgsl.zst', 'metadata.json.zst'].includes(path)) {
         throw new Error(`Invalid exported payload path: ${path}`);
       }
       const target = join(out, ...path.split('/'));

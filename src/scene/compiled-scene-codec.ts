@@ -1,17 +1,20 @@
 import { init, compress, decompress } from '@bokuweb/zstd-wasm';
 import type { BvhNode } from '../geometry/bvh.ts';
 
-export const COMPILED_SCENE_VERSION = '1.0';
+export const COMPILED_SCENE_VERSION = '2.0';
 export const COMPILED_SCENE_ABI = 1;
 const MAX_RESOURCE_BYTES = 512 * 1024 * 1024;
 const MAX_TOTAL_BYTES = 2 * 1024 * 1024 * 1024;
 const MAX_STATE_BYTES = 64 * 1024 * 1024;
+const PACKED_FILES = { buffers: 'buffers.bin.zst', shaders: 'shaders.wgsl.zst', metadata: 'metadata.json.zst' } as const;
 const textEncoder = new TextEncoder();
 const textDecoder = new TextDecoder('utf-8', { fatal: true });
 let initialized: Promise<void> | undefined;
 
 export interface CompiledResource {
   path: string;
+  file: string;
+  offset: number;
   byteLength: number;
   compressedByteLength: number;
   sha256: string;
@@ -19,12 +22,13 @@ export interface CompiledResource {
 
 export interface CompiledSceneManifest {
   format: 'materialx-compiled-scene';
-  version: '1.0';
+  version: '2.0';
   engineAbi: number;
   compression: 'zstd';
   byteOrder: 'little-endian';
   generatedFrom: string;
   state: string;
+  files: { path: string; byteLength: number }[];
   resources: CompiledResource[];
 }
 
@@ -57,7 +61,7 @@ async function hash(bytes: Uint8Array<ArrayBuffer>): Promise<string> {
 }
 
 function validPath(path: unknown): path is string {
-  return typeof path === 'string' && /^(buffers|textures|shaders|metadata)\/[a-f0-9]{64}\.(bin|wgsl|json)\.zst$/.test(path);
+  return typeof path === 'string' && /^(buffers|shaders|metadata)\/[a-f0-9]{64}\.(bin|wgsl|json)\.zst$/.test(path);
 }
 
 function size(value: unknown, maximum: number): value is number {
@@ -72,10 +76,22 @@ function bvhNodes(value: unknown[]): value is BvhNode[] {
 }
 
 /** Separate immutable, content-addressed payloads; the manifest is written last. */
-export async function encodeCompiledScene(value: unknown, generatedFrom: string): Promise<CompiledScenePackage> {
+export interface CompiledSceneEncodeOptions {
+  compressionLevel?: number;
+  onProgress?: (message: string) => void;
+}
+
+export async function encodeCompiledScene(
+  value: unknown, generatedFrom: string, options: CompiledSceneEncodeOptions = {},
+): Promise<CompiledScenePackage> {
+  const level = options.compressionLevel ?? 22;
+  if (!Number.isInteger(level) || level < 1 || level > 22) throw new Error('Compression level must be an integer between 1 and 22.');
   assertLittleEndian();
   await ready();
   const files = new Map<string, Uint8Array<ArrayBuffer>>();
+  const packed = new Map(Object.values(PACKED_FILES).map(path => [path as string, {
+    chunks: [] as Uint8Array<ArrayBuffer>[], byteLength: 0,
+  }]));
   const resources: CompiledResource[] = [];
   const byContent = new Map<string, string>();
   const ancestors = new WeakSet<object>();
@@ -88,9 +104,15 @@ export async function encodeCompiledScene(value: unknown, generatedFrom: string)
     total += bytes.byteLength;
     if (total > MAX_TOTAL_BYTES) throw new Error('Compiled scene exceeds 2 GiB uncompressed.');
     const path = `${directory}/${sha256}.${extension}.zst`;
-    const compressed = compress(bytes, 22);
-    files.set(path, compressed);
-    resources.push({ path, byteLength: bytes.byteLength, compressedByteLength: compressed.byteLength, sha256 });
+    options.onProgress?.(`Compressing ${path}: ${(bytes.byteLength / 1048576).toFixed(1)} MiB (Zstandard ${level})...`);
+    const started = performance.now();
+    const compressed = compress(bytes, level);
+    options.onProgress?.(`Compressed in ${((performance.now() - started) / 1000).toFixed(1)}s: ${(compressed.byteLength / 1048576).toFixed(1)} MiB.`);
+    const file = PACKED_FILES[directory as keyof typeof PACKED_FILES];
+    const bundle = packed.get(file)!;
+    resources.push({ path, file, offset: bundle.byteLength, byteLength: bytes.byteLength, compressedByteLength: compressed.byteLength, sha256 });
+    bundle.chunks.push(compressed);
+    bundle.byteLength += compressed.byteLength;
     byContent.set(sha256, path);
     return path;
   };
@@ -145,7 +167,7 @@ export async function encodeCompiledScene(value: unknown, generatedFrom: string)
       }
       const entries: Json[] = [];
       for (const [k, v] of Object.entries(input)) {
-        entries.push([k, await encode(v, k, depth + 1, k === 'images' || k === 'image' ? 'textures' : directory)]);
+        entries.push([k, await encode(v, k, depth + 1, directory)]);
       }
       return { $: 'object', entries };
     } finally {
@@ -155,10 +177,21 @@ export async function encodeCompiledScene(value: unknown, generatedFrom: string)
   const encoded = textEncoder.encode(JSON.stringify(await encode(value)));
   if (encoded.byteLength > MAX_STATE_BYTES) throw new Error('Compiled scene metadata exceeds 64 MiB.');
   const state = await store(encoded, 'metadata', 'json');
+  for (const [path, bundle] of packed) {
+    const bytes = new Uint8Array(bundle.byteLength);
+    let offset = 0;
+    for (const chunk of bundle.chunks) {
+      bytes.set(chunk, offset);
+      offset += chunk.byteLength;
+    }
+    files.set(path, bytes);
+    bundle.chunks.length = 0;
+  }
   return {
     manifest: {
       format: 'materialx-compiled-scene', version: COMPILED_SCENE_VERSION, engineAbi: COMPILED_SCENE_ABI,
       compression: 'zstd', byteOrder: 'little-endian', generatedFrom, state, resources,
+      files: [...files].map(([path, bytes]) => ({ path, byteLength: bytes.byteLength })),
     },
     files,
   };
@@ -168,18 +201,36 @@ export function validateCompiledManifest(value: unknown): asserts value is Compi
   if (!isRecord(value) || value.format !== 'materialx-compiled-scene' || value.version !== COMPILED_SCENE_VERSION ||
       value.engineAbi !== COMPILED_SCENE_ABI || value.compression !== 'zstd' || value.byteOrder !== 'little-endian' ||
       typeof value.generatedFrom !== 'string' || !validPath(value.state) || !Array.isArray(value.resources) ||
-      value.resources.length > 100000) throw new Error('Unsupported or invalid compiled scene manifest/version/ABI.');
+      value.resources.length > 100000 || !Array.isArray(value.files) || value.files.length !== 3) {
+    throw new Error('Unsupported or invalid compiled scene manifest/version/ABI.');
+  }
+  const files = new Map<string, number>();
+  for (const file of value.files) {
+    if (!isRecord(file) || !Object.values(PACKED_FILES).includes(file.path as typeof PACKED_FILES[keyof typeof PACKED_FILES]) ||
+        typeof file.path !== 'string' || files.has(file.path) || !size(file.byteLength, MAX_TOTAL_BYTES + MAX_STATE_BYTES)) {
+      throw new Error('Invalid compiled scene packed file.');
+    }
+    files.set(file.path, file.byteLength);
+  }
+  const offsets = new Map([...files.keys()].map(path => [path, 0]));
   let total = 0;
   const paths = new Set<string>();
   for (const resource of value.resources) {
     if (!isRecord(resource) || !validPath(resource.path) || paths.has(resource.path) ||
+      typeof resource.file !== 'string' || !files.has(resource.file) ||
+      resource.file !== PACKED_FILES[resource.path.split('/')[0] as keyof typeof PACKED_FILES] ||
+      !size(resource.offset, files.get(resource.file)!) || resource.offset !== offsets.get(resource.file) ||
         !size(resource.byteLength, MAX_RESOURCE_BYTES) || !size(resource.compressedByteLength, MAX_RESOURCE_BYTES + 1024 * 1024) ||
         typeof resource.sha256 !== 'string' || !/^[a-f0-9]{64}$/.test(resource.sha256) ||
         !resource.path.includes(`/${resource.sha256}.`)) throw new Error('Invalid compiled scene resource descriptor.');
+      const end = resource.offset + resource.compressedByteLength;
+      if (end > files.get(resource.file)!) throw new Error('Compiled scene resource exceeds packed file bounds.');
+      offsets.set(resource.file, end);
     paths.add(resource.path);
     total += resource.byteLength;
   }
-  if (total > MAX_TOTAL_BYTES || !paths.has(value.state) ||
+  if ([...files].some(([path, length]) => offsets.get(path) !== length) ||
+      !value.state.startsWith('metadata/') || total > MAX_TOTAL_BYTES || !paths.has(value.state) ||
       value.resources.find(resource => resource.path === value.state).byteLength > MAX_STATE_BYTES) {
     throw new Error('Invalid compiled scene metadata or size limit.');
   }
@@ -213,6 +264,21 @@ export async function decodeCompiledScene(
   validateCompiledManifest(manifest);
   await ready();
   const descriptors = new Map(manifest.resources.map(resource => [resource.path, resource]));
+  const packed = new Map<string, Promise<Uint8Array<ArrayBuffer>>>();
+  const loadFile = (path: string): Promise<Uint8Array<ArrayBuffer>> => {
+    let pending = packed.get(path);
+    if (!pending) {
+      pending = (async () => {
+        const bytes = await read(path);
+        if (bytes.byteLength !== manifest.files.find(file => file.path === path)!.byteLength) {
+          throw new Error(`Truncated compiled scene packed file: ${path}`);
+        }
+        return bytes;
+      })();
+      packed.set(path, pending);
+    }
+    return pending;
+  };
   const payloads = new Map<string, Promise<Uint8Array<ArrayBuffer>>>();
   const load = (path: unknown): Promise<Uint8Array<ArrayBuffer>> => {
     if (typeof path !== 'string' || !descriptors.has(path)) throw new Error('Unknown compiled scene resource.');
@@ -220,7 +286,8 @@ export async function decodeCompiledScene(
     if (!pending) {
       pending = (async () => {
         const descriptor = descriptors.get(path)!;
-        const compressed = await read(path);
+        const file = await loadFile(descriptor.file);
+        const compressed = file.subarray(descriptor.offset, descriptor.offset + descriptor.compressedByteLength);
         if (compressed.byteLength !== descriptor.compressedByteLength) throw new Error(`Truncated compiled scene resource: ${path}`);
         validateFrame(compressed, descriptor.byteLength);
         const bytes = decompress(compressed);

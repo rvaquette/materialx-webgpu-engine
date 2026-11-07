@@ -1,5 +1,8 @@
 import { buildEnvCdf } from '../assets/environment-cdf.ts';
 import type { DecodedPixelImage } from '../assets/images.ts';
+import { decodeBrowserImage } from '../assets/browser-image.ts';
+import { decodeUdimImage } from '../assets/udim.ts';
+import { AssetResolver } from '../assets/resolver.ts';
 import type { DiagnosticSink } from '../core/diagnostics.ts';
 import { assembleIrForwardShader, type IrForwardShader, type RasterQuality } from '../render/raster/ir-forward.ts';
 import { buildSceneFrame, type RasterSurface } from '../render/raster/scene-frame.ts';
@@ -8,10 +11,11 @@ import { SCENE_BUFFER_CACHE_VERSION, validatePreparedGeometry } from '../render/
 import { buildMaterialDispatch, type PtMaterialDispatch } from '../render/pathtracing/material-variant.ts';
 import { pathTraceSettings } from '../render/pathtracing/scene-settings.ts';
 import type { LoadedUsdScene } from '../render/usd-scene-assets.ts';
+import { loadEnvironment } from '../render/usd-scene-assets.ts';
 import type { SceneResources } from '../render/scene-resources.ts';
 import {
   decodeCompiledScene, encodeCompiledScene, isRecord,
-  type CompiledScenePackage,
+  type CompiledScenePackage, type CompiledSceneEncodeOptions,
 } from './compiled-scene-codec.ts';
 
 export interface CompiledSceneRuntime {
@@ -19,6 +23,12 @@ export interface CompiledSceneRuntime {
   dispatch: PtMaterialDispatch;
   rasterShaders: Map<string, IrForwardShader>;
   environmentCdf?: ReturnType<typeof buildEnvCdf>;
+}
+
+interface ExternalImage {
+  kind: 'external';
+  urls: string[];
+  tiles?: number[];
 }
 
 interface CompiledSceneData extends CompiledSceneRuntime {
@@ -29,8 +39,9 @@ interface CompiledSceneData extends CompiledSceneRuntime {
   lights: LoadedUsdScene['lights'];
   cameras: LoadedUsdScene['cameras'];
   environment?: LoadedUsdScene['environment'];
+  environmentSource?: Omit<NonNullable<LoadedUsdScene['environment']>, 'image'> & { url: string };
   surfaces: Map<string, RasterSurface>;
-  images: Map<string, DecodedPixelImage>;
+  images: Map<string, ExternalImage>;
 }
 
 export function compiledRasterShaderKey(materialKey: string, quality: RasterQuality): string {
@@ -38,14 +49,18 @@ export function compiledRasterShaderKey(materialKey: string, quality: RasterQual
 }
 
 /** Snapshot after import/displacement; material graphs are kept for explicit later edits. */
-export async function exportCompiledScene(loaded: LoadedUsdScene): Promise<CompiledScenePackage> {
+export async function exportCompiledScene(
+  loaded: LoadedUsdScene, options: CompiledSceneEncodeOptions = {},
+): Promise<CompiledScenePackage> {
   if (loaded.resources.pendingGeometry.length || loaded.resources.pendingMaterials.length) {
     throw new Error('Cannot export a scene with missing geometry or materials.');
   }
   const surfaces = new Map([...loaded.resources.materials].map(([key, material]) => [key, loaded.mtlx.surfaceFor(material)]));
+  options.onProgress?.('Preparing path tracing buffers and BVH...');
   const pathTrace = loaded.compiled?.pathTrace ?? await buildCachedPathTraceScene(loaded.resources, {
     lights: loaded.lights, surfaceFor: loaded.mtlx.surfaceFor, settings: pathTraceSettings(loaded.scene),
   });
+  options.onProgress?.(`Path tracing ready: ${pathTrace.triangleCount} triangles, ${pathTrace.nodeCount} BVH nodes.`);
   const dispatch = loaded.compiled?.dispatch ?? buildMaterialDispatch(pathTrace.variantSources);
   const files = new Set(dispatch.textureRegistry.images.filter((file): file is string => file !== undefined));
   for (const resources of [loaded.resources, loaded.parameterResources]) {
@@ -57,11 +72,21 @@ export async function exportCompiledScene(loaded: LoadedUsdScene): Promise<Compi
     }
   }
   if (pathTrace.displacement) files.add(pathTrace.displacement.mapFile);
-  const images = new Map<string, DecodedPixelImage>();
+  const sourceEntry = new URL(loaded.entry, typeof document === 'undefined' ? undefined : document.baseURI);
+  const portableUrl = (url: URL): string => url.origin === sourceEntry.origin
+    ? `${url.pathname}${url.search}${url.hash}` : url.href;
+  const materialDirectories = [...new Set(loaded.scene.materials.map(ref =>
+    new URL('.', new URL(ref.assetPath, new URL(ref.authoringLayer ?? loaded.entry, sourceEntry))).href))];
+  if (!materialDirectories.length) materialDirectories.push(new URL('.', sourceEntry).href);
+  const images = new Map<string, ExternalImage>();
   for (const file of files) {
     const image = await loaded.mtlx.imageProvider.decode(file);
     if (!image) throw new Error(`Cannot export missing texture: ${file}`);
-    images.set(file, image);
+    images.set(file, {
+      kind: 'external',
+      urls: [...new Set(materialDirectories.map(dir => portableUrl(new URL(AssetResolver.normalizeUdim(file), dir))))],
+      ...(image.udim ? { tiles: image.udim.map(tile => tile.tile) } : {}),
+    });
   }
   const rasterShaders = new Map<string, IrForwardShader>();
   const analyticLights = buildSceneFrame(loaded.resources, { lights: loaded.lights, surfaceFor: loaded.mtlx.surfaceFor }).analyticLights !== undefined;
@@ -76,8 +101,16 @@ export async function exportCompiledScene(loaded: LoadedUsdScene): Promise<Compi
         }));
     }
   }
-  const environmentCdf = loaded.environment
-    ? loaded.compiled?.environmentCdf ?? buildEnvCdf(loaded.environment.image) : undefined;
+  let environmentSource: CompiledSceneData['environmentSource'];
+  if (loaded.environment) {
+    const dome = loaded.lights.find(light => light.type === 'dome' && light.textureFile);
+    if (!dome?.textureFile) throw new Error('Cannot export environment without its original image reference.');
+    environmentSource = {
+      url: portableUrl(new URL(dome.textureFile, new URL(dome.textureSourceLayer ?? sourceEntry.href, sourceEntry))),
+      sh: loaded.environment.sh, averageRadiance: loaded.environment.averageRadiance,
+      tint: loaded.environment.tint, intensity: loaded.environment.intensity,
+    };
+  }
   const data: CompiledSceneData = {
     layout: {
       sceneBufferVersion: SCENE_BUFFER_CACHE_VERSION, nodeFloats: PT_NODE_FLOATS,
@@ -86,11 +119,12 @@ export async function exportCompiledScene(loaded: LoadedUsdScene): Promise<Compi
     scene: loaded.scene, resources: loaded.resources, lights: loaded.lights, cameras: loaded.cameras,
     pathTrace, dispatch, rasterShaders, surfaces, images,
     ...(loaded.parameterResources ? { parameterResources: loaded.parameterResources } : {}),
-    ...(loaded.environment ? { environment: loaded.environment } : {}),
-    ...(environmentCdf ? { environmentCdf } : {}),
+    ...(environmentSource ? { environmentSource } : {}),
   };
+  options.onProgress?.('Validating prepared scene...');
   validateData(data);
-  return encodeCompiledScene(data, loaded.entry);
+  options.onProgress?.('Encoding and compressing prepared scene...');
+  return encodeCompiledScene(data, loaded.entry, options);
 }
 
 const finiteArray = (value: unknown, length?: number): boolean =>
@@ -103,29 +137,6 @@ function fail(detail: string): never {
 
 function validateBounds(value: unknown): void {
   if (!isRecord(value) || !finiteArray(value.min, 3) || !finiteArray(value.max, 3)) fail('bounds');
-}
-
-function validateImage(value: unknown): void {
-  if (!isRecord(value) || value.kind !== 'pixels' || !uint(value.width) || value.width < 1 ||
-      !uint(value.height) || value.height < 1 || ![1, 2, 3, 4].includes(Number(value.channels)) ||
-      typeof value.colorSpace !== 'string' || !value.colorSpace) fail('texture metadata');
-  const types = { uint8: Uint8Array, uint16: Uint16Array, float16: Uint16Array, float32: Float32Array };
-  if (typeof value.componentType !== 'string' || !Object.hasOwn(types, value.componentType)) fail('texture precision');
-  const ctor = types[value.componentType as keyof typeof types];
-  if (!(value.data instanceof ctor) || value.data.length !== Number(value.width) * Number(value.height) * Number(value.channels)) fail('texture pixels');
-  if (value.udim !== undefined) {
-    if (!Array.isArray(value.udim) || !value.udim.length) fail('UDIM tiles');
-    const seen = new Set<number>();
-    for (const tile of value.udim) {
-      if (!isRecord(tile) || !uint(tile.tile) || tile.tile < 1001 || tile.tile > 2000 || seen.has(tile.tile)) fail('UDIM index');
-      seen.add(tile.tile);
-      validateImage(tile.image);
-      if (!isRecord(tile.image) || tile.image.udim !== undefined ||
-          tile.image.width !== value.width || tile.image.height !== value.height ||
-          tile.image.colorSpace !== value.colorSpace || tile.image.componentType !== value.componentType ||
-          tile.image.channels !== value.channels) fail('incompatible UDIM tile');
-    }
-  }
 }
 
 function validateResources(value: unknown): void {
@@ -225,7 +236,12 @@ function validateData(value: unknown): asserts value is CompiledSceneData {
       !isRecord(value.dispatch.textureRegistry) || !Array.isArray(value.dispatch.textureRegistry.images)) fail('WGSL dispatch');
   for (const [file, image] of value.images) {
     if (typeof file !== 'string') fail('texture reference');
-    validateImage(image);
+    if (!isRecord(image) || image.kind !== 'external' || !Array.isArray(image.urls) ||
+        !image.urls.length || image.urls.some(url => typeof url !== 'string' || !url ||
+          (!url.startsWith('/') && !/^https?:\/\//i.test(url)))) fail('external texture URL');
+    if (image.tiles !== undefined && (!Array.isArray(image.tiles) || !image.tiles.length ||
+        image.tiles.some(tile => !uint(tile) || tile < 1001 || tile > 1999) ||
+        new Set(image.tiles).size !== image.tiles.length)) fail('external UDIM tiles');
   }
   const images = value.images;
   const requireImage = (file: unknown): void => {
@@ -249,17 +265,15 @@ function validateData(value: unknown): asserts value is CompiledSceneData {
       }
     }
   }
-  if (value.environment !== undefined) {
-    if (!isRecord(value.environment) || !isRecord(value.environment.image) ||
-        !uint(value.environment.image.width) || value.environment.image.width < 1 ||
-        !uint(value.environment.image.height) || value.environment.image.height < 1 ||
-        !(value.environment.image.data instanceof Float32Array) ||
-        value.environment.image.data.length !== value.environment.image.width * value.environment.image.height * 3 ||
-        !isRecord(value.environmentCdf) || !(value.environmentCdf.cdf instanceof Float32Array) ||
-        value.environmentCdf.width !== value.environment.image.width || value.environmentCdf.height !== value.environment.image.height ||
-        value.environmentCdf.cdf.length !== value.environment.image.width * value.environment.image.height ||
-        typeof value.environmentCdf.totalSum !== 'number' || !Number.isFinite(value.environmentCdf.totalSum)) fail('environment');
-  }
+  if (value.environment !== undefined || value.environmentCdf !== undefined) fail('embedded environment is unsupported');
+        if (value.environmentSource !== undefined) {
+          const source = value.environmentSource;
+          if (!isRecord(source) || typeof source.url !== 'string' ||
+          (!source.url.startsWith('/') && !/^https?:\/\//i.test(source.url)) ||
+          !finiteArray(source.averageRadiance, 3) || !finiteArray(source.tint, 3) ||
+          !(source.sh instanceof Float32Array) || !finiteArray(source.sh, 27) ||
+          typeof source.intensity !== 'number' || !Number.isFinite(source.intensity)) fail('external environment');
+        }
 }
 
 export async function loadCompiledScene(
@@ -278,14 +292,53 @@ export async function loadCompiledScene(
       return new Uint8Array(await resource.arrayBuffer());
     });
     validateData(data);
+    if (data.environmentSource) {
+      const { url, ...parameters } = data.environmentSource;
+      const dome = data.lights.find(light => light.type === 'dome');
+      if (!dome) throw new Error('Missing dome light for external environment.');
+      const imageUrl = new URL(url, response.url || entry).href;
+      const environmentLight = { ...dome, textureFile: imageUrl, textureSourceLayer: imageUrl };
+      delete environmentLight.irradianceFile;
+      const environment = await loadEnvironment([environmentLight], imageUrl, sink, fetchResource);
+      if (!environment) throw new Error(`Missing external environment: ${imageUrl}`);
+      data.environment = { ...parameters, image: environment.image };
+      data.environmentCdf = buildEnvCdf(environment.image);
+    }
     const { images, surfaces } = data;
+    const decodedImages = new Map<string, Promise<DecodedPixelImage>>();
+    const decodeExternal = async (image: ExternalImage): Promise<DecodedPixelImage> => {
+      const base = response.url || entry;
+      const decode = async (url: string): Promise<DecodedPixelImage | undefined> => {
+        const resource = await fetchResource(url);
+        if (resource.status === 404) return undefined;
+        if (!resource.ok) throw new Error(`HTTP ${resource.status}: ${url}`);
+        return decodeBrowserImage(await resource.blob(), url);
+      };
+      for (const reference of image.urls) {
+        const url = new URL(reference, base).href;
+        if (image.tiles) {
+          const first = await decode(AssetResolver.expandUdim(url, image.tiles[0]!));
+          if (!first) continue;
+          return decodeUdimImage(url, image.tiles, tile => tile === AssetResolver.expandUdim(url, image.tiles![0]!)
+            ? Promise.resolve(first) : decode(tile));
+        }
+        const decoded = await decode(url);
+        if (decoded) return decoded;
+      }
+      throw new Error(`Missing external texture: ${image.urls.join(', ')}`);
+    };
     return {
       entry, scene: data.scene, resources: data.resources, lights: data.lights, cameras: data.cameras,
       mtlx: {
         imageProvider: { decode: file => {
           const image = images.get(file);
           if (!image) throw new Error(`Texture absent from compiled scene: ${file}`);
-          return image;
+          let decoded = decodedImages.get(file);
+          if (!decoded) {
+            decoded = decodeExternal(image).catch(error => { decodedImages.delete(file); throw error; });
+            decodedImages.set(file, decoded);
+          }
+          return decoded;
         } },
         surfaceFor: material => {
           const surface = surfaces.get(material.unitKey);

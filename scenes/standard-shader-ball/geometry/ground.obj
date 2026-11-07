@@ -1,12 +1,3 @@
-o Ground
-v -100 -0.732128987 -100
-v -100 -0.732128987 100
-v 100 -0.732128987 100
-v 100 -0.732128987 -100
-vt -0.5 1.5
-vt -0.5 0.5
-vt 1.5 0.5
-vt 1.5 1.5
-vn 0 1 0
-f 1/1/1 2/2/1 3/3/1
-f 1/1/1 3/3/1 4/4/1
+version https://git-lfs.github.com/spec/v1
+oid sha256:9bce8cab3fa0bf7c800442b7ad6de96a3da681aa56c06886565b15b72b6e29fb
+size 212

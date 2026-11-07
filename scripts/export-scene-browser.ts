@@ -5,14 +5,17 @@ import type { DiagnosticSink } from '../src/core/diagnostics.ts';
 
 let scenePackage: CompiledScenePackage | undefined;
 
-export async function compileScene(entry: string) {
+export async function compileScene(entry: string, compressionLevel = 22) {
   const sink: DiagnosticSink = diagnostic => {
     if (diagnostic.level === 'error') console.error(diagnostic.message, diagnostic.detail ?? '');
     else if (diagnostic.level === 'warning') console.warn(diagnostic.message, diagnostic.detail ?? '');
   };
-  const loaded = await loadUsdScene(entry, sink, () => {}, new Map(), { editableParameters: true });
+  console.log('Loading USD scene...');
+  const loaded = await loadUsdScene(entry, sink, message => console.log(message), new Map(), { editableParameters: true });
   try {
-    scenePackage = await exportCompiledScene(loaded);
+    console.log('Preparing and compressing compiled scene...');
+    scenePackage = await exportCompiledScene(loaded, { compressionLevel, onProgress: message => console.log(message) });
+    console.log(`Compiled scene ready: ${scenePackage.files.size} payloads.`);
     return {
       manifest: scenePackage.manifest,
       files: [...scenePackage.files].map(([path, bytes]) => ({ path, byteLength: bytes.byteLength })),

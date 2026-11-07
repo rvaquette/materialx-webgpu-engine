@@ -22,9 +22,19 @@ async function fetchGeometry(uri: string): Promise<ArrayBuffer> {
   return response.arrayBuffer();
 }
 
-async function parseGeometry(bytes: ArrayBuffer, uri: string, read: GeometryReader): Promise<{ root: Object3D; flipV: boolean }> {
+async function parseGeometry(bytes: ArrayBuffer, uri: string, read: GeometryReader, sink: DiagnosticSink): Promise<{ root: Object3D; flipV: boolean }> {
   const extension = new URL(uri, 'http://scene.local/').pathname.split('.').at(-1)?.toLowerCase();
-  if (extension === 'obj') return { root: new OBJLoader().parse(new TextDecoder().decode(bytes)), flipV: false };
+  if (extension === 'obj') {
+    const text = new TextDecoder().decode(bytes);
+    if (/^\s*(?:<!doctype\s+html\b|<html\b)/i.test(text)) {
+      throw new Error(`Geometry asset returned HTML instead of OBJ (check for a missing file): ${uri}`);
+    }
+    const trianglesOnly = text.replace(/^[\t ]*[lp][\t ]+[^\r\n]*/gm, '');
+    if (trianglesOnly !== text) {
+      sink({ level: 'warning', message: `Ignoring OBJ line and point primitives for triangle geometry: ${uri}` });
+    }
+    return { root: new OBJLoader().parse(trianglesOnly), flipV: false };
+  }
   if (extension === 'glb' || extension === 'gltf') {
     // Geometry only: do not fetch or decode glTF materials/textures. USD owns shading.
     const loader = new GLTFLoader();
@@ -144,7 +154,7 @@ export async function loadExternalMeshSource(
       const uri = resolveAsset(attribute.sourceLayer ?? scene.entry, attribute.value);
       let file = files.get(uri);
       if (!file) {
-        file = read(uri).then((bytes) => parseGeometry(bytes, uri, read));
+        file = read(uri).then((bytes) => parseGeometry(bytes, uri, read, sink));
         files.set(uri, file);
       }
       const { root, flipV } = await file;

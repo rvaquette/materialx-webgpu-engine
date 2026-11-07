@@ -2,7 +2,7 @@ import { openIndexedDbStore, type KeyValueStore } from '../compiler/cache.ts';
 import type { Bvh } from './bvh.ts';
 import type { PreparedMesh } from './prepare.ts';
 
-const CACHE_VERSION = 1;
+const CACHE_VERSION = 2;
 const DATABASE_NAME = 'materialx-webgpu-engine';
 const STORE_NAME = 'prepared-geometry';
 const CACHE_PREFIX = 'geometry:v1:';
@@ -66,20 +66,39 @@ export function openPathTraceBvhCache(): Promise<PathTraceBvhCache> {
   return defaultBvhCache;
 }
 
-function stableStringify(value: unknown): string {
+function* stableParts(value: unknown): Generator<string> {
   if (typeof value === 'number') {
-    if (Number.isNaN(value)) return '"__NaN__"';
-    if (value === Infinity) return '"__Infinity__"';
-    if (value === -Infinity) return '"__-Infinity__"';
-    if (Object.is(value, -0)) return '"__-0__"';
-    return JSON.stringify(value);
+    if (Number.isNaN(value)) yield '"__NaN__"';
+    else if (value === Infinity) yield '"__Infinity__"';
+    else if (value === -Infinity) yield '"__-Infinity__"';
+    else if (Object.is(value, -0)) yield '"__-0__"';
+    else yield JSON.stringify(value);
+    return;
   }
-  if (value === null || typeof value !== 'object') return JSON.stringify(value) ?? 'null';
-  if (Array.isArray(value)) return `[${value.map(stableStringify).join(',')}]`;
+  if (value === null || typeof value !== 'object') {
+    yield JSON.stringify(value) ?? 'null';
+    return;
+  }
+  if (Array.isArray(value)) {
+    yield '[';
+    for (let index = 0; index < value.length; index++) {
+      if (index) yield ',';
+      yield* stableParts(value[index]);
+    }
+    yield ']';
+    return;
+  }
   const entries = Object.entries(value as Record<string, unknown>)
     .filter(([, entry]) => entry !== undefined)
     .sort(([a], [b]) => a.localeCompare(b));
-  return `{${entries.map(([key, entry]) => `${JSON.stringify(key)}:${stableStringify(entry)}`).join(',')}}`;
+  yield '{';
+  for (let index = 0; index < entries.length; index++) {
+    const [key, entry] = entries[index]!;
+    if (index) yield ',';
+    yield `${JSON.stringify(key)}:`;
+    yield* stableParts(entry);
+  }
+  yield '}';
 }
 
 export async function preparedGeometryCacheKey(
@@ -88,9 +107,29 @@ export async function preparedGeometryCacheKey(
 ): Promise<string | undefined> {
   const cryptoApi = globalThis.crypto?.subtle;
   if (!cryptoApi) return undefined;
-  const payload = `{"cacheVersion":${CACHE_VERSION},"mesh":${stableStringify(mesh)},"options":${stableStringify(options)}}`;
-  const digest = await cryptoApi.digest('SHA-256', new TextEncoder().encode(payload));
-  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('');
+  const chunkSize = 64 * 1024;
+  const encoder = new TextEncoder();
+  let digest = new Uint8Array(32);
+  let pending = '';
+  const hashChunk = async (text: string): Promise<void> => {
+    const bytes = encoder.encode(text);
+    const chained = new Uint8Array(digest.length + bytes.length);
+    chained.set(digest);
+    chained.set(bytes, digest.length);
+    digest = new Uint8Array(await cryptoApi.digest('SHA-256', chained));
+  };
+  for (const part of stableParts({ cacheVersion: CACHE_VERSION, mesh, options })) {
+    pending += part;
+    while (pending.length >= chunkSize) {
+      let end = chunkSize;
+      const last = pending.charCodeAt(end - 1);
+      if (last >= 0xd800 && last <= 0xdbff) end--;
+      await hashChunk(pending.slice(0, end));
+      pending = pending.slice(end);
+    }
+  }
+  if (pending) await hashChunk(pending);
+  return Array.from(digest, (byte) => byte.toString(16).padStart(2, '0')).join('');
 }
 
 export async function pathTraceBvhCacheKey(positions: Float32Array): Promise<string | undefined> {

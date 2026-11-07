@@ -326,6 +326,7 @@ export async function loadEnvironment(
   lights: readonly SceneLight[],
   entry: string,
   sink: DiagnosticSink,
+  fetchResource: typeof fetch = fetch,
 ): Promise<LoadedEnvironment | undefined> {
   const dome = lights.find((l) => l.type === 'dome' && l.textureFile);
   if (!dome?.textureFile) return undefined;
@@ -336,7 +337,7 @@ export async function loadEnvironment(
     const started = performance.now();
     try {
       const image = await decodedEnvironmentCache.get(url, async (signal) => {
-        const res = await fetch(url, { signal });
+        const res = await fetchResource(url, { signal });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const bytes = await res.arrayBuffer();
         let decoded: HdrImage;

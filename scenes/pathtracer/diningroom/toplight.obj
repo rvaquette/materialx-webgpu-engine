@@ -1,10 +1,3 @@
-# Blender v2.79 (sub 0) OBJ File: 'casa2.blend'
-# www.blender.org
-o Plane
-v -1.698293 4.893044 3.361581
-v 1.917820 4.893044 3.361581
-v -1.698293 4.893044 -3.194531
-v 1.917820 4.893044 -3.194531
-vn 0.0000 1.0000 0.0000
-s off
-f 1//1 2//1 4//1 3//1
+version https://git-lfs.github.com/spec/v1
+oid sha256:94f61af4fc4af33e2239d686398a4acff56590025694676832b0e6baf5abcefb
+size 256

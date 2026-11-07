@@ -122,6 +122,48 @@ describe('Three.js external geometry bridge', () => {
     expect(prepareMesh(raw).indices.length).toBe(3);
   });
 
+  it('preserves OBJ faces when the same object also contains lines and points', async () => {
+    const scene = await stage('def Mesh "mesh" { asset engine:geometry:file = @mixed.obj@ }');
+    const diagnostics: Diagnostic[] = [];
+    const source = await loadExternalMeshSource(scene, empty, diagnostic => diagnostics.push(diagnostic),
+      async () => bytes(`${triangleObj}\n l 1 2\n\tp 3\n`));
+    expect(source.meshFor('/mesh')?.faceVertexCounts).toEqual([3]);
+    expect(source.meshFor('/mesh')?.points).toEqual([0, 0, 0, 1, 0, 0, 0, 1, 0]);
+    expect(prepareMesh(source.meshFor('/mesh')!).indices.length).toBe(3);
+    expect(diagnostics).toMatchObject([{ level: 'warning', message: expect.stringContaining('line and point') }]);
+  });
+
+  it('loads all diningroom chair_nuts faces despite loose OBJ edges', async () => {
+    const scene = await stage('def Mesh "mesh" { asset engine:geometry:file = @chair_nuts.obj@ }');
+    const obj = readFileSync(join('scenes', 'pathtracer', 'diningroom', 'chair_nuts.obj'), 'utf8');
+    const source = await loadExternalMeshSource(scene, empty, () => {}, async () => bytes(obj));
+    const raw = source.meshFor('/mesh')!;
+    const expected = obj.split(/\r?\n/).filter(line => line.startsWith('f '))
+      .reduce((total, line) => total + line.trim().split(/\s+/).length - 3, 0);
+    expect(raw.faceVertexCounts.length).toBe(expected);
+    expect(raw.faceVertexIndices.length).toBe(expected * 3);
+    expect(raw.faceVertexCounts.every(count => count === 3)).toBe(true);
+  });
+
+  it('still rejects OBJ assets containing only lines and points', async () => {
+    const scene = await stage('def Mesh "mesh" { asset engine:geometry:file = @lines.obj@ }');
+    await expect(loadExternalMeshSource(scene, empty, () => {},
+      async () => bytes('v 0 0 0\nv 1 0 0\nl 1 2\np 1\n'))).rejects.toThrow('No triangle mesh found');
+  });
+
+  it('reports an HTML fallback instead of trying to parse it as OBJ geometry', async () => {
+    const scene = await stage('def Mesh "mesh" { asset engine:geometry:file = @missing.obj@ }');
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      await expect(loadExternalMeshSource(scene, empty, () => {},
+        async () => bytes('<!doctype html>\n<html><body>Viewer</body></html>')))
+        .rejects.toThrow('Geometry asset returned HTML instead of OBJ');
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
   it('loads a GLB once, selects objects and bakes parent/node transforms without USD transforms', async () => {
     const scene = await stage(`def Mesh "a" {
       asset engine:geometry:file = @objects.glb@

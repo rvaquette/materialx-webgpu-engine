@@ -202,7 +202,12 @@ export function buildPathTraceScene(
     const normal = geom.streams.find((s) => s.name === 'normal');
     const uv = geom.streams.find((s) => s.name === 'uv');
     const tangent = geom.streams.find((s) => s.name === 'tangent');
-    if (tangent) hasTangents = true;
+    if (tangent && !hasTangents) {
+      if (!preparedGeometry) {
+        for (let offset = 0; offset < triCount * PT_TAN_STRIDE; offset++) tanFloats[offset] = 0;
+      }
+      hasTangents = true;
+    }
     const matIdx = indexFor(materialKeyOf(draw.materialKey), draw.surface, draw.materialKey);
     // A file-cache hit still rebuilds live materials/frame, but never visits vertices.
     if (preparedGeometry) continue;

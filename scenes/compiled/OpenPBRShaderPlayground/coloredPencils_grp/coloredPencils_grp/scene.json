@@ -1,0 +1,1865 @@
+{
+  "format": "materialx-compiled-scene",
+  "version": "2.0",
+  "engineAbi": 1,
+  "compression": "zstd",
+  "byteOrder": "little-endian",
+  "generatedFrom": "scenes/OpenPBRShaderPlayground/coloredPencils_grp/coloredPencils_grp.usda",
+  "state": "metadata/e1ecce2cc70a1a7b9de86a85b3b64e7f0294b8054c37bc3930cefd5c2bdde85d.json.zst",
+  "resources": [
+    {
+      "path": "buffers/1a34814cb136e79d320c00447ffa2030871a599de69cb73f63a338c89c650848.bin.zst",
+      "byteLength": 1664,
+      "compressedByteLength": 25,
+      "sha256": "1a34814cb136e79d320c00447ffa2030871a599de69cb73f63a338c89c650848",
+      "file": "buffers.bin.zst",
+      "offset": 0
+    },
+    {
+      "path": "buffers/e8d2a8445ba73b9bb099c5e9e65b28f299314b3b538b5f6e874b86628965f81b.bin.zst",
+      "byteLength": 6656,
+      "compressedByteLength": 1146,
+      "sha256": "e8d2a8445ba73b9bb099c5e9e65b28f299314b3b538b5f6e874b86628965f81b",
+      "file": "buffers.bin.zst",
+      "offset": 25
+    },
+    {
+      "path": "buffers/631f0365f191e1af561219c1346d90321f2d235ca11e839c24b3b44ae352b03c.bin.zst",
+      "byteLength": 5040,
+      "compressedByteLength": 4587,
+      "sha256": "631f0365f191e1af561219c1346d90321f2d235ca11e839c24b3b44ae352b03c",
+      "file": "buffers.bin.zst",
+      "offset": 1171
+    },
+    {
+      "path": "buffers/22130daef1e9a33d71c90f2b8979b44d341b5a26d1961ab1598992ee94b529ca.bin.zst",
+      "byteLength": 19968,
+      "compressedByteLength": 4134,
+      "sha256": "22130daef1e9a33d71c90f2b8979b44d341b5a26d1961ab1598992ee94b529ca",
+      "file": "buffers.bin.zst",
+      "offset": 5758
+    },
+    {
+      "path": "buffers/302b4eeda52db7f8e19bef551ee85560e3e2827ea8bb4cd7bb0da76bbe498784.bin.zst",
+      "byteLength": 6656,
+      "compressedByteLength": 799,
+      "sha256": "302b4eeda52db7f8e19bef551ee85560e3e2827ea8bb4cd7bb0da76bbe498784",
+      "file": "buffers.bin.zst",
+      "offset": 9892
+    },
+    {
+      "path": "buffers/e48b8a98953758d55dc40e09309e4521f086e48ea217674226d987ad0441d3bc.bin.zst",
+      "byteLength": 4000,
+      "compressedByteLength": 3483,
+      "sha256": "e48b8a98953758d55dc40e09309e4521f086e48ea217674226d987ad0441d3bc",
+      "file": "buffers.bin.zst",
+      "offset": 10691
+    },
+    {
+      "path": "buffers/0323339c1e02ac75fb6e582e29837cc589d4efbd0a3386b90e3d7338bf90be4b.bin.zst",
+      "byteLength": 6656,
+      "compressedByteLength": 1135,
+      "sha256": "0323339c1e02ac75fb6e582e29837cc589d4efbd0a3386b90e3d7338bf90be4b",
+      "file": "buffers.bin.zst",
+      "offset": 14174
+    },
+    {
+      "path": "buffers/50c8b7eec41ed718b526cad5c3dafbebb33c072fb355d42967def62b9d0989e6.bin.zst",
+      "byteLength": 1952,
+      "compressedByteLength": 25,
+      "sha256": "50c8b7eec41ed718b526cad5c3dafbebb33c072fb355d42967def62b9d0989e6",
+      "file": "buffers.bin.zst",
+      "offset": 15309
+    },
+    {
+      "path": "buffers/81ec75cbf2f22c0096e4160b691d36c5816558e05ec0d7b6b1252637806c52b0.bin.zst",
+      "byteLength": 7808,
+      "compressedByteLength": 1452,
+      "sha256": "81ec75cbf2f22c0096e4160b691d36c5816558e05ec0d7b6b1252637806c52b0",
+      "file": "buffers.bin.zst",
+      "offset": 15334
+    },
+    {
+      "path": "buffers/2fc3bbf6a2235b34a61f55c4aa977e47163c90a6fdc8dd5198a3b532a1b8ae1e.bin.zst",
+      "byteLength": 5904,
+      "compressedByteLength": 5437,
+      "sha256": "2fc3bbf6a2235b34a61f55c4aa977e47163c90a6fdc8dd5198a3b532a1b8ae1e",
+      "file": "buffers.bin.zst",
+      "offset": 16786
+    },
+    {
+      "path": "buffers/a7ac89e462612d82105235ad277d82bb7ae16ac2e18f71be854338aacf5dd3a0.bin.zst",
+      "byteLength": 23424,
+      "compressedByteLength": 6108,
+      "sha256": "a7ac89e462612d82105235ad277d82bb7ae16ac2e18f71be854338aacf5dd3a0",
+      "file": "buffers.bin.zst",
+      "offset": 22223
+    },
+    {
+      "path": "buffers/6c318ba2ea832fae367dedec4e387da9df62ae375881e26441fad2cd9923ef1e.bin.zst",
+      "byteLength": 7808,
+      "compressedByteLength": 913,
+      "sha256": "6c318ba2ea832fae367dedec4e387da9df62ae375881e26441fad2cd9923ef1e",
+      "file": "buffers.bin.zst",
+      "offset": 28331
+    },
+    {
+      "path": "buffers/9ffc0ffc7b38e3639350ba7c626c1e5b95e17b16312ffbb3bbe074b726809d7d.bin.zst",
+      "byteLength": 4928,
+      "compressedByteLength": 3963,
+      "sha256": "9ffc0ffc7b38e3639350ba7c626c1e5b95e17b16312ffbb3bbe074b726809d7d",
+      "file": "buffers.bin.zst",
+      "offset": 29244
+    },
+    {
+      "path": "buffers/3c802df495d036893521ccd23c5c8906f32a84f53ac89f9726d2c6836ed7355a.bin.zst",
+      "byteLength": 7808,
+      "compressedByteLength": 1435,
+      "sha256": "3c802df495d036893521ccd23c5c8906f32a84f53ac89f9726d2c6836ed7355a",
+      "file": "buffers.bin.zst",
+      "offset": 33207
+    },
+    {
+      "path": "buffers/a44480807980cf70ef8d9082e012884a90d4c391ac7e3a8873bb2cd6cba6388e.bin.zst",
+      "byteLength": 2480,
+      "compressedByteLength": 25,
+      "sha256": "a44480807980cf70ef8d9082e012884a90d4c391ac7e3a8873bb2cd6cba6388e",
+      "file": "buffers.bin.zst",
+      "offset": 34642
+    },
+    {
+      "path": "buffers/52ac49f4109fc6c1d8a0842c7b3859265b89b2c1a165f4c0711291a0fcb96e5a.bin.zst",
+      "byteLength": 9920,
+      "compressedByteLength": 1715,
+      "sha256": "52ac49f4109fc6c1d8a0842c7b3859265b89b2c1a165f4c0711291a0fcb96e5a",
+      "file": "buffers.bin.zst",
+      "offset": 34667
+    },
+    {
+      "path": "buffers/c1a65822b6bd674453e03e44eb57ef84ad124bc53a7a03fe72f959587e0396ff.bin.zst",
+      "byteLength": 7488,
+      "compressedByteLength": 6747,
+      "sha256": "c1a65822b6bd674453e03e44eb57ef84ad124bc53a7a03fe72f959587e0396ff",
+      "file": "buffers.bin.zst",
+      "offset": 36382
+    },
+    {
+      "path": "buffers/8fa6d7e765876b3b02b61a86071addee72629269edef5d2a434259301d7b3325.bin.zst",
+      "byteLength": 29760,
+      "compressedByteLength": 8528,
+      "sha256": "8fa6d7e765876b3b02b61a86071addee72629269edef5d2a434259301d7b3325",
+      "file": "buffers.bin.zst",
+      "offset": 43129
+    },
+    {
+      "path": "buffers/56d78ba04a58a58fa7e53b0b83214d86dde6051f977f3182cb57c625b37b9bf5.bin.zst",
+      "byteLength": 9920,
+      "compressedByteLength": 1180,
+      "sha256": "56d78ba04a58a58fa7e53b0b83214d86dde6051f977f3182cb57c625b37b9bf5",
+      "file": "buffers.bin.zst",
+      "offset": 51657
+    },
+    {
+      "path": "buffers/51ae1c621c6ac9427132889dcd876a5d1935e871d26266b04938d7c77281ce41.bin.zst",
+      "byteLength": 6096,
+      "compressedByteLength": 5548,
+      "sha256": "51ae1c621c6ac9427132889dcd876a5d1935e871d26266b04938d7c77281ce41",
+      "file": "buffers.bin.zst",
+      "offset": 52837
+    },
+    {
+      "path": "buffers/f2ead27c5f1e92a4dd043b7ba905dc4e69c9a6dcb54c3d13b546385f90a84a4d.bin.zst",
+      "byteLength": 9920,
+      "compressedByteLength": 1713,
+      "sha256": "f2ead27c5f1e92a4dd043b7ba905dc4e69c9a6dcb54c3d13b546385f90a84a4d",
+      "file": "buffers.bin.zst",
+      "offset": 58385
+    },
+    {
+      "path": "buffers/cb72ab77045163c3512227fa77e0970d2acac61be7f41ede019d95581c9ed5c1.bin.zst",
+      "byteLength": 9920,
+      "compressedByteLength": 1702,
+      "sha256": "cb72ab77045163c3512227fa77e0970d2acac61be7f41ede019d95581c9ed5c1",
+      "file": "buffers.bin.zst",
+      "offset": 60098
+    },
+    {
+      "path": "buffers/f5c5e4a5e489c6c4dff954f7751d375cfe0adbd92eeb4010e262d8e403d509e7.bin.zst",
+      "byteLength": 7488,
+      "compressedByteLength": 6725,
+      "sha256": "f5c5e4a5e489c6c4dff954f7751d375cfe0adbd92eeb4010e262d8e403d509e7",
+      "file": "buffers.bin.zst",
+      "offset": 61800
+    },
+    {
+      "path": "buffers/3d9ffdf5457ba6599959b83b58f764148dda4dc210de634d54ad94c0730f3353.bin.zst",
+      "byteLength": 29760,
+      "compressedByteLength": 8497,
+      "sha256": "3d9ffdf5457ba6599959b83b58f764148dda4dc210de634d54ad94c0730f3353",
+      "file": "buffers.bin.zst",
+      "offset": 68525
+    },
+    {
+      "path": "buffers/21a172dc561978f125d73deef50e275205f17ecf1fbac3e077f1802690b8e536.bin.zst",
+      "byteLength": 6096,
+      "compressedByteLength": 5554,
+      "sha256": "21a172dc561978f125d73deef50e275205f17ecf1fbac3e077f1802690b8e536",
+      "file": "buffers.bin.zst",
+      "offset": 77022
+    },
+    {
+      "path": "buffers/dd7ea0993e4fdb2e23f3a1167d368db15ba2f8ae65671ba909101373ce744efb.bin.zst",
+      "byteLength": 9920,
+      "compressedByteLength": 1719,
+      "sha256": "dd7ea0993e4fdb2e23f3a1167d368db15ba2f8ae65671ba909101373ce744efb",
+      "file": "buffers.bin.zst",
+      "offset": 82576
+    },
+    {
+      "path": "buffers/011172949db0188085914543876009278be7ea6398691155afe53125efad422b.bin.zst",
+      "byteLength": 7808,
+      "compressedByteLength": 1459,
+      "sha256": "011172949db0188085914543876009278be7ea6398691155afe53125efad422b",
+      "file": "buffers.bin.zst",
+      "offset": 84295
+    },
+    {
+      "path": "buffers/76239c73ae28787d164afbd9ab7d281952f7bbb6494d5e4f9958f8fcd06b08a8.bin.zst",
+      "byteLength": 5904,
+      "compressedByteLength": 5417,
+      "sha256": "76239c73ae28787d164afbd9ab7d281952f7bbb6494d5e4f9958f8fcd06b08a8",
+      "file": "buffers.bin.zst",
+      "offset": 85754
+    },
+    {
+      "path": "buffers/bac24b85f43be638d67d8b05c83055120faf2685edd405bc33139f77eba83a8c.bin.zst",
+      "byteLength": 23424,
+      "compressedByteLength": 6119,
+      "sha256": "bac24b85f43be638d67d8b05c83055120faf2685edd405bc33139f77eba83a8c",
+      "file": "buffers.bin.zst",
+      "offset": 91171
+    },
+    {
+      "path": "buffers/bd457440e965f87d0c20133f00ed315343ed3ead61181d99efbcee7eab86d594.bin.zst",
+      "byteLength": 7808,
+      "compressedByteLength": 1438,
+      "sha256": "bd457440e965f87d0c20133f00ed315343ed3ead61181d99efbcee7eab86d594",
+      "file": "buffers.bin.zst",
+      "offset": 97290
+    },
+    {
+      "path": "buffers/4edb6b05e2f46d8d5f1b7490cfea687acf22eb92495e1aa118fcd49deab0c1b4.bin.zst",
+      "byteLength": 6656,
+      "compressedByteLength": 1153,
+      "sha256": "4edb6b05e2f46d8d5f1b7490cfea687acf22eb92495e1aa118fcd49deab0c1b4",
+      "file": "buffers.bin.zst",
+      "offset": 98728
+    },
+    {
+      "path": "buffers/392c86891f0d3a5c296629eb3ab09da591d6bcb8326c55498bed69ef26bc7aca.bin.zst",
+      "byteLength": 5040,
+      "compressedByteLength": 4617,
+      "sha256": "392c86891f0d3a5c296629eb3ab09da591d6bcb8326c55498bed69ef26bc7aca",
+      "file": "buffers.bin.zst",
+      "offset": 99881
+    },
+    {
+      "path": "buffers/3e8ebf4fc90f0d93d51e83595a11d785a50b44f54750a0a1c0a058dd91e71a1f.bin.zst",
+      "byteLength": 19968,
+      "compressedByteLength": 4338,
+      "sha256": "3e8ebf4fc90f0d93d51e83595a11d785a50b44f54750a0a1c0a058dd91e71a1f",
+      "file": "buffers.bin.zst",
+      "offset": 104498
+    },
+    {
+      "path": "buffers/09ebbc6e2754063eb4ceb66d6bc53c609fad8a2b9477a381ba2c57b4c48f44c1.bin.zst",
+      "byteLength": 6656,
+      "compressedByteLength": 1137,
+      "sha256": "09ebbc6e2754063eb4ceb66d6bc53c609fad8a2b9477a381ba2c57b4c48f44c1",
+      "file": "buffers.bin.zst",
+      "offset": 108836
+    },
+    {
+      "path": "buffers/b6f590a719115e208949b5246b022cb18edb579d43d16621c7bdd191bec702ab.bin.zst",
+      "byteLength": 9920,
+      "compressedByteLength": 1724,
+      "sha256": "b6f590a719115e208949b5246b022cb18edb579d43d16621c7bdd191bec702ab",
+      "file": "buffers.bin.zst",
+      "offset": 109973
+    },
+    {
+      "path": "buffers/63d054e168449350b9ecb9544949eb905123f93af6b1aeaebe9ad48492314779.bin.zst",
+      "byteLength": 7488,
+      "compressedByteLength": 6695,
+      "sha256": "63d054e168449350b9ecb9544949eb905123f93af6b1aeaebe9ad48492314779",
+      "file": "buffers.bin.zst",
+      "offset": 111697
+    },
+    {
+      "path": "buffers/a229e75eb61dc2e6e837ecac962bb925f144dd5747ac56f1aaa9a64945ca32de.bin.zst",
+      "byteLength": 29760,
+      "compressedByteLength": 8501,
+      "sha256": "a229e75eb61dc2e6e837ecac962bb925f144dd5747ac56f1aaa9a64945ca32de",
+      "file": "buffers.bin.zst",
+      "offset": 118392
+    },
+    {
+      "path": "buffers/23ee6c0e29f4ce548ade3ae21de7c6b481b882ff74df587c41fe8646a5c4fa35.bin.zst",
+      "byteLength": 6096,
+      "compressedByteLength": 5533,
+      "sha256": "23ee6c0e29f4ce548ade3ae21de7c6b481b882ff74df587c41fe8646a5c4fa35",
+      "file": "buffers.bin.zst",
+      "offset": 126893
+    },
+    {
+      "path": "buffers/e82c749355bb379b12901d9ff1ac5c80a4b3da80c0ef4bd33b54f99b1c1ca0fa.bin.zst",
+      "byteLength": 9920,
+      "compressedByteLength": 1732,
+      "sha256": "e82c749355bb379b12901d9ff1ac5c80a4b3da80c0ef4bd33b54f99b1c1ca0fa",
+      "file": "buffers.bin.zst",
+      "offset": 132426
+    },
+    {
+      "path": "buffers/1c1fd1e10542923f43898da6fd505a324a40a480e785ebfe1018dc58bd4f112c.bin.zst",
+      "byteLength": 7808,
+      "compressedByteLength": 1444,
+      "sha256": "1c1fd1e10542923f43898da6fd505a324a40a480e785ebfe1018dc58bd4f112c",
+      "file": "buffers.bin.zst",
+      "offset": 134158
+    },
+    {
+      "path": "buffers/1b9df7aeefd0b3212877a1fcbca496aba41c3275521ea92caa325040ff218635.bin.zst",
+      "byteLength": 5904,
+      "compressedByteLength": 5327,
+      "sha256": "1b9df7aeefd0b3212877a1fcbca496aba41c3275521ea92caa325040ff218635",
+      "file": "buffers.bin.zst",
+      "offset": 135602
+    },
+    {
+      "path": "buffers/bb8e800a1f478f9ad1f28f815f58a6b8eecaf8032b339f5fffa8fe3d7615a521.bin.zst",
+      "byteLength": 23424,
+      "compressedByteLength": 6105,
+      "sha256": "bb8e800a1f478f9ad1f28f815f58a6b8eecaf8032b339f5fffa8fe3d7615a521",
+      "file": "buffers.bin.zst",
+      "offset": 140929
+    },
+    {
+      "path": "buffers/4a0619a384a867e666e5b49b6cb2bf248331f967daad841b2a35c48ed9d05373.bin.zst",
+      "byteLength": 4928,
+      "compressedByteLength": 3963,
+      "sha256": "4a0619a384a867e666e5b49b6cb2bf248331f967daad841b2a35c48ed9d05373",
+      "file": "buffers.bin.zst",
+      "offset": 147034
+    },
+    {
+      "path": "buffers/981563b846b25425dc19a7e99285ae0465bf0faebe2e6d045b3056acc78eac9c.bin.zst",
+      "byteLength": 7808,
+      "compressedByteLength": 1410,
+      "sha256": "981563b846b25425dc19a7e99285ae0465bf0faebe2e6d045b3056acc78eac9c",
+      "file": "buffers.bin.zst",
+      "offset": 150997
+    },
+    {
+      "path": "buffers/6a9b2dec042dfd4088e5536193e49a005b6d4c077d2c65c853413ac5070a7abf.bin.zst",
+      "byteLength": 6656,
+      "compressedByteLength": 1157,
+      "sha256": "6a9b2dec042dfd4088e5536193e49a005b6d4c077d2c65c853413ac5070a7abf",
+      "file": "buffers.bin.zst",
+      "offset": 152407
+    },
+    {
+      "path": "buffers/79d6a091ed13a5c6db5277c0bb82702fd1d28d1a71f5c2b7829c9dac20fd5445.bin.zst",
+      "byteLength": 5040,
+      "compressedByteLength": 4632,
+      "sha256": "79d6a091ed13a5c6db5277c0bb82702fd1d28d1a71f5c2b7829c9dac20fd5445",
+      "file": "buffers.bin.zst",
+      "offset": 153564
+    },
+    {
+      "path": "buffers/882bf6e1a6bb86f144213b1257e6b1be6030d900b08a08befb73660a5c82bd04.bin.zst",
+      "byteLength": 19968,
+      "compressedByteLength": 4293,
+      "sha256": "882bf6e1a6bb86f144213b1257e6b1be6030d900b08a08befb73660a5c82bd04",
+      "file": "buffers.bin.zst",
+      "offset": 158196
+    },
+    {
+      "path": "buffers/2beb520533787cd7491d42144d8e7c724b37dbb860e421309b3ffdc29733e0eb.bin.zst",
+      "byteLength": 6656,
+      "compressedByteLength": 1145,
+      "sha256": "2beb520533787cd7491d42144d8e7c724b37dbb860e421309b3ffdc29733e0eb",
+      "file": "buffers.bin.zst",
+      "offset": 162489
+    },
+    {
+      "path": "buffers/bd5b0c366fbf3bc27d7c6379fd3d991eb420ea50158ea14f35bd950b48065047.bin.zst",
+      "byteLength": 7808,
+      "compressedByteLength": 1435,
+      "sha256": "bd5b0c366fbf3bc27d7c6379fd3d991eb420ea50158ea14f35bd950b48065047",
+      "file": "buffers.bin.zst",
+      "offset": 163634
+    },
+    {
+      "path": "buffers/12749087bb079d6a28d030ea60039d67bb9b1d7d85713ed664475b33eb74ae2e.bin.zst",
+      "byteLength": 5904,
+      "compressedByteLength": 5379,
+      "sha256": "12749087bb079d6a28d030ea60039d67bb9b1d7d85713ed664475b33eb74ae2e",
+      "file": "buffers.bin.zst",
+      "offset": 165069
+    },
+    {
+      "path": "buffers/da5b962f206cf557cbfacccea8b8f6ea83b0640ad32562486c29ce80cf4f939c.bin.zst",
+      "byteLength": 23424,
+      "compressedByteLength": 6131,
+      "sha256": "da5b962f206cf557cbfacccea8b8f6ea83b0640ad32562486c29ce80cf4f939c",
+      "file": "buffers.bin.zst",
+      "offset": 170448
+    },
+    {
+      "path": "buffers/ef6dee09d338458c094bc4c16e5e85764dc29956a4c05e31adc39c6e2f2ea60a.bin.zst",
+      "byteLength": 4928,
+      "compressedByteLength": 3965,
+      "sha256": "ef6dee09d338458c094bc4c16e5e85764dc29956a4c05e31adc39c6e2f2ea60a",
+      "file": "buffers.bin.zst",
+      "offset": 176579
+    },
+    {
+      "path": "buffers/6ae0cdabbd2e7f124f5ba242ad4282a6b0678af2c7e4618bd67d696b26157c55.bin.zst",
+      "byteLength": 7808,
+      "compressedByteLength": 1425,
+      "sha256": "6ae0cdabbd2e7f124f5ba242ad4282a6b0678af2c7e4618bd67d696b26157c55",
+      "file": "buffers.bin.zst",
+      "offset": 180544
+    },
+    {
+      "path": "buffers/850604410f3fb06974803c61d1fad3e842bafcf25133cb26ecadf61b2eba967c.bin.zst",
+      "byteLength": 9920,
+      "compressedByteLength": 1707,
+      "sha256": "850604410f3fb06974803c61d1fad3e842bafcf25133cb26ecadf61b2eba967c",
+      "file": "buffers.bin.zst",
+      "offset": 181969
+    },
+    {
+      "path": "buffers/59dc73a6877a2435ba06b9afb3644215bb25cee4359cdf7aa0583adb5305235f.bin.zst",
+      "byteLength": 7488,
+      "compressedByteLength": 6795,
+      "sha256": "59dc73a6877a2435ba06b9afb3644215bb25cee4359cdf7aa0583adb5305235f",
+      "file": "buffers.bin.zst",
+      "offset": 183676
+    },
+    {
+      "path": "buffers/74c4c39b6d2c7f1e249db26ecd081646b54d5f2b8000de745a4e287843953a98.bin.zst",
+      "byteLength": 29760,
+      "compressedByteLength": 8509,
+      "sha256": "74c4c39b6d2c7f1e249db26ecd081646b54d5f2b8000de745a4e287843953a98",
+      "file": "buffers.bin.zst",
+      "offset": 190471
+    },
+    {
+      "path": "buffers/c2c1dd9bbc1ea0a8915b34a8d882308ae8c38ba49e7564d075c1964f206cc648.bin.zst",
+      "byteLength": 6096,
+      "compressedByteLength": 5537,
+      "sha256": "c2c1dd9bbc1ea0a8915b34a8d882308ae8c38ba49e7564d075c1964f206cc648",
+      "file": "buffers.bin.zst",
+      "offset": 198980
+    },
+    {
+      "path": "buffers/c3bc2b54b7ccd640380a4903f484c4311f75c4f1656ff033b4fc18272a884439.bin.zst",
+      "byteLength": 9920,
+      "compressedByteLength": 1732,
+      "sha256": "c3bc2b54b7ccd640380a4903f484c4311f75c4f1656ff033b4fc18272a884439",
+      "file": "buffers.bin.zst",
+      "offset": 204517
+    },
+    {
+      "path": "buffers/ce95fed771614495cc19dee28642debd07dc7b708fc0ba1962b1a8ac9b1902f6.bin.zst",
+      "byteLength": 6656,
+      "compressedByteLength": 1146,
+      "sha256": "ce95fed771614495cc19dee28642debd07dc7b708fc0ba1962b1a8ac9b1902f6",
+      "file": "buffers.bin.zst",
+      "offset": 206249
+    },
+    {
+      "path": "buffers/b04fb3b0179e10289bb203be07150a026c153c8b7f0d45f3d15d5acbad3237df.bin.zst",
+      "byteLength": 5040,
+      "compressedByteLength": 4610,
+      "sha256": "b04fb3b0179e10289bb203be07150a026c153c8b7f0d45f3d15d5acbad3237df",
+      "file": "buffers.bin.zst",
+      "offset": 207395
+    },
+    {
+      "path": "buffers/ffc38aa3ca1db18257e25311dfb31caf3a15b57011cfc888abb38ae9768619d5.bin.zst",
+      "byteLength": 19968,
+      "compressedByteLength": 4220,
+      "sha256": "ffc38aa3ca1db18257e25311dfb31caf3a15b57011cfc888abb38ae9768619d5",
+      "file": "buffers.bin.zst",
+      "offset": 212005
+    },
+    {
+      "path": "buffers/9379b1775acbeb7b2bd5bb71acd95b7c7abf0173d79bc4183aaa114839dd7357.bin.zst",
+      "byteLength": 6656,
+      "compressedByteLength": 1148,
+      "sha256": "9379b1775acbeb7b2bd5bb71acd95b7c7abf0173d79bc4183aaa114839dd7357",
+      "file": "buffers.bin.zst",
+      "offset": 216225
+    },
+    {
+      "path": "buffers/2650e774e5283e282bac12465eb6a733ea6b0439417adceec94454fa25c848c9.bin.zst",
+      "byteLength": 7808,
+      "compressedByteLength": 1448,
+      "sha256": "2650e774e5283e282bac12465eb6a733ea6b0439417adceec94454fa25c848c9",
+      "file": "buffers.bin.zst",
+      "offset": 217373
+    },
+    {
+      "path": "buffers/ad0d50790f99829bb2d3ec2c46dcd783ed2b5ac4b782c0dc9f04ccd6c3dd2e8d.bin.zst",
+      "byteLength": 5904,
+      "compressedByteLength": 5371,
+      "sha256": "ad0d50790f99829bb2d3ec2c46dcd783ed2b5ac4b782c0dc9f04ccd6c3dd2e8d",
+      "file": "buffers.bin.zst",
+      "offset": 218821
+    },
+    {
+      "path": "buffers/73e2b580895ac3a1c5701783c594b124311a967d70f70202099334653f93da5e.bin.zst",
+      "byteLength": 23424,
+      "compressedByteLength": 6118,
+      "sha256": "73e2b580895ac3a1c5701783c594b124311a967d70f70202099334653f93da5e",
+      "file": "buffers.bin.zst",
+      "offset": 224192
+    },
+    {
+      "path": "buffers/60913cb6138a522da692903dbd65c9fc9eac567c3735fc976eddf42fe544d891.bin.zst",
+      "byteLength": 4928,
+      "compressedByteLength": 3965,
+      "sha256": "60913cb6138a522da692903dbd65c9fc9eac567c3735fc976eddf42fe544d891",
+      "file": "buffers.bin.zst",
+      "offset": 230310
+    },
+    {
+      "path": "buffers/8f427edcd92090a216a987e5d431670932235f368736c215eac59b3a4ccce600.bin.zst",
+      "byteLength": 7808,
+      "compressedByteLength": 1433,
+      "sha256": "8f427edcd92090a216a987e5d431670932235f368736c215eac59b3a4ccce600",
+      "file": "buffers.bin.zst",
+      "offset": 234275
+    },
+    {
+      "path": "buffers/5dfc66e6bc471eb1307a02f18b005d05f19102209fbb962e7674f6c42564219f.bin.zst",
+      "byteLength": 9920,
+      "compressedByteLength": 1725,
+      "sha256": "5dfc66e6bc471eb1307a02f18b005d05f19102209fbb962e7674f6c42564219f",
+      "file": "buffers.bin.zst",
+      "offset": 235708
+    },
+    {
+      "path": "buffers/81b47210b16104cf250f22766e6413c1c0dabb8c0daa2e30c2bee1b2817effe8.bin.zst",
+      "byteLength": 7488,
+      "compressedByteLength": 6750,
+      "sha256": "81b47210b16104cf250f22766e6413c1c0dabb8c0daa2e30c2bee1b2817effe8",
+      "file": "buffers.bin.zst",
+      "offset": 237433
+    },
+    {
+      "path": "buffers/1e8596b572d1fc9a0150b10522afc45288cd2def821eb15807721663abaa6d06.bin.zst",
+      "byteLength": 29760,
+      "compressedByteLength": 8592,
+      "sha256": "1e8596b572d1fc9a0150b10522afc45288cd2def821eb15807721663abaa6d06",
+      "file": "buffers.bin.zst",
+      "offset": 244183
+    },
+    {
+      "path": "buffers/555b439e5291c42c7ba152a148c1b45bc17b6133f7366b876bf4f2df267168e9.bin.zst",
+      "byteLength": 6096,
+      "compressedByteLength": 5526,
+      "sha256": "555b439e5291c42c7ba152a148c1b45bc17b6133f7366b876bf4f2df267168e9",
+      "file": "buffers.bin.zst",
+      "offset": 252775
+    },
+    {
+      "path": "buffers/fe402ade86a8dbf3534673efe472d9bdb011390c96c40ed5f2107f5589f470b4.bin.zst",
+      "byteLength": 9920,
+      "compressedByteLength": 1736,
+      "sha256": "fe402ade86a8dbf3534673efe472d9bdb011390c96c40ed5f2107f5589f470b4",
+      "file": "buffers.bin.zst",
+      "offset": 258301
+    },
+    {
+      "path": "buffers/b0368fc2fb75216f90eddcd854de1f57a62d672289bfa0fa462b0efd08afc76c.bin.zst",
+      "byteLength": 6656,
+      "compressedByteLength": 1150,
+      "sha256": "b0368fc2fb75216f90eddcd854de1f57a62d672289bfa0fa462b0efd08afc76c",
+      "file": "buffers.bin.zst",
+      "offset": 260037
+    },
+    {
+      "path": "buffers/2e3443b2294b0b0a985df1e5bb3d4c129da3d3780d03ddb2268e8c9613d46606.bin.zst",
+      "byteLength": 5040,
+      "compressedByteLength": 4498,
+      "sha256": "2e3443b2294b0b0a985df1e5bb3d4c129da3d3780d03ddb2268e8c9613d46606",
+      "file": "buffers.bin.zst",
+      "offset": 261187
+    },
+    {
+      "path": "buffers/7b34d209f070de2b8e2ca4fef11347bf59cd068784b397808b0b647cfd15c86b.bin.zst",
+      "byteLength": 19968,
+      "compressedByteLength": 4224,
+      "sha256": "7b34d209f070de2b8e2ca4fef11347bf59cd068784b397808b0b647cfd15c86b",
+      "file": "buffers.bin.zst",
+      "offset": 265685
+    },
+    {
+      "path": "buffers/2f02f71723278189207c704d4a6df7a850faaa6eae43c8d4490d4252002a3b9b.bin.zst",
+      "byteLength": 6656,
+      "compressedByteLength": 1127,
+      "sha256": "2f02f71723278189207c704d4a6df7a850faaa6eae43c8d4490d4252002a3b9b",
+      "file": "buffers.bin.zst",
+      "offset": 269909
+    },
+    {
+      "path": "buffers/e0e71ddb61dc796b4d16c451d73632f535a6b83bf5aecbbf16efb95c09a00696.bin.zst",
+      "byteLength": 3000,
+      "compressedByteLength": 2321,
+      "sha256": "e0e71ddb61dc796b4d16c451d73632f535a6b83bf5aecbbf16efb95c09a00696",
+      "file": "buffers.bin.zst",
+      "offset": 271036
+    },
+    {
+      "path": "buffers/d1a2fd12ddfb09cc05260abed3905fe6d7f59b04fc4884ebc7b843e7c6ca1ada.bin.zst",
+      "byteLength": 3000,
+      "compressedByteLength": 2315,
+      "sha256": "d1a2fd12ddfb09cc05260abed3905fe6d7f59b04fc4884ebc7b843e7c6ca1ada",
+      "file": "buffers.bin.zst",
+      "offset": 273357
+    },
+    {
+      "path": "buffers/5c5fed00fa90c8cb155b51180dbb1f662377d9db1e277cbe057e8e6fcc527fd8.bin.zst",
+      "byteLength": 2000,
+      "compressedByteLength": 1661,
+      "sha256": "5c5fed00fa90c8cb155b51180dbb1f662377d9db1e277cbe057e8e6fcc527fd8",
+      "file": "buffers.bin.zst",
+      "offset": 275672
+    },
+    {
+      "path": "buffers/9c36383d3d7ce30013e8effb43773431b24b56ef351b640eebd6bda1cf9401f4.bin.zst",
+      "byteLength": 4000,
+      "compressedByteLength": 2716,
+      "sha256": "9c36383d3d7ce30013e8effb43773431b24b56ef351b640eebd6bda1cf9401f4",
+      "file": "buffers.bin.zst",
+      "offset": 277333
+    },
+    {
+      "path": "buffers/cbf9839a57c13f0cea9e64c7365c06aae0ce477cbcba03a04754070d1cd6e95b.bin.zst",
+      "byteLength": 4992,
+      "compressedByteLength": 1197,
+      "sha256": "cbf9839a57c13f0cea9e64c7365c06aae0ce477cbcba03a04754070d1cd6e95b",
+      "file": "buffers.bin.zst",
+      "offset": 280049
+    },
+    {
+      "path": "buffers/798c16a2a49d9f8d990de3717527dd158d3a159705a87b9b585f809135fac077.bin.zst",
+      "byteLength": 20400,
+      "compressedByteLength": 3716,
+      "sha256": "798c16a2a49d9f8d990de3717527dd158d3a159705a87b9b585f809135fac077",
+      "file": "buffers.bin.zst",
+      "offset": 281246
+    },
+    {
+      "path": "buffers/53628424366bec418bcdd0773db6418ea160eae943d3164fde2cfcb17f2e32e4.bin.zst",
+      "byteLength": 1664,
+      "compressedByteLength": 497,
+      "sha256": "53628424366bec418bcdd0773db6418ea160eae943d3164fde2cfcb17f2e32e4",
+      "file": "buffers.bin.zst",
+      "offset": 284962
+    },
+    {
+      "path": "buffers/0dd3f8be5ae1907bfb0b8cdc9a92e399b3277786887a1d79b30a1bd4a84ac260.bin.zst",
+      "byteLength": 3696,
+      "compressedByteLength": 2756,
+      "sha256": "0dd3f8be5ae1907bfb0b8cdc9a92e399b3277786887a1d79b30a1bd4a84ac260",
+      "file": "buffers.bin.zst",
+      "offset": 285459
+    },
+    {
+      "path": "buffers/f4af911e0223aaf7ea4f0b6954475f0d20deb247bcce3039ef10fa64131f8021.bin.zst",
+      "byteLength": 3696,
+      "compressedByteLength": 2768,
+      "sha256": "f4af911e0223aaf7ea4f0b6954475f0d20deb247bcce3039ef10fa64131f8021",
+      "file": "buffers.bin.zst",
+      "offset": 288215
+    },
+    {
+      "path": "buffers/9f4ee47ad6d633c1e01de37693a31f6f0119a203ad9f263c61f0398dd5dc6d5c.bin.zst",
+      "byteLength": 2464,
+      "compressedByteLength": 1955,
+      "sha256": "9f4ee47ad6d633c1e01de37693a31f6f0119a203ad9f263c61f0398dd5dc6d5c",
+      "file": "buffers.bin.zst",
+      "offset": 290983
+    },
+    {
+      "path": "buffers/c16f7f50a1fe64bf49ba26a76c145e0ca6a35e097911891973f3c2b490cbd37f.bin.zst",
+      "byteLength": 4928,
+      "compressedByteLength": 3405,
+      "sha256": "c16f7f50a1fe64bf49ba26a76c145e0ca6a35e097911891973f3c2b490cbd37f",
+      "file": "buffers.bin.zst",
+      "offset": 292938
+    },
+    {
+      "path": "buffers/bbd027177c77cd9089389a7a19e49a8a43bcc311ec27ea43520c48191f261c9a.bin.zst",
+      "byteLength": 5856,
+      "compressedByteLength": 1499,
+      "sha256": "bbd027177c77cd9089389a7a19e49a8a43bcc311ec27ea43520c48191f261c9a",
+      "file": "buffers.bin.zst",
+      "offset": 296343
+    },
+    {
+      "path": "buffers/48882371e0637e3830698db2a55ce574b18721645e73d1f77c1bbff7da216346.bin.zst",
+      "byteLength": 20400,
+      "compressedByteLength": 3706,
+      "sha256": "48882371e0637e3830698db2a55ce574b18721645e73d1f77c1bbff7da216346",
+      "file": "buffers.bin.zst",
+      "offset": 297842
+    },
+    {
+      "path": "buffers/8cad121ee764d337949f0f9f361db808ff72455bc9a9b09262282aaf3db57b20.bin.zst",
+      "byteLength": 1952,
+      "compressedByteLength": 672,
+      "sha256": "8cad121ee764d337949f0f9f361db808ff72455bc9a9b09262282aaf3db57b20",
+      "file": "buffers.bin.zst",
+      "offset": 301548
+    },
+    {
+      "path": "buffers/6434e6b37c09aa0d1487be2e9d64f4ef2a31eb1708c87ac96c3c140851c94e6a.bin.zst",
+      "byteLength": 4572,
+      "compressedByteLength": 3395,
+      "sha256": "6434e6b37c09aa0d1487be2e9d64f4ef2a31eb1708c87ac96c3c140851c94e6a",
+      "file": "buffers.bin.zst",
+      "offset": 302220
+    },
+    {
+      "path": "buffers/c5f99a1fce6b92481f99d6ee8758b81b37e1ecb534c58a78505ea73d0ce5fc18.bin.zst",
+      "byteLength": 4572,
+      "compressedByteLength": 3629,
+      "sha256": "c5f99a1fce6b92481f99d6ee8758b81b37e1ecb534c58a78505ea73d0ce5fc18",
+      "file": "buffers.bin.zst",
+      "offset": 305615
+    },
+    {
+      "path": "buffers/b1aceca60be6f7f7c36fe28155939be8cc12125bae7629885586870557450c14.bin.zst",
+      "byteLength": 3048,
+      "compressedByteLength": 2680,
+      "sha256": "b1aceca60be6f7f7c36fe28155939be8cc12125bae7629885586870557450c14",
+      "file": "buffers.bin.zst",
+      "offset": 309244
+    },
+    {
+      "path": "buffers/c4bb6c04d12aa783c276e42f8189d1dc77cb28004921d3c79232c37fd88e6a5b.bin.zst",
+      "byteLength": 6096,
+      "compressedByteLength": 4282,
+      "sha256": "c4bb6c04d12aa783c276e42f8189d1dc77cb28004921d3c79232c37fd88e6a5b",
+      "file": "buffers.bin.zst",
+      "offset": 311924
+    },
+    {
+      "path": "buffers/59d8defa88fe3e679ad15ea1a7ed67e208b161df67dc2b568ea693404369d99e.bin.zst",
+      "byteLength": 7440,
+      "compressedByteLength": 1987,
+      "sha256": "59d8defa88fe3e679ad15ea1a7ed67e208b161df67dc2b568ea693404369d99e",
+      "file": "buffers.bin.zst",
+      "offset": 316206
+    },
+    {
+      "path": "buffers/b8ab1ad2459647c9ab8fe7645315953afb070ae5f6282bfb3e1d2d291270cc41.bin.zst",
+      "byteLength": 37680,
+      "compressedByteLength": 6519,
+      "sha256": "b8ab1ad2459647c9ab8fe7645315953afb070ae5f6282bfb3e1d2d291270cc41",
+      "file": "buffers.bin.zst",
+      "offset": 318193
+    },
+    {
+      "path": "buffers/428d30edd1181f097547943352bcb4260e7e3809d84a864d77ac4fab01f00221.bin.zst",
+      "byteLength": 2480,
+      "compressedByteLength": 818,
+      "sha256": "428d30edd1181f097547943352bcb4260e7e3809d84a864d77ac4fab01f00221",
+      "file": "buffers.bin.zst",
+      "offset": 324712
+    },
+    {
+      "path": "buffers/c3062a7d538bfcaf73e424bd41910d69b31a9b61c53e9c5bedca86bec3d37cd1.bin.zst",
+      "byteLength": 4572,
+      "compressedByteLength": 3428,
+      "sha256": "c3062a7d538bfcaf73e424bd41910d69b31a9b61c53e9c5bedca86bec3d37cd1",
+      "file": "buffers.bin.zst",
+      "offset": 325530
+    },
+    {
+      "path": "buffers/3564f41bd0eb7fec8bb712a539c9b2822b9208f37abb11af097488b65a8ac34f.bin.zst",
+      "byteLength": 4572,
+      "compressedByteLength": 3629,
+      "sha256": "3564f41bd0eb7fec8bb712a539c9b2822b9208f37abb11af097488b65a8ac34f",
+      "file": "buffers.bin.zst",
+      "offset": 328958
+    },
+    {
+      "path": "buffers/e82d71ce77f696d0749ce1ebc51fe87045f0807ef138acb0554d6c580507adcb.bin.zst",
+      "byteLength": 3048,
+      "compressedByteLength": 2685,
+      "sha256": "e82d71ce77f696d0749ce1ebc51fe87045f0807ef138acb0554d6c580507adcb",
+      "file": "buffers.bin.zst",
+      "offset": 332587
+    },
+    {
+      "path": "buffers/ca9704b46cdc9d0065a0ebd1bcd5e7300df102585e87a5caa61004fb04e5fa0e.bin.zst",
+      "byteLength": 6096,
+      "compressedByteLength": 4263,
+      "sha256": "ca9704b46cdc9d0065a0ebd1bcd5e7300df102585e87a5caa61004fb04e5fa0e",
+      "file": "buffers.bin.zst",
+      "offset": 335272
+    },
+    {
+      "path": "buffers/2e67963bbe4f1d2eae3177cd2d62ae874de5aabff8d2f561fea933661fac39ab.bin.zst",
+      "byteLength": 7440,
+      "compressedByteLength": 1982,
+      "sha256": "2e67963bbe4f1d2eae3177cd2d62ae874de5aabff8d2f561fea933661fac39ab",
+      "file": "buffers.bin.zst",
+      "offset": 339535
+    },
+    {
+      "path": "buffers/4bf1386f9b22f50961821f822b7627ad1f0e919690818378303e8cb00ff092f1.bin.zst",
+      "byteLength": 37680,
+      "compressedByteLength": 6607,
+      "sha256": "4bf1386f9b22f50961821f822b7627ad1f0e919690818378303e8cb00ff092f1",
+      "file": "buffers.bin.zst",
+      "offset": 341517
+    },
+    {
+      "path": "buffers/e762f6a08cb9bab45617446b299351777de47d7cf91179e602c92a0937621381.bin.zst",
+      "byteLength": 2480,
+      "compressedByteLength": 806,
+      "sha256": "e762f6a08cb9bab45617446b299351777de47d7cf91179e602c92a0937621381",
+      "file": "buffers.bin.zst",
+      "offset": 348124
+    },
+    {
+      "path": "buffers/ad6356ab54f980c0a4e19b51e1947bfb02efe27df4675e8a2697ff707d976276.bin.zst",
+      "byteLength": 3696,
+      "compressedByteLength": 2754,
+      "sha256": "ad6356ab54f980c0a4e19b51e1947bfb02efe27df4675e8a2697ff707d976276",
+      "file": "buffers.bin.zst",
+      "offset": 348930
+    },
+    {
+      "path": "buffers/83ad4146fd514d5e7e98a4d994a32983d56b6e64cbaecef91f18ce650788306f.bin.zst",
+      "byteLength": 3696,
+      "compressedByteLength": 2766,
+      "sha256": "83ad4146fd514d5e7e98a4d994a32983d56b6e64cbaecef91f18ce650788306f",
+      "file": "buffers.bin.zst",
+      "offset": 351684
+    },
+    {
+      "path": "buffers/4c88b76cd694d45ef52f8a2f31b4144fc1b222f21850c694e286599699145b40.bin.zst",
+      "byteLength": 2464,
+      "compressedByteLength": 1956,
+      "sha256": "4c88b76cd694d45ef52f8a2f31b4144fc1b222f21850c694e286599699145b40",
+      "file": "buffers.bin.zst",
+      "offset": 354450
+    },
+    {
+      "path": "buffers/a150901e4f76e5caf6f478001cecc0e1c7c8bc9579cbe49342baebf8d7bdea5d.bin.zst",
+      "byteLength": 4928,
+      "compressedByteLength": 3396,
+      "sha256": "a150901e4f76e5caf6f478001cecc0e1c7c8bc9579cbe49342baebf8d7bdea5d",
+      "file": "buffers.bin.zst",
+      "offset": 356406
+    },
+    {
+      "path": "buffers/f594bb58e18b694d02e5a3e8a7588d3f84112d47f9b728a633b8ec4fa60c34c5.bin.zst",
+      "byteLength": 5856,
+      "compressedByteLength": 1500,
+      "sha256": "f594bb58e18b694d02e5a3e8a7588d3f84112d47f9b728a633b8ec4fa60c34c5",
+      "file": "buffers.bin.zst",
+      "offset": 359802
+    },
+    {
+      "path": "buffers/d54b797328e5a7ae19764d9c56b4e0489505d3a4a2c5e5be16574c62fe61f8ea.bin.zst",
+      "byteLength": 20400,
+      "compressedByteLength": 3738,
+      "sha256": "d54b797328e5a7ae19764d9c56b4e0489505d3a4a2c5e5be16574c62fe61f8ea",
+      "file": "buffers.bin.zst",
+      "offset": 361302
+    },
+    {
+      "path": "buffers/f22f523d5a69f1bde8ecbbaf65858b6c674d175efe96066b8cf04e1c7c342b42.bin.zst",
+      "byteLength": 1952,
+      "compressedByteLength": 673,
+      "sha256": "f22f523d5a69f1bde8ecbbaf65858b6c674d175efe96066b8cf04e1c7c342b42",
+      "file": "buffers.bin.zst",
+      "offset": 365040
+    },
+    {
+      "path": "buffers/c6ca73615a449c179503c27865c1bd565bd7a761159d4af8b9288ed426b683ad.bin.zst",
+      "byteLength": 3000,
+      "compressedByteLength": 2295,
+      "sha256": "c6ca73615a449c179503c27865c1bd565bd7a761159d4af8b9288ed426b683ad",
+      "file": "buffers.bin.zst",
+      "offset": 365713
+    },
+    {
+      "path": "buffers/c1aba8a4351f6b2db1f85c3d95b496c0d94118207611fcd993ac5c5418222177.bin.zst",
+      "byteLength": 3000,
+      "compressedByteLength": 2306,
+      "sha256": "c1aba8a4351f6b2db1f85c3d95b496c0d94118207611fcd993ac5c5418222177",
+      "file": "buffers.bin.zst",
+      "offset": 368008
+    },
+    {
+      "path": "buffers/e94af6fffdf29fb08441e1604fda854eb3e6467a897fc5c945f7a6c80b8f666a.bin.zst",
+      "byteLength": 2000,
+      "compressedByteLength": 1661,
+      "sha256": "e94af6fffdf29fb08441e1604fda854eb3e6467a897fc5c945f7a6c80b8f666a",
+      "file": "buffers.bin.zst",
+      "offset": 370314
+    },
+    {
+      "path": "buffers/fe3c6643b364e4a91c25d9edc33b1e3409774dc7787fb285da5b059fd2fec79b.bin.zst",
+      "byteLength": 4000,
+      "compressedByteLength": 2709,
+      "sha256": "fe3c6643b364e4a91c25d9edc33b1e3409774dc7787fb285da5b059fd2fec79b",
+      "file": "buffers.bin.zst",
+      "offset": 371975
+    },
+    {
+      "path": "buffers/ea43880783e2c27d7b94a601346a95b700d6fdd46c6b6766800693e9b837d963.bin.zst",
+      "byteLength": 4992,
+      "compressedByteLength": 1182,
+      "sha256": "ea43880783e2c27d7b94a601346a95b700d6fdd46c6b6766800693e9b837d963",
+      "file": "buffers.bin.zst",
+      "offset": 374684
+    },
+    {
+      "path": "buffers/03aad6b98aeb81fb664e3f19dd2caa897ff30443de1a716df01021ffa60216ee.bin.zst",
+      "byteLength": 20400,
+      "compressedByteLength": 3733,
+      "sha256": "03aad6b98aeb81fb664e3f19dd2caa897ff30443de1a716df01021ffa60216ee",
+      "file": "buffers.bin.zst",
+      "offset": 375866
+    },
+    {
+      "path": "buffers/f49239a9d3922eb99e1dc895cef3b489aa333b22883136578a0dffb5f1c5c2d3.bin.zst",
+      "byteLength": 1664,
+      "compressedByteLength": 499,
+      "sha256": "f49239a9d3922eb99e1dc895cef3b489aa333b22883136578a0dffb5f1c5c2d3",
+      "file": "buffers.bin.zst",
+      "offset": 379599
+    },
+    {
+      "path": "buffers/b29bcf188c18ae0f5e4f6219bbf7d3d3f1be200839c231ed93bb697023bdb79c.bin.zst",
+      "byteLength": 4572,
+      "compressedByteLength": 3388,
+      "sha256": "b29bcf188c18ae0f5e4f6219bbf7d3d3f1be200839c231ed93bb697023bdb79c",
+      "file": "buffers.bin.zst",
+      "offset": 380098
+    },
+    {
+      "path": "buffers/a9e057d0d2e7d24392313ba62a263221d211b48af0d60cf5df31786a358c7a5c.bin.zst",
+      "byteLength": 4572,
+      "compressedByteLength": 3627,
+      "sha256": "a9e057d0d2e7d24392313ba62a263221d211b48af0d60cf5df31786a358c7a5c",
+      "file": "buffers.bin.zst",
+      "offset": 383486
+    },
+    {
+      "path": "buffers/35f2407722b85d6adb0b73c6af7791fcc0c0854b3c537017d66e4520c49a9671.bin.zst",
+      "byteLength": 3048,
+      "compressedByteLength": 2684,
+      "sha256": "35f2407722b85d6adb0b73c6af7791fcc0c0854b3c537017d66e4520c49a9671",
+      "file": "buffers.bin.zst",
+      "offset": 387113
+    },
+    {
+      "path": "buffers/73bb1d1e062292565d805df275b6f6bd74a4ec63f0e344eea8656650f67c30f0.bin.zst",
+      "byteLength": 6096,
+      "compressedByteLength": 4270,
+      "sha256": "73bb1d1e062292565d805df275b6f6bd74a4ec63f0e344eea8656650f67c30f0",
+      "file": "buffers.bin.zst",
+      "offset": 389797
+    },
+    {
+      "path": "buffers/d1e0d17c831a6c73ed51fcb8b07c66a0db391a6eb9f400dc19c211144d353f9c.bin.zst",
+      "byteLength": 7440,
+      "compressedByteLength": 2005,
+      "sha256": "d1e0d17c831a6c73ed51fcb8b07c66a0db391a6eb9f400dc19c211144d353f9c",
+      "file": "buffers.bin.zst",
+      "offset": 394067
+    },
+    {
+      "path": "buffers/5a5146f5347650dfc4871d238fd4f1c2a8c190e825fc86eb55a0041d7a519ac8.bin.zst",
+      "byteLength": 37680,
+      "compressedByteLength": 6567,
+      "sha256": "5a5146f5347650dfc4871d238fd4f1c2a8c190e825fc86eb55a0041d7a519ac8",
+      "file": "buffers.bin.zst",
+      "offset": 396072
+    },
+    {
+      "path": "buffers/a0eadea29f52a58f17994f70c75d4c20eb9341faeca3dad60d0f0342a2d357f2.bin.zst",
+      "byteLength": 2480,
+      "compressedByteLength": 802,
+      "sha256": "a0eadea29f52a58f17994f70c75d4c20eb9341faeca3dad60d0f0342a2d357f2",
+      "file": "buffers.bin.zst",
+      "offset": 402639
+    },
+    {
+      "path": "buffers/378966aec324c0413504ffd95367f5cafb20790f3b06d9bf71d1203ece7d35f7.bin.zst",
+      "byteLength": 3696,
+      "compressedByteLength": 2749,
+      "sha256": "378966aec324c0413504ffd95367f5cafb20790f3b06d9bf71d1203ece7d35f7",
+      "file": "buffers.bin.zst",
+      "offset": 403441
+    },
+    {
+      "path": "buffers/3a8da26027a75573c5e3054ef145b869e3cc5790d227099db1455f37654f0f66.bin.zst",
+      "byteLength": 3696,
+      "compressedByteLength": 2806,
+      "sha256": "3a8da26027a75573c5e3054ef145b869e3cc5790d227099db1455f37654f0f66",
+      "file": "buffers.bin.zst",
+      "offset": 406190
+    },
+    {
+      "path": "buffers/73c3cc74634b6274de4e99ba9c614020923209810bd2b5935024fe5ec81515e9.bin.zst",
+      "byteLength": 2464,
+      "compressedByteLength": 1955,
+      "sha256": "73c3cc74634b6274de4e99ba9c614020923209810bd2b5935024fe5ec81515e9",
+      "file": "buffers.bin.zst",
+      "offset": 408996
+    },
+    {
+      "path": "buffers/379360931acf5ca5928ee8472203a395fd5be19006dde19cafb69ac69152af37.bin.zst",
+      "byteLength": 4928,
+      "compressedByteLength": 3435,
+      "sha256": "379360931acf5ca5928ee8472203a395fd5be19006dde19cafb69ac69152af37",
+      "file": "buffers.bin.zst",
+      "offset": 410951
+    },
+    {
+      "path": "buffers/8078b948483efbeeb4adfe40f1b5e1f9d9f5131f8f328ef8859440fa31ee9df5.bin.zst",
+      "byteLength": 5856,
+      "compressedByteLength": 1507,
+      "sha256": "8078b948483efbeeb4adfe40f1b5e1f9d9f5131f8f328ef8859440fa31ee9df5",
+      "file": "buffers.bin.zst",
+      "offset": 414386
+    },
+    {
+      "path": "buffers/a5d227d2521767f85a8953315e197465f4bb4b460b51120257ee14fafd6955cb.bin.zst",
+      "byteLength": 20400,
+      "compressedByteLength": 3654,
+      "sha256": "a5d227d2521767f85a8953315e197465f4bb4b460b51120257ee14fafd6955cb",
+      "file": "buffers.bin.zst",
+      "offset": 415893
+    },
+    {
+      "path": "buffers/06383fa99fa1684ec9c6bae6a92588f59ba5792de332401708d4a56a8ce2c5f3.bin.zst",
+      "byteLength": 1952,
+      "compressedByteLength": 663,
+      "sha256": "06383fa99fa1684ec9c6bae6a92588f59ba5792de332401708d4a56a8ce2c5f3",
+      "file": "buffers.bin.zst",
+      "offset": 419547
+    },
+    {
+      "path": "buffers/68e46de1cd533ec8b4493435cfe1508c815b979ce61c4e951b18163ba3867c35.bin.zst",
+      "byteLength": 3000,
+      "compressedByteLength": 2315,
+      "sha256": "68e46de1cd533ec8b4493435cfe1508c815b979ce61c4e951b18163ba3867c35",
+      "file": "buffers.bin.zst",
+      "offset": 420210
+    },
+    {
+      "path": "buffers/9020e41e115c36f502ceb8247764d3778513d311853a614997ad476038f054e2.bin.zst",
+      "byteLength": 3000,
+      "compressedByteLength": 2332,
+      "sha256": "9020e41e115c36f502ceb8247764d3778513d311853a614997ad476038f054e2",
+      "file": "buffers.bin.zst",
+      "offset": 422525
+    },
+    {
+      "path": "buffers/d60312d55b38fa52511d24880b273ab8ce7f4b6062e70b3ee3e53d69619ad4d0.bin.zst",
+      "byteLength": 4000,
+      "compressedByteLength": 2720,
+      "sha256": "d60312d55b38fa52511d24880b273ab8ce7f4b6062e70b3ee3e53d69619ad4d0",
+      "file": "buffers.bin.zst",
+      "offset": 424857
+    },
+    {
+      "path": "buffers/e3d860ece184662969801d1a013a4943e3ace48bd6ab5deeb6a63b5ed8dadd47.bin.zst",
+      "byteLength": 4992,
+      "compressedByteLength": 1198,
+      "sha256": "e3d860ece184662969801d1a013a4943e3ace48bd6ab5deeb6a63b5ed8dadd47",
+      "file": "buffers.bin.zst",
+      "offset": 427577
+    },
+    {
+      "path": "buffers/f55c7a7dc933afe91aa5c5d7fa2a3ff065b3a50b5d710db6637110ca364bb761.bin.zst",
+      "byteLength": 20400,
+      "compressedByteLength": 3715,
+      "sha256": "f55c7a7dc933afe91aa5c5d7fa2a3ff065b3a50b5d710db6637110ca364bb761",
+      "file": "buffers.bin.zst",
+      "offset": 428775
+    },
+    {
+      "path": "buffers/811fb8c10774b4248cf3a67108737ac8c409bf9407124fb9467b2f6001b418e3.bin.zst",
+      "byteLength": 1664,
+      "compressedByteLength": 497,
+      "sha256": "811fb8c10774b4248cf3a67108737ac8c409bf9407124fb9467b2f6001b418e3",
+      "file": "buffers.bin.zst",
+      "offset": 432490
+    },
+    {
+      "path": "buffers/1275842a92414520fecdc7bbb57975c05f25f739531b86d8b270b4c9262f0f24.bin.zst",
+      "byteLength": 3696,
+      "compressedByteLength": 2755,
+      "sha256": "1275842a92414520fecdc7bbb57975c05f25f739531b86d8b270b4c9262f0f24",
+      "file": "buffers.bin.zst",
+      "offset": 432987
+    },
+    {
+      "path": "buffers/e5a69d8eb82fd6d696f84fa8f54db61cb1bf90c5d8282b9994797a7a84023502.bin.zst",
+      "byteLength": 3696,
+      "compressedByteLength": 2785,
+      "sha256": "e5a69d8eb82fd6d696f84fa8f54db61cb1bf90c5d8282b9994797a7a84023502",
+      "file": "buffers.bin.zst",
+      "offset": 435742
+    },
+    {
+      "path": "buffers/a46ab1b404e9ed281486a70efa0995562e47c63e553923d9730152e7811dd904.bin.zst",
+      "byteLength": 2464,
+      "compressedByteLength": 1957,
+      "sha256": "a46ab1b404e9ed281486a70efa0995562e47c63e553923d9730152e7811dd904",
+      "file": "buffers.bin.zst",
+      "offset": 438527
+    },
+    {
+      "path": "buffers/e1ef84a1f23740139be8ec4f5576cac1483f0fc88cf8178fa902c2e9a8bd11e3.bin.zst",
+      "byteLength": 4928,
+      "compressedByteLength": 3429,
+      "sha256": "e1ef84a1f23740139be8ec4f5576cac1483f0fc88cf8178fa902c2e9a8bd11e3",
+      "file": "buffers.bin.zst",
+      "offset": 440484
+    },
+    {
+      "path": "buffers/e7e46a6cb02a1fcae54a75884ef6266efb52952a7a01bb4b5d95d63b409b745d.bin.zst",
+      "byteLength": 5856,
+      "compressedByteLength": 1502,
+      "sha256": "e7e46a6cb02a1fcae54a75884ef6266efb52952a7a01bb4b5d95d63b409b745d",
+      "file": "buffers.bin.zst",
+      "offset": 443913
+    },
+    {
+      "path": "buffers/14125b4ca8785571b18f680f0f0c20ef3879bdf40bdf44a54e2ec4c46a6e639c.bin.zst",
+      "byteLength": 20400,
+      "compressedByteLength": 3681,
+      "sha256": "14125b4ca8785571b18f680f0f0c20ef3879bdf40bdf44a54e2ec4c46a6e639c",
+      "file": "buffers.bin.zst",
+      "offset": 445415
+    },
+    {
+      "path": "buffers/1b681f64e53e0dede1450ff876640607d209f83535674c84eb5ffb4f77eb68c1.bin.zst",
+      "byteLength": 1952,
+      "compressedByteLength": 663,
+      "sha256": "1b681f64e53e0dede1450ff876640607d209f83535674c84eb5ffb4f77eb68c1",
+      "file": "buffers.bin.zst",
+      "offset": 449096
+    },
+    {
+      "path": "buffers/5c8d6e68234bb48007d0af3fd5b47950ec1be30a6da35ede3e6af73841a987be.bin.zst",
+      "byteLength": 4572,
+      "compressedByteLength": 3406,
+      "sha256": "5c8d6e68234bb48007d0af3fd5b47950ec1be30a6da35ede3e6af73841a987be",
+      "file": "buffers.bin.zst",
+      "offset": 449759
+    },
+    {
+      "path": "buffers/1453ab25657a74837f086a98250db0809835ade9db7825440b780eab9ac1d4ef.bin.zst",
+      "byteLength": 4572,
+      "compressedByteLength": 3615,
+      "sha256": "1453ab25657a74837f086a98250db0809835ade9db7825440b780eab9ac1d4ef",
+      "file": "buffers.bin.zst",
+      "offset": 453165
+    },
+    {
+      "path": "buffers/a425a314b364c45bdfa1e48b82034b83ef77b46e77593b345d39089d2e46d98d.bin.zst",
+      "byteLength": 3048,
+      "compressedByteLength": 2681,
+      "sha256": "a425a314b364c45bdfa1e48b82034b83ef77b46e77593b345d39089d2e46d98d",
+      "file": "buffers.bin.zst",
+      "offset": 456780
+    },
+    {
+      "path": "buffers/983014adfe4656e49568ef544175d5134f9fd23f3a0dcedb8a88db67b7612817.bin.zst",
+      "byteLength": 6096,
+      "compressedByteLength": 4284,
+      "sha256": "983014adfe4656e49568ef544175d5134f9fd23f3a0dcedb8a88db67b7612817",
+      "file": "buffers.bin.zst",
+      "offset": 459461
+    },
+    {
+      "path": "buffers/e7cc320c8487cc3f5fa943fded265e792b0344e65335c13c9ecffc8bf7cdd1d7.bin.zst",
+      "byteLength": 7440,
+      "compressedByteLength": 1991,
+      "sha256": "e7cc320c8487cc3f5fa943fded265e792b0344e65335c13c9ecffc8bf7cdd1d7",
+      "file": "buffers.bin.zst",
+      "offset": 463745
+    },
+    {
+      "path": "buffers/cde53c2af12dc1ac5af885834af11c092bc25ccb3657749fbfc2e2aa123b7bfa.bin.zst",
+      "byteLength": 37680,
+      "compressedByteLength": 6537,
+      "sha256": "cde53c2af12dc1ac5af885834af11c092bc25ccb3657749fbfc2e2aa123b7bfa",
+      "file": "buffers.bin.zst",
+      "offset": 465736
+    },
+    {
+      "path": "buffers/79af5fafcdbd8ab31483c3998044fd96f10072f9ed4a433d96e259fccd170aec.bin.zst",
+      "byteLength": 2480,
+      "compressedByteLength": 814,
+      "sha256": "79af5fafcdbd8ab31483c3998044fd96f10072f9ed4a433d96e259fccd170aec",
+      "file": "buffers.bin.zst",
+      "offset": 472273
+    },
+    {
+      "path": "buffers/006a1fdb48c8b7c4bd66c124cc174c79ebcd2eed6968965d932ceb257711d4d8.bin.zst",
+      "byteLength": 3000,
+      "compressedByteLength": 2281,
+      "sha256": "006a1fdb48c8b7c4bd66c124cc174c79ebcd2eed6968965d932ceb257711d4d8",
+      "file": "buffers.bin.zst",
+      "offset": 473087
+    },
+    {
+      "path": "buffers/e0f3025bd52c19ee01d2d3e3973d4cf2f2f82d83a629b8348f2b57c95d626648.bin.zst",
+      "byteLength": 3000,
+      "compressedByteLength": 2347,
+      "sha256": "e0f3025bd52c19ee01d2d3e3973d4cf2f2f82d83a629b8348f2b57c95d626648",
+      "file": "buffers.bin.zst",
+      "offset": 475368
+    },
+    {
+      "path": "buffers/5511952d6ac3e3e38c98e2d62b7a4360c57a7bc8afdcd08437a0789b36ec8684.bin.zst",
+      "byteLength": 2000,
+      "compressedByteLength": 1661,
+      "sha256": "5511952d6ac3e3e38c98e2d62b7a4360c57a7bc8afdcd08437a0789b36ec8684",
+      "file": "buffers.bin.zst",
+      "offset": 477715
+    },
+    {
+      "path": "buffers/8f65fa95293259e476d6aa95a318220a076e1ddfd85af1d338219c69b962e85a.bin.zst",
+      "byteLength": 4000,
+      "compressedByteLength": 2760,
+      "sha256": "8f65fa95293259e476d6aa95a318220a076e1ddfd85af1d338219c69b962e85a",
+      "file": "buffers.bin.zst",
+      "offset": 479376
+    },
+    {
+      "path": "buffers/363f6b352b1495320b34f273c7ae95c94f1254cc7f5b61c9fa66c2ce56c044a6.bin.zst",
+      "byteLength": 4992,
+      "compressedByteLength": 1199,
+      "sha256": "363f6b352b1495320b34f273c7ae95c94f1254cc7f5b61c9fa66c2ce56c044a6",
+      "file": "buffers.bin.zst",
+      "offset": 482136
+    },
+    {
+      "path": "buffers/594629f32c11f8ea656e4407b128105b8dce71c036e24103420b0d7cd1ec4b80.bin.zst",
+      "byteLength": 20400,
+      "compressedByteLength": 3646,
+      "sha256": "594629f32c11f8ea656e4407b128105b8dce71c036e24103420b0d7cd1ec4b80",
+      "file": "buffers.bin.zst",
+      "offset": 483335
+    },
+    {
+      "path": "buffers/3f42170358b5b5e39ac04ead7c2df3b622bb4ef69a27e6e6b5187f883cded955.bin.zst",
+      "byteLength": 1664,
+      "compressedByteLength": 498,
+      "sha256": "3f42170358b5b5e39ac04ead7c2df3b622bb4ef69a27e6e6b5187f883cded955",
+      "file": "buffers.bin.zst",
+      "offset": 486981
+    },
+    {
+      "path": "buffers/2c5b55e5167fdd9894f97f665a002aba6d86a76610280f205a7387448266d33b.bin.zst",
+      "byteLength": 3696,
+      "compressedByteLength": 2742,
+      "sha256": "2c5b55e5167fdd9894f97f665a002aba6d86a76610280f205a7387448266d33b",
+      "file": "buffers.bin.zst",
+      "offset": 487479
+    },
+    {
+      "path": "buffers/4a23dd93443af11d0a27dd9809c35e418bc94b8ad2b44e74d5ec47fb2b93e4ea.bin.zst",
+      "byteLength": 3696,
+      "compressedByteLength": 2810,
+      "sha256": "4a23dd93443af11d0a27dd9809c35e418bc94b8ad2b44e74d5ec47fb2b93e4ea",
+      "file": "buffers.bin.zst",
+      "offset": 490221
+    },
+    {
+      "path": "buffers/a45814f4293aaec393c338822d450a27abdc37433153219cdbd9399e702b3c75.bin.zst",
+      "byteLength": 2464,
+      "compressedByteLength": 1949,
+      "sha256": "a45814f4293aaec393c338822d450a27abdc37433153219cdbd9399e702b3c75",
+      "file": "buffers.bin.zst",
+      "offset": 493031
+    },
+    {
+      "path": "buffers/cbe64df978c1f7866285d6ccf18748b3d0429d8bfe45779f4b5bfc244ee9ed9c.bin.zst",
+      "byteLength": 4928,
+      "compressedByteLength": 3432,
+      "sha256": "cbe64df978c1f7866285d6ccf18748b3d0429d8bfe45779f4b5bfc244ee9ed9c",
+      "file": "buffers.bin.zst",
+      "offset": 494980
+    },
+    {
+      "path": "buffers/bdf35d0dfb94c6a7b48ca75b1603c32315ddf13f5d7a137bbf6941dd94960a40.bin.zst",
+      "byteLength": 5856,
+      "compressedByteLength": 1488,
+      "sha256": "bdf35d0dfb94c6a7b48ca75b1603c32315ddf13f5d7a137bbf6941dd94960a40",
+      "file": "buffers.bin.zst",
+      "offset": 498412
+    },
+    {
+      "path": "buffers/38eea181e6e9556e9ac65934310403f9ebc6d106752453197b04e2350dcb1162.bin.zst",
+      "byteLength": 20400,
+      "compressedByteLength": 3624,
+      "sha256": "38eea181e6e9556e9ac65934310403f9ebc6d106752453197b04e2350dcb1162",
+      "file": "buffers.bin.zst",
+      "offset": 499900
+    },
+    {
+      "path": "buffers/12ccd2b6eb86c016b97c90377dabf61c7fbecb51686478006862503171afa52a.bin.zst",
+      "byteLength": 1952,
+      "compressedByteLength": 774,
+      "sha256": "12ccd2b6eb86c016b97c90377dabf61c7fbecb51686478006862503171afa52a",
+      "file": "buffers.bin.zst",
+      "offset": 503524
+    },
+    {
+      "path": "buffers/3a60fd638d17cd02f59d9cfdc97e652822fae8bdbea90c22670fe19eb1cb7a75.bin.zst",
+      "byteLength": 4572,
+      "compressedByteLength": 3415,
+      "sha256": "3a60fd638d17cd02f59d9cfdc97e652822fae8bdbea90c22670fe19eb1cb7a75",
+      "file": "buffers.bin.zst",
+      "offset": 504298
+    },
+    {
+      "path": "buffers/3978c85021826cddc092346c3e590dee306d421ff5d15e38f1e912493c2c1f27.bin.zst",
+      "byteLength": 4572,
+      "compressedByteLength": 3640,
+      "sha256": "3978c85021826cddc092346c3e590dee306d421ff5d15e38f1e912493c2c1f27",
+      "file": "buffers.bin.zst",
+      "offset": 507713
+    },
+    {
+      "path": "buffers/824d537d6af5928da585019c27964cd2c994e5a39b22a1e2c802e577785b1d2c.bin.zst",
+      "byteLength": 3048,
+      "compressedByteLength": 2674,
+      "sha256": "824d537d6af5928da585019c27964cd2c994e5a39b22a1e2c802e577785b1d2c",
+      "file": "buffers.bin.zst",
+      "offset": 511353
+    },
+    {
+      "path": "buffers/5f8ec4a0a14979dec821294a2f7ca08a50ed74c70c2fac8cdea224a2ae4640eb.bin.zst",
+      "byteLength": 6096,
+      "compressedByteLength": 4277,
+      "sha256": "5f8ec4a0a14979dec821294a2f7ca08a50ed74c70c2fac8cdea224a2ae4640eb",
+      "file": "buffers.bin.zst",
+      "offset": 514027
+    },
+    {
+      "path": "buffers/43825f7b28355534b69c93645fb238b9311e5d4faaa22dac9ec8dc339ec6132a.bin.zst",
+      "byteLength": 7440,
+      "compressedByteLength": 2034,
+      "sha256": "43825f7b28355534b69c93645fb238b9311e5d4faaa22dac9ec8dc339ec6132a",
+      "file": "buffers.bin.zst",
+      "offset": 518304
+    },
+    {
+      "path": "buffers/e09cc064d8f20b18817db699f3fa98ce07383c36d197561e22b63b04c9998ad3.bin.zst",
+      "byteLength": 37680,
+      "compressedByteLength": 6476,
+      "sha256": "e09cc064d8f20b18817db699f3fa98ce07383c36d197561e22b63b04c9998ad3",
+      "file": "buffers.bin.zst",
+      "offset": 520338
+    },
+    {
+      "path": "buffers/5406f2f44b469bf7993e0fe1a3670a21e91aeeb365a781f650033dfbe98692ef.bin.zst",
+      "byteLength": 2480,
+      "compressedByteLength": 814,
+      "sha256": "5406f2f44b469bf7993e0fe1a3670a21e91aeeb365a781f650033dfbe98692ef",
+      "file": "buffers.bin.zst",
+      "offset": 526814
+    },
+    {
+      "path": "buffers/4e0b3aaae960ed7c4c89ac8bae24f2370bd5341a3f8127bd46221f39430c6ea9.bin.zst",
+      "byteLength": 3000,
+      "compressedByteLength": 2219,
+      "sha256": "4e0b3aaae960ed7c4c89ac8bae24f2370bd5341a3f8127bd46221f39430c6ea9",
+      "file": "buffers.bin.zst",
+      "offset": 527628
+    },
+    {
+      "path": "buffers/d194a7187f9eb46714cf4bda7c3fcf9f77a1e5884129be0714746fa973130037.bin.zst",
+      "byteLength": 3000,
+      "compressedByteLength": 2351,
+      "sha256": "d194a7187f9eb46714cf4bda7c3fcf9f77a1e5884129be0714746fa973130037",
+      "file": "buffers.bin.zst",
+      "offset": 529847
+    },
+    {
+      "path": "buffers/cb0fa24793182bc8d97b1064ec0ea635c22d403a674cdded6d4537a11d9b4998.bin.zst",
+      "byteLength": 2000,
+      "compressedByteLength": 1655,
+      "sha256": "cb0fa24793182bc8d97b1064ec0ea635c22d403a674cdded6d4537a11d9b4998",
+      "file": "buffers.bin.zst",
+      "offset": 532198
+    },
+    {
+      "path": "buffers/383d7f720d4b36eafbb2174c10b622908f25c68720725d032ef3ceb08cf8049d.bin.zst",
+      "byteLength": 4000,
+      "compressedByteLength": 2729,
+      "sha256": "383d7f720d4b36eafbb2174c10b622908f25c68720725d032ef3ceb08cf8049d",
+      "file": "buffers.bin.zst",
+      "offset": 533853
+    },
+    {
+      "path": "buffers/b3c68d7f361c01bc1c8b6d6f30323284732e127b2dbd64df491b62024d688444.bin.zst",
+      "byteLength": 4992,
+      "compressedByteLength": 1190,
+      "sha256": "b3c68d7f361c01bc1c8b6d6f30323284732e127b2dbd64df491b62024d688444",
+      "file": "buffers.bin.zst",
+      "offset": 536582
+    },
+    {
+      "path": "buffers/f83218817aa9e2f39cc6fa13e007dbb75d8ef55f2940341ce8f6f1e291faa141.bin.zst",
+      "byteLength": 20400,
+      "compressedByteLength": 3543,
+      "sha256": "f83218817aa9e2f39cc6fa13e007dbb75d8ef55f2940341ce8f6f1e291faa141",
+      "file": "buffers.bin.zst",
+      "offset": 537772
+    },
+    {
+      "path": "buffers/0c492ef13858bada01ae4b75235969035924343364d20460cabcccd5a1d37428.bin.zst",
+      "byteLength": 1664,
+      "compressedByteLength": 495,
+      "sha256": "0c492ef13858bada01ae4b75235969035924343364d20460cabcccd5a1d37428",
+      "file": "buffers.bin.zst",
+      "offset": 541315
+    },
+    {
+      "path": "shaders/3ca5474af3c66189666b9405ff8734490f598a85274d9d95ebc08a8bc25d21d3.wgsl.zst",
+      "byteLength": 60043,
+      "compressedByteLength": 13321,
+      "sha256": "3ca5474af3c66189666b9405ff8734490f598a85274d9d95ebc08a8bc25d21d3",
+      "file": "shaders.wgsl.zst",
+      "offset": 0
+    },
+    {
+      "path": "shaders/643085fc499781e31bd822d37118237ceccc4b24b990e378a87b2ec22411420c.wgsl.zst",
+      "byteLength": 47880,
+      "compressedByteLength": 10408,
+      "sha256": "643085fc499781e31bd822d37118237ceccc4b24b990e378a87b2ec22411420c",
+      "file": "shaders.wgsl.zst",
+      "offset": 13321
+    },
+    {
+      "path": "buffers/018b0a9886a1ce76091ae6039ec2a0f611e570fb6bf9ff21fcac833d46116b1a.bin.zst",
+      "byteLength": 1200,
+      "compressedByteLength": 490,
+      "sha256": "018b0a9886a1ce76091ae6039ec2a0f611e570fb6bf9ff21fcac833d46116b1a",
+      "file": "buffers.bin.zst",
+      "offset": 541810
+    },
+    {
+      "path": "buffers/ef4e1fef33a4968ff79d7c802ffbc9dfc10336d50c696f58f18a44f10de6f5c6.bin.zst",
+      "byteLength": 60,
+      "compressedByteLength": 36,
+      "sha256": "ef4e1fef33a4968ff79d7c802ffbc9dfc10336d50c696f58f18a44f10de6f5c6",
+      "file": "buffers.bin.zst",
+      "offset": 542300
+    },
+    {
+      "path": "buffers/480ec4e7fb4a2f8c6aa48e1b7fb0179d8f10b628bd0550c42c7b926d1946aad3.bin.zst",
+      "byteLength": 232080,
+      "compressedByteLength": 70718,
+      "sha256": "480ec4e7fb4a2f8c6aa48e1b7fb0179d8f10b628bd0550c42c7b926d1946aad3",
+      "file": "buffers.bin.zst",
+      "offset": 542336
+    },
+    {
+      "path": "buffers/8915f28bc70520fb4644cce5af8f6721f96a08798db01b5ced744d54773813cc.bin.zst",
+      "byteLength": 579120,
+      "compressedByteLength": 127242,
+      "sha256": "8915f28bc70520fb4644cce5af8f6721f96a08798db01b5ced744d54773813cc",
+      "file": "buffers.bin.zst",
+      "offset": 613054
+    },
+    {
+      "path": "buffers/75ea1895e8ca5b327e2ad3eebb781aa074472d6a237989098ce5cb2c4dda21ae.bin.zst",
+      "byteLength": 30480,
+      "compressedByteLength": 10005,
+      "sha256": "75ea1895e8ca5b327e2ad3eebb781aa074472d6a237989098ce5cb2c4dda21ae",
+      "file": "buffers.bin.zst",
+      "offset": 740296
+    },
+    {
+      "path": "buffers/bec56e956f3f608ef65c9928e7b0cd0765d753d31560a4b86b0786b1d6a8b2b4.bin.zst",
+      "byteLength": 16020,
+      "compressedByteLength": 75,
+      "sha256": "bec56e956f3f608ef65c9928e7b0cd0765d753d31560a4b86b0786b1d6a8b2b4",
+      "file": "buffers.bin.zst",
+      "offset": 750301
+    },
+    {
+      "path": "buffers/76aff4508e6a815716c6006820b2cc7a5861940be899f19d8edc533d3ebcfb79.bin.zst",
+      "byteLength": 182880,
+      "compressedByteLength": 20081,
+      "sha256": "76aff4508e6a815716c6006820b2cc7a5861940be899f19d8edc533d3ebcfb79",
+      "file": "buffers.bin.zst",
+      "offset": 750376
+    },
+    {
+      "path": "buffers/191ef6836be2120be152051831036f3a864f6ffa531e5b0f82cd55c1b1447058.bin.zst",
+      "byteLength": 365760,
+      "compressedByteLength": 79625,
+      "sha256": "191ef6836be2120be152051831036f3a864f6ffa531e5b0f82cd55c1b1447058",
+      "file": "buffers.bin.zst",
+      "offset": 770457
+    },
+    {
+      "path": "buffers/4e151093f39e140e2ab29ef981ae9e1dcb29d0b89a3f81ba88006bfe06c40006.bin.zst",
+      "byteLength": 560,
+      "compressedByteLength": 345,
+      "sha256": "4e151093f39e140e2ab29ef981ae9e1dcb29d0b89a3f81ba88006bfe06c40006",
+      "file": "buffers.bin.zst",
+      "offset": 850082
+    },
+    {
+      "path": "shaders/5bcdf256d9a1191f516f96548b2695469d82cae03041ca82a28e8f75f728f417.wgsl.zst",
+      "byteLength": 83,
+      "compressedByteLength": 92,
+      "sha256": "5bcdf256d9a1191f516f96548b2695469d82cae03041ca82a28e8f75f728f417",
+      "file": "shaders.wgsl.zst",
+      "offset": 23729
+    },
+    {
+      "path": "shaders/390b31b9b7f6106c81a485fe9b7cc5985d404629be542e6442c1c59889ea01bc.wgsl.zst",
+      "byteLength": 1948,
+      "compressedByteLength": 642,
+      "sha256": "390b31b9b7f6106c81a485fe9b7cc5985d404629be542e6442c1c59889ea01bc",
+      "file": "shaders.wgsl.zst",
+      "offset": 23821
+    },
+    {
+      "path": "shaders/19d2a6d9f91bd093a6708159419e66b0d4312f358b8f613024d11b1e913c2436.wgsl.zst",
+      "byteLength": 1533,
+      "compressedByteLength": 642,
+      "sha256": "19d2a6d9f91bd093a6708159419e66b0d4312f358b8f613024d11b1e913c2436",
+      "file": "shaders.wgsl.zst",
+      "offset": 24463
+    },
+    {
+      "path": "shaders/f000e45bed00addad135e1a833bf792d5000558c58310cf6d2bdd971ff29912f.wgsl.zst",
+      "byteLength": 484,
+      "compressedByteLength": 276,
+      "sha256": "f000e45bed00addad135e1a833bf792d5000558c58310cf6d2bdd971ff29912f",
+      "file": "shaders.wgsl.zst",
+      "offset": 25105
+    },
+    {
+      "path": "shaders/ce800d9a76f0cefa9e9fb91d91a85056d59d5537c63f223ab624f540e5a5f1b8.wgsl.zst",
+      "byteLength": 261,
+      "compressedByteLength": 170,
+      "sha256": "ce800d9a76f0cefa9e9fb91d91a85056d59d5537c63f223ab624f540e5a5f1b8",
+      "file": "shaders.wgsl.zst",
+      "offset": 25381
+    },
+    {
+      "path": "shaders/90dce9fcbef9d1533241341e5e4d920c0471a2df2173c3773b3bbd9e8df847c9.wgsl.zst",
+      "byteLength": 83,
+      "compressedByteLength": 92,
+      "sha256": "90dce9fcbef9d1533241341e5e4d920c0471a2df2173c3773b3bbd9e8df847c9",
+      "file": "shaders.wgsl.zst",
+      "offset": 25551
+    },
+    {
+      "path": "shaders/0e6a59a04a34744f418c7d04e19e6d7980ce0bf06aedbfcd61e296912f618aec.wgsl.zst",
+      "byteLength": 1948,
+      "compressedByteLength": 642,
+      "sha256": "0e6a59a04a34744f418c7d04e19e6d7980ce0bf06aedbfcd61e296912f618aec",
+      "file": "shaders.wgsl.zst",
+      "offset": 25643
+    },
+    {
+      "path": "shaders/3e381b9387b4c942f9047f0653c97885fb2b046b8e3c1dc4bf5a44382f3ad033.wgsl.zst",
+      "byteLength": 83,
+      "compressedByteLength": 92,
+      "sha256": "3e381b9387b4c942f9047f0653c97885fb2b046b8e3c1dc4bf5a44382f3ad033",
+      "file": "shaders.wgsl.zst",
+      "offset": 26285
+    },
+    {
+      "path": "shaders/463732ba1794242a45496ff9178663e80fd335ca01eb233ef74565b12f8dd6ce.wgsl.zst",
+      "byteLength": 1948,
+      "compressedByteLength": 642,
+      "sha256": "463732ba1794242a45496ff9178663e80fd335ca01eb233ef74565b12f8dd6ce",
+      "file": "shaders.wgsl.zst",
+      "offset": 26377
+    },
+    {
+      "path": "shaders/a8b41cf3873c7f69de8f817f34992a58195909a84bc0c0386dcb7a89d884bc13.wgsl.zst",
+      "byteLength": 83,
+      "compressedByteLength": 92,
+      "sha256": "a8b41cf3873c7f69de8f817f34992a58195909a84bc0c0386dcb7a89d884bc13",
+      "file": "shaders.wgsl.zst",
+      "offset": 27019
+    },
+    {
+      "path": "shaders/5065fb49f72bee9929300531f73c89ff3918569461971a2ea39762f43fb52781.wgsl.zst",
+      "byteLength": 1948,
+      "compressedByteLength": 642,
+      "sha256": "5065fb49f72bee9929300531f73c89ff3918569461971a2ea39762f43fb52781",
+      "file": "shaders.wgsl.zst",
+      "offset": 27111
+    },
+    {
+      "path": "shaders/f8a52a3c2311c14bba307c77ea6bdafeb1714c806c2750c8f27063f543c94d5e.wgsl.zst",
+      "byteLength": 83,
+      "compressedByteLength": 92,
+      "sha256": "f8a52a3c2311c14bba307c77ea6bdafeb1714c806c2750c8f27063f543c94d5e",
+      "file": "shaders.wgsl.zst",
+      "offset": 27753
+    },
+    {
+      "path": "shaders/cfa1feb366bb50cee1033cfe23581fa293d137c4e39052f01ef055fdbc7223a9.wgsl.zst",
+      "byteLength": 1948,
+      "compressedByteLength": 642,
+      "sha256": "cfa1feb366bb50cee1033cfe23581fa293d137c4e39052f01ef055fdbc7223a9",
+      "file": "shaders.wgsl.zst",
+      "offset": 27845
+    },
+    {
+      "path": "shaders/6c100a9e2505584b6eb48d65ec64c74acd214882d50cb8e9d95b4da4dbe24712.wgsl.zst",
+      "byteLength": 83,
+      "compressedByteLength": 92,
+      "sha256": "6c100a9e2505584b6eb48d65ec64c74acd214882d50cb8e9d95b4da4dbe24712",
+      "file": "shaders.wgsl.zst",
+      "offset": 28487
+    },
+    {
+      "path": "shaders/3d147a154ebadac5615743851303eb23e83a0b95ff481da57ec4025d6cf69860.wgsl.zst",
+      "byteLength": 1948,
+      "compressedByteLength": 642,
+      "sha256": "3d147a154ebadac5615743851303eb23e83a0b95ff481da57ec4025d6cf69860",
+      "file": "shaders.wgsl.zst",
+      "offset": 28579
+    },
+    {
+      "path": "shaders/9ac1576c2cb2196dcee7fad5674d9b23abea51c132725f3dc91a51f605a2b200.wgsl.zst",
+      "byteLength": 83,
+      "compressedByteLength": 92,
+      "sha256": "9ac1576c2cb2196dcee7fad5674d9b23abea51c132725f3dc91a51f605a2b200",
+      "file": "shaders.wgsl.zst",
+      "offset": 29221
+    },
+    {
+      "path": "shaders/8db3e123d1f927dafdcf39368617555afa1e4b6df433c6a35e3bf3e726d00843.wgsl.zst",
+      "byteLength": 1948,
+      "compressedByteLength": 642,
+      "sha256": "8db3e123d1f927dafdcf39368617555afa1e4b6df433c6a35e3bf3e726d00843",
+      "file": "shaders.wgsl.zst",
+      "offset": 29313
+    },
+    {
+      "path": "shaders/275df601f72d8d825fa5de9aa9311cdf09339cda6767512ae1d2199903371d4a.wgsl.zst",
+      "byteLength": 83,
+      "compressedByteLength": 92,
+      "sha256": "275df601f72d8d825fa5de9aa9311cdf09339cda6767512ae1d2199903371d4a",
+      "file": "shaders.wgsl.zst",
+      "offset": 29955
+    },
+    {
+      "path": "shaders/984a36816fe1572f050db51b2d612ec231866ede7c6c23b3076e8d9cc695300f.wgsl.zst",
+      "byteLength": 1948,
+      "compressedByteLength": 642,
+      "sha256": "984a36816fe1572f050db51b2d612ec231866ede7c6c23b3076e8d9cc695300f",
+      "file": "shaders.wgsl.zst",
+      "offset": 30047
+    },
+    {
+      "path": "shaders/62a892052ef6e7a06a86ae2f0465a4fe7671b842ff87808723756bbcbe43b1e2.wgsl.zst",
+      "byteLength": 83,
+      "compressedByteLength": 92,
+      "sha256": "62a892052ef6e7a06a86ae2f0465a4fe7671b842ff87808723756bbcbe43b1e2",
+      "file": "shaders.wgsl.zst",
+      "offset": 30689
+    },
+    {
+      "path": "shaders/ffad0154a74d225abec99a36be41372abead316356fd8fdbc813d462f9d10627.wgsl.zst",
+      "byteLength": 1948,
+      "compressedByteLength": 642,
+      "sha256": "ffad0154a74d225abec99a36be41372abead316356fd8fdbc813d462f9d10627",
+      "file": "shaders.wgsl.zst",
+      "offset": 30781
+    },
+    {
+      "path": "shaders/2825fc7aeb9e351b1eb122fbc52426f717853b59b703dbb4afa5b80e6d5fd50b.wgsl.zst",
+      "byteLength": 83,
+      "compressedByteLength": 92,
+      "sha256": "2825fc7aeb9e351b1eb122fbc52426f717853b59b703dbb4afa5b80e6d5fd50b",
+      "file": "shaders.wgsl.zst",
+      "offset": 31423
+    },
+    {
+      "path": "shaders/2fedf6cc16fd3ff3113f017771e05bf7ecf2ef7ca3e909b2d03e03df30f6a925.wgsl.zst",
+      "byteLength": 1948,
+      "compressedByteLength": 642,
+      "sha256": "2fedf6cc16fd3ff3113f017771e05bf7ecf2ef7ca3e909b2d03e03df30f6a925",
+      "file": "shaders.wgsl.zst",
+      "offset": 31515
+    },
+    {
+      "path": "shaders/bc89922a7144d67a653846e0e7740535afdcaf5f600fe88181efb83a30cd54f5.wgsl.zst",
+      "byteLength": 84,
+      "compressedByteLength": 93,
+      "sha256": "bc89922a7144d67a653846e0e7740535afdcaf5f600fe88181efb83a30cd54f5",
+      "file": "shaders.wgsl.zst",
+      "offset": 32157
+    },
+    {
+      "path": "shaders/2f0ef180159e985bb000c2ea38f32dd003e51d0b74bc0445c31198104550b29c.wgsl.zst",
+      "byteLength": 1958,
+      "compressedByteLength": 645,
+      "sha256": "2f0ef180159e985bb000c2ea38f32dd003e51d0b74bc0445c31198104550b29c",
+      "file": "shaders.wgsl.zst",
+      "offset": 32250
+    },
+    {
+      "path": "shaders/a2b3dce1c3f4c2c60d283976e94d04f2c46a59804ee434789e17216d5a59604b.wgsl.zst",
+      "byteLength": 84,
+      "compressedByteLength": 93,
+      "sha256": "a2b3dce1c3f4c2c60d283976e94d04f2c46a59804ee434789e17216d5a59604b",
+      "file": "shaders.wgsl.zst",
+      "offset": 32895
+    },
+    {
+      "path": "shaders/4f14ff83ceea85cd71fabf22f32f5afb4321654e7b13e4a8df66346e4a57cfd6.wgsl.zst",
+      "byteLength": 1958,
+      "compressedByteLength": 644,
+      "sha256": "4f14ff83ceea85cd71fabf22f32f5afb4321654e7b13e4a8df66346e4a57cfd6",
+      "file": "shaders.wgsl.zst",
+      "offset": 32988
+    },
+    {
+      "path": "shaders/543da76402f1e1714e54e99eadc63c1e6ee040958d385eb6cd9d4fcfdd13e207.wgsl.zst",
+      "byteLength": 84,
+      "compressedByteLength": 93,
+      "sha256": "543da76402f1e1714e54e99eadc63c1e6ee040958d385eb6cd9d4fcfdd13e207",
+      "file": "shaders.wgsl.zst",
+      "offset": 33632
+    },
+    {
+      "path": "shaders/9ed3440aa3326811f5c851dfe92ebe33622ca2121eb9fd8d5622266d83ee8ac5.wgsl.zst",
+      "byteLength": 1958,
+      "compressedByteLength": 645,
+      "sha256": "9ed3440aa3326811f5c851dfe92ebe33622ca2121eb9fd8d5622266d83ee8ac5",
+      "file": "shaders.wgsl.zst",
+      "offset": 33725
+    },
+    {
+      "path": "shaders/6d659e1b945a6984970f6c5556e538db607318ef7b50338617f565bd9c05784e.wgsl.zst",
+      "byteLength": 84,
+      "compressedByteLength": 93,
+      "sha256": "6d659e1b945a6984970f6c5556e538db607318ef7b50338617f565bd9c05784e",
+      "file": "shaders.wgsl.zst",
+      "offset": 34370
+    },
+    {
+      "path": "shaders/32612eeba78e59dae67d80c7c1f12a8beb74957ded4b8b097c663fcce1530d73.wgsl.zst",
+      "byteLength": 1958,
+      "compressedByteLength": 644,
+      "sha256": "32612eeba78e59dae67d80c7c1f12a8beb74957ded4b8b097c663fcce1530d73",
+      "file": "shaders.wgsl.zst",
+      "offset": 34463
+    },
+    {
+      "path": "shaders/99f5f98613f2bf8a0a1be7be8f41990365e6890160b17c918db0e4733bd0f129.wgsl.zst",
+      "byteLength": 84,
+      "compressedByteLength": 93,
+      "sha256": "99f5f98613f2bf8a0a1be7be8f41990365e6890160b17c918db0e4733bd0f129",
+      "file": "shaders.wgsl.zst",
+      "offset": 35107
+    },
+    {
+      "path": "shaders/136d4c1ee8c1eaffcabebc88574d857cbfd6590b4e3a1b8a03645279d9e5fb28.wgsl.zst",
+      "byteLength": 1958,
+      "compressedByteLength": 644,
+      "sha256": "136d4c1ee8c1eaffcabebc88574d857cbfd6590b4e3a1b8a03645279d9e5fb28",
+      "file": "shaders.wgsl.zst",
+      "offset": 35200
+    },
+    {
+      "path": "shaders/45b51d12204e9c46b31939404dcd1d6f1f662b8508bc38b8320af7774531f67a.wgsl.zst",
+      "byteLength": 30234,
+      "compressedByteLength": 1079,
+      "sha256": "45b51d12204e9c46b31939404dcd1d6f1f662b8508bc38b8320af7774531f67a",
+      "file": "shaders.wgsl.zst",
+      "offset": 35844
+    },
+    {
+      "path": "shaders/e5e04036b6d798d39524d740f302a3a07189b8432aeda05e448c83262fc3e11c.wgsl.zst",
+      "byteLength": 2228,
+      "compressedByteLength": 269,
+      "sha256": "e5e04036b6d798d39524d740f302a3a07189b8432aeda05e448c83262fc3e11c",
+      "file": "shaders.wgsl.zst",
+      "offset": 36923
+    },
+    {
+      "path": "shaders/400f3b48aaffac2424c3c755232a2657b15c85958cd52b92191b6d3c48cd480e.wgsl.zst",
+      "byteLength": 62829,
+      "compressedByteLength": 13947,
+      "sha256": "400f3b48aaffac2424c3c755232a2657b15c85958cd52b92191b6d3c48cd480e",
+      "file": "shaders.wgsl.zst",
+      "offset": 37192
+    },
+    {
+      "path": "shaders/1af97af1bbce9fc13c8aa441abd3856699b8920b9facced10b1e9bb2e231e9e5.wgsl.zst",
+      "byteLength": 64782,
+      "compressedByteLength": 14272,
+      "sha256": "1af97af1bbce9fc13c8aa441abd3856699b8920b9facced10b1e9bb2e231e9e5",
+      "file": "shaders.wgsl.zst",
+      "offset": 51139
+    },
+    {
+      "path": "buffers/73c42ce79bd4c8a92709509ed419628dc660f148fb5d4739797d99f31d737b0d.bin.zst",
+      "byteLength": 108,
+      "compressedByteLength": 117,
+      "sha256": "73c42ce79bd4c8a92709509ed419628dc660f148fb5d4739797d99f31d737b0d",
+      "file": "buffers.bin.zst",
+      "offset": 850427
+    },
+    {
+      "path": "metadata/e1ecce2cc70a1a7b9de86a85b3b64e7f0294b8054c37bc3930cefd5c2bdde85d.json.zst",
+      "byteLength": 2251684,
+      "compressedByteLength": 23254,
+      "sha256": "e1ecce2cc70a1a7b9de86a85b3b64e7f0294b8054c37bc3930cefd5c2bdde85d",
+      "file": "metadata.json.zst",
+      "offset": 0
+    }
+  ],
+  "files": [
+    {
+      "path": "buffers.bin.zst",
+      "byteLength": 850544
+    },
+    {
+      "path": "shaders.wgsl.zst",
+      "byteLength": 65411
+    },
+    {
+      "path": "metadata.json.zst",
+      "byteLength": 23254
+    }
+  ]
+}

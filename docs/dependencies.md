@@ -12,11 +12,13 @@ alias resolves the published file without modifying installed dependencies.
 # Precompiled scene compression
 
 `@bokuweb/zstd-wasm` (MIT) provides the same Zstandard encoder/decoder in the
-browser and Node tests. Exports use level 22 for a high compression ratio without
-loss of prepared buffer or texture bytes; compression time and size savings are
-scene-dependent. Vite bundles its WASM locally, with no CDN dependency. The
+browser and Node tests. Exports default to level 22 for a high compression ratio without
+loss of prepared buffer bytes; original texture and environment images are
+referenced externally, not recompressed. Compression time and size savings are
+scene-dependent; use `--compression-level 3` (or PowerShell `-CompressionLevel 3`)
+for faster lossless exports. Vite bundles its WASM locally, with no CDN dependency. The
 package is excluded from dependency prebundling so its WASM URL is resolved as a
-normal Vite asset. See [precompiled scenes](usd-import.md#precompiled-scenes-v10)
+normal Vite asset. See [precompiled scenes](usd-import.md#precompiled-scenes-v20)
 for the format and loading workflow.
 
 # MaterialX JavaScript Core WASM

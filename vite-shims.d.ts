@@ -11,8 +11,22 @@ declare module 'path' {
   export function extname(p: string): string;
 }
 declare module 'node:fs/promises' {
+  export function mkdtemp(prefix: string): Promise<string>;
+  export function mkdir(path: string, options: { recursive: true }): Promise<string | undefined>;
   export function readFile(path: string): Promise<Uint8Array<ArrayBuffer>>;
   export function readFile(path: string, encoding: 'utf8'): Promise<string>;
+  export function writeFile(path: string, data: string | Uint8Array): Promise<void>;
+  export function rm(path: string, options: { recursive: boolean; force: boolean }): Promise<void>;
+}
+declare module 'node:child_process' {
+  export function execFile(file: string, args: readonly string[], callback: (error: Error | null, stdout: string, stderr: string) => void): void;
+}
+declare module 'node:util' {
+  export function promisify(fn: typeof import('node:child_process').execFile):
+    (file: string, args: readonly string[]) => Promise<{ stdout: string; stderr: string }>;
+}
+declare module 'node:os' {
+  export function tmpdir(): string;
 }
 declare module 'node:path' {
   export function resolve(...parts: string[]): string;
@@ -31,4 +45,4 @@ declare module 'node:url' {
   export function pathToFileURL(path: string): URL;
   export function fileURLToPath(url: string | URL): string;
 }
-declare const process: { env: Record<string, string | undefined> };
+declare const process: { env: Record<string, string | undefined>; execPath: string };
