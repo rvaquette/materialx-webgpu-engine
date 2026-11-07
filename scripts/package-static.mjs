@@ -1,4 +1,4 @@
-import { cpSync, existsSync, mkdirSync, rmSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -18,6 +18,33 @@ function requirePath(path, label) {
   if (!existsSync(path)) throw new Error(`Missing ${label}: ${path}`);
 }
 
+function validateCompiledScenes(directory) {
+  for (const entry of readdirSync(directory, { withFileTypes: true })) {
+    const path = join(directory, entry.name);
+    if (entry.isDirectory()) {
+      validateCompiledScenes(path);
+      continue;
+    }
+    if (!entry.isFile() || entry.name !== 'scene.json') continue;
+    const manifest = JSON.parse(readFileSync(path, 'utf8'));
+    if (manifest.format !== 'materialx-compiled-scene' || manifest.version !== '2.0') continue;
+    if (!Array.isArray(manifest.files) || manifest.files.length !== 3) {
+      throw new Error(`Invalid grouped-scene manifest: ${path}`);
+    }
+    for (const file of manifest.files) {
+      if (!['buffers.bin.zst', 'metadata.json.zst', 'shaders.wgsl.zst'].includes(file.path) ||
+          !Number.isSafeInteger(file.byteLength) || file.byteLength < 0) {
+        throw new Error(`Invalid grouped-scene file descriptor in ${path}`);
+      }
+      const actual = statSync(join(directory, file.path)).size;
+      if (actual !== file.byteLength) {
+        throw new Error(`Compiled scene file is incomplete: ${join(directory, file.path)} (${actual} bytes; expected ${file.byteLength}). ` +
+          'Check that Git LFS files were hydrated before packaging.');
+      }
+    }
+  }
+}
+
 requirePath(distRoot, 'Vite build output');
 const scenesRoot = join(distRoot, 'scenes');
 rmSync(scenesRoot, { recursive: true, force: true });
@@ -26,6 +53,7 @@ for (const name of sceneNames) {
   requirePath(source, `built-in scene ${name}`);
 }
 cpSync(join(projectRoot, 'scenes'), scenesRoot, { recursive: true });
+validateCompiledScenes(scenesRoot);
 
 const materialxRoot = join(distRoot, 'materialx');
 rmSync(materialxRoot, { recursive: true, force: true });

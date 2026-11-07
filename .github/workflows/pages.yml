@@ -20,6 +20,8 @@ jobs:
     steps:
       - name: Checkout application
         uses: actions/checkout@v4
+        with:
+          lfs: true
 
       - name: Checkout MaterialX
         uses: actions/checkout@v4
