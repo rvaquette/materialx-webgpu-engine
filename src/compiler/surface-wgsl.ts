@@ -705,7 +705,7 @@ function lowerLamaClosureWgsl(
     const bsdf = child('bsdf');
     const edf = child('edf');
     const merged = mergeLamaClosures(bsdf, edf);
-    const opacity = ctx.s('opacity', 1);
+    const opacity = clampExpr(ctx.s('opacity', 1));
     const ref = lowered.inputs.get('opacity');
     if (ref !== undefined) used.add(ref);
     return { ...merged, opacity };
@@ -725,9 +725,17 @@ function lowerLamaClosureWgsl(
   if (kind === 'LamaLayer') {
     const base = child('materialBase');
     const top = scaleLamaClosureWgsl(child('materialTop'), clampExpr(ctx.s('topMix', 1)));
-    if (top.lobes.length === 1 && top.lobes[0]?.kind === 'dielectric_reflection') {
-      const lobe = top.lobes[0];
-      return { ...base, coat: { weight: lobe.weight, color: lobe.color, roughness: lobe.roughness ?? '0.0', ior: lobe.ior ?? '1.5' } };
+    const topReflection = top.lobes.find(lobe => lobe.kind === 'dielectric_reflection');
+    const dielectricTop = topReflection !== undefined && top.lobes.every(lobe =>
+      lobe.kind === 'dielectric_reflection' || lobe.kind === 'dielectric_transmission');
+    if (topReflection && dielectricTop) {
+      return {
+        ...base,
+        coat: { weight: topReflection.weight, color: topReflection.color,
+          roughness: topReflection.roughness ?? '0.0', ior: topReflection.ior ?? '1.5' },
+        ...(top.thinFilm ? { thinFilm: top.thinFilm } : {}),
+        ...(top.emission ? { emission: top.emission } : {}),
+      };
     }
     if (top.lobes.length === 1 && top.lobes[0]?.kind === 'sheen') {
       const lobe = top.lobes[0];

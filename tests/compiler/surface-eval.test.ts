@@ -79,6 +79,53 @@ describe('evaluateSurfaceToLayered (T057i3)', () => {
     expect(closure.lobes[0]).toMatchObject({ kind: 'oren_nayar_diffuse', color: [0.2, 0.3, 0.4], roughness: 0.6 });
   });
 
+  it('evaluates a connected Lama BSDF color on the CPU', () => {
+    const root: ResolvedNode = {
+      id: 'SR', category: 'surface', type: 'surfaceshader',
+      inputs: [{ name: 'bsdf', type: 'BSDF', source: { kind: 'connection', nodeId: 'diffuse' }, provenance: { namePath: '/mat/bsdf' } }],
+      provenance: { namePath: '/mat/SR' },
+    };
+    const diffuseNode: ResolvedNode = {
+      id: 'diffuse', category: 'LamaDiffuse', type: 'BSDF',
+      inputs: [
+        { name: 'color', type: 'color3', source: { kind: 'connection', nodeId: 'albedo' }, provenance: { namePath: '/mat/diffuse/color' } },
+        { name: 'roughness', type: 'float', source: { kind: 'value', value: '0.25', type: 'float' }, provenance: { namePath: '/mat/diffuse/roughness' } },
+      ],
+      provenance: { namePath: '/mat/diffuse' },
+    };
+    const albedo: ResolvedNode = {
+      id: 'albedo', category: 'constant', type: 'color3',
+      inputs: [{ name: 'value', type: 'color3', source: { kind: 'value', value: '0.7, 0.2, 0.1', type: 'color3' }, provenance: { namePath: '/mat/albedo/value' } }],
+      provenance: { namePath: '/mat/albedo' },
+    };
+    const graph: ResolvedGraph = {
+      terminals: [{ name: 'surfaceshader', type: 'surfaceshader', nodeId: 'SR', provenance: { namePath: '/mat/SR' } }],
+      nodes: new Map([['SR', root], ['diffuse', diffuseNode], ['albedo', albedo]]),
+    };
+    const closure = evaluateSurfaceToLayered(graph, resolveSurface(graph)!);
+    expect(closure.lobes[0]).toMatchObject({ kind: 'oren_nayar_diffuse', color: [0.7, 0.2, 0.1], roughness: 0.25 });
+  });
+
+  it('selects LamaSurface materialBack for a back-facing CPU view', () => {
+    const front: ResolvedNode = {
+      id: 'front', category: 'LamaDiffuse', type: 'BSDF',
+      inputs: [{ name: 'color', type: 'color3', source: { kind: 'value', value: '0.8, 0.1, 0.1', type: 'color3' }, provenance: { namePath: '/mat/front/color' } }],
+      provenance: { namePath: '/mat/front' },
+    };
+    const back: ResolvedNode = {
+      id: 'back', category: 'LamaSheen', type: 'BSDF',
+      inputs: [{ name: 'color', type: 'color3', source: { kind: 'value', value: '0.1, 0.2, 0.8', type: 'color3' }, provenance: { namePath: '/mat/back/color' } }],
+      provenance: { namePath: '/mat/back' },
+    };
+    const graph: ResolvedGraph = {
+      terminals: [{ name: 'surfaceshader', type: 'surfaceshader', nodeId: 'front', provenance: { namePath: '/mat/front' } }],
+      nodes: new Map([['front', front], ['back', back]]), lamaSurface: { backNodeId: 'back' },
+    };
+    const surface = resolveSurface(graph)!;
+    const closure = evaluateSurfaceToLayered(graph, surface, { normal: [0, 0, 1], viewDir: [0, 0, -1] });
+    expect(closure.sheen).toMatchObject({ color: [0.1, 0.2, 0.8] });
+  });
+
   it('evaluates a connected procedural base_color instead of the nodedef default', () => {
     const graph = brickGraph();
     const surface = resolveSurface(graph, {})!;

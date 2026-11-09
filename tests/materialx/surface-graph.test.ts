@@ -113,6 +113,19 @@ describe('resolveSurface (T055a)', () => {
     expect(surface.inputs.get('edf')?.source).toEqual({ kind: 'connection', nodeId: 'E' });
   });
 
+  it('resolves LamaSurface presence and back-side BSDF metadata', () => {
+    const graph = graphOf({ category: 'surface', inputs: [
+      input('bsdf', 'BSDF', { kind: 'connection', nodeId: 'FRONT' }),
+    ] });
+    graph.lamaSurface = {
+      presence: input('presence', 'float', { kind: 'value', value: '0.35', type: 'float' }),
+      backNodeId: 'BACK',
+    };
+    const surface = resolveSurface(graph)!;
+    expect(surface.backNodeId).toBe('BACK');
+    expect(surface.inputs.get('opacity')?.source).toEqual({ kind: 'value', value: [0.35] });
+  });
+
   it('applies official nodedef defaults for unauthored inputs', () => {
     const resolved = resolveSurface(graphOf({ category: 'standard_surface' }))!;
     expect(resolved.inputs.get('specular_roughness')!.source).toEqual({ kind: 'default', value: [0.2] });

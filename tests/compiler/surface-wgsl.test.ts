@@ -123,6 +123,43 @@ describe('emitLayeredSurface (T055d)', () => {
     expect(module.code).toContain('(1.0 - clamp(');
   });
 
+  it('lowers LamaLayer with a dielectric top as a coat over its base closure', () => {
+    const graph = surfaceGraph('surface', [conn('bsdf', 'BSDF', 'layer')], [
+      upstream('layer', 'LamaLayer', 'BSDF', [
+        conn('materialTop', 'BSDF', 'glass'), conn('materialBase', 'BSDF', 'base'), value('topMix', 'float', '0.6'),
+      ]),
+      upstream('glass', 'LamaDielectric', 'BSDF', [
+        value('fresnelMode', 'integer', '1'), value('IOR', 'float', '1.5'), value('roughness', 'float', '0.08'),
+      ]),
+      upstream('base', 'LamaDiffuse', 'BSDF', [value('color', 'color3', '0.3, 0.2, 0.1')]),
+    ]);
+    const module = emit(graph);
+    expect(module.code).toContain('c.coat = MxCoatLayer(');
+    expect(module.code).toContain('c.lobes[0] = MxBsdfLobe(MX_LOBE_OREN_NAYAR_DIFFUSE');
+    expect(module.code).not.toContain('c.lobes[2] =');
+    expect(module.features?.coat).toBe(true);
+  });
+
+  it('selects LamaSurface front/back closures and applies its presence mask', () => {
+    const graph = surfaceGraph('surface', [conn('bsdf', 'BSDF', 'front')], [
+      upstream('front', 'LamaDiffuse', 'BSDF', [value('color', 'color3', '0.8, 0.1, 0.1')]),
+      upstream('back', 'LamaSheen', 'BSDF', [value('color', 'color3', '0.1, 0.2, 0.8')]),
+    ]);
+    graph.lamaSurface = {
+      presence: { name: 'presence', type: 'float', source: { kind: 'value', value: '0.35', type: 'float' }, provenance: { namePath: '/mat/presence' } },
+      backNodeId: 'back',
+    };
+    const module = emit(graph);
+    expect(module.code).toContain('var cFront: LayeredClosure;');
+    expect(module.code).toContain('var cBack: LayeredClosure;');
+    expect(module.code).toContain('dot(vary.normal, vary.viewDir) >= 0.0');
+    expect(module.code).toContain('cFront.opacity = clamp(');
+    expect(module.code).toContain('cBack.opacity = clamp(');
+    expect(module.features?.lobeKinds).toContain(0);
+    expect(module.features?.lobeKinds).toContain(6);
+    expect(module.features?.opaque).toBe(false);
+  });
+
   it('emits a connected LamaDiffuse as a layered Oren-Nayar lobe', () => {
     const graph = surfaceGraph('surface', [conn('bsdf', 'BSDF', 'diffuse')], [
       upstream('diffuse', 'LamaDiffuse', 'BSDF', [
