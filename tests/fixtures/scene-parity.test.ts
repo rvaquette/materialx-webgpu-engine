@@ -56,7 +56,7 @@ interface Rep {
   readonly canon: CanonicalSurfaceInputs;
 }
 
-type CanonicalFamily = Exclude<SurfaceFamily, 'simple_hair'>;
+type CanonicalFamily = Exclude<SurfaceFamily, 'simple_hair' | 'surface'>;
 
 const REPS: Readonly<Record<CanonicalFamily, Rep>> = {
   standard_surface: {

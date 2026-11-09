@@ -31,6 +31,14 @@ function input(name: string, type: string, value: string): ResolvedInput {
   return { name, type, source: val(type, value), provenance: { namePath: `/mat/${name}` } };
 }
 
+function connection(name: string, type: string, nodeId: string): ResolvedInput {
+  return { name, type, source: { kind: 'connection', nodeId }, provenance: { namePath: `/mat/${name}` } };
+}
+
+function bsdfNode(id: string, category: string, inputs: ResolvedInput[]): ResolvedNode {
+  return { id, category, type: 'BSDF', inputs, provenance: { namePath: `/mat/${id}` } };
+}
+
 function graphOf(category: string, inputs: ResolvedInput[], version?: string): ResolvedGraph {
   const id = 'SR';
   const node: ResolvedNode = {
@@ -90,6 +98,61 @@ function shade(closure: LayeredClosure, lighting: ReferenceLighting = defaultLig
 }
 
 describe('surfaceGraphToLayered (T055b)', () => {
+  it('lowers a LamaDiffuse BSDF connected to a generic MaterialX surface', () => {
+    const graph = graphOf('surface', [
+      { name: 'bsdf', type: 'BSDF', source: { kind: 'connection', nodeId: 'LAMA' }, provenance: { namePath: '/mat/bsdf' } },
+    ]);
+    graph.nodes.set('LAMA', {
+      id: 'LAMA', category: 'LamaDiffuse', type: 'BSDF',
+      nodeDef: {
+        name: 'ND_lama_diffuse', nodeString: 'LamaDiffuse', type: 'BSDF',
+        implementation: { kind: 'nodegraph', name: 'NG_lama_diffuse' },
+        inputs: [
+          { name: 'color', type: 'color3', value: '0.2, 0.3, 0.4' },
+          { name: 'roughness', type: 'float', value: '0.6' },
+        ],
+      },
+      inputs: [input('color', 'color3', '0.2, 0.3, 0.4'), input('roughness', 'float', '0.6')],
+      provenance: { namePath: '/mat/LAMA' },
+    });
+    const surface = resolveSurface(graph)!;
+    const closure = surfaceGraphToLayered(surface, graph);
+    expect(closure.lobes).toEqual([
+      { kind: 'oren_nayar_diffuse', weight: 1, color: [0.2, 0.3, 0.4], roughness: 0.6 },
+    ]);
+    expect(closure.opacity).toBe(1);
+  });
+
+  it('lowers direct Lama conductor and dielectric closures', () => {
+    const conductorGraph = graphOf('surface', [connection('bsdf', 'BSDF', 'METAL')]);
+    conductorGraph.nodes.set('METAL', bsdfNode('METAL', 'LamaConductor', [
+      input('reflectivity', 'color3', '0.8, 0.6, 0.4'), input('roughness', 'float', '0.2'),
+    ]));
+    const conductor = surfaceGraphToLayered(resolveSurface(conductorGraph)!, conductorGraph);
+    expect(conductor.lobes[0]).toMatchObject({ kind: 'conductor', color: [0.8, 0.6, 0.4], roughness: 0.2 });
+
+    const dielectricGraph = graphOf('surface', [connection('bsdf', 'BSDF', 'GLASS')]);
+    dielectricGraph.nodes.set('GLASS', bsdfNode('GLASS', 'LamaDielectric', [
+      input('fresnelMode', 'integer', '1'), input('IOR', 'float', '1.5'),
+      input('roughness', 'float', '0.1'),
+    ]));
+    const dielectric = surfaceGraphToLayered(resolveSurface(dielectricGraph)!, dielectricGraph);
+    expect(dielectric.lobes.map(lobe => lobe.kind)).toEqual(['dielectric_reflection', 'dielectric_transmission']);
+    expect(dielectric.lobes[0]?.ior).toBe(1.5);
+  });
+
+  it('combines LamaMix weights over connected BSDFs', () => {
+    const graph = graphOf('surface', [connection('bsdf', 'BSDF', 'MIX')]);
+    graph.nodes.set('MIX', bsdfNode('MIX', 'LamaMix', [
+      connection('material1', 'BSDF', 'A'), connection('material2', 'BSDF', 'B'), input('mix', 'float', '0.25'),
+    ]));
+    graph.nodes.set('A', bsdfNode('A', 'LamaDiffuse', [input('color', 'color3', '1, 0, 0')]));
+    graph.nodes.set('B', bsdfNode('B', 'LamaDiffuse', [input('color', 'color3', '0, 0, 1')]));
+    const closure = surfaceGraphToLayered(resolveSurface(graph)!, graph);
+    expect(closure.lobes.map(lobe => lobe.weight)).toEqual([0.75, 0.25]);
+    expect(closure.lobes.map(lobe => lobe.color)).toEqual([[1, 0, 0], [0, 0, 1]]);
+  });
+
   it('keeps the feature_alpha showcase explicitly blended at half coverage', () => {
     const inputs = [...featureAlphaXml.matchAll(/<input name="([^"]+)" type="([^"]+)" value="([^"]+)"\s*\/>/g)]
       .map((match) => input(match[1]!, match[2]!, match[3]!));

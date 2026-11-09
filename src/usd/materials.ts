@@ -8,7 +8,7 @@
 // No asset path is repaired silently; unbound gprims are reported (REQ-013).
 
 import type { Diagnostic, DiagnosticSink } from '../core/diagnostics.ts';
-import type { GraphRoot, MxNode, MxVector } from '../materialx/graph.ts';
+import type { GraphRoot, MxNode, MxVector, ResolvedInput } from '../materialx/graph.ts';
 import type { MxElement } from '../materialx/wasm.ts';
 import type {
   BindingStrength,
@@ -151,6 +151,8 @@ export interface MtlxMaterialInput {
   getName(): string;
   getType(): string;
   getConnectedNode?(): MxNode | null;
+  getValueString?(): string;
+  hasValue?(): boolean;
 }
 
 /** Structural view of a surfacematerial node. */
@@ -231,6 +233,34 @@ export function materialGraphRoots(
 
   const inputs = toArray(material.getInputs());
   const roots: GraphRoot[] = [];
+  if (material.getCategory?.() === 'LamaSurface') {
+    const front = inputs.find(input => input.getName() === 'materialFront')?.getConnectedNode?.() ?? null;
+    if (!front) {
+      emit({ level: 'warning', message: `LamaSurface has no connected front material: ${materialName}` });
+      return [];
+    }
+    const back = inputs.find(input => input.getName() === 'materialBack')?.getConnectedNode?.() ?? null;
+    const presenceInput = inputs.find(input => input.getName() === 'presence');
+    let presence: ResolvedInput | undefined;
+    if (presenceInput) {
+      const connected = presenceInput.getConnectedNode?.() ?? null;
+      const raw = presenceInput.getValueString?.() ?? '';
+      const hasValue = presenceInput.hasValue?.() ?? raw !== '';
+      presence = {
+        name: 'presence', type: 'float',
+        source: connected
+          ? { kind: 'connection', nodeId: connected.getNamePath() }
+          : hasValue ? { kind: 'value', value: raw, type: 'float' } : { kind: 'default', type: 'float' },
+        provenance: { namePath: `/${materialName}/presence` },
+      };
+    }
+    const lamaSurface = { ...(presence ? { presence } : {}), ...(back ? { backNode: back } : {}) };
+    roots.push({
+      name: 'surfaceshader', type: 'surfaceshader', node: front,
+      ...(presence || back ? { lamaSurface } : {}),
+    });
+    return roots;
+  }
   for (const terminal of MATERIAL_TERMINALS) {
     const input = inputs.find((i) => i.getName() === terminal);
     if (!input) continue;

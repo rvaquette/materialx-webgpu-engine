@@ -185,6 +185,16 @@ function materialNode(name: string, inputs: MtlxMaterialInput[]): MtlxMaterialNo
 }
 
 describe('materialGraphRoots', () => {
+  it('uses LamaSurface materialFront when the document exposes a material node directly', () => {
+    const front = { id: 'front' } as unknown as MxNode;
+    const material = {
+      ...materialNode('lama', [input('materialFront', 'BSDF', front)]),
+      getCategory: () => 'LamaSurface',
+    } as MtlxMaterialNode;
+    const roots = materialGraphRoots({ getChild: name => name === 'lama' ? material : null }, 'lama');
+    expect(roots).toEqual([{ name: 'surfaceshader', type: 'surfaceshader', node: front }]);
+  });
+
   it('builds roots from connected shader terminals in render order', () => {
     const surf = { id: 'surf' } as unknown as MxNode;
     const disp = { id: 'disp' } as unknown as MxNode;

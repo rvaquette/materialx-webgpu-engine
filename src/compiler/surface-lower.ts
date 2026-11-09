@@ -11,6 +11,7 @@
 // this lowering is a strict superset of the pre-P10 surface (non-regression).
 
 import type { CoatLayer, FuzzLayer, LayeredBsdfLobe, LayeredClosure, Rgb, SheenLayer, ThinFilmLayer } from './ir.ts';
+import type { ResolvedGraph } from '../materialx/graph.ts';
 import type { NormalizedSurfaceInput, ResolvedSurface } from '../materialx/surface-graph.ts';
 import { hairAbsorptionFromColor, hairAbsorptionFromMelanin } from '../render/bsdf/hair.ts';
 
@@ -266,14 +267,218 @@ function lowerDisneyPrincipled(m: Inputs): LayeredClosure {
   return assemble(lobes, 1, slots);
 }
 
+function nodeNumbers(graph: ResolvedGraph, nodeId: string, name: string, fallback: readonly number[]): readonly number[] {
+  const node = graph.nodes.get(nodeId);
+  const authored = node?.inputs.find((input) => input.name === name)?.source;
+  if (authored?.kind === 'value') {
+    const values = authored.value.split(',').map(Number);
+    if (values.every(Number.isFinite)) return values;
+  }
+  const declared = node?.nodeDef?.inputs?.find((input) => input.name === name)?.value;
+  if (declared !== undefined) {
+    const values = declared.split(',').map(Number);
+    if (values.every(Number.isFinite)) return values;
+  }
+  return fallback;
+}
+
+function nodeConnection(graph: ResolvedGraph, nodeId: string, name: string): string | undefined {
+  const source = graph.nodes.get(nodeId)?.inputs.find(input => input.name === name)?.source;
+  return source?.kind === 'connection' ? source.nodeId : undefined;
+}
+
+function nodeScalar(graph: ResolvedGraph, nodeId: string, name: string, fallback: number): number {
+  return nodeNumbers(graph, nodeId, name, [fallback])[0] ?? fallback;
+}
+
+function nodeColor(graph: ResolvedGraph, nodeId: string, name: string, fallback: Rgb): Rgb {
+  const values = nodeNumbers(graph, nodeId, name, fallback);
+  if (values.length === 1) return [values[0]!, values[0]!, values[0]!];
+  return [values[0] ?? fallback[0], values[1] ?? fallback[1], values[2] ?? fallback[2]];
+}
+
+function scaleLamaClosure(closure: LayeredClosure, weight: number): LayeredClosure {
+  return {
+    ...closure,
+    lobes: closure.lobes.map(lobe => ({ ...lobe, weight: lobe.weight * weight })),
+    ...(closure.coat ? { coat: { ...closure.coat, weight: closure.coat.weight * weight } } : {}),
+    ...(closure.sheen ? { sheen: { ...closure.sheen, weight: closure.sheen.weight * weight } } : {}),
+    ...(closure.fuzz ? { fuzz: { ...closure.fuzz, weight: closure.fuzz.weight * weight } } : {}),
+    ...(closure.thinFilm ? { thinFilm: { ...closure.thinFilm, weight: closure.thinFilm.weight * weight } } : {}),
+    ...(closure.emission ? { emission: scaleRgb(closure.emission, weight) } : {}),
+  };
+}
+
+function addLamaClosures(a: LayeredClosure, b: LayeredClosure): LayeredClosure {
+  return {
+    lobes: [...a.lobes, ...b.lobes],
+    opacity: 1,
+    ...(a.coat ?? b.coat ? { coat: a.coat ?? b.coat } : {}),
+    ...(a.sheen ?? b.sheen ? { sheen: a.sheen ?? b.sheen } : {}),
+    ...(a.fuzz ?? b.fuzz ? { fuzz: a.fuzz ?? b.fuzz } : {}),
+    ...(a.thinFilm ?? b.thinFilm ? { thinFilm: a.thinFilm ?? b.thinFilm } : {}),
+    ...(a.emission || b.emission ? { emission: [
+      (a.emission?.[0] ?? 0) + (b.emission?.[0] ?? 0),
+      (a.emission?.[1] ?? 0) + (b.emission?.[1] ?? 0),
+      (a.emission?.[2] ?? 0) + (b.emission?.[2] ?? 0),
+    ] as Rgb } : {}),
+  };
+}
+
+function lowerLamaBsdf(graph: ResolvedGraph, nodeId: string, visiting = new Set<string>()): LayeredClosure {
+  if (visiting.has(nodeId)) return { lobes: [], opacity: 1 };
+  const node = graph.nodes.get(nodeId);
+  if (!node) return { lobes: [], opacity: 1 };
+  const kind = node.nodeDef?.nodeString ?? node.category;
+  const next = new Set(visiting).add(nodeId);
+  const child = (name: string): LayeredClosure => {
+    const childId = nodeConnection(graph, nodeId, name);
+    return childId ? lowerLamaBsdf(graph, childId, next) : { lobes: [], opacity: 1 };
+  };
+  const roughness = clamp01(nodeScalar(graph, nodeId, 'roughness', 0.1));
+  const anisotropy = nodeScalar(graph, nodeId, 'anisotropy', 0);
+  const rotation = nodeScalar(graph, nodeId, 'anisotropyRotation', 0);
+
+  switch (kind) {
+    case 'LamaDiffuse':
+      return assemble([{
+        kind: 'oren_nayar_diffuse', weight: 1,
+        color: nodeColor(graph, nodeId, 'color', [0.18, 0.18, 0.18]), roughness,
+      }], 1, {});
+    case 'LamaTranslucent':
+      return assemble([{
+        kind: 'translucent', weight: 1,
+        color: nodeColor(graph, nodeId, 'color', [0.18, 0.18, 0.18]),
+      }], 1, {});
+    case 'LamaConductor': {
+      const mode = nodeScalar(graph, nodeId, 'fresnelMode', 0);
+      const eta = nodeColor(graph, nodeId, 'IOR', [0.18, 0.42, 1.37]);
+      const kappa = nodeColor(graph, nodeId, 'extinction', [3.42, 2.35, 1.77]);
+      const artistic = nodeColor(graph, nodeId, 'reflectivity', [0.945, 0.7772, 0.3737]);
+      const scientific = eta.map((n, i) => {
+        const k = kappa[i]!;
+        return ((n - 1) ** 2 + k * k) / ((n + 1) ** 2 + k * k);
+      }) as unknown as Rgb;
+      const f0 = (mode === 0 ? artistic : scientific).map((value, i) => value * nodeColor(graph, nodeId, 'tint', [1, 1, 1])[i]!) as unknown as Rgb;
+      return assemble([{
+        kind: 'conductor', weight: 1, color: f0, extinction: kappa, roughness,
+        ...(anisotropy > 0 ? { anisotropy } : {}), ...(rotation > 0 ? { rotation } : {}),
+      }], 1, {});
+    }
+    case 'LamaDielectric': {
+      const mode = nodeScalar(graph, nodeId, 'fresnelMode', 0);
+      const reflectivity = nodeColor(graph, nodeId, 'reflectivity', [0.04, 0.04, 0.04]);
+      const reflectance = Math.max(0, Math.min(0.999, (reflectivity[0] + reflectivity[1] + reflectivity[2]) / 3));
+      const artisticIor = (1 + Math.sqrt(reflectance)) / Math.max(1 - Math.sqrt(reflectance), 1e-4);
+      const ior = mode === 0 ? artisticIor : nodeScalar(graph, nodeId, 'IOR', 1.5);
+      const absorption = nodeColor(graph, nodeId, 'absorptionColor', [1, 1, 1]);
+      const radius = nodeScalar(graph, nodeId, 'absorptionRadius', 1);
+      const shared = {
+        weight: 1, roughness, ior,
+        ...(anisotropy > 0 ? { anisotropy } : {}), ...(rotation > 0 ? { rotation } : {}),
+      };
+      return assemble([
+        { kind: 'dielectric_reflection', ...shared, color: nodeColor(graph, nodeId, 'reflectionTint', [1, 1, 1]) },
+        {
+          kind: 'dielectric_transmission', ...shared,
+          color: nodeColor(graph, nodeId, 'transmissionTint', [1, 1, 1]),
+          ...(radius > 0 && absorption.some(value => value < 1) ? { attenuationColor: absorption, attenuationDistance: radius } : {}),
+        },
+      ], 1, {});
+    }
+    case 'LamaGeneralizedSchlick': {
+      const color = nodeColor(graph, nodeId, 'reflectivity', [0.04, 0.04, 0.04]);
+      const color90 = nodeColor(graph, nodeId, 'reflectivity90', [1, 1, 1]);
+      return assemble([{
+        kind: 'generalized_schlick', weight: 1, color, color90, roughness,
+        ...(anisotropy > 0 ? { anisotropy } : {}), ...(rotation > 0 ? { rotation } : {}),
+      }], 1, {});
+    }
+    case 'LamaSheen':
+      return assemble([], 1, {
+        sheen: { weight: 1, color: nodeColor(graph, nodeId, 'color', [1, 1, 1]), roughness },
+      });
+    case 'LamaSSS':
+      return assemble([{
+        kind: 'subsurface', weight: 1,
+        color: nodeColor(graph, nodeId, 'color', [0.18, 0.18, 0.18]),
+        subsurfaceRadius: scaleRgb(nodeColor(graph, nodeId, 'sssRadius', [0, 0, 0]), nodeScalar(graph, nodeId, 'sssScale', 1)),
+        anisotropy: nodeScalar(graph, nodeId, 'sssAnisotropy', 0),
+      }], 1, {});
+    case 'LamaIridescence': {
+      const min = nodeScalar(graph, nodeId, 'minFilmThickness', 400);
+      const max = nodeScalar(graph, nodeId, 'maxFilmThickness', 800);
+      const relative = clamp01(nodeScalar(graph, nodeId, 'relativeFilmThickness', 0.5));
+      return assemble([{
+        kind: 'dielectric_reflection', weight: 1, color: [1, 1, 1], roughness,
+        ...(anisotropy > 0 ? { anisotropy } : {}), ...(rotation > 0 ? { rotation } : {}),
+      }], 1, {
+        thinFilm: { weight: 1, thickness: min + (max - min) * relative, ior: nodeScalar(graph, nodeId, 'filmIOR', 1.3) },
+      });
+    }
+    case 'LamaAdd': {
+      const a = scaleLamaClosure(child('material1'), clamp01(nodeScalar(graph, nodeId, 'weight1', 1)));
+      const b = scaleLamaClosure(child('material2'), clamp01(nodeScalar(graph, nodeId, 'weight2', 0)));
+      return addLamaClosures(a, b);
+    }
+    case 'LamaMix': {
+      const mix = clamp01(nodeScalar(graph, nodeId, 'mix', 0));
+      return addLamaClosures(scaleLamaClosure(child('material1'), 1 - mix), scaleLamaClosure(child('material2'), mix));
+    }
+    case 'LamaLayer': {
+      const base = child('materialBase');
+      const top = scaleLamaClosure(child('materialTop'), clamp01(nodeScalar(graph, nodeId, 'topMix', 1)));
+      const topCoat = top.lobes.length === 1 && top.lobes[0]?.kind === 'dielectric_reflection' ? {
+        weight: top.lobes[0].weight,
+        color: top.lobes[0].color,
+        roughness: top.lobes[0].roughness ?? 0,
+        ior: top.lobes[0].ior ?? 1.5,
+      } : undefined;
+      const layers = addLamaClosures(base, { ...top, lobes: topCoat ? [] : top.lobes });
+      return { ...layers, ...(topCoat ? { coat: topCoat } : {}) };
+    }
+    default:
+      return { lobes: [], opacity: 1 };
+  }
+}
+
+function lowerGenericSurface(surface: ResolvedSurface, graph: ResolvedGraph | undefined): LayeredClosure {
+  const opacity = clamp01(scalarOf(surface.inputs, 'opacity', 1));
+  if (!graph) return { lobes: [], opacity };
+
+  const rootNode = graph.nodes.get(surface.nodeId);
+  const rootKind = rootNode?.nodeDef?.nodeString ?? rootNode?.category;
+  if (rootKind && rootKind.startsWith('Lama') && rootKind !== 'LamaEmission') {
+    return { ...lowerLamaBsdf(graph, surface.nodeId), opacity };
+  }
+
+  const bsdf = surface.inputs.get('bsdf')?.source;
+  const nodeId = bsdf?.kind === 'connection' ? bsdf.nodeId : undefined;
+  const bsdfClosure = nodeId ? lowerLamaBsdf(graph, nodeId) : { lobes: [], opacity: 1 };
+
+  const edf = surface.inputs.get('edf')?.source;
+  const edfNodeId = edf?.kind === 'connection' ? edf.nodeId : undefined;
+  const edfNode = edfNodeId ? graph.nodes.get(edfNodeId) : undefined;
+  if (edfNodeId && (edfNode?.nodeDef?.nodeString ?? edfNode?.category) === 'LamaEmission') {
+    return {
+      ...bsdfClosure,
+      opacity,
+      emission: nodeColor(graph, edfNodeId, 'color', [0, 0, 0]),
+    };
+  }
+  return { ...bsdfClosure, opacity };
+}
+
 /**
  * Lower a resolved surface (T055a) to its LayeredClosure (T054). Dispatches on the
  * resolved family; every family returns a closure whose base lobes, coat, sheen,
  * fuzz, thin film, emission and opacity are driven by the family interface.
  */
-export function surfaceGraphToLayered(surface: ResolvedSurface): LayeredClosure {
+export function surfaceGraphToLayered(surface: ResolvedSurface, graph?: ResolvedGraph): LayeredClosure {
   const m = surface.inputs;
   switch (surface.family) {
+    case 'surface':
+      return lowerGenericSurface(surface, graph);
     case 'simple_hair': {
       const azimuthal = scalarOf(m, 'azimuthalRoughness', 0.1);
       const fromColor = hairAbsorptionFromColor(rgbOf(m, 'baseColor', [1, 1, 1]), azimuthal);

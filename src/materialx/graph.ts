@@ -119,6 +119,8 @@ export interface ResolvedTerminal {
 export interface ResolvedGraph {
   terminals: ResolvedTerminal[];
   nodes: Map<string, ResolvedNode>;
+  /** Optional front/back/presence wrapper carried by a LamaSurface material. */
+  lamaSurface?: { presence?: ResolvedInput; backNodeId?: string };
 }
 
 export interface GraphRoot {
@@ -127,6 +129,8 @@ export interface GraphRoot {
   type: string;
   /** Shader node connected to the terminal, or null when unconnected. */
   node: MxNode | null;
+  /** Material-level LamaSurface inputs that are not shader-node terminals. */
+  lamaSurface?: { presence?: ResolvedInput; backNode?: MxNode | null };
   provenance?: Provenance;
 }
 
@@ -297,6 +301,7 @@ export function resolveGraph(options: ResolveGraphOptions): ResolvedGraph {
   const nodes = new Map<string, ResolvedNode>();
   const terminals: ResolvedTerminal[] = [];
   const stack: MxNode[] = [];
+  let lamaSurface: ResolvedGraph['lamaSurface'];
 
   for (const root of options.roots) {
     const terminal: ResolvedTerminal = {
@@ -307,6 +312,13 @@ export function resolveGraph(options: ResolveGraphOptions): ResolvedGraph {
     };
     terminals.push(terminal);
     if (root.node) stack.push(root.node);
+    if (root.lamaSurface) {
+      lamaSurface = {
+        ...(root.lamaSurface.presence ? { presence: root.lamaSurface.presence } : {}),
+        ...(root.lamaSurface.backNode ? { backNodeId: root.lamaSurface.backNode.getNamePath() } : {}),
+      };
+      if (root.lamaSurface.backNode) stack.push(root.lamaSurface.backNode);
+    }
   }
 
   while (stack.length > 0) {
@@ -332,5 +344,5 @@ export function resolveGraph(options: ResolveGraphOptions): ResolvedGraph {
     });
   }
 
-  return { terminals, nodes };
+  return { terminals, nodes, ...(lamaSurface ? { lamaSurface } : {}) };
 }

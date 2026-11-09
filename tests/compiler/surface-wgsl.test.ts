@@ -55,6 +55,104 @@ function emit(graph: ResolvedGraph, sink?: (d: Diagnostic) => void) {
 }
 
 describe('emitLayeredSurface (T055d)', () => {
+  it('lowers connected Lama BSDF parameters through the normal texture/IR path', () => {
+    const graph = surfaceGraph('LamaDiffuse', [
+      conn('color', 'color3', 'albedo'), value('roughness', 'float', '0.35'),
+    ], [
+      upstream('albedo', 'image', 'color3', [value('file', 'filename', 'lama-albedo.png')]),
+    ]);
+    graph.nodes.get('SR')!.nodeDef = {
+      name: 'ND_lama_diffuse', nodeString: 'LamaDiffuse', type: 'BSDF',
+      implementation: { kind: 'nodegraph', name: 'NG_lama_diffuse' },
+      inputs: [
+        { name: 'color', type: 'color3', value: '0.18, 0.18, 0.18' },
+        { name: 'roughness', type: 'float', value: '0.0' },
+        { name: 'normal', type: 'vector3', geomprop: 'Nworld' },
+      ],
+    };
+    const module = emit(graph);
+    expect(module.textures).toHaveLength(1);
+    expect(module.samplers).toHaveLength(1);
+    expect(module.code).toContain('textureSample(');
+    expect(module.code).toContain('MxBsdfLobe(MX_LOBE_OREN_NAYAR_DIFFUSE');
+    expect(module.code).toMatch(/MxBsdfLobe\(MX_LOBE_OREN_NAYAR_DIFFUSE, 1\.0, e\d+,/);
+  });
+
+  it.each([
+    ['LamaTranslucent', 'color', 'color3', 2],
+    ['LamaConductor', 'reflectivity', 'color3', 5],
+    ['LamaDielectric', 'reflectionTint', 'color3', 3],
+    ['LamaGeneralizedSchlick', 'reflectivity', 'color3', 5],
+    ['LamaSheen', 'color', 'color3', 6],
+    ['LamaSSS', 'color', 'color3', 7],
+    ['LamaIridescence', 'relativeFilmThickness', 'float', 3],
+  ] as const)('keeps connected %s inputs dynamic', (nodeString, inputName, inputType, lobeKind) => {
+    const graph = surfaceGraph(nodeString, [conn(inputName, inputType, 'parameter')], [
+      upstream('parameter', 'image', inputType, [value('file', 'filename', 'lama-parameter.png')]),
+    ]);
+    graph.nodes.get('SR')!.nodeDef = {
+      name: `ND_${nodeString}`, nodeString, type: 'BSDF',
+      implementation: { kind: 'nodegraph', name: `NG_${nodeString}` },
+      inputs: [{ name: inputName, type: inputType, value: inputType === 'float' ? '0.5' : '1, 1, 1' }],
+    };
+    const module = emit(graph);
+    expect(module.textures).toHaveLength(1);
+    expect(module.samplers).toHaveLength(1);
+    expect(module.code).toContain('textureSample(');
+    expect(module.features?.lobeKinds).toContain(lobeKind);
+  });
+
+  it('lowers LamaMix recursively while preserving connected child textures', () => {
+    const graph = surfaceGraph('surface', [conn('bsdf', 'BSDF', 'mix')], [
+      upstream('mix', 'LamaMix', 'BSDF', [
+        conn('material1', 'BSDF', 'diffuseA'), conn('material2', 'BSDF', 'diffuseB'), value('mix', 'float', '0.25'),
+      ]),
+      upstream('diffuseA', 'LamaDiffuse', 'BSDF', [
+        conn('color', 'color3', 'albedo'), value('roughness', 'float', '0.2'),
+      ]),
+      upstream('diffuseB', 'LamaDiffuse', 'BSDF', [
+        value('color', 'color3', '0.1, 0.2, 0.3'), value('roughness', 'float', '0.4'),
+      ]),
+      upstream('albedo', 'image', 'color3', [value('file', 'filename', 'lama-mix-albedo.png')]),
+    ]);
+    const module = emit(graph);
+    expect(module.textures).toHaveLength(1);
+    expect(module.code.match(/c\.lobes\[\d+\] = MxBsdfLobe\(MX_LOBE_OREN_NAYAR_DIFFUSE/g)).toHaveLength(2);
+    expect(module.code).toContain('textureSample(');
+    expect(module.code).toContain('0.25');
+    expect(module.code).toContain('(1.0 - clamp(');
+  });
+
+  it('emits a connected LamaDiffuse as a layered Oren-Nayar lobe', () => {
+    const graph = surfaceGraph('surface', [conn('bsdf', 'BSDF', 'diffuse')], [
+      upstream('diffuse', 'LamaDiffuse', 'BSDF', [
+        value('color', 'color3', '0.2, 0.3, 0.4'),
+        value('roughness', 'float', '0.6'),
+      ]),
+    ]);
+    const module = emit(graph);
+    expect(module.family).toBe('surface');
+    expect(module.features?.lobeKinds).toContain(0);
+    expect(module.code).toContain('MX_LOBE_OREN_NAYAR_DIFFUSE');
+    expect(module.code).toContain('vec3f(0.2, 0.3, 0.4)');
+    expect(module.code).toContain('0.6');
+  });
+
+  it('emits LamaSheen and LamaEmission on the generic surface terminal', () => {
+    const graph = surfaceGraph('surface', [
+      conn('bsdf', 'BSDF', 'sheen'), conn('edf', 'EDF', 'emission'),
+    ], [
+      upstream('sheen', 'LamaSheen', 'BSDF', [
+        value('color', 'color3', '0.7, 0.8, 0.9'), value('roughness', 'float', '0.4'),
+      ]),
+      upstream('emission', 'LamaEmission', 'EDF', [value('color', 'color3', '2, 1, 0.5')]),
+    ]);
+    const module = emit(graph);
+    expect(module.features?.lobeKinds).toContain(6);
+    expect(module.code).toContain('c.hasEmission = 1u;');
+    expect(module.code).toContain('vec3f(2.0, 1.0, 0.5)');
+  });
+
   it('retains fuzz for connected and editable weights even when their initial value is zero', () => {
     const graph = surfaceGraph('open_pbr_surface', [value('fuzz_weight', 'float', '0')]);
     const surface = resolveSurface(graph)!;

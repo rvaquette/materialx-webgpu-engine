@@ -168,6 +168,7 @@ export function editableSceneMaterials(resources: SceneResources): SceneResource
     let inputs = new Map(material.resolvedSurface.inputs);
     const surfaceNode = material.surfaceGraph.nodes.get(material.resolvedSurface.nodeId);
     for (const [name, input] of inputs) {
+      if (input.type === 'BSDF' || input.type === 'EDF') continue;
       const authored = surfaceNode?.inputs.find(candidate => candidate.name === name);
       if (authored?.interfaceName || authored?.source.kind === 'interface' || authored?.source.kind === 'connection') continue;
       if (input.source.kind !== 'value' && input.source.kind !== 'default') continue;

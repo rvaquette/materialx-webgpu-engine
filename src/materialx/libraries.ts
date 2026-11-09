@@ -48,6 +48,19 @@ export const MATERIALX_DEFAULT_LIBRARY_FILES: readonly string[] = [
   'bxdf/gltf_pbr.mtlx',
   'bxdf/usd_preview_surface.mtlx',
   'bxdf/disney_principled.mtlx',
+  'bxdf/lama/lama_add.mtlx',
+  'bxdf/lama/lama_conductor.mtlx',
+  'bxdf/lama/lama_dielectric.mtlx',
+  'bxdf/lama/lama_diffuse.mtlx',
+  'bxdf/lama/lama_emission.mtlx',
+  'bxdf/lama/lama_generalized_schlick.mtlx',
+  'bxdf/lama/lama_iridescence.mtlx',
+  'bxdf/lama/lama_layer.mtlx',
+  'bxdf/lama/lama_mix.mtlx',
+  'bxdf/lama/lama_sheen.mtlx',
+  'bxdf/lama/lama_sss.mtlx',
+  'bxdf/lama/lama_surface.mtlx',
+  'bxdf/lama/lama_translucent.mtlx',
 ];
 
 // Exporter image extensions are declared separately, without altering stdlib.

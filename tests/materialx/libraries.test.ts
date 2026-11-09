@@ -35,6 +35,8 @@ describe('defaultLibrarySources', () => {
     expect(MATERIALX_DEFAULT_LIBRARY_FILES.some((f) => f.includes('_impl.mtlx'))).toBe(false);
     expect(MATERIALX_DEFAULT_LIBRARY_FILES).toContain('stdlib/stdlib_defs.mtlx');
     expect(MATERIALX_DEFAULT_LIBRARY_FILES).toContain('bxdf/open_pbr_surface.mtlx');
+    expect(MATERIALX_DEFAULT_LIBRARY_FILES).toContain('bxdf/lama/lama_surface.mtlx');
+    expect(MATERIALX_DEFAULT_LIBRARY_FILES.filter((file) => file.startsWith('bxdf/lama/'))).toHaveLength(13);
   });
 });
 

@@ -85,6 +85,7 @@ describe('resolveSurface (T055a)', () => {
   });
   it('classifies every known family and fills the full declared interface', () => {
     const cases: Array<{ category: string; count: number }> = [
+      { category: 'surface', count: 3 },
       { category: 'standard_surface', count: 42 },
       { category: 'open_pbr_surface', count: 41 },
       { category: 'disney_principled', count: 14 },
@@ -97,6 +98,19 @@ describe('resolveSurface (T055a)', () => {
       expect(resolved!.family).toBe(category);
       expect(resolved!.inputs.size, category).toBe(count);
     }
+  });
+
+  it('preserves generic BSDF and EDF surface connections', () => {
+    const graph = graphOf({ category: 'surface' });
+    const node = graph.nodes.get('SR')!;
+    node.inputs = [
+      { name: 'bsdf', type: 'BSDF', source: { kind: 'connection', nodeId: 'B' }, provenance: { namePath: '/mat/bsdf' } },
+      { name: 'edf', type: 'EDF', source: { kind: 'connection', nodeId: 'E' }, provenance: { namePath: '/mat/edf' } },
+    ];
+    const surface = resolveSurface(graph)!;
+    expect(surface.family).toBe('surface');
+    expect(surface.inputs.get('bsdf')?.source).toEqual({ kind: 'connection', nodeId: 'B' });
+    expect(surface.inputs.get('edf')?.source).toEqual({ kind: 'connection', nodeId: 'E' });
   });
 
   it('applies official nodedef defaults for unauthored inputs', () => {

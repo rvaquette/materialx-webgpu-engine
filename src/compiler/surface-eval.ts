@@ -20,6 +20,7 @@ import type { NormalizedSurfaceInput, ResolvedSurface } from '../materialx/surfa
 
 /** A surface whose inputs have been lowered to IR once, ready for per-point eval. */
 export interface PreparedSurface {
+  readonly graph: ResolvedGraph;
   readonly surface: ResolvedSurface;
   readonly ir: ShaderIr;
   /** Surface input name -> IrRef feeding it. */
@@ -37,18 +38,20 @@ export function prepareSurface(
   sink: DiagnosticSink = silentSink,
 ): PreparedSurface {
   const builder = new IrModuleBuilder();
-  const lowered = lowerSurfaceInputsToIr(graph, surface, builder, sink);
+  const lowered = surface.family === 'surface'
+    ? { inputs: new Map<string, string>() }
+    : lowerSurfaceInputsToIr(graph, surface, builder, sink);
   const connected = new Set<string>();
   for (const [name, input] of surface.inputs) {
-    if (input.source.kind === 'connection') connected.add(name);
+    if (input.source.kind === 'connection' && input.type !== 'BSDF' && input.type !== 'EDF') connected.add(name);
   }
-  return { surface, ir: builder.build(), inputs: lowered.inputs, connected };
+  return { graph, surface, ir: builder.build(), inputs: lowered.inputs, connected };
 }
 
 /** Compose a prepared surface into a LayeredClosure at one shading point. */
 export function composeSurfaceLayered(prepared: PreparedSurface, env: IrEvalVaryings = {}): LayeredClosure {
   // No procedural inputs: exact non-regression with the constant lowering.
-  if (prepared.connected.size === 0) return surfaceGraphToLayered(prepared.surface);
+  if (prepared.connected.size === 0) return surfaceGraphToLayered(prepared.surface, prepared.graph);
   const cache = new Map<string, readonly number[]>();
   const overridden = new Map<string, NormalizedSurfaceInput>();
   for (const [name, input] of prepared.surface.inputs) {
@@ -68,7 +71,7 @@ export function composeSurfaceLayered(prepared: PreparedSurface, env: IrEvalVary
       overridden.set(name, input);
     }
   }
-  return surfaceGraphToLayered({ ...prepared.surface, inputs: overridden });
+  return surfaceGraphToLayered({ ...prepared.surface, inputs: overridden }, prepared.graph);
 }
 
 /** Convenience: lower and compose a surface in one call. */

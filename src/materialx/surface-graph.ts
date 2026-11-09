@@ -13,6 +13,7 @@ import type { ResolvedGraph } from './graph.ts';
 
 /** Surface-shader families with a known interface contract. */
 export type SurfaceFamily =
+  | 'surface'
   | 'standard_surface'
   | 'open_pbr_surface'
   | 'disney_principled'
@@ -20,7 +21,7 @@ export type SurfaceFamily =
   | 'simple_hair'
   | 'UsdPreviewSurface';
 
-export type SurfaceInputType = 'float' | 'color3' | 'vector3' | 'integer' | 'boolean';
+export type SurfaceInputType = 'float' | 'color3' | 'vector3' | 'integer' | 'boolean' | 'BSDF' | 'EDF';
 
 /** One declared interface input of a family nodedef with its official default. */
 export interface SurfaceInputDef {
@@ -50,6 +51,8 @@ export interface NormalizedSurfaceInput {
 export interface ResolvedSurface {
   readonly family: SurfaceFamily;
   readonly nodeId: string;
+  /** Optional LamaSurface back-side BSDF, selected for back-facing views. */
+  readonly backNodeId?: string;
   readonly nodeDefName?: string;
   readonly version?: string;
   /** Every declared interface input, resolved to a normalized source. */
@@ -264,7 +267,14 @@ const SIMPLE_HAIR: readonly SurfaceInputDef[] = [
   f('ior', 1.55),
 ];
 
+const GENERIC_SURFACE: readonly SurfaceInputDef[] = [
+  { name: 'bsdf', type: 'BSDF' },
+  { name: 'edf', type: 'EDF' },
+  f('opacity', 1),
+];
+
 const FAMILY_INPUTS: Record<SurfaceFamily, readonly SurfaceInputDef[]> = {
+  surface: GENERIC_SURFACE,
   simple_hair: SIMPLE_HAIR,
   standard_surface: STANDARD_SURFACE_100,
   open_pbr_surface: OPEN_PBR_SURFACE,
@@ -274,9 +284,25 @@ const FAMILY_INPUTS: Record<SurfaceFamily, readonly SurfaceInputDef[]> = {
 };
 
 const KNOWN_FAMILIES = new Set<string>(Object.keys(FAMILY_INPUTS));
+const DIRECT_LAMA_BSDFS = new Set([
+  'LamaAdd', 'LamaConductor', 'LamaDielectric', 'LamaDiffuse', 'LamaGeneralizedSchlick',
+  'LamaIridescence', 'LamaLayer', 'LamaMix', 'LamaSheen', 'LamaSSS', 'LamaTranslucent',
+]);
 
 /** Upstream node categories the texture/procedural lowering (T055c) can emit. */
 export const DEFAULT_SUPPORTED_UPSTREAM: ReadonlySet<string> = new Set([
+  'LamaAdd',
+  'LamaConductor',
+  'LamaDielectric',
+  'LamaDiffuse',
+  'LamaEmission',
+  'LamaGeneralizedSchlick',
+  'LamaIridescence',
+  'LamaLayer',
+  'LamaMix',
+  'LamaSheen',
+  'LamaSSS',
+  'LamaTranslucent',
   'image',
   'tiledimage',
   'hextiledimage',
@@ -358,7 +384,8 @@ export function resolveSurface(graph: ResolvedGraph, options: ResolveSurfaceOpti
   }
 
   const familyKey = node.nodeDef?.nodeString ?? node.category;
-  if (!KNOWN_FAMILIES.has(familyKey)) {
+  const resolvedFamilyKey = DIRECT_LAMA_BSDFS.has(familyKey) ? 'surface' : familyKey;
+  if (!KNOWN_FAMILIES.has(resolvedFamilyKey)) {
     diag({
       level: 'error',
       message: `Unsupported surface family '${familyKey}' (${node.id}); no LayeredClosure lowering available (REQ-013).`,
@@ -366,14 +393,14 @@ export function resolveSurface(graph: ResolvedGraph, options: ResolveSurfaceOpti
     });
     return null;
   }
-  const family = familyKey as SurfaceFamily;
+  const family = resolvedFamilyKey as SurfaceFamily;
   const version = node.nodeDef?.version;
   const fallbackDefs = familyInputs(family, version);
   // Real documents carry their active NodeDef interface, including inherited inputs.
   // Family tables are only a fallback for synthetic graphs and absent NodeDefs.
   const defs: readonly SurfaceInputDef[] = node.nodeDef?.inputs?.length
     ? node.nodeDef.inputs.flatMap(input => {
-      if (!['float', 'color3', 'vector3', 'integer', 'boolean'].includes(input.type)) return [];
+      if (!['float', 'color3', 'vector3', 'integer', 'boolean', 'BSDF', 'EDF'].includes(input.type)) return [];
       const type = input.type as SurfaceInputType;
       const fallback = fallbackDefs.find(def => def.name === input.name);
       return [{
@@ -449,9 +476,26 @@ export function resolveSurface(graph: ResolvedGraph, options: ResolveSurfaceOpti
     }
   }
 
+  const wrapperPresence = graph.lamaSurface?.presence;
+  if (wrapperPresence) {
+    let source: NormalizedSurfaceSource;
+    switch (wrapperPresence.source.kind) {
+      case 'value': source = { kind: 'value', value: parseValue('float', wrapperPresence.source.value) }; break;
+      case 'connection':
+        source = wrapperPresence.source.output !== undefined
+          ? { kind: 'connection', nodeId: wrapperPresence.source.nodeId, output: wrapperPresence.source.output }
+          : { kind: 'connection', nodeId: wrapperPresence.source.nodeId };
+        break;
+      case 'interface':
+      case 'default': source = { kind: 'default', value: [1] }; break;
+    }
+    inputs.set('opacity', { name: 'opacity', type: 'float', source });
+  }
+
   return {
     family,
     nodeId: node.id,
+    ...(graph.lamaSurface?.backNodeId ? { backNodeId: graph.lamaSurface.backNodeId } : {}),
     ...(node.nodeDef?.name !== undefined ? { nodeDefName: node.nodeDef.name } : {}),
     ...(version !== undefined ? { version } : {}),
     inputs,

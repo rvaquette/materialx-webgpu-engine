@@ -54,6 +54,31 @@ function constantGraph(): ResolvedGraph {
 const diffuse = (c: ReturnType<typeof surfaceGraphToLayered>) => c.lobes.find((l) => l.kind === 'burley_diffuse')!;
 
 describe('evaluateSurfaceToLayered (T057i3)', () => {
+  it('keeps a connected LamaDiffuse closure intact through CPU preparation', () => {
+    const root: ResolvedNode = {
+      id: 'SR', category: 'surface', type: 'surfaceshader',
+      inputs: [
+        { name: 'bsdf', type: 'BSDF', source: { kind: 'connection', nodeId: 'diffuse' }, provenance: { namePath: '/mat/bsdf' } },
+      ],
+      provenance: { namePath: '/mat/SR' },
+    };
+    const diffuseNode: ResolvedNode = {
+      id: 'diffuse', category: 'LamaDiffuse', type: 'BSDF',
+      inputs: [
+        { name: 'color', type: 'color3', source: { kind: 'value', value: '0.2, 0.3, 0.4', type: 'color3' }, provenance: { namePath: '/mat/diffuse/color' } },
+        { name: 'roughness', type: 'float', source: { kind: 'value', value: '0.6', type: 'float' }, provenance: { namePath: '/mat/diffuse/roughness' } },
+      ],
+      provenance: { namePath: '/mat/diffuse' },
+    };
+    const graph: ResolvedGraph = {
+      terminals: [{ name: 'surfaceshader', type: 'surfaceshader', nodeId: 'SR', provenance: { namePath: '/mat/SR' } }],
+      nodes: new Map([['SR', root], ['diffuse', diffuseNode]]),
+    };
+    const surface = resolveSurface(graph)!;
+    const closure = evaluateSurfaceToLayered(graph, surface);
+    expect(closure.lobes[0]).toMatchObject({ kind: 'oren_nayar_diffuse', color: [0.2, 0.3, 0.4], roughness: 0.6 });
+  });
+
   it('evaluates a connected procedural base_color instead of the nodedef default', () => {
     const graph = brickGraph();
     const surface = resolveSurface(graph, {})!;

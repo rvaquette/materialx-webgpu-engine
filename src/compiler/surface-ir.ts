@@ -21,6 +21,7 @@ import {
   FLOAT,
   INT,
   BOOL,
+  closureType,
   IrModuleBuilder,
   irTypeFromMaterialX,
   vector,
@@ -76,6 +77,10 @@ function surfaceIrType(type: SurfaceInputType): IrType {
       return COLOR3;
     case 'vector3':
       return vector(3, 'float', 'vector');
+    case 'BSDF':
+      return closureType('bsdf');
+    case 'EDF':
+      return closureType('edf');
   }
 }
 
