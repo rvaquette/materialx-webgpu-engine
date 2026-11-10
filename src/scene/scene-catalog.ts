@@ -12,6 +12,13 @@ const pathTracerScenes = Object.keys(import.meta.glob('/scenes/pathtracer/*.usda
     entry: `.${path}`,
   }));
 
+const lamaScenes = Object.keys(import.meta.glob('/scenes/pathtracer/lama/*.usda', { query: '?raw', import: 'default' }))
+  .sort()
+  .map((path): SceneCatalogEntry => ({
+    label: `Lama - ${path.slice('/scenes/pathtracer/lama/'.length).replace(/\.usda$/, '').replace(/_/g, ' ')}`,
+    entry: `.${path}`,
+  }));
+
 const gltfScenes = Object.keys(import.meta.glob('/scenes/pathtracer/*.{gltf,glb}', { query: '?url', import: 'default' }))
   .sort()
   .map((path): SceneCatalogEntry => ({
@@ -40,6 +47,7 @@ export const SCENE_CATALOG: readonly SceneCatalogEntry[] = [
   { label: 'Standard shader ball', entry: './scenes/standard-shader-ball/standard-shader-ball.usda' },
   { label: 'Simple shader ball', entry: './scenes/standard-shader-ball/openpbr-rva-standard-shader-ball.usda' },
   ...pathTracerScenes,
+  ...lamaScenes,
   ...gltfScenes,
   ...compiledScenes,
   { label: 'OpenPBR Shader Playground - Selection (9 groups)', entry: './scenes/OpenPBRShaderPlayground/playground_selection.usda' },

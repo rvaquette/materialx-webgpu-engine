@@ -6,10 +6,18 @@ describe('scene selector catalog', () => {
   it('includes every current pathtracer USDA exactly once, in filename order', () => {
     const names = readdirSync('scenes\\pathtracer')
       .filter(name => name.endsWith('.usda')).sort();
-    const entries = SCENE_CATALOG.filter(scene => scene.entry.startsWith('./scenes/pathtracer/') && scene.entry.endsWith('.usda'));
+    const entries = SCENE_CATALOG.filter(scene => scene.entry.startsWith('./scenes/pathtracer/')
+      && scene.entry.endsWith('.usda') && !scene.entry.slice('./scenes/pathtracer/'.length).includes('/'));
     expect(entries.map(scene => scene.entry)).toEqual(names.map(name => `./scenes/pathtracer/${name}`));
     expect(new Set(SCENE_CATALOG.map(scene => scene.entry)).size).toBe(SCENE_CATALOG.length);
     expect(entries.every(scene => scene.label.startsWith('Pathtracer - '))).toBe(true);
+  });
+  it('includes every Lama USDA scene once with a dedicated label', () => {
+    const names = readdirSync('scenes\\pathtracer\\lama').filter(name => name.endsWith('.usda')).sort();
+    const entries = SCENE_CATALOG.filter(scene => scene.entry.startsWith('./scenes/pathtracer/lama/')
+      && scene.entry.endsWith('.usda'));
+    expect(entries.map(scene => scene.entry)).toEqual(names.map(name => `./scenes/pathtracer/lama/${name}`));
+    expect(entries.every(scene => scene.label.startsWith('Lama - '))).toBe(true);
   });
   it('includes only top-level pathtracer glTF and GLB files with distinct format labels', () => {
     const names = readdirSync('scenes\\pathtracer').filter(name => /\.(gltf|glb)$/i.test(name)).sort();

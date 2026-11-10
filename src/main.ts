@@ -91,7 +91,7 @@ async function main(): Promise<void> {
   const localFolder = document.getElementById('local-scene-folder') as HTMLInputElement | null;
   let localScene: LocalGltfScene | undefined;
   const state: ViewerUiState = {
-    entry: initialEntry, scenes: [...SCENE_CATALOG], resolution: initialResolution,
+    entry: initialEntry, scenes: [...SCENE_CATALOG], resolution: initialResolution, pathTracingDepth: 12,
     rasterQuality: 'interactive', backend: initialBackend, environmentEnabled: true, denoise: false,
     status: undefined, busy: true, busyMessage: 'Initialisation...', error: '', shaderErrors: '', warnings: '',
     objectPath: '', objects: [], materialFolderPath: [], materialTree: buildMaterialTree(MATERIAL_CATALOG), materialPath: '',
@@ -181,6 +181,7 @@ async function main(): Promise<void> {
         ...(config?.textureRoot ? { textureRoot: new URL(config.textureRoot, document.baseURI).href } : {}),
       });
       state.entry = entry;
+      state.pathTracingDepth = viewer.pathTracingDepth;
       state.compiled = viewer.isCompiledScene;
       refreshObjects();
       if (localScene && (imported || localScene.entry !== entry)) {
@@ -240,6 +241,10 @@ async function main(): Promise<void> {
       await viewer.resize(size === '1024x768' ? 1024 : size, size === '1024x768' ? 768 : size);
       state.resolution = size;
     }); },
+    pathTracingDepth: depth => { void operation('Mise à jour de la profondeur...', async () => {
+      viewer.setPathTracingDepth(depth);
+      state.pathTracingDepth = viewer.pathTracingDepth;
+    }); },
     quality: quality => { void operation('Compilation du profil raster...', async () => { await viewer.setRasterQuality(quality); state.rasterQuality = quality; }); },
     backend: backend => { void operation('Changement du moteur de rendu...', async () => {
       viewer.setBackend(backend);
@@ -268,6 +273,7 @@ async function main(): Promise<void> {
       if (++recoveries > 3) { setStatus(`GPU perdu (${info.message || info.reason}). Recharger la page.`); return; }
       const backend = viewer.backend;
       const quality = viewer.rasterQuality;
+      const pathTracingDepth = viewer.pathTracingDepth;
       const denoise = viewer.pathTracingDenoise;
       const environment = viewer.environmentEnabled;
       const paused = viewer.pathTracingPaused;
@@ -286,7 +292,11 @@ async function main(): Promise<void> {
         viewer.setBackend(backend);
         deviceLost = false;
         watchDevice(next.device);
-        if (await loadEntry(state.entry)) recoveries = 0;
+        if (await loadEntry(state.entry)) {
+          viewer.setPathTracingDepth(pathTracingDepth);
+          state.pathTracingDepth = viewer.pathTracingDepth;
+          recoveries = 0;
+        }
       } catch (error) { setStatus(`GPU perdu : ${String(error)}. Recharger la page.`); }
     });
   }

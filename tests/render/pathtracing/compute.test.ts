@@ -593,6 +593,13 @@ describe('buildPathTraceUniform layout', () => {
     scene.analyticLightCount = 17;
     expect([...buildPathTraceUniform(scene, 0, 1, 512, 512).slice(100)]).toEqual([3, 2, 17, 1]);
   });
+  it('overrides only the path-tracing depth uniform', () => {
+    const scene = fakeScene();
+    scene.settings = { converted: true, maxDepth: 3, rouletteDepth: 2 };
+    const overridden = buildPathTraceUniform(scene, 0, 1, 512, 512, 0, undefined, 16);
+    expect([...overridden.slice(100)]).toEqual([16, 2, 0, 1]);
+    expect([...buildPathTraceUniform(scene, 0, 1, 512, 512).slice(100)]).toEqual([3, 2, 0, 1]);
+  });
   it('enables a display-only panorama camera without changing transport rays', () => {
     const scene = fakeScene();
     const normal = buildPathTraceUniform(scene, 0, 1, 512, 512);

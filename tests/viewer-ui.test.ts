@@ -109,13 +109,13 @@ describe('ImGui material parameter editing', () => {
 function fixture() {
   const state: ViewerUiState = {
     entry: 'books.usda', scenes: [{ label: 'Books', entry: 'books.usda' }, { label: 'Chair', entry: 'chair.usda' }],
-    resolution: 256, rasterQuality: 'interactive', backend: 'raster', environmentEnabled: true, denoise: false, compiled: false,
+    resolution: 256, pathTracingDepth: 12, rasterQuality: 'interactive', backend: 'raster', environmentEnabled: true, denoise: false, compiled: false,
     status: undefined, busy: false, busyMessage: '', error: '', shaderErrors: '', warnings: '',
     objectPath: '/Book', objects: [{ path: '/Book', material: 'Paper' }], materialPath: '',
     materialFolderPath: [], materialTree: { folders: new Map(), materials: [{ label: 'Gold', path: './gold.mtlx' }] },
   };
   const actions: ViewerUiActions = {
-    scene: vi.fn(), resolution: vi.fn(), quality: vi.fn(), backend: vi.fn(), environment: vi.fn(),
+    scene: vi.fn(), resolution: vi.fn(), pathTracingDepth: vi.fn(), quality: vi.fn(), backend: vi.fn(), environment: vi.fn(),
     denoise: vi.fn(), pause: vi.fn(), openFiles: vi.fn(), object: vi.fn(), material: vi.fn(),
   };
   const parameters = new MaterialParameterEditor({ parameters: () => [], apply: vi.fn(), error: vi.fn() });
@@ -155,6 +155,30 @@ describe('Dear ImGui viewer controls', () => {
     expect(ImGui.PushStyleColorImVec4).toHaveBeenCalledWith(17, { x: 0.78, y: 0.78, z: 0.78, w: 1 });
     expect(ImGui.PopStyleColor).toHaveBeenCalledWith(4);
     stop();
+  });
+
+  it('offers path-tracing bounce depth and applies the selected value', async () => {
+    const f = fixture();
+    const stop = await startViewerUi(f.canvas, f.state, f.actions, f.parameters);
+    controls.selection = '16 rebonds##16';
+    f.render();
+    expect(f.actions.pathTracingDepth).toHaveBeenCalledWith(16);
+    stop();
+  });
+
+  it('does not offer zero depth unless the loaded scene explicitly uses it', async () => {
+    const f = fixture();
+    const stop = await startViewerUi(f.canvas, f.state, f.actions, f.parameters);
+    f.render();
+    expect(vi.mocked(ImGui.Selectable).mock.calls.some(([label]) => label === '0 rebonds##0')).toBe(false);
+    stop();
+
+    const zeroDepth = fixture();
+    zeroDepth.state.pathTracingDepth = 0;
+    const stopZeroDepth = await startViewerUi(zeroDepth.canvas, zeroDepth.state, zeroDepth.actions, zeroDepth.parameters);
+    zeroDepth.render();
+    expect(vi.mocked(ImGui.Selectable).mock.calls.some(([label]) => label === '0 rebond (scène, fond seulement)##0')).toBe(true);
+    stopZeroDepth();
   });
 
   const pointer = (type: string, pointerType: string): Event => Object.assign(new Event(type), {

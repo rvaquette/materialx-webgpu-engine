@@ -87,6 +87,8 @@ interface SceneRender {
   frame: SceneFramePlan;
   resize: (width: number, height: number) => void;
   setRasterQuality: (quality: RasterQuality) => Promise<void>;
+  pathTracingDepth: () => number;
+  setPathTracingDepth: (depth: number) => void;
   renderRaster: (targetView: GPUTextureView) => void;
   /** Starts the path tracer build on first call; renders nothing until it is ready. */
   renderPathTrace: (targetView: GPUTextureView, tiled: boolean, accumulate: boolean) => void;
@@ -109,6 +111,7 @@ export class InteractiveViewer {
   #height: number;
   #backend: BackendKind = 'raster';
   #rasterQuality: RasterQuality = 'interactive';
+  #pathTracingDepthOverride: number | undefined;
   #pathTracingPaused = false;
   #pathTracingDenoise = false;
   #environmentEnabled = true;
@@ -160,6 +163,21 @@ export class InteractiveViewer {
 
   get rasterQuality(): RasterQuality {
     return this.#rasterQuality;
+  }
+
+  get pathTracingDepth(): number {
+    return this.#current?.pathTracingDepth() ?? this.#pathTracingDepthOverride ?? 64;
+  }
+
+  setPathTracingDepth(depth: number): void {
+    if (!Number.isInteger(depth) || depth < 0 || depth > 64) {
+      throw new Error('Path-tracing depth must be an integer between 0 and 64.');
+    }
+    if (depth === this.pathTracingDepth) return;
+    this.#pathTracingDepthOverride = depth;
+    this.#current?.setPathTracingDepth(depth);
+    this.#ptDisplayDirty = true;
+    this.#emitStatus();
   }
 
   get environmentEnabled(): boolean { return this.#environmentEnabled; }
@@ -258,6 +276,8 @@ export class InteractiveViewer {
     }
     this.#current.dispose();
     this.#current = render;
+    if (this.#pathTracingDepthOverride !== undefined) render.setPathTracingDepth(this.#pathTracingDepthOverride);
+    if (this.#pathTracingDepthOverride !== undefined) render.setPathTracingDepth(this.#pathTracingDepthOverride);
     this.#loaded = candidate;
     this.#onCameraChanged();
     this.#emitStatus();
@@ -569,6 +589,7 @@ export class InteractiveViewer {
     let width = this.#width;
     let height = this.#height;
     let rasterQuality = this.#rasterQuality;
+    let pathTracingDepth = pathTraceSettings(loaded.scene).maxDepth;
     let disposed = false;
     let pathTraceScene: PathTraceScene | undefined;
     let cameraViewProj = frame.camera.viewProj;
@@ -1319,7 +1340,8 @@ export class InteractiveViewer {
               : { tile: { x: 0, y: 0, width: ptWidth, height: ptHeight }, frameIndex: ptBackend.advanceFrame() };
             const [wgX, wgY] = PathTraceBackend.workgroupCount(tile.width, tile.height);
             // Distinct uniforms let all four watchdog-sized dispatches share a submission.
-            device.queue.writeBuffer(ptUniforms[i]!, 0, buildPathTraceUniform(ptScene, frameIndex, 1, ptWidth, ptHeight, 0, tile));
+            device.queue.writeBuffer(ptUniforms[i]!, 0,
+              buildPathTraceUniform(ptScene, frameIndex, 1, ptWidth, ptHeight, 0, tile, pathTracingDepth));
             const compute = encoder.beginComputePass();
             compute.setPipeline(ptPipeline);
             compute.setBindGroup(0, ptComputeGroups[i]!);
@@ -1522,6 +1544,15 @@ export class InteractiveViewer {
         if (disposed) throw new Error('Viewer disposed during raster compilation.');
         rasterQuality = quality;
         applyCamera(cameraViewProj, cameraEye, backgroundInvViewProj);
+      },
+      pathTracingDepth: () => pathTracingDepth,
+      setPathTracingDepth: (depth) => {
+        if (!Number.isInteger(depth) || depth < 0 || depth > 64) {
+          throw new Error('Path-tracing depth must be an integer between 0 and 64.');
+        }
+        if (depth === pathTracingDepth) return;
+        pathTracingDepth = depth;
+        pathTracer?.resetPathTrace();
       },
       renderRaster: targetView => {
         if (raster) raster.render(targetView);

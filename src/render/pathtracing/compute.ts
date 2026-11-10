@@ -1308,6 +1308,7 @@ export function buildPathTraceUniform(
   height: number,
   fireflyClamp = 0,
   tile?: PathTraceTile,
+  maxDepthOverride?: number,
 ): Float32Array {
   const d = new Float32Array(PT_UNIFORM_FLOATS);
   d.set(scene.camera.invViewProj, 0);
@@ -1339,7 +1340,8 @@ export function buildPathTraceUniform(
     d[81] = 1;
     d.set(scene.camera.backgroundInvViewProj, 84);
   }
-  d.set([scene.settings?.maxDepth ?? 64, scene.settings?.rouletteDepth ?? 3, scene.analyticLightCount ?? 0, scene.settings?.converted ? 1 : 0], 100);
+  d.set([maxDepthOverride ?? scene.settings?.maxDepth ?? 64, scene.settings?.rouletteDepth ?? 3,
+    scene.analyticLightCount ?? 0, scene.settings?.converted ? 1 : 0], 100);
   return d;
 }
 

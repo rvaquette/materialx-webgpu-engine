@@ -8,6 +8,7 @@ export interface ViewerUiState {
   entry: string;
   scenes: Array<{ label: string; entry: string }>;
   resolution: number | '1024x768';
+  pathTracingDepth: number;
   rasterQuality: RasterQuality;
   backend: BackendKind;
   environmentEnabled: boolean;
@@ -29,6 +30,7 @@ export interface ViewerUiState {
 export interface ViewerUiActions {
   scene: (entry: string) => void;
   resolution: (size: number | '1024x768') => void;
+  pathTracingDepth: (depth: number) => void;
   quality: (quality: RasterQuality) => void;
   backend: (backend: BackendKind) => void;
   environment: (enabled: boolean) => void;
@@ -133,6 +135,18 @@ export async function startViewerUi(
           ...[256, 512, 1024].map(size => ({ label: `${size} x ${size}`, value: String(size) })),
           { label: '1024 x 768', value: '1024x768' },
         ], value => actions.resolution(value === '1024x768' ? value : Number(value)));
+        ImGui.Text('Profondeur du path tracing');
+        const depthOptions = [1, 2, 4, 8, 12, 16, 24, 32, 48, 64].map(depth => ({
+          label: `${depth} rebonds`, value: String(depth),
+        }));
+        if (!depthOptions.some(option => Number(option.value) === state.pathTracingDepth)) {
+          const label = state.pathTracingDepth === 0
+            ? '0 rebond (scène, fond seulement)'
+            : `${state.pathTracingDepth} rebonds (scène)`;
+          depthOptions.unshift({ label, value: String(state.pathTracingDepth) });
+        }
+        combo('##path-tracing-depth', String(state.pathTracingDepth), depthOptions,
+          value => actions.pathTracingDepth(Number(value)));
         combo('##quality', state.rasterQuality, [
           { label: 'Interactive (filtered IBL)', value: 'interactive' },
           { label: 'Reference (64 samples)', value: 'reference' },
