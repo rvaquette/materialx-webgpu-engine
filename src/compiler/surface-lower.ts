@@ -1,4 +1,4 @@
-import { lamaSssTransport } from './lama-sss.ts';
+import { lamaSssTransport, lamaSssSubset } from './lama-sss.ts';
 // T055b: map a resolved surface interface (src/materialx/surface-graph.ts) to a
 // LayeredClosure (src/compiler/ir.ts). This is the CPU lowering that captures the
 // family parameters the legacy seven-parameter canonical model discarded: coat,
@@ -486,6 +486,12 @@ function lowerLamaBsdf(graph: ResolvedGraph, nodeId: string, frame?: LamaShading
       return assemble([{
         kind: 'subsurface', weight: 1,
         subsurfaceTransport: lamaSssTransport(graph, nodeId),
+        subsurfaceInversion: nodeScalar(graph, nodeId, 'albedoInversionMethod', 0) as 0 | 1,
+        subsurfaceBleed: nodeScalar(graph, nodeId, 'sssBleed', 0),
+        subsurfaceMode: nodeScalar(graph, nodeId, 'mode', 0) as 0 | 1 | 2,
+        subsurfaceFollowTopology: nodeScalar(graph, nodeId, 'sssFollowTopology', 0),
+        subsurfaceSubset: lamaSssSubset(graph, nodeId),
+        subsurfaceContinuation: nodeScalar(graph, nodeId, 'sssContinuationRays', 0) !== 0,
         ior: nodeScalar(graph, nodeId, 'sssIOR', 1),
         color: nodeColor(graph, nodeId, 'color', [0.18, 0.18, 0.18]),
         subsurfaceRadius: scaleRgb(nodeColor(graph, nodeId, 'sssRadius', [0, 0, 0]),
@@ -515,11 +521,13 @@ function lowerLamaBsdf(graph: ResolvedGraph, nodeId: string, frame?: LamaShading
     case 'LamaLayer': {
       const base = child('materialBase');
       const top = scaleLamaClosure(child('materialTop'), clamp01(nodeScalar(graph, nodeId, 'topMix', 1)));
-      const topCoat = top.lobes.length === 1 && top.lobes[0]?.kind === 'dielectric_reflection' ? {
-        weight: top.lobes[0].weight,
-        color: top.lobes[0].color,
-        roughness: top.lobes[0].roughness ?? 0,
-        ior: top.lobes[0].ior ?? 1.5,
+      const reflection = top.lobes.find(lobe => lobe.kind === 'dielectric_reflection');
+      const topCoat = reflection && top.lobes.every(lobe =>
+        lobe.kind === 'dielectric_reflection' || lobe.kind === 'dielectric_transmission') ? {
+        weight: reflection.weight,
+        color: reflection.color,
+        roughness: reflection.roughness ?? 0,
+        ior: reflection.ior ?? 1.5,
       } : undefined;
       const layers = addLamaClosures(base, { ...top, lobes: topCoat ? [] : top.lobes });
       return { ...layers, ...(topCoat ? { coat: topCoat } : {}) };

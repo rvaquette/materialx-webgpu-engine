@@ -36,6 +36,62 @@ export function singleScatterAlbedo(a: Vec3): Vec3 {
   return [f(a[0]), f(a[1]), f(a[2])];
 }
 
+export function albedoPreservingSingleScatter(albedo: Vec3, anisotropy = 0, ior = 1): Vec3 {
+  const escape = 1 / Math.max(1, ior) ** 2;
+  const g = Math.min(Math.max(anisotropy, -0.99), 0.99);
+  return albedo.map(value => {
+    const color = Math.min(Math.max(value, 0), 1 - 1e-6);
+    const internal = color / (escape + color * (1 - escape));
+    const reduced = 4 * internal / (1 + internal) ** 2;
+    return Math.min(reduced / (1 - g + reduced * g), 1 - 1e-6);
+  }) as unknown as Vec3;
+}
+
+export function sssCoefficientsWgsl(prefix: string): string {
+  return `fn ${prefix}_alpha(albedo: vec3f, g: f32, ior: f32, inversion: f32) -> vec3f {
+  let a = clamp(albedo, vec3f(0.0), vec3f(1.0));
+  if (inversion >= 0.5) { return vec3f(1.0) - exp(-5.09406 * a + 2.61188 * a * a - 4.31805 * a * a * a); }
+  let color = min(a, vec3f(0.999999));
+  let eta = max(ior, 1.0);
+  let escape = 1.0 / (eta * eta);
+  let internal = color / (escape + color * (1.0 - escape));
+  let reduced = 4.0 * internal / ((vec3f(1.0) + internal) * (vec3f(1.0) + internal));
+  let anisotropy = clamp(g, -0.99, 0.99);
+  return min(reduced / (1.0 - anisotropy + reduced * anisotropy), vec3f(0.999999));
+}
+fn ${prefix}_sigma_t(albedo: vec3f, mfp: vec3f, inversion: f32) -> vec3f {
+  var distance = mfp;
+  if (inversion < 0.5) {
+    let a = clamp(albedo, vec3f(0.0), vec3f(1.0));
+    let offset = a - vec3f(0.8);
+    distance *= vec3f(1.9) - a + 3.5 * offset * offset;
+  }
+  return select(vec3f(0.0), vec3f(1.0) / max(distance, vec3f(1e-20)), distance > vec3f(0.0));
+}`;
+}
+
+export function sampleDavisDensity(bleed: number, random: Rng): number {
+  const shape = 2 - 0.75 * Math.min(Math.max(bleed, 0), 1);
+  const d = shape - 1 / 3;
+  const c = 1 / Math.sqrt(9 * d);
+  for (let attempt = 0; attempt < 128; attempt++) {
+    const normal = Math.sqrt(-2 * Math.log(Math.max(random(), 1e-12))) * Math.cos(2 * Math.PI * random());
+    const root = 1 + c * normal;
+    if (root <= 0) continue;
+    const cube = root ** 3;
+    const uniform = Math.max(random(), 1e-12);
+    if (uniform < 1 - 0.0331 * normal ** 4 || Math.log(uniform) < 0.5 * normal ** 2 + d * (1 - cube + Math.log(cube))) {
+      return d * cube / shape;
+    }
+  }
+  throw new Error('Davis density sampling exceeded its rejection budget.');
+}
+
+export function topologyReflectionProbability(entryNormal: Vec3, exitNormal: Vec3, strength: number): number {
+  const alignment = entryNormal[0] * exitNormal[0] + entryNormal[1] * exitNormal[1] + entryNormal[2] * exitNormal[2];
+  return Math.min(Math.max(strength, 0), 1) * (1 - Math.min(Math.max(alignment, 0), 1));
+}
+
 /**
  * Christensen-Burley scaling s(A) used to turn an artist mean free path into a
  * volumetric extinction: sigma_t = 1 / (meanFreePath * s). Parameterization
@@ -66,15 +122,18 @@ export function sampleBurleyRadius(diffusionLength: number, component: number, s
   return -scale * Math.log1p(-Math.min(Math.max(sample, 0), 1 - Number.EPSILON));
 }
 
-export function burleyDiffusionLength(albedo: Vec3, radius: Vec3, mode: 2 | 3, anisotropy = 0): Vec3 {
-  const alpha = singleScatterAlbedo(albedo);
+export function burleyDiffusionLength(
+  albedo: Vec3, radius: Vec3, mode: 2 | 3, anisotropy = 0, inversion: 0 | 1 = 1, ior = 1,
+): Vec3 {
+  const alpha = inversion === 0 ? albedoPreservingSingleScatter(albedo, anisotropy, ior) : singleScatterAlbedo(albedo);
   return radius.map((value, channel) => mode === 2 ? Math.max(value, 0) / 2.5
     : Math.max(value, 0) / Math.sqrt(3 * (1 - alpha[channel]!) * (1 - alpha[channel]! * anisotropy))) as unknown as Vec3;
 }
 
-export function exponentialSubsurfaceMedium(albedo: Vec3, meanFreePath: Vec3, anisotropy = 0): HomogeneousMedium {
-  const alpha = singleScatterAlbedo(albedo);
-  const sigmaT = meanFreePath.map(value => value > 0 ? 1 / value : 0);
+export function exponentialSubsurfaceMedium(albedo: Vec3, meanFreePath: Vec3, anisotropy = 0, inversion: 0 | 1 = 1, ior = 1): HomogeneousMedium {
+  const alpha = inversion === 0 ? albedoPreservingSingleScatter(albedo, anisotropy, ior) : singleScatterAlbedo(albedo);
+  const sigmaT = inversion === 0 ? extinctionFromMeanFreePath(meanFreePath, albedo)
+    : meanFreePath.map(value => value > 0 ? 1 / value : 0);
   return {
     absorption: alpha.map((value, channel) => (1 - value) * sigmaT[channel]!) as unknown as Vec3,
     scattering: alpha.map((value, channel) => value * sigmaT[channel]!) as unknown as Vec3,
@@ -90,8 +149,11 @@ export function sampleBurleySurface(
   anisotropy: number,
   project: (probe: Vec3, axis: Vec3) => readonly SurfaceHit[],
   rng: Rng,
+  inversion: 0 | 1 = 1,
+  followTopology = 0,
+  ior = 1,
 ): { hit: SurfaceHit; weight: Vec3 } | null {
-  const lengths = burleyDiffusionLength(albedo, radius, mode, anisotropy);
+  const lengths = burleyDiffusionLength(albedo, radius, mode, anisotropy, inversion, ior);
   const channel = Math.min(2, Math.floor(rng() * 3));
   if (!(lengths[channel]! > 0)) {
     const localChannels = lengths.filter(length => !(length > 0)).length;
@@ -134,8 +196,9 @@ export function sampleBurleySurface(
   }
   if (!(areaPdf > 0)) return null;
   const separation = Math.hypot(...hit.position.map((value, index) => value - entry.position[index]!));
+  const topologyWeight = 1 - topologyReflectionProbability(entry.normal, hit.normal, followTopology);
   const weight = albedo.map((value, index) => Math.min(Math.max(value, 0), 1)
-    * burleyProfile(separation, lengths[index]!) / areaPdf) as unknown as Vec3;
+    * burleyProfile(separation, lengths[index]!) * topologyWeight / areaPdf) as unknown as Vec3;
   return { hit, weight };
 }
 

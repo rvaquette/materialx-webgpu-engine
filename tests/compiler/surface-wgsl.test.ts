@@ -62,18 +62,83 @@ describe('emitLayeredSurface (T055d)', () => {
     ]),
   ]);
 
-  it.each([1, 2, 3])('carries Lama SSS transport %s consistently to CPU and GPU', (mode) => {
+  it.each([0, 1, 2, 3])('carries Lama SSS transport %s consistently to CPU and GPU', (mode) => {
     const graph = sssGraph([value('sssMode', 'integer', String(mode)), value('albedoInversionMethod', 'integer', '1')]);
     const closure = surfaceGraphToLayered(resolveSurface(graph)!, graph);
     expect(closure.lobes[0]?.subsurfaceTransport).toBe(mode);
     expect(emit(graph).code).toContain(`${mode}.0, (`);
     if (mode >= 2) expect(emit(graph).code).not.toContain('c.hasInterior = select(');
   });
+  it('lowers all documented equivalent SSS controls without dropping them', () => {
+    const graph = sssGraph([
+      value('sssMode', 'integer', '0'), value('albedoInversionMethod', 'integer', '0'),
+      value('sssBleed', 'float', '0.5'), value('sssFollowTopology', 'float', '0.75'),
+      value('sssSubset', 'string', 'skin'), value('sssContinuationRays', 'integer', '1'), value('mode', 'integer', '2'),
+    ]);
+    const closure = surfaceGraphToLayered(resolveSurface(graph)!, graph);
+    expect(closure.lobes[0]).toMatchObject({ subsurfaceTransport: 0, subsurfaceInversion: 0,
+      subsurfaceBleed: 0.5, subsurfaceFollowTopology: 0.75, subsurfaceContinuation: true, subsurfaceMode: 2 });
+    expect(closure.lobes[0]?.subsurfaceSubset).toBeGreaterThan(0);
+    const module = emit(graph);
+    expect(module.code).toContain('mx_lama_controls_alpha(');
+    expect(module.code).toContain('mx_lama_controls_sigma_t(');
+  });
+
+  it('uses stable exact group keys and rejects connected subset labels', () => {
+    const subsetKey = (label: string) => {
+      const graph = sssGraph([value('sssSubset', 'string', label)]);
+      return surfaceGraphToLayered(resolveSurface(graph)!, graph).lobes[0]!.subsurfaceSubset!;
+    };
+    expect(subsetKey('')).toBe(0);
+    const skin = subsetKey('skin');
+    expect(subsetKey('skin')).toBe(skin);
+    expect(subsetKey('other')).not.toBe(skin);
+    expect(Math.fround(skin)).toBe(skin);
+    const graph = sssGraph([conn('sssSubset', 'string', 'label')]);
+    expect(() => emit(graph)).toThrow(/dynamic sssSubset/);
+    expect(() => surfaceGraphToLayered(resolveSurface(graph)!, graph)).toThrow(/dynamic sssSubset/);
+  });
+
+  it.each(['LamaDielectric', 'LamaSheen'])('composes %s above spatial Burley in both CPU and WGSL', (category) => {
+    const graph = sssGraph([value('sssMode', 'integer', '2'), value('albedoInversionMethod', 'integer', '1')]);
+    graph.nodes.set('top', upstream('top', category, 'BSDF', [
+      value('fresnelMode', 'integer', '1'), value('IOR', 'float', '1.5'), value('roughness', 'float', '0.2'),
+    ]));
+    graph.nodes.set('layer', upstream('layer', 'LamaLayer', 'BSDF', [
+      conn('materialTop', 'BSDF', 'top'), conn('materialBase', 'BSDF', 'skin'), value('topMix', 'float', '0.6'),
+    ]));
+    graph.nodes.get('SR')!.inputs = [conn('bsdf', 'BSDF', 'layer')];
+    const module = emit(graph);
+    const closure = surfaceGraphToLayered(resolveSurface(graph)!, graph);
+    expect(closure.lobes.find(lobe => lobe.kind === 'subsurface')?.subsurfaceTransport).toBe(2);
+    if (category === 'LamaDielectric') {
+      expect(module.features?.coat).toBe(true);
+      expect(closure.coat?.weight).toBeCloseTo(0.6);
+    } else {
+      expect(module.features?.lobeKinds).toContain(6);
+      expect(closure.sheen?.weight).toBeCloseTo(0.6);
+    }
+  });
+
+  it('accepts explicit reflection with direct illumination for exponential SSS', () => {
+    const graph = sssGraph([value('sssMode', 'integer', '1'), value('albedoInversionMethod', 'integer', '1'),
+      value('mode', 'integer', '2')]);
+    expect(emit(graph).code).toContain('mx_lama_sss_medium(');
+    expect(surfaceGraphToLayered(resolveSurface(graph)!, graph).lobes[0]?.subsurfaceTransport).toBe(1);
+  });
+
+  it('accepts dielectric interfaces and anisotropy for documented Burley equivalents', () => {
+    const graph = sssGraph([value('sssMode', 'integer', '2'), value('albedoInversionMethod', 'integer', '0'),
+      value('sssIOR', 'float', '1.5'), value('sssAnisotropy', 'float', '0.35')]);
+    const closure = surfaceGraphToLayered(resolveSurface(graph)!, graph);
+    expect(closure.lobes[0]).toMatchObject({ subsurfaceTransport: 2, ior: 1.5, anisotropy: 0.35 });
+    expect(emit(graph).code).toContain('mx_fresnel_dielectric');
+  });
 
   it.each([
-    ['sssMode', 'integer', '0'], ['albedoInversionMethod', 'integer', '0'],
-    ['sssBleed', 'float', '0.5'], ['sssFollowTopology', 'float', '0.5'],
-    ['sssSubset', 'string', 'skin'], ['sssContinuationRays', 'integer', '1'], ['mode', 'integer', '2'],
+    ['sssMode', 'integer', '4'], ['albedoInversionMethod', 'integer', '2'],
+    ['sssBleed', 'float', '1.5'], ['sssFollowTopology', 'float', '1.5'],
+    ['sssSubset', 'string', 'skin*'], ['sssContinuationRays', 'integer', '2'], ['mode', 'integer', '3'],
   ])('rejects unsupported Lama %s rather than substituting another model', (name, type, raw) => {
     const options = [value('sssMode', 'integer', '1'), value('albedoInversionMethod', 'integer', '1')]
       .filter(option => option.name !== name);

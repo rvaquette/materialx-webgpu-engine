@@ -43,7 +43,13 @@ export interface SerializedBsdfLobe {
   interiorScattering?: Rgb3;
   interiorAnisotropy?: number;
   subsurfaceRadius?: Rgb3;
-  subsurfaceTransport?: 1 | 2 | 3;
+  subsurfaceTransport?: 0 | 1 | 2 | 3;
+  subsurfaceInversion?: 0 | 1;
+  subsurfaceBleed?: number;
+  subsurfaceMode?: 0 | 1 | 2;
+  subsurfaceFollowTopology?: number;
+  subsurfaceSubset?: number;
+  subsurfaceContinuation?: boolean;
 }
 
 export interface SerializedCoatLayer {
@@ -97,6 +103,12 @@ function serializeLobe(l: LayeredBsdfLobe, d: number): SerializedBsdfLobe {
   if (l.interiorAnisotropy !== undefined) out.interiorAnisotropy = roundTo(l.interiorAnisotropy, d);
   if (l.subsurfaceRadius) out.subsurfaceRadius = rgb(l.subsurfaceRadius, d);
   if (l.subsurfaceTransport !== undefined) out.subsurfaceTransport = l.subsurfaceTransport;
+  if (l.subsurfaceInversion !== undefined) out.subsurfaceInversion = l.subsurfaceInversion;
+  if (l.subsurfaceBleed !== undefined) out.subsurfaceBleed = roundTo(l.subsurfaceBleed, d);
+  if (l.subsurfaceMode !== undefined) out.subsurfaceMode = l.subsurfaceMode;
+  if (l.subsurfaceFollowTopology !== undefined) out.subsurfaceFollowTopology = roundTo(l.subsurfaceFollowTopology, d);
+  if (l.subsurfaceSubset !== undefined) out.subsurfaceSubset = l.subsurfaceSubset;
+  if (l.subsurfaceContinuation !== undefined) out.subsurfaceContinuation = l.subsurfaceContinuation;
   if (l.thinWalled) out.thinWalled = true;
   return out;
 }
@@ -156,6 +168,12 @@ function deserializeLobe(l: SerializedBsdfLobe): LayeredBsdfLobe {
   if (l.interiorAnisotropy !== undefined) out.interiorAnisotropy = l.interiorAnisotropy;
   if (l.subsurfaceRadius) out.subsurfaceRadius = tuple(l.subsurfaceRadius);
   if (l.subsurfaceTransport !== undefined) out.subsurfaceTransport = l.subsurfaceTransport;
+  if (l.subsurfaceInversion !== undefined) out.subsurfaceInversion = l.subsurfaceInversion;
+  if (l.subsurfaceBleed !== undefined) out.subsurfaceBleed = l.subsurfaceBleed;
+  if (l.subsurfaceMode !== undefined) out.subsurfaceMode = l.subsurfaceMode;
+  if (l.subsurfaceFollowTopology !== undefined) out.subsurfaceFollowTopology = l.subsurfaceFollowTopology;
+  if (l.subsurfaceSubset !== undefined) out.subsurfaceSubset = l.subsurfaceSubset;
+  if (l.subsurfaceContinuation !== undefined) out.subsurfaceContinuation = l.subsurfaceContinuation;
   if (l.thinWalled) out.thinWalled = true;
   return out;
 }

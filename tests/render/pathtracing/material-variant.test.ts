@@ -14,6 +14,7 @@ import type {
 } from '../../../src/materialx/graph.ts';
 import { resolveSurface } from '../../../src/materialx/surface-graph.ts';
 import { emitSurfaceVariant } from '../../../src/compiler/surface-wgsl.ts';
+import { surfaceGraphToLayered } from '../../../src/compiler/surface-lower.ts';
 import { packPtTextureArrays } from '../../../src/render/pathtracing/texture-arrays.ts';
 import type { PtDeviceBindings } from '../../../src/render/pathtracing/device-bindings.ts';
 import {
@@ -86,6 +87,20 @@ describe('emitSurfaceVariant (T057g)', () => {
 });
 
 describe('buildMaterialDispatch (T057g)', () => {
+  it('dispatches uniform SSS groups from graphs instead of stale packed fallback records', () => {
+    const skin = (label: string) => surfaceGraph('surface', [conn('bsdf', 'BSDF', 'skin')], [
+      upstream('skin', 'LamaSSS', 'BSDF', [value('sssRadius', 'color3', '1,1,1'), value('sssSubset', 'string', label)]),
+    ]);
+    const sources = [source(0, skin('skin')), source(1, skin('skin')), source(2, skin('other'))];
+    const key = surfaceGraphToLayered(sources[0]!.surface, sources[0]!.graph).lobes[0]!.subsurfaceSubset!;
+    const other = surfaceGraphToLayered(sources[2]!.surface, sources[2]!.graph).lobes[0]!.subsurfaceSubset!;
+    const dispatch = buildMaterialDispatch(sources);
+    expect(key).not.toBe(other);
+    expect(dispatch.sssSubsetDispatcherWgsl).toContain(`case 0u: { return ${key}u; }`);
+    expect(dispatch.sssSubsetDispatcherWgsl).toContain(`case 1u: { return ${key}u; }`);
+    expect(dispatch.sssSubsetDispatcherWgsl).toContain(`case 2u: { return ${other}u; }`);
+    expect(dispatch.sssSubsetDispatcherWgsl).toContain('default: { return mx_material_sss_subset(matId); }');
+  });
   it('shares identical constant variants without changing material indices', () => {
     const graph = surfaceGraph('disney_principled', [value('metallic', 'float', '1')]);
     const dispatch = buildMaterialDispatch([source(0, graph), source(7, graph)]);

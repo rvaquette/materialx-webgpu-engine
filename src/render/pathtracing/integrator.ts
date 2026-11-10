@@ -10,6 +10,7 @@ import type { Vec3 } from '../../scene/transforms.ts';
 import type { HomogeneousMedium } from './media.ts';
 import { phaseHG, sampleHenyeyGreenstein, sampleHomogeneous } from './media.ts';
 import { sampleVolumeTransport, type VolumeField } from '../volume-field.ts';
+import { sampleDavisDensity, topologyReflectionProbability } from './subsurface.ts';
 
 export type Rng = () => number;
 
@@ -114,6 +115,11 @@ export interface SurfaceHit {
   interiorMedium?: HomogeneousMedium;
   interiorIor?: number;
   subsurfaceInterior?: boolean;
+  subsurfaceDavisBleed?: number;
+  subsurfaceMode?: 0 | 1 | 2;
+  subsurfaceDomain?: number;
+  subsurfaceSelective?: boolean;
+  subsurfaceFollowTopology?: number;
   /** Invisible closed boundary of a pure volumeshader (no BSDF event). */
   volumeBoundary?: boolean;
   interiorField?: VolumeField;
@@ -145,7 +151,7 @@ export interface LightSample {
 
 export interface SceneSampler {
   intersect(ray: Ray): SurfaceHit | null;
-  sampleSubsurface?(hit: SurfaceHit, rng: Rng): { hit: SurfaceHit; weight: Vec3; outgoing?: Vec3 } | null | undefined;
+  sampleSubsurface?(hit: SurfaceHit, rng: Rng, outgoing?: Vec3): { hit: SurfaceHit; weight: Vec3; outgoing?: Vec3; directLighting?: boolean } | null | undefined;
   sampleBsdf(hit: SurfaceHit, wo: Vec3, rng: Rng): BsdfSample | null;
   evalBsdf(hit: SurfaceHit, wo: Vec3, wi: Vec3): { value: Vec3; pdf: number };
   sampleLight(hit: SurfaceHit, rng: Rng): LightSample | null;
@@ -198,10 +204,21 @@ export function integratePath(
   let subsurfaceWalk = false;
   let subsurfaceEvents = 0;
   let subsurfaceChannel: number | undefined;
+  let subsurfaceMode = 2;
+  let subsurfaceDomain: number | undefined;
+  let subsurfaceSelective = false;
+  let subsurfaceTopology = 0;
+  let subsurfaceEntryNormal: Vec3 = [0, 0, 1];
   let bounces = 0;
 
   for (let pathStep = 0; pathStep < 65536; pathStep++) {
     let hit = scene.intersect(ray);
+    if (subsurfaceWalk && medium && subsurfaceSelective && subsurfaceDomain !== undefined) {
+      for (let crossing = 0; hit && hit.subsurfaceDomain !== subsurfaceDomain && crossing < 128; crossing++) {
+        hit = scene.intersect({ ...ray, minDistance: distanceBetween(ray.origin, hit.position) + 1e-6 });
+      }
+      if (hit && hit.subsurfaceDomain !== subsurfaceDomain) break;
+    }
     const tMax = hit ? distanceBetween(ray.origin, hit.position) : Infinity;
     if (pathStep === 0 && hit?.volumeBoundary && dot(ray.direction,hit.normal) > 0) {
       field = hit.interiorField;
@@ -270,9 +287,12 @@ export function integratePath(
       continue;
     }
     const boundaryNormal = hit.geometricNormal ?? hit.normal;
-    if (medium && interiorIor > 1 && dot(ray.direction, boundaryNormal) > 0) {
+    const subsurfaceExit = subsurfaceWalk && !!medium && dot(ray.direction, boundaryNormal) > 0;
+    if (medium && dot(ray.direction, boundaryNormal) > 0) {
       const cosine = dot(ray.direction, boundaryNormal);
-      if (interiorIor * interiorIor * Math.max(0, 1 - cosine * cosine) >= 1) {
+      const totalInternal = interiorIor > 1 && interiorIor * interiorIor * Math.max(0, 1 - cosine * cosine) >= 1;
+      const topologyProbability = subsurfaceWalk ? topologyReflectionProbability(subsurfaceEntryNormal, hit.normal, subsurfaceTopology) : 0;
+      if (totalInternal || (topologyProbability > 0 && rng() < topologyProbability)) {
         const reflected = add(ray.direction, scale(boundaryNormal, -2 * cosine));
         ray = { origin: add(hit.position, scale(reflected, 1e-6)), direction: reflected, minDistance: 1e-7 };
         if (subsurfaceWalk) {
@@ -303,20 +323,23 @@ export function integratePath(
         radiance = add(radiance, scale(mul(beta, hit.emission), w));
       }
     }
+    if (subsurfaceExit && subsurfaceMode === 1) break;
     if (bounces >= maxBounces) break;
 
     let wo = neg(ray.direction);
+    let directLighting = !subsurfaceExit || subsurfaceMode === 2;
     if (scene.sampleSubsurface) {
-      const event = scene.sampleSubsurface(hit, rng);
+      const event = scene.sampleSubsurface(hit, rng, wo);
       if (event === null) break;
       if (event) {
         beta = mul(beta, event.weight);
         hit = event.hit;
         wo = event.outgoing ?? wo;
+        directLighting = event.directLighting ?? directLighting;
       }
     }
 
-    const ls = scene.sampleLight(hit, rng);
+    const ls = directLighting ? scene.sampleLight(hit, rng) : null;
     if (ls && ls.pdf > 0 && !scene.occluded(hit.position, ls.direction, ls.distance)) {
       const { value: f, pdf: scatterPdf } = scene.evalBsdf(hit, wo, ls.direction);
       if (maxComponent(f) > 0) {
@@ -332,7 +355,7 @@ export function integratePath(
     const cosScatter = Math.abs(dot(hit.normal, bs.direction));
     beta = mul(beta, scale(bs.value, cosScatter / bs.pdf));
     bsdfPdf = bs.pdf;
-    specularBounce = bs.specular ?? false;
+    specularBounce = !directLighting || (bs.specular ?? false);
     prevHit = hit;
     ray = { origin: hit.position, direction: bs.direction };
 
@@ -343,6 +366,11 @@ export function integratePath(
       field = exiting ? undefined : hit.interiorField;
       interiorIor = exiting ? 1 : hit.interiorIor ?? 1;
       subsurfaceWalk = !exiting && hit.subsurfaceInterior === true;
+      subsurfaceMode = exiting ? 2 : hit.subsurfaceMode ?? 2;
+      subsurfaceDomain = exiting ? undefined : hit.subsurfaceDomain;
+      subsurfaceSelective = !exiting && hit.subsurfaceSelective === true;
+      subsurfaceTopology = exiting ? 0 : hit.subsurfaceFollowTopology ?? 0;
+      if (!exiting) subsurfaceEntryNormal = hit.normal;
       subsurfaceEvents = 0;
       if (subsurfaceWalk && medium && !field && maxComponent(medium.scattering) > 0) {
         if (subsurfaceChannel === undefined) {
@@ -354,6 +382,10 @@ export function integratePath(
         const scattering = medium.scattering[subsurfaceChannel]!;
         medium = { absorption: [absorption, absorption, absorption],
           scattering: [scattering, scattering, scattering], anisotropy: medium.anisotropy };
+      }
+      if (subsurfaceWalk && medium && !field && hit.subsurfaceDavisBleed !== undefined) {
+        const density = sampleDavisDensity(hit.subsurfaceDavisBleed, rng);
+        medium = { ...medium, absorption: scale(medium.absorption, density), scattering: scale(medium.scattering, density) };
       }
     }
 

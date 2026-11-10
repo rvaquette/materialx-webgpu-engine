@@ -73,6 +73,12 @@ const LOBE_HAS_CONDUCTOR_ETA = 4096;
 const LOBE_HAS_ENERGY_COMPENSATION = 8192;
 const LOBE_HAS_INTERIOR_SCATTERING = 16384;
 const LOBE_HAS_SUBSURFACE_TRANSPORT = 32768;
+const LOBE_HAS_SSS_INVERSION = 65536;
+const LOBE_HAS_SSS_BLEED = 131072;
+const LOBE_HAS_SSS_MODE = 262144;
+const LOBE_HAS_SSS_TOPOLOGY = 524288;
+const LOBE_HAS_SSS_SUBSET = 1048576;
+const LOBE_HAS_SSS_CONTINUATION = 2097152;
 
 function rd(buf: ArrayLike<number>, i: number): number {
   return buf[i] ?? 0;
@@ -96,6 +102,12 @@ function writeLobe(out: Float32Array, base: number, lobe: LayeredBsdfLobe): void
   if (lobe.energyCompensation !== undefined) flags |= LOBE_HAS_ENERGY_COMPENSATION;
   if (lobe.interiorScattering !== undefined) flags |= LOBE_HAS_INTERIOR_SCATTERING;
   if (lobe.subsurfaceTransport !== undefined) flags |= LOBE_HAS_SUBSURFACE_TRANSPORT;
+  if (lobe.subsurfaceInversion !== undefined) flags |= LOBE_HAS_SSS_INVERSION;
+  if (lobe.subsurfaceBleed !== undefined) flags |= LOBE_HAS_SSS_BLEED;
+  if (lobe.subsurfaceMode !== undefined) flags |= LOBE_HAS_SSS_MODE;
+  if (lobe.subsurfaceFollowTopology !== undefined) flags |= LOBE_HAS_SSS_TOPOLOGY;
+  if (lobe.subsurfaceSubset !== undefined) flags |= LOBE_HAS_SSS_SUBSET;
+  if (lobe.subsurfaceContinuation !== undefined) flags |= LOBE_HAS_SSS_CONTINUATION;
 
   out[base] = KIND_TO_U32[lobe.kind];
   out[base + 1] = lobe.weight;
@@ -107,19 +119,20 @@ function writeLobe(out: Float32Array, base: number, lobe: LayeredBsdfLobe): void
   out[base + 6] = c90[0];
   out[base + 7] = c90[1];
   out[base + 8] = c90[2];
-  out[base + 9] = lobe.roughness ?? 0;
+  out[base + 9] = lobe.subsurfaceInversion ?? lobe.roughness ?? 0;
   out[base + 10] = lobe.anisotropy ?? 0;
-  out[base + 11] = lobe.rotation ?? 0;
+  out[base + 11] = lobe.subsurfaceSubset ?? lobe.rotation ?? 0;
   out[base + 12] = lobe.ior ?? 0;
   const ext = lobe.extinction ?? lobe.interiorScattering ?? [0, 0, 0];
   out[base + 13] = ext[0];
-  out[base + 14] = ext[1];
-  out[base + 15] = ext[2];
+  if (lobe.subsurfaceMode !== undefined) out[base + 13] = lobe.subsurfaceMode;
+  out[base + 14] = lobe.subsurfaceFollowTopology ?? ext[1];
+  out[base + 15] = lobe.subsurfaceBleed ?? ext[2];
   const atten = lobe.attenuationColor ?? [0, 0, 0];
   out[base + 16] = atten[0];
   out[base + 17] = atten[1];
   out[base + 18] = atten[2];
-  out[base + 19] = lobe.attenuationDistance ?? 0;
+  out[base + 19] = lobe.subsurfaceContinuation === undefined ? lobe.attenuationDistance ?? 0 : Number(lobe.subsurfaceContinuation);
   const radius = lobe.subsurfaceRadius ?? [0, 0, 0];
   out[base + 20] = radius[0];
   out[base + 21] = radius[1];
@@ -137,7 +150,13 @@ function readLobe(buf: ArrayLike<number>, base: number): LayeredBsdfLobe {
   const flags = Math.round(rd(buf, base + 2));
   const color: Rgb = [rd(buf, base + 3), rd(buf, base + 4), rd(buf, base + 5)];
   const lobe: LayeredBsdfLobe = { kind, weight: rd(buf, base + 1), color };
-  if ((flags & LOBE_HAS_SUBSURFACE_TRANSPORT) !== 0) lobe.subsurfaceTransport = Math.round(rd(buf, base + 23)) as 1 | 2 | 3;
+  if ((flags & LOBE_HAS_SUBSURFACE_TRANSPORT) !== 0) lobe.subsurfaceTransport = Math.round(rd(buf, base + 23)) as 0 | 1 | 2 | 3;
+  if ((flags & LOBE_HAS_SSS_INVERSION) !== 0) lobe.subsurfaceInversion = rd(buf, base + 9) as 0 | 1;
+  if ((flags & LOBE_HAS_SSS_BLEED) !== 0) lobe.subsurfaceBleed = rd(buf, base + 15);
+  if ((flags & LOBE_HAS_SSS_MODE) !== 0) lobe.subsurfaceMode = rd(buf, base + 13) as 0 | 1 | 2;
+  if ((flags & LOBE_HAS_SSS_TOPOLOGY) !== 0) lobe.subsurfaceFollowTopology = rd(buf, base + 14);
+  if ((flags & LOBE_HAS_SSS_SUBSET) !== 0) lobe.subsurfaceSubset = rd(buf, base + 11);
+  if ((flags & LOBE_HAS_SSS_CONTINUATION) !== 0) lobe.subsurfaceContinuation = rd(buf, base + 19) !== 0;
   if ((flags & LOBE_HAS_FRESNEL_EXPONENT) !== 0) lobe.fresnelExponent = rd(buf, base + 23);
   if ((flags & LOBE_HAS_HAIR_TRT) !== 0) {
     lobe.hairTintTRT = [rd(buf, base + 24), rd(buf, base + 25), rd(buf, base + 26)];
@@ -351,15 +370,23 @@ fn mx_material_lobe(base : u32) -> MxBsdfLobe {
     lobe.color90 = lobe.color;
   }
   lobe.roughness = select(0.0, materials[base + 9u], (flags & MX_LOBE_HAS_ROUGHNESS) != 0u);
+  if ((flags & ${LOBE_HAS_SSS_INVERSION}u) != 0u) { lobe.roughness = materials[base + 9u]; }
   lobe.anisotropy = select(0.0, materials[base + 10u], (flags & MX_LOBE_HAS_ANISOTROPY) != 0u);
   lobe.rotation = select(0.0, materials[base + 11u], (flags & MX_LOBE_HAS_ROTATION) != 0u);
+  if ((flags & ${LOBE_HAS_SSS_SUBSET}u) != 0u) { lobe.rotation = materials[base + 11u]; }
   lobe.ior = select(select(0.0, materials[base + 12u], (flags & MX_LOBE_HAS_IOR) != 0u), 1.0, (flags & MX_LOBE_HAS_CONDUCTOR_ETA) != 0u);
+  if ((flags & MX_LOBE_HAS_SUBSURFACE_RADIUS) != 0u && (flags & ${LOBE_HAS_SUBSURFACE_TRANSPORT}u) != 0u) { lobe.ior = max(lobe.ior, 1.0); }
   if ((flags & MX_LOBE_HAS_EXTINCTION) != 0u) {
     lobe.extinction = vec3f(materials[base + 13u], materials[base + 14u], materials[base + 15u]);
   } else {
     lobe.extinction = vec3f(0.0, 0.0, 0.0);
   }
+  if ((flags & ${LOBE_HAS_SSS_BLEED}u) != 0u) { lobe.extinction.z = materials[base + 15u]; }
+  lobe.extinction.x = select(lobe.extinction.x, 2.0, (flags & ${LOBE_HAS_SUBSURFACE_TRANSPORT}u) != 0u);
+  if ((flags & ${LOBE_HAS_SSS_MODE}u) != 0u) { lobe.extinction.x = materials[base + 13u]; }
   lobe.thin = select(0.0, 1.0, (flags & MX_LOBE_THIN_WALLED) != 0u);
+  if ((flags & ${LOBE_HAS_SSS_CONTINUATION}u) != 0u) { lobe.thin = materials[base + 19u]; }
+  if ((flags & ${LOBE_HAS_SSS_TOPOLOGY}u) != 0u) { lobe.extinction.y = materials[base + 14u]; }
   lobe.dispersion = materials[base + 23u];
   lobe.hairTintTRT = vec3f(materials[base + 24u], materials[base + 25u], materials[base + 26u]);
   return lobe;
@@ -367,6 +394,17 @@ fn mx_material_lobe(base : u32) -> MxBsdfLobe {
 fn mx_material_opacity(matIndex : u32) -> f32 {
   if (mx_material_volume_boundary(matIndex)) { return 0.0; }
   return materials[matIndex * MX_MATERIAL_RECORD_FLOATS + 1u];
+}
+fn mx_material_sss_subset(matIndex: u32) -> u32 {
+  let base = matIndex * MX_MATERIAL_RECORD_FLOATS;
+  let count = min(u32(round(materials[base])), MX_MAX_LOBES);
+  for (var index = 0u; index < count; index++) {
+    let lobe = base + MX_MATERIAL_HEADER_FLOATS + index * MX_LOBE_FLOATS;
+    if (u32(round(materials[lobe])) == MX_LOBE_SUBSURFACE && (u32(round(materials[lobe + 2u])) & ${LOBE_HAS_SSS_SUBSET}u) != 0u) {
+      return u32(round(materials[lobe + 11u]));
+    }
+  }
+  return 0u;
 }
 fn mx_material_volume_boundary(matIndex : u32) -> bool {
   return materials[matIndex * MX_MATERIAL_RECORD_FLOATS + 37u] != 0.0;
@@ -418,8 +456,9 @@ fn mx_material_closure(matIndex : u32) -> LayeredClosure {
       if ((lflags & ${LOBE_HAS_SUBSURFACE_TRANSPORT}u) != 0u && materials[lb + 23u] >= 2.0) { continue; }
       var m = mx_subsurface_medium(scol, radius, g);
       if ((lflags & ${LOBE_HAS_SUBSURFACE_TRANSPORT}u) != 0u) {
-        let alpha = mx_single_scatter_albedo(scol);
-        let sigmaT = select(vec3f(0.0), vec3f(1.0) / max(radius, vec3f(1e-20)), radius > vec3f(0.0));
+        let inversion = select(1.0, materials[lb + 9u], (lflags & ${LOBE_HAS_SSS_INVERSION}u) != 0u);
+        let alpha = mx_sss_controls_alpha(scol, g, c.lobes[i].ior, inversion);
+        let sigmaT = mx_sss_controls_sigma_t(scol, radius, inversion);
         m = MxMedium((vec3f(1.0) - alpha) * sigmaT, alpha * sigmaT, g);
       }
       c.interiorSigmaA = m.sigmaA;

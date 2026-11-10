@@ -14,6 +14,11 @@ Render with `usd-image-harness.html?entry=/scenes/pathtracer/lama/test_lama_sss.
 
 ## SSS Model Contract
 
+- `sssMode=0`: engine Davis-equivalent heterogeneous walk, not Pixar's original
+  formula. A unit-mean gamma density multiplier is drawn once per SSS entry;
+  shape and rate are both `2 - 0.75 * sssBleed`. It scales scattering and
+  absorption together. Bleed in [0,1] changes the density variance and tail;
+  even bleed zero is heterogeneous, unlike mode 1.
 - `sssMode=1`: exponential homogeneous random walk. With
   `albedoInversionMethod=1`, Chiang maps colour to single-scatter albedo and
   sigma_t is exactly 1 / radius (no diffuse-MFP remapping).
@@ -21,26 +26,126 @@ Render with `usd-image-harness.html?entry=/scenes/pathtracer/lama/test_lama_sss.
   colour is applied by the medium only, not again at entry and exit. A zero
   radius still selects the coloured local Lambert response.
 - `sssMode=2`: a normalized two-exponential Burley spatial BSSRDF. Radius is
-  interpreted as mean radial distance, so diffusion length is radius / 2.5.
+  interpreted as effective mean radial distance, so diffusion length is radius
+  / 2.5. This parameterization is independent of albedo and anisotropy; use mode
+  3 when anisotropy should change the diffusion length.
 - `sssMode=3`: the same spatial profile with diffusion length derived from
-  volumetric MFP: radius / sqrt(3 * (1 - alpha) * (1 - alpha * g)).
+  volumetric MFP: radius / sqrt(3 * (1 - alpha) * (1 - alpha * g)). The
+  two-flux alpha inversion also includes the specified IOR.
   These are explicit engine parameterizations, not verified RenderMan remappings.
 - Burley uses three projection axes (normal/tangent/bitangent with probabilities
-  0.5/0.25/0.25), samples matching-material exits, and includes all three area
+  0.5/0.25/0.25), samples matching-domain exits, and includes all three area
   PDFs, projection Jacobians and exit-selection probabilities in its density.
   Separate objects sharing a material share the diffusion domain. The GPU limits
   projection to 128 crossings; paths exceeding this safety bound are terminated.
 - Random-walk `sssIOR` triggers total internal reflection at the exit boundary.
-  Burley currently requires IOR 1; mode 2 also requires anisotropy 0.
+  Burley multiplies its spatial response by unpolarized dielectric transmission
+  at entry and exit, using the incident/outgoing cosines. This is an engine
+  interface model; the diffusion profile itself is not a refractive BSSRDF.
 - Radius zero remains local Lambert. Zero-radius individual channels retain a
   local component instead of losing their energy.
-- Davis (`sssMode=0`) and Pixar inversion (`albedoInversionMethod=0`) are not
-  implemented and are rejected for active SSS, including when NodeDef defaults
-  select them. Author mode 1/2/3 and inversion 1 explicitly.
-- Nonzero bleed/topology/continuation, nonempty subset, non-reflection surface
-  mode, and outer coat/sheen/fuzz/thin-film layers on Burley are rejected rather
-  than ignored. Additive and mixed lobes use a compensated event-selection step.
+- `albedoInversionMethod=0`: engine two-flux equivalent, not Pixar's fitted
+  inversion. It uses escape probability `1 / IOR^2`, converts the target colour
+  to internal diffuse reflectance, inverts `A = (1-sqrt(1-alpha')) /
+  (1+sqrt(1-alpha'))`, and undoes reduced-scattering anisotropy. Extinction uses
+  diffuse-MFP remapping `1 / (radius * (1.9-A+3.5*(A-0.8)^2))`.
+  Method 1 retains the Chiang polynomial and exponential extinction `1/radius`.
+- `sssSubset`: exact uniform group label using letters, digits, `_`, `.`, `:`,
+  or `-`. Equal labels share a domain across materials; empty labels retain the
+  material-index domain. Labels become exact Float32 integer keys with collision
+  detection. RenderMan subset expressions and connected labels are rejected.
+- `sssContinuationRays=1`, or a nonempty subset, makes random walks ignore
+  foreign-domain surfaces before free-flight sampling. The origin and full optical
+  distance are preserved; ignored surfaces consume no random draws or bounces.
+  Both implementations terminate after more than 128 foreign crossings.
+  Burley already projects through foreign surfaces, so continuation does not
+  change its projection algorithm; subset still controls eligible exits.
+- `sssFollowTopology` in [0,1] is an explicit normal-based engine equivalent.
+  Burley multiplies spatial weight by `1-strength*(1-max(dot(Nentry,Nexit),0))`,
+  without altering the sampling PDF. Random walks instead reflect a prospective
+  exit with probability `strength*(1-max(dot(Nentry,Nexit),0))`; this redistributes
+  paths rather than absorbing them. Normals are smooth shading normals; boundary
+  reflection uses the geometric normal. This is not a curvature/topology solver.
+- Surface `mode=0` omits exit next-event lighting, but keeps indirect continuation;
+  `mode=1` retains internal contributions and stops at the exit; `mode=2` enables
+  exit lighting and continuation. These are documented engine selections, not
+  a verified RenderMan match. Burley does not support transmission mode 1.
+- Outer coat/sheen/fuzz/thin-film controls are no longer blanket-rejected above
+  Burley. Spatial base attenuation uses the existing layer stack and entry/exit
+  angles; local layer reflection is selected separately with compensated weights.
+  The local coat regression covers dielectric-over-Burley; this is not exhaustive
+  GPU qualification of every layer combination.
+- Nonzero bleed requires mode 0. Transport, inversion, bleed and surface mode
+  must be uniform. Mode 2 deliberately treats radius as an effective radial
+  distance and does not use albedo, anisotropy or IOR to set that profile length;
+  IOR still affects its entry/exit transmission. Mode 3 uses albedo, anisotropy
+  and (for inversion 0) IOR in the profile length.
 - Raster remains a local preview; spatial diffusion is a path-tracer operation.
+
+## Local Equivalent Controls Validation
+
+`sss-equivalent-controls.mtlx` enables Davis-equivalent transport, two-flux
+inversion, bleed 0.5, topology 0.25, subset `skin`, continuation and surface mode 2.
+The furnace run on Intel gen-12lp WebGPU at 64x64 and 128 spp completed in 64.34 s,
+but its black sphere exposed a missing graph-backed subset lookup despite zero
+WGSL messages/nonfinite values. That preliminary image and the `-final` image are
+failed visual checks, not qualification evidence.
+
+The corrected dispatcher reads uniform group keys from the compiled graphs,
+falling back to packed records only for materials without graphs. The corrected
+run completed in 41.74 s, with zero WGSL messages/nonfinite accumulation values,
+and a visibly coloured sphere. All pixels have 128 samples; the 197-pixel central
+disk has mean linear RGB `(0.744993, 0.256407, 0.147538)`. This is a nonblack,
+finite-response check, not an independent physical oracle or RenderMan comparison.
+Artifact: `renders/local-test_lama_sss_furnace-pathtracing-depth12-equivalent-controls-domain-fixed.png`
+and matching HDR JSON. CPU tests compare identical trajectories and random draw
+counts with and without embedded geometry, with filtering before free-flight.
+
+Focused CPU tests cover gamma mean/Laplace transform, pure-absorption Davis
+transmission, analytic inversion round trip, opposed-normal topology response,
+continuation, graph-backed groups, mode selection, and packed record/JSON
+preservation. The path-tracer/compiler gate passes 519 tests across
+35 files, excluding the existing analytic-lights traversal-string assertion.
+Production build and typecheck pass. The independent Davis/two-flux validation
+below qualifies that engine equivalent; prior analog measurements below qualify
+Chiang/exponential only.
+
+## Independent Davis / Two-Flux Qualification
+
+`scripts/validate-sss-equivalent-physics.mjs` independently computes an analog
+walk on a sphere of radius 0.8. It uses a regularized-gamma inverse CDF for the
+per-entry Davis density (not the production rejection sampler), derives the
+two-flux albedo and extinction directly from their equations, then simulates
+exponential collisions, HG scattering, absorption and IOR-based TIR. The GPU
+fixture is `sss-fidelity-davis.mtlx` (IOR 1.3, g 0.15, bleed 0.5).
+
+Intel gen-12lp, 64x64, 512 spp; the reference uses 40,000 analog photons/channel.
+The acceptance band is 0.015 radiance plus five combined standard errors:
+
+| Channel | Analog Reference | GPU Mean | Difference | Tolerance |
+| --- | ---: | ---: | ---: | ---: |
+| Red | 0.75125 | 0.74887 | -0.00238 | 0.03589 |
+| Green | 0.25420 | 0.25356 | -0.00064 | 0.02942 |
+| Blue | 0.14718 | 0.14743 | +0.00026 | 0.02657 |
+
+All three channels pass. WGSL diagnostics and nonfinite accumulation are zero;
+the 512-spp timestamp query exceeded the driver budget, so render time is not
+reported. Report: `renders/local-lama-sss-equivalent-physical-validation.json`;
+render: `renders/local-test_lama_sss_furnace-pathtracing-depth12-davis-two-flux.png`.
+This qualifies the engine's declared Davis/two-flux equivalents on the sphere,
+not Pixar formulas or RenderMan output.
+
+Burley mode 3 with inversion 0, IOR 1.5 and g 0.3 compiled and rendered on Intel
+gen-12lp at 64x64/128 spp (13.02 s, zero WGSL messages/nonfinite values). An
+independent sphere oracle integrates the normalized radial profile over the sphere
+and cosine-averages the exit Fresnel transmission; it does not call production
+BSSRDF sampling or evaluation. On the 197-pixel central disk, measured/oracle
+linear RGB are `(0.284816, 0.111132, 0.071066)` /
+`(0.276066, 0.108469, 0.069730)`. All channels pass `0.006 + 5σ` residual
+tolerance. This qualifies the spherical mode-3 response for this configuration,
+not arbitrary geometry or RenderMan equivalence. Report:
+`renders/local-lama-sss-burley-ior-validation.json`;
+render: `renders/local-test_lama_sss_furnace-pathtracing-depth12-burley-ior-anisotropy.png`.
 
 ## Mobile Interface Regression (2026-11-10)
 

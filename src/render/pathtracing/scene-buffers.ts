@@ -26,7 +26,7 @@ import {
   type FrameLight,
   type RasterSurface,
 } from '../raster/scene-frame.ts';
-import { evalWorld, layeredSurfaceBsdf, sampleWorld } from './bsdf.ts';
+import { burleyInterfaceTransmission, evalWorld, layeredSurfaceBsdf, sampleWorld, spatialBaseAttenuation } from './bsdf.ts';
 import { absorbingMedium, type HomogeneousMedium } from './media.ts';
 import { subsurfaceMedium, exponentialSubsurfaceMedium, sampleBurleySurface } from './subsurface.ts';
 import { canonicalSurfaceToLayered, type LayeredClosure } from '../../compiler/ir.ts';
@@ -695,6 +695,17 @@ export function createSceneSampler(scene: PathTraceScene): SceneSampler {
   // constant record. Constant-only materials keep the packed record fallback.
   const prepared = new Map<number, PreparedSurface>();
   for (const v of scene.variantSources) prepared.set(v.materialIndex, prepareSurface(v.graph, v.surface));
+  const spatialLayers = new WeakMap<SurfaceHit, { closure: LayeredClosure; outgoingCosine: number; ior: number }>();
+
+  function spatialValue(hit: SurfaceHit, incoming: Vec3, value: Vec3): Vec3 {
+    const layers = spatialLayers.get(hit);
+    if (!layers) return value;
+    const attenuation = spatialBaseAttenuation(layers.closure, layers.outgoingCosine, dot3(hit.normal, incoming));
+    const interfaceTransmission = burleyInterfaceTransmission(layers.ior, layers.outgoingCosine,
+      Math.min(1, Math.abs(dot3(hit.normal, incoming))));
+    return [value[0] * attenuation[0] * interfaceTransmission,
+      value[1] * attenuation[1] * interfaceTransmission, value[2] * attenuation[2] * interfaceTransmission];
+  }
 
   function closureFor(hit: PtHit): LayeredClosure {
     const override = (hit as PtHit & { closureOverride?: LayeredClosure }).closureOverride;
@@ -715,8 +726,8 @@ export function createSceneSampler(scene: PathTraceScene): SceneSampler {
     const closure = closureFor(hit);
     const sss = closure.lobes.find((l) => l.kind === 'subsurface' && l.subsurfaceRadius !== undefined);
     if (sss?.subsurfaceRadius && (sss.subsurfaceTransport ?? 1) < 2) {
-      return sss.subsurfaceTransport === 1
-        ? exponentialSubsurfaceMedium(sss.color, sss.subsurfaceRadius, sss.anisotropy ?? 0)
+      return sss.subsurfaceTransport !== undefined
+        ? exponentialSubsurfaceMedium(sss.color, sss.subsurfaceRadius, sss.anisotropy ?? 0, sss.subsurfaceInversion ?? 1, sss.ior ?? 1)
         : subsurfaceMedium(sss.color, sss.subsurfaceRadius, sss.anisotropy ?? 0);
     }
     const glass = closure.lobes.find(
@@ -745,17 +756,15 @@ export function createSceneSampler(scene: PathTraceScene): SceneSampler {
   }
 
   const sampler: SceneSampler = {
-    sampleSubsurface(surface: SurfaceHit, rng: Rng) {
+    sampleSubsurface(surface: SurfaceHit, rng: Rng, outgoing: Vec3 = surface.normal) {
       const entry = surface as PtHit;
       const closure = closureFor(entry);
       const diffusion = closure.lobes.filter(lobe => lobe.kind === 'subsurface' && (lobe.subsurfaceTransport ?? 1) >= 2
         && lobe.weight > 0 && lobe.subsurfaceRadius?.some(value => value > 0));
       if (diffusion.length === 0) return undefined;
-      if (closure.coat || closure.sheen || closure.fuzz || closure.thinFilm) {
-        throw new Error('Burley spatial transport does not yet support outer coat/sheen/fuzz/thin-film layers.');
-      }
       const remaining = closure.lobes.filter(lobe => !diffusion.includes(lobe));
-      const probability = remaining.some(lobe => lobe.weight > 0) ? 0.5 : 1;
+      const hasLayers = closure.coat || closure.sheen || closure.fuzz;
+      const probability = remaining.some(lobe => lobe.weight > 0) || hasLayers ? 0.5 : 1;
       if (rng() >= probability) {
         return { hit: { ...entry, closureOverride: { ...closure, lobes: remaining } },
           weight: [1 / (1 - probability), 1 / (1 - probability), 1 / (1 - probability)] as Vec3 };
@@ -773,7 +782,10 @@ export function createSceneSampler(scene: PathTraceScene): SceneSampler {
             if (!intersection) break;
             const exit = hitSurface(scene, intersection, ray);
             const base = intersection.triangle * PT_TRIANGLE_FLOATS;
-            if (exit.materialIndex === entry.materialIndex) {
+            const subset = lobe.subsurfaceSubset ?? 0;
+            const matches = subset > 0 ? closureFor(exit).lobes.some(candidate => candidate.subsurfaceSubset === subset)
+              : exit.materialIndex === entry.materialIndex;
+            if (matches) {
               const vertices = scene.triangles.subarray(base, base + 9);
               const geometryNormal = normalize3(cross3(
                 sub3(readVec3(vertices, 1), readVec3(vertices, 0)),
@@ -785,10 +797,14 @@ export function createSceneSampler(scene: PathTraceScene): SceneSampler {
             distance -= step;
           }
           return exits;
-        }, rng);
+        }, rng, lobe.subsurfaceInversion ?? 1, lobe.subsurfaceFollowTopology ?? 0, lobe.ior ?? 1);
       if (!event) return null;
-      return { hit: { ...event.hit, closureOverride: { lobes: [{ kind: 'burley_diffuse', weight: 1, color: [1, 1, 1] }], opacity: 1 } },
-        weight: scale3(event.weight, lobe.weight * diffusion.length / probability), outgoing: event.hit.normal };
+      const exit: SurfaceHit & { closureOverride: LayeredClosure } = { ...event.hit,
+        closureOverride: { lobes: [{ kind: 'burley_diffuse', weight: 1, color: [1, 1, 1] }], opacity: 1 } };
+      spatialLayers.set(exit, { closure, outgoingCosine: Math.min(1, Math.abs(dot3(entry.normal, outgoing))), ior: lobe.ior ?? 1 });
+      return { hit: exit,
+        weight: scale3(event.weight, lobe.weight * diffusion.length / probability), outgoing: event.hit.normal,
+        directLighting: (lobe.subsurfaceMode ?? 2) === 2 };
     },
     intersect(ray: Ray): SurfaceHit | null {
       const hit = traverse(scene, ray, Infinity, false);
@@ -800,9 +816,14 @@ export function createSceneSampler(scene: PathTraceScene): SceneSampler {
       return {
         ...surface,
         ...(medium ? { interiorMedium: medium } : {}),
-        ...(subsurface?.subsurfaceTransport === 1 ? { interiorIor: subsurface.ior ?? 1 } : {}),
+        ...(subsurface?.subsurfaceTransport !== undefined && subsurface.subsurfaceTransport < 2 ? { interiorIor: subsurface.ior ?? 1 } : {}),
+        ...(subsurface?.subsurfaceTransport === 0 ? { subsurfaceDavisBleed: subsurface.subsurfaceBleed ?? 0 } : {}),
+        ...(subsurface?.subsurfaceMode !== undefined ? { subsurfaceMode: subsurface.subsurfaceMode } : {}),
+        subsurfaceDomain: subsurface?.subsurfaceSubset || -surface.materialIndex - 1,
+        ...(subsurface ? { subsurfaceSelective: (subsurface.subsurfaceSubset ?? 0) > 0 || subsurface.subsurfaceContinuation === true,
+          subsurfaceFollowTopology: subsurface.subsurfaceFollowTopology ?? 0 } : {}),
         ...(medium && subsurface?.subsurfaceRadius?.some(value => value > 0)
-          && (subsurface.subsurfaceTransport ?? 1) === 1 ? { subsurfaceInterior: true } : {}),
+          && (subsurface.subsurfaceTransport ?? 1) < 2 ? { subsurfaceInterior: true } : {}),
         ...(field ? { interiorField: field } : {}),
         ...(isVolumeBoundary(scene.materials, surface.materialIndex) ? { volumeBoundary: true } : {}),
       };
@@ -812,10 +833,11 @@ export function createSceneSampler(scene: PathTraceScene): SceneSampler {
       if (!s) return null;
       // Direction crossed the interface (sign flip of the normal projection) -> transmission.
       const transmission = dot3(hit.normal, wo) > 0 !== dot3(hit.normal, s.direction) > 0;
-      return { direction: s.direction, value: s.value, pdf: s.pdf, specular: s.specular, transmission };
+      return { direction: s.direction, value: spatialValue(hit, s.direction, s.value), pdf: s.pdf, specular: s.specular, transmission };
     },
     evalBsdf(hit: SurfaceHit, wo: Vec3, wi: Vec3) {
-      return evalWorld(lobeFor(hit), hit.normal, wo, wi);
+      const evaluated = evalWorld(lobeFor(hit), hit.normal, wo, wi);
+      return { ...evaluated, value: spatialValue(hit, wi, evaluated.value) };
     },
     sampleLight(_hit: SurfaceHit): LightSample | null {
       // Single distant (delta) light: a fixed incident direction, unit pdf.

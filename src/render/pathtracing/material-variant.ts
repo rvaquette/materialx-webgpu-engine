@@ -17,6 +17,7 @@
 import type { ResolvedGraph } from '../../materialx/graph.ts';
 import type { ResolvedSurface } from '../../materialx/surface-graph.ts';
 import { emitSurfaceVariant, type SurfaceVariantModule } from '../../compiler/surface-wgsl.ts';
+import { surfaceGraphToLayered } from '../../compiler/surface-lower.ts';
 import type { IrType } from '../../compiler/ir.ts';
 import type { WgslBinding, WgslUniformField } from '../../compiler/wgsl.ts';
 import { buildTextureRegistry, type PtTextureRegistry } from './texture-registry.ts';
@@ -50,6 +51,7 @@ export interface PtMaterialDispatch {
   /** Per-variant opacity-only functions followed by the mx_eval_material_opacity
    *  switch (and PT_MATERIAL_OPACITY_VARYINGS when opacityReadsVaryings). */
   opacityDispatcherWgsl: string;
+  sssSubsetDispatcherWgsl?: string;
   /** True when at least one variant's opacity depends on hit varyings. */
   opacityReadsVaryings: boolean;
   /** Node helper preludes required by the variants (deduplicated). */
@@ -123,9 +125,20 @@ export function buildMaterialDispatch(sources: readonly PtVariantSource[]): PtMa
   const fns = [...unique.values()].map((v) => v.fnCode).join('\n\n');
   const dispatcherWgsl = `${fns ? fns + '\n\n' : ''}fn ${PT_MATERIAL_DISPATCH_ENTRY}(matId: u32, vary: MxVaryings) -> LayeredClosure {\n  switch matId {\n${switchBody}\n  }\n}`;
   const { opacityDispatcherWgsl, opacityReadsVaryings } = buildOpacityDispatch(variants, functionFor);
+  const subsetCases = sources.map(source => {
+    const subset = source.surface.family === 'surface'
+      ? surfaceGraphToLayered(source.surface, source.graph).lobes.find(lobe => lobe.kind === 'subsurface')?.subsurfaceSubset ?? 0 : 0;
+    return `    case ${source.materialIndex}u: { return ${subset}u; }`;
+  });
+  const sssSubsetDispatcherWgsl = `fn mx_eval_material_sss_subset(matId: u32) -> u32 {
+  switch matId {
+${subsetCases.join('\n')}
+    default: { return mx_material_sss_subset(matId); }
+  }
+}`;
 
   return {
-    variants, dispatcherWgsl, opacityDispatcherWgsl, opacityReadsVaryings,
+    variants, dispatcherWgsl, opacityDispatcherWgsl, opacityReadsVaryings, sssSubsetDispatcherWgsl,
     preludes, textures, samplers, textureRegistry, uniforms, primvarFields, extraInputs,
   };
 }

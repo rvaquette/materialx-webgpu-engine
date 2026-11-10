@@ -354,7 +354,13 @@ export interface LayeredBsdfLobe {
   interiorAnisotropy?: number;
   /** Subsurface mean free path per channel (OpenPBR subsurface_radius); drives the BSSRDF walk. */
   subsurfaceRadius?: Rgb;
-  subsurfaceTransport?: 1 | 2 | 3;
+  subsurfaceTransport?: 0 | 1 | 2 | 3;
+  subsurfaceInversion?: 0 | 1;
+  subsurfaceBleed?: number;
+  subsurfaceMode?: 0 | 1 | 2;
+  subsurfaceFollowTopology?: number;
+  subsurfaceSubset?: number;
+  subsurfaceContinuation?: boolean;
 }
 
 /** Dielectric coat layered over the base stack (clearcoat). */

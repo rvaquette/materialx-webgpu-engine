@@ -82,6 +82,41 @@ function build(surface?: RasterSurface): PathTraceScene {
 }
 
 describe('buildPathTraceScene packing', () => {
+  it('keeps coated Burley entry angles and local reflection in separate compensated branches', () => {
+    const closure: LayeredClosure = { opacity: 1, lobes: [{
+      kind: 'subsurface', weight: 1, color: [0.6, 0.6, 0.6], subsurfaceRadius: [0.02, 0.02, 0.02], subsurfaceTransport: 2,
+    }], coat: { weight: 0.6, color: [0.8, 0.9, 1], roughness: 0.2, ior: 1.5 } };
+    const sampler = createSceneSampler({ ...build(), materials: packLayeredMaterial(closure) });
+    const hit = sampler.intersect({ origin: [0, 0, 1], direction: [0, 0, -1] })!;
+    const outgoing = [0.6, 0, 0.8] as const;
+    const spatial = sampler.sampleSubsurface!(hit, () => 0.1, outgoing)!;
+    expect(spatial.hit.position).not.toEqual(hit.position);
+    const evaluated = sampler.evalBsdf(spatial.hit, spatial.outgoing!, [0, 0, 1]);
+    const entryFresnel = 0.04 + 0.96 * 0.2 ** 5;
+    const factor = (1 - 0.6 * entryFresnel) * (1 - 0.6 * 0.04);
+    for (let channel = 0; channel < 3; channel++) {
+      expect(evaluated.value[channel]).toBeCloseTo(factor * (0.4 + 0.6 * closure.coat!.color[channel]!) / Math.PI, 6);
+    }
+    const local = sampler.sampleSubsurface!(hit, () => 0.9, outgoing)!;
+    expect(local.hit.position).toEqual(hit.position);
+    expect(local.weight).toEqual([2, 2, 2]);
+    expect(sampler.evalBsdf(local.hit, [0, 0, 1], [0, 0, 1]).value[0]).toBeGreaterThan(0);
+  });
+  it('applies reciprocal Fresnel transmission at Burley entry and exit for non-unit IOR', () => {
+    const base = build();
+    const closure: LayeredClosure = { opacity: 1, lobes: [{
+      kind: 'subsurface', weight: 1, color: [0.6, 0.6, 0.6], subsurfaceRadius: [0.02, 0.02, 0.02],
+      subsurfaceTransport: 2, ior: 1.5,
+    }] };
+    const sampler = createSceneSampler({ ...base, materials: packLayeredMaterial(closure) });
+    const entry = sampler.intersect({ origin: [0, 0, 1], direction: [0, 0, -1] })!;
+    const event = sampler.sampleSubsurface!(entry, () => 0.1, [0, 0, 1])!;
+    expect(event.hit.position).not.toEqual(entry.position);
+    const evaluated = sampler.evalBsdf(event.hit, event.outgoing!, [0, 0, 1]);
+    const normalFresnel = 0.04;
+    expect(evaluated.value[0]).toBeCloseTo((1 - normalFresnel) ** 2 / Math.PI, 7);
+    expect(evaluated.value[0]).toBeLessThan(1 / Math.PI);
+  });
   it('identifies exponential SSS interiors for independent random-walk termination', () => {
     const scene = { ...build(), materials: packLayeredMaterial({ opacity: 1, lobes: [{
       kind: 'subsurface', weight: 1, color: [0.6, 0.6, 0.6], subsurfaceRadius: [0.02, 0.02, 0.02], subsurfaceTransport: 1,

@@ -882,7 +882,8 @@ export function lobeFromLayered(l: LayeredBsdfLobe, film?: ThinFilmLayer): Lobe 
     case 'sheen':
       return sheenLobe(l.color, l.roughness ?? 0.3);
     case 'subsurface':
-      if (l.subsurfaceTransport === 1 && l.subsurfaceRadius?.some(value => value > 0)) return subsurfaceInterfaceLobe();
+      if (l.subsurfaceTransport !== undefined && l.subsurfaceTransport < 2
+        && l.subsurfaceRadius?.some(value => value > 0)) return subsurfaceInterfaceLobe();
       if ((l.subsurfaceTransport ?? 0) >= 2) return subsurfaceLobe(l.color);
       return subsurfaceLobe(l.color, l.subsurfaceRadius?.some(value => value > 0) === true);
   }
@@ -1001,6 +1002,22 @@ export function layeredSurfaceBsdf(closure: LayeredClosure, channel: 0 | 1 | 2 =
   const base = composeLobes(entries);
   const coated = closure.coat ? coatOverBase(closure.coat, base) : base;
   return closure.fuzz ? fuzzOverBase(closure.fuzz, coated) : coated;
+}
+
+export function spatialBaseAttenuation(closure: LayeredClosure, outgoingCosine: number, incomingCosine: number): Vec3 {
+  if (!closure.coat && !closure.sheen && !closure.fuzz) return [1, 1, 1];
+  const outgoing: Vec3 = [Math.sqrt(Math.max(0, 1 - outgoingCosine ** 2)), 0, outgoingCosine];
+  const incoming: Vec3 = [Math.sqrt(Math.max(0, 1 - incomingCosine ** 2)), 0, incomingCosine];
+  const base = layeredSurfaceBsdf({ ...closure, lobes: [{ kind: 'burley_diffuse', weight: 1, color: [1, 1, 1] }] })
+    .eval(outgoing, incoming).value;
+  const top = layeredSurfaceBsdf({ ...closure, lobes: [] }).eval(outgoing, incoming).value;
+  return [Math.max(0, (base[0] - top[0]) * PI), Math.max(0, (base[1] - top[1]) * PI),
+    Math.max(0, (base[2] - top[2]) * PI)];
+}
+
+export function burleyInterfaceTransmission(ior: number, entryCosine: number, exitCosine: number): number {
+  const eta = Math.max(ior, 1);
+  return (1 - fresnelDielectric(entryCosine, eta)) * (1 - fresnelDielectric(exitCosine, 1 / eta));
 }
 
 // --- hemispherical reflectance (energy / unbiasedness checks) ----------------

@@ -28,6 +28,7 @@ import {
 } from './material-variant.ts';
 import { ANALYTIC_LIGHTS_WGSL } from './analytic-lights.ts';
 import { pruneWgslFunctions } from '../../compiler/wgsl-reachability.ts';
+import { sssCoefficientsWgsl } from './subsurface.ts';
 
 /** Compute workgroup tile edge (threads per dimension). */
 export const PT_WORKGROUP_SIZE = 8;
@@ -281,6 +282,23 @@ struct MxMediumSample {
   t: f32,
   weight: vec3f,
 };
+${sssCoefficientsWgsl('mx_sss_controls')}
+fn mx_sample_davis_density(bleed: f32, state: ptr<function, u32>) -> f32 {
+  let shape = 2.0 - 0.75 * clamp(bleed, 0.0, 1.0);
+  let d = shape - 1.0 / 3.0;
+  let c = 1.0 / sqrt(9.0 * d);
+  for (var attempt = 0u; attempt < 128u; attempt++) {
+    let normal = sqrt(-2.0 * log(max(rng_next(state), 1e-12))) * cos(2.0 * PI * rng_next(state));
+    let root = 1.0 + c * normal;
+    if (root <= 0.0) { continue; }
+    let cube = root * root * root;
+    let variate = max(rng_next(state), 1e-12);
+    if (variate < 1.0 - 0.0331 * normal * normal * normal * normal || log(variate) < 0.5 * normal * normal + d * (1.0 - cube + log(cube))) {
+      return d * cube / shape;
+    }
+  }
+  return -1.0;
+}
 fn mx_pick3(v : vec3f, ch : u32) -> f32 {
   if (ch == 0u) { return v.x; }
   if (ch == 1u) { return v.y; }
@@ -527,7 +545,7 @@ fn surface_hit_geometric_normal(h: Hit) -> vec3f {
 fn mx_burley_lengths(lobe: MxBsdfLobe) -> vec3f {
   let radius = max(lobe.hairTintTRT, vec3f(0.0));
   if (lobe.dispersion < 2.5) { return radius / 2.5; }
-  let alpha = mx_single_scatter_albedo(lobe.color);
+  let alpha = mx_sss_controls_alpha(lobe.color, lobe.anisotropy, max(lobe.ior, 1.0), lobe.roughness);
   return radius / sqrt(3.0 * (vec3f(1.0) - alpha) * (vec3f(1.0) - alpha * lobe.anisotropy));
 }
 fn mx_burley_profile(radius: f32, lengths: vec3f) -> vec3f {
@@ -537,7 +555,7 @@ fn mx_burley_profile(radius: f32, lengths: vec3f) -> vec3f {
 }
 struct MxBurleyExit { position: vec3f, normal: vec3f, geometricNormal: vec3f, weight: vec3f, valid: bool };
 struct MxBurleyProjection { position: vec3f, normal: vec3f, shadingNormal: vec3f, count: u32, valid: bool };
-fn mx_project_burley(probe: vec3f, axis: vec3f, material: u32, choose: bool, state: ptr<function, u32>) -> MxBurleyProjection {
+fn mx_project_burley(probe: vec3f, axis: vec3f, material: u32, subset: u32, choose: bool, state: ptr<function, u32>) -> MxBurleyProjection {
   var result: MxBurleyProjection;
   let extent = length(vec3f(nodes[4u], nodes[5u], nodes[6u]) - vec3f(nodes[0u], nodes[1u], nodes[2u])) + 1.0;
   var origin = probe - axis * extent;
@@ -546,7 +564,7 @@ fn mx_project_burley(probe: vec3f, axis: vec3f, material: u32, choose: bool, sta
     let candidate = traverse_min(origin, axis, remaining, false, 1e-7);
     if (!candidate.hitAny) { result.valid = true; return result; }
     let position = origin + axis * candidate.t;
-    if (tri_material(candidate.tri) == material) {
+    if (select(tri_material(candidate.tri) == material, ${dispatch ? 'mx_eval_material_sss_subset' : 'mx_material_sss_subset'}(tri_material(candidate.tri)) == subset, subset > 0u)) {
       result.count++;
       if (choose) {
         if (rng_next(state) * f32(result.count) < 1.0) {
@@ -581,7 +599,7 @@ fn mx_sample_burley(entry: vec3f, normal: vec3f, entryGeometric: vec3f, material
   let axisIndex = select(select(2u, 1u, choice < 0.75), 0u, choice < 0.5);
   let phi = 2.0 * PI * rng_next(state);
   let probe = entry + radius * (cos(phi) * axes[(axisIndex + 1u) % 3u] + sin(phi) * axes[(axisIndex + 2u) % 3u]);
-  let projection = mx_project_burley(probe, axes[axisIndex], material, true, state);
+  let projection = mx_project_burley(probe, axes[axisIndex], material, u32(lobe.rotation), true, state);
   if (projection.count == 0u || !projection.valid) { return result; }
   result.position = projection.position; result.normal = projection.shadingNormal; result.geometricNormal = projection.normal;
   let offset = result.position - entry;
@@ -593,7 +611,7 @@ fn mx_sample_burley(entry: vec3f, normal: vec3f, entryGeometric: vec3f, material
     let radialOffset = offset - axis * dot(offset, axis);
     var count = projection.count;
     if (index != axisIndex) {
-      let candidates = mx_project_burley(entry + radialOffset, axis, material, false, state);
+      let candidates = mx_project_burley(entry + radialOffset, axis, material, u32(lobe.rotation), false, state);
       if (!candidates.valid) { return result; }
       count = candidates.count;
     }
@@ -603,12 +621,37 @@ fn mx_sample_burley(entry: vec3f, normal: vec3f, entryGeometric: vec3f, material
   }
   if (pdf <= 0.0) { return result; }
   result.weight = clamp(lobe.color, vec3f(0.0), vec3f(1.0)) * mx_burley_profile(distance(entry, result.position), lengths) / pdf;
+  result.weight *= 1.0 - clamp(lobe.extinction.y, 0.0, 1.0) * (1.0 - clamp(dot(normal, result.normal), 0.0, 1.0));
   result.valid = true;
   return result;
 }
 fn mx_is_burley(lobe: MxBsdfLobe) -> bool {
   return lobe.kind == MX_LOBE_SUBSURFACE && lobe.dispersion >= 2.0 && lobe.weight > 0.0
     && any(lobe.hairTintTRT > vec3f(0.0));
+}
+fn mx_spatial_base_attenuation(layers: LayeredClosure, outgoingCosine: f32, incoming: vec3f) -> vec3f {
+  var interfaceIor = 1.0;
+  for (var index = 0u; index < layers.lobeCount; index++) {
+    if (layers.lobes[index].kind == MX_LOBE_SUBSURFACE && layers.lobes[index].dispersion >= 2.0) {
+      interfaceIor = max(layers.lobes[index].ior, 1.0);
+    }
+  }
+  let interfaceTransmission = (1.0 - mx_fresnel_dielectric(outgoingCosine, interfaceIor))
+    * (1.0 - mx_fresnel_dielectric(abs(incoming.z), 1.0 / interfaceIor));
+  if (layers.hasCoat == 0u && layers.hasSheen == 0u && layers.hasFuzz == 0u) {
+    return vec3f(interfaceTransmission);
+  }
+  var base = layers;
+  base.lobeCount = 1u;
+  base.hasInterior = 0u;
+  var white: MxBsdfLobe;
+  white.kind = MX_LOBE_SUBSURFACE; white.weight = 1.0; white.color = vec3f(1.0);
+  base.lobes[0] = white;
+  let outgoing = vec3f(sqrt(max(0.0, 1.0 - outgoingCosine * outgoingCosine)), 0.0, outgoingCosine);
+  let combined = mx_closure_eval(base, outgoing, incoming).value;
+  base.lobeCount = 0u;
+  let top = mx_closure_eval(base, outgoing, incoming).value;
+  return max((combined - top) * PI, vec3f(0.0)) * interfaceTransmission;
 }
 ${texHelpers}
 
@@ -668,6 +711,12 @@ fn integrate(ro0 : vec3<f32>, rd0 : vec3<f32>, backgroundDirection : vec3<f32>, 
   var interiorIor = 1.0;
   var subsurfaceWalk = false;
   var subsurfaceEvents = 0;
+  var subsurfaceMode = 2.0;
+  var subsurfaceMaterial = 0xffffffffu;
+  var subsurfaceSubset = 0u;
+  var subsurfaceSelective = false;
+  var subsurfaceTopology = 0.0;
+  var subsurfaceEntryNormal = vec3f(0.0, 0.0, 1.0);
   var bounce = 0;
   var medium : MxMedium;
   var volumeIndex = 0xffffffffu;
@@ -678,7 +727,19 @@ ${analyticLights ? '  var analyticNee = false;' : ''}
 
   for (var pathStep = 0u; pathStep < 65536u; pathStep++) {
 ${analyticLights ? `    let emitter = mx_intersect_lights(ro, rd);
-    let hit = traverse_min(ro, rd, emitter.distance, false,select(RAY_EPS,1e-7,inMedium));` : '    let hit = traverse_min(ro, rd, 1.0e30, false,select(RAY_EPS,1e-7,inMedium));'}
+    var hit = traverse_min(ro, rd, emitter.distance, false,select(RAY_EPS,1e-7,inMedium));` : '    var hit = traverse_min(ro, rd, 1.0e30, false,select(RAY_EPS,1e-7,inMedium));'}
+    if (inMedium && subsurfaceWalk && subsurfaceSelective) {
+      var exhausted = true;
+      for (var crossing = 0u; crossing <= 128u; crossing++) {
+        if (!hit.hitAny) { exhausted = false; break; }
+        let matches = select(tri_material(hit.tri) == subsurfaceMaterial,
+          ${dispatch ? 'mx_eval_material_sss_subset' : 'mx_material_sss_subset'}(tri_material(hit.tri)) == subsurfaceSubset, subsurfaceSubset > 0u);
+        if (matches) { exhausted = false; break; }
+        if (crossing == 128u) { break; }
+        hit = traverse_min(ro, rd, ${analyticLights ? 'emitter.distance' : '1.0e30'}, false, hit.t + 1e-6);
+      }
+      if (exhausted) { break; }
+    }
     // Free-flight sampling: when inside a medium, a collision before the surface
     // scatters off the Henyey-Greenstein phase (importance-sampled, f/pdf = 1);
     // otherwise beta carries the surface-reaching transmittance (media.ts).
@@ -770,9 +831,13 @@ ${
     var geometricNormal = surface_hit_geometric_normal(hit);
     var n = surface_hit_normal(hit);
 ${closureBuild}
-    if (inMedium && interiorIor > 1.0 && dot(rd, geometricNormal) > 0.0) {
+    let subsurfaceExit = inMedium && subsurfaceWalk && dot(rd, geometricNormal) > 0.0;
+    if (inMedium && dot(rd, geometricNormal) > 0.0) {
       let cosine = dot(rd, geometricNormal);
-      if (interiorIor * interiorIor * max(0.0, 1.0 - cosine * cosine) >= 1.0) {
+      let totalInternal = interiorIor > 1.0 && interiorIor * interiorIor * max(0.0, 1.0 - cosine * cosine) >= 1.0;
+      let topologyProbability = select(0.0, clamp(subsurfaceTopology, 0.0, 1.0)
+        * (1.0 - clamp(dot(subsurfaceEntryNormal, n), 0.0, 1.0)), subsurfaceWalk);
+      if (totalInternal || (topologyProbability > 0.0 && rng_next(state) < topologyProbability)) {
         rd = reflect(rd, geometricNormal); ro = pos + rd * 1e-6;
         if (subsurfaceWalk) {
           if (subsurfaceEvents >= i32(U.transport.y) && (subsurfaceEvents - i32(U.transport.y)) % 32 == 0) {
@@ -810,15 +875,22 @@ ${displayAovs ? `    if (cameraSegment) {
     }` : ''}
     cameraSegment = false;
     if (c.hasEmission != 0u) { radiance = radiance + beta * c.emission; }
+    if (subsurfaceExit && subsurfaceMode == 1.0) { break; }
+    var allowDirectLighting = !subsurfaceExit || subsurfaceMode >= 1.5;
     var diffusionCount = 0u;
+    var spatialLayers: LayeredClosure;
+    var spatialOutgoingCosine = 1.0;
     var otherWeight = 0.0;
     for (var index = 0u; index < c.lobeCount; index++) {
       if (mx_is_burley(c.lobes[index])) { diffusionCount++; }
       else { otherWeight += max(c.lobes[index].weight, 0.0); }
     }
     if (diffusionCount > 0u) {
-      let probability = select(0.5, 1.0, otherWeight <= 0.0);
+      let hasLayers = c.hasCoat != 0u || c.hasSheen != 0u || c.hasFuzz != 0u;
+      let probability = select(0.5, 1.0, otherWeight <= 0.0 && !hasLayers);
       if (rng_next(state) < probability) {
+        spatialLayers = c;
+        spatialOutgoingCosine = clamp(abs(dot(normalize(-rd), normalize(mx_closure_shading_normal(c, n)))), 0.0, 1.0);
         var selectedDiffusion = min(diffusionCount - 1u, u32(rng_next(state) * f32(diffusionCount)));
         var lobe: MxBsdfLobe;
         for (var index = 0u; index < c.lobeCount; index++) {
@@ -830,6 +902,7 @@ ${displayAovs ? `    if (cameraSegment) {
         let exit = mx_sample_burley(pos, n, geometricNormal, tri_material(hit.tri), lobe, state);
         if (!exit.valid) { break; }
         beta *= exit.weight * lobe.weight * f32(diffusionCount) / probability;
+        allowDirectLighting = lobe.extinction.x >= 1.5;
         pos = exit.position; n = exit.normal; geometricNormal = exit.geometricNormal; rd = -n;
         var local: LayeredClosure;
         local.opacity = 1.0; local.lobeCount = 1u;
@@ -870,7 +943,7 @@ ${displayAovs ? `    if (cameraSegment) {
 
     // Next-event estimation for the distant (delta) light: a delta direction has
     // no BSDF-sampling counterpart, so its MIS weight is 1 (no power heuristic).
-${analyticLights ? `    if (!specular && mx_light_count() > 0u) {
+${analyticLights ? `    if (allowDirectLighting && !specular && mx_light_count() > 0u) {
       let light = mx_sample_light(pos, vec3f(rng_next(state), rng_next(state), rng_next(state)));
       if (light.pdf > 0.0) {
         let origin = pos + light.direction * RAY_EPS;
@@ -879,23 +952,25 @@ ${analyticLights ? `    if (!specular && mx_light_count() > 0u) {
           let wi = transpose(frame) * light.direction;
           let ev = mx_closure_eval(c, wo, wi);
           let weight = select(power_heuristic(1.0, light.pdf, 1.0, ev.pdf), 1.0, light.delta);
-          radiance += beta * ev.value * light.radiance * (abs(wi.z) * visibility * weight / light.pdf);
+          radiance += beta * ev.value * mx_spatial_base_attenuation(spatialLayers, spatialOutgoingCosine, wi)
+            * light.radiance * (abs(wi.z) * visibility * weight / light.pdf);
         }
       }
-    }` : `    if (!specular && dot(lightRadiance, lightRadiance) > 0.0) {
+    }` : `    if (allowDirectLighting && !specular && dot(lightRadiance, lightRadiance) > 0.0) {
       let visibility = mx_alpha_visibility(pos + toLight * RAY_EPS, toLight);
       if (visibility > 0.0) {
         let wiLight = transpose(frame) * toLight;
         let ev = mx_closure_eval(c, wo, wiLight);
         let cosL = abs(dot(shadingNormal, toLight));
-        radiance = radiance + beta * ev.value * lightRadiance * (cosL * visibility);
+        radiance = radiance + beta * ev.value * mx_spatial_base_attenuation(spatialLayers, spatialOutgoingCosine, wiLight)
+          * lightRadiance * (cosL * visibility);
       }
     }
 `}
 
     // Diffuse illumination must test visibility too. Retain the separate SH/LTC
     // integration only for the existing fuzz path.
-    if (hasEnv && !specular) {
+    if (allowDirectLighting && hasEnv && !specular) {
 ${
       environment
         ? /* wgsl */ `      let shFuzz = c.hasFuzz != 0u && c.fuzz.weight > 0.0;
@@ -918,7 +993,8 @@ ${
               if (shFuzz) { ev = mx_closure_specular_eval(c, wo, wiLocal); }
               else { ev = mx_closure_eval(c, wo, wiLocal); }
               let w = power_heuristic(1.0, envPdf, 1.0, ev.pdf);
-              radiance = radiance + beta * ev.value * (colS * U.env.xyz * U.env.w) * (w * abs(wiLocal.z) * visibility / envPdf);
+              radiance = radiance + beta * ev.value * mx_spatial_base_attenuation(spatialLayers, spatialOutgoingCosine, wiLocal)
+                * (colS * U.env.xyz * U.env.w) * (w * abs(wiLocal.z) * visibility / envPdf);
             }
           }
         }
@@ -934,7 +1010,8 @@ ${
             if (shFuzz) { ev = mx_closure_specular_eval(c, wo, wiLocal); }
             else { ev = mx_closure_eval(c, wo, wiLocal); }
             let w = power_heuristic(1.0, envPdf, 1.0, ev.pdf);
-            radiance = radiance + beta * ev.value * ${envNee} * (w * wiLocal.z * visibility / envPdf);
+            radiance = radiance + beta * ev.value * mx_spatial_base_attenuation(spatialLayers, spatialOutgoingCosine, wiLocal)
+              * ${envNee} * (w * wiLocal.z * visibility / envPdf);
           }
         }
       }`
@@ -947,7 +1024,8 @@ ${
         if (visibility > 0.0) {
           let ev = mx_closure_eval(c, wo, wiLocal);
           let w = power_heuristic(1.0, envPdf, 1.0, ev.pdf);
-          radiance = radiance + beta * ev.value * ${envNee} * (w * wiLocal.z * visibility / envPdf);
+          radiance = radiance + beta * ev.value * mx_spatial_base_attenuation(spatialLayers, spatialOutgoingCosine, wiLocal)
+            * ${envNee} * (w * wiLocal.z * visibility / envPdf);
         }
       }`
     }
@@ -970,10 +1048,10 @@ ${
     }`
         : ''
     }
-    beta = beta * bs.value * cosS / bs.pdf;
+    beta = beta * bs.value * mx_spatial_base_attenuation(spatialLayers, spatialOutgoingCosine, bs.wi) * cosS / bs.pdf;
     bsdfPdf = bs.pdf;
-${analyticLights ? '    analyticNee = !specular && mx_light_count() > 0u;' : ''}
-    specularBounce = specular;
+${analyticLights ? '    analyticNee = allowDirectLighting && !specular && mx_light_count() > 0u;' : ''}
+  specularBounce = specular || !allowDirectLighting;
     diffuseBounce = splitFuzzEnvironment && mx_closure_sampled_is_diffuse(c, wo, u.z);
     lastN = shadingNormal;
     ro = pos + wiWorld * RAY_EPS;
@@ -988,15 +1066,27 @@ ${analyticLights ? '    analyticNee = !specular && mx_light_count() > 0u;' : ''}
         interiorIor = 1.0;
         subsurfaceWalk = false;
         subsurfaceEvents = 0;
+        subsurfaceMode = 2.0;
+        subsurfaceSelective = false;
         volumeIndex = 0xffffffffu;
       } else if (c.hasInterior != 0u) {
         interiorIor = 1.0;
         subsurfaceWalk = false;
         subsurfaceEvents = 0;
+        subsurfaceMode = 2.0;
+        subsurfaceMaterial = tri_material(hit.tri);
+        subsurfaceEntryNormal = n;
+        subsurfaceSubset = 0u;
+        subsurfaceTopology = 0.0;
+        subsurfaceSelective = false;
         for (var index = 0u; index < c.lobeCount; index++) {
           if (c.lobes[index].kind == MX_LOBE_SUBSURFACE && c.lobes[index].weight > 0.0) {
             interiorIor = max(1.0, c.lobes[index].ior);
             subsurfaceWalk = subsurfaceWalk || any(c.lobes[index].hairTintTRT > vec3f(0.0));
+            subsurfaceMode = c.lobes[index].extinction.x;
+            subsurfaceSubset = u32(c.lobes[index].rotation);
+            subsurfaceTopology = c.lobes[index].extinction.y;
+            subsurfaceSelective = subsurfaceSubset > 0u || c.lobes[index].thin > 0.5;
           }
         }
         medium = MxMedium(c.interiorSigmaA, c.interiorSigmaS, c.interiorG);
@@ -1011,6 +1101,17 @@ ${analyticLights ? '    analyticNee = !specular && mx_light_count() > 0u;' : ''}
             beta *= channelWeight; environmentBeta *= channelWeight;
           }
           medium = MxMedium(vec3f(medium.sigmaA[spectralChannel]), vec3f(medium.sigmaS[spectralChannel]), medium.g);
+        }
+        if (subsurfaceWalk && volumeIndex == 0xffffffffu) {
+          for (var index = 0u; index < c.lobeCount; index++) {
+            let lobe = c.lobes[index];
+            if (lobe.kind == MX_LOBE_SUBSURFACE && lobe.weight > 0.0 && lobe.dispersion == 0.0 && lobe.ior >= 1.0) {
+              let density = mx_sample_davis_density(lobe.extinction.z, state);
+              if (density <= 0.0) { return radiance; }
+              medium.sigmaA *= density; medium.sigmaS *= density;
+              break;
+            }
+          }
         }
       }
     }
@@ -1188,6 +1289,7 @@ function wgslDispatch(dispatch: PtMaterialDispatch): string {
     parts.push(`@group(${s.group}) @binding(${s.binding}) var ${s.handle}: sampler;`);
   }
   parts.push(dispatch.dispatcherWgsl);
+  parts.push(dispatch.sssSubsetDispatcherWgsl ?? 'fn mx_eval_material_sss_subset(matId: u32) -> u32 { return mx_material_sss_subset(matId); }');
   parts.push(dispatch.opacityDispatcherWgsl);
   return parts.join('\n\n');
 }

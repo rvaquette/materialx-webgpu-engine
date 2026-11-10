@@ -1,4 +1,5 @@
-import { lamaSssTransport } from './lama-sss.ts';
+import { lamaSssTransport, lamaSssSubset } from './lama-sss.ts';
+import { sssCoefficientsWgsl } from '../render/pathtracing/subsurface.ts';
 // T055d: emit a WGSL `LayeredClosure` struct and a generated
 // `mx_surface_layered(vary) -> LayeredClosure` fill function for a resolved
 // surface. The per-input IR expressions from T055c (lowerSurfaceInputsToIr) back
@@ -153,11 +154,10 @@ interface LobeWgsl {
 }
 
 const LAMA_INTERIOR_PRELUDE = `struct MxLamaInterior { sigmaA: vec3f, sigmaS: vec3f, g: f32 };
-fn mx_lama_sss_medium(albedo: vec3f, mfp: vec3f, g: f32) -> MxLamaInterior {
-  let a = clamp(albedo, vec3f(0.0), vec3f(1.0));
-  let alpha = vec3f(1.0) - exp(-5.09406 * a + 2.61188 * a * a - 4.31805 * a * a * a);
-  let opticalDistance = mfp;
-  let sigmaT = select(vec3f(0.0), vec3f(1.0) / opticalDistance, opticalDistance > vec3f(0.0));
+${sssCoefficientsWgsl('mx_lama_controls')}
+fn mx_lama_sss_medium(albedo: vec3f, mfp: vec3f, g: f32, ior: f32, inversion: f32) -> MxLamaInterior {
+  let alpha = mx_lama_controls_alpha(albedo, g, ior, inversion);
+  let sigmaT = mx_lama_controls_sigma_t(albedo, mfp, inversion);
   return MxLamaInterior((vec3f(1.0) - alpha) * sigmaT, alpha * sigmaT, g);
 }`;
 
@@ -870,11 +870,13 @@ function lowerLamaClosureWgsl(
       const transport = lamaSssTransport(graph, nodeId);
       const color = ctx.col('color', [0.18, 0.18, 0.18]);
       const radius = `(${ctx.col('sssRadius', [0, 0, 0])} * ${ctx.s('sssScale', 1)} * ${ctx.s('sssUnitLength', 0.00328)})`;
-      result.lobes = [{ kind: 'subsurface', weight: '1.0', color, roughness: '0.0',
+      result.lobes = [{ kind: 'subsurface', weight: '1.0', color, roughness: `f32(${ctx.s('albedoInversionMethod', 0)})`,
         hairTintTRT: radius, dispersion: `${transport}.0`, ior: `max(1.0, ${ctx.s('sssIOR', 1)})`,
+        rotation: `${lamaSssSubset(graph, nodeId)}.0`, thin: `f32(${ctx.s('sssContinuationRays', 0)})`,
+        extinction: `vec3f(f32(${ctx.s('mode', 0)}), ${ctx.s('sssFollowTopology', 0)}, ${ctx.s('sssBleed', 0)})`,
         anisotropy: ctx.s('sssAnisotropy', 0) }];
-      const medium = `mx_lama_sss_medium(${color}, ${radius}, ${ctx.s('sssAnisotropy', 0)})`;
-      if (transport === 1) {
+      const medium = `mx_lama_sss_medium(${color}, ${radius}, ${ctx.s('sssAnisotropy', 0)}, ${ctx.s('sssIOR', 1)}, f32(${ctx.s('albedoInversionMethod', 0)}))`;
+      if (transport < 2) {
         result.interior = { sigmaA: `${medium}.sigmaA`, sigmaS: `${medium}.sigmaS`, g: `${medium}.g` };
         result.interiorActive = `any(${radius} > vec3f(0.0))`;
       }
@@ -925,9 +927,8 @@ function buildLamaSurfaceFn(
     : undefined;
   if (backClosure && surface.inputs.has('opacity')) backClosure.opacity = closure.opacity;
   const closures = backClosure ? [closure, backClosure] : [closure];
-  if (closures.some(item => item.lobes.some(lobe => lobe.kind === 'subsurface' && Number(lobe.dispersion) >= 2)
-    && (item.coat || item.sheen || item.fuzz || item.thinFilm))) {
-    throw new Error('Burley spatial transport does not yet support outer coat/sheen/fuzz/thin-film layers.');
+  for (const item of closures) {
+    if (item.sheen) item.lobes.push({ kind: 'sheen', ...item.sheen });
   }
   const maxLobes = Math.min(8, Math.max(...closures.map(item => item.lobes.length)));
   for (const item of closures) if (item.lobes.length > 8) {

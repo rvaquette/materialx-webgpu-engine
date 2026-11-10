@@ -163,8 +163,8 @@ function lobeDispatch(spec: ClosureDispatchSpec): string {
     sampleCases.push('    case 6u: { return mx_sheen_sample(ctx, u.xy); }');
   }
   if (has(7).length) {
-    evalCases.push('    case 7u: { if (lobe.dispersion == 1.0) { if (c.hasInterior != 0u && any(lobe.hairTintTRT > vec3f(0.0))) { return mx_subsurface_interface_eval(ctx, wi); } return mx_subsurface_eval(ctx, wi); } if (c.hasInterior != 0u) { return mx_subsurface_boundary_eval(ctx, wi); } return mx_subsurface_eval(ctx, wi); }');
-    sampleCases.push('    case 7u: { if (lobe.dispersion == 1.0) { if (c.hasInterior != 0u && any(lobe.hairTintTRT > vec3f(0.0))) { return mx_subsurface_interface_sample(ctx, u.xy); } return mx_subsurface_sample(ctx, u.xy); } if (c.hasInterior != 0u) { return mx_subsurface_boundary_sample(ctx, u); } return mx_subsurface_sample(ctx, u.xy); }');
+    evalCases.push('    case 7u: { if (lobe.dispersion <= 1.0 && lobe.ior >= 1.0) { if (c.hasInterior != 0u && any(lobe.hairTintTRT > vec3f(0.0))) { return mx_subsurface_interface_eval(ctx, wi); } return mx_subsurface_eval(ctx, wi); } if (c.hasInterior != 0u) { return mx_subsurface_boundary_eval(ctx, wi); } return mx_subsurface_eval(ctx, wi); }');
+    sampleCases.push('    case 7u: { if (lobe.dispersion <= 1.0 && lobe.ior >= 1.0) { if (c.hasInterior != 0u && any(lobe.hairTintTRT > vec3f(0.0))) { return mx_subsurface_interface_sample(ctx, u.xy); } return mx_subsurface_sample(ctx, u.xy); } if (c.hasInterior != 0u) { return mx_subsurface_boundary_sample(ctx, u); } return mx_subsurface_sample(ctx, u.xy); }');
   }
   if (has(8).length) {
     evalCases.push('    case 8u: { return mx_dielectric_transmission_eval(ctx, wi); }');

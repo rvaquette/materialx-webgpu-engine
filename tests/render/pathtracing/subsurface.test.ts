@@ -12,14 +12,134 @@ import {
   extinctionFromMeanFreePath,
   randomWalkSlabChannel,
   singleScatterAlbedo,
+  albedoPreservingSingleScatter,
+  sampleDavisDensity,
   subsurfaceMedium,
 } from '../../../src/render/pathtracing/subsurface.ts';
 import { extinction } from '../../../src/render/pathtracing/media.ts';
 import { packLayeredMaterial, unpackLayeredMaterial } from '../../../src/render/pathtracing/material-record.ts';
 import { serializeLayeredClosure, deserializeLayeredClosure } from '../../../src/compiler/layered-serialize.ts';
 import type { LayeredClosure } from '../../../src/compiler/ir.ts';
+import { burleyInterfaceTransmission, spatialBaseAttenuation } from '../../../src/render/pathtracing/bsdf.ts';
 
 describe('normalized Burley diffusion', () => {
+  it('reduces spatial transport between opposed normals when followTopology is enabled', () => {
+    const entry = { position: [0, 0, 0] as Vec3, normal: [0, 0, 1] as Vec3 };
+    const project = (probe: Vec3, axis: Vec3) => Math.abs(axis[2]) > 0.5
+      ? [{ position: [probe[0], probe[1], -0.1] as Vec3, normal: [0, 0, -1] as Vec3 }] : [];
+    const baseline = sampleBurleySurface(entry, [0.6, 0.6, 0.6], [1, 1, 1], 2, 0, project, () => 0.1, 1, 0)!;
+    const constrained = sampleBurleySurface(entry, [0.6, 0.6, 0.6], [1, 1, 1], 2, 0, project, () => 0.1, 1, 1)!;
+    expect(baseline.weight[0]).toBeGreaterThan(0);
+    expect(constrained.weight).toEqual([0, 0, 0]);
+  });
+
+  it.each([false, true])('selectively skips embedded geometry during continuation (enabled=%s)', (enabled) => {
+    let crossings = 0;
+    const vacuum = { absorption: [0, 0, 0] as Vec3, scattering: [0, 0, 0] as Vec3, anisotropy: 0 };
+    const scene: SceneSampler = {
+      intersect() {
+        crossings++;
+        if (crossings === 1) return { position: [0, 0, 0], normal: [0, 0, 1], interiorMedium: vacuum,
+          subsurfaceInterior: true, subsurfaceDomain: 1, subsurfaceSelective: enabled };
+        if (crossings === 2) return { position: [0, 0, -0.5], normal: [0, 0, 1], subsurfaceDomain: 2 };
+        if (crossings === 3) return { position: [0, 0, -1], normal: [0, 0, -1], subsurfaceDomain: 1 };
+        return null;
+      },
+      sampleBsdf: () => crossings === 2 ? null : { direction: [0, 0, -1], value: [1, 1, 1], pdf: 1, transmission: true },
+      evalBsdf: () => ({ value: [0, 0, 0], pdf: 0 }), sampleLight: () => null,
+      occluded: () => false, lightPdf: () => 0, environment: () => [1, 1, 1],
+    };
+    expect(integratePath(scene, { origin: [0, 0, 1], direction: [0, 0, -1] }, createPcg32(731),
+      { maxBounces: 2 })).toEqual(enabled ? [1, 1, 1] : [0, 0, 0]);
+  });
+  it('preserves free-flight random draws and distance when ignoring foreign geometry', () => {
+    const render = (embedded: boolean) => {
+      let entered = false;
+      let finished = false;
+      let randomDraws = 0;
+      const absorption = { absorption: [1, 1, 1] as Vec3, scattering: [0, 0, 0] as Vec3, anisotropy: 0 };
+      const scene: SceneSampler = {
+        intersect(ray) {
+          if (finished) return null;
+          if (!entered) return { position: [0, 0, 0], normal: [0, 0, 1], interiorMedium: absorption,
+            subsurfaceInterior: true, subsurfaceDomain: 1, subsurfaceSelective: true };
+          if (embedded && (ray.minDistance ?? 0) < 0.5) {
+            return { position: [0, 0, -0.5], normal: [0, 0, 1], subsurfaceDomain: 2 };
+          }
+          expect(ray.origin).toEqual([0, 0, 0]);
+          return { position: [0, 0, -1], normal: [0, 0, -1], subsurfaceDomain: 1 };
+        },
+        sampleBsdf() {
+          if (entered) finished = true;
+          entered = true;
+          return { direction: [0, 0, -1], value: [1, 1, 1], pdf: 1, transmission: true };
+        },
+        evalBsdf: () => ({ value: [0, 0, 0], pdf: 0 }), sampleLight: () => null,
+        occluded: () => false, lightPdf: () => 0, environment: () => [1, 1, 1],
+      };
+      const radiance = integratePath(scene, { origin: [0, 0, 1], direction: [0, 0, -1] },
+        () => { randomDraws++; return 0.9; }, { maxBounces: 2 });
+      return { radiance, randomDraws };
+    };
+    const baseline = render(false);
+    expect(baseline.radiance).toEqual([1, 1, 1]);
+    expect(render(true)).toEqual(baseline);
+  });
+  it('applies Davis density to an absorbing medium even without scattering', () => {
+    const random = createPcg32(731);
+    let total = 0;
+    const samples = 10000;
+    for (let sample = 0; sample < samples; sample++) {
+      let crossings = 0;
+      const scene: SceneSampler = {
+        intersect() {
+          crossings++;
+          if (crossings === 1) return { position: [0, 0, 0], normal: [0, 0, 1], subsurfaceInterior: true,
+            subsurfaceDavisBleed: 0.5, interiorMedium: { absorption: [1, 1, 1], scattering: [0, 0, 0], anisotropy: 0 } };
+          if (crossings === 2) return { position: [0, 0, -1], normal: [0, 0, -1] };
+          return null;
+        },
+        sampleBsdf: () => ({ direction: [0, 0, -1], value: [1, 1, 1], pdf: 1, transmission: true }),
+        evalBsdf: () => ({ value: [0, 0, 0], pdf: 0 }), sampleLight: () => null,
+        occluded: () => false, lightPdf: () => 0, environment: () => [1, 1, 1],
+      };
+      total += integratePath(scene, { origin: [0, 0, 1], direction: [0, 0, -1] }, random, { maxBounces: 2 })[0];
+    }
+    const shape = 2 - 0.75 * 0.5;
+    expect(total / samples).toBeCloseTo((1 + 1 / shape) ** -shape, 1);
+    expect(Math.abs(total / samples - Math.exp(-1))).toBeGreaterThan(0.05);
+  });
+  it.each([0, 1, 2] as const)('uses the documented exit-lighting selection for surface mode %s', (mode) => {
+    let crossings = 0;
+    let lightQueries = 0;
+    const vacuum = { absorption: [0, 0, 0] as Vec3, scattering: [0, 0, 0] as Vec3, anisotropy: 0 };
+    const scene: SceneSampler = {
+      intersect() {
+        crossings++;
+        if (crossings === 1) return { position: [0, 0, 0], normal: [0, 0, 1], interiorMedium: vacuum,
+          subsurfaceInterior: true, subsurfaceMode: mode };
+        if (crossings === 2) return { position: [0, 0, -1], normal: [0, 0, -1] };
+        return null;
+      },
+      sampleBsdf: () => ({ direction: [0, 0, -1], value: [1, 1, 1], pdf: 1, transmission: true }),
+      evalBsdf: () => ({ value: [0, 0, 0], pdf: 0 }),
+      sampleLight() { lightQueries++; return null; }, occluded: () => false, lightPdf: () => 0,
+      environment: () => [1, 1, 1],
+    };
+    const radiance = integratePath(scene, { origin: [0, 0, 1], direction: [0, 0, -1] }, createPcg32(731));
+    expect(radiance).toEqual(mode === 1 ? [0, 0, 0] : [1, 1, 1]);
+    expect(lightQueries).toBe(mode === 2 ? 2 : 1);
+  });
+  it('attenuates the spatial base by the existing coat without counting the coat reflection twice', () => {
+    const closure: LayeredClosure = { opacity: 1, lobes: [],
+      coat: { weight: 0.6, color: [0.8, 0.9, 1], roughness: 0.2, ior: 1.5 } };
+    const attenuation = spatialBaseAttenuation(closure, 1, 1);
+    for (let channel = 0; channel < 3; channel++) {
+      expect(attenuation[channel]).toBeCloseTo((1 - 0.6 * 0.04) ** 2 * (0.4 + 0.6 * closure.coat!.color[channel]!), 10);
+    }
+    expect(spatialBaseAttenuation({ opacity: 1, lobes: [] }, 1, 1)).toEqual([1, 1, 1]);
+    expect(spatialBaseAttenuation({ ...closure, coat: { ...closure.coat!, weight: 0 } }, 1, 1)).toEqual([1, 1, 1]);
+  });
   it('lets forty SSS collisions finish with a budget of two surface bounces', () => {
     const render = (maxBounces: number, random: () => number = () => 0.25) => {
       let intersections = 0;
@@ -85,6 +205,15 @@ describe('normalized Burley diffusion', () => {
     expect(unpackLayeredMaterial(packLayeredMaterial(closure))).toEqual(closure);
     expect(deserializeLayeredClosure(serializeLayeredClosure(closure))).toEqual(closure);
   });
+  it('preserves the equivalent inversion and Davis bleed through records and JSON', () => {
+    const closure: LayeredClosure = { opacity: 1, lobes: [{
+      kind: 'subsurface', weight: 1, color: [0.5, 0.5, 0.5], subsurfaceRadius: [1, 2, 3],
+      subsurfaceTransport: 0, subsurfaceInversion: 0, subsurfaceBleed: 0.5, subsurfaceMode: 2,
+      subsurfaceFollowTopology: 0.75, subsurfaceSubset: 12345, subsurfaceContinuation: true,
+    }] };
+    expect(unpackLayeredMaterial(packLayeredMaterial(closure))).toEqual(closure);
+    expect(deserializeLayeredClosure(serializeLayeredClosure(closure))).toEqual(closure);
+  });
   it('moves the exit point and preserves diffuse albedo on a plane', () => {
     const rng = createPcg32(19);
     const entry = { position: [0, 0, 0] as Vec3, normal: [0, 0, 1] as Vec3 };
@@ -135,6 +264,18 @@ describe('normalized Burley diffusion', () => {
     expect(extinction(medium)[0]).toBeCloseTo(1, 12);
     expect(extinction(medium)[1]).toBeCloseTo(0.5, 12);
   });
+  it('applies reciprocal dielectric transmission to Burley entry and exit interfaces', () => {
+    expect(burleyInterfaceTransmission(1, 0.2, 0.7)).toBe(1);
+    expect(burleyInterfaceTransmission(1.5, 1, 1)).toBeCloseTo(0.96 ** 2, 12);
+    expect(burleyInterfaceTransmission(1.5, 0.3, 0.3)).toBeLessThan(burleyInterfaceTransmission(1.5, 1, 1));
+  });
+  it('uses the documented effective-radius profile for Burley mode 2', () => {
+    const radius: Vec3 = [1, 2, 3];
+    expect(burleyDiffusionLength([0.5, 0.5, 0.5], radius, 2, 0.8)).toEqual([0.4, 0.8, 1.2]);
+    expect(burleyDiffusionLength([0.5, 0.5, 0.5], radius, 2, 0)).toEqual([0.4, 0.8, 1.2]);
+    expect(burleyDiffusionLength([0.5, 0.5, 0.5], radius, 3, 0.3, 0, 1.5)[0])
+      .not.toBeCloseTo(burleyDiffusionLength([0.5, 0.5, 0.5], radius, 3, 0.3, 0, 1)[0], 5);
+  });
   it('integrates to unit energy over surface area', () => {
     const step = 0.001;
     let energy = 0;
@@ -163,6 +304,39 @@ describe('normalized Burley diffusion', () => {
 });
 
 describe('single-scatter albedo inversion', () => {
+  it('inverts the documented two-flux approximation with boundary escape and anisotropy', () => {
+    const color = [0.2, 0.5, 0.8] as Vec3;
+    const anisotropy = 0.3;
+    const ior = 1.4;
+    const alpha = albedoPreservingSingleScatter(color, anisotropy, ior);
+    const escape = 1 / ior ** 2;
+    for (let channel = 0; channel < 3; channel++) {
+      const reduced = alpha[channel]! * (1 - anisotropy) / (1 - alpha[channel]! * anisotropy);
+      const root = Math.sqrt(1 - reduced);
+      const internal = (1 - root) / (1 + root);
+      const reflected = internal * escape / (1 - internal * (1 - escape));
+      expect(reflected).toBeCloseTo(color[channel]!, 10);
+    }
+  });
+
+  it('samples a non-exponential Davis-equivalent attenuation with unit mean density', () => {
+    for (const bleed of [0, 1]) {
+      const random = createPcg32(731);
+      const samples = 30000;
+      let sum = 0;
+      let attenuation = 0;
+      for (let sample = 0; sample < samples; sample++) {
+        const density = sampleDavisDensity(bleed, random);
+        expect(density).toBeGreaterThan(0);
+        sum += density;
+        attenuation += Math.exp(-2 * density);
+      }
+      const shape = 2 - 0.75 * bleed;
+      expect(sum / samples).toBeCloseTo(1, 1);
+      expect(attenuation / samples).toBeCloseTo((1 + 2 / shape) ** -shape, 2);
+      expect(attenuation / samples).toBeGreaterThan(Math.exp(-2));
+    }
+  });
   it('maps black to zero and white near one', () => {
     expect(singleScatterAlbedo([0, 0, 0])).toEqual([0, 0, 0]);
     const white = singleScatterAlbedo([1, 1, 1]);
