@@ -7,14 +7,6 @@ import { importLights } from '../../src/usd/lights.ts';
 import { packAnalyticLights } from '../../src/render/pathtracing/analytic-lights.ts';
 
 const SCENE_DIR = resolve(fileURLToPath(new URL('.', import.meta.url)), '../../scenes/pathtracer/lama');
-const CASES = [
-  { suffix: '1_0', ior: '1' },
-  { suffix: '1_5', ior: '1.5' },
-  { suffix: '2_0', ior: '2' },
-  { suffix: '2_5', ior: '2.5' },
-  { suffix: '3_0', ior: '3' },
-] as const;
-
 const reader: UsdLayerReader = {
   async read(uri) {
     return readFile(resolve(SCENE_DIR, uri), 'utf8');
@@ -22,15 +14,15 @@ const reader: UsdLayerReader = {
 };
 
 describe('LamaLayer gold IOR scenes', () => {
-  it.each(CASES)('imports the IOR $ior scene and resolves its material references', async ({ suffix, ior }) => {
-    const scene = await importUsdStage(join(SCENE_DIR, `lama_layer_gold_ior_${suffix}.usda`), { reader });
+  it('imports the editable IOR scene and resolves its material references', async () => {
+    const scene = await importUsdStage(join(SCENE_DIR, 'lama_layer_gold_ior.usda'), { reader });
     const layeredMaterial = scene.materials.find((material) => material.primPath === '/World/Looks/layeredGold');
 
     expect(scene.stage.defaultPrim).toBe('World');
     expect(scene.prims.has('/World/Geometry/Teapot')).toBe(true);
     expect(scene.prims.has('/World/Geometry/Stand')).toBe(true);
     expect(layeredMaterial?.assetPath).toBe('./lama_layer_gold.mtlx');
-    expect(layeredMaterial?.referencedPrimPath).toBe(`/MaterialX/Materials/gold_ior_${suffix}`);
+    expect(layeredMaterial?.referencedPrimPath).toBe('/MaterialX/Materials/gold_ior');
 
     const lights = importLights(scene);
     const key = lights.find((light) => light.path === '/World/Lights/Key');
@@ -52,9 +44,12 @@ describe('LamaLayer gold IOR scenes', () => {
     expect(packed[16]! * -packed[0]! + packed[18]! * -packed[2]!).toBeGreaterThan(0);
 
     const materialDocument = await readFile(join(SCENE_DIR, 'lama_layer_gold.mtlx'), 'utf8');
-    const dielectric = materialDocument.match(new RegExp(`<LamaDielectric name="dielectric_ior_${suffix}"[^>]*>([\\s\\S]*?)</LamaDielectric>`))?.[1];
-    expect(dielectric).toContain(`<input name="IOR" type="float" value="${ior}" />`);
-    expect(materialDocument).toContain(`<LamaSurface name="gold_ior_${suffix}" type="material">`);
+    const dielectric = materialDocument.match(/<LamaDielectric name="dielectric"[^>]*>([\s\S]*?)<\/LamaDielectric>/)?.[1];
+    expect(dielectric).toContain('<input name="IOR" type="float" value="1" uimin="1" uimax="3" engine_editable="true" />');
+    expect(materialDocument.match(/<LamaDielectric\b/g)).toHaveLength(1);
+    expect(materialDocument.match(/<LamaLayer\b/g)).toHaveLength(1);
+    expect(materialDocument.match(/<LamaSurface\b/g)).toHaveLength(1);
+    expect(materialDocument).toContain('<LamaSurface name="gold_ior" type="material">');
     const conductor = materialDocument.match(/<LamaConductor name="gold_base"[^>]*>([\s\S]*?)<\/LamaConductor>/)?.[1];
     expect(conductor).toContain('<input name="fresnelMode" type="integer" value="1" />');
     expect(conductor).toContain('<input name="roughness" type="float" value="0.22" />');

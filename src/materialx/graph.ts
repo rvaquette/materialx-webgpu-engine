@@ -19,6 +19,7 @@ export interface MxVector<T> {
 }
 
 export interface MxInput extends MxElement {
+  getAttribute?(name: string): string;
   getDefaultGeomPropString?(): string;
   getType(): string;
   getValueString(): string;
@@ -78,6 +79,10 @@ export interface ResolvedInput {
   source: ResolvedValueSource;
   /** Preserve interface bindings even when their source resolves to a literal. */
   interfaceName?: string;
+  /** Engine editor opt-in; when authored, only true inputs are shown for this graph. */
+  editable?: boolean;
+  min?: readonly number[];
+  max?: readonly number[];
   /** Declared colorspace carried from the input; never inferred. */
   colorSpace?: string;
   unit?: string;
@@ -155,6 +160,17 @@ function nonEmpty(value: string | undefined): string | undefined {
   return value !== undefined && value !== '' ? value : undefined;
 }
 
+function parseUiLimit(value: string | undefined, type: string, attribute: string, namePath: string): number[] | undefined {
+  const raw = nonEmpty(value);
+  if (raw === undefined) return undefined;
+  const size = type === 'color3' ? 3 : type.startsWith('vector') ? Number(type.at(-1)) : 1;
+  const values = raw.split(/[\s,]+/).filter(Boolean).map(Number);
+  if (values.length !== size || !values.every(Number.isFinite)) {
+    throw new Error(`Invalid ${attribute} at ${namePath}: expected ${size} finite value(s).`);
+  }
+  return values;
+}
+
 function provenanceOf(el: { getNamePath(): string; getActiveSourceUri?(): string }): Provenance {
   const sourceUri = nonEmpty(el.getActiveSourceUri?.());
   return sourceUri !== undefined ? { namePath: el.getNamePath(), sourceUri } : { namePath: el.getNamePath() };
@@ -180,6 +196,15 @@ function resolveInput(input: MxInput): { resolved: ResolvedInput; connected: MxN
   const colorSpace = nonEmpty(input.getColorSpace?.());
   const unit = nonEmpty(input.getUnit?.());
   const unitType = nonEmpty(input.getUnitType?.());
+  const editable = nonEmpty(input.getAttribute?.('engine_editable'));
+  if (editable !== undefined && editable !== 'true' && editable !== 'false') {
+    throw new Error(`Invalid engine_editable at ${provenance.namePath}: expected true or false.`);
+  }
+  const min = parseUiLimit(input.getAttribute?.('uimin'), type, 'uimin', provenance.namePath);
+  const max = parseUiLimit(input.getAttribute?.('uimax'), type, 'uimax', provenance.namePath);
+  if (min && max && min.some((value, index) => value > max[index]!)) {
+    throw new Error(`Invalid UI range at ${provenance.namePath}: uimin must not exceed uimax.`);
+  }
 
   let source: ResolvedValueSource;
   let connected: MxNode | null = null;
@@ -234,6 +259,9 @@ function resolveInput(input: MxInput): { resolved: ResolvedInput; connected: MxN
       type,
       source,
       ...(interfaceName !== undefined ? { interfaceName } : {}),
+      ...(editable !== undefined ? { editable: editable === 'true' } : {}),
+      ...(min !== undefined ? { min } : {}),
+      ...(max !== undefined ? { max } : {}),
       ...(colorSpace !== undefined ? { colorSpace } : {}),
       ...(unit !== undefined ? { unit } : {}),
       ...(unitType !== undefined ? { unitType } : {}),

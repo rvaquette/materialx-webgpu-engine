@@ -16,6 +16,8 @@ export interface MaterialParameter {
   type: 'float' | 'integer' | 'boolean' | 'color3' | 'vector2' | 'vector3' | 'vector4';
   value: readonly number[];
   initial: readonly number[];
+  min?: readonly number[];
+  max?: readonly number[];
   /** Uniform edits are immediate; feature boundaries and topology rebuild. */
   update: 'uniform' | 'feature' | 'rebuild';
   uniform?: string;
@@ -141,17 +143,23 @@ function applyFeatureStates(surface: ResolvedSurface, parameters: readonly Mater
 }
 
 export function visibleMaterialParameters(material: MaterialResource): readonly MaterialParameter[] {
-  const surfaceNode = material.surfaceGraph?.nodes.get(material.resolvedSurface?.nodeId ?? '');
+  const graph = material.surfaceGraph;
+  const surfaceNode = graph?.nodes.get(material.resolvedSurface?.nodeId ?? '');
+  const explicitSelection = [...(graph?.nodes.values() ?? [])].some(node =>
+    node.inputs.some(input => input.editable !== undefined));
   return (material.parameters ?? []).filter(parameter => {
-    if (parameter.nodeId) return false;
-    const input = surfaceNode?.inputs.find(input => input.name === parameter.input);
-    return input?.source.kind === 'value' && !input.interfaceName;
+    const node = parameter.nodeId ? graph?.nodes.get(parameter.nodeId) : surfaceNode;
+    const input = node?.inputs.find(input => input.name === parameter.input);
+    if (input?.source.kind !== 'value' || input.interfaceName) return false;
+    return explicitSelection ? input.editable === true : !parameter.nodeId;
   });
 }
 
 export function parameterValues(parameter: MaterialParameter, values: readonly number[]): number[] {
   const size = parameter.type === 'color3' ? 3 : parameter.type.startsWith('vector') ? Number(parameter.type.at(-1)) : 1;
   if (values.length !== size || !values.every(Number.isFinite)) throw new Error(`Invalid value for ${parameter.label}`);
+  if (parameter.min?.some((minimum, index) => values[index]! < minimum)) throw new Error(`${parameter.label} is below its minimum.`);
+  if (parameter.max?.some((maximum, index) => values[index]! > maximum)) throw new Error(`${parameter.label} is above its maximum.`);
   if (parameter.type === 'integer' && !Number.isInteger(values[0])) throw new Error(`${parameter.label} requires an integer.`);
   if (parameter.type === 'boolean' && values[0] !== 0 && values[0] !== 1) throw new Error(`${parameter.label} requires a boolean.`);
   return [...values];
@@ -178,6 +186,8 @@ export function editableSceneMaterials(resources: SceneResources): SceneResource
       parameters.push({
         id: `surface:${name}`, label: name, type: input.type, input: name,
         value: [...input.source.value], initial: [...input.source.value],
+        ...(authored?.min !== undefined ? { min: authored.min } : {}),
+        ...(authored?.max !== undefined ? { max: authored.max } : {}),
         update: rebuild ? 'rebuild' : feature ? 'feature' : 'uniform', ...(!rebuild ? { uniform } : {}),
       });
       if (!rebuild && !feature) inputs.set(name, { ...input, parameter: uniform });
@@ -200,6 +210,8 @@ export function editableSceneMaterials(resources: SceneResources): SceneResource
         const parameter: MaterialParameter = {
           id: JSON.stringify([nodeId, input.name]), label: `${nodeId} / ${input.name}`, type: input.type,
           value: values, initial: [...values], update: 'rebuild', nodeId, input: input.name,
+          ...(input.min !== undefined ? { min: input.min } : {}),
+          ...(input.max !== undefined ? { max: input.max } : {}),
         };
         parameterValues(parameter, values);
         parameters.push(parameter);

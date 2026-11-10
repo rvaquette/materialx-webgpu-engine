@@ -17,6 +17,9 @@ interface FakeInputSpec {
   colorSpace?: string;
   unit?: string;
   unitType?: string;
+  editable?: string;
+  uiMin?: string;
+  uiMax?: string;
 }
 
 function fakeInput(spec: FakeInputSpec): MxInput {
@@ -32,6 +35,8 @@ function fakeInput(spec: FakeInputSpec): MxInput {
     getColorSpace: () => spec.colorSpace ?? '',
     getUnit: () => spec.unit ?? '',
     getUnitType: () => spec.unitType ?? '',
+    getAttribute: name => name === 'engine_editable' ? spec.editable ?? ''
+      : name === 'uimin' ? spec.uiMin ?? '' : name === 'uimax' ? spec.uiMax ?? '' : '',
     validate: () => true,
     delete: () => {},
   };
@@ -99,6 +104,29 @@ function fakeNode(opts: {
 }
 
 describe('resolveGraph', () => {
+  it('preserves explicit editor selection and rejects invalid flags', () => {
+    const resolve = (editable?: string) => {
+      const input = fakeInput({ name: 'IOR', type: 'float', value: '1.5', ...(editable !== undefined ? { editable } : {}) });
+      const node = fakeNode({ name: 'coat', category: 'LamaDielectric', type: 'BSDF', inputs: [input] });
+      return resolveGraph({ roots: [{ name: 'bsdf', type: 'BSDF', node }], onDiagnostic: () => {} })
+        .nodes.get('/mat/coat')!.inputs[0]!;
+    };
+    expect(resolve('true').editable).toBe(true);
+    expect(resolve('false').editable).toBe(false);
+    expect(resolve().editable).toBeUndefined();
+    expect(() => resolve('yes')).toThrow('Invalid engine_editable');
+  });
+  it('preserves and validates MaterialX UI numeric limits', () => {
+    const resolve = (uiMin?: string, uiMax?: string) => {
+      const input = fakeInput({ name: 'IOR', type: 'float', value: '1.5', uiMin, uiMax });
+      const node = fakeNode({ name: 'coat', category: 'LamaDielectric', type: 'BSDF', inputs: [input] });
+      return resolveGraph({ roots: [{ name: 'bsdf', type: 'BSDF', node }], onDiagnostic: () => {} })
+        .nodes.get('/mat/coat')!.inputs[0]!;
+    };
+    expect(resolve('1', '3')).toMatchObject({ min: [1], max: [3] });
+    expect(() => resolve('3', '1')).toThrow('uimin must not exceed uimax');
+    expect(() => resolve('low', '3')).toThrow('Invalid uimin');
+  });
   it('preserves active NodeDef inputs and their typed defaults, including inherited inputs', () => {
     const definition = fakeNodeDef({ name: 'ND_mix_color3', nodeString: 'mix', type: 'color3' });
     definition.getInputs = () => [fakeInput({ name: 'mix', type: 'float', value: '0.25' })];

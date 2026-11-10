@@ -11,6 +11,7 @@ import { changeMaterialParameters, compileEditableMaterial, editableSceneMateria
 import { applySceneDisplacement } from '../../src/render/displacement.ts';
 import { resolveVolume } from '../../src/materialx/volume-graph.ts';
 import { appendVolumeIr } from '../../src/compiler/volume-ir.ts';
+import { surfaceGraphToLayered } from '../../src/compiler/surface-lower.ts';
 
 async function fixture(displacement = false, configure?: (graph: ResolvedGraph) => void) {
   const graph: ResolvedGraph = {
@@ -66,6 +67,63 @@ def Mesh "b" { rel material:binding = </Mat> }` } });
 }
 
 describe('dynamic MaterialX parameters', () => {
+  it('exposes only the opted-in dielectric IOR and rebuilds the LamaLayer without changing its conductor', async () => {
+    const resources = await fixture(false, graph => {
+      const surface = graph.nodes.get('surface')!;
+      surface.category = 'LamaLayer';
+      surface.type = 'BSDF';
+      surface.inputs = [
+        { name: 'materialTop', type: 'BSDF', source: { kind: 'connection', nodeId: 'coat' }, provenance: { namePath: '/surface/materialTop' } },
+        { name: 'materialBase', type: 'BSDF', source: { kind: 'connection', nodeId: 'gold' }, provenance: { namePath: '/surface/materialBase' } },
+      ];
+      graph.nodes.set('coat', {
+        id: 'coat', category: 'LamaDielectric', type: 'BSDF', provenance: { namePath: '/coat' },
+        inputs: [
+          { name: 'IOR', type: 'float', editable: true, min: [1], max: [3], source: { kind: 'value', type: 'float', value: '1.5' }, provenance: { namePath: '/coat/IOR' } },
+          { name: 'fresnelMode', type: 'integer', source: { kind: 'value', type: 'integer', value: '1' }, provenance: { namePath: '/coat/fresnelMode' } },
+        ],
+      });
+      graph.nodes.set('gold', {
+        id: 'gold', category: 'LamaConductor', type: 'BSDF', provenance: { namePath: '/gold' }, inputs: [],
+      });
+    });
+    const material = [...resources.materials.values()][0]!;
+    const parameters = visibleMaterialParameters(material);
+    expect(parameters.map(parameter => [parameter.nodeId, parameter.input, parameter.value, parameter.update]))
+      .toEqual([['coat', 'IOR', [1.5], 'rebuild']]);
+    const ior = parameters[0]!;
+    expect(ior.min).toEqual([1]);
+    expect(ior.max).toEqual([3]);
+    expect(parameterValues(ior, [3])).toEqual([3]);
+    expect(() => parameterValues(ior, [0.9])).toThrow('below its minimum');
+    expect(() => parameterValues(ior, [3.1])).toThrow('above its maximum');
+    const original = surfaceGraphToLayered(material.resolvedSurface!, material.surfaceGraph!);
+    const updated = compileEditableMaterial(changeMaterialParameters(material, new Map([[ior.id, [3]]])));
+    const changed = surfaceGraphToLayered(updated.resolvedSurface!, updated.surfaceGraph!);
+    expect(original.coat?.ior).toBe(1.5);
+    expect(changed.coat?.ior).toBe(3);
+    expect(changed.lobes).toEqual(original.lobes);
+    expect(updated.sceneShader!.code).not.toBe(material.sceneShader!.code);
+    expect(visibleMaterialParameters(updated).map(parameter => parameter.input)).toEqual(['IOR']);
+    const reset = changeMaterialParameters(updated, new Map([[ior.id, ior.initial]]));
+    expect(surfaceGraphToLayered(reset.resolvedSurface!, reset.surfaceGraph!).coat?.ior).toBe(1.5);
+  });
+
+  it('can hide every control and does not expose marked connections or interfaces', async () => {
+    const resources = await fixture(false, graph => {
+      graph.nodes.get('surface')!.inputs = [
+        { name: 'specular', type: 'float', editable: false, source: { kind: 'value', type: 'float', value: '1' }, provenance: { namePath: '/surface/specular' } },
+        { name: 'base_color', type: 'color3', editable: true, source: { kind: 'connection', nodeId: 'color' }, provenance: { namePath: '/surface/base_color' } },
+        { name: 'specular_roughness', type: 'float', editable: true, interfaceName: 'roughness',
+          source: { kind: 'value', type: 'float', value: '0.4' }, provenance: { namePath: '/surface/specular_roughness' } },
+      ];
+      graph.nodes.set('color', {
+        id: 'color', category: 'constant', type: 'color3', provenance: { namePath: '/color' },
+        inputs: [{ name: 'value', type: 'color3', source: { kind: 'value', type: 'color3', value: '1, 1, 1' }, provenance: { namePath: '/color/value' } }],
+      });
+    });
+    expect(visibleMaterialParameters([...resources.materials.values()][0]!)).toEqual([]);
+  });
   it('rebuilds explicit volume coefficients when an upstream VDF parameter changes', async () => {
     const resources = await fixture(false, graph => {
       graph.terminals = [...graph.terminals, { name: 'volumeshader', type: 'volumeshader', nodeId: 'volume', provenance: { namePath: '/volume' } }];

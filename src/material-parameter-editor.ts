@@ -47,7 +47,9 @@ export class MaterialParameterEditor {
       } else {
         if (parameter.type === 'float') {
           const value: [number] = [current[0]!];
-          if (ImGui.SliderFloat('Curseur', value, Math.min(0, value[0]), Math.max(1, value[0] * 2))) {
+          const minimum = parameter.min?.[0] ?? Math.min(0, value[0]);
+          const maximum = parameter.max?.[0] ?? Math.max(1, value[0] * 2);
+          if (ImGui.SliderFloat('Curseur', value, minimum, maximum)) {
             current[0] = value[0];
             this.#queue(parameter, current);
           }
@@ -67,7 +69,7 @@ export class MaterialParameterEditor {
             ? ImGui.InputInt(`Valeur ${i + 1}`, input)
             : ImGui.InputFloat(`Valeur ${i + 1}`, input, 0, 0, '%.6g');
           if (changed) {
-            current[i] = input[0];
+            current[i] = Math.max(parameter.min?.[i] ?? -Infinity, Math.min(parameter.max?.[i] ?? Infinity, input[0]));
             if (current.every(Number.isFinite)) this.#queue(parameter, current);
             else this.#options.error(new Error(`Valeur invalide : ${parameter.label}`));
           }

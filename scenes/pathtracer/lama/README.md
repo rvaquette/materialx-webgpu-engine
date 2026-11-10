@@ -318,13 +318,12 @@ All final controls reported zero WGSL errors/nonfinite accumulation values.
 The path-tracer/compiler suite passed 495 tests in 35 files, excluding the same
 pre-existing analytic-lights traversal-string assertion. Validation was local only.
 
-## LamaLayer gold / dielectric IOR sweep
+## LamaLayer gold / dielectric IOR
 
-The five `lama_layer_gold_ior_*.usda` scenes use the existing RenderMan teapot
-mesh and shared `lama_layer_gold.mtlx` document. The conductor forms the rough
-gold base; a dielectric LamaLayer sits above it with fixed roughness and IOR
-values 1.0, 1.5, 2.0, 2.5, and 3.0. Geometry, camera, and lighting are identical
-between scenes so the IOR is the only changing parameter.
+The `lama_layer_gold_ior.usda` scene uses the existing RenderMan teapot mesh
+and `lama_layer_gold.mtlx` document. The conductor forms the rough gold base;
+a dielectric LamaLayer sits above it with roughness 0.08 and an initial IOR of
+1.0, editable in the viewer over the range 1.0-3.0.
 
 The key is a vertical 0.18 x 0.35 m rectangular softbox in front of the teapot,
 with a weaker fill and an explicit studio HDR dome at intensity 0.06 to preserve
@@ -334,6 +333,15 @@ The isotropic gold conductor uses scientific Fresnel (complex IOR), neutral tint
 and roughness 0.22; the dielectric top roughness stays at 0.08.
 This is a local lighting/material reconstruction, not a pixel-matched RenderMan reference.
 
+In the viewer, select **Teapot**, then **Parametres du materiau** to edit only
+the dielectric IOR. An edit recompiles the material and restarts accumulation;
+reset restores the selected scene's initial IOR. Ground and stand controls are hidden.
+The engine-specific MaterialX input attribute `engine_editable="true"` opts an
+input into the editor; once any `engine_editable` attribute is authored in a
+material's reachable graph, all unmarked inputs are hidden. `false` alone hides
+all controls for that material. Without this metadata, the usual editor behavior
+(explicit unbound surface inputs only) is unchanged. Connections and interface
+bindings cannot be made editable by this attribute.
+
 Open a scene with
-`usd-image-harness.html?entry=/scenes/pathtracer/lama/lama_layer_gold_ior_1_0.usda&backend=pathtracing&res=512&spp=64`;
-replace `1_0` with `1_5`, `2_0`, `2_5`, or `3_0` for the other renders.
+`usd-image-harness.html?entry=/scenes/pathtracer/lama/lama_layer_gold_ior.usda&backend=pathtracing&res=512&spp=64`.

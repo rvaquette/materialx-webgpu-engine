@@ -3,7 +3,7 @@
     defaultPrim = "World"
     metersPerUnit = 1
     upAxis = "Y"
-    doc = "LamaLayer rough gold base and dielectric top, IOR 2.0"
+    doc = "LamaLayer rough gold base and editable dielectric IOR, initial value 1.0"
 )
 
 def Xform "World"
@@ -29,7 +29,7 @@ def Xform "World"
     {
         def Material "ground" (prepend references = @./lama_layer_gold.mtlx@</MaterialX/Materials/ground>) {}
         def Material "stand" (prepend references = @./lama_layer_gold.mtlx@</MaterialX/Materials/stand>) {}
-        def Material "layeredGold" (prepend references = @./lama_layer_gold.mtlx@</MaterialX/Materials/gold_ior_2_0>) {}
+        def Material "layeredGold" (prepend references = @./lama_layer_gold.mtlx@</MaterialX/Materials/gold_ior>) {}
     }
 
     def Scope "Geometry"

@@ -1,7 +1,7 @@
 <?xml version="1.0"?>
 <materialx version="1.39" colorspace="lin_rec709">
   <standard_surface name="ground_surface" type="surfaceshader">
-    <input name="base_color" type="color3" nodename="ground_albedo" />
+    <input name="base_color" type="color3" nodename="ground_albedo" engine_editable="false" />
     <input name="specular_roughness" type="float" value="0.8" />
   </standard_surface>
   <image name="ground_texture" type="color3">
@@ -16,7 +16,7 @@
   </surfacematerial>
 
   <standard_surface name="stand_surface" type="surfaceshader">
-    <input name="base_color" type="color3" value="0.025, 0.02, 0.012" />
+    <input name="base_color" type="color3" value="0.025, 0.02, 0.012" engine_editable="false" />
     <input name="metalness" type="float" value="1" />
     <input name="specular_roughness" type="float" value="0.28" />
   </standard_surface>
@@ -33,81 +33,21 @@
     <input name="tint" type="color3" value="1, 1, 1" />
   </LamaConductor>
 
-  <LamaDielectric name="dielectric_ior_1_0" type="BSDF">
+  <LamaDielectric name="dielectric" type="BSDF">
     <input name="fresnelMode" type="integer" value="1" />
-    <input name="IOR" type="float" value="1" />
-    <input name="roughness" type="float" value="0.08" />
-  </LamaDielectric>
-  <LamaDielectric name="dielectric_ior_1_5" type="BSDF">
-    <input name="fresnelMode" type="integer" value="1" />
-    <input name="IOR" type="float" value="1.5" />
-    <input name="roughness" type="float" value="0.08" />
-  </LamaDielectric>
-  <LamaDielectric name="dielectric_ior_2_0" type="BSDF">
-    <input name="fresnelMode" type="integer" value="1" />
-    <input name="IOR" type="float" value="2" />
-    <input name="roughness" type="float" value="0.08" />
-  </LamaDielectric>
-  <LamaDielectric name="dielectric_ior_2_5" type="BSDF">
-    <input name="fresnelMode" type="integer" value="1" />
-    <input name="IOR" type="float" value="2.5" />
-    <input name="roughness" type="float" value="0.08" />
-  </LamaDielectric>
-  <LamaDielectric name="dielectric_ior_3_0" type="BSDF">
-    <input name="fresnelMode" type="integer" value="1" />
-    <input name="IOR" type="float" value="3" />
+    <input name="IOR" type="float" value="1" uimin="1" uimax="3" engine_editable="true" />
     <input name="roughness" type="float" value="0.08" />
   </LamaDielectric>
 
-  <LamaLayer name="layer_ior_1_0" type="BSDF">
-    <input name="materialTop" type="BSDF" nodename="dielectric_ior_1_0" />
-    <input name="materialBase" type="BSDF" nodename="gold_base" />
-    <input name="topMix" type="float" value="1" />
-  </LamaLayer>
-  <LamaLayer name="layer_ior_1_5" type="BSDF">
-    <input name="materialTop" type="BSDF" nodename="dielectric_ior_1_5" />
-    <input name="materialBase" type="BSDF" nodename="gold_base" />
-    <input name="topMix" type="float" value="1" />
-  </LamaLayer>
-  <LamaLayer name="layer_ior_2_0" type="BSDF">
-    <input name="materialTop" type="BSDF" nodename="dielectric_ior_2_0" />
-    <input name="materialBase" type="BSDF" nodename="gold_base" />
-    <input name="topMix" type="float" value="1" />
-  </LamaLayer>
-  <LamaLayer name="layer_ior_2_5" type="BSDF">
-    <input name="materialTop" type="BSDF" nodename="dielectric_ior_2_5" />
-    <input name="materialBase" type="BSDF" nodename="gold_base" />
-    <input name="topMix" type="float" value="1" />
-  </LamaLayer>
-  <LamaLayer name="layer_ior_3_0" type="BSDF">
-    <input name="materialTop" type="BSDF" nodename="dielectric_ior_3_0" />
+  <LamaLayer name="gold_layer" type="BSDF">
+    <input name="materialTop" type="BSDF" nodename="dielectric" />
     <input name="materialBase" type="BSDF" nodename="gold_base" />
     <input name="topMix" type="float" value="1" />
   </LamaLayer>
 
-  <LamaSurface name="gold_ior_1_0" type="material">
-    <input name="materialFront" type="BSDF" nodename="layer_ior_1_0" />
-    <input name="materialBack" type="BSDF" nodename="layer_ior_1_0" />
-    <input name="presence" type="float" value="1" />
-  </LamaSurface>
-  <LamaSurface name="gold_ior_1_5" type="material">
-    <input name="materialFront" type="BSDF" nodename="layer_ior_1_5" />
-    <input name="materialBack" type="BSDF" nodename="layer_ior_1_5" />
-    <input name="presence" type="float" value="1" />
-  </LamaSurface>
-  <LamaSurface name="gold_ior_2_0" type="material">
-    <input name="materialFront" type="BSDF" nodename="layer_ior_2_0" />
-    <input name="materialBack" type="BSDF" nodename="layer_ior_2_0" />
-    <input name="presence" type="float" value="1" />
-  </LamaSurface>
-  <LamaSurface name="gold_ior_2_5" type="material">
-    <input name="materialFront" type="BSDF" nodename="layer_ior_2_5" />
-    <input name="materialBack" type="BSDF" nodename="layer_ior_2_5" />
-    <input name="presence" type="float" value="1" />
-  </LamaSurface>
-  <LamaSurface name="gold_ior_3_0" type="material">
-    <input name="materialFront" type="BSDF" nodename="layer_ior_3_0" />
-    <input name="materialBack" type="BSDF" nodename="layer_ior_3_0" />
+  <LamaSurface name="gold_ior" type="material">
+    <input name="materialFront" type="BSDF" nodename="gold_layer" />
+    <input name="materialBack" type="BSDF" nodename="gold_layer" />
     <input name="presence" type="float" value="1" />
   </LamaSurface>
 </materialx>
