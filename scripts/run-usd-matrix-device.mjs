@@ -8,6 +8,7 @@
 // Usage:  node scripts/run-usd-matrix-device.mjs [res] [spp]
 // Env:    MX_ADB   path to adb (default D:\platform-tools\adb.exe)
 //         MX_PORT  dev server port (default 5173)
+//         MX_ENTRIES comma-separated scene URLs (overrides the built-in matrix)
 
 import { spawn, execFile } from 'node:child_process';
 import { writeFileSync, mkdirSync } from 'node:fs';
@@ -31,7 +32,11 @@ const ALL_SCENES = [
   'test_material_brick_procedural',
 ];
 const SCENE_FILTER = (process.env.MX_SCENES ?? '').split(',').map((s) => s.trim()).filter(Boolean);
-const SCENES = SCENE_FILTER.length > 0 ? ALL_SCENES.filter((s) => SCENE_FILTER.some((f) => s.includes(f))) : ALL_SCENES;
+const CUSTOM_ENTRIES = (process.env.MX_ENTRIES ?? '').split(',').map((s) => s.trim()).filter(Boolean);
+const SCENES = CUSTOM_ENTRIES.length > 0
+  ? CUSTOM_ENTRIES.map((entry) => ({ name: entry.split('/').pop().replace(/\.[^.]+$/, ''), entry }))
+  : (SCENE_FILTER.length > 0 ? ALL_SCENES.filter((s) => SCENE_FILTER.some((f) => s.includes(f))) : ALL_SCENES)
+    .map((name) => ({ name, entry: `/scenes/${name}/${name}.usda` }));
 const BACKENDS = (process.env.MX_BACKENDS ?? 'raster,pathtracing').split(',').map((s) => s.trim()).filter(Boolean);
 
 const log = (m) => console.log(`[usd-matrix-device] ${m}`);
@@ -168,8 +173,7 @@ async function main() {
     await send('Page.enable');
 
     mkdirSync(OUT_DIR, { recursive: true });
-    for (const name of SCENES) {
-      const entry = `/scenes/${name}/${name}.usda`;
+    for (const { name, entry } of SCENES) {
       for (const backend of BACKENDS) {
         log(`rendering ${name} [${backend}] @ ${RES}x${RES}${backend === 'pathtracing' ? `, ${SPP} spp` : ''}...`);
         const { dataUrl, renderMs, pageLog } = await renderOne(send, entry, backend);
@@ -198,7 +202,7 @@ async function main() {
   console.log('\n=== Temps de rendu mobile (ms) ===');
   const col = (v) => (v == null ? '   n/a' : v.toFixed(0).padStart(6));
   console.log(`${'scene'.padEnd(30)} ${'raster'.padStart(8)} ${'pathtrace'.padStart(10)}`);
-  for (const name of SCENES) {
+  for (const { name } of SCENES) {
     const r = results.find((x) => x.name === name && x.backend === 'raster');
     const p = results.find((x) => x.name === name && x.backend === 'pathtracing');
     console.log(`${name.padEnd(30)} ${col(r?.renderMs)}   ${col(p?.renderMs)}`);

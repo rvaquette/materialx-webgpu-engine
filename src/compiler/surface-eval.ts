@@ -92,9 +92,13 @@ export function prepareSurface(
 
 /** Compose a prepared surface into a LayeredClosure at one shading point. */
 export function composeSurfaceLayered(prepared: PreparedSurface, env: IrEvalVaryings = {}): LayeredClosure {
+  const frame = {
+    ...(env.normal !== undefined ? { normal: env.normal } : {}),
+    ...(env.tangent !== undefined ? { tangent: env.tangent } : {}),
+  };
   // No procedural inputs: exact non-regression with the constant lowering.
   if (prepared.connected.size === 0 && prepared.lamaInputs.length === 0) {
-    return surfaceGraphToLayered(selectLamaSide(prepared.surface, env), prepared.graph);
+    return surfaceGraphToLayered(selectLamaSide(prepared.surface, env), prepared.graph, frame);
   }
   const cache = new Map<string, readonly number[]>();
   const overridden = new Map<string, NormalizedSurfaceInput>();
@@ -132,7 +136,7 @@ export function composeSurfaceLayered(prepared: PreparedSurface, env: IrEvalVary
   const graph = nodes.size === prepared.graph.nodes.size
     ? { ...prepared.graph, nodes }
     : prepared.graph;
-  return surfaceGraphToLayered(selectLamaSide({ ...prepared.surface, inputs: overridden }, env), graph);
+  return surfaceGraphToLayered(selectLamaSide({ ...prepared.surface, inputs: overridden }, env), graph, frame);
 }
 
 function selectLamaSide(surface: ResolvedSurface, env: IrEvalVaryings): ResolvedSurface {

@@ -133,16 +133,19 @@ describe('T057b material-record codec', () => {
           anisotropy: 0.6,
           rotation: 0.3,
           extinction: [2.1, 1.9, 1.7],
+          conductorEta: [0.2, 0.4, 1.2],
         },
         {
           kind: 'generalized_schlick',
           weight: 0.5,
           color: [0.04, 0.04, 0.04],
           color90: [1, 1, 1],
+          fresnelExponent: 3,
           roughness: 0.1,
           ior: 1.4,
         },
         { kind: 'dielectric_transmission', weight: 0.3, color: [1, 1, 1], roughness: 0.05, ior: 1.33, thinWalled: true },
+        { kind: 'oren_nayar_diffuse', weight: 0.7, color: [0.8, 0.7, 0.6], roughness: 0.2, energyCompensation: 0.75 },
       ],
       coat: { weight: 0.8, color: [1, 0.98, 0.95], roughness: 0.08, ior: 1.5 },
       sheen: { weight: 0.4, color: [0.5, 0.5, 0.6], roughness: 0.3 },
@@ -157,8 +160,11 @@ describe('T057b material-record codec', () => {
     expect(back.lobes[0]!.anisotropy).toBeCloseTo(0.6, 5);
     expect(back.lobes[0]!.rotation).toBeCloseTo(0.3, 5);
     expect(back.lobes[0]!.extinction![1]!).toBeCloseTo(1.9, 5);
+    expect(back.lobes[0]!.conductorEta![2]!).toBeCloseTo(1.2, 5);
     expect(back.lobes[1]!.color90![0]!).toBeCloseTo(1, 5);
+    expect(back.lobes[1]!.fresnelExponent).toBeCloseTo(3, 5);
     expect(back.lobes[2]!.thinWalled).toBe(true);
+    expect(back.lobes[3]!.energyCompensation).toBeCloseTo(0.75, 5);
     // layers + emission + opacity
     expect(back.coat!.ior).toBeCloseTo(1.5, 5);
     expect(back.sheen!.roughness).toBeCloseTo(0.3, 5);
@@ -179,6 +185,8 @@ describe('T057b material-record codec', () => {
           ior: 1.5,
           attenuationColor: [0.5, 0.25, 0.1],
           attenuationDistance: 2,
+          interiorScattering: [0.1, 0.2, 0.3],
+          interiorAnisotropy: 0.45,
         },
         { kind: 'subsurface', weight: 0.7, color: [0.9, 0.5, 0.4], subsurfaceRadius: [1.2, 0.4, 0.2] },
       ],
@@ -189,6 +197,10 @@ describe('T057b material-record codec', () => {
     const glass = back.lobes[0]!;
     expect(glass.attenuationColor![1]!).toBeCloseTo(0.25, 5);
     expect(glass.attenuationDistance!).toBeCloseTo(2, 5);
+    expect(glass.interiorScattering?.[0]).toBeCloseTo(0.1, 6);
+    expect(glass.interiorScattering?.[1]).toBeCloseTo(0.2, 6);
+    expect(glass.interiorScattering?.[2]).toBeCloseTo(0.3, 6);
+    expect(glass.interiorAnisotropy).toBeCloseTo(0.45, 5);
     const sss = back.lobes[1]!;
     expect(sss.subsurfaceRadius![0]!).toBeCloseTo(1.2, 5);
     expect(sss.subsurfaceRadius![2]!).toBeCloseTo(0.2, 5);

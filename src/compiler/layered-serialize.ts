@@ -30,13 +30,18 @@ export interface SerializedBsdfLobe {
   weight: number;
   color: Rgb3;
   color90?: Rgb3;
+  fresnelExponent?: number;
+  energyCompensation?: number;
   hairTintTRT?: Rgb3;
   roughness?: number;
   anisotropy?: number;
   rotation?: number;
   ior?: number;
   extinction?: Rgb3;
+  conductorEta?: Rgb3;
   thinWalled?: boolean;
+  interiorScattering?: Rgb3;
+  interiorAnisotropy?: number;
 }
 
 export interface SerializedCoatLayer {
@@ -77,12 +82,17 @@ export interface SerializedLayeredClosure {
 function serializeLobe(l: LayeredBsdfLobe, d: number): SerializedBsdfLobe {
   const out: SerializedBsdfLobe = { kind: l.kind, weight: roundTo(l.weight, d), color: rgb(l.color, d) };
   if (l.color90) out.color90 = rgb(l.color90, d);
+  if (l.fresnelExponent !== undefined) out.fresnelExponent = roundTo(l.fresnelExponent, d);
+  if (l.energyCompensation !== undefined) out.energyCompensation = roundTo(l.energyCompensation, d);
   if (l.hairTintTRT) out.hairTintTRT = rgb(l.hairTintTRT, d);
   if (l.roughness !== undefined) out.roughness = roundTo(l.roughness, d);
   if (l.anisotropy !== undefined) out.anisotropy = roundTo(l.anisotropy, d);
   if (l.rotation !== undefined) out.rotation = roundTo(l.rotation, d);
   if (l.ior !== undefined) out.ior = roundTo(l.ior, d);
   if (l.extinction) out.extinction = rgb(l.extinction, d);
+  if (l.conductorEta) out.conductorEta = rgb(l.conductorEta, d);
+  if (l.interiorScattering) out.interiorScattering = rgb(l.interiorScattering, d);
+  if (l.interiorAnisotropy !== undefined) out.interiorAnisotropy = roundTo(l.interiorAnisotropy, d);
   if (l.thinWalled) out.thinWalled = true;
   return out;
 }
@@ -129,12 +139,17 @@ export function serializeLayeredClosure(closure: LayeredClosure, decimals = 6): 
 function deserializeLobe(l: SerializedBsdfLobe): LayeredBsdfLobe {
   const out: LayeredBsdfLobe = { kind: l.kind, weight: l.weight, color: tuple(l.color) };
   if (l.color90) out.color90 = tuple(l.color90);
+  if (l.fresnelExponent !== undefined) out.fresnelExponent = l.fresnelExponent;
+  if (l.energyCompensation !== undefined) out.energyCompensation = l.energyCompensation;
   if (l.hairTintTRT) out.hairTintTRT = tuple(l.hairTintTRT);
   if (l.roughness !== undefined) out.roughness = l.roughness;
   if (l.anisotropy !== undefined) out.anisotropy = l.anisotropy;
   if (l.rotation !== undefined) out.rotation = l.rotation;
   if (l.ior !== undefined) out.ior = l.ior;
   if (l.extinction) out.extinction = tuple(l.extinction);
+  if (l.conductorEta) out.conductorEta = tuple(l.conductorEta);
+  if (l.interiorScattering) out.interiorScattering = tuple(l.interiorScattering);
+  if (l.interiorAnisotropy !== undefined) out.interiorAnisotropy = l.interiorAnisotropy;
   if (l.thinWalled) out.thinWalled = true;
   return out;
 }

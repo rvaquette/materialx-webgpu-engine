@@ -113,6 +113,22 @@ describe('resolveSurface (T055a)', () => {
     expect(surface.inputs.get('edf')?.source).toEqual({ kind: 'connection', nodeId: 'E' });
   });
 
+  it('does not treat closure connections as unsupported surface-value inputs', () => {
+    const diag = vi.fn();
+    const graph = graphOf({
+      category: 'LamaLayer',
+      nodeString: 'LamaLayer',
+      inputs: [input('materialTop', 'BSDF', { kind: 'connection', nodeId: 'coat' })],
+      extraNodes: [upstream('coat', 'LamaDielectric')],
+    });
+    graph.nodes.get('SR')!.nodeDef!.inputs = [{ name: 'materialTop', type: 'BSDF' }];
+
+    const surface = resolveSurface(graph, { onDiagnostic: diag, supportedUpstream: new Set() })!;
+
+    expect(surface.inputs.get('materialTop')?.source).toEqual({ kind: 'connection', nodeId: 'coat' });
+    expect(diag).not.toHaveBeenCalled();
+  });
+
   it('resolves LamaSurface presence and back-side BSDF metadata', () => {
     const graph = graphOf({ category: 'surface', inputs: [
       input('bsdf', 'BSDF', { kind: 'connection', nodeId: 'FRONT' }),

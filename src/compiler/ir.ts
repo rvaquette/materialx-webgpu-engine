@@ -322,6 +322,10 @@ export interface LayeredBsdfLobe {
   color: Rgb;
   /** Grazing reflectance (generalized-schlick color90); defaults to color. */
   color90?: Rgb;
+  /** Exponent for generalized Schlick Fresnel; defaults to 5. */
+  fresnelExponent?: number;
+  /** Oren–Nayar multiple-scattering energy compensation in [0,1]. */
+  energyCompensation?: number;
   /** Chiang TRT tint; color/color90 carry R/TT. */
   hairTintTRT?: Rgb;
   /** Perceptual roughness in [0,1]; longitudinal roughness for Chiang hair. */
@@ -336,12 +340,18 @@ export interface LayeredBsdfLobe {
   dispersion?: number;
   /** Conductor extinction k; absorption coefficient for Chiang hair. */
   extinction?: Rgb;
+  /** Conductor index eta for the exact Fresnel conductor model. */
+  conductorEta?: Rgb;
   /** Thin-walled transmission: straight-through, no refraction bending. */
   thinWalled?: boolean;
   /** Interior Beer-Lambert tint reached after attenuationDistance (glass volume). */
   attenuationColor?: Rgb;
   /** Reference distance for attenuationColor; absent/Infinity disables absorption. */
   attenuationDistance?: number;
+  /** Volumetric scattering coefficients for a transmissive interior. */
+  interiorScattering?: Rgb;
+  /** Henyey-Greenstein anisotropy of the transmissive interior. */
+  interiorAnisotropy?: number;
   /** Subsurface mean free path per channel (OpenPBR subsurface_radius); drives the BSSRDF walk. */
   subsurfaceRadius?: Rgb;
 }

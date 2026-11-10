@@ -68,6 +68,10 @@ const LOBE_HAS_ATTENUATION = 128;
 const LOBE_HAS_SUBSURFACE_RADIUS = 256;
 const LOBE_HAS_DISPERSION = 512;
 const LOBE_HAS_HAIR_TRT = 1024;
+const LOBE_HAS_FRESNEL_EXPONENT = 2048;
+const LOBE_HAS_CONDUCTOR_ETA = 4096;
+const LOBE_HAS_ENERGY_COMPENSATION = 8192;
+const LOBE_HAS_INTERIOR_SCATTERING = 16384;
 
 function rd(buf: ArrayLike<number>, i: number): number {
   return buf[i] ?? 0;
@@ -75,7 +79,7 @@ function rd(buf: ArrayLike<number>, i: number): number {
 
 function writeLobe(out: Float32Array, base: number, lobe: LayeredBsdfLobe): void {
   let flags = 0;
-  if (lobe.color90 !== undefined) flags |= LOBE_HAS_COLOR90;
+  if (lobe.color90 !== undefined || lobe.conductorEta !== undefined) flags |= LOBE_HAS_COLOR90;
   if (lobe.roughness !== undefined) flags |= LOBE_HAS_ROUGHNESS;
   if (lobe.anisotropy !== undefined) flags |= LOBE_HAS_ANISOTROPY;
   if (lobe.rotation !== undefined) flags |= LOBE_HAS_ROTATION;
@@ -86,6 +90,10 @@ function writeLobe(out: Float32Array, base: number, lobe: LayeredBsdfLobe): void
   if (lobe.subsurfaceRadius !== undefined) flags |= LOBE_HAS_SUBSURFACE_RADIUS;
   if (lobe.dispersion !== undefined) flags |= LOBE_HAS_DISPERSION;
   if (lobe.hairTintTRT !== undefined) flags |= LOBE_HAS_HAIR_TRT;
+  if (lobe.fresnelExponent !== undefined) flags |= LOBE_HAS_FRESNEL_EXPONENT;
+  if (lobe.conductorEta !== undefined) flags |= LOBE_HAS_CONDUCTOR_ETA;
+  if (lobe.energyCompensation !== undefined) flags |= LOBE_HAS_ENERGY_COMPENSATION;
+  if (lobe.interiorScattering !== undefined) flags |= LOBE_HAS_INTERIOR_SCATTERING;
 
   out[base] = KIND_TO_U32[lobe.kind];
   out[base + 1] = lobe.weight;
@@ -93,7 +101,7 @@ function writeLobe(out: Float32Array, base: number, lobe: LayeredBsdfLobe): void
   out[base + 3] = lobe.color[0];
   out[base + 4] = lobe.color[1];
   out[base + 5] = lobe.color[2];
-  const c90 = lobe.color90 ?? lobe.color;
+  const c90 = lobe.color90 ?? lobe.conductorEta ?? lobe.color;
   out[base + 6] = c90[0];
   out[base + 7] = c90[1];
   out[base + 8] = c90[2];
@@ -101,7 +109,7 @@ function writeLobe(out: Float32Array, base: number, lobe: LayeredBsdfLobe): void
   out[base + 10] = lobe.anisotropy ?? 0;
   out[base + 11] = lobe.rotation ?? 0;
   out[base + 12] = lobe.ior ?? 0;
-  const ext = lobe.extinction ?? [0, 0, 0];
+  const ext = lobe.extinction ?? lobe.interiorScattering ?? [0, 0, 0];
   out[base + 13] = ext[0];
   out[base + 14] = ext[1];
   out[base + 15] = ext[2];
@@ -114,7 +122,7 @@ function writeLobe(out: Float32Array, base: number, lobe: LayeredBsdfLobe): void
   out[base + 20] = radius[0];
   out[base + 21] = radius[1];
   out[base + 22] = radius[2];
-  out[base + 23] = lobe.dispersion ?? 0;
+  out[base + 23] = lobe.dispersion ?? lobe.fresnelExponent ?? lobe.energyCompensation ?? lobe.interiorAnisotropy ?? 0;
   const trt = lobe.hairTintTRT ?? [1, 1, 1];
   out[base + 24] = trt[0];
   out[base + 25] = trt[1];
@@ -127,8 +135,17 @@ function readLobe(buf: ArrayLike<number>, base: number): LayeredBsdfLobe {
   const flags = Math.round(rd(buf, base + 2));
   const color: Rgb = [rd(buf, base + 3), rd(buf, base + 4), rd(buf, base + 5)];
   const lobe: LayeredBsdfLobe = { kind, weight: rd(buf, base + 1), color };
+  if ((flags & LOBE_HAS_FRESNEL_EXPONENT) !== 0) lobe.fresnelExponent = rd(buf, base + 23);
   if ((flags & LOBE_HAS_HAIR_TRT) !== 0) {
     lobe.hairTintTRT = [rd(buf, base + 24), rd(buf, base + 25), rd(buf, base + 26)];
+  }
+  if ((flags & LOBE_HAS_CONDUCTOR_ETA) !== 0) {
+    lobe.conductorEta = [rd(buf, base + 6), rd(buf, base + 7), rd(buf, base + 8)];
+  }
+  if ((flags & LOBE_HAS_ENERGY_COMPENSATION) !== 0) lobe.energyCompensation = rd(buf, base + 23);
+  if ((flags & LOBE_HAS_INTERIOR_SCATTERING) !== 0) {
+    lobe.interiorScattering = [rd(buf, base + 13), rd(buf, base + 14), rd(buf, base + 15)];
+    lobe.interiorAnisotropy = rd(buf, base + 23);
   }
   if ((flags & LOBE_HAS_DISPERSION) !== 0) lobe.dispersion = rd(buf, base + 23);
   if ((flags & LOBE_HAS_COLOR90) !== 0) {
@@ -315,6 +332,10 @@ const MX_LOBE_HAS_EXTINCTION: u32 = ${LOBE_HAS_EXTINCTION}u;
 const MX_LOBE_THIN_WALLED: u32 = ${LOBE_THIN_WALLED}u;
 const MX_LOBE_HAS_ATTENUATION: u32 = ${LOBE_HAS_ATTENUATION}u;
 const MX_LOBE_HAS_SUBSURFACE_RADIUS: u32 = ${LOBE_HAS_SUBSURFACE_RADIUS}u;
+const MX_LOBE_HAS_FRESNEL_EXPONENT: u32 = ${LOBE_HAS_FRESNEL_EXPONENT}u;
+const MX_LOBE_HAS_CONDUCTOR_ETA: u32 = ${LOBE_HAS_CONDUCTOR_ETA}u;
+const MX_LOBE_HAS_ENERGY_COMPENSATION: u32 = ${LOBE_HAS_ENERGY_COMPENSATION}u;
+const MX_LOBE_HAS_INTERIOR_SCATTERING: u32 = ${LOBE_HAS_INTERIOR_SCATTERING}u;
 fn mx_material_lobe(base : u32) -> MxBsdfLobe {
   var lobe : MxBsdfLobe;
   lobe.kind = u32(round(materials[base]));
@@ -329,7 +350,7 @@ fn mx_material_lobe(base : u32) -> MxBsdfLobe {
   lobe.roughness = select(0.0, materials[base + 9u], (flags & MX_LOBE_HAS_ROUGHNESS) != 0u);
   lobe.anisotropy = select(0.0, materials[base + 10u], (flags & MX_LOBE_HAS_ANISOTROPY) != 0u);
   lobe.rotation = select(0.0, materials[base + 11u], (flags & MX_LOBE_HAS_ROTATION) != 0u);
-  lobe.ior = select(0.0, materials[base + 12u], (flags & MX_LOBE_HAS_IOR) != 0u);
+  lobe.ior = select(select(0.0, materials[base + 12u], (flags & MX_LOBE_HAS_IOR) != 0u), 1.0, (flags & MX_LOBE_HAS_CONDUCTOR_ETA) != 0u);
   if ((flags & MX_LOBE_HAS_EXTINCTION) != 0u) {
     lobe.extinction = vec3f(materials[base + 13u], materials[base + 14u], materials[base + 15u]);
   } else {
@@ -408,7 +429,11 @@ fn mx_material_closure(matIndex : u32) -> LayeredClosure {
       if (kind == MX_LOBE_DIELECTRIC_TRANSMISSION && (lflags & MX_LOBE_HAS_ATTENUATION) != 0u && c.hasInterior == 0u) {
         let acol = vec3f(materials[lb + 16u], materials[lb + 17u], materials[lb + 18u]);
         let adist = materials[lb + 19u];
-        let m = mx_absorbing_medium(acol, adist);
+        var m = mx_absorbing_medium(acol, adist);
+        if ((lflags & MX_LOBE_HAS_INTERIOR_SCATTERING) != 0u) {
+          m.sigmaS = vec3f(materials[lb + 13u], materials[lb + 14u], materials[lb + 15u]);
+          m.g = materials[lb + 23u];
+        }
         c.interiorSigmaA = m.sigmaA;
         c.interiorSigmaS = m.sigmaS;
         c.interiorG = m.g;

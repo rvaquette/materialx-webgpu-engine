@@ -118,7 +118,7 @@ describe('surfaceGraphToLayered (T055b)', () => {
     const surface = resolveSurface(graph)!;
     const closure = surfaceGraphToLayered(surface, graph);
     expect(closure.lobes).toEqual([
-      { kind: 'oren_nayar_diffuse', weight: 1, color: [0.2, 0.3, 0.4], roughness: 0.6 },
+      { kind: 'oren_nayar_diffuse', weight: 1, color: [0.2, 0.3, 0.4], roughness: 0.18, energyCompensation: 1 },
     ]);
     expect(closure.opacity).toBe(1);
   });
@@ -129,16 +129,43 @@ describe('surfaceGraphToLayered (T055b)', () => {
       input('reflectivity', 'color3', '0.8, 0.6, 0.4'), input('roughness', 'float', '0.2'),
     ]));
     const conductor = surfaceGraphToLayered(resolveSurface(conductorGraph)!, conductorGraph);
-    expect(conductor.lobes[0]).toMatchObject({ kind: 'conductor', color: [0.8, 0.6, 0.4], roughness: 0.2 });
+    expect(conductor.lobes[0]).toMatchObject({ kind: 'conductor', color: [1, 1, 1], roughness: 0.2 });
+    expect(conductor.lobes[0]?.conductorEta).toHaveLength(3);
+    expect(conductor.lobes[0]?.extinction).toHaveLength(3);
+
+    const scientificGraph = graphOf('surface', [connection('bsdf', 'BSDF', 'METAL')]);
+    scientificGraph.nodes.set('METAL', bsdfNode('METAL', 'LamaConductor', [
+      input('fresnelMode', 'integer', '1'), input('IOR', 'vector3', '0.2, 0.4, 1.2'),
+      input('extinction', 'vector3', '3, 2, 1'),
+    ]));
+    const scientific = surfaceGraphToLayered(resolveSurface(scientificGraph)!, scientificGraph);
+    expect(scientific.lobes[0]?.conductorEta).toEqual([0.2, 0.4, 1.2]);
+    expect(scientific.lobes[0]?.extinction).toEqual([3, 2, 1]);
 
     const dielectricGraph = graphOf('surface', [connection('bsdf', 'BSDF', 'GLASS')]);
     dielectricGraph.nodes.set('GLASS', bsdfNode('GLASS', 'LamaDielectric', [
       input('fresnelMode', 'integer', '1'), input('IOR', 'float', '1.5'),
-      input('roughness', 'float', '0.1'),
+      input('roughness', 'float', '0.1'), input('absorptionColor', 'color3', '0.2, 0.4, 0.6'),
+      input('absorptionRadius', 'float', '2'),
     ]));
     const dielectric = surfaceGraphToLayered(resolveSurface(dielectricGraph)!, dielectricGraph);
     expect(dielectric.lobes.map(lobe => lobe.kind)).toEqual(['dielectric_reflection', 'dielectric_transmission']);
     expect(dielectric.lobes[0]?.ior).toBe(1.5);
+    expect(dielectric.lobes[1]?.attenuationDistance).toBe(2);
+    expect(dielectric.lobes[1]?.attenuationColor?.[0]).toBeCloseTo(Math.exp(-0.2), 5);
+    expect(dielectric.lobes[1]?.interiorScattering).toBeUndefined();
+
+    const schlickGraph = graphOf('surface', [connection('bsdf', 'BSDF', 'SCHLICK')]);
+    schlickGraph.nodes.set('SCHLICK', bsdfNode('SCHLICK', 'LamaGeneralizedSchlick', [
+      input('fresnelMode', 'integer', '1'), input('IOR', 'vector3', '1.5, 1.4, 1.3'),
+      input('reflectivity90', 'color3', '0.9, 0.8, 0.7'), input('reflectivityProfile', 'float', '0.25'),
+      input('reflectionTint', 'color3', '0.5, 0.6, 0.7'), input('transmissionTint', 'color3', '0.8, 0.9, 1'),
+      input('scatterColor', 'color3', '0.1, 0.2, 0.3'), input('scatterAnisotropy', 'float', '0.4'),
+    ]));
+    const schlick = surfaceGraphToLayered(resolveSurface(schlickGraph)!, schlickGraph);
+    expect(schlick.lobes).toHaveLength(2);
+    expect(schlick.lobes[0]).toMatchObject({ kind: 'generalized_schlick', fresnelExponent: 4, color90: [0.9, 0.8, 0.7] });
+    expect(schlick.lobes[1]).toMatchObject({ kind: 'dielectric_transmission', color: [0.8, 0.9, 1], interiorScattering: [0.1, 0.2, 0.3], interiorAnisotropy: 0.4 });
   });
 
   it('combines LamaMix weights over connected BSDFs', () => {

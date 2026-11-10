@@ -127,6 +127,34 @@ export function lambertLobe(albedo: Vec3): Lobe {
   };
 }
 
+/** Oren–Nayar diffuse reflection with the Lama multiple-scattering energy control. */
+export function orenNayarLobe(albedo: Vec3, roughness: number, energyCompensation = 1): Lobe {
+  const sigma = clamp01(roughness);
+  const sigma2 = sigma * sigma;
+  const A = 1 - 0.5 * sigma2 / (sigma2 + 0.33);
+  const B = 0.45 * sigma2 / (sigma2 + 0.09);
+  const compensation = 1 + clamp01(energyCompensation) * (1 / A - 1);
+  const evaluate = (wo: V, wi: V): BsdfEval => {
+    if (wo[2] <= 0 || wi[2] <= 0) return { value: [0, 0, 0], pdf: 0 };
+    const s = dot(wi, wo) - wi[2] * wo[2];
+    const t = s > 0 ? Math.max(wi[2], wo[2]) : 1;
+    const scaleFactor = (A + B * s / t) * compensation * INV_PI;
+    return {
+      value: [albedo[0] * scaleFactor, albedo[1] * scaleFactor, albedo[2] * scaleFactor],
+      pdf: wi[2] * INV_PI,
+    };
+  };
+  return {
+    eval: (wo, wi) => evaluate(wo as V, wi as V),
+    sample(wo, rng) {
+      if (wo[2] <= 0) return null;
+      const wi = cosineHemisphere(rng(), rng());
+      const result = evaluate(wo as V, wi);
+      return { wi, value: result.value, pdf: result.pdf, specular: false };
+    },
+  };
+}
+
 /** Diffuse transmission (translucent_bsdf): cosine lobe in the far hemisphere. */
 export function translucentLobe(albedo: Vec3): Lobe {
   const f: V = scale(albedo, INV_PI);
@@ -154,17 +182,23 @@ export function translucentLobe(albedo: Vec3): Lobe {
  * the diffuse lobe exactly in the radius -> 0 limit (the spatial profile stays in
  * subsurface.ts for the integrator wiring in T057).
  */
-export function subsurfaceLobe(albedo: Vec3): Lobe {
-  const f: V = scale(albedo, INV_PI);
+export function subsurfaceLobe(albedo: Vec3, twoSided = false): Lobe {
+  const f: V = scale(albedo, INV_PI * (twoSided ? 0.5 : 1));
   return {
     eval(wo, wi) {
+      if (twoSided) {
+        if (wo[2] === 0 || wi[2] === 0) return { value: [0, 0, 0], pdf: 0 };
+        return { value: [...f], pdf: Math.abs(wi[2]) * INV_PI * 0.5 };
+      }
       if (wo[2] <= 0 || wi[2] <= 0) return { value: [0, 0, 0], pdf: 0 };
-      return { value: [...f], pdf: wi[2] * INV_PI };
+      return { value: [...f], pdf: Math.abs(wi[2]) * INV_PI * (twoSided ? 0.5 : 1) };
     },
     sample(wo, rng) {
-      if (wo[2] <= 0) return null;
-      const wi = cosineHemisphere(rng(), rng());
-      return { wi, value: [...f], pdf: wi[2] * INV_PI, specular: false };
+      if (twoSided ? wo[2] === 0 : wo[2] <= 0) return null;
+      const lower = twoSided && (rng() < 0.5 ? wo[2] > 0 : wo[2] < 0);
+      const h = cosineHemisphere(rng(), rng());
+      const wi: V = lower ? [h[0], h[1], -h[2]] : h;
+      return { wi, value: [...f], pdf: Math.abs(wi[2]) * INV_PI * (twoSided ? 0.5 : 1), specular: false };
     },
   };
 }
@@ -203,6 +237,93 @@ export function conductorLobe(f0: Vec3, roughness: number): Lobe {
   return {
     eval: (wo, wi) => microfacetEval(wo as V, wi as V, a, fresnel),
     sample: (wo, rng) => microfacetSample(wo as V, a, fresnel, rng),
+  };
+}
+
+function exactConductorFresnel(eta: Vec3, kappa: Vec3, cosTheta: number): V {
+  const c = clamp01(cosTheta);
+  const c2 = c * c;
+  const channelFresnel = (channel: 0 | 1 | 2): number => {
+    const n = eta[channel]!;
+    const k = kappa[channel]!;
+    const n2k2 = n * n + k * k;
+    const twoNc = 2 * n * c;
+    const rs = (n2k2 - twoNc + c2) / Math.max(n2k2 + twoNc + c2, 1e-7);
+    const rp = (n2k2 * c2 - twoNc + 1) / Math.max(n2k2 * c2 + twoNc + 1, 1e-7);
+    return clamp01(0.5 * (rs + rp));
+  };
+  return [channelFresnel(0), channelFresnel(1), channelFresnel(2)];
+}
+
+/** Exact unpolarized conductor Fresnel with GGX masking, optionally tinted and anisotropic. */
+export function exactConductorLobe(
+  eta: Vec3,
+  kappa: Vec3,
+  tint: Vec3,
+  roughness: number,
+  anisotropy = 0,
+  rotation = 0,
+  film?: ThinFilmLayer,
+): Lobe {
+  const f0 = exactConductorFresnel(eta, kappa, 1);
+  const rawFresnel = (cosVH: number): V => exactConductorFresnel(eta, kappa, cosVH);
+  const fresnel = film && film.weight > 0 && film.thickness > 0
+    ? (cosVH: number): V => {
+      const base = rawFresnel(cosVH);
+      const coated = thinFilmFresnel(base, f0, cosVH, film);
+      return [coated[0] * tint[0], coated[1] * tint[1], coated[2] * tint[2]];
+    }
+    : (cosVH: number): V => {
+      const base = rawFresnel(cosVH);
+      return [base[0] * tint[0], base[1] * tint[1], base[2] * tint[2]];
+    };
+  if (anisotropy > 0) {
+    const [au, av] = anisoAlphas(roughness, anisotropy);
+    return {
+      eval: (wo, wi) => microfacetEvalAniso(wo as V, wi as V, au, av, rotation, fresnel),
+      sample: (wo, rng) => microfacetSampleAniso(wo as V, au, av, rotation, fresnel, rng),
+    };
+  }
+  const alpha = alphaOf(roughness);
+  return {
+    eval: (wo, wi) => microfacetEval(wo as V, wi as V, alpha, fresnel),
+    sample: (wo, rng) => microfacetSample(wo as V, alpha, fresnel, rng),
+  };
+}
+
+/** GGX reflection using the generalized Schlick endpoint colors and exponent. */
+export function generalizedSchlickLobe(
+  color0: Vec3,
+  color90: Vec3,
+  roughness: number,
+  exponent = 5,
+  anisotropy = 0,
+  rotation = 0,
+  film?: ThinFilmLayer,
+): Lobe {
+  const power = Math.max(0, Math.min(Number.isFinite(exponent) ? exponent : 5, 100));
+  const baseFresnel = (cosVH: number): V => {
+    const f = Math.pow(clamp01(1 - cosVH), power);
+    return [
+      color0[0] + (color90[0] - color0[0]) * f,
+      color0[1] + (color90[1] - color0[1]) * f,
+      color0[2] + (color90[2] - color0[2]) * f,
+    ];
+  };
+  const fresnel = film && film.weight > 0 && film.thickness > 0
+    ? (cosVH: number): V => thinFilmFresnel(baseFresnel(cosVH), color0, cosVH, film)
+    : baseFresnel;
+  if (anisotropy > 0) {
+    const [au, av] = anisoAlphas(roughness, anisotropy);
+    return {
+      eval: (wo, wi) => microfacetEvalAniso(wo as V, wi as V, au, av, rotation, fresnel),
+      sample: (wo, rng) => microfacetSampleAniso(wo as V, au, av, rotation, fresnel, rng),
+    };
+  }
+  const alpha = alphaOf(roughness);
+  return {
+    eval: (wo, wi) => microfacetEval(wo as V, wi as V, alpha, fresnel),
+    sample: (wo, rng) => microfacetSample(wo as V, alpha, fresnel, rng),
   };
 }
 
@@ -715,17 +836,23 @@ export function lobeFromLayered(l: LayeredBsdfLobe, film?: ThinFilmLayer): Lobe 
       };
     }
     case 'oren_nayar_diffuse':
+      return orenNayarLobe(l.color, roughness, l.energyCompensation ?? 1);
     case 'burley_diffuse':
       return lambertLobe(l.color);
     case 'translucent':
       return translucentLobe(l.color);
     case 'conductor':
-    case 'generalized_schlick':
+      if (l.conductorEta && l.extinction) {
+        return exactConductorLobe(l.conductorEta, l.extinction, l.color, roughness, aniso, rotation, film);
+      }
       return film
         ? conductorThinFilmLobe(l.color, roughness, aniso, rotation, film)
         : aniso > 0
           ? conductorAnisoLobe(l.color, roughness, aniso, rotation)
           : conductorLobe(l.color, roughness);
+    case 'generalized_schlick':
+      return generalizedSchlickLobe(l.color, l.color90 ?? [1, 1, 1], roughness,
+        l.fresnelExponent ?? 5, aniso, rotation, film);
     case 'dielectric_reflection':
       return film
         ? dielectricThinFilmLobe(l.ior ?? 1.5, roughness, aniso, rotation, film)
@@ -739,7 +866,7 @@ export function lobeFromLayered(l: LayeredBsdfLobe, film?: ThinFilmLayer): Lobe 
     case 'sheen':
       return sheenLobe(l.color, l.roughness ?? 0.3);
     case 'subsurface':
-      return subsurfaceLobe(l.color);
+      return subsurfaceLobe(l.color, l.subsurfaceRadius?.some(value => value > 0) === true);
   }
 }
 

@@ -113,10 +113,13 @@ function lobeDispatch(spec: ClosureDispatchSpec): string {
   const label = (kinds: number[]) => kinds.map((k) => `${k}u`).join(', ');
   const evalCases: string[] = [];
   const sampleCases: string[] = [];
-  const diffuse = has(0, 1);
-  if (diffuse.length) {
-    evalCases.push(`    case ${label(diffuse)}: { return mx_diffuse_eval(ctx, wi); }`);
-    sampleCases.push(`    case ${label(diffuse)}: { return mx_diffuse_sample(ctx, u.xy); }`);
+  if (has(0).length) {
+    evalCases.push('    case 0u: { return mx_oren_nayar_eval(lobe, wo, wi); }');
+    sampleCases.push('    case 0u: { return mx_oren_nayar_sample(lobe, wo, u.xy); }');
+  }
+  if (has(1).length) {
+    evalCases.push('    case 1u: { return mx_diffuse_eval(ctx, wi); }');
+    sampleCases.push('    case 1u: { return mx_diffuse_sample(ctx, u.xy); }');
   }
   if (has(2).length) {
     evalCases.push('    case 2u: { return mx_translucent_eval(ctx, wi); }');
@@ -133,24 +136,35 @@ function lobeDispatch(spec: ClosureDispatchSpec): string {
     }` : '    case 3u: { return mx_dielectric_reflection_eval(ctx, wi); }');
     sampleCases.push('    case 3u: { return mx_dielectric_reflection_sample(ctx, u.xy); }');
   }
-  const conductor = has(4, 5);
+  const conductor = has(4);
   if (conductor.length) {
     evalCases.push(spec.thinFilm ? `    case ${label(conductor)}: {
+      if (lobe.ior > 0.5) { return mx_conductor_exact_eval(lobe, c, wo, wi); }
       if (filmActive) {
         if (lobe.anisotropy <= 0.0) { return mx_microfacet_eval_tf(wo, wi, mx_alpha_of(lobe.roughness), lobe.color, c.thinFilm.weight, c.thinFilm.thickness, c.thinFilm.ior); }
         return mx_microfacet_eval_aniso_tf(wo, wi, mx_aniso_alphas(lobe.roughness, lobe.anisotropy), lobe.rotation, lobe.color, c.thinFilm.weight, c.thinFilm.thickness, c.thinFilm.ior);
       }
       return mx_conductor_eval(ctx, wi);
-    }` : `    case ${label(conductor)}: { return mx_conductor_eval(ctx, wi); }`);
-    sampleCases.push(`    case ${label(conductor)}: { return mx_conductor_sample(ctx, u.xy); }`);
+    }` : `    case ${label(conductor)}: {
+      if (lobe.ior > 0.5) { return mx_conductor_exact_eval(lobe, c, wo, wi); }
+      return mx_conductor_eval(ctx, wi);
+    }`);
+    sampleCases.push(`    case ${label(conductor)}: {
+      if (lobe.ior > 0.5) { return mx_conductor_exact_sample(lobe, c, wo, u.xy); }
+      return mx_conductor_sample(ctx, u.xy);
+    }`);
+  }
+  if (has(5).length) {
+    evalCases.push('    case 5u: { return mx_generalized_schlick_eval(lobe, c, wo, wi); }');
+    sampleCases.push('    case 5u: { return mx_generalized_schlick_sample(lobe, c, wo, u.xy); }');
   }
   if (has(6).length) {
     evalCases.push('    case 6u: { return mx_sheen_eval(ctx, wi); }');
     sampleCases.push('    case 6u: { return mx_sheen_sample(ctx, u.xy); }');
   }
   if (has(7).length) {
-    evalCases.push('    case 7u: { return mx_subsurface_eval(ctx, wi); }');
-    sampleCases.push('    case 7u: { return mx_subsurface_sample(ctx, u.xy); }');
+    evalCases.push('    case 7u: { if (c.hasInterior != 0u) { return mx_subsurface_boundary_eval(ctx, wi); } return mx_subsurface_eval(ctx, wi); }');
+    sampleCases.push('    case 7u: { if (c.hasInterior != 0u) { return mx_subsurface_boundary_sample(ctx, u); } return mx_subsurface_sample(ctx, u.xy); }');
   }
   if (has(8).length) {
     evalCases.push('    case 8u: { return mx_dielectric_transmission_eval(ctx, wi); }');
@@ -167,7 +181,7 @@ function lobeDispatch(spec: ClosureDispatchSpec): string {
 ${[...evalCases, '    default: { return MxBsdfEval(vec3f(0.0), 0.0); }'].join('\n')}
   }
 }
-fn mx_closure_lobe_sample(lobe: MxBsdfLobe, wo: vec3f, u: vec3f) -> MxBsdfSample {
+fn mx_closure_lobe_sample(lobe: MxBsdfLobe, c: LayeredClosure, wo: vec3f, u: vec3f) -> MxBsdfSample {
   let ctx = mx_closure_lobe_ctx(lobe, wo);
   switch (lobe.kind) {
 ${[...sampleCases, '    default: { return MxBsdfSample(vec3f(0.0), vec3f(0.0), 0.0, false); }'].join('\n')}
@@ -267,6 +281,10 @@ fn mx_fresnel_schlick(f0: vec3f, cosT: f32) -> vec3f {
   let f = pow(clamp(1.0 - cosT, 0.0, 1.0), 5.0);
   return f0 + (vec3f(1.0) - f0) * f;
 }
+fn mx_fresnel_generalized_schlick(color0: vec3f, color90: vec3f, cosT: f32, exponent: f32) -> vec3f {
+  let f = pow(clamp(1.0 - cosT, 0.0, 1.0), clamp(exponent, 0.0, 100.0));
+  return color0 + (color90 - color0) * f;
+}
 fn mx_alpha_of(roughness: f32) -> f32 {
   return max(roughness * roughness, 1.0e-3);
 }
@@ -306,6 +324,23 @@ fn mx_diffuse_sample(ctx: MxLobeCtx, u: vec2f) -> MxBsdfSample {
   let wi = mx_cosine_hemisphere(u);
   return MxBsdfSample(wi, ctx.color / MX_PI, wi.z / MX_PI, true);
 }
+fn mx_oren_nayar_eval(lobe: MxBsdfLobe, wo: vec3f, wi: vec3f) -> MxBsdfEval {
+  if (wo.z <= 0.0 || wi.z <= 0.0) { return MxBsdfEval(vec3f(0.0), 0.0); }
+  let sigma = clamp(lobe.roughness, 0.0, 1.0);
+  let sigma2 = sigma * sigma;
+  let a = 1.0 - 0.5 * sigma2 / (sigma2 + 0.33);
+  let b = 0.45 * sigma2 / (sigma2 + 0.09);
+  let s = dot(wi, wo) - wi.z * wo.z;
+  let t = select(1.0, max(wi.z, wo.z), s > 0.0);
+  let compensation = mix(1.0, 1.0 / a, clamp(lobe.dispersion, 0.0, 1.0));
+  return MxBsdfEval(lobe.color * ((a + b * s / t) * compensation / MX_PI), wi.z / MX_PI);
+}
+fn mx_oren_nayar_sample(lobe: MxBsdfLobe, wo: vec3f, u: vec2f) -> MxBsdfSample {
+  if (wo.z <= 0.0) { return MxBsdfSample(vec3f(0.0), vec3f(0.0), 0.0, false); }
+  let wi = mx_cosine_hemisphere(u);
+  let e = mx_oren_nayar_eval(lobe, wo, wi);
+  return MxBsdfSample(wi, e.value, e.pdf, true);
+}
 
 // --- translucent (diffuse transmission): cosine lobe in the far hemisphere -----
 fn mx_translucent_eval(ctx: MxLobeCtx, wi: vec3f) -> MxBsdfEval {
@@ -336,6 +371,20 @@ fn mx_subsurface_sample(ctx: MxLobeCtx, u: vec2f) -> MxBsdfSample {
   if (ctx.wo.z <= 0.0) { return MxBsdfSample(vec3f(0.0), vec3f(0.0), 0.0, false); }
   let wi = mx_cosine_hemisphere(u);
   return MxBsdfSample(wi, ctx.color / MX_PI, wi.z / MX_PI, true);
+}
+fn mx_subsurface_boundary_eval(ctx: MxLobeCtx, wi: vec3f) -> MxBsdfEval {
+  if (ctx.wo.z == 0.0 || wi.z == 0.0) { return MxBsdfEval(vec3f(0.0), 0.0); }
+  return MxBsdfEval(ctx.color / (2.0 * MX_PI), abs(wi.z) / (2.0 * MX_PI));
+}
+fn mx_subsurface_boundary_sample(ctx: MxLobeCtx, u: vec3f) -> MxBsdfSample {
+  if (ctx.wo.z == 0.0) { return MxBsdfSample(vec3f(0.0), vec3f(0.0), 0.0, false); }
+  let sameSide = u.z < 0.5;
+  let woSign = select(-1.0, 1.0, ctx.wo.z > 0.0);
+  let wiSign = select(-woSign, woSign, sameSide);
+  let h = mx_cosine_hemisphere(u.xy);
+  let wi = vec3f(h.x, h.y, h.z * wiSign);
+  let e = mx_subsurface_boundary_eval(ctx, wi);
+  return MxBsdfSample(wi, e.value, e.pdf, true);
 }
 
 // --- microfacet core (GGX NDF + separable Smith + Schlick Fresnel) -------------
@@ -485,6 +534,117 @@ fn mx_conductor_sample(ctx: MxLobeCtx, u: vec2f) -> MxBsdfSample {
     return mx_microfacet_sample(ctx.wo, mx_alpha_of(ctx.roughness), ctx.color, u);
   }
   return mx_microfacet_sample_aniso(ctx.wo, mx_aniso_alphas(ctx.roughness, ctx.anisotropy), ctx.rotation, ctx.color, u);
+}
+fn mx_exact_conductor_fresnel(eta: vec3f, kappa: vec3f, cosT: f32) -> vec3f {
+  let c = clamp(cosT, 0.0, 1.0);
+  let c2 = c * c;
+  let n2k2 = eta * eta + kappa * kappa;
+  let twoNc = 2.0 * eta * c;
+  let rs = (n2k2 - twoNc + vec3f(c2)) / max(n2k2 + twoNc + vec3f(c2), vec3f(1e-7));
+  let rp = (n2k2 * c2 - twoNc + vec3f(1.0)) / max(n2k2 * c2 + twoNc + vec3f(1.0), vec3f(1e-7));
+  return clamp(0.5 * (rs + rp), vec3f(0.0), vec3f(1.0));
+}
+fn mx_conductor_exact_eval(lobe: MxBsdfLobe, c: LayeredClosure, wo: vec3f, wi: vec3f) -> MxBsdfEval {
+  if (wo.z <= 0.0 || wi.z <= 0.0) { return MxBsdfEval(vec3f(0.0), 0.0); }
+  var wor = wo;
+  var wir = wi;
+  if (lobe.anisotropy > 0.0) {
+    wor = mx_rotate_tangent(wo, lobe.rotation);
+    wir = mx_rotate_tangent(wi, lobe.rotation);
+  }
+  let wm0 = wor + wir;
+  if (dot(wm0, wm0) <= 0.0) { return MxBsdfEval(vec3f(0.0), 0.0); }
+  let wm = normalize(wm0);
+  let cosVH = dot(wor, wm);
+  if (cosVH <= 0.0) { return MxBsdfEval(vec3f(0.0), 0.0); }
+  let baseF0 = mx_exact_conductor_fresnel(lobe.color90, lobe.extinction, 1.0) * lobe.color;
+  var f = mx_exact_conductor_fresnel(lobe.color90, lobe.extinction, cosVH) * lobe.color;
+  if (c.hasThinFilm != 0u && c.thinFilm.weight > 0.0 && c.thinFilm.thickness > 0.0) {
+    f = mx_thin_film_fresnel(f, baseF0, cosVH, c.thinFilm.weight, c.thinFilm.thickness, c.thinFilm.ior);
+  }
+  var d: f32;
+  var g: f32;
+  if (lobe.anisotropy > 0.0) {
+    let alpha = mx_aniso_alphas(lobe.roughness, lobe.anisotropy);
+    d = mx_ggx_ndf_aniso(wm, alpha);
+    g = mx_smith_g1_aniso(wor, alpha) * mx_smith_g1_aniso(wir, alpha);
+  } else {
+    let alpha = mx_alpha_of(lobe.roughness);
+    d = mx_ggx_ndf(wm.z, alpha);
+    g = mx_smith_g1(wo.z, alpha) * mx_smith_g1(wi.z, alpha);
+  }
+  return MxBsdfEval(f * (d * g / (4.0 * wor.z * wir.z)), d * wm.z / (4.0 * cosVH));
+}
+fn mx_conductor_exact_sample(lobe: MxBsdfLobe, c: LayeredClosure, wo: vec3f, u: vec2f) -> MxBsdfSample {
+  if (wo.z <= 0.0) { return MxBsdfSample(vec3f(0.0), vec3f(0.0), 0.0, false); }
+  var wi: vec3f;
+  if (lobe.anisotropy > 0.0) {
+    let alpha = mx_aniso_alphas(lobe.roughness, lobe.anisotropy);
+    let wor = mx_rotate_tangent(wo, lobe.rotation);
+    let wm = mx_sample_ggx_normal_aniso(alpha, u);
+    let wir = reflect(-wor, wm);
+    if (wir.z <= 0.0) { return MxBsdfSample(vec3f(0.0), vec3f(0.0), 0.0, false); }
+    wi = mx_rotate_tangent(wir, -lobe.rotation);
+  } else {
+    let wm = mx_sample_ggx_normal(mx_alpha_of(lobe.roughness), u);
+    wi = reflect(-wo, wm);
+    if (wi.z <= 0.0) { return MxBsdfSample(vec3f(0.0), vec3f(0.0), 0.0, false); }
+  }
+  let e = mx_conductor_exact_eval(lobe, c, wo, wi);
+  if (e.pdf <= 0.0) { return MxBsdfSample(vec3f(0.0), vec3f(0.0), 0.0, false); }
+  return MxBsdfSample(wi, e.value, e.pdf, true);
+}
+
+fn mx_generalized_schlick_eval(lobe: MxBsdfLobe, c: LayeredClosure, wo: vec3f, wi: vec3f) -> MxBsdfEval {
+  if (wo.z <= 0.0 || wi.z <= 0.0) { return MxBsdfEval(vec3f(0.0), 0.0); }
+  var wor = wo;
+  var wir = wi;
+  if (lobe.anisotropy > 0.0) {
+    wor = mx_rotate_tangent(wo, lobe.rotation);
+    wir = mx_rotate_tangent(wi, lobe.rotation);
+  }
+  let wm0 = wor + wir;
+  if (dot(wm0, wm0) <= 0.0) { return MxBsdfEval(vec3f(0.0), 0.0); }
+  let wm = normalize(wm0);
+  let cosVH = dot(wor, wm);
+  if (cosVH <= 0.0) { return MxBsdfEval(vec3f(0.0), 0.0); }
+  var f = mx_fresnel_generalized_schlick(lobe.color, lobe.color90, cosVH, lobe.dispersion);
+  if (c.hasThinFilm != 0u && c.thinFilm.weight > 0.0 && c.thinFilm.thickness > 0.0) {
+    f = mx_thin_film_fresnel(f, lobe.color, cosVH, c.thinFilm.weight, c.thinFilm.thickness, c.thinFilm.ior);
+  }
+  var d: f32;
+  var g: f32;
+  if (lobe.anisotropy > 0.0) {
+    let alpha = mx_aniso_alphas(lobe.roughness, lobe.anisotropy);
+    d = mx_ggx_ndf_aniso(wm, alpha);
+    g = mx_smith_g1_aniso(wor, alpha) * mx_smith_g1_aniso(wir, alpha);
+  } else {
+    let alpha = mx_alpha_of(lobe.roughness);
+    d = mx_ggx_ndf(wm.z, alpha);
+    g = mx_smith_g1(wo.z, alpha) * mx_smith_g1(wi.z, alpha);
+  }
+  let value = f * (d * g / (4.0 * wor.z * wir.z));
+  let pdf = d * wm.z / (4.0 * cosVH);
+  return MxBsdfEval(value, pdf);
+}
+fn mx_generalized_schlick_sample(lobe: MxBsdfLobe, c: LayeredClosure, wo: vec3f, u: vec2f) -> MxBsdfSample {
+  if (wo.z <= 0.0) { return MxBsdfSample(vec3f(0.0), vec3f(0.0), 0.0, false); }
+  var wi: vec3f;
+  if (lobe.anisotropy > 0.0) {
+    let alpha = mx_aniso_alphas(lobe.roughness, lobe.anisotropy);
+    let wor = mx_rotate_tangent(wo, lobe.rotation);
+    let wm = mx_sample_ggx_normal_aniso(alpha, u);
+    let wir = reflect(-wor, wm);
+    if (wir.z <= 0.0) { return MxBsdfSample(vec3f(0.0), vec3f(0.0), 0.0, false); }
+    wi = mx_rotate_tangent(wir, -lobe.rotation);
+  } else {
+    let wm = mx_sample_ggx_normal(mx_alpha_of(lobe.roughness), u);
+    wi = reflect(-wo, wm);
+    if (wi.z <= 0.0) { return MxBsdfSample(vec3f(0.0), vec3f(0.0), 0.0, false); }
+  }
+  let e = mx_generalized_schlick_eval(lobe, c, wo, wi);
+  if (e.pdf <= 0.0) { return MxBsdfSample(vec3f(0.0), vec3f(0.0), 0.0, false); }
+  return MxBsdfSample(wi, e.value, e.pdf, true);
 }
 
 // --- sheen (Charlie NDF + Ashikhmin visibility; cosine-sampled layer lobe) ------
@@ -904,6 +1064,7 @@ fn mx_closure_base_direction(c: LayeredClosure, wo: vec3f, u: vec3f) -> MxBsdfSa
   // dense side; the transmission lobe handles that, so only reject grazing.
   if (total <= 0.0 || wo.z == 0.0) { return MxBsdfSample(vec3f(0.0), vec3f(0.0), 0.0, false); }
   var pick = u.z * total;
+  var sampleU = u;
   var chosen = 0u;
   var found = false;
   for (var i = 0u; i < c.lobeCount; i = i + 1u) {
@@ -911,10 +1072,10 @@ fn mx_closure_base_direction(c: LayeredClosure, wo: vec3f, u: vec3f) -> MxBsdfSa
     if (w <= 0.0) { continue; }
     if (!found) {
       chosen = i;
-      if (pick < w) { found = true; } else { pick = pick - w; }
+      if (pick < w) { sampleU.z = pick / w; found = true; } else { pick = pick - w; }
     }
   }
-  return mx_closure_lobe_sample(c.lobes[chosen], wo, u);
+  return mx_closure_lobe_sample(c.lobes[chosen], c, wo, sampleU);
 }
 fn mx_closure_base_sample(c: LayeredClosure, wo: vec3f, u: vec3f) -> MxBsdfSample {
   let s = mx_closure_base_direction(c, wo, u);

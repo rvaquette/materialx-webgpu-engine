@@ -144,9 +144,23 @@ interface LobeWgsl {
   extinction?: string;
   /** Thin-walled transmission flag (1.0 = straight-through, no refraction). */
   thin?: string;
+  fresnelExponent?: string;
+  conductorEta?: string;
+  energyCompensation?: string;
   /** False when the weight is statically zero (default true). */
   active?: boolean;
 }
+
+const LAMA_INTERIOR_PRELUDE = `struct MxLamaInterior { sigmaA: vec3f, sigmaS: vec3f, g: f32 };
+fn mx_lama_sss_medium(albedo: vec3f, mfp: vec3f, g: f32) -> MxLamaInterior {
+  let a = clamp(albedo, vec3f(0.0), vec3f(1.0));
+  let alpha = vec3f(1.0) - exp(-5.09406 * a + 2.61188 * a * a - 4.31805 * a * a * a);
+  let d = alpha - vec3f(0.8);
+  let scale = vec3f(1.9) - alpha + 3.5 * d * d;
+  let opticalDistance = mfp * scale;
+  let sigmaT = select(vec3f(0.0), vec3f(1.0) / opticalDistance, opticalDistance > vec3f(0.0));
+  return MxLamaInterior((vec3f(1.0) - alpha) * sigmaT, alpha * sigmaT, g);
+}`;
 
 interface FamilyWgsl {
   /** Extra `let mx_* = ...;` helper statements emitted before the assignments. */
@@ -539,18 +553,21 @@ function lowerFamily(family: SurfaceFamily, c: Ctx): FamilyWgsl {
 }
 
 function lobeAssign(index: number, lobe: LobeWgsl): string {
+  const auxiliary = lobe.dispersion
+    ?? (lobe.kind === 'generalized_schlick' ? lobe.fresnelExponent ?? '5.0'
+      : lobe.kind === 'oren_nayar_diffuse' ? lobe.energyCompensation ?? '1.0' : '0.0');
   const fields = [
     LOBE_KIND_CONST[lobe.kind],
     lobe.weight,
     lobe.color,
-    lobe.color90 ?? lobe.color,
+    lobe.conductorEta ?? lobe.color90 ?? lobe.color,
     lobe.roughness ?? '0.0',
     lobe.anisotropy ?? '0.0',
     lobe.rotation ?? '0.0',
-    lobe.ior ?? '1.5',
+    lobe.conductorEta ? '1.0' : lobe.ior ?? '1.5',
     lobe.extinction ?? 'vec3f(0.0)',
     lobe.thin ?? '0.0',
-    lobe.dispersion ?? '0.0',
+    auxiliary,
     lobe.hairTintTRT ?? 'vec3f(1.0)',
   ];
   return `  c.lobes[${index}] = MxBsdfLobe(${fields.join(', ')});`;
@@ -623,6 +640,9 @@ function inputsForLamaNode(graph: ResolvedGraph, nodeId: string, root?: Resolved
 
 interface LamaClosureWgsl extends FamilyWgsl {
   shadingNormal?: string;
+  shadingTangent?: string;
+  interior?: { sigmaA: string; sigmaS: string; g: string };
+  interiorActive?: string;
 }
 
 function hasLamaClosure(graph: ResolvedGraph, nodeId: string, seen = new Set<string>()): boolean {
@@ -656,6 +676,9 @@ function mergeLamaClosures(a: LamaClosureWgsl, b: LamaClosureWgsl): LamaClosureW
     ...(a.emission || b.emission ? { emission: `(${a.emission ?? 'vec3f(0.0)'} + ${b.emission ?? 'vec3f(0.0)'})` } : {}),
     opacity: '1.0',
     ...(a.shadingNormal ?? b.shadingNormal ? { shadingNormal: a.shadingNormal ?? b.shadingNormal } : {}),
+    ...(a.shadingTangent ?? b.shadingTangent ? { shadingTangent: a.shadingTangent ?? b.shadingTangent } : {}),
+    ...(a.interior ?? b.interior ? { interior: a.interior ?? b.interior } : {}),
+    ...(a.interiorActive ?? b.interiorActive ? { interiorActive: a.interiorActive ?? b.interiorActive } : {}),
     transmission: a.transmission === true || b.transmission === true,
     dispersion: a.dispersion === true || b.dispersion === true,
   };
@@ -670,6 +693,11 @@ function scaleLamaClosureWgsl(closure: LamaClosureWgsl, weight: string): LamaClo
     ...(closure.fuzz ? { fuzz: { ...closure.fuzz, weight: `(${closure.fuzz.weight} * ${weight})` } } : {}),
     ...(closure.thinFilm ? { thinFilm: { ...closure.thinFilm, weight: `(${closure.thinFilm.weight} * ${weight})` } } : {}),
     ...(closure.emission ? { emission: `(${closure.emission} * ${weight})` } : {}),
+    ...(closure.interior ? { interior: {
+      sigmaA: `(${closure.interior.sigmaA} * ${weight})`,
+      sigmaS: `(${closure.interior.sigmaS} * ${weight})`,
+      g: closure.interior.g,
+    } } : {}),
   };
 }
 
@@ -746,11 +774,30 @@ function lowerLamaClosureWgsl(
 
   const roughness = `clamp(${ctx.s('roughness', 0.1)}, 0.0, 1.0)`;
   const anisotropy = ctx.s('anisotropy', 0.0);
-  const rotation = ctx.s('anisotropyRotation', 0.0);
+  const rotationName = nodeSurface.inputs.has('anisotropyRotation') ? 'anisotropyRotation' : 'rotation';
+  let rotation = ctx.s(rotationName, 0.0);
   const result: LamaClosureWgsl = { locals: [], lobes: [], opacity: '1.0' };
+  const directionName = nodeSurface.inputs.has('anisotropyDirection') ? 'anisotropyDirection'
+    : nodeSurface.inputs.has('direction') ? 'direction' : undefined;
+  const directionRef = directionName ? lowered.inputs.get(directionName) : undefined;
+  if (directionRef !== undefined) {
+    used.add(directionRef);
+    const normalRef = lowered.inputs.get('normal');
+    if (normalRef !== undefined) used.add(normalRef);
+    const normal = normalRef ?? 'vary.normal';
+    const tangent = 'vary.tangent';
+    const direction = `(${directionRef} - ${normal} * dot(${normal}, ${directionRef}))`;
+    const baseTangent = `(${tangent} - ${normal} * dot(${normal}, ${tangent}))`;
+    rotation = `(${rotation} + atan2(dot(${normal}, cross(${baseTangent}, ${direction})), dot(${baseTangent}, ${direction})) / 6.28318530718)`;
+    result.shadingTangent = tangent;
+  }
   switch (kind) {
     case 'LamaDiffuse':
-      result.lobes = [{ kind: 'oren_nayar_diffuse', weight: '1.0', color: ctx.col('color', [0.18, 0.18, 0.18]), roughness }];
+      {
+        const materialRoughness = `(${ctx.s('roughness', 0)} * ${ctx.s('roughness', 0)} * 0.5)`;
+        result.lobes = [{ kind: 'oren_nayar_diffuse', weight: '1.0', color: ctx.col('color', [0.18, 0.18, 0.18]),
+          roughness: materialRoughness, energyCompensation: `clamp(${ctx.s('energyCompensation', 1)}, 0.0, 1.0)` }];
+      }
       break;
     case 'LamaTranslucent':
       result.lobes = [{ kind: 'translucent', weight: '1.0', color: ctx.col('color', [0.18, 0.18, 0.18]) }];
@@ -759,19 +806,33 @@ function lowerLamaClosureWgsl(
     case 'LamaConductor': {
       const eta = ctx.col('IOR', [0.18, 0.42, 1.37]);
       const extinction = ctx.col('extinction', [3.42, 2.35, 1.77]);
-      const etaMinusOne = `(${eta} - vec3f(1.0))`;
-      const etaPlusOne = `(${eta} + vec3f(1.0))`;
-      const k2 = `(${extinction} * ${extinction})`;
-      const scientific = `((${etaMinusOne} * ${etaMinusOne} + ${k2}) / (${etaPlusOne} * ${etaPlusOne} + ${k2}))`;
-      const f0 = `(${ctx.col('tint', [1, 1, 1])} * select(${ctx.col('reflectivity', [0.945, 0.7772, 0.3737])}, ${scientific}, ${ctx.s('fresnelMode', 0)} == 1))`;
-      result.lobes = [{ kind: 'generalized_schlick', weight: '1.0', color: f0,
-        color90: ctx.col('edgeColor', [1, 1, 1]), roughness, anisotropy, rotation }];
+      const reflectivity = `clamp(${ctx.col('reflectivity', [0.945, 0.7772, 0.3737])}, vec3f(0.0), vec3f(0.99))`;
+      const edgeColor = ctx.col('edgeColor', [0.7137, 0.7373, 0.455]);
+      const sqrtR = `sqrt(${reflectivity})`;
+      const etaMin = `((vec3f(1.0) - ${reflectivity}) / (vec3f(1.0) + ${reflectivity}))`;
+      const etaMax = `((vec3f(1.0) + ${sqrtR}) / (vec3f(1.0) - ${sqrtR}))`;
+      const artisticEta = `mix(${etaMax}, ${etaMin}, ${edgeColor})`;
+      const etaPlusOne = `(${artisticEta} + vec3f(1.0))`;
+      const etaMinusOne = `(${artisticEta} - vec3f(1.0))`;
+      const artisticKappa = `sqrt(max(((${etaPlusOne} * ${etaPlusOne} * ${reflectivity}) - (${etaMinusOne} * ${etaMinusOne})) / (vec3f(1.0) - ${reflectivity}), vec3f(0.0)))`;
+      const scientificMode = `${ctx.s('fresnelMode', 0)} == 1`;
+      result.lobes = [{ kind: 'conductor', weight: '1.0', color: ctx.col('tint', [1, 1, 1]),
+        roughness, anisotropy, rotation, extinction: `select(${artisticKappa}, ${extinction}, ${scientificMode})`,
+        conductorEta: `select(${artisticEta}, ${eta}, ${scientificMode})` }];
       break;
     }
     case 'LamaDielectric': {
       const reflectivity = `clamp(${ctx.s('reflectivity', 0.04)}, 0.0, 0.999)`;
       const artisticIor = `((1.0 + sqrt(${reflectivity})) / (1.0 - sqrt(${reflectivity})))`;
       const ior = `select(${ctx.s('IOR', 1.5)}, ${artisticIor}, ${ctx.s('fresnelMode', 0)} == 0)`;
+      const absorption = ctx.col('absorptionColor', [1, 1, 1]);
+      const radius = `max(${ctx.s('absorptionRadius', 1)}, 1e-6)`;
+      result.interior = {
+        sigmaA: `(${absorption} / ${radius})`,
+        sigmaS: ctx.col('scatterColor', [0, 0, 0]),
+        g: ctx.s('scatterAnisotropy', 0),
+      };
+      result.interiorActive = `(any(${absorption} < vec3f(1.0)) || any(${result.interior.sigmaS} > vec3f(0.0)))`;
       const shared = { roughness, anisotropy, rotation, ior };
       result.lobes = [
         { kind: 'dielectric_reflection', weight: '1.0', color: ctx.col('reflectionTint', [1, 1, 1]), ...shared },
@@ -786,9 +847,18 @@ function lowerLamaClosureWgsl(
       const etaPlusOne = `(${eta} + vec3f(1.0))`;
       const scientific = `((${etaMinusOne} * ${etaMinusOne}) / (${etaPlusOne} * ${etaPlusOne}))`;
       const f0 = `select(${ctx.col('reflectivity', [0.04, 0.04, 0.04])}, ${scientific}, ${ctx.s('fresnelMode', 0)} == 1)`;
+      const exponent = `(1.0 / max(${ctx.s('reflectivityProfile', 0.2)}, 1e-6))`;
+      const absorption = ctx.col('absorptionColor', [1, 1, 1]);
+      const radius = `max(${ctx.s('absorptionRadius', 1)}, 1e-6)`;
+      result.interior = {
+        sigmaA: `(${absorption} / ${radius})`,
+        sigmaS: ctx.col('scatterColor', [0, 0, 0]),
+        g: ctx.s('scatterAnisotropy', 0),
+      };
+      result.interiorActive = `(any(${absorption} < vec3f(1.0)) || any(${result.interior.sigmaS} > vec3f(0.0)))`;
       result.lobes = [
         { kind: 'generalized_schlick', weight: '1.0', color: `(${f0} * ${ctx.col('reflectionTint', [1, 1, 1])})`,
-          color90: ctx.col('reflectivity90', [1, 1, 1]), roughness, anisotropy, rotation },
+          color90: ctx.col('reflectivity90', [1, 1, 1]), roughness, anisotropy, rotation, fresnelExponent: exponent },
         { kind: 'dielectric_transmission', weight: '1.0', color: ctx.col('transmissionTint', [1, 1, 1]), roughness, anisotropy, rotation, ior: '1.5' },
       ];
       result.transmission = true;
@@ -797,9 +867,15 @@ function lowerLamaClosureWgsl(
     case 'LamaSheen':
       result.lobes = [{ kind: 'sheen', weight: '1.0', color: ctx.col('color', [1, 1, 1]), roughness }];
       break;
-    case 'LamaSSS':
+    case 'LamaSSS': {
       result.lobes = [{ kind: 'subsurface', weight: '1.0', color: ctx.col('color', [0.18, 0.18, 0.18]), roughness: '0.0' }];
+      const color = ctx.col('color', [0.18, 0.18, 0.18]);
+      const radius = `(${ctx.col('sssRadius', [0, 0, 0])} * ${ctx.s('sssScale', 1)} * ${ctx.s('sssUnitLength', 0.00328)})`;
+      const medium = `mx_lama_sss_medium(${color}, ${radius}, ${ctx.s('sssAnisotropy', 0)})`;
+      result.interior = { sigmaA: `${medium}.sigmaA`, sigmaS: `${medium}.sigmaS`, g: `${medium}.g` };
+      result.interiorActive = `any(${radius} > vec3f(0.0))`;
       break;
+    }
     case 'LamaIridescence': {
       const min = ctx.s('minFilmThickness', 400);
       const max = ctx.s('maxFilmThickness', 800);
@@ -834,6 +910,8 @@ function buildLamaSurfaceFn(
   entryName: string,
   opacityEntryName: string | undefined,
   sink: DiagnosticSink,
+  handlePrefix: string,
+  computeStage: boolean,
 ): SurfaceFnParts {
   const builder = new IrModuleBuilder();
   const used = new Set<IrRef>();
@@ -849,7 +927,7 @@ function buildLamaSurfaceFn(
     item.lobes = item.lobes.slice(0, 8);
   }
   for (const ref of used) builder.output({ name: ref, type: FLOAT, ref });
-  const exprs = lowerExprs(builder.build());
+  const exprs = lowerExprs(builder.build(), handlePrefix, computeStage);
   const closureLocal = (name: string, value: LamaClosureWgsl): string[] => {
     const assigns = [`  ${name}.lobeCount = ${value.lobes.length}u;`, ...value.lobes.map((lobe, index) =>
       lobeAssign(index, lobe).replace('c.lobes[', `${name}.lobes[`))];
@@ -859,6 +937,10 @@ function buildLamaSurfaceFn(
     if (value.thinFilm) assigns.push(`  ${name}.hasThinFilm = 1u;`, `  ${name}.thinFilm = MxThinFilmLayer(${value.thinFilm.weight}, ${value.thinFilm.thickness}, ${value.thinFilm.ior});`);
     if (value.emission) assigns.push(`  ${name}.hasEmission = 1u;`, `  ${name}.emission = ${value.emission};`);
     if (value.shadingNormal) assigns.push(`  ${name}.hasShadingNormal = 1u;`, `  ${name}.shadingNormal = ${value.shadingNormal};`);
+    if (value.shadingTangent) assigns.push(`  ${name}.hasShadingTangent = 1u;`, `  ${name}.shadingTangent = ${value.shadingTangent};`);
+    if (value.interior) assigns.push(`  ${name}.hasInterior = ${value.interiorActive ? `select(0u, 1u, ${value.interiorActive})` : '1u'};`,
+      `${name}.interiorSigmaA = ${value.interior.sigmaA};`,
+      `  ${name}.interiorSigmaS = ${value.interior.sigmaS};`, `  ${name}.interiorG = ${value.interior.g};`);
     assigns.push(`  ${name}.opacity = ${value.opacity};`);
     return [`  var ${name}: LayeredClosure;`, ...assigns];
   };
@@ -869,11 +951,14 @@ function buildLamaSurfaceFn(
     ...(backClosure ? ['  if (dot(vary.normal, vary.viewDir) >= 0.0) { return cFront; }', '  return cBack;'] : ['  return c;']),
   ];
   const fnCode = `fn ${entryName}(vary: MxVaryings) -> LayeredClosure {\n${fnBody.join('\n')}\n}`;
-  const opacity = opacityEntryName === undefined ? undefined : {
-    fnName: opacityEntryName,
-    fnCode: `fn ${opacityEntryName}(vary: MxVaryings) -> f32 { return clamp(${closure.opacity}, 0.0, 1.0); }`,
-    readsVaryings: /\bvary\./.test(closure.opacity),
-  };
+  let opacity: SurfaceOpacityFn | undefined;
+  if (opacityEntryName !== undefined) {
+    const opacityBuilder = new IrModuleBuilder();
+    const opacitySurface = { ...surface, inputs: new Map([...surface.inputs].filter(([name]) => name === 'opacity')) };
+    const opacityInputs = lowerSurfaceInputsToIr(graph, opacitySurface, opacityBuilder, sink);
+    opacity = buildOpacityFn(opacityBuilder.build(), opacitySurface, opacityInputs.inputs,
+      opacityEntryName, handlePrefix, computeStage, false);
+  }
   const lobeKinds = [...new Set(closures.flatMap(item => item.lobes.map(lobe => LOBE_KIND_NUM[lobe.kind])))];
   const features: SurfaceFeatures = {
     opaque: closures.every(item => item.opacity === '1.0'), fuzz: closures.some(item => item.fuzz !== undefined),
@@ -884,7 +969,11 @@ function buildLamaSurfaceFn(
   };
   return {
     ...(opacity ? { opacity } : {}), fnName: entryName, fnCode, family: surface.family,
-    preludes: [...exprs.preludes], uniforms: exprs.uniforms, textures: exprs.textures, samplers: exprs.samplers,
+    preludes: [
+      ...exprs.preludes,
+      ...(closures.some(item => item.interior) ? [LAMA_INTERIOR_PRELUDE] : []),
+    ],
+    uniforms: exprs.uniforms, textures: exprs.textures, samplers: exprs.samplers,
     primvarFields: exprs.primvarFields, extraInputs: exprs.extraInputs, usesLighting: exprs.usesLighting,
     features, lobeCount: maxLobes,
   };
@@ -896,6 +985,8 @@ function buildGenericSurfaceFn(
   entryName: string,
   opacityEntryName?: string,
   sink: DiagnosticSink = defaultDiagnosticSink,
+  handlePrefix = '',
+  computeStage = false,
 ): SurfaceFnParts {
   const rootNode = graph.nodes.get(surface.nodeId);
   const rootKind = rootNode?.nodeDef?.nodeString ?? rootNode?.category ?? '';
@@ -904,7 +995,7 @@ function buildGenericSurfaceFn(
     (input.type === 'BSDF' || input.type === 'EDF') && input.source.kind === 'connection'
       && hasLamaClosure(graph, input.source.nodeId));
   if (hasLama) {
-    return buildLamaSurfaceFn(graph, surface, entryName, opacityEntryName, sink);
+    return buildLamaSurfaceFn(graph, surface, entryName, opacityEntryName, sink, handlePrefix, computeStage);
   }
   const closure = surfaceGraphToLayered(surface, graph);
   const lobes = closure.lobes.map(directLobe);
@@ -1012,7 +1103,7 @@ function buildSurfaceFn(
   opacityEntryName?: string,
 ): SurfaceFnParts {
   if (surface.family === 'surface') {
-    return buildGenericSurfaceFn(graph, surface, entryName, opacityEntryName, sink);
+    return buildGenericSurfaceFn(graph, surface, entryName, opacityEntryName, sink, handlePrefix, computeStage);
   }
   const builder = new IrModuleBuilder();
   const lowered = lowerSurfaceInputsToIr(graph, surface, builder, sink);

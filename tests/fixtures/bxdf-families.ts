@@ -163,6 +163,10 @@ const LAMA_CLOSURE: LayeredClosure = {
   lobes: [
     { kind: 'conductor', weight: 0.5, color: [1.0, 0.78, 0.34], roughness: 0.12, anisotropy: 0.4 },
     { kind: 'burley_diffuse', weight: 0.5, color: [0.2, 0.25, 0.3], roughness: 0.4 },
+    { kind: 'conductor', weight: 0.2, color: [0.9, 0.95, 1], conductorEta: [0.2, 0.4, 1.2], extinction: [3, 2, 1.4], roughness: 0.24 },
+    { kind: 'generalized_schlick', weight: 0.25, color: [0.04, 0.08, 0.12], color90: [1, 0.6, 0.3], fresnelExponent: 2.5, roughness: 0.2 },
+    { kind: 'oren_nayar_diffuse', weight: 0.3, color: [0.55, 0.42, 0.32], roughness: 0.18, energyCompensation: 0.8 },
+    { kind: 'subsurface', weight: 0.2, color: [0.7, 0.35, 0.2], subsurfaceRadius: [0.8, 0.4, 0.2], anisotropy: 0.25 },
   ],
   coat: { weight: 0.7, color: [1, 1, 1], roughness: 0.05, ior: 1.5 },
   sheen: { weight: 0.4, color: [0.8, 0.8, 0.9], roughness: 0.3 },
@@ -256,7 +260,7 @@ export const BXDF_FAMILY_CASES: readonly BxdfFamilyCase[] = [
     name: 'LamaAssembly',
     family: 'lama_assembly',
     closure: LAMA_CLOSURE,
-    features: ['coat', 'sheen', 'thin_film', 'anisotropy'],
+    features: ['coat', 'sheen', 'thin_film', 'anisotropy', 'subsurface'],
   },
   {
     name: 'ProceduralNodegraph',

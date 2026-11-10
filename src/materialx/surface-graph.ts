@@ -431,7 +431,7 @@ export function resolveSurface(graph: ResolvedGraph, options: ResolveSurfaceOpti
         case 'connection': {
           const connected = graph.nodes.get(input.source.nodeId);
           const category = connected?.category;
-          if (category !== undefined && !supportedUpstream.has(category)) {
+          if (def.type !== 'BSDF' && def.type !== 'EDF' && category !== undefined && !supportedUpstream.has(category)) {
             diag({
               level: 'warning',
               message: `Input '${family}.${def.name}' is driven by unsupported node '${category}' (${input.source.nodeId}); its contribution would be lost (REQ-013).`,

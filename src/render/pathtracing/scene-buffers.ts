@@ -714,7 +714,11 @@ export function createSceneSampler(scene: PathTraceScene): SceneSampler {
       (l) => l.kind === 'dielectric_transmission' && l.attenuationColor !== undefined && l.attenuationDistance !== undefined,
     );
     if (glass?.attenuationColor && glass.attenuationDistance !== undefined) {
-      return absorbingMedium(glass.attenuationColor, glass.attenuationDistance);
+      const medium = absorbingMedium(glass.attenuationColor, glass.attenuationDistance);
+      if (glass.interiorScattering) {
+        return { ...medium, scattering: glass.interiorScattering, anisotropy: glass.interiorAnisotropy ?? 0 };
+      }
+      return medium;
     }
 
     return null;

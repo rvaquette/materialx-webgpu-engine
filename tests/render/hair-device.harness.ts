@@ -54,7 +54,8 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
 }` });
   const info = await module.getCompilationInfo();
   const errors = info.messages.filter(message => message.type === 'error');
-  if (errors.length) throw new Error(`Hair WGSL: ${errors.map(message => message.message).join('; ')}`);
+  if (errors.length) throw new Error(`Hair WGSL: ${errors.map(message =>
+    `${message.message} (${message.lineNum}:${message.linePos})`).join('; ')}`);
   const pipeline = await device.createComputePipelineAsync({ layout: 'auto', compute: { module, entryPoint: 'main' } });
   const input = device.createBuffer({ size: inputs.byteLength, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
   const size = cases.length * 48;

@@ -12,6 +12,9 @@ import {
   lambertLobe,
   translucentLobe,
   conductorLobe,
+  generalizedSchlickLobe,
+  lobeFromLayered,
+  orenNayarLobe,
   dielectricLobe,
   surfaceBsdf,
   hemisphericalReflectance,
@@ -84,6 +87,41 @@ describe('diffuse lobes (T044)', () => {
     expect(rho[1]).toBeCloseTo(0.4, 6);
     expect(rho[2]).toBeCloseTo(0.3, 6);
   });
+
+  it('Oren-Nayar roughness changes the lobe and compensation restores lost energy', () => {
+    const wo: V = normalize([0.75, 0, 0.66]);
+    const wi: V = normalize([0.5, 0.4, 0.77]);
+    const lambert = lambertLobe([1, 1, 1]).eval(wo, wi).value[0];
+    const rough = orenNayarLobe([1, 1, 1], 0.5, 0).eval(wo, wi).value[0];
+    const compensated = orenNayarLobe([1, 1, 1], 0.5, 1).eval(wo, wi).value[0];
+    expect(rough).not.toBeCloseTo(lambert, 4);
+    expect(compensated).toBeGreaterThan(rough);
+  });
+
+  it('subsurface with nonzero mean free path samples both surface hemispheres', () => {
+    const mediumLobe = lobeFromLayered({
+      kind: 'subsurface', weight: 1, color: [0.8, 0.5, 0.3], subsurfaceRadius: [1, 0.5, 0.2],
+    })!;
+    const rng = createPcg32(771);
+    let entered = false, exited = false;
+    for (let i = 0; i < 128; i++) {
+      const sample = mediumLobe.sample(WO, rng);
+      expect(sample).not.toBeNull();
+      entered ||= sample!.wi[2] < 0;
+      exited ||= sample!.wi[2] > 0;
+    }
+    expect(entered).toBe(true);
+    expect(exited).toBe(true);
+    expect(mediumLobe.eval(WO, [0, 0, -1]).pdf).toBeGreaterThan(0);
+    const insideExit = mediumLobe.sample([0, 0, -1], createPcg32(19));
+    expect(insideExit).not.toBeNull();
+    expect(insideExit!.wi[2]).toBeGreaterThan(0);
+
+    const lambertLimit = lobeFromLayered({
+      kind: 'subsurface', weight: 1, color: [0.8, 0.5, 0.3], subsurfaceRadius: [0, 0, 0],
+    })!;
+    expect(lambertLimit.eval(WO, [0, 0, -1]).pdf).toBe(0);
+  });
 });
 
 describe('microfacet lobes (T044)', () => {
@@ -115,6 +153,18 @@ describe('microfacet lobes (T044)', () => {
   it('near-smooth conductor reflects almost all energy', () => {
     const rho = hemisphericalReflectance(conductorLobe([1, 1, 1], 0.05), WO, createPcg32(9), 60000);
     expect(maxc(rho)).toBeGreaterThan(0.9);
+  });
+
+  it('generalized Schlick uses color90 and its configurable exponent', () => {
+    const wo: V = normalize([0.98, 0, 0.2]);
+    const wi: V = normalize([-wo[0], -wo[1], wo[2]]);
+    const profileOne = generalizedSchlickLobe([0.04, 0.04, 0.04], [1, 0.2, 0.1], 0.2, 1);
+    const profileEight = generalizedSchlickLobe([0.04, 0.04, 0.04], [1, 0.2, 0.1], 0.2, 8);
+    const first = profileOne.eval(wo, wi).value;
+    const eighth = profileEight.eval(wo, wi).value;
+    expect(first[0]).toBeGreaterThan(eighth[0]);
+    expect(first[1]).toBeGreaterThan(eighth[1]);
+    expect(first[0] - eighth[0]).toBeGreaterThan(0.01);
   });
 
   it('is unbiased: importance sampling matches uniform-hemisphere estimate', () => {

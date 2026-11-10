@@ -80,7 +80,7 @@ describe('emitLayeredSurface (T055d)', () => {
 
   it.each([
     ['LamaTranslucent', 'color', 'color3', 2],
-    ['LamaConductor', 'reflectivity', 'color3', 5],
+    ['LamaConductor', 'reflectivity', 'color3', 4],
     ['LamaDielectric', 'reflectionTint', 'color3', 3],
     ['LamaGeneralizedSchlick', 'reflectivity', 'color3', 5],
     ['LamaSheen', 'color', 'color3', 6],
@@ -158,6 +158,60 @@ describe('emitLayeredSurface (T055d)', () => {
     expect(module.features?.lobeKinds).toContain(0);
     expect(module.features?.lobeKinds).toContain(6);
     expect(module.features?.opaque).toBe(false);
+  });
+
+  it('emits interior medium coefficients for Lama dielectric and SSS closures', () => {
+    const dielectricGraph = surfaceGraph('surface', [conn('bsdf', 'BSDF', 'glass')], [
+      upstream('glass', 'LamaDielectric', 'BSDF', [
+        value('absorptionColor', 'color3', '0.5, 0.8, 1'), value('absorptionRadius', 'float', '2'),
+        value('scatterColor', 'color3', '0.1, 0.2, 0.3'), value('scatterAnisotropy', 'float', '0.4'),
+      ]),
+    ]);
+    const dielectric = emit(dielectricGraph);
+    expect(dielectric.code).toContain('fn mx_lama_sss_medium(');
+    expect(dielectric.code).toContain('c.hasInterior = select(0u, 1u,');
+    expect(dielectric.code).toContain('c.interiorSigmaA =');
+    expect(dielectric.code).toContain('c.interiorSigmaS =');
+    expect(dielectric.code).toContain('c.interiorG = e');
+    expect(dielectric.code).toContain('= 0.4;');
+
+    const sssGraph = surfaceGraph('surface', [conn('bsdf', 'BSDF', 'skin')], [
+      upstream('skin', 'LamaSSS', 'BSDF', [
+        value('color', 'color3', '0.7, 0.3, 0.2'), value('sssRadius', 'color3', '2, 1, 0.5'),
+        value('sssScale', 'float', '3'), value('sssUnitLength', 'float', '0.01'),
+      ]),
+    ]);
+    const sss = emit(sssGraph);
+    expect(sss.code).toContain('mx_lama_sss_medium(');
+    expect(sss.code).toContain('c.hasInterior = select(0u, 1u, any(');
+
+    const zeroRadiusGraph = surfaceGraph('LamaSSS', [
+      value('color', 'color3', '0.7, 0.3, 0.2'), value('sssRadius', 'color3', '0, 0, 0'),
+    ]);
+    const zeroRadius = emit(zeroRadiusGraph);
+    expect(zeroRadius.code).toContain('c.hasInterior = select(0u, 1u, any(');
+  });
+
+  it('uses Lama anisotropyDirection to rotate the local tangent frame', () => {
+    const graph = surfaceGraph('surface', [conn('bsdf', 'BSDF', 'metal')], [
+      upstream('metal', 'LamaConductor', 'BSDF', [
+        value('anisotropy', 'float', '0.6'), value('anisotropyDirection', 'vector3', '0, 1, 0'),
+      ]),
+    ]);
+    graph.nodes.get('metal')!.nodeDef = {
+      name: 'ND_lama_conductor', nodeString: 'LamaConductor', type: 'BSDF',
+      implementation: { kind: 'nodegraph', name: 'IMPL_lama_conductor' },
+      inputs: [
+        { name: 'anisotropy', type: 'float', value: '0.0' },
+        { name: 'anisotropyDirection', type: 'vector3', geomprop: 'Tworld' },
+        { name: 'anisotropyRotation', type: 'float', value: '0.0' },
+        { name: 'normal', type: 'vector3', geomprop: 'Nworld' },
+      ],
+    };
+    const module = emit(graph);
+    expect(module.code).toContain('c.hasShadingTangent = 1u;');
+    expect(module.code).toContain('c.shadingTangent = vary.tangent;');
+    expect(module.code).toContain('atan2(');
   });
 
   it('emits a connected LamaDiffuse as a layered Oren-Nayar lobe', () => {
@@ -463,6 +517,29 @@ describe('emitLayeredSurface (T055d)', () => {
 describe('emitSurfaceVariant opacity-only evaluator', () => {
   const image = (id: string, type: string, file: string) => upstream(id, 'image', type, [value('file', 'filename', file)]);
   const variant = (graph: ResolvedGraph, index = 0) => emitSurfaceVariant(graph, resolveSurface(graph)!, index);
+
+  it.each([false, true])('declares Lama presence expressions independently (textured=%s)', (textured) => {
+    const graph = surfaceGraph('surface', [conn('bsdf', 'BSDF', 'diffuse')], [
+      upstream('diffuse', 'LamaDiffuse', 'BSDF', [value('color', 'color3', '0.7, 0.2, 0.1')]),
+      image('presenceTex', 'float', 'presence.png'),
+    ]);
+    graph.lamaSurface = { presence: textured
+      ? conn('presence', 'float', 'presenceTex')
+      : value('presence', 'float', '0.35') };
+    const result = variant(graph, 2);
+    const code = result.opacity!.fnCode;
+    const references = [...code.matchAll(/\be\d+\b/g)].map(match => match[0]);
+    expect(references.length).toBeGreaterThan(0);
+    for (const reference of references) expect(code).toContain(`let ${reference} =`);
+    expect(code).not.toContain('MxBsdfLobe');
+    expect(result.opacity!.readsVaryings).toBe(textured);
+    if (textured) {
+      expect(code).toContain('m2_tex_presenceTex');
+      expect(code).toContain('textureSampleLevel(');
+    } else {
+      expect(code).toContain('0.35');
+    }
+  });
 
   it('lowers only the textured glTF alpha and cutoff, excluding lobe inputs and their textures', () => {
     const v = variant(surfaceGraph('gltf_pbr', [

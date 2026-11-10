@@ -24,6 +24,9 @@ import {
 } from '../../src/render/pathtracing/material-record.ts';
 import { LAYERED_CLOSURE_PRELUDE } from '../../src/compiler/surface-wgsl.ts';
 import { CLOSURE_LIBRARY_PRELUDE } from '../../src/compiler/closure-library.ts';
+import { emitLayeredSurface } from '../../src/compiler/surface-wgsl.ts';
+import { resolveSurface } from '../../src/materialx/surface-graph.ts';
+import type { ResolvedGraph, ResolvedInput, ResolvedNode } from '../../src/materialx/graph.ts';
 import { MEDIA_HELPERS_PRELUDE } from '../../src/render/pathtracing/compute.ts';
 import { validateHairOnDevice } from './hair-device.harness.ts';
 
@@ -42,6 +45,120 @@ export interface BxdfDeviceReport {
   readonly geomCount: number;
   readonly cases: readonly BxdfDeviceCaseResult[];
   readonly hairParity?: { cases: number; maxRelativeError: number };
+  readonly lamaShader?: { compiled: boolean; features: string[] };
+}
+
+function valueInput(name: string, type: string, value: string): ResolvedInput {
+  return { name, type, source: { kind: 'value', type, value }, provenance: { namePath: `/mat/metal/${name}` } };
+}
+
+function lamaConductorGraph(): { graph: ResolvedGraph } {
+  const surface: ResolvedNode = {
+    id: 'surface', category: 'surface', type: 'surfaceshader',
+    inputs: [{ name: 'bsdf', type: 'BSDF', source: { kind: 'connection', nodeId: 'metal' }, provenance: { namePath: '/mat/bsdf' } }],
+    provenance: { namePath: '/mat/surface' },
+  };
+  const metal: ResolvedNode = {
+    id: 'metal', category: 'LamaConductor', type: 'BSDF',
+    nodeDef: {
+      name: 'ND_lama_conductor', nodeString: 'LamaConductor', type: 'BSDF',
+      implementation: { kind: 'nodegraph', name: 'IMPL_lama_conductor' },
+      inputs: [
+        { name: 'tint', type: 'color3', value: '1, 1, 1' },
+        { name: 'fresnelMode', type: 'integer', value: '1' },
+        { name: 'IOR', type: 'vector3', value: '0.2, 0.4, 1.2' },
+        { name: 'extinction', type: 'vector3', value: '3, 2, 1' },
+        { name: 'roughness', type: 'float', value: '0.2' },
+        { name: 'normal', type: 'vector3', geomprop: 'Nworld' },
+        { name: 'anisotropy', type: 'float', value: '0.65' },
+        { name: 'anisotropyDirection', type: 'vector3', geomprop: 'Tworld' },
+        { name: 'anisotropyRotation', type: 'float', value: '0.1' },
+      ],
+    },
+    inputs: [
+      valueInput('fresnelMode', 'integer', '1'), valueInput('IOR', 'vector3', '0.2, 0.4, 1.2'),
+      valueInput('extinction', 'vector3', '3, 2, 1'), valueInput('roughness', 'float', '0.2'),
+      valueInput('anisotropy', 'float', '0.65'), valueInput('anisotropyDirection', 'vector3', '0, 1, 0'),
+      valueInput('anisotropyRotation', 'float', '0.1'),
+    ],
+    provenance: { namePath: '/mat/metal' },
+  };
+  return {
+    graph: {
+      terminals: [{ name: 'surfaceshader', type: 'surfaceshader', nodeId: surface.id, provenance: { namePath: '/mat/surface' } }],
+      nodes: new Map([[surface.id, surface], [metal.id, metal]]),
+    },
+  };
+}
+
+function lamaSssGraph(): ResolvedGraph {
+  const surface: ResolvedNode = {
+    id: 'sss-surface', category: 'surface', type: 'surfaceshader',
+    inputs: [{ name: 'bsdf', type: 'BSDF', source: { kind: 'connection', nodeId: 'skin' }, provenance: { namePath: '/mat/bsdf' } }],
+    provenance: { namePath: '/mat/sss-surface' },
+  };
+  const skin: ResolvedNode = {
+    id: 'skin', category: 'LamaSSS', type: 'BSDF',
+    nodeDef: {
+      name: 'ND_lama_sss', nodeString: 'LamaSSS', type: 'BSDF',
+      implementation: { kind: 'nodegraph', name: 'IMPL_lama_sss' },
+      inputs: [
+        { name: 'color', type: 'color3', value: '0.7, 0.3, 0.2' },
+        { name: 'normal', type: 'vector3', geomprop: 'Nworld' },
+        { name: 'sssRadius', type: 'color3', value: '2, 1, 0.5' },
+        { name: 'sssScale', type: 'float', value: '1' },
+        { name: 'sssMode', type: 'integer', value: '0' },
+        { name: 'sssIOR', type: 'float', value: '1.3' },
+        { name: 'sssAnisotropy', type: 'float', value: '0.2' },
+        { name: 'sssBleed', type: 'float', value: '0.3' },
+        { name: 'sssFollowTopology', type: 'float', value: '0.5' },
+        { name: 'sssUnitLength', type: 'float', value: '0.00328' },
+        { name: 'mode', type: 'integer', value: '0' },
+        { name: 'albedoInversionMethod', type: 'integer', value: '0' },
+      ],
+    },
+    inputs: [
+      valueInput('color', 'color3', '0.7, 0.3, 0.2'), valueInput('sssRadius', 'color3', '2, 1, 0.5'),
+      valueInput('sssScale', 'float', '1'), valueInput('sssMode', 'integer', '0'), valueInput('sssIOR', 'float', '1.3'),
+      valueInput('sssAnisotropy', 'float', '0.2'), valueInput('sssBleed', 'float', '0.3'),
+      valueInput('sssFollowTopology', 'float', '0.5'), valueInput('sssUnitLength', 'float', '0.00328'),
+      valueInput('mode', 'integer', '0'), valueInput('albedoInversionMethod', 'integer', '0'),
+    ],
+    provenance: { namePath: '/mat/skin' },
+  };
+  return {
+    terminals: [{ name: 'surfaceshader', type: 'surfaceshader', nodeId: surface.id, provenance: { namePath: '/mat/sss-surface' } }],
+    nodes: new Map([[surface.id, surface], [skin.id, skin]]),
+  };
+}
+
+async function validateLamaSurfaceShader(device: GPUDevice): Promise<{ compiled: boolean; features: string[] }> {
+  const compileSurface = async (graph: ResolvedGraph, label: string): Promise<void> => {
+    const surface = resolveSurface(graph);
+    if (!surface) throw new Error(`${label} surface did not resolve.`);
+    const generated = emitLayeredSurface(graph, surface);
+    const module = device.createShaderModule({ code: `${generated.code}
+@compute @workgroup_size(1)
+fn validate_lama() {
+  var vary: MxVaryings;
+  vary.normal = vec3f(0.0, 0.0, 1.0);
+  vary.tangent = vec3f(1.0, 0.0, 0.0);
+  vary.viewDir = vec3f(0.0, 0.0, 1.0);
+  let c = mx_surface_layered(vary);
+  let e = mx_closure_eval(c, vec3f(0.0, 0.0, 1.0), vec3f(0.0, 0.0, 1.0));
+}` });
+    const info = await module.getCompilationInfo();
+    const errors = info.messages.filter(message => message.type === 'error');
+    if (errors.length) throw new Error(`${label} WGSL: ${errors.map(message =>
+      `${message.message} (${message.lineNum}:${message.linePos})`).join('; ')}`);
+    device.pushErrorScope('validation');
+    await device.createComputePipelineAsync({ layout: 'auto', compute: { module, entryPoint: 'validate_lama' } });
+    const pipelineError = await device.popErrorScope();
+    if (pipelineError) throw new Error(`${label} pipeline: ${pipelineError.message}`);
+  };
+  await compileSurface(lamaConductorGraph().graph, 'LamaConductor');
+  await compileSurface(lamaSssGraph(), 'LamaSSS');
+  return { compiled: true, features: ['conductor-eta-kappa', 'anisotropic-direction', 'sss-medium-entry-exit'] };
 }
 
 /** Compose a shade shader that rebuilds the packed closure via the shared reader
@@ -114,6 +231,7 @@ async function shadePass(
   count: number,
   bytes: number,
 ): Promise<Float32Array> {
+  device.pushErrorScope('validation');
   const outBuffer = device.createBuffer({ size: bytes, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC });
   const readBuffer = device.createBuffer({ size: bytes, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
   const bindGroup = device.createBindGroup({
@@ -137,8 +255,10 @@ async function shadePass(
   await readBuffer.mapAsync(GPUMapMode.READ);
   const out = new Float32Array(readBuffer.getMappedRange().slice(0));
   readBuffer.unmap();
+  const validation = await device.popErrorScope();
   outBuffer.destroy();
   readBuffer.destroy();
+  if (validation) throw new Error(`BxDF shade pass: ${validation.message}`);
   return out;
 }
 
@@ -167,7 +287,7 @@ export async function runBxdfOnDevice(
     if (errors.length > 0) {
       throw new Error(`WGSL: ${errors.map((m) => `${m.lineNum}:${m.linePos} ${m.message}`).join(' | ')}`);
     }
-    return device.createComputePipeline({ layout: 'auto', compute: { module, entryPoint: 'main' } });
+    return await device.createComputePipelineAsync({ layout: 'auto', compute: { module, entryPoint: 'main' } });
   };
   device.pushErrorScope('validation');
   const rasterPipeline = await compile(bxdfShadeWgsl('max'));
@@ -252,8 +372,10 @@ export async function bootstrap(): Promise<BxdfDeviceReport> {
   line('Rendu des familles BxDF sur le GPU (deux backends)...');
   const hairParity = await validateHairOnDevice(device);
   line(`Hair CPU/GPU: ${hairParity.cases} cases, max relative error ${hairParity.maxRelativeError}`);
+  const lamaShader = await validateLamaSurfaceShader(device);
+  line(`Lama surface shader: compiled (${lamaShader.features.join(', ')})`);
   const body = await runBxdfOnDevice(device);
-  const report: BxdfDeviceReport = { userAgent: ua(), adapter: adapterFields(adapter), ...body, hairParity };
+  const report: BxdfDeviceReport = { userAgent: ua(), adapter: adapterFields(adapter), ...body, hairParity, lamaShader };
   (globalThis as { __MX_BXDF_REPORT__?: BxdfDeviceReport }).__MX_BXDF_REPORT__ = report;
   line(`${report.cases.length} familles rendues (${report.geomCount} frames), rapport pret.`);
   return report;

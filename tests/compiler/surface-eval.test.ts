@@ -76,7 +76,7 @@ describe('evaluateSurfaceToLayered (T057i3)', () => {
     };
     const surface = resolveSurface(graph)!;
     const closure = evaluateSurfaceToLayered(graph, surface);
-    expect(closure.lobes[0]).toMatchObject({ kind: 'oren_nayar_diffuse', color: [0.2, 0.3, 0.4], roughness: 0.6 });
+    expect(closure.lobes[0]).toMatchObject({ kind: 'oren_nayar_diffuse', color: [0.2, 0.3, 0.4], roughness: 0.18, energyCompensation: 1 });
   });
 
   it('evaluates a connected Lama BSDF color on the CPU', () => {
@@ -103,7 +103,7 @@ describe('evaluateSurfaceToLayered (T057i3)', () => {
       nodes: new Map([['SR', root], ['diffuse', diffuseNode], ['albedo', albedo]]),
     };
     const closure = evaluateSurfaceToLayered(graph, resolveSurface(graph)!);
-    expect(closure.lobes[0]).toMatchObject({ kind: 'oren_nayar_diffuse', color: [0.7, 0.2, 0.1], roughness: 0.25 });
+    expect(closure.lobes[0]).toMatchObject({ kind: 'oren_nayar_diffuse', color: [0.7, 0.2, 0.1], roughness: 0.03125, energyCompensation: 1 });
   });
 
   it('selects LamaSurface materialBack for a back-facing CPU view', () => {
@@ -124,6 +124,30 @@ describe('evaluateSurfaceToLayered (T057i3)', () => {
     const surface = resolveSurface(graph)!;
     const closure = evaluateSurfaceToLayered(graph, surface, { normal: [0, 0, 1], viewDir: [0, 0, -1] });
     expect(closure.sheen).toMatchObject({ color: [0.1, 0.2, 0.8] });
+  });
+
+  it('rotates Lama anisotropyDirection relative to the evaluated tangent', () => {
+    const root: ResolvedNode = {
+      id: 'SR', category: 'surface', type: 'surfaceshader',
+      inputs: [{ name: 'bsdf', type: 'BSDF', source: { kind: 'connection', nodeId: 'metal' }, provenance: { namePath: '/mat/bsdf' } }],
+      provenance: { namePath: '/mat/SR' },
+    };
+    const metal: ResolvedNode = {
+      id: 'metal', category: 'LamaConductor', type: 'BSDF',
+      inputs: [
+        { name: 'anisotropy', type: 'float', source: { kind: 'value', value: '0.5', type: 'float' }, provenance: { namePath: '/mat/metal/aniso' } },
+        { name: 'anisotropyDirection', type: 'vector3', source: { kind: 'value', value: '0, 1, 0', type: 'vector3' }, provenance: { namePath: '/mat/metal/direction' } },
+      ],
+      provenance: { namePath: '/mat/metal' },
+    };
+    const graph: ResolvedGraph = {
+      terminals: [{ name: 'surfaceshader', type: 'surfaceshader', nodeId: 'SR', provenance: { namePath: '/mat/SR' } }],
+      nodes: new Map([['SR', root], ['metal', metal]]),
+    };
+    const closure = evaluateSurfaceToLayered(graph, resolveSurface(graph)!, {
+      normal: [0, 0, 1], tangent: [1, 0, 0],
+    });
+    expect(closure.lobes[0]?.rotation).toBeCloseTo(0.25, 6);
   });
 
   it('evaluates a connected procedural base_color instead of the nodedef default', () => {
