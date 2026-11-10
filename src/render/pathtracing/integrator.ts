@@ -105,12 +105,15 @@ export interface Ray {
 export interface SurfaceHit {
   position: Vec3;
   normal: Vec3;
+  geometricNormal?: Vec3;
   /** Coverage opacity, after applying alpha mode/cutoff; omitted means opaque. */
   opacity?: number;
   /** Emitted radiance if the surface is a light; omitted otherwise. */
   emission?: Vec3;
   /** Homogeneous medium filling the interior side of this surface; entered on transmission. */
   interiorMedium?: HomogeneousMedium;
+  interiorIor?: number;
+  subsurfaceInterior?: boolean;
   /** Invisible closed boundary of a pure volumeshader (no BSDF event). */
   volumeBoundary?: boolean;
   interiorField?: VolumeField;
@@ -142,6 +145,7 @@ export interface LightSample {
 
 export interface SceneSampler {
   intersect(ray: Ray): SurfaceHit | null;
+  sampleSubsurface?(hit: SurfaceHit, rng: Rng): { hit: SurfaceHit; weight: Vec3; outgoing?: Vec3 } | null | undefined;
   sampleBsdf(hit: SurfaceHit, wo: Vec3, rng: Rng): BsdfSample | null;
   evalBsdf(hit: SurfaceHit, wo: Vec3, wi: Vec3): { value: Vec3; pdf: number };
   sampleLight(hit: SurfaceHit, rng: Rng): LightSample | null;
@@ -190,11 +194,15 @@ export function integratePath(
   let prevHit: SurfaceHit | null = null;
   let medium: HomogeneousMedium | null = options.initialMedium ?? null;
   let field: VolumeField | undefined;
+  let interiorIor = 1;
+  let subsurfaceWalk = false;
+  let subsurfaceEvents = 0;
+  let bounces = 0;
 
-  for (let bounces = 0; bounces <= maxBounces; bounces++) {
-    const hit = scene.intersect(ray);
+  for (let pathStep = 0; pathStep < 65536; pathStep++) {
+    let hit = scene.intersect(ray);
     const tMax = hit ? distanceBetween(ray.origin, hit.position) : Infinity;
-    if (bounces === 0 && hit?.volumeBoundary && dot(ray.direction,hit.normal) > 0) {
+    if (pathStep === 0 && hit?.volumeBoundary && dot(ray.direction,hit.normal) > 0) {
       field = hit.interiorField;
       medium = hit.interiorMedium ?? null;
     }
@@ -206,6 +214,7 @@ export function integratePath(
       beta = mul(beta, mi.weight);
       const g = volumeSample?.anisotropy ?? medium!.anisotropy;
       if (mi.scattered) {
+        if (!subsurfaceWalk && bounces >= maxBounces) break;
         const point: V = add(ray.origin, scale(ray.direction, mi.t));
         const wo = neg(ray.direction);
         if (scene.transmittance) {
@@ -225,11 +234,14 @@ export function integratePath(
         specularBounce = false;
         prevHit = null;
         ray = { origin: point, direction: ps.wi, ...(field ? { minDistance:1e-7 } : {}) };
-        if (bounces >= minBounces) {
+        const rouletteDepth = subsurfaceWalk ? subsurfaceEvents : bounces;
+        if (rouletteDepth >= minBounces) {
           const rr = russianRoulette(beta, rng());
           if (!rr.survive) break;
           beta = scale(beta, rr.scale);
         }
+        if (subsurfaceWalk) subsurfaceEvents++;
+        else bounces++;
         continue;
       }
       // Reached the surface: the surface-reaching transmittance is already in mi.weight.
@@ -251,8 +263,30 @@ export function integratePath(
     if (hit.volumeBoundary) {
       medium = dot(ray.direction, hit.normal) < 0 ? hit.interiorMedium ?? null : null;
       field = dot(ray.direction,hit.normal) < 0 ? hit.interiorField : undefined;
+      subsurfaceWalk = false;
+      subsurfaceEvents = 0;
       ray = { origin: add(hit.position, scale(ray.direction, 1e-4)), direction: ray.direction };
       continue;
+    }
+    const boundaryNormal = hit.geometricNormal ?? hit.normal;
+    if (medium && interiorIor > 1 && dot(ray.direction, boundaryNormal) > 0) {
+      const cosine = dot(ray.direction, boundaryNormal);
+      if (interiorIor * interiorIor * Math.max(0, 1 - cosine * cosine) >= 1) {
+        const reflected = add(ray.direction, scale(boundaryNormal, -2 * cosine));
+        ray = { origin: add(hit.position, scale(reflected, 1e-6)), direction: reflected, minDistance: 1e-7 };
+        if (subsurfaceWalk) {
+          if (subsurfaceEvents >= minBounces) {
+            const roulette = russianRoulette(beta, rng());
+            if (!roulette.survive) break;
+            beta = scale(beta, roulette.scale);
+          }
+          subsurfaceEvents++;
+        } else {
+          if (bounces >= maxBounces) break;
+          bounces++;
+        }
+        continue;
+      }
     }
     const opacity = Math.min(Math.max(hit.opacity ?? 1, 0), 1);
     if (opacity <= 0 || (opacity < 1 && rng() >= opacity)) {
@@ -268,8 +302,18 @@ export function integratePath(
         radiance = add(radiance, scale(mul(beta, hit.emission), w));
       }
     }
+    if (bounces >= maxBounces) break;
 
-    const wo = neg(ray.direction);
+    let wo = neg(ray.direction);
+    if (scene.sampleSubsurface) {
+      const event = scene.sampleSubsurface(hit, rng);
+      if (event === null) break;
+      if (event) {
+        beta = mul(beta, event.weight);
+        hit = event.hit;
+        wo = event.outgoing ?? wo;
+      }
+    }
 
     const ls = scene.sampleLight(hit, rng);
     if (ls && ls.pdf > 0 && !scene.occluded(hit.position, ls.direction, ls.distance)) {
@@ -296,6 +340,9 @@ export function integratePath(
       const exiting = medium || field;
       medium = exiting ? null : hit.interiorMedium ?? null;
       field = exiting ? undefined : hit.interiorField;
+      interiorIor = exiting ? 1 : hit.interiorIor ?? 1;
+      subsurfaceWalk = !exiting && hit.subsurfaceInterior === true;
+      subsurfaceEvents = 0;
     }
 
     if (bounces >= minBounces) {
@@ -303,6 +350,7 @@ export function integratePath(
       if (!rr.survive) break;
       beta = scale(beta, rr.scale);
     }
+    bounces++;
   }
 
   return radiance;

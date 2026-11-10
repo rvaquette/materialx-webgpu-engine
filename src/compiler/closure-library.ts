@@ -163,8 +163,8 @@ function lobeDispatch(spec: ClosureDispatchSpec): string {
     sampleCases.push('    case 6u: { return mx_sheen_sample(ctx, u.xy); }');
   }
   if (has(7).length) {
-    evalCases.push('    case 7u: { if (c.hasInterior != 0u) { return mx_subsurface_boundary_eval(ctx, wi); } return mx_subsurface_eval(ctx, wi); }');
-    sampleCases.push('    case 7u: { if (c.hasInterior != 0u) { return mx_subsurface_boundary_sample(ctx, u); } return mx_subsurface_sample(ctx, u.xy); }');
+    evalCases.push('    case 7u: { if (lobe.dispersion == 1.0) { if (c.hasInterior != 0u && any(lobe.hairTintTRT > vec3f(0.0))) { return mx_subsurface_interface_eval(ctx, wi); } return mx_subsurface_eval(ctx, wi); } if (c.hasInterior != 0u) { return mx_subsurface_boundary_eval(ctx, wi); } return mx_subsurface_eval(ctx, wi); }');
+    sampleCases.push('    case 7u: { if (lobe.dispersion == 1.0) { if (c.hasInterior != 0u && any(lobe.hairTintTRT > vec3f(0.0))) { return mx_subsurface_interface_sample(ctx, u.xy); } return mx_subsurface_sample(ctx, u.xy); } if (c.hasInterior != 0u) { return mx_subsurface_boundary_sample(ctx, u); } return mx_subsurface_sample(ctx, u.xy); }');
   }
   if (has(8).length) {
     evalCases.push('    case 8u: { return mx_dielectric_transmission_eval(ctx, wi); }');
@@ -371,6 +371,17 @@ fn mx_subsurface_sample(ctx: MxLobeCtx, u: vec2f) -> MxBsdfSample {
   if (ctx.wo.z <= 0.0) { return MxBsdfSample(vec3f(0.0), vec3f(0.0), 0.0, false); }
   let wi = mx_cosine_hemisphere(u);
   return MxBsdfSample(wi, ctx.color / MX_PI, wi.z / MX_PI, true);
+}
+fn mx_subsurface_interface_eval(ctx: MxLobeCtx, wi: vec3f) -> MxBsdfEval {
+  if (ctx.wo.z * wi.z >= 0.0) { return MxBsdfEval(vec3f(0.0), 0.0); }
+  return MxBsdfEval(vec3f(1.0 / MX_PI), abs(wi.z) / MX_PI);
+}
+fn mx_subsurface_interface_sample(ctx: MxLobeCtx, u: vec2f) -> MxBsdfSample {
+  if (ctx.wo.z == 0.0) { return MxBsdfSample(vec3f(0.0), vec3f(0.0), 0.0, false); }
+  let local = mx_cosine_hemisphere(u);
+  let wi = vec3f(local.xy, select(local.z, -local.z, ctx.wo.z > 0.0));
+  let evaluated = mx_subsurface_interface_eval(ctx, wi);
+  return MxBsdfSample(wi, evaluated.value, evaluated.pdf, true);
 }
 fn mx_subsurface_boundary_eval(ctx: MxLobeCtx, wi: vec3f) -> MxBsdfEval {
   if (ctx.wo.z == 0.0 || wi.z == 0.0) { return MxBsdfEval(vec3f(0.0), 0.0); }

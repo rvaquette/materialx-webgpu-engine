@@ -42,6 +42,8 @@ export interface SerializedBsdfLobe {
   thinWalled?: boolean;
   interiorScattering?: Rgb3;
   interiorAnisotropy?: number;
+  subsurfaceRadius?: Rgb3;
+  subsurfaceTransport?: 1 | 2 | 3;
 }
 
 export interface SerializedCoatLayer {
@@ -93,6 +95,8 @@ function serializeLobe(l: LayeredBsdfLobe, d: number): SerializedBsdfLobe {
   if (l.conductorEta) out.conductorEta = rgb(l.conductorEta, d);
   if (l.interiorScattering) out.interiorScattering = rgb(l.interiorScattering, d);
   if (l.interiorAnisotropy !== undefined) out.interiorAnisotropy = roundTo(l.interiorAnisotropy, d);
+  if (l.subsurfaceRadius) out.subsurfaceRadius = rgb(l.subsurfaceRadius, d);
+  if (l.subsurfaceTransport !== undefined) out.subsurfaceTransport = l.subsurfaceTransport;
   if (l.thinWalled) out.thinWalled = true;
   return out;
 }
@@ -150,6 +154,8 @@ function deserializeLobe(l: SerializedBsdfLobe): LayeredBsdfLobe {
   if (l.conductorEta) out.conductorEta = tuple(l.conductorEta);
   if (l.interiorScattering) out.interiorScattering = tuple(l.interiorScattering);
   if (l.interiorAnisotropy !== undefined) out.interiorAnisotropy = l.interiorAnisotropy;
+  if (l.subsurfaceRadius) out.subsurfaceRadius = tuple(l.subsurfaceRadius);
+  if (l.subsurfaceTransport !== undefined) out.subsurfaceTransport = l.subsurfaceTransport;
   if (l.thinWalled) out.thinWalled = true;
   return out;
 }

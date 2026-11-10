@@ -182,6 +182,22 @@ export function translucentLobe(albedo: Vec3): Lobe {
  * the diffuse lobe exactly in the radius -> 0 limit (the spatial profile stays in
  * subsurface.ts for the integrator wiring in T057).
  */
+export function subsurfaceInterfaceLobe(): Lobe {
+  const response: V = [INV_PI, INV_PI, INV_PI];
+  return {
+    eval(wo, wi) {
+      if (wo[2] * wi[2] >= 0) return { value: [0, 0, 0], pdf: 0 };
+      return { value: [...response], pdf: Math.abs(wi[2]) * INV_PI };
+    },
+    sample(wo, rng) {
+      if (wo[2] === 0) return null;
+      const local = cosineHemisphere(rng(), rng());
+      const direction: V = [local[0], local[1], wo[2] > 0 ? -local[2] : local[2]];
+      return { wi: direction, value: [...response], pdf: Math.abs(direction[2]) * INV_PI, specular: false };
+    },
+  };
+}
+
 export function subsurfaceLobe(albedo: Vec3, twoSided = false): Lobe {
   const f: V = scale(albedo, INV_PI * (twoSided ? 0.5 : 1));
   return {
@@ -866,6 +882,8 @@ export function lobeFromLayered(l: LayeredBsdfLobe, film?: ThinFilmLayer): Lobe 
     case 'sheen':
       return sheenLobe(l.color, l.roughness ?? 0.3);
     case 'subsurface':
+      if (l.subsurfaceTransport === 1 && l.subsurfaceRadius?.some(value => value > 0)) return subsurfaceInterfaceLobe();
+      if ((l.subsurfaceTransport ?? 0) >= 2) return subsurfaceLobe(l.color);
       return subsurfaceLobe(l.color, l.subsurfaceRadius?.some(value => value > 0) === true);
   }
 }

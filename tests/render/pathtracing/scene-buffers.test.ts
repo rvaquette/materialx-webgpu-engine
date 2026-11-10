@@ -82,6 +82,34 @@ function build(surface?: RasterSurface): PathTraceScene {
 }
 
 describe('buildPathTraceScene packing', () => {
+  it('identifies exponential SSS interiors for independent random-walk termination', () => {
+    const scene = { ...build(), materials: packLayeredMaterial({ opacity: 1, lobes: [{
+      kind: 'subsurface', weight: 1, color: [0.6, 0.6, 0.6], subsurfaceRadius: [0.02, 0.02, 0.02], subsurfaceTransport: 1,
+    }] }) };
+    const hit = createSceneSampler(scene).intersect({ origin: [0, 0, 1], direction: [0, 0, -1] })!;
+    expect(hit.interiorMedium).toBeDefined();
+    expect(hit.subsurfaceInterior).toBe(true);
+  });
+  it('integrates Burley transport through real triangle projection without losing plane albedo', () => {
+    const base = build();
+    const closure: LayeredClosure = { opacity: 1, lobes: [{
+      kind: 'subsurface', weight: 1, color: [0.6, 0.6, 0.6], subsurfaceRadius: [0.02, 0.02, 0.02], subsurfaceTransport: 2,
+    }] };
+    const scene = { ...base, materials: packLayeredMaterial(closure),
+      light: { ...base.light, intensity: 0 }, environment: { ...base.environment, radiance: [1, 1, 1] as const } };
+    const sampler = createSceneSampler(scene);
+    const ray: Ray = { origin: [0, 0, 1], direction: [0, 0, -1] };
+    const hit = sampler.intersect(ray)!;
+    expect(hit.interiorMedium).toBeUndefined();
+    const event = sampler.sampleSubsurface!(hit, () => 0.1)!;
+    expect(event.hit.position).not.toEqual(hit.position);
+    expect(event.weight[0]).toBeCloseTo(1.2, 6);
+    let radiance = 0;
+    const rng = createPcg32(87);
+    for (let sample = 0; sample < 1000; sample++) radiance += integratePath(sampler, ray, rng)[0];
+    expect(Math.abs(radiance / 1000 - 0.6)).toBeLessThan(0.05);
+  });
+
   it('threads explicit volume coefficients from resources into GPU records and CPU hits', () => {
     const medium = { absorption: [0.1, 0.2, 0.3] as const, scattering: [0.4, 0.4, 0.4] as const, anisotropy: 0.5 };
     for (const volumeBoundary of [false, true]) {

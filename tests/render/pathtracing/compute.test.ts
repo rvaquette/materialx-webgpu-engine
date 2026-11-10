@@ -75,6 +75,14 @@ function fakeScene(): PathTraceScene {
 }
 
 describe('pathTraceComputeWgsl', () => {
+  it('keeps SSS collisions and internal reflections outside the surface budget', () => {
+    const shader = pathTraceComputeWgsl();
+    expect(shader).toContain('if (!subsurfaceWalk && bounce >= i32(U.transport.x))');
+    expect(shader).toContain('let rouletteDepth = select(bounce, subsurfaceEvents, subsurfaceWalk);');
+    expect(shader).toContain('if (subsurfaceWalk) { subsurfaceEvents++; }');
+    expect(shader).toContain('beta /= probability; environmentBeta /= probability;');
+    expect(shader).not.toContain('for (var bounce = 0; bounce < 64;');
+  });
   const src = pathTraceComputeWgsl();
   it('keeps PCG sampling for the reference and Halton for viewer display AOVs', () => {
     expect(src).not.toContain('fn camera_jitter');
@@ -246,8 +254,8 @@ describe('pathTraceComputeWgsl', () => {
 
   it('uses the graph normal for shading while retaining geometric normals for hit varyings', () => {
     const shader = pathTraceComputeWgsl({ environment: true });
-    expect(shader).toContain('let geometricNormal = surface_hit_normal(hit);');
-    expect(shader).toContain('let authoredNormal = mx_closure_shading_normal(c, geometricNormal);');
+    expect(shader).toContain('var geometricNormal = surface_hit_geometric_normal(hit);');
+    expect(shader).toContain('let authoredNormal = mx_closure_shading_normal(c, n);');
     expect(shader).toContain('let shadingNormal = mx_closure_oriented_normal(c, authoredNormal, -rd);');
     expect(shader).toContain('let frame = mx_closure_frame(c, shadingNormal, basis(shadingNormal));');
     expect(shader).toContain('mx_sh_irradiance(shadingNormal)');

@@ -21,6 +21,9 @@
   </LamaSurface>
 
   <LamaSSS name="sss_short_bsdf" type="BSDF">
+    <input name="sssMode" type="integer" value="1" />
+    <input name="albedoInversionMethod" type="integer" value="1" />
+    <input name="sssIOR" type="float" value="1.3" />
     <input name="color" type="color3" value="0.72, 0.28, 0.18" />
     <input name="sssRadius" type="color3" value="12, 6, 3" />
     <input name="sssScale" type="float" value="1" />
@@ -34,11 +37,13 @@
   </LamaSurface>
 
   <LamaSSS name="sss_long_bsdf" type="BSDF">
+    <input name="sssMode" type="integer" value="2" />
+    <input name="albedoInversionMethod" type="integer" value="1" />
     <input name="color" type="color3" value="0.72, 0.28, 0.18" />
     <input name="sssRadius" type="color3" value="80, 36, 16" />
     <input name="sssScale" type="float" value="1" />
     <input name="sssUnitLength" type="float" value="0.001" />
-    <input name="sssAnisotropy" type="float" value="0.35" />
+    <input name="sssAnisotropy" type="float" value="0" />
   </LamaSSS>
   <LamaSurface name="sss_long" type="material">
     <input name="materialFront" type="BSDF" nodename="sss_long_bsdf" />
@@ -47,6 +52,8 @@
   </LamaSurface>
 
   <LamaSSS name="sss_coated_base" type="BSDF">
+    <input name="sssMode" type="integer" value="1" />
+    <input name="albedoInversionMethod" type="integer" value="1" />
     <input name="color" type="color3" value="0.72, 0.28, 0.18" />
     <input name="sssRadius" type="color3" value="55, 24, 10" />
     <input name="sssScale" type="float" value="1" />
@@ -67,5 +74,17 @@
     <input name="materialFront" type="BSDF" nodename="sss_coated_bsdf" />
     <input name="materialBack" type="BSDF" nodename="sss_coated_bsdf" />
     <input name="presence" type="float" value="1" />
+  </LamaSurface>
+  <LamaSSS name="sss_mfp_bsdf" type="BSDF">
+    <input name="sssMode" type="integer" value="3" />
+    <input name="albedoInversionMethod" type="integer" value="1" />
+    <input name="color" type="color3" value="0.72, 0.28, 0.18" />
+    <input name="sssRadius" type="color3" value="80, 36, 16" />
+    <input name="sssUnitLength" type="float" value="0.001" />
+    <input name="sssAnisotropy" type="float" value="0.35" />
+  </LamaSSS>
+  <LamaSurface name="sss_mfp" type="material">
+    <input name="materialFront" type="BSDF" nodename="sss_mfp_bsdf" />
+    <input name="materialBack" type="BSDF" nodename="sss_mfp_bsdf" />
   </LamaSurface>
 </materialx>

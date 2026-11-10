@@ -17,6 +17,25 @@ import {
 const wo: Vec3 = [0, 0, 1];
 
 describe('subsurface BSDF lobe (T056g)', () => {
+  it('crosses exponential interfaces without applying the medium albedo a second time', () => {
+    const material: LayeredBsdfLobe = { kind: 'subsurface', weight: 1, color: [0.2, 0.4, 0.6],
+      subsurfaceTransport: 1, subsurfaceRadius: [1, 1, 1] };
+    const boundary = lobeFromLayered(material)!;
+    const rng = createPcg32(731);
+    for (const outgoing of [[0, 0, 1], [0, 0, -1]] as Vec3[]) {
+      expect(boundary.eval(outgoing, outgoing).pdf).toBe(0);
+      for (let index = 0; index < 64; index++) {
+        const sampled = boundary.sample(outgoing, rng)!;
+        expect(sampled.wi[2] * outgoing[2]).toBeLessThan(0);
+        const evaluated = boundary.eval(outgoing, sampled.wi);
+        expect(evaluated.pdf).toBeCloseTo(sampled.pdf, 12);
+        for (const value of sampled.value) expect(value * Math.abs(sampled.wi[2]) / sampled.pdf).toBeCloseTo(1, 12);
+      }
+    }
+    const local = lobeFromLayered({ ...material, subsurfaceRadius: [0, 0, 0] })!;
+    expect(local.eval(wo, wo).value[0]).toBeCloseTo(0.2 / Math.PI, 12);
+  });
+
   it('is wired on lobeFromLayered instead of the former null fallback', () => {
     const lobe: LayeredBsdfLobe = { kind: 'subsurface', weight: 0.5, color: [0.8, 0.5, 0.3] };
     expect(lobeFromLayered(lobe)).not.toBeNull();

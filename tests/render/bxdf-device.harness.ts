@@ -91,7 +91,7 @@ function lamaConductorGraph(): { graph: ResolvedGraph } {
   };
 }
 
-function lamaSssGraph(): ResolvedGraph {
+function lamaSssGraph(mode = 1): ResolvedGraph {
   const surface: ResolvedNode = {
     id: 'sss-surface', category: 'surface', type: 'surfaceshader',
     inputs: [{ name: 'bsdf', type: 'BSDF', source: { kind: 'connection', nodeId: 'skin' }, provenance: { namePath: '/mat/bsdf' } }],
@@ -107,22 +107,22 @@ function lamaSssGraph(): ResolvedGraph {
         { name: 'normal', type: 'vector3', geomprop: 'Nworld' },
         { name: 'sssRadius', type: 'color3', value: '2, 1, 0.5' },
         { name: 'sssScale', type: 'float', value: '1' },
-        { name: 'sssMode', type: 'integer', value: '0' },
+        { name: 'sssMode', type: 'integer', value: String(mode) },
         { name: 'sssIOR', type: 'float', value: '1.3' },
         { name: 'sssAnisotropy', type: 'float', value: '0.2' },
-        { name: 'sssBleed', type: 'float', value: '0.3' },
-        { name: 'sssFollowTopology', type: 'float', value: '0.5' },
+        { name: 'sssBleed', type: 'float', value: '0' },
+        { name: 'sssFollowTopology', type: 'float', value: '0' },
         { name: 'sssUnitLength', type: 'float', value: '0.00328' },
         { name: 'mode', type: 'integer', value: '0' },
-        { name: 'albedoInversionMethod', type: 'integer', value: '0' },
+        { name: 'albedoInversionMethod', type: 'integer', value: '1' },
       ],
     },
     inputs: [
       valueInput('color', 'color3', '0.7, 0.3, 0.2'), valueInput('sssRadius', 'color3', '2, 1, 0.5'),
-      valueInput('sssScale', 'float', '1'), valueInput('sssMode', 'integer', '0'), valueInput('sssIOR', 'float', '1.3'),
-      valueInput('sssAnisotropy', 'float', '0.2'), valueInput('sssBleed', 'float', '0.3'),
-      valueInput('sssFollowTopology', 'float', '0.5'), valueInput('sssUnitLength', 'float', '0.00328'),
-      valueInput('mode', 'integer', '0'), valueInput('albedoInversionMethod', 'integer', '0'),
+      valueInput('sssScale', 'float', '1'), valueInput('sssMode', 'integer', String(mode)), valueInput('sssIOR', 'float', mode === 1 ? '1.3' : '1'),
+      valueInput('sssAnisotropy', 'float', mode === 2 ? '0' : '0.2'), valueInput('sssBleed', 'float', '0'),
+      valueInput('sssFollowTopology', 'float', '0'), valueInput('sssUnitLength', 'float', '0.00328'),
+      valueInput('mode', 'integer', '0'), valueInput('albedoInversionMethod', 'integer', '1'),
     ],
     provenance: { namePath: '/mat/skin' },
   };
@@ -157,7 +157,7 @@ fn validate_lama() {
     if (pipelineError) throw new Error(`${label} pipeline: ${pipelineError.message}`);
   };
   await compileSurface(lamaConductorGraph().graph, 'LamaConductor');
-  await compileSurface(lamaSssGraph(), 'LamaSSS');
+  for (const mode of [1, 2, 3]) await compileSurface(lamaSssGraph(mode), `LamaSSS-${mode}`);
   return { compiled: true, features: ['conductor-eta-kappa', 'anisotropic-direction', 'sss-medium-entry-exit'] };
 }
 

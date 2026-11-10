@@ -39,13 +39,42 @@ describe('extinction and transmittance', () => {
 });
 
 describe('Henyey-Greenstein phase', () => {
+  it('integrates to the signed angular moment used by the outgoing-direction sampler', () => {
+    const bins = 20000;
+    const step = 2 / bins;
+    for (const anisotropy of [-0.6, 0, 0.6]) {
+      let energy = 0;
+      let moment = 0;
+      for (let bin = 0; bin < bins; bin++) {
+        const cosine = -1 + (bin + 0.5) * step;
+        const density = 2 * Math.PI * phaseHG(cosine, anisotropy) * step;
+        energy += density;
+        moment += density * cosine;
+      }
+      expect(energy).toBeCloseTo(1, 6);
+      expect(moment).toBeCloseTo(-anisotropy, 6);
+    }
+  });
+
   it('is 1/(4pi) when isotropic', () => {
     expect(phaseHG(0.3, 0)).toBeCloseTo(1 / (4 * Math.PI), 10);
     expect(phaseHG(-0.7, 0)).toBeCloseTo(1 / (4 * Math.PI), 10);
   });
 
   it('peaks forward for g>0', () => {
-    expect(phaseHG(1, 0.6)).toBeGreaterThan(phaseHG(-1, 0.6));
+    expect(phaseHG(-1, 0.6)).toBeGreaterThan(phaseHG(1, 0.6));
+  });
+
+  it('keeps the same finite phase at the anisotropy bounds', () => {
+    for (const anisotropy of [-1, 1]) {
+      for (const sample of [0, 0.2, 0.8, 1]) {
+        const sampled = sampleHenyeyGreenstein([0, 0, 1], anisotropy, sample, 0.3);
+        expect(length(sampled.wi)).toBeCloseTo(1, 10);
+        expect(sampled.pdf).toBeGreaterThan(0);
+        expect(Number.isFinite(sampled.pdf)).toBe(true);
+        expect(sampled.pdf).toBeCloseTo(phaseHG(sampled.wi[2], anisotropy), 10);
+      }
+    }
   });
 
   it('returns unit directions and pdf matching the phase value', () => {

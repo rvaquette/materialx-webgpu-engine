@@ -28,7 +28,7 @@ import {
 } from '../raster/scene-frame.ts';
 import { evalWorld, layeredSurfaceBsdf, sampleWorld } from './bsdf.ts';
 import { absorbingMedium, type HomogeneousMedium } from './media.ts';
-import { subsurfaceMedium } from './subsurface.ts';
+import { subsurfaceMedium, exponentialSubsurfaceMedium, sampleBurleySurface } from './subsurface.ts';
 import { canonicalSurfaceToLayered, type LayeredClosure } from '../../compiler/ir.ts';
 import { composeSurfaceLayered, prepareSurface, type PreparedSurface } from '../../compiler/surface-eval.ts';
 import type { IrEvalVaryings } from '../../compiler/ir-eval.ts';
@@ -624,7 +624,10 @@ function hitSurface(scene: PathTraceScene, hit: TriHit, ray: Ray): PtHit {
     ray.origin[1] + ray.direction[1] * hit.t,
     ray.origin[2] + ray.direction[2] * hit.t,
   ];
-  return { position, normal, materialIndex: d[b + 18]!, triangle: hit.triangle, u: hit.u, v: hit.v };
+  const vertices = d.subarray(b, b + 9);
+  const geometricNormal = normalize3(cross3(sub3(readVec3(vertices, 1), readVec3(vertices, 0)),
+    sub3(readVec3(vertices, 2), readVec3(vertices, 0))));
+  return { position, normal, geometricNormal, materialIndex: d[b + 18]!, triangle: hit.triangle, u: hit.u, v: hit.v };
 }
 
 /** Interpolate the hit's shading varyings for the procedural surface oracle (T057i3). */
@@ -694,6 +697,8 @@ export function createSceneSampler(scene: PathTraceScene): SceneSampler {
   for (const v of scene.variantSources) prepared.set(v.materialIndex, prepareSurface(v.graph, v.surface));
 
   function closureFor(hit: PtHit): LayeredClosure {
+    const override = (hit as PtHit & { closureOverride?: LayeredClosure }).closureOverride;
+    if (override) return override;
     const variant = prepared.get(hit.materialIndex);
     return variant ? composeSurfaceLayered(variant, hitVaryings(scene, hit)) : readLayeredClosure(scene, hit.materialIndex);
   }
@@ -709,7 +714,11 @@ export function createSceneSampler(scene: PathTraceScene): SceneSampler {
     if (explicit) return explicit;
     const closure = closureFor(hit);
     const sss = closure.lobes.find((l) => l.kind === 'subsurface' && l.subsurfaceRadius !== undefined);
-    if (sss?.subsurfaceRadius) return subsurfaceMedium(sss.color, sss.subsurfaceRadius, sss.anisotropy ?? 0);
+    if (sss?.subsurfaceRadius && (sss.subsurfaceTransport ?? 1) < 2) {
+      return sss.subsurfaceTransport === 1
+        ? exponentialSubsurfaceMedium(sss.color, sss.subsurfaceRadius, sss.anisotropy ?? 0)
+        : subsurfaceMedium(sss.color, sss.subsurfaceRadius, sss.anisotropy ?? 0);
+    }
     const glass = closure.lobes.find(
       (l) => l.kind === 'dielectric_transmission' && l.attenuationColor !== undefined && l.attenuationDistance !== undefined,
     );
@@ -736,15 +745,64 @@ export function createSceneSampler(scene: PathTraceScene): SceneSampler {
   }
 
   const sampler: SceneSampler = {
+    sampleSubsurface(surface: SurfaceHit, rng: Rng) {
+      const entry = surface as PtHit;
+      const closure = closureFor(entry);
+      const diffusion = closure.lobes.filter(lobe => lobe.kind === 'subsurface' && (lobe.subsurfaceTransport ?? 1) >= 2
+        && lobe.weight > 0 && lobe.subsurfaceRadius?.some(value => value > 0));
+      if (diffusion.length === 0) return undefined;
+      if (closure.coat || closure.sheen || closure.fuzz || closure.thinFilm) {
+        throw new Error('Burley spatial transport does not yet support outer coat/sheen/fuzz/thin-film layers.');
+      }
+      const remaining = closure.lobes.filter(lobe => !diffusion.includes(lobe));
+      const probability = remaining.some(lobe => lobe.weight > 0) ? 0.5 : 1;
+      if (rng() >= probability) {
+        return { hit: { ...entry, closureOverride: { ...closure, lobes: remaining } },
+          weight: [1 / (1 - probability), 1 / (1 - probability), 1 / (1 - probability)] as Vec3 };
+      }
+      const lobe = diffusion[Math.min(diffusion.length - 1, Math.floor(rng() * diffusion.length))]!;
+      const extent = Math.hypot(scene.nodes[4]! - scene.nodes[0]!, scene.nodes[5]! - scene.nodes[1]!, scene.nodes[6]! - scene.nodes[2]!) + 1;
+      const event = sampleBurleySurface(entry, lobe.color, lobe.subsurfaceRadius!, lobe.subsurfaceTransport as 2 | 3,
+        lobe.anisotropy ?? 0, (probe, axis) => {
+          const exits: SurfaceHit[] = [];
+          let origin = sub3(probe, scale3(axis, extent));
+          let distance = 2 * extent;
+          for (let crossing = 0; crossing <= scene.triangleCount; crossing++) {
+            const ray = { origin, direction: axis, minDistance: 1e-7 };
+            const intersection = traverse(scene, ray, distance, false);
+            if (!intersection) break;
+            const exit = hitSurface(scene, intersection, ray);
+            const base = intersection.triangle * PT_TRIANGLE_FLOATS;
+            if (exit.materialIndex === entry.materialIndex) {
+              const vertices = scene.triangles.subarray(base, base + 9);
+              const geometryNormal = normalize3(cross3(
+                sub3(readVec3(vertices, 1), readVec3(vertices, 0)),
+                sub3(readVec3(vertices, 2), readVec3(vertices, 0))));
+              exits.push({ ...exit, geometricNormal: geometryNormal });
+            }
+            const step = intersection.t + 1e-6;
+            origin = [origin[0] + axis[0] * step, origin[1] + axis[1] * step, origin[2] + axis[2] * step];
+            distance -= step;
+          }
+          return exits;
+        }, rng);
+      if (!event) return null;
+      return { hit: { ...event.hit, closureOverride: { lobes: [{ kind: 'burley_diffuse', weight: 1, color: [1, 1, 1] }], opacity: 1 } },
+        weight: scale3(event.weight, lobe.weight * diffusion.length / probability), outgoing: event.hit.normal };
+    },
     intersect(ray: Ray): SurfaceHit | null {
       const hit = traverse(scene, ray, Infinity, false);
       if (!hit) return null;
       const surface = hitSurface(scene, hit, ray);
       const medium = interiorMediumFor(surface as PtHit);
+      const subsurface = closureFor(surface).lobes.find(lobe => lobe.kind === 'subsurface');
       const field = fieldFor(surface);
       return {
         ...surface,
         ...(medium ? { interiorMedium: medium } : {}),
+        ...(subsurface?.subsurfaceTransport === 1 ? { interiorIor: subsurface.ior ?? 1 } : {}),
+        ...(medium && subsurface?.subsurfaceRadius?.some(value => value > 0)
+          && (subsurface.subsurfaceTransport ?? 1) === 1 ? { subsurfaceInterior: true } : {}),
         ...(field ? { interiorField: field } : {}),
         ...(isVolumeBoundary(scene.materials, surface.materialIndex) ? { volumeBoundary: true } : {}),
       };

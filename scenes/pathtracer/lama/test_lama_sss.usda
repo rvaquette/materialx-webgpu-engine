@@ -39,8 +39,8 @@ def Xform "World"
         def Material "sss_long" (
             prepend references = @./test_lama_sss.mtlx@</MaterialX/Materials/sss_long>
         ) {}
-        def Material "sss_coated" (
-            prepend references = @./test_lama_sss.mtlx@</MaterialX/Materials/sss_coated>
+        def Material "sss_mfp" (
+            prepend references = @./test_lama_sss.mtlx@</MaterialX/Materials/sss_mfp>
         ) {}
     }
 
@@ -56,7 +56,7 @@ def Xform "World"
         }
         def Mesh "diffuse_control"
         {
-            custom asset engine:geometry:file = @../material_test/sphere.obj@
+            custom asset engine:geometry:file = @./sphere-smooth.obj@
             double3 xformOp:translate = (-3.8, -0.2, 0.8)
             float3 xformOp:scale = (0.8, 0.8, 0.8)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
@@ -64,7 +64,7 @@ def Xform "World"
         }
         def Mesh "sss_short"
         {
-            custom asset engine:geometry:file = @../material_test/sphere.obj@
+            custom asset engine:geometry:file = @./sphere-smooth.obj@
             double3 xformOp:translate = (-1.8, -0.2, 0.8)
             float3 xformOp:scale = (0.8, 0.8, 0.8)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
@@ -72,19 +72,19 @@ def Xform "World"
         }
         def Mesh "sss_long"
         {
-            custom asset engine:geometry:file = @../material_test/sphere.obj@
+            custom asset engine:geometry:file = @./sphere-smooth.obj@
             double3 xformOp:translate = (0.2, -0.2, 0.8)
             float3 xformOp:scale = (0.8, 0.8, 0.8)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
             rel material:binding = </World/Looks/sss_long>
         }
-        def Mesh "sss_coated"
+        def Mesh "sss_mfp"
         {
-            custom asset engine:geometry:file = @../material_test/sphere.obj@
+            custom asset engine:geometry:file = @./sphere-smooth.obj@
             double3 xformOp:translate = (2.2, -0.2, 0.8)
             float3 xformOp:scale = (0.8, 0.8, 0.8)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
-            rel material:binding = </World/Looks/sss_coated>
+            rel material:binding = </World/Looks/sss_mfp>
         }
     }
 

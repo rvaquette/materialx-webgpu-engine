@@ -14,6 +14,7 @@ import type {
 } from '../../src/materialx/graph.ts';
 import { resolveSurface } from '../../src/materialx/surface-graph.ts';
 import { emitLayeredSurface, emitSurfaceVariant } from '../../src/compiler/surface-wgsl.ts';
+import { surfaceGraphToLayered } from '../../src/compiler/surface-lower.ts';
 import type { Diagnostic } from '../../src/core/diagnostics.ts';
 
 function value(name: string, type: string, raw: string, colorSpace?: string): ResolvedInput {
@@ -55,6 +56,32 @@ function emit(graph: ResolvedGraph, sink?: (d: Diagnostic) => void) {
 }
 
 describe('emitLayeredSurface (T055d)', () => {
+  const sssGraph = (options: ResolvedInput[]) => surfaceGraph('surface', [conn('bsdf', 'BSDF', 'skin')], [
+    upstream('skin', 'LamaSSS', 'BSDF', [
+      value('sssRadius', 'color3', '1,2,3'), ...options,
+    ]),
+  ]);
+
+  it.each([1, 2, 3])('carries Lama SSS transport %s consistently to CPU and GPU', (mode) => {
+    const graph = sssGraph([value('sssMode', 'integer', String(mode)), value('albedoInversionMethod', 'integer', '1')]);
+    const closure = surfaceGraphToLayered(resolveSurface(graph)!, graph);
+    expect(closure.lobes[0]?.subsurfaceTransport).toBe(mode);
+    expect(emit(graph).code).toContain(`${mode}.0, (`);
+    if (mode >= 2) expect(emit(graph).code).not.toContain('c.hasInterior = select(');
+  });
+
+  it.each([
+    ['sssMode', 'integer', '0'], ['albedoInversionMethod', 'integer', '0'],
+    ['sssBleed', 'float', '0.5'], ['sssFollowTopology', 'float', '0.5'],
+    ['sssSubset', 'string', 'skin'], ['sssContinuationRays', 'integer', '1'], ['mode', 'integer', '2'],
+  ])('rejects unsupported Lama %s rather than substituting another model', (name, type, raw) => {
+    const options = [value('sssMode', 'integer', '1'), value('albedoInversionMethod', 'integer', '1')]
+      .filter(option => option.name !== name);
+    const graph = sssGraph([...options, value(name, type, raw)]);
+    expect(() => emit(graph)).toThrow(/unsupported/);
+    expect(() => surfaceGraphToLayered(resolveSurface(graph)!, graph)).toThrow(/unsupported/);
+  });
+
   it('lowers connected Lama BSDF parameters through the normal texture/IR path', () => {
     const graph = surfaceGraph('LamaDiffuse', [
       conn('color', 'color3', 'albedo'), value('roughness', 'float', '0.35'),
@@ -177,6 +204,7 @@ describe('emitLayeredSurface (T055d)', () => {
 
     const sssGraph = surfaceGraph('surface', [conn('bsdf', 'BSDF', 'skin')], [
       upstream('skin', 'LamaSSS', 'BSDF', [
+        value('sssMode', 'integer', '1'), value('albedoInversionMethod', 'integer', '1'),
         value('color', 'color3', '0.7, 0.3, 0.2'), value('sssRadius', 'color3', '2, 1, 0.5'),
         value('sssScale', 'float', '3'), value('sssUnitLength', 'float', '0.01'),
       ]),

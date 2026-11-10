@@ -13,7 +13,7 @@
 // single-scatter albedo that drives the walk.
 
 import type { Vec3 } from '../../scene/transforms.ts';
-import type { Rng } from './integrator.ts';
+import type { Rng, SurfaceHit } from './integrator.ts';
 import type { HomogeneousMedium } from './media.ts';
 import { sampleHenyeyGreenstein } from './media.ts';
 
@@ -48,6 +48,95 @@ export function extinctionFromMeanFreePath(meanFreePath: Vec3, albedo: Vec3): Ve
     return dd > 0 ? 1 / dd : 0;
   };
   return [sigma(meanFreePath[0], albedo[0]), sigma(meanFreePath[1], albedo[1]), sigma(meanFreePath[2], albedo[2])];
+}
+
+export function burleyRadialPdf(radius: number, diffusionLength: number): number {
+  if (!(diffusionLength > 0) || radius < 0) return 0;
+  return (Math.exp(-radius / diffusionLength) + Math.exp(-radius / (3 * diffusionLength))) / (4 * diffusionLength);
+}
+
+export function burleyProfile(radius: number, diffusionLength: number): number {
+  if (!(diffusionLength > 0) || radius < 0) return 0;
+  return burleyRadialPdf(radius, diffusionLength) / (2 * Math.PI * radius);
+}
+
+export function sampleBurleyRadius(diffusionLength: number, component: number, sample: number): number {
+  if (!(diffusionLength > 0)) return 0;
+  const scale = component < 0.25 ? diffusionLength : 3 * diffusionLength;
+  return -scale * Math.log1p(-Math.min(Math.max(sample, 0), 1 - Number.EPSILON));
+}
+
+export function burleyDiffusionLength(albedo: Vec3, radius: Vec3, mode: 2 | 3, anisotropy = 0): Vec3 {
+  const alpha = singleScatterAlbedo(albedo);
+  return radius.map((value, channel) => mode === 2 ? Math.max(value, 0) / 2.5
+    : Math.max(value, 0) / Math.sqrt(3 * (1 - alpha[channel]!) * (1 - alpha[channel]! * anisotropy))) as unknown as Vec3;
+}
+
+export function exponentialSubsurfaceMedium(albedo: Vec3, meanFreePath: Vec3, anisotropy = 0): HomogeneousMedium {
+  const alpha = singleScatterAlbedo(albedo);
+  const sigmaT = meanFreePath.map(value => value > 0 ? 1 / value : 0);
+  return {
+    absorption: alpha.map((value, channel) => (1 - value) * sigmaT[channel]!) as unknown as Vec3,
+    scattering: alpha.map((value, channel) => value * sigmaT[channel]!) as unknown as Vec3,
+    anisotropy,
+  };
+}
+
+export function sampleBurleySurface(
+  entry: SurfaceHit,
+  albedo: Vec3,
+  radius: Vec3,
+  mode: 2 | 3,
+  anisotropy: number,
+  project: (probe: Vec3, axis: Vec3) => readonly SurfaceHit[],
+  rng: Rng,
+): { hit: SurfaceHit; weight: Vec3 } | null {
+  const lengths = burleyDiffusionLength(albedo, radius, mode, anisotropy);
+  const channel = Math.min(2, Math.floor(rng() * 3));
+  if (!(lengths[channel]! > 0)) {
+    const localChannels = lengths.filter(length => !(length > 0)).length;
+    return { hit: entry, weight: albedo.map((value, index) => lengths[index]! > 0 ? 0
+      : Math.min(Math.max(value, 0), 1) * 3 / localChannels) as unknown as Vec3 };
+  }
+  const distance = sampleBurleyRadius(lengths[channel]!, rng(), rng());
+  if (!(distance > 0)) return null;
+  const normal = normalize(entry.normal);
+  const helper: Vec3 = Math.abs(normal[2]) < 0.9 ? [0, 0, 1] : [0, 1, 0];
+  const tangent = normalize([helper[1] * normal[2] - helper[2] * normal[1],
+    helper[2] * normal[0] - helper[0] * normal[2], helper[0] * normal[1] - helper[1] * normal[0]]);
+  const bitangent: Vec3 = [normal[1] * tangent[2] - normal[2] * tangent[1],
+    normal[2] * tangent[0] - normal[0] * tangent[2], normal[0] * tangent[1] - normal[1] * tangent[0]];
+  const axes = [normal, tangent, bitangent];
+  const choice = rng();
+  const axisIndex = choice < 0.5 ? 0 : choice < 0.75 ? 1 : 2;
+  const axis = axes[axisIndex]!;
+  const diskX = axes[(axisIndex + 1) % 3]!;
+  const diskY = axes[(axisIndex + 2) % 3]!;
+  const phi = 2 * Math.PI * rng();
+  const probe = entry.position.map((value, index) => value + distance
+    * (Math.cos(phi) * diskX[index]! + Math.sin(phi) * diskY[index]!)) as unknown as Vec3;
+  const exits = project(probe, axis);
+  if (exits.length === 0) return null;
+  const hit = exits[Math.min(exits.length - 1, Math.floor(rng() * exits.length))]!;
+  const offset = hit.position.map((value, index) => value - entry.position[index]!) as unknown as Vec3;
+  const geometricNormal = hit.geometricNormal ?? hit.normal;
+  let areaPdf = 0;
+  for (const [index, projectionAxis] of axes.entries()) {
+    const jacobian = Math.abs(geometricNormal[0] * projectionAxis[0] + geometricNormal[1] * projectionAxis[1] + geometricNormal[2] * projectionAxis[2]);
+    if (jacobian === 0) continue;
+    const depth = offset[0] * projectionAxis[0] + offset[1] * projectionAxis[1] + offset[2] * projectionAxis[2];
+    const projected = hit.position.map((value, component) => value - projectionAxis[component]! * depth) as unknown as Vec3;
+    const radialDistance = Math.hypot(...projected.map((value, component) => value - entry.position[component]!));
+    const count = index === axisIndex ? exits.length : project(projected, projectionAxis).length;
+    if (count === 0) continue;
+    areaPdf += (index === 0 ? 0.5 : 0.25)
+      * lengths.reduce((sum, length) => sum + burleyProfile(radialDistance, length) / 3, 0) * jacobian / count;
+  }
+  if (!(areaPdf > 0)) return null;
+  const separation = Math.hypot(...hit.position.map((value, index) => value - entry.position[index]!));
+  const weight = albedo.map((value, index) => Math.min(Math.max(value, 0), 1)
+    * burleyProfile(separation, lengths[index]!) / areaPdf) as unknown as Vec3;
+  return { hit, weight };
 }
 
 export type WalkMode = 'analog' | 'weighted';
@@ -109,7 +198,7 @@ export function randomWalkSlabChannel(
       }
     }
 
-    dir = sampleHenyeyGreenstein(dir, anisotropy, rng(), rng()).wi;
+    dir = sampleHenyeyGreenstein([-dir[0], -dir[1], -dir[2]], anisotropy, rng(), rng()).wi;
   }
   return { exit: 'terminated', weight, bounces: maxBounces };
 }

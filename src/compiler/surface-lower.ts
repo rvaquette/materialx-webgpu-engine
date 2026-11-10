@@ -1,3 +1,4 @@
+import { lamaSssTransport } from './lama-sss.ts';
 // T055b: map a resolved surface interface (src/materialx/surface-graph.ts) to a
 // LayeredClosure (src/compiler/ir.ts). This is the CPU lowering that captures the
 // family parameters the legacy seven-parameter canonical model discarded: coat,
@@ -484,6 +485,8 @@ function lowerLamaBsdf(graph: ResolvedGraph, nodeId: string, frame?: LamaShading
     case 'LamaSSS':
       return assemble([{
         kind: 'subsurface', weight: 1,
+        subsurfaceTransport: lamaSssTransport(graph, nodeId),
+        ior: nodeScalar(graph, nodeId, 'sssIOR', 1),
         color: nodeColor(graph, nodeId, 'color', [0.18, 0.18, 0.18]),
         subsurfaceRadius: scaleRgb(nodeColor(graph, nodeId, 'sssRadius', [0, 0, 0]),
           nodeScalar(graph, nodeId, 'sssScale', 1) * nodeScalar(graph, nodeId, 'sssUnitLength', 0.00328)),

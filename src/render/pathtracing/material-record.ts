@@ -72,6 +72,7 @@ const LOBE_HAS_FRESNEL_EXPONENT = 2048;
 const LOBE_HAS_CONDUCTOR_ETA = 4096;
 const LOBE_HAS_ENERGY_COMPENSATION = 8192;
 const LOBE_HAS_INTERIOR_SCATTERING = 16384;
+const LOBE_HAS_SUBSURFACE_TRANSPORT = 32768;
 
 function rd(buf: ArrayLike<number>, i: number): number {
   return buf[i] ?? 0;
@@ -94,6 +95,7 @@ function writeLobe(out: Float32Array, base: number, lobe: LayeredBsdfLobe): void
   if (lobe.conductorEta !== undefined) flags |= LOBE_HAS_CONDUCTOR_ETA;
   if (lobe.energyCompensation !== undefined) flags |= LOBE_HAS_ENERGY_COMPENSATION;
   if (lobe.interiorScattering !== undefined) flags |= LOBE_HAS_INTERIOR_SCATTERING;
+  if (lobe.subsurfaceTransport !== undefined) flags |= LOBE_HAS_SUBSURFACE_TRANSPORT;
 
   out[base] = KIND_TO_U32[lobe.kind];
   out[base + 1] = lobe.weight;
@@ -122,8 +124,8 @@ function writeLobe(out: Float32Array, base: number, lobe: LayeredBsdfLobe): void
   out[base + 20] = radius[0];
   out[base + 21] = radius[1];
   out[base + 22] = radius[2];
-  out[base + 23] = lobe.dispersion ?? lobe.fresnelExponent ?? lobe.energyCompensation ?? lobe.interiorAnisotropy ?? 0;
-  const trt = lobe.hairTintTRT ?? [1, 1, 1];
+  out[base + 23] = lobe.subsurfaceTransport ?? lobe.dispersion ?? lobe.fresnelExponent ?? lobe.energyCompensation ?? lobe.interiorAnisotropy ?? 0;
+  const trt = lobe.hairTintTRT ?? (lobe.kind === 'subsurface' ? lobe.subsurfaceRadius ?? [0, 0, 0] : [1, 1, 1]);
   out[base + 24] = trt[0];
   out[base + 25] = trt[1];
   out[base + 26] = trt[2];
@@ -135,6 +137,7 @@ function readLobe(buf: ArrayLike<number>, base: number): LayeredBsdfLobe {
   const flags = Math.round(rd(buf, base + 2));
   const color: Rgb = [rd(buf, base + 3), rd(buf, base + 4), rd(buf, base + 5)];
   const lobe: LayeredBsdfLobe = { kind, weight: rd(buf, base + 1), color };
+  if ((flags & LOBE_HAS_SUBSURFACE_TRANSPORT) !== 0) lobe.subsurfaceTransport = Math.round(rd(buf, base + 23)) as 1 | 2 | 3;
   if ((flags & LOBE_HAS_FRESNEL_EXPONENT) !== 0) lobe.fresnelExponent = rd(buf, base + 23);
   if ((flags & LOBE_HAS_HAIR_TRT) !== 0) {
     lobe.hairTintTRT = [rd(buf, base + 24), rd(buf, base + 25), rd(buf, base + 26)];
@@ -412,11 +415,17 @@ fn mx_material_closure(matIndex : u32) -> LayeredClosure {
       let scol = vec3f(materials[lb + 3u], materials[lb + 4u], materials[lb + 5u]);
       let radius = vec3f(materials[lb + 20u], materials[lb + 21u], materials[lb + 22u]);
       let g = select(0.0, materials[lb + 10u], (lflags & MX_LOBE_HAS_ANISOTROPY) != 0u);
-      let m = mx_subsurface_medium(scol, radius, g);
+      if ((lflags & ${LOBE_HAS_SUBSURFACE_TRANSPORT}u) != 0u && materials[lb + 23u] >= 2.0) { continue; }
+      var m = mx_subsurface_medium(scol, radius, g);
+      if ((lflags & ${LOBE_HAS_SUBSURFACE_TRANSPORT}u) != 0u) {
+        let alpha = mx_single_scatter_albedo(scol);
+        let sigmaT = select(vec3f(0.0), vec3f(1.0) / max(radius, vec3f(1e-20)), radius > vec3f(0.0));
+        m = MxMedium((vec3f(1.0) - alpha) * sigmaT, alpha * sigmaT, g);
+      }
       c.interiorSigmaA = m.sigmaA;
       c.interiorSigmaS = m.sigmaS;
       c.interiorG = m.g;
-      c.hasInterior = 1u;
+      c.hasInterior = select(0u, 1u, any(radius > vec3f(0.0)));
       sssFound = true;
     }
   }

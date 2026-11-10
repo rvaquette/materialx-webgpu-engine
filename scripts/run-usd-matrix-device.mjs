@@ -9,6 +9,8 @@
 // Env:    MX_ADB   path to adb (default D:\platform-tools\adb.exe)
 //         MX_PORT  dev server port (default 5173)
 //         MX_ENTRIES comma-separated scene URLs (overrides the built-in matrix)
+//         MX_MAX_DEPTH optional 1..64 depth override; saves HDR benchmark JSON
+//         MX_TILE_SPP samples per dispatch (default 1)
 
 import { spawn, execFile } from 'node:child_process';
 import { writeFileSync, mkdirSync } from 'node:fs';
@@ -18,6 +20,12 @@ const ADB = process.env.MX_ADB ?? 'D:\\platform-tools\\adb.exe';
 const PORT = Number(process.env.MX_PORT ?? 5173);
 const RES = Number(process.argv[2] ?? 256);
 const SPP = Number(process.argv[3] ?? 160);
+const TILE_SPP = Number(process.env.MX_TILE_SPP ?? 1);
+if (!Number.isInteger(TILE_SPP) || TILE_SPP < 1) throw new Error('MX_TILE_SPP must be a positive integer');
+const MAX_DEPTH = process.env.MX_MAX_DEPTH !== undefined ? Number(process.env.MX_MAX_DEPTH) : undefined;
+if (MAX_DEPTH !== undefined && (!Number.isInteger(MAX_DEPTH) || MAX_DEPTH < 1 || MAX_DEPTH > 64)) {
+  throw new Error('MX_MAX_DEPTH must be an integer from 1 to 64');
+}
 const HARNESS_PATH = '/usd-image-harness.html';
 // The device reaches the dev server through `adb reverse` on localhost.
 const DEVICE_URL = `http://localhost:${PORT}${HARNESS_PATH}`;
@@ -95,7 +103,8 @@ function openCdp(wsUrl) {
 }
 
 async function renderOne(send, entry, backend) {
-  const query = `?entry=${encodeURIComponent(entry)}&res=${RES}&spp=${SPP}&backend=${backend}&_=${Date.now()}`;
+  const query = `?entry=${encodeURIComponent(entry)}&res=${RES}&spp=${SPP}&tileSpp=${TILE_SPP}&backend=${backend}&_=${Date.now()}`
+    + (MAX_DEPTH !== undefined ? `&maxDepth=${MAX_DEPTH}&benchmark=1` : '');
   const url = `${DEVICE_URL}${query}`;
   await send('Page.navigate', { url });
   const evalExpr = async (expression) => {
@@ -107,9 +116,12 @@ async function renderOne(send, entry, backend) {
   let status = null;
   let lastLog = '';
   let printedLines = 0;
+  const matches = (value) => value?.e === entry && value.b === backend && value.url === url
+    && value.width === RES && value.height === RES && value.samples === (backend === 'raster' ? 1 : SPP)
+    && (MAX_DEPTH === undefined || value.depth === MAX_DEPTH);
   while (Date.now() - started < DEADLINE_MS) {
     const raw = await evalExpr(
-      "JSON.stringify((() => { const i = globalThis.__MX_IMAGE__; return { e: i ? i.entry : null, b: i ? i.backend : null, ms: i ? i.renderMs : null, failed: ('__MX_IMAGE__' in globalThis) && i === null }; })())",
+      "JSON.stringify((() => { const i = globalThis.__MX_IMAGE__; return { e: i ? i.entry : null, b: i ? i.backend : null, ms: i ? i.renderMs : null, url: location.href, width: i?.width, height: i?.height, samples: i?.samples, depth: i?.benchmark?.sceneMetadata?.maxDepth, failed: ('__MX_IMAGE__' in globalThis) && i === null }; })())",
     );
     try {
       status = raw ? JSON.parse(raw) : null;
@@ -124,16 +136,18 @@ async function renderOne(send, entry, backend) {
       }
       printedLines = lines.length;
     }
-    if (status && status.e === entry && status.b === backend) break;
+    if (matches(status)) break;
     if (status && status.failed) break;
     await sleep(500);
   }
   let dataUrl = null;
-  if (status && status.e === entry && status.b === backend) {
+  if (matches(status)) {
     const d = await evalExpr('(globalThis.__MX_IMAGE__ && globalThis.__MX_IMAGE__.dataUrl) ?? null');
     if (typeof d === 'string' && d.startsWith('data:image/png')) dataUrl = d;
   }
-  return { dataUrl, renderMs: status?.ms ?? null, pageLog: lastLog };
+  const benchmark = dataUrl && MAX_DEPTH !== undefined
+    ? await evalExpr('globalThis.__MX_IMAGE__?.benchmark ?? null') : null;
+  return { dataUrl, renderMs: status?.ms ?? null, pageLog: lastLog, benchmark };
 }
 
 async function main() {
@@ -176,7 +190,7 @@ async function main() {
     for (const { name, entry } of SCENES) {
       for (const backend of BACKENDS) {
         log(`rendering ${name} [${backend}] @ ${RES}x${RES}${backend === 'pathtracing' ? `, ${SPP} spp` : ''}...`);
-        const { dataUrl, renderMs, pageLog } = await renderOne(send, entry, backend);
+        const { dataUrl, renderMs, pageLog, benchmark } = await renderOne(send, entry, backend);
         if (process.env.MX_VERBOSE && pageLog) {
           for (const l of pageLog.split('\n')) if (l.trim()) console.log(`    ${l.trim()}`);
         }
@@ -186,10 +200,17 @@ async function main() {
           results.push({ name, backend, renderMs: null, file: null });
           continue;
         }
-        const file = new URL(`../renders/device-${name}-${backend}.png`, import.meta.url);
+        const suffix = MAX_DEPTH !== undefined ? `-depth${MAX_DEPTH}` : '';
+        const stem = `device-${name}-${backend}${suffix}`;
+        const file = new URL(`../renders/${stem}.png`, import.meta.url);
         writeFileSync(file, Buffer.from(dataUrl.slice(dataUrl.indexOf(',') + 1), 'base64'));
-        log(`  saved renders/device-${name}-${backend}.png (${renderMs != null ? renderMs.toFixed(0) : '?'} ms)`);
-        results.push({ name, backend, renderMs, file: `renders/device-${name}-${backend}.png` });
+        if (MAX_DEPTH !== undefined) {
+          if (benchmark?.sceneMetadata?.maxDepth !== MAX_DEPTH) throw new Error('Missing or mismatched depth benchmark');
+          writeFileSync(new URL(`../renders/${stem}.json`, import.meta.url),
+            JSON.stringify({ entry, backend, res: RES, spp: SPP, maxDepth: MAX_DEPTH, renderMs, benchmark }, null, 2));
+        }
+        log(`  saved renders/${stem}.png (${renderMs != null ? renderMs.toFixed(0) : '?'} ms)`);
+        results.push({ name, backend, renderMs, file: `renders/${stem}.png` });
       }
     }
     ws.close();
@@ -208,6 +229,7 @@ async function main() {
     console.log(`${name.padEnd(30)} ${col(r?.renderMs)}   ${col(p?.renderMs)}`);
   }
   console.log(`\n(${RES}x${RES}, path tracer ${SPP} spp)`);
+  if (results.some(result => !result.file)) throw new Error('One or more mobile renders failed');
 }
 
 main()

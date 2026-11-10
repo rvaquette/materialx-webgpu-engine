@@ -1,3 +1,4 @@
+import { lamaSssTransport } from './lama-sss.ts';
 // T055d: emit a WGSL `LayeredClosure` struct and a generated
 // `mx_surface_layered(vary) -> LayeredClosure` fill function for a resolved
 // surface. The per-input IR expressions from T055c (lowerSurfaceInputsToIr) back
@@ -155,9 +156,7 @@ const LAMA_INTERIOR_PRELUDE = `struct MxLamaInterior { sigmaA: vec3f, sigmaS: ve
 fn mx_lama_sss_medium(albedo: vec3f, mfp: vec3f, g: f32) -> MxLamaInterior {
   let a = clamp(albedo, vec3f(0.0), vec3f(1.0));
   let alpha = vec3f(1.0) - exp(-5.09406 * a + 2.61188 * a * a - 4.31805 * a * a * a);
-  let d = alpha - vec3f(0.8);
-  let scale = vec3f(1.9) - alpha + 3.5 * d * d;
-  let opticalDistance = mfp * scale;
+  let opticalDistance = mfp;
   let sigmaT = select(vec3f(0.0), vec3f(1.0) / opticalDistance, opticalDistance > vec3f(0.0));
   return MxLamaInterior((vec3f(1.0) - alpha) * sigmaT, alpha * sigmaT, g);
 }`;
@@ -868,12 +867,17 @@ function lowerLamaClosureWgsl(
       result.lobes = [{ kind: 'sheen', weight: '1.0', color: ctx.col('color', [1, 1, 1]), roughness }];
       break;
     case 'LamaSSS': {
-      result.lobes = [{ kind: 'subsurface', weight: '1.0', color: ctx.col('color', [0.18, 0.18, 0.18]), roughness: '0.0' }];
+      const transport = lamaSssTransport(graph, nodeId);
       const color = ctx.col('color', [0.18, 0.18, 0.18]);
       const radius = `(${ctx.col('sssRadius', [0, 0, 0])} * ${ctx.s('sssScale', 1)} * ${ctx.s('sssUnitLength', 0.00328)})`;
+      result.lobes = [{ kind: 'subsurface', weight: '1.0', color, roughness: '0.0',
+        hairTintTRT: radius, dispersion: `${transport}.0`, ior: `max(1.0, ${ctx.s('sssIOR', 1)})`,
+        anisotropy: ctx.s('sssAnisotropy', 0) }];
       const medium = `mx_lama_sss_medium(${color}, ${radius}, ${ctx.s('sssAnisotropy', 0)})`;
-      result.interior = { sigmaA: `${medium}.sigmaA`, sigmaS: `${medium}.sigmaS`, g: `${medium}.g` };
-      result.interiorActive = `any(${radius} > vec3f(0.0))`;
+      if (transport === 1) {
+        result.interior = { sigmaA: `${medium}.sigmaA`, sigmaS: `${medium}.sigmaS`, g: `${medium}.g` };
+        result.interiorActive = `any(${radius} > vec3f(0.0))`;
+      }
       break;
     }
     case 'LamaIridescence': {
@@ -921,6 +925,10 @@ function buildLamaSurfaceFn(
     : undefined;
   if (backClosure && surface.inputs.has('opacity')) backClosure.opacity = closure.opacity;
   const closures = backClosure ? [closure, backClosure] : [closure];
+  if (closures.some(item => item.lobes.some(lobe => lobe.kind === 'subsurface' && Number(lobe.dispersion) >= 2)
+    && (item.coat || item.sheen || item.fuzz || item.thinFilm))) {
+    throw new Error('Burley spatial transport does not yet support outer coat/sheen/fuzz/thin-film layers.');
+  }
   const maxLobes = Math.min(8, Math.max(...closures.map(item => item.lobes.length)));
   for (const item of closures) if (item.lobes.length > 8) {
     sink({ level: 'warning', message: `Lama closure at ${surface.nodeId} exceeds the 8-lobe renderer limit; extra lobes are omitted.` });

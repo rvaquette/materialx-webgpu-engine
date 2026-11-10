@@ -25,6 +25,7 @@
       const entry = params.get('entry') ?? '/scenes/test_material_disney_gold/test_material_disney_gold.usda';
       const res = Number(params.get('res') ?? 256);
       const spp = Number(params.get('spp') ?? 192);
+      const maxDepth = params.has('maxDepth') ? Number(params.get('maxDepth')) : undefined;
       const tileSpp = Number(params.get('tileSpp') ?? 1);
       if (!Number.isInteger(tileSpp) || tileSpp < 1) throw new Error('tileSpp must be a positive integer');
       const backend = params.get('backend') === 'raster' ? 'raster' : 'pathtracing';
@@ -48,6 +49,9 @@
       const lightDirParam = params.get('lightDir');
       const lightDir = lightDirParam ? lightDirParam.split(',').map(Number) : undefined;
       try {
+      if (maxDepth !== undefined && (!Number.isInteger(maxDepth) || maxDepth < 1 || maxDepth > 64)) {
+        throw new Error('maxDepth must be an integer from 1 to 64');
+      }
       const removedOptions = ['workgroup', 'bvh', 'sampler', 'seed', 'bsdf', 'profileTraversal',
         'profileShading', 'profileReplayFirst', 'bvhCheck', 'bvhTest', 'samplingTest',
         'profileTest', 'shadingProfile', 'bsdfTest', 'architectureTest', 'referenceSpp'];
@@ -56,7 +60,7 @@
       const cacheMode = params.get('cache') ?? 'use';
       if (!['use', 'bypass', 'refresh', 'verify'].includes(cacheMode)) throw new Error('Invalid cache mode');
       const benchmark = params.has('benchmark') ? { cacheMode } : undefined;
-      await bootstrapUsdImage(entry, res, spp, backend, openpbr, exposure, firefly, skyPower, skyColor, camBack, dispScale, shadows, lightDir, tileSpp, benchmark);
+      await bootstrapUsdImage(entry, res, spp, backend, openpbr, exposure, firefly, skyPower, skyColor, camBack, dispScale, shadows, lightDir, tileSpp, benchmark, maxDepth);
       } catch (e) {
         globalThis.__MX_IMAGE__ = null;
         const p = document.createElement('p');

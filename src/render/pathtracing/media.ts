@@ -67,10 +67,10 @@ export function transmittanceHomogeneous(sigmaT: Vec3, distance: number): Vec3 {
   return [Math.exp(-sigmaT[0] * d), Math.exp(-sigmaT[1] * d), Math.exp(-sigmaT[2] * d)];
 }
 
-/** Henyey-Greenstein phase value for the cosine between in/out directions. */
+/** HG value for the cosine between two directions pointing away from the collision. */
 export function phaseHG(cosTheta: number, g: number): number {
   const gg = Math.min(Math.max(g, -0.99), 0.99);
-  const denom = 1 + gg * gg - 2 * gg * cosTheta;
+  const denom = 1 + gg * gg + 2 * gg * Math.min(Math.max(cosTheta, -1), 1);
   return (1 - gg * gg) / (4 * Math.PI * Math.max(denom, 1e-6) ** 1.5);
 }
 
@@ -86,12 +86,13 @@ export interface PhaseSample {
  */
 export function sampleHenyeyGreenstein(wo: Vec3, g: number, u1: number, u2: number): PhaseSample {
   const w = normalize(wo);
+  const gg = Math.min(Math.max(g, -0.99), 0.99);
   let cosTheta: number;
-  if (Math.abs(g) < 1e-3) {
+  if (Math.abs(gg) < 1e-3) {
     cosTheta = 1 - 2 * u1;
   } else {
-    const sqr = (1 - g * g) / (1 + g - 2 * g * u1);
-    cosTheta = -(1 + g * g - sqr * sqr) / (2 * g);
+    const sqr = (1 - gg * gg) / (1 + gg - 2 * gg * u1);
+    cosTheta = -(1 + gg * gg - sqr * sqr) / (2 * gg);
   }
   const sinTheta = Math.sqrt(Math.max(0, 1 - cosTheta * cosTheta));
   const phi = 2 * Math.PI * u2;
@@ -103,7 +104,7 @@ export function sampleHenyeyGreenstein(wo: Vec3, g: number, u1: number, u2: numb
     sc * t1[1] + ss * t2[1] + cosTheta * w[1],
     sc * t1[2] + ss * t2[2] + cosTheta * w[2],
   ];
-  return { wi, pdf: phaseHG(cosTheta, g) };
+  return { wi, pdf: phaseHG(cosTheta, gg) };
 }
 
 export interface MediumInteraction {

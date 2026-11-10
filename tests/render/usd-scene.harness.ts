@@ -1123,6 +1123,7 @@ async function renderUsdOnDevice(
   maxSamplesPerDispatch = 1,
   benchmarkOptions?: PathTraceBenchmarkOptions,
   preparedScene?: Awaited<ReturnType<typeof loadRenderScene>>,
+  maxDepthOverride?: number,
 ): Promise<{ rgba: Uint8ClampedArray; renderMs: number; benchmark?: PathTraceBenchmarkResult }> {
   if (!Number.isInteger(maxSamplesPerDispatch) || maxSamplesPerDispatch < 1) {
     throw new Error(`maxSamplesPerDispatch must be a positive integer; got ${maxSamplesPerDispatch}`);
@@ -1164,6 +1165,12 @@ async function renderUsdOnDevice(
     settings: pathTraceSettings(scene),
     ...(dispScaleOverride !== undefined ? { displacementScale: dispScaleOverride } : {}),
   }, benchmarkOptions?.cacheMode ?? 'use');
+  if (maxDepthOverride !== undefined) {
+    if (!Number.isInteger(maxDepthOverride) || maxDepthOverride < 1 || maxDepthOverride > 64) {
+      throw new Error('maxDepth must be an integer from 1 to 64');
+    }
+    ptScene.settings = { ...pathTraceSettings(scene), ...ptScene.settings, maxDepth: maxDepthOverride };
+  }
   for (const diagnostic of sceneBufferCache.diagnostics) line(`diag file-cache: ${diagnostic}`);
   line(`diag file-cache ${sceneBufferCache.status} key=${sceneBufferCache.key} bytes=${sceneBufferCache.bytes}`);
   ptScene.environment.textureRadianceScale = envGpu?.radianceScale ?? 1;
@@ -1585,6 +1592,7 @@ export async function bootstrapUsdImage(
   lightDir?: Vec3,
   maxSamplesPerDispatch = 1,
   benchmarkOptions?: PathTraceBenchmarkOptions,
+  maxDepth?: number,
 ): Promise<UsdSceneImage | null> {
   const started = performance.now();
   let phaseStarted = started;
@@ -1666,7 +1674,7 @@ export async function bootstrapUsdImage(
     ({ rgba, renderMs } = await renderUsdRasterOnDevice(device, entry, res, line, materialOverride, exposure, camBack, dispScale, tracedShadows, lightDir, phase, loaded));
   } else {
     line(`Rendu path-trace GPU de ${entry} (${res}x${res}, ${samples} spp)...`);
-    ({ rgba, renderMs, benchmark } = await renderUsdOnDevice(device, entry, res, samples, line, materialOverride, exposure, firefly, skyPower, skyColor, camBack, dispScale, phase, maxSamplesPerDispatch, benchmarkOptions, loaded));
+    ({ rgba, renderMs, benchmark } = await renderUsdOnDevice(device, entry, res, samples, line, materialOverride, exposure, firefly, skyPower, skyColor, camBack, dispScale, phase, maxSamplesPerDispatch, benchmarkOptions, loaded, maxDepth));
   }
 
   const canvas = document.createElement('canvas');
