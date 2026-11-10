@@ -317,3 +317,23 @@ Cases are `calibration`, `original` and `white`; after their renders, run
 All final controls reported zero WGSL errors/nonfinite accumulation values.
 The path-tracer/compiler suite passed 495 tests in 35 files, excluding the same
 pre-existing analytic-lights traversal-string assertion. Validation was local only.
+
+## LamaLayer gold / dielectric IOR sweep
+
+The five `lama_layer_gold_ior_*.usda` scenes use the existing RenderMan teapot
+mesh and shared `lama_layer_gold.mtlx` document. The conductor forms the rough
+gold base; a dielectric LamaLayer sits above it with fixed roughness and IOR
+values 1.0, 1.5, 2.0, 2.5, and 3.0. Geometry, camera, and lighting are identical
+between scenes so the IOR is the only changing parameter.
+
+The key is a vertical 0.18 x 0.35 m rectangular softbox in front of the teapot,
+with a weaker fill and an explicit studio HDR dome at intensity 0.06 to preserve
+reflection contrast instead of using the viewer's default preview illumination.
+The camera has a 12.5-degree field of view for a close-up of the teapot.
+The isotropic gold conductor uses scientific Fresnel (complex IOR), neutral tint,
+and roughness 0.22; the dielectric top roughness stays at 0.08.
+This is a local lighting/material reconstruction, not a pixel-matched RenderMan reference.
+
+Open a scene with
+`usd-image-harness.html?entry=/scenes/pathtracer/lama/lama_layer_gold_ior_1_0.usda&backend=pathtracing&res=512&spp=64`;
+replace `1_0` with `1_5`, `2_0`, `2_5`, or `3_0` for the other renders.
