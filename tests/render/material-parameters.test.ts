@@ -67,7 +67,7 @@ def Mesh "b" { rel material:binding = </Mat> }` } });
 }
 
 describe('dynamic MaterialX parameters', () => {
-  it('exposes only the opted-in dielectric IOR and rebuilds the LamaLayer without changing its conductor', async () => {
+  it('exposes the opted-in dielectric IOR as a uniform without changing the LamaLayer shader', async () => {
     const resources = await fixture(false, graph => {
       const surface = graph.nodes.get('surface')!;
       surface.category = 'LamaLayer';
@@ -90,8 +90,9 @@ describe('dynamic MaterialX parameters', () => {
     const material = [...resources.materials.values()][0]!;
     const parameters = visibleMaterialParameters(material);
     expect(parameters.map(parameter => [parameter.nodeId, parameter.input, parameter.value, parameter.update]))
-      .toEqual([['coat', 'IOR', [1.5], 'rebuild']]);
+      .toEqual([['coat', 'IOR', [1.5], 'uniform']]);
     const ior = parameters[0]!;
+    expect(ior.uniform).toBeDefined();
     expect(ior.min).toEqual([1]);
     expect(ior.max).toEqual([3]);
     expect(parameterValues(ior, [3])).toEqual([3]);
@@ -103,7 +104,16 @@ describe('dynamic MaterialX parameters', () => {
     expect(original.coat?.ior).toBe(1.5);
     expect(changed.coat?.ior).toBe(3);
     expect(changed.lobes).toEqual(original.lobes);
-    expect(updated.sceneShader!.code).not.toBe(material.sceneShader!.code);
+    expect(material.surfaceModule!.uniforms.some(field => field.name === ior.uniform)).toBe(true);
+    expect(updated.sceneShader!.code).toBe(material.sceneShader!.code);
+    const dispatch = buildMaterialDispatch([{ materialIndex: 0, graph: material.surfaceGraph!, surface: material.resolvedSurface! }]);
+    expect(dispatch.uniforms.some(field => field.name === ior.uniform)).toBe(true);
+    expect(dispatch.dispatcherWgsl).toContain(`u.m0_${ior.uniform}`);
+    const initialUniforms = new Float32Array(materialUniformData(material));
+    const changedUniforms = new Float32Array(materialUniformData(updated));
+    expect(Array.from(initialUniforms)).toContain(1.5);
+    expect(Array.from(changedUniforms)).toContain(3);
+    expect(Array.from(changedUniforms)).not.toEqual(Array.from(initialUniforms));
     expect(visibleMaterialParameters(updated).map(parameter => parameter.input)).toEqual(['IOR']);
     const reset = changeMaterialParameters(updated, new Map([[ior.id, ior.initial]]));
     expect(surfaceGraphToLayered(reset.resolvedSurface!, reset.surfaceGraph!).coat?.ior).toBe(1.5);

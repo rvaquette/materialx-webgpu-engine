@@ -228,15 +228,20 @@ export class InteractiveViewer {
     }));
     if (changes.size === 0) return;
     let updated = changeMaterialParameters(material, changes);
-    const compiled = compileEditableMaterial(updated);
-    const before = buildSceneFrame(source, { surfaceFor: loaded.mtlx.surfaceFor }).draws.find(draw => draw.materialKey === key);
-    const probeMaterials = new Map(source.materials);
-    probeMaterials.set(key, compiled);
-    const after = buildSceneFrame({ ...source, materials: probeMaterials }, { surfaceFor: loaded.mtlx.surfaceFor })
-      .draws.find(draw => draw.materialKey === key);
-    const rebuild = material.volumeIr !== undefined || material.parameters?.some(parameter => changes.has(parameter.id) && parameter.update === 'rebuild')
-      || compiled.sceneShader?.code !== material.sceneShader?.code || before?.pass !== after?.pass;
-    if (rebuild) updated = compiled;
+    const uniformOnly = material.volumeIr === undefined && [...changes.keys()].every(id =>
+      material.parameters?.find(parameter => parameter.id === id)?.update === 'uniform');
+    let rebuild = false;
+    if (!uniformOnly) {
+      const compiled = compileEditableMaterial(updated);
+      const before = buildSceneFrame(source, { surfaceFor: loaded.mtlx.surfaceFor }).draws.find(draw => draw.materialKey === key);
+      const probeMaterials = new Map(source.materials);
+      probeMaterials.set(key, compiled);
+      const after = buildSceneFrame({ ...source, materials: probeMaterials }, { surfaceFor: loaded.mtlx.surfaceFor })
+        .draws.find(draw => draw.materialKey === key);
+      rebuild = material.volumeIr !== undefined || material.parameters?.some(parameter => changes.has(parameter.id) && parameter.update === 'rebuild')
+        || compiled.sceneShader?.code !== material.sceneShader?.code || before?.pass !== after?.pass;
+      if (rebuild) updated = compiled;
+    }
     const materials = new Map(source.materials);
     materials.set(key, updated);
     const parameterResources = { ...source, materials };
@@ -249,7 +254,6 @@ export class InteractiveViewer {
       bakedMaterials.set(key, baked);
       loaded.resources = { ...loaded.resources, materials: bakedMaterials };
       loaded.parameterResources = parameterResources;
-      delete loaded.compiled;
       this.#rasterDirty = true;
       this.#ptDisplayDirty = true;
       this.#current.resetPathTrace();

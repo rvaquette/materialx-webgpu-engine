@@ -81,6 +81,8 @@ export interface ResolvedInput {
   interfaceName?: string;
   /** Engine editor opt-in; when authored, only true inputs are shown for this graph. */
   editable?: boolean;
+  /** Runtime uniform field assigned to an editable upstream input. */
+  parameter?: string;
   min?: readonly number[];
   max?: readonly number[];
   /** Declared colorspace carried from the input; never inferred. */

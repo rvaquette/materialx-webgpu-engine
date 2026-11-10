@@ -193,6 +193,7 @@ export function editableSceneMaterials(resources: SceneResources): SceneResource
       if (!rebuild && !feature) inputs.set(name, { ...input, parameter: uniform });
     }
     // Expose literal inputs of reachable upstream nodes; connections remain intact.
+    const graphNodes = new Map(material.surfaceGraph.nodes);
     for (const [nodeId, node] of material.surfaceGraph.nodes) {
       if (nodeId === material.resolvedSurface.nodeId) continue;
       const inputs = [
@@ -207,18 +208,28 @@ export function editableSceneMaterials(resources: SceneResources): SceneResource
         if (input.source.kind !== 'value' || !isType(input.type)) continue;
         const values = input.source.value.trim() === 'true' ? [1] : input.source.value.trim() === 'false' ? [0]
           : input.source.value.split(',').map(Number);
+        const uniform = input.editable === true && input.type === 'float' ? `parameter_${parameters.length}` : undefined;
         const parameter: MaterialParameter = {
           id: JSON.stringify([nodeId, input.name]), label: `${nodeId} / ${input.name}`, type: input.type,
-          value: values, initial: [...values], update: 'rebuild', nodeId, input: input.name,
+          value: values, initial: [...values], update: uniform ? 'uniform' : 'rebuild', nodeId, input: input.name,
+          ...(uniform ? { uniform } : {}),
           ...(input.min !== undefined ? { min: input.min } : {}),
           ...(input.max !== undefined ? { max: input.max } : {}),
         };
         parameterValues(parameter, values);
         parameters.push(parameter);
+        if (uniform) {
+          const current = graphNodes.get(nodeId)!;
+          graphNodes.set(nodeId, {
+            ...current,
+            inputs: current.inputs.map(candidate => candidate.name === input.name ? { ...candidate, parameter: uniform } : candidate),
+          });
+        }
       }
     }
     const surface = applyFeatureStates({ ...material.resolvedSurface, inputs }, parameters);
-    materials.set(key, compileEditableMaterial({ ...material, unitKey: key, boundPrims: [instance.primPath], resolvedSurface: surface, parameters }));
+    const surfaceGraph: ResolvedGraph = { ...material.surfaceGraph, nodes: graphNodes };
+    materials.set(key, compileEditableMaterial({ ...material, unitKey: key, boundPrims: [instance.primPath], surfaceGraph, resolvedSurface: surface, parameters }));
     return { ...instance, materialKey: key };
   });
   const used = new Set(instances.map(instance => instance.materialKey));

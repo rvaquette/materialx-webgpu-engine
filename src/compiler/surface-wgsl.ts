@@ -632,7 +632,10 @@ function inputsForLamaNode(graph: ResolvedGraph, nodeId: string, root?: Resolved
     } else {
       source = { kind: 'default', value: [0] };
     }
-    inputs.set(def.name, { name: def.name, type: def.type as NormalizedSurfaceInput['type'], source });
+    inputs.set(def.name, {
+      name: def.name, type: def.type as NormalizedSurfaceInput['type'], source,
+      ...(input?.parameter !== undefined ? { parameter: input.parameter } : {}),
+    });
   }
   return { family: 'surface', nodeId, inputs };
 }

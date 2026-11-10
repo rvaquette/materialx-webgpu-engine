@@ -334,7 +334,8 @@ and roughness 0.22; the dielectric top roughness stays at 0.08.
 This is a local lighting/material reconstruction, not a pixel-matched RenderMan reference.
 
 In the viewer, select **Teapot**, then **Parametres du materiau** to edit only
-the dielectric IOR. An edit recompiles the material and restarts accumulation;
+the dielectric IOR. Its 1.0-3.0 range is defined by `uimin`/`uimax`. Edits update
+the material uniform without recompiling the shader and restart path accumulation;
 reset restores the selected scene's initial IOR. Ground and stand controls are hidden.
 The engine-specific MaterialX input attribute `engine_editable="true"` opts an
 input into the editor; once any `engine_editable` attribute is authored in a
