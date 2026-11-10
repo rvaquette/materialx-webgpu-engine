@@ -44,7 +44,9 @@ describe('normalized Burley diffusion', () => {
     };
     const shallow = render(2);
     expect(shallow.intersections).toBe(43);
-    expect(shallow.value[0]).toBeCloseTo((1 / 0.95) ** 37, 10);
+    expect(shallow.value[0]).toBeCloseTo(3 * (1 / 0.95) ** 2, 10);
+    expect(shallow.value[1]).toBe(0);
+    expect(shallow.value[2]).toBe(0);
     expect(shallow.value).toEqual(render(12).value);
     expect(shallow.value).toEqual(render(64).value);
     const random = createPcg32(731);

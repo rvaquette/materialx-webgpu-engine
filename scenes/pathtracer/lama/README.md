@@ -151,3 +151,64 @@ All three runs reported zero WGSL errors and zero nonfinite RGB components.
 Validation: 493 tests passed in 35 files (the pre-existing analytic-lights
 traversal-string assertion remains excluded), and production build/typecheck
 passed. The focused transport suite passed 132 tests. Validation was local only.
+
+## Independent Physical Validation (2026-11-10)
+
+`scripts/validate-sss-physics.mjs` compares HDR furnace renders to a scalar analog
+walk on an analytic sphere of radius 0.8. The reference uses 40,000 photons per
+colour channel, independent free-flight, phase inversion, sphere intersection,
+analog absorption and total internal reflection; it imports only the PCG RNG,
+not the production transport or phase functions.
+
+The furnace scene has one sphere, no floor, a disabled local light and unit white
+environment radiance. Background HDR corners are checked within 1e-5, every pixel
+must have the requested spp, and missing/failed controls cause a nonzero exit.
+Measurements use a central disk (radius one eighth of the image width), before
+tonemapping, with firefly clamping disabled. Coloured cases use 128x128 at 1024
+spp; the expensive high-albedo case uses 64x64 at 512 spp. Dispatches contain one
+sample to avoid the Intel watchdog. HDR export continues when timestamp timing
+exceeds its query budget; `timestampStatus` then reports `budget-exceeded`.
+
+The controls exposed and led to three corrections:
+
+- HG evaluation now uses the same outgoing-direction convention as its sampler;
+  its integral is one and its signed first moment is -g. The slab oracle passes
+  the negated travel direction to this sampler. CPU/WGSL clamp g identically.
+- SSS roulette is evaluated every 32 internal events after its minimum depth,
+  still with reciprocal-probability compensation. Ordinary roulette is unchanged.
+- A persistent uniformly selected RGB channel drives each SSS path. Throughput
+  carries the 1/p=3 selection compensation, and the medium coefficients use the
+  selected channel. This avoids products of high-variance RGB tracking weights.
+
+Final linear RGB measurements and independent predictions:
+
+| Case | GPU Mean RGB | Analog Reference RGB | Result |
+| --- | --- | --- | --- |
+| Isotropic, IOR 1 | (0.73852, 0.27841, 0.17768) | (0.73900, 0.28205, 0.18445) | pass |
+| Original g=0.15, IOR 1.3 | (0.60796, 0.15446, 0.08928) | (0.60945, 0.15673, 0.09345) | pass |
+| White input, g=0, IOR 1 | (0.93868, 0.93916, 0.92780) | (0.94310, 0.93580, 0.92900) | pass |
+
+Per-channel acceptance is 0.01 absolute radiance plus five combined estimated
+standard errors. The analytic surface and triangle surface are not identical,
+and numerical ray offsets remain. This is a finite-sample transport check, not
+an exact identity or proof of RenderMan fidelity. The Chiang polynomial maps
+white input to single-scatter albedo slightly below one, so this white control
+is weakly absorbing; an exactly nonabsorbing medium is covered by CPU energy tests.
+
+Under controlled lighting, the original IOR/anisotropy settings physically lower
+the reflected energy, particularly in green and blue. Thus the darker, more
+saturated second sphere is consistent with the implemented exponential model
+after the depth-truncation and variance issues were corrected. The reference
+checks the configured coefficients, not the exact artistic fit of the inversion.
+
+Run the local matrix with `MX_ENTRIES=/scenes/pathtracer/lama/test_lama_sss_furnace.usda`,
+`MX_MAX_DEPTH=12`, `MX_TILE_SPP=1`, and a case tag `MX_OUTPUT_TAG=fidelity-<case>`.
+Set `MX_HARNESS_QUERY` to `openpbr=/scenes/pathtracer/lama/sss-fidelity-<case>.mtlx&skyPower=1&skyColor=1,1,1&firefly=0`.
+Cases are `calibration`, `original` and `white`; after their renders, run
+`node scripts/validate-sss-physics.mjs`. The complete report is
+`renders/local-lama-sss-physical-validation.json`; PNG/HDR pairs use the stem
+`renders/local-test_lama_sss_furnace-pathtracing-depth12-fidelity-<case>`.
+
+All final controls reported zero WGSL errors/nonfinite accumulation values.
+The path-tracer/compiler suite passed 495 tests in 35 files, excluding the same
+pre-existing analytic-lights traversal-string assertion. Validation was local only.

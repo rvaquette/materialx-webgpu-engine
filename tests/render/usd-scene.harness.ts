@@ -106,7 +106,7 @@ export interface PathTraceBenchmarkOptions {
 
 export interface PathTraceBenchmarkResult {
   gpuMs: number | null;
-  timestampStatus: 'available' | 'unsupported';
+  timestampStatus: 'available' | 'unsupported' | 'budget-exceeded';
   hdrBase64: string;
   workgroupSize: readonly [number, number];
   sceneBufferCache: SceneBufferCacheReport;
@@ -341,7 +341,11 @@ function envFrameConfig(
   envTotalSum?: number;
   sh?: Float32Array;
 } {
-  if (!env) return { radiance: converted ? [0, 0, 0] : PREVIEW_ENV };
+  if (!env) {
+    const color = skyColor ?? (converted ? [0, 0, 0] : PREVIEW_ENV);
+    const power = skyPower ?? 1;
+    return { radiance: color.map(value => value * power) as unknown as Vec3 };
+  }
   return {
     radiance: env.averageRadiance,
     tint: skyColor ?? env.tint,
@@ -1412,12 +1416,16 @@ async function renderUsdOnDevice(
   }
 
   phase('gpuResources');
-  const timestampSupported = device.features.has('timestamp-query');
+  const queryCount = Math.ceil(samples / maxSamplesPerDispatch) * 16 * 2;
+  const timestampStatus = !device.features.has('timestamp-query') ? 'unsupported'
+    : queryCount > 8192 ? 'budget-exceeded' : 'available';
+  const timestampSupported = timestampStatus === 'available';
+  if (benchmarkOptions && timestampStatus === 'budget-exceeded') {
+    line('diag benchmark timestamp budget exceeded; HDR remains enabled, GPU time unavailable');
+  }
   const trace = async (): Promise<{ renderMs: number; gpuMs: number | null; mean: Float32Array<ArrayBuffer> }> => {
     backend.resetAccumulation();
     device.queue.writeBuffer(accumBuffer, 0, new Float32Array(res * res * 4));
-    const queryCount = Math.ceil(samples / maxSamplesPerDispatch) * 16 * 2;
-    if (benchmarkOptions && queryCount > 8192) throw new Error('Benchmark exceeds its 8192 timestamp query budget; reduce spp.');
     // WebGPU limits each query set to 4096 entries; high-spp references need more.
     const queriesPerSet = 4096;
     const querySets = benchmarkOptions && timestampSupported
@@ -1425,7 +1433,7 @@ async function renderUsdOnDevice(
         device.createQuerySet({ type: 'timestamp', count: Math.min(queriesPerSet, queryCount - index * queriesPerSet) })) : [];
     try {
       let queryIndex = 0;
-      if (benchmarkOptions && !timestampSupported) line('diag benchmark timestamp-query unsupported; GPU time unavailable');
+      if (benchmarkOptions && timestampStatus === 'unsupported') line('diag benchmark timestamp-query unsupported; GPU time unavailable');
       const renderStart = performance.now();
       device.pushErrorScope('validation');
       const batch = 8;
@@ -1534,7 +1542,7 @@ async function renderUsdOnDevice(
     const bytes = new Uint8Array(mean.buffer, mean.byteOffset, mean.byteLength);
     let binary = '';
     for (let i = 0; i < bytes.length; i += 8192) binary += String.fromCharCode(...bytes.subarray(i, i + 8192));
-    benchmark = { gpuMs, timestampStatus: timestampSupported ? 'available' : 'unsupported',
+    benchmark = { gpuMs, timestampStatus,
       hdrBase64: btoa(binary), workgroupSize: [PT_WORKGROUP_SIZE, PT_WORKGROUP_SIZE], sceneBufferCache,
       sceneMetadata: { triangleCount: ptScene.triangleCount, nodeCount: ptScene.nodeCount,
         materialCount: ptScene.materialCount, maxDepth: ptScene.settings?.maxDepth ?? 64, opaque,

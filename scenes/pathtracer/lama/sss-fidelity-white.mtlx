@@ -1,0 +1,18 @@
+<?xml version="1.0"?>
+<materialx version="1.39" colorspace="lin_rec709">
+  <LamaSSS name="skin" type="BSDF">
+    <input name="color" type="color3" value="1, 1, 1" />
+    <input name="sssRadius" type="color3" value="12, 6, 3" />
+    <input name="sssUnitLength" type="float" value="0.001" />
+    <input name="sssMode" type="integer" value="1" />
+    <input name="albedoInversionMethod" type="integer" value="1" />
+    <input name="sssIOR" type="float" value="1" />
+    <input name="sssAnisotropy" type="float" value="0" />
+  </LamaSSS>
+  <surface name="skin_surface" type="surfaceshader">
+    <input name="bsdf" type="BSDF" nodename="skin" />
+  </surface>
+  <surfacematerial name="OpenPBRMaterial" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="skin_surface" />
+  </surfacematerial>
+</materialx>

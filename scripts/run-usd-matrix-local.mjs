@@ -11,6 +11,7 @@
 //         MX_MAX_DEPTH optional 1..64 depth override; saves HDR benchmark JSON
 //         MX_TILE_SPP samples per dispatch (default 1)
 //         MX_OUTPUT_TAG optional filename tag for comparison runs
+//         MX_HARNESS_QUERY optional openpbr/skyPower/skyColor/firefly/exposure overrides
 
 import { spawn } from 'node:child_process';
 import { writeFileSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
@@ -31,6 +32,10 @@ if (MAX_DEPTH !== undefined && (!Number.isInteger(MAX_DEPTH) || MAX_DEPTH < 1 ||
 const CDP_PORT = Number(process.env.MX_CDP_PORT ?? 9222);
 const OUTPUT_TAG = process.env.MX_OUTPUT_TAG ?? '';
 if (OUTPUT_TAG && !/^[a-zA-Z0-9_-]+$/.test(OUTPUT_TAG)) throw new Error('MX_OUTPUT_TAG must be a filename-safe identifier');
+const HARNESS_OPTIONS = new URLSearchParams(process.env.MX_HARNESS_QUERY ?? '');
+for (const name of HARNESS_OPTIONS.keys()) {
+  if (!['openpbr', 'skyPower', 'skyColor', 'firefly', 'exposure'].includes(name)) throw new Error(`Unsupported MX_HARNESS_QUERY option: ${name}`);
+}
 const HARNESS_PATH = '/usd-image-harness.html';
 const LOCAL_URL = `http://127.0.0.1:${PORT}${HARNESS_PATH}`;
 const CDP = `http://127.0.0.1:${CDP_PORT}`;
@@ -100,7 +105,8 @@ function openCdp(wsUrl) {
 
 async function renderOne(send, entry, backend) {
   const query = `?entry=${encodeURIComponent(entry)}&res=${RES}&spp=${SPP}&tileSpp=${TILE_SPP}&backend=${backend}&_=${Date.now()}`
-    + (MAX_DEPTH !== undefined ? `&maxDepth=${MAX_DEPTH}&benchmark=1` : '');
+    + (MAX_DEPTH !== undefined ? `&maxDepth=${MAX_DEPTH}&benchmark=1` : '')
+    + (HARNESS_OPTIONS.size ? `&${HARNESS_OPTIONS}` : '');
   const url = `http://127.0.0.1:${PORT}${HARNESS_PATH}${query}`;
   await send('Page.navigate', { url });
   const evalExpr = async (expression) => {
@@ -206,7 +212,8 @@ async function main() {
         if (MAX_DEPTH !== undefined) {
           if (benchmark?.sceneMetadata?.maxDepth !== MAX_DEPTH) throw new Error('Missing or mismatched depth benchmark');
           writeFileSync(new URL(`../renders/${stem}.json`, import.meta.url),
-            JSON.stringify({ entry, backend, res: RES, spp: SPP, maxDepth: MAX_DEPTH, renderMs, benchmark }, null, 2));
+            JSON.stringify({ entry, backend, res: RES, spp: SPP, maxDepth: MAX_DEPTH,
+              harnessOptions: Object.fromEntries(HARNESS_OPTIONS), renderMs, benchmark }, null, 2));
         }
         log(`  saved renders/${stem}.png (${renderMs != null ? renderMs.toFixed(0) : '?'} ms)`);
         results.push({ name, backend, renderMs, file: `renders/${stem}.png` });

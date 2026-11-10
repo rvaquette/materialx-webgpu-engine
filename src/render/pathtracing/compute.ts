@@ -714,7 +714,7 @@ ${analyticLights ? '        analyticNee = false; // No analytic-light NEE is per
         ro = sp;
         rd = wiM;
         let rouletteDepth = select(bounce, subsurfaceEvents, subsurfaceWalk);
-        if (rouletteDepth >= i32(U.transport.y)) {
+        if (rouletteDepth >= i32(U.transport.y) && (!subsurfaceWalk || (subsurfaceEvents - i32(U.transport.y)) % 32 == 0)) {
           let q = clamp(max(beta.x, max(beta.y, beta.z)), 0.0, 0.95);
           if (rng_next(state) >= q) { break; }
           beta = beta / q;
@@ -775,7 +775,7 @@ ${closureBuild}
       if (interiorIor * interiorIor * max(0.0, 1.0 - cosine * cosine) >= 1.0) {
         rd = reflect(rd, geometricNormal); ro = pos + rd * 1e-6;
         if (subsurfaceWalk) {
-          if (subsurfaceEvents >= i32(U.transport.y)) {
+          if (subsurfaceEvents >= i32(U.transport.y) && (subsurfaceEvents - i32(U.transport.y)) % 32 == 0) {
             let probability = clamp(max(beta.x, max(beta.y, beta.z)), 0.0, 0.95);
             if (rng_next(state) >= probability) { break; }
             beta /= probability; environmentBeta /= probability;
@@ -1003,6 +1003,15 @@ ${analyticLights ? '    analyticNee = !specular && mx_light_count() > 0u;' : ''}
         inMedium = true;
         let matBase = tri_material(hit.tri)*${PT_MATERIAL_RECORD_FLOATS}u;
         volumeIndex = select(0xffffffffu,tri_material(hit.tri),materials[matBase+29u] != 0.0);
+        if (subsurfaceWalk && volumeIndex == 0xffffffffu && any(medium.sigmaS > vec3f(0.0))) {
+          if (spectralChannel == 3u) {
+            spectralChannel = min(2u, u32(rng_next(state) * 3.0));
+            var channelWeight = vec3f(0.0);
+            channelWeight[spectralChannel] = 3.0;
+            beta *= channelWeight; environmentBeta *= channelWeight;
+          }
+          medium = MxMedium(vec3f(medium.sigmaA[spectralChannel]), vec3f(medium.sigmaS[spectralChannel]), medium.g);
+        }
       }
     }
 

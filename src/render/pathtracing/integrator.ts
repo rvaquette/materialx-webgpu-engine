@@ -197,6 +197,7 @@ export function integratePath(
   let interiorIor = 1;
   let subsurfaceWalk = false;
   let subsurfaceEvents = 0;
+  let subsurfaceChannel: number | undefined;
   let bounces = 0;
 
   for (let pathStep = 0; pathStep < 65536; pathStep++) {
@@ -235,7 +236,7 @@ export function integratePath(
         prevHit = null;
         ray = { origin: point, direction: ps.wi, ...(field ? { minDistance:1e-7 } : {}) };
         const rouletteDepth = subsurfaceWalk ? subsurfaceEvents : bounces;
-        if (rouletteDepth >= minBounces) {
+        if (rouletteDepth >= minBounces && (!subsurfaceWalk || (subsurfaceEvents - minBounces) % 32 === 0)) {
           const rr = russianRoulette(beta, rng());
           if (!rr.survive) break;
           beta = scale(beta, rr.scale);
@@ -275,7 +276,7 @@ export function integratePath(
         const reflected = add(ray.direction, scale(boundaryNormal, -2 * cosine));
         ray = { origin: add(hit.position, scale(reflected, 1e-6)), direction: reflected, minDistance: 1e-7 };
         if (subsurfaceWalk) {
-          if (subsurfaceEvents >= minBounces) {
+          if (subsurfaceEvents >= minBounces && (subsurfaceEvents - minBounces) % 32 === 0) {
             const roulette = russianRoulette(beta, rng());
             if (!roulette.survive) break;
             beta = scale(beta, roulette.scale);
@@ -343,6 +344,17 @@ export function integratePath(
       interiorIor = exiting ? 1 : hit.interiorIor ?? 1;
       subsurfaceWalk = !exiting && hit.subsurfaceInterior === true;
       subsurfaceEvents = 0;
+      if (subsurfaceWalk && medium && !field && maxComponent(medium.scattering) > 0) {
+        if (subsurfaceChannel === undefined) {
+          subsurfaceChannel = Math.min(2, Math.floor(rng() * 3));
+          const weight: V = subsurfaceChannel === 0 ? [3, 0, 0] : subsurfaceChannel === 1 ? [0, 3, 0] : [0, 0, 3];
+          beta = mul(beta, weight);
+        }
+        const absorption = medium.absorption[subsurfaceChannel]!;
+        const scattering = medium.scattering[subsurfaceChannel]!;
+        medium = { absorption: [absorption, absorption, absorption],
+          scattering: [scattering, scattering, scattering], anisotropy: medium.anisotropy };
+      }
     }
 
     if (bounces >= minBounces) {
