@@ -54,8 +54,8 @@ const openPbrScenes = Object.keys(import.meta.glob('/scenes/OpenPBRShaderPlaygro
   });
 
 export const SCENE_CATALOG: readonly SceneCatalogEntry[] = [
-  { label: 'Standard shader ball', entry: './scenes/standard-shader-ball/standard-shader-ball.usda' },
   { label: 'Simple shader ball', entry: './scenes/standard-shader-ball/openpbr-rva-standard-shader-ball.usda' },
+  { label: 'Standard shader ball', entry: './scenes/standard-shader-ball/standard-shader-ball.usda' },
   ...pathTracerScenes,
   ...lamaScenes,
   ...gltfScenes,

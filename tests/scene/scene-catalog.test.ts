@@ -34,8 +34,8 @@ describe('scene selector catalog', () => {
     expect(entries.every(scene => /\.(gltf|glb)$/i.test(scene.label))).toBe(true);
     expect(entries.every(scene => !scene.entry.slice('./scenes/pathtracer/'.length).includes('/'))).toBe(true);
   });
-  it('keeps the existing default scene and app-relative paths', () => {
-    expect(SCENE_CATALOG[0]!.entry).toBe('./scenes/standard-shader-ball/standard-shader-ball.usda');
+  it('defaults to Simple shader ball and keeps app-relative paths', () => {
+    expect(SCENE_CATALOG[0]!.entry).toBe('./scenes/standard-shader-ball/openpbr-rva-standard-shader-ball.usda');
     expect(SCENE_CATALOG.every(scene => scene.entry.startsWith('./'))).toBe(true);
     expect(SCENE_CATALOG.find(scene => scene.entry.endsWith('/hyperion_rect_lights.usda'))?.label)
       .toBe('Pathtracer - hyperion rect lights');
