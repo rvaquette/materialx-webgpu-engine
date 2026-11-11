@@ -10,7 +10,7 @@ import { projectIrradianceSH } from '../../src/render/env/irradiance.ts';
 import { buildEnvCdf } from '../../src/assets/environment-cdf.ts';
 import { JsDenoiser } from '../../src/render/pathtracing/js-denoiser.ts';
 import { editableSceneMaterials, materialUniformData } from '../../src/render/material-parameters.ts';
-import { PT_UNIFORM_SIZE, pathTraceTile } from '../../src/render/pathtracing/compute.ts';
+import { PT_UNIFORM_SIZE, pathTraceTile, pathTraceTileCount } from '../../src/render/pathtracing/compute.ts';
 import type { ShaderCompilationError } from '../../src/gpu/shader-diagnostics.ts';
 import { exportCompiledScene } from '../../src/scene/compiled-scene.ts';
 
@@ -579,7 +579,7 @@ describe('interactive viewer resource lifecycle', () => {
     await Promise.resolve();
     const refinement = device.createCommandEncoder.mock.results[0]!.value;
     expect(refinement.copyBufferToBuffer).toHaveBeenCalledWith(expect.anything(), 0, expect.anything(), 0, 128 * 128 * 32);
-    expect(pass.dispatchWorkgroups.mock.calls).toEqual(Array(4).fill([16, 16, 1]));
+    expect(pass.dispatchWorkgroups.mock.calls).toEqual(Array(16).fill([8, 8, 1]));
     expect(device.queue.submit).toHaveBeenCalledTimes(1);
     expect(device.queue.onSubmittedWorkDone).toHaveBeenCalledTimes(1);
     expect(pass.draw).toHaveBeenCalledTimes(1);
@@ -632,21 +632,22 @@ describe('interactive viewer resource lifecycle', () => {
     expect(device.queue.onSubmittedWorkDone).toHaveBeenCalledTimes(64);
     const uniforms = device.queue.writeBuffer.mock.calls.map(call => call[2])
       .filter((data): data is Float32Array => data instanceof Float32Array && data.byteLength === PT_UNIFORM_SIZE);
-    expect(uniforms).toHaveLength(256);
+    const tileCount = pathTraceTileCount(512, 512);
+    expect(uniforms).toHaveLength(64 * 16);
     for (const [index, data] of uniforms.entries()) {
-      expect(Array.from(data.slice(32, 36))).toEqual([Math.floor(index / 16), 1, 512, 512]);
-      const tile = pathTraceTile(512, 512, index % 16);
+      expect(Array.from(data.slice(32, 36))).toEqual([Math.floor(index / tileCount), 1, 512, 512]);
+      const tile = pathTraceTile(512, 512, index % tileCount);
       expect(Array.from(data.slice(76, 80))).toEqual([tile.x, tile.y, tile.width, tile.height]);
       const writeIndex = device.queue.writeBuffer.mock.calls.findIndex(call => call[2] === data);
       const writeOrder = device.queue.writeBuffer.mock.invocationCallOrder[writeIndex]!;
-      const batch = Math.floor(index / 4);
+      const batch = Math.floor(index / 16);
       const submitOrder = device.queue.submit.mock.invocationCallOrder[batch]!;
       expect(writeOrder).toBeLessThan(submitOrder);
       if (batch > 0) expect(writeOrder).toBeGreaterThan(device.queue.submit.mock.invocationCallOrder[batch - 1]!);
       const buffer = device.queue.writeBuffer.mock.calls[writeIndex]![0];
-      const batchBuffers = uniforms.slice(batch * 4, batch * 4 + 4).map(uniform =>
+      const batchBuffers = uniforms.slice(batch * 16, batch * 16 + 16).map(uniform =>
         device.queue.writeBuffer.mock.calls.find(call => call[2] === uniform)![0]);
-      expect(new Set(batchBuffers).size).toBe(4);
+      expect(new Set(batchBuffers).size).toBe(16);
       expect(device.createBindGroup.mock.calls.some(([desc]) => Array.from(desc.entries).some(entry =>
         'buffer' in entry.resource && entry.resource.buffer === buffer))).toBe(true);
     }
@@ -719,9 +720,9 @@ describe('interactive viewer resource lifecycle', () => {
     await viewer.resize(256);
     const groups = device.createBindGroup.mock.calls.map(([desc]) => Array.from(desc.entries));
     const compute = groups.filter(entries => entries.length > 6);
-    expect(compute).toHaveLength(4);
+    expect(compute).toHaveLength(16);
     const buffers = compute.map(entries => entries.filter(entry => 'buffer' in entry.resource).map(entry => entry.resource));
-    expect(new Set(buffers.map(entries => (entries[0] as GPUBufferBinding).buffer)).size).toBe(4);
+    expect(new Set(buffers.map(entries => (entries[0] as GPUBufferBinding).buffer)).size).toBe(16);
     // Only the per-tile camera uniform differs; every scene/storage binding is shared.
     for (let i = 1; i < buffers[0]!.length; i++) {
       expect(new Set(buffers.map(entries => (entries[i] as GPUBufferBinding).buffer)).size).toBe(1);

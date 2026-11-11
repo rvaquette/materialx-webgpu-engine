@@ -49,7 +49,7 @@ import {
   GBUFFER_POSITION_FORMAT,
   GBUFFER_NORMAL_FORMAT,
 } from '../../src/render/hybrid/trace-pass.ts';
-import { buildPathTraceUniform, pathTraceComputeWgsl, pathTraceClosureDispatch, pathTraceOpaqueScene, PathTraceBackend, PT_UNIFORM_SIZE, PT_WORKGROUP_SIZE } from '../../src/render/pathtracing/compute.ts';
+import { buildPathTraceUniform, pathTraceComputeWgsl, pathTraceClosureDispatch, pathTraceOpaqueScene, PathTraceBackend, pathTraceTileCount, PT_UNIFORM_SIZE, PT_WORKGROUP_SIZE } from '../../src/render/pathtracing/compute.ts';
 import { pathTraceSettings } from '../../src/render/pathtracing/scene-settings.ts';
 import { pathTraceDisplacementWgsl } from '../../src/render/pathtracing/displacement-wgsl.ts';
 import { cameraFovY } from '../../src/usd/cameras.ts';
@@ -1260,7 +1260,7 @@ async function renderUsdOnDevice(
     usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC,
   });
   device.queue.writeBuffer(accumBuffer, 0, new Float32Array(res * res * 4));
-  const tileUniforms = Array.from({ length: 16 }, () =>
+  const tileUniforms = Array.from({ length: pathTraceTileCount(res, res) }, () =>
     device.createBuffer({ size: PT_UNIFORM_SIZE, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST }),
   );
 
@@ -1416,7 +1416,7 @@ async function renderUsdOnDevice(
   }
 
   phase('gpuResources');
-  const queryCount = Math.ceil(samples / maxSamplesPerDispatch) * 16 * 2;
+  const queryCount = Math.ceil(samples / maxSamplesPerDispatch) * pathTraceTileCount(res, res) * 2;
   const timestampStatus = !device.features.has('timestamp-query') ? 'unsupported'
     : queryCount > 8192 ? 'budget-exceeded' : 'available';
   const timestampSupported = timestampStatus === 'available';

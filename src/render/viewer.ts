@@ -21,7 +21,7 @@ import {
 import { createSceneBindGroups, uploadGeometry, type SceneDrawBuffers } from './scene-resources.ts';
 import { buildEnvCdf } from '../assets/environment-cdf.ts';
 import { buildCachedPathTraceScene, type PathTraceScene } from './pathtracing/scene-buffers.ts';
-import { buildPathTraceUniform, pathTraceComputeWgsl, pathTraceClosureDispatch, pathTraceOpaqueScene, PathTraceBackend, PT_UNIFORM_SIZE } from './pathtracing/compute.ts';
+import { buildPathTraceUniform, pathTraceComputeWgsl, pathTraceClosureDispatch, pathTraceOpaqueScene, PathTraceBackend, pathTraceTileCount, PT_UNIFORM_SIZE } from './pathtracing/compute.ts';
 import { pathTraceSettings } from './pathtracing/scene-settings.ts';
 import { cameraFovY } from '../usd/cameras.ts';
 import { buildMaterialDispatch } from './pathtracing/material-variant.ts';
@@ -51,6 +51,7 @@ import { compiledRasterShaderKey, loadCompiledScene } from '../scene/compiled-sc
 const PREVIEW_ENV: Vec3 = [0.65, 0.68, 0.72];
 const RASTER_BAND_PIXELS = 256 * 256;
 const PATH_TRACE_TILES_PER_REFRESH = 4;
+const PATH_TRACE_MAX_TILES_PER_REFRESH = 16;
 function previewCamera(aspect: number, exposure: number): FrameCamera {
   const target: Vec3 = [0, 0.3, 0];
   const dir: Vec3 = [0.657, 0.438, 0.613];
@@ -1160,7 +1161,7 @@ export class InteractiveViewer {
       let previewBuffer = accumulation(Math.ceil(width / 2), Math.ceil(height / 2));
       ptTrash.push({ destroy: () => previewBuffer.destroy() });
       const ptUniform = track(device.createBuffer({ size: PT_UNIFORM_SIZE, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST }));
-      const ptUniforms = [ptUniform, ...Array.from({ length: PATH_TRACE_TILES_PER_REFRESH - 1 }, () =>
+      const ptUniforms = [ptUniform, ...Array.from({ length: PATH_TRACE_MAX_TILES_PER_REFRESH - 1 }, () =>
         track(device.createBuffer({ size: PT_UNIFORM_SIZE, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST })))];
 
       const group0Entries: GPUBindGroupEntry[] = bindings.group0.map((slot) => {
@@ -1337,13 +1338,16 @@ export class InteractiveViewer {
         lastPreview = accumulate && !tiled;
         if (accumulate) {
           needsPreview = false;
-          const tileCount = tiled ? PATH_TRACE_TILES_PER_REFRESH : 1;
+          const tileCount = tiled ? Math.min(PATH_TRACE_MAX_TILES_PER_REFRESH, Math.max(
+            PATH_TRACE_TILES_PER_REFRESH,
+            Math.ceil(pathTraceTileCount(ptWidth, ptHeight) / PATH_TRACE_TILES_PER_REFRESH),
+          )) : 1;
           for (let i = 0; i < tileCount; i++) {
             const { tile, frameIndex } = tiled
               ? ptBackend.advanceTile(ptWidth, ptHeight)
               : { tile: { x: 0, y: 0, width: ptWidth, height: ptHeight }, frameIndex: ptBackend.advanceFrame() };
             const [wgX, wgY] = PathTraceBackend.workgroupCount(tile.width, tile.height);
-            // Distinct uniforms let all four watchdog-sized dispatches share a submission.
+            // Separate uniforms let watchdog-sized tile dispatches share a submission.
             device.queue.writeBuffer(ptUniforms[i]!, 0,
               buildPathTraceUniform(ptScene, frameIndex, 1, ptWidth, ptHeight, 0, tile, pathTracingDepth));
             const compute = encoder.beginComputePass();

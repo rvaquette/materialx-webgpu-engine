@@ -85,16 +85,31 @@ export interface PathTraceTile {
   height: number;
 }
 
+const PT_MAX_TILE_EDGE = 64;
+
+function pathTraceTileGrid(width: number, height: number): { columns: number; rows: number } {
+  return {
+    columns: Math.max(4, Math.ceil(width / PT_MAX_TILE_EDGE)),
+    rows: Math.max(4, Math.ceil(height / PT_MAX_TILE_EDGE)),
+  };
+}
+
+export function pathTraceTileCount(width: number, height: number): number {
+  const { columns, rows } = pathTraceTileGrid(width, height);
+  return columns * rows;
+}
+
 export function pathTraceTile(width: number, height: number, index: number): PathTraceTile {
-  const column = index % 4;
-  const row = Math.floor(index / 4);
-  const x = Math.floor(column * width / 4);
-  const y = Math.floor(row * height / 4);
+  const { columns, rows } = pathTraceTileGrid(width, height);
+  const column = index % columns;
+  const row = Math.floor(index / columns);
+  const x = Math.floor(column * width / columns);
+  const y = Math.floor(row * height / rows);
   return {
     x,
     y,
-    width: Math.floor((column + 1) * width / 4) - x,
-    height: Math.floor((row + 1) * height / 4) - y,
+    width: Math.floor((column + 1) * width / columns) - x,
+    height: Math.floor((row + 1) * height / rows) - y,
   };
 }
 
@@ -1386,7 +1401,7 @@ export class PathTraceBackend {
     const frameIndex = this.#frameIndex;
     const tile = pathTraceTile(width, height, this.#tileIndex);
     this.#tileIndex += 1;
-    if (this.#tileIndex === 16) {
+    if (this.#tileIndex === pathTraceTileCount(width, height)) {
       this.#tileIndex = 0;
       this.#frameIndex += 1;
     }

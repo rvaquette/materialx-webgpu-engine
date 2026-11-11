@@ -4,6 +4,7 @@ import {
   pathTraceComputeWgsl,
   pathTraceClosureDispatch,
   pathTraceTile,
+  pathTraceTileCount,
   PathTraceBackend,
   PT_COMPUTE_ENTRY,
   PT_UNIFORM_FLOATS,
@@ -619,7 +620,7 @@ describe('buildPathTraceUniform layout', () => {
     expect(Array.from(full.slice(76, 80))).toEqual([0, 0, 512, 512]);
     const tile = pathTraceTile(512, 512, 6);
     const tiled = buildPathTraceUniform(fakeScene(), 0, 1, 512, 512, 10, tile);
-    expect(Array.from(tiled.slice(76, 80))).toEqual([256, 128, 128, 128]);
+    expect(Array.from(tiled.slice(76, 80))).toEqual([384, 0, 64, 64]);
     expect(tiled[19]).toBe(10);
   });
 
@@ -719,10 +720,11 @@ describe('PathTraceBackend', () => {
     expect(PathTraceBackend.workgroupCount(320, 180)).toEqual([40, 23]);
   });
 
-  it('counts a sample only after sixteen tiles and resets to the first tile', () => {
+  it('counts a sample only after all image tiles and resets to the first tile', () => {
     const { device } = mockDevice();
     const backend = new PathTraceBackend(device);
-    for (let index = 0; index < 16; index++) {
+    const tileCount = pathTraceTileCount(512, 512);
+    for (let index = 0; index < tileCount; index++) {
       expect(backend.frameIndex).toBe(0);
       const step = backend.advanceTile(512, 512);
       expect(step.frameIndex).toBe(0);
@@ -780,14 +782,21 @@ describe('PathTraceBackend', () => {
 });
 
 describe('path-tracing tiles', () => {
-  it.each([256, 512, 1024])('uses quarter-sized tiles at resolution %i', (size) => {
-    expect(pathTraceTile(size, size, 0)).toEqual({ x: 0, y: 0, width: size / 4, height: size / 4 });
-    expect(pathTraceTile(size, size, 15)).toEqual({ x: size * 3 / 4, y: size * 3 / 4, width: size / 4, height: size / 4 });
+  it.each([[256, 16], [512, 64], [1024, 256]])('bounds tiles to 64 pixels at resolution %i', (size, count) => {
+    expect(pathTraceTileCount(size, size)).toBe(count);
+    const lastTile = pathTraceTile(size, size, count - 1);
+    expect(lastTile.x + lastTile.width).toBe(size);
+    expect(lastTile.y + lastTile.height).toBe(size);
+    for (let index = 0; index < count; index++) {
+      const tile = pathTraceTile(size, size, index);
+      expect(tile.width).toBeLessThanOrEqual(64);
+      expect(tile.height).toBeLessThanOrEqual(64);
+    }
   });
 
-  it.each([[17, 13], [3, 2]])('covers every pixel exactly once for %ix%i', (width, height) => {
+  it.each([[512, 512], [17, 13], [3, 2]])('covers every pixel exactly once for %ix%i', (width, height) => {
     const visits = new Uint8Array(width * height);
-    for (let index = 0; index < 16; index++) {
+    for (let index = 0; index < pathTraceTileCount(width, height); index++) {
       const tile = pathTraceTile(width, height, index);
       for (let y = tile.y; y < tile.y + tile.height; y++) {
         for (let x = tile.x; x < tile.x + tile.width; x++) {
