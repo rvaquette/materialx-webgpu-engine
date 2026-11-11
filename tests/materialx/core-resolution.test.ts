@@ -6,6 +6,9 @@ import { MaterialXCore, type MaterialXModuleFactory } from '../../src/materialx/
 import { MaterialXLibraries, defaultLibrarySources } from '../../src/materialx/libraries.ts';
 import { loadMaterialXDocuments } from '../../src/materialx/document-source.ts';
 import { createGraphMaterialCompiler } from '../../src/render/graph-material-compiler.ts';
+import { editableSceneMaterials, visibleMaterialParameters } from '../../src/render/material-parameters.ts';
+import { buildSceneResources } from '../../src/render/scene-resources.ts';
+import { importUsdStage } from '../../src/usd/importer.ts';
 import type { Diagnostic } from '../../src/core/diagnostics.ts';
 
 const coreRoot = process.env['MX_CORE_DIR']
@@ -36,6 +39,20 @@ describe.skipIf(!existsSync(coreFile) || !existsSync(libraryRoot))('installed Ma
           referencedPrimPath: `/MaterialX/Materials/${name}`, boundPrims: [] });
         expect(build?.layered, example.parameter).toBeDefined();
         expect(diagnostics.filter(diagnostic => diagnostic.level === 'error'), example.parameter).toEqual([]);
+        if (family === 'dielectric' && example.parameter === 'transmission_tint') {
+          const scene = await importUsdStage('test.usda', { reader: { read: async () => `#usda 1.0
+def Material "Mat" (prepend references = @materials.mtlx@</MaterialX/Materials/dielectric_transmission_tint>) {}
+def Mesh "Teapot" { rel material:binding = </Mat> }` } });
+          const resources = editableSceneMaterials(await buildSceneResources(scene, {
+            meshSource: { meshFor: () => ({ points: [0, 0, 0, 1, 0, 0, 0, 1, 0], faceVertexCounts: [3], faceVertexIndices: [0, 1, 2] }) },
+            materialCompiler: { compile: () => build },
+          }));
+          const material = [...resources.materials.values()][0]!;
+          const editable = visibleMaterialParameters(material);
+          expect(editable.map(parameter => parameter.input).sort()).toEqual(['reflectionTint', 'transmissionTint']);
+          expect(editable.every(parameter => parameter.type === 'color3' && parameter.update === 'uniform')).toBe(true);
+          expect(material.surfaceModule!.uniforms.map(field => field.name).sort()).toEqual(editable.map(parameter => parameter.uniform).sort());
+        }
         if (example.status === 'unsupported') {
           expect(diagnostics.some(diagnostic => diagnostic.message.includes('is not implemented')), example.parameter).toBe(true);
         } else {

@@ -175,13 +175,16 @@ export function editableSceneMaterials(resources: SceneResources): SceneResource
     const parameters: MaterialParameter[] = [];
     let inputs = new Map(material.resolvedSurface.inputs);
     const surfaceNode = material.surfaceGraph.nodes.get(material.resolvedSurface.nodeId);
+    const explicitSelection = [...material.surfaceGraph.nodes.values()].some(node =>
+      node.inputs.some(input => input.editable !== undefined));
     for (const [name, input] of inputs) {
       if (input.type === 'BSDF' || input.type === 'EDF') continue;
       const authored = surfaceNode?.inputs.find(candidate => candidate.name === name);
       if (authored?.interfaceName || authored?.source.kind === 'interface' || authored?.source.kind === 'connection') continue;
       if (input.source.kind !== 'value' && input.source.kind !== 'default') continue;
       const uniform = `parameter_${parameters.length}`;
-      const rebuild = input.type === 'boolean' || input.type === 'integer';
+      const rebuild = input.type === 'boolean' || input.type === 'integer'
+        || explicitSelection && authored?.editable !== true;
       const feature = featureRule(material.resolvedSurface, name, input.type);
       parameters.push({
         id: `surface:${name}`, label: name, type: input.type, input: name,
@@ -211,7 +214,8 @@ export function editableSceneMaterials(resources: SceneResources): SceneResource
         const max = 'max' in input ? input.max : undefined;
         const values = input.source.value.trim() === 'true' ? [1] : input.source.value.trim() === 'false' ? [0]
           : input.source.value.split(',').map(Number);
-        const uniform = editable === true && input.type === 'float' ? `parameter_${parameters.length}` : undefined;
+        const uniform = editable === true && (input.type === 'float' || input.type === 'color3')
+          ? `parameter_${parameters.length}` : undefined;
         const parameter: MaterialParameter = {
           id: JSON.stringify([nodeId, input.name]), label: `${nodeId} / ${input.name}`, type: input.type,
           value: values, initial: [...values], update: uniform ? 'uniform' : 'rebuild', nodeId, input: input.name,

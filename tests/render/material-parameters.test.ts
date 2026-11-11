@@ -67,6 +67,76 @@ def Mesh "b" { rel material:binding = </Mat> }` } });
 }
 
 describe('dynamic MaterialX parameters', () => {
+  it('updates explicitly editable dielectric colors as uniforms without compiling unrelated inputs', async () => {
+    const resources = await fixture(false, graph => {
+      const node = graph.nodes.get('surface')!;
+      node.category = 'LamaDielectric';
+      node.type = 'BSDF';
+      node.nodeDef = {
+        name: 'ND_LamaDielectric', nodeString: 'LamaDielectric', type: 'BSDF',
+        implementation: { kind: 'unresolved' },
+        inputs: [
+          { name: 'reflectionTint', type: 'color3', value: '1, 1, 1' },
+          { name: 'transmissionTint', type: 'color3', value: '1, 1, 1' },
+          { name: 'roughness', type: 'float', value: '0.08' },
+        ],
+      };
+      node.inputs = [
+        { name: 'reflectionTint', type: 'color3', editable: true, source: { kind: 'value', type: 'color3', value: '1, 1, 1' }, provenance: { namePath: '/surface/reflectionTint' } },
+        { name: 'transmissionTint', type: 'color3', editable: true, source: { kind: 'value', type: 'color3', value: '0.2, 0.6, 1' }, provenance: { namePath: '/surface/transmissionTint' } },
+        { name: 'roughness', type: 'float', source: { kind: 'value', type: 'float', value: '0.08' }, provenance: { namePath: '/surface/roughness' } },
+      ];
+    });
+    const material = [...resources.materials.values()][0]!;
+    const parameters = visibleMaterialParameters(material);
+    expect(parameters.map(parameter => parameter.input)).toEqual(['reflectionTint', 'transmissionTint']);
+    expect(parameters.map(parameter => parameter.update)).toEqual(['uniform', 'uniform']);
+    expect(material.surfaceModule!.uniforms.map(field => field.name).sort())
+      .toEqual(parameters.map(parameter => parameter.uniform).sort());
+    const reflection = parameters[0]!;
+    const transmission = parameters[1]!;
+    const updated = changeMaterialParameters(material, new Map([
+      [reflection.id, [0.3, 0.4, 0.5]], [transmission.id, [0.7, 0.8, 0.9]],
+    ]));
+    expect(compileEditableMaterial(updated).sceneShader!.code).toBe(material.sceneShader!.code);
+    expect(Array.from(new Float32Array(materialUniformData(updated)))).toEqual([
+      expect.closeTo(0.3), expect.closeTo(0.4), expect.closeTo(0.5), 0,
+      expect.closeTo(0.7), expect.closeTo(0.8), expect.closeTo(0.9), 0,
+    ]);
+    const dispatch = buildMaterialDispatch([{ materialIndex: 0, graph: material.surfaceGraph!, surface: material.resolvedSurface! }]);
+    for (const parameter of parameters) {
+      expect(dispatch.uniforms.find(field => field.name === parameter.uniform)?.wgslType).toBe('vec3f');
+      expect(dispatch.dispatcherWgsl).toContain(`u.m0_${parameter.uniform}`);
+    }
+    const reset = changeMaterialParameters(updated, new Map(parameters.map(parameter => [parameter.id, parameter.initial])));
+    expect(new Uint8Array(materialUniformData(reset))).toEqual(new Uint8Array(materialUniformData(material)));
+  });
+
+  it('emits editable upstream color inputs as uniforms in raster and path tracing', async () => {
+    const resources = await fixture(false, graph => {
+      graph.nodes.get('surface')!.inputs = [
+        { name: 'base_color', type: 'color3', source: { kind: 'connection', nodeId: 'color' }, provenance: { namePath: '/surface/base_color' } },
+      ];
+      graph.nodes.set('color', {
+        id: 'color', category: 'multiply', type: 'color3', provenance: { namePath: '/color' },
+        inputs: [
+          { name: 'in1', type: 'color3', editable: true, source: { kind: 'value', type: 'color3', value: '0.2, 0.4, 0.6' }, provenance: { namePath: '/color/in1' } },
+          { name: 'in2', type: 'color3', source: { kind: 'value', type: 'color3', value: '1, 1, 1' }, provenance: { namePath: '/color/in2' } },
+        ],
+      });
+    });
+    const material = [...resources.materials.values()][0]!;
+    const [parameter] = visibleMaterialParameters(material);
+    expect(parameter?.update).toBe('uniform');
+    expect(material.surfaceModule!.uniforms.some(field => field.name === parameter!.uniform)).toBe(true);
+    const dispatch = buildMaterialDispatch([{ materialIndex: 0, graph: material.surfaceGraph!, surface: material.resolvedSurface! }]);
+    expect(dispatch.dispatcherWgsl).toContain(`u.m0_${parameter!.uniform}`);
+    const updated = changeMaterialParameters(material, new Map([[parameter!.id, [0.1, 0.3, 0.5]]]));
+    expect(compileEditableMaterial(updated).sceneShader!.code).toBe(material.sceneShader!.code);
+    expect(Array.from(new Float32Array(materialUniformData(updated))).slice(0, 3))
+      .toEqual([expect.closeTo(0.1), expect.closeTo(0.3), expect.closeTo(0.5)]);
+  });
+
   it('exposes the opted-in dielectric IOR as a uniform without changing the LamaLayer shader', async () => {
     const resources = await fixture(false, graph => {
       const surface = graph.nodes.get('surface')!;

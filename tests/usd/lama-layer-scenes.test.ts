@@ -24,6 +24,14 @@ const reader: UsdLayerReader = {
 };
 
 describe('LamaLayer gold IOR scenes', () => {
+  it('opts only the two transmission-tint colors into editing', async () => {
+    const document = await readFile(join(SCENE_DIR, 'dielectric', 'materials.mtlx'), 'utf8');
+    const dielectric = document.match(/<LamaDielectric name="dielectric_transmission_tint_bsdf"[^>]*>([\s\S]*?)<\/LamaDielectric>/)?.[1];
+    expect(dielectric).toBeDefined();
+    const editable = [...dielectric!.matchAll(/<input name="([^"]+)"[^>]*engine:editable="true"/g)].map(match => match[1]);
+    expect(editable).toEqual(['reflectionTint', 'transmissionTint']);
+  });
+
   it.each([
     { family: 'conductor', count: 21, unsupported: 4 },
     { family: 'dielectric', count: 34, unsupported: 10 },

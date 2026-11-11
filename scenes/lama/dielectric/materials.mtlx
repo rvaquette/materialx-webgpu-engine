@@ -66,19 +66,19 @@
     <input name="presence" type="float" value="1" />
   </LamaSurface>
   <LamaDielectric name="dielectric_transmission_tint_bsdf" type="BSDF">
-    <input name="reflectionTint" type="color3" value="1, 1, 1" />
-    <input name="transmissionTint" type="color3" value="0.2, 0.6, 1" />
-    <input name="fresnelMode" type="integer" value="1" uimin="0" uimax="1" engine:editable="true" />
-    <input name="IOR" type="float" value="1.5" uimin="1" uimax="3" engine:editable="true" />
-    <input name="reflectivity" type="float" value="0.04" uimin="0" uimax="0.99" engine:editable="true" />
-    <input name="roughness" type="float" value="0.08" uimin="0" uimax="1" engine:editable="true" />
+    <input name="reflectionTint" type="color3" value="1, 1, 1" engine:editable="true" />
+    <input name="transmissionTint" type="color3" value="0.2, 0.6, 1" engine:editable="true" />
+    <input name="fresnelMode" type="integer" value="1" uimin="0" uimax="1" />
+    <input name="IOR" type="float" value="1.5" uimin="1" uimax="3" />
+    <input name="reflectivity" type="float" value="0.04" uimin="0" uimax="0.99" />
+    <input name="roughness" type="float" value="0.08" uimin="0" uimax="1" />
     <input name="absorptionColor" type="color3" value="1, 1, 1" />
-    <input name="absorptionRadius" type="float" value="0.08" uimin="0.001" uimax="1" engine:editable="true" />
+    <input name="absorptionRadius" type="float" value="0.08" uimin="0.001" uimax="1" />
     <input name="scatterColor" type="color3" value="0, 0, 0" />
-    <input name="scatterAnisotropy" type="float" value="0" uimin="-0.99" uimax="0.99" engine:editable="true" />
-    <input name="anisotropy" type="float" value="0" uimin="-0.98" uimax="0.98" engine:editable="true" />
-    <input name="rotation" type="float" value="0" uimin="-1" uimax="1" engine:editable="true" />
-    <input name="exteriorIOR" type="float" value="1" uimin="0.1" uimax="3" engine:editable="true" />
+    <input name="scatterAnisotropy" type="float" value="0" uimin="-0.99" uimax="0.99" />
+    <input name="anisotropy" type="float" value="0" uimin="-0.98" uimax="0.98" />
+    <input name="rotation" type="float" value="0" uimin="-1" uimax="1" />
+    <input name="exteriorIOR" type="float" value="1" uimin="0.1" uimax="3" />
   </LamaDielectric>
   <LamaSurface name="dielectric_transmission_tint" type="material">
     <input name="materialFront" type="BSDF" nodename="dielectric_transmission_tint_bsdf" />

@@ -499,6 +499,12 @@ Filename, string and graph-connection editing are outside this first version. Nu
 color components are linear; color pickers convert to/from sRGB without clipping
 the numeric HDR fields.
 
+When `engine:editable` metadata is present in a reachable material graph, only
+explicitly opted-in literal inputs are exposed. Editable `float` and `color3`
+inputs on surface and upstream shading nodes can use GPU uniforms; integer and
+boolean controls require a rebuild. The `dielectric_transmission_tint` scene
+exposes only its reflection and transmission tint colors.
+
 Each object has independent parameter state. Surface numeric edits use GPU
 uniforms in both renderers when the emitted shader and render pass remain
 unchanged. The engine compares generated code/pass classification rather than

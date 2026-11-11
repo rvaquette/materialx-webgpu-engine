@@ -11,6 +11,7 @@ const controls = vi.hoisted(() => ({
   io: { ConfigFlags: 0, AddMouseSourceEvent: vi.fn(), AddMousePosEvent: vi.fn() },
   style: { ScrollbarSize: 14, GrabMinSize: 12, FramePadding: {}, ItemSpacing: {} },
   number: undefined as number | undefined,
+  color: undefined as [number, number, number] | undefined,
 }));
 vi.mock('@mori2003/jsimgui', () => ({
   ImVec2: class { constructor(public x: number, public y: number) {} },
@@ -40,10 +41,17 @@ vi.mock('@mori2003/jsimgui', () => ({
     }),
     CollapsingHeader: () => controls.header, DestroyContext: vi.fn(),
     PushID: vi.fn(), PopID: vi.fn(), SliderFloat: () => false,
+    ColorEdit3: vi.fn((_label: string, value: [number, number, number]) => {
+      if (!controls.color) return false;
+      value.splice(0, 3, ...controls.color);
+      controls.color = undefined;
+      return true;
+    }),
     InputFloat: vi.fn((_label: string, value: [number]) => {
       if (controls.number === undefined) return false;
       value[0] = controls.number;
       controls.number = undefined;
+      controls.color = undefined;
       controls.style.ScrollbarSize = 14;
       return true;
     }),
@@ -61,6 +69,20 @@ afterEach(() => {
 });
 
 describe('ImGui material parameter editing', () => {
+  it('sends color picker edits as linear uniform values', async () => {
+    vi.useFakeTimers();
+    const parameter: MaterialParameter = {
+      id: 'tint', input: 'transmissionTint', label: 'Tint', type: 'color3',
+      value: [1, 1, 1], initial: [1, 1, 1], update: 'uniform',
+    };
+    const apply = vi.fn(async () => {});
+    const editor = new MaterialParameterEditor({ parameters: () => [parameter], apply, error: vi.fn() });
+    controls.color = [0.5, 1, 0];
+    editor.draw();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(apply).toHaveBeenCalledWith(new Map([['tint', [expect.closeTo(0.214041), 1, 0]]]));
+  });
+
   it('coalesces edits and cancels pending rebuilds when the selected object changes', async () => {
     vi.useFakeTimers();
     const parameter: MaterialParameter = {

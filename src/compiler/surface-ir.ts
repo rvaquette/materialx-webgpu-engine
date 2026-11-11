@@ -164,6 +164,11 @@ export function lowerValueInputsToIr(
       case 'value': {
         const irt = irTypeFromMaterialX(input.type) ?? FLOAT;
         if (irt.kind === 'string' || irt.kind === 'filename') return undefined;
+        if (input.parameter) {
+          const value = parseNumbers(input.source.value);
+          builder.declareParam({ name: input.parameter, type: irt, defaultValue: value.length === 1 ? value[0]! : value, editable: true });
+          return builder.add({ kind: 'param', type: irt, name: input.parameter });
+        }
         return constOfIrType(builder, irt, parseNumbers(input.source.value));
       }
       case 'connection':

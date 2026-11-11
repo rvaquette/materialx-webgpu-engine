@@ -488,6 +488,13 @@ describe('interactive viewer resource lifecycle', () => {
     expect(device.queue.writeBuffer.mock.calls.length).toBeGreaterThanOrEqual(2);
     expect(device.createComputePipelineAsync).toHaveBeenCalledTimes(pipelines);
     expect(buildCachedPathTraceScene).toHaveBeenCalledOnce();
+    device.queue.writeBuffer.mockClear();
+    await viewer.setObjectParameters('/World/Ball', new Map([['surface:base_color', [0.2, 0.4, 0.8]]]));
+    expect(viewer.objectParameters('/World/Ball').find(parameter => parameter.id === 'surface:base_color')?.value).toEqual([0.2, 0.4, 0.8]);
+    expect(device.queue.writeBuffer.mock.calls.some(call => call[2] instanceof ArrayBuffer
+      && Array.from(new Float32Array(call[2])).some((value, i, data) =>
+        Math.abs(value - 0.2) < 1e-6 && Math.abs(data[i + 1]! - 0.4) < 1e-6 && Math.abs(data[i + 2]! - 0.8) < 1e-6))).toBe(true);
+    expect(device.createComputePipelineAsync).toHaveBeenCalledTimes(pipelines);
   });
 
   it('does not build path-tracing CPU data/BVH in raster, including after resize', async () => {
