@@ -107,10 +107,13 @@ export interface ResolvedNodeDefRef {
   inputs?: readonly { name: string; type: string; value?: string; geomprop?: string }[];
 }
 
+export type LamaLayerMode = 'fresnel_blend' | 'smooth_coating' | 'rough_coating' | 'auto';
+
 export interface ResolvedNode {
   id: string;
   category: string;
   type: string;
+  lamaLayer?: { mode: LamaLayerMode; topThickness: number };
   nodeDef?: ResolvedNodeDefRef;
   inputs: ResolvedInput[];
   provenance: Provenance;
@@ -364,10 +367,25 @@ export function resolveGraph(options: ResolveGraphOptions): ResolvedGraph {
     }
 
     const nodeDef = resolveNodeDef(node, options.target, diag, options.isCovered);
+    let lamaLayer: ResolvedNode['lamaLayer'];
+    if (node.getCategory() === 'LamaLayer' || nodeDef?.nodeString === 'LamaLayer') {
+      const authoredMode = nonEmpty(node.getAttribute?.('engine:layerMode'));
+      const mode = authoredMode ?? 'fresnel_blend';
+      if (mode !== 'fresnel_blend' && mode !== 'smooth_coating' && mode !== 'rough_coating' && mode !== 'auto') {
+        throw new Error(`Invalid engine:layerMode at ${provenanceOf(node).namePath}: expected fresnel_blend, smooth_coating, rough_coating or auto.`);
+      }
+      const rawThickness = nonEmpty(node.getAttribute?.('engine:topThickness'));
+      const topThickness = rawThickness === undefined ? 0 : Number(rawThickness);
+      if (!Number.isFinite(topThickness) || topThickness < 0) {
+        throw new Error(`Invalid engine:topThickness at ${provenanceOf(node).namePath}: expected a finite non-negative value.`);
+      }
+      lamaLayer = { mode, topThickness };
+    }
     nodes.set(id, {
       id,
       category: node.getCategory(),
       type: node.getType(),
+      ...(lamaLayer ? { lamaLayer } : {}),
       ...(nodeDef ? { nodeDef } : {}),
       inputs: resolvedInputs,
       provenance: provenanceOf(node),

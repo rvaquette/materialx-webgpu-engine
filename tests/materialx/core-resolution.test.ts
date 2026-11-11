@@ -115,8 +115,11 @@ describe.skipIf(!existsSync(coreFile) || !existsSync(libraryRoot))('installed Ma
       const build = await createGraphMaterialCompiler({ documents, sink: d => diagnostics.push(d) }).compile({
         assetPath, materialName: 'gold_ior', referencedPrimPath: '/MaterialX/Materials/gold_ior', boundPrims: [],
       });
-      const dielectric = [...(build?.graph?.nodes.values() ?? [])].find(node => node.category === 'LamaDielectric');
+      const nodes = [...(build?.graph?.nodes.values() ?? [])];
+      const dielectric = nodes.find(node => node.category === 'LamaDielectric');
       expect(dielectric?.inputs.find(input => input.name === 'IOR')).toMatchObject({ editable: true, min: [1], max: [3] });
+      expect(nodes.find(node => node.category === 'LamaLayer')?.lamaLayer)
+        .toEqual({ mode: 'fresnel_blend', topThickness: 0 });
       expect(diagnostics).toEqual([]);
     } finally {
       documents.delete();

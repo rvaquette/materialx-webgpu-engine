@@ -39,7 +39,7 @@
     <input name="roughness" type="float" value="0.08" />
   </LamaDielectric>
 
-  <LamaLayer name="gold_layer" type="BSDF">
+  <LamaLayer name="gold_layer" type="BSDF" engine:layerMode="fresnel_blend" engine:topThickness="0">
     <input name="materialTop" type="BSDF" nodename="dielectric" />
     <input name="materialBase" type="BSDF" nodename="gold_base" />
     <input name="topMix" type="float" value="1" />

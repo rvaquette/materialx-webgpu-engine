@@ -902,35 +902,67 @@ function coatOverBase(coat: CoatLayer, base: Lobe): Lobe {
   const coatW = clamp01(coat.weight);
   if (coatW <= 0) return base;
   const coatLobe = dielectricLobe(coat.ior, coat.roughness);
+  const refractive = coat.mode === 'smooth_coating' || coat.mode === 'rough_coating';
   const f0 = dielectricF0(coat.ior);
   const schlick = (c: number): number => f0 + (1 - f0) * Math.pow(clamp01(1 - c), 5);
   const coatProbability = (wo: V): number => Math.min(coatW * schlick(wo[2]), 0.95);
+  const refractDirection = (direction: V, entering: boolean): V | null => {
+    const side = direction[2] >= 0 ? 1 : -1;
+    const incident = entering ? scale(direction, -1) : direction;
+    const normal: V = [0, 0, entering ? side : -side];
+    const eta = entering ? 1 / Math.max(coat.ior, 1e-4) : Math.max(coat.ior, 1e-4);
+    const cosIncident = -dot(normal, incident);
+    const discriminant = 1 - eta * eta * (1 - cosIncident * cosIncident);
+    if (discriminant < 0) return null;
+    const transmitted = sub(scale(incident, eta), scale(normal, eta * dot(normal, incident) + Math.sqrt(discriminant)));
+    return normalize(entering ? scale(transmitted, -1) : transmitted);
+  };
   const attenuation = (wo: V, wi: V): V => {
     const att = (1 - coatW * schlick(wo[2])) * (1 - coatW * schlick(wi[2]));
+    const sigmaA = coat.absorption ?? [0, 0, 0];
+    const woInside = refractive ? refractDirection(wo, true) : wo;
+    const wiInside = refractive ? refractDirection(wi, true) : wi;
+    const pathLength = coat.topThickness && woInside && wiInside
+      ? coat.topThickness * (1 / Math.max(Math.abs(woInside[2]), 0.05) + 1 / Math.max(Math.abs(wiInside[2]), 0.05))
+      : 0;
     return [
-      att * (1 - coatW + coatW * coat.color[0]),
-      att * (1 - coatW + coatW * coat.color[1]),
-      att * (1 - coatW + coatW * coat.color[2]),
+      att * (1 - coatW + coatW * coat.color[0]) * Math.exp(-sigmaA[0] * pathLength),
+      att * (1 - coatW + coatW * coat.color[1]) * Math.exp(-sigmaA[1] * pathLength),
+      att * (1 - coatW + coatW * coat.color[2]) * Math.exp(-sigmaA[2] * pathLength),
     ];
   };
   function ev(wo: V, wi: V): BsdfEval {
-    const b = base.eval(wo, wi);
+    const woInside = refractive ? refractDirection(wo, true) : wo;
+    const wiInside = refractive ? refractDirection(wi, true) : wi;
+    const b = woInside && wiInside ? base.eval(woInside, wiInside) : { value: [0, 0, 0] as V, pdf: 0 };
     const c = coatLobe.eval(wo, wi);
     const t = attenuation(wo, wi);
+    const jacobian = refractive && wiInside ? Math.abs(wi[2]) / Math.max(Math.abs(wiInside[2]), 1e-6) : 1;
     const value: V = [
       coatW * c.value[0] + t[0] * b.value[0],
       coatW * c.value[1] + t[1] * b.value[1],
       coatW * c.value[2] + t[2] * b.value[2],
     ];
     const pCoat = coatProbability(wo);
-    return { value, pdf: pCoat * c.pdf + (1 - pCoat) * b.pdf };
+    return { value, pdf: pCoat * c.pdf + (1 - pCoat) * b.pdf * jacobian };
   }
   return {
     eval: (wo, wi) => ev(wo as V, wi as V),
     sample(wo, rng) {
       const w = wo as V;
       if (w[2] <= 0) return null;
-      const s = rng() < coatProbability(w) ? coatLobe.sample(w, rng) : base.sample(w, rng);
+      let s: BsdfSampleLocal | null;
+      if (rng() < coatProbability(w)) {
+        s = coatLobe.sample(w, rng);
+      } else {
+        const internalWo = refractive ? refractDirection(w, true) : w;
+        if (!internalWo) return null;
+        const internalSample = base.sample(internalWo, rng);
+        if (!internalSample) return null;
+        const externalWi = refractive ? refractDirection(internalSample.wi as V, false) : internalSample.wi as V;
+        if (!externalWi) return null;
+        s = { ...internalSample, wi: externalWi };
+      }
       if (!s) return null;
       const { value, pdf } = ev(w, s.wi as V);
       if (pdf <= 0) return null;
@@ -993,7 +1025,14 @@ export function layeredSurfaceBsdf(closure: LayeredClosure, channel: 0 | 1 | 2 =
     const spectral = l.kind === 'dielectric_transmission' && !l.thinWalled && (l.dispersion ?? 0) > 0
       ? { ...l, ior: dispersionIor(l.ior ?? 1.5, l.dispersion ?? 0, channel) }
       : l;
-    const lobe = lobeFromLayered(spectral, film);
+    let adjusted = spectral;
+    if (closure.coat?.mode === 'rough_coating') {
+      if (adjusted.roughness !== undefined) adjusted = { ...adjusted, roughness: Math.max(adjusted.roughness, closure.coat.roughness) };
+      if ((adjusted.kind === 'dielectric_reflection' || adjusted.kind === 'dielectric_transmission') && adjusted.ior !== undefined) {
+        adjusted = { ...adjusted, ior: adjusted.ior / Math.max(closure.coat.ior, 1e-4) };
+      }
+    }
+    const lobe = lobeFromLayered(adjusted, film);
     if (lobe) entries.push({ weight: l.weight, lobe });
   }
   if (closure.sheen && closure.sheen.weight > 0) {

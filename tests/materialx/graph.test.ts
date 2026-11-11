@@ -91,6 +91,8 @@ function fakeNode(opts: {
   inputs?: MxInput[];
   nodeDef?: MxNodeDef | null;
   sourceUri?: string;
+  layerMode?: string;
+  topThickness?: string;
 }): FakeNode {
   return {
     getName: () => opts.name,
@@ -100,6 +102,8 @@ function fakeNode(opts: {
     getInputs: () => opts.inputs ?? [],
     getNodeDef: () => opts.nodeDef ?? null,
     getActiveSourceUri: () => opts.sourceUri ?? '',
+    getAttribute: name => name === 'engine:layerMode' ? opts.layerMode ?? ''
+      : name === 'engine:topThickness' ? opts.topThickness ?? '' : '',
     validate: () => true,
     delete: () => {},
   };
@@ -132,6 +136,19 @@ describe('resolveGraph', () => {
     expect(resolve('1', '3')).toMatchObject({ min: [1], max: [3] });
     expect(() => resolve('3', '1')).toThrow('uimin must not exceed uimax');
     expect(() => resolve('low', '3')).toThrow('Invalid uimin');
+  });
+  it('resolves and validates LamaLayer engine extension settings', () => {
+    const resolve = (layerMode?: string, topThickness?: string) => {
+      const node = fakeNode({ name: 'layer', category: 'LamaLayer', type: 'BSDF', layerMode, topThickness });
+      return resolveGraph({ roots: [{ name: 'bsdf', type: 'BSDF', node }], onDiagnostic: () => {} })
+        .nodes.get('/mat/layer')!.lamaLayer;
+    };
+    expect(resolve()).toEqual({ mode: 'fresnel_blend', topThickness: 0 });
+    expect(resolve('smooth_coating', '2')).toEqual({ mode: 'smooth_coating', topThickness: 2 });
+    expect(resolve('rough_coating')?.mode).toBe('rough_coating');
+    expect(resolve('auto')?.mode).toBe('auto');
+    expect(() => resolve('invalid')).toThrow('Invalid engine:layerMode');
+    expect(() => resolve('fresnel_blend', '-1')).toThrow('Invalid engine:topThickness');
   });
   it('preserves active NodeDef inputs and their typed defaults, including inherited inputs', () => {
     const definition = fakeNodeDef({ name: 'ND_mix_color3', nodeString: 'mix', type: 'color3' });

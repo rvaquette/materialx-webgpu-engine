@@ -13,6 +13,7 @@ import { sssCoefficientsWgsl } from '../render/pathtracing/subsurface.ts';
 
 import { defaultDiagnosticSink, type DiagnosticSink } from '../core/diagnostics.ts';
 import type { ResolvedGraph } from '../materialx/graph.ts';
+import { resolveLamaLayerMode } from './surface-lower.ts';
 import type {
   NormalizedSurfaceInput,
   ResolvedSurface,
@@ -103,7 +104,7 @@ struct MxBsdfLobe {
   dispersion: f32,
   hairTintTRT: vec3f,
 };
-struct MxCoatLayer { weight: f32, color: vec3f, roughness: f32, ior: f32 };
+struct MxCoatLayer { weight: f32, color: vec3f, roughness: f32, ior: f32, mode: u32, topThickness: f32, sigmaA: vec3f };
 struct MxSheenLayer { weight: f32, color: vec3f, roughness: f32 };
 struct MxFuzzLayer { weight: f32, color: vec3f, roughness: f32 };
 struct MxThinFilmLayer { weight: f32, thickness: f32, ior: f32 };
@@ -165,7 +166,7 @@ interface FamilyWgsl {
   /** Extra `let mx_* = ...;` helper statements emitted before the assignments. */
   locals: string[];
   lobes: LobeWgsl[];
-  coat?: { weight: string; color: string; roughness: string; ior: string };
+  coat?: { weight: string; color: string; roughness: string; ior: string; mode?: string; topThickness?: string; sigmaA?: string };
   sheen?: { weight: string; color: string; roughness: string };
   fuzz?: { weight: string; color: string; roughness: string };
   thinFilm?: { weight: string; thickness: string; ior: string };
@@ -755,14 +756,21 @@ function lowerLamaClosureWgsl(
   if (kind === 'LamaLayer') {
     const base = child('materialBase');
     const top = scaleLamaClosureWgsl(child('materialTop'), clampExpr(ctx.s('topMix', 1)));
+    const layer = graph.nodes.get(nodeId)?.lamaLayer;
     const topReflection = top.lobes.find(lobe => lobe.kind === 'dielectric_reflection');
     const dielectricTop = topReflection !== undefined && top.lobes.every(lobe =>
       lobe.kind === 'dielectric_reflection' || lobe.kind === 'dielectric_transmission');
     if (topReflection && dielectricTop) {
+      const mode = resolveLamaLayerMode(layer?.mode, base.lobes);
+      const modeCode = mode === 'smooth_coating' ? '1u' : mode === 'rough_coating' ? '2u' : '0u';
+      const sigmaA = top.interior && top.interiorActive
+        ? `select(vec3f(0.0), ${top.interior.sigmaA}, ${top.interiorActive})`
+        : 'vec3f(0.0)';
       return {
         ...base,
         coat: { weight: topReflection.weight, color: topReflection.color,
-          roughness: topReflection.roughness ?? '0.0', ior: topReflection.ior ?? '1.5' },
+          roughness: topReflection.roughness ?? '0.0', ior: topReflection.ior ?? '1.5',
+          mode: modeCode, topThickness: staticFloat(layer?.topThickness), sigmaA },
         ...(top.thinFilm ? { thinFilm: top.thinFilm } : {}),
         ...(top.emission ? { emission: top.emission } : {}),
       };
@@ -943,7 +951,7 @@ function buildLamaSurfaceFn(
   const closureLocal = (name: string, value: LamaClosureWgsl): string[] => {
     const assigns = [`  ${name}.lobeCount = ${value.lobes.length}u;`, ...value.lobes.map((lobe, index) =>
       lobeAssign(index, lobe).replace('c.lobes[', `${name}.lobes[`))];
-    if (value.coat) assigns.push(`  ${name}.hasCoat = 1u;`, `  ${name}.coat = MxCoatLayer(${value.coat.weight}, ${value.coat.color}, ${value.coat.roughness}, ${value.coat.ior});`);
+    if (value.coat) assigns.push(`  ${name}.hasCoat = 1u;`, `  ${name}.coat = MxCoatLayer(${value.coat.weight}, ${value.coat.color}, ${value.coat.roughness}, ${value.coat.ior}, ${value.coat.mode ?? '0u'}, ${value.coat.topThickness ?? '0.0'}, ${value.coat.sigmaA ?? 'vec3f(0.0)'});`);
     if (value.sheen) assigns.push(`  ${name}.hasSheen = 1u;`, `  ${name}.sheen = MxSheenLayer(${value.sheen.weight}, ${value.sheen.color}, ${value.sheen.roughness});`);
     if (value.fuzz) assigns.push(`  ${name}.hasFuzz = 1u;`, `  ${name}.fuzz = MxFuzzLayer(${value.fuzz.weight}, ${value.fuzz.color}, ${value.fuzz.roughness});`);
     if (value.thinFilm) assigns.push(`  ${name}.hasThinFilm = 1u;`, `  ${name}.thinFilm = MxThinFilmLayer(${value.thinFilm.weight}, ${value.thinFilm.thickness}, ${value.thinFilm.ior});`);
@@ -1022,7 +1030,7 @@ function buildGenericSurfaceFn(
   const assigns = [`  c.lobeCount = ${lobes.length}u;`, ...lobes.map((lobe, index) => lobeAssign(index, lobe))];
   if (closure.coat) {
     const coat = closure.coat;
-    assigns.push(`  c.hasCoat = 1u;`, `  c.coat = MxCoatLayer(${staticFloat(coat.weight)}, ${staticColor(coat.color, [1, 1, 1])}, ${staticFloat(coat.roughness)}, ${staticFloat(coat.ior, 1.5)});`);
+    assigns.push(`  c.hasCoat = 1u;`, `  c.coat = MxCoatLayer(${staticFloat(coat.weight)}, ${staticColor(coat.color, [1, 1, 1])}, ${staticFloat(coat.roughness)}, ${staticFloat(coat.ior, 1.5)}, 0u, 0.0, vec3f(0.0));`);
   }
   if (closure.sheen) {
     const sheen = closure.sheen;
@@ -1144,7 +1152,7 @@ function buildSurfaceFn(
   if (surface.family === 'simple_hair') assigns.push('  c.hasShadingTangent = 1u;', '  c.shadingTangent = vary.tangent;');
   if (shadingNormal !== undefined) assigns.push('  c.hasShadingNormal = 1u;', `  c.shadingNormal = ${shadingNormal};`);
   lobes.forEach((lobe, i) => assigns.push(lobeAssign(i, lobe)));
-  if (fam.coat) assigns.push(`  c.hasCoat = 1u;`, `  c.coat = MxCoatLayer(${fam.coat.weight}, ${fam.coat.color}, ${fam.coat.roughness}, ${fam.coat.ior});`);
+  if (fam.coat) assigns.push(`  c.hasCoat = 1u;`, `  c.coat = MxCoatLayer(${fam.coat.weight}, ${fam.coat.color}, ${fam.coat.roughness}, ${fam.coat.ior}, 0u, 0.0, vec3f(0.0));`);
   if (fam.sheen) assigns.push(`  c.hasSheen = 1u;`, `  c.sheen = MxSheenLayer(${fam.sheen.weight}, ${fam.sheen.color}, ${fam.sheen.roughness});`);
   if (fam.fuzz) assigns.push(`  c.hasFuzz = 1u;`, `  c.fuzz = MxFuzzLayer(${fam.fuzz.weight}, ${fam.fuzz.color}, ${fam.fuzz.roughness});`);
   if (fam.thinFilm) assigns.push(`  c.hasThinFilm = 1u;`, `  c.thinFilm = MxThinFilmLayer(${fam.thinFilm.weight}, ${fam.thinFilm.thickness}, ${fam.thinFilm.ior});`);

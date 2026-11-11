@@ -74,6 +74,24 @@ describe('T057b material-record codec', () => {
     expect(back.lobes[0]?.dispersion).toBeCloseTo(0.35);
     expect(materialClosureReaderWgsl()).toContain('lobe.dispersion = materials[base + 23u]');
   });
+  it('round-trips LamaLayer mode, top thickness and absorption in reserved GPU record slots', () => {
+    const closure: LayeredClosure = {
+      opacity: 1, lobes: [],
+      coat: { weight: 0.8, color: [1, 1, 1], roughness: 0.2, ior: 1.4,
+        mode: 'rough_coating', topThickness: 2, absorption: [0.1, 0.2, 0.3] },
+    };
+    const back = unpackLayeredMaterial(packLayeredMaterial(closure));
+    expect(back.coat?.mode).toBe('rough_coating');
+    expect(back.coat?.topThickness).toBe(2);
+    expect(back.coat?.weight).toBeCloseTo(0.8, 6);
+    expect(back.coat?.ior).toBeCloseTo(1.4, 6);
+    expect(back.coat?.roughness).toBeCloseTo(0.2, 6);
+    for (let channel = 0; channel < 3; channel++) {
+      expect(back.coat?.absorption?.[channel]).toBeCloseTo(closure.coat!.absorption![channel]!, 6);
+    }
+    expect(materialClosureReaderWgsl()).toContain('materials[base + 41u]');
+    expect(materialClosureReaderWgsl()).toContain('materials[base + 45u]');
+  });
   it('packs a record of the documented fixed stride', () => {
     const closure = canonicalSurfaceToLayered({
       baseColor: [0.8, 0.2, 0.1],

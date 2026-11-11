@@ -13,6 +13,7 @@ export interface MxObject {
 export interface MxElement extends MxObject {
   getName(): string;
   getNamePath(): string;
+  getAttribute?(name: string): string;
   getCategory?(): string;
   validate(): boolean;
 }

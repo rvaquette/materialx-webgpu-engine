@@ -743,6 +743,32 @@ fn mx_coat_attenuation(coatW: f32, ior: f32, color: vec3f, wo: vec3f, wi: vec3f)
   let absorb = vec3f(1.0 - coatW) + coatW * color;
   return vec3f(att) * absorb;
 }
+fn mx_coat_enter(v: vec3f, ior: f32) -> vec3f {
+  let side = select(-1.0, 1.0, v.z >= 0.0);
+  let transmitted = refract(-v, vec3f(0.0, 0.0, side), 1.0 / max(ior, 1.0e-4));
+  return -transmitted;
+}
+fn mx_coat_exit(v: vec3f, ior: f32) -> vec3f {
+  let side = select(1.0, -1.0, v.z >= 0.0);
+  return refract(v, vec3f(0.0, 0.0, side), max(ior, 1.0e-4));
+}
+fn mx_coat_base_closure(c: LayeredClosure) -> LayeredClosure {
+  var base = c;
+  if (c.coat.mode == 2u) {
+    for (var i = 0u; i < base.lobeCount; i++) {
+      base.lobes[i].roughness = max(base.lobes[i].roughness, c.coat.roughness);
+      if (base.lobes[i].kind == MX_LOBE_DIELECTRIC_REFLECTION || base.lobes[i].kind == MX_LOBE_DIELECTRIC_TRANSMISSION) {
+        base.lobes[i].ior = base.lobes[i].ior / max(c.coat.ior, 1.0e-4);
+      }
+    }
+  }
+  return base;
+}
+fn mx_coat_absorption(c: LayeredClosure, wo: vec3f, wi: vec3f) -> vec3f {
+  if (c.coat.topThickness <= 0.0) { return vec3f(1.0); }
+  let distance = c.coat.topThickness * (1.0 / max(abs(wo.z), 0.05) + 1.0 / max(abs(wi.z), 0.05));
+  return exp(-c.coat.sigmaA * distance);
+}
 
 // --- dielectric transmission (BTDF): refraction + thin-walled (T056e) ---------
 // Rough dielectric transmission from the Walter 2007 microfacet BTDF, mirroring
@@ -1051,14 +1077,22 @@ fn mx_closure_coat_ctx(c: LayeredClosure, wo: vec3f) -> MxLobeCtx {
   return MxLobeCtx(wo, vec3f(0.0), c.coat.roughness, c.coat.ior, 0.0, 0.0, 0.0);
 }
 fn mx_closure_eval_base(c: LayeredClosure, wo: vec3f, wi: vec3f) -> MxBsdfEval {
-  let base = mx_closure_base_eval(c, wo, wi);
-  if (c.hasCoat == 0u || c.coat.weight <= 0.0) { return base; }
+  if (c.hasCoat == 0u || c.coat.weight <= 0.0) { return mx_closure_base_eval(c, wo, wi); }
   let coatW = clamp(c.coat.weight, 0.0, 1.0);
   let cc = mx_dielectric_reflection_eval(mx_closure_coat_ctx(c, wo), wi);
-  let att = mx_coat_attenuation(coatW, c.coat.ior, c.coat.color, wo, wi);
+  var baseWo = wo;
+  var baseWi = wi;
+  var base = mx_coat_base_closure(c);
+  if (c.coat.mode != 0u) {
+    baseWo = mx_coat_enter(wo, c.coat.ior);
+    baseWi = mx_coat_enter(wi, c.coat.ior);
+  }
+  let baseEval = mx_closure_base_eval(base, baseWo, baseWi);
+  let jacobian = select(1.0, abs(wi.z) / max(abs(baseWi.z), 1.0e-6), c.coat.mode != 0u);
+  let att = mx_coat_attenuation(coatW, c.coat.ior, c.coat.color, wo, wi) * mx_coat_absorption(c, baseWo, baseWi);
   let pCoat = min(coatW * mx_coat_fresnel(c.coat.ior, wo.z), 0.95);
-  let value = coatW * cc.value + att * base.value;
-  let pdf = pCoat * cc.pdf + (1.0 - pCoat) * base.pdf;
+  let value = coatW * cc.value + att * baseEval.value;
+  let pdf = pCoat * cc.pdf + (1.0 - pCoat) * baseEval.pdf * jacobian;
   return MxBsdfEval(value, pdf);
 }
 ${CLOSURE_FUZZ_EVAL}
@@ -1185,23 +1219,31 @@ fn mx_closure_specular_eval(c: LayeredClosure, wo: vec3f, wi: vec3f) -> MxBsdfEv
   }
   var value = vec3f(0.0);
   var pdf = 0.0;
+  var baseWo = wo;
+  var baseWi = wi;
+  let baseClosure = mx_coat_base_closure(c);
+  if (c.hasCoat != 0u && c.coat.mode != 0u) {
+    baseWo = mx_coat_enter(wo, c.coat.ior);
+    baseWi = mx_coat_enter(wi, c.coat.ior);
+  }
   if (specTotal > 0.0) {
     for (var i = 0u; i < c.lobeCount; i = i + 1u) {
-      let lobe = c.lobes[i];
+      let lobe = baseClosure.lobes[i];
       if (lobe.weight <= 0.0) { continue; }
       if (!(lobe.kind == MX_LOBE_DIELECTRIC_REFLECTION || lobe.kind == MX_LOBE_CONDUCTOR
           || lobe.kind == MX_LOBE_GENERALIZED_SCHLICK || lobe.kind == MX_LOBE_DIELECTRIC_TRANSMISSION
           || lobe.kind == MX_LOBE_CHIANG_HAIR)) { continue; }
-      let r = mx_closure_lobe_eval(lobe, c, wo, wi);
+      let r = mx_closure_lobe_eval(lobe, baseClosure, baseWo, baseWi);
       value = value + r.value * lobe.weight;
       pdf = pdf + (lobe.weight / specTotal) * r.pdf;
     }
   }
-  var base = MxBsdfEval(value, pdf);
+  let jacobian = select(1.0, abs(wi.z) / max(abs(baseWi.z), 1.0e-6), c.hasCoat != 0u && c.coat.mode != 0u);
+  var base = MxBsdfEval(value, pdf * jacobian);
   if (c.hasCoat != 0u && c.coat.weight > 0.0) {
     let coatW = clamp(c.coat.weight, 0.0, 1.0);
     let cc = mx_dielectric_reflection_eval(mx_closure_coat_ctx(c, wo), wi);
-    let att = mx_coat_attenuation(coatW, c.coat.ior, c.coat.color, wo, wi);
+    let att = mx_coat_attenuation(coatW, c.coat.ior, c.coat.color, wo, wi) * mx_coat_absorption(c, baseWo, baseWi);
     let pCoat = min(coatW * mx_coat_fresnel(c.coat.ior, wo.z), 0.95);
     base = MxBsdfEval(
       coatW * cc.value + att * base.value,
@@ -1224,9 +1266,12 @@ fn mx_closure_sample_base(c: LayeredClosure, wo: vec3f, u: vec3f) -> MxBsdfSampl
     wi = s.wi;
   } else {
     let ru = vec3f(u.x, u.y, (u.z - pCoat) / max(1.0 - pCoat, 1.0e-6));
-    let s = mx_closure_base_direction(c, wo, ru);
+    let base = mx_coat_base_closure(c);
+    let baseWo = select(wo, mx_coat_enter(wo, c.coat.ior), c.coat.mode != 0u);
+    let s = mx_closure_base_direction(base, baseWo, ru);
     if (!s.valid) { return MxBsdfSample(vec3f(0.0), vec3f(0.0), 0.0, false); }
-    wi = s.wi;
+    wi = select(s.wi, mx_coat_exit(s.wi, c.coat.ior), c.coat.mode != 0u);
+    if (c.coat.mode != 0u && dot(wi, wi) < 0.5) { return MxBsdfSample(vec3f(0.0), vec3f(0.0), 0.0, false); }
   }
   let e = mx_closure_eval_base(c, wo, wi);
   if (e.pdf <= 0.0) { return MxBsdfSample(vec3f(0.0), vec3f(0.0), 0.0, false); }

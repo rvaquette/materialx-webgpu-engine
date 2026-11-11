@@ -232,6 +232,23 @@ describe('emitLayeredSurface (T055d)', () => {
     expect(module.features?.coat).toBe(true);
   });
 
+  it('emits the selected LamaLayer coating mode and top-medium absorption', () => {
+    const graph = surfaceGraph('surface', [conn('bsdf', 'BSDF', 'layer')], [
+      upstream('layer', 'LamaLayer', 'BSDF', [
+        conn('materialTop', 'BSDF', 'glass'), conn('materialBase', 'BSDF', 'base'), value('topMix', 'float', '1'),
+      ]),
+      upstream('glass', 'LamaDielectric', 'BSDF', [
+        value('fresnelMode', 'integer', '1'), value('IOR', 'float', '1.5'), value('roughness', 'float', '0.2'),
+        value('absorptionColor', 'color3', '0.8, 0.6, 0.4'), value('absorptionRadius', 'float', '2'),
+      ]),
+      upstream('base', 'LamaDiffuse', 'BSDF', [value('color', 'color3', '0.3, 0.2, 0.1')]),
+    ]);
+    graph.nodes.get('layer')!.lamaLayer = { mode: 'rough_coating', topThickness: 2 };
+    const module = emit(graph);
+    expect(module.code).toContain('MxCoatLayer(');
+    expect(module.code).toContain(', 2u, 2.0, select(vec3f(0.0),');
+  });
+
   it('selects LamaSurface front/back closures and applies its presence mask', () => {
     const graph = surfaceGraph('surface', [conn('bsdf', 'BSDF', 'front')], [
       upstream('front', 'LamaDiffuse', 'BSDF', [value('color', 'color3', '0.8, 0.1, 0.1')]),

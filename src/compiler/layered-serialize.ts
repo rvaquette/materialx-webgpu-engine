@@ -57,6 +57,9 @@ export interface SerializedCoatLayer {
   color: Rgb3;
   roughness: number;
   ior: number;
+  mode?: 'fresnel_blend' | 'smooth_coating' | 'rough_coating';
+  topThickness?: number;
+  absorption?: Rgb3;
 }
 
 export interface SerializedSheenLayer {
@@ -125,6 +128,9 @@ export function serializeLayeredClosure(closure: LayeredClosure, decimals = 6): 
       color: rgb(closure.coat.color, decimals),
       roughness: roundTo(closure.coat.roughness, decimals),
       ior: roundTo(closure.coat.ior, decimals),
+      ...(closure.coat.mode !== undefined ? { mode: closure.coat.mode } : {}),
+      ...(closure.coat.topThickness !== undefined ? { topThickness: roundTo(closure.coat.topThickness, decimals) } : {}),
+      ...(closure.coat.absorption ? { absorption: rgb(closure.coat.absorption, decimals) } : {}),
     };
   }
   if (closure.sheen) {
@@ -181,7 +187,12 @@ function deserializeLobe(l: SerializedBsdfLobe): LayeredBsdfLobe {
 /** Rebuild a LayeredClosure from its serialized JSON form. */
 export function deserializeLayeredClosure(data: SerializedLayeredClosure): LayeredClosure {
   const out: LayeredClosure = { lobes: data.lobes.map(deserializeLobe), opacity: data.opacity };
-  if (data.coat) out.coat = { weight: data.coat.weight, color: tuple(data.coat.color), roughness: data.coat.roughness, ior: data.coat.ior };
+  if (data.coat) out.coat = {
+    weight: data.coat.weight, color: tuple(data.coat.color), roughness: data.coat.roughness, ior: data.coat.ior,
+    ...(data.coat.mode !== undefined ? { mode: data.coat.mode } : {}),
+    ...(data.coat.topThickness !== undefined ? { topThickness: data.coat.topThickness } : {}),
+    ...(data.coat.absorption ? { absorption: tuple(data.coat.absorption) } : {}),
+  };
   if (data.sheen) out.sheen = { weight: data.sheen.weight, color: tuple(data.sheen.color), roughness: data.sheen.roughness };
   if (data.fuzz) out.fuzz = { weight: data.fuzz.weight, color: tuple(data.fuzz.color), roughness: data.fuzz.roughness };
   if (data.thinFilm) out.thinFilm = { weight: data.thinFilm.weight, thickness: data.thinFilm.thickness, ior: data.thinFilm.ior };

@@ -83,6 +83,31 @@ describe('dielectric coat layer (T056d)', () => {
     }
   });
 
+  it('distinguishes Fresnel Blend, Smooth Coating and Rough Coating', () => {
+    const layered = (mode?: 'fresnel_blend' | 'smooth_coating' | 'rough_coating'): LayeredClosure => ({
+      lobes: [
+        { kind: 'burley_diffuse', weight: 0.7, color: [0.6, 0.4, 0.2], roughness: 0.02 },
+        { kind: 'dielectric_reflection', weight: 0.3, color: [1, 1, 1], roughness: 0.02, ior: 1.5 },
+      ],
+      coat: { weight: 1, color: [1, 1, 1], roughness: 0.3, ior: 1.33, ...(mode ? { mode } : {}) },
+      opacity: 1,
+    });
+    const legacy = layeredSurfaceBsdf(layered());
+    const fresnel = layeredSurfaceBsdf(layered('fresnel_blend'));
+    const smooth = layeredSurfaceBsdf(layered('smooth_coating'));
+    const rough = layeredSurfaceBsdf(layered('rough_coating'));
+    for (const wi of DIRS) {
+      const old = legacy.eval(WO, wi);
+      const blend = fresnel.eval(WO, wi);
+      const refracted = smooth.eval(WO, wi);
+      const scattered = rough.eval(WO, wi);
+      expect(blend.value).toEqual(old.value);
+      expect(blend.pdf).toBeCloseTo(old.pdf, 12);
+      expect(refracted.value).not.toEqual(blend.value);
+      expect(scattered.value).not.toEqual(refracted.value);
+    }
+  });
+
   it('layers over the base: changes the response and darkens the diffuse base', () => {
     const base = layeredSurfaceBsdf(baseClosure());
     const coated = layeredSurfaceBsdf({

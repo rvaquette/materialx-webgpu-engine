@@ -346,5 +346,14 @@ unbound surface inputs only) is unchanged. Connections and interface bindings
 cannot be made editable by this attribute. The legacy `engine_editable` spelling
 is still accepted when loading existing documents.
 
+`LamaLayer` accepts `engine:layerMode` with `fresnel_blend`, `smooth_coating`,
+`rough_coating`, or `auto`, plus non-negative `engine:topThickness` in scene units.
+Fresnel Blend is the default and matches MaterialX's standard layer behavior.
+Smooth and rough coating refract base-layer directions; rough coating also clamps
+base roughness and adjusts dielectric IOR relative to the top layer. Positive top
+thickness applies Beer-Lambert absorption from the top `LamaDielectric`. These are
+engine extensions, and the coating models are renderer approximations rather than
+a byte-for-byte RenderMan implementation.
+
 Open a scene with
 `usd-image-harness.html?entry=/scenes/pathtracer/lama/lama_layer_gold_ior.usda&backend=pathtracing&res=512&spp=64`.

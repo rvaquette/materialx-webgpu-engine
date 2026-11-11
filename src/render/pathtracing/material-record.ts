@@ -214,6 +214,10 @@ export function packLayeredMaterial(closure: LayeredClosure, medium?: VolumeMedi
     out[13] = c.color[2];
     out[14] = c.roughness;
     out[15] = c.ior;
+    out[41] = c.mode === 'smooth_coating' ? 1 : c.mode === 'rough_coating' ? 2 : 0;
+    out[42] = c.topThickness ?? 0;
+    out.set(c.absorption ?? [0, 0, 0], 43);
+    out[46] = c.mode !== undefined ? 1 : 0;
   }
   if (closure.sheen !== undefined) {
     const s = closure.sheen;
@@ -284,6 +288,11 @@ export function unpackLayeredMaterial(
       color: [rd(buf, base + 11), rd(buf, base + 12), rd(buf, base + 13)],
       roughness: rd(buf, base + 14),
       ior: rd(buf, base + 15),
+      ...(rd(buf, base + 46) !== 0 ? { mode: rd(buf, base + 41) === 1 ? 'smooth_coating' as const
+        : rd(buf, base + 41) === 2 ? 'rough_coating' as const : 'fresnel_blend' as const } : {}),
+      ...(rd(buf, base + 42) !== 0 ? { topThickness: rd(buf, base + 42) } : {}),
+      ...(rd(buf, base + 43) !== 0 || rd(buf, base + 44) !== 0 || rd(buf, base + 45) !== 0
+        ? { absorption: [rd(buf, base + 43), rd(buf, base + 44), rd(buf, base + 45)] as Rgb } : {}),
     };
   }
   if (Math.round(rd(buf, base + 3)) !== 0) {
@@ -432,7 +441,7 @@ fn mx_material_closure(matIndex : u32) -> LayeredClosure {
   c.hasThinFilm = u32(round(materials[base + 5u]));
   c.hasEmission = u32(round(materials[base + 6u]));
   c.emission = vec3f(materials[base + 7u], materials[base + 8u], materials[base + 9u]);
-  c.coat = MxCoatLayer(materials[base + 10u], vec3f(materials[base + 11u], materials[base + 12u], materials[base + 13u]), materials[base + 14u], materials[base + 15u]);
+  c.coat = MxCoatLayer(materials[base + 10u], vec3f(materials[base + 11u], materials[base + 12u], materials[base + 13u]), materials[base + 14u], materials[base + 15u], u32(round(materials[base + 41u])), materials[base + 42u], vec3f(materials[base + 43u], materials[base + 44u], materials[base + 45u]));
   c.sheen = MxSheenLayer(materials[base + 16u], vec3f(materials[base + 17u], materials[base + 18u], materials[base + 19u]), materials[base + 20u]);
   c.fuzz = MxFuzzLayer(materials[base + 21u], vec3f(materials[base + 22u], materials[base + 23u], materials[base + 24u]), materials[base + 25u]);
   c.thinFilm = MxThinFilmLayer(materials[base + 26u], materials[base + 27u], materials[base + 28u]);

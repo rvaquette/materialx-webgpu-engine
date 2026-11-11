@@ -12,13 +12,22 @@ import { lamaSssTransport, lamaSssSubset } from './lama-sss.ts';
 // this lowering is a strict superset of the pre-P10 surface (non-regression).
 
 import type { CoatLayer, FuzzLayer, LayeredBsdfLobe, LayeredClosure, Rgb, SheenLayer, ThinFilmLayer } from './ir.ts';
-import type { ResolvedGraph } from '../materialx/graph.ts';
+import type { LamaLayerMode, ResolvedGraph } from '../materialx/graph.ts';
 import type { NormalizedSurfaceInput, ResolvedSurface } from '../materialx/surface-graph.ts';
 import { hairAbsorptionFromColor, hairAbsorptionFromMelanin } from '../render/bsdf/hair.ts';
 
 type Inputs = ReadonlyMap<string, NormalizedSurfaceInput>;
 
 const clamp01 = (x: number): number => (x < 0 ? 0 : x > 1 ? 1 : x);
+
+const DIFFUSE_LOBES = new Set<LayeredBsdfLobe['kind']>([
+  'oren_nayar_diffuse', 'burley_diffuse', 'translucent', 'subsurface',
+]);
+
+export function resolveLamaLayerMode(mode: LamaLayerMode | undefined, base: readonly LayeredBsdfLobe[]): NonNullable<CoatLayer['mode']> {
+  if (mode === 'auto') return base.length === 0 || base.every(lobe => DIFFUSE_LOBES.has(lobe.kind)) ? 'fresnel_blend' : 'rough_coating';
+  return mode ?? 'fresnel_blend';
+}
 
 /** Literal numbers backing an input, or undefined for connection/geomprop sources. */
 function read(input: NormalizedSurfaceInput | undefined): readonly number[] | undefined {
@@ -522,12 +531,22 @@ function lowerLamaBsdf(graph: ResolvedGraph, nodeId: string, frame?: LamaShading
       const base = child('materialBase');
       const top = scaleLamaClosure(child('materialTop'), clamp01(nodeScalar(graph, nodeId, 'topMix', 1)));
       const reflection = top.lobes.find(lobe => lobe.kind === 'dielectric_reflection');
+      const layer = graph.nodes.get(nodeId)?.lamaLayer;
       const topCoat = reflection && top.lobes.every(lobe =>
         lobe.kind === 'dielectric_reflection' || lobe.kind === 'dielectric_transmission') ? {
         weight: reflection.weight,
         color: reflection.color,
         roughness: reflection.roughness ?? 0,
         ior: reflection.ior ?? 1.5,
+        ...(resolveLamaLayerMode(layer?.mode, base.lobes) !== 'fresnel_blend'
+          ? { mode: resolveLamaLayerMode(layer?.mode, base.lobes) } : {}),
+        ...(layer && layer.topThickness > 0 ? { topThickness: layer.topThickness } : {}),
+        ...(() => {
+          const transmission = top.lobes.find(lobe => lobe.kind === 'dielectric_transmission');
+          if (!transmission?.attenuationColor || !transmission.attenuationDistance || transmission.attenuationDistance <= 0) return {};
+          const absorption = transmission.attenuationColor.map(value => -Math.log(Math.max(value, 1e-6)) / transmission.attenuationDistance) as unknown as Rgb;
+          return absorption.some(value => value > 0) ? { absorption } : {};
+        })(),
       } : undefined;
       const layers = addLamaClosures(base, { ...top, lobes: topCoat ? [] : top.lobes });
       return { ...layers, ...(topCoat ? { coat: topCoat } : {}) };

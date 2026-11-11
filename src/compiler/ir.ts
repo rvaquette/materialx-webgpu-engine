@@ -369,6 +369,9 @@ export interface CoatLayer {
   color: Rgb;
   roughness: number;
   ior: number;
+  mode?: 'fresnel_blend' | 'smooth_coating' | 'rough_coating';
+  topThickness?: number;
+  absorption?: Rgb;
 }
 
 /** Charlie-sheen retro-reflective layer over the base stack. */
