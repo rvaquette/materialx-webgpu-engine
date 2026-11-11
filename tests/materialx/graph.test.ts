@@ -18,6 +18,7 @@ interface FakeInputSpec {
   unit?: string;
   unitType?: string;
   editable?: string;
+  legacyEditable?: string;
   uiMin?: string;
   uiMax?: string;
 }
@@ -35,7 +36,8 @@ function fakeInput(spec: FakeInputSpec): MxInput {
     getColorSpace: () => spec.colorSpace ?? '',
     getUnit: () => spec.unit ?? '',
     getUnitType: () => spec.unitType ?? '',
-    getAttribute: name => name === 'engine_editable' ? spec.editable ?? ''
+    getAttribute: name => name === 'engine:editable' ? spec.editable ?? ''
+      : name === 'engine_editable' ? spec.legacyEditable ?? ''
       : name === 'uimin' ? spec.uiMin ?? '' : name === 'uimax' ? spec.uiMax ?? '' : '',
     validate: () => true,
     delete: () => {},
@@ -114,7 +116,11 @@ describe('resolveGraph', () => {
     expect(resolve('true').editable).toBe(true);
     expect(resolve('false').editable).toBe(false);
     expect(resolve().editable).toBeUndefined();
-    expect(() => resolve('yes')).toThrow('Invalid engine_editable');
+    expect(() => resolve('yes')).toThrow('Invalid engine:editable');
+    const legacy = fakeInput({ name: 'IOR', type: 'float', value: '1.5', legacyEditable: 'true' });
+    const legacyNode = fakeNode({ name: 'coat', category: 'LamaDielectric', type: 'BSDF', inputs: [legacy] });
+    expect(resolveGraph({ roots: [{ name: 'bsdf', type: 'BSDF', node: legacyNode }], onDiagnostic: () => {} })
+      .nodes.get('/mat/coat')!.inputs[0]!.editable).toBe(true);
   });
   it('preserves and validates MaterialX UI numeric limits', () => {
     const resolve = (uiMin?: string, uiMax?: string) => {

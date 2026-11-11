@@ -198,9 +198,9 @@ function resolveInput(input: MxInput): { resolved: ResolvedInput; connected: MxN
   const colorSpace = nonEmpty(input.getColorSpace?.());
   const unit = nonEmpty(input.getUnit?.());
   const unitType = nonEmpty(input.getUnitType?.());
-  const editable = nonEmpty(input.getAttribute?.('engine_editable'));
+  const editable = nonEmpty(input.getAttribute?.('engine:editable')) ?? nonEmpty(input.getAttribute?.('engine_editable'));
   if (editable !== undefined && editable !== 'true' && editable !== 'false') {
-    throw new Error(`Invalid engine_editable at ${provenance.namePath}: expected true or false.`);
+    throw new Error(`Invalid engine:editable at ${provenance.namePath}: expected true or false.`);
   }
   const min = parseUiLimit(input.getAttribute?.('uimin'), type, 'uimin', provenance.namePath);
   const max = parseUiLimit(input.getAttribute?.('uimax'), type, 'uimax', provenance.namePath);

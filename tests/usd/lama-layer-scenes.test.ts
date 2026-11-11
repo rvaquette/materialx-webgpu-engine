@@ -45,7 +45,7 @@ describe('LamaLayer gold IOR scenes', () => {
 
     const materialDocument = await readFile(join(SCENE_DIR, 'lama_layer_gold.mtlx'), 'utf8');
     const dielectric = materialDocument.match(/<LamaDielectric name="dielectric"[^>]*>([\s\S]*?)<\/LamaDielectric>/)?.[1];
-    expect(dielectric).toContain('<input name="IOR" type="float" value="1" uimin="1" uimax="3" engine_editable="true" />');
+    expect(dielectric).toContain('<input name="IOR" type="float" value="1" uimin="1" uimax="3" engine:editable="true" />');
     expect(materialDocument.match(/<LamaDielectric\b/g)).toHaveLength(1);
     expect(materialDocument.match(/<LamaLayer\b/g)).toHaveLength(1);
     expect(materialDocument.match(/<LamaSurface\b/g)).toHaveLength(1);

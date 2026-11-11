@@ -97,6 +97,33 @@ describe.skipIf(!existsSync(coreFile) || !existsSync(libraryRoot))('installed Ma
     }
   }, 30000);
 
+  it('reads namespaced engine extension attributes from MaterialX inputs', async () => {
+    const module = await import(/* @vite-ignore */ pathToFileURL(coreFile).href) as { default: MaterialXModuleFactory };
+    const core = new MaterialXCore(await module.default());
+    const libraries = new MaterialXLibraries(core);
+    await libraries.load({
+      sources: defaultLibrarySources(libraryRoot),
+      fetchText: async path => readFileSync(path, 'utf8'),
+    });
+    const diagnostics: Diagnostic[] = [];
+    const assetPath = join('scenes', 'pathtracer', 'lama', 'lama_layer_gold.mtlx');
+    const text = readFileSync(assetPath, 'utf8');
+    const documents = await loadMaterialXDocuments({
+      core, libraries, texts: new Map([[assetPath, text]]), sink: d => diagnostics.push(d),
+    });
+    try {
+      const build = await createGraphMaterialCompiler({ documents, sink: d => diagnostics.push(d) }).compile({
+        assetPath, materialName: 'gold_ior', referencedPrimPath: '/MaterialX/Materials/gold_ior', boundPrims: [],
+      });
+      const dielectric = [...(build?.graph?.nodes.values() ?? [])].find(node => node.category === 'LamaDielectric');
+      expect(dielectric?.inputs.find(input => input.name === 'IOR')).toMatchObject({ editable: true, min: [1], max: [3] });
+      expect(diagnostics).toEqual([]);
+    } finally {
+      documents.delete();
+      libraries.delete();
+    }
+  }, 30000);
+
   it.skipIf(!existsSync(join(playgroundRoot, 'materials')))('compiles all playground documents without material warnings', async () => {
     const module = await import(/* @vite-ignore */ pathToFileURL(coreFile).href) as { default: MaterialXModuleFactory };
     const core = new MaterialXCore(await module.default());

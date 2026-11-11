@@ -337,12 +337,14 @@ In the viewer, select **Teapot**, then **Parametres du materiau** to edit only
 the dielectric IOR. Its 1.0-3.0 range is defined by `uimin`/`uimax`. Edits update
 the material uniform without recompiling the shader and restart path accumulation;
 reset restores the selected scene's initial IOR. Ground and stand controls are hidden.
-The engine-specific MaterialX input attribute `engine_editable="true"` opts an
-input into the editor; once any `engine_editable` attribute is authored in a
-material's reachable graph, all unmarked inputs are hidden. `false` alone hides
-all controls for that material. Without this metadata, the usual editor behavior
-(explicit unbound surface inputs only) is unchanged. Connections and interface
-bindings cannot be made editable by this attribute.
+The engine extension namespace is `urn:materialx-webgpu-engine:extensions` with
+the `engine` prefix. Its input attribute `engine:editable="true"` opts an input
+into the editor; once any `engine:editable` attribute is authored in a material's
+reachable graph, all unmarked inputs are hidden. `false` alone hides all controls
+for that material. Without this metadata, the usual editor behavior (explicit
+unbound surface inputs only) is unchanged. Connections and interface bindings
+cannot be made editable by this attribute. The legacy `engine_editable` spelling
+is still accepted when loading existing documents.
 
 Open a scene with
 `usd-image-harness.html?entry=/scenes/pathtracer/lama/lama_layer_gold_ior.usda&backend=pathtracing&res=512&spp=64`.
