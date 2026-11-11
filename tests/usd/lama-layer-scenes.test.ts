@@ -7,6 +7,12 @@ import { importLights } from '../../src/usd/lights.ts';
 import { packAnalyticLights } from '../../src/render/pathtracing/analytic-lights.ts';
 
 const SCENE_DIR = resolve(fileURLToPath(new URL('.', import.meta.url)), '../../scenes/pathtracer/lama');
+const MODES = [
+  { mode: 'fresnel_blend', scene: 'lama_layer_gold_fresnel_blend.usda', material: 'gold_fresnel_blend' },
+  { mode: 'smooth_coating', scene: 'lama_layer_gold_smooth_coating.usda', material: 'gold_smooth_coating' },
+  { mode: 'rough_coating', scene: 'lama_layer_gold_rough_coating.usda', material: 'gold_rough_coating' },
+  { mode: 'auto', scene: 'lama_layer_gold_auto.usda', material: 'gold_auto' },
+] as const;
 const reader: UsdLayerReader = {
   async read(uri) {
     return readFile(resolve(SCENE_DIR, uri), 'utf8');
@@ -14,15 +20,15 @@ const reader: UsdLayerReader = {
 };
 
 describe('LamaLayer gold IOR scenes', () => {
-  it('imports the editable IOR scene and resolves its material references', async () => {
-    const scene = await importUsdStage(join(SCENE_DIR, 'lama_layer_gold_ior.usda'), { reader });
+  it.each(MODES)('imports the $mode teapot scene and resolves its material reference', async ({ scene: sceneFile, material, mode }) => {
+    const scene = await importUsdStage(join(SCENE_DIR, sceneFile), { reader });
     const layeredMaterial = scene.materials.find((material) => material.primPath === '/World/Looks/layeredGold');
 
     expect(scene.stage.defaultPrim).toBe('World');
     expect(scene.prims.has('/World/Geometry/Teapot')).toBe(true);
     expect(scene.prims.has('/World/Geometry/Stand')).toBe(true);
-    expect(layeredMaterial?.assetPath).toBe('./lama_layer_gold.mtlx');
-    expect(layeredMaterial?.referencedPrimPath).toBe('/MaterialX/Materials/gold_ior');
+    expect(layeredMaterial?.assetPath).toBe('./lama_layer_gold_modes.mtlx');
+    expect(layeredMaterial?.referencedPrimPath).toBe(`/MaterialX/Materials/${material}`);
 
     const lights = importLights(scene);
     const key = lights.find((light) => light.path === '/World/Lights/Key');
@@ -43,13 +49,14 @@ describe('LamaLayer gold IOR scenes', () => {
     expect(packed[17]).toBe(0);
     expect(packed[16]! * -packed[0]! + packed[18]! * -packed[2]!).toBeGreaterThan(0);
 
-    const materialDocument = await readFile(join(SCENE_DIR, 'lama_layer_gold.mtlx'), 'utf8');
+    const materialDocument = await readFile(join(SCENE_DIR, 'lama_layer_gold_modes.mtlx'), 'utf8');
     const dielectric = materialDocument.match(/<LamaDielectric name="dielectric"[^>]*>([\s\S]*?)<\/LamaDielectric>/)?.[1];
-    expect(dielectric).toContain('<input name="IOR" type="float" value="1" uimin="1" uimax="3" engine:editable="true" />');
+    expect(dielectric).toContain('<input name="IOR" type="float" value="1.5" uimin="1" uimax="3" engine:editable="true" />');
     expect(materialDocument.match(/<LamaDielectric\b/g)).toHaveLength(1);
-    expect(materialDocument.match(/<LamaLayer\b/g)).toHaveLength(1);
-    expect(materialDocument.match(/<LamaSurface\b/g)).toHaveLength(1);
-    expect(materialDocument).toContain('<LamaSurface name="gold_ior" type="material">');
+    expect(materialDocument.match(/<LamaLayer\b/g)).toHaveLength(4);
+    expect(materialDocument.match(/<LamaSurface\b/g)).toHaveLength(4);
+    expect(materialDocument).toContain(`<LamaLayer name="layer_${mode}" type="BSDF" engine:layerMode="${mode}" engine:topThickness="0">`);
+    expect(materialDocument).toContain(`<LamaSurface name="${material}" type="material">`);
     const conductor = materialDocument.match(/<LamaConductor name="gold_base"[^>]*>([\s\S]*?)<\/LamaConductor>/)?.[1];
     expect(conductor).toContain('<input name="fresnelMode" type="integer" value="1" />');
     expect(conductor).toContain('<input name="roughness" type="float" value="0.22" />');

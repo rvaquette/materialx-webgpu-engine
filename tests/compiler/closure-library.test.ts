@@ -52,7 +52,7 @@ describe('closure library prelude (T056a)', () => {
     const coated = CLOSURE_LIBRARY_PRELUDE.match(/fn mx_closure_sample_base[\s\S]*?\n}/)?.[0];
     expect(direction).toContain('mx_closure_lobe_sample');
     expect(direction).not.toContain('mx_closure_base_eval');
-    expect(coated).toContain('mx_closure_base_direction(c, wo, ru)');
+    expect(coated).toContain('mx_closure_base_direction(base, baseWo, ru)');
     expect(coated).not.toContain('mx_closure_base_sample(c, wo, ru)');
     expect(coated?.match(/let e = mx_closure_eval_base/g)).toHaveLength(1);
   });
@@ -140,7 +140,7 @@ describe('closure library prelude (T056a)', () => {
     expect(CLOSURE_LIBRARY_PRELUDE).toContain('fn mx_closure_pdf(c: LayeredClosure, wo: vec3f, wi: vec3f) -> f32');
     expect(CLOSURE_LIBRARY_PRELUDE).toContain('fn mx_closure_sample(c: LayeredClosure, wo: vec3f, u: vec3f) -> MxBsdfSample');
     expect(CLOSURE_LIBRARY_PRELUDE).toContain('pdf = pdf + (lobe.weight / total) * r.pdf;');
-    expect(CLOSURE_LIBRARY_PRELUDE).toContain('let value = coatW * cc.value + att * base.value;');
+    expect(CLOSURE_LIBRARY_PRELUDE).toContain('let value = coatW * cc.value + att * baseEval.value;');
     expect(CLOSURE_LIBRARY_PRELUDE).toContain('mx_thin_film_fresnel(mx_fresnel_schlick(f0, cosVH), f0, cosVH, filmW, filmT, filmIor)');
   });
 });

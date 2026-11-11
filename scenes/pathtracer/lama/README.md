@@ -318,12 +318,15 @@ All final controls reported zero WGSL errors/nonfinite accumulation values.
 The path-tracer/compiler suite passed 495 tests in 35 files, excluding the same
 pre-existing analytic-lights traversal-string assertion. Validation was local only.
 
-## LamaLayer gold / dielectric IOR
+## LamaLayer gold modes
 
-The `lama_layer_gold_ior.usda` scene uses the existing RenderMan teapot mesh
-and `lama_layer_gold.mtlx` document. The conductor forms the rough gold base;
-a dielectric LamaLayer sits above it with roughness 0.08 and an initial IOR of
-1.0, editable in the viewer over the range 1.0-3.0.
+Four USDA scenes use the same RenderMan teapot, camera, geometry, lights and
+shared `lama_layer_gold_modes.mtlx` material graph. The gold conductor is the
+base, with roughness 0.22; a dielectric top has roughness 0.28 and initial IOR
+1.5, editable in the viewer over the range 1.0-3.0.
+
+The scenes select `fresnel_blend`, `smooth_coating`, `rough_coating`, and `auto`.
+Because the gold base is specular, `auto` resolves to `rough_coating` by design.
 
 The key is a vertical 0.18 x 0.35 m rectangular softbox in front of the teapot,
 with a weaker fill and an explicit studio HDR dome at intensity 0.06 to preserve
@@ -355,5 +358,7 @@ thickness applies Beer-Lambert absorption from the top `LamaDielectric`. These a
 engine extensions, and the coating models are renderer approximations rather than
 a byte-for-byte RenderMan implementation.
 
-Open a scene with
-`usd-image-harness.html?entry=/scenes/pathtracer/lama/lama_layer_gold_ior.usda&backend=pathtracing&res=512&spp=64`.
+Open the scenes with `usd-image-harness.html?entry=/scenes/pathtracer/lama/lama_layer_gold_fresnel_blend.usda&backend=pathtracing&res=512&spp=64`,
+`usd-image-harness.html?entry=/scenes/pathtracer/lama/lama_layer_gold_smooth_coating.usda&backend=pathtracing&res=512&spp=64`,
+`usd-image-harness.html?entry=/scenes/pathtracer/lama/lama_layer_gold_rough_coating.usda&backend=pathtracing&res=512&spp=64`, and
+`usd-image-harness.html?entry=/scenes/pathtracer/lama/lama_layer_gold_auto.usda&backend=pathtracing&res=512&spp=64`.

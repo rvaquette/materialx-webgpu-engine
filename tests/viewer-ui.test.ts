@@ -17,17 +17,16 @@ vi.mock('@mori2003/jsimgui', () => ({
   ImVec4: class { constructor(public x: number, public y: number, public z: number, public w: number) {} },
   ImGuiCol: { ScrollbarBg: 14, ScrollbarGrab: 15, ScrollbarGrabHovered: 16, ScrollbarGrabActive: 17 },
   ImGuiWindowFlags: { NoMove: 1, NoResize: 2, NoCollapse: 4, NoSavedSettings: 8, AlwaysVerticalScrollbar: 16384 },
-  ImGuiChildFlags: { None: 0 },
+  ImGuiComboFlags: { None: 0, HeightLarge: 8 },
   ImGuiConfigFlags: { NavEnableKeyboard: 1 },
   ImGuiMouseSource: { _Mouse: 0, _TouchScreen: 1, _Pen: 2 },
   ImGuiImplWeb: { Init: vi.fn(async () => {}), BeginRender: vi.fn(), EndRender: vi.fn() },
   ImGui: {
     StyleColorsDark: vi.fn(), GetIO: () => controls.io, GetStyle: () => controls.style, SetNextWindowPos: vi.fn(), SetNextWindowSize: vi.fn(),
     PushStyleColorImVec4: vi.fn(), PopStyleColor: vi.fn(),
-    BeginChild: vi.fn(() => true), EndChild: vi.fn(),
     Begin: () => true, End: vi.fn(), BeginDisabled: vi.fn(), EndDisabled: vi.fn(),
     SeparatorText: vi.fn(), Text: vi.fn(), TextWrapped: vi.fn(), SameLine: vi.fn(),
-    SetNextItemWidth: vi.fn(), SetItemDefaultFocus: vi.fn(), EndCombo: vi.fn(), BeginCombo: () => true,
+    SetNextItemWidth: vi.fn(), SetItemDefaultFocus: vi.fn(), EndCombo: vi.fn(), BeginCombo: vi.fn(() => true),
     RadioButton: vi.fn(() => false), Button: vi.fn(() => false),
     Selectable: vi.fn((label: string) => {
       if (label !== controls.selection) return false;
@@ -150,8 +149,7 @@ describe('Dear ImGui viewer controls', () => {
     controls.selection = '1024 x 768##1024x768';
     f.render();
     expect(f.actions.resolution).toHaveBeenCalledWith('1024x768');
-    expect(ImGui.BeginChild).toHaveBeenCalledWith('##scene-options', { x: 0, y: 0 }, 0, 16384);
-    expect(ImGui.EndChild).toHaveBeenCalled();
+    expect(ImGui.BeginCombo).toHaveBeenNthCalledWith(1, '##scene', 'Books', 8);
     expect(ImGui.PushStyleColorImVec4).toHaveBeenCalledWith(17, { x: 0.78, y: 0.78, z: 0.78, w: 1 });
     expect(ImGui.PopStyleColor).toHaveBeenCalledWith(4);
     stop();

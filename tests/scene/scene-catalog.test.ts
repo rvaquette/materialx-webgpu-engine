@@ -17,7 +17,15 @@ describe('scene selector catalog', () => {
     const entries = SCENE_CATALOG.filter(scene => scene.entry.startsWith('./scenes/pathtracer/lama/')
       && scene.entry.endsWith('.usda'));
     expect(entries.map(scene => scene.entry)).toEqual(names.map(name => `./scenes/pathtracer/lama/${name}`));
-    expect(entries.every(scene => scene.label.startsWith('Lama - '))).toBe(true);
+    expect(entries.every(scene => scene.label.startsWith('Lama - ') || scene.label.startsWith('LamaLayer Gold - '))).toBe(true);
+  });
+  it('labels the four LamaLayer gold modes explicitly in the scene selector', () => {
+    expect(SCENE_CATALOG.filter(scene => scene.label.startsWith('LamaLayer Gold - ')).map(scene => scene.label)).toEqual([
+      'LamaLayer Gold - Auto',
+      'LamaLayer Gold - Fresnel Blend',
+      'LamaLayer Gold - Rough Coating',
+      'LamaLayer Gold - Smooth Coating',
+    ]);
   });
   it('includes only top-level pathtracer glTF and GLB files with distinct format labels', () => {
     const names = readdirSync('scenes\\pathtracer').filter(name => /\.(gltf|glb)$/i.test(name)).sort();

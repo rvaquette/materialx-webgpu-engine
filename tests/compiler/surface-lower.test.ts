@@ -14,7 +14,7 @@ import type {
   ResolvedValueSource,
 } from '../../src/materialx/graph.ts';
 import { resolveSurface } from '../../src/materialx/surface-graph.ts';
-import { surfaceGraphToLayered } from '../../src/compiler/surface-lower.ts';
+import { resolveLamaLayerMode, surfaceGraphToLayered } from '../../src/compiler/surface-lower.ts';
 import { canonicalSurfaceToLayered, type LayeredClosure } from '../../src/compiler/ir.ts';
 import {
   evaluateLayeredSurface,
@@ -98,6 +98,11 @@ function shade(closure: LayeredClosure, lighting: ReferenceLighting = defaultLig
 }
 
 describe('surfaceGraphToLayered (T055b)', () => {
+  it('resolves Auto to Fresnel Blend for diffuse bases and Rough Coating for specular bases', () => {
+    expect(resolveLamaLayerMode('auto', [{ kind: 'burley_diffuse' }])).toBe('fresnel_blend');
+    expect(resolveLamaLayerMode('auto', [{ kind: 'conductor' }])).toBe('rough_coating');
+    expect(resolveLamaLayerMode('smooth_coating', [{ kind: 'burley_diffuse' }])).toBe('smooth_coating');
+  });
   it('lowers a LamaDiffuse BSDF connected to a generic MaterialX surface', () => {
     const graph = graphOf('surface', [
       { name: 'bsdf', type: 'BSDF', source: { kind: 'connection', nodeId: 'LAMA' }, provenance: { namePath: '/mat/bsdf' } },

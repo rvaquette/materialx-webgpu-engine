@@ -52,6 +52,7 @@ interface FakeNode {
   getInputs(): MxInput[];
   getNodeDef(target?: string): MxNodeDef | null;
   getActiveSourceUri(): string;
+  getAttribute(name: string): string;
   validate(): boolean;
   delete(): void;
 }
@@ -128,7 +129,8 @@ describe('resolveGraph', () => {
   });
   it('preserves and validates MaterialX UI numeric limits', () => {
     const resolve = (uiMin?: string, uiMax?: string) => {
-      const input = fakeInput({ name: 'IOR', type: 'float', value: '1.5', uiMin, uiMax });
+      const input = fakeInput({ name: 'IOR', type: 'float', value: '1.5',
+        ...(uiMin !== undefined ? { uiMin } : {}), ...(uiMax !== undefined ? { uiMax } : {}) });
       const node = fakeNode({ name: 'coat', category: 'LamaDielectric', type: 'BSDF', inputs: [input] });
       return resolveGraph({ roots: [{ name: 'bsdf', type: 'BSDF', node }], onDiagnostic: () => {} })
         .nodes.get('/mat/coat')!.inputs[0]!;
@@ -139,7 +141,8 @@ describe('resolveGraph', () => {
   });
   it('resolves and validates LamaLayer engine extension settings', () => {
     const resolve = (layerMode?: string, topThickness?: string) => {
-      const node = fakeNode({ name: 'layer', category: 'LamaLayer', type: 'BSDF', layerMode, topThickness });
+      const node = fakeNode({ name: 'layer', category: 'LamaLayer', type: 'BSDF',
+        ...(layerMode !== undefined ? { layerMode } : {}), ...(topThickness !== undefined ? { topThickness } : {}) });
       return resolveGraph({ roots: [{ name: 'bsdf', type: 'BSDF', node }], onDiagnostic: () => {} })
         .nodes.get('/mat/layer')!.lamaLayer;
     };

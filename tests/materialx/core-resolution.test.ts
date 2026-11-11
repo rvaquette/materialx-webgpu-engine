@@ -106,20 +106,27 @@ describe.skipIf(!existsSync(coreFile) || !existsSync(libraryRoot))('installed Ma
       fetchText: async path => readFileSync(path, 'utf8'),
     });
     const diagnostics: Diagnostic[] = [];
-    const assetPath = join('scenes', 'pathtracer', 'lama', 'lama_layer_gold.mtlx');
+    const assetPath = join('scenes', 'pathtracer', 'lama', 'lama_layer_gold_modes.mtlx');
     const text = readFileSync(assetPath, 'utf8');
     const documents = await loadMaterialXDocuments({
       core, libraries, texts: new Map([[assetPath, text]]), sink: d => diagnostics.push(d),
     });
     try {
-      const build = await createGraphMaterialCompiler({ documents, sink: d => diagnostics.push(d) }).compile({
-        assetPath, materialName: 'gold_ior', referencedPrimPath: '/MaterialX/Materials/gold_ior', boundPrims: [],
-      });
-      const nodes = [...(build?.graph?.nodes.values() ?? [])];
-      const dielectric = nodes.find(node => node.category === 'LamaDielectric');
-      expect(dielectric?.inputs.find(input => input.name === 'IOR')).toMatchObject({ editable: true, min: [1], max: [3] });
-      expect(nodes.find(node => node.category === 'LamaLayer')?.lamaLayer)
-        .toEqual({ mode: 'fresnel_blend', topThickness: 0 });
+      const compiler = createGraphMaterialCompiler({ documents, sink: d => diagnostics.push(d) });
+      for (const [materialName, mode] of [
+        ['gold_fresnel_blend', 'fresnel_blend'], ['gold_smooth_coating', 'smooth_coating'],
+        ['gold_rough_coating', 'rough_coating'], ['gold_auto', 'auto'],
+      ] as const) {
+        const build = await compiler.compile({
+          assetPath, materialName, referencedPrimPath: `/MaterialX/Materials/${materialName}`, boundPrims: [],
+        });
+        const nodes = [...(build?.graph?.nodes.values() ?? [])];
+        const dielectric = nodes.find(node => node.category === 'LamaDielectric');
+        expect(dielectric?.inputs.find(input => input.name === 'IOR')).toMatchObject({ editable: true, min: [1], max: [3] });
+        const layer = nodes.find(node => node.category === 'LamaLayer');
+        expect(layer?.lamaLayer).toEqual({ mode, topThickness: 0 });
+        expect(layer?.inputs.find(input => input.name === 'topMix')).toMatchObject({ editable: true, min: [0], max: [1] });
+      }
       expect(diagnostics).toEqual([]);
     } finally {
       documents.delete();

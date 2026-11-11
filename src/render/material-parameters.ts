@@ -206,15 +206,18 @@ export function editableSceneMaterials(resources: SceneResources): SceneResource
       for (const input of inputs) {
         if ('interfaceName' in input && input.interfaceName) continue;
         if (input.source.kind !== 'value' || !isType(input.type)) continue;
+        const editable = 'editable' in input ? input.editable : undefined;
+        const min = 'min' in input ? input.min : undefined;
+        const max = 'max' in input ? input.max : undefined;
         const values = input.source.value.trim() === 'true' ? [1] : input.source.value.trim() === 'false' ? [0]
           : input.source.value.split(',').map(Number);
-        const uniform = input.editable === true && input.type === 'float' ? `parameter_${parameters.length}` : undefined;
+        const uniform = editable === true && input.type === 'float' ? `parameter_${parameters.length}` : undefined;
         const parameter: MaterialParameter = {
           id: JSON.stringify([nodeId, input.name]), label: `${nodeId} / ${input.name}`, type: input.type,
           value: values, initial: [...values], update: uniform ? 'uniform' : 'rebuild', nodeId, input: input.name,
           ...(uniform ? { uniform } : {}),
-          ...(input.min !== undefined ? { min: input.min } : {}),
-          ...(input.max !== undefined ? { max: input.max } : {}),
+          ...(min !== undefined ? { min } : {}),
+          ...(max !== undefined ? { max } : {}),
         };
         parameterValues(parameter, values);
         parameters.push(parameter);
@@ -248,6 +251,7 @@ export function changeMaterialParameters(
   material: MaterialResource, changes: ReadonlyMap<string, readonly number[]>,
 ): MaterialResource {
   if (!material.resolvedSurface || !material.surfaceGraph || !material.parameters) throw new Error('Material has no editable parameters.');
+  const rootNodeId = material.resolvedSurface.nodeId;
   const inputs = new Map(material.resolvedSurface.inputs);
   const nodes = new Map(material.surfaceGraph.nodes);
   for (const id of changes.keys()) if (!material.parameters.some(parameter => parameter.id === id)) throw new Error(`Unknown parameter: ${id}`);
@@ -270,6 +274,17 @@ export function changeMaterialParameters(
     } else {
       const input = inputs.get(parameter.input)!;
       inputs.set(parameter.input, { ...input, source: { kind: 'value', value } });
+      const root = nodes.get(rootNodeId);
+      if (root?.inputs.some(candidate => candidate.name === parameter.input)) {
+        const source = {
+          kind: 'value' as const, type: parameter.type,
+          value: parameter.type === 'boolean' ? String(value[0] === 1) : value.join(', '),
+        };
+        nodes.set(root.id, {
+          ...root,
+          inputs: root.inputs.map(candidate => candidate.name === parameter.input ? { ...candidate, source } : candidate),
+        });
+      }
     }
     return { ...parameter, value };
   });

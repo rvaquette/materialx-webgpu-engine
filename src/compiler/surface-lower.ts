@@ -20,11 +20,11 @@ type Inputs = ReadonlyMap<string, NormalizedSurfaceInput>;
 
 const clamp01 = (x: number): number => (x < 0 ? 0 : x > 1 ? 1 : x);
 
-const DIFFUSE_LOBES = new Set<LayeredBsdfLobe['kind']>([
+const DIFFUSE_LOBES = new Set<string>([
   'oren_nayar_diffuse', 'burley_diffuse', 'translucent', 'subsurface',
 ]);
 
-export function resolveLamaLayerMode(mode: LamaLayerMode | undefined, base: readonly LayeredBsdfLobe[]): NonNullable<CoatLayer['mode']> {
+export function resolveLamaLayerMode(mode: LamaLayerMode | undefined, base: readonly { kind: string }[]): NonNullable<CoatLayer['mode']> {
   if (mode === 'auto') return base.length === 0 || base.every(lobe => DIFFUSE_LOBES.has(lobe.kind)) ? 'fresnel_blend' : 'rough_coating';
   return mode ?? 'fresnel_blend';
 }
@@ -543,8 +543,9 @@ function lowerLamaBsdf(graph: ResolvedGraph, nodeId: string, frame?: LamaShading
         ...(layer && layer.topThickness > 0 ? { topThickness: layer.topThickness } : {}),
         ...(() => {
           const transmission = top.lobes.find(lobe => lobe.kind === 'dielectric_transmission');
-          if (!transmission?.attenuationColor || !transmission.attenuationDistance || transmission.attenuationDistance <= 0) return {};
-          const absorption = transmission.attenuationColor.map(value => -Math.log(Math.max(value, 1e-6)) / transmission.attenuationDistance) as unknown as Rgb;
+          const distance = transmission?.attenuationDistance;
+          if (!transmission?.attenuationColor || distance === undefined || distance <= 0) return {};
+          const absorption = transmission.attenuationColor.map(value => -Math.log(Math.max(value, 1e-6)) / distance) as unknown as Rgb;
           return absorption.some(value => value > 0) ? { absorption } : {};
         })(),
       } : undefined;

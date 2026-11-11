@@ -245,6 +245,11 @@ describe('emitLayeredSurface (T055d)', () => {
     ]);
     graph.nodes.get('layer')!.lamaLayer = { mode: 'rough_coating', topThickness: 2 };
     const module = emit(graph);
+    const closure = surfaceGraphToLayered(resolveSurface(graph)!, graph);
+    expect(closure.coat).toMatchObject({ mode: 'rough_coating', topThickness: 2 });
+    expect(closure.coat?.absorption?.[0]).toBeCloseTo(0.4, 6);
+    expect(closure.coat?.absorption?.[1]).toBeCloseTo(0.3, 6);
+    expect(closure.coat?.absorption?.[2]).toBeCloseTo(0.2, 6);
     expect(module.code).toContain('MxCoatLayer(');
     expect(module.code).toContain(', 2u, 2.0, select(vec3f(0.0),');
   });

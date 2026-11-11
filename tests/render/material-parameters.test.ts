@@ -72,9 +72,19 @@ describe('dynamic MaterialX parameters', () => {
       const surface = graph.nodes.get('surface')!;
       surface.category = 'LamaLayer';
       surface.type = 'BSDF';
+      surface.nodeDef = {
+        name: 'ND_LamaLayer', nodeString: 'LamaLayer', type: 'BSDF',
+        implementation: { kind: 'unresolved' },
+        inputs: [
+          { name: 'materialTop', type: 'BSDF' }, { name: 'materialBase', type: 'BSDF' },
+          { name: 'topMix', type: 'float', value: '1' },
+        ],
+      };
       surface.inputs = [
         { name: 'materialTop', type: 'BSDF', source: { kind: 'connection', nodeId: 'coat' }, provenance: { namePath: '/surface/materialTop' } },
         { name: 'materialBase', type: 'BSDF', source: { kind: 'connection', nodeId: 'gold' }, provenance: { namePath: '/surface/materialBase' } },
+        { name: 'topMix', type: 'float', editable: true, min: [0], max: [1],
+          source: { kind: 'value', type: 'float', value: '1' }, provenance: { namePath: '/surface/topMix' } },
       ];
       graph.nodes.set('coat', {
         id: 'coat', category: 'LamaDielectric', type: 'BSDF', provenance: { namePath: '/coat' },
@@ -89,9 +99,12 @@ describe('dynamic MaterialX parameters', () => {
     });
     const material = [...resources.materials.values()][0]!;
     const parameters = visibleMaterialParameters(material);
-    expect(parameters.map(parameter => [parameter.nodeId, parameter.input, parameter.value, parameter.update]))
-      .toEqual([['coat', 'IOR', [1.5], 'uniform']]);
-    const ior = parameters[0]!;
+    const ior = parameters.find(parameter => parameter.input === 'IOR')!;
+    const topMix = parameters.find(parameter => parameter.input === 'topMix')!;
+    expect(ior.update).toBe('uniform');
+    expect(topMix.update).toBe('uniform');
+    expect(topMix.min).toEqual([0]);
+    expect(topMix.max).toEqual([1]);
     expect(ior.uniform).toBeDefined();
     expect(ior.min).toEqual([1]);
     expect(ior.max).toEqual([3]);
@@ -114,9 +127,13 @@ describe('dynamic MaterialX parameters', () => {
     expect(Array.from(initialUniforms)).toContain(1.5);
     expect(Array.from(changedUniforms)).toContain(3);
     expect(Array.from(changedUniforms)).not.toEqual(Array.from(initialUniforms));
-    expect(visibleMaterialParameters(updated).map(parameter => parameter.input)).toEqual(['IOR']);
+    expect(visibleMaterialParameters(updated).map(parameter => parameter.input).sort()).toEqual(['IOR', 'topMix']);
     const reset = changeMaterialParameters(updated, new Map([[ior.id, ior.initial]]));
     expect(surfaceGraphToLayered(reset.resolvedSurface!, reset.surfaceGraph!).coat?.ior).toBe(1.5);
+    const changedMix = compileEditableMaterial(changeMaterialParameters(material, new Map([[topMix.id, [0.25]]])));
+    expect(changedMix.sceneShader!.code).toBe(material.sceneShader!.code);
+    expect(surfaceGraphToLayered(changedMix.resolvedSurface!, changedMix.surfaceGraph!).coat?.weight).toBeCloseTo(0.25);
+    expect(Array.from(new Float32Array(materialUniformData(changedMix)))).toContain(0.25);
   });
 
   it('can hide every control and does not expose marked connections or interfaces', async () => {

@@ -108,6 +108,25 @@ describe('dielectric coat layer (T056d)', () => {
     }
   });
 
+  it.each(['smooth_coating', 'rough_coating'] as const)('keeps eval/pdf consistent while sampling %s', (mode) => {
+    const coated = layeredSurfaceBsdf({
+      lobes: [
+        { kind: 'burley_diffuse', weight: 0.7, color: [0.6, 0.4, 0.2], roughness: 0.02 },
+        { kind: 'dielectric_reflection', weight: 0.3, color: [1, 1, 1], roughness: 0.02, ior: 1.5 },
+      ],
+      coat: { weight: 1, color: [1, 1, 1], roughness: 0.3, ior: 1.33, mode },
+      opacity: 1,
+    });
+    const rng = createPcg32(mode === 'smooth_coating' ? 101 : 103);
+    for (let i = 0; i < 128; i++) {
+      const sample = coated.sample(WO, rng);
+      if (!sample) continue;
+      const evaluated = coated.eval(WO, sample.wi);
+      expect(evaluated.pdf).toBeCloseTo(sample.pdf, 8);
+      for (let channel = 0; channel < 3; channel++) expect(evaluated.value[channel]).toBeCloseTo(sample.value[channel]!, 8);
+    }
+  });
+
   it('layers over the base: changes the response and darkens the diffuse base', () => {
     const base = layeredSurfaceBsdf(baseClosure());
     const coated = layeredSurfaceBsdf({

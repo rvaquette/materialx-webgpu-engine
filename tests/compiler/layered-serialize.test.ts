@@ -16,7 +16,8 @@ const rich: LayeredClosure = {
     { kind: 'generalized_schlick', weight: 0.5, color: [0.04, 0.04, 0.04], color90: [1, 1, 1], roughness: 0.4, ior: 1.5 },
     { kind: 'burley_diffuse', weight: 0.25, color: [0.1, 0.2, 0.3] },
   ],
-  coat: { weight: 0.7, color: [1, 1, 1], roughness: 0.1, ior: 1.5 },
+  coat: { weight: 0.7, color: [1, 1, 1], roughness: 0.1, ior: 1.5,
+    mode: 'rough_coating', topThickness: 2, absorption: [0.1, 0.2, 0.3] },
   sheen: { weight: 0.3, color: [0.9, 0.9, 0.8], roughness: 0.3 },
   fuzz: { weight: 0.2, color: [0.5, 0.5, 0.5], roughness: 0.4 },
   thinFilm: { weight: 1, thickness: 500, ior: 1.4 },
@@ -52,7 +53,8 @@ describe('LayeredClosure serialization (T055e1)', () => {
 
   it('carries every slot and optional field through serialization', () => {
     const s = serializeLayeredClosure(rich);
-    expect(s.coat).toEqual({ weight: 0.7, color: [1, 1, 1], roughness: 0.1, ior: 1.5 });
+    expect(s.coat).toEqual({ weight: 0.7, color: [1, 1, 1], roughness: 0.1, ior: 1.5,
+      mode: 'rough_coating', topThickness: 2, absorption: [0.1, 0.2, 0.3] });
     expect(s.sheen).toEqual({ weight: 0.3, color: [0.9, 0.9, 0.8], roughness: 0.3 });
     expect(s.fuzz).toEqual({ weight: 0.2, color: [0.5, 0.5, 0.5], roughness: 0.4 });
     expect(s.thinFilm).toEqual({ weight: 1, thickness: 500, ior: 1.4 });

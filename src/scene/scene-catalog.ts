@@ -12,12 +12,22 @@ const pathTracerScenes = Object.keys(import.meta.glob('/scenes/pathtracer/*.usda
     entry: `.${path}`,
   }));
 
+const lamaLayerLabels: Readonly<Record<string, string>> = {
+  'lama_layer_gold_fresnel_blend.usda': 'LamaLayer Gold - Fresnel Blend',
+  'lama_layer_gold_smooth_coating.usda': 'LamaLayer Gold - Smooth Coating',
+  'lama_layer_gold_rough_coating.usda': 'LamaLayer Gold - Rough Coating',
+  'lama_layer_gold_auto.usda': 'LamaLayer Gold - Auto',
+};
+
 const lamaScenes = Object.keys(import.meta.glob('/scenes/pathtracer/lama/*.usda', { query: '?raw', import: 'default' }))
   .sort()
-  .map((path): SceneCatalogEntry => ({
-    label: `Lama - ${path.slice('/scenes/pathtracer/lama/'.length).replace(/\.usda$/, '').replace(/_/g, ' ')}`,
-    entry: `.${path}`,
-  }));
+  .map((path): SceneCatalogEntry => {
+    const filename = path.slice('/scenes/pathtracer/lama/'.length);
+    return {
+      label: lamaLayerLabels[filename] ?? `Lama - ${filename.replace(/\.usda$/, '').replace(/_/g, ' ')}`,
+      entry: `.${path}`,
+    };
+  });
 
 const gltfScenes = Object.keys(import.meta.glob('/scenes/pathtracer/*.{gltf,glb}', { query: '?url', import: 'default' }))
   .sort()

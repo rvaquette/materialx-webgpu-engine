@@ -754,7 +754,7 @@ fn mx_coat_exit(v: vec3f, ior: f32) -> vec3f {
 }
 fn mx_coat_base_closure(c: LayeredClosure) -> LayeredClosure {
   var base = c;
-  if (c.coat.mode == 2u) {
+  if (c.hasCoat != 0u && c.coat.mode == 2u) {
     for (var i = 0u; i < base.lobeCount; i++) {
       base.lobes[i].roughness = max(base.lobes[i].roughness, c.coat.roughness);
       if (base.lobes[i].kind == MX_LOBE_DIELECTRIC_REFLECTION || base.lobes[i].kind == MX_LOBE_DIELECTRIC_TRANSMISSION) {
@@ -1164,6 +1164,15 @@ fn mx_closure_diffuse_albedo(c: LayeredClosure, wo: vec3f) -> vec3f {
         || l.kind == MX_LOBE_SUBSURFACE) {
       a = a + l.color * l.weight;
     }
+  }
+  if (c.hasCoat != 0u && c.coat.weight > 0.0) {
+    let coatW = clamp(c.coat.weight, 0.0, 1.0);
+    let f0 = mx_dielectric_f0(c.coat.ior);
+    let fo = mx_coat_fresnel(c.coat.ior, abs(wo.z));
+    let fi = f0 + (1.0 - f0) / 21.0;
+    let absorb = vec3f(1.0 - coatW) + coatW * c.coat.color;
+    let pathLength = c.coat.topThickness * (1.0 / max(abs(wo.z), 0.05) + 1.5);
+    a = a * vec3f((1.0 - coatW * fo) * (1.0 - coatW * fi)) * absorb * exp(-c.coat.sigmaA * pathLength);
   }
   if (c.hasFuzz != 0u && c.fuzz.weight > 0.0) {
     let coverage = mx_closure_fuzz_coverage(c, wo);
