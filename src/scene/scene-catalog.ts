@@ -13,6 +13,7 @@ const pathTracerScenes = Object.keys(import.meta.glob('/scenes/pathtracer/*.usda
   }));
 
 const lamaLayerLabels: Readonly<Record<string, string>> = {
+  'lama_layer_verdigris.usda': 'Lama - LamaLayer Verdigris (aged brass)',
   'lama_layer_gold_fresnel_blend.usda': 'LamaLayer Gold - Fresnel Blend',
   'lama_layer_gold_smooth_coating.usda': 'LamaLayer Gold - Smooth Coating',
   'lama_layer_gold_rough_coating.usda': 'LamaLayer Gold - Rough Coating',

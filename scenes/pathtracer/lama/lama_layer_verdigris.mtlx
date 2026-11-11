@@ -1,0 +1,80 @@
+<?xml version="1.0"?>
+<materialx version="1.39" colorspace="lin_rec709" xmlns:engine="urn:materialx-webgpu-engine:extensions">
+  <standard_surface name="ground_surface" type="surfaceshader">
+    <input name="base_color" type="color3" value="0.48, 0.5, 0.51" />
+    <input name="specular_roughness" type="float" value="0.85" />
+  </standard_surface>
+  <surfacematerial name="ground" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="ground_surface" />
+  </surfacematerial>
+
+  <position name="surface_position" type="vector3">
+    <input name="space" type="string" value="world" />
+  </position>
+  <multiply name="patina_scale" type="vector3">
+    <input name="in1" type="vector3" nodename="surface_position" />
+    <input name="in2" type="vector3" value="420, 420, 420" />
+  </multiply>
+  <fractal3d name="corrosion" type="float">
+    <input name="position" type="vector3" nodename="patina_scale" />
+    <input name="amplitude" type="float" value="1" />
+    <input name="octaves" type="integer" value="3" />
+    <input name="lacunarity" type="float" value="2.1" />
+    <input name="diminish" type="float" value="0.5" />
+  </fractal3d>
+  <smoothstep name="patina_mask" type="float">
+    <input name="in" type="float" nodename="corrosion" />
+    <input name="low" type="float" value="-0.26" uimin="-1" uimax="1" engine:editable="true" />
+    <input name="high" type="float" value="-0.12" uimin="-1" uimax="1" engine:editable="true" />
+  </smoothstep>
+  <multiply name="mottle_scale" type="vector3">
+    <input name="in1" type="vector3" nodename="surface_position" />
+    <input name="in2" type="vector3" value="130, 130, 130" />
+  </multiply>
+  <noise3d name="mottle" type="float">
+    <input name="position" type="vector3" nodename="mottle_scale" />
+    <input name="amplitude" type="float" value="0.5" />
+    <input name="pivot" type="float" value="0.5" />
+  </noise3d>
+  <mix name="patina_color" type="color3">
+    <input name="bg" type="color3" value="0.012, 0.065, 0.06" />
+    <input name="fg" type="color3" value="0.055, 0.24, 0.22" />
+    <input name="mix" type="float" nodename="mottle" />
+  </mix>
+  <mix name="metal_roughness" type="float">
+    <input name="bg" type="float" value="0.25" />
+    <input name="fg" type="float" value="0.46" />
+    <input name="mix" type="float" nodename="mottle" />
+  </mix>
+  <LamaConductor name="aged_brass" type="BSDF">
+    <input name="fresnelMode" type="integer" value="0" />
+    <input name="reflectivity" type="color3" value="0.78, 0.57, 0.28" />
+    <input name="edgeColor" type="color3" value="0.95, 0.84, 0.58" />
+    <input name="roughness" type="float" nodename="metal_roughness" />
+    <input name="tint" type="color3" value="0.85, 0.78, 0.62" />
+  </LamaConductor>
+  <LamaDiffuse name="oxide" type="BSDF">
+    <input name="color" type="color3" nodename="patina_color" />
+    <input name="roughness" type="float" value="0.7" />
+  </LamaDiffuse>
+  <LamaMix name="weathered_metal" type="BSDF">
+    <input name="material1" type="BSDF" nodename="aged_brass" />
+    <input name="material2" type="BSDF" nodename="oxide" />
+    <input name="mix" type="float" nodename="patina_mask" />
+  </LamaMix>
+  <LamaDielectric name="surface_reflection" type="BSDF">
+    <input name="fresnelMode" type="integer" value="1" />
+    <input name="IOR" type="float" value="1.48" uimin="1" uimax="3" engine:editable="true" />
+    <input name="roughness" type="float" value="0.38" />
+  </LamaDielectric>
+  <LamaLayer name="patina_layer" type="BSDF" engine:layerMode="rough_coating" engine:topThickness="0">
+    <input name="materialBase" type="BSDF" nodename="weathered_metal" />
+    <input name="materialTop" type="BSDF" nodename="surface_reflection" />
+    <input name="topMix" type="float" value="0.35" uimin="0" uimax="1" engine:editable="true" />
+  </LamaLayer>
+  <LamaSurface name="verdigris" type="material">
+    <input name="materialFront" type="BSDF" nodename="patina_layer" />
+    <input name="materialBack" type="BSDF" nodename="patina_layer" />
+    <input name="presence" type="float" value="1" />
+  </LamaSurface>
+</materialx>

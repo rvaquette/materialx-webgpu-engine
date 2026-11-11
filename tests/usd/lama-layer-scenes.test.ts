@@ -20,6 +20,20 @@ const reader: UsdLayerReader = {
 };
 
 describe('LamaLayer gold IOR scenes', () => {
+  it('imports the verdigris scene with the same layered patina on the teapot and stand', async () => {
+    const scene = await importUsdStage(join(SCENE_DIR, 'lama_layer_verdigris.usda'), { reader });
+    const material = scene.materials.find((entry) => entry.primPath === '/World/Looks/verdigris');
+    expect(material?.assetPath).toBe('./lama_layer_verdigris.mtlx');
+    expect(material?.referencedPrimPath).toBe('/MaterialX/Materials/verdigris');
+    expect(scene.prims.has('/World/Geometry/Teapot')).toBe(true);
+    expect(scene.prims.has('/World/Geometry/Stand')).toBe(true);
+    const document = await readFile(join(SCENE_DIR, 'lama_layer_verdigris.mtlx'), 'utf8');
+    expect(document).toContain('<LamaLayer name="patina_layer" type="BSDF" engine:layerMode="rough_coating"');
+    expect(document).toContain('<input name="materialBase" type="BSDF" nodename="weathered_metal" />');
+    expect(document).toContain('<input name="mix" type="float" nodename="patina_mask" />');
+    expect(document).toContain('<fractal3d name="corrosion" type="float">');
+  });
+
   it.each(MODES)('imports the $mode teapot scene and resolves its material reference', async ({ scene: sceneFile, material, mode }) => {
     const scene = await importUsdStage(join(SCENE_DIR, sceneFile), { reader });
     const layeredMaterial = scene.materials.find((material) => material.primPath === '/World/Looks/layeredGold');
