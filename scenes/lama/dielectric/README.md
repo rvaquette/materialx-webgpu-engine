@@ -2,10 +2,16 @@
 
 Reference: https://rmanwiki-26.pixar.com/space/REN26/19661513/LamaDielectric
 
-34 scenes share the Lama teapot camera and lighting. The scene selector labels
+34 scenes share the Lama teapot camera and area lights. The scene selector labels
 24 working shading examples and 10 unsupported parameter probes separately.
 `coverage.json` records the status of each case. This is functional, partial
 RenderMan-style compatibility, NOT numerical equivalence to RenderMan.
+
+The glass examples use a dome intensity of 0.3 instead of the metal examples'
+0.06, without changing material tint or absorption. Split solid interfaces retain
+the signed exit normal (`thin <= 0`). Reflection/transmission selection is Fresnel-
+weighted, with the same probabilities used by the mixture PDF; physical lobe
+weights remain unchanged. A 2% sampling floor retains rough-interface support.
 
 ## Supported Shading
 

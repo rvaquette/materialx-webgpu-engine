@@ -68,6 +68,8 @@ export async function buildDielectricScenes(root = new URL('../', import.meta.ur
     nodes.push(`  <LamaDielectric name="${material}_bsdf" type="BSDF">\n${inputs.join('\n')}\n  </LamaDielectric>\n  <LamaSurface name="${material}" type="material">\n    <input name="materialFront" type="BSDF" nodename="${material}_bsdf" />\n    <input name="materialBack" type="BSDF" nodename="${material}_bsdf" />\n    <input name="presence" type="float" value="1" />\n  </LamaSurface>`);
     const stage = template
       .replace('Rough gold base with dielectric top, LamaLayer Rough Coating', `${example.label}${example.blocked ? `: ${example.blocked}` : ''}`)
+      .replace('pathtracer:environmentIntensity = 0.06', 'pathtracer:environmentIntensity = 0.3')
+      .replace('inputs:intensity = 0.06', 'inputs:intensity = 0.3')
       .replaceAll('@./lama_layer_gold_modes.mtlx@', '@./materials.mtlx@')
       .replace(/        def Material "stand"[^\n]*\n/, '')
       .replace(/        def Material "layeredGold"[^\n]*/, `        def Material "${material}" (prepend references = @./materials.mtlx@</MaterialX/Materials/${material}>) {}`)

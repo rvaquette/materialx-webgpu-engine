@@ -1267,13 +1267,13 @@ fn mx_closure_sampled_is_diffuse(c: LayeredClosure, wo: vec3f, uz: f32) -> bool 
     if (uz < pCoat) { return false; }
     pz = (uz - pCoat) / max(1.0 - pCoat, 1.0e-6);
   }
-  let total = mx_closure_total_weight(c);
+  let total = mx_closure_selection_total(c, wo);
   if (total <= 0.0) { return false; }
   var pick = pz * total;
   var chosen = 0u;
   var found = false;
   for (var i = 0u; i < c.lobeCount; i = i + 1u) {
-    let w = c.lobes[i].weight;
+    let w = mx_closure_selection_weight(c.lobes[i], wo);
     if (w <= 0.0) { continue; }
     if (!found) {
       chosen = i;
@@ -1289,18 +1289,6 @@ fn mx_closure_sampled_is_diffuse(c: LayeredClosure, wo: vec3f, uz: f32) -> bool 
 // are excluded (lit by the SH probe) so the environment NEE keeps importance
 // sampling only the glossy/coat reflections (reflets du vernis).
 fn mx_closure_specular_eval(c: LayeredClosure, wo: vec3f, wi: vec3f) -> MxBsdfEval {
-  var specTotal = 0.0;
-  for (var i = 0u; i < c.lobeCount; i = i + 1u) {
-    let l = c.lobes[i];
-    if (l.weight <= 0.0) { continue; }
-    if (l.kind == MX_LOBE_DIELECTRIC_REFLECTION || l.kind == MX_LOBE_CONDUCTOR
-        || l.kind == MX_LOBE_GENERALIZED_SCHLICK || l.kind == MX_LOBE_DIELECTRIC_TRANSMISSION
-        || l.kind == MX_LOBE_CHIANG_HAIR) {
-      specTotal = specTotal + l.weight;
-    }
-  }
-  var value = vec3f(0.0);
-  var pdf = 0.0;
   var baseWo = wo;
   var baseWi = wi;
   let baseClosure = mx_coat_base_closure(c);
@@ -1308,6 +1296,18 @@ fn mx_closure_specular_eval(c: LayeredClosure, wo: vec3f, wi: vec3f) -> MxBsdfEv
     baseWo = mx_coat_enter(wo, c.coat.ior);
     baseWi = mx_coat_enter(wi, c.coat.ior);
   }
+  var specTotal = 0.0;
+  for (var i = 0u; i < c.lobeCount; i = i + 1u) {
+    let l = baseClosure.lobes[i];
+    if (l.weight <= 0.0) { continue; }
+    if (l.kind == MX_LOBE_DIELECTRIC_REFLECTION || l.kind == MX_LOBE_CONDUCTOR
+        || l.kind == MX_LOBE_GENERALIZED_SCHLICK || l.kind == MX_LOBE_DIELECTRIC_TRANSMISSION
+        || l.kind == MX_LOBE_CHIANG_HAIR) {
+      specTotal = specTotal + mx_closure_selection_weight(l, baseWo);
+    }
+  }
+  var value = vec3f(0.0);
+  var pdf = 0.0;
   if (specTotal > 0.0) {
     for (var i = 0u; i < c.lobeCount; i = i + 1u) {
       let lobe = baseClosure.lobes[i];
@@ -1317,7 +1317,7 @@ fn mx_closure_specular_eval(c: LayeredClosure, wo: vec3f, wi: vec3f) -> MxBsdfEv
           || lobe.kind == MX_LOBE_CHIANG_HAIR)) { continue; }
       let r = mx_closure_lobe_eval(lobe, baseClosure, baseWo, baseWi);
       value = value + r.value * lobe.weight;
-      pdf = pdf + (lobe.weight / specTotal) * r.pdf;
+      pdf = pdf + (mx_closure_selection_weight(lobe, baseWo) / specTotal) * r.pdf;
     }
   }
   let jacobian = select(1.0, abs(wi.z) / max(abs(baseWi.z), 1.0e-6), c.hasCoat != 0u && c.coat.mode != 0u);

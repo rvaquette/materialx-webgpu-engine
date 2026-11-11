@@ -10,7 +10,7 @@ def Xform "World"
 {
     custom int2 pathtracer:resolution = (512, 512)
     custom int pathtracer:maxDepth = 8
-    custom float pathtracer:environmentIntensity = 0.06
+    custom float pathtracer:environmentIntensity = 0.3
 
     def Camera "Camera"
     {
@@ -55,7 +55,7 @@ def Xform "World"
         def DomeLight "Environment"
         {
             asset inputs:texture:file = @../../pathtracer/HDR/photo_studio_01_1k.hdr@
-            float inputs:intensity = 0.06
+            float inputs:intensity = 0.3
             color3f inputs:color = (1, 1, 1)
         }
         def RectLight "Key"

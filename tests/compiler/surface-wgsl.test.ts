@@ -483,7 +483,7 @@ describe('emitLayeredSurface (T055d)', () => {
     const end = code.indexOf('fn mx_closure_base_eval(', start);
     const helper = code.slice(start, end);
     expect(helper).toContain('if (dot(n, viewDir) >= 0.0) { return n; }');
-    expect(helper).toContain('l.weight > 0.0 && l.kind == MX_LOBE_DIELECTRIC_TRANSMISSION && l.thin == 0.0');
+    expect(helper).toContain('l.weight > 0.0 && l.kind == MX_LOBE_DIELECTRIC_TRANSMISSION && l.thin <= 0.0');
     expect(helper).toContain('return -n;');
   });
 
