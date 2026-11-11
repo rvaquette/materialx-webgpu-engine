@@ -1,4 +1,5 @@
-import { access, readFile } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
@@ -38,13 +39,13 @@ describe('LamaLayer gold IOR scenes', () => {
       expect(scene.prims.get('/World/Camera')?.attributes, example.parameter)
         .toEqual(reference.prims.get('/World/Camera')?.attributes);
       for (const entry of scene.materials) {
-        if (entry.assetPath) await access(resolve(directory, entry.assetPath));
+        if (entry.assetPath) expect(existsSync(resolve(directory, entry.assetPath)), entry.assetPath).toBe(true);
       }
     }
     for (const asset of ['background.obj', 'teapot.obj', 'teapot_base.obj']) {
-      await access(resolve(directory, '../../pathtracer/renderman', asset));
+      expect(existsSync(resolve(directory, '../../pathtracer/renderman', asset)), asset).toBe(true);
     }
-    await access(resolve(directory, '../../pathtracer/HDR/photo_studio_01_1k.hdr'));
+    expect(existsSync(resolve(directory, '../../pathtracer/HDR/photo_studio_01_1k.hdr'))).toBe(true);
   });
 
   it('imports the editable gold/blue LamaMix scene with the common Lama camera', async () => {

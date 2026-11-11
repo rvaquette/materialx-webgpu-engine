@@ -39,50 +39,62 @@ const directional = Array.from({ length: SIZE * SIZE }, (_, index) => {
   const cosine = Math.max(0.02, (index % SIZE) / (SIZE - 1));
   return integrateAlbedo(roughness, cosine);
 });
-const average = Array.from({ length: SIZE }, (_, row) => {
-  let integral = 0;
-  for (let column = 1; column < SIZE; column++) {
-    const lower = (column - 1) / (SIZE - 1);
-    const upper = column / (SIZE - 1);
-    integral += (directional[row * SIZE + column - 1]! * lower + directional[row * SIZE + column]! * upper) / (SIZE - 1);
-  }
-  return integral;
-});
-
 const clamp = (value: number): number => Math.max(0, Math.min(1, value));
-const lerp = (lower: number, upper: number, amount: number): number => lower + (upper - lower) * amount;
+const TERMS = 6;
+
+function fit(values: readonly number[]): number[] {
+  const matrix = Array.from({ length: TERMS }, (_, row) => Array.from({ length: TERMS + 1 }, (_, column) =>
+    values.reduce((total, value, sample) => {
+      const position = sample / (SIZE - 1);
+      return total + Math.pow(position, row) * (column === TERMS ? value : Math.pow(position, column));
+    }, 0)));
+  for (let column = 0; column < TERMS; column++) {
+    let pivot = column;
+    for (let row = column + 1; row < TERMS; row++) {
+      if (Math.abs(matrix[row]![column]!) > Math.abs(matrix[pivot]![column]!)) pivot = row;
+    }
+    [matrix[column], matrix[pivot]] = [matrix[pivot]!, matrix[column]!];
+    const divisor = matrix[column]![column]!;
+    for (let index = column; index <= TERMS; index++) matrix[column]![index] = matrix[column]![index]! / divisor;
+    for (let row = 0; row < TERMS; row++) {
+      if (row === column) continue;
+      const factor = matrix[row]![column]!;
+      for (let index = column; index <= TERMS; index++) {
+        matrix[row]![index] = matrix[row]![index]! - factor * matrix[column]![index]!;
+      }
+    }
+  }
+  return matrix.map(row => row[TERMS]!);
+}
+
+const angleFits = Array.from({ length: SIZE }, (_, row) => fit(directional.slice(row * SIZE, (row + 1) * SIZE)));
+const coefficients = Array.from({ length: TERMS }, (_, term) => fit(angleFits.map(row => row[term]!)));
+const polynomial = (values: readonly number[], position: number): number =>
+  values.reduceRight((total, coefficient) => total * position + coefficient, 0);
 
 export function conductorAlbedo(roughness: number, cosine: number): number {
-  const rough = clamp(roughness) * (SIZE - 1);
-  const angle = clamp(cosine) * (SIZE - 1);
-  const row = Math.min(SIZE - 2, Math.floor(rough));
-  const column = Math.min(SIZE - 2, Math.floor(angle));
-  const low = lerp(directional[row * SIZE + column]!, directional[row * SIZE + column + 1]!, angle - column);
-  const high = lerp(directional[(row + 1) * SIZE + column]!, directional[(row + 1) * SIZE + column + 1]!, angle - column);
-  return lerp(low, high, rough - row);
+  return clamp(polynomial(coefficients.map(row => polynomial(row, clamp(roughness))), clamp(cosine)));
 }
 
 export function conductorAverageAlbedo(roughness: number): number {
-  const rough = clamp(roughness) * (SIZE - 1);
-  const row = Math.min(SIZE - 2, Math.floor(rough));
-  return lerp(average[row]!, average[row + 1]!, rough - row);
+  return clamp(coefficients.reduce((total, row, term) => total + polynomial(row, clamp(roughness)) * 2 / (term + 2), 0));
 }
 
+function wgslPolynomial(values: readonly number[], variable: string): string {
+  return values.reduceRight((expression, value) => `(${expression} * ${variable} + ${value.toFixed(9)})`, '0.0');
+}
+const angleExpressions = coefficients.map(row => wgslPolynomial(row, 'rough'));
+const albedoExpression = angleExpressions.reduceRight((expression, value) => `(${expression} * angle + ${value})`, '0.0');
+const averageExpression = coefficients.map((row, term) => `(${wgslPolynomial(row, 'rough')} * ${(2 / (term + 2)).toFixed(9)})`).join(' + ');
+
 export const CONDUCTOR_ENERGY_WGSL = `
-const MX_CONDUCTOR_ALBEDO = array<f32, 256>(${directional.map(value => value.toFixed(7)).join(', ')});
-const MX_CONDUCTOR_AVERAGE = array<f32, 16>(${average.map(value => value.toFixed(7)).join(', ')});
 fn mx_conductor_albedo(roughness: f32, cosine: f32) -> f32 {
-  let rough = clamp(roughness, 0.0, 1.0) * 15.0;
-  let angle = clamp(cosine, 0.0, 1.0) * 15.0;
-  let row = min(14u, u32(rough));
-  let column = min(14u, u32(angle));
-  let low = mix(MX_CONDUCTOR_ALBEDO[row * 16u + column], MX_CONDUCTOR_ALBEDO[row * 16u + column + 1u], angle - f32(column));
-  let high = mix(MX_CONDUCTOR_ALBEDO[(row + 1u) * 16u + column], MX_CONDUCTOR_ALBEDO[(row + 1u) * 16u + column + 1u], angle - f32(column));
-  return mix(low, high, rough - f32(row));
+  let rough = clamp(roughness, 0.0, 1.0);
+  let angle = clamp(cosine, 0.0, 1.0);
+  return clamp(${albedoExpression}, 0.0, 1.0);
 }
 fn mx_conductor_average_albedo(roughness: f32) -> f32 {
-  let rough = clamp(roughness, 0.0, 1.0) * 15.0;
-  let row = min(14u, u32(rough));
-  return mix(MX_CONDUCTOR_AVERAGE[row], MX_CONDUCTOR_AVERAGE[row + 1u], rough - f32(row));
+  let rough = clamp(roughness, 0.0, 1.0);
+  return clamp(${averageExpression}, 0.0, 1.0);
 }
 `;

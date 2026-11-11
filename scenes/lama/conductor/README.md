@@ -23,11 +23,13 @@ shared with the existing corpus. Numeric controls are editable uniforms.
   Nonpositive tail length disables the extra lobe. Both lobes use matching
   evaluation and sampling PDFs, and their weights sum to one.
 - Energy Compensation: an engine Kulla-Conty-style multiple-scattering equivalent.
-  A 16x16 GGX directional-albedo table is integrated with 2048 deterministic
-  NDF samples per cell. CPU and WGSL use the same table. The reciprocal missing-
+  A 16x16 GGX directional-albedo reference is integrated with 2048 deterministic
+  NDF samples per cell, then fitted by a degree-5 polynomial in roughness and
+  view cosine. CPU and WGSL use the same fit; WGSL has no dynamically indexed
+  constant albedo array. The reciprocal missing-
   energy term is cosine-sampled as part of the conductor BSDF, with a matching
   mixture PDF. Fresnel averaging uses a Schlick integral fit. The albedo table
-  is isotropic: compensation on anisotropic/film-coated conductors remains an
+  reference is isotropic: compensation on anisotropic/film-coated conductors remains an
   approximation. This is not a reproduction of RenderMan's compensation.
 
 Advanced inputs absent from the upstream MaterialX NodeDef are declared in
