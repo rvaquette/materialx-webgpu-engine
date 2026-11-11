@@ -20,6 +20,23 @@ const reader: UsdLayerReader = {
 };
 
 describe('LamaLayer gold IOR scenes', () => {
+  it('imports the editable gold/blue LamaMix scene with the common Lama camera', async () => {
+    const scene = await importUsdStage(join(SCENE_DIR, 'lama_mix_gold_blue.usda'), { reader });
+    const material = scene.materials.find((entry) => entry.primPath === '/World/Looks/gold_blue');
+    expect(material?.assetPath).toBe('./lama_mix_gold_blue.mtlx');
+    expect(material?.referencedPrimPath).toBe('/MaterialX/Materials/gold_blue');
+    expect(scene.prims.has('/World/Geometry/Teapot')).toBe(true);
+    expect(scene.prims.has('/World/Geometry/Stand')).toBe(true);
+    const reference = await importUsdStage(join(SCENE_DIR, 'lama_layer_gold_rough_coating.usda'), { reader });
+    expect(scene.prims.get('/World/Camera')?.attributes)
+      .toEqual(reference.prims.get('/World/Camera')?.attributes);
+    const document = await readFile(join(SCENE_DIR, 'lama_mix_gold_blue.mtlx'), 'utf8');
+    expect(document).toContain('<LamaMix name="gold_blue_mix" type="BSDF">');
+    expect(document).toContain('<input name="material1" type="BSDF" nodename="gold" />');
+    expect(document).toContain('<input name="material2" type="BSDF" nodename="blue" />');
+    expect(document).toContain('<input name="mix" type="float" value="0.5" uimin="0" uimax="1" engine:editable="true" />');
+  });
+
   it('imports the yellow LamaAdd scene with its textured diffuse and dielectric branches', async () => {
     const scene = await importUsdStage(join(SCENE_DIR, 'lama_add_yellow.usda'), { reader });
     const material = scene.materials.find((entry) => entry.primPath === '/World/Looks/yellow');
