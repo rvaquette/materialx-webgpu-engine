@@ -1,0 +1,34 @@
+<?xml version="1.0"?>
+<materialx version="1.39" colorspace="lin_rec709" xmlns:engine="urn:materialx-webgpu-engine:extensions">
+  <image name="decoration" type="color3">
+    <input name="file" type="filename" value="../renderman/textures/gold_base.png" />
+  </image>
+  <power name="decoration_linear" type="color3">
+    <input name="in1" type="color3" nodename="decoration" />
+    <input name="in2" type="color3" value="2.2, 2.2, 2.2" />
+  </power>
+  <multiply name="yellow_color" type="color3">
+    <input name="in1" type="color3" nodename="decoration_linear" />
+    <input name="in2" type="color3" value="0.95, 0.68, 0.12" />
+  </multiply>
+  <LamaDiffuse name="yellow_diffuse" type="BSDF">
+    <input name="color" type="color3" nodename="yellow_color" />
+    <input name="roughness" type="float" value="0.18" />
+  </LamaDiffuse>
+  <LamaDielectric name="glossy_reflection" type="BSDF">
+    <input name="fresnelMode" type="integer" value="1" />
+    <input name="IOR" type="float" value="1.5" uimin="1" uimax="3" engine:editable="true" />
+    <input name="roughness" type="float" value="0.2" />
+  </LamaDielectric>
+  <LamaAdd name="yellow_add" type="BSDF">
+    <input name="material1" type="BSDF" nodename="yellow_diffuse" />
+    <input name="weight1" type="float" value="0.9" uimin="0" uimax="1" engine:editable="true" />
+    <input name="material2" type="BSDF" nodename="glossy_reflection" />
+    <input name="weight2" type="float" value="0.7" uimin="0" uimax="1" engine:editable="true" />
+  </LamaAdd>
+  <LamaSurface name="yellow" type="material">
+    <input name="materialFront" type="BSDF" nodename="yellow_add" />
+    <input name="materialBack" type="BSDF" nodename="yellow_add" />
+    <input name="presence" type="float" value="1" />
+  </LamaSurface>
+</materialx>

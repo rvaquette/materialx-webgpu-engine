@@ -20,6 +20,27 @@ const reader: UsdLayerReader = {
 };
 
 describe('LamaLayer gold IOR scenes', () => {
+  it('imports the yellow LamaAdd scene with its textured diffuse and dielectric branches', async () => {
+    const scene = await importUsdStage(join(SCENE_DIR, 'lama_add_yellow.usda'), { reader });
+    const material = scene.materials.find((entry) => entry.primPath === '/World/Looks/yellow');
+    expect(material?.assetPath).toBe('./lama_add_yellow.mtlx');
+    expect(material?.referencedPrimPath).toBe('/MaterialX/Materials/yellow');
+    expect(scene.prims.has('/World/Geometry/Teapot')).toBe(true);
+    expect(scene.prims.has('/World/Geometry/Stand')).toBe(true);
+    expect(scene.prims.get('/World')?.attributes.get('pathtracer:environmentIntensity')?.value).toBe(0);
+    const reference = await importUsdStage(join(SCENE_DIR, 'lama_layer_gold_rough_coating.usda'), { reader });
+    expect(scene.prims.get('/World/Camera')?.attributes)
+      .toEqual(reference.prims.get('/World/Camera')?.attributes);
+    for (const name of ['Teapot', 'Stand']) {
+      expect(scene.prims.get(`/World/Geometry/${name}`)?.attributes.has('xformOp:transform')).toBe(false);
+    }
+    const document = await readFile(join(SCENE_DIR, 'lama_add_yellow.mtlx'), 'utf8');
+    expect(document).toContain('<LamaAdd name="yellow_add" type="BSDF">');
+    expect(document).toContain('<input name="material1" type="BSDF" nodename="yellow_diffuse" />');
+    expect(document).toContain('<input name="material2" type="BSDF" nodename="glossy_reflection" />');
+    expect(document).toContain('../renderman/textures/gold_base.png');
+  });
+
   it('imports the verdigris scene with the same layered patina on the teapot and stand', async () => {
     const scene = await importUsdStage(join(SCENE_DIR, 'lama_layer_verdigris.usda'), { reader });
     const material = scene.materials.find((entry) => entry.primPath === '/World/Looks/verdigris');
