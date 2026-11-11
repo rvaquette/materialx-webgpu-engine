@@ -79,6 +79,7 @@ const LOBE_HAS_SSS_MODE = 262144;
 const LOBE_HAS_SSS_TOPOLOGY = 524288;
 const LOBE_HAS_SSS_SUBSET = 1048576;
 const LOBE_HAS_SSS_CONTINUATION = 2097152;
+const LOBE_PAIRED_DIELECTRIC = 4194304;
 
 function rd(buf: ArrayLike<number>, i: number): number {
   return buf[i] ?? 0;
@@ -108,6 +109,7 @@ function writeLobe(out: Float32Array, base: number, lobe: LayeredBsdfLobe): void
   if (lobe.subsurfaceFollowTopology !== undefined) flags |= LOBE_HAS_SSS_TOPOLOGY;
   if (lobe.subsurfaceSubset !== undefined) flags |= LOBE_HAS_SSS_SUBSET;
   if (lobe.subsurfaceContinuation !== undefined) flags |= LOBE_HAS_SSS_CONTINUATION;
+  if (lobe.pairedDielectric) flags |= LOBE_PAIRED_DIELECTRIC;
 
   out[base] = KIND_TO_U32[lobe.kind];
   out[base + 1] = lobe.weight;
@@ -150,6 +152,7 @@ function readLobe(buf: ArrayLike<number>, base: number): LayeredBsdfLobe {
   const flags = Math.round(rd(buf, base + 2));
   const color: Rgb = [rd(buf, base + 3), rd(buf, base + 4), rd(buf, base + 5)];
   const lobe: LayeredBsdfLobe = { kind, weight: rd(buf, base + 1), color };
+  if ((flags & LOBE_PAIRED_DIELECTRIC) !== 0) lobe.pairedDielectric = true;
   if ((flags & LOBE_HAS_SUBSURFACE_TRANSPORT) !== 0) lobe.subsurfaceTransport = Math.round(rd(buf, base + 23)) as 0 | 1 | 2 | 3;
   if ((flags & LOBE_HAS_SSS_INVERSION) !== 0) lobe.subsurfaceInversion = rd(buf, base + 9) as 0 | 1;
   if ((flags & LOBE_HAS_SSS_BLEED) !== 0) lobe.subsurfaceBleed = rd(buf, base + 15);
@@ -394,6 +397,7 @@ fn mx_material_lobe(base : u32) -> MxBsdfLobe {
   lobe.extinction.x = select(lobe.extinction.x, 2.0, (flags & ${LOBE_HAS_SUBSURFACE_TRANSPORT}u) != 0u);
   if ((flags & ${LOBE_HAS_SSS_MODE}u) != 0u) { lobe.extinction.x = materials[base + 13u]; }
   lobe.thin = select(0.0, 1.0, (flags & MX_LOBE_THIN_WALLED) != 0u);
+  if ((flags & ${LOBE_PAIRED_DIELECTRIC}u) != 0u) { lobe.thin = -1.0; }
   if ((flags & ${LOBE_HAS_SSS_CONTINUATION}u) != 0u) { lobe.thin = materials[base + 19u]; }
   if ((flags & ${LOBE_HAS_SSS_TOPOLOGY}u) != 0u) { lobe.extinction.y = materials[base + 14u]; }
   lobe.dispersion = materials[base + 23u];

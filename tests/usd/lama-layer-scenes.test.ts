@@ -24,15 +24,18 @@ const reader: UsdLayerReader = {
 };
 
 describe('LamaLayer gold IOR scenes', () => {
-  it('imports every conductor parameter scene with valid material assets and the common camera', async () => {
-    const directory = join(SCENE_DIR, 'conductor');
+  it.each([
+    { family: 'conductor', count: 21, unsupported: 4 },
+    { family: 'dielectric', count: 34, unsupported: 10 },
+  ])('imports every $family parameter scene with valid material assets and the common camera', async ({ family, count, unsupported }) => {
+    const directory = join(SCENE_DIR, family);
     const coverage = JSON.parse(await readFile(join(directory, 'coverage.json'), 'utf8')) as { scene: string; parameter: string; status: string }[];
-    expect(coverage).toHaveLength(21);
-    expect(coverage.filter(example => example.status === 'unsupported')).toHaveLength(4);
+    expect(coverage).toHaveLength(count);
+    expect(coverage.filter(example => example.status === 'unsupported')).toHaveLength(unsupported);
     const reference = await importUsdStage(join(LAYER_DIR, 'lama_layer_gold_rough_coating.usda'), { reader });
     for (const example of coverage) {
       const scene = await importUsdStage(join(directory, example.scene), { reader });
-      const name = `conductor_${example.parameter}`;
+      const name = `${family}_${example.parameter}`;
       const material = scene.materials.find(entry => entry.primPath === `/World/Looks/${name}`);
       expect(material?.assetPath, example.parameter).toBe('./materials.mtlx');
       expect(material?.referencedPrimPath, example.parameter).toBe(`/MaterialX/Materials/${name}`);

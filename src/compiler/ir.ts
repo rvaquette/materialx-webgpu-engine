@@ -344,6 +344,7 @@ export interface LayeredBsdfLobe {
   conductorEta?: Rgb;
   /** Thin-walled transmission: straight-through, no refraction bending. */
   thinWalled?: boolean;
+  pairedDielectric?: boolean;
   /** Interior Beer-Lambert tint reached after attenuationDistance (glass volume). */
   attenuationColor?: Rgb;
   /** Reference distance for attenuationColor; absent/Infinity disables absorption. */

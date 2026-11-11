@@ -30,6 +30,13 @@ const normalize = (a: V): V => {
 const WO: V = normalize([0.4, 0.1, 1.0]);
 
 describe('closure library prelude (T056a)', () => {
+  it('preserves signed exit normals for both combined and split solid dielectric interfaces', () => {
+    const oriented = CLOSURE_LIBRARY_PRELUDE.match(/fn mx_closure_oriented_normal[\s\S]*?\n}/)?.[0];
+    expect(oriented).toContain('l.kind == MX_LOBE_DIELECTRIC_TRANSMISSION && l.thin <= 0.0');
+    expect(oriented).not.toContain('l.thin == 0.0');
+    expect(oriented).toContain('return -n;');
+  });
+
   it('specializes absent fuzz to the exact base eval/sample paths, retaining all other formulas', () => {
     const spec = { kinds: new Set([1, 3, 4, 8]), thinFilm: false };
     const generic = closureLibraryPrelude(spec);
@@ -139,7 +146,7 @@ describe('closure library prelude (T056a)', () => {
     expect(CLOSURE_LIBRARY_PRELUDE).toContain('fn mx_closure_eval(c: LayeredClosure, wo: vec3f, wi: vec3f) -> MxBsdfEval');
     expect(CLOSURE_LIBRARY_PRELUDE).toContain('fn mx_closure_pdf(c: LayeredClosure, wo: vec3f, wi: vec3f) -> f32');
     expect(CLOSURE_LIBRARY_PRELUDE).toContain('fn mx_closure_sample(c: LayeredClosure, wo: vec3f, u: vec3f) -> MxBsdfSample');
-    expect(CLOSURE_LIBRARY_PRELUDE).toContain('pdf = pdf + (lobe.weight / total) * r.pdf;');
+    expect(CLOSURE_LIBRARY_PRELUDE).toContain('pdf = pdf + (mx_closure_selection_weight(lobe, wo) / total) * r.pdf;');
     expect(CLOSURE_LIBRARY_PRELUDE).toContain('let value = coatW * cc.value + att * baseEval.value;');
     expect(CLOSURE_LIBRARY_PRELUDE).toContain('mx_thin_film_fresnel(mx_fresnel_schlick(f0, cosVH), f0, cosVH, filmW, filmT, filmIor)');
   });

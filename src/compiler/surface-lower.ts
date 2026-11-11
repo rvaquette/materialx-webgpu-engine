@@ -446,25 +446,40 @@ function lowerLamaBsdf(graph: ResolvedGraph, nodeId: string, frame?: LamaShading
       const reflectivity = nodeColor(graph, nodeId, 'reflectivity', [0.04, 0.04, 0.04]);
       const reflectance = Math.max(0, Math.min(0.999, (reflectivity[0] + reflectivity[1] + reflectivity[2]) / 3));
       const artisticIor = (1 + Math.sqrt(reflectance)) / Math.max(1 - Math.sqrt(reflectance), 1e-4);
-      const ior = mode === 0 ? artisticIor : nodeScalar(graph, nodeId, 'IOR', 1.5);
+      const exterior = Math.max(nodeScalar(graph, nodeId, 'exteriorIOR', 1), 1e-4);
+      const ior = Math.max(mode === 0 ? artisticIor : nodeScalar(graph, nodeId, 'IOR', 1.5), 1e-4) / exterior;
       const absorption = nodeColor(graph, nodeId, 'absorptionColor', [1, 1, 1]);
-      const radius = nodeScalar(graph, nodeId, 'absorptionRadius', 1);
-      const attenuationColor = absorption.map(value => Math.exp(-value)) as unknown as Rgb;
+      const radius = Math.max(nodeScalar(graph, nodeId, 'absorptionRadius', 1), 1e-6);
+      const scatter = nodeColor(graph, nodeId, 'scatterColor', [0, 0, 0]).map(clamp01) as unknown as Rgb;
+      const extinction = absorption.map(value => -Math.log(Math.max(1e-6, Math.min(1, value))) / radius) as unknown as Rgb;
+      const attenuationColor = absorption.map((value, channel) => Math.pow(Math.max(1e-6, Math.min(1, value)), 1 - scatter[channel]!)) as unknown as Rgb;
       const shared = {
-        weight: 1, roughness, ior,
-        ...(anisotropy > 0 ? { anisotropy } : {}), ...(rotation > 0 ? { rotation } : {}),
+        weight: 1, roughness, ior, pairedDielectric: true,
+        ...(anisotropy !== 0 ? { anisotropy: Math.min(Math.abs(anisotropy), 0.98) } : {}),
+        ...((rotation !== 0 || anisotropy < 0) ? { rotation: rotation + (anisotropy < 0 ? 0.25 : 0) } : {}),
       };
-      const scattering = nodeColor(graph, nodeId, 'scatterColor', [0, 0, 0]);
-      const scatterAnisotropy = nodeScalar(graph, nodeId, 'scatterAnisotropy', 0);
-      return assemble([
+      const scattering = extinction.map((value, channel) => value * scatter[channel]!) as unknown as Rgb;
+      const scatterAnisotropy = Math.max(-0.99, Math.min(0.99, nodeScalar(graph, nodeId, 'scatterAnisotropy', 0)));
+      const strength = nodeScalar(graph, nodeId, 'dispersionMode', 0) === 1
+        ? 20 / Math.max(nodeScalar(graph, nodeId, 'dispersionAbbe', 50), 1)
+        : Math.max(nodeScalar(graph, nodeId, 'dispersionSpread', 0), 0);
+      const dispersion = strength * clamp01(nodeScalar(graph, nodeId, 'dispersionSaturation', 1));
+      const lobes: LayeredBsdfLobe[] = [
         { kind: 'dielectric_reflection', ...shared, color: nodeColor(graph, nodeId, 'reflectionTint', [1, 1, 1]) },
         {
           kind: 'dielectric_transmission', ...shared,
           color: nodeColor(graph, nodeId, 'transmissionTint', [1, 1, 1]),
-          ...(radius > 0 && absorption.some(value => value > 0) ? { attenuationColor, attenuationDistance: radius } : {}),
+          ...(dispersion > 0 ? { dispersion } : {}),
+          ...(radius > 0 && absorption.some(value => value < 1) ? { attenuationColor, attenuationDistance: radius } : {}),
           ...(scattering.some(value => value > 0) ? { interiorScattering: scattering, interiorAnisotropy: scatterAnisotropy } : {}),
         },
-      ], 1, {});
+      ];
+      const length = clamp01(nodeScalar(graph, nodeId, 'tailLength', 0.5));
+      const tail = length > 0 ? clamp01(nodeScalar(graph, nodeId, 'tailMix', 0)) : 0;
+      return assemble(tail > 0 ? [
+        ...lobes.map(lobe => ({ ...lobe, weight: 1 - tail })),
+        ...lobes.map(lobe => ({ ...lobe, weight: tail, roughness: roughness + (1 - roughness) * length })),
+      ] : lobes, 1, {});
     }
     case 'LamaGeneralizedSchlick': {
       const mode = nodeScalar(graph, nodeId, 'fresnelMode', 0);

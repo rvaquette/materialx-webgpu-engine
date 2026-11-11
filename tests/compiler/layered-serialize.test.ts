@@ -26,6 +26,13 @@ const rich: LayeredClosure = {
 };
 
 describe('LayeredClosure serialization (T055e1)', () => {
+  it('preserves the paired dielectric interface contract', () => {
+    const closure: LayeredClosure = { opacity: 1, lobes: [
+      { kind: 'dielectric_transmission', color: [1, 1, 1], weight: 1, pairedDielectric: true },
+    ] };
+    expect(deserializeLayeredClosure(serializeLayeredClosure(closure))).toEqual(closure);
+  });
+
   it('rounds every numeric field to the requested decimals', () => {
     const s = serializeLayeredClosure({ lobes: [{ kind: 'burley_diffuse', weight: 0.1234567, color: [0.7654321, 0, 0] }], opacity: 1 }, 6);
     expect(s.lobes[0]!.weight).toBe(0.123457);

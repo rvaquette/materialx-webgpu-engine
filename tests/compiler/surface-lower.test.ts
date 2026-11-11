@@ -98,6 +98,39 @@ function shade(closure: LayeredClosure, lighting: ReferenceLighting = defaultLig
 }
 
 describe('surfaceGraphToLayered (T055b)', () => {
+  it('lowers dielectric exterior IOR, signed anisotropy, Abbe dispersion and tail weights', () => {
+    const graph = graphOf('surface', [connection('bsdf', 'BSDF', 'GLASS')]);
+    graph.nodes.set('GLASS', bsdfNode('GLASS', 'LamaDielectric', [
+      input('fresnelMode', 'integer', '1'), input('IOR', 'float', '1.6'), input('exteriorIOR', 'float', '1.25'),
+      input('anisotropy', 'float', '-0.6'), input('rotation', 'float', '-0.125'),
+      input('dispersionMode', 'integer', '1'), input('dispersionAbbe', 'float', '40'),
+      input('dispersionSaturation', 'float', '0.5'), input('roughness', 'float', '0.2'),
+      input('tailMix', 'float', '0.3'), input('tailLength', 'float', '0.5'),
+    ]));
+    const closure = surfaceGraphToLayered(resolveSurface(graph)!, graph);
+    expect(closure.lobes).toHaveLength(4);
+    expect(closure.lobes[0]).toMatchObject({ weight: 0.7, anisotropy: 0.6, rotation: 0.125, ior: 1.28 });
+    expect(closure.lobes[1]!.dispersion).toBeCloseTo(0.25);
+    expect(closure.lobes[2]!.weight).toBeCloseTo(0.3);
+    expect(closure.lobes[2]!.roughness).toBeCloseTo(0.6);
+  });
+
+  it('uses absorptionColor as transmittance and scatterColor as the interior albedo', () => {
+    const graph = graphOf('surface', [connection('bsdf', 'BSDF', 'GLASS')]);
+    const inputs = [input('absorptionColor', 'color3', '0.25, 1, 0'), input('absorptionRadius', 'float', '2'),
+      input('scatterColor', 'color3', '0.5, 1, 0'), input('scatterAnisotropy', 'float', '-0.3')];
+    graph.nodes.set('GLASS', bsdfNode('GLASS', 'LamaDielectric', inputs));
+    const transmission = surfaceGraphToLayered(resolveSurface(graph)!, graph).lobes[1]!;
+    expect(transmission.attenuationColor![0]).toBeCloseTo(0.5);
+    expect(transmission.attenuationColor![1]).toBe(1);
+    expect(transmission.interiorScattering![0]).toBeCloseTo(-Math.log(0.25) / 4);
+    expect(transmission.interiorScattering![1]).toBeCloseTo(0);
+    expect(transmission.interiorScattering![2]).toBeCloseTo(0);
+    expect(transmission.interiorAnisotropy).toBe(-0.3);
+    graph.nodes.set('GLASS', bsdfNode('GLASS', 'LamaDielectric', [input('absorptionColor', 'color3', '1, 1, 1')]));
+    expect(surfaceGraphToLayered(resolveSurface(graph)!, graph).lobes[1]!.attenuationColor).toBeUndefined();
+  });
+
   it('preserves signed conductor anisotropy, exterior IOR, tails and compensation', () => {
     const graph = graphOf('surface', [connection('bsdf', 'BSDF', 'METAL')]);
     graph.nodes.set('METAL', bsdfNode('METAL', 'LamaConductor', [
@@ -179,7 +212,7 @@ describe('surfaceGraphToLayered (T055b)', () => {
     expect(dielectric.lobes.map(lobe => lobe.kind)).toEqual(['dielectric_reflection', 'dielectric_transmission']);
     expect(dielectric.lobes[0]?.ior).toBe(1.5);
     expect(dielectric.lobes[1]?.attenuationDistance).toBe(2);
-    expect(dielectric.lobes[1]?.attenuationColor?.[0]).toBeCloseTo(Math.exp(-0.2), 5);
+    expect(dielectric.lobes[1]?.attenuationColor?.[0]).toBeCloseTo(0.2, 5);
     expect(dielectric.lobes[1]?.interiorScattering).toBeUndefined();
 
     const schlickGraph = graphOf('surface', [connection('bsdf', 'BSDF', 'SCHLICK')]);

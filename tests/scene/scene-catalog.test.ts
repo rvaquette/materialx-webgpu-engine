@@ -4,6 +4,14 @@ import { describe, expect, it } from 'vitest';
 import { SCENE_CATALOG } from '../../src/scene/scene-catalog.ts';
 
 describe('scene selector catalog', () => {
+  it('includes every dielectric parameter scene and identifies unsupported controls', () => {
+    const names = readdirSync('scenes/lama/dielectric').filter(name => name.endsWith('.usda')).sort();
+    const entries = SCENE_CATALOG.filter(scene => scene.entry.startsWith('./scenes/lama/dielectric/'));
+    expect(entries.map(scene => scene.entry).sort()).toEqual(names.map(name => `./scenes/lama/dielectric/${name}`));
+    expect(entries).toHaveLength(34);
+    expect(entries.filter(scene => scene.label.includes('NOT SUPPORTED'))).toHaveLength(10);
+  });
+
   it('includes every current pathtracer USDA exactly once, in filename order', () => {
     const names = readdirSync('scenes\\pathtracer')
       .filter(name => name.endsWith('.usda')).sort();

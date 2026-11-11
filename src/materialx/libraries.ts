@@ -87,6 +87,28 @@ const CONDUCTOR_EXTENSION_DEFS = `<materialx version="1.39">
   </nodedef>
 </materialx>`;
 
+const DIELECTRIC_EXTENSION_DEFS = `<materialx version="1.39">
+  <nodedef name="ND_engine_lama_dielectric" node="LamaDielectric" inherit="ND_lama_dielectric">
+    <input name="tailMix" type="float" value="0" />
+    <input name="tailLength" type="float" value="0.5" />
+    <input name="exteriorIOR" type="float" value="1" />
+    <input name="dispersionMode" type="integer" value="0" />
+    <input name="dispersionSpread" type="float" value="0" />
+    <input name="dispersionAbbe" type="float" value="50" />
+    <input name="dispersionSaturation" type="float" value="1" />
+    <input name="energyCompensation" type="float" value="0" />
+    <input name="shadowDensity" type="float" value="1" />
+    <input name="shadowColoring" type="float" value="1" />
+    <input name="shadowFresnelFront" type="float" value="1" />
+    <input name="shadowFresnelBack" type="float" value="1" />
+    <input name="surfaceMollification" type="float" value="0" />
+    <input name="motionMollification" type="float" value="0" />
+    <input name="lobeName" type="string" value="" />
+    <input name="interiorId" type="integer" value="0" />
+    <input name="matte" type="string" value="" />
+  </nodedef>
+</materialx>`;
+
 /** Build library sources from a root URL and a list of relative file paths. */
 export function defaultLibrarySources(
   rootUrl: string,
@@ -123,6 +145,9 @@ export class MaterialXLibraries {
       }
       if (options.sources.some(source => source.name === 'bxdf/lama/lama_conductor.mtlx')) {
         await this.core.readXmlString(doc, CONDUCTOR_EXTENSION_DEFS, { readXIncludes: false });
+      }
+      if (options.sources.some(source => source.name === 'bxdf/lama/lama_dielectric.mtlx')) {
+        await this.core.readXmlString(doc, DIELECTRIC_EXTENSION_DEFS, { readXIncludes: false });
       }
 
     } catch (error) {

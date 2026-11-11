@@ -247,9 +247,9 @@ describe('emitLayeredSurface (T055d)', () => {
     const module = emit(graph);
     const closure = surfaceGraphToLayered(resolveSurface(graph)!, graph);
     expect(closure.coat).toMatchObject({ mode: 'rough_coating', topThickness: 2 });
-    expect(closure.coat?.absorption?.[0]).toBeCloseTo(0.4, 6);
-    expect(closure.coat?.absorption?.[1]).toBeCloseTo(0.3, 6);
-    expect(closure.coat?.absorption?.[2]).toBeCloseTo(0.2, 6);
+    expect(closure.coat?.absorption?.[0]).toBeCloseTo(-Math.log(0.8) / 2, 6);
+    expect(closure.coat?.absorption?.[1]).toBeCloseTo(-Math.log(0.6) / 2, 6);
+    expect(closure.coat?.absorption?.[2]).toBeCloseTo(-Math.log(0.4) / 2, 6);
     expect(module.code).toContain('MxCoatLayer(');
     expect(module.code).toContain(', 2u, 2.0, select(vec3f(0.0),');
   });
@@ -286,7 +286,7 @@ describe('emitLayeredSurface (T055d)', () => {
     expect(dielectric.code).toContain('c.hasInterior = select(0u, 1u,');
     expect(dielectric.code).toContain('c.interiorSigmaA =');
     expect(dielectric.code).toContain('c.interiorSigmaS =');
-    expect(dielectric.code).toContain('c.interiorG = e');
+    expect(dielectric.code).toContain('c.interiorG = clamp(');
     expect(dielectric.code).toContain('= 0.4;');
 
     const sssGraph = surfaceGraph('surface', [conn('bsdf', 'BSDF', 'skin')], [

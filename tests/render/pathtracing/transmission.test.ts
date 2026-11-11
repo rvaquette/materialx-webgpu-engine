@@ -15,6 +15,7 @@ import {
   dielectricLobe,
   dielectricF0,
   fresnelDielectric,
+  pairedDielectricReflectionLobe,
   layeredSurfaceBsdf,
   hemisphericalReflectance,
 } from '../../../src/render/pathtracing/bsdf.ts';
@@ -31,6 +32,61 @@ const WO: V = normalize([0.3, 0.2, 1.0]);
 const IOR = 1.5;
 
 describe('dielectric transmission BTDF (T056e)', () => {
+  it('samples split glass predominantly in transmission and preserves energy through both sides', () => {
+    const glass = layeredSurfaceBsdf({ opacity: 1, lobes: [
+      { kind: 'dielectric_reflection', weight: 1, color: [1, 1, 1], roughness: 0.001, ior: IOR, pairedDielectric: true },
+      { kind: 'dielectric_transmission', weight: 1, color: [1, 1, 1], roughness: 0.001, ior: IOR, pairedDielectric: true },
+    ] });
+    const random = createPcg32(763);
+    let enteringTransmissions = 0;
+    let exitingTransmissions = 0;
+    let slab = 0;
+    for (let sampleIndex = 0; sampleIndex < 4000; sampleIndex++) {
+      const entry = glass.sample([0, 0, 1], random);
+      if (!entry || entry.wi[2] >= 0) continue;
+      enteringTransmissions++;
+      expect(glass.eval([0, 0, 1], entry.wi).pdf).toBeCloseTo(entry.pdf, 8);
+      const exit = glass.sample([0, 0, -1], random);
+      if (!exit || exit.wi[2] <= 0) continue;
+      exitingTransmissions++;
+      const throughput = entry.value[0] * Math.abs(entry.wi[2]) / entry.pdf
+        * exit.value[0] * Math.abs(exit.wi[2]) / exit.pdf;
+      slab += throughput;
+    }
+    expect(enteringTransmissions).toBeGreaterThan(3700);
+    expect(exitingTransmissions).toBeGreaterThan(3500);
+    expect(slab / 4000).toBeCloseTo((1 - dielectricF0(IOR)) ** 2, 1);
+  });
+
+  it('pairs a tinted exact reflection with transmission without double-counting reflection', () => {
+    const outgoing: V = [0, 0, 1];
+    const reflection = pairedDielectricReflectionLobe([0.2, 0.6, 1], 0.2, IOR);
+    const transmission = dielectricTransmissionLobe([1, 1, 1], 0.2, IOR);
+    const value = reflection.eval(outgoing, outgoing).value;
+    expect(value[0] / value[2]).toBeCloseTo(0.2, 9);
+    expect(transmission.eval(outgoing, outgoing).value).toEqual([0, 0, 0]);
+    const inside: V = normalize([0.9, 0, -0.3]);
+    const sample = pairedDielectricReflectionLobe([1, 1, 1], 0.001, IOR).sample(inside, createPcg32(19));
+    expect(sample).not.toBeNull();
+    expect(sample!.wi[2]).toBeLessThan(0);
+    expect(sample!.value[0] * Math.abs(sample!.wi[2]) / sample!.pdf).toBeCloseTo(1, 2);
+  });
+
+  it('keeps anisotropic transmission sampling and evaluation coherent', () => {
+    const lobe = dielectricTransmissionLobe([0.9, 0.95, 1], 0.35, IOR, 0.75, -0.125);
+    const random = createPcg32(693);
+    let valid = 0;
+    for (let sampleIndex = 0; sampleIndex < 512; sampleIndex++) {
+      const sample = lobe.sample(WO, random);
+      if (!sample) continue;
+      valid++;
+      const evaluated = lobe.eval(WO, sample.wi);
+      expect(evaluated.pdf).toBeCloseTo(sample.pdf, 9);
+      expect(evaluated.value).toEqual(sample.value);
+    }
+    expect(valid).toBeGreaterThan(300);
+  });
+
   it('dielectric Fresnel matches the achromatic F0 at normal incidence and hits TIR', () => {
     expect(fresnelDielectric(1, IOR)).toBeCloseTo(dielectricF0(IOR), 9);
     // Dense-to-light (eta < 1) beyond the critical angle is total internal reflection.

@@ -677,8 +677,38 @@ function refractAboutMicrofacet(wo: V, wm: V, invEta: number): V | null {
   return normalize(add(scale(wo, -invEta), scale(wm, invEta * cosI - cosT)));
 }
 
-function transmissionEval(wo: V, wi: V, a: number, ior: number, tint: V): BsdfEval {
+export function pairedDielectricReflectionLobe(tint: Vec3, roughness: number, ior: number, anisotropy = 0, rotation = 0): Lobe {
+  const orient = (direction: Vec3, side: number): Vec3 => [direction[0], direction[1], direction[2] * side];
+  const base = (side: number): Lobe => {
+    const fresnel = (cosine: number): Vec3 => scale(tint, fresnelDielectric(cosine, side > 0 ? ior : 1 / ior));
+    const [alphaU, alphaV] = anisoAlphas(roughness, anisotropy);
+    return anisotropy > 0 ? {
+      eval: (outgoing, incoming) => microfacetEvalAniso(outgoing, incoming, alphaU, alphaV, rotation, fresnel),
+      sample: (outgoing, random) => microfacetSampleAniso(outgoing, alphaU, alphaV, rotation, fresnel, random),
+    } : {
+      eval: (outgoing, incoming) => microfacetEval(outgoing, incoming, alphaOf(roughness), fresnel),
+      sample: (outgoing, random) => microfacetSample(outgoing, alphaOf(roughness), fresnel, random),
+    };
+  };
+  return {
+    eval: (outgoing, incoming) => {
+      const side = outgoing[2] >= 0 ? 1 : -1;
+      return base(side).eval(orient(outgoing, side), orient(incoming, side));
+    },
+    sample: (outgoing, random) => {
+      const side = outgoing[2] >= 0 ? 1 : -1;
+      const sample = base(side).sample(orient(outgoing, side), random);
+      return sample ? { ...sample, wi: orient(sample.wi, side) } : null;
+    },
+  };
+}
+
+function transmissionEval(wo: V, wi: V, a: number, ior: number, tint: V, anisotropy = 0, rotation = 0): BsdfEval {
   if (wo[2] === 0 || wi[2] === 0 || wo[2] * wi[2] > 0) return { value: [0, 0, 0], pdf: 0 };
+  if (anisotropy > 0) {
+    wo = rotateTangent(wo, rotation);
+    wi = rotateTangent(wi, rotation);
+  }
   const eta = wo[2] > 0 ? ior : 1 / ior; // n_t / n_i across the crossing
   let wm = normalize(add(wo, scale(wi, eta)));
   if (wm[2] < 0) wm = scale(wm, -1);
@@ -687,8 +717,11 @@ function transmissionEval(wo: V, wi: V, a: number, ior: number, tint: V): BsdfEv
   const denom = dotO + eta * dotI;
   if (Math.abs(denom) < 1e-7) return { value: [0, 0, 0], pdf: 0 };
   const F = fresnelDielectric(dotO, eta);
-  const D = ggxNdf(Math.abs(wm[2]), a);
-  const G = smithG1(Math.abs(wo[2]), a) * smithG1(Math.abs(wi[2]), a);
+  const [alphaU, alphaV] = anisoAlphas(Math.sqrt(a), anisotropy);
+  const D = anisotropy > 0 ? ggxNdfAniso(wm, alphaU, alphaV) : ggxNdf(Math.abs(wm[2]), a);
+  const G = anisotropy > 0
+    ? smithG1Aniso([wo[0], wo[1], Math.abs(wo[2])], alphaU, alphaV) * smithG1Aniso([wi[0], wi[1], Math.abs(wi[2])], alphaU, alphaV)
+    : smithG1(Math.abs(wo[2]), a) * smithG1(Math.abs(wi[2]), a);
   // Radiance-mode BTDF value: the eta^2 of the Jacobian is absent here so that
   // value / pdf carries the 1/eta^2 compression on the refracted radiance.
   const common = (Math.abs(dotO) * Math.abs(dotI)) / (Math.abs(wo[2]) * Math.abs(wi[2]));
@@ -698,21 +731,24 @@ function transmissionEval(wo: V, wi: V, a: number, ior: number, tint: V): BsdfEv
 }
 
 /** Refractive dielectric transmission (glass): Snell + 1/eta^2 compression. */
-export function dielectricTransmissionLobe(tint: Vec3, roughness: number, ior: number): Lobe {
+export function dielectricTransmissionLobe(tint: Vec3, roughness: number, ior: number, anisotropy = 0, rotation = 0): Lobe {
   const a = alphaOf(roughness);
   const t: V = [...tint];
   return {
-    eval: (wo, wi) => transmissionEval(wo as V, wi as V, a, ior, t),
+    eval: (wo, wi) => transmissionEval(wo as V, wi as V, a, ior, t, anisotropy, rotation),
     sample(wo, rng) {
       const w = wo as V;
       if (w[2] === 0) return null;
-      let wm = sampleGgxNormal(a, rng(), rng());
+      const [alphaU, alphaV] = anisoAlphas(roughness, anisotropy);
+      let wm = anisotropy > 0
+        ? rotateTangent(sampleGgxNormalAniso(alphaU, alphaV, rng(), rng()), -rotation)
+        : sampleGgxNormal(a, rng(), rng());
       if (w[2] < 0) wm = scale(wm, -1); // face the incident side
       if (dot(w, wm) <= 0) return null;
       const invEta = w[2] > 0 ? 1 / ior : ior; // n_i / n_t
       const wi = refractAboutMicrofacet(w, wm, invEta);
       if (!wi || w[2] * wi[2] > 0) return null; // TIR or no crossing
-      const { value, pdf } = transmissionEval(w, wi, a, ior, t);
+      const { value, pdf } = transmissionEval(w, wi, a, ior, t, anisotropy, rotation);
       if (pdf <= 0) return null;
       return { wi, value, pdf, specular: false };
     },
@@ -774,6 +810,7 @@ export interface SurfaceParams {
 interface WeightedLobe {
   weight: number;
   lobe: Lobe;
+  selectionWeight?: (outgoing: Vec3) => number;
 }
 
 /**
@@ -792,10 +829,11 @@ export function composeLobes(input: readonly WeightedLobe[]): Lobe {
     let value: V = [0, 0, 0];
     let pdf = 0;
     if (total <= 0) return { value, pdf };
+    const selectionTotal = entries.reduce((sum, entry) => sum + (entry.selectionWeight?.(wo) ?? entry.weight), 0);
     for (const e of entries) {
       const r = e.lobe.eval(wo, wi);
       value = add(value, scale(r.value, e.weight));
-      pdf += (e.weight / total) * r.pdf;
+      pdf += ((e.selectionWeight?.(wo) ?? e.weight) / selectionTotal) * r.pdf;
     }
     return { value, pdf };
   }
@@ -804,14 +842,16 @@ export function composeLobes(input: readonly WeightedLobe[]): Lobe {
     eval: (wo, wi) => combinedEval(wo as V, wi as V),
     sample(wo, rng) {
       if (total <= 0 || (wo as V)[2] === 0) return null;
-      let pick = rng() * total;
+      const selectionTotal = entries.reduce((sum, entry) => sum + (entry.selectionWeight?.(wo) ?? entry.weight), 0);
+      let pick = rng() * selectionTotal;
       let chosen = entries[entries.length - 1]!;
       for (const e of entries) {
-        if (pick < e.weight) {
+        const probabilityWeight = e.selectionWeight?.(wo) ?? e.weight;
+        if (pick < probabilityWeight) {
           chosen = e;
           break;
         }
-        pick -= e.weight;
+        pick -= probabilityWeight;
       }
       const s = chosen.lobe.sample(wo as V, rng);
       if (!s) return null;
@@ -902,6 +942,7 @@ export function lobeFromLayered(l: LayeredBsdfLobe, film?: ThinFilmLayer): Lobe 
       return generalizedSchlickLobe(l.color, l.color90 ?? [1, 1, 1], roughness,
         l.fresnelExponent ?? 5, aniso, rotation, film);
     case 'dielectric_reflection':
+      if (l.pairedDielectric) return pairedDielectricReflectionLobe(l.color, roughness, l.ior ?? 1.5, aniso, rotation);
       return film
         ? dielectricThinFilmLobe(l.ior ?? 1.5, roughness, aniso, rotation, film)
         : aniso > 0
@@ -910,7 +951,7 @@ export function lobeFromLayered(l: LayeredBsdfLobe, film?: ThinFilmLayer): Lobe 
     case 'dielectric_transmission':
       return l.thinWalled
         ? thinWalledTransmissionLobe(l.color, roughness, l.ior ?? 1.5)
-        : dielectricTransmissionLobe(l.color, roughness, l.ior ?? 1.5);
+        : dielectricTransmissionLobe(l.color, roughness, l.ior ?? 1.5, aniso, rotation);
     case 'sheen':
       return sheenLobe(l.color, l.roughness ?? 0.3);
     case 'subsurface':
@@ -1065,7 +1106,14 @@ export function layeredSurfaceBsdf(closure: LayeredClosure, channel: 0 | 1 | 2 =
       }
     }
     const lobe = lobeFromLayered(adjusted, film);
-    if (lobe) entries.push({ weight: l.weight, lobe });
+    if (lobe) entries.push({ weight: l.weight, lobe,
+      ...(adjusted.pairedDielectric ? { selectionWeight: (outgoing: Vec3): number => {
+        const ior = adjusted.ior ?? 1.5;
+        const eta = outgoing[2] > 0 ? ior : 1 / ior;
+        const reflection = Math.max(0.02, Math.min(0.98, fresnelDielectric(Math.abs(outgoing[2]), eta)));
+        return l.weight * (adjusted.kind === 'dielectric_reflection' ? reflection : 1 - reflection);
+      } } : {}),
+    });
   }
   if (closure.sheen && closure.sheen.weight > 0) {
     entries.push({ weight: closure.sheen.weight, lobe: sheenLobe(closure.sheen.color, closure.sheen.roughness) });

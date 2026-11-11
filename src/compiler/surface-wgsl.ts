@@ -596,6 +596,7 @@ function directLobe(lobe: LayeredBsdfLobe): LobeWgsl {
     ...(lobe.ior !== undefined ? { ior: staticFloat(lobe.ior, 1.5) } : {}),
     ...(lobe.extinction ? { extinction: staticColor(lobe.extinction, [0, 0, 0]) } : {}),
     ...(lobe.thinWalled ? { thin: '1.0' } : {}),
+    ...(lobe.pairedDielectric ? { thin: '-1.0' } : {}),
     ...(lobe.dispersion !== undefined ? { dispersion: staticFloat(lobe.dispersion) } : {}),
     ...(lobe.energyCompensation !== undefined ? { energyCompensation: staticFloat(lobe.energyCompensation) } : {}),
   };
@@ -856,22 +857,43 @@ function lowerLamaClosureWgsl(
       break;
     }
     case 'LamaDielectric': {
+      for (const input of node.inputs) {
+        if (['energyCompensation', 'shadowDensity', 'shadowColoring', 'shadowFresnelFront', 'shadowFresnelBack',
+          'surfaceMollification', 'motionMollification', 'lobeName', 'interiorId', 'matte'].includes(input.name)) {
+          sink({ level: 'warning', message: `LamaDielectric '${input.name}' is not implemented; this control has no effect.`, detail: { nodeId, parameter: input.name } });
+        }
+      }
       const reflectivity = `clamp(${ctx.s('reflectivity', 0.04)}, 0.0, 0.999)`;
       const artisticIor = `((1.0 + sqrt(${reflectivity})) / (1.0 - sqrt(${reflectivity})))`;
-      const ior = `select(${ctx.s('IOR', 1.5)}, ${artisticIor}, ${ctx.s('fresnelMode', 0)} == 0)`;
+      const exterior = `max(${ctx.s('exteriorIOR', 1)}, 1e-4)`;
+      const ior = `(max(select(${ctx.s('IOR', 1.5)}, ${artisticIor}, ${ctx.s('fresnelMode', 0)} == 0), 1e-4) / ${exterior})`;
       const absorption = ctx.col('absorptionColor', [1, 1, 1]);
       const radius = `max(${ctx.s('absorptionRadius', 1)}, 1e-6)`;
+      const extinction = `(-log(clamp(${absorption}, vec3f(1e-6), vec3f(1.0))) / ${radius})`;
+      const scatter = `clamp(${ctx.col('scatterColor', [0, 0, 0])}, vec3f(0.0), vec3f(1.0))`;
       result.interior = {
-        sigmaA: `(${absorption} / ${radius})`,
-        sigmaS: ctx.col('scatterColor', [0, 0, 0]),
-        g: ctx.s('scatterAnisotropy', 0),
+        sigmaA: `(${extinction} * (vec3f(1.0) - ${scatter}))`,
+        sigmaS: `(${extinction} * ${scatter})`,
+        g: `clamp(${ctx.s('scatterAnisotropy', 0)}, -0.99, 0.99)`,
       };
-      result.interiorActive = `(any(${absorption} < vec3f(1.0)) || any(${result.interior.sigmaS} > vec3f(0.0)))`;
-      const shared = { roughness, anisotropy, rotation, ior };
+      result.interiorActive = `any(${extinction} > vec3f(0.0))`;
+      const spread = `max(${ctx.s('dispersionSpread', 0)}, 0.0)`;
+      const abbe = `(20.0 / max(${ctx.s('dispersionAbbe', 50)}, 1.0))`;
+      const dispersion = `(select(${spread}, ${abbe}, ${ctx.s('dispersionMode', 0)} == 1) * clamp(${ctx.s('dispersionSaturation', 1)}, 0.0, 1.0))`;
+      const shared = { roughness, thin: '-1.0', anisotropy: `min(abs(${anisotropy}), 0.98)`,
+        rotation: `(${rotation} + select(0.0, 0.25, ${anisotropy} < 0.0))`, ior };
       result.lobes = [
         { kind: 'dielectric_reflection', weight: '1.0', color: ctx.col('reflectionTint', [1, 1, 1]), ...shared },
-        { kind: 'dielectric_transmission', weight: '1.0', color: ctx.col('transmissionTint', [1, 1, 1]), ...shared },
+        { kind: 'dielectric_transmission', weight: '1.0', color: ctx.col('transmissionTint', [1, 1, 1]), ...shared, dispersion },
       ];
+      if (nodeSurface.inputs.has('tailMix') || nodeSurface.inputs.has('tailLength')) {
+        const tailLength = `clamp(${ctx.s('tailLength', 0.5)}, 0.0, 1.0)`;
+        const tailMix = `(clamp(${ctx.s('tailMix', 0)}, 0.0, 1.0) * select(0.0, 1.0, ${tailLength} > 0.0))`;
+        result.lobes = [
+          ...result.lobes.map(lobe => ({ ...lobe, weight: `(1.0 - ${tailMix})` })),
+          ...result.lobes.map(lobe => ({ ...lobe, weight: tailMix, roughness: `mix(${roughness}, 1.0, ${tailLength})` })),
+        ];
+      }
       result.transmission = true;
       break;
     }

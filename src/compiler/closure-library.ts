@@ -128,6 +128,7 @@ function lobeDispatch(spec: ClosureDispatchSpec): string {
   }
   if (has(3).length) {
     evalCases.push(spec.thinFilm ? `    case 3u: {
+      if (ctx.thin < 0.0) { return mx_lama_reflection_eval(ctx, wi); }
       let f0 = vec3f(mx_dielectric_f0(lobe.ior));
       if (filmActive) {
         if (lobe.anisotropy <= 0.0) { return mx_microfacet_eval_tf(wo, wi, mx_alpha_of(lobe.roughness), f0, c.thinFilm.weight, c.thinFilm.thickness, c.thinFilm.ior); }
@@ -508,6 +509,7 @@ fn mx_microfacet_sample_aniso(wo: vec3f, alpha: vec2f, rotation: f32, f0: vec3f,
 
 // --- dielectric_reflection (achromatic GGX from the index of refraction) -------
 fn mx_dielectric_reflection_eval(ctx: MxLobeCtx, wi: vec3f) -> MxBsdfEval {
+  if (ctx.thin < 0.0) { return mx_lama_reflection_eval(ctx, wi); }
   let f0 = vec3f(mx_dielectric_f0(ctx.ior));
   if (ctx.anisotropy <= 0.0) {
     return mx_microfacet_eval(ctx.wo, wi, mx_alpha_of(ctx.roughness), f0);
@@ -521,6 +523,7 @@ fn mx_dielectric_reflection_pdf(ctx: MxLobeCtx, wi: vec3f) -> f32 {
   return mx_microfacet_pdf_aniso(ctx.wo, wi, mx_aniso_alphas(ctx.roughness, ctx.anisotropy), ctx.rotation);
 }
 fn mx_dielectric_reflection_sample(ctx: MxLobeCtx, u: vec2f) -> MxBsdfSample {
+  if (ctx.thin < 0.0) { return mx_lama_reflection_sample(ctx, u); }
   let f0 = vec3f(mx_dielectric_f0(ctx.ior));
   if (ctx.anisotropy <= 0.0) {
     return mx_microfacet_sample(ctx.wo, mx_alpha_of(ctx.roughness), f0, u);
@@ -819,19 +822,52 @@ fn mx_refract_microfacet(wo: vec3f, wm: vec3f, invEta: f32) -> MxRefract {
 // the far side, with total internal reflection folded into the reflection branch.
 // The reflect/refract split carries F / (1 - F) in both value and pdf so the one-
 // sample estimator is unbiased and energy-conserving (clear glass, no TIR leaks).
+fn mx_transmission_ndf(ctx: MxLobeCtx, normal: vec3f) -> f32 {
+  if (ctx.anisotropy <= 0.0) { return mx_ggx_ndf(abs(normal.z), mx_alpha_of(ctx.roughness)); }
+  return mx_ggx_ndf_aniso(mx_rotate_tangent(normal, ctx.rotation), mx_aniso_alphas(ctx.roughness, ctx.anisotropy));
+}
+fn mx_transmission_masking(ctx: MxLobeCtx, direction: vec3f) -> f32 {
+  if (ctx.anisotropy <= 0.0) { return mx_smith_g1(abs(direction.z), mx_alpha_of(ctx.roughness)); }
+  let rotated = mx_rotate_tangent(direction, ctx.rotation);
+  return mx_smith_g1_aniso(vec3f(rotated.xy, abs(rotated.z)), mx_aniso_alphas(ctx.roughness, ctx.anisotropy));
+}
+fn mx_transmission_normal(ctx: MxLobeCtx, sample: vec2f) -> vec3f {
+  if (ctx.anisotropy <= 0.0) { return mx_sample_ggx_normal(mx_alpha_of(ctx.roughness), sample); }
+  return mx_rotate_tangent(mx_sample_ggx_normal_aniso(mx_aniso_alphas(ctx.roughness, ctx.anisotropy), sample), -ctx.rotation);
+}
+fn mx_lama_reflection_eval(ctx: MxLobeCtx, wi: vec3f) -> MxBsdfEval {
+  if (ctx.wo.z * wi.z <= 0.0) { return MxBsdfEval(vec3f(0.0), 0.0); }
+  let side = select(-1.0, 1.0, ctx.wo.z > 0.0);
+  let halfVector = normalize((ctx.wo + wi) * side);
+  let viewHalf = abs(dot(ctx.wo, halfVector));
+  let eta = select(1.0 / ctx.ior, ctx.ior, ctx.wo.z > 0.0);
+  let fresnel = mx_fresnel_dielectric(viewHalf, eta);
+  let ndf = mx_transmission_ndf(ctx, halfVector);
+  let masking = mx_transmission_masking(ctx, ctx.wo) * mx_transmission_masking(ctx, wi);
+  return MxBsdfEval(ctx.color * fresnel * ndf * masking / max(4.0 * abs(ctx.wo.z * wi.z), 1e-8),
+    ndf * abs(halfVector.z) / max(4.0 * viewHalf, 1e-8));
+}
+fn mx_lama_reflection_sample(ctx: MxLobeCtx, sample: vec2f) -> MxBsdfSample {
+  let side = select(-1.0, 1.0, ctx.wo.z > 0.0);
+  let halfVector = mx_transmission_normal(ctx, sample) * side;
+  let direction = reflect(-ctx.wo, halfVector);
+  let evaluated = mx_lama_reflection_eval(ctx, direction);
+  return MxBsdfSample(direction, evaluated.value, evaluated.pdf, evaluated.pdf > 0.0);
+}
 fn mx_transmission_refractive_eval(ctx: MxLobeCtx, wi: vec3f) -> MxBsdfEval {
   if (ctx.wo.z == 0.0 || wi.z == 0.0) { return MxBsdfEval(vec3f(0.0), 0.0); }
   let a = mx_alpha_of(ctx.roughness);
   let eta = select(1.0 / ctx.ior, ctx.ior, ctx.wo.z > 0.0);
   if (ctx.wo.z * wi.z > 0.0) {
+    if (ctx.thin < 0.0) { return MxBsdfEval(vec3f(0.0), 0.0); }
     // Reflection branch (same hemisphere): microfacet mirror weighted by Fresnel F.
     var wm = normalize(ctx.wo + wi);
     if (dot(ctx.wo, wm) < 0.0) { wm = -wm; }
     let dotO = dot(ctx.wo, wm);
     if (dotO <= 0.0) { return MxBsdfEval(vec3f(0.0), 0.0); }
     let f = mx_fresnel_dielectric(dotO, eta);
-    let d = mx_ggx_ndf(abs(wm.z), a);
-    let g = mx_smith_g1(abs(ctx.wo.z), a) * mx_smith_g1(abs(wi.z), a);
+    let d = mx_transmission_ndf(ctx, wm);
+    let g = mx_transmission_masking(ctx, ctx.wo) * mx_transmission_masking(ctx, wi);
     let scalar = f * d * g / (4.0 * abs(ctx.wo.z) * abs(wi.z));
     let pdf = f * d * abs(wm.z) / (4.0 * dotO);
     return MxBsdfEval(vec3f(scalar), pdf);
@@ -844,11 +880,12 @@ fn mx_transmission_refractive_eval(ctx: MxLobeCtx, wi: vec3f) -> MxBsdfEval {
   let denom = dotO + eta * dotI;
   if (abs(denom) < 1.0e-7) { return MxBsdfEval(vec3f(0.0), 0.0); }
   let f = mx_fresnel_dielectric(dotO, eta);
-  let d = mx_ggx_ndf(abs(wm.z), a);
-  let g = mx_smith_g1(abs(ctx.wo.z), a) * mx_smith_g1(abs(wi.z), a);
+  let d = mx_transmission_ndf(ctx, wm);
+  let g = mx_transmission_masking(ctx, ctx.wo) * mx_transmission_masking(ctx, wi);
   let geomFactor = (abs(dotO) * abs(dotI)) / (abs(ctx.wo.z) * abs(wi.z));
   let scalar = (1.0 - f) * geomFactor * d * g / (denom * denom);
-  let pdf = (1.0 - f) * d * abs(wm.z) * eta * eta * abs(dotI) / (denom * denom);
+  let selection = select(1.0 - f, 1.0, ctx.thin < 0.0);
+  let pdf = selection * d * abs(wm.z) * eta * eta * abs(dotI) / (denom * denom);
   return MxBsdfEval(ctx.color * scalar, pdf);
 }
 fn mx_transmission_thin_eval(ctx: MxLobeCtx, wi: vec3f) -> MxBsdfEval {
@@ -887,7 +924,7 @@ fn mx_dielectric_transmission_sample(ctx: MxLobeCtx, u: vec3f) -> MxBsdfSample {
     if (e.pdf <= 0.0) { return MxBsdfSample(vec3f(0.0), vec3f(0.0), 0.0, false); }
     return MxBsdfSample(wi, e.value, e.pdf, true);
   }
-  var wm = mx_sample_ggx_normal(a, u.xy);
+  var wm = mx_transmission_normal(ctx, u.xy);
   if (ctx.wo.z < 0.0) { wm = -wm; }
   if (dot(ctx.wo, wm) <= 0.0) { return MxBsdfSample(vec3f(0.0), vec3f(0.0), 0.0, false); }
   let eta = select(1.0 / ctx.ior, ctx.ior, ctx.wo.z > 0.0);
@@ -897,11 +934,15 @@ fn mx_dielectric_transmission_sample(ctx: MxLobeCtx, u: vec3f) -> MxBsdfSample {
   // Total internal reflection (invalid refraction) or the Fresnel coin flip both
   // reflect; otherwise refract. u.z is the free reflect/refract random.
   if (!r.valid || u.z < f) {
+    if (ctx.thin < 0.0) {
+      if (!r.valid) { return MxBsdfSample(vec3f(0.0), vec3f(0.0), 0.0, false); }
+    } else {
     let wi = reflect(-ctx.wo, wm);
     if (ctx.wo.z * wi.z <= 0.0) { return MxBsdfSample(vec3f(0.0), vec3f(0.0), 0.0, false); }
     let e = mx_transmission_refractive_eval(ctx, wi);
     if (e.pdf <= 0.0) { return MxBsdfSample(vec3f(0.0), vec3f(0.0), 0.0, false); }
     return MxBsdfSample(wi, e.value, e.pdf, true);
+    }
   }
   if (ctx.wo.z * r.dir.z > 0.0) { return MxBsdfSample(vec3f(0.0), vec3f(0.0), 0.0, false); }
   let e = mx_transmission_refractive_eval(ctx, r.dir);
@@ -1025,7 +1066,7 @@ fn mx_closure_total_weight(c: LayeredClosure) -> f32 {
 fn mx_closure_has_dispersion(c: LayeredClosure) -> bool {
   for (var i = 0u; i < c.lobeCount; i++) {
     let l = c.lobes[i];
-    if (l.kind == MX_LOBE_DIELECTRIC_TRANSMISSION && l.weight > 0.0 && l.dispersion > 0.0 && l.thin == 0.0) {
+    if (l.kind == MX_LOBE_DIELECTRIC_TRANSMISSION && l.weight > 0.0 && l.dispersion > 0.0 && l.thin <= 0.0) {
       return true;
     }
   }
@@ -1038,7 +1079,7 @@ fn mx_closure_spectral_channel(c: LayeredClosure, channel: u32) -> LayeredClosur
   var result = c;
   for (var i = 0u; i < c.lobeCount; i++) {
     let l = c.lobes[i];
-    if (l.kind == MX_LOBE_DIELECTRIC_TRANSMISSION && l.thin == 0.0 && l.dispersion > 0.0) {
+    if (l.kind == MX_LOBE_DIELECTRIC_TRANSMISSION && l.thin <= 0.0 && l.dispersion > 0.0) {
       result.lobes[i].ior = mx_dispersion_ior(l.ior, l.dispersion, channel);
     }
   }
@@ -1070,14 +1111,29 @@ fn mx_closure_oriented_normal(c: LayeredClosure, n: vec3f, viewDir: vec3f) -> ve
     let l = c.lobes[i];
     // Solid glass needs the signed interface normal to distinguish entering
     // from exiting. Opaque backfaces exposed by cutouts must still scatter.
-    if (l.weight > 0.0 && l.kind == MX_LOBE_DIELECTRIC_TRANSMISSION && l.thin == 0.0) {
+    if (l.weight > 0.0 && l.kind == MX_LOBE_DIELECTRIC_TRANSMISSION && l.thin <= 0.0) {
       return n;
     }
   }
   return -n;
 }
+fn mx_closure_selection_weight(lobe: MxBsdfLobe, wo: vec3f) -> f32 {
+  if (lobe.thin < 0.0 && (lobe.kind == MX_LOBE_DIELECTRIC_REFLECTION || lobe.kind == MX_LOBE_DIELECTRIC_TRANSMISSION)) {
+    let eta = select(1.0 / lobe.ior, lobe.ior, wo.z > 0.0);
+    let reflection = clamp(mx_fresnel_dielectric(abs(wo.z), eta), 0.02, 0.98);
+    return max(lobe.weight, 0.0) * select(1.0 - reflection, reflection, lobe.kind == MX_LOBE_DIELECTRIC_REFLECTION);
+  }
+  return max(lobe.weight, 0.0);
+}
+fn mx_closure_selection_total(c: LayeredClosure, wo: vec3f) -> f32 {
+  var total = 0.0;
+  for (var index = 0u; index < c.lobeCount; index++) {
+    total += mx_closure_selection_weight(c.lobes[index], wo);
+  }
+  return total;
+}
 fn mx_closure_base_eval(c: LayeredClosure, wo: vec3f, wi: vec3f) -> MxBsdfEval {
-  let total = mx_closure_total_weight(c);
+  let total = mx_closure_selection_total(c, wo);
   var value = vec3f(0.0);
   var pdf = 0.0;
   if (total <= 0.0) { return MxBsdfEval(value, pdf); }
@@ -1086,7 +1142,7 @@ fn mx_closure_base_eval(c: LayeredClosure, wo: vec3f, wi: vec3f) -> MxBsdfEval {
     if (lobe.weight <= 0.0) { continue; }
     let r = mx_closure_lobe_eval(lobe, c, wo, wi);
     value = value + r.value * lobe.weight;
-    pdf = pdf + (lobe.weight / total) * r.pdf;
+    pdf = pdf + (mx_closure_selection_weight(lobe, wo) / total) * r.pdf;
   }
   return MxBsdfEval(value, pdf);
 }
@@ -1121,7 +1177,7 @@ fn mx_closure_pdf(c: LayeredClosure, wo: vec3f, wi: vec3f) -> f32 {
   return mx_closure_eval(c, wo, wi).pdf;
 }
 fn mx_closure_base_direction(c: LayeredClosure, wo: vec3f, u: vec3f) -> MxBsdfSample {
-  let total = mx_closure_total_weight(c);
+  let total = mx_closure_selection_total(c, wo);
   // wo.z < 0 means a ray inside a refractive medium hitting the surface from the
   // dense side; the transmission lobe handles that, so only reject grazing.
   if (total <= 0.0 || wo.z == 0.0) { return MxBsdfSample(vec3f(0.0), vec3f(0.0), 0.0, false); }
@@ -1130,7 +1186,7 @@ fn mx_closure_base_direction(c: LayeredClosure, wo: vec3f, u: vec3f) -> MxBsdfSa
   var chosen = 0u;
   var found = false;
   for (var i = 0u; i < c.lobeCount; i = i + 1u) {
-    let w = c.lobes[i].weight;
+    let w = mx_closure_selection_weight(c.lobes[i], wo);
     if (w <= 0.0) { continue; }
     if (!found) {
       chosen = i;

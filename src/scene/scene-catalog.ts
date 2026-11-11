@@ -44,6 +44,12 @@ const conductorScenes = Object.entries(import.meta.glob<{ label: string; scene: 
     entry: `./scenes/lama/conductor/${example.scene}`,
   })));
 
+const dielectricScenes = Object.entries(import.meta.glob<{ label: string; scene: string }[]>('/scenes/lama/dielectric/coverage.json', { eager: true, import: 'default' }))
+  .flatMap(([, coverage]) => coverage.map(example => ({
+    label: `LamaDielectric - ${example.label}`,
+    entry: `./scenes/lama/dielectric/${example.scene}`,
+  })));
+
 const compiledScenes = Object.keys(import.meta.glob('/scenes/**/scene.json', { query: '?url', import: 'default' }))
   .sort()
   .map((path): SceneCatalogEntry => {
@@ -67,6 +73,7 @@ export const SCENE_CATALOG: readonly SceneCatalogEntry[] = [
   ...pathTracerScenes,
   ...lamaScenes,
   ...conductorScenes,
+  ...dielectricScenes,
   ...gltfScenes,
   ...compiledScenes,
   { label: 'OpenPBR Shader Playground - Selection (9 groups)', entry: './scenes/OpenPBRShaderPlayground/playground_selection.usda' },

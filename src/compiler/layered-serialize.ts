@@ -40,6 +40,7 @@ export interface SerializedBsdfLobe {
   extinction?: Rgb3;
   conductorEta?: Rgb3;
   thinWalled?: boolean;
+  pairedDielectric?: boolean;
   interiorScattering?: Rgb3;
   interiorAnisotropy?: number;
   subsurfaceRadius?: Rgb3;
@@ -113,6 +114,7 @@ function serializeLobe(l: LayeredBsdfLobe, d: number): SerializedBsdfLobe {
   if (l.subsurfaceSubset !== undefined) out.subsurfaceSubset = l.subsurfaceSubset;
   if (l.subsurfaceContinuation !== undefined) out.subsurfaceContinuation = l.subsurfaceContinuation;
   if (l.thinWalled) out.thinWalled = true;
+  if (l.pairedDielectric) out.pairedDielectric = true;
   return out;
 }
 
@@ -181,6 +183,7 @@ function deserializeLobe(l: SerializedBsdfLobe): LayeredBsdfLobe {
   if (l.subsurfaceSubset !== undefined) out.subsurfaceSubset = l.subsurfaceSubset;
   if (l.subsurfaceContinuation !== undefined) out.subsurfaceContinuation = l.subsurfaceContinuation;
   if (l.thinWalled) out.thinWalled = true;
+  if (l.pairedDielectric) out.pairedDielectric = true;
   return out;
 }
 

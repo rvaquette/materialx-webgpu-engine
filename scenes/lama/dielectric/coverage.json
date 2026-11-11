@@ -1,0 +1,216 @@
+[
+  {
+    "parameter": "clear",
+    "scene": "dielectric_clear.usda",
+    "label": "Clear Glass",
+    "status": "implemented"
+  },
+  {
+    "parameter": "reflection_tint",
+    "scene": "dielectric_reflection_tint.usda",
+    "label": "Reflection Tint",
+    "status": "implemented"
+  },
+  {
+    "parameter": "transmission_tint",
+    "scene": "dielectric_transmission_tint.usda",
+    "label": "Transmission Tint",
+    "status": "implemented"
+  },
+  {
+    "parameter": "fresnel_artistic",
+    "scene": "dielectric_fresnel_artistic.usda",
+    "label": "Fresnel Mode - Artistic",
+    "status": "implemented"
+  },
+  {
+    "parameter": "fresnel_scientific",
+    "scene": "dielectric_fresnel_scientific.usda",
+    "label": "Fresnel Mode - Scientific",
+    "status": "implemented"
+  },
+  {
+    "parameter": "reflectivity",
+    "scene": "dielectric_reflectivity.usda",
+    "label": "Reflectivity",
+    "status": "implemented"
+  },
+  {
+    "parameter": "ior",
+    "scene": "dielectric_ior.usda",
+    "label": "IOR",
+    "status": "implemented"
+  },
+  {
+    "parameter": "roughness",
+    "scene": "dielectric_roughness.usda",
+    "label": "Roughness",
+    "status": "implemented"
+  },
+  {
+    "parameter": "normal_bump",
+    "scene": "dielectric_normal_bump.usda",
+    "label": "Normal / Bump",
+    "status": "implemented"
+  },
+  {
+    "parameter": "tail_mix",
+    "scene": "dielectric_tail_mix.usda",
+    "label": "Tail Mix (engine equivalent)",
+    "status": "engine-equivalent"
+  },
+  {
+    "parameter": "tail_length",
+    "scene": "dielectric_tail_length.usda",
+    "label": "Tail Length (engine equivalent)",
+    "status": "engine-equivalent"
+  },
+  {
+    "parameter": "anisotropy",
+    "scene": "dielectric_anisotropy.usda",
+    "label": "Anisotropy",
+    "status": "implemented"
+  },
+  {
+    "parameter": "anisotropy_negative",
+    "scene": "dielectric_anisotropy_negative.usda",
+    "label": "Anisotropy - Negative",
+    "status": "implemented"
+  },
+  {
+    "parameter": "direction",
+    "scene": "dielectric_direction.usda",
+    "label": "Direction",
+    "status": "implemented"
+  },
+  {
+    "parameter": "rotation",
+    "scene": "dielectric_rotation.usda",
+    "label": "Rotation",
+    "status": "implemented"
+  },
+  {
+    "parameter": "dispersion_mode",
+    "scene": "dielectric_dispersion_mode.usda",
+    "label": "Dispersion Mode (RGB equivalent)",
+    "status": "engine-equivalent"
+  },
+  {
+    "parameter": "dispersion_spread",
+    "scene": "dielectric_dispersion_spread.usda",
+    "label": "Dispersion Spread (RGB equivalent)",
+    "status": "engine-equivalent"
+  },
+  {
+    "parameter": "dispersion_abbe",
+    "scene": "dielectric_dispersion_abbe.usda",
+    "label": "Dispersion Abbe (RGB equivalent)",
+    "status": "engine-equivalent"
+  },
+  {
+    "parameter": "dispersion_saturation",
+    "scene": "dielectric_dispersion_saturation.usda",
+    "label": "Dispersion Saturation (RGB equivalent)",
+    "status": "engine-equivalent"
+  },
+  {
+    "parameter": "absorption_color",
+    "scene": "dielectric_absorption_color.usda",
+    "label": "Absorption Color",
+    "status": "implemented"
+  },
+  {
+    "parameter": "absorption_radius",
+    "scene": "dielectric_absorption_radius.usda",
+    "label": "Absorption Radius",
+    "status": "implemented"
+  },
+  {
+    "parameter": "scatter_color",
+    "scene": "dielectric_scatter_color.usda",
+    "label": "Scatter Color",
+    "status": "implemented"
+  },
+  {
+    "parameter": "scatter_anisotropy",
+    "scene": "dielectric_scatter_anisotropy.usda",
+    "label": "Scatter Anisotropy",
+    "status": "implemented"
+  },
+  {
+    "parameter": "exterior_ior",
+    "scene": "dielectric_exterior_ior.usda",
+    "label": "Exterior IOR",
+    "status": "implemented"
+  },
+  {
+    "parameter": "energy_compensation",
+    "scene": "dielectric_energy_compensation.usda",
+    "label": "Energy Compensation - NOT SUPPORTED",
+    "status": "unsupported",
+    "reason": "No dielectric multiple-scattering compensation is implemented."
+  },
+  {
+    "parameter": "shadow_density",
+    "scene": "dielectric_shadow_density.usda",
+    "label": "Shadow Density - NOT SUPPORTED",
+    "status": "unsupported",
+    "reason": "Artistic transmission-shadow overrides are not implemented."
+  },
+  {
+    "parameter": "shadow_coloring",
+    "scene": "dielectric_shadow_coloring.usda",
+    "label": "Shadow Coloring - NOT SUPPORTED",
+    "status": "unsupported",
+    "reason": "Colored transmission-shadow overrides are not implemented."
+  },
+  {
+    "parameter": "shadow_fresnel_front",
+    "scene": "dielectric_shadow_fresnel_front.usda",
+    "label": "Shadow Fresnel Front - NOT SUPPORTED",
+    "status": "unsupported",
+    "reason": "Front-face shadow Fresnel overrides are not implemented."
+  },
+  {
+    "parameter": "shadow_fresnel_back",
+    "scene": "dielectric_shadow_fresnel_back.usda",
+    "label": "Shadow Fresnel Back - NOT SUPPORTED",
+    "status": "unsupported",
+    "reason": "Back-face shadow Fresnel overrides are not implemented."
+  },
+  {
+    "parameter": "surface_mollification",
+    "scene": "dielectric_surface_mollification.usda",
+    "label": "Surface Mollification - NOT SUPPORTED",
+    "status": "unsupported",
+    "reason": "Per-hit curvature/normal-variance data is not supplied."
+  },
+  {
+    "parameter": "motion_mollification",
+    "scene": "dielectric_motion_mollification.usda",
+    "label": "Motion Mollification - NOT SUPPORTED",
+    "status": "unsupported",
+    "reason": "No time-dependent geometry or shutter data is supplied."
+  },
+  {
+    "parameter": "lobe_name",
+    "scene": "dielectric_lobe_name.usda",
+    "label": "Lobe Name - NOT SUPPORTED",
+    "status": "unsupported",
+    "reason": "Named LPE/AOV routing is not implemented."
+  },
+  {
+    "parameter": "interior_id",
+    "scene": "dielectric_interior_id.usda",
+    "label": "Interior Id - NOT SUPPORTED",
+    "status": "unsupported",
+    "reason": "Nested medium tracking by named interior ID is not implemented."
+  },
+  {
+    "parameter": "matte",
+    "scene": "dielectric_matte.usda",
+    "label": "Matte - NOT SUPPORTED",
+    "status": "unsupported",
+    "reason": "Per-lobe final-weight AOV accumulation is not implemented."
+  }
+]
