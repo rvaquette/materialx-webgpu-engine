@@ -329,6 +329,27 @@ describe('emitLayeredSurface (T055d)', () => {
     expect(module.code).toContain('atan2(');
   });
 
+  it('emits conductor controls authored beyond a MaterialX nodedef', () => {
+    const graph = surfaceGraph('surface', [conn('bsdf', 'BSDF', 'metal')], [
+      upstream('metal', 'LamaConductor', 'BSDF', [
+        value('tailMix', 'float', '0.3'), value('tailLength', 'float', '0.6'),
+        value('exteriorIOR', 'float', '1.33'), value('energyCompensation', 'float', '1'),
+        value('anisotropy', 'float', '-0.7'),
+      ]),
+    ]);
+    graph.nodes.get('metal')!.nodeDef = {
+      name: 'ND_lama_conductor', nodeString: 'LamaConductor', type: 'BSDF',
+      implementation: { kind: 'nodegraph', name: 'IMPL_lama_conductor' },
+      inputs: [{ name: 'roughness', type: 'float', value: '0.2' }],
+    };
+    const module = emit(graph);
+    expect(module.code).toContain('c.lobeCount = 2u;');
+    expect(module.code).toContain('min(abs(');
+    expect(module.code).toContain('select(0.0, 0.25,');
+    expect(module.code).toContain('= 1.33;');
+    expect(module.code).toContain('mx_conductor_average_albedo');
+  });
+
   it('emits a connected LamaDiffuse as a layered Oren-Nayar lobe', () => {
     const graph = surfaceGraph('surface', [conn('bsdf', 'BSDF', 'diffuse')], [
       upstream('diffuse', 'LamaDiffuse', 'BSDF', [

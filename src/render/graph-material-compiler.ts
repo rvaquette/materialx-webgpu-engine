@@ -112,7 +112,7 @@ export function createGraphMaterialCompiler(options: GraphMaterialCompilerOption
         const graph = resolveGraph({
           roots,
           onDiagnostic: emit,
-          isCovered: (category) => category === 'volume' || isNodeCovered(category) || SURFACE_IR_UPSTREAM.has(category),
+          isCovered: (category) => category === 'volume' || category === 'LamaConductor' || isNodeCovered(category) || SURFACE_IR_UPSTREAM.has(category),
           ...(options.target !== undefined ? { target: options.target } : {}),
         });
 

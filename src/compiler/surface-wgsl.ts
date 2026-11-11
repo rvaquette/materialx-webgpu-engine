@@ -555,7 +555,8 @@ function lowerFamily(family: SurfaceFamily, c: Ctx): FamilyWgsl {
 function lobeAssign(index: number, lobe: LobeWgsl): string {
   const auxiliary = lobe.dispersion
     ?? (lobe.kind === 'generalized_schlick' ? lobe.fresnelExponent ?? '5.0'
-      : lobe.kind === 'oren_nayar_diffuse' ? lobe.energyCompensation ?? '1.0' : '0.0');
+      : lobe.kind === 'oren_nayar_diffuse' ? lobe.energyCompensation ?? '1.0'
+        : lobe.kind === 'conductor' ? lobe.energyCompensation ?? '0.0' : '0.0');
   const fields = [
     LOBE_KIND_CONST[lobe.kind],
     lobe.weight,
@@ -596,6 +597,7 @@ function directLobe(lobe: LayeredBsdfLobe): LobeWgsl {
     ...(lobe.extinction ? { extinction: staticColor(lobe.extinction, [0, 0, 0]) } : {}),
     ...(lobe.thinWalled ? { thin: '1.0' } : {}),
     ...(lobe.dispersion !== undefined ? { dispersion: staticFloat(lobe.dispersion) } : {}),
+    ...(lobe.energyCompensation !== undefined ? { energyCompensation: staticFloat(lobe.energyCompensation) } : {}),
   };
 }
 
@@ -616,8 +618,12 @@ function inputsForLamaNode(graph: ResolvedGraph, nodeId: string, root?: Resolved
   const inputs = new Map<string, NormalizedSurfaceInput>();
   if (!node) return { family: 'surface', nodeId, inputs };
   const authored = new Map(node.inputs.map(input => [input.name, input] as const));
-  const defs: readonly { name: string; type: string; value?: string; geomprop?: string }[] =
-    node.nodeDef?.inputs ?? node.inputs.map(input => ({ name: input.name, type: input.type }));
+  const declared = node.nodeDef?.inputs ?? [];
+  const defs: readonly { name: string; type: string; value?: string; geomprop?: string }[] = [
+    ...declared,
+    ...node.inputs.filter(input => !declared.some(def => def.name === input.name))
+      .map(input => ({ name: input.name, type: input.type })),
+  ];
   for (const def of defs) {
     if (!LAMA_VALUE_TYPES.has(def.type)) continue;
     const input = authored.get(def.name);
@@ -814,6 +820,11 @@ function lowerLamaClosureWgsl(
       result.transmission = true;
       break;
     case 'LamaConductor': {
+      for (const input of node.inputs) {
+        if (['surfaceMollification', 'motionMollification', 'lobeName', 'matte'].includes(input.name)) {
+          sink({ level: 'warning', message: `LamaConductor '${input.name}' is not implemented; no mollification or AOV output will be produced.`, detail: { nodeId, parameter: input.name } });
+        }
+      }
       const eta = ctx.col('IOR', [0.18, 0.42, 1.37]);
       const extinction = ctx.col('extinction', [3.42, 2.35, 1.77]);
       const reflectivity = `clamp(${ctx.col('reflectivity', [0.945, 0.7772, 0.3737])}, vec3f(0.0), vec3f(0.99))`;
@@ -826,9 +837,22 @@ function lowerLamaClosureWgsl(
       const etaMinusOne = `(${artisticEta} - vec3f(1.0))`;
       const artisticKappa = `sqrt(max(((${etaPlusOne} * ${etaPlusOne} * ${reflectivity}) - (${etaMinusOne} * ${etaMinusOne})) / (vec3f(1.0) - ${reflectivity}), vec3f(0.0)))`;
       const scientificMode = `${ctx.s('fresnelMode', 0)} == 1`;
+      const exterior = `max(${ctx.s('exteriorIOR', 1)}, 1e-4)`;
       result.lobes = [{ kind: 'conductor', weight: '1.0', color: ctx.col('tint', [1, 1, 1]),
-        roughness, anisotropy, rotation, extinction: `select(${artisticKappa}, ${extinction}, ${scientificMode})`,
-        conductorEta: `select(${artisticEta}, ${eta}, ${scientificMode})` }];
+        roughness, anisotropy: `min(abs(${anisotropy}), 0.98)`,
+        rotation: `(${rotation} + select(0.0, 0.25, ${anisotropy} < 0.0))`,
+        extinction: `(select(${artisticKappa}, ${extinction}, ${scientificMode}) / ${exterior})`,
+        conductorEta: `(select(${artisticEta}, ${eta}, ${scientificMode}) / ${exterior})`,
+        energyCompensation: `clamp(${ctx.s('energyCompensation', 0)}, 0.0, 1.0)` }];
+      if (nodeSurface.inputs.has('tailMix') || nodeSurface.inputs.has('tailLength')) {
+        const tailLength = `clamp(${ctx.s('tailLength', 0.5)}, 0.0, 1.0)`;
+        const tailMix = `(clamp(${ctx.s('tailMix', 0)}, 0.0, 1.0) * select(0.0, 1.0, ${tailLength} > 0.0))`;
+        const main = result.lobes[0]!;
+        result.lobes = [
+          { ...main, weight: `(1.0 - ${tailMix})` },
+          { ...main, weight: tailMix, roughness: `mix(${roughness}, 1.0, ${tailLength})` },
+        ];
+      }
       break;
     }
     case 'LamaDielectric': {

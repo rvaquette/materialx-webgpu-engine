@@ -28,6 +28,7 @@
 // module emit this library so both backends call one identical source.
 
 import { HAIR_WGSL } from '../render/bsdf/hair.ts';
+import { CONDUCTOR_ENERGY_WGSL } from '../render/bsdf/conductor-energy.ts';
 
 /** The lobe families in the library; each has an eval/pdf/sample fn. T056a ported
  *  the four isotropic families; T056b adds the Charlie sheen lobe. */
@@ -546,6 +547,7 @@ fn mx_conductor_sample(ctx: MxLobeCtx, u: vec2f) -> MxBsdfSample {
   }
   return mx_microfacet_sample_aniso(ctx.wo, mx_aniso_alphas(ctx.roughness, ctx.anisotropy), ctx.rotation, ctx.color, u);
 }
+${CONDUCTOR_ENERGY_WGSL}
 fn mx_exact_conductor_fresnel(eta: vec3f, kappa: vec3f, cosT: f32) -> vec3f {
   let c = clamp(cosT, 0.0, 1.0);
   let c2 = c * c;
@@ -584,20 +586,35 @@ fn mx_conductor_exact_eval(lobe: MxBsdfLobe, c: LayeredClosure, wo: vec3f, wi: v
     d = mx_ggx_ndf(wm.z, alpha);
     g = mx_smith_g1(wo.z, alpha) * mx_smith_g1(wi.z, alpha);
   }
-  return MxBsdfEval(f * (d * g / (4.0 * wor.z * wir.z)), d * wm.z / (4.0 * cosVH));
+  let compensation = clamp(lobe.dispersion, 0.0, 1.0);
+  let outgoingAlbedo = mx_conductor_albedo(lobe.roughness, wo.z);
+  let incomingAlbedo = mx_conductor_albedo(lobe.roughness, wi.z);
+  let average = mx_conductor_average_albedo(lobe.roughness);
+  let fresnelAverage = mx_exact_conductor_fresnel(lobe.color90, lobe.extinction, 1.0) + (vec3f(1.0) - mx_exact_conductor_fresnel(lobe.color90, lobe.extinction, 1.0)) / 21.0;
+  let multipleColor = lobe.color * fresnelAverage * fresnelAverage * average / max(vec3f(1.0) - fresnelAverage * (1.0 - average), vec3f(1e-6));
+  let extra = compensation * (1.0 - outgoingAlbedo) * (1.0 - incomingAlbedo) / max(MX_PI * (1.0 - average), 1e-6);
+  let multipleProbability = min(0.8, compensation * (1.0 - outgoingAlbedo));
+  return MxBsdfEval(f * (d * g / (4.0 * wor.z * wir.z)) + multipleColor * extra,
+    mix(d * wm.z / (4.0 * cosVH), wi.z / MX_PI, multipleProbability));
 }
 fn mx_conductor_exact_sample(lobe: MxBsdfLobe, c: LayeredClosure, wo: vec3f, u: vec2f) -> MxBsdfSample {
   if (wo.z <= 0.0) { return MxBsdfSample(vec3f(0.0), vec3f(0.0), 0.0, false); }
+  let multipleProbability = min(0.8, clamp(lobe.dispersion, 0.0, 1.0) * (1.0 - mx_conductor_albedo(lobe.roughness, wo.z)));
+  var sampleInput = u;
   var wi: vec3f;
-  if (lobe.anisotropy > 0.0) {
+  if (multipleProbability > 0.0 && u.x < multipleProbability) {
+    wi = mx_cosine_hemisphere(vec2f(u.x / multipleProbability, u.y));
+  } else if (lobe.anisotropy > 0.0) {
+    sampleInput.x = (u.x - multipleProbability) / max(1.0 - multipleProbability, 1e-6);
     let alpha = mx_aniso_alphas(lobe.roughness, lobe.anisotropy);
     let wor = mx_rotate_tangent(wo, lobe.rotation);
-    let wm = mx_sample_ggx_normal_aniso(alpha, u);
+    let wm = mx_sample_ggx_normal_aniso(alpha, sampleInput);
     let wir = reflect(-wor, wm);
     if (wir.z <= 0.0) { return MxBsdfSample(vec3f(0.0), vec3f(0.0), 0.0, false); }
     wi = mx_rotate_tangent(wir, -lobe.rotation);
   } else {
-    let wm = mx_sample_ggx_normal(mx_alpha_of(lobe.roughness), u);
+    sampleInput.x = (u.x - multipleProbability) / max(1.0 - multipleProbability, 1e-6);
+    let wm = mx_sample_ggx_normal(mx_alpha_of(lobe.roughness), sampleInput);
     wi = reflect(-wo, wm);
     if (wi.z <= 0.0) { return MxBsdfSample(vec3f(0.0), vec3f(0.0), 0.0, false); }
   }

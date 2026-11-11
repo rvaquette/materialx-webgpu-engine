@@ -3,7 +3,7 @@
     defaultPrim = "World"
     metersPerUnit = 1
     upAxis = "Y"
-    doc = "Rough gold base with dielectric top, LamaLayer Rough Coating"
+    doc = "Energy Compensation (engine equivalent)"
 )
 
 def Xform "World"
@@ -27,27 +27,26 @@ def Xform "World"
 
     def Scope "Looks"
     {
-        def Material "ground" (prepend references = @./lama_layer_gold_modes.mtlx@</MaterialX/Materials/ground>) {}
-        def Material "stand" (prepend references = @./lama_layer_gold_modes.mtlx@</MaterialX/Materials/stand>) {}
-        def Material "layeredGold" (prepend references = @./lama_layer_gold_modes.mtlx@</MaterialX/Materials/gold_rough_coating>) {}
+        def Material "ground" (prepend references = @../layer/lama_layer_gold_modes.mtlx@</MaterialX/Materials/ground>) {}
+        def Material "conductor_energy_compensation" (prepend references = @./materials.mtlx@</MaterialX/Materials/conductor_energy_compensation>) {}
     }
 
     def Scope "Geometry"
     {
         def Mesh "Ground"
         {
-            custom asset engine:geometry:file = @../renderman/background.obj@
+            custom asset engine:geometry:file = @../../pathtracer/renderman/background.obj@
             rel material:binding = </World/Looks/ground>
         }
         def Mesh "Teapot"
         {
-            custom asset engine:geometry:file = @../renderman/teapot.obj@
-            rel material:binding = </World/Looks/layeredGold>
+            custom asset engine:geometry:file = @../../pathtracer/renderman/teapot.obj@
+            rel material:binding = </World/Looks/conductor_energy_compensation>
         }
         def Mesh "Stand"
         {
-            custom asset engine:geometry:file = @../renderman/teapot_base.obj@
-            rel material:binding = </World/Looks/stand>
+            custom asset engine:geometry:file = @../../pathtracer/renderman/teapot_base.obj@
+            rel material:binding = </World/Looks/conductor_energy_compensation>
         }
     }
 
@@ -55,7 +54,7 @@ def Xform "World"
     {
         def DomeLight "Environment"
         {
-            asset inputs:texture:file = @../HDR/photo_studio_01_1k.hdr@
+            asset inputs:texture:file = @../../pathtracer/HDR/photo_studio_01_1k.hdr@
             float inputs:intensity = 0.06
             color3f inputs:color = (1, 1, 1)
         }

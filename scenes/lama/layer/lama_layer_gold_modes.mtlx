@@ -5,7 +5,7 @@
     <input name="specular_roughness" type="float" value="0.8" />
   </standard_surface>
   <image name="ground_texture" type="color3">
-    <input name="file" type="filename" value="../renderman/textures/checker.png" />
+    <input name="file" type="filename" value="../../pathtracer/renderman/textures/checker.png" />
   </image>
   <power name="ground_albedo" type="color3">
     <input name="in1" type="color3" nodename="ground_texture" />

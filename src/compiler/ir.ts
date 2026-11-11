@@ -324,7 +324,7 @@ export interface LayeredBsdfLobe {
   color90?: Rgb;
   /** Exponent for generalized Schlick Fresnel; defaults to 5. */
   fresnelExponent?: number;
-  /** Oren–Nayar multiple-scattering energy compensation in [0,1]. */
+  /** Oren–Nayar or exact-conductor multiple-scattering compensation in [0,1]. */
   energyCompensation?: number;
   /** Chiang TRT tint; color/color90 carry R/TT. */
   hairTintTRT?: Rgb;

@@ -1,4 +1,5 @@
 import { readdirSync } from 'node:fs';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { SCENE_CATALOG } from '../../src/scene/scene-catalog.ts';
 
@@ -13,10 +14,14 @@ describe('scene selector catalog', () => {
     expect(entries.every(scene => scene.label.startsWith('Pathtracer - '))).toBe(true);
   });
   it('includes every Lama USDA scene once with a dedicated label', () => {
-    const names = readdirSync('scenes\\pathtracer\\lama').filter(name => name.endsWith('.usda')).sort();
-    const entries = SCENE_CATALOG.filter(scene => scene.entry.startsWith('./scenes/pathtracer/lama/')
-      && scene.entry.endsWith('.usda'));
-    expect(entries.map(scene => scene.entry)).toEqual(names.map(name => `./scenes/pathtracer/lama/${name}`));
+    const names = ['add', 'layer', 'mix'].flatMap(directory =>
+      readdirSync(join('scenes', 'lama', directory))
+        .filter(name => name.endsWith('.usda'))
+        .map(name => `${directory}/${name}`),
+    ).sort();
+    const entries = SCENE_CATALOG.filter(scene => ['add', 'layer', 'mix']
+      .some(directory => scene.entry.startsWith(`./scenes/lama/${directory}/`)));
+    expect(entries.map(scene => scene.entry)).toEqual(names.map(name => `./scenes/lama/${name}`));
     expect(entries.every(scene => scene.label.startsWith('Lama - ') || scene.label.startsWith('LamaLayer Gold - '))).toBe(true);
   });
   it('labels the four LamaLayer gold modes explicitly in the scene selector', () => {
@@ -26,6 +31,14 @@ describe('scene selector catalog', () => {
       'LamaLayer Gold - Rough Coating',
       'LamaLayer Gold - Smooth Coating',
     ]);
+  });
+  it('includes every conductor parameter example and labels unsupported cases explicitly', () => {
+    const names = readdirSync('scenes/lama/conductor').filter(name => name.endsWith('.usda')).sort();
+    const entries = SCENE_CATALOG.filter(scene => scene.entry.startsWith('./scenes/lama/conductor/'));
+    expect(entries.map(scene => scene.entry).sort()).toEqual(names.map(name => `./scenes/lama/conductor/${name}`));
+    expect(entries).toHaveLength(21);
+    expect(entries.every(scene => scene.label.startsWith('LamaConductor - '))).toBe(true);
+    expect(entries.filter(scene => scene.label.includes('NOT SUPPORTED'))).toHaveLength(4);
   });
   it('includes only top-level pathtracer glTF and GLB files with distinct format labels', () => {
     const names = readdirSync('scenes\\pathtracer').filter(name => /\.(gltf|glb)$/i.test(name)).sort();

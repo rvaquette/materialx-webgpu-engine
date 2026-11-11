@@ -1,0 +1,132 @@
+[
+  {
+    "parameter": "tint",
+    "scene": "conductor_tint.usda",
+    "label": "Conductor Tint",
+    "status": "implemented"
+  },
+  {
+    "parameter": "fresnel_artistic",
+    "scene": "conductor_fresnel_artistic.usda",
+    "label": "Fresnel Mode - Artistic",
+    "status": "implemented"
+  },
+  {
+    "parameter": "fresnel_scientific",
+    "scene": "conductor_fresnel_scientific.usda",
+    "label": "Fresnel Mode - Scientific",
+    "status": "implemented"
+  },
+  {
+    "parameter": "reflectivity",
+    "scene": "conductor_reflectivity.usda",
+    "label": "Reflectivity",
+    "status": "implemented"
+  },
+  {
+    "parameter": "edge_color",
+    "scene": "conductor_edge_color.usda",
+    "label": "Edge Color",
+    "status": "implemented"
+  },
+  {
+    "parameter": "ior",
+    "scene": "conductor_ior.usda",
+    "label": "IOR (Eta)",
+    "status": "implemented"
+  },
+  {
+    "parameter": "extinction",
+    "scene": "conductor_extinction.usda",
+    "label": "Extinction (Kappa)",
+    "status": "implemented"
+  },
+  {
+    "parameter": "roughness",
+    "scene": "conductor_roughness.usda",
+    "label": "Roughness",
+    "status": "implemented"
+  },
+  {
+    "parameter": "normal_bump",
+    "scene": "conductor_normal_bump.usda",
+    "label": "Normal / Bump",
+    "status": "implemented"
+  },
+  {
+    "parameter": "tail_mix",
+    "scene": "conductor_tail_mix.usda",
+    "label": "Tail Mix (engine equivalent)",
+    "status": "engine-equivalent"
+  },
+  {
+    "parameter": "tail_length",
+    "scene": "conductor_tail_length.usda",
+    "label": "Tail Length (engine equivalent)",
+    "status": "engine-equivalent"
+  },
+  {
+    "parameter": "anisotropy",
+    "scene": "conductor_anisotropy.usda",
+    "label": "Anisotropy",
+    "status": "implemented"
+  },
+  {
+    "parameter": "anisotropy_negative",
+    "scene": "conductor_anisotropy_negative.usda",
+    "label": "Anisotropy - Negative",
+    "status": "implemented"
+  },
+  {
+    "parameter": "direction",
+    "scene": "conductor_direction.usda",
+    "label": "Direction",
+    "status": "implemented"
+  },
+  {
+    "parameter": "rotation",
+    "scene": "conductor_rotation.usda",
+    "label": "Rotation",
+    "status": "implemented"
+  },
+  {
+    "parameter": "exterior_ior",
+    "scene": "conductor_exterior_ior.usda",
+    "label": "Exterior IOR",
+    "status": "implemented"
+  },
+  {
+    "parameter": "energy_compensation",
+    "scene": "conductor_energy_compensation.usda",
+    "label": "Energy Compensation (engine equivalent)",
+    "status": "engine-equivalent"
+  },
+  {
+    "parameter": "surface_mollification",
+    "scene": "conductor_surface_mollification.usda",
+    "label": "Surface Mollification - NOT SUPPORTED",
+    "status": "unsupported",
+    "reason": "Per-hit curvature/normal-variance data is not supplied to material graphs."
+  },
+  {
+    "parameter": "motion_mollification",
+    "scene": "conductor_motion_mollification.usda",
+    "label": "Motion Mollification - NOT SUPPORTED",
+    "status": "unsupported",
+    "reason": "The renderer has no shutter interval or time-dependent geometry/velocity inputs."
+  },
+  {
+    "parameter": "lobe_name",
+    "scene": "conductor_lobe_name.usda",
+    "label": "Lobe Name - NOT SUPPORTED",
+    "status": "unsupported",
+    "reason": "Named LPE/AOV routing and output buffers are not implemented."
+  },
+  {
+    "parameter": "matte",
+    "scene": "conductor_matte.usda",
+    "label": "Matte - NOT SUPPORTED",
+    "status": "unsupported",
+    "reason": "Per-lobe weight AOV output buffers and export are not implemented."
+  }
+]

@@ -98,6 +98,28 @@ function shade(closure: LayeredClosure, lighting: ReferenceLighting = defaultLig
 }
 
 describe('surfaceGraphToLayered (T055b)', () => {
+  it('preserves signed conductor anisotropy, exterior IOR, tails and compensation', () => {
+    const graph = graphOf('surface', [connection('bsdf', 'BSDF', 'METAL')]);
+    graph.nodes.set('METAL', bsdfNode('METAL', 'LamaConductor', [
+      input('fresnelMode', 'integer', '1'), input('IOR', 'vector3', '0.2, 0.4, 1.2'),
+      input('extinction', 'vector3', '3, 2, 1'), input('exteriorIOR', 'float', '2'),
+      input('anisotropy', 'float', '-0.7'), input('anisotropyRotation', 'float', '-0.1'),
+      input('roughness', 'float', '0.2'), input('tailMix', 'float', '0.3'),
+      input('tailLength', 'float', '0.5'), input('energyCompensation', 'float', '1'),
+    ]));
+    const closure = surfaceGraphToLayered(resolveSurface(graph)!, graph);
+    expect(closure.lobes).toHaveLength(2);
+    expect(closure.lobes[0]).toMatchObject({ weight: 0.7, anisotropy: 0.7, energyCompensation: 1,
+      conductorEta: [0.1, 0.2, 0.6], extinction: [1.5, 1, 0.5] });
+    expect(closure.lobes[0]!.rotation).toBeCloseTo(0.15);
+    expect(closure.lobes[1]!.weight).toBeCloseTo(0.3);
+    expect(closure.lobes[1]!.roughness).toBeCloseTo(0.6);
+    graph.nodes.get('METAL')!.inputs.push(input('tailLength', 'float', '-0.5'));
+    graph.nodes.get('METAL')!.inputs = graph.nodes.get('METAL')!.inputs.filter((entry, index, entries) =>
+      entry.name !== 'tailLength' || index === entries.length - 1);
+    expect(surfaceGraphToLayered(resolveSurface(graph)!, graph).lobes).toHaveLength(1);
+  });
+
   it('resolves Auto to Fresnel Blend for diffuse bases and Rough Coating for specular bases', () => {
     expect(resolveLamaLayerMode('auto', [{ kind: 'burley_diffuse' }])).toBe('fresnel_blend');
     expect(resolveLamaLayerMode('auto', [{ kind: 'conductor' }])).toBe('rough_coating');

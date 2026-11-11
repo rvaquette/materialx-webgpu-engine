@@ -16,6 +16,38 @@ const playgroundRoot = process.env['MX_PLAYGROUND_ROOT']
 const coreFile = join(coreRoot, 'JsMaterialXCore.js');
 
 describe.skipIf(!existsSync(coreFile) || !existsSync(libraryRoot))('installed MaterialX Core resolution', () => {
+  it('resolves all conductor parameter scenes and explicitly diagnoses unsupported controls', async () => {
+    const module = await import(/* @vite-ignore */ pathToFileURL(coreFile).href) as { default: MaterialXModuleFactory };
+    const core = new MaterialXCore(await module.default());
+    const libraries = new MaterialXLibraries(core);
+    await libraries.load({ sources: defaultLibrarySources(libraryRoot), fetchText: async path => readFileSync(path, 'utf8') });
+    const diagnostics: Diagnostic[] = [];
+    const documents = await loadMaterialXDocuments({ core, libraries,
+      texts: new Map([['conductor', readFileSync('scenes/lama/conductor/materials.mtlx', 'utf8')]]),
+      sink: diagnostic => diagnostics.push(diagnostic),
+    });
+    try {
+      const coverage = JSON.parse(readFileSync('scenes/lama/conductor/coverage.json', 'utf8')) as { parameter: string; status: string }[];
+      const compiler = createGraphMaterialCompiler({ documents, sink: diagnostic => diagnostics.push(diagnostic) });
+      for (const example of coverage) {
+        diagnostics.length = 0;
+        const name = `conductor_${example.parameter}`;
+        const build = await compiler.compile({ assetPath: 'conductor', materialName: name,
+          referencedPrimPath: `/MaterialX/Materials/${name}`, boundPrims: [] });
+        expect(build?.layered, example.parameter).toBeDefined();
+        expect(diagnostics.filter(diagnostic => diagnostic.level === 'error'), example.parameter).toEqual([]);
+        if (example.status === 'unsupported') {
+          expect(diagnostics.some(diagnostic => diagnostic.message.includes('is not implemented')), example.parameter).toBe(true);
+        } else {
+          expect(diagnostics, example.parameter).toEqual([]);
+        }
+      }
+    } finally {
+      documents.delete();
+      libraries.delete();
+    }
+  }, 30000);
+
   it('resolves the corpus-local SimpleHair NodeDef to a native Chiang surface', async () => {
     const module = await import(/* @vite-ignore */ pathToFileURL(coreFile).href) as { default: MaterialXModuleFactory };
     const core = new MaterialXCore(await module.default());
@@ -106,7 +138,7 @@ describe.skipIf(!existsSync(coreFile) || !existsSync(libraryRoot))('installed Ma
       fetchText: async path => readFileSync(path, 'utf8'),
     });
     const diagnostics: Diagnostic[] = [];
-    const assetPath = join('scenes', 'pathtracer', 'lama', 'lama_layer_gold_modes.mtlx');
+    const assetPath = join('scenes', 'pathtracer', 'lama', 'layer', 'lama_layer_gold_modes.mtlx');
     const text = readFileSync(assetPath, 'utf8');
     const documents = await loadMaterialXDocuments({
       core, libraries, texts: new Map([[assetPath, text]]), sink: d => diagnostics.push(d),

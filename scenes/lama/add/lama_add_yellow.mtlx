@@ -1,7 +1,7 @@
 <?xml version="1.0"?>
 <materialx version="1.39" colorspace="lin_rec709" xmlns:engine="urn:materialx-webgpu-engine:extensions">
   <image name="decoration" type="color3">
-    <input name="file" type="filename" value="../renderman/textures/gold_base.png" />
+    <input name="file" type="filename" value="../../pathtracer/renderman/textures/gold_base.png" />
   </image>
   <power name="decoration_linear" type="color3">
     <input name="in1" type="color3" nodename="decoration" />

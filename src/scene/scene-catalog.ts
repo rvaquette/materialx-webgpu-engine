@@ -21,10 +21,10 @@ const lamaLayerLabels: Readonly<Record<string, string>> = {
   'lama_layer_gold_auto.usda': 'LamaLayer Gold - Auto',
 };
 
-const lamaScenes = Object.keys(import.meta.glob('/scenes/pathtracer/lama/*.usda', { query: '?raw', import: 'default' }))
+const lamaScenes = Object.keys(import.meta.glob('/scenes/lama/{add,layer,mix}/**/*.usda', { query: '?raw', import: 'default' }))
   .sort()
   .map((path): SceneCatalogEntry => {
-    const filename = path.slice('/scenes/pathtracer/lama/'.length);
+    const filename = path.split('/').at(-1) ?? path;
     return {
       label: lamaLayerLabels[filename] ?? `Lama - ${filename.replace(/\.usda$/, '').replace(/_/g, ' ')}`,
       entry: `.${path}`,
@@ -37,6 +37,12 @@ const gltfScenes = Object.keys(import.meta.glob('/scenes/pathtracer/*.{gltf,glb}
     label: `Pathtracer - ${path.slice('/scenes/pathtracer/'.length).replace(/_/g, ' ')}`,
     entry: `.${path}`,
   }));
+
+const conductorScenes = Object.entries(import.meta.glob<{ label: string; scene: string }[]>('/scenes/lama/conductor/coverage.json', { eager: true, import: 'default' }))
+  .flatMap(([, coverage]) => coverage.map(example => ({
+    label: `LamaConductor - ${example.label}`,
+    entry: `./scenes/lama/conductor/${example.scene}`,
+  })));
 
 const compiledScenes = Object.keys(import.meta.glob('/scenes/**/scene.json', { query: '?url', import: 'default' }))
   .sort()
@@ -60,6 +66,7 @@ export const SCENE_CATALOG: readonly SceneCatalogEntry[] = [
   { label: 'Standard shader ball', entry: './scenes/standard-shader-ball/standard-shader-ball.usda' },
   ...pathTracerScenes,
   ...lamaScenes,
+  ...conductorScenes,
   ...gltfScenes,
   ...compiledScenes,
   { label: 'OpenPBR Shader Playground - Selection (9 groups)', entry: './scenes/OpenPBRShaderPlayground/playground_selection.usda' },

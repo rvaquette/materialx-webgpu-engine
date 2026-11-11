@@ -1,0 +1,447 @@
+<?xml version="1.0"?>
+<materialx version="1.39" colorspace="lin_rec709" xmlns:engine="urn:materialx-webgpu-engine:extensions">
+  <position name="position" type="vector3" />
+  <multiply name="scratch_scale" type="vector3">
+    <input name="in1" type="vector3" nodename="position" />
+    <input name="in2" type="vector3" value="2000, 80, 80" />
+  </multiply>
+  <noise3d name="scratches" type="vector3">
+    <input name="position" type="vector3" nodename="scratch_scale" />
+    <input name="amplitude" type="vector3" value="0.2, 0.2, 0" />
+    <input name="pivot" type="float" value="0.5" />
+  </noise3d>
+  <add name="normal_signal" type="vector3">
+    <input name="in1" type="vector3" nodename="scratches" />
+    <input name="in2" type="vector3" value="0, 0, 0.5" />
+  </add>
+  <normalmap name="scratched_normal" type="vector3">
+    <input name="in" type="vector3" nodename="normal_signal" />
+    <input name="scale" type="float" value="0.3" />
+  </normalmap>
+  <LamaConductor name="conductor_tint_bsdf" type="BSDF">
+    <input name="fresnelMode" type="integer" value="1" uimin="0" uimax="1" engine:editable="true" />
+    <input name="tint" type="color3" value="0.5, 0.8, 1" />
+    <input name="reflectivity" type="color3" value="0.945, 0.7772, 0.3737" />
+    <input name="edgeColor" type="color3" value="0.7137, 0.7373, 0.455" />
+    <input name="IOR" type="vector3" value="0.18, 0.42, 1.37" />
+    <input name="extinction" type="vector3" value="3.42, 2.35, 1.77" />
+    <input name="roughness" type="float" value="0.24" uimin="0" uimax="1" engine:editable="true" />
+    <input name="anisotropy" type="float" value="0" uimin="-0.98" uimax="0.98" engine:editable="true" />
+    <input name="anisotropyRotation" type="float" value="0" uimin="-1" uimax="1" engine:editable="true" />
+    <input name="exteriorIOR" type="float" value="1" uimin="0.1" uimax="3" engine:editable="true" />
+    <input name="energyCompensation" type="float" value="0" uimin="0" uimax="1" engine:editable="true" />
+    <input name="tailMix" type="float" value="0" uimin="0" uimax="1" engine:editable="true" />
+    <input name="tailLength" type="float" value="0.5" uimin="-1" uimax="1" engine:editable="true" />
+  </LamaConductor>
+  <LamaSurface name="conductor_tint" type="material">
+    <input name="materialFront" type="BSDF" nodename="conductor_tint_bsdf" />
+    <input name="materialBack" type="BSDF" nodename="conductor_tint_bsdf" />
+    <input name="presence" type="float" value="1" />
+  </LamaSurface>
+  <LamaConductor name="conductor_fresnel_artistic_bsdf" type="BSDF">
+    <input name="fresnelMode" type="integer" value="0" uimin="0" uimax="1" engine:editable="true" />
+    <input name="tint" type="color3" value="1, 1, 1" />
+    <input name="reflectivity" type="color3" value="0.945, 0.7772, 0.3737" />
+    <input name="edgeColor" type="color3" value="0.7137, 0.7373, 0.455" />
+    <input name="IOR" type="vector3" value="0.18, 0.42, 1.37" />
+    <input name="extinction" type="vector3" value="3.42, 2.35, 1.77" />
+    <input name="roughness" type="float" value="0.24" uimin="0" uimax="1" engine:editable="true" />
+    <input name="anisotropy" type="float" value="0" uimin="-0.98" uimax="0.98" engine:editable="true" />
+    <input name="anisotropyRotation" type="float" value="0" uimin="-1" uimax="1" engine:editable="true" />
+    <input name="exteriorIOR" type="float" value="1" uimin="0.1" uimax="3" engine:editable="true" />
+    <input name="energyCompensation" type="float" value="0" uimin="0" uimax="1" engine:editable="true" />
+    <input name="tailMix" type="float" value="0" uimin="0" uimax="1" engine:editable="true" />
+    <input name="tailLength" type="float" value="0.5" uimin="-1" uimax="1" engine:editable="true" />
+  </LamaConductor>
+  <LamaSurface name="conductor_fresnel_artistic" type="material">
+    <input name="materialFront" type="BSDF" nodename="conductor_fresnel_artistic_bsdf" />
+    <input name="materialBack" type="BSDF" nodename="conductor_fresnel_artistic_bsdf" />
+    <input name="presence" type="float" value="1" />
+  </LamaSurface>
+  <LamaConductor name="conductor_fresnel_scientific_bsdf" type="BSDF">
+    <input name="fresnelMode" type="integer" value="1" uimin="0" uimax="1" engine:editable="true" />
+    <input name="tint" type="color3" value="1, 1, 1" />
+    <input name="reflectivity" type="color3" value="0.945, 0.7772, 0.3737" />
+    <input name="edgeColor" type="color3" value="0.7137, 0.7373, 0.455" />
+    <input name="IOR" type="vector3" value="0.18, 0.42, 1.37" />
+    <input name="extinction" type="vector3" value="3.42, 2.35, 1.77" />
+    <input name="roughness" type="float" value="0.24" uimin="0" uimax="1" engine:editable="true" />
+    <input name="anisotropy" type="float" value="0" uimin="-0.98" uimax="0.98" engine:editable="true" />
+    <input name="anisotropyRotation" type="float" value="0" uimin="-1" uimax="1" engine:editable="true" />
+    <input name="exteriorIOR" type="float" value="1" uimin="0.1" uimax="3" engine:editable="true" />
+    <input name="energyCompensation" type="float" value="0" uimin="0" uimax="1" engine:editable="true" />
+    <input name="tailMix" type="float" value="0" uimin="0" uimax="1" engine:editable="true" />
+    <input name="tailLength" type="float" value="0.5" uimin="-1" uimax="1" engine:editable="true" />
+  </LamaConductor>
+  <LamaSurface name="conductor_fresnel_scientific" type="material">
+    <input name="materialFront" type="BSDF" nodename="conductor_fresnel_scientific_bsdf" />
+    <input name="materialBack" type="BSDF" nodename="conductor_fresnel_scientific_bsdf" />
+    <input name="presence" type="float" value="1" />
+  </LamaSurface>
+  <LamaConductor name="conductor_reflectivity_bsdf" type="BSDF">
+    <input name="fresnelMode" type="integer" value="0" uimin="0" uimax="1" engine:editable="true" />
+    <input name="tint" type="color3" value="1, 1, 1" />
+    <input name="reflectivity" type="color3" value="0.8, 0.3, 0.1" />
+    <input name="edgeColor" type="color3" value="0.7137, 0.7373, 0.455" />
+    <input name="IOR" type="vector3" value="0.18, 0.42, 1.37" />
+    <input name="extinction" type="vector3" value="3.42, 2.35, 1.77" />
+    <input name="roughness" type="float" value="0.24" uimin="0" uimax="1" engine:editable="true" />
+    <input name="anisotropy" type="float" value="0" uimin="-0.98" uimax="0.98" engine:editable="true" />
+    <input name="anisotropyRotation" type="float" value="0" uimin="-1" uimax="1" engine:editable="true" />
+    <input name="exteriorIOR" type="float" value="1" uimin="0.1" uimax="3" engine:editable="true" />
+    <input name="energyCompensation" type="float" value="0" uimin="0" uimax="1" engine:editable="true" />
+    <input name="tailMix" type="float" value="0" uimin="0" uimax="1" engine:editable="true" />
+    <input name="tailLength" type="float" value="0.5" uimin="-1" uimax="1" engine:editable="true" />
+  </LamaConductor>
+  <LamaSurface name="conductor_reflectivity" type="material">
+    <input name="materialFront" type="BSDF" nodename="conductor_reflectivity_bsdf" />
+    <input name="materialBack" type="BSDF" nodename="conductor_reflectivity_bsdf" />
+    <input name="presence" type="float" value="1" />
+  </LamaSurface>
+  <LamaConductor name="conductor_edge_color_bsdf" type="BSDF">
+    <input name="fresnelMode" type="integer" value="0" uimin="0" uimax="1" engine:editable="true" />
+    <input name="tint" type="color3" value="1, 1, 1" />
+    <input name="reflectivity" type="color3" value="0.945, 0.7772, 0.3737" />
+    <input name="edgeColor" type="color3" value="0.1, 0.8, 0.95" />
+    <input name="IOR" type="vector3" value="0.18, 0.42, 1.37" />
+    <input name="extinction" type="vector3" value="3.42, 2.35, 1.77" />
+    <input name="roughness" type="float" value="0.24" uimin="0" uimax="1" engine:editable="true" />
+    <input name="anisotropy" type="float" value="0" uimin="-0.98" uimax="0.98" engine:editable="true" />
+    <input name="anisotropyRotation" type="float" value="0" uimin="-1" uimax="1" engine:editable="true" />
+    <input name="exteriorIOR" type="float" value="1" uimin="0.1" uimax="3" engine:editable="true" />
+    <input name="energyCompensation" type="float" value="0" uimin="0" uimax="1" engine:editable="true" />
+    <input name="tailMix" type="float" value="0" uimin="0" uimax="1" engine:editable="true" />
+    <input name="tailLength" type="float" value="0.5" uimin="-1" uimax="1" engine:editable="true" />
+  </LamaConductor>
+  <LamaSurface name="conductor_edge_color" type="material">
+    <input name="materialFront" type="BSDF" nodename="conductor_edge_color_bsdf" />
+    <input name="materialBack" type="BSDF" nodename="conductor_edge_color_bsdf" />
+    <input name="presence" type="float" value="1" />
+  </LamaSurface>
+  <LamaConductor name="conductor_ior_bsdf" type="BSDF">
+    <input name="fresnelMode" type="integer" value="1" uimin="0" uimax="1" engine:editable="true" />
+    <input name="tint" type="color3" value="1, 1, 1" />
+    <input name="reflectivity" type="color3" value="0.945, 0.7772, 0.3737" />
+    <input name="edgeColor" type="color3" value="0.7137, 0.7373, 0.455" />
+    <input name="IOR" type="vector3" value="0.9, 0.5, 0.2" />
+    <input name="extinction" type="vector3" value="3.42, 2.35, 1.77" />
+    <input name="roughness" type="float" value="0.24" uimin="0" uimax="1" engine:editable="true" />
+    <input name="anisotropy" type="float" value="0" uimin="-0.98" uimax="0.98" engine:editable="true" />
+    <input name="anisotropyRotation" type="float" value="0" uimin="-1" uimax="1" engine:editable="true" />
+    <input name="exteriorIOR" type="float" value="1" uimin="0.1" uimax="3" engine:editable="true" />
+    <input name="energyCompensation" type="float" value="0" uimin="0" uimax="1" engine:editable="true" />
+    <input name="tailMix" type="float" value="0" uimin="0" uimax="1" engine:editable="true" />
+    <input name="tailLength" type="float" value="0.5" uimin="-1" uimax="1" engine:editable="true" />
+  </LamaConductor>
+  <LamaSurface name="conductor_ior" type="material">
+    <input name="materialFront" type="BSDF" nodename="conductor_ior_bsdf" />
+    <input name="materialBack" type="BSDF" nodename="conductor_ior_bsdf" />
+    <input name="presence" type="float" value="1" />
+  </LamaSurface>
+  <LamaConductor name="conductor_extinction_bsdf" type="BSDF">
+    <input name="fresnelMode" type="integer" value="1" uimin="0" uimax="1" engine:editable="true" />
+    <input name="tint" type="color3" value="1, 1, 1" />
+    <input name="reflectivity" type="color3" value="0.945, 0.7772, 0.3737" />
+    <input name="edgeColor" type="color3" value="0.7137, 0.7373, 0.455" />
+    <input name="IOR" type="vector3" value="0.18, 0.42, 1.37" />
+    <input name="extinction" type="vector3" value="1.5, 2.5, 4" />
+    <input name="roughness" type="float" value="0.24" uimin="0" uimax="1" engine:editable="true" />
+    <input name="anisotropy" type="float" value="0" uimin="-0.98" uimax="0.98" engine:editable="true" />
+    <input name="anisotropyRotation" type="float" value="0" uimin="-1" uimax="1" engine:editable="true" />
+    <input name="exteriorIOR" type="float" value="1" uimin="0.1" uimax="3" engine:editable="true" />
+    <input name="energyCompensation" type="float" value="0" uimin="0" uimax="1" engine:editable="true" />
+    <input name="tailMix" type="float" value="0" uimin="0" uimax="1" engine:editable="true" />
+    <input name="tailLength" type="float" value="0.5" uimin="-1" uimax="1" engine:editable="true" />
+  </LamaConductor>
+  <LamaSurface name="conductor_extinction" type="material">
+    <input name="materialFront" type="BSDF" nodename="conductor_extinction_bsdf" />
+    <input name="materialBack" type="BSDF" nodename="conductor_extinction_bsdf" />
+    <input name="presence" type="float" value="1" />
+  </LamaSurface>
+  <LamaConductor name="conductor_roughness_bsdf" type="BSDF">
+    <input name="fresnelMode" type="integer" value="1" uimin="0" uimax="1" engine:editable="true" />
+    <input name="tint" type="color3" value="1, 1, 1" />
+    <input name="reflectivity" type="color3" value="0.945, 0.7772, 0.3737" />
+    <input name="edgeColor" type="color3" value="0.7137, 0.7373, 0.455" />
+    <input name="IOR" type="vector3" value="0.18, 0.42, 1.37" />
+    <input name="extinction" type="vector3" value="3.42, 2.35, 1.77" />
+    <input name="roughness" type="float" value="0.65" uimin="0" uimax="1" engine:editable="true" />
+    <input name="anisotropy" type="float" value="0" uimin="-0.98" uimax="0.98" engine:editable="true" />
+    <input name="anisotropyRotation" type="float" value="0" uimin="-1" uimax="1" engine:editable="true" />
+    <input name="exteriorIOR" type="float" value="1" uimin="0.1" uimax="3" engine:editable="true" />
+    <input name="energyCompensation" type="float" value="0" uimin="0" uimax="1" engine:editable="true" />
+    <input name="tailMix" type="float" value="0" uimin="0" uimax="1" engine:editable="true" />
+    <input name="tailLength" type="float" value="0.5" uimin="-1" uimax="1" engine:editable="true" />
+  </LamaConductor>
+  <LamaSurface name="conductor_roughness" type="material">
+    <input name="materialFront" type="BSDF" nodename="conductor_roughness_bsdf" />
+    <input name="materialBack" type="BSDF" nodename="conductor_roughness_bsdf" />
+    <input name="presence" type="float" value="1" />
+  </LamaSurface>
+  <LamaConductor name="conductor_normal_bump_bsdf" type="BSDF">
+    <input name="fresnelMode" type="integer" value="1" uimin="0" uimax="1" engine:editable="true" />
+    <input name="tint" type="color3" value="1, 1, 1" />
+    <input name="reflectivity" type="color3" value="0.945, 0.7772, 0.3737" />
+    <input name="edgeColor" type="color3" value="0.7137, 0.7373, 0.455" />
+    <input name="IOR" type="vector3" value="0.18, 0.42, 1.37" />
+    <input name="extinction" type="vector3" value="3.42, 2.35, 1.77" />
+    <input name="roughness" type="float" value="0.24" uimin="0" uimax="1" engine:editable="true" />
+    <input name="anisotropy" type="float" value="0" uimin="-0.98" uimax="0.98" engine:editable="true" />
+    <input name="anisotropyRotation" type="float" value="0" uimin="-1" uimax="1" engine:editable="true" />
+    <input name="exteriorIOR" type="float" value="1" uimin="0.1" uimax="3" engine:editable="true" />
+    <input name="energyCompensation" type="float" value="0" uimin="0" uimax="1" engine:editable="true" />
+    <input name="tailMix" type="float" value="0" uimin="0" uimax="1" engine:editable="true" />
+    <input name="tailLength" type="float" value="0.5" uimin="-1" uimax="1" engine:editable="true" />
+    <input name="normal" type="vector3" nodename="scratched_normal" />
+  </LamaConductor>
+  <LamaSurface name="conductor_normal_bump" type="material">
+    <input name="materialFront" type="BSDF" nodename="conductor_normal_bump_bsdf" />
+    <input name="materialBack" type="BSDF" nodename="conductor_normal_bump_bsdf" />
+    <input name="presence" type="float" value="1" />
+  </LamaSurface>
+  <LamaConductor name="conductor_tail_mix_bsdf" type="BSDF">
+    <input name="fresnelMode" type="integer" value="1" uimin="0" uimax="1" engine:editable="true" />
+    <input name="tint" type="color3" value="1, 1, 1" />
+    <input name="reflectivity" type="color3" value="0.945, 0.7772, 0.3737" />
+    <input name="edgeColor" type="color3" value="0.7137, 0.7373, 0.455" />
+    <input name="IOR" type="vector3" value="0.18, 0.42, 1.37" />
+    <input name="extinction" type="vector3" value="3.42, 2.35, 1.77" />
+    <input name="roughness" type="float" value="0.24" uimin="0" uimax="1" engine:editable="true" />
+    <input name="anisotropy" type="float" value="0" uimin="-0.98" uimax="0.98" engine:editable="true" />
+    <input name="anisotropyRotation" type="float" value="0" uimin="-1" uimax="1" engine:editable="true" />
+    <input name="exteriorIOR" type="float" value="1" uimin="0.1" uimax="3" engine:editable="true" />
+    <input name="energyCompensation" type="float" value="0" uimin="0" uimax="1" engine:editable="true" />
+    <input name="tailMix" type="float" value="0.65" uimin="0" uimax="1" engine:editable="true" />
+    <input name="tailLength" type="float" value="0.65" uimin="-1" uimax="1" engine:editable="true" />
+  </LamaConductor>
+  <LamaSurface name="conductor_tail_mix" type="material">
+    <input name="materialFront" type="BSDF" nodename="conductor_tail_mix_bsdf" />
+    <input name="materialBack" type="BSDF" nodename="conductor_tail_mix_bsdf" />
+    <input name="presence" type="float" value="1" />
+  </LamaSurface>
+  <LamaConductor name="conductor_tail_length_bsdf" type="BSDF">
+    <input name="fresnelMode" type="integer" value="1" uimin="0" uimax="1" engine:editable="true" />
+    <input name="tint" type="color3" value="1, 1, 1" />
+    <input name="reflectivity" type="color3" value="0.945, 0.7772, 0.3737" />
+    <input name="edgeColor" type="color3" value="0.7137, 0.7373, 0.455" />
+    <input name="IOR" type="vector3" value="0.18, 0.42, 1.37" />
+    <input name="extinction" type="vector3" value="3.42, 2.35, 1.77" />
+    <input name="roughness" type="float" value="0.24" uimin="0" uimax="1" engine:editable="true" />
+    <input name="anisotropy" type="float" value="0" uimin="-0.98" uimax="0.98" engine:editable="true" />
+    <input name="anisotropyRotation" type="float" value="0" uimin="-1" uimax="1" engine:editable="true" />
+    <input name="exteriorIOR" type="float" value="1" uimin="0.1" uimax="3" engine:editable="true" />
+    <input name="energyCompensation" type="float" value="0" uimin="0" uimax="1" engine:editable="true" />
+    <input name="tailMix" type="float" value="0.5" uimin="0" uimax="1" engine:editable="true" />
+    <input name="tailLength" type="float" value="0.9" uimin="-1" uimax="1" engine:editable="true" />
+  </LamaConductor>
+  <LamaSurface name="conductor_tail_length" type="material">
+    <input name="materialFront" type="BSDF" nodename="conductor_tail_length_bsdf" />
+    <input name="materialBack" type="BSDF" nodename="conductor_tail_length_bsdf" />
+    <input name="presence" type="float" value="1" />
+  </LamaSurface>
+  <LamaConductor name="conductor_anisotropy_bsdf" type="BSDF">
+    <input name="fresnelMode" type="integer" value="1" uimin="0" uimax="1" engine:editable="true" />
+    <input name="tint" type="color3" value="1, 1, 1" />
+    <input name="reflectivity" type="color3" value="0.945, 0.7772, 0.3737" />
+    <input name="edgeColor" type="color3" value="0.7137, 0.7373, 0.455" />
+    <input name="IOR" type="vector3" value="0.18, 0.42, 1.37" />
+    <input name="extinction" type="vector3" value="3.42, 2.35, 1.77" />
+    <input name="roughness" type="float" value="0.4" uimin="0" uimax="1" engine:editable="true" />
+    <input name="anisotropy" type="float" value="0.8" uimin="-0.98" uimax="0.98" engine:editable="true" />
+    <input name="anisotropyRotation" type="float" value="0" uimin="-1" uimax="1" engine:editable="true" />
+    <input name="exteriorIOR" type="float" value="1" uimin="0.1" uimax="3" engine:editable="true" />
+    <input name="energyCompensation" type="float" value="0" uimin="0" uimax="1" engine:editable="true" />
+    <input name="tailMix" type="float" value="0" uimin="0" uimax="1" engine:editable="true" />
+    <input name="tailLength" type="float" value="0.5" uimin="-1" uimax="1" engine:editable="true" />
+  </LamaConductor>
+  <LamaSurface name="conductor_anisotropy" type="material">
+    <input name="materialFront" type="BSDF" nodename="conductor_anisotropy_bsdf" />
+    <input name="materialBack" type="BSDF" nodename="conductor_anisotropy_bsdf" />
+    <input name="presence" type="float" value="1" />
+  </LamaSurface>
+  <LamaConductor name="conductor_anisotropy_negative_bsdf" type="BSDF">
+    <input name="fresnelMode" type="integer" value="1" uimin="0" uimax="1" engine:editable="true" />
+    <input name="tint" type="color3" value="1, 1, 1" />
+    <input name="reflectivity" type="color3" value="0.945, 0.7772, 0.3737" />
+    <input name="edgeColor" type="color3" value="0.7137, 0.7373, 0.455" />
+    <input name="IOR" type="vector3" value="0.18, 0.42, 1.37" />
+    <input name="extinction" type="vector3" value="3.42, 2.35, 1.77" />
+    <input name="roughness" type="float" value="0.4" uimin="0" uimax="1" engine:editable="true" />
+    <input name="anisotropy" type="float" value="-0.8" uimin="-0.98" uimax="0.98" engine:editable="true" />
+    <input name="anisotropyRotation" type="float" value="0" uimin="-1" uimax="1" engine:editable="true" />
+    <input name="exteriorIOR" type="float" value="1" uimin="0.1" uimax="3" engine:editable="true" />
+    <input name="energyCompensation" type="float" value="0" uimin="0" uimax="1" engine:editable="true" />
+    <input name="tailMix" type="float" value="0" uimin="0" uimax="1" engine:editable="true" />
+    <input name="tailLength" type="float" value="0.5" uimin="-1" uimax="1" engine:editable="true" />
+  </LamaConductor>
+  <LamaSurface name="conductor_anisotropy_negative" type="material">
+    <input name="materialFront" type="BSDF" nodename="conductor_anisotropy_negative_bsdf" />
+    <input name="materialBack" type="BSDF" nodename="conductor_anisotropy_negative_bsdf" />
+    <input name="presence" type="float" value="1" />
+  </LamaSurface>
+  <LamaConductor name="conductor_direction_bsdf" type="BSDF">
+    <input name="fresnelMode" type="integer" value="1" uimin="0" uimax="1" engine:editable="true" />
+    <input name="tint" type="color3" value="1, 1, 1" />
+    <input name="reflectivity" type="color3" value="0.945, 0.7772, 0.3737" />
+    <input name="edgeColor" type="color3" value="0.7137, 0.7373, 0.455" />
+    <input name="IOR" type="vector3" value="0.18, 0.42, 1.37" />
+    <input name="extinction" type="vector3" value="3.42, 2.35, 1.77" />
+    <input name="roughness" type="float" value="0.4" uimin="0" uimax="1" engine:editable="true" />
+    <input name="anisotropy" type="float" value="0.8" uimin="-0.98" uimax="0.98" engine:editable="true" />
+    <input name="anisotropyRotation" type="float" value="0" uimin="-1" uimax="1" engine:editable="true" />
+    <input name="exteriorIOR" type="float" value="1" uimin="0.1" uimax="3" engine:editable="true" />
+    <input name="energyCompensation" type="float" value="0" uimin="0" uimax="1" engine:editable="true" />
+    <input name="tailMix" type="float" value="0" uimin="0" uimax="1" engine:editable="true" />
+    <input name="tailLength" type="float" value="0.5" uimin="-1" uimax="1" engine:editable="true" />
+    <input name="anisotropyDirection" type="vector3" value="0, 0, 1" />
+  </LamaConductor>
+  <LamaSurface name="conductor_direction" type="material">
+    <input name="materialFront" type="BSDF" nodename="conductor_direction_bsdf" />
+    <input name="materialBack" type="BSDF" nodename="conductor_direction_bsdf" />
+    <input name="presence" type="float" value="1" />
+  </LamaSurface>
+  <LamaConductor name="conductor_rotation_bsdf" type="BSDF">
+    <input name="fresnelMode" type="integer" value="1" uimin="0" uimax="1" engine:editable="true" />
+    <input name="tint" type="color3" value="1, 1, 1" />
+    <input name="reflectivity" type="color3" value="0.945, 0.7772, 0.3737" />
+    <input name="edgeColor" type="color3" value="0.7137, 0.7373, 0.455" />
+    <input name="IOR" type="vector3" value="0.18, 0.42, 1.37" />
+    <input name="extinction" type="vector3" value="3.42, 2.35, 1.77" />
+    <input name="roughness" type="float" value="0.4" uimin="0" uimax="1" engine:editable="true" />
+    <input name="anisotropy" type="float" value="0.8" uimin="-0.98" uimax="0.98" engine:editable="true" />
+    <input name="anisotropyRotation" type="float" value="-0.125" uimin="-1" uimax="1" engine:editable="true" />
+    <input name="exteriorIOR" type="float" value="1" uimin="0.1" uimax="3" engine:editable="true" />
+    <input name="energyCompensation" type="float" value="0" uimin="0" uimax="1" engine:editable="true" />
+    <input name="tailMix" type="float" value="0" uimin="0" uimax="1" engine:editable="true" />
+    <input name="tailLength" type="float" value="0.5" uimin="-1" uimax="1" engine:editable="true" />
+  </LamaConductor>
+  <LamaSurface name="conductor_rotation" type="material">
+    <input name="materialFront" type="BSDF" nodename="conductor_rotation_bsdf" />
+    <input name="materialBack" type="BSDF" nodename="conductor_rotation_bsdf" />
+    <input name="presence" type="float" value="1" />
+  </LamaSurface>
+  <LamaConductor name="conductor_exterior_ior_bsdf" type="BSDF">
+    <input name="fresnelMode" type="integer" value="1" uimin="0" uimax="1" engine:editable="true" />
+    <input name="tint" type="color3" value="1, 1, 1" />
+    <input name="reflectivity" type="color3" value="0.945, 0.7772, 0.3737" />
+    <input name="edgeColor" type="color3" value="0.7137, 0.7373, 0.455" />
+    <input name="IOR" type="vector3" value="0.18, 0.42, 1.37" />
+    <input name="extinction" type="vector3" value="3.42, 2.35, 1.77" />
+    <input name="roughness" type="float" value="0.24" uimin="0" uimax="1" engine:editable="true" />
+    <input name="anisotropy" type="float" value="0" uimin="-0.98" uimax="0.98" engine:editable="true" />
+    <input name="anisotropyRotation" type="float" value="0" uimin="-1" uimax="1" engine:editable="true" />
+    <input name="exteriorIOR" type="float" value="1.5" uimin="0.1" uimax="3" engine:editable="true" />
+    <input name="energyCompensation" type="float" value="0" uimin="0" uimax="1" engine:editable="true" />
+    <input name="tailMix" type="float" value="0" uimin="0" uimax="1" engine:editable="true" />
+    <input name="tailLength" type="float" value="0.5" uimin="-1" uimax="1" engine:editable="true" />
+  </LamaConductor>
+  <LamaSurface name="conductor_exterior_ior" type="material">
+    <input name="materialFront" type="BSDF" nodename="conductor_exterior_ior_bsdf" />
+    <input name="materialBack" type="BSDF" nodename="conductor_exterior_ior_bsdf" />
+    <input name="presence" type="float" value="1" />
+  </LamaSurface>
+  <LamaConductor name="conductor_energy_compensation_bsdf" type="BSDF">
+    <input name="fresnelMode" type="integer" value="1" uimin="0" uimax="1" engine:editable="true" />
+    <input name="tint" type="color3" value="1, 1, 1" />
+    <input name="reflectivity" type="color3" value="0.945, 0.7772, 0.3737" />
+    <input name="edgeColor" type="color3" value="0.7137, 0.7373, 0.455" />
+    <input name="IOR" type="vector3" value="0.18, 0.42, 1.37" />
+    <input name="extinction" type="vector3" value="3.42, 2.35, 1.77" />
+    <input name="roughness" type="float" value="0.8" uimin="0" uimax="1" engine:editable="true" />
+    <input name="anisotropy" type="float" value="0" uimin="-0.98" uimax="0.98" engine:editable="true" />
+    <input name="anisotropyRotation" type="float" value="0" uimin="-1" uimax="1" engine:editable="true" />
+    <input name="exteriorIOR" type="float" value="1" uimin="0.1" uimax="3" engine:editable="true" />
+    <input name="energyCompensation" type="float" value="1" uimin="0" uimax="1" engine:editable="true" />
+    <input name="tailMix" type="float" value="0" uimin="0" uimax="1" engine:editable="true" />
+    <input name="tailLength" type="float" value="0.5" uimin="-1" uimax="1" engine:editable="true" />
+  </LamaConductor>
+  <LamaSurface name="conductor_energy_compensation" type="material">
+    <input name="materialFront" type="BSDF" nodename="conductor_energy_compensation_bsdf" />
+    <input name="materialBack" type="BSDF" nodename="conductor_energy_compensation_bsdf" />
+    <input name="presence" type="float" value="1" />
+  </LamaSurface>
+  <LamaConductor name="conductor_surface_mollification_bsdf" type="BSDF">
+    <input name="fresnelMode" type="integer" value="1" uimin="0" uimax="1" engine:editable="true" />
+    <input name="tint" type="color3" value="1, 1, 1" />
+    <input name="reflectivity" type="color3" value="0.945, 0.7772, 0.3737" />
+    <input name="edgeColor" type="color3" value="0.7137, 0.7373, 0.455" />
+    <input name="IOR" type="vector3" value="0.18, 0.42, 1.37" />
+    <input name="extinction" type="vector3" value="3.42, 2.35, 1.77" />
+    <input name="roughness" type="float" value="0.24" uimin="0" uimax="1" engine:editable="true" />
+    <input name="anisotropy" type="float" value="0" uimin="-0.98" uimax="0.98" engine:editable="true" />
+    <input name="anisotropyRotation" type="float" value="0" uimin="-1" uimax="1" engine:editable="true" />
+    <input name="exteriorIOR" type="float" value="1" uimin="0.1" uimax="3" engine:editable="true" />
+    <input name="energyCompensation" type="float" value="0" uimin="0" uimax="1" engine:editable="true" />
+    <input name="tailMix" type="float" value="0" uimin="0" uimax="1" engine:editable="true" />
+    <input name="tailLength" type="float" value="0.5" uimin="-1" uimax="1" engine:editable="true" />
+    <input name="surfaceMollification" type="float" value="1" uimin="0" uimax="1" engine:editable="true" />
+  </LamaConductor>
+  <LamaSurface name="conductor_surface_mollification" type="material">
+    <input name="materialFront" type="BSDF" nodename="conductor_surface_mollification_bsdf" />
+    <input name="materialBack" type="BSDF" nodename="conductor_surface_mollification_bsdf" />
+    <input name="presence" type="float" value="1" />
+  </LamaSurface>
+  <LamaConductor name="conductor_motion_mollification_bsdf" type="BSDF">
+    <input name="fresnelMode" type="integer" value="1" uimin="0" uimax="1" engine:editable="true" />
+    <input name="tint" type="color3" value="1, 1, 1" />
+    <input name="reflectivity" type="color3" value="0.945, 0.7772, 0.3737" />
+    <input name="edgeColor" type="color3" value="0.7137, 0.7373, 0.455" />
+    <input name="IOR" type="vector3" value="0.18, 0.42, 1.37" />
+    <input name="extinction" type="vector3" value="3.42, 2.35, 1.77" />
+    <input name="roughness" type="float" value="0.24" uimin="0" uimax="1" engine:editable="true" />
+    <input name="anisotropy" type="float" value="0" uimin="-0.98" uimax="0.98" engine:editable="true" />
+    <input name="anisotropyRotation" type="float" value="0" uimin="-1" uimax="1" engine:editable="true" />
+    <input name="exteriorIOR" type="float" value="1" uimin="0.1" uimax="3" engine:editable="true" />
+    <input name="energyCompensation" type="float" value="0" uimin="0" uimax="1" engine:editable="true" />
+    <input name="tailMix" type="float" value="0" uimin="0" uimax="1" engine:editable="true" />
+    <input name="tailLength" type="float" value="0.5" uimin="-1" uimax="1" engine:editable="true" />
+    <input name="motionMollification" type="float" value="1" uimin="0" uimax="1" engine:editable="true" />
+  </LamaConductor>
+  <LamaSurface name="conductor_motion_mollification" type="material">
+    <input name="materialFront" type="BSDF" nodename="conductor_motion_mollification_bsdf" />
+    <input name="materialBack" type="BSDF" nodename="conductor_motion_mollification_bsdf" />
+    <input name="presence" type="float" value="1" />
+  </LamaSurface>
+  <LamaConductor name="conductor_lobe_name_bsdf" type="BSDF">
+    <input name="fresnelMode" type="integer" value="1" uimin="0" uimax="1" engine:editable="true" />
+    <input name="tint" type="color3" value="1, 1, 1" />
+    <input name="reflectivity" type="color3" value="0.945, 0.7772, 0.3737" />
+    <input name="edgeColor" type="color3" value="0.7137, 0.7373, 0.455" />
+    <input name="IOR" type="vector3" value="0.18, 0.42, 1.37" />
+    <input name="extinction" type="vector3" value="3.42, 2.35, 1.77" />
+    <input name="roughness" type="float" value="0.24" uimin="0" uimax="1" engine:editable="true" />
+    <input name="anisotropy" type="float" value="0" uimin="-0.98" uimax="0.98" engine:editable="true" />
+    <input name="anisotropyRotation" type="float" value="0" uimin="-1" uimax="1" engine:editable="true" />
+    <input name="exteriorIOR" type="float" value="1" uimin="0.1" uimax="3" engine:editable="true" />
+    <input name="energyCompensation" type="float" value="0" uimin="0" uimax="1" engine:editable="true" />
+    <input name="tailMix" type="float" value="0" uimin="0" uimax="1" engine:editable="true" />
+    <input name="tailLength" type="float" value="0.5" uimin="-1" uimax="1" engine:editable="true" />
+    <input name="lobeName" type="string" value="metal_reflection" />
+  </LamaConductor>
+  <LamaSurface name="conductor_lobe_name" type="material">
+    <input name="materialFront" type="BSDF" nodename="conductor_lobe_name_bsdf" />
+    <input name="materialBack" type="BSDF" nodename="conductor_lobe_name_bsdf" />
+    <input name="presence" type="float" value="1" />
+  </LamaSurface>
+  <LamaConductor name="conductor_matte_bsdf" type="BSDF">
+    <input name="fresnelMode" type="integer" value="1" uimin="0" uimax="1" engine:editable="true" />
+    <input name="tint" type="color3" value="1, 1, 1" />
+    <input name="reflectivity" type="color3" value="0.945, 0.7772, 0.3737" />
+    <input name="edgeColor" type="color3" value="0.7137, 0.7373, 0.455" />
+    <input name="IOR" type="vector3" value="0.18, 0.42, 1.37" />
+    <input name="extinction" type="vector3" value="3.42, 2.35, 1.77" />
+    <input name="roughness" type="float" value="0.24" uimin="0" uimax="1" engine:editable="true" />
+    <input name="anisotropy" type="float" value="0" uimin="-0.98" uimax="0.98" engine:editable="true" />
+    <input name="anisotropyRotation" type="float" value="0" uimin="-1" uimax="1" engine:editable="true" />
+    <input name="exteriorIOR" type="float" value="1" uimin="0.1" uimax="3" engine:editable="true" />
+    <input name="energyCompensation" type="float" value="0" uimin="0" uimax="1" engine:editable="true" />
+    <input name="tailMix" type="float" value="0" uimin="0" uimax="1" engine:editable="true" />
+    <input name="tailLength" type="float" value="0.5" uimin="-1" uimax="1" engine:editable="true" />
+    <input name="matte" type="string" value="metal_weight" />
+  </LamaConductor>
+  <LamaSurface name="conductor_matte" type="material">
+    <input name="materialFront" type="BSDF" nodename="conductor_matte_bsdf" />
+    <input name="materialBack" type="BSDF" nodename="conductor_matte_bsdf" />
+    <input name="presence" type="float" value="1" />
+  </LamaSurface>
+</materialx>

@@ -7,6 +7,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   conductorLobe,
+  exactConductorLobe,
   dielectricLobe,
   conductorAnisoLobe,
   dielectricAnisoLobe,
@@ -25,6 +26,36 @@ const WO: V = normalize([0.4, 0.1, 1.0]);
 const GOLD: Vec3 = [1, 0.86, 0.57];
 
 describe('anisotropic GGX lobes (T056c)', () => {
+  it('compensated conductors are reciprocal and have coherent evaluation and sampling', () => {
+    const lobe = exactConductorLobe([0.18, 0.42, 1.37], [3.42, 2.35, 1.77], [1, 1, 1], 0.8, 0, 0, undefined, 1);
+    const incoming = normalize([0.2, -0.3, 1]);
+    const forward = lobe.eval(WO, incoming);
+    const reverse = lobe.eval(incoming, WO);
+    for (const channel of [0, 1, 2]) expect(forward.value[channel]).toBeCloseTo(reverse.value[channel]!, 10);
+    const random = createPcg32(831);
+    let valid = 0;
+    for (let sampleIndex = 0; sampleIndex < 512; sampleIndex++) {
+      const sample = lobe.sample(WO, random);
+      if (!sample) continue;
+      valid++;
+      const evaluated = lobe.eval(WO, sample.wi);
+      expect(evaluated.pdf).toBeCloseTo(sample.pdf, 10);
+      expect(evaluated.value).toEqual(sample.value);
+    }
+    expect(valid).toBeGreaterThan(300);
+  });
+
+  it('restores a rough white conductor furnace without adding excess energy', () => {
+    for (const roughness of [0.4, 0.8, 1]) {
+      const compensated = exactConductorLobe([0, 0, 0], [10, 10, 10], [1, 1, 1], roughness, 0, 0, undefined, 1);
+      for (const outgoing of [[0, 0, 1], normalize([0.95, 0, 0.25])] as V[]) {
+        const reflectance = hemisphericalReflectance(compensated, outgoing, createPcg32(284), 40000);
+        expect(reflectance[0]).toBeGreaterThan(0.96);
+        expect(reflectance[0]).toBeLessThan(1.04);
+      }
+    }
+  });
+
   it('reduce to the isotropic lobe when anisotropy is zero', () => {
     const pairs: [ReturnType<typeof conductorLobe>, ReturnType<typeof conductorLobe>][] = [
       [conductorAnisoLobe(GOLD, 0.3, 0, 0), conductorLobe(GOLD, 0.3)],

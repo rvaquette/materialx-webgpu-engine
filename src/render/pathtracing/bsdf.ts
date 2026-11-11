@@ -15,6 +15,7 @@ import type { Vec3 } from '../../scene/transforms.ts';
 import type { CoatLayer, LayeredBsdfLobe, LayeredClosure, ThinFilmLayer } from '../../compiler/ir.ts';
 import { dispersionIor, thinFilmTint } from './spectrum.ts';
 import { hairEval, hairSample } from '../bsdf/hair.ts';
+import { conductorAlbedo, conductorAverageAlbedo } from '../bsdf/conductor-energy.ts';
 
 const PI = Math.PI;
 const INV_PI = 1 / Math.PI;
@@ -280,6 +281,7 @@ export function exactConductorLobe(
   anisotropy = 0,
   rotation = 0,
   film?: ThinFilmLayer,
+  energyCompensation = 0,
 ): Lobe {
   const f0 = exactConductorFresnel(eta, kappa, 1);
   const rawFresnel = (cosVH: number): V => exactConductorFresnel(eta, kappa, cosVH);
@@ -293,17 +295,47 @@ export function exactConductorLobe(
       const base = rawFresnel(cosVH);
       return [base[0] * tint[0], base[1] * tint[1], base[2] * tint[2]];
     };
+  let single: Lobe;
   if (anisotropy > 0) {
     const [au, av] = anisoAlphas(roughness, anisotropy);
-    return {
+    single = {
       eval: (wo, wi) => microfacetEvalAniso(wo as V, wi as V, au, av, rotation, fresnel),
       sample: (wo, rng) => microfacetSampleAniso(wo as V, au, av, rotation, fresnel, rng),
     };
+  } else {
+    const alpha = alphaOf(roughness);
+    single = {
+      eval: (wo, wi) => microfacetEval(wo as V, wi as V, alpha, fresnel),
+      sample: (wo, rng) => microfacetSample(wo as V, alpha, fresnel, rng),
+    };
   }
-  const alpha = alphaOf(roughness);
+  const compensation = clamp01(energyCompensation);
+  if (compensation === 0) return single;
+  const average = conductorAverageAlbedo(roughness);
+  const multipleColor = f0.map((reflectance, channel) => {
+    const fresnelAverage = reflectance + (1 - reflectance) / 21;
+    return tint[channel]! * fresnelAverage * fresnelAverage * average
+      / Math.max(1 - fresnelAverage * (1 - average), 1e-6);
+  }) as unknown as V;
+  const probability = (wo: Vec3): number => Math.min(0.8, compensation * (1 - conductorAlbedo(roughness, wo[2])));
+  const evaluate = (wo: Vec3, wi: Vec3): BsdfEval => {
+    if (wo[2] <= 0 || wi[2] <= 0) return { value: [0, 0, 0], pdf: 0 };
+    const base = single.eval(wo, wi);
+    const extra = compensation * (1 - conductorAlbedo(roughness, wo[2])) * (1 - conductorAlbedo(roughness, wi[2]))
+      / Math.max(PI * (1 - average), 1e-6);
+    const multipleProbability = probability(wo);
+    return { value: add(base.value, scale(multipleColor, extra)), pdf: (1 - multipleProbability) * base.pdf + multipleProbability * wi[2] * INV_PI };
+  };
   return {
-    eval: (wo, wi) => microfacetEval(wo as V, wi as V, alpha, fresnel),
-    sample: (wo, rng) => microfacetSample(wo as V, alpha, fresnel, rng),
+    eval: evaluate,
+    sample: (wo, rng) => {
+      if (wo[2] <= 0) return null;
+      const selected = rng();
+      const multipleProbability = probability(wo);
+      const sample = selected < multipleProbability
+        ? lambertLobe([1, 1, 1]).sample(wo, rng) : single.sample(wo, rng);
+      return sample ? { ...sample, ...evaluate(wo, sample.wi) } : null;
+    },
   };
 }
 
@@ -859,7 +891,7 @@ export function lobeFromLayered(l: LayeredBsdfLobe, film?: ThinFilmLayer): Lobe 
       return translucentLobe(l.color);
     case 'conductor':
       if (l.conductorEta && l.extinction) {
-        return exactConductorLobe(l.conductorEta, l.extinction, l.color, roughness, aniso, rotation, film);
+        return exactConductorLobe(l.conductorEta, l.extinction, l.color, roughness, aniso, rotation, film, l.energyCompensation ?? 0);
       }
       return film
         ? conductorThinFilmLobe(l.color, roughness, aniso, rotation, film)

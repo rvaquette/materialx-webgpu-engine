@@ -10,7 +10,7 @@ and frame the four materials with an oriented USD camera.
   dielectric-over-diffuse layer, and a diffuse/sheen mix.
 
 The paired `.mtlx` documents use the Lama node definitions loaded by the engine.
-Render with `usd-image-harness.html?entry=/scenes/pathtracer/lama/test_lama_sss.usda&backend=pathtracing&res=256&spp=32`.
+Render with `usd-image-harness.html?entry=/scenes/lama/test_lama_sss.usda&backend=pathtracing&res=256&spp=32`.
 
 ## SSS Model Contract
 
@@ -306,9 +306,9 @@ saturated second sphere is consistent with the implemented exponential model
 after the depth-truncation and variance issues were corrected. The reference
 checks the configured coefficients, not the exact artistic fit of the inversion.
 
-Run the local matrix with `MX_ENTRIES=/scenes/pathtracer/lama/test_lama_sss_furnace.usda`,
+Run the local matrix with `MX_ENTRIES=/scenes/lama/test_lama_sss_furnace.usda`,
 `MX_MAX_DEPTH=12`, `MX_TILE_SPP=1`, and a case tag `MX_OUTPUT_TAG=fidelity-<case>`.
-Set `MX_HARNESS_QUERY` to `openpbr=/scenes/pathtracer/lama/sss-fidelity-<case>.mtlx&skyPower=1&skyColor=1,1,1&firefly=0`.
+Set `MX_HARNESS_QUERY` to `openpbr=/scenes/lama/sss-fidelity-<case>.mtlx&skyPower=1&skyColor=1,1,1&firefly=0`.
 Cases are `calibration`, `original` and `white`; after their renders, run
 `node scripts/validate-sss-physics.mjs`. The complete report is
 `renders/local-lama-sss-physical-validation.json`; PNG/HDR pairs use the stem
@@ -320,8 +320,8 @@ pre-existing analytic-lights traversal-string assertion. Validation was local on
 
 ## LamaLayer gold modes
 
-Four USDA scenes use the same RenderMan teapot, camera, geometry, lights and
-shared `lama_layer_gold_modes.mtlx` material graph. The gold conductor is the
+Four USDA scenes under `layer/` use the same RenderMan teapot, camera, geometry,
+lights and shared `layer/lama_layer_gold_modes.mtlx` material graph. The gold conductor is the
 base, with roughness 0.22; a dielectric top has roughness 0.28 and initial IOR
 1.5, editable in the viewer over the range 1.0-3.0.
 
@@ -358,7 +358,7 @@ thickness applies Beer-Lambert absorption from the top `LamaDielectric`. These a
 engine extensions, and the coating models are renderer approximations rather than
 a byte-for-byte RenderMan implementation.
 
-Open the scenes with `usd-image-harness.html?entry=/scenes/pathtracer/lama/lama_layer_gold_fresnel_blend.usda&backend=pathtracing&res=512&spp=64`,
-`usd-image-harness.html?entry=/scenes/pathtracer/lama/lama_layer_gold_smooth_coating.usda&backend=pathtracing&res=512&spp=64`,
-`usd-image-harness.html?entry=/scenes/pathtracer/lama/lama_layer_gold_rough_coating.usda&backend=pathtracing&res=512&spp=64`, and
-`usd-image-harness.html?entry=/scenes/pathtracer/lama/lama_layer_gold_auto.usda&backend=pathtracing&res=512&spp=64`.
+Open the scenes with `usd-image-harness.html?entry=/scenes/lama/layer/lama_layer_gold_fresnel_blend.usda&backend=pathtracing&res=512&spp=64`,
+`usd-image-harness.html?entry=/scenes/lama/layer/lama_layer_gold_smooth_coating.usda&backend=pathtracing&res=512&spp=64`,
+`usd-image-harness.html?entry=/scenes/lama/layer/lama_layer_gold_rough_coating.usda&backend=pathtracing&res=512&spp=64`, and
+`usd-image-harness.html?entry=/scenes/lama/layer/lama_layer_gold_auto.usda&backend=pathtracing&res=512&spp=64`.

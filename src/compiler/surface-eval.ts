@@ -46,8 +46,12 @@ function parseLamaValue(raw: string): number[] {
 
 function resolvedLamaNodeSurface(node: ResolvedNode): ResolvedSurface {
   const authored = new Map(node.inputs.map(input => [input.name, input] as const));
-  const defs: readonly { name: string; type: string; value?: string; geomprop?: string }[] =
-    node.nodeDef?.inputs ?? node.inputs.map(input => ({ name: input.name, type: input.type }));
+  const declared = node.nodeDef?.inputs ?? [];
+  const defs: readonly { name: string; type: string; value?: string; geomprop?: string }[] = [
+    ...declared,
+    ...node.inputs.filter(input => !declared.some(def => def.name === input.name))
+      .map(input => ({ name: input.name, type: input.type })),
+  ];
   const inputs = new Map<string, NormalizedSurfaceInput>();
   for (const def of defs) {
     if (!LAMA_VALUE_TYPES.has(def.type)) continue;

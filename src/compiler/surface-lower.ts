@@ -425,11 +425,21 @@ function lowerLamaBsdf(graph: ResolvedGraph, nodeId: string, frame?: LamaShading
       }) as unknown as Rgb;
       const eta = mode === 0 ? artisticEta : nodeColor(graph, nodeId, 'IOR', [0.18, 0.42, 1.37]);
       const kappa = mode === 0 ? artisticKappa : nodeColor(graph, nodeId, 'extinction', [3.42, 2.35, 1.77]);
-      return assemble([{
+      const exterior = Math.max(nodeScalar(graph, nodeId, 'exteriorIOR', 1), 1e-4);
+      const compensation = clamp01(nodeScalar(graph, nodeId, 'energyCompensation', 0));
+      const main: LayeredBsdfLobe = {
         kind: 'conductor', weight: 1, color: nodeColor(graph, nodeId, 'tint', [1, 1, 1]),
-        conductorEta: eta, extinction: kappa, roughness,
-        ...(anisotropy > 0 ? { anisotropy } : {}), ...(rotation > 0 ? { rotation } : {}),
-      }], 1, {});
+        conductorEta: scaleRgb(eta, 1 / exterior), extinction: scaleRgb(kappa, 1 / exterior), roughness,
+        ...(anisotropy !== 0 ? { anisotropy: Math.min(Math.abs(anisotropy), 0.98) } : {}),
+        ...((rotation !== 0 || anisotropy < 0) ? { rotation: rotation + (anisotropy < 0 ? 0.25 : 0) } : {}),
+        ...(compensation > 0 ? { energyCompensation: compensation } : {}),
+      };
+      const length = clamp01(nodeScalar(graph, nodeId, 'tailLength', 0.5));
+      const tail = length > 0 ? clamp01(nodeScalar(graph, nodeId, 'tailMix', 0)) : 0;
+      return assemble(tail > 0 ? [
+        { ...main, weight: 1 - tail },
+        { ...main, weight: tail, roughness: roughness + (1 - roughness) * length },
+      ] : [main], 1, {});
     }
     case 'LamaDielectric': {
       const mode = nodeScalar(graph, nodeId, 'fresnelMode', 0);

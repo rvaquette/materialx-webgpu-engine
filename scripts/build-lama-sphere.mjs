@@ -19,7 +19,7 @@ if (maxNormalError > 1e-6) throw new Error('Lama sphere normals are not radial.'
 geometry.computeBoundingBox();
 const mesh = new Mesh(geometry);
 mesh.name = 'LamaSphere';
-const output = new URL('../scenes/pathtracer/lama/sphere-smooth.obj', import.meta.url);
+const output = new URL('../scenes/lama/sphere-smooth.obj', import.meta.url);
 writeFileSync(output, new OBJExporter().parse(mesh));
 console.log(JSON.stringify({ file: output.pathname, triangles: geometry.index.count / 3,
   bounds: geometry.boundingBox, maxNormalError }));

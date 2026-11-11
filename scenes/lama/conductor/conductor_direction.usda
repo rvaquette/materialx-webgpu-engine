@@ -3,14 +3,14 @@
     defaultPrim = "World"
     metersPerUnit = 1
     upAxis = "Y"
-    doc = "LamaLayer weathered brass teapot with procedural turquoise verdigris"
+    doc = "Direction"
 )
 
 def Xform "World"
 {
-    custom int2 pathtracer:resolution = (768, 512)
+    custom int2 pathtracer:resolution = (512, 512)
     custom int pathtracer:maxDepth = 8
-    custom float pathtracer:environmentIntensity = 0.3
+    custom float pathtracer:environmentIntensity = 0.06
 
     def Camera "Camera"
     {
@@ -18,7 +18,7 @@ def Xform "World"
         uniform token[] xformOpOrder = ["xformOp:transform"]
         token projection = "perspective"
         float focalLength = 50
-        float horizontalAperture = 16.427671725
+        float horizontalAperture = 10.95178115
         float verticalAperture = 10.95178115
         float2 clippingRange = (0.001, 1000000)
         custom point3f pathtracer:lookAt = (0, 0.07, 0)
@@ -27,26 +27,26 @@ def Xform "World"
 
     def Scope "Looks"
     {
-        def Material "ground" (prepend references = @./lama_layer_verdigris.mtlx@</MaterialX/Materials/ground>) {}
-        def Material "verdigris" (prepend references = @./lama_layer_verdigris.mtlx@</MaterialX/Materials/verdigris>) {}
+        def Material "ground" (prepend references = @../layer/lama_layer_gold_modes.mtlx@</MaterialX/Materials/ground>) {}
+        def Material "conductor_direction" (prepend references = @./materials.mtlx@</MaterialX/Materials/conductor_direction>) {}
     }
 
     def Scope "Geometry"
     {
         def Mesh "Ground"
         {
-            custom asset engine:geometry:file = @../renderman/background.obj@
+            custom asset engine:geometry:file = @../../pathtracer/renderman/background.obj@
             rel material:binding = </World/Looks/ground>
         }
         def Mesh "Teapot"
         {
-            custom asset engine:geometry:file = @../renderman/teapot.obj@
-            rel material:binding = </World/Looks/verdigris>
+            custom asset engine:geometry:file = @../../pathtracer/renderman/teapot.obj@
+            rel material:binding = </World/Looks/conductor_direction>
         }
         def Mesh "Stand"
         {
-            custom asset engine:geometry:file = @../renderman/teapot_base.obj@
-            rel material:binding = </World/Looks/verdigris>
+            custom asset engine:geometry:file = @../../pathtracer/renderman/teapot_base.obj@
+            rel material:binding = </World/Looks/conductor_direction>
         }
     }
 
@@ -54,15 +54,15 @@ def Xform "World"
     {
         def DomeLight "Environment"
         {
-            asset inputs:texture:file = @../HDR/photo_studio_01_1k.hdr@
-            float inputs:intensity = 0.3
+            asset inputs:texture:file = @../../pathtracer/HDR/photo_studio_01_1k.hdr@
+            float inputs:intensity = 0.06
             color3f inputs:color = (1, 1, 1)
         }
         def RectLight "Key"
         {
             matrix4d xformOp:transform = ((0.6, 0, -0.8, 0), (0, 1, 0, 0), (0.8, 0, 0.6, 0), (0.4, 0.22, 0.3, 1))
             uniform token[] xformOpOrder = ["xformOp:transform"]
-            color3f inputs:color = (1, 0.98, 0.94)
+            color3f inputs:color = (1, 1, 1)
             float inputs:intensity = 10
             bool inputs:normalize = false
             float inputs:width = 0.18
@@ -72,8 +72,8 @@ def Xform "World"
         {
             matrix4d xformOp:transform = ((0.297116013245, -0.907778095767, -0.296076009699, 0), (-0.705870411804, 0, -0.708340992559, 0), (0.643016437381, 0.41945074662, -0.640773698288, 0), (0.4048555, 0.3710285, -0.4083235, 1))
             uniform token[] xformOpOrder = ["xformOp:transform"]
-            color3f inputs:color = (0.95, 1, 1)
-            float inputs:intensity = 4
+            color3f inputs:color = (0.975609756098, 1, 1)
+            float inputs:intensity = 2.5
             bool inputs:normalize = false
             float inputs:width = 0.2
             float inputs:height = 0.204
