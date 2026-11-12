@@ -85,7 +85,7 @@ export async function runSmoothSheetProbe(device: GPUDevice, forwardCode: string
       [1, 1, 1, 0.75],
       [1, 1, 1, 1.25],
       [1, 1, 1, 0.77],
-      [1, 1 + film[0]!, 1 + film[1]!, 0.75 + 1.25 * film[2]!],
+      [1, 1, 1, 0.75 + 0.5 * film[2]!],
     ];
     for (const [i, row] of rows.entries()) {
       if (row.some((v, j) => !Number.isFinite(v) || Math.abs(v - expected[i]![j]!) > 1e-5)) {
