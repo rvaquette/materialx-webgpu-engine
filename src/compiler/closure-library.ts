@@ -169,22 +169,50 @@ function lobeDispatch(spec: ClosureDispatchSpec): string {
     sampleCases.push('    case 7u: { if (lobe.dispersion <= 1.0 && lobe.ior >= 1.0) { if (c.hasInterior != 0u && any(lobe.hairTintTRT > vec3f(0.0))) { return mx_subsurface_interface_sample(ctx, u.xy); } return mx_subsurface_sample(ctx, u.xy); } if (c.hasInterior != 0u) { return mx_subsurface_boundary_sample(ctx, u); } return mx_subsurface_sample(ctx, u.xy); }');
   }
   if (has(8).length) {
-    evalCases.push('    case 8u: { return mx_dielectric_transmission_eval(ctx, wi); }');
-    sampleCases.push('    case 8u: { return mx_dielectric_transmission_sample(ctx, u); }');
+    evalCases.push(spec.thinFilm
+      ? '    case 8u: { if (filmActive && lobe.thin > 0.0) { return mx_transmission_thin_film_eval(ctx, wi, c); } return mx_dielectric_transmission_eval(ctx, wi); }'
+      : '    case 8u: { return mx_dielectric_transmission_eval(ctx, wi); }');
+    sampleCases.push(spec.thinFilm
+      ? `    case 8u: {
+      let s = mx_dielectric_transmission_sample(ctx, u);
+      if (!filmActive || lobe.thin <= 0.0 || !s.valid) { return s; }
+      let e = mx_transmission_thin_film_eval(ctx, s.wi, c);
+      return MxBsdfSample(s.wi, e.value, e.pdf, e.pdf > 0.0);
+    }`
+      : '    case 8u: { return mx_dielectric_transmission_sample(ctx, u); }');
   }
   if (has(9).length) {
     evalCases.push('    case 9u: { return mx_hair_eval(lobe, wo, wi); }');
     sampleCases.push('    case 9u: { return mx_hair_sample(lobe, wo, u); }');
   }
   const film = spec.thinFilm ? '\n  let filmActive = c.hasThinFilm != 0u && c.thinFilm.weight > 0.0 && c.thinFilm.thickness > 0.0;' : '';
-  return `fn mx_closure_lobe_eval(lobe: MxBsdfLobe, c: LayeredClosure, wo: vec3f, wi: vec3f) -> MxBsdfEval {
+  const filmTransmissionEval = spec.thinFilm && has(8).length ? `fn mx_transmission_thin_film_eval(ctx: MxLobeCtx, wi: vec3f, c: LayeredClosure) -> MxBsdfEval {
+  if (ctx.wo.z == 0.0 || wi.z == 0.0 || ctx.wo.z * wi.z > 0.0) { return MxBsdfEval(vec3f(0.0), 0.0); }
+  let a = mx_alpha_of(ctx.roughness);
+  let s = select(-1.0, 1.0, ctx.wo.z > 0.0);
+  let woU = vec3f(ctx.wo.x, ctx.wo.y, s * ctx.wo.z);
+  let wiU = vec3f(wi.x, wi.y, -s * wi.z);
+  let wm = normalize(woU + wiU);
+  let cosVH = dot(woU, wm);
+  if (cosVH <= 0.0) { return MxBsdfEval(vec3f(0.0), 0.0); }
+  let f0 = vec3f(mx_dielectric_f0(ctx.ior));
+  let baseFresnel = mx_fresnel_schlick(f0, cosVH);
+  let f = mx_thin_film_fresnel(baseFresnel, f0, cosVH, c.thinFilm.weight, c.thinFilm.thickness, c.thinFilm.ior, c.thinFilm.targetHue);
+  let d = mx_ggx_ndf(wm.z, a);
+  let g = mx_smith_g1(woU.z, a) * mx_smith_g1(wiU.z, a);
+  let scalar = d * g / (4.0 * woU.z * wiU.z);
+  let pdf = d * wm.z / (4.0 * cosVH);
+  return MxBsdfEval(ctx.color * (vec3f(1.0) - f) * scalar, pdf);
+}
+` : '';
+  return `${filmTransmissionEval}fn mx_closure_lobe_eval(lobe: MxBsdfLobe, c: LayeredClosure, wo: vec3f, wi: vec3f) -> MxBsdfEval {
   let ctx = mx_closure_lobe_ctx(lobe, wo);${film}
   switch (lobe.kind) {
 ${[...evalCases, '    default: { return MxBsdfEval(vec3f(0.0), 0.0); }'].join('\n')}
   }
 }
 fn mx_closure_lobe_sample(lobe: MxBsdfLobe, c: LayeredClosure, wo: vec3f, u: vec3f) -> MxBsdfSample {
-  let ctx = mx_closure_lobe_ctx(lobe, wo);
+  let ctx = mx_closure_lobe_ctx(lobe, wo);${film}
   switch (lobe.kind) {
 ${[...sampleCases, '    default: { return MxBsdfSample(vec3f(0.0), vec3f(0.0), 0.0, false); }'].join('\n')}
   }

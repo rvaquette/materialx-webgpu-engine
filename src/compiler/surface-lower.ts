@@ -554,8 +554,12 @@ function lowerLamaBsdf(graph: ResolvedGraph, nodeId: string, frame?: LamaShading
       const min = nodeScalar(graph, nodeId, 'minFilmThickness', 400);
       const max = nodeScalar(graph, nodeId, 'maxFilmThickness', 800);
       const relative = clamp01(nodeScalar(graph, nodeId, 'relativeFilmThickness', 0.5));
+      const ior = 1;
       return assemble([{
-        kind: 'dielectric_reflection', weight: 1, color: [1, 1, 1], roughness,
+        kind: 'dielectric_reflection', weight: 1, color: [1, 1, 1], roughness, ior,
+        ...(anisotropy > 0 ? { anisotropy } : {}), ...(rotation > 0 ? { rotation } : {}),
+      }, {
+        kind: 'dielectric_transmission', weight: 1, color: [1, 1, 1], roughness, ior, thinWalled: true,
         ...(anisotropy > 0 ? { anisotropy } : {}), ...(rotation > 0 ? { rotation } : {}),
       }], 1, {
         thinFilm: {

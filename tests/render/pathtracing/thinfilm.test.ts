@@ -11,6 +11,7 @@ import {
   conductorThinFilmLobe,
   dielectricLobe,
   conductorLobe,
+  thinWalledTransmissionLobe,
   layeredSurfaceBsdf,
   hemisphericalReflectance,
 } from '../../../src/render/pathtracing/bsdf.ts';
@@ -84,6 +85,31 @@ describe('thin-film specular modulation (T056f)', () => {
     const mappedValue = mapped.eval(WO, DIRS[0]!).value;
     expect(mappedValue).not.toEqual(originalValue);
     expect(mappedValue.every(Number.isFinite)).toBe(true);
+  });
+
+  it('balances iridescent reflection with complementary thin-walled transmission', () => {
+    const film: ThinFilmLayer = { weight: 1, thickness: 430, ior: 1.3, targetHue: [0.1, 0.8, 0.4] };
+    const roughness = 0.2;
+    const bsdf = layeredSurfaceBsdf({
+      opacity: 1,
+      thinFilm: film,
+      lobes: [
+        { kind: 'dielectric_reflection', weight: 1, color: [1, 1, 1], roughness, ior: 1 },
+        { kind: 'dielectric_transmission', weight: 1, color: [1, 1, 1], roughness, ior: 1, thinWalled: true },
+      ],
+    });
+    const outgoing: V = [0, 0, 1];
+    const reflected = bsdf.eval(outgoing, outgoing).value;
+    const transmitted = bsdf.eval(outgoing, [0, 0, -1]).value;
+    const uncoatedTransmission = thinWalledTransmissionLobe([1, 1, 1], roughness, 1)
+      .eval(outgoing, [0, 0, -1]).value;
+
+    for (let channel = 0; channel < 3; channel++) {
+      expect(reflected[channel]).toBeGreaterThan(0);
+      expect(transmitted[channel]).toBeGreaterThan(0);
+      expect(reflected[channel]! + transmitted[channel]!).toBeCloseTo(uncoatedTransmission[channel]!, 10);
+    }
+    expect(transmitted[0]).not.toBeCloseTo(transmitted[1]!, 5);
   });
 
   it('eval and sample agree for the thin-film specular lobe', () => {

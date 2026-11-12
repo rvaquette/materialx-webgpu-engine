@@ -982,7 +982,11 @@ function lowerLamaClosureWgsl(
       const min = ctx.s('minFilmThickness', 400);
       const max = ctx.s('maxFilmThickness', 800);
       const relative = `clamp(${ctx.s('relativeFilmThickness', 0.5)}, 0.0, 1.0)`;
-      result.lobes = [{ kind: 'dielectric_reflection', weight: '1.0', color: 'vec3f(1.0)', roughness, anisotropy, rotation }];
+      result.lobes = [
+        { kind: 'dielectric_reflection', weight: '1.0', color: 'vec3f(1.0)', roughness, anisotropy, rotation, ior: '1.0' },
+        { kind: 'dielectric_transmission', weight: '1.0', color: 'vec3f(1.0)', roughness, anisotropy, rotation,
+          ior: '1.0', thin: '1.0' },
+      ];
       result.thinFilm = {
         weight: '1.0', thickness: `mix(${min}, ${max}, ${relative})`, ior: ctx.s('filmIOR', 1.3),
         targetHue: ctx.col('targetHue', [1, 1, 1]),

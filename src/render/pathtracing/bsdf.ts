@@ -759,7 +759,7 @@ export function dielectricTransmissionLobe(tint: Vec3, roughness: number, ior: n
   };
 }
 
-function thinWalledEval(wo: V, wi: V, a: number, ior: number, tint: V): BsdfEval {
+function thinWalledEval(wo: V, wi: V, a: number, ior: number, tint: V, film?: ThinFilmLayer): BsdfEval {
   if (wo[2] === 0 || wi[2] === 0 || wo[2] * wi[2] > 0) return { value: [0, 0, 0], pdf: 0 };
   const s = wo[2] > 0 ? 1 : -1;
   const woU: V = [wo[0], wo[1], s * wo[2]];
@@ -769,20 +769,31 @@ function thinWalledEval(wo: V, wi: V, a: number, ior: number, tint: V): BsdfEval
   const wm = normalize(wm0);
   const cosVH = dot(woU, wm);
   if (cosVH <= 0) return { value: [0, 0, 0], pdf: 0 };
-  const F = fresnelDielectric(cosVH, ior);
+  const f0 = dielectricF0(ior);
+  const f0v: V = [f0, f0, f0];
+  const F = film && film.weight > 0 && film.thickness > 0
+    ? thinFilmFresnel(fresnelSchlick(f0v, cosVH), f0v, cosVH, film)
+    : [fresnelDielectric(cosVH, ior), fresnelDielectric(cosVH, ior), fresnelDielectric(cosVH, ior)];
   const D = ggxNdf(wm[2], a);
   const G = smithG1(woU[2], a) * smithG1(wiU[2], a);
-  const scalar = ((1 - F) * D * G) / (4 * woU[2] * wiU[2]);
+  const scaleFactor = (D * G) / (4 * woU[2] * wiU[2]);
   const pdf = (D * wm[2]) / (4 * cosVH);
-  return { value: scale(tint, scalar), pdf };
+  return {
+    value: [
+      tint[0] * (1 - F[0]) * scaleFactor,
+      tint[1] * (1 - F[1]) * scaleFactor,
+      tint[2] * (1 - F[2]) * scaleFactor,
+    ],
+    pdf,
+  };
 }
 
 /** Thin-walled transmission: no refraction, transmits from both sides. */
-export function thinWalledTransmissionLobe(tint: Vec3, roughness: number, ior: number): Lobe {
+export function thinWalledTransmissionLobe(tint: Vec3, roughness: number, ior: number, film?: ThinFilmLayer): Lobe {
   const a = alphaOf(roughness);
   const t: V = [...tint];
   return {
-    eval: (wo, wi) => thinWalledEval(wo as V, wi as V, a, ior, t),
+    eval: (wo, wi) => thinWalledEval(wo as V, wi as V, a, ior, t, film),
     sample(wo, rng) {
       const w = wo as V;
       if (w[2] === 0) return null;
@@ -792,7 +803,7 @@ export function thinWalledTransmissionLobe(tint: Vec3, roughness: number, ior: n
       const wrU = reflectAbout(woU, wm);
       if (wrU[2] <= 0) return null;
       const wi: V = [wrU[0], wrU[1], -s * wrU[2]]; // mirror to the far hemisphere
-      const { value, pdf } = thinWalledEval(w, wi, a, ior, t);
+      const { value, pdf } = thinWalledEval(w, wi, a, ior, t, film);
       if (pdf <= 0) return null;
       return { wi, value, pdf, specular: false };
     },
@@ -962,7 +973,7 @@ export function lobeFromLayered(l: LayeredBsdfLobe, film?: ThinFilmLayer): Lobe 
           : dielectricLobe(l.ior ?? 1.5, roughness);
     case 'dielectric_transmission':
       return l.thinWalled
-        ? thinWalledTransmissionLobe(l.color, roughness, l.ior ?? 1.5)
+        ? thinWalledTransmissionLobe(l.color, roughness, l.ior ?? 1.5, film)
         : dielectricTransmissionLobe(l.color, roughness, l.ior ?? 1.5, aniso, rotation);
     case 'sheen':
       return sheenLobe(l.color, l.roughness ?? 0.3);

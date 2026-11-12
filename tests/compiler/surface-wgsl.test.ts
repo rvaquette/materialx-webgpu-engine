@@ -566,6 +566,8 @@ describe('emitLayeredSurface (T055d)', () => {
     expect(module.code).toContain('mx_rotate_rgb_hue');
     expect(module.code).toContain('mx_thin_film_fresnel');
     expect(module.code).toContain('MxThinFilmLayer(');
+    expect(module.code).toContain('MX_LOBE_DIELECTRIC_TRANSMISSION');
+    expect(module.code).toContain('mx_transmission_thin_film_eval');
     expect(module.code).toContain('vec3f(0.1, 0.8, 0.4)');
   });
 

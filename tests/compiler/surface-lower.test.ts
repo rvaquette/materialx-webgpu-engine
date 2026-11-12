@@ -164,6 +164,11 @@ describe('surfaceGraphToLayered (T055b)', () => {
     ]));
     const closure = surfaceGraphToLayered(resolveSurface(graph)!, graph);
     expect(closure.thinFilm).toEqual({ weight: 1, thickness: 600, ior: 1.3, targetHue: [0.1, 0.8, 0.4] });
+    expect(closure.lobes).toHaveLength(2);
+    expect(lobe(closure, 'dielectric_reflection')).toMatchObject({ weight: 1, ior: 1, roughness: 0.1 });
+    expect(lobe(closure, 'dielectric_transmission')).toMatchObject({
+      weight: 1, ior: 1, roughness: 0.1, thinWalled: true, color: [1, 1, 1],
+    });
   });
 
   it('resolves Auto to Fresnel Blend for diffuse bases and Rough Coating for specular bases', () => {

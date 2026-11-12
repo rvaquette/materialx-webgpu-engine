@@ -240,7 +240,7 @@ describe('assembleIrForwardShader (T058b)', () => {
     expect(shader.code).toContain('frame * vec3f(-wo.xy, wo.z)');
     expect(shader.code).toContain('frame * (-wo)');
     expect(shader.code).toContain('mx_thin_film_fresnel(f, f0, cosV, c.thinFilm.weight, c.thinFilm.thickness, c.thinFilm.ior, c.thinFilm.targetHue)');
-    expect(shader.code).toContain('l.weight * l.color * (1.0 - f) * transmitted');
+    expect(shader.code).toContain('l.weight * l.color * (vec3f(1.0) - f) * transmitted');
     expect(shader.code).toMatch(/if \(mx_forward_is_smooth_sheet\(spec\)\) \{\s+radiance = radiance \+ mx_forward_smooth_sheet\(spec, wo, sframe\);/);
     expect(shader.code).toMatch(/else if \(dielectricIndex >= 0\) \{\s+radiance = radiance \+ mx_forward_dielectric_environment\(spec.lobes\[u32\(dielectricIndex\)\], wo, sframe\);\s+\} else \{\s+for \(var i = 0u; i < 64u; i\+\+\)/);
   });
@@ -259,6 +259,7 @@ describe('assembleIrForwardShader (T058b)', () => {
     expect(direct).toContain('for (var i = 0u; i < 64u; i++)');
     expect(direct).toContain('mx_dielectric_transmission_sample(ctx, u)');
     expect(direct).toContain('mx_dielectric_transmission_eval(ctx, wi)');
+    expect(shader.code).toContain('l.weight * l.color * (vec3f(1.0) - f) * transmitted');
     expect(direct).toContain('l.weight * bs.value');
     expect(direct).toContain('l.weight * em.value');
     expect(direct).toContain('bs.pdf * bs.pdf + envPdf * envPdf');
