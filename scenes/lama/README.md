@@ -1,5 +1,24 @@
 # Lama Test Scenes
 
+## Neon emission teapot
+
+`emission/lama_emission_neon.usda` reuses the Lama teapot, stand, floor,
+camera and softbox transforms. Dimmed softboxes and a black environment leave
+the cyan/magenta procedural scanlines dominant over a glossy black conductor.
+The same emissive material covers the teapot and stand; a dark glossy floor
+receives indirect light and reflections in path tracing.
+
+The paired `emission/lama_emission_neon.mtlx` connects `LamaConductor` and
+`LamaEmission` to the generic `surface` BSDF/EDF inputs. Palette colors,
+emission strength and scanline frequency are editable. No textures are required.
+This is a procedural interpretation of the reference, not an exact reproduction;
+no bloom post-process is added.
+
+Select **Lama - LamaEmission Neon (cyan / magenta)** in the viewer, or open
+`usd-image-harness.html?entry=/scenes/lama/emission/lama_emission_neon.usda&backend=pathtracing&res=432&spp=128`.
+
+## Earlier control scenes
+
 Small path-tracer scenes derived from `test_thinwalled_transmission.usda`.
 They reuse its floor and sphere OBJ assets, compensate their local origins,
 and frame the four materials with an oriented USD camera.

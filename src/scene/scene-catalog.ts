@@ -14,6 +14,7 @@ const pathTracerScenes = Object.keys(import.meta.glob('/scenes/pathtracer/*.usda
 
 const lamaLayerLabels: Readonly<Record<string, string>> = {
   'lama_add_yellow.usda': 'Lama - LamaAdd Yellow Gloss',
+  'lama_emission_neon.usda': 'Lama - LamaEmission Neon (cyan / magenta)',
   'lama_layer_verdigris.usda': 'Lama - LamaLayer Verdigris (aged brass)',
   'lama_layer_gold_fresnel_blend.usda': 'LamaLayer Gold - Fresnel Blend',
   'lama_layer_gold_smooth_coating.usda': 'LamaLayer Gold - Smooth Coating',
@@ -21,7 +22,7 @@ const lamaLayerLabels: Readonly<Record<string, string>> = {
   'lama_layer_gold_auto.usda': 'LamaLayer Gold - Auto',
 };
 
-const lamaScenes = Object.keys(import.meta.glob('/scenes/lama/{add,layer,mix}/**/*.usda', { query: '?raw', import: 'default' }))
+const lamaScenes = Object.keys(import.meta.glob('/scenes/lama/{add,emission,layer,mix}/**/*.usda', { query: '?raw', import: 'default' }))
   .sort()
   .map((path): SceneCatalogEntry => {
     const filename = path.split('/').at(-1) ?? path;

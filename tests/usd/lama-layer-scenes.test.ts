@@ -111,6 +111,36 @@ describe('LamaLayer gold IOR scenes', () => {
     expect(document).toContain('<fractal3d name="corrosion" type="float">');
   });
 
+  it('imports the neon emission scene with common geometry, camera and softbox placement', async () => {
+    const directory = join(SCENE_DIR, 'emission');
+    const scene = await importUsdStage(join(directory, 'lama_emission_neon.usda'), { reader });
+    const reference = await importUsdStage(join(MIX_DIR, 'lama_mix_gold_blue.usda'), { reader });
+    expect(scene.prims.get('/World/Camera')?.attributes)
+      .toEqual(reference.prims.get('/World/Camera')?.attributes);
+    for (const name of ['Ground', 'Teapot', 'Stand']) {
+      const prim = scene.prims.get(`/World/Geometry/${name}`);
+      expect(prim?.attributes.get('engine:geometry:file')?.value)
+        .toEqual(reference.prims.get(`/World/Geometry/${name}`)?.attributes.get('engine:geometry:file')?.value);
+      expect(prim?.relationships.get('material:binding')?.targets)
+        .toEqual([name === 'Ground' ? '/World/Looks/ground' : '/World/Looks/neon']);
+    }
+    for (const name of ['Key', 'Fill']) {
+      expect(scene.prims.get(`/World/Lights/${name}`)?.attributes.get('xformOp:transform'))
+        .toEqual(reference.prims.get(`/World/Lights/${name}`)?.attributes.get('xformOp:transform'));
+    }
+    const material = scene.materials.find(entry => entry.primPath === '/World/Looks/neon');
+    expect(material?.assetPath).toBe('./lama_emission_neon.mtlx');
+    expect(material?.referencedPrimPath).toBe('/MaterialX/Materials/neon');
+    for (const entry of scene.materials) {
+      if (entry.assetPath) expect(existsSync(resolve(directory, entry.assetPath))).toBe(true);
+    }
+    expect(scene.prims.get('/World')?.attributes.get('pathtracer:environmentIntensity')?.value).toBe(0);
+    const document = await readFile(join(directory, 'lama_emission_neon.mtlx'), 'utf8');
+    expect(document).toContain('<LamaEmission name="neon_emission" type="EDF">');
+    expect(document).toContain('<input name="bsdf" type="BSDF" nodename="black_gloss" />');
+    expect(document).toContain('<input name="edf" type="EDF" nodename="neon_emission" />');
+  });
+
   it.each(MODES)('imports the $mode teapot scene and resolves its material reference', async ({ scene: sceneFile, material, mode }) => {
     const scene = await importUsdStage(join(LAYER_DIR, sceneFile), { reader });
     const layeredMaterial = scene.materials.find((material) => material.primPath === '/World/Looks/layeredGold');

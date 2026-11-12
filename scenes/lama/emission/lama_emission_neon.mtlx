@@ -1,0 +1,89 @@
+<?xml version="1.0"?>
+<materialx version="1.39" colorspace="lin_rec709" xmlns:engine="urn:materialx-webgpu-engine:extensions">
+  <standard_surface name="ground_surface" type="surfaceshader">
+    <input name="base_color" type="color3" value="0.012, 0.018, 0.02" />
+    <input name="specular_roughness" type="float" value="0.24" />
+  </standard_surface>
+  <surfacematerial name="ground" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="ground_surface" />
+  </surfacematerial>
+
+  <position name="surface_position" type="vector3">
+    <input name="space" type="string" value="world" />
+  </position>
+  <extract name="height" type="float">
+    <input name="in" type="vector3" nodename="surface_position" />
+    <input name="index" type="integer" value="1" />
+  </extract>
+  <multiply name="scanline_frequency" type="float">
+    <input name="in1" type="float" nodename="height" />
+    <input name="in2" type="float" value="3200" uimin="500" uimax="6000" engine:editable="true" />
+  </multiply>
+  <sin name="scanline_wave" type="float">
+    <input name="in" type="float" nodename="scanline_frequency" />
+  </sin>
+  <smoothstep name="scanlines" type="float">
+    <input name="in" type="float" nodename="scanline_wave" />
+    <input name="low" type="float" value="0.25" />
+    <input name="high" type="float" value="0.55" />
+  </smoothstep>
+  <multiply name="pattern_scale" type="vector3">
+    <input name="in1" type="vector3" nodename="surface_position" />
+    <input name="in2" type="vector3" value="85, 85, 85" />
+  </multiply>
+  <noise3d name="islands" type="float">
+    <input name="position" type="vector3" nodename="pattern_scale" />
+    <input name="amplitude" type="float" value="1" />
+  </noise3d>
+  <smoothstep name="island_mask" type="float">
+    <input name="in" type="float" nodename="islands" />
+    <input name="low" type="float" value="-0.02" />
+    <input name="high" type="float" value="0.08" />
+  </smoothstep>
+  <multiply name="emission_mask" type="float">
+    <input name="in1" type="float" nodename="scanlines" />
+    <input name="in2" type="float" nodename="island_mask" />
+  </multiply>
+  <multiply name="color_scale" type="vector3">
+    <input name="in1" type="vector3" nodename="surface_position" />
+    <input name="in2" type="vector3" value="42, 42, 42" />
+  </multiply>
+  <noise3d name="color_noise" type="float">
+    <input name="position" type="vector3" nodename="color_scale" />
+    <input name="amplitude" type="float" value="1" />
+  </noise3d>
+  <smoothstep name="color_regions" type="float">
+    <input name="in" type="float" nodename="color_noise" />
+    <input name="low" type="float" value="-0.06" />
+    <input name="high" type="float" value="0.06" />
+  </smoothstep>
+  <mix name="neon_palette" type="color3">
+    <input name="bg" type="color3" value="0.002, 1, 0.78" engine:editable="true" />
+    <input name="fg" type="color3" value="1, 0.012, 0.24" engine:editable="true" />
+    <input name="mix" type="float" nodename="color_regions" />
+  </mix>
+  <multiply name="emission_strength" type="float">
+    <input name="in1" type="float" nodename="emission_mask" />
+    <input name="in2" type="float" value="4" uimin="0" uimax="20" engine:editable="true" />
+  </multiply>
+  <multiply name="emission_color" type="color3">
+    <input name="in1" type="color3" nodename="neon_palette" />
+    <input name="in2" type="float" nodename="emission_strength" />
+  </multiply>
+  <LamaConductor name="black_gloss" type="BSDF">
+    <input name="fresnelMode" type="integer" value="0" />
+    <input name="reflectivity" type="color3" value="0.025, 0.03, 0.035" />
+    <input name="edgeColor" type="color3" value="0.4, 0.45, 0.48" />
+    <input name="roughness" type="float" value="0.18" />
+  </LamaConductor>
+  <LamaEmission name="neon_emission" type="EDF">
+    <input name="color" type="color3" nodename="emission_color" />
+  </LamaEmission>
+  <surface name="neon_surface" type="surfaceshader">
+    <input name="bsdf" type="BSDF" nodename="black_gloss" />
+    <input name="edf" type="EDF" nodename="neon_emission" />
+  </surface>
+  <surfacematerial name="neon" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="neon_surface" />
+  </surfacematerial>
+</materialx>
