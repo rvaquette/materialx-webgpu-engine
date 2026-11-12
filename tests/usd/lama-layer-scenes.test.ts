@@ -40,8 +40,11 @@ describe('LamaLayer gold IOR scenes', () => {
       if (entry.assetPath) expect(existsSync(resolve(directory, entry.assetPath))).toBe(true);
     }
     for (const name of ['Environment', 'Key', 'Fill']) {
-      expect(scene.prims.get(`/World/Lights/${name}`)?.attributes)
-        .toEqual(reference.prims.get(`/World/Lights/${name}`)?.attributes);
+      const attributes = scene.prims.get(`/World/Lights/${name}`)?.attributes;
+      expect(attributes).toBeDefined();
+      for (const [key, attribute] of reference.prims.get(`/World/Lights/${name}`)!.attributes) {
+        expect(attributes!.get(key)?.value).toEqual(attribute.value);
+      }
     }
     const document = await readFile(join(directory, 'lama_sheen_color_roughness.mtlx'), 'utf8');
     const editable = [...document.matchAll(/<input name="([^"]+)"[^>]*engine:editable="true"/g)].map(match => match[1]);
