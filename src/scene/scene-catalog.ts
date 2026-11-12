@@ -20,9 +20,10 @@ const lamaLayerLabels: Readonly<Record<string, string>> = {
   'lama_layer_gold_smooth_coating.usda': 'LamaLayer Gold - Smooth Coating',
   'lama_layer_gold_rough_coating.usda': 'LamaLayer Gold - Rough Coating',
   'lama_layer_gold_auto.usda': 'LamaLayer Gold - Auto',
+  'lama_iridescence_target_hue.usda': 'Lama - Iridescence Target Hue',
 };
 
-const lamaScenes = Object.keys(import.meta.glob('/scenes/lama/{add,emission,layer,mix}/**/*.usda', { query: '?raw', import: 'default' }))
+const lamaScenes = Object.keys(import.meta.glob('/scenes/lama/{add,emission,iridescence,layer,mix}/**/*.usda', { query: '?raw', import: 'default' }))
   .sort()
   .map((path): SceneCatalogEntry => {
     const filename = path.split('/').at(-1) ?? path;

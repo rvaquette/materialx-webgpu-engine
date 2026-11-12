@@ -11,6 +11,7 @@ const SCENE_DIR = resolve(fileURLToPath(new URL('.', import.meta.url)), '../../s
 const ADD_DIR = join(SCENE_DIR, 'add');
 const LAYER_DIR = join(SCENE_DIR, 'layer');
 const MIX_DIR = join(SCENE_DIR, 'mix');
+const IRIDESCENCE_DIR = join(SCENE_DIR, 'iridescence');
 const MODES = [
   { mode: 'fresnel_blend', scene: 'lama_layer_gold_fresnel_blend.usda', material: 'gold_fresnel_blend' },
   { mode: 'smooth_coating', scene: 'lama_layer_gold_smooth_coating.usda', material: 'gold_smooth_coating' },
@@ -30,6 +31,23 @@ describe('LamaLayer gold IOR scenes', () => {
     expect(dielectric).toBeDefined();
     const editable = [...dielectric!.matchAll(/<input name="([^"]+)"[^>]*engine:editable="true"/g)].map(match => match[1]);
     expect(editable).toEqual(['reflectionTint', 'transmissionTint']);
+  });
+
+  describe('LamaIridescence Target Hue scene', () => {
+    it('imports the editable iridescence color scene with the common Lama camera and geometry', async () => {
+      const scene = await importUsdStage(join(IRIDESCENCE_DIR, 'lama_iridescence_target_hue.usda'), { reader });
+      const reference = await importUsdStage(join(MIX_DIR, 'lama_mix_gold_blue.usda'), { reader });
+      const material = scene.materials.find(entry => entry.primPath === '/World/Looks/iridescence');
+      expect(material?.assetPath).toBe('./lama_iridescence_target_hue.mtlx');
+      expect(material?.referencedPrimPath).toBe('/MaterialX/Materials/iridescent_material');
+      expect(scene.prims.get('/World/Camera')?.attributes).toEqual(reference.prims.get('/World/Camera')?.attributes);
+      for (const name of ['Ground', 'Teapot', 'Stand']) {
+        expect(scene.prims.has(`/World/Geometry/${name}`)).toBe(true);
+      }
+      const document = await readFile(join(IRIDESCENCE_DIR, 'lama_iridescence_target_hue.mtlx'), 'utf8');
+      expect(document).toContain('<LamaIridescence name="iridescence" type="BSDF">');
+      expect(document).toContain('<input name="targetHue" type="color3" value="0.05, 0.65, 0.85" uiname="Target Hue" uifolder="Hue Mapping" engine:editable="true" />');
+    });
   });
 
   it.each([

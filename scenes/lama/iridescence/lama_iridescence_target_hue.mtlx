@@ -1,0 +1,16 @@
+<?xml version="1.0"?>
+<materialx version="1.39" colorspace="lin_rec709" xmlns:engine="urn:materialx-webgpu-engine:extensions">
+  <LamaIridescence name="iridescence" type="BSDF">
+    <input name="roughness" type="float" value="0.12" />
+    <input name="relativeFilmThickness" type="float" value="0.5" />
+    <input name="minFilmThickness" type="float" value="400" />
+    <input name="maxFilmThickness" type="float" value="800" />
+    <input name="filmIOR" type="float" value="1.3" />
+    <input name="targetHue" type="color3" value="0.05, 0.65, 0.85" uiname="Target Hue" uifolder="Hue Mapping" engine:editable="true" />
+  </LamaIridescence>
+  <LamaSurface name="iridescent_material" type="material">
+    <input name="materialFront" type="BSDF" nodename="iridescence" />
+    <input name="materialBack" type="BSDF" nodename="iridescence" />
+    <input name="presence" type="float" value="1" />
+  </LamaSurface>
+</materialx>

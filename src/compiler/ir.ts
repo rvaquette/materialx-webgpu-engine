@@ -398,6 +398,8 @@ export interface ThinFilmLayer {
   thickness: number;
   /** Film index of refraction. */
   ior: number;
+  /** Optional hue to map the film's 600 nm, normal-incidence reference color to. */
+  targetHue?: Rgb;
 }
 
 /** A surface lowered to its runtime closure stack. */

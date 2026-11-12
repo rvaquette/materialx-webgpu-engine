@@ -558,7 +558,10 @@ function lowerLamaBsdf(graph: ResolvedGraph, nodeId: string, frame?: LamaShading
         kind: 'dielectric_reflection', weight: 1, color: [1, 1, 1], roughness,
         ...(anisotropy > 0 ? { anisotropy } : {}), ...(rotation > 0 ? { rotation } : {}),
       }], 1, {
-        thinFilm: { weight: 1, thickness: min + (max - min) * relative, ior: nodeScalar(graph, nodeId, 'filmIOR', 1.3) },
+        thinFilm: {
+          weight: 1, thickness: min + (max - min) * relative, ior: nodeScalar(graph, nodeId, 'filmIOR', 1.3),
+          targetHue: nodeColor(graph, nodeId, 'targetHue', [1, 1, 1]),
+        },
       });
     }
     case 'LamaAdd': {

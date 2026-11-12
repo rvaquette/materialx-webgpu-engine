@@ -75,6 +75,17 @@ describe('thin-film specular modulation (T056f)', () => {
     expect(maxFilmSpread).toBeGreaterThan(1e-3);
   });
 
+  it('maps the physical film hue to the selected Target Hue', () => {
+    const film: ThinFilmLayer = { weight: 1, thickness: 430, ior: 1.4 };
+    const mappedFilm: ThinFilmLayer = { ...film, targetHue: [1, 0, 0] };
+    const original = dielectricThinFilmLobe(1.5, 0.2, 0, 0, film);
+    const mapped = dielectricThinFilmLobe(1.5, 0.2, 0, 0, mappedFilm);
+    const originalValue = original.eval(WO, DIRS[0]!).value;
+    const mappedValue = mapped.eval(WO, DIRS[0]!).value;
+    expect(mappedValue).not.toEqual(originalValue);
+    expect(mappedValue.every(Number.isFinite)).toBe(true);
+  });
+
   it('eval and sample agree for the thin-film specular lobe', () => {
     const film: ThinFilmLayer = { weight: 0.8, thickness: 380, ior: 1.45 };
     const lobe = dielectricThinFilmLobe(1.5, 0.25, 0, 0, film);

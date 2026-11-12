@@ -5,6 +5,8 @@ import {
   cieY,
   LAMBDA_MAX,
   LAMBDA_MIN,
+  mapThinFilmHue,
+  rotateRgbHue,
   sampleWavelength,
   sellmeierIor,
   spectrumToLinearSrgb,
@@ -93,5 +95,14 @@ describe('thin film interference', () => {
     const maxC = Math.max(rgb[0], rgb[1], rgb[2]);
     const minC = Math.min(rgb[0], rgb[1], rgb[2]);
     expect(maxC - minC).toBeGreaterThan(0.01);
+  });
+
+  it('maps a selected target hue from the reference film color and leaves neutral targets unchanged', () => {
+    const color: Vec3 = [0.8, 0.3, 0.1];
+    expect(mapThinFilmHue(color, [1, 1, 1], [0.1, 0.8, 0.3])).toEqual(color);
+    mapThinFilmHue([1, 0, 0], [0, 1, 0], [1, 0, 0]).forEach((value, index) =>
+      expect(value).toBeCloseTo([0, 1, 0][index]!, 12));
+    rotateRgbHue([1, 0, 0], 1 / 3).forEach((value, index) =>
+      expect(value).toBeCloseTo([0, 1, 0][index]!, 12));
   });
 });

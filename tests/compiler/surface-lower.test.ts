@@ -153,6 +153,19 @@ describe('surfaceGraphToLayered (T055b)', () => {
     expect(surfaceGraphToLayered(resolveSurface(graph)!, graph).lobes).toHaveLength(1);
   });
 
+  it('carries LamaIridescence Target Hue into the thin-film closure', () => {
+    const graph = graphOf('surface', [connection('bsdf', 'BSDF', 'IRIDESCENCE')]);
+    graph.nodes.set('IRIDESCENCE', bsdfNode('IRIDESCENCE', 'LamaIridescence', [
+      input('relativeFilmThickness', 'float', '0.5'),
+      input('minFilmThickness', 'float', '400'),
+      input('maxFilmThickness', 'float', '800'),
+      input('filmIOR', 'float', '1.3'),
+      input('targetHue', 'color3', '0.1, 0.8, 0.4'),
+    ]));
+    const closure = surfaceGraphToLayered(resolveSurface(graph)!, graph);
+    expect(closure.thinFilm).toEqual({ weight: 1, thickness: 600, ior: 1.3, targetHue: [0.1, 0.8, 0.4] });
+  });
+
   it('resolves Auto to Fresnel Blend for diffuse bases and Rough Coating for specular bases', () => {
     expect(resolveLamaLayerMode('auto', [{ kind: 'burley_diffuse' }])).toBe('fresnel_blend');
     expect(resolveLamaLayerMode('auto', [{ kind: 'conductor' }])).toBe('rough_coating');

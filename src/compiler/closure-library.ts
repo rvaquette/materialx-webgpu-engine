@@ -131,8 +131,8 @@ function lobeDispatch(spec: ClosureDispatchSpec): string {
       if (ctx.thin < 0.0) { return mx_lama_reflection_eval(ctx, wi); }
       let f0 = vec3f(mx_dielectric_f0(lobe.ior));
       if (filmActive) {
-        if (lobe.anisotropy <= 0.0) { return mx_microfacet_eval_tf(wo, wi, mx_alpha_of(lobe.roughness), f0, c.thinFilm.weight, c.thinFilm.thickness, c.thinFilm.ior); }
-        return mx_microfacet_eval_aniso_tf(wo, wi, mx_aniso_alphas(lobe.roughness, lobe.anisotropy), lobe.rotation, f0, c.thinFilm.weight, c.thinFilm.thickness, c.thinFilm.ior);
+        if (lobe.anisotropy <= 0.0) { return mx_microfacet_eval_tf(wo, wi, mx_alpha_of(lobe.roughness), f0, c.thinFilm.weight, c.thinFilm.thickness, c.thinFilm.ior, c.thinFilm.targetHue); }
+        return mx_microfacet_eval_aniso_tf(wo, wi, mx_aniso_alphas(lobe.roughness, lobe.anisotropy), lobe.rotation, f0, c.thinFilm.weight, c.thinFilm.thickness, c.thinFilm.ior, c.thinFilm.targetHue);
       }
       return mx_dielectric_reflection_eval(ctx, wi);
     }` : '    case 3u: { return mx_dielectric_reflection_eval(ctx, wi); }');
@@ -143,8 +143,8 @@ function lobeDispatch(spec: ClosureDispatchSpec): string {
     evalCases.push(spec.thinFilm ? `    case ${label(conductor)}: {
       if (lobe.ior > 0.5) { return mx_conductor_exact_eval(lobe, c, wo, wi); }
       if (filmActive) {
-        if (lobe.anisotropy <= 0.0) { return mx_microfacet_eval_tf(wo, wi, mx_alpha_of(lobe.roughness), lobe.color, c.thinFilm.weight, c.thinFilm.thickness, c.thinFilm.ior); }
-        return mx_microfacet_eval_aniso_tf(wo, wi, mx_aniso_alphas(lobe.roughness, lobe.anisotropy), lobe.rotation, lobe.color, c.thinFilm.weight, c.thinFilm.thickness, c.thinFilm.ior);
+        if (lobe.anisotropy <= 0.0) { return mx_microfacet_eval_tf(wo, wi, mx_alpha_of(lobe.roughness), lobe.color, c.thinFilm.weight, c.thinFilm.thickness, c.thinFilm.ior, c.thinFilm.targetHue); }
+        return mx_microfacet_eval_aniso_tf(wo, wi, mx_aniso_alphas(lobe.roughness, lobe.anisotropy), lobe.rotation, lobe.color, c.thinFilm.weight, c.thinFilm.thickness, c.thinFilm.ior, c.thinFilm.targetHue);
       }
       return mx_conductor_eval(ctx, wi);
     }` : `    case ${label(conductor)}: {
@@ -576,7 +576,7 @@ fn mx_conductor_exact_eval(lobe: MxBsdfLobe, c: LayeredClosure, wo: vec3f, wi: v
   let baseF0 = mx_exact_conductor_fresnel(lobe.color90, lobe.extinction, 1.0) * lobe.color;
   var f = mx_exact_conductor_fresnel(lobe.color90, lobe.extinction, cosVH) * lobe.color;
   if (c.hasThinFilm != 0u && c.thinFilm.weight > 0.0 && c.thinFilm.thickness > 0.0) {
-    f = mx_thin_film_fresnel(f, baseF0, cosVH, c.thinFilm.weight, c.thinFilm.thickness, c.thinFilm.ior);
+    f = mx_thin_film_fresnel(f, baseF0, cosVH, c.thinFilm.weight, c.thinFilm.thickness, c.thinFilm.ior, c.thinFilm.targetHue);
   }
   var d: f32;
   var g: f32;
@@ -645,7 +645,7 @@ fn mx_generalized_schlick_eval(lobe: MxBsdfLobe, c: LayeredClosure, wo: vec3f, w
   if (cosVH <= 0.0) { return MxBsdfEval(vec3f(0.0), 0.0); }
   var f = mx_fresnel_generalized_schlick(lobe.color, lobe.color90, cosVH, lobe.dispersion);
   if (c.hasThinFilm != 0u && c.thinFilm.weight > 0.0 && c.thinFilm.thickness > 0.0) {
-    f = mx_thin_film_fresnel(f, lobe.color, cosVH, c.thinFilm.weight, c.thinFilm.thickness, c.thinFilm.ior);
+    f = mx_thin_film_fresnel(f, lobe.color, cosVH, c.thinFilm.weight, c.thinFilm.thickness, c.thinFilm.ior, c.thinFilm.targetHue);
   }
   var d: f32;
   var g: f32;
@@ -1009,9 +1009,44 @@ fn mx_thin_film_tint(thickness: f32, cosTheta0: f32, filmIor: f32, f0: vec3f) ->
     mx_thin_film_channel(465.0, thickness, cosTheta0, filmIor, f0.z),
   );
 }
-fn mx_thin_film_fresnel(baseFresnel: vec3f, baseF0: vec3f, cosVH: f32, weight: f32, thickness: f32, filmIor: f32) -> vec3f {
+fn mx_rgb_hue(color: vec3f) -> f32 {
+  let maximum = max(color.r, max(color.g, color.b));
+  let minimum = min(color.r, min(color.g, color.b));
+  let chroma = maximum - minimum;
+  if (chroma <= 1e-8) { return 0.0; }
+  var hue: f32;
+  if (color.r >= color.g && color.r >= color.b) {
+    hue = (color.g - color.b) / chroma + select(0.0, 6.0, color.g < color.b);
+  } else if (color.g >= color.b) {
+    hue = (color.b - color.r) / chroma + 2.0;
+  } else {
+    hue = (color.r - color.g) / chroma + 4.0;
+  }
+  return hue / 6.0;
+}
+fn mx_rotate_rgb_hue(color: vec3f, hueOffset: f32) -> vec3f {
+  let maximum = max(color.r, max(color.g, color.b));
+  let minimum = min(color.r, min(color.g, color.b));
+  let chroma = maximum - minimum;
+  if (chroma <= 1e-8) { return color; }
+  let sector = fract(mx_rgb_hue(color) + hueOffset) * 6.0;
+  let x = chroma * (1.0 - abs(sector - 2.0 * floor(sector * 0.5) - 1.0));
+  var rgb: vec3f;
+  if (sector < 1.0) { rgb = vec3f(chroma, x, 0.0); }
+  else if (sector < 2.0) { rgb = vec3f(x, chroma, 0.0); }
+  else if (sector < 3.0) { rgb = vec3f(0.0, chroma, x); }
+  else if (sector < 4.0) { rgb = vec3f(0.0, x, chroma); }
+  else if (sector < 5.0) { rgb = vec3f(x, 0.0, chroma); }
+  else { rgb = vec3f(chroma, 0.0, x); }
+  return rgb + vec3f(minimum);
+}
+fn mx_thin_film_fresnel(baseFresnel: vec3f, baseF0: vec3f, cosVH: f32, weight: f32, thickness: f32, filmIor: f32, targetHue: vec3f) -> vec3f {
   if (weight <= 0.0 || thickness <= 0.0) { return baseFresnel; }
-  let tint = mx_thin_film_tint(thickness, cosVH, filmIor, baseF0);
+  var tint = mx_thin_film_tint(thickness, cosVH, filmIor, baseF0);
+  if (max(targetHue.r, max(targetHue.g, targetHue.b)) - min(targetHue.r, min(targetHue.g, targetHue.b)) > 1e-8) {
+    let reference = mx_thin_film_tint(600.0, 1.0, filmIor, baseF0);
+    tint = mx_rotate_rgb_hue(tint, mx_rgb_hue(targetHue) - mx_rgb_hue(reference));
+  }
   return mix(baseFresnel, tint, clamp(weight, 0.0, 1.0));
 }
 
@@ -1021,7 +1056,7 @@ fn mx_thin_film_fresnel(baseFresnel: vec3f, baseF0: vec3f, cosVH: f32, weight: f
 // depends only on the GGX alpha), so the assembler keeps the base samplers and
 // re-evaluates the value through these when a thin film is active (mirrors the
 // CPU conductorThinFilmLobe / dielectricThinFilmLobe in bsdf.ts).
-fn mx_microfacet_eval_tf(wo: vec3f, wi: vec3f, a: f32, f0: vec3f, filmW: f32, filmT: f32, filmIor: f32) -> MxBsdfEval {
+fn mx_microfacet_eval_tf(wo: vec3f, wi: vec3f, a: f32, f0: vec3f, filmW: f32, filmT: f32, filmIor: f32, targetHue: vec3f) -> MxBsdfEval {
   if (wo.z <= 0.0 || wi.z <= 0.0) { return MxBsdfEval(vec3f(0.0), 0.0); }
   let wm0 = wo + wi;
   if (dot(wm0, wm0) <= 0.0) { return MxBsdfEval(vec3f(0.0), 0.0); }
@@ -1030,12 +1065,12 @@ fn mx_microfacet_eval_tf(wo: vec3f, wi: vec3f, a: f32, f0: vec3f, filmW: f32, fi
   if (cosVH <= 0.0) { return MxBsdfEval(vec3f(0.0), 0.0); }
   let d = mx_ggx_ndf(wm.z, a);
   let g = mx_smith_g1(wo.z, a) * mx_smith_g1(wi.z, a);
-  let f = mx_thin_film_fresnel(mx_fresnel_schlick(f0, cosVH), f0, cosVH, filmW, filmT, filmIor);
+  let f = mx_thin_film_fresnel(mx_fresnel_schlick(f0, cosVH), f0, cosVH, filmW, filmT, filmIor, targetHue);
   let value = f * (d * g / (4.0 * wo.z * wi.z));
   let pdf = d * wm.z / (4.0 * cosVH);
   return MxBsdfEval(value, pdf);
 }
-fn mx_microfacet_eval_aniso_tf(wo: vec3f, wi: vec3f, alpha: vec2f, rotation: f32, f0: vec3f, filmW: f32, filmT: f32, filmIor: f32) -> MxBsdfEval {
+fn mx_microfacet_eval_aniso_tf(wo: vec3f, wi: vec3f, alpha: vec2f, rotation: f32, f0: vec3f, filmW: f32, filmT: f32, filmIor: f32, targetHue: vec3f) -> MxBsdfEval {
   if (wo.z <= 0.0 || wi.z <= 0.0) { return MxBsdfEval(vec3f(0.0), 0.0); }
   let wor = mx_rotate_tangent(wo, rotation);
   let wir = mx_rotate_tangent(wi, rotation);
@@ -1046,7 +1081,7 @@ fn mx_microfacet_eval_aniso_tf(wo: vec3f, wi: vec3f, alpha: vec2f, rotation: f32
   if (cosVH <= 0.0) { return MxBsdfEval(vec3f(0.0), 0.0); }
   let d = mx_ggx_ndf_aniso(wm, alpha);
   let g = mx_smith_g1_aniso(wor, alpha) * mx_smith_g1_aniso(wir, alpha);
-  let f = mx_thin_film_fresnel(mx_fresnel_schlick(f0, cosVH), f0, cosVH, filmW, filmT, filmIor);
+  let f = mx_thin_film_fresnel(mx_fresnel_schlick(f0, cosVH), f0, cosVH, filmW, filmT, filmIor, targetHue);
   let value = f * (d * g / (4.0 * wor.z * wir.z));
   let pdf = d * wm.z / (4.0 * cosVH);
   return MxBsdfEval(value, pdf);

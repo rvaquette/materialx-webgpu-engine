@@ -194,3 +194,42 @@ export function thinFilmTint(thicknessNm: number, cosTheta0: number, filmIor: nu
   };
   return [channel(0), channel(1), channel(2)];
 }
+
+function rgbHue(color: Vec3): number {
+  const [r, g, b] = color;
+  const maximum = Math.max(r, g, b);
+  const minimum = Math.min(r, g, b);
+  const chroma = maximum - minimum;
+  if (chroma <= 1e-8) return 0;
+  const hue = maximum === r ? (g - b) / chroma + (g < b ? 6 : 0)
+    : maximum === g ? (b - r) / chroma + 2
+      : (r - g) / chroma + 4;
+  return hue / 6;
+}
+
+/** Rotate an RGB color's hue while preserving its HSV saturation and value. */
+export function rotateRgbHue(color: Vec3, hueOffset: number): Vec3 {
+  const maximum = Math.max(...color);
+  const minimum = Math.min(...color);
+  const chroma = maximum - minimum;
+  if (chroma <= 1e-8 || !Number.isFinite(hueOffset)) return color;
+  const hue = ((rgbHue(color) + hueOffset) % 1 + 1) % 1;
+  const sector = hue * 6;
+  const x = chroma * (1 - Math.abs((sector % 2) - 1));
+  const m = minimum;
+  const rgb: Vec3 = sector < 1 ? [chroma, x, 0]
+    : sector < 2 ? [x, chroma, 0]
+      : sector < 3 ? [0, chroma, x]
+        : sector < 4 ? [0, x, chroma]
+          : sector < 5 ? [x, 0, chroma]
+            : [chroma, 0, x];
+  return [rgb[0] + m, rgb[1] + m, rgb[2] + m];
+}
+
+/** Map a film tint's reference hue to Target Hue; achromatic targets disable mapping. */
+export function mapThinFilmHue(color: Vec3, targetHue: Vec3, referenceColor: Vec3): Vec3 {
+  const targetChroma = Math.max(...targetHue) - Math.min(...targetHue);
+  const referenceChroma = Math.max(...referenceColor) - Math.min(...referenceColor);
+  if (targetChroma <= 1e-8 || referenceChroma <= 1e-8) return color;
+  return rotateRgbHue(color, rgbHue(targetHue) - rgbHue(referenceColor));
+}

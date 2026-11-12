@@ -80,6 +80,7 @@ export interface SerializedThinFilmLayer {
   weight: number;
   thickness: number;
   ior: number;
+  targetHue?: Rgb3;
 }
 
 export interface SerializedLayeredClosure {
@@ -156,6 +157,7 @@ export function serializeLayeredClosure(closure: LayeredClosure, decimals = 6): 
       weight: roundTo(closure.thinFilm.weight, decimals),
       thickness: roundTo(closure.thinFilm.thickness, decimals),
       ior: roundTo(closure.thinFilm.ior, decimals),
+      ...(closure.thinFilm.targetHue ? { targetHue: rgb(closure.thinFilm.targetHue, decimals) } : {}),
     };
   }
   if (closure.emission) out.emission = rgb(closure.emission, decimals);
@@ -201,7 +203,10 @@ export function deserializeLayeredClosure(data: SerializedLayeredClosure): Layer
   };
   if (data.sheen) out.sheen = { weight: data.sheen.weight, color: tuple(data.sheen.color), roughness: data.sheen.roughness };
   if (data.fuzz) out.fuzz = { weight: data.fuzz.weight, color: tuple(data.fuzz.color), roughness: data.fuzz.roughness };
-  if (data.thinFilm) out.thinFilm = { weight: data.thinFilm.weight, thickness: data.thinFilm.thickness, ior: data.thinFilm.ior };
+  if (data.thinFilm) out.thinFilm = {
+    weight: data.thinFilm.weight, thickness: data.thinFilm.thickness, ior: data.thinFilm.ior,
+    ...(data.thinFilm.targetHue ? { targetHue: tuple(data.thinFilm.targetHue) } : {}),
+  };
   if (data.emission) out.emission = tuple(data.emission);
   return out;
 }

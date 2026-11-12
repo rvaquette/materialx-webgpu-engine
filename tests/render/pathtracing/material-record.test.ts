@@ -6,6 +6,7 @@
 import { describe, expect, it } from 'vitest';
 import { canonicalSurfaceToLayered, type LayeredClosure } from '../../../src/compiler/ir.ts';
 import {
+  PT_MATERIAL_HEADER_FLOATS,
   PT_MATERIAL_RECORD_FLOATS,
   PT_MAX_LOBES,
   materialClosureReaderWgsl,
@@ -101,6 +102,19 @@ describe('T057b material-record codec', () => {
     }
     expect(materialClosureReaderWgsl()).toContain('materials[base + 41u]');
     expect(materialClosureReaderWgsl()).toContain('materials[base + 45u]');
+  });
+  it('round-trips LamaIridescence Target Hue in reserved GPU record slots', () => {
+    const closure: LayeredClosure = {
+      opacity: 1, lobes: [],
+      thinFilm: { weight: 1, thickness: 500, ior: 1.3, targetHue: [0.1, 0.8, 0.4] },
+    };
+    const packed = packLayeredMaterial(closure);
+    const back = unpackLayeredMaterial(packed);
+    back.thinFilm?.targetHue?.forEach((value, index) => expect(value).toBeCloseTo([0.1, 0.8, 0.4][index]!, 6));
+    Array.from(packed.slice(PT_MATERIAL_HEADER_FLOATS - 4, PT_MATERIAL_HEADER_FLOATS - 1))
+      .forEach((value, index) => expect(value).toBeCloseTo([0.1, 0.8, 0.4][index]!, 6));
+    expect(packed[PT_MATERIAL_HEADER_FLOATS - 1]).toBe(1);
+    expect(materialClosureReaderWgsl()).toContain(`materials[base + ${PT_MATERIAL_HEADER_FLOATS - 1}u]`);
   });
   it('packs a record of the documented fixed stride', () => {
     const closure = canonicalSurfaceToLayered({

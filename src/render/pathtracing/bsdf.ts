@@ -13,7 +13,7 @@
 
 import type { Vec3 } from '../../scene/transforms.ts';
 import type { CoatLayer, LayeredBsdfLobe, LayeredClosure, ThinFilmLayer } from '../../compiler/ir.ts';
-import { dispersionIor, thinFilmTint } from './spectrum.ts';
+import { dispersionIor, mapThinFilmHue, thinFilmTint } from './spectrum.ts';
 import { hairEval, hairSample } from '../bsdf/hair.ts';
 import { conductorAlbedo, conductorAverageAlbedo } from '../bsdf/conductor-energy.ts';
 
@@ -505,7 +505,11 @@ export function dielectricAnisoLobe(ior: number, roughness: number, anisotropy: 
 /** Modulate a Schlick Fresnel by thin-film interference over a substrate F0. */
 function thinFilmFresnel(baseFresnel: V, baseF0: V, cosVH: number, film: ThinFilmLayer): V {
   if (film.weight <= 0 || film.thickness <= 0) return baseFresnel;
-  const iris = thinFilmTint(film.thickness, cosVH, film.ior, baseF0);
+  let iris = thinFilmTint(film.thickness, cosVH, film.ior, baseF0);
+  if (film.targetHue) {
+    const reference = thinFilmTint(600, 1, film.ior, baseF0);
+    iris = mapThinFilmHue(iris, film.targetHue, reference);
+  }
   const w = clamp01(film.weight);
   return [
     baseFresnel[0] + (iris[0] - baseFresnel[0]) * w,

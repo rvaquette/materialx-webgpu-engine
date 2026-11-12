@@ -556,6 +556,19 @@ describe('emitLayeredSurface (T055d)', () => {
     expect(mod.code).toContain('c.opacity =');
   });
 
+  it('compiles LamaIridescence Target Hue as a live thin-film color input', () => {
+    const graph = surfaceGraph('surface', [conn('bsdf', 'BSDF', 'iridescence')], [
+      upstream('iridescence', 'LamaIridescence', 'BSDF', [
+        value('targetHue', 'color3', '0.1, 0.8, 0.4'),
+      ]),
+    ]);
+    const module = emit(graph);
+    expect(module.code).toContain('mx_rotate_rgb_hue');
+    expect(module.code).toContain('mx_thin_film_fresnel');
+    expect(module.code).toContain('MxThinFilmLayer(');
+    expect(module.code).toContain('vec3f(0.1, 0.8, 0.4)');
+  });
+
   it('omits optional layers that are absent', () => {
     const mod = emit(surfaceGraph('standard_surface', [value('base_color', 'color3', '0.5, 0.5, 0.5')]));
     expect(mod.code).not.toContain('c.hasCoat = 1u;');

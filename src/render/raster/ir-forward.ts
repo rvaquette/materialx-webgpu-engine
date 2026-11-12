@@ -191,7 +191,7 @@ fn mx_forward_smooth_sheet(c: LayeredClosure, wo: vec3f, frame: mat3x3f) -> vec3
       let f0 = vec3f(mx_dielectric_f0(l.ior));
       var f = mx_fresnel_schlick(f0, cosV);
       if (c.hasThinFilm != 0u) {
-        f = mx_thin_film_fresnel(f, f0, cosV, c.thinFilm.weight, c.thinFilm.thickness, c.thinFilm.ior);
+        f = mx_thin_film_fresnel(f, f0, cosV, c.thinFilm.weight, c.thinFilm.thickness, c.thinFilm.ior, c.thinFilm.targetHue);
       }
       radiance = radiance + l.weight * f * reflected;
     } else {

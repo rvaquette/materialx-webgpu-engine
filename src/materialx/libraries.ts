@@ -127,6 +127,13 @@ const GENERALIZED_SCHLICK_EXTENSION_DEFS = `<materialx version="1.39">
   </nodedef>
 </materialx>`;
 
+const IRIDESCENCE_EXTENSION_DEFS = `<materialx version="1.39">
+  <nodedef name="ND_engine_lama_iridescence" node="LamaIridescence" inherit="ND_lama_iridescence">
+    <input name="targetHue" type="color3" value="1, 1, 1" uiname="Target Hue" uifolder="Hue Mapping"
+           doc="Maps the physical thin-film hues to a selected hue." />
+  </nodedef>
+</materialx>`;
+
 /** Build library sources from a root URL and a list of relative file paths. */
 export function defaultLibrarySources(
   rootUrl: string,
@@ -169,6 +176,9 @@ export class MaterialXLibraries {
       }
       if (options.sources.some(source => source.name === 'bxdf/lama/lama_generalized_schlick.mtlx')) {
         await this.core.readXmlString(doc, GENERALIZED_SCHLICK_EXTENSION_DEFS, { readXIncludes: false });
+      }
+      if (options.sources.some(source => source.name === 'bxdf/lama/lama_iridescence.mtlx')) {
+        await this.core.readXmlString(doc, IRIDESCENCE_EXTENSION_DEFS, { readXIncludes: false });
       }
 
     } catch (error) {
