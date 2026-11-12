@@ -359,7 +359,7 @@ export class InteractiveViewer {
   }
 
   async resize(width: number, height = width): Promise<void> {
-    if (!(width === height && [256, 512, 1024].includes(width)) && !(width === 1024 && height === 768)) throw new Error('Unsupported render resolution.');
+    if (!(width === height && [128, 256, 512, 1024].includes(width)) && !(width === 1024 && height === 768)) throw new Error('Unsupported render resolution.');
     if (width === this.#width && height === this.#height) return;
     this.#current?.resize(width, height);
     this.#width = width;

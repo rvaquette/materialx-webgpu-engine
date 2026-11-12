@@ -176,6 +176,7 @@ describe('emitLayeredSurface (T055d)', () => {
     ['LamaDielectric', 'reflectionTint', 'color3', 3],
     ['LamaGeneralizedSchlick', 'reflectivity', 'color3', 5],
     ['LamaSheen', 'color', 'color3', 6],
+    ['LamaSheen', 'roughness', 'float', 6],
     ['LamaSSS', 'color', 'color3', 7],
     ['LamaIridescence', 'relativeFilmThickness', 'float', 3],
   ] as const)('keeps connected %s inputs dynamic', (nodeString, inputName, inputType, lobeKind) => {
@@ -396,8 +397,24 @@ describe('emitLayeredSurface (T055d)', () => {
     ]);
     const module = emit(graph);
     expect(module.features?.lobeKinds).toContain(6);
+    expect(module.code).toContain('vec3f(0.7, 0.8, 0.9)');
+    expect(module.code).toContain('pow(0.1 + 0.9 * clamp(');
     expect(module.code).toContain('c.hasEmission = 1u;');
     expect(module.code).toContain('vec3f(2.0, 1.0, 0.5)');
+  });
+
+  it('keeps both LamaSheen image inputs connected through roughness remapping', () => {
+    const graph = surfaceGraph('surface', [conn('bsdf', 'BSDF', 'sheen')], [
+      upstream('sheen', 'LamaSheen', 'BSDF', [
+        conn('color', 'color3', 'colorMap'), conn('roughness', 'float', 'roughnessMap'),
+      ]),
+      upstream('colorMap', 'image', 'color3', [value('file', 'filename', 'sheen-color.png')]),
+      upstream('roughnessMap', 'image', 'float', [value('file', 'filename', 'sheen-roughness.png')]),
+    ]);
+    const module = emit(graph);
+    expect(module.textures).toHaveLength(2);
+    expect(module.code).toMatch(/MxBsdfLobe\(MX_LOBE_SHEEN, 1\.0, e\d+, e\d+, pow\(0\.1 \+ 0\.9 \* clamp\(e\d+, 0\.0, 1\.0\), 2\.0\)/);
+    expect(module.code).toContain('textureSample(');
   });
 
   it('retains fuzz for connected and editable weights even when their initial value is zero', () => {

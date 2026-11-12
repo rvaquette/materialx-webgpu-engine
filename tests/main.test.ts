@@ -98,6 +98,15 @@ describe('viewer loading indicator', () => {
     });
   };
 
+  it('defaults to 128x128', async () => {
+    await import('../src/main.ts');
+    await settle();
+    expect(state.ui?.resolution).toBe(128);
+    expect(canvas).toMatchObject({ width: 128, height: 128 });
+    finishLoad();
+    await settle();
+  });
+
   it('accepts 1024x768 from the URL without making the canvas square', async () => {
     vi.stubGlobal('location', { search: '?res=1024x768' });
     await import('../src/main.ts');

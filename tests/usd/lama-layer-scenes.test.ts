@@ -25,6 +25,31 @@ const reader: UsdLayerReader = {
 };
 
 describe('LamaLayer gold IOR scenes', () => {
+  it('imports the editable LamaSheen scene with common geometry and studio lights', async () => {
+    const directory = join(SCENE_DIR, 'sheen');
+    const scene = await importUsdStage(join(directory, 'lama_sheen_color_roughness.usda'), { reader });
+    const reference = await importUsdStage(join(IRIDESCENCE_DIR, 'lama_iridescence_target_hue.usda'), { reader });
+    const material = scene.materials.find(entry => entry.primPath === '/World/Looks/sheen');
+    expect(material?.assetPath).toBe('./lama_sheen_color_roughness.mtlx');
+    expect(material?.referencedPrimPath).toBe('/MaterialX/Materials/sheen_material');
+    expect(scene.prims.get('/World/Camera')?.attributes).toEqual(reference.prims.get('/World/Camera')?.attributes);
+    for (const name of ['Ground', 'Teapot', 'Stand']) {
+      expect(scene.prims.has(`/World/Geometry/${name}`)).toBe(true);
+    }
+    for (const entry of scene.materials) {
+      if (entry.assetPath) expect(existsSync(resolve(directory, entry.assetPath))).toBe(true);
+    }
+    for (const name of ['Environment', 'Key', 'Fill']) {
+      expect(scene.prims.get(`/World/Lights/${name}`)?.attributes)
+        .toEqual(reference.prims.get(`/World/Lights/${name}`)?.attributes);
+    }
+    const document = await readFile(join(directory, 'lama_sheen_color_roughness.mtlx'), 'utf8');
+    const editable = [...document.matchAll(/<input name="([^"]+)"[^>]*engine:editable="true"/g)].map(match => match[1]);
+    expect(editable).toEqual(['color', 'roughness']);
+    expect(document).toContain('<input name="materialTop" type="BSDF" nodename="sheen" />');
+    expect(document).toContain('<input name="materialBase" type="BSDF" nodename="dark_base" />');
+  });
+
   it('opts only the two transmission-tint colors into editing', async () => {
     const document = await readFile(join(SCENE_DIR, 'dielectric', 'materials.mtlx'), 'utf8');
     const dielectric = document.match(/<LamaDielectric name="dielectric_transmission_tint_bsdf"[^>]*>([\s\S]*?)<\/LamaDielectric>/)?.[1];

@@ -177,6 +177,15 @@ describe('Dear ImGui viewer controls', () => {
     stop();
   });
 
+  it('offers 128x128 and applies the selected resolution', async () => {
+    const f = fixture();
+    const stop = await startViewerUi(f.canvas, f.state, f.actions, f.parameters);
+    controls.selection = '128 x 128##128';
+    f.render();
+    expect(f.actions.resolution).toHaveBeenCalledWith(128);
+    stop();
+  });
+
   it('offers path-tracing bounce depth and applies the selected value', async () => {
     const f = fixture();
     const stop = await startViewerUi(f.canvas, f.state, f.actions, f.parameters);

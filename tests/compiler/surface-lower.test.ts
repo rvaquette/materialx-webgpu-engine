@@ -98,6 +98,25 @@ function shade(closure: LayeredClosure, lighting: ReferenceLighting = defaultLig
 }
 
 describe('surfaceGraphToLayered (T055b)', () => {
+  it.each([-1, 0, 0.1, 0.5, 1, 2])('maps LamaSheen roughness %s without changing its color', roughness => {
+    const graph = graphOf('surface', [connection('bsdf', 'BSDF', 'SHEEN')]);
+    graph.nodes.set('SHEEN', bsdfNode('SHEEN', 'LamaSheen', [
+      input('color', 'color3', '0.2, 0.6, 0.9'),
+      input('roughness', 'float', String(roughness)),
+    ]));
+    const closure = surfaceGraphToLayered(resolveSurface(graph)!, graph);
+    expect(closure.sheen?.color).toEqual([0.2, 0.6, 0.9]);
+    expect(closure.sheen?.roughness).toBeCloseTo((0.1 + 0.9 * Math.min(1, Math.max(0, roughness))) ** 2, 12);
+  });
+
+  it('uses the LamaSheen white color and 0.1 roughness defaults', () => {
+    const graph = graphOf('surface', [connection('bsdf', 'BSDF', 'SHEEN')]);
+    graph.nodes.set('SHEEN', bsdfNode('SHEEN', 'LamaSheen', []));
+    const closure = surfaceGraphToLayered(resolveSurface(graph)!, graph);
+    expect(closure.sheen?.color).toEqual([1, 1, 1]);
+    expect(closure.sheen?.roughness).toBeCloseTo(0.0361, 12);
+  });
+
   it('lowers dielectric exterior IOR, signed anisotropy, Abbe dispersion and tail weights', () => {
     const graph = graphOf('surface', [connection('bsdf', 'BSDF', 'GLASS')]);
     graph.nodes.set('GLASS', bsdfNode('GLASS', 'LamaDielectric', [

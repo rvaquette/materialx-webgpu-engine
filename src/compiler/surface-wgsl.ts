@@ -960,7 +960,10 @@ function lowerLamaClosureWgsl(
       break;
     }
     case 'LamaSheen':
-      result.lobes = [{ kind: 'sheen', weight: '1.0', color: ctx.col('color', [1, 1, 1]), roughness }];
+      result.lobes = [{
+        kind: 'sheen', weight: '1.0', color: ctx.col('color', [1, 1, 1]),
+        roughness: `pow(0.1 + 0.9 * ${roughness}, 2.0)`,
+      }];
       break;
     case 'LamaSSS': {
       const transport = lamaSssTransport(graph, nodeId);

@@ -1,5 +1,16 @@
 # Lama Test Scenes
 
+## Editable sheen teapot
+
+Select **Lama - LamaSheen Color / Roughness** in the viewer.
+`sheen/lama_sheen_color_roughness.usda` reuses the common Lama teapot, stand,
+camera and studio lights. A warm `LamaSheen` layer over a dark diffuse base
+makes the grazing effect visible on both the teapot and stand.
+
+The paired MaterialX document exposes **Color** and **Roughness** in the
+**LamaSheen** UI folder. Compare roughness near 0 (narrow rim) and 1 (broad sheen),
+then change Color to inspect the sheen tint independently of the dark base.
+
 ## Neon emission teapot
 
 `emission/lama_emission_neon.usda` reuses the Lama teapot, stand, floor,

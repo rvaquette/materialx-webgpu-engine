@@ -23,6 +23,18 @@ const WO: V = normalize([0.3, 0.1, 0.9]);
 const WHITE: Vec3 = [1, 1, 1];
 
 describe('Charlie sheen lobe (T056b)', () => {
+  it('broadens away from the grazing rim as Lama-mapped roughness increases', () => {
+    const narrow = sheenLobe(WHITE, 0.01);
+    const broad = sheenLobe(WHITE, 1);
+    const middle: V = [0.6, 0, 0.8];
+    const rim: V = normalize([1, 0, 0.05]);
+    const narrowRatio = narrow.eval(middle, middle).value[0] / narrow.eval(rim, rim).value[0];
+    const broadRatio = broad.eval(middle, middle).value[0] / broad.eval(rim, rim).value[0];
+    expect(narrowRatio).toBeLessThan(1e-8);
+    expect(broadRatio).toBeGreaterThan(0.01);
+    expect(broad.eval(middle, middle).value[0]).toBeGreaterThan(narrow.eval(middle, middle).value[0]);
+  });
+
   it('eval and sample agree at the sampled direction', () => {
     const lobe = sheenLobe([0.9, 0.85, 0.8], 0.3);
     const rng = createPcg32(11);

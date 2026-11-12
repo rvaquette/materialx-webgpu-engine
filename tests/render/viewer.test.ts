@@ -514,6 +514,9 @@ describe('interactive viewer resource lifecycle', () => {
   it('resizes raster targets to 1024x768 and can return to square without recompiling', async () => {
     const { viewer, canvas, device } = await setup();
     const shaders = device.createShaderModule.mock.calls.length;
+    await viewer.resize(128);
+    expect(canvas.width).toBe(128);
+    expect(canvas.height).toBe(128);
     await viewer.resize(1024, 768);
     expect(canvas.width).toBe(1024);
     expect(canvas.height).toBe(768);

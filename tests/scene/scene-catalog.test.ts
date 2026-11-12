@@ -31,12 +31,12 @@ describe('scene selector catalog', () => {
     expect(entries.every(scene => scene.label.startsWith('Pathtracer - '))).toBe(true);
   });
   it('includes every Lama USDA scene once with a dedicated label', () => {
-    const names = ['add', 'iridescence', 'layer', 'mix'].flatMap(directory =>
+    const names = ['add', 'iridescence', 'layer', 'mix', 'sheen'].flatMap(directory =>
       readdirSync(join('scenes', 'lama', directory))
         .filter(name => name.endsWith('.usda'))
         .map(name => `${directory}/${name}`),
     ).sort();
-    const entries = SCENE_CATALOG.filter(scene => ['add', 'iridescence', 'layer', 'mix']
+    const entries = SCENE_CATALOG.filter(scene => ['add', 'iridescence', 'layer', 'mix', 'sheen']
       .some(directory => scene.entry.startsWith(`./scenes/lama/${directory}/`)));
     expect(entries.map(scene => scene.entry)).toEqual(names.map(name => `./scenes/lama/${name}`));
     expect(entries.every(scene => scene.label.startsWith('Lama - ') || scene.label.startsWith('LamaLayer Gold - '))).toBe(true);

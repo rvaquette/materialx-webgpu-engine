@@ -223,6 +223,63 @@ function checker(): DecodedPixelImage {
 }
 
 describe('composeSurfaceLayered texture sampling (T057k)', () => {
+  it.each(['direct', 'surface'] as const)('evaluates LamaSheen image color and procedural roughness on a %s terminal', terminal => {
+    const graph = imageGraph();
+    const provenance = { namePath: '/mat/sheen' };
+    const sheenNode: ResolvedNode = {
+      id: 'sheen', category: 'LamaSheen', type: 'BSDF', provenance,
+      nodeDef: {
+        name: 'ND_lama_sheen', nodeString: 'LamaSheen', type: 'BSDF',
+        implementation: { kind: 'nodegraph', name: 'IMPL_lama_sheen' },
+        inputs: [
+          { name: 'color', type: 'color3', value: '1, 1, 1' },
+          { name: 'roughness', type: 'float', value: '0.1' },
+        ],
+      },
+      inputs: [
+        { name: 'color', type: 'color3', source: { kind: 'connection', nodeId: 'tex' }, provenance },
+        { name: 'roughness', type: 'float', source: { kind: 'connection', nodeId: 'roughness' }, provenance },
+      ],
+    };
+    graph.nodes.set('roughness', {
+      id: 'roughness', category: 'extract', type: 'float', provenance,
+      inputs: [
+        { name: 'in', type: 'color3', source: { kind: 'connection', nodeId: 'tex' }, provenance },
+        { name: 'index', type: 'integer', source: { kind: 'value', type: 'integer', value: '0' }, provenance },
+      ],
+    });
+    if (terminal === 'direct') {
+      graph.nodes.set('SR', { ...sheenNode, id: 'SR' });
+    } else {
+      graph.nodes.set('sheen', sheenNode);
+      graph.nodes.set('SR', {
+        id: 'SR', category: 'surface', type: 'surfaceshader', provenance,
+        inputs: [{ name: 'bsdf', type: 'BSDF', source: { kind: 'connection', nodeId: 'sheen' }, provenance }],
+      });
+    }
+    const prepared = prepareSurface(graph, resolveSurface(graph)!);
+    const textures = { tex: createImageSampler(checker()) };
+    const red = composeSurfaceLayered(prepared, { texcoord: [0.25, 0.75], textures });
+    const green = composeSurfaceLayered(prepared, { texcoord: [0.75, 0.75], textures });
+    expect(red.sheen?.color).toEqual([1, 0, 0]);
+    expect(red.sheen?.roughness).toBeCloseTo(1, 12);
+    expect(green.sheen?.color).toEqual([0, 1, 0]);
+    expect(green.sheen?.roughness).toBeCloseTo(0.01, 12);
+
+    graph.nodes.set('tex', {
+      id: 'tex', category: 'convert', type: 'color3', provenance,
+      inputs: [{ name: 'in', type: 'vector3', source: { kind: 'connection', nodeId: 'position' }, provenance }],
+    });
+    graph.nodes.set('position', { id: 'position', category: 'position', type: 'vector3', inputs: [], provenance });
+    const procedural = prepareSurface(graph, resolveSurface(graph)!);
+    const a = composeSurfaceLayered(procedural, { position: [0.2, 0.4, 0.8] });
+    const b = composeSurfaceLayered(procedural, { position: [0.8, 0.6, 0.2] });
+    expect(a.sheen?.color).toEqual([0.2, 0.4, 0.8]);
+    expect(a.sheen?.roughness).toBeCloseTo(0.0784, 12);
+    expect(b.sheen?.color).toEqual([0.8, 0.6, 0.2]);
+    expect(b.sheen?.roughness).toBeCloseTo(0.6724, 12);
+  });
+
   it('drives base_color from a decoded texture sampled at the shading point', () => {
     const graph = imageGraph();
     const surface = resolveSurface(graph, {})!;

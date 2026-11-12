@@ -42,7 +42,7 @@ async function main(): Promise<void> {
   const params = new URLSearchParams(location.search);
   const initialEntry = params.get('entry') ?? SCENE_CATALOG[0]!.entry;
   const initialBackend = params.get('backend') ?? 'raster';
-  const resolutionParam = params.get('res') ?? '512';
+  const resolutionParam = params.get('res') ?? '128';
   const initialResolution = resolutionParam === '1024x768' ? resolutionParam : Number(resolutionParam);
   const scenePath = initialEntry.replace(/^\.\//, '/');
   if (!scenePath.startsWith('/scenes/') || scenePath.split('/').includes('..') ||
@@ -50,7 +50,7 @@ async function main(): Promise<void> {
     throw new Error('Invalid scene entry: expected USD, glTF, GLB or scene.json under /scenes/.');
   }
   if (initialBackend !== 'raster' && initialBackend !== 'pathtracing') throw new Error('Unsupported backend.');
-  if (initialResolution !== '1024x768' && ![256, 512, 1024].includes(initialResolution)) throw new Error('Interactive resolution must be 256, 512, 1024 or 1024x768.');
+  if (initialResolution !== '1024x768' && ![128, 256, 512, 1024].includes(initialResolution)) throw new Error('Interactive resolution must be 128, 256, 512, 1024 or 1024x768.');
   if (!('gpu' in navigator)) { setStatus('WebGPU is not available in this browser.'); return; }
   const withTimeout = <T>(promise: Promise<T>, ms: number): Promise<T | undefined> =>
     Promise.race([promise, new Promise<undefined>(resolve => setTimeout(() => resolve(undefined), ms))]);

@@ -220,3 +220,14 @@ independent fp64 oracle `referenceClosureDirect` on shared frames and light.
   (direct lighting only, no shadows, constant environment) are documented in
   [docs/validation.md](validation.md) ("Parité device des familles BxDF") and
   [docs/conformance.md](conformance.md) ("Parité device des familles BxDF").
+
+## 8. LamaSheen Color and Roughness
+
+`LamaSheen.color` accepts a flat linear color, an image, or a supported procedural
+connection. It tints the sheen per channel without tinting the underlying base.
+`roughness` accepts a scalar or the same connected input types and is clamped to
+`[0, 1]`. Both CPU and WGSL use the MaterialX Lama mapping
+`(0.1 + 0.9 * roughness)^2` before evaluating the Charlie sheen: low values produce
+a narrow grazing sheen, and high values broaden it across the surface. The
+default is white with authored roughness `0.1`. Other materials' sheen controls
+retain their existing mapping.

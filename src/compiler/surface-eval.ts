@@ -82,7 +82,7 @@ export function prepareSurface(
   }
   const lamaInputs: Array<{ nodeId: string; input: ResolvedInput; ref: string }> = [];
   for (const node of graph.nodes.values()) {
-    if (node.id === surface.nodeId || !(node.nodeDef?.nodeString ?? node.category).startsWith('Lama')) continue;
+    if (!(node.nodeDef?.nodeString ?? node.category).startsWith('Lama')) continue;
     const nodeSurface = resolvedLamaNodeSurface(node);
     const nodeInputs = lowerSurfaceInputsToIr(graph, nodeSurface, builder, sink).inputs;
     for (const authored of node.inputs) {

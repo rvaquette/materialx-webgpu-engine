@@ -532,7 +532,11 @@ function lowerLamaBsdf(graph: ResolvedGraph, nodeId: string, frame?: LamaShading
     }
     case 'LamaSheen':
       return assemble([], 1, {
-        sheen: { weight: 1, color: nodeColor(graph, nodeId, 'color', [1, 1, 1]), roughness },
+        sheen: {
+          weight: 1, color: nodeColor(graph, nodeId, 'color', [1, 1, 1]),
+          // Match the roughness compression and squaring in MaterialX's lama_sheen.
+          roughness: (0.1 + 0.9 * roughness) ** 2,
+        },
       });
     case 'LamaSSS':
       return assemble([{

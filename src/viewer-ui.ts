@@ -128,7 +128,7 @@ export async function startViewerUi(
         combo('##scene', state.entry, state.scenes.map(scene => ({ label: scene.label, value: scene.entry })), actions.scene, true);
         ImGui.SeparatorText('Rendu');
         combo('##resolution', String(state.resolution), [
-          ...[256, 512, 1024].map(size => ({ label: `${size} x ${size}`, value: String(size) })),
+          ...[128, 256, 512, 1024].map(size => ({ label: `${size} x ${size}`, value: String(size) })),
           { label: '1024 x 768', value: '1024x768' },
         ], value => actions.resolution(value === '1024x768' ? value : Number(value)));
         ImGui.Text('Profondeur du path tracing');
