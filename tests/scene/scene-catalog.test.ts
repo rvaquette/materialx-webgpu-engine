@@ -12,6 +12,15 @@ describe('scene selector catalog', () => {
     expect(entries.filter(scene => scene.label.includes('NOT SUPPORTED'))).toHaveLength(10);
   });
 
+  it('includes every generalized-Schlick parameter scene and identifies unsupported controls', () => {
+    const names = readdirSync('scenes/lama/generalized_schlick').filter(name => name.endsWith('.usda')).sort();
+    const entries = SCENE_CATALOG.filter(scene => scene.entry.startsWith('./scenes/lama/generalized_schlick/'));
+    expect(entries.map(scene => scene.entry).sort()).toEqual(names.map(name => `./scenes/lama/generalized_schlick/${name}`));
+    expect(entries).toHaveLength(34);
+    expect(entries.every(scene => scene.label.startsWith('LamaGeneralizedSchlick - '))).toBe(true);
+    expect(entries.filter(scene => scene.label.includes('NOT SUPPORTED'))).toHaveLength(10);
+  });
+
   it('includes every current pathtracer USDA exactly once, in filename order', () => {
     const names = readdirSync('scenes\\pathtracer')
       .filter(name => name.endsWith('.usda')).sort();

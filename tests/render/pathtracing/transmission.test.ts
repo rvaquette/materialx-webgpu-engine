@@ -72,6 +72,27 @@ describe('dielectric transmission BTDF (T056e)', () => {
     expect(sample!.value[0] * Math.abs(sample!.wi[2]) / sample!.pdf).toBeCloseTo(1, 2);
   });
 
+  it('reflects a paired generalized-Schlick lobe internally with the interior tint', () => {
+    const glass = layeredSurfaceBsdf({ opacity: 1, lobes: [
+      { kind: 'generalized_schlick', weight: 1, color: [0.04, 0.04, 0.04], color90: [1, 1, 1], fresnelExponent: 5,
+        roughness: 0.001, ior: IOR, pairedDielectric: true, interiorTint: [0.2, 0.6, 1] },
+      { kind: 'dielectric_transmission', weight: 1, color: [1, 1, 1], roughness: 0.001, ior: IOR, pairedDielectric: true },
+    ] });
+    const random = createPcg32(41);
+    const inside: V = normalize([0.9, 0, -0.3]);
+    let reflected = 0;
+    for (let sampleIndex = 0; sampleIndex < 256; sampleIndex++) {
+      const sample = glass.sample(inside, random);
+      if (!sample) continue;
+      expect(sample.wi[2]).toBeLessThan(0);
+      const weight = Math.abs(sample.wi[2]) / sample.pdf;
+      expect(sample.value[0] / sample.value[2]).toBeCloseTo(0.2, 9);
+      expect(sample.value[2] * weight).toBeCloseTo(1, 1);
+      reflected++;
+    }
+    expect(reflected).toBeGreaterThan(200);
+  });
+
   it('keeps anisotropic transmission sampling and evaluation coherent', () => {
     const lobe = dielectricTransmissionLobe([0.9, 0.95, 1], 0.35, IOR, 0.75, -0.125);
     const random = createPcg32(693);

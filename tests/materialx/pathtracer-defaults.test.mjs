@@ -49,8 +49,9 @@ describe.skipIf(!existsSync(coreFile) || !existsSync(defaultLibraryRoot))('Patht
         const unit = { materialName, referencedPrimPath: `/MaterialX/Materials/${materialName}`, boundPrims: [] };
         const explicit = await compiler.compile({ ...unit, assetPath: `${file}:explicit` });
         const compact = await compiler.compile({ ...unit, assetPath: `${file}:compact` });
-        expect(explicit?.layered, `${file}/${materialName}`).toBeDefined();
+        expect(explicit?.layered ?? explicit?.volume, `${file}/${materialName}`).toBeDefined();
         expect(compact?.layered, `${file}/${materialName}`).toEqual(explicit.layered);
+        expect(compact?.volume, `${file}/${materialName}`).toEqual(explicit.volume);
         expect(compact?.module, `${file}/${materialName}`).toEqual(explicit.module);
       }
       expect(bindings.length).toBeGreaterThanOrEqual(294);

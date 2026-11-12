@@ -7,13 +7,13 @@ import type { ResolvedGraph } from '../../src/materialx/graph.ts';
 import { importUsdStage } from '../../src/usd/importer.ts';
 import { buildSceneResources } from '../../src/render/scene-resources.ts';
 import { buildMaterialDispatch } from '../../src/render/pathtracing/material-variant.ts';
-import { changeMaterialParameters, compileEditableMaterial, editableSceneMaterials, materialUniformData, packParameterUniforms, parameterValues, visibleMaterialParameters } from '../../src/render/material-parameters.ts';
+import { changeMaterialParameters, compileEditableMaterial, editableSceneMaterials, materialUniformData, packParameterUniforms, parameterValues, uniformSceneMaterials, visibleMaterialParameters } from '../../src/render/material-parameters.ts';
 import { applySceneDisplacement } from '../../src/render/displacement.ts';
 import { resolveVolume } from '../../src/materialx/volume-graph.ts';
 import { appendVolumeIr } from '../../src/compiler/volume-ir.ts';
 import { surfaceGraphToLayered } from '../../src/compiler/surface-lower.ts';
 
-async function fixture(displacement = false, configure?: (graph: ResolvedGraph) => void) {
+async function fixture(displacement = false, configure?: (graph: ResolvedGraph) => void, mode: 'editor' | 'uniform' | 'literal' = 'editor') {
   const graph: ResolvedGraph = {
     terminals: [{ name: 'surfaceshader', type: 'surfaceshader', nodeId: 'surface', provenance: { namePath: '/surface' } }],
     nodes: new Map([['surface', {
@@ -55,7 +55,7 @@ async function fixture(displacement = false, configure?: (graph: ResolvedGraph) 
 def Material "Mat" (prepend references = @mat.mtlx@</Mat>) {}
 def Mesh "a" { rel material:binding = </Mat> }
 def Mesh "b" { rel material:binding = </Mat> }` } });
-  return editableSceneMaterials(await buildSceneResources(scene, {
+  const built = await buildSceneResources(scene, {
     meshSource: { meshFor: () => ({
       points: [0, 0, 0, 1, 0, 0, 0, 1, 0], faceVertexCounts: [3], faceVertexIndices: [0, 1, 2],
       primvars: [{ name: 'st', interpolation: 'vertex', elementSize: 2, values: [0, 0, 1, 0, 0, 1] }],
@@ -63,10 +63,75 @@ def Mesh "b" { rel material:binding = </Mat> }` } });
     materialCompiler: { compile: () => ({ ir, module: emitWgsl(ir), graph, surface, layered: emitLayeredSurface(graph, surface),
       ...(volume ? { volume } : {}),
       ...(displacement ? { displacement: { file: 'height.png', scale: 0.1 } } : {}) }) },
-  }));
+  });
+  return mode === 'editor' ? editableSceneMaterials(built) : mode === 'uniform' ? uniformSceneMaterials(built) : built;
 }
 
 describe('dynamic MaterialX parameters', () => {
+  it('shares one shader across value-only variants in uniform parameter mode', async () => {
+    const schlick = (roughness: string, reflectivity: string) => (graph: ResolvedGraph) => {
+      const surface = graph.nodes.get('surface')!;
+      surface.category = 'LamaLayer';
+      surface.type = 'BSDF';
+      surface.nodeDef = {
+        name: 'ND_LamaLayer', nodeString: 'LamaLayer', type: 'BSDF', implementation: { kind: 'unresolved' },
+        inputs: [{ name: 'materialTop', type: 'BSDF' }, { name: 'materialBase', type: 'BSDF' }, { name: 'topMix', type: 'float', value: '1' }],
+      };
+      surface.inputs = [
+        { name: 'materialTop', type: 'BSDF', source: { kind: 'connection', nodeId: 'gs' }, provenance: { namePath: '/surface/materialTop' } },
+        { name: 'materialBase', type: 'BSDF', source: { kind: 'connection', nodeId: 'gold' }, provenance: { namePath: '/surface/materialBase' } },
+      ];
+      graph.nodes.set('gs', {
+        id: 'gs', category: 'LamaGeneralizedSchlick', type: 'BSDF', provenance: { namePath: '/gs' },
+        nodeDef: { name: 'ND_LamaGeneralizedSchlick', nodeString: 'LamaGeneralizedSchlick', type: 'BSDF', implementation: { kind: 'unresolved' },
+          inputs: [{ name: 'roughness', type: 'float', value: '0.2' }, { name: 'reflectivity', type: 'color3', value: '0.04, 0.04, 0.04' },
+            { name: 'fresnelMode', type: 'integer', value: '0' }, { name: 'energyCompensation', type: 'float', value: '1' }] },
+        inputs: [
+          { name: 'roughness', type: 'float', source: { kind: 'value', type: 'float', value: roughness }, provenance: { namePath: '/gs/roughness' } },
+          { name: 'reflectivity', type: 'color3', source: { kind: 'value', type: 'color3', value: reflectivity }, provenance: { namePath: '/gs/reflectivity' } },
+        ],
+      });
+      graph.nodes.set('gold', { id: 'gold', category: 'LamaConductor', type: 'BSDF', provenance: { namePath: '/gold' }, inputs: [] });
+    };
+    const dispatchOf = (resources: Awaited<ReturnType<typeof fixture>>) => {
+      const material = [...resources.materials.values()][0]!;
+      return { material, dispatch: buildMaterialDispatch([{ materialIndex: 0, graph: material.surfaceGraph!, surface: material.resolvedSurface! }]) };
+    };
+    const literalA = dispatchOf(await fixture(false, schlick('0.1', '0.9, 0.2, 0.1'), 'literal'));
+    const literalB = dispatchOf(await fixture(false, schlick('0.6', '0.1, 0.5, 0.9'), 'literal'));
+    expect(literalA.dispatch.dispatcherWgsl).not.toBe(literalB.dispatch.dispatcherWgsl);
+
+    const uniformA = dispatchOf(await fixture(false, schlick('0.1', '0.9, 0.2, 0.1'), 'uniform'));
+    const uniformB = dispatchOf(await fixture(false, schlick('0.6', '0.1, 0.5, 0.9'), 'uniform'));
+    expect(uniformA.dispatch.dispatcherWgsl).toBe(uniformB.dispatch.dispatcherWgsl);
+    expect(uniformA.material.sceneShader!.code).toBe(uniformB.material.sceneShader!.code);
+    expect(uniformA.material.variant.pipelineKey).toBe(uniformB.material.variant.pipelineKey);
+    expect(new Uint8Array(materialUniformData(uniformA.material))).not.toEqual(new Uint8Array(materialUniformData(uniformB.material)));
+    // Unauthored defaults become uniforms too; integer modes stay compile-time literals.
+    const gsInputs = uniformA.material.surfaceGraph!.nodes.get('gs')!.inputs;
+    expect(gsInputs.find(input => input.name === 'energyCompensation')).toMatchObject({ defaulted: true, parameter: expect.any(String) });
+    expect(gsInputs.find(input => input.name === 'fresnelMode')?.parameter).toBeUndefined();
+    expect(uniformA.material.parameters!.find(parameter => parameter.input === 'roughness')?.update).toBe('uniform');
+    expect(uniformA.material.parameters!.find(parameter => parameter.input === 'fresnelMode')?.update).toBe('rebuild');
+  });
+
+  it('parameterizes the LamaSurface back closure when it reuses the front node', async () => {
+    const twoSided = (roughness: string) => (graph: ResolvedGraph) => {
+      const surface = graph.nodes.get('surface')!;
+      surface.category = 'LamaGeneralizedSchlick';
+      surface.type = 'BSDF';
+      surface.nodeDef = { name: 'ND_LamaGeneralizedSchlick', nodeString: 'LamaGeneralizedSchlick', type: 'BSDF', implementation: { kind: 'unresolved' },
+        inputs: [{ name: 'roughness', type: 'float', value: '0.2' }, { name: 'absorptionRadius', type: 'float', value: '0.08' }] };
+      surface.inputs = [{ name: 'roughness', type: 'float', source: { kind: 'value', type: 'float', value: roughness }, provenance: { namePath: '/surface/roughness' } }];
+      graph.lamaSurface = { backNodeId: 'surface' };
+    };
+    const shaderOf = async (roughness: string) => [...(await fixture(false, twoSided(roughness), 'uniform')).materials.values()][0]!;
+    const [a, b] = [await shaderOf('0.1'), await shaderOf('0.7')];
+    expect(a.resolvedSurface!.backNodeId).toBe('surface');
+    expect(a.sceneShader!.code).toBe(b.sceneShader!.code);
+    expect(a.surfaceGraph!.nodes.get('surface')!.inputs.find(input => input.name === 'absorptionRadius')).toMatchObject({ defaulted: true });
+  });
+
   it('updates explicitly editable dielectric colors as uniforms without compiling unrelated inputs', async () => {
     const resources = await fixture(false, graph => {
       const node = graph.nodes.get('surface')!;

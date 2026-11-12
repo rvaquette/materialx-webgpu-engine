@@ -19,7 +19,7 @@ const playgroundRoot = process.env['MX_PLAYGROUND_ROOT']
 const coreFile = join(coreRoot, 'JsMaterialXCore.js');
 
 describe.skipIf(!existsSync(coreFile) || !existsSync(libraryRoot))('installed MaterialX Core resolution', () => {
-  it.each(['conductor', 'dielectric'])('resolves all %s parameter scenes and explicitly diagnoses unsupported controls', async (family) => {
+  it.each(['conductor', 'dielectric', 'generalized_schlick'])('resolves all %s parameter scenes and explicitly diagnoses unsupported controls', async (family) => {
     const module = await import(/* @vite-ignore */ pathToFileURL(coreFile).href) as { default: MaterialXModuleFactory };
     const core = new MaterialXCore(await module.default());
     const libraries = new MaterialXLibraries(core);
@@ -155,7 +155,7 @@ def Mesh "Teapot" { rel material:binding = </Mat> }` } });
       fetchText: async path => readFileSync(path, 'utf8'),
     });
     const diagnostics: Diagnostic[] = [];
-    const assetPath = join('scenes', 'pathtracer', 'lama', 'layer', 'lama_layer_gold_modes.mtlx');
+    const assetPath = join('scenes', 'lama', 'layer', 'lama_layer_gold_modes.mtlx');
     const text = readFileSync(assetPath, 'utf8');
     const documents = await loadMaterialXDocuments({
       core, libraries, texts: new Map([[assetPath, text]]), sink: d => diagnostics.push(d),
@@ -244,10 +244,11 @@ def Mesh "Teapot" { rel material:binding = </Mat> }` } });
         const build = await compiler.compile({
           ...binding, referencedPrimPath: `/MaterialX/Materials/${binding.materialName}`, boundPrims: [],
         });
-        expect(build?.surface, `${binding.assetPath}/${binding.materialName}`).toBeDefined();
-        expect(build?.layered, `${binding.assetPath}/${binding.materialName}`).toBeDefined();
+        // Native volume materials compile to a volume closure instead of a layered surface.
+        expect(build?.surface ?? build?.volume, `${binding.assetPath}/${binding.materialName}`).toBeDefined();
+        expect(build?.layered ?? build?.volume, `${binding.assetPath}/${binding.materialName}`).toBeDefined();
       }
-      expect(files).toHaveLength(45);
+      expect(files).toHaveLength(50);
       expect(bindings.length).toBeGreaterThanOrEqual(294);
       expect(diagnostics).toEqual([]);
     } finally {

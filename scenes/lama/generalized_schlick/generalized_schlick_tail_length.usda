@@ -1,0 +1,82 @@
+#usda 1.0
+(
+    defaultPrim = "World"
+    metersPerUnit = 1
+    upAxis = "Y"
+    doc = "LamaGeneralizedSchlick Tail Length (engine equivalent)"
+)
+
+def Xform "World"
+{
+    custom int2 pathtracer:resolution = (512, 512)
+    custom int pathtracer:maxDepth = 8
+    custom float pathtracer:environmentIntensity = 0.3
+
+    def Camera "Camera"
+    {
+        matrix4d xformOp:transform = ((0, 0, -1, 0), (-0.352609234174, 0.935770659924, 0, 0), (0.935770659924, 0.352609234174, 0, 0), (0.69, 0.33, 0, 1))
+        uniform token[] xformOpOrder = ["xformOp:transform"]
+        token projection = "perspective"
+        float focalLength = 50
+        float horizontalAperture = 10.95178115
+        float verticalAperture = 10.95178115
+        float2 clippingRange = (0.001, 1000000)
+        custom point3f pathtracer:lookAt = (0, 0.07, 0)
+        custom float pathtracer:fov = 12.5
+    }
+
+    def Scope "Looks"
+    {
+        def Material "ground" (prepend references = @./materials.mtlx@</MaterialX/Materials/ground>) {}
+        def Material "generalized_schlick_tail_length" (prepend references = @./materials.mtlx@</MaterialX/Materials/generalized_schlick_tail_length>) {}
+    }
+
+    def Scope "Geometry"
+    {
+        def Mesh "Ground"
+        {
+            custom asset engine:geometry:file = @../../pathtracer/renderman/background.obj@
+            rel material:binding = </World/Looks/ground>
+        }
+        def Mesh "Teapot"
+        {
+            custom asset engine:geometry:file = @../../pathtracer/renderman/teapot.obj@
+            rel material:binding = </World/Looks/generalized_schlick_tail_length>
+        }
+        def Mesh "Stand"
+        {
+            custom asset engine:geometry:file = @../../pathtracer/renderman/teapot_base.obj@
+            rel material:binding = </World/Looks/generalized_schlick_tail_length>
+        }
+    }
+
+    def Scope "Lights"
+    {
+        def DomeLight "Environment"
+        {
+            asset inputs:texture:file = @../../pathtracer/HDR/photo_studio_01_1k.hdr@
+            float inputs:intensity = 0.3
+            color3f inputs:color = (1, 1, 1)
+        }
+        def RectLight "Key"
+        {
+            matrix4d xformOp:transform = ((0.6, 0, -0.8, 0), (0, 1, 0, 0), (0.8, 0, 0.6, 0), (0.4, 0.22, 0.3, 1))
+            uniform token[] xformOpOrder = ["xformOp:transform"]
+            color3f inputs:color = (1, 1, 1)
+            float inputs:intensity = 10
+            bool inputs:normalize = false
+            float inputs:width = 0.18
+            float inputs:height = 0.35
+        }
+        def RectLight "Fill"
+        {
+            matrix4d xformOp:transform = ((0.297116013245, -0.907778095767, -0.296076009699, 0), (-0.705870411804, 0, -0.708340992559, 0), (0.643016437381, 0.41945074662, -0.640773698288, 0), (0.4048555, 0.3710285, -0.4083235, 1))
+            uniform token[] xformOpOrder = ["xformOp:transform"]
+            color3f inputs:color = (0.975609756098, 1, 1)
+            float inputs:intensity = 2.5
+            bool inputs:normalize = false
+            float inputs:width = 0.2
+            float inputs:height = 0.204
+        }
+    }
+}

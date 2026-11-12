@@ -194,6 +194,26 @@ describe('emitLayeredSurface (T055d)', () => {
     expect(module.features?.lobeKinds).toContain(lobeKind);
   });
 
+  it('pairs LamaGeneralizedSchlick with the dielectric interface and warns on unsupported controls', () => {
+    const diags: Diagnostic[] = [];
+    const graph = surfaceGraph('surface', [conn('bsdf', 'BSDF', 'schlick')], [
+      upstream('schlick', 'LamaGeneralizedSchlick', 'BSDF', [
+        value('fresnelMode', 'integer', '1'), value('IOR', 'vector3', '1.5, 1.5, 1.5'), value('exteriorIOR', 'float', '1.33'),
+        value('absorptionColor', 'color3', '0.5, 0.7, 0.9'), value('tailMix', 'float', '0.2'),
+        value('energyCompensation', 'float', '1'),
+      ]),
+    ]);
+    const module = emit(graph, (d) => diags.push(d));
+    const lobes = module.code.match(/c\.lobes\[\d+\] = MxBsdfLobe\([^\n]*/g) ?? [];
+    expect(lobes.filter(line => line.includes('MX_LOBE_GENERALIZED_SCHLICK'))).toHaveLength(2);
+    expect(lobes.filter(line => line.includes('MX_LOBE_DIELECTRIC_TRANSMISSION'))).toHaveLength(2);
+    expect(lobes.every(line => line.includes(', -1.0, '))).toBe(true);
+    expect(module.code).toContain('1.33');
+    expect(module.code).toContain('-log(clamp(');
+    expect(module.features?.transmission ?? true).toBe(true);
+    expect(diags.some(d => d.level === 'warning' && d.message.includes("LamaGeneralizedSchlick 'energyCompensation'"))).toBe(true);
+  });
+
   it('lowers LamaMix recursively while preserving connected child textures', () => {
     const graph = surfaceGraph('surface', [conn('bsdf', 'BSDF', 'mix')], [
       upstream('mix', 'LamaMix', 'BSDF', [

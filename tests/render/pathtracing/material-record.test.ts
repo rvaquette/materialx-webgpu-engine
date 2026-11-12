@@ -56,6 +56,16 @@ describe('T057b material-record codec', () => {
     expect(isVolumeBoundary(packLayeredMaterial(closure, medium))).toBe(false);
     expect(materialClosureReaderWgsl()).toContain('return mx_material_apply_volume(matIndex, c)');
   });
+  it('round-trips a paired generalized-Schlick interior tint', () => {
+    const closure: LayeredClosure = { opacity: 1, lobes: [
+      { kind: 'generalized_schlick', weight: 1, color: [0.04, 0.04, 0.04], color90: [1, 1, 1], fresnelExponent: 4,
+        roughness: 0.2, ior: 1.5, pairedDielectric: true, interiorTint: [0.2, 0.5, 0.8] },
+    ] };
+    const lobe = unpackLayeredMaterial(packLayeredMaterial(closure)).lobes[0]!;
+    expect(lobe.pairedDielectric).toBe(true);
+    expect(lobe.fresnelExponent).toBeCloseTo(4, 5);
+    lobe.interiorTint!.forEach((value, i) => expect(value).toBeCloseTo([0.2, 0.5, 0.8][i]!, 5));
+  });
   it('reports the largest packed lobe count, skipping graph-backed materials', () => {
     const lobe = { kind: 'burley_diffuse' as const, weight: 1, color: [1, 1, 1] as [number, number, number] };
     const one = packLayeredMaterial({ opacity: 1, lobes: [lobe] });

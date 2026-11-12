@@ -627,6 +627,10 @@ fn mx_conductor_exact_sample(lobe: MxBsdfLobe, c: LayeredClosure, wo: vec3f, u: 
 }
 
 fn mx_generalized_schlick_eval(lobe: MxBsdfLobe, c: LayeredClosure, wo: vec3f, wi: vec3f) -> MxBsdfEval {
+  if (lobe.thin < 0.0 && wo.z < 0.0) {
+    // Lama split interface: internal reflection (incl. TIR) uses the dielectric Fresnel.
+    return mx_lama_reflection_eval(MxLobeCtx(wo, lobe.hairTintTRT, lobe.roughness, lobe.ior, lobe.anisotropy, lobe.rotation, lobe.thin), wi);
+  }
   if (wo.z <= 0.0 || wi.z <= 0.0) { return MxBsdfEval(vec3f(0.0), 0.0); }
   var wor = wo;
   var wir = wi;
@@ -659,6 +663,9 @@ fn mx_generalized_schlick_eval(lobe: MxBsdfLobe, c: LayeredClosure, wo: vec3f, w
   return MxBsdfEval(value, pdf);
 }
 fn mx_generalized_schlick_sample(lobe: MxBsdfLobe, c: LayeredClosure, wo: vec3f, u: vec2f) -> MxBsdfSample {
+  if (lobe.thin < 0.0 && wo.z < 0.0) {
+    return mx_lama_reflection_sample(MxLobeCtx(wo, lobe.hairTintTRT, lobe.roughness, lobe.ior, lobe.anisotropy, lobe.rotation, lobe.thin), u);
+  }
   if (wo.z <= 0.0) { return MxBsdfSample(vec3f(0.0), vec3f(0.0), 0.0, false); }
   var wi: vec3f;
   if (lobe.anisotropy > 0.0) {
@@ -1118,10 +1125,11 @@ fn mx_closure_oriented_normal(c: LayeredClosure, n: vec3f, viewDir: vec3f) -> ve
   return -n;
 }
 fn mx_closure_selection_weight(lobe: MxBsdfLobe, wo: vec3f) -> f32 {
-  if (lobe.thin < 0.0 && (lobe.kind == MX_LOBE_DIELECTRIC_REFLECTION || lobe.kind == MX_LOBE_DIELECTRIC_TRANSMISSION)) {
+  if (lobe.thin < 0.0 && (lobe.kind == MX_LOBE_DIELECTRIC_REFLECTION || lobe.kind == MX_LOBE_DIELECTRIC_TRANSMISSION
+      || lobe.kind == MX_LOBE_GENERALIZED_SCHLICK)) {
     let eta = select(1.0 / lobe.ior, lobe.ior, wo.z > 0.0);
     let reflection = clamp(mx_fresnel_dielectric(abs(wo.z), eta), 0.02, 0.98);
-    return max(lobe.weight, 0.0) * select(1.0 - reflection, reflection, lobe.kind == MX_LOBE_DIELECTRIC_REFLECTION);
+    return max(lobe.weight, 0.0) * select(reflection, 1.0 - reflection, lobe.kind == MX_LOBE_DIELECTRIC_TRANSMISSION);
   }
   return max(lobe.weight, 0.0);
 }

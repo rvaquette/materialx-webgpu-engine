@@ -88,7 +88,7 @@ import { clearFallbackEnvironment } from '../../src/render/scene-resources.ts';
 import { compiledRasterShaderKey, loadCompiledScene } from '../../src/scene/compiled-scene.ts';
 import type { CompiledSceneRuntime } from '../../src/scene/compiled-scene.ts';
 import { rasterVolumeWgsl, RASTER_VOLUME_UNIFORM_BYTES } from '../../src/render/raster/volume-pass.ts';
-import { materialUniformData, packParameterUniforms } from '../../src/render/material-parameters.ts';
+import { materialUniformData, packParameterUniforms, uniformSceneMaterials } from '../../src/render/material-parameters.ts';
 
 let renderSession: {
   adapter: GPUAdapter;
@@ -560,9 +560,11 @@ export async function loadRenderScene(
   sink: (diagnostic: { level: string; message: string }) => void,
   phase: (name: string) => void,
   materialOverride?: string,
+  parameterMode: 'literal' | 'uniform' = 'literal',
 ) {
   if (/(?:^|\/)scene\.json$/i.test(entry)) {
     if (materialOverride !== undefined) throw new Error('Compiled scenes cannot use source material overrides.');
+    if (parameterMode === 'uniform') throw new Error('Compiled scenes cannot switch to uniform parameter mode.');
     const loaded = await loadCompiledScene(new URL(entry,document.baseURI).href,sink);
     phase('compiledSceneLoad');
     line('diag step: compiled scene restored (no USD/MaterialX import or BVH build)');
@@ -582,12 +584,17 @@ export async function loadRenderScene(
   phase('materialDocuments');
   const meshSource = await loadExternalMeshSource(scene,meshSourceFromScene(scene),sink);
   phase('geometryLoading');
-  const resources = await buildSceneResources(scene,{
+  const built = await buildSceneResources(scene,{
     meshSource,materialCompiler:createGraphMaterialCompiler({ documents:mtlx.documents,sink }),sink,
   });
-  requireCompiledMaterials(resources);
+  requireCompiledMaterials(built);
+  const resources = parameterMode === 'uniform' ? uniformSceneMaterials(built) : built;
   phase('sceneResources');
   line('diag step: scene resources built');
+  if (parameterMode === 'uniform') {
+    const counts = [...resources.materials.values()].map(material => material.surfaceModule?.uniforms.length ?? 0);
+    line(`diag params: mode=uniform materials=${counts.length} uniformFields=${counts.join(',')}`);
+  }
   return { scene,lights,cameras,envAsset,resources,...mtlx,compiled:undefined };
 }
 
@@ -1601,6 +1608,7 @@ export async function bootstrapUsdImage(
   maxSamplesPerDispatch = 1,
   benchmarkOptions?: PathTraceBenchmarkOptions,
   maxDepth?: number,
+  parameterMode: 'literal' | 'uniform' = 'literal',
 ): Promise<UsdSceneImage | null> {
   const started = performance.now();
   let phaseStarted = started;
@@ -1631,7 +1639,7 @@ export async function bootstrapUsdImage(
   delete state.__MX_SKIPPED__;
   const loaded = await loadRenderScene(entry, line, diagnostic => {
     if (diagnostic.level === 'warning' || diagnostic.level === 'error') line(`diag: ${diagnostic.message}`);
-  }, phase, materialOverride);
+  }, phase, materialOverride, parameterMode);
   const hasGeometry = loaded.resources.instances.some(instance =>
     instance.hasGeometry && (loaded.resources.geometries.get(instance.prototypeId)?.triangleCount ?? 0) > 0);
   if (!hasGeometry) {

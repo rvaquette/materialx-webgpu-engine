@@ -83,6 +83,8 @@ export interface ResolvedInput {
   editable?: boolean;
   /** Runtime uniform field assigned to an editable upstream input. */
   parameter?: string;
+  /** Unauthored nodedef default materialized only to back a runtime parameter. */
+  defaulted?: boolean;
   min?: readonly number[];
   max?: readonly number[];
   /** Declared colorspace carried from the input; never inferred. */

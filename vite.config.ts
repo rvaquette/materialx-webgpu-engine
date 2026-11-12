@@ -1,8 +1,9 @@
 /// <reference path="./vite-shims.d.ts" />
-import { defineConfig } from 'vite';
+import { defineConfig, configDefaults } from 'vitest/config';
 import { existsSync, readFileSync } from 'fs';
 import { extname, join, normalize } from 'path';
 import { fileURLToPath } from 'node:url';
+import { sceneBufferCachePlugin } from './scripts/pathtracer-cache-server.mjs';
 
 // The installed OpenUSD crate runtime requires shared memory and isolation.
 const crossOriginIsolationHeaders = {
@@ -78,6 +79,8 @@ const materialxAssets = {
 
 export default defineConfig({
   base: './',
+  // scripts/*.test.mjs use node:test and run through `node --test` (see npm test).
+  test: { exclude: [...configDefaults.exclude, 'scripts/**/*.test.mjs'] },
   optimizeDeps: { exclude: ['@bokuweb/zstd-wasm', '@mori2003/jsimgui'] },
   resolve: {
     alias: [{
@@ -86,7 +89,7 @@ export default defineConfig({
       replacement: fileURLToPath(new URL('./node_modules/@mori2003/jsimgui/build/loader-extensions-freetype.js', import.meta.url)),
     }],
   },
-  plugins: [materialxAssets],
+  plugins: [materialxAssets, sceneBufferCachePlugin(fileURLToPath(new URL('.', import.meta.url)))],
   server: { headers: crossOriginIsolationHeaders },
   preview: { headers: crossOriginIsolationHeaders },
   // MaterialX ships a .wasm binary that must be served as an asset, not inlined.

@@ -165,6 +165,30 @@ export function parameterValues(parameter: MaterialParameter, values: readonly n
   return [...values];
 }
 
+/** `editor`: per-instance copies honouring `editable` selections (viewer).
+ *  `uniform`: shared per material; every reachable float/color/vector literal,
+ *  including unauthored nodedef defaults, moves to the parameter buffer so
+ *  materials differing only by values compile to identical WGSL. */
+type ParameterPolicy = 'editor' | 'uniform';
+
+const UNIFORM_TYPES = new Set(['float', 'color3', 'vector2', 'vector3', 'vector4']);
+
+/** Nodes feeding the surface through connections; unrelated graph nodes (e.g. volume) keep literals. */
+function reachableNodes(material: MaterialResource): Set<string> {
+  const graph = material.surfaceGraph!;
+  const surface = material.resolvedSurface!;
+  const pending = [surface.nodeId, ...(surface.backNodeId ? [surface.backNodeId] : [])];
+  for (const input of surface.inputs.values()) if (input.source.kind === 'connection') pending.push(input.source.nodeId);
+  const seen = new Set<string>();
+  while (pending.length) {
+    const id = pending.pop()!;
+    if (seen.has(id)) continue;
+    seen.add(id);
+    for (const input of graph.nodes.get(id)?.inputs ?? []) if (input.source.kind === 'connection') pending.push(input.source.nodeId);
+  }
+  return seen;
+}
+
 /** Give each object independent values even when its original material is shared. */
 export function editableSceneMaterials(resources: SceneResources): SceneResources {
   const materials = new Map(resources.materials);
@@ -172,11 +196,33 @@ export function editableSceneMaterials(resources: SceneResources): SceneResource
     const material = instance.materialKey ? materials.get(instance.materialKey) : undefined;
     if (!material?.resolvedSurface || !material.surfaceGraph) return instance;
     const key = `${instance.materialKey}::editor::${instance.primPath}`;
+    materials.set(key, parameterizeMaterial({ ...material, unitKey: key, boundPrims: [instance.primPath] }, 'editor'));
+    return { ...instance, materialKey: key };
+  });
+  const used = new Set(instances.map(instance => instance.materialKey));
+  for (const key of materials.keys()) if (!used.has(key)) materials.delete(key);
+  return { ...resources, instances, materials };
+}
+
+/** Parameter-buffer mode: material values live in a uniform buffer instead of WGSL literals. */
+export function uniformSceneMaterials(resources: SceneResources): SceneResources {
+  const materials = new Map(resources.materials);
+  for (const key of new Set(resources.instances.map(instance => instance.materialKey))) {
+    const material = key ? materials.get(key) : undefined;
+    if (key && material?.resolvedSurface && material.surfaceGraph) materials.set(key, parameterizeMaterial(material, 'uniform'));
+  }
+  return { ...resources, materials };
+}
+
+function parameterizeMaterial(material: MaterialResource, policy: ParameterPolicy): MaterialResource {
+  {
+    if (!material.resolvedSurface || !material.surfaceGraph) throw new Error('Missing editable material graph.');
     const parameters: MaterialParameter[] = [];
     let inputs = new Map(material.resolvedSurface.inputs);
     const surfaceNode = material.surfaceGraph.nodes.get(material.resolvedSurface.nodeId);
-    const explicitSelection = [...material.surfaceGraph.nodes.values()].some(node =>
+    const explicitSelection = policy === 'editor' && [...material.surfaceGraph.nodes.values()].some(node =>
       node.inputs.some(input => input.editable !== undefined));
+    const reachable = policy === 'uniform' ? reachableNodes(material) : undefined;
     for (const [name, input] of inputs) {
       if (input.type === 'BSDF' || input.type === 'EDF') continue;
       const authored = surfaceNode?.inputs.find(candidate => candidate.name === name);
@@ -197,8 +243,29 @@ export function editableSceneMaterials(resources: SceneResources): SceneResource
     }
     // Expose literal inputs of reachable upstream nodes; connections remain intact.
     const graphNodes = new Map(material.surfaceGraph.nodes);
+    const rootId = material.resolvedSurface.nodeId;
+    const root = graphNodes.get(rootId);
+    if (root && material.resolvedSurface.backNodeId === rootId) {
+      // The back closure re-reads the root node from the graph: share the front uniforms.
+      const linked = parameters.filter(parameter => parameter.update === 'uniform' && parameter.uniform);
+      const inputsWithParameters = root.inputs.map(input => {
+        const parameter = linked.find(candidate => candidate.input === input.name);
+        return parameter && input.source.kind === 'value' ? { ...input, parameter: parameter.uniform! } : input;
+      });
+      for (const parameter of linked) {
+        const resolved = inputs.get(parameter.input);
+        if (root.inputs.some(input => input.name === parameter.input) || resolved?.source.kind !== 'default') continue;
+        inputsWithParameters.push({
+          name: parameter.input, type: parameter.type,
+          source: { kind: 'value', type: parameter.type, value: parameter.initial.join(', ') },
+          parameter: parameter.uniform!, defaulted: true, provenance: { namePath: `${rootId}/${parameter.input}` },
+        });
+      }
+      graphNodes.set(rootId, { ...root, inputs: inputsWithParameters });
+    }
     for (const [nodeId, node] of material.surfaceGraph.nodes) {
-      if (nodeId === material.resolvedSurface.nodeId) continue;
+      if (nodeId === rootId) continue;
+      if (reachable && !reachable.has(nodeId)) continue;
       const inputs = [
         ...node.inputs,
         ...(node.nodeDef?.inputs ?? []).filter(input => input.value !== undefined && !input.geomprop && !node.inputs.some(authored => authored.name === input.name))
@@ -214,8 +281,9 @@ export function editableSceneMaterials(resources: SceneResources): SceneResource
         const max = 'max' in input ? input.max : undefined;
         const values = input.source.value.trim() === 'true' ? [1] : input.source.value.trim() === 'false' ? [0]
           : input.source.value.split(',').map(Number);
-        const uniform = editable === true && (input.type === 'float' || input.type === 'color3')
-          ? `parameter_${parameters.length}` : undefined;
+        const promoted = policy === 'uniform' ? UNIFORM_TYPES.has(input.type)
+          : editable === true && (input.type === 'float' || input.type === 'color3');
+        const uniform = promoted ? `parameter_${parameters.length}` : undefined;
         const parameter: MaterialParameter = {
           id: JSON.stringify([nodeId, input.name]), label: `${nodeId} / ${input.name}`, type: input.type,
           value: values, initial: [...values], update: uniform ? 'uniform' : 'rebuild', nodeId, input: input.name,
@@ -227,21 +295,23 @@ export function editableSceneMaterials(resources: SceneResources): SceneResource
         parameters.push(parameter);
         if (uniform) {
           const current = graphNodes.get(nodeId)!;
+          const authored = current.inputs.some(candidate => candidate.name === input.name);
           graphNodes.set(nodeId, {
             ...current,
-            inputs: current.inputs.map(candidate => candidate.name === input.name ? { ...candidate, parameter: uniform } : candidate),
+            inputs: authored
+              ? current.inputs.map(candidate => candidate.name === input.name ? { ...candidate, parameter: uniform } : candidate)
+              : [...current.inputs, {
+                name: input.name, type: input.type, source: input.source, parameter: uniform, defaulted: true,
+                provenance: { namePath: `${nodeId}/${input.name}` },
+              }],
           });
         }
       }
     }
     const surface = applyFeatureStates({ ...material.resolvedSurface, inputs }, parameters);
     const surfaceGraph: ResolvedGraph = { ...material.surfaceGraph, nodes: graphNodes };
-    materials.set(key, compileEditableMaterial({ ...material, unitKey: key, boundPrims: [instance.primPath], surfaceGraph, resolvedSurface: surface, parameters }));
-    return { ...instance, materialKey: key };
-  });
-  const used = new Set(instances.map(instance => instance.materialKey));
-  for (const key of materials.keys()) if (!used.has(key)) materials.delete(key);
-  return { ...resources, instances, materials };
+    return compileEditableMaterial({ ...material, surfaceGraph, resolvedSurface: surface, parameters });
+  }
 }
 
 export function compileEditableMaterial(material: MaterialResource): MaterialResource {

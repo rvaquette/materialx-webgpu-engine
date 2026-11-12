@@ -55,7 +55,7 @@ describe('analytic converted lights', () => {
     const shader = pathTraceComputeWgsl({ analyticLights: true, opaque: true });
     expect(shader).toContain('@binding(9)');
     expect(shader).toContain('analyticLights[b + 1u].w * cosine * f32(mx_light_count())');
-    expect(shader).toContain('traverse(ro, rd, emitter.distance, false)');
+    expect(shader).toContain('traverse_min(ro, rd, emitter.distance, false,');
     expect(shader).toContain('light.distance - 2.0 * RAY_EPS');
     expect(shader).toContain('if (bounce >= i32(U.transport.x)) { break; }');
     expect(shader).not.toContain('mx_closure_eval(c, wo, wiLight)');

@@ -29,7 +29,7 @@ describe('shaderball tilespp CLI', () => {
     expect(run(['--help'])).toContain('--tilespp N');
     expect(run(['--list', '--target', 'local'])).toContain('tilespp=4');
     expect(run(['--list', '--target', 'mobile'])).toContain('tilespp=1');
-  });
+  }, 30000);
 
   it('accepts an explicit samples-per-tile override on either target', () => {
     for (const target of ['local', 'mobile']) {

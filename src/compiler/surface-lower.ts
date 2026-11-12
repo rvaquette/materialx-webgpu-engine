@@ -483,34 +483,52 @@ function lowerLamaBsdf(graph: ResolvedGraph, nodeId: string, frame?: LamaShading
     }
     case 'LamaGeneralizedSchlick': {
       const mode = nodeScalar(graph, nodeId, 'fresnelMode', 0);
-      const reflectivity = nodeColor(graph, nodeId, 'reflectivity', [0.04, 0.04, 0.04]);
-      const eta = nodeColor(graph, nodeId, 'IOR', [1.5, 1.5, 1.5]);
+      const exterior = Math.max(nodeScalar(graph, nodeId, 'exteriorIOR', 1), 1e-4);
+      const eta = nodeColor(graph, nodeId, 'IOR', [1.5, 1.5, 1.5]).map(value => Math.max(value / exterior, 1e-4)) as unknown as Rgb;
       const scientific = eta.map(value => ((value - 1) / (value + 1)) ** 2) as unknown as Rgb;
+      const f0 = mode === 1 ? scientific
+        : nodeColor(graph, nodeId, 'reflectivity', [0.04, 0.04, 0.04]).map(clamp01) as unknown as Rgb;
       const tint = nodeColor(graph, nodeId, 'reflectionTint', [1, 1, 1]);
-      const rawColor = mode === 0 ? reflectivity : scientific;
-      const color = rawColor.map((value, i) => value * tint[i]!) as unknown as Rgb;
-      const color90 = nodeColor(graph, nodeId, 'reflectivity90', [1, 1, 1]);
-      const profile = 1 / Math.max(nodeScalar(graph, nodeId, 'reflectivityProfile', 0.2), 1e-6);
-      const absorption = nodeColor(graph, nodeId, 'absorptionColor', [1, 1, 1]);
-      const radius = nodeScalar(graph, nodeId, 'absorptionRadius', 1);
-      const scattering = nodeColor(graph, nodeId, 'scatterColor', [0, 0, 0]);
-      const scatterAnisotropy = nodeScalar(graph, nodeId, 'scatterAnisotropy', 0);
-      const transmissionTint = nodeColor(graph, nodeId, 'transmissionTint', [1, 1, 1]);
-      const transmission: LayeredBsdfLobe = {
-        kind: 'dielectric_transmission', weight: 1, color: transmissionTint, roughness, ior: 1.5,
-        ...(radius > 0 && absorption.some(value => value > 0)
-          ? { attenuationColor: absorption.map(value => Math.exp(-value)) as unknown as Rgb, attenuationDistance: radius }
-          : {}),
-        ...(scattering.some(value => value > 0) ? { interiorScattering: scattering, interiorAnisotropy: scatterAnisotropy } : {}),
-        ...(anisotropy > 0 ? { anisotropy } : {}), ...(rotation > 0 ? { rotation } : {}),
+      const color = f0.map((value, i) => value * tint[i]!) as unknown as Rgb;
+      const color90 = nodeColor(graph, nodeId, 'reflectivity90', [1, 1, 1]).map(clamp01) as unknown as Rgb;
+      const exponent = 1 / Math.max(nodeScalar(graph, nodeId, 'reflectivityProfile', 0.2), 1e-6);
+      // Refraction IOR: the scientific IOR, or the IOR whose dielectric F0 matches the mean artistic reflectivity.
+      const meanF0 = Math.sqrt(Math.max(0, Math.min(0.999, (f0[0] + f0[1] + f0[2]) / 3)));
+      const ior = Math.max(mode === 1 ? (eta[0] + eta[1] + eta[2]) / 3 : (1 + meanF0) / (1 - meanF0) / exterior, 1e-4);
+      // Nodedef anisotropy is the co-tangent roughness (< 0: isotropic); map the alpha pair onto the engine aspect.
+      const coRoughness = anisotropy >= 0 ? clamp01(anisotropy) : roughness;
+      const alphaT = Math.max(roughness * roughness, 1e-3);
+      const alphaB = Math.max(coRoughness * coRoughness, 1e-3);
+      const ratio = alphaB / alphaT;
+      const aspect = Math.min(1 - Math.min(ratio, 1 / ratio), 0.98);
+      const lobeRotation = rotation + (ratio > 1 ? 0.25 : 0);
+      const shared = {
+        weight: 1, roughness: Math.sqrt(Math.sqrt(alphaT * alphaB)), ior, pairedDielectric: true,
+        ...(aspect > 0 ? { anisotropy: aspect } : {}),
+        ...(lobeRotation !== 0 ? { rotation: lobeRotation } : {}),
       };
-      return assemble([
+      const absorption = nodeColor(graph, nodeId, 'absorptionColor', [1, 1, 1]);
+      const radius = Math.max(nodeScalar(graph, nodeId, 'absorptionRadius', 1), 1e-6);
+      const scatter = nodeColor(graph, nodeId, 'scatterColor', [0, 0, 0]).map(clamp01) as unknown as Rgb;
+      const extinction = absorption.map(value => -Math.log(Math.max(1e-6, Math.min(1, value))) / radius) as unknown as Rgb;
+      const attenuationColor = absorption.map((value, channel) => Math.pow(Math.max(1e-6, Math.min(1, value)), 1 - scatter[channel]!)) as unknown as Rgb;
+      const scattering = extinction.map((value, channel) => value * scatter[channel]!) as unknown as Rgb;
+      const scatterAnisotropy = Math.max(-0.99, Math.min(0.99, nodeScalar(graph, nodeId, 'scatterAnisotropy', 0)));
+      const transmissionTint = nodeColor(graph, nodeId, 'transmissionTint', [1, 1, 1]);
+      const lobes: LayeredBsdfLobe[] = [
+        { kind: 'generalized_schlick', ...shared, color, color90, fresnelExponent: exponent, interiorTint: transmissionTint },
         {
-          kind: 'generalized_schlick', weight: 1, color, color90, roughness, fresnelExponent: profile,
-          ...(anisotropy > 0 ? { anisotropy } : {}), ...(rotation > 0 ? { rotation } : {}),
+          kind: 'dielectric_transmission', ...shared, color: transmissionTint,
+          ...(absorption.some(value => value < 1) ? { attenuationColor, attenuationDistance: radius } : {}),
+          ...(scattering.some(value => value > 0) ? { interiorScattering: scattering, interiorAnisotropy: scatterAnisotropy } : {}),
         },
-        transmission,
-      ], 1, {});
+      ];
+      const length = clamp01(nodeScalar(graph, nodeId, 'tailLength', 0.5));
+      const tail = length > 0 ? clamp01(nodeScalar(graph, nodeId, 'tailMix', 0)) : 0;
+      return assemble(tail > 0 ? [
+        ...lobes.map(lobe => ({ ...lobe, weight: 1 - tail })),
+        ...lobes.map(lobe => ({ ...lobe, weight: tail, roughness: shared.roughness + (1 - shared.roughness) * length })),
+      ] : lobes, 1, {});
     }
     case 'LamaSheen':
       return assemble([], 1, {

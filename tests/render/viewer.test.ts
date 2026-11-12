@@ -105,7 +105,7 @@ def Xform "World" {
     },
   });
   return {
-    entry: 'scene.usda', scene,
+    entry: 'https://example.test/scenes/source/scene.usda', scene,
     resources: editable ? editableSceneMaterials(resources) : resources,
     ...(editable ? { parameterResources: editableSceneMaterials(resources) } : {}), lights: [], cameras: [],
     mtlx: {
@@ -243,7 +243,7 @@ describe('interactive viewer resource lifecycle', () => {
     const actual = await vi.importActual<typeof import('../../src/render/pathtracing/scene-buffers.ts')>(
       '../../src/render/pathtracing/scene-buffers.ts');
     vi.mocked(buildCachedPathTraceScene).mockImplementation(actual.buildCachedPathTraceScene);
-    const { viewer, loaded, device, statuses } = await setup(true, true, 'pathtracing');
+    const { viewer, loaded, device, statuses } = await setup(false, true, 'pathtracing');
     const compiled = await exportCompiledScene(loaded);
     vi.mocked(buildCachedPathTraceScene).mockReset();
     vi.mocked(loadUsdScene).mockClear();

@@ -147,10 +147,29 @@ export function standardMaterial(name, v, { flipNormalY = true } = {}) {
   return `  <${family} name="${name}_surface" type="surfaceshader">\n${inputs.map(input => `    ${input}`).join('\n')}\n  </${family}>\n${nodes.join('\n')}${nodes.length ? '\n' : ''}  <surfacematerial name="${name}" type="material">\n    ${link('surfaceshader', 'surfaceshader', `${name}_surface`)}\n  </surfacematerial>`;
 }
 
+/** Top-level elements of a material and its upstream nodes, in document order. */
+function materialElements(xml, name) {
+  const elements = new Map([...xml.matchAll(/^ {2}<(\w+) name="([^"]+)"[^>]*?(?:\/>|>[\s\S]*?^ {2}<\/\1>)/gm)]
+    .map(match => [match[2], { index: match.index, text: match[0] }]));
+  if (!elements.get(name)?.text.startsWith('  <surfacematerial ')) return undefined;
+  const found = new Set();
+  const visit = node => {
+    const element = elements.get(node);
+    if (!element || found.has(element)) return;
+    found.add(element);
+    for (const [, upstream] of element.text.matchAll(/nodename="([^"]+)"/g)) visit(upstream);
+  };
+  visit(name);
+  return [...found].sort((a, b) => a.index - b.index).map(element => element.text);
+}
+
 export function repairMaterials(sourceRoot, outputRoot = ROOT, apply = false) {
   const defaults = surfaceDefaults(defaultLibraryRoot);
   const reports = [];
-  for (const scene of readdirSync(outputRoot).filter(name => name.endsWith('.usda')).sort()) {
+  // Hand-authored native scenes (no converted source) are outside this repair.
+  const scenes = readdirSync(outputRoot).filter(name => name.endsWith('.usda')
+    && existsSync(join(sourceRoot, name.replace('.usda', '.scene')))).sort();
+  for (const scene of scenes) {
     const source = readFileSync(join(sourceRoot, scene.replace('.usda', '.scene')), 'utf8');
     const materials = materialBlocks(source);
     const seen = new Set();
@@ -186,6 +205,11 @@ export function repairMaterials(sourceRoot, outputRoot = ROOT, apply = false) {
       ].includes(key));
       if (unsupported.length) throw new Error(`${scene}/${name}: unhandled fields ${unsupported.join(', ')}`);
       if (values.mediumtype && !['none', 'absorb'].includes(values.mediumtype)) {
+        const native = materialElements(oldXml, name);
+        if (native?.some(element => /type="volumeshader"/.test(element))) {
+          pieces.push(native.join('\n'));
+          continue;
+        }
         const message = `${name}: ${values.mediumtype} volume remains uncorrected; surface-only conversion cannot preserve it`;
         warnings.push(message);
         const surface = new RegExp(`  <disney_principled name="${name}_surface"[\\s\\S]*?</disney_principled>`).exec(oldXml)?.[0];

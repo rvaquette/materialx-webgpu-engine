@@ -154,6 +154,9 @@ interface LobeWgsl {
   active?: boolean;
 }
 
+const LAMA_SCHLICK_UNSUPPORTED = ['energyCompensation', 'shadowDensity', 'shadowColoring', 'shadowFresnelFront',
+  'shadowFresnelBack', 'surfaceMollification', 'motionMollification', 'lobeName', 'interiorId', 'matte'];
+
 const LAMA_INTERIOR_PRELUDE = `struct MxLamaInterior { sigmaA: vec3f, sigmaS: vec3f, g: f32 };
 ${sssCoefficientsWgsl('mx_lama_controls')}
 fn mx_lama_sss_medium(albedo: vec3f, mfp: vec3f, g: f32, ior: f32, inversion: f32) -> MxLamaInterior {
@@ -589,7 +592,9 @@ function directLobe(lobe: LayeredBsdfLobe): LobeWgsl {
     weight: staticFloat(lobe.weight),
     color: staticColor(lobe.color, [0, 0, 0]),
     ...(lobe.color90 ? { color90: staticColor(lobe.color90, [0, 0, 0]) } : {}),
-    ...(lobe.hairTintTRT ? { hairTintTRT: staticColor(lobe.hairTintTRT, [1, 1, 1]) } : {}),
+    ...(lobe.hairTintTRT ? { hairTintTRT: staticColor(lobe.hairTintTRT, [1, 1, 1]) }
+      : lobe.interiorTint ? { hairTintTRT: staticColor(lobe.interiorTint, [1, 1, 1]) } : {}),
+    ...(lobe.fresnelExponent !== undefined ? { fresnelExponent: staticFloat(lobe.fresnelExponent, 5) } : {}),
     ...(lobe.roughness !== undefined ? { roughness: staticFloat(lobe.roughness) } : {}),
     ...(lobe.anisotropy !== undefined ? { anisotropy: staticFloat(lobe.anisotropy) } : {}),
     ...(lobe.rotation !== undefined ? { rotation: staticFloat(lobe.rotation) } : {}),
@@ -822,7 +827,7 @@ function lowerLamaClosureWgsl(
       break;
     case 'LamaConductor': {
       for (const input of node.inputs) {
-        if (['surfaceMollification', 'motionMollification', 'lobeName', 'matte'].includes(input.name)) {
+        if (!input.defaulted && ['surfaceMollification', 'motionMollification', 'lobeName', 'matte'].includes(input.name)) {
           sink({ level: 'warning', message: `LamaConductor '${input.name}' is not implemented; no mollification or AOV output will be produced.`, detail: { nodeId, parameter: input.name } });
         }
       }
@@ -858,7 +863,7 @@ function lowerLamaClosureWgsl(
     }
     case 'LamaDielectric': {
       for (const input of node.inputs) {
-        if (['energyCompensation', 'shadowDensity', 'shadowColoring', 'shadowFresnelFront', 'shadowFresnelBack',
+        if (!input.defaulted && ['energyCompensation', 'shadowDensity', 'shadowColoring', 'shadowFresnelFront', 'shadowFresnelBack',
           'surfaceMollification', 'motionMollification', 'lobeName', 'interiorId', 'matte'].includes(input.name)) {
           sink({ level: 'warning', message: `LamaDielectric '${input.name}' is not implemented; this control has no effect.`, detail: { nodeId, parameter: input.name } });
         }
@@ -898,25 +903,59 @@ function lowerLamaClosureWgsl(
       break;
     }
     case 'LamaGeneralizedSchlick': {
-      const eta = ctx.col('IOR', [1.5, 1.5, 1.5]);
+      for (const input of node.inputs) {
+        if (!input.defaulted && LAMA_SCHLICK_UNSUPPORTED.includes(input.name)) {
+          sink({ level: 'warning', message: `LamaGeneralizedSchlick '${input.name}' is not implemented; this control has no effect.`, detail: { nodeId, parameter: input.name } });
+        }
+      }
+      const fresnelMode = ctx.s('fresnelMode', 0);
+      const exterior = `max(${ctx.s('exteriorIOR', 1)}, 1e-4)`;
+      const eta = `max(${ctx.col('IOR', [1.5, 1.5, 1.5])} / ${exterior}, vec3f(1e-4))`;
       const etaMinusOne = `(${eta} - vec3f(1.0))`;
       const etaPlusOne = `(${eta} + vec3f(1.0))`;
       const scientific = `((${etaMinusOne} * ${etaMinusOne}) / (${etaPlusOne} * ${etaPlusOne}))`;
-      const f0 = `select(${ctx.col('reflectivity', [0.04, 0.04, 0.04])}, ${scientific}, ${ctx.s('fresnelMode', 0)} == 1)`;
+      const f0 = `select(clamp(${ctx.col('reflectivity', [0.04, 0.04, 0.04])}, vec3f(0.0), vec3f(1.0)), ${scientific}, ${fresnelMode} == 1)`;
+      // Refraction IOR: the scientific IOR, or the IOR whose dielectric F0 matches the mean artistic reflectivity.
+      const meanF0 = `sqrt(clamp(dot(${f0}, vec3f(1.0 / 3.0)), 0.0, 0.999))`;
+      const ior = `max(select(((1.0 + ${meanF0}) / (1.0 - ${meanF0})) / ${exterior}, dot(${eta}, vec3f(1.0 / 3.0)), ${fresnelMode} == 1), 1e-4)`;
       const exponent = `(1.0 / max(${ctx.s('reflectivityProfile', 0.2)}, 1e-6))`;
       const absorption = ctx.col('absorptionColor', [1, 1, 1]);
       const radius = `max(${ctx.s('absorptionRadius', 1)}, 1e-6)`;
+      const extinction = `(-log(clamp(${absorption}, vec3f(1e-6), vec3f(1.0))) / ${radius})`;
+      const scatter = `clamp(${ctx.col('scatterColor', [0, 0, 0])}, vec3f(0.0), vec3f(1.0))`;
       result.interior = {
-        sigmaA: `(${absorption} / ${radius})`,
-        sigmaS: ctx.col('scatterColor', [0, 0, 0]),
-        g: ctx.s('scatterAnisotropy', 0),
+        sigmaA: `(${extinction} * (vec3f(1.0) - ${scatter}))`,
+        sigmaS: `(${extinction} * ${scatter})`,
+        g: `clamp(${ctx.s('scatterAnisotropy', 0)}, -0.99, 0.99)`,
       };
-      result.interiorActive = `(any(${absorption} < vec3f(1.0)) || any(${result.interior.sigmaS} > vec3f(0.0)))`;
+      result.interiorActive = `any(${extinction} > vec3f(0.0))`;
+      // Nodedef anisotropy is the co-tangent roughness (<= 0: isotropic). Map the
+      // (tangent, co-tangent) GGX alpha pair exactly onto the engine's area-preserving aspect.
+      const coRoughness = `select(${roughness}, clamp(${anisotropy}, 0.0, 1.0), ${anisotropy} >= 0.0)`;
+      const alphaT = `max(${roughness} * ${roughness}, 1e-3)`;
+      const alphaB = `max(${coRoughness} * ${coRoughness}, 1e-3)`;
+      const ratio = `(${alphaB} / ${alphaT})`;
+      const shared = {
+        roughness: `sqrt(sqrt(${alphaT} * ${alphaB}))`,
+        anisotropy: `min(1.0 - select(1.0 / ${ratio}, ${ratio}, ${ratio} < 1.0), 0.98)`,
+        rotation: `(${rotation} + select(0.0, 0.25, ${ratio} > 1.0))`,
+        thin: '-1.0', ior,
+      };
+      const transmissionTint = ctx.col('transmissionTint', [1, 1, 1]);
       result.lobes = [
         { kind: 'generalized_schlick', weight: '1.0', color: `(${f0} * ${ctx.col('reflectionTint', [1, 1, 1])})`,
-          color90: ctx.col('reflectivity90', [1, 1, 1]), roughness, anisotropy, rotation, fresnelExponent: exponent },
-        { kind: 'dielectric_transmission', weight: '1.0', color: ctx.col('transmissionTint', [1, 1, 1]), roughness, anisotropy, rotation, ior: '1.5' },
+          color90: `clamp(${ctx.col('reflectivity90', [1, 1, 1])}, vec3f(0.0), vec3f(1.0))`, fresnelExponent: exponent,
+          hairTintTRT: transmissionTint, ...shared },
+        { kind: 'dielectric_transmission', weight: '1.0', color: transmissionTint, ...shared },
       ];
+      if (nodeSurface.inputs.has('tailMix') || nodeSurface.inputs.has('tailLength')) {
+        const tailLength = `clamp(${ctx.s('tailLength', 0.5)}, 0.0, 1.0)`;
+        const tailMix = `(clamp(${ctx.s('tailMix', 0)}, 0.0, 1.0) * select(0.0, 1.0, ${tailLength} > 0.0))`;
+        result.lobes = [
+          ...result.lobes.map(lobe => ({ ...lobe, weight: `(1.0 - ${tailMix})` })),
+          ...result.lobes.map(lobe => ({ ...lobe, weight: tailMix, roughness: `mix(${shared.roughness}, 1.0, ${tailLength})` })),
+        ];
+      }
       result.transmission = true;
       break;
     }

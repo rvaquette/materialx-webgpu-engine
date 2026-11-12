@@ -938,9 +938,17 @@ export function lobeFromLayered(l: LayeredBsdfLobe, film?: ThinFilmLayer): Lobe 
         : aniso > 0
           ? conductorAnisoLobe(l.color, roughness, aniso, rotation)
           : conductorLobe(l.color, roughness);
-    case 'generalized_schlick':
-      return generalizedSchlickLobe(l.color, l.color90 ?? [1, 1, 1], roughness,
+    case 'generalized_schlick': {
+      const exterior = generalizedSchlickLobe(l.color, l.color90 ?? [1, 1, 1], roughness,
         l.fresnelExponent ?? 5, aniso, rotation, film);
+      if (!l.pairedDielectric) return exterior;
+      // Lama split interface: Schlick reflection outside, dielectric internal reflection (TIR) inside.
+      const interior = pairedDielectricReflectionLobe(l.interiorTint ?? [1, 1, 1], roughness, l.ior ?? 1.5, aniso, rotation);
+      return {
+        eval: (wo, wi) => (wo[2] >= 0 ? exterior : interior).eval(wo, wi),
+        sample: (wo, rng) => (wo[2] >= 0 ? exterior : interior).sample(wo, rng),
+      };
+    }
     case 'dielectric_reflection':
       if (l.pairedDielectric) return pairedDielectricReflectionLobe(l.color, roughness, l.ior ?? 1.5, aniso, rotation);
       return film
@@ -1111,7 +1119,7 @@ export function layeredSurfaceBsdf(closure: LayeredClosure, channel: 0 | 1 | 2 =
         const ior = adjusted.ior ?? 1.5;
         const eta = outgoing[2] > 0 ? ior : 1 / ior;
         const reflection = Math.max(0.02, Math.min(0.98, fresnelDielectric(Math.abs(outgoing[2]), eta)));
-        return l.weight * (adjusted.kind === 'dielectric_reflection' ? reflection : 1 - reflection);
+        return l.weight * (adjusted.kind === 'dielectric_transmission' ? 1 - reflection : reflection);
       } } : {}),
     });
   }

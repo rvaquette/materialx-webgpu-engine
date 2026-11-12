@@ -60,7 +60,9 @@
       const cacheMode = params.get('cache') ?? 'use';
       if (!['use', 'bypass', 'refresh', 'verify'].includes(cacheMode)) throw new Error('Invalid cache mode');
       const benchmark = params.has('benchmark') ? { cacheMode } : undefined;
-      await bootstrapUsdImage(entry, res, spp, backend, openpbr, exposure, firefly, skyPower, skyColor, camBack, dispScale, shadows, lightDir, tileSpp, benchmark, maxDepth);
+      const parameterMode = params.get('params') ?? 'literal';
+      if (parameterMode !== 'literal' && parameterMode !== 'uniform') throw new Error('params must be literal or uniform');
+      await bootstrapUsdImage(entry, res, spp, backend, openpbr, exposure, firefly, skyPower, skyColor, camBack, dispScale, shadows, lightDir, tileSpp, benchmark, maxDepth, parameterMode);
       } catch (e) {
         globalThis.__MX_IMAGE__ = null;
         const p = document.createElement('p');

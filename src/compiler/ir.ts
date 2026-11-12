@@ -345,6 +345,8 @@ export interface LayeredBsdfLobe {
   /** Thin-walled transmission: straight-through, no refraction bending. */
   thinWalled?: boolean;
   pairedDielectric?: boolean;
+  /** Paired generalized-schlick: tint of the internal (wo inside) dielectric reflection. */
+  interiorTint?: Rgb;
   /** Interior Beer-Lambert tint reached after attenuationDistance (glass volume). */
   attenuationColor?: Rgb;
   /** Reference distance for attenuationColor; absent/Infinity disables absorption. */

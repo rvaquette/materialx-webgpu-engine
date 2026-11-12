@@ -14,7 +14,7 @@
   <!-- Transmission is glass-like with internal volume scattering -->
   <standard_surface name="volume_surface" type="surfaceshader">
     <input name="base_color" type="color3" value="1, 1, 1" />
-    <input name="roughness" type="float" value="0.0" />
+    <input name="specular_roughness" type="float" value="0.0" />
     <input name="transmission" type="float" value="1" />
     <input name="transmission_color" type="color3" value="1, 1, 1" />
     <input name="subsurface_color" type="color3" value="0.8, 0.8, 0.8" />

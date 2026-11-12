@@ -20,6 +20,8 @@ import { join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 
 const CHROME = process.env.MX_CHROME ?? 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe';
+// Extra Chrome switches, e.g. MX_CHROME_FLAGS="--enable-dawn-features=use_dxc --use-webgpu-adapter=..."
+const CHROME_FLAGS = (process.env.MX_CHROME_FLAGS ?? '').split(/\s+/).filter(Boolean);
 const PORT = Number(process.env.MX_PORT ?? 5173);
 const RES = Number(process.argv[2] ?? 256);
 const SPP = Number(process.argv[3] ?? 160);
@@ -34,7 +36,7 @@ const OUTPUT_TAG = process.env.MX_OUTPUT_TAG ?? '';
 if (OUTPUT_TAG && !/^[a-zA-Z0-9_-]+$/.test(OUTPUT_TAG)) throw new Error('MX_OUTPUT_TAG must be a filename-safe identifier');
 const HARNESS_OPTIONS = new URLSearchParams(process.env.MX_HARNESS_QUERY ?? '');
 for (const name of HARNESS_OPTIONS.keys()) {
-  if (!['openpbr', 'skyPower', 'skyColor', 'firefly', 'exposure'].includes(name)) throw new Error(`Unsupported MX_HARNESS_QUERY option: ${name}`);
+  if (!['openpbr', 'skyPower', 'skyColor', 'firefly', 'exposure', 'params'].includes(name)) throw new Error(`Unsupported MX_HARNESS_QUERY option: ${name}`);
 }
 const HARNESS_PATH = '/usd-image-harness.html';
 const LOCAL_URL = `http://127.0.0.1:${PORT}${HARNESS_PATH}`;
@@ -172,6 +174,7 @@ async function main() {
       '--no-default-browser-check',
       '--enable-unsafe-webgpu',
       '--headless=new',
+      ...CHROME_FLAGS,
       `${LOCAL_URL}?session=1`,
     ],
     { stdio: 'ignore' },
@@ -192,9 +195,12 @@ async function main() {
     await send('Page.enable');
 
     mkdirSync(OUT_DIR, { recursive: true });
+    const total = SCENES.length * BACKENDS.length;
+    let index = 0;
     for (const { name, entry } of SCENES) {
       for (const backend of BACKENDS) {
-        log(`rendering ${name} [${backend}] @ ${RES}x${RES}${backend === 'pathtracing' ? `, ${SPP} spp` : ''}...`);
+        index++;
+        log(`[${index}/${total}] rendering ${name} [${backend}] @ ${RES}x${RES}${backend === 'pathtracing' ? `, ${SPP} spp` : ''}...`);
         const { dataUrl, renderMs, pageLog, benchmark } = await renderOne(send, entry, backend);
         if (process.env.MX_VERBOSE && pageLog) {
           for (const l of pageLog.split('\n')) if (l.trim()) console.log(`    ${l.trim()}`);

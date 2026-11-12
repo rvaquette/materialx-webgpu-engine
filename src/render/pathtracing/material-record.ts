@@ -80,6 +80,7 @@ const LOBE_HAS_SSS_TOPOLOGY = 524288;
 const LOBE_HAS_SSS_SUBSET = 1048576;
 const LOBE_HAS_SSS_CONTINUATION = 2097152;
 const LOBE_PAIRED_DIELECTRIC = 4194304;
+const LOBE_HAS_INTERIOR_TINT = 8388608;
 
 function rd(buf: ArrayLike<number>, i: number): number {
   return buf[i] ?? 0;
@@ -110,6 +111,7 @@ function writeLobe(out: Float32Array, base: number, lobe: LayeredBsdfLobe): void
   if (lobe.subsurfaceSubset !== undefined) flags |= LOBE_HAS_SSS_SUBSET;
   if (lobe.subsurfaceContinuation !== undefined) flags |= LOBE_HAS_SSS_CONTINUATION;
   if (lobe.pairedDielectric) flags |= LOBE_PAIRED_DIELECTRIC;
+  if (lobe.interiorTint !== undefined) flags |= LOBE_HAS_INTERIOR_TINT;
 
   out[base] = KIND_TO_U32[lobe.kind];
   out[base + 1] = lobe.weight;
@@ -140,7 +142,7 @@ function writeLobe(out: Float32Array, base: number, lobe: LayeredBsdfLobe): void
   out[base + 21] = radius[1];
   out[base + 22] = radius[2];
   out[base + 23] = lobe.subsurfaceTransport ?? lobe.dispersion ?? lobe.fresnelExponent ?? lobe.energyCompensation ?? lobe.interiorAnisotropy ?? 0;
-  const trt = lobe.hairTintTRT ?? (lobe.kind === 'subsurface' ? lobe.subsurfaceRadius ?? [0, 0, 0] : [1, 1, 1]);
+  const trt = lobe.hairTintTRT ?? lobe.interiorTint ?? (lobe.kind === 'subsurface' ? lobe.subsurfaceRadius ?? [0, 0, 0] : [1, 1, 1]);
   out[base + 24] = trt[0];
   out[base + 25] = trt[1];
   out[base + 26] = trt[2];
@@ -163,6 +165,9 @@ function readLobe(buf: ArrayLike<number>, base: number): LayeredBsdfLobe {
   if ((flags & LOBE_HAS_FRESNEL_EXPONENT) !== 0) lobe.fresnelExponent = rd(buf, base + 23);
   if ((flags & LOBE_HAS_HAIR_TRT) !== 0) {
     lobe.hairTintTRT = [rd(buf, base + 24), rd(buf, base + 25), rd(buf, base + 26)];
+  }
+  if ((flags & LOBE_HAS_INTERIOR_TINT) !== 0) {
+    lobe.interiorTint = [rd(buf, base + 24), rd(buf, base + 25), rd(buf, base + 26)];
   }
   if ((flags & LOBE_HAS_CONDUCTOR_ETA) !== 0) {
     lobe.conductorEta = [rd(buf, base + 6), rd(buf, base + 7), rd(buf, base + 8)];

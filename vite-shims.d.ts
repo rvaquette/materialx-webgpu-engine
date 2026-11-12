@@ -45,4 +45,7 @@ declare module 'node:url' {
   export function pathToFileURL(path: string): URL;
   export function fileURLToPath(url: string | URL): string;
 }
+declare module '*/pathtracer-cache-server.mjs' {
+  export function sceneBufferCachePlugin(root: string): import('vite').Plugin;
+}
 declare const process: { env: Record<string, string | undefined>; execPath: string };

@@ -51,7 +51,7 @@ import { uploadMaterialImage } from '../gpu/material-texture.ts';
 import type { OpenUsdModule } from '../usd/crate.ts';
 import { FloatType } from 'three';
 import { applySceneDisplacement } from './displacement.ts';
-import { editableSceneMaterials } from './material-parameters.ts';
+import { editableSceneMaterials, uniformSceneMaterials } from './material-parameters.ts';
 import type { CompiledSceneRuntime } from '../scene/compiled-scene.ts';
 
 /** App-relative paths also work when dist/ is served below the workspace root. */
@@ -429,6 +429,8 @@ export function applyObjectMaterialOverrides(
 
 export interface SceneLoadOptions {
   editableParameters?: boolean;
+  /** `uniform`: material literals live in a parameter buffer so value-only variants share one pipeline. */
+  parameterMode?: 'literal' | 'uniform';
   /** Explicit root for scene-authored MaterialX texture paths, not runtime overrides. */
   textureRoot?: string;
   loadCrateModule?: () => Promise<OpenUsdModule>;
@@ -488,7 +490,8 @@ export async function loadUsdScene(
     });
     requireCompiledMaterials(built);
     const parameterResources = options.editableParameters ? editableSceneMaterials(built) : undefined;
-    const resources = await applySceneDisplacement(parameterResources ?? built, mtlx.imageProvider);
+    const baseResources = parameterResources ?? (options.parameterMode === 'uniform' ? uniformSceneMaterials(built) : built);
+    const resources = await applySceneDisplacement(baseResources, mtlx.imageProvider);
     const environment = await loadEnvironment(lights, entry, sink);
     performance.measure('usd:resources', { start: materialsAt, end: performance.now(), detail: {
       entry, geometries: resources.geometries.size, materials: resources.materials.size,

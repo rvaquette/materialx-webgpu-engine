@@ -220,12 +220,50 @@ describe('surfaceGraphToLayered (T055b)', () => {
       input('fresnelMode', 'integer', '1'), input('IOR', 'vector3', '1.5, 1.4, 1.3'),
       input('reflectivity90', 'color3', '0.9, 0.8, 0.7'), input('reflectivityProfile', 'float', '0.25'),
       input('reflectionTint', 'color3', '0.5, 0.6, 0.7'), input('transmissionTint', 'color3', '0.8, 0.9, 1'),
+      input('absorptionColor', 'color3', '0.5, 0.5, 0.5'), input('absorptionRadius', 'float', '2'),
       input('scatterColor', 'color3', '0.1, 0.2, 0.3'), input('scatterAnisotropy', 'float', '0.4'),
+      input('exteriorIOR', 'float', '1.4'),
     ]));
     const schlick = surfaceGraphToLayered(resolveSurface(schlickGraph)!, schlickGraph);
     expect(schlick.lobes).toHaveLength(2);
-    expect(schlick.lobes[0]).toMatchObject({ kind: 'generalized_schlick', fresnelExponent: 4, color90: [0.9, 0.8, 0.7] });
-    expect(schlick.lobes[1]).toMatchObject({ kind: 'dielectric_transmission', color: [0.8, 0.9, 1], interiorScattering: [0.1, 0.2, 0.3], interiorAnisotropy: 0.4 });
+    expect(schlick.lobes[0]).toMatchObject({ kind: 'generalized_schlick', fresnelExponent: 4, color90: [0.9, 0.8, 0.7],
+      pairedDielectric: true, interiorTint: [0.8, 0.9, 1] });
+    expect(schlick.lobes[0]?.color?.[1]).toBe(0);
+    expect(schlick.lobes[0]?.ior).toBeCloseTo(1.4 / 1.4, 6);
+    expect(schlick.lobes[1]).toMatchObject({ kind: 'dielectric_transmission', color: [0.8, 0.9, 1], pairedDielectric: true,
+      attenuationDistance: 2, interiorAnisotropy: 0.4 });
+    expect(schlick.lobes[1]?.interiorScattering?.[0]).toBeCloseTo(Math.log(2) / 2 * 0.1, 6);
+    expect(schlick.lobes[1]?.attenuationColor?.[2]).toBeCloseTo(0.5 ** 0.7, 6);
+  });
+
+  it('maps LamaGeneralizedSchlick artistic F0, co-tangent anisotropy and tail', () => {
+    const graph = graphOf('surface', [connection('bsdf', 'BSDF', 'SCHLICK')]);
+    graph.nodes.set('SCHLICK', bsdfNode('SCHLICK', 'LamaGeneralizedSchlick', [
+      input('reflectivity', 'color3', '0.04, 0.04, 0.04'), input('roughness', 'float', '0.2'),
+      input('anisotropy', 'float', '0.4'), input('tailMix', 'float', '0.25'), input('tailLength', 'float', '0.5'),
+    ]));
+    const closure = surfaceGraphToLayered(resolveSurface(graph)!, graph);
+    expect(closure.lobes.map(lobe => lobe.kind)).toEqual(['generalized_schlick', 'dielectric_transmission',
+      'generalized_schlick', 'dielectric_transmission']);
+    const [main, , tail] = closure.lobes;
+    expect(main?.ior).toBeCloseTo(1.5, 6);
+    expect(main?.weight).toBe(0.75);
+    expect(tail?.weight).toBe(0.25);
+    // Co-tangent roughness 0.4 > tangent 0.2: alpha ratio 4, swapped onto the bitangent.
+    expect(main?.anisotropy).toBeCloseTo(0.75, 6);
+    expect(main?.rotation).toBeCloseTo(0.25, 6);
+    expect(main?.roughness).toBeCloseTo(Math.sqrt(0.2 * 0.4), 6);
+    expect(tail?.roughness).toBeCloseTo(main!.roughness! + (1 - main!.roughness!) * 0.5, 6);
+
+    const isotropic = graphOf('surface', [connection('bsdf', 'BSDF', 'SCHLICK')]);
+    isotropic.nodes.set('SCHLICK', bsdfNode('SCHLICK', 'LamaGeneralizedSchlick', [
+      input('roughness', 'float', '0.3'), input('anisotropy', 'float', '-1'),
+    ]));
+    const iso = surfaceGraphToLayered(resolveSurface(isotropic)!, isotropic);
+    expect(iso.lobes).toHaveLength(2);
+    expect(iso.lobes[0]?.anisotropy).toBeUndefined();
+    expect(iso.lobes[0]?.roughness).toBeCloseTo(0.3, 6);
+    expect(iso.lobes[1]?.attenuationColor).toBeUndefined();
   });
 
   it('combines LamaMix weights over connected BSDFs', () => {

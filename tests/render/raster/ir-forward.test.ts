@@ -66,7 +66,7 @@ describe('assembleIrForwardShader (T058b)', () => {
     expect(shader.code).toContain('if (frontFacing && facing < 0.0)');
     expect(shader.code).toContain('authoredNormal - 2.0 * facing * vary.viewDir');
     expect(shader.code).toContain('mx_closure_oriented_normal(c, authoredNormal, vary.viewDir)');
-    expect(shader.code).toContain('l.kind == MX_LOBE_DIELECTRIC_TRANSMISSION && l.thin == 0.0');
+    expect(shader.code).toContain('l.kind == MX_LOBE_DIELECTRIC_TRANSMISSION && l.thin <= 0.0');
   });
 
   it('offers filtered 16-sample interactive IBL without CDF searches or a second MIS strategy', () => {
@@ -121,7 +121,7 @@ describe('assembleIrForwardShader (T058b)', () => {
     expect(shader.code).not.toContain('mx_forward_smooth_sheet');
     expect(shader.code).not.toContain('case 8u: { return mx_dielectric_transmission_eval(ctx, wi); }');
     expect(shader.code).not.toContain('mx_microfacet_eval_tf(wo, wi');
-    expect(shader.code).toContain('case 4u: { return mx_conductor_eval(ctx, wi); }');
+    expect(shader.code).toMatch(/case 4u: \{\s+if \(lobe\.ior > 0\.5\) \{ return mx_conductor_exact_eval\(lobe, c, wo, wi\); \}\s+return mx_conductor_eval\(ctx, wi\);/);
     expect(shader.code).toContain('radiance = mx_forward_lighting(c, n, wo, sframe, fin.worldPos);');
     expect(shader.code).toContain('if (dielectricIndex >= 0) {');
   });

@@ -4,12 +4,14 @@ import { join } from 'node:path';
 import { materialBlocks, standardMaterial, repairMaterials } from '../../scripts/repair-pathtracer-materials.mjs';
 
 const sourceRoot = 'D:\\WebGL2\\GLSL-PathTracer-JS\\scenes\\pathtracer';
+// Hand-tuned in this repository (measured gold) after diverging from the external source scene.
+const handEdited = new Set(['test_material_disney_gold.usda']);
 
 describe('Pathtracer standard MaterialX conversion', () => {
   it.skipIf(!existsSync(sourceRoot))('regenerates compact materials and restored bindings without further changes', () => {
     const reports = repairMaterials(sourceRoot);
     expect(reports).toHaveLength(45);
-    expect(reports.filter(report => report.changed || report.stageChanged)).toEqual([]);
+    expect(reports.filter(report => !handEdited.has(report.scene) && (report.changed || report.stageChanged))).toEqual([]);
   });
 
   it('parses named materials without activating commented maps and records malformed source lines', () => {
@@ -67,7 +69,7 @@ describe('Pathtracer standard MaterialX conversion', () => {
   it('keeps every USDA MaterialX terminal present after repair, including restored originals', () => {
     const root = join(process.cwd(), 'scenes', 'pathtracer');
     const scenes = readdirSync(root).filter(name => name.endsWith('.usda'));
-    expect(scenes).toHaveLength(45);
+    expect(scenes).toHaveLength(50);
     let references = 0;
     for (const scene of scenes) {
       const stage = readFileSync(join(root, scene), 'utf8');

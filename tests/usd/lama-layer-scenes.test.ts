@@ -35,6 +35,7 @@ describe('LamaLayer gold IOR scenes', () => {
   it.each([
     { family: 'conductor', count: 21, unsupported: 4 },
     { family: 'dielectric', count: 34, unsupported: 10 },
+    { family: 'generalized_schlick', count: 34, unsupported: 10 },
   ])('imports every $family parameter scene with valid material assets and the common camera', async ({ family, count, unsupported }) => {
     const directory = join(SCENE_DIR, family);
     const coverage = JSON.parse(await readFile(join(directory, 'coverage.json'), 'utf8')) as { scene: string; parameter: string; status: string }[];

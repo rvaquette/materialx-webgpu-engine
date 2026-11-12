@@ -1,0 +1,216 @@
+[
+  {
+    "parameter": "clear",
+    "scene": "generalized_schlick_clear.usda",
+    "label": "Clear Schlick Glass",
+    "status": "implemented"
+  },
+  {
+    "parameter": "reflection_tint",
+    "scene": "generalized_schlick_reflection_tint.usda",
+    "label": "Reflection Tint",
+    "status": "implemented"
+  },
+  {
+    "parameter": "transmission_tint",
+    "scene": "generalized_schlick_transmission_tint.usda",
+    "label": "Transmission Tint",
+    "status": "implemented"
+  },
+  {
+    "parameter": "fresnel_artistic",
+    "scene": "generalized_schlick_fresnel_artistic.usda",
+    "label": "Fresnel Mode - Artistic",
+    "status": "implemented"
+  },
+  {
+    "parameter": "fresnel_scientific",
+    "scene": "generalized_schlick_fresnel_scientific.usda",
+    "label": "Fresnel Mode - Scientific",
+    "status": "implemented"
+  },
+  {
+    "parameter": "reflectivity",
+    "scene": "generalized_schlick_reflectivity.usda",
+    "label": "Reflectivity",
+    "status": "implemented"
+  },
+  {
+    "parameter": "reflectivity_color",
+    "scene": "generalized_schlick_reflectivity_color.usda",
+    "label": "Reflectivity - Colored (engine equivalent)",
+    "status": "engine-equivalent"
+  },
+  {
+    "parameter": "reflectivity90",
+    "scene": "generalized_schlick_reflectivity90.usda",
+    "label": "Reflectivity 90 (engine equivalent)",
+    "status": "engine-equivalent"
+  },
+  {
+    "parameter": "reflectivity_profile",
+    "scene": "generalized_schlick_reflectivity_profile.usda",
+    "label": "Reflectivity Profile (engine equivalent)",
+    "status": "engine-equivalent"
+  },
+  {
+    "parameter": "ior",
+    "scene": "generalized_schlick_ior.usda",
+    "label": "IOR",
+    "status": "implemented"
+  },
+  {
+    "parameter": "ior_rgb",
+    "scene": "generalized_schlick_ior_rgb.usda",
+    "label": "IOR - Per Channel (engine equivalent)",
+    "status": "engine-equivalent"
+  },
+  {
+    "parameter": "roughness",
+    "scene": "generalized_schlick_roughness.usda",
+    "label": "Roughness",
+    "status": "implemented"
+  },
+  {
+    "parameter": "normal_bump",
+    "scene": "generalized_schlick_normal_bump.usda",
+    "label": "Normal / Bump",
+    "status": "implemented"
+  },
+  {
+    "parameter": "tail_mix",
+    "scene": "generalized_schlick_tail_mix.usda",
+    "label": "Tail Mix (engine equivalent)",
+    "status": "engine-equivalent"
+  },
+  {
+    "parameter": "tail_length",
+    "scene": "generalized_schlick_tail_length.usda",
+    "label": "Tail Length (engine equivalent)",
+    "status": "engine-equivalent"
+  },
+  {
+    "parameter": "anisotropy",
+    "scene": "generalized_schlick_anisotropy.usda",
+    "label": "Anisotropy - Co-tangent Roughness",
+    "status": "implemented"
+  },
+  {
+    "parameter": "anisotropy_isotropic",
+    "scene": "generalized_schlick_anisotropy_isotropic.usda",
+    "label": "Anisotropy - Negative (isotropic)",
+    "status": "implemented"
+  },
+  {
+    "parameter": "anisotropy_direction",
+    "scene": "generalized_schlick_anisotropy_direction.usda",
+    "label": "Anisotropy Direction",
+    "status": "implemented"
+  },
+  {
+    "parameter": "anisotropy_rotation",
+    "scene": "generalized_schlick_anisotropy_rotation.usda",
+    "label": "Anisotropy Rotation",
+    "status": "implemented"
+  },
+  {
+    "parameter": "absorption_color",
+    "scene": "generalized_schlick_absorption_color.usda",
+    "label": "Absorption Color",
+    "status": "implemented"
+  },
+  {
+    "parameter": "absorption_radius",
+    "scene": "generalized_schlick_absorption_radius.usda",
+    "label": "Absorption Radius",
+    "status": "implemented"
+  },
+  {
+    "parameter": "scatter_color",
+    "scene": "generalized_schlick_scatter_color.usda",
+    "label": "Scatter Color",
+    "status": "implemented"
+  },
+  {
+    "parameter": "scatter_anisotropy",
+    "scene": "generalized_schlick_scatter_anisotropy.usda",
+    "label": "Scatter Anisotropy",
+    "status": "implemented"
+  },
+  {
+    "parameter": "exterior_ior",
+    "scene": "generalized_schlick_exterior_ior.usda",
+    "label": "Exterior IOR",
+    "status": "implemented"
+  },
+  {
+    "parameter": "energy_compensation",
+    "scene": "generalized_schlick_energy_compensation.usda",
+    "label": "Energy Compensation - NOT SUPPORTED",
+    "status": "unsupported",
+    "reason": "No generalized-Schlick multiple-scattering compensation is implemented."
+  },
+  {
+    "parameter": "shadow_density",
+    "scene": "generalized_schlick_shadow_density.usda",
+    "label": "Shadow Density - NOT SUPPORTED",
+    "status": "unsupported",
+    "reason": "Artistic transmission-shadow overrides are not implemented."
+  },
+  {
+    "parameter": "shadow_coloring",
+    "scene": "generalized_schlick_shadow_coloring.usda",
+    "label": "Shadow Coloring - NOT SUPPORTED",
+    "status": "unsupported",
+    "reason": "Colored transmission-shadow overrides are not implemented."
+  },
+  {
+    "parameter": "shadow_fresnel_front",
+    "scene": "generalized_schlick_shadow_fresnel_front.usda",
+    "label": "Shadow Fresnel Front - NOT SUPPORTED",
+    "status": "unsupported",
+    "reason": "Front-face shadow Fresnel overrides are not implemented."
+  },
+  {
+    "parameter": "shadow_fresnel_back",
+    "scene": "generalized_schlick_shadow_fresnel_back.usda",
+    "label": "Shadow Fresnel Back - NOT SUPPORTED",
+    "status": "unsupported",
+    "reason": "Back-face shadow Fresnel overrides are not implemented."
+  },
+  {
+    "parameter": "surface_mollification",
+    "scene": "generalized_schlick_surface_mollification.usda",
+    "label": "Surface Mollification - NOT SUPPORTED",
+    "status": "unsupported",
+    "reason": "Per-hit curvature/normal-variance data is not supplied."
+  },
+  {
+    "parameter": "motion_mollification",
+    "scene": "generalized_schlick_motion_mollification.usda",
+    "label": "Motion Mollification - NOT SUPPORTED",
+    "status": "unsupported",
+    "reason": "No time-dependent geometry or shutter data is supplied."
+  },
+  {
+    "parameter": "lobe_name",
+    "scene": "generalized_schlick_lobe_name.usda",
+    "label": "Lobe Name - NOT SUPPORTED",
+    "status": "unsupported",
+    "reason": "Named LPE/AOV routing is not implemented."
+  },
+  {
+    "parameter": "interior_id",
+    "scene": "generalized_schlick_interior_id.usda",
+    "label": "Interior Id - NOT SUPPORTED",
+    "status": "unsupported",
+    "reason": "Nested medium tracking by named interior ID is not implemented."
+  },
+  {
+    "parameter": "matte",
+    "scene": "generalized_schlick_matte.usda",
+    "label": "Matte - NOT SUPPORTED",
+    "status": "unsupported",
+    "reason": "Per-lobe final-weight AOV accumulation is not implemented."
+  }
+]
