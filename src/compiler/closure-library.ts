@@ -373,16 +373,54 @@ fn mx_oren_nayar_sample(lobe: MxBsdfLobe, wo: vec3f, u: vec2f) -> MxBsdfSample {
 }
 
 // --- translucent (diffuse transmission): cosine lobe in the far hemisphere -----
+fn mx_translucent_exponent(roughness: f32) -> f32 {
+  let r = clamp(roughness, 0.0, 1.0);
+  return 2.0 / max(r * r, 1.0e-4) - 2.0;
+}
+fn mx_translucent_power(ctx: MxLobeCtx, wi: vec3f, exponent: f32) -> f32 {
+  if (exponent == 0.0) { return 1.0; }
+  return pow(clamp((1.0 - dot(ctx.wo, wi)) * 0.5, 0.0, 1.0), exponent);
+}
 fn mx_translucent_eval(ctx: MxLobeCtx, wi: vec3f) -> MxBsdfEval {
   if (ctx.wo.z <= 0.0 || wi.z >= 0.0) { return MxBsdfEval(vec3f(0.0), 0.0); }
+  if (ctx.thin > 0.0) {
+    let exponent = mx_translucent_exponent(ctx.roughness);
+    let power = mx_translucent_power(ctx, wi, exponent);
+    let normalization = (exponent + 1.0) * (exponent + 2.0)
+      / (2.0 * MX_PI * (2.0 * exponent + exp2(-exponent)));
+    let r = clamp(ctx.roughness, 0.0, 1.0);
+    let pdf = r * (-wi.z / MX_PI) + (1.0 - r) * (exponent + 1.0) * power / (4.0 * MX_PI);
+    return MxBsdfEval(ctx.color * (normalization * power), pdf);
+  }
   return MxBsdfEval(ctx.color / MX_PI, -wi.z / MX_PI);
 }
 fn mx_translucent_pdf(ctx: MxLobeCtx, wi: vec3f) -> f32 {
-  if (ctx.wo.z <= 0.0 || wi.z >= 0.0) { return 0.0; }
-  return -wi.z / MX_PI;
+  return mx_translucent_eval(ctx, wi).pdf;
 }
 fn mx_translucent_sample(ctx: MxLobeCtx, u: vec2f) -> MxBsdfSample {
   if (ctx.wo.z <= 0.0) { return MxBsdfSample(vec3f(0.0), vec3f(0.0), 0.0, false); }
+  if (ctx.thin > 0.0) {
+    let r = clamp(ctx.roughness, 0.0, 1.0);
+    var wi: vec3f;
+    if (u.x < r) {
+      let h = mx_cosine_hemisphere(vec2f(u.x / r, u.y));
+      wi = vec3f(h.xy, -h.z);
+    } else {
+      let exponent = mx_translucent_exponent(r);
+      let cosine = 2.0 * pow((u.x - r) / (1.0 - r), 1.0 / (exponent + 1.0)) - 1.0;
+      let sine = sqrt(max(0.0, 1.0 - cosine * cosine));
+      let axis = -ctx.wo;
+      let signZ = select(-1.0, 1.0, axis.z >= 0.0);
+      let a = -1.0 / (signZ + axis.z);
+      let b = axis.x * axis.y * a;
+      let tangent = vec3f(1.0 + signZ * axis.x * axis.x * a, signZ * b, -signZ * axis.x);
+      let bitangent = vec3f(b, signZ + axis.y * axis.y * a, -axis.y);
+      wi = tangent * (sine * cos(2.0 * MX_PI * u.y))
+        + bitangent * (sine * sin(2.0 * MX_PI * u.y)) + axis * cosine;
+    }
+    let e = mx_translucent_eval(ctx, wi);
+    return MxBsdfSample(wi, e.value, e.pdf, e.pdf > 0.0);
+  }
   let h = mx_cosine_hemisphere(u);
   let wi = vec3f(h.x, h.y, -h.z);
   return MxBsdfSample(wi, ctx.color / MX_PI, -wi.z / MX_PI, true);
@@ -1309,7 +1347,7 @@ fn mx_closure_diffuse_albedo(c: LayeredClosure, wo: vec3f) -> vec3f {
     let l = c.lobes[i];
     if (l.weight <= 0.0) { continue; }
     if (l.kind == MX_LOBE_OREN_NAYAR_DIFFUSE || l.kind == MX_LOBE_BURLEY_DIFFUSE
-        || l.kind == MX_LOBE_TRANSLUCENT || l.kind == MX_LOBE_SHEEN
+        || (l.kind == MX_LOBE_TRANSLUCENT && l.thin <= 0.0) || l.kind == MX_LOBE_SHEEN
         || l.kind == MX_LOBE_SUBSURFACE) {
       a = a + l.color * l.weight;
     }
@@ -1358,7 +1396,7 @@ fn mx_closure_sampled_is_diffuse(c: LayeredClosure, wo: vec3f, uz: f32) -> bool 
   }
   let k = c.lobes[chosen].kind;
   return k == MX_LOBE_OREN_NAYAR_DIFFUSE || k == MX_LOBE_BURLEY_DIFFUSE
-      || k == MX_LOBE_TRANSLUCENT || k == MX_LOBE_SHEEN || k == MX_LOBE_SUBSURFACE;
+      || (k == MX_LOBE_TRANSLUCENT && c.lobes[chosen].thin <= 0.0) || k == MX_LOBE_SHEEN || k == MX_LOBE_SUBSURFACE;
 }
 // Specular-only closure response: the dielectric/conductor/schlick reflection
 // lobes, the glass transmission lobe and the dielectric coat. The diffuse lobes
@@ -1378,7 +1416,7 @@ fn mx_closure_specular_eval(c: LayeredClosure, wo: vec3f, wi: vec3f) -> MxBsdfEv
     if (l.weight <= 0.0) { continue; }
     if (l.kind == MX_LOBE_DIELECTRIC_REFLECTION || l.kind == MX_LOBE_CONDUCTOR
         || l.kind == MX_LOBE_GENERALIZED_SCHLICK || l.kind == MX_LOBE_DIELECTRIC_TRANSMISSION
-        || l.kind == MX_LOBE_CHIANG_HAIR) {
+        || l.kind == MX_LOBE_CHIANG_HAIR || (l.kind == MX_LOBE_TRANSLUCENT && l.thin > 0.0)) {
       specTotal = specTotal + mx_closure_selection_weight(l, baseWo);
     }
   }
@@ -1390,7 +1428,7 @@ fn mx_closure_specular_eval(c: LayeredClosure, wo: vec3f, wi: vec3f) -> MxBsdfEv
       if (lobe.weight <= 0.0) { continue; }
       if (!(lobe.kind == MX_LOBE_DIELECTRIC_REFLECTION || lobe.kind == MX_LOBE_CONDUCTOR
           || lobe.kind == MX_LOBE_GENERALIZED_SCHLICK || lobe.kind == MX_LOBE_DIELECTRIC_TRANSMISSION
-          || lobe.kind == MX_LOBE_CHIANG_HAIR)) { continue; }
+          || lobe.kind == MX_LOBE_CHIANG_HAIR || (lobe.kind == MX_LOBE_TRANSLUCENT && lobe.thin > 0.0))) { continue; }
       let r = mx_closure_lobe_eval(lobe, baseClosure, baseWo, baseWi);
       value = value + r.value * lobe.weight;
       pdf = pdf + (mx_closure_selection_weight(lobe, baseWo) / specTotal) * r.pdf;

@@ -11,6 +11,7 @@ import { describe, expect, it } from 'vitest';
 import {
   lambertLobe,
   translucentLobe,
+  directionalTranslucentLobe,
   conductorLobe,
   generalizedSchlickLobe,
   lobeFromLayered,
@@ -37,7 +38,7 @@ function normalize(a: V): V {
   const len = Math.hypot(a[0], a[1], a[2]);
   return len === 0 ? [0, 0, 1] : [a[0] / len, a[1] / len, a[2] / len];
 }
-const neg = (a: V): V => [-a[0], -a[1], -a[2]];
+const neg = (a: Vec3): V => [-a[0], -a[1], -a[2]];
 const maxc = (a: readonly number[]): number => Math.max(a[0]!, a[1]!, a[2]!);
 
 const WO: V = normalize([0.4, 0.1, 1.0]);
@@ -58,6 +59,73 @@ function uniformReflectance(lobe: Lobe, wo: V, rng: () => number, samples: numbe
 }
 
 describe('diffuse lobes (T044)', () => {
+  it.each([0, 0.1, 0.5, 1])('samples directional translucent roughness %s with matching eval and PDF', roughness => {
+    const lobe = directionalTranslucentLobe([0.8, 0.4, 0.2], roughness);
+    const rng = createPcg32(19);
+    for (let i = 0; i < 1024; i++) {
+      const sample = lobe.sample(WO, rng);
+      if (!sample) continue;
+      expect(sample.wi[2]).toBeLessThan(0);
+      expect(Math.hypot(...sample.wi)).toBeCloseTo(1, 9);
+      const ev = lobe.eval(WO, sample.wi);
+      expect(sample.value).toEqual(ev.value);
+      expect(sample.pdf).toBe(ev.pdf);
+      const reverse = lobe.eval(neg(sample.wi), neg(WO));
+      expect(reverse.value).toEqual(ev.value);
+    }
+    expect(lobe.eval(WO, WO)).toEqual({ value: [0, 0, 0], pdf: 0 });
+  });
+
+  it('broadens the transmitted silhouette and reaches the Lambert endpoint', () => {
+    const wo: V = [0, 0, 1];
+    const straight: V = [0, 0, -1];
+    const offAxis: V = normalize([0.5, 0, -1]);
+    const sharp = directionalTranslucentLobe([0.8, 0.4, 0.2], 0);
+    const blurry = directionalTranslucentLobe([0.8, 0.4, 0.2], 0.5);
+    expect(sharp.eval(wo, offAxis).value[0] / sharp.eval(wo, straight).value[0]).toBeLessThan(1e-8);
+    expect(blurry.eval(wo, offAxis).value[0] / blurry.eval(wo, straight).value[0]).toBeGreaterThan(0.5);
+    expect(blurry.eval(wo, straight).value[0] / blurry.eval(wo, straight).value[1]).toBeCloseTo(2, 12);
+    const diffuse = directionalTranslucentLobe([0.8, 0.4, 0.2], 1);
+    expect(diffuse.eval(WO, offAxis)).toEqual(translucentLobe([0.8, 0.4, 0.2]).eval(WO, offAxis));
+  });
+
+  it('reduces contrast across a black silhouette behind a thin sheet', () => {
+    const contrast = (roughness: number): number => {
+      const lobe = directionalTranslucentLobe([1, 1, 1], roughness);
+      const brightness = (x: number): number => {
+        const rng = createPcg32(43);
+        let sum = 0;
+        for (let i = 0; i < 16384; i++) {
+          const sample = lobe.sample([0, 0, 1], rng);
+          if (!sample) continue;
+          const behindX = x + sample.wi[0] / -sample.wi[2];
+          if (Math.abs(behindX) > 0.15) sum += sample.value[0] * -sample.wi[2] / sample.pdf;
+        }
+        return sum / 16384;
+      };
+      return brightness(0.3) - brightness(0);
+    };
+    expect(contrast(0)).toBeGreaterThan(0.9);
+    expect(contrast(0.35)).toBeLessThan(0.65);
+    expect(contrast(1)).toBeLessThan(0.15);
+  });
+
+  it.each([0, 0.25, 0.5, 1])('does not create energy at directional translucent roughness %s', roughness => {
+    const lobe = directionalTranslucentLobe([1, 1, 1], roughness);
+    const normal = hemisphericalReflectance(lobe, [0, 0, 1], createPcg32(29), 32768);
+    expect(normal[0]).toBeCloseTo(1, 1);
+    for (const wo of [WO, normalize([1, 0, 0.05])]) {
+      const energy = hemisphericalReflectance(lobe, wo, createPcg32(29), 32768)[0];
+      expect(energy).toBeGreaterThan(0);
+      expect(energy).toBeLessThanOrEqual(1.02);
+    }
+    if (roughness >= 0.25) {
+      const sampled = hemisphericalReflectance(lobe, WO, createPcg32(31), 32768);
+      const integrated = uniformReflectance(lobe, WO, createPcg32(37), 65536, true);
+      expect(sampled[0]).toBeCloseTo(integrated[0], 1);
+    }
+  });
+
   it('Lambert reflectance equals albedo with zero variance', () => {
     const albedo: V = [0.8, 0.6, 0.4];
     const rho = hemisphericalReflectance(lambertLobe(albedo), WO, createPcg32(1), 4096);

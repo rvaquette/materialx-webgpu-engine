@@ -156,7 +156,8 @@ fn mx_forward_specular_closure(c: LayeredClosure) -> LayeredClosure {
     let kind = spec.lobes[i].kind;
     if (!(kind == MX_LOBE_DIELECTRIC_REFLECTION || kind == MX_LOBE_CONDUCTOR
         || kind == MX_LOBE_GENERALIZED_SCHLICK || kind == MX_LOBE_DIELECTRIC_TRANSMISSION
-        || kind == MX_LOBE_CHIANG_HAIR)) {
+        || kind == MX_LOBE_CHIANG_HAIR
+        || (kind == MX_LOBE_TRANSLUCENT && spec.lobes[i].thin > 0.0))) {
       spec.lobes[i].weight = 0.0;
     }
   }
@@ -461,7 +462,7 @@ ${analyticLights ? `  var radiance = vec3f(0.0);
       if (light.pdf > 0.0) {
         let wi = transpose(sframe) * light.direction;
         let ev = mx_closure_eval(c, wo, wi);
-        let cosine = ${f.lobeKinds.includes(9) ? 'abs(dot(n, light.direction))' : 'max(dot(n, light.direction), 0.0)'};
+        let cosine = ${f.transmission || f.lobeKinds.includes(9) ? 'abs(dot(n, light.direction))' : 'max(dot(n, light.direction), 0.0)'};
         radiance += ev.value * light.radiance * (cosine / (light.pdf * f32(count * sampleCount)));
       }
     }
@@ -472,7 +473,7 @@ ${analyticLights ? `  var radiance = vec3f(0.0);
   let toLight = normalize(-fu.lightDir.xyz);
   let wiLight = transpose(sframe) * toLight;
   let ev = mx_closure_eval(c, wo, wiLight);
-  let cosL = ${f.lobeKinds.includes(9) ? 'abs(dot(n, toLight))' : 'max(dot(n, toLight), 0.0)'};
+  let cosL = ${f.transmission || f.lobeKinds.includes(9) ? 'abs(dot(n, toLight))' : 'max(dot(n, toLight), 0.0)'};
   var radiance = ev.value * (fu.lightColor.xyz * fu.lightColor.w) * cosL;
 `}
 

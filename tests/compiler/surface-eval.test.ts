@@ -223,13 +223,16 @@ function checker(): DecodedPixelImage {
 }
 
 describe('composeSurfaceLayered texture sampling (T057k)', () => {
-  it.each(['direct', 'surface'] as const)('evaluates LamaSheen image color and procedural roughness on a %s terminal', terminal => {
+  it.each([
+    ['LamaSheen', 'direct'], ['LamaSheen', 'surface'],
+    ['LamaTranslucent', 'direct'], ['LamaTranslucent', 'surface'],
+  ] as const)('evaluates %s image color and procedural roughness on a %s terminal', (family, terminal) => {
     const graph = imageGraph();
     const provenance = { namePath: '/mat/sheen' };
     const sheenNode: ResolvedNode = {
-      id: 'sheen', category: 'LamaSheen', type: 'BSDF', provenance,
+      id: 'sheen', category: family, type: 'BSDF', provenance,
       nodeDef: {
-        name: 'ND_lama_sheen', nodeString: 'LamaSheen', type: 'BSDF',
+        name: `ND_${family}`, nodeString: family, type: 'BSDF',
         implementation: { kind: 'nodegraph', name: 'IMPL_lama_sheen' },
         inputs: [
           { name: 'color', type: 'color3', value: '1, 1, 1' },
@@ -261,10 +264,10 @@ describe('composeSurfaceLayered texture sampling (T057k)', () => {
     const textures = { tex: createImageSampler(checker()) };
     const red = composeSurfaceLayered(prepared, { texcoord: [0.25, 0.75], textures });
     const green = composeSurfaceLayered(prepared, { texcoord: [0.75, 0.75], textures });
-    expect(red.sheen?.color).toEqual([1, 0, 0]);
-    expect(red.sheen?.roughness).toBeCloseTo(1, 12);
-    expect(green.sheen?.color).toEqual([0, 1, 0]);
-    expect(green.sheen?.roughness).toBeCloseTo(0.01, 12);
+    expect((red.sheen ?? red.lobes[0])?.color).toEqual([1, 0, 0]);
+    expect((red.sheen ?? red.lobes[0])?.roughness).toBeCloseTo(1, 12);
+    expect((green.sheen ?? green.lobes[0])?.color).toEqual([0, 1, 0]);
+    expect((green.sheen ?? green.lobes[0])?.roughness).toBeCloseTo(family === 'LamaSheen' ? 0.01 : 0, 12);
 
     graph.nodes.set('tex', {
       id: 'tex', category: 'convert', type: 'color3', provenance,
@@ -274,10 +277,10 @@ describe('composeSurfaceLayered texture sampling (T057k)', () => {
     const procedural = prepareSurface(graph, resolveSurface(graph)!);
     const a = composeSurfaceLayered(procedural, { position: [0.2, 0.4, 0.8] });
     const b = composeSurfaceLayered(procedural, { position: [0.8, 0.6, 0.2] });
-    expect(a.sheen?.color).toEqual([0.2, 0.4, 0.8]);
-    expect(a.sheen?.roughness).toBeCloseTo(0.0784, 12);
-    expect(b.sheen?.color).toEqual([0.8, 0.6, 0.2]);
-    expect(b.sheen?.roughness).toBeCloseTo(0.6724, 12);
+    expect((a.sheen ?? a.lobes[0])?.color).toEqual([0.2, 0.4, 0.8]);
+    expect((a.sheen ?? a.lobes[0])?.roughness).toBeCloseTo(family === 'LamaSheen' ? 0.0784 : 0.2, 12);
+    expect((b.sheen ?? b.lobes[0])?.color).toEqual([0.8, 0.6, 0.2]);
+    expect((b.sheen ?? b.lobes[0])?.roughness).toBeCloseTo(family === 'LamaSheen' ? 0.6724 : 0.8, 12);
   });
 
   it('drives base_color from a decoded texture sampled at the shading point', () => {

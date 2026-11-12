@@ -173,6 +173,43 @@ export function translucentLobe(albedo: Vec3): Lobe {
   };
 }
 
+/** Reciprocal thin-sheet blur, normalized at normal incidence; roughness 1 is Lambert. */
+export function directionalTranslucentLobe(albedo: Vec3, roughness: number): Lobe {
+  const r = clamp01(roughness);
+  const exponent = 2 / Math.max(r * r, 1e-4) - 2;
+  const normalization = (exponent + 1) * (exponent + 2)
+    / (2 * PI * (2 * exponent + 2 ** -exponent));
+  const evaluate = (wo: V, wi: V): BsdfEval => {
+    if (wo[2] <= 0 || wi[2] >= 0) return { value: [0, 0, 0], pdf: 0 };
+    const power = exponent === 0 ? 1 : clamp01((1 - dot(wo, wi)) * 0.5) ** exponent;
+    return {
+      value: scale(albedo, normalization * power),
+      pdf: r * -wi[2] * INV_PI + (1 - r) * (exponent + 1) * power / (4 * PI),
+    };
+  };
+  return {
+    eval: evaluate,
+    sample(wo, rng) {
+      if (wo[2] <= 0) return null;
+      const u = rng();
+      const v = rng();
+      let wi: V;
+      if (u < r) {
+        const h = cosineHemisphere(u / r, v);
+        wi = [h[0], h[1], -h[2]];
+      } else {
+        const cosine = 2 * ((u - r) / (1 - r)) ** (1 / (exponent + 1)) - 1;
+        const sine = Math.sqrt(Math.max(0, 1 - cosine * cosine));
+        const axis = scale(wo, -1);
+        const [t, b] = shadingFrame(axis);
+        wi = toWorld([sine * Math.cos(2 * PI * v), sine * Math.sin(2 * PI * v), cosine], t, b, axis);
+      }
+      const e = evaluate(wo, wi);
+      return e.pdf > 0 ? { wi, value: e.value, pdf: e.pdf, specular: false } : null;
+    },
+  };
+}
+
 /**
  * Subsurface scattering as a local shading lobe (T056g). The non-local BSSRDF
  * random walk in subsurface.ts (T029) exits the medium diffusely, and under the
@@ -943,7 +980,7 @@ export function lobeFromLayered(l: LayeredBsdfLobe, film?: ThinFilmLayer): Lobe 
     case 'burley_diffuse':
       return lambertLobe(l.color);
     case 'translucent':
-      return translucentLobe(l.color);
+      return l.thinWalled ? directionalTranslucentLobe(l.color, roughness) : translucentLobe(l.color);
     case 'conductor':
       if (l.conductorEta && l.extinction) {
         return exactConductorLobe(l.conductorEta, l.extinction, l.color, roughness, aniso, rotation, film, l.energyCompensation ?? 0);

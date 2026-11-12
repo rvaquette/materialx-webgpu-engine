@@ -48,6 +48,23 @@ function forward(category: string, inputs: ResolvedInput[]) {
 }
 
 describe('assembleIrForwardShader (T058b)', () => {
+  it('integrates directional translucency from the back hemisphere instead of front-side SH', () => {
+    const graph = surfaceGraph('surface', [{
+      name: 'bsdf', type: 'BSDF', source: { kind: 'connection', nodeId: 'trans' },
+      provenance: { namePath: '/mat/bsdf' },
+    }]);
+    graph.nodes.set('trans', {
+      id: 'trans', category: 'LamaTranslucent', type: 'BSDF',
+      inputs: [value('roughness', 'float', '0.5')], provenance: { namePath: '/mat/trans' },
+    });
+    const surface = emitLayeredSurface(graph, resolveSurface(graph)!);
+    expect(surface.features?.transmission).toBe(true);
+    const shader = assembleIrForwardShader(surface, { analyticLights: true });
+    expect(shader.code).toContain('let cosine = abs(dot(n, light.direction));');
+    expect(shader.code).toContain('(kind == MX_LOBE_TRANSLUCENT && spec.lobes[i].thin > 0.0)');
+    expect(shader.code).toContain('(l.kind == MX_LOBE_TRANSLUCENT && l.thin <= 0.0)');
+  });
+
   it.each(['interactive', 'reference'] as const)('uses physical area-light sampling in %s without the directional fallback', quality => {
     const { surface } = forward('standard_surface', []);
     const shader = assembleIrForwardShader(surface, { rasterQuality: quality, analyticLights: true });

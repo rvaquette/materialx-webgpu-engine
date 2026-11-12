@@ -25,6 +25,39 @@ const reader: UsdLayerReader = {
 };
 
 describe('LamaLayer gold IOR scenes', () => {
+  it('imports the translucent teapot with the common Lama setup and two editable controls', async () => {
+    const directory = join(SCENE_DIR, 'translucent');
+    const scene = await importUsdStage(join(directory, 'lama_translucent_color_roughness.usda'), { reader });
+    const reference = await importUsdStage(join(IRIDESCENCE_DIR, 'lama_iridescence_target_hue.usda'), { reader });
+    expect(scene.materials.find(entry => entry.primPath === '/World/Looks/translucent')).toMatchObject({
+      assetPath: './lama_translucent_color_roughness.mtlx',
+      referencedPrimPath: '/MaterialX/Materials/translucent_material',
+    });
+    expect(scene.prims.get('/World/Camera')?.attributes).toEqual(reference.prims.get('/World/Camera')?.attributes);
+    for (const name of ['Ground', 'Teapot', 'Stand']) {
+      const prim = scene.prims.get(`/World/Geometry/${name}`);
+      expect(prim?.attributes.get('engine:geometry:file')?.value)
+        .toEqual(reference.prims.get(`/World/Geometry/${name}`)?.attributes.get('engine:geometry:file')?.value);
+      expect(prim?.relationships.get('material:binding')?.targets)
+        .toEqual([name === 'Ground' ? '/World/Looks/ground' : '/World/Looks/translucent']);
+    }
+    for (const name of ['Environment', 'Key', 'Fill']) {
+      const attributes = scene.prims.get(`/World/Lights/${name}`)?.attributes;
+      expect(attributes).toBeDefined();
+      for (const [key, attribute] of reference.prims.get(`/World/Lights/${name}`)!.attributes) {
+        expect(attributes!.get(key)?.value).toEqual(attribute.value);
+      }
+    }
+    for (const entry of scene.materials) {
+      if (entry.assetPath) expect(existsSync(resolve(directory, entry.assetPath))).toBe(true);
+    }
+    const document = await readFile(join(directory, 'lama_translucent_color_roughness.mtlx'), 'utf8');
+    const editable = [...document.matchAll(/<input name="([^"]+)"[^>]*engine:editable="true"/g)].map(match => match[1]);
+    expect(editable).toEqual(['color', 'roughness']);
+    expect(document).toContain('<LamaTranslucent name="translucent" type="BSDF">');
+    expect(document).toContain('name="roughness" type="float" value="0.25"');
+  });
+
   it('imports the editable LamaSheen scene with common geometry and studio lights', async () => {
     const directory = join(SCENE_DIR, 'sheen');
     const scene = await importUsdStage(join(directory, 'lama_sheen_color_roughness.usda'), { reader });

@@ -98,6 +98,26 @@ function shade(closure: LayeredClosure, lighting: ReferenceLighting = defaultLig
 }
 
 describe('surfaceGraphToLayered (T055b)', () => {
+  it.each([-1, 0, 0.5, 1, 2])('preserves LamaTranslucent color and clamps directional roughness %s', roughness => {
+    const graph = graphOf('surface', [connection('bsdf', 'BSDF', 'TRANS')]);
+    graph.nodes.set('TRANS', bsdfNode('TRANS', 'LamaTranslucent', [
+      input('color', 'color3', '0.2, 0.6, 0.9'), input('roughness', 'float', String(roughness)),
+    ]));
+    const closure = surfaceGraphToLayered(resolveSurface(graph)!, graph);
+    expect(closure.lobes).toEqual([{
+      kind: 'translucent', weight: 1, color: [0.2, 0.6, 0.9],
+      roughness: Math.min(Math.max(roughness, 0), 1), thinWalled: true,
+    }]);
+  });
+
+  it('uses the LamaTranslucent default color and zero roughness', () => {
+    const graph = graphOf('surface', [connection('bsdf', 'BSDF', 'TRANS')]);
+    graph.nodes.set('TRANS', bsdfNode('TRANS', 'LamaTranslucent', []));
+    expect(surfaceGraphToLayered(resolveSurface(graph)!, graph).lobes[0]).toMatchObject({
+      color: [0.18, 0.18, 0.18], roughness: 0, thinWalled: true,
+    });
+  });
+
   it.each([-1, 0, 0.1, 0.5, 1, 2])('maps LamaSheen roughness %s without changing its color', roughness => {
     const graph = graphOf('surface', [connection('bsdf', 'BSDF', 'SHEEN')]);
     graph.nodes.set('SHEEN', bsdfNode('SHEEN', 'LamaSheen', [

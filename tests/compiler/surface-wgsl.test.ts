@@ -172,6 +172,7 @@ describe('emitLayeredSurface (T055d)', () => {
 
   it.each([
     ['LamaTranslucent', 'color', 'color3', 2],
+    ['LamaTranslucent', 'roughness', 'float', 2],
     ['LamaConductor', 'reflectivity', 'color3', 4],
     ['LamaDielectric', 'reflectionTint', 'color3', 3],
     ['LamaGeneralizedSchlick', 'reflectivity', 'color3', 5],

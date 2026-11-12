@@ -405,6 +405,8 @@ function lowerLamaBsdf(graph: ResolvedGraph, nodeId: string, frame?: LamaShading
       return assemble([{
         kind: 'translucent', weight: 1,
         color: nodeColor(graph, nodeId, 'color', [0.18, 0.18, 0.18]),
+        roughness: clamp01(nodeScalar(graph, nodeId, 'roughness', 0)),
+        thinWalled: true,
       }], 1, {});
     case 'LamaConductor': {
       const mode = nodeScalar(graph, nodeId, 'fresnelMode', 0);

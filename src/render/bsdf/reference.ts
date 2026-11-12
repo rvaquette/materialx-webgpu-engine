@@ -398,7 +398,11 @@ function evalLayeredLobe(lobe: LayeredBsdfLobe, geom: ShadingGeometry, lighting:
   const white: Vec3 = [1, 1, 1];
   const roughness = lobe.roughness ?? 0;
   switch (lobe.kind) {
+    case 'translucent':
     case 'chiang_hair': {
+      if (lobe.kind === 'translucent' && !lobe.thinWalled) {
+        return translucent(lobe.weight, lobe.color, geom, lighting);
+      }
       const bsdf = lobeFromLayered(lobe)!;
       const n = normalize(geom.normal);
       const view = normalize(geom.view);
@@ -428,8 +432,6 @@ function evalLayeredLobe(lobe: LayeredBsdfLobe, geom: ShadingGeometry, lighting:
       return orenNayarDiffuse(lobe.weight, lobe.color, roughness, geom, lighting);
     case 'burley_diffuse':
       return burleyDiffuse(lobe.weight, lobe.color, roughness, geom, lighting);
-    case 'translucent':
-      return translucent(lobe.weight, lobe.color, geom, lighting);
     case 'dielectric_reflection':
       return dielectric(lobe.weight, lobe.color, lobe.ior ?? 1.5, roughness, geom, lighting);
     case 'dielectric_transmission':

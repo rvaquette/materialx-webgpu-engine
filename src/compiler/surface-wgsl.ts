@@ -822,7 +822,10 @@ function lowerLamaClosureWgsl(
       }
       break;
     case 'LamaTranslucent':
-      result.lobes = [{ kind: 'translucent', weight: '1.0', color: ctx.col('color', [0.18, 0.18, 0.18]) }];
+      result.lobes = [{
+        kind: 'translucent', weight: '1.0', color: ctx.col('color', [0.18, 0.18, 0.18]),
+        roughness: `clamp(${ctx.s('roughness', 0)}, 0.0, 1.0)`, thin: '1.0',
+      }];
       result.transmission = true;
       break;
     case 'LamaConductor': {

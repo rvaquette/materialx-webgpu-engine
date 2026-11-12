@@ -32,6 +32,14 @@ function expectLobesClose(a: LayeredClosure, b: LayeredClosure): void {
 }
 
 describe('T057b material-record codec', () => {
+  it('preserves the directional translucent mode, color and roughness', () => {
+    const closure: LayeredClosure = { opacity: 1, lobes: [
+      { kind: 'translucent', weight: 1, color: [0.2, 0.6, 0.9], roughness: 0.35, thinWalled: true },
+    ] };
+    const decoded = unpackLayeredMaterial(packLayeredMaterial(closure));
+    expectLobesClose(closure, decoded);
+    expect(decoded.lobes[0]?.thinWalled).toBe(true);
+  });
   it('preserves HDR volume emission and rejects coefficients outside float32', () => {
     const closure: LayeredClosure = { lobes:[],opacity:1 };
     const medium = { absorption:[0,0,0] as const,scattering:[0,0,0] as const,

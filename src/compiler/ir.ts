@@ -342,7 +342,7 @@ export interface LayeredBsdfLobe {
   extinction?: Rgb;
   /** Conductor index eta for the exact Fresnel conductor model. */
   conductorEta?: Rgb;
-  /** Thin-walled transmission: straight-through, no refraction bending. */
+  /** Thin-walled transmission; translucent lobes use the directional-blur model. */
   thinWalled?: boolean;
   pairedDielectric?: boolean;
   /** Paired generalized-schlick: tint of the internal (wo inside) dielectric reflection. */

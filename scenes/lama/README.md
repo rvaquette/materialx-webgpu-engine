@@ -1,5 +1,19 @@
 # Lama Test Scenes
 
+## Editable translucent teapot
+
+Select **Lama - LamaTranslucent Color / Roughness**, then **Path tracing**.
+`translucent/lama_translucent_color_roughness.usda` reuses the common Lama
+teapot, stand, checker floor, camera, HDR environment and studio softboxes.
+The same translucent material covers the teapot and stand, with editable
+**Color** and **Roughness** in the **LamaTranslucent** UI folder.
+Roughness starts at 0.25. Reduce it to resolve the geometry behind the surface,
+then increase it to spread the transmitted light. Color tints that light.
+
+Raster cannot resolve the geometry behind a sheet; use path tracing. The blur is
+an engine approximation, not a verified match to RenderMan. Roughness 0
+has a small finite angular width rather than perfect delta transmission.
+
 ## Editable sheen teapot
 
 Select **Lama - LamaSheen Color / Roughness** in the viewer.

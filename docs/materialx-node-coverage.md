@@ -231,3 +231,29 @@ connection. It tints the sheen per channel without tinting the underlying base.
 a narrow grazing sheen, and high values broaden it across the surface. The
 default is white with authored roughness `0.1`. Other materials' sheen controls
 retain their existing mapping.
+
+## 9. LamaTranslucent Color and Roughness
+
+`LamaTranslucent.color` accepts constant colors, images and supported procedural
+connections. `roughness` accepts constant or connected scalars, clamped to
+`[0, 1]`, with default `0`. The default color is `(0.18, 0.18, 0.18)`.
+
+The engine uses a directional thin-sheet blur model, not a verified RenderMan
+BRDF. The reference MaterialX Lama node declares Roughness but does not connect
+it to its diffuse transmission implementation. Here low roughness transmits
+nearly straight through; increasing roughness blurs silhouettes, reaching
+Lambert transmission at 1. The generic `translucent_bsdf` remains unchanged.
+
+The reciprocal kernel is `C * ((1 - dot(wo, wi)) / 2)^n` in opposite
+hemispheres, where `n = 2 / max(roughness^2, 0.0001) - 2` and
+`C = (n+1)(n+2) / (2*pi*(2*n + 2^-n))`.
+It transmits the authored albedo at normal incidence and loses energy, rather
+than adding it, toward grazing incidence. The minimum width at roughness 0 is
+finite (roughly one degree), not a perfect delta transmission.
+CPU and WGSL use the same kernel and a mixture of forward-power and cosine
+sampling. The existing thin-walled lobe flag selects this model without
+changing the packed material format.
+
+Raster evaluates back lighting and the transmitted environment, but has no
+visibility rays for objects behind the sheet. Use path tracing to inspect
+silhouette blur in `lama/translucent/lama_translucent_color_roughness.usda`.
