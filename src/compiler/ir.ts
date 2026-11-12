@@ -398,8 +398,12 @@ export interface ThinFilmLayer {
   thickness: number;
   /** Film index of refraction. */
   ior: number;
-  /** Optional hue to map the film's 600 nm, normal-incidence reference color to. */
+  /** Optional target for all physical film hues; saturation/value are preserved, neutral disables mapping. */
   targetHue?: Rgb;
+  /** Multiplier of the physical incident angle; defaults to 1. */
+  incidentAngleScale?: number;
+  /** Offset in degrees after scaling; the resulting angle is clamped to [0, 90]. */
+  incidentAngleOffset?: number;
 }
 
 /** A surface lowered to its runtime closure stack. */

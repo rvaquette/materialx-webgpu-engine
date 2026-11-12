@@ -20,7 +20,8 @@ const rich: LayeredClosure = {
     mode: 'rough_coating', topThickness: 2, absorption: [0.1, 0.2, 0.3] },
   sheen: { weight: 0.3, color: [0.9, 0.9, 0.8], roughness: 0.3 },
   fuzz: { weight: 0.2, color: [0.5, 0.5, 0.5], roughness: 0.4 },
-  thinFilm: { weight: 1, thickness: 500, ior: 1.4, targetHue: [0.1, 0.8, 0.4] },
+  thinFilm: { weight: 1, thickness: 500, ior: 1.4, targetHue: [0.1, 0.8, 0.4],
+    incidentAngleScale: 0, incidentAngleOffset: -15 },
   emission: [2, 1, 0.5],
   opacity: 0.9,
 };
@@ -64,7 +65,8 @@ describe('LayeredClosure serialization (T055e1)', () => {
       mode: 'rough_coating', topThickness: 2, absorption: [0.1, 0.2, 0.3] });
     expect(s.sheen).toEqual({ weight: 0.3, color: [0.9, 0.9, 0.8], roughness: 0.3 });
     expect(s.fuzz).toEqual({ weight: 0.2, color: [0.5, 0.5, 0.5], roughness: 0.4 });
-    expect(s.thinFilm).toEqual({ weight: 1, thickness: 500, ior: 1.4, targetHue: [0.1, 0.8, 0.4] });
+    expect(s.thinFilm).toEqual({ weight: 1, thickness: 500, ior: 1.4, targetHue: [0.1, 0.8, 0.4],
+      incidentAngleScale: 0, incidentAngleOffset: -15 });
     expect(s.emission).toEqual([2, 1, 0.5]);
     expect(s.lobes[0]).toEqual({ kind: 'conductor', weight: 1, color: [0.8, 0.5, 0.2], roughness: 0.2, anisotropy: 0.3, rotation: 0.25 });
     expect(s.lobes[1]!.color90).toEqual([1, 1, 1]);

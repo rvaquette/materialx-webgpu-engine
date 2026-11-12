@@ -107,7 +107,7 @@ struct MxBsdfLobe {
 struct MxCoatLayer { weight: f32, color: vec3f, roughness: f32, ior: f32, mode: u32, topThickness: f32, sigmaA: vec3f };
 struct MxSheenLayer { weight: f32, color: vec3f, roughness: f32 };
 struct MxFuzzLayer { weight: f32, color: vec3f, roughness: f32 };
-struct MxThinFilmLayer { weight: f32, thickness: f32, ior: f32, targetHue: vec3f };
+struct MxThinFilmLayer { weight: f32, thickness: f32, ior: f32, targetHue: vec3f, incidentAngleScale: f32, incidentAngleOffset: f32 };
 struct LayeredClosure {
   lobes: array<MxBsdfLobe, MX_MAX_LOBES>,
   lobeCount: u32,
@@ -172,7 +172,7 @@ interface FamilyWgsl {
   coat?: { weight: string; color: string; roughness: string; ior: string; mode?: string; topThickness?: string; sigmaA?: string };
   sheen?: { weight: string; color: string; roughness: string };
   fuzz?: { weight: string; color: string; roughness: string };
-  thinFilm?: { weight: string; thickness: string; ior: string; targetHue?: string };
+  thinFilm?: { weight: string; thickness: string; ior: string; targetHue?: string; incidentAngleScale?: string; incidentAngleOffset?: string };
   emission?: string;
   opacity: string;
   /** Statically known to have a non-zero transmission weight (default: a transmission lobe exists). */
@@ -990,6 +990,8 @@ function lowerLamaClosureWgsl(
       result.thinFilm = {
         weight: '1.0', thickness: `mix(${min}, ${max}, ${relative})`, ior: ctx.s('filmIOR', 1.3),
         targetHue: ctx.col('targetHue', [1, 1, 1]),
+        incidentAngleScale: ctx.s('incidentAngleScale', 1),
+        incidentAngleOffset: ctx.s('incidentAngleOffset', 0),
       };
       break;
     }
@@ -1046,7 +1048,7 @@ function buildLamaSurfaceFn(
     if (value.coat) assigns.push(`  ${name}.hasCoat = 1u;`, `  ${name}.coat = MxCoatLayer(${value.coat.weight}, ${value.coat.color}, ${value.coat.roughness}, ${value.coat.ior}, ${value.coat.mode ?? '0u'}, ${value.coat.topThickness ?? '0.0'}, ${value.coat.sigmaA ?? 'vec3f(0.0)'});`);
     if (value.sheen) assigns.push(`  ${name}.hasSheen = 1u;`, `  ${name}.sheen = MxSheenLayer(${value.sheen.weight}, ${value.sheen.color}, ${value.sheen.roughness});`);
     if (value.fuzz) assigns.push(`  ${name}.hasFuzz = 1u;`, `  ${name}.fuzz = MxFuzzLayer(${value.fuzz.weight}, ${value.fuzz.color}, ${value.fuzz.roughness});`);
-    if (value.thinFilm) assigns.push(`  ${name}.hasThinFilm = 1u;`, `  ${name}.thinFilm = MxThinFilmLayer(${value.thinFilm.weight}, ${value.thinFilm.thickness}, ${value.thinFilm.ior}, ${value.thinFilm.targetHue ?? 'vec3f(1.0)'});`);
+    if (value.thinFilm) assigns.push(`  ${name}.hasThinFilm = 1u;`, `  ${name}.thinFilm = MxThinFilmLayer(${value.thinFilm.weight}, ${value.thinFilm.thickness}, ${value.thinFilm.ior}, ${value.thinFilm.targetHue ?? 'vec3f(1.0)'}, ${value.thinFilm.incidentAngleScale ?? '1.0'}, ${value.thinFilm.incidentAngleOffset ?? '0.0'});`);
     if (value.emission) assigns.push(`  ${name}.hasEmission = 1u;`, `  ${name}.emission = ${value.emission};`);
     if (value.shadingNormal) assigns.push(`  ${name}.hasShadingNormal = 1u;`, `  ${name}.shadingNormal = ${value.shadingNormal};`);
     if (value.shadingTangent) assigns.push(`  ${name}.hasShadingTangent = 1u;`, `  ${name}.shadingTangent = ${value.shadingTangent};`);
@@ -1134,7 +1136,7 @@ function buildGenericSurfaceFn(
   }
   if (closure.thinFilm) {
     const film = closure.thinFilm;
-    assigns.push(`  c.hasThinFilm = 1u;`, `  c.thinFilm = MxThinFilmLayer(${staticFloat(film.weight)}, ${staticFloat(film.thickness)}, ${staticFloat(film.ior, 1.5)}, ${film.targetHue ? staticColor(film.targetHue, [1, 1, 1]) : 'vec3f(1.0)'});`);
+    assigns.push(`  c.hasThinFilm = 1u;`, `  c.thinFilm = MxThinFilmLayer(${staticFloat(film.weight)}, ${staticFloat(film.thickness)}, ${staticFloat(film.ior, 1.5)}, ${film.targetHue ? staticColor(film.targetHue, [1, 1, 1]) : 'vec3f(1.0)'}, ${staticFloat(film.incidentAngleScale, 1)}, ${staticFloat(film.incidentAngleOffset, 0)});`);
   }
   if (closure.emission) assigns.push(`  c.hasEmission = 1u;`, `  c.emission = ${staticColor(closure.emission, [0, 0, 0])};`);
   assigns.push(`  c.opacity = ${staticFloat(closure.opacity, 1)};`);
@@ -1247,7 +1249,7 @@ function buildSurfaceFn(
   if (fam.coat) assigns.push(`  c.hasCoat = 1u;`, `  c.coat = MxCoatLayer(${fam.coat.weight}, ${fam.coat.color}, ${fam.coat.roughness}, ${fam.coat.ior}, 0u, 0.0, vec3f(0.0));`);
   if (fam.sheen) assigns.push(`  c.hasSheen = 1u;`, `  c.sheen = MxSheenLayer(${fam.sheen.weight}, ${fam.sheen.color}, ${fam.sheen.roughness});`);
   if (fam.fuzz) assigns.push(`  c.hasFuzz = 1u;`, `  c.fuzz = MxFuzzLayer(${fam.fuzz.weight}, ${fam.fuzz.color}, ${fam.fuzz.roughness});`);
-  if (fam.thinFilm) assigns.push(`  c.hasThinFilm = 1u;`, `  c.thinFilm = MxThinFilmLayer(${fam.thinFilm.weight}, ${fam.thinFilm.thickness}, ${fam.thinFilm.ior}, ${fam.thinFilm.targetHue ?? 'vec3f(1.0)'});`);
+  if (fam.thinFilm) assigns.push(`  c.hasThinFilm = 1u;`, `  c.thinFilm = MxThinFilmLayer(${fam.thinFilm.weight}, ${fam.thinFilm.thickness}, ${fam.thinFilm.ior}, ${fam.thinFilm.targetHue ?? 'vec3f(1.0)'}, ${fam.thinFilm.incidentAngleScale ?? '1.0'}, ${fam.thinFilm.incidentAngleOffset ?? '0.0'});`);
   if (fam.emission) assigns.push(`  c.hasEmission = 1u;`, `  c.emission = ${fam.emission};`);
   assigns.push(`  c.opacity = ${fam.opacity};`);
 

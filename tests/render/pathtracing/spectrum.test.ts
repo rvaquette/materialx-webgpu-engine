@@ -7,11 +7,13 @@ import {
   LAMBDA_MIN,
   mapThinFilmHue,
   rotateRgbHue,
+  remapThinFilmCosine,
   sampleWavelength,
   sellmeierIor,
   spectrumToLinearSrgb,
   spectrumToXYZ,
   thinFilmColor,
+  thinFilmTint,
   thinFilmReflectance,
   xyzToLinearSrgb,
 } from '../../../src/render/pathtracing/spectrum.ts';
@@ -65,6 +67,14 @@ describe('dispersion', () => {
 });
 
 describe('thin film interference', () => {
+  it('remaps incident angles with scale and degree offset, clamping to the physical range', () => {
+    const cosine = Math.cos(Math.PI / 6);
+    expect(remapThinFilmCosine(cosine)).toBe(cosine);
+    expect(remapThinFilmCosine(cosine, 2, 15)).toBeCloseTo(Math.cos(75 * Math.PI / 180), 12);
+    expect(remapThinFilmCosine(cosine, 0, 45)).toBeCloseTo(Math.SQRT1_2, 12);
+    expect(remapThinFilmCosine(cosine, 1, -90)).toBe(1);
+    expect(remapThinFilmCosine(cosine, 4, 90)).toBeCloseTo(0, 12);
+  });
   it('reduces to a bare interface at zero thickness', () => {
     const r = thinFilmReflectance(550, 0, 1, 1, 1.3, 1.5);
     const fresnel = ((1 - 1.5) / (1 + 1.5)) ** 2;
@@ -97,12 +107,34 @@ describe('thin film interference', () => {
     expect(maxC - minC).toBeGreaterThan(0.01);
   });
 
-  it('maps a selected target hue from the reference film color and leaves neutral targets unchanged', () => {
+  it('maps each physical hue to the selected hue and leaves neutral colors unchanged', () => {
     const color: Vec3 = [0.8, 0.3, 0.1];
-    expect(mapThinFilmHue(color, [1, 1, 1], [0.1, 0.8, 0.3])).toEqual(color);
-    mapThinFilmHue([1, 0, 0], [0, 1, 0], [1, 0, 0]).forEach((value, index) =>
+    expect(mapThinFilmHue(color, [1, 1, 1])).toEqual(color);
+    expect(mapThinFilmHue(color, [0, 0, 0])).toEqual(color);
+    expect(mapThinFilmHue([0.3, 0.3, 0.3], [1, 0, 0])).toEqual([0.3, 0.3, 0.3]);
+    mapThinFilmHue([1, 0, 0], [0, 1, 0]).forEach((value, index) =>
       expect(value).toBeCloseTo([0, 1, 0][index]!, 12));
     rotateRgbHue([1, 0, 0], 1 / 3).forEach((value, index) =>
       expect(value).toBeCloseTo([0, 1, 0][index]!, 12));
+  });
+
+  it.each([
+    [1, 0, 0], [1, 1, 0], [1, 0, 1], [0, 1, 1], [0.05, 0.65, 0.85],
+  ] as Vec3[])('keeps target %j dominant over film thickness and incidence', (...target) => {
+    const targetMin = Math.min(...target);
+    const targetChroma = Math.max(...target) - targetMin;
+    for (const thickness of [400, 430, 600, 800]) {
+      for (const cosine of [1, 0.8, 0.5, 0.2]) {
+        const physical = thinFilmTint(thickness, cosine, 1.3, [0, 0, 0]);
+        const mapped = mapThinFilmHue(physical, target);
+        const minimum = Math.min(...physical);
+        const maximum = Math.max(...physical);
+        for (let channel = 0; channel < 3; channel++) {
+          expect(mapped[channel]).toBeCloseTo(
+            minimum + (maximum - minimum) * (target[channel]! - targetMin) / targetChroma, 10,
+          );
+        }
+      }
+    }
   });
 });

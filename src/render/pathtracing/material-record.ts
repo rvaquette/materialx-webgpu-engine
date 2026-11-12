@@ -23,7 +23,7 @@ export const PT_MAX_LOBES = 8;
 export const PT_LOBE_FLOATS = 27;
 
 /** f32 count of the per-material header that precedes the lobe array. */
-export const PT_MATERIAL_HEADER_FLOATS = 55;
+export const PT_MATERIAL_HEADER_FLOATS = 57;
 
 /** f32 stride of one complete packed material record. */
 export const PT_MATERIAL_RECORD_FLOATS =
@@ -248,6 +248,8 @@ export function packLayeredMaterial(closure: LayeredClosure, medium?: VolumeMedi
     out[26] = t.weight;
     out[27] = t.thickness;
     out[28] = t.ior;
+    out[55] = t.incidentAngleScale ?? 1;
+    out[56] = t.incidentAngleOffset ?? 0;
     if (t.targetHue) {
       out.set(t.targetHue, 51);
       out[54] = 1;
@@ -327,6 +329,8 @@ export function unpackLayeredMaterial(
       thickness: rd(buf, base + 27),
       ior: rd(buf, base + 28),
       ...(rd(buf, base + 54) !== 0 ? { targetHue: [rd(buf, base + 51), rd(buf, base + 52), rd(buf, base + 53)] as Rgb } : {}),
+      ...(rd(buf, base + 55) !== 1 ? { incidentAngleScale: rd(buf, base + 55) } : {}),
+      ...(rd(buf, base + 56) !== 0 ? { incidentAngleOffset: rd(buf, base + 56) } : {}),
     };
   }
   if (Math.round(rd(buf, base + 6)) !== 0) {
@@ -459,7 +463,8 @@ fn mx_material_closure(matIndex : u32) -> LayeredClosure {
   c.sheen = MxSheenLayer(materials[base + 16u], vec3f(materials[base + 17u], materials[base + 18u], materials[base + 19u]), materials[base + 20u]);
   c.fuzz = MxFuzzLayer(materials[base + 21u], vec3f(materials[base + 22u], materials[base + 23u], materials[base + 24u]), materials[base + 25u]);
   c.thinFilm = MxThinFilmLayer(materials[base + 26u], materials[base + 27u], materials[base + 28u],
-    select(vec3f(1.0), vec3f(materials[base + 51u], materials[base + 52u], materials[base + 53u]), materials[base + 54u] != 0.0));
+    select(vec3f(1.0), vec3f(materials[base + 51u], materials[base + 52u], materials[base + 53u]), materials[base + 54u] != 0.0),
+    materials[base + 55u], materials[base + 56u]);
   for (var i : u32 = 0u; i < MX_MAX_LOBES; i = i + 1u) {
     if (i < lobeCount) {
       c.lobes[i] = mx_material_lobe(base + MX_MATERIAL_HEADER_FLOATS + i * MX_LOBE_FLOATS);

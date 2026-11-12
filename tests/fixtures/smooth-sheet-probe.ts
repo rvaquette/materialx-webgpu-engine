@@ -39,7 +39,7 @@ fn probe(@builtin(global_invocation_id) id: vec3u) {
     case 10u: { c.lobes[0].ior = 1.5; c.lobes[1].ior = 1.5; }
     case 11u: {
       c.hasThinFilm = 1u;
-      c.thinFilm = MxThinFilmLayer(1.0, 500.0, 1.4, vec3f(1.0));
+      c.thinFilm = MxThinFilmLayer(1.0, 500.0, 1.4, vec3f(1.0), 1.0, 0.0);
     }
     default: {}
   }

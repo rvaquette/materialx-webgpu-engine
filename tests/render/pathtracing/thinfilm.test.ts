@@ -19,6 +19,7 @@ import { createPcg32 } from '../../../src/render/pathtracing/integrator.ts';
 import type { LayeredClosure } from '../../../src/compiler/ir.ts';
 import type { Vec3 } from '../../../src/scene/transforms.ts';
 import type { ThinFilmLayer } from '../../../src/compiler/ir.ts';
+import { mapThinFilmHue, remapThinFilmCosine, thinFilmTint } from '../../../src/render/pathtracing/spectrum.ts';
 
 type V = [number, number, number];
 const normalize = (a: V): V => {
@@ -87,8 +88,9 @@ describe('thin-film specular modulation (T056f)', () => {
     expect(mappedValue.every(Number.isFinite)).toBe(true);
   });
 
-  it('balances iridescent reflection with complementary thin-walled transmission', () => {
-    const film: ThinFilmLayer = { weight: 1, thickness: 430, ior: 1.3, targetHue: [0.1, 0.8, 0.4] };
+  it.each([[1, 0], [2, 15], [0, 45]])('balances reflection/transmission with angle scale %s and offset %s', (scale, offset) => {
+    const film: ThinFilmLayer = { weight: 1, thickness: 430, ior: 1.3, targetHue: [0.1, 0.8, 0.4],
+      incidentAngleScale: scale, incidentAngleOffset: offset };
     const roughness = 0.2;
     const bsdf = layeredSurfaceBsdf({
       opacity: 1,
@@ -103,17 +105,23 @@ describe('thin-film specular modulation (T056f)', () => {
     const transmitted = bsdf.eval(outgoing, [0, 0, -1]).value;
     const uncoatedTransmission = thinWalledTransmissionLobe([1, 1, 1], roughness, 1)
       .eval(outgoing, [0, 0, -1]).value;
+    const expectedFresnel = mapThinFilmHue(
+      thinFilmTint(film.thickness, remapThinFilmCosine(1, scale, offset), film.ior, [0, 0, 0]),
+      film.targetHue!,
+    );
 
     for (let channel = 0; channel < 3; channel++) {
       expect(reflected[channel]).toBeGreaterThan(0);
       expect(transmitted[channel]).toBeGreaterThan(0);
       expect(reflected[channel]! + transmitted[channel]!).toBeCloseTo(uncoatedTransmission[channel]!, 10);
+      expect(reflected[channel]! / uncoatedTransmission[channel]!).toBeCloseTo(expectedFresnel[channel]!, 10);
     }
     expect(transmitted[0]).not.toBeCloseTo(transmitted[1]!, 5);
   });
 
   it('eval and sample agree for the thin-film specular lobe', () => {
-    const film: ThinFilmLayer = { weight: 0.8, thickness: 380, ior: 1.45 };
+    const film: ThinFilmLayer = { weight: 0.8, thickness: 380, ior: 1.45,
+      incidentAngleScale: 2, incidentAngleOffset: -15 };
     const lobe = dielectricThinFilmLobe(1.5, 0.25, 0, 0, film);
     const rng = createPcg32(83);
     for (let i = 0; i < 256; i++) {

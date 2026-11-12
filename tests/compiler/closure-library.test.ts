@@ -132,8 +132,8 @@ describe('closure library prelude (T056a)', () => {
     // the weight/thickness no-op guard that keeps the nominal Fresnel (T056f).
     expect(CLOSURE_LIBRARY_PRELUDE).toContain('4.0 * MX_PI * n1 * thickness * c1 / lambda');
     expect(CLOSURE_LIBRARY_PRELUDE).toContain('let n2 = (1.0 + s) / (1.0 - s);');
-    expect(CLOSURE_LIBRARY_PRELUDE).toContain('if (weight <= 0.0 || thickness <= 0.0) { return baseFresnel; }');
-    expect(CLOSURE_LIBRARY_PRELUDE).toContain('mix(baseFresnel, tint, clamp(weight, 0.0, 1.0))');
+    expect(CLOSURE_LIBRARY_PRELUDE).toContain('if (film.weight <= 0.0 || film.thickness <= 0.0) { return baseFresnel; }');
+    expect(CLOSURE_LIBRARY_PRELUDE).toContain('mix(baseFresnel, tint, clamp(film.weight, 0.0, 1.0))');
 
     // Subsurface: the optically-thick BSSRDF limit is the cosine-diffuse lobe
     // (T056g), so it shares the Lambert value/pdf expression with the diffuse lobe.
@@ -148,7 +148,7 @@ describe('closure library prelude (T056a)', () => {
     expect(CLOSURE_LIBRARY_PRELUDE).toContain('fn mx_closure_sample(c: LayeredClosure, wo: vec3f, u: vec3f) -> MxBsdfSample');
     expect(CLOSURE_LIBRARY_PRELUDE).toContain('pdf = pdf + (mx_closure_selection_weight(lobe, wo) / total) * r.pdf;');
     expect(CLOSURE_LIBRARY_PRELUDE).toContain('let value = coatW * cc.value + att * baseEval.value;');
-    expect(CLOSURE_LIBRARY_PRELUDE).toContain('mx_thin_film_fresnel(mx_fresnel_schlick(f0, cosVH), f0, cosVH, filmW, filmT, filmIor, targetHue)');
+    expect(CLOSURE_LIBRARY_PRELUDE).toContain('mx_thin_film_fresnel(mx_fresnel_schlick(f0, cosVH), f0, cosVH, film)');
   });
 });
 

@@ -560,6 +560,8 @@ describe('emitLayeredSurface (T055d)', () => {
     const graph = surfaceGraph('surface', [conn('bsdf', 'BSDF', 'iridescence')], [
       upstream('iridescence', 'LamaIridescence', 'BSDF', [
         value('targetHue', 'color3', '0.1, 0.8, 0.4'),
+        value('incidentAngleScale', 'float', '2'),
+        value('incidentAngleOffset', 'float', '-15'),
       ]),
     ]);
     const module = emit(graph);
@@ -569,6 +571,8 @@ describe('emitLayeredSurface (T055d)', () => {
     expect(module.code).toContain('MX_LOBE_DIELECTRIC_TRANSMISSION');
     expect(module.code).toContain('mx_transmission_thin_film_eval');
     expect(module.code).toContain('vec3f(0.1, 0.8, 0.4)');
+    expect(module.features?.thinFilm).toBe(true);
+    expect(module.code).toContain('mx_remap_thin_film_cosine(cosVH, film.incidentAngleScale, film.incidentAngleOffset)');
   });
 
   it('omits optional layers that are absent', () => {

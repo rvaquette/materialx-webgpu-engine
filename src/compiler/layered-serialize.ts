@@ -81,6 +81,8 @@ export interface SerializedThinFilmLayer {
   thickness: number;
   ior: number;
   targetHue?: Rgb3;
+  incidentAngleScale?: number;
+  incidentAngleOffset?: number;
 }
 
 export interface SerializedLayeredClosure {
@@ -158,6 +160,8 @@ export function serializeLayeredClosure(closure: LayeredClosure, decimals = 6): 
       thickness: roundTo(closure.thinFilm.thickness, decimals),
       ior: roundTo(closure.thinFilm.ior, decimals),
       ...(closure.thinFilm.targetHue ? { targetHue: rgb(closure.thinFilm.targetHue, decimals) } : {}),
+      ...(closure.thinFilm.incidentAngleScale !== undefined ? { incidentAngleScale: roundTo(closure.thinFilm.incidentAngleScale, decimals) } : {}),
+      ...(closure.thinFilm.incidentAngleOffset !== undefined ? { incidentAngleOffset: roundTo(closure.thinFilm.incidentAngleOffset, decimals) } : {}),
     };
   }
   if (closure.emission) out.emission = rgb(closure.emission, decimals);
@@ -206,6 +210,8 @@ export function deserializeLayeredClosure(data: SerializedLayeredClosure): Layer
   if (data.thinFilm) out.thinFilm = {
     weight: data.thinFilm.weight, thickness: data.thinFilm.thickness, ior: data.thinFilm.ior,
     ...(data.thinFilm.targetHue ? { targetHue: tuple(data.thinFilm.targetHue) } : {}),
+    ...(data.thinFilm.incidentAngleScale !== undefined ? { incidentAngleScale: data.thinFilm.incidentAngleScale } : {}),
+    ...(data.thinFilm.incidentAngleOffset !== undefined ? { incidentAngleOffset: data.thinFilm.incidentAngleOffset } : {}),
   };
   if (data.emission) out.emission = tuple(data.emission);
   return out;

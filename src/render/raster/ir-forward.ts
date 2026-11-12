@@ -191,15 +191,14 @@ fn mx_forward_smooth_sheet(c: LayeredClosure, wo: vec3f, frame: mat3x3f) -> vec3
       let f0 = vec3f(mx_dielectric_f0(l.ior));
       var f = mx_fresnel_schlick(f0, cosV);
       if (c.hasThinFilm != 0u) {
-        f = mx_thin_film_fresnel(f, f0, cosV, c.thinFilm.weight, c.thinFilm.thickness, c.thinFilm.ior, c.thinFilm.targetHue);
+        f = mx_thin_film_fresnel(f, f0, cosV, c.thinFilm);
       }
       radiance = radiance + l.weight * f * reflected;
     } else {
       let f0 = vec3f(mx_dielectric_f0(l.ior));
       var f = vec3f(mx_fresnel_dielectric(cosV, l.ior));
       if (c.hasThinFilm != 0u && c.thinFilm.weight > 0.0 && c.thinFilm.thickness > 0.0) {
-        f = mx_thin_film_fresnel(mx_fresnel_schlick(f0, cosV), f0, cosV,
-          c.thinFilm.weight, c.thinFilm.thickness, c.thinFilm.ior, c.thinFilm.targetHue);
+        f = mx_thin_film_fresnel(mx_fresnel_schlick(f0, cosV), f0, cosV, c.thinFilm);
       }
       radiance = radiance + l.weight * l.color * (vec3f(1.0) - f) * transmitted;
     }

@@ -130,7 +130,11 @@ const GENERALIZED_SCHLICK_EXTENSION_DEFS = `<materialx version="1.39">
 const IRIDESCENCE_EXTENSION_DEFS = `<materialx version="1.39">
   <nodedef name="ND_engine_lama_iridescence" node="LamaIridescence" inherit="ND_lama_iridescence">
     <input name="targetHue" type="color3" value="1, 1, 1" uiname="Target Hue" uifolder="Hue Mapping"
-           doc="Maps the physical thin-film hues to a selected hue." />
+           doc="Maps physical thin-film hues to the selected hue, preserving angle-dependent saturation and intensity. Neutral colors retain physical hues." />
+    <input name="incidentAngleScale" type="float" value="1" uiname="Incident Angle Scale" uifolder="Angle Mapping" uimin="0" uimax="4"
+           doc="Scales the physical incident angle before evaluating thin-film reflectivity. Default 1 leaves the angle unchanged." />
+    <input name="incidentAngleOffset" type="float" value="0" uiname="Incident Angle Offset" uifolder="Angle Mapping" uimin="-90" uimax="90"
+           doc="Adds an offset in degrees after scaling the incident angle, then clamps to 0-90 degrees. Affects the whole film reflectivity, not just hue." />
   </nodedef>
 </materialx>`;
 

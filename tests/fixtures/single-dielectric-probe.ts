@@ -67,7 +67,7 @@ fn probe(@builtin(global_invocation_id) id: vec3u) {
     case 8u: { c.lobes[1].weight = 0.0; }
     case 9u: { c.hasCoat = 1u; c.coat.weight = 1.0; }
     case 10u: { c.hasFuzz = 1u; c.fuzz.weight = 1.0; }
-    case 11u: { c.hasThinFilm = 1u; c.thinFilm = MxThinFilmLayer(1.0, 500.0, 1.4, vec3f(1.0)); }
+    case 11u: { c.hasThinFilm = 1u; c.thinFilm = MxThinFilmLayer(1.0, 500.0, 1.4, vec3f(1.0), 1.0, 0.0); }
     case 12u: { c.lobes[0] = c.lobes[1]; c.lobes[0].kind = MX_LOBE_CONDUCTOR; }
     case 13u: { c.lobes[0] = c.lobes[1]; }
     case 14u: { c.lobes[0].roughness = 0.8; }

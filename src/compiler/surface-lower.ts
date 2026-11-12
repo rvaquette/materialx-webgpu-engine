@@ -554,6 +554,8 @@ function lowerLamaBsdf(graph: ResolvedGraph, nodeId: string, frame?: LamaShading
       const min = nodeScalar(graph, nodeId, 'minFilmThickness', 400);
       const max = nodeScalar(graph, nodeId, 'maxFilmThickness', 800);
       const relative = clamp01(nodeScalar(graph, nodeId, 'relativeFilmThickness', 0.5));
+      const incidentAngleScale = nodeScalar(graph, nodeId, 'incidentAngleScale', 1);
+      const incidentAngleOffset = nodeScalar(graph, nodeId, 'incidentAngleOffset', 0);
       const ior = 1;
       return assemble([{
         kind: 'dielectric_reflection', weight: 1, color: [1, 1, 1], roughness, ior,
@@ -565,6 +567,8 @@ function lowerLamaBsdf(graph: ResolvedGraph, nodeId: string, frame?: LamaShading
         thinFilm: {
           weight: 1, thickness: min + (max - min) * relative, ior: nodeScalar(graph, nodeId, 'filmIOR', 1.3),
           targetHue: nodeColor(graph, nodeId, 'targetHue', [1, 1, 1]),
+          ...(incidentAngleScale !== 1 ? { incidentAngleScale } : {}),
+          ...(incidentAngleOffset !== 0 ? { incidentAngleOffset } : {}),
         },
       });
     }

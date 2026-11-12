@@ -169,6 +169,13 @@ describe('surfaceGraphToLayered (T055b)', () => {
     expect(lobe(closure, 'dielectric_transmission')).toMatchObject({
       weight: 1, ior: 1, roughness: 0.1, thinWalled: true, color: [1, 1, 1],
     });
+    graph.nodes.get('IRIDESCENCE')!.inputs.push(
+      input('incidentAngleScale', 'float', '2'),
+      input('incidentAngleOffset', 'float', '-15'),
+    );
+    expect(surfaceGraphToLayered(resolveSurface(graph)!, graph).thinFilm).toMatchObject({
+      incidentAngleScale: 2, incidentAngleOffset: -15,
+    });
   });
 
   it('resolves Auto to Fresnel Blend for diffuse bases and Rough Coating for specular bases', () => {

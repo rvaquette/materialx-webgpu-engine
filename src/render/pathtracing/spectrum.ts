@@ -195,6 +195,14 @@ export function thinFilmTint(thicknessNm: number, cosTheta0: number, filmIor: nu
   return [channel(0), channel(1), channel(2)];
 }
 
+/** Remap the angle used by the film, without changing the geometric shading frame. */
+export function remapThinFilmCosine(cosine: number, scale = 1, offsetDegrees = 0): number {
+  if (scale === 1 && offsetDegrees === 0) return cosine;
+  const angle = Math.acos(Math.min(1, Math.max(0, cosine)));
+  const remapped = Math.min(Math.PI / 2, Math.max(0, angle * scale + offsetDegrees * Math.PI / 180));
+  return Math.cos(remapped);
+}
+
 function rgbHue(color: Vec3): number {
   const [r, g, b] = color;
   const maximum = Math.max(r, g, b);
@@ -226,10 +234,9 @@ export function rotateRgbHue(color: Vec3, hueOffset: number): Vec3 {
   return [rgb[0] + m, rgb[1] + m, rgb[2] + m];
 }
 
-/** Map a film tint's reference hue to Target Hue; achromatic targets disable mapping. */
-export function mapThinFilmHue(color: Vec3, targetHue: Vec3, referenceColor: Vec3): Vec3 {
+/** Map physical hues to Target Hue, preserving film saturation/value; neutral targets disable mapping. */
+export function mapThinFilmHue(color: Vec3, targetHue: Vec3): Vec3 {
   const targetChroma = Math.max(...targetHue) - Math.min(...targetHue);
-  const referenceChroma = Math.max(...referenceColor) - Math.min(...referenceColor);
-  if (targetChroma <= 1e-8 || referenceChroma <= 1e-8) return color;
-  return rotateRgbHue(color, rgbHue(targetHue) - rgbHue(referenceColor));
+  if (targetChroma <= 1e-8) return color;
+  return rotateRgbHue(color, rgbHue(targetHue) - rgbHue(color));
 }

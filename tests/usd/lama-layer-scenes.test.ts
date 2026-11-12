@@ -47,6 +47,8 @@ describe('LamaLayer gold IOR scenes', () => {
       const document = await readFile(join(IRIDESCENCE_DIR, 'lama_iridescence_target_hue.mtlx'), 'utf8');
       expect(document).toContain('<LamaIridescence name="iridescence" type="BSDF">');
       expect(document).toContain('<input name="targetHue" type="color3" value="0.05, 0.65, 0.85" uiname="Target Hue" uifolder="Hue Mapping" engine:editable="true" />');
+      expect(document).toContain('name="incidentAngleScale" type="float" value="1" uiname="Incident Angle Scale" uifolder="Angle Mapping" uimin="0" uimax="4" engine:editable="true"');
+      expect(document).toContain('name="incidentAngleOffset" type="float" value="0" uiname="Incident Angle Offset (degrees)" uifolder="Angle Mapping" uimin="-90" uimax="90" engine:editable="true"');
     });
   });
 
