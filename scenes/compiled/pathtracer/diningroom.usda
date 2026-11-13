@@ -1,0 +1,9 @@
+#usda 1.0
+(
+    customLayerData = {
+        string "materialx:compiledScene" = "./diningroom/scene.json"
+        string "materialx:compiledShaders" = "./diningroom/shaders.wgsl.zst"
+        string "materialx:source" = "../../pathtracer/diningroom.usda"
+    }
+    subLayers = [@../../pathtracer/diningroom.usda@]
+)

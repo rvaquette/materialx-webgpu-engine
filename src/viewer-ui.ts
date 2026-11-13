@@ -24,7 +24,6 @@ export interface ViewerUiState {
   materialFolderPath: string[];
   materialTree: MaterialFolder;
   materialPath: string;
-  compiled: boolean;
 }
 
 export interface ViewerUiActions {
@@ -180,8 +179,6 @@ export async function startViewerUi(
           combo('##object', state.objectPath, state.objects.map(object => ({
             label: `${object.path.split('/').at(-1)} (${object.material})`, value: object.path,
           })), actions.object);
-          if (state.compiled) ImGui.Text('Scene compilee : remplacement via le USD source.');
-          ImGui.BeginDisabled(state.compiled);
           let folder = state.materialTree;
           for (let depth = 0; folder.folders.size; depth++) {
             const index = depth;
@@ -197,7 +194,6 @@ export async function startViewerUi(
             { label: "Materiau d'origine", value: '' },
             ...folder.materials.map(material => ({ label: material.label, value: material.path })),
           ], actions.material);
-          ImGui.EndDisabled();
           if (ImGui.CollapsingHeader('Parametres du materiau')) parameters.draw();
           ImGui.EndDisabled();
         }

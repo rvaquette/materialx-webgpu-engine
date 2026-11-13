@@ -1,0 +1,9 @@
+#usda 1.0
+(
+    customLayerData = {
+        string "materialx:compiledScene" = "./test_thinwalled_transmission/scene.json"
+        string "materialx:compiledShaders" = "./test_thinwalled_transmission/shaders.wgsl.zst"
+        string "materialx:source" = "../../pathtracer/test_thinwalled_transmission.usda"
+    }
+    subLayers = [@../../pathtracer/test_thinwalled_transmission.usda@]
+)

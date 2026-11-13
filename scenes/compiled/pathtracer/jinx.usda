@@ -1,0 +1,9 @@
+#usda 1.0
+(
+    customLayerData = {
+        string "materialx:compiledScene" = "./jinx/scene.json"
+        string "materialx:compiledShaders" = "./jinx/shaders.wgsl.zst"
+        string "materialx:source" = "../../pathtracer/jinx.usda"
+    }
+    subLayers = [@../../pathtracer/jinx.usda@]
+)

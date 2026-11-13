@@ -1,0 +1,9 @@
+#usda 1.0
+(
+    customLayerData = {
+        string "materialx:compiledScene" = "./cornell_box_orig/scene.json"
+        string "materialx:compiledShaders" = "./cornell_box_orig/shaders.wgsl.zst"
+        string "materialx:source" = "../../pathtracer/cornell_box_orig.usda"
+    }
+    subLayers = [@../../pathtracer/cornell_box_orig.usda@]
+)

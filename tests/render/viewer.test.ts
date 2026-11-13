@@ -12,7 +12,7 @@ import { JsDenoiser } from '../../src/render/pathtracing/js-denoiser.ts';
 import { editableSceneMaterials, materialUniformData } from '../../src/render/material-parameters.ts';
 import { PT_UNIFORM_SIZE, pathTraceTile, pathTraceTileCount } from '../../src/render/pathtracing/compute.ts';
 import type { ShaderCompilationError } from '../../src/gpu/shader-diagnostics.ts';
-import { exportCompiledScene } from '../../src/scene/compiled-scene.ts';
+import { exportCompiledMaterial, exportCompiledScene } from '../../src/scene/compiled-scene.ts';
 
 vi.mock('../../src/render/usd-scene-assets.ts', async (original) => ({
   ...await original<typeof import('../../src/render/usd-scene-assets.ts')>(),
@@ -265,10 +265,51 @@ describe('interactive viewer resource lifecycle', () => {
     viewer.setBackend('raster');
     tick(1);
     await vi.waitFor(() => expect(device.createRenderPipeline).toHaveBeenCalled());
-    await expect(viewer.setObjectMaterial('/World/Ball', 'new.mtlx')).rejects.toThrow('original USD');
+    await expect(viewer.setObjectMaterial('/World/Ball', 'new.mtlx')).rejects.toThrow('no precompiled package');
     vi.mocked(buildCachedPathTraceScene).mockImplementation(actual.buildCachedPathTraceScene);
     await viewer.setObjectParameters('/World/Ball', new Map([['surface:specular_roughness', [0.7]]]));
     expect(viewer.objectParameters('/World/Ball').find(parameter => parameter.id === 'surface:specular_roughness')?.value).toEqual([0.7]);
+    expect(viewer.isCompiledScene).toBe(true);
+  });
+
+  it('opens a USDA layer referencing compiled binaries and applies precompiled materials without MaterialX', async () => {
+    const actual = await vi.importActual<typeof import('../../src/render/pathtracing/scene-buffers.ts')>(
+      '../../src/render/pathtracing/scene-buffers.ts');
+    vi.mocked(buildCachedPathTraceScene).mockImplementation(actual.buildCachedPathTraceScene);
+    const { viewer, loaded } = await setup(false, true, 'raster');
+    const compiled = await exportCompiledScene(loaded);
+    const material = await exportCompiledMaterial(loaded, '/World/Ball');
+    vi.mocked(loadUsdScene).mockClear();
+    const layer = [
+      '#usda 1.0', '(', '    customLayerData = {',
+      '        string "materialx:compiledScene" = "./ball/scene.json"',
+      '        string "materialx:compiledShaders" = "../shared/shaders.wgsl.zst"',
+      '        string "materialx:source" = "../../ball.usda"',
+      '    }', '    subLayers = [@../../ball.usda@]', ')', '', 'def Xform "World" {}', '',
+    ].join('\n');
+    const requests: string[] = [];
+    vi.stubGlobal('fetch', async (input: string) => {
+      requests.push(input);
+      const path = new URL(input).pathname;
+      if (path === '/scenes/compiled/ball.usda') return new Response(layer);
+      if (path === '/scenes/compiled/ball/scene.json') return new Response(JSON.stringify(compiled.manifest));
+      if (path === '/scenes/shared/shaders.wgsl.zst') return new Response(compiled.files.get('shaders.wgsl.zst'));
+      if (path === '/materials/gold/material.json') return new Response(JSON.stringify(material.manifest));
+      const bytes = path.startsWith('/scenes/compiled/ball/') && path !== '/scenes/compiled/ball/shaders.wgsl.zst'
+        ? compiled.files.get(path.slice('/scenes/compiled/ball/'.length))
+        : path.startsWith('/materials/gold/') ? material.files.get(path.slice('/materials/gold/'.length)) : undefined;
+      return bytes ? new Response(bytes) : new Response(null, { status: 404 });
+    });
+    await viewer.load('https://example.test/scenes/compiled/ball.usda');
+    expect(viewer.isCompiledScene).toBe(true);
+    expect(loadUsdScene).not.toHaveBeenCalled();
+    expect(requests).toContain('https://example.test/scenes/shared/shaders.wgsl.zst');
+    await viewer.setObjectMaterial('/World/Ball', 'https://example.test/gold.mtlx', 'https://example.test/materials/gold/material.json');
+    expect(loadUsdScene).not.toHaveBeenCalled();
+    expect(viewer.objects.find(object => object.path === '/World/Ball')?.assetPath).toBe('https://example.test/gold.mtlx');
+    expect(viewer.objectParameters('/World/Ball').length).toBeGreaterThan(0);
+    await viewer.setObjectMaterial('/World/Ball');
+    expect(viewer.objects.find(object => object.path === '/World/Ball')?.assetPath).toBeUndefined();
     expect(viewer.isCompiledScene).toBe(true);
   });
 

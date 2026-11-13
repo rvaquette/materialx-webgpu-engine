@@ -28,7 +28,7 @@ import { buildMaterialDispatch } from './pathtracing/material-variant.ts';
 import { buildPtDeviceBindings } from './pathtracing/device-bindings.ts';
 import { maxRecordLobes, PT_MAX_LOBES } from './pathtracing/material-record.ts';
 import type { DecodedPixelImage } from '../assets/images.ts';
-import { loadUsdScene, uploadMaterialTextures, type ObjectMaterialOverride, type SceneLoadOptions } from './usd-scene-assets.ts';
+import { loadUsdScene, uploadMaterialTextures, type LoadedUsdScene, type ObjectMaterialOverride, type SceneLoadOptions } from './usd-scene-assets.ts';
 import { assertSceneStorageSize, assertSceneTextureBindings } from '../gpu/device.ts';
 import { uploadMaterialImage, uploadMaterialImageArray } from '../gpu/material-texture.ts';
 import { packPtTextureArrays } from './pathtracing/texture-arrays.ts';
@@ -45,7 +45,20 @@ import { JsDenoiser } from './pathtracing/js-denoiser.ts';
 import { changeMaterialParameters, compileEditableMaterial, materialUniformData, packParameterUniforms, visibleMaterialParameters, type MaterialParameter } from './material-parameters.ts';
 import { applySceneDisplacement } from './displacement.ts';
 import type { MaterialResource } from './scene-resources.ts';
-import { compiledRasterShaderKey, loadCompiledScene } from '../scene/compiled-scene.ts';
+import {
+  applyCompiledMaterials, compiledRasterShaderKey, loadCompiledMaterial, loadCompiledScene, readCompiledLayerReferences,
+  type CompiledMaterial,
+} from '../scene/compiled-scene.ts';
+
+function describeObjects(
+  loaded: LoadedUsdScene, assetPaths: ReadonlyMap<string, string>,
+): Array<{ path: string; material: string; assetPath?: string }> {
+  return loaded.resources.instances.filter((instance) => instance.hasGeometry).map((instance) => {
+    const material = instance.materialKey ? loaded.resources.materials.get(instance.materialKey) : undefined;
+    const assetPath = assetPaths.get(instance.primPath);
+    return { path: instance.primPath, material: material?.materialName ?? 'Default', ...(assetPath ? { assetPath } : {}) };
+  });
+}
 
 /** Preview fill + framing shared with the capture harness so the live view matches. */
 const PREVIEW_ENV: Vec3 = [0.65, 0.68, 0.72];
@@ -125,6 +138,9 @@ export class InteractiveViewer {
   #firstFrameStart: number | undefined;
   #sceneEntry: string | undefined;
   #materialOverrides = new Map<string, ObjectMaterialOverride>();
+  #compiledBase: LoadedUsdScene | undefined;
+  #compiledOverrides = new Map<string, { assetPath: string; material: CompiledMaterial }>();
+  readonly #compiledMaterialCache = new Map<string, Promise<CompiledMaterial>>();
   #objects: ReadonlyArray<{ path: string; material: string; assetPath?: string }> = [];
   #warnings = 0;
   #rasterDirty = true;
@@ -264,9 +280,15 @@ export class InteractiveViewer {
     const resources = await applySceneDisplacement(parameterResources, loaded.mtlx.imageProvider);
     const candidate = { ...loaded, resources, parameterResources };
     delete candidate.compiled;
-    const exposure = loaded.cameras[0]?.exposure ?? 0;
-    const frame = buildSceneFrame(resources, {
-      lights: loaded.lights, surfaceFor: loaded.mtlx.surfaceFor,
+    await this.#replaceLoaded(loaded, candidate, 'Scene changed during parameter update.');
+  }
+
+  /** Swap the active scene state without reparsing USD (frame + GPU render set rebuilt from resources). */
+  async #replaceLoaded(loaded: LoadedUsdScene, candidate: LoadedUsdScene, changedMessage: string): Promise<void> {
+    if (!this.#current) throw new Error('No scene loaded.');
+    const exposure = candidate.cameras[0]?.exposure ?? 0;
+    const frame = buildSceneFrame(candidate.resources, {
+      lights: candidate.lights, surfaceFor: candidate.mtlx.surfaceFor,
       environment: this.#current.frame.environment,
       frameCamera: { viewProj: this.#orbit.viewProj(), eye: this.#orbit.eye, exposure },
     });
@@ -277,11 +299,10 @@ export class InteractiveViewer {
     const render = await this.#buildSceneRender(candidate, frame, exposure, sink);
     if (this.#loaded !== loaded || this.#disposed) {
       render.dispose();
-      throw new Error('Scene changed during parameter update.');
+      throw new Error(changedMessage);
     }
     this.#current.dispose();
     this.#current = render;
-    if (this.#pathTracingDepthOverride !== undefined) render.setPathTracingDepth(this.#pathTracingDepthOverride);
     if (this.#pathTracingDepthOverride !== undefined) render.setPathTracingDepth(this.#pathTracingDepthOverride);
     this.#loaded = candidate;
     this.#onCameraChanged();
@@ -294,10 +315,26 @@ export class InteractiveViewer {
       .map(parameter => [parameter.id, parameter.initial])));
   }
 
-  async setObjectMaterial(path: string, assetPath?: string): Promise<void> {
-    if (this.isCompiledScene) throw new Error('Material replacement requires the original USD scene. Compiled scenes support parameter edits only.');
+  /** Replace an object's material. Compiled scenes require `compiledUrl`, a precompiled MaterialX package. */
+  async setObjectMaterial(path: string, assetPath?: string, compiledUrl?: string): Promise<void> {
     if (!this.#sceneEntry || !this.#objects.some((object) => object.path === path)) {
       throw new Error(`Unknown object: ${path}`);
+    }
+    if (this.isCompiledScene) {
+      const base = this.#compiledBase;
+      if (!base) throw new Error('Compiled scene state is unavailable.');
+      if (assetPath && !compiledUrl) throw new Error('This material has no precompiled package.');
+      const overrides = new Map(this.#compiledOverrides);
+      if (assetPath && compiledUrl) overrides.set(path, { assetPath, material: await this.#compiledMaterial(compiledUrl) });
+      else overrides.delete(path);
+      const loaded = this.#loaded!;
+      const candidate = overrides.size
+        ? await applyCompiledMaterials(base, new Map([...overrides].map(([key, value]) => [key, value.material])))
+        : base;
+      await this.#replaceLoaded(loaded, candidate, 'Scene changed during material replacement.');
+      this.#compiledOverrides = overrides;
+      this.#objects = describeObjects(candidate, new Map([...overrides].map(([key, value]) => [key, value.assetPath])));
+      return;
     }
     const overrides = new Map(this.#materialOverrides);
     if (assetPath) {
@@ -312,6 +349,41 @@ export class InteractiveViewer {
       overrides.delete(path);
     }
     await this.load(this.#sceneEntry, overrides, true, this.#loadOptions);
+  }
+
+  #compiledMaterial(url: string): Promise<CompiledMaterial> {
+    let material = this.#compiledMaterialCache.get(url);
+    if (!material) {
+      material = loadCompiledMaterial(url).catch(error => { this.#compiledMaterialCache.delete(url); throw error; });
+      this.#compiledMaterialCache.set(url, material);
+    }
+    return material;
+  }
+
+  /** Resolve a compiled scene: a `scene.json` manifest, or a USDA layer referencing compiled binaries. */
+  async #loadEntry(
+    entry: string, overrides: ReadonlyMap<string, ObjectMaterialOverride>, options: SceneLoadOptions, sink: DiagnosticSink,
+  ): Promise<LoadedUsdScene> {
+    const sourceOptions = { ...options, editableParameters: true };
+    if (/(?:^|\/)scene\.json(?:[?#]|$)/i.test(entry)) {
+      if (overrides.size || options.imported) throw new Error('Compiled scenes cannot import source material overrides.');
+      return loadCompiledScene(entry, sink);
+    }
+    const references = !options.imported && /\.usda(?:[?#]|$)/i.test(entry)
+      ? await readCompiledLayerReferences(entry).catch(() => undefined) : undefined;
+    if (!references) return loadUsdScene(entry, sink, () => { }, overrides, sourceOptions);
+    if (overrides.size) {
+      if (!references.source) throw new Error('Compiled scenes cannot import source material overrides.');
+      return loadUsdScene(references.source, sink, () => { }, overrides, sourceOptions);
+    }
+    try {
+      const loaded = await loadCompiledScene(references.scene, sink, fetch, references.shaders ? { shaders: references.shaders } : {});
+      return { ...loaded, entry };
+    } catch (error) {
+      if (!references.source) throw error;
+      sink({ level: 'warning', message: `Compiled binaries unavailable; loading source ${references.source}`, detail: String(error) });
+      return loadUsdScene(references.source, sink, () => { }, overrides, sourceOptions);
+    }
   }
 
   get pathTracingPaused(): boolean {
@@ -387,11 +459,7 @@ export class InteractiveViewer {
       if (d.level === 'error') console.error(d.message, d.detail ?? '');
       else if (d.level === 'warning') console.warn(d.message, d.detail ?? '');
     };
-    const compiledEntry = /(?:^|\/)scene\.json(?:[?#]|$)/i.test(entry);
-    if (compiledEntry && (overrides.size || options.imported)) throw new Error('Compiled scenes cannot import source material overrides.');
-    const loaded = compiledEntry
-      ? await loadCompiledScene(entry, sink)
-      : await loadUsdScene(entry, sink, () => { }, overrides, { ...options, editableParameters: true });
+    const loaded = await this.#loadEntry(entry, overrides, options, sink);
     const exposure = loaded.cameras[0]?.exposure ?? 0;
     let frame: SceneFramePlan;
     let render: SceneRender;
@@ -433,15 +501,9 @@ export class InteractiveViewer {
     this.#loadOptions = options;
     this.#sceneEntry = entry;
     this.#materialOverrides = new Map(overrides);
-    this.#objects = loaded.resources.instances.filter((instance) => instance.hasGeometry).map((instance) => {
-      const material = instance.materialKey ? loaded.resources.materials.get(instance.materialKey) : undefined;
-      const override = overrides.get(instance.primPath);
-      return {
-        path: instance.primPath,
-        material: material?.materialName ?? 'Default',
-        ...(override ? { assetPath: override.assetPath } : {}),
-      };
-    });
+    this.#compiledBase = loaded.precompiled ? { ...loaded } : undefined;
+    this.#compiledOverrides = new Map();
+    this.#objects = describeObjects(loaded, new Map([...overrides].map(([key, value]) => [key, value.assetPath])));
 
     // Seed the orbit from the scene bounds so the first frame is framed, then push
     // the camera into both backends and restart accumulation.

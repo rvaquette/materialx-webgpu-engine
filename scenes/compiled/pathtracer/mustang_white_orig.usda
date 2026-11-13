@@ -1,0 +1,9 @@
+#usda 1.0
+(
+    customLayerData = {
+        string "materialx:compiledScene" = "./mustang_white_orig/scene.json"
+        string "materialx:compiledShaders" = "./mustang_white_orig/shaders.wgsl.zst"
+        string "materialx:source" = "../../pathtracer/mustang_white_orig.usda"
+    }
+    subLayers = [@../../pathtracer/mustang_white_orig.usda@]
+)

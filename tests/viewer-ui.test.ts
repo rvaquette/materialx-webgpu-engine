@@ -133,7 +133,7 @@ describe('ImGui material parameter editing', () => {
 function fixture() {
   const state: ViewerUiState = {
     entry: 'books.usda', scenes: [{ label: 'Books', entry: 'books.usda' }, { label: 'Chair', entry: 'chair.usda' }],
-    resolution: 256, pathTracingDepth: 12, rasterQuality: 'interactive', backend: 'raster', environmentEnabled: true, denoise: false, compiled: false,
+    resolution: 256, pathTracingDepth: 12, rasterQuality: 'interactive', backend: 'raster',     environmentEnabled: true, denoise: false,
     status: undefined, busy: false, busyMessage: '', error: '', shaderErrors: '', warnings: '',
     objectPath: '/Book', objects: [{ path: '/Book', material: 'Paper' }], materialPath: '',
     materialFolderPath: [], materialTree: { folders: new Map(), materials: [{ label: 'Gold', path: './gold.mtlx' }] },
@@ -171,15 +171,12 @@ describe('Dear ImGui viewer controls', () => {
     stop();
   });
 
-  it('keeps export out of the UI and gates source-material replacement for compiled entries', async () => {
+  it('keeps export out of the UI', async () => {
     const f = fixture();
-    f.state.compiled = true;
     controls.header = true;
     const stop = await startViewerUi(f.canvas, f.state, f.actions, f.parameters);
     f.render();
     expect(vi.mocked(ImGui.Button).mock.calls.some(([label]) => label.includes('Exporter'))).toBe(false);
-    expect(ImGui.Text).toHaveBeenCalledWith('Scene compilee : remplacement via le USD source.');
-    expect(ImGui.BeginDisabled).toHaveBeenCalledWith(true);
     vi.mocked(ImGui.Button).mockImplementation(() => false);
     stop();
   });

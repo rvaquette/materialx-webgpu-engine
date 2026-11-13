@@ -1,5 +1,5 @@
 import { InteractiveViewer } from './render/viewer.ts';
-import { SCENE_CATALOG } from './scene/scene-catalog.ts';
+import { SCENE_CATALOG, SOURCE_SCENE_CATALOG } from './scene/scene-catalog.ts';
 import { MATERIAL_CATALOG } from './scene/material-catalog.ts';
 import { buildMaterialTree } from './scene/material-tree.ts';
 import { MaterialParameterEditor } from './material-parameter-editor.ts';
@@ -40,7 +40,7 @@ function setStatus(text: string, error = true): void {
 
 async function main(): Promise<void> {
   const params = new URLSearchParams(location.search);
-  const initialEntry = params.get('entry') ?? SCENE_CATALOG[0]!.entry;
+  const initialEntry = params.get('entry') ?? (SCENE_CATALOG[0] ?? SOURCE_SCENE_CATALOG[0]!).entry;
   const initialBackend = params.get('backend') ?? 'raster';
   const resolutionParam = params.get('res') ?? '128';
   const initialResolution = resolutionParam === '1024x768' ? resolutionParam : Number(resolutionParam);
@@ -95,7 +95,6 @@ async function main(): Promise<void> {
     rasterQuality: 'interactive', backend: initialBackend, environmentEnabled: true, denoise: false,
     status: undefined, busy: true, busyMessage: 'Initialisation...', error: '', shaderErrors: '', warnings: '',
     objectPath: '', objects: [], materialFolderPath: [], materialTree: buildMaterialTree(MATERIAL_CATALOG), materialPath: '',
-    compiled: false,
   };
   ui = state;
   if (!state.scenes.some(scene => scene.entry === initialEntry)) state.scenes.push({ entry: initialEntry, label: initialEntry });
@@ -182,7 +181,6 @@ async function main(): Promise<void> {
       });
       state.entry = entry;
       state.pathTracingDepth = viewer.pathTracingDepth;
-      state.compiled = viewer.isCompiledScene;
       refreshObjects();
       if (localScene && (imported || localScene.entry !== entry)) {
         state.scenes = state.scenes.filter(scene => scene.entry !== localScene?.entry || !scene.label.startsWith('Local - '));
@@ -255,8 +253,15 @@ async function main(): Promise<void> {
     pause: () => viewer.setPathTracingPaused(!viewer.pathTracingPaused),
     openFiles: folder => (folder ? localFolder : localFiles)?.click(),
     object: path => { state.objectPath = path; refreshMaterialSelection(); },
-    material: path => { void operation('Compilation du matériau...', async () => {
-      try { await viewer.setObjectMaterial(state.objectPath, path ? new URL(path, document.baseURI).href : undefined); }
+    material: path => { void operation('Application du matériau...', async () => {
+      const compiled = MATERIAL_CATALOG.find(item => item.path === path)?.compiled;
+      try {
+        await viewer.setObjectMaterial(
+          state.objectPath,
+          path ? new URL(path, document.baseURI).href : undefined,
+          compiled ? new URL(compiled, document.baseURI).href : undefined,
+        );
+      }
       finally { refreshObjects(); }
     }); },
   };

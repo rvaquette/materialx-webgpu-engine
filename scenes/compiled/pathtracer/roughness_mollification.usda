@@ -1,0 +1,9 @@
+#usda 1.0
+(
+    customLayerData = {
+        string "materialx:compiledScene" = "./roughness_mollification/scene.json"
+        string "materialx:compiledShaders" = "./roughness_mollification/shaders.wgsl.zst"
+        string "materialx:source" = "../../pathtracer/roughness_mollification.usda"
+    }
+    subLayers = [@../../pathtracer/roughness_mollification.usda@]
+)

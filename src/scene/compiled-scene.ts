@@ -12,7 +12,9 @@ import { buildMaterialDispatch, type PtMaterialDispatch } from '../render/pathtr
 import { pathTraceSettings } from '../render/pathtracing/scene-settings.ts';
 import type { LoadedUsdScene } from '../render/usd-scene-assets.ts';
 import { loadEnvironment } from '../render/usd-scene-assets.ts';
-import type { SceneResources } from '../render/scene-resources.ts';
+import type { MaterialResource, SceneResources } from '../render/scene-resources.ts';
+import type { PtImageProvider } from '../render/pathtracing/device-bindings.ts';
+import { applySceneDisplacement } from '../render/displacement.ts';
 import {
   decodeCompiledScene, encodeCompiledScene, isRecord,
   type CompiledScenePackage, type CompiledSceneEncodeOptions,
@@ -84,19 +86,7 @@ export async function exportCompiledScene(
   const sourceEntry = new URL(loaded.entry, typeof document === 'undefined' ? undefined : document.baseURI);
   const portableUrl = (url: URL): string => url.origin === sourceEntry.origin
     ? `${url.pathname}${url.search}${url.hash}` : url.href;
-  const materialDirectories = [...new Set(loaded.scene.materials.map(ref =>
-    new URL('.', new URL(ref.assetPath, new URL(ref.authoringLayer ?? loaded.entry, sourceEntry))).href))];
-  if (!materialDirectories.length) materialDirectories.push(new URL('.', sourceEntry).href);
-  const images = new Map<string, ExternalImage>();
-  for (const file of files) {
-    const image = await loaded.mtlx.imageProvider.decode(file);
-    if (!image) throw new Error(`Cannot export missing texture: ${file}`);
-    images.set(file, {
-      kind: 'external',
-      urls: [...new Set(materialDirectories.map(dir => portableUrl(new URL(AssetResolver.normalizeUdim(file), dir))))],
-      ...(image.udim ? { tiles: image.udim.map(tile => tile.tile) } : {}),
-    });
-  }
+  const images = await collectExternalImages(loaded, files);
   const rasterShaders = new Map<string, IrForwardShader>();
   const analyticLights = buildSceneFrame(loaded.resources, { lights: loaded.lights, surfaceFor: loaded.mtlx.surfaceFor }).analyticLights !== undefined;
   for (const [key, material] of loaded.resources.materials) {
@@ -134,6 +124,180 @@ export async function exportCompiledScene(
   validateData(data);
   options.onProgress?.('Encoding and compressing prepared scene...');
   return encodeCompiledScene(data, loaded.entry, options);
+}
+
+/** Texture files keep their opaque compile-time keys; URLs are portable relative to the app. */
+async function collectExternalImages(loaded: LoadedUsdScene, files: Iterable<string>): Promise<Map<string, ExternalImage>> {
+  const sourceEntry = new URL(loaded.entry, typeof document === 'undefined' ? undefined : document.baseURI);
+  const portableUrl = (url: URL): string => url.origin === sourceEntry.origin
+    ? `${url.pathname}${url.search}${url.hash}` : url.href;
+  const materialDirectories = [...new Set(loaded.scene.materials.map(ref =>
+    new URL('.', new URL(ref.assetPath, new URL(ref.authoringLayer ?? loaded.entry, sourceEntry))).href))];
+  if (!materialDirectories.length) materialDirectories.push(new URL('.', sourceEntry).href);
+  const images = new Map<string, ExternalImage>();
+  for (const file of files) {
+    const image = await loaded.mtlx.imageProvider.decode(file);
+    if (!image) throw new Error(`Cannot export missing texture: ${file}`);
+    images.set(file, {
+      kind: 'external',
+      urls: [...new Set(materialDirectories.map(dir => portableUrl(new URL(AssetResolver.normalizeUdim(file), dir))))],
+      ...(image.udim ? { tiles: image.udim.map(tile => tile.tile) } : {}),
+    });
+  }
+  return images;
+}
+
+interface CompiledMaterialData {
+  kind: 'material';
+  material: MaterialResource;
+  surface: RasterSurface;
+  images: Map<string, ExternalImage>;
+}
+
+export interface CompiledMaterial {
+  url: string;
+  material: MaterialResource;
+  surface: RasterSurface;
+  imageProvider: PtImageProvider;
+}
+
+/** Precompiled MaterialX material (graph, WGSL, parameters), applied to compiled scenes without MaterialX. */
+export async function exportCompiledMaterial(
+  loaded: LoadedUsdScene, primPath: string, options: CompiledSceneEncodeOptions = {},
+): Promise<CompiledScenePackage> {
+  if (loaded.resources.pendingMaterials.length) throw new Error('Cannot export a material that failed to compile.');
+  const source = loaded.parameterResources ?? loaded.resources;
+  const key = source.instances.find(instance => instance.primPath === primPath)?.materialKey;
+  const material = key ? source.materials.get(key) : undefined;
+  if (!material) throw new Error(`No compiled material bound to ${primPath}.`);
+  const pathTrace = await buildCachedPathTraceScene(loaded.resources, {
+    lights: loaded.lights, surfaceFor: loaded.mtlx.surfaceFor, settings: pathTraceSettings(loaded.scene),
+  });
+  const files = new Set(buildMaterialDispatch(pathTrace.variantSources).textureRegistry.images
+    .filter((file): file is string => file !== undefined));
+  for (const candidate of [material, loaded.resources.materials.get(key!)]) {
+    for (const texture of candidate?.surfaceModule?.textures ?? []) if (texture.fileRef !== undefined) files.add(texture.fileRef);
+    if (candidate?.displacement) files.add(candidate.displacement.file);
+  }
+  const data: CompiledMaterialData = {
+    kind: 'material',
+    material: { ...material, boundPrims: [] },
+    surface: loaded.mtlx.surfaceFor(material),
+    images: await collectExternalImages(loaded, files),
+  };
+  validateMaterialData(data);
+  return encodeCompiledScene(data, loaded.entry, options);
+}
+
+export async function loadCompiledMaterial(url: string, fetchResource: typeof fetch = fetch): Promise<CompiledMaterial> {
+  const response = await fetchResource(url);
+  if (!response.ok) throw new Error(`HTTP ${response.status}: ${url}`);
+  const base = response.url || url;
+  const data = await decodeCompiledScene(await response.json(), path => fetchBytes(new URL(path, base).href, fetchResource));
+  validateMaterialData(data);
+  return {
+    url, material: data.material, surface: data.surface,
+    imageProvider: externalImageProvider(data.images, base, fetchResource, 'compiled material'),
+  };
+}
+
+/** Bind precompiled materials to objects of a compiled scene; geometry and GPU buffers are rebuilt from its data. */
+export async function applyCompiledMaterials(
+  base: LoadedUsdScene, overrides: ReadonlyMap<string, CompiledMaterial>,
+): Promise<LoadedUsdScene> {
+  const source = base.parameterResources ?? base.resources;
+  const materials = new Map(source.materials);
+  const surfaces = new Map<string, RasterSurface>();
+  const providers: PtImageProvider[] = [];
+  const unknown = new Set(overrides.keys());
+  const instances = source.instances.map(instance => {
+    const override = overrides.get(instance.primPath);
+    if (!override || !instance.hasGeometry) return instance;
+    unknown.delete(instance.primPath);
+    const key = `${override.material.unitKey}::override::${instance.primPath}`;
+    materials.set(key, { ...override.material, unitKey: key, boundPrims: [instance.primPath] });
+    surfaces.set(key, override.surface);
+    if (!providers.includes(override.imageProvider)) providers.push(override.imageProvider);
+    return { ...instance, materialKey: key };
+  });
+  if (unknown.size) throw new Error(`Unknown object: ${[...unknown].join(', ')}`);
+  const used = new Set(instances.map(instance => instance.materialKey));
+  for (const key of materials.keys()) if (!used.has(key)) materials.delete(key);
+  const parameterResources: SceneResources = { ...source, instances, materials };
+  const fallback = base.mtlx.imageProvider;
+  const mtlx = {
+    ...base.mtlx,
+    surfaceFor: (material: MaterialResource) => surfaces.get(material.unitKey) ?? base.mtlx.surfaceFor(material),
+    imageProvider: { decode: async (file: string) => {
+      for (const provider of providers) {
+        try {
+          const image = await provider.decode(file);
+          if (image) return image;
+        } catch (error) {
+          if (!(error instanceof MissingCompiledImageError)) throw error;
+        }
+      }
+      return fallback.decode(file);
+    } },
+  };
+  const resources = await applySceneDisplacement(parameterResources, mtlx.imageProvider);
+  const result: LoadedUsdScene = { ...base, resources, parameterResources, mtlx };
+  delete result.compiled;
+  return result;
+}
+
+export interface CompiledLayerReferences {
+  scene: string;
+  shaders?: string;
+  source?: string;
+}
+
+export const COMPILED_LAYER_KEYS = {
+  scene: 'materialx:compiledScene',
+  shaders: 'materialx:compiledShaders',
+  source: 'materialx:source',
+} as const;
+
+/** Compiled binaries referenced by a USDA layer's customLayerData, resolved against the layer URL. */
+export function parseCompiledLayerReferences(text: string, layerUrl: string): CompiledLayerReferences | undefined {
+  const header = /^#usda[^\n]*\r?\n\s*\(([\s\S]*?)\r?\n\)/.exec(text)?.[1];
+  const data = header && /customLayerData\s*=\s*\{([\s\S]*?)\}/.exec(header)?.[1];
+  if (!data) return undefined;
+  const values = new Map<string, string>();
+  for (const match of data.matchAll(/(?:string|asset)\s+"([^"]+)"\s*=\s*(?:"([^"]*)"|@([^@]*)@)/g)) {
+    values.set(match[1]!, match[2] ?? match[3]!);
+  }
+  const scene = values.get(COMPILED_LAYER_KEYS.scene);
+  if (!scene) return undefined;
+  const shaders = values.get(COMPILED_LAYER_KEYS.shaders);
+  const source = values.get(COMPILED_LAYER_KEYS.source);
+  return {
+    scene: new URL(scene, layerUrl).href,
+    ...(shaders ? { shaders: new URL(shaders, layerUrl).href } : {}),
+    ...(source ? { source: new URL(source, layerUrl).href } : {}),
+  };
+}
+
+/** Reads only the layer header, so plain USDA sources are not downloaded twice. */
+export async function readCompiledLayerReferences(
+  entry: string, fetchResource: typeof fetch = fetch,
+): Promise<CompiledLayerReferences | undefined> {
+  const response = await fetchResource(entry);
+  if (!response.ok) throw new Error(`HTTP ${response.status}: ${entry}`);
+  const reader = response.body?.getReader();
+  if (!reader) return parseCompiledLayerReferences(await response.text(), response.url || entry);
+  const decoder = new TextDecoder();
+  let text = '';
+  try {
+    while (text.length < 65536 && !/\r?\n\)/.test(text)) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      text += decoder.decode(value, { stream: true });
+    }
+  } finally {
+    await reader.cancel().catch(() => undefined);
+  }
+  return parseCompiledLayerReferences(text, response.url || entry);
 }
 
 const finiteArray = (value: unknown, length?: number): boolean =>
@@ -243,15 +407,7 @@ function validateData(value: unknown): asserts value is CompiledSceneData {
       !Array.isArray(value.dispatch.uniforms) || !Array.isArray(value.dispatch.preludes) ||
       !(value.dispatch.primvarFields instanceof Map) || !(value.dispatch.extraInputs instanceof Map) ||
       !isRecord(value.dispatch.textureRegistry) || !Array.isArray(value.dispatch.textureRegistry.images)) fail('WGSL dispatch');
-  for (const [file, image] of value.images) {
-    if (typeof file !== 'string') fail('texture reference');
-    if (!isRecord(image) || image.kind !== 'external' || !Array.isArray(image.urls) ||
-        !image.urls.length || image.urls.some(url => typeof url !== 'string' || !url ||
-          (!url.startsWith('/') && !/^https?:\/\//i.test(url)))) fail('external texture URL');
-    if (image.tiles !== undefined && (!Array.isArray(image.tiles) || !image.tiles.length ||
-        image.tiles.some(tile => !uint(tile) || tile < 1001 || tile > 1999) ||
-        new Set(image.tiles).size !== image.tiles.length)) fail('external UDIM tiles');
-  }
+  validateExternalImages(value.images);
   const images = value.images;
   const requireImage = (file: unknown): void => {
     if (file !== undefined && (typeof file !== 'string' || !images.has(file))) fail(`missing texture ${String(file)}`);
@@ -285,24 +441,107 @@ function validateData(value: unknown): asserts value is CompiledSceneData {
         }
 }
 
+function validateMaterialData(value: unknown): asserts value is CompiledMaterialData {
+  if (!isRecord(value) || value.kind !== 'material' || !isRecord(value.material) || !isRecord(value.surface) ||
+      !(value.images instanceof Map)) fail('material package');
+  const material = value.material;
+  validateResources({
+    geometries: new Map(), materials: new Map([[material.unitKey, material]]), instances: [], pendingGeometry: [],
+    pendingMaterials: [], unboundGprims: [], tlas: { instanceOrder: new Uint32Array(), nodes: [], bounds: { min: [0, 0, 0], max: [0, 0, 0] } },
+  });
+  validateExternalImages(value.images);
+  for (const texture of isRecord(material.surfaceModule) && Array.isArray(material.surfaceModule.textures)
+    ? material.surfaceModule.textures : []) {
+    if (!isRecord(texture) || (texture.fileRef !== undefined && (typeof texture.fileRef !== 'string' ||
+        !value.images.has(texture.fileRef)))) fail('material texture');
+  }
+  if (isRecord(material.displacement) && !value.images.has(String(material.displacement.file))) fail('displacement texture');
+}
+
+function validateExternalImages(images: Map<unknown, unknown>): void {
+  for (const [file, image] of images) {
+    if (typeof file !== 'string') fail('texture reference');
+    if (!isRecord(image) || image.kind !== 'external' || !Array.isArray(image.urls) ||
+        !image.urls.length || image.urls.some(url => typeof url !== 'string' || !url ||
+          (!url.startsWith('/') && !/^https?:\/\//i.test(url)))) fail('external texture URL');
+    if (image.tiles !== undefined && (!Array.isArray(image.tiles) || !image.tiles.length ||
+        image.tiles.some(tile => !uint(tile) || tile < 1001 || tile > 1999) ||
+        new Set(image.tiles).size !== image.tiles.length)) fail('external UDIM tiles');
+  }
+}
+
+class MissingCompiledImageError extends Error {}
+
+async function fetchBytes(url: string, fetchResource: typeof fetch): Promise<Uint8Array> {
+  const resource = await fetchResource(url);
+  if (!resource.ok) throw new Error(`HTTP ${resource.status}: ${url}`);
+  return new Uint8Array(await resource.arrayBuffer());
+}
+
+const appBaseUrl = (): string => typeof document === 'undefined' ? '/' : import.meta.env.BASE_URL;
+const documentBaseUrl = (fallback: string): string => typeof document === 'undefined' ? fallback : document.baseURI;
+
+/** Lazily fetches and caches exported texture references (app-relative or absolute URLs). */
+function externalImageProvider(
+  images: ReadonlyMap<string, ExternalImage>, base: string, fetchResource: typeof fetch, label: string,
+): PtImageProvider {
+  const appBase = appBaseUrl();
+  const documentBase = documentBaseUrl(base);
+  const decodedImages = new Map<string, Promise<DecodedPixelImage>>();
+  const decodeExternal = async (image: ExternalImage): Promise<DecodedPixelImage> => {
+    const decode = async (url: string): Promise<DecodedPixelImage | undefined> => {
+      const resource = await fetchResource(url);
+      if (resource.status === 404) return undefined;
+      if (!resource.ok) throw new Error(`HTTP ${resource.status}: ${url}`);
+      return decodeBrowserImage(await resource.blob(), url);
+    };
+    for (const reference of image.urls) {
+      const url = compiledSceneAssetUrl(reference, base, appBase, documentBase);
+      if (image.tiles) {
+        const first = await decode(AssetResolver.expandUdim(url, image.tiles[0]!));
+        if (!first) continue;
+        return decodeUdimImage(url, image.tiles, tile => tile === AssetResolver.expandUdim(url, image.tiles![0]!)
+          ? Promise.resolve(first) : decode(tile));
+      }
+      const decoded = await decode(url);
+      if (decoded) return decoded;
+    }
+    throw new Error(`Missing external texture: ${image.urls.join(', ')}`);
+  };
+  return { decode: file => {
+    const image = images.get(file);
+    if (!image) throw new MissingCompiledImageError(`Texture absent from ${label}: ${file}`);
+    let decoded = decodedImages.get(file);
+    if (!decoded) {
+      decoded = decodeExternal(image).catch(error => { decodedImages.delete(file); throw error; });
+      decodedImages.set(file, decoded);
+    }
+    return decoded;
+  } };
+}
+
+export interface CompiledSceneLoadOptions {
+  /** Overrides the location of the grouped WGSL payload (from a USDA `materialx:compiledShaders` reference). */
+  shaders?: string;
+}
+
 export async function loadCompiledScene(
   entry: string,
   sink: DiagnosticSink,
   fetchResource: typeof fetch = fetch,
+  options: CompiledSceneLoadOptions = {},
 ): Promise<LoadedUsdScene> {
   try {
     const response = await fetchResource(entry);
     if (!response.ok) throw new Error(`HTTP ${response.status}: ${entry}`);
     const manifest: unknown = await response.json();
-    const data = await decodeCompiledScene(manifest, async path => {
-      const url = new URL(path, response.url || entry).href;
-      const resource = await fetchResource(url);
-      if (!resource.ok) throw new Error(`HTTP ${resource.status}: ${url}`);
-      return new Uint8Array(await resource.arrayBuffer());
-    });
+    const data = await decodeCompiledScene(manifest, path => fetchBytes(
+      path === 'shaders.wgsl.zst' && options.shaders ? options.shaders : new URL(path, response.url || entry).href,
+      fetchResource,
+    ));
     validateData(data);
-    const appBase = typeof document === 'undefined' ? '/' : import.meta.env.BASE_URL;
-    const documentBase = typeof document === 'undefined' ? response.url || entry : document.baseURI;
+    const appBase = appBaseUrl();
+    const documentBase = documentBaseUrl(response.url || entry);
     if (data.environmentSource) {
       const { url, ...parameters } = data.environmentSource;
       const dome = data.lights.find(light => light.type === 'dome');
@@ -316,41 +555,10 @@ export async function loadCompiledScene(
       data.environmentCdf = buildEnvCdf(environment.image);
     }
     const { images, surfaces } = data;
-    const decodedImages = new Map<string, Promise<DecodedPixelImage>>();
-    const decodeExternal = async (image: ExternalImage): Promise<DecodedPixelImage> => {
-      const base = response.url || entry;
-      const decode = async (url: string): Promise<DecodedPixelImage | undefined> => {
-        const resource = await fetchResource(url);
-        if (resource.status === 404) return undefined;
-        if (!resource.ok) throw new Error(`HTTP ${resource.status}: ${url}`);
-        return decodeBrowserImage(await resource.blob(), url);
-      };
-      for (const reference of image.urls) {
-        const url = compiledSceneAssetUrl(reference, base, appBase, documentBase);
-        if (image.tiles) {
-          const first = await decode(AssetResolver.expandUdim(url, image.tiles[0]!));
-          if (!first) continue;
-          return decodeUdimImage(url, image.tiles, tile => tile === AssetResolver.expandUdim(url, image.tiles![0]!)
-            ? Promise.resolve(first) : decode(tile));
-        }
-        const decoded = await decode(url);
-        if (decoded) return decoded;
-      }
-      throw new Error(`Missing external texture: ${image.urls.join(', ')}`);
-    };
     return {
       entry, scene: data.scene, resources: data.resources, lights: data.lights, cameras: data.cameras,
       mtlx: {
-        imageProvider: { decode: file => {
-          const image = images.get(file);
-          if (!image) throw new Error(`Texture absent from compiled scene: ${file}`);
-          let decoded = decodedImages.get(file);
-          if (!decoded) {
-            decoded = decodeExternal(image).catch(error => { decodedImages.delete(file); throw error; });
-            decodedImages.set(file, decoded);
-          }
-          return decoded;
-        } },
+        imageProvider: externalImageProvider(images, response.url || entry, fetchResource, 'compiled scene'),
         surfaceFor: material => {
           const surface = surfaces.get(material.unitKey);
           if (!surface) throw new Error(`Surface absent from compiled scene: ${material.unitKey}`);

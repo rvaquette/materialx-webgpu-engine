@@ -27,6 +27,7 @@
     "build:fixtures": "node scripts/build-shaderball-fixture.mjs && node scripts/build-scene-materials.ts",
     "build:materials": "node scripts/build-scene-materials.ts",
     "export:scene": "node scripts/export-scene.mjs",
+    "compile:scenes": "node scripts/compile-scenes.mjs",
     "render:scenes": "node scripts/render-scenes.ts",
     "validate:scene": "vite-node scripts/validate-disney-gold.ts"
   },

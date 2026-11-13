@@ -1,0 +1,9 @@
+#usda 1.0
+(
+    customLayerData = {
+        string "materialx:compiledScene" = "./hyperion_rect_lights/scene.json"
+        string "materialx:compiledShaders" = "./hyperion_rect_lights/shaders.wgsl.zst"
+        string "materialx:source" = "../../pathtracer/hyperion_rect_lights.usda"
+    }
+    subLayers = [@../../pathtracer/hyperion_rect_lights.usda@]
+)

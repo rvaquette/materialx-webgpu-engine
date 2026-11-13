@@ -1,0 +1,9 @@
+#usda 1.0
+(
+    customLayerData = {
+        string "materialx:compiledScene" = "./ajax/scene.json"
+        string "materialx:compiledShaders" = "./ajax/shaders.wgsl.zst"
+        string "materialx:source" = "../../pathtracer/ajax.usda"
+    }
+    subLayers = [@../../pathtracer/ajax.usda@]
+)

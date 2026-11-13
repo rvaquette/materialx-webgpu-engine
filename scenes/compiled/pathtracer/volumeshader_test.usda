@@ -1,0 +1,9 @@
+#usda 1.0
+(
+    customLayerData = {
+        string "materialx:compiledScene" = "./volumeshader_test/scene.json"
+        string "materialx:compiledShaders" = "./volumeshader_test/shaders.wgsl.zst"
+        string "materialx:source" = "../../pathtracer/volumeshader_test.usda"
+    }
+    subLayers = [@../../pathtracer/volumeshader_test.usda@]
+)

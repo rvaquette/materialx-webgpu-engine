@@ -1,0 +1,21 @@
+#usda 1.0
+(
+    doc = "Probe quad used by scripts/compile-scenes.mjs to precompile MaterialX library materials."
+    upAxis = "Y"
+)
+
+def Xform "Probe"
+{
+    def Mesh "Mesh"
+    {
+        int[] faceVertexCounts = [4]
+        int[] faceVertexIndices = [0, 1, 2, 3]
+        point3f[] points = [(-1, -1, 0), (1, -1, 0), (1, 1, 0), (-1, 1, 0)]
+        normal3f[] normals = [(0, 0, 1), (0, 0, 1), (0, 0, 1), (0, 0, 1)] (
+            interpolation = "vertex"
+        )
+        texCoord2f[] primvars:st = [(0, 0), (1, 0), (1, 1), (0, 1)] (
+            interpolation = "vertex"
+        )
+    }
+}

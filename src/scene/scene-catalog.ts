@@ -1,3 +1,5 @@
+import { compiledWrapperPath } from './compiled-paths.ts';
+
 // Selectable scenes are relative to the app so builds also work under /dist/.
 export interface SceneCatalogEntry {
   label: string;
@@ -67,13 +69,6 @@ const lamaSurfaceScenes = Object.entries(import.meta.glob<{ label: string; scene
     entry: `./scenes/lama/surface/${example.scene}`,
   })));
 
-const compiledScenes = Object.keys(import.meta.glob('/scenes/**/scene.json', { query: '?url', import: 'default' }))
-  .sort()
-  .map((path): SceneCatalogEntry => {
-    const name = path.slice('/scenes/'.length, -'/scene.json'.length).split('/').at(-1) ?? 'Unknown';
-    return { label: `Compiled - ${name}`, entry: `.${path}` };
-  });
-
 const openPbrScenes = Object.keys(import.meta.glob('/scenes/OpenPBRShaderPlayground/*_grp/*_grp.usda', { query: '?raw', import: 'default' }))
   .sort()
   .map((path): SceneCatalogEntry => {
@@ -84,7 +79,8 @@ const openPbrScenes = Object.keys(import.meta.glob('/scenes/OpenPBRShaderPlaygro
     };
   });
 
-export const SCENE_CATALOG: readonly SceneCatalogEntry[] = [
+/** Every source scene compiled by `npm run compile:scenes`. */
+export const SOURCE_SCENE_CATALOG: readonly SceneCatalogEntry[] = [
   { label: 'Simple shader ball', entry: './scenes/standard-shader-ball/openpbr-rva-standard-shader-ball.usda' },
   { label: 'Standard shader ball', entry: './scenes/standard-shader-ball/standard-shader-ball.usda' },
   ...pathTracerScenes,
@@ -96,13 +92,23 @@ export const SCENE_CATALOG: readonly SceneCatalogEntry[] = [
   { label: 'LamaSurface - Camouflage ajouré', entry: './scenes/lama/surface/lama_surface_camouflage.usda' },
   { label: 'LamaSurface - Chrome ajouré', entry: './scenes/lama/surface/lama_surface_chrome_cutout.usda' },
   ...gltfScenes,
-  ...compiledScenes,
   { label: 'OpenPBR Shader Playground - Selection (9 groups)', entry: './scenes/OpenPBRShaderPlayground/playground_selection.usda' },
   { label: 'OpenPBR Shader Playground - Selection 2 (8 groups)', entry: './scenes/OpenPBRShaderPlayground/playground_selection_2.usda' },
   ...openPbrScenes,
-  ...(import.meta.env.DEV ? [{
-    label: 'OpenPBR Shader Playground (local)',
-    entry: './playground/ShdrPlygrnd_OpenPBR.usda',
-    textureRoot: './playground/',
-  }] : []),
 ];
+
+/** Sources with compiled binaries, opened through their wrapper layer (see compiled-paths.ts). */
+export function compiledSceneCatalog(
+  sources: readonly SceneCatalogEntry[], wrappers: Iterable<string>,
+): SceneCatalogEntry[] {
+  const available = new Set([...wrappers].map(path => path.replace(/^\.?\//, '')));
+  return sources.flatMap(source => {
+    const wrapper = compiledWrapperPath(source.entry);
+    return available.has(wrapper) ? [{ label: source.label, entry: `./${wrapper}` }] : [];
+  });
+}
+
+export const SCENE_CATALOG: readonly SceneCatalogEntry[] = compiledSceneCatalog(
+  SOURCE_SCENE_CATALOG,
+  Object.keys(import.meta.glob('/scenes/compiled/**/*.usda', { query: '?url', import: 'default' })),
+);
