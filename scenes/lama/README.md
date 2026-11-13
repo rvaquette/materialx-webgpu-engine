@@ -1,5 +1,12 @@
 # Lama Test Scenes
 
+The scene selector uses compact labels (for example **Schlick** for
+**LamaGeneralizedSchlick**, **(approx.)** for an engine equivalent and **[N/S]**
+for an unsupported control). Hover an entry to read its full label.
+The popup stays within the controls panel width so its vertical scrollbar
+remains visible. The catalog test checks every Lama `.usda` recursively,
+including emission, conductor, dielectric, generalized Schlick and surface scenes.
+
 ## Editable SSS teapot
 
 Select **Lama - LamaSSS Color / Radius (presets RenderMan)**, then **Path tracing**.

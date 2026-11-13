@@ -9,7 +9,7 @@ const controls = vi.hoisted(() => ({
   selection: '',
   header: false,
   io: { ConfigFlags: 0, AddMouseSourceEvent: vi.fn(), AddMousePosEvent: vi.fn() },
-  style: { ScrollbarSize: 14, GrabMinSize: 12, FramePadding: {}, ItemSpacing: {} },
+  style: { ScrollbarSize: 14, GrabMinSize: 12, FramePadding: {}, ItemSpacing: {}, WindowPadding: { x: 8, y: 8 } },
   number: undefined as number | undefined,
   color: undefined as [number, number, number] | undefined,
 }));
@@ -28,6 +28,9 @@ vi.mock('@mori2003/jsimgui', () => ({
     Begin: () => true, End: vi.fn(), BeginDisabled: vi.fn(), EndDisabled: vi.fn(),
     SeparatorText: vi.fn(), Text: vi.fn(), TextWrapped: vi.fn(), SameLine: vi.fn(),
     SetNextItemWidth: vi.fn(), SetItemDefaultFocus: vi.fn(), EndCombo: vi.fn(), BeginCombo: vi.fn(() => true),
+    GetContentRegionAvail: vi.fn(() => ({ x: 384, y: 600 })),
+    GetTextLineHeightWithSpacing: () => 17,
+    SetNextWindowSizeConstraints: vi.fn(), SetItemTooltip: vi.fn(),
     RadioButton: vi.fn(() => false), Button: vi.fn(() => false),
     Selectable: vi.fn((label: string) => {
       if (label !== controls.selection) return false;
@@ -152,6 +155,22 @@ function fixture() {
 }
 
 describe('Dear ImGui viewer controls', () => {
+  it('bounds the scene popup to the panel and keeps full labels in tooltips while selecting compact labels', async () => {
+    const f = fixture();
+    const label = 'LamaGeneralizedSchlick - Motion Mollification - NOT SUPPORTED';
+    const entry = './scenes/lama/generalized_schlick/generalized_schlick_motion_mollification.usda';
+    f.state.scenes = [{ label, entry }];
+    f.state.entry = entry;
+    controls.selection = `Schlick - Motion Mollification [N/S]##${entry}`;
+    const stop = await startViewerUi(f.canvas, f.state, f.actions, f.parameters);
+    f.render();
+    expect(ImGui.SetNextWindowSizeConstraints).toHaveBeenCalledExactlyOnceWith({ x: 384, y: 0 }, { x: 384, y: 356 });
+    expect(ImGui.BeginCombo).toHaveBeenNthCalledWith(1, '##scene', 'Schlick - Motion Mollification [N/S]', 8);
+    expect(ImGui.SetItemTooltip).toHaveBeenCalledWith(label);
+    expect(f.actions.scene).toHaveBeenCalledWith(entry);
+    stop();
+  });
+
   it('keeps export out of the UI and gates source-material replacement for compiled entries', async () => {
     const f = fixture();
     f.state.compiled = true;

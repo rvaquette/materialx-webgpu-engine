@@ -4,6 +4,17 @@ import { describe, expect, it } from 'vitest';
 import { SCENE_CATALOG } from '../../src/scene/scene-catalog.ts';
 
 describe('scene selector catalog', () => {
+  it('includes every Lama USDA across all subdirectories exactly once', () => {
+    const paths = readdirSync('scenes\\lama', { recursive: true })
+      .map(path => path.replace(/\\/g, '/'))
+      .filter(path => path.endsWith('.usda'))
+      .map(path => `./scenes/lama/${path}`)
+      .sort();
+    const entries = SCENE_CATALOG.filter(scene => scene.entry.startsWith('./scenes/lama/'));
+    expect(paths.length).toBeGreaterThan(0);
+    expect(entries.map(scene => scene.entry).sort()).toEqual(paths);
+  });
+
   it('includes every dielectric parameter scene and identifies unsupported controls', () => {
     const names = readdirSync('scenes/lama/dielectric').filter(name => name.endsWith('.usda')).sort();
     const entries = SCENE_CATALOG.filter(scene => scene.entry.startsWith('./scenes/lama/dielectric/'));

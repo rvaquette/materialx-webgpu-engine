@@ -42,15 +42,28 @@ export interface ViewerUiActions {
 }
 
 function combo(label: string, value: string, options: readonly { label: string; value: string }[], change: (value: string) => void, largePopup = false): void {
+  const displayLabel = (text: string): string => largePopup ? text
+    .replace(/^Lama - (?:Lama)?/, 'Lama ')
+    .replace(/^Lama(?:Generalized)?(?=[A-Z])/, '')
+    .replace(/^OpenPBR Shader Playground/, 'OpenPBR')
+    .replace(/^Pathtracer - /, 'PT - ')
+    .replace(/ \(engine equivalent\)/g, ' (approx.)')
+    .replace(/ - NOT SUPPORTED$/, ' [N/S]') : text;
   const selected = options.find(option => option.value === value);
   ImGui.SetNextItemWidth(-1);
   ImGui.PushStyleColorImVec4(ImGuiCol.ScrollbarBg, new ImVec4(0.06, 0.06, 0.06, 0.95));
   ImGui.PushStyleColorImVec4(ImGuiCol.ScrollbarGrab, new ImVec4(0.48, 0.48, 0.48, 1));
   ImGui.PushStyleColorImVec4(ImGuiCol.ScrollbarGrabHovered, new ImVec4(0.64, 0.64, 0.64, 1));
   ImGui.PushStyleColorImVec4(ImGuiCol.ScrollbarGrabActive, new ImVec4(0.78, 0.78, 0.78, 1));
-  if (ImGui.BeginCombo(label, selected?.label ?? value, largePopup ? ImGuiComboFlags.HeightLarge : ImGuiComboFlags.None)) {
+  if (largePopup) {
+    const width = ImGui.GetContentRegionAvail().x;
+    const height = ImGui.GetTextLineHeightWithSpacing() * 20 + ImGui.GetStyle().WindowPadding.y * 2;
+    ImGui.SetNextWindowSizeConstraints(new ImVec2(width, 0), new ImVec2(width, height));
+  }
+  if (ImGui.BeginCombo(label, displayLabel(selected?.label ?? value), largePopup ? ImGuiComboFlags.HeightLarge : ImGuiComboFlags.None)) {
     for (const option of options) {
-      if (ImGui.Selectable(`${option.label}##${option.value}`, option.value === value, 0, new ImVec2(0, 0))) change(option.value);
+      if (ImGui.Selectable(`${displayLabel(option.label)}##${option.value}`, option.value === value, 0, new ImVec2(0, 0))) change(option.value);
+      if (largePopup) ImGui.SetItemTooltip(option.label);
       if (option.value === value) ImGui.SetItemDefaultFocus();
     }
     ImGui.EndCombo();
