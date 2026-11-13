@@ -664,7 +664,7 @@ async function renderUsdRasterOnDevice(
   for (const draw of frame.draws) {
     const material = draw.materialKey ? resources.materials.get(draw.materialKey) : undefined;
     if (material?.sceneShader && !material.volumeBoundary) {
-      backend.createSceneVariantPipeline(draw.pass, material.variant.pipelineKey, material.sceneShader.code);
+      backend.createSceneVariantPipeline(draw.pass, material.variant.pipelineKey, material.sceneShader.code, undefined, !!material.resolvedSurface?.backNodeId);
     }
   }
   const resolvePipeline = backend.createResolvePipeline();

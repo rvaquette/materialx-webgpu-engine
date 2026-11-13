@@ -749,7 +749,7 @@ export class InteractiveViewer {
           this.#onShaderErrors?.(rasterErrors);
           if (rasterErrors.length > 0) throw new Error(`WGSL: ${rasterErrors.length} erreur(s) de compilation.`);
           shaders.set(material.variant.pipelineKey, shader);
-          nextBackend.createSceneVariantPipeline(draw.pass, material.variant.pipelineKey, shader.code, compiled.module);
+          nextBackend.createSceneVariantPipeline(draw.pass, material.variant.pipelineKey, shader.code, compiled.module, !!material.resolvedSurface?.backNodeId);
         }
         const nextDraws = new Map<ScenePassKind, SceneDrawCall[]>();
         for (const draw of frame.draws) {
@@ -764,7 +764,7 @@ export class InteractiveViewer {
           const shader = shaders.get(material.variant.pipelineKey);
           if (!shader) throw new Error(`Missing raster shader: ${material.materialName}`);
           const pipeline = nextBackend.sceneVariantPipeline(draw.pass, material.variant.pipelineKey)
-            ?? nextBackend.createSceneVariantPipeline(draw.pass, material.variant.pipelineKey, shader.code);
+            ?? nextBackend.createSceneVariantPipeline(draw.pass, material.variant.pipelineKey, shader.code, undefined, !!material.resolvedSurface?.backNodeId);
           if (!pipeline) continue;
           let texcoord = buffers.vertexBuffers.get('uv');
           if (!texcoord) {

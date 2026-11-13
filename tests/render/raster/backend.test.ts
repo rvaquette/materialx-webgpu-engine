@@ -41,6 +41,11 @@ function makeBackend(tonemap?: 'none' | 'reinhard' | 'acesFilmic') {
 }
 
 describe('RasterBackend pipelines', () => {
+  it('renders both faces of an opaque two-sided material', () => {
+    const { device, backend } = makeBackend();
+    backend.createSceneVariantPipeline('opaque', 'two-sided', '// shader', undefined, true);
+    expect(device.createRenderPipeline.mock.calls[0]![0].primitive).toMatchObject({ cullMode: 'none' });
+  });
   it('renders alpha masks with depth writes and no blending, retaining both sides of cutouts', () => {
     const { device, backend } = makeBackend();
     backend.createSceneVariantPipeline('masked', 'mask', '// mask shader');

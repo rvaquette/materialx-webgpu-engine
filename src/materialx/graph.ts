@@ -149,7 +149,7 @@ export interface GraphRoot {
   /** Shader node connected to the terminal, or null when unconnected. */
   node: MxNode | null;
   /** Material-level LamaSurface inputs that are not shader-node terminals. */
-  lamaSurface?: { presence?: ResolvedInput; backNode?: MxNode | null };
+  lamaSurface?: { presence?: ResolvedInput; presenceNode?: MxNode | null; backNode?: MxNode | null };
   provenance?: Provenance;
 }
 
@@ -378,6 +378,7 @@ export function resolveGraph(options: ResolveGraphOptions): ResolvedGraph {
         ...(root.lamaSurface.backNode ? { backNodeId: root.lamaSurface.backNode.getNamePath() } : {}),
       };
       if (root.lamaSurface.backNode) stack.push(root.lamaSurface.backNode);
+      if (root.lamaSurface.presenceNode) stack.push(root.lamaSurface.presenceNode);
     }
   }
 

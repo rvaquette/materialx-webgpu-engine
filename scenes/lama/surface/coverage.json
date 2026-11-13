@@ -1,0 +1,61 @@
+[
+  {
+    "parameter": "material_sides",
+    "scene": "surface_material_sides.usda",
+    "label": "Material Sides - Front / Back",
+    "status": "implemented"
+  },
+  {
+    "parameter": "material_front",
+    "scene": "surface_material_front.usda",
+    "label": "Material Front",
+    "status": "implemented"
+  },
+  {
+    "parameter": "material_back",
+    "scene": "surface_material_back.usda",
+    "label": "Material Back",
+    "status": "implemented"
+  },
+  {
+    "parameter": "presence",
+    "scene": "surface_presence.usda",
+    "label": "Presence - Connected Pattern",
+    "status": "implemented"
+  },
+  {
+    "parameter": "compute_presence",
+    "scene": "surface_compute_presence.usda",
+    "label": "Compute Presence - NOT SUPPORTED",
+    "status": "unsupported",
+    "reason": "RenderMan renderer feature switch is not represented by the MaterialX LamaSurface NodeDef or implemented by this engine."
+  },
+  {
+    "parameter": "compute_opacity",
+    "scene": "surface_compute_opacity.usda",
+    "label": "Compute Opacity - NOT SUPPORTED",
+    "status": "unsupported",
+    "reason": "RenderMan renderer feature switch is not represented by the MaterialX LamaSurface NodeDef or implemented by this engine."
+  },
+  {
+    "parameter": "presence_opacity_cached",
+    "scene": "surface_presence_opacity_cached.usda",
+    "label": "Presence / Opacity Cached - NOT SUPPORTED",
+    "status": "unsupported",
+    "reason": "RenderMan renderer feature switch is not represented by the MaterialX LamaSurface NodeDef or implemented by this engine."
+  },
+  {
+    "parameter": "compute_subsurface",
+    "scene": "surface_compute_subsurface.usda",
+    "label": "Compute Subsurface - NOT SUPPORTED",
+    "status": "unsupported",
+    "reason": "RenderMan renderer feature switch is not represented by the MaterialX LamaSurface NodeDef or implemented by this engine."
+  },
+  {
+    "parameter": "compute_interior",
+    "scene": "surface_compute_interior.usda",
+    "label": "Compute Interior - NOT SUPPORTED",
+    "status": "unsupported",
+    "reason": "RenderMan renderer feature switch is not represented by the MaterialX LamaSurface NodeDef or implemented by this engine."
+  }
+]

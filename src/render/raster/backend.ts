@@ -183,7 +183,7 @@ export class RasterBackend {
    * shader uses the vs_forward/fs_forward entry points and reads position/normal/
    * texcoord vertex buffers; blend and depth match the hand-written pass.
    */
-  createSceneVariantPipeline(pass: ScenePassKind, pipelineKey: string, code: string, checkedModule?: GPUShaderModule): GPURenderPipeline {
+  createSceneVariantPipeline(pass: ScenePassKind, pipelineKey: string, code: string, checkedModule?: GPUShaderModule, doubleSided = false): GPURenderPipeline {
     const cacheKey = `${pass}:${pipelineKey}`;
     const cached = this.sceneVariants.get(cacheKey);
     if (cached) return cached;
@@ -193,7 +193,7 @@ export class RasterBackend {
       layout: 'auto',
       vertex: { module, entryPoint: IR_FORWARD_VERTEX_ENTRY, buffers: SCENE_IR_VERTEX_LAYOUTS },
       fragment: { module, entryPoint: IR_FORWARD_FRAGMENT_ENTRY, targets: [this.sceneColorTarget(transparent)] },
-      primitive: { topology: 'triangle-list', cullMode: pass === 'opaque' ? 'back' : 'none' },
+      primitive: { topology: 'triangle-list', cullMode: pass === 'opaque' && !doubleSided ? 'back' : 'none' },
       depthStencil: { format: this.depthFormat, depthWriteEnabled: !transparent, depthCompare: 'less' },
     });
     this.sceneVariants.set(cacheKey, pipeline);

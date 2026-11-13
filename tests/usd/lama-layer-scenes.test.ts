@@ -25,6 +25,59 @@ const reader: UsdLayerReader = {
 };
 
 describe('LamaLayer gold IOR scenes', () => {
+  it('keeps the chrome scene camera and geometry aligned with the camouflage scene', async () => {
+    const directory = join(SCENE_DIR, 'surface');
+    const scene = await importUsdStage(join(directory, 'lama_surface_chrome_cutout.usda'), { reader });
+    const reference = await importUsdStage(join(directory, 'lama_surface_camouflage.usda'), { reader });
+    expect(scene.prims.get('/World/Camera')?.xformOps).toEqual(reference.prims.get('/World/Camera')?.xformOps);
+    expect(scene.prims.get('/World/Camera')?.attributes).toEqual(reference.prims.get('/World/Camera')?.attributes);
+    for (const name of ['Teapot', 'Stand']) {
+      const prim = scene.prims.get(`/World/Geometry/${name}`);
+      const original = reference.prims.get(`/World/Geometry/${name}`);
+      expect(prim?.xformOps).toEqual(original?.xformOps);
+      expect(prim?.attributes.get('engine:geometry:file')?.value).toEqual(original?.attributes.get('engine:geometry:file')?.value);
+      expect(prim?.relationships.get('material:binding')?.targets).toEqual(['/World/Looks/chrome']);
+    }
+  });
+
+  it('imports the two-sided camouflage teapot and stand', async () => {
+    const directory = join(SCENE_DIR, 'surface');
+    const scene = await importUsdStage(join(directory, 'lama_surface_camouflage.usda'), { reader });
+    const reference = await importUsdStage(join(SCENE_DIR, 'translucent', 'lama_translucent_color_roughness.usda'), { reader });
+    expect(scene.materials.find(material => material.primPath === '/World/Looks/camouflage')).toMatchObject({
+      assetPath: './lama_surface_camouflage.mtlx', referencedPrimPath: '/MaterialX/Materials/camouflage',
+    });
+    expect(scene.prims.get('/World/Camera')?.xformOps).toEqual(reference.prims.get('/World/Camera')?.xformOps);
+    expect(scene.prims.get('/World/Camera')?.attributes).toEqual(reference.prims.get('/World/Camera')?.attributes);
+    for (const name of ['Teapot', 'Stand']) {
+      const prim = scene.prims.get(`/World/Geometry/${name}`);
+      expect(prim?.relationships.get('material:binding')?.targets).toEqual(['/World/Looks/camouflage']);
+      expect(prim?.xformOps).toEqual(reference.prims.get(`/World/Geometry/${name}`)?.xformOps);
+    }
+  });
+
+  it('imports all LamaSurface parameter scenes and keeps unsupported switches explicit', async () => {
+    const directory = join(SCENE_DIR, 'surface');
+    const coverage = JSON.parse(await readFile(join(directory, 'coverage.json'), 'utf8')) as {
+      parameter: string; scene: string; status: string; reason?: string;
+    }[];
+    expect(coverage).toHaveLength(9);
+    for (const entry of coverage) {
+      const scene = await importUsdStage(join(directory, entry.scene), { reader });
+      expect(scene.materials.find(material => material.primPath === '/World/Looks/lamaSurface')).toMatchObject({
+        assetPath: './materials.mtlx', referencedPrimPath: `/MaterialX/Materials/surface_${entry.parameter}`,
+      });
+      expect(scene.prims.get('/World/Geometry/Teapot')?.relationships.get('material:binding')?.targets)
+        .toEqual(['/World/Looks/lamaSurface']);
+      for (const material of scene.materials) if (material.assetPath) expect(existsSync(resolve(directory, material.assetPath))).toBe(true);
+      if (entry.status === 'unsupported') expect(entry.reason).toBeTruthy();
+      if (entry.parameter === 'material_back' || entry.parameter === 'material_sides') {
+        expect(scene.prims.has('/World/Geometry/FrontCard')).toBe(true);
+        expect(scene.prims.has('/World/Geometry/BackCard')).toBe(true);
+      }
+    }
+  });
+
   it('imports the LamaSSS teapot with the common Lama setup and RenderMan Color/Radius presets', async () => {
     const directory = join(SCENE_DIR, 'sss');
     const scene = await importUsdStage(join(directory, 'lama_sss_color_radius.usda'), { reader });

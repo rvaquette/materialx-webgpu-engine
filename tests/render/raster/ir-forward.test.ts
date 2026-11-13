@@ -80,6 +80,7 @@ describe('assembleIrForwardShader (T058b)', () => {
   it('corrects front-face shading normals continuously without changing back-face glass orientation', () => {
     const { shader } = forward('standard_surface', []);
     expect(shader.code).toContain('@builtin(front_facing) frontFacing: bool');
+    expect(shader.code).toContain('vary.frontFacing = select(-1.0, 1.0, frontFacing);');
     expect(shader.code).toContain('if (frontFacing && facing < 0.0)');
     expect(shader.code).toContain('authoredNormal - 2.0 * facing * vary.viewDir');
     expect(shader.code).toContain('mx_closure_oriented_normal(c, authoredNormal, vary.viewDir)');

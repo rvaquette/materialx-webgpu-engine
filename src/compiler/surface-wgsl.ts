@@ -1068,7 +1068,8 @@ function buildLamaSurfaceFn(
     ...exprs.body,
     ...closureLocal(backClosure ? 'cFront' : 'c', closure),
     ...(backClosure ? closureLocal('cBack', backClosure) : []),
-    ...(backClosure ? ['  if (dot(vary.normal, vary.viewDir) >= 0.0) { return cFront; }', '  return cBack;'] : ['  return c;']),
+    ...(backClosure ? ['  let facing = select(dot(vary.normal, vary.viewDir), vary.frontFacing, vary.frontFacing != 0.0);',
+      '  if (facing >= 0.0) { return cFront; }', '  return cBack;'] : ['  return c;']),
   ];
   const fnCode = `fn ${entryName}(vary: MxVaryings) -> LayeredClosure {\n${fnBody.join('\n')}\n}`;
   let opacity: SurfaceOpacityFn | undefined;

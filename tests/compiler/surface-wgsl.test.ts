@@ -294,7 +294,7 @@ describe('emitLayeredSurface (T055d)', () => {
     const module = emit(graph);
     expect(module.code).toContain('var cFront: LayeredClosure;');
     expect(module.code).toContain('var cBack: LayeredClosure;');
-    expect(module.code).toContain('dot(vary.normal, vary.viewDir) >= 0.0');
+    expect(module.code).toContain('select(dot(vary.normal, vary.viewDir), vary.frontFacing, vary.frontFacing != 0.0)');
     expect(module.code).toContain('cFront.opacity = clamp(');
     expect(module.code).toContain('cBack.opacity = clamp(');
     expect(module.features?.lobeKinds).toContain(0);

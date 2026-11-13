@@ -422,6 +422,7 @@ fn ${IR_FORWARD_FRAGMENT_ENTRY}(fin: MxVertexOut, @builtin(front_facing) frontFa
   vary.tangent = tangent;
   vary.bitangent = bitangent;
   vary.viewDir = normalize(fin.viewDir);
+  vary.frontFacing = select(-1.0, 1.0, frontFacing);
   vary.texcoord = fin.texcoord;${primvarAssigns ? '\n' + primvarAssigns : ''}
   let c = ${surfaceEntry}(vary);
   if (c.opacity <= 0.0) { discard; }

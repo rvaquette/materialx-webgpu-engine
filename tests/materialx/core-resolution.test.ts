@@ -8,6 +8,7 @@ import { loadMaterialXDocuments } from '../../src/materialx/document-source.ts';
 import { createGraphMaterialCompiler } from '../../src/render/graph-material-compiler.ts';
 import { activeParameterPreset, changeMaterialParameters, compileEditableMaterial, editableSceneMaterials, parameterPresetChanges, parameterPresetNames, visibleMaterialParameters } from '../../src/render/material-parameters.ts';
 import { surfaceGraphToLayered } from '../../src/compiler/surface-lower.ts';
+import { evaluateSurfaceToLayered } from '../../src/compiler/surface-eval.ts';
 import { buildSceneResources } from '../../src/render/scene-resources.ts';
 import { importUsdStage } from '../../src/usd/importer.ts';
 import type { Diagnostic } from '../../src/core/diagnostics.ts';
@@ -20,6 +21,130 @@ const playgroundRoot = process.env['MX_PLAYGROUND_ROOT']
 const coreFile = join(coreRoot, 'JsMaterialXCore.js');
 
 describe.skipIf(!existsSync(coreFile) || !existsSync(libraryRoot))('installed MaterialX Core resolution', () => {
+  it('evaluates the chrome cutout on the front without cutting the back', async () => {
+    const module = await import(/* @vite-ignore */ pathToFileURL(coreFile).href) as { default: MaterialXModuleFactory };
+    const core = new MaterialXCore(await module.default());
+    const libraries = new MaterialXLibraries(core);
+    await libraries.load({ sources: defaultLibrarySources(libraryRoot), fetchText: async path => readFileSync(path, 'utf8') });
+    const diagnostics: Diagnostic[] = [];
+    const text = readFileSync(join('scenes', 'lama', 'surface', 'lama_surface_chrome_cutout.mtlx'), 'utf8');
+    const documents = await loadMaterialXDocuments({ core, libraries, texts: new Map([['chrome', text]]),
+      sink: d => diagnostics.push(d) });
+    try {
+      const build = await createGraphMaterialCompiler({ documents, sink: d => diagnostics.push(d) }).compile({
+        assetPath: 'chrome', materialName: 'chrome_cutout',
+        referencedPrimPath: '/MaterialX/Materials/chrome_cutout', boundPrims: [],
+      });
+      expect(build?.graph).toBeDefined();
+      expect(build?.surface).toBeDefined();
+      expect(build?.surface?.backNodeId).toBe('interior');
+      expect(build?.surface?.inputs.get('opacity')?.source).toEqual({ kind: 'connection', nodeId: 'front_cutout' });
+      const opacity = (position: number[]) => evaluateSurfaceToLayered(build!.graph!, build!.surface!, { position }).opacity;
+      expect(opacity([0.05, 0.0883, 0])).toBe(0);
+      expect(opacity([0.05, 0.0883, 0.05])).toBe(1);
+      expect(opacity([0.05, 0.0616, 0.047])).toBe(0);
+      expect(opacity([0.05, 0.0616, -0.047])).toBe(0);
+      expect(opacity([-0.05, 0.0506, 0])).toBe(1);
+      expect(diagnostics.filter(d => d.level === 'error')).toEqual([]);
+    } finally {
+      documents.delete();
+      libraries.delete();
+    }
+  }, 30000);
+
+  it('compiles a LamaSurface with front, back and a connected presence pattern', async () => {
+    const module = await import(/* @vite-ignore */ pathToFileURL(coreFile).href) as { default: MaterialXModuleFactory };
+    const core = new MaterialXCore(await module.default());
+    const libraries = new MaterialXLibraries(core);
+    await libraries.load({ sources: defaultLibrarySources(libraryRoot), fetchText: async path => readFileSync(path, 'utf8') });
+    const diagnostics: Diagnostic[] = [];
+    const documents = await loadMaterialXDocuments({ core, libraries, texts: new Map([['lama', `<materialx version="1.39">
+      <LamaDiffuse name="front" type="BSDF"><input name="color" type="color3" value="0.8, 0.1, 0.1" /></LamaDiffuse>
+      <LamaSheen name="back" type="BSDF"><input name="color" type="color3" value="0.1, 0.2, 0.8" /></LamaSheen>
+      <image name="mask" type="float"><input name="file" type="filename" value="mask.png" /></image>
+      <LamaSurface name="mat" type="material">
+        <input name="materialFront" type="BSDF" nodename="front" />
+        <input name="materialBack" type="BSDF" nodename="back" />
+        <input name="presence" type="float" nodename="mask" />
+      </LamaSurface>
+    </materialx>`]]), sink: d => diagnostics.push(d) });
+    try {
+      const build = await createGraphMaterialCompiler({ documents, sink: d => diagnostics.push(d) }).compile({
+        assetPath: 'lama', materialName: 'mat', referencedPrimPath: '/MaterialX/Materials/mat', boundPrims: [],
+      });
+      expect(build?.graph?.nodes.has('mask')).toBe(true);
+      expect(build?.surface?.backNodeId).toBe('back');
+      expect(build?.layered?.textures).toHaveLength(1);
+      expect(build?.layered?.features?.opaque).toBe(false);
+      expect(build?.layered?.code).toContain('vary.frontFacing');
+      expect(diagnostics.filter(d => d.level === 'error')).toEqual([]);
+    } finally {
+      documents.delete();
+      libraries.delete();
+    }
+  }, 30000);
+
+  it('compiles every generated LamaSurface example with the installed libraries', async () => {
+    const module = await import(/* @vite-ignore */ pathToFileURL(coreFile).href) as { default: MaterialXModuleFactory };
+    const core = new MaterialXCore(await module.default());
+    const libraries = new MaterialXLibraries(core);
+    await libraries.load({ sources: defaultLibrarySources(libraryRoot), fetchText: async path => readFileSync(path, 'utf8') });
+    const diagnostics: Diagnostic[] = [];
+    const directory = join('scenes', 'lama', 'surface');
+    const coverage = JSON.parse(readFileSync(join(directory, 'coverage.json'), 'utf8')) as { parameter: string; status: string }[];
+    const documents = await loadMaterialXDocuments({ core, libraries,
+      texts: new Map([['surface', readFileSync(join(directory, 'materials.mtlx'), 'utf8')]]),
+      sink: d => diagnostics.push(d) });
+    try {
+      const compiler = createGraphMaterialCompiler({ documents, sink: d => diagnostics.push(d) });
+      for (const example of coverage) {
+        diagnostics.length = 0;
+        const materialName = `surface_${example.parameter}`;
+        const build = await compiler.compile({ assetPath: 'surface', materialName,
+          referencedPrimPath: `/MaterialX/Materials/${materialName}`, boundPrims: [] });
+        expect(build?.layered, materialName).toBeDefined();
+        expect(diagnostics.filter(d => d.level === 'error'), materialName).toEqual([]);
+        if (example.parameter === 'presence') {
+          expect(build?.graph?.nodes.has('checker')).toBe(true);
+          expect(build?.layered?.code).toContain('floor(');
+          expect(build?.layered?.features?.opaque).toBe(false);
+        }
+        if (example.parameter === 'material_back') expect(build?.surface?.backNodeId).toBe('back');
+      }
+    } finally {
+      documents.delete();
+      libraries.delete();
+    }
+  }, 30000);
+
+  it('compiles the two-sided procedural camouflage and its cutout network', async () => {
+    const module = await import(/* @vite-ignore */ pathToFileURL(coreFile).href) as { default: MaterialXModuleFactory };
+    const core = new MaterialXCore(await module.default());
+    const libraries = new MaterialXLibraries(core);
+    await libraries.load({ sources: defaultLibrarySources(libraryRoot), fetchText: async path => readFileSync(path, 'utf8') });
+    const diagnostics: Diagnostic[] = [];
+    const text = readFileSync(join('scenes', 'lama', 'surface', 'lama_surface_camouflage.mtlx'), 'utf8');
+    const documents = await loadMaterialXDocuments({ core, libraries, texts: new Map([['camouflage', text]]),
+      sink: d => diagnostics.push(d) });
+    try {
+      const build = await createGraphMaterialCompiler({ documents, sink: d => diagnostics.push(d) }).compile({
+        assetPath: 'camouflage', materialName: 'camouflage',
+        referencedPrimPath: '/MaterialX/Materials/camouflage', boundPrims: [],
+      });
+      expect(build?.surface?.backNodeId).toBe('camouflage_diffuse');
+      expect(build?.surface?.inputs.get('opacity')?.source).toEqual({ kind: 'connection', nodeId: 'holes' });
+      expect(build?.graph?.nodes.has('hole_noise')).toBe(true);
+      expect(build?.graph?.nodes.has('hole_projection')).toBe(true);
+      expect(build?.graph?.nodes.has('cells')).toBe(true);
+      expect(build?.layered?.features?.opaque).toBe(false);
+      expect(build?.layered?.code).toContain('mx_worley(');
+      expect(diagnostics.filter(d => d.level === 'error')).toEqual([]);
+    } finally {
+      documents.delete();
+      libraries.delete();
+    }
+  }, 30000);
+
   it.each(['conductor', 'dielectric', 'generalized_schlick'])('resolves all %s parameter scenes and explicitly diagnoses unsupported controls', async (family) => {
     const module = await import(/* @vite-ignore */ pathToFileURL(coreFile).href) as { default: MaterialXModuleFactory };
     const core = new MaterialXCore(await module.default());

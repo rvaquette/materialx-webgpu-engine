@@ -111,6 +111,20 @@ function fakeNode(opts: {
 }
 
 describe('resolveGraph', () => {
+  it('walks the LamaSurface presence network as well as both closures', () => {
+    const front = fakeNode({ name: 'front', category: 'LamaDiffuse', type: 'BSDF' });
+    const back = fakeNode({ name: 'back', category: 'LamaSheen', type: 'BSDF' });
+    const source = fakeNode({ name: 'maskValue', category: 'constant', type: 'float' });
+    const mask = fakeNode({ name: 'mask', category: 'multiply', type: 'float',
+      inputs: [fakeInput({ name: 'in1', type: 'float', connected: source })] });
+    const graph = resolveGraph({
+      roots: [{ name: 'surfaceshader', type: 'surfaceshader', node: front,
+        lamaSurface: { backNode: back, presenceNode: mask,
+          presence: { name: 'presence', type: 'float', source: { kind: 'connection', nodeId: '/mat/mask' }, provenance: { namePath: '/mat/presence' } } } }],
+      onDiagnostic: () => {},
+    });
+    expect([...graph.nodes.keys()]).toEqual(expect.arrayContaining(['/mat/front', '/mat/back', '/mat/mask', '/mat/maskValue']));
+  });
   it('preserves explicit editor selection and rejects invalid flags', () => {
     const resolve = (editable?: string) => {
       const input = fakeInput({ name: 'IOR', type: 'float', value: '1.5', ...(editable !== undefined ? { editable } : {}) });

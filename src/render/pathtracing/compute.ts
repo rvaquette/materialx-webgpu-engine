@@ -496,6 +496,7 @@ fn mx_hit_varyings(h : Hit, pos : vec3<f32>, n : vec3<f32>, viewDir : vec3<f32>)
   vary.bitangent = select(f[1], normalize(cross(n, tang)) * select(1.0, -1.0, tangentWithSign.w < 0.0), hasT);
   vary.texcoord = uv;
   vary.viewDir = viewDir;
+  vary.frontFacing = select(-1.0, 1.0, dot(surface_hit_geometric_normal(h), viewDir) >= 0.0);
 ${assigns.join('\n')}
   return vary;
 }`,

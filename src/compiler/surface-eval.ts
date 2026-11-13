@@ -144,10 +144,11 @@ export function composeSurfaceLayered(prepared: PreparedSurface, env: IrEvalVary
 }
 
 function selectLamaSide(surface: ResolvedSurface, env: IrEvalVaryings): ResolvedSurface {
-  if (!surface.backNodeId || !env.normal || !env.viewDir) return surface;
-  const facing = (env.normal[0] ?? 0) * (env.viewDir[0] ?? 0)
-    + (env.normal[1] ?? 0) * (env.viewDir[1] ?? 0)
-    + (env.normal[2] ?? 0) * (env.viewDir[2] ?? 0);
+  const normal = env.geometricNormal ?? env.normal;
+  if (!surface.backNodeId || !normal || !env.viewDir) return surface;
+  const facing = (normal[0] ?? 0) * (env.viewDir[0] ?? 0)
+    + (normal[1] ?? 0) * (env.viewDir[1] ?? 0)
+    + (normal[2] ?? 0) * (env.viewDir[2] ?? 0);
   return facing >= 0 ? surface : {
     family: surface.family,
     nodeId: surface.backNodeId,

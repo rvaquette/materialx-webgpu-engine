@@ -221,6 +221,20 @@ tracer.
 | Lama (assemblage) | `lama_*` | supported |
 | Nodegraph procédural | nodegraph | supported |
 
+### LamaSurface
+
+Les scènes `scenes/lama/surface/` illustrent les entrées MaterialX
+`materialFront`, `materialBack` et `presence`, ainsi que les deux faces
+géométriques. Le masque peut être constant ou connecté à un graphe ; sans face
+arrière connectée, le matériau avant est utilisé par le path tracer. Le raster
+ne désactive le culling opaque que lorsqu'une face arrière est connectée.
+
+Les cinq scènes étiquetées **NOT SUPPORTED** illustrent les effets associés mais
+ne contrôlent pas les options RenderMan Compute Presence, Compute Opacity,
+Presence / Opacity Cached, Compute Subsurface et Compute Interior. Ces options
+ne sont pas exposées par le NodeDef MaterialX LamaSurface utilisé ici. Les
+exemples et leur statut sont régénérés par `node scripts/build-lama-surface-scenes.mjs`.
+
 Harnais et cas : [`tests/render/bxdf-device.harness.ts`](../tests/render/bxdf-device.harness.ts),
 [`tests/fixtures/bxdf-families.ts`](../tests/fixtures/bxdf-families.ts). Orchestrateurs
 `npm run test:local-bxdf` (GPU local) et `npm run test:bxdf-device` (mobile Adreno

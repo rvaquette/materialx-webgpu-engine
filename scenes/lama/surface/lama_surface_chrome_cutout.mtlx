@@ -1,0 +1,108 @@
+<?xml version="1.0"?>
+<materialx version="1.39" colorspace="lin_rec709">
+  <standard_surface name="ground_shader" type="surfaceshader">
+    <input name="base_color" type="color3" value="0.7, 0.72, 0.73" />
+    <input name="specular_roughness" type="float" value="0.85" />
+  </standard_surface>
+  <surfacematerial name="ground" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="ground_shader" />
+  </surfacematerial>
+  <position name="position" type="vector3">
+    <input name="space" type="string" value="world" />
+  </position>
+  <dotproduct name="vertical" type="float">
+    <input name="in1" type="vector3" nodename="position" />
+    <input name="in2" type="vector3" value="-0.352609, 0.935771, 0" />
+  </dotproduct>
+  <subtract name="centered_vertical" type="float">
+    <input name="in1" type="float" nodename="vertical" />
+    <input name="in2" type="float" value="0.065" />
+  </subtract>
+  <extract name="horizontal" type="float">
+    <input name="in" type="vector3" nodename="position" />
+    <input name="index" type="integer" value="2" />
+  </extract>
+  <extract name="depth" type="float">
+    <input name="in" type="vector3" nodename="position" />
+    <input name="index" type="integer" value="0" />
+  </extract>
+  <absval name="absolute_horizontal" type="float">
+    <input name="in" type="float" nodename="horizontal" />
+  </absval>
+  <absval name="absolute_vertical" type="float">
+    <input name="in" type="float" nodename="centered_vertical" />
+  </absval>
+  <divide name="scaled_horizontal" type="float">
+    <input name="in1" type="float" nodename="absolute_horizontal" />
+    <input name="in2" type="float" value="0.033" />
+  </divide>
+  <divide name="scaled_vertical" type="float">
+    <input name="in1" type="float" nodename="absolute_vertical" />
+    <input name="in2" type="float" value="0.04" />
+  </divide>
+  <multiply name="slanted_horizontal" type="float">
+    <input name="in1" type="float" nodename="scaled_horizontal" />
+    <input name="in2" type="float" value="0.5" />
+  </multiply>
+  <add name="slanted_edge" type="float">
+    <input name="in1" type="float" nodename="scaled_vertical" />
+    <input name="in2" type="float" nodename="slanted_horizontal" />
+  </add>
+  <max name="hexagonal_distance" type="float">
+    <input name="in1" type="float" nodename="scaled_horizontal" />
+    <input name="in2" type="float" nodename="slanted_edge" />
+  </max>
+  <ifgreater name="outside_emblem" type="float">
+    <input name="value1" type="float" nodename="hexagonal_distance" />
+    <input name="value2" type="float" value="1" />
+    <input name="in1" type="float" value="1" />
+    <input name="in2" type="float" value="0" />
+  </ifgreater>
+  <combine2 name="projected_position" type="vector2">
+    <input name="in1" type="float" nodename="horizontal" />
+    <input name="in2" type="float" nodename="vertical" />
+  </combine2>
+  <distance name="left_distance" type="float">
+    <input name="in1" type="vector2" nodename="projected_position" />
+    <input name="in2" type="vector2" value="-0.047, 0.04" />
+  </distance>
+  <distance name="right_distance" type="float">
+    <input name="in1" type="vector2" nodename="projected_position" />
+    <input name="in2" type="vector2" value="0.047, 0.04" />
+  </distance>
+  <min name="circle_distance" type="float">
+    <input name="in1" type="float" nodename="left_distance" />
+    <input name="in2" type="float" nodename="right_distance" />
+  </min>
+  <ifgreater name="outside_circles" type="float">
+    <input name="value1" type="float" nodename="circle_distance" />
+    <input name="value2" type="float" value="0.0065" />
+    <input name="in1" type="float" value="1" />
+    <input name="in2" type="float" value="0" />
+  </ifgreater>
+  <multiply name="outside_cutouts" type="float">
+    <input name="in1" type="float" nodename="outside_emblem" />
+    <input name="in2" type="float" nodename="outside_circles" />
+  </multiply>
+  <ifgreater name="front_cutout" type="float">
+    <input name="value1" type="float" nodename="depth" />
+    <input name="value2" type="float" value="0" />
+    <input name="in1" type="float" nodename="outside_cutouts" />
+    <input name="in2" type="float" value="1" />
+  </ifgreater>
+  <LamaConductor name="chrome" type="BSDF">
+    <input name="fresnelMode" type="integer" value="0" />
+    <input name="reflectivity" type="color3" value="0.92, 0.93, 0.94" />
+    <input name="edgeColor" type="color3" value="1, 1, 1" />
+    <input name="roughness" type="float" value="0.16" />
+  </LamaConductor>
+  <LamaDiffuse name="interior" type="BSDF">
+    <input name="color" type="color3" value="0.018, 0.02, 0.022" />
+    <input name="roughness" type="float" value="0.3" />
+  </LamaDiffuse>
+  <LamaSurface name="chrome_cutout" type="material">
+    <input name="materialFront" type="BSDF" nodename="chrome" />
+    <input name="materialBack" type="BSDF" nodename="interior" />
+    <input name="presence" type="float" nodename="front_cutout" />
+  </LamaSurface>
+</materialx>

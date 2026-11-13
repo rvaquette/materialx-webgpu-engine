@@ -591,6 +591,7 @@ export function emitVaryingsStruct(primvarFields: Map<string, IrType>, extraInpu
     '  bitangent: vec3f,',
     '  texcoord: vec2f,',
     '  viewDir: vec3f,',
+    '  frontFacing: f32,',
   ];
   for (const [name, type] of primvarFields) varyingFields.push(`  v_${ident(name)}: ${wgslType(type)},`);
   for (const [name, type] of extraInputs) varyingFields.push(`  in_${ident(name)}: ${wgslType(type)},`);

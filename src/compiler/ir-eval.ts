@@ -27,6 +27,8 @@ export interface IrEvalVaryings {
   readonly bitangent?: IrValue;
   readonly texcoord?: IrValue;
   readonly viewDir?: IrValue;
+  /** Geometric normal used to choose a LamaSurface side when provided. */
+  readonly geometricNormal?: IrValue;
   /** Geometric inputs addressed by vary.in_<name> (input kind). */
   readonly inputs?: Readonly<Record<string, IrValue>>;
   /** Primvars addressed by vary.v_<name> (primvar kind). */

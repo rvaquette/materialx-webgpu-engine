@@ -424,6 +424,7 @@ describe('pathTraceComputeWgsl varyings (T057h)', () => {
     expect(src).toContain('vary.texcoord = uv;');
     expect(src).toContain('vary.v_st = uv;');
     expect(src).toContain('vary.tangent = tang;');
+    expect(src).toContain('vary.frontFacing = select(-1.0, 1.0, dot(surface_hit_geometric_normal(h), viewDir) >= 0.0);');
   });
 
   it('keeps constant shading until T057i wires the dispatcher', () => {

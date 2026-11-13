@@ -1,0 +1,63 @@
+<?xml version="1.0"?>
+<materialx version="1.39" colorspace="lin_rec709">
+  <LamaDiffuse name="front" type="BSDF">
+    <input name="color" type="color3" value="0.8, 0.12, 0.08" />
+  </LamaDiffuse>
+  <LamaDiffuse name="back" type="BSDF">
+    <input name="color" type="color3" value="0.08, 0.25, 0.8" />
+  </LamaDiffuse>
+  <LamaDielectric name="glass" type="BSDF">
+    <input name="IOR" type="float" value="1.5" />
+    <input name="roughness" type="float" value="0.1" />
+  </LamaDielectric>
+  <LamaSSS name="sss" type="BSDF">
+    <input name="color" type="color3" value="0.8, 0.35, 0.2" />
+    <input name="sssRadius" type="color3" value="1, 0.4, 0.2" />
+    <input name="sssUnitLength" type="float" value="0.001" />
+  </LamaSSS>
+  <checkerboard name="checker" type="color3">
+    <input name="uvtiling" type="vector2" value="8, 8" />
+  </checkerboard>
+  <extract name="mask" type="float">
+    <input name="in" type="color3" nodename="checker" />
+    <input name="index" type="integer" value="0" />
+  </extract>
+  <LamaSurface name="surface_material_sides" type="material">
+    <input name="materialFront" type="BSDF" nodename="front" />
+    <input name="materialBack" type="BSDF" nodename="back" />
+    <input name="presence" type="float" value="1" />
+  </LamaSurface>
+  <LamaSurface name="surface_material_front" type="material">
+    <input name="materialFront" type="BSDF" nodename="front" />
+    <input name="presence" type="float" value="1" />
+  </LamaSurface>
+  <LamaSurface name="surface_material_back" type="material">
+    <input name="materialFront" type="BSDF" nodename="front" />
+    <input name="materialBack" type="BSDF" nodename="back" />
+    <input name="presence" type="float" value="1" />
+  </LamaSurface>
+  <LamaSurface name="surface_presence" type="material">
+    <input name="materialFront" type="BSDF" nodename="front" />
+    <input name="presence" type="float" nodename="mask" />
+  </LamaSurface>
+  <LamaSurface name="surface_compute_presence" type="material">
+    <input name="materialFront" type="BSDF" nodename="front" />
+    <input name="presence" type="float" nodename="mask" />
+  </LamaSurface>
+  <LamaSurface name="surface_compute_opacity" type="material">
+    <input name="materialFront" type="BSDF" nodename="glass" />
+    <input name="presence" type="float" value="1" />
+  </LamaSurface>
+  <LamaSurface name="surface_presence_opacity_cached" type="material">
+    <input name="materialFront" type="BSDF" nodename="front" />
+    <input name="presence" type="float" nodename="mask" />
+  </LamaSurface>
+  <LamaSurface name="surface_compute_subsurface" type="material">
+    <input name="materialFront" type="BSDF" nodename="sss" />
+    <input name="presence" type="float" value="1" />
+  </LamaSurface>
+  <LamaSurface name="surface_compute_interior" type="material">
+    <input name="materialFront" type="BSDF" nodename="glass" />
+    <input name="presence" type="float" value="1" />
+  </LamaSurface>
+</materialx>

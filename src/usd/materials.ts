@@ -153,6 +153,9 @@ export interface MtlxMaterialInput {
   getConnectedNode?(): MxNode | null;
   getValueString?(): string;
   hasValue?(): boolean;
+  getOutputString?(): string;
+  getNodeGraphString?(): string;
+  getConnectedOutput?(): { getOutputString?(): string } | null;
 }
 
 /** Structural view of a surfacematerial node. */
@@ -241,20 +244,23 @@ export function materialGraphRoots(
     }
     const back = inputs.find(input => input.getName() === 'materialBack')?.getConnectedNode?.() ?? null;
     const presenceInput = inputs.find(input => input.getName() === 'presence');
+    const presenceNode = presenceInput?.getConnectedNode?.() ?? null;
     let presence: ResolvedInput | undefined;
     if (presenceInput) {
-      const connected = presenceInput.getConnectedNode?.() ?? null;
       const raw = presenceInput.getValueString?.() ?? '';
       const hasValue = presenceInput.hasValue?.() ?? raw !== '';
+      const output = presenceInput.getNodeGraphString?.()
+        ? presenceInput.getConnectedOutput?.()?.getOutputString?.()
+        : presenceInput.getOutputString?.();
       presence = {
         name: 'presence', type: 'float',
-        source: connected
-          ? { kind: 'connection', nodeId: connected.getNamePath() }
+        source: presenceNode
+          ? { kind: 'connection', nodeId: presenceNode.getNamePath(), ...(output ? { output } : {}) }
           : hasValue ? { kind: 'value', value: raw, type: 'float' } : { kind: 'default', type: 'float' },
         provenance: { namePath: `/${materialName}/presence` },
       };
     }
-    const lamaSurface = { ...(presence ? { presence } : {}), ...(back ? { backNode: back } : {}) };
+    const lamaSurface = { ...(presence ? { presence } : {}), ...(presenceNode ? { presenceNode } : {}), ...(back ? { backNode: back } : {}) };
     roots.push({
       name: 'surfaceshader', type: 'surfaceshader', node: front,
       ...(presence || back ? { lamaSurface } : {}),

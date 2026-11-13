@@ -1,0 +1,76 @@
+<?xml version="1.0"?>
+<materialx version="1.39" colorspace="lin_rec709">
+  <standard_surface name="ground_shader" type="surfaceshader">
+    <input name="base_color" type="color3" value="0.7, 0.72, 0.73" />
+    <input name="specular_roughness" type="float" value="0.85" />
+  </standard_surface>
+  <surfacematerial name="ground" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="ground_shader" />
+  </surfacematerial>
+  <position name="position" type="vector3">
+    <input name="space" type="string" value="world" />
+  </position>
+  <!-- Align the cutout on both sides along the shared Lama camera direction. -->
+  <dotproduct name="hole_vertical" type="float">
+    <input name="in1" type="vector3" nodename="position" />
+    <input name="in2" type="vector3" value="-0.352609, 0.935771, 0" />
+  </dotproduct>
+  <extract name="hole_horizontal" type="float">
+    <input name="in" type="vector3" nodename="position" />
+    <input name="index" type="integer" value="2" />
+  </extract>
+  <combine3 name="hole_projection" type="vector3">
+    <input name="in1" type="float" nodename="hole_vertical" />
+    <input name="in2" type="float" nodename="hole_horizontal" />
+    <input name="in3" type="float" value="0" />
+  </combine3>
+  <multiply name="hole_coordinates" type="vector3">
+    <input name="in1" type="vector3" nodename="hole_projection" />
+    <input name="in2" type="vector3" value="110, 110, 110" />
+  </multiply>
+  <noise3d name="hole_noise" type="float">
+    <input name="position" type="vector3" nodename="hole_coordinates" />
+    <input name="amplitude" type="float" value="1" />
+  </noise3d>
+  <ifgreater name="holes" type="float">
+    <input name="value1" type="float" nodename="hole_noise" />
+    <input name="value2" type="float" value="-0.13" />
+    <input name="in1" type="float" value="1" />
+    <input name="in2" type="float" value="0" />
+  </ifgreater>
+  <multiply name="color_coordinates" type="vector3">
+    <input name="in1" type="vector3" nodename="position" />
+    <input name="in2" type="vector3" value="260, 260, 260" />
+  </multiply>
+  <worleynoise3d name="cells" type="float">
+    <input name="position" type="vector3" nodename="color_coordinates" />
+    <input name="style" type="integer" value="1" />
+  </worleynoise3d>
+  <ifgreater name="green_or_dark" type="color3">
+    <input name="value1" type="float" nodename="cells" />
+    <input name="value2" type="float" value="0.28" />
+    <input name="in1" type="color3" value="0.19, 0.28, 0.16" />
+    <input name="in2" type="color3" value="0.025, 0.045, 0.032" />
+  </ifgreater>
+  <ifgreater name="cream_or_green" type="color3">
+    <input name="value1" type="float" nodename="cells" />
+    <input name="value2" type="float" value="0.56" />
+    <input name="in1" type="color3" value="0.83, 0.84, 0.68" />
+    <input name="in2" type="color3" nodename="green_or_dark" />
+  </ifgreater>
+  <ifgreater name="camouflage_color" type="color3">
+    <input name="value1" type="float" nodename="cells" />
+    <input name="value2" type="float" value="0.82" />
+    <input name="in1" type="color3" value="0.015, 0.65, 0.56" />
+    <input name="in2" type="color3" nodename="cream_or_green" />
+  </ifgreater>
+  <LamaDiffuse name="camouflage_diffuse" type="BSDF">
+    <input name="color" type="color3" nodename="camouflage_color" />
+    <input name="roughness" type="float" value="0.2" />
+  </LamaDiffuse>
+  <LamaSurface name="camouflage" type="material">
+    <input name="materialFront" type="BSDF" nodename="camouflage_diffuse" />
+    <input name="materialBack" type="BSDF" nodename="camouflage_diffuse" />
+    <input name="presence" type="float" nodename="holes" />
+  </LamaSurface>
+</materialx>

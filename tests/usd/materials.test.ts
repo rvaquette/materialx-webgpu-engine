@@ -211,6 +211,20 @@ describe('materialGraphRoots', () => {
     expect(roots[0]?.lamaSurface?.presence?.source).toEqual({ kind: 'value', value: '0.35', type: 'float' });
   });
 
+  it('retains the connected presence node and its selected output', () => {
+    const front = { id: 'front' } as unknown as MxNode;
+    const mask = { getNamePath: () => '/mask' } as MxNode;
+    const presence: MtlxMaterialInput = {
+      getName: () => 'presence', getType: () => 'float', getConnectedNode: () => mask,
+      getNodeGraphString: () => 'patterns', getConnectedOutput: () => ({ getOutputString: () => 'outy' }),
+    };
+    const material = { ...materialNode('lama', [input('materialFront', 'BSDF', front), presence]),
+      getCategory: () => 'LamaSurface' };
+    const root = materialGraphRoots({ getChild: () => material }, 'lama')[0]!;
+    expect(root.lamaSurface?.presenceNode).toBe(mask);
+    expect(root.lamaSurface?.presence?.source).toEqual({ kind: 'connection', nodeId: '/mask', output: 'outy' });
+  });
+
   it('builds roots from connected shader terminals in render order', () => {
     const surf = { id: 'surf' } as unknown as MxNode;
     const disp = { id: 'disp' } as unknown as MxNode;

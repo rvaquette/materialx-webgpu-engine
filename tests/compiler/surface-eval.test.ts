@@ -124,6 +124,10 @@ describe('evaluateSurfaceToLayered (T057i3)', () => {
     const surface = resolveSurface(graph)!;
     const closure = evaluateSurfaceToLayered(graph, surface, { normal: [0, 0, 1], viewDir: [0, 0, -1] });
     expect(closure.sheen).toMatchObject({ color: [0.1, 0.2, 0.8] });
+    const geometricBack = evaluateSurfaceToLayered(graph, surface, {
+      normal: [0, 0, 1], geometricNormal: [0, 0, -1], viewDir: [0, 0, 1],
+    });
+    expect(geometricBack.sheen).toMatchObject({ color: [0.1, 0.2, 0.8] });
   });
 
   it('rotates Lama anisotropyDirection relative to the evaluated tangent', () => {
