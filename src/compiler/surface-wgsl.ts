@@ -975,7 +975,7 @@ function lowerLamaClosureWgsl(
       result.lobes = [{ kind: 'subsurface', weight: '1.0', color, roughness: `f32(${ctx.s('albedoInversionMethod', 0)})`,
         hairTintTRT: radius, dispersion: `${transport}.0`, ior: `max(1.0, ${ctx.s('sssIOR', 1)})`,
         rotation: `${lamaSssSubset(graph, nodeId)}.0`, thin: `f32(${ctx.s('sssContinuationRays', 0)})`,
-        extinction: `vec3f(f32(${ctx.s('mode', 0)}), ${ctx.s('sssFollowTopology', 0)}, ${ctx.s('sssBleed', 0)})`,
+        extinction: `vec3f(f32(${ctx.s('mode', 0)}), ${ctx.s('sssFollowTopology', 0)}, ${transport === 0 ? ctx.s('sssBleed', 0) : '0.0'})`,
         anisotropy: ctx.s('sssAnisotropy', 0) }];
       const medium = `mx_lama_sss_medium(${color}, ${radius}, ${ctx.s('sssAnisotropy', 0)}, ${ctx.s('sssIOR', 1)}, f32(${ctx.s('albedoInversionMethod', 0)}))`;
       if (transport < 2) {

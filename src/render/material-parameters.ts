@@ -18,6 +18,8 @@ export interface MaterialParameter {
   initial: readonly number[];
   min?: readonly number[];
   max?: readonly number[];
+  /** Named values offered by the editor; validated like ordinary edits. */
+  presets?: readonly { name: string; value: readonly number[] }[];
   /** Uniform edits are immediate; feature boundaries and topology rebuild. */
   update: 'uniform' | 'feature' | 'rebuild';
   uniform?: string;
@@ -155,6 +157,31 @@ export function visibleMaterialParameters(material: MaterialResource): readonly 
   });
 }
 
+/** Authored preset names across parameters, in first-seen order. */
+export function parameterPresetNames(parameters: readonly MaterialParameter[]): string[] {
+  return [...new Set(parameters.flatMap(parameter => parameter.presets?.map(preset => preset.name) ?? []))];
+}
+
+/** One preset name applies to every parameter declaring it, e.g. LamaSSS Color and Radius together. */
+export function parameterPresetChanges(parameters: readonly MaterialParameter[], name: string): Map<string, readonly number[]> {
+  return new Map(parameters.flatMap(parameter => {
+    const preset = parameter.presets?.find(candidate => candidate.name === name);
+    return preset ? [[parameter.id, [...preset.value]] as const] : [];
+  }));
+}
+
+/** Preset whose values all match `value(parameter)`, if any. */
+export function activeParameterPreset(
+  parameters: readonly MaterialParameter[], value: (parameter: MaterialParameter) => readonly number[],
+): string | undefined {
+  const tolerance = 1e-5;
+  return parameterPresetNames(parameters).find(name => [...parameterPresetChanges(parameters, name)].every(([id, preset]) => {
+    const parameter = parameters.find(candidate => candidate.id === id)!;
+    const current = value(parameter);
+    return preset.every((component, i) => Math.abs(component - current[i]!) <= tolerance * Math.max(1, Math.abs(component)));
+  }));
+}
+
 export function parameterValues(parameter: MaterialParameter, values: readonly number[]): number[] {
   const size = parameter.type === 'color3' ? 3 : parameter.type.startsWith('vector') ? Number(parameter.type.at(-1)) : 1;
   if (values.length !== size || !values.every(Number.isFinite)) throw new Error(`Invalid value for ${parameter.label}`);
@@ -237,8 +264,10 @@ function parameterizeMaterial(material: MaterialResource, policy: ParameterPolic
         value: [...input.source.value], initial: [...input.source.value],
         ...(authored?.min !== undefined ? { min: authored.min } : {}),
         ...(authored?.max !== undefined ? { max: authored.max } : {}),
+        ...(authored?.presets !== undefined ? { presets: authored.presets } : {}),
         update: rebuild ? 'rebuild' : feature ? 'feature' : 'uniform', ...(!rebuild ? { uniform } : {}),
       });
+      for (const preset of authored?.presets ?? []) parameterValues(parameters.at(-1)!, preset.value);
       if (!rebuild && !feature) inputs.set(name, { ...input, parameter: uniform });
     }
     // Expose literal inputs of reachable upstream nodes; connections remain intact.
@@ -279,6 +308,7 @@ function parameterizeMaterial(material: MaterialResource, policy: ParameterPolic
         const editable = 'editable' in input ? input.editable : undefined;
         const min = 'min' in input ? input.min : undefined;
         const max = 'max' in input ? input.max : undefined;
+        const presets = 'presets' in input ? input.presets : undefined;
         const values = input.source.value.trim() === 'true' ? [1] : input.source.value.trim() === 'false' ? [0]
           : input.source.value.split(',').map(Number);
         const promoted = policy === 'uniform' ? UNIFORM_TYPES.has(input.type)
@@ -290,8 +320,10 @@ function parameterizeMaterial(material: MaterialResource, policy: ParameterPolic
           ...(uniform ? { uniform } : {}),
           ...(min !== undefined ? { min } : {}),
           ...(max !== undefined ? { max } : {}),
+          ...(presets !== undefined ? { presets } : {}),
         };
         parameterValues(parameter, values);
+        for (const preset of presets ?? []) parameterValues(parameter, preset.value);
         parameters.push(parameter);
         if (uniform) {
           const current = graphNodes.get(nodeId)!;

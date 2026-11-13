@@ -330,3 +330,75 @@ describe('integratePath participating media', () => {
     expect(integratePath(plain, cameraRay, createPcg32(1))).toEqual([3, 2, 1]);
   });
 });
+
+describe('SSS walk event budget', () => {
+  const scattering = { absorption: [0, 0, 0], scattering: [1, 1, 1], anisotropy: 0 } as const;
+  const vacuum = { absorption: [0, 0, 0], scattering: [0, 0, 0], anisotropy: 0 } as const;
+
+  it.each(['collision', 'reflection', 'mixed'] as const)(
+    'allows 255 %s events to exit but truncates at 256 before the next traversal',
+    (eventKind) => {
+      const render = (events: number) => {
+        let queries = 0;
+        const scene = makeScene({
+          intersect(ray) {
+            queries++;
+            if (queries === 1) return {
+              position: [0, 0, 0], normal: [0, 0, 1],
+              interiorMedium: eventKind === 'reflection' ? vacuum : scattering,
+              subsurfaceInterior: true, subsurfaceFollowTopology: 1,
+            };
+            if (queries > events + 2) return null;
+            const internal = queries <= events + 1;
+            const collision = internal && (eventKind === 'collision' || (eventKind === 'mixed' && queries % 2 === 0));
+            const distance = collision ? 100 : 1e-9;
+            return {
+              position: [
+                ray.origin[0] + ray.direction[0] * distance,
+                ray.origin[1] + ray.direction[1] * distance,
+                ray.origin[2] + ray.direction[2] * distance,
+              ],
+              normal: internal ? [0, 0, -1] : [0, 0, 1],
+              geometricNormal: ray.direction,
+            };
+          },
+          sampleBsdf: (hit) => ({
+            direction: queries === 1 ? [0, 0, -1] : hit.geometricNormal!,
+            value: [1, 1, 1], pdf: 1, transmission: true,
+          }),
+          environment: () => [1, 1, 1],
+        });
+        const radiance = integratePath(scene, cameraRay, () => 0.25, { minBounces: 1000, maxBounces: 2 });
+        return { queries, radiance };
+      };
+      const shorter = render(255);
+      expect(shorter.queries).toBe(258);
+      expect(shorter.radiance[0]).toBeGreaterThan(0);
+      expect(shorter.radiance.every(Number.isFinite)).toBe(true);
+      expect(render(256)).toEqual({ queries: 257, radiance: [0, 0, 0] });
+    },
+  );
+
+  it('does not truncate ordinary volume transport after 256 collisions', () => {
+    let queries = 0;
+    const scene = makeScene({
+      intersect(ray) {
+        queries++;
+        const distance = queries <= 300 ? 100 : 1e-9;
+        return {
+          position: [
+            ray.origin[0] + ray.direction[0] * distance,
+            ray.origin[1] + ray.direction[1] * distance,
+            ray.origin[2] + ray.direction[2] * distance,
+          ],
+          normal: ray.direction, emission: [1, 1, 1],
+        };
+      },
+    });
+    const radiance = integratePath(scene, cameraRay, () => 0.25, {
+      initialMedium: scattering, minBounces: 1000, maxBounces: 400,
+    });
+    expect(queries).toBe(301);
+    expect(radiance).toEqual([1, 1, 1]);
+  });
+});

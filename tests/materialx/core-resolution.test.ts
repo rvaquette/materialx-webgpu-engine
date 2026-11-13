@@ -6,7 +6,8 @@ import { MaterialXCore, type MaterialXModuleFactory } from '../../src/materialx/
 import { MaterialXLibraries, defaultLibrarySources } from '../../src/materialx/libraries.ts';
 import { loadMaterialXDocuments } from '../../src/materialx/document-source.ts';
 import { createGraphMaterialCompiler } from '../../src/render/graph-material-compiler.ts';
-import { editableSceneMaterials, visibleMaterialParameters } from '../../src/render/material-parameters.ts';
+import { activeParameterPreset, changeMaterialParameters, compileEditableMaterial, editableSceneMaterials, parameterPresetChanges, parameterPresetNames, visibleMaterialParameters } from '../../src/render/material-parameters.ts';
+import { surfaceGraphToLayered } from '../../src/compiler/surface-lower.ts';
 import { buildSceneResources } from '../../src/render/scene-resources.ts';
 import { importUsdStage } from '../../src/usd/importer.ts';
 import type { Diagnostic } from '../../src/core/diagnostics.ts';
@@ -177,6 +178,49 @@ def Mesh "Teapot" { rel material:binding = </Mat> }` } });
         expect(layer?.inputs.find(input => input.name === 'topMix')).toMatchObject({ editable: true, min: [0], max: [1] });
       }
       expect(diagnostics).toEqual([]);
+    } finally {
+      documents.delete();
+      libraries.delete();
+    }
+  }, 30000);
+
+  it('exposes the LamaSSS RenderMan Color/Radius presets as one editor selection', async () => {
+    const module = await import(/* @vite-ignore */ pathToFileURL(coreFile).href) as { default: MaterialXModuleFactory };
+    const core = new MaterialXCore(await module.default());
+    const libraries = new MaterialXLibraries(core);
+    await libraries.load({ sources: defaultLibrarySources(libraryRoot), fetchText: async path => readFileSync(path, 'utf8') });
+    const diagnostics: Diagnostic[] = [];
+    const assetPath = join('scenes', 'lama', 'sss', 'lama_sss_color_radius.mtlx');
+    const documents = await loadMaterialXDocuments({
+      core, libraries, texts: new Map([[assetPath, readFileSync(assetPath, 'utf8')]]), sink: d => diagnostics.push(d),
+    });
+    try {
+      const build = await createGraphMaterialCompiler({ documents, sink: d => diagnostics.push(d) }).compile({
+        assetPath, materialName: 'sss_material', referencedPrimPath: '/MaterialX/Materials/sss_material', boundPrims: [],
+      });
+      expect(diagnostics).toEqual([]);
+      const scene = await importUsdStage('test.usda', { reader: { read: async () => `#usda 1.0
+def Material "Mat" (prepend references = @sss.mtlx@</MaterialX/Materials/sss_material>) {}
+def Mesh "Teapot" { rel material:binding = </Mat> }` } });
+      const resources = editableSceneMaterials(await buildSceneResources(scene, {
+        meshSource: { meshFor: () => ({ points: [0, 0, 0, 1, 0, 0, 0, 1, 0], faceVertexCounts: [3], faceVertexIndices: [0, 1, 2] }) },
+        materialCompiler: { compile: () => build },
+      }));
+      const material = [...resources.materials.values()][0]!;
+      const editable = visibleMaterialParameters(material);
+      expect(editable.map(parameter => [parameter.input, parameter.update])).toEqual([['color', 'uniform'], ['sssRadius', 'uniform']]);
+      const names = parameterPresetNames(editable);
+      expect(names).toEqual(['apple', 'chicken1', 'chicken2', 'cream', 'ketchup', 'marble', 'potato',
+        'skim milk', 'skin1', 'skin2', 'whole milk']);
+      expect(activeParameterPreset(editable, parameter => parameter.value)).toBe('apple');
+      const changes = parameterPresetChanges(editable, 'skim milk');
+      expect([...changes.values()]).toEqual([[0.815, 0.813, 0.682], [18.42, 10.44, 3.5]]);
+      const updated = changeMaterialParameters(material, changes);
+      expect(activeParameterPreset(visibleMaterialParameters(updated), parameter => parameter.value)).toBe('skim milk');
+      expect(compileEditableMaterial(updated).sceneShader!.code).toBe(material.sceneShader!.code);
+      const lobe = surfaceGraphToLayered(updated.resolvedSurface!, updated.surfaceGraph!).lobes[0]!;
+      expect(lobe).toMatchObject({ kind: 'subsurface', subsurfaceTransport: 0, color: [0.815, 0.813, 0.682] });
+      [18.42, 10.44, 3.5].forEach((millimeters, i) => expect(lobe.subsurfaceRadius![i]).toBeCloseTo(millimeters * 0.001, 8));
     } finally {
       documents.delete();
       libraries.delete();

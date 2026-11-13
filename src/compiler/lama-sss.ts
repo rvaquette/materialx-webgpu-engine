@@ -49,9 +49,9 @@ export function lamaSssTransport(graph: ResolvedGraph, nodeId: string): 0 | 1 | 
   if (![0, 1].includes(Number(values('albedoInversionMethod', '0')))) {
     throw new Error(`LamaSSS '${nodeId}': unsupported albedoInversionMethod; expected 0 or 1.`);
   }
-  const bleed = Number(values('sssBleed', '0'));
-  if (!Number.isFinite(bleed) || bleed < 0 || bleed > 1 || (transport !== 0 && bleed !== 0)) {
-    throw new Error(`LamaSSS '${nodeId}': unsupported sssBleed; use [0,1] with Davis-equivalent transport (0).`);
+  const bleed = values('sssBleed', '0');
+  if (bleed !== undefined && (!Number.isFinite(Number(bleed)) || Number(bleed) < 0 || Number(bleed) > 1)) {
+    throw new Error(`LamaSSS '${nodeId}': unsupported sssBleed; expected [0,1].`);
   }
   const ior = values('sssIOR', '1');
   if (ior !== undefined && (!Number.isFinite(Number(ior)) || Number(ior) < 1)) {

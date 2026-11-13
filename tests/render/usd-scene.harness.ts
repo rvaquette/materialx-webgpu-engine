@@ -1534,10 +1534,15 @@ async function renderUsdOnDevice(
   };
   const { renderMs, gpuMs, mean } = await trace();
   let nonFinite = 0;
+  const nonFinitePixels: string[] = [];
   for (let p = 0; p < res * res; p++) {
-    for (let c = 0; c < 3; c++) if (!Number.isFinite(mean[p * 4 + c])) nonFinite++;
+    let bad = false;
+    for (let c = 0; c < 3; c++) if (!Number.isFinite(mean[p * 4 + c])) { nonFinite++; bad = true; }
+    if (bad && nonFinitePixels.length < 8) {
+      nonFinitePixels.push(`(${p % res},${Math.floor(p / res)})=[${[0, 1, 2].map(c => mean[p * 4 + c]).join(',')}]`);
+    }
   }
-  line(`diag accum nonfinite=${nonFinite}`);
+  line(`diag accum nonfinite=${nonFinite}${nonFinitePixels.length ? ` at ${nonFinitePixels.join(' ')}` : ''}`);
   if (nonFinite > 0) {
     throw new Error(`Pathtracing accumulation contains ${nonFinite} non-finite RGB components`);
   }

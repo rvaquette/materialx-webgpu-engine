@@ -1,5 +1,5 @@
-import { ImGui } from '@mori2003/jsimgui';
-import type { MaterialParameter } from './render/material-parameters.ts';
+import { ImGui, ImGuiComboFlags, ImVec2 } from '@mori2003/jsimgui';
+import { activeParameterPreset, parameterPresetChanges, parameterPresetNames, type MaterialParameter } from './render/material-parameters.ts';
 
 interface ParameterEditorOptions {
   parameters: () => readonly MaterialParameter[];
@@ -35,6 +35,24 @@ export class MaterialParameterEditor {
       for (const parameter of parameters) this.#queue(parameter, parameter.initial);
       clearTimeout(this.#timer);
       void this.#flush();
+    }
+    const presets = parameterPresetNames(parameters);
+    if (presets.length) {
+      const active = activeParameterPreset(parameters, parameter => this.#drafts.get(parameter.id) ?? parameter.value);
+      ImGui.SetNextItemWidth(-1);
+      if (ImGui.BeginCombo('##preset', active ? `Prereglage : ${active}` : 'Prereglage : personnalise', ImGuiComboFlags.HeightLarge)) {
+        for (const name of presets) {
+          if (ImGui.Selectable(`${name}##preset-${name}`, name === active, 0, new ImVec2(0, 0))) {
+            const changes = parameterPresetChanges(parameters, name);
+            for (const parameter of parameters) {
+              const value = changes.get(parameter.id);
+              if (value) this.#queue(parameter, value);
+            }
+          }
+          if (name === active) ImGui.SetItemDefaultFocus();
+        }
+        ImGui.EndCombo();
+      }
     }
     for (const parameter of parameters) {
       ImGui.PushID(parameter.id);

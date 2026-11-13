@@ -23,9 +23,10 @@ const lamaLayerLabels: Readonly<Record<string, string>> = {
   'lama_iridescence_target_hue.usda': 'Lama - Iridescence Target Hue',
   'lama_sheen_color_roughness.usda': 'Lama - LamaSheen Color / Roughness',
   'lama_translucent_color_roughness.usda': 'Lama - LamaTranslucent Color / Roughness',
+  'lama_sss_color_radius.usda': 'Lama - LamaSSS Color / Radius (presets RenderMan)',
 };
 
-const lamaScenes = Object.keys(import.meta.glob('/scenes/lama/{add,emission,iridescence,layer,mix,sheen,translucent}/**/*.usda', { query: '?raw', import: 'default' }))
+const lamaScenes = Object.keys(import.meta.glob('/scenes/lama/{add,emission,iridescence,layer,mix,sheen,sss,translucent}/**/*.usda', { query: '?raw', import: 'default' }))
   .sort()
   .map((path): SceneCatalogEntry => {
     const filename = path.split('/').at(-1) ?? path;

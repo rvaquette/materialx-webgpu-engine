@@ -84,6 +84,19 @@ describe('pathTraceComputeWgsl', () => {
     expect(shader).toContain('beta /= probability; environmentBeta /= probability;');
     expect(shader).not.toContain('for (var bounce = 0; bounce < 64;');
   });
+  it('terminates SSS walks at 256 events before traversing another ray', () => {
+    const shader = pathTraceComputeWgsl();
+    expect(shader).toContain(
+      'for (var pathStep = 0u; pathStep < 65536u; pathStep++) {\n'
+      + '    if (subsurfaceWalk && subsurfaceEvents >= 256) { break; }',
+    );
+  });
+  it('uses the DMFP fit, not mean radial distance, for Burley mode 2', () => {
+    const shader = pathTraceComputeWgsl();
+    expect(shader).toContain('return mx_sss_controls_burley_dmfp(lobe.color, radius);');
+    expect(shader).toContain('vec3f(3.5) + 100.0 * squared * squared');
+    expect(shader).not.toContain('return radius / 2.5;');
+  });
   const src = pathTraceComputeWgsl();
   it('keeps PCG sampling for the reference and Halton for viewer display AOVs', () => {
     expect(src).not.toContain('fn camera_jitter');

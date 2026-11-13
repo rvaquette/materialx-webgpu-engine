@@ -1,0 +1,16 @@
+<?xml version="1.0"?>
+<materialx version="1.39" colorspace="lin_rec709" xmlns:engine="urn:materialx-webgpu-engine:extensions">
+  <!-- Presets: RenderMan LamaSSS table (Color = albedo, Radius = diffuse mean free path in mm).
+       The scene is in meters, so sssUnitLength converts mm to scene units. -->
+  <LamaSSS name="sss" type="BSDF">
+    <input name="color" type="color3" value="0.846, 0.841, 0.528" uiname="Color" uifolder="LamaSSS" engine:editable="true"
+           engine:presets="apple=0.846,0.841,0.528; chicken1=0.314,0.156,0.126; chicken2=0.321,0.160,0.108; cream=0.976,0.900,0.725; ketchup=0.164,0.006,0.002; marble=0.830,0.791,0.753; potato=0.764,0.613,0.213; skim milk=0.815,0.813,0.682; skin1=0.436,0.227,0.131; skin2=0.623,0.433,0.343; whole milk=0.908,0.881,0.759" />
+    <input name="sssRadius" type="color3" value="6.96, 6.40, 1.90" uiname="Radius" uifolder="LamaSSS" uimin="0, 0, 0" uimax="30, 30, 30" engine:editable="true"
+           engine:presets="apple=6.96,6.40,1.90; chicken1=11.61,3.88,1.75; chicken2=9.44,3.35,1.79; cream=15.03,4.66,2.54; ketchup=4.76,0.58,0.39; marble=8.51,5.57,3.95; potato=14.27,7.23,2.04; skim milk=18.42,10.44,3.50; skin1=3.67,1.37,0.68; skin2=4.82,1.69,1.09; whole milk=10.90,6.58,2.51" />
+    <input name="sssUnitLength" type="float" value="0.001" />
+  </LamaSSS>
+  <LamaSurface name="sss_material" type="material">
+    <input name="materialFront" type="BSDF" nodename="sss" />
+    <input name="presence" type="float" value="1" />
+  </LamaSurface>
+</materialx>

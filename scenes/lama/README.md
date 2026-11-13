@@ -1,5 +1,17 @@
 # Lama Test Scenes
 
+## Editable SSS teapot
+
+Select **Lama - LamaSSS Color / Radius (presets RenderMan)**, then **Path tracing**.
+`sss/lama_sss_color_radius.usda` reuses the common Lama teapot, stand, floor,
+camera, HDR and softboxes. **Color** and **Radius** are editable in the
+**LamaSSS** folder; the **Prereglage** combo applies the RenderMan example
+pairs (apple, chicken1, chicken2, cream, ketchup, marble, potato, skim milk,
+skin1, skin2, whole milk). Radius is authored in mm, as in the RenderMan table;
+`sssUnitLength` 0.001 converts it to scene meters. The preset values come from
+the `engine:presets="name=v,v,v; ..."` input attribute. This is an engine
+equivalent, not exact RenderMan parity; see the SSS Model Contract below.
+
 ## Editable translucent teapot
 
 Select **Lama - LamaTranslucent Color / Roughness**, then **Path tracing**.
@@ -70,19 +82,35 @@ Render with `usd-image-harness.html?entry=/scenes/lama/test_lama_sss.usda&backen
   colour is applied by the medium only, not again at entry and exit. A zero
   radius still selects the coloured local Lambert response.
 - `sssMode=2`: a normalized two-exponential Burley spatial BSSRDF. Radius is
-  interpreted as effective mean radial distance, so diffusion length is radius
-  / 2.5. This parameterization is independent of albedo and anisotropy; use mode
-  3 when anisotropy should change the diffusion length.
-- `sssMode=3`: the same spatial profile with diffusion length derived from
+  diffuse mean free path (DMFP), matching the RenderMan control and preset table.
+  The Christensen-Burley DMFP fit gives diffusion length
+  `radius / (3.5 + 100 * (A - 0.33)^4)` per channel, where A is Color clamped to
+  [0,1]. Color is also the integrated profile albedo; 2.5 times the diffusion
+  length is the mean radial distance, not the authored Radius.
+  Anisotropy and albedo inversion do not change this DMFP fit.
+  This intentionally replaces the previous `radius / 2.5` engine mapping.
+  The DMFP (equation 8) and MFP fits are distinct; see the
+  [published-fit implementation](https://github.com/appleseedhq/appleseed/blob/master/src/appleseed/renderer/modeling/bssrdf/sss.cpp).
+- `sssMode=3`: an engine-only extension, not a fourth RenderMan mode. It uses
+  the same spatial profile with diffusion length derived from
   volumetric MFP: radius / sqrt(3 * (1 - alpha) * (1 - alpha * g)). The
   two-flux alpha inversion also includes the specified IOR.
-  These are explicit engine parameterizations, not verified RenderMan remappings.
+  Its Radius is volumetric MFP, not DMFP; the RenderMan preset table is therefore
+  not directly interchangeable with this mode. Neither mode has been verified
+  against a RenderMan reference render.
 - Burley uses three projection axes (normal/tangent/bitangent with probabilities
   0.5/0.25/0.25), samples matching-domain exits, and includes all three area
   PDFs, projection Jacobians and exit-selection probabilities in its density.
   Separate objects sharing a material share the diffusion domain. The GPU limits
   projection to 128 crossings; paths exceeding this safety bound are terminated.
 - Random-walk `sssIOR` triggers total internal reflection at the exit boundary.
+  CPU and GPU terminate each SSS walk after 256 events (medium collisions and
+  internal boundary reflections combined), independently of the surface bounce
+  budget. The budget resets on each SSS entry and does not apply to ordinary
+  volumes or Burley modes. This performance cutoff discards the remaining path
+  throughput without compensation: long walks lose energy, potentially noticeably
+  in bright, optically thick materials. Earlier unbiased walk qualification
+  below does not quantify this truncation bias.
   Burley multiplies its spatial response by unpolarized dielectric transmission
   at entry and exit, using the incident/outgoing cosines. This is an engine
   interface model; the diffusion profile itself is not a refractive BSSRDF.
@@ -119,9 +147,10 @@ Render with `usd-image-harness.html?entry=/scenes/lama/test_lama_sss.usda&backen
   angles; local layer reflection is selected separately with compensated weights.
   The local coat regression covers dielectric-over-Burley; this is not exhaustive
   GPU qualification of every layer combination.
-- Nonzero bleed requires mode 0. Transport, inversion, bleed and surface mode
-  must be uniform. Mode 2 deliberately treats radius as an effective radial
-  distance and does not use albedo, anisotropy or IOR to set that profile length;
+- Bleed is Davis-only, as documented by RenderMan: it is ignored outside mode 0.
+  Transport, inversion, bleed and surface mode
+  must be uniform. Mode 2 uses Color and Radius in the DMFP fit,
+  but does not use anisotropy or IOR to set that profile length;
   IOR still affects its entry/exit transmission. Mode 3 uses albedo, anisotropy
   and (for inversion 0) IOR in the profile length.
 - Raster remains a local preview; spatial diffusion is a path-tracer operation.

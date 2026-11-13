@@ -120,6 +120,12 @@ describe('emitLayeredSurface (T055d)', () => {
     }
   });
 
+  it('ignores Davis-only Bleed for other RenderMan SSS modes', () => {
+    const graph = sssGraph([value('sssMode', 'integer', '1'), value('sssBleed', 'float', '0.8')]);
+    expect(surfaceGraphToLayered(resolveSurface(graph)!, graph).lobes[0]).toMatchObject({ subsurfaceTransport: 1, subsurfaceBleed: 0 });
+    expect(emit(graph).code).toBe(emit(sssGraph([value('sssMode', 'integer', '1'), value('sssBleed', 'float', '0')])).code);
+  });
+
   it('accepts explicit reflection with direct illumination for exponential SSS', () => {
     const graph = sssGraph([value('sssMode', 'integer', '1'), value('albedoInversionMethod', 'integer', '1'),
       value('mode', 'integer', '2')]);

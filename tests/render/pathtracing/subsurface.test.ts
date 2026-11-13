@@ -230,7 +230,7 @@ describe('normalized Burley diffusion', () => {
       exits++;
       displacement += Math.hypot(...event.hit.position);
     }
-    expect(displacement / exits).toBeCloseTo(1, 1);
+    expect(displacement / exits).toBeCloseTo(0.6201256573, 1);
     expect(Math.abs(energy / samples - 0.6)).toBeLessThan(0.05);
     expect(sampleBurleySurface(entry, [1, 1, 1], [1, 1, 1], 2, 0, () => [], rng)).toBeNull();
   });
@@ -246,6 +246,23 @@ describe('normalized Burley diffusion', () => {
     expect(event.weight[0]).toBeCloseTo(1.2, 10);
   });
 
+  it('rejects exits that coincide with the entry instead of returning NaN weights', () => {
+    const entry = { position: [0, 0, 0] as Vec3, normal: [0, 0, 1] as Vec3 };
+    const degenerate = sampleBurleySurface(entry, [0.6, 0.6, 0.6], [1, 1, 1], 2, 0,
+      () => [{ position: [0, 0, 0] as Vec3, normal: entry.normal }], () => 0.1);
+    const nanNormal = sampleBurleySurface(entry, [0.6, 0.6, 0.6], [1, 1, 1], 2, 0,
+      probe => [{ position: probe, normal: entry.normal, geometricNormal: [NaN, NaN, NaN] as Vec3 }], () => 0.1);
+    expect(degenerate).toBeNull();
+    expect(nanNormal).toBeNull();
+  });
+
+  it('ignores exits outside the truncation sphere around the entry', () => {
+    const entry = { position: [0, 0, 0] as Vec3, normal: [0, 0, 1] as Vec3 };
+    const far = sampleBurleySurface(entry, [0.6, 0.6, 0.6], [1, 1, 1], 2, 0,
+      probe => [{ position: [probe[0], probe[1], -100] as Vec3, normal: entry.normal }], () => 0.1);
+    expect(far).toBeNull();
+  });
+
   it('retains the local response of zero-radius colour channels', () => {
     const entry = { position: [0, 0, 0] as Vec3, normal: [0, 0, 1] as Vec3 };
     const event = sampleBurleySurface(entry, [0.2, 0.4, 0.6], [1, 0, 0], 2, 0,
@@ -255,10 +272,12 @@ describe('normalized Burley diffusion', () => {
     expect(event.weight[1]).toBeCloseTo(0.6, 12);
     expect(event.weight[2]).toBeCloseTo(0.9, 12);
   });
-  it('distinguishes diffuse radial distance from volumetric mean free path', () => {
+  it('distinguishes diffuse mean free path from volumetric mean free path', () => {
     const radius: Vec3 = [1, 2, 3];
     const diffuse = burleyDiffusionLength([0.5, 0.5, 0.5], radius, 2);
-    expect(diffuse).toEqual([0.4, 0.8, 1.2]);
+    expect(diffuse[0]).toBeCloseTo(0.2790551527, 10);
+    expect(diffuse[1]).toBeCloseTo(0.5581103055, 10);
+    expect(diffuse[2]).toBeCloseTo(0.8371654582, 10);
     expect(burleyDiffusionLength([0.5, 0.5, 0.5], radius, 3)[0]).toBeGreaterThan(diffuse[0]);
     const medium = exponentialSubsurfaceMedium([0.5, 0.5, 0.5], radius);
     expect(extinction(medium)[0]).toBeCloseTo(1, 12);
@@ -269,12 +288,32 @@ describe('normalized Burley diffusion', () => {
     expect(burleyInterfaceTransmission(1.5, 1, 1)).toBeCloseTo(0.96 ** 2, 12);
     expect(burleyInterfaceTransmission(1.5, 0.3, 0.3)).toBeLessThan(burleyInterfaceTransmission(1.5, 1, 1));
   });
-  it('uses the documented effective-radius profile for Burley mode 2', () => {
+  it('maps DMFP with the Christensen-Burley fit independently of path-traced controls', () => {
     const radius: Vec3 = [1, 2, 3];
-    expect(burleyDiffusionLength([0.5, 0.5, 0.5], radius, 2, 0.8)).toEqual([0.4, 0.8, 1.2]);
-    expect(burleyDiffusionLength([0.5, 0.5, 0.5], radius, 2, 0)).toEqual([0.4, 0.8, 1.2]);
+    const diffuse = burleyDiffusionLength([0.33, 0.33, 0.33], radius, 2);
+    expect(diffuse).toEqual([1 / 3.5, 2 / 3.5, 3 / 3.5]);
+    expect(burleyDiffusionLength([0.33, 0.33, 0.33], radius, 2, 0.8, 0, 1.5)).toEqual(diffuse);
+    expect(burleyDiffusionLength([0.8, 0.8, 0.8], radius, 2)[0]).toBeLessThan(diffuse[0]);
     expect(burleyDiffusionLength([0.5, 0.5, 0.5], radius, 3, 0.3, 0, 1.5)[0])
       .not.toBeCloseTo(burleyDiffusionLength([0.5, 0.5, 0.5], radius, 3, 0.3, 0, 1)[0], 5);
+  });
+  it('retains RGB albedo on a plane with RenderMan apple DMFP values', () => {
+    const color: Vec3 = [0.846, 0.841, 0.528];
+    const radius: Vec3 = [6.96e-3, 6.40e-3, 1.90e-3];
+    const entry = { position: [0, 0, 0] as Vec3, normal: [0, 0, 1] as Vec3 };
+    const rng = createPcg32(301);
+    const sum = [0, 0, 0];
+    const samples = 20000;
+    for (let i = 0; i < samples; i++) {
+      const event = sampleBurleySurface(entry, color, radius, 2, 0,
+        (probe, axis) => Math.abs(axis[2]) > 0.5 ? [{ position: probe, normal: entry.normal }] : [], rng);
+      event?.weight.forEach((weight, channel) => { sum[channel]! += weight / samples; });
+    }
+    color.forEach((albedo, channel) => expect(Math.abs(sum[channel]! - albedo)).toBeLessThan(0.02));
+    const lengths = burleyDiffusionLength(color, radius, 2);
+    expect(lengths[0]).toBeCloseTo(0.000657271850, 10);
+    expect(lengths[1]).toBeCloseTo(0.000620250140, 10);
+    expect(lengths[2]).toBeCloseTo(0.000520021461, 10);
   });
   it('integrates to unit energy over surface area', () => {
     const step = 0.001;

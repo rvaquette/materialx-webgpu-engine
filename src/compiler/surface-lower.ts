@@ -540,12 +540,14 @@ function lowerLamaBsdf(graph: ResolvedGraph, nodeId: string, frame?: LamaShading
           roughness: (0.1 + 0.9 * roughness) ** 2,
         },
       });
-    case 'LamaSSS':
+    case 'LamaSSS': {
+      const transport = lamaSssTransport(graph, nodeId);
       return assemble([{
         kind: 'subsurface', weight: 1,
-        subsurfaceTransport: lamaSssTransport(graph, nodeId),
+        subsurfaceTransport: transport,
         subsurfaceInversion: nodeScalar(graph, nodeId, 'albedoInversionMethod', 0) as 0 | 1,
-        subsurfaceBleed: nodeScalar(graph, nodeId, 'sssBleed', 0),
+        // RenderMan documents Bleed as Davis-only; other modes ignore it.
+        subsurfaceBleed: transport === 0 ? nodeScalar(graph, nodeId, 'sssBleed', 0) : 0,
         subsurfaceMode: nodeScalar(graph, nodeId, 'mode', 0) as 0 | 1 | 2,
         subsurfaceFollowTopology: nodeScalar(graph, nodeId, 'sssFollowTopology', 0),
         subsurfaceSubset: lamaSssSubset(graph, nodeId),
@@ -556,6 +558,7 @@ function lowerLamaBsdf(graph: ResolvedGraph, nodeId: string, frame?: LamaShading
           nodeScalar(graph, nodeId, 'sssScale', 1) * nodeScalar(graph, nodeId, 'sssUnitLength', 0.00328)),
         anisotropy: nodeScalar(graph, nodeId, 'sssAnisotropy', 0),
       }], 1, {});
+    }
     case 'LamaIridescence': {
       const min = nodeScalar(graph, nodeId, 'minFilmThickness', 400);
       const max = nodeScalar(graph, nodeId, 'maxFilmThickness', 800);

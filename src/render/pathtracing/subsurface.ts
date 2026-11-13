@@ -19,6 +19,9 @@ import { sampleHenyeyGreenstein } from './media.ts';
 
 type V = Vec3;
 
+/** Per-entry production walk budget shared by CPU and GPU; truncation is biased. */
+export const MAX_SSS_WALK_EVENTS = 256;
+
 function normalize(v: V): V {
   const len = Math.hypot(v[0], v[1], v[2]);
   return len > 0 ? [v[0] / len, v[1] / len, v[2] / len] : [0, 0, 1];
@@ -67,6 +70,11 @@ fn ${prefix}_sigma_t(albedo: vec3f, mfp: vec3f, inversion: f32) -> vec3f {
     distance *= vec3f(1.9) - a + 3.5 * offset * offset;
   }
   return select(vec3f(0.0), vec3f(1.0) / max(distance, vec3f(1e-20)), distance > vec3f(0.0));
+}
+fn ${prefix}_burley_dmfp(albedo: vec3f, dmfp: vec3f) -> vec3f {
+  let offset = clamp(albedo, vec3f(0.0), vec3f(1.0)) - vec3f(0.33);
+  let squared = offset * offset;
+  return max(dmfp, vec3f(0.0)) / (vec3f(3.5) + 100.0 * squared * squared);
 }`;
 }
 
@@ -125,9 +133,17 @@ export function sampleBurleyRadius(diffusionLength: number, component: number, s
 export function burleyDiffusionLength(
   albedo: Vec3, radius: Vec3, mode: 2 | 3, anisotropy = 0, inversion: 0 | 1 = 1, ior = 1,
 ): Vec3 {
+  if (mode === 2) {
+    // Christensen-Burley DMFP fit, equation 8: d = DMFP / s(A).
+    const length = (value: number, color: number): number => {
+      const offset = Math.min(Math.max(color, 0), 1) - 0.33;
+      return Math.max(value, 0) / (3.5 + 100 * offset ** 4);
+    };
+    return [length(radius[0], albedo[0]), length(radius[1], albedo[1]), length(radius[2], albedo[2])];
+  }
   const alpha = inversion === 0 ? albedoPreservingSingleScatter(albedo, anisotropy, ior) : singleScatterAlbedo(albedo);
-  return radius.map((value, channel) => mode === 2 ? Math.max(value, 0) / 2.5
-    : Math.max(value, 0) / Math.sqrt(3 * (1 - alpha[channel]!) * (1 - alpha[channel]! * anisotropy))) as unknown as Vec3;
+  return radius.map((value, channel) =>
+    Math.max(value, 0) / Math.sqrt(3 * (1 - alpha[channel]!) * (1 - alpha[channel]! * anisotropy))) as unknown as Vec3;
 }
 
 export function exponentialSubsurfaceMedium(albedo: Vec3, meanFreePath: Vec3, anisotropy = 0, inversion: 0 | 1 = 1, ior = 1): HomogeneousMedium {
@@ -161,7 +177,12 @@ export function sampleBurleySurface(
       : Math.min(Math.max(value, 0), 1) * 3 / localChannels) as unknown as Vec3 };
   }
   const distance = sampleBurleyRadius(lengths[channel]!, rng(), rng());
-  if (!(distance > 0)) return null;
+  // Exits are searched only within a sphere of radius rMax around the entry,
+  // matching the GPU probe chords; the truncated tail holds ~e^-20/3 of the energy.
+  const rMax = 20 * Math.max(...lengths);
+  if (!(distance > 0) || distance >= rMax) return null;
+  const withinSphere = (hits: readonly SurfaceHit[]) => hits.filter(hit =>
+    Math.hypot(...hit.position.map((value, index) => value - entry.position[index]!)) <= rMax * 1.0001 + 1e-6);
   const normal = normalize(entry.normal);
   const helper: Vec3 = Math.abs(normal[2]) < 0.9 ? [0, 0, 1] : [0, 1, 0];
   const tangent = normalize([helper[1] * normal[2] - helper[2] * normal[1],
@@ -177,7 +198,7 @@ export function sampleBurleySurface(
   const phi = 2 * Math.PI * rng();
   const probe = entry.position.map((value, index) => value + distance
     * (Math.cos(phi) * diskX[index]! + Math.sin(phi) * diskY[index]!)) as unknown as Vec3;
-  const exits = project(probe, axis);
+  const exits = withinSphere(project(probe, axis));
   if (exits.length === 0) return null;
   const hit = exits[Math.min(exits.length - 1, Math.floor(rng() * exits.length))]!;
   const offset = hit.position.map((value, index) => value - entry.position[index]!) as unknown as Vec3;
@@ -189,16 +210,18 @@ export function sampleBurleySurface(
     const depth = offset[0] * projectionAxis[0] + offset[1] * projectionAxis[1] + offset[2] * projectionAxis[2];
     const projected = hit.position.map((value, component) => value - projectionAxis[component]! * depth) as unknown as Vec3;
     const radialDistance = Math.hypot(...projected.map((value, component) => value - entry.position[component]!));
-    const count = index === axisIndex ? exits.length : project(projected, projectionAxis).length;
+    const count = index === axisIndex ? exits.length : withinSphere(project(projected, projectionAxis)).length;
     if (count === 0) continue;
     areaPdf += (index === 0 ? 0.5 : 0.25)
       * lengths.reduce((sum, length) => sum + burleyProfile(radialDistance, length) / 3, 0) * jacobian / count;
   }
-  if (!(areaPdf > 0)) return null;
+  if (!(areaPdf > 0) || !Number.isFinite(areaPdf)) return null;
   const separation = Math.hypot(...hit.position.map((value, index) => value - entry.position[index]!));
   const topologyWeight = 1 - topologyReflectionProbability(entry.normal, hit.normal, followTopology);
   const weight = albedo.map((value, index) => Math.min(Math.max(value, 0), 1)
     * burleyProfile(separation, lengths[index]!) * topologyWeight / areaPdf) as unknown as Vec3;
+  // The 1/r profile overflows when the exit coincides with the entry point.
+  if (!weight.every(Number.isFinite)) return null;
   return { hit, weight };
 }
 

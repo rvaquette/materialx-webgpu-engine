@@ -73,6 +73,11 @@ export type ResolvedValueSource =
   | { kind: 'interface'; name: string }
   | { kind: 'default'; type: string };
 
+export interface ResolvedInputPreset {
+  name: string;
+  value: readonly number[];
+}
+
 export interface ResolvedInput {
   name: string;
   type: string;
@@ -87,6 +92,8 @@ export interface ResolvedInput {
   defaulted?: boolean;
   min?: readonly number[];
   max?: readonly number[];
+  /** Named editor values from `engine:presets`. */
+  presets?: readonly ResolvedInputPreset[];
   /** Declared colorspace carried from the input; never inferred. */
   colorSpace?: string;
   unit?: string;
@@ -178,6 +185,22 @@ function parseUiLimit(value: string | undefined, type: string, attribute: string
   return values;
 }
 
+/** `engine:presets="apple=0.8,0.8,0.5; skin 1=0.4,0.2,0.1"`: named UI values for an input. */
+function parsePresets(value: string | undefined, type: string, namePath: string): ResolvedInputPreset[] | undefined {
+  const raw = nonEmpty(value);
+  if (raw === undefined) return undefined;
+  const presets = raw.split(';').map(entry => entry.trim()).filter(Boolean).map(entry => {
+    const separator = entry.indexOf('=');
+    const name = separator > 0 ? entry.slice(0, separator).trim() : '';
+    if (!name) throw new Error(`Invalid engine:presets at ${namePath}: expected name=value entries.`);
+    return { name, value: parseUiLimit(entry.slice(separator + 1), type, `engine:presets '${name}'`, namePath)! };
+  });
+  if (new Set(presets.map(preset => preset.name)).size !== presets.length) {
+    throw new Error(`Invalid engine:presets at ${namePath}: duplicate preset name.`);
+  }
+  return presets;
+}
+
 function provenanceOf(el: { getNamePath(): string; getActiveSourceUri?(): string }): Provenance {
   const sourceUri = nonEmpty(el.getActiveSourceUri?.());
   return sourceUri !== undefined ? { namePath: el.getNamePath(), sourceUri } : { namePath: el.getNamePath() };
@@ -212,6 +235,7 @@ function resolveInput(input: MxInput): { resolved: ResolvedInput; connected: MxN
   if (min && max && min.some((value, index) => value > max[index]!)) {
     throw new Error(`Invalid UI range at ${provenance.namePath}: uimin must not exceed uimax.`);
   }
+  const presets = parsePresets(input.getAttribute?.('engine:presets'), type, provenance.namePath);
 
   let source: ResolvedValueSource;
   let connected: MxNode | null = null;
@@ -269,6 +293,7 @@ function resolveInput(input: MxInput): { resolved: ResolvedInput; connected: MxN
       ...(editable !== undefined ? { editable: editable === 'true' } : {}),
       ...(min !== undefined ? { min } : {}),
       ...(max !== undefined ? { max } : {}),
+      ...(presets !== undefined ? { presets } : {}),
       ...(colorSpace !== undefined ? { colorSpace } : {}),
       ...(unit !== undefined ? { unit } : {}),
       ...(unitType !== undefined ? { unitType } : {}),

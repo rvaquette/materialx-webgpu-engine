@@ -28,7 +28,7 @@ import {
 } from './material-variant.ts';
 import { ANALYTIC_LIGHTS_WGSL } from './analytic-lights.ts';
 import { pruneWgslFunctions } from '../../compiler/wgsl-reachability.ts';
-import { sssCoefficientsWgsl } from './subsurface.ts';
+import { MAX_SSS_WALK_EVENTS, sssCoefficientsWgsl } from './subsurface.ts';
 
 /** Compute workgroup tile edge (threads per dimension). */
 export const PT_WORKGROUP_SIZE = 8;
@@ -279,7 +279,8 @@ fn pcg_hash(v : u32) -> u32 {
 
 fn rng_next(state : ptr<function, u32>) -> f32 {
   *state = pcg_hash(*state);
-  return f32(*state) * (1.0 / 4294967296.0);
+  // f32(u32) rounds values near 2^32 up to 1.0; keep the documented [0, 1) range.
+  return min(f32(*state) * (1.0 / 4294967296.0), 0.99999994);
 }
 `;
 }
@@ -349,12 +350,22 @@ fn mx_subsurface_medium(albedo : vec3f, mfp : vec3f, g : f32) -> MxMedium {
 // Hero-wavelength free-flight sampler: picks a channel, samples a collision
 // distance from its extinction, and returns the MIS-balanced throughput for the
 // scatter or the surface-reaching branch (matches sampleHomogeneous in media.ts).
-fn mx_sample_homogeneous(m : MxMedium, tMax : f32, state : ptr<function, u32>) -> MxMediumSample {
+// The free-flight distance does not depend on the surface distance, so the
+// integrator can draw it before tracing and bound the ray to it (short rays
+// prune the BVH), then resolve the event with mx_homogeneous_event.
+fn mx_homogeneous_free_flight(m : MxMedium, state : ptr<function, u32>) -> f32 {
   let sigmaT = m.sigmaA + m.sigmaS;
   let ch = min(2u, u32(floor(rng_next(state) * 3.0)));
   let st = mx_pick3(sigmaT, ch);
   var t = 1.0e30;
   if (st > 0.0) { t = -log(1.0 - rng_next(state)) / st; }
+  return t;
+}
+fn mx_sample_homogeneous(m : MxMedium, tMax : f32, state : ptr<function, u32>) -> MxMediumSample {
+  return mx_homogeneous_event(m, mx_homogeneous_free_flight(m, state), tMax);
+}
+fn mx_homogeneous_event(m : MxMedium, t : f32, tMax : f32) -> MxMediumSample {
+  let sigmaT = m.sigmaA + m.sigmaS;
   var samp : MxMediumSample;
   samp.scattered = t < tMax;
   let dist = select(tMax, t, samp.scattered);
@@ -559,7 +570,7 @@ fn surface_hit_geometric_normal(h: Hit) -> vec3f {
 }
 fn mx_burley_lengths(lobe: MxBsdfLobe) -> vec3f {
   let radius = max(lobe.hairTintTRT, vec3f(0.0));
-  if (lobe.dispersion < 2.5) { return radius / 2.5; }
+  if (lobe.dispersion < 2.5) { return mx_sss_controls_burley_dmfp(lobe.color, radius); }
   let alpha = mx_sss_controls_alpha(lobe.color, lobe.anisotropy, max(lobe.ior, 1.0), lobe.roughness);
   return radius / sqrt(3.0 * (vec3f(1.0) - alpha) * (vec3f(1.0) - alpha * lobe.anisotropy));
 }
@@ -568,13 +579,17 @@ fn mx_burley_profile(radius: f32, lengths: vec3f) -> vec3f {
   return select(vec3f(0.0), (exp(-radius / distance) + exp(-radius / (3.0 * distance)))
     / (8.0 * PI * distance * max(radius, 1e-20)), lengths > vec3f(0.0));
 }
+// Bit-level test so fast-math cannot fold away a NaN/Inf check.
+fn mx_finite3(v: vec3f) -> bool {
+  let exponent = bitcast<vec3u>(v) & vec3u(0x7f800000u);
+  return all(exponent != vec3u(0x7f800000u));
+}
 struct MxBurleyExit { position: vec3f, normal: vec3f, geometricNormal: vec3f, weight: vec3f, valid: bool };
 struct MxBurleyProjection { position: vec3f, normal: vec3f, shadingNormal: vec3f, count: u32, valid: bool };
-fn mx_project_burley(probe: vec3f, axis: vec3f, material: u32, subset: u32, choose: bool, state: ptr<function, u32>) -> MxBurleyProjection {
+fn mx_project_burley(probe: vec3f, axis: vec3f, halfChord: f32, material: u32, subset: u32, choose: bool, state: ptr<function, u32>) -> MxBurleyProjection {
   var result: MxBurleyProjection;
-  let extent = length(vec3f(nodes[4u], nodes[5u], nodes[6u]) - vec3f(nodes[0u], nodes[1u], nodes[2u])) + 1.0;
-  var origin = probe - axis * extent;
-  var remaining = 2.0 * extent;
+  var origin = probe - axis * halfChord;
+  var remaining = 2.0 * halfChord;
   for (var crossing = 0u; crossing < 128u; crossing++) {
     let candidate = traverse_min(origin, axis, remaining, false, 1e-7);
     if (!candidate.hitAny) { result.valid = true; return result; }
@@ -607,16 +622,21 @@ fn mx_sample_burley(entry: vec3f, normal: vec3f, entryGeometric: vec3f, material
   }
   let scale = lengths[channel] * select(3.0, 1.0, rng_next(state) < 0.25);
   let radius = -scale * log(max(1.0 - rng_next(state), 1e-7));
-  if (radius <= 0.0) { return result; }
+  // Probe rays cover only the chord of a sphere of radius rMax around the entry
+  // (the truncated profile tail holds ~e^-20/3 of the energy), not the scene.
+  let rMax = 20.0 * max(lengths.x, max(lengths.y, lengths.z));
+  if (radius <= 0.0 || radius >= rMax) { return result; }
   let frame = basis(normal);
   let axes = mat3x3f(normal, frame[0], frame[1]);
   let choice = rng_next(state);
   let axisIndex = select(select(2u, 1u, choice < 0.75), 0u, choice < 0.5);
   let phi = 2.0 * PI * rng_next(state);
   let probe = entry + radius * (cos(phi) * axes[(axisIndex + 1u) % 3u] + sin(phi) * axes[(axisIndex + 2u) % 3u]);
-  let projection = mx_project_burley(probe, axes[axisIndex], material, u32(lobe.rotation), true, state);
+  let projection = mx_project_burley(probe, axes[axisIndex], sqrt(rMax * rMax - radius * radius), material, u32(lobe.rotation), true, state);
   if (projection.count == 0u || !projection.valid) { return result; }
   result.position = projection.position; result.normal = projection.shadingNormal; result.geometricNormal = projection.normal;
+  // Degenerate exit triangles produce NaN normals; reject them instead of poisoning the path.
+  if (!mx_finite3(result.normal) || !mx_finite3(result.geometricNormal)) { return result; }
   let offset = result.position - entry;
   var pdf = 0.0;
   for (var index = 0u; index < 3u; index++) {
@@ -624,20 +644,23 @@ fn mx_sample_burley(entry: vec3f, normal: vec3f, entryGeometric: vec3f, material
     let jacobian = abs(dot(result.geometricNormal, axis));
     if (jacobian <= 0.0) { continue; }
     let radialOffset = offset - axis * dot(offset, axis);
+    let radialDistance = length(radialOffset);
     var count = projection.count;
     if (index != axisIndex) {
-      let candidates = mx_project_burley(entry + radialOffset, axis, material, u32(lobe.rotation), false, state);
+      let halfChord = sqrt(max(rMax * rMax - radialDistance * radialDistance, 0.0)) * 1.0001 + 1e-6;
+      let candidates = mx_project_burley(entry + radialOffset, axis, halfChord, material, u32(lobe.rotation), false, state);
       if (!candidates.valid) { return result; }
       count = candidates.count;
     }
     if (count == 0u) { continue; }
     let probability = select(0.25, 0.5, index == 0u);
-    pdf += probability * dot(mx_burley_profile(length(radialOffset), lengths), vec3f(1.0 / 3.0)) * jacobian / f32(count);
+    pdf += probability * dot(mx_burley_profile(radialDistance, lengths), vec3f(1.0 / 3.0)) * jacobian / f32(count);
   }
-  if (pdf <= 0.0) { return result; }
+  if (!(pdf > 0.0) || !mx_finite3(vec3f(pdf))) { return result; }
   result.weight = clamp(lobe.color, vec3f(0.0), vec3f(1.0)) * mx_burley_profile(distance(entry, result.position), lengths) / pdf;
   result.weight *= 1.0 - clamp(lobe.extinction.y, 0.0, 1.0) * (1.0 - clamp(dot(normal, result.normal), 0.0, 1.0));
-  result.valid = true;
+  // The 1/r profile overflows when the exit lands on the entry point (Inf/Inf).
+  result.valid = mx_finite3(result.weight);
   return result;
 }
 fn mx_is_burley(lobe: MxBsdfLobe) -> bool {
@@ -741,8 +764,14 @@ fn integrate(ro0 : vec3<f32>, rd0 : vec3<f32>, backgroundDirection : vec3<f32>, 
 ${analyticLights ? '  var analyticNee = false;' : ''}
 
   for (var pathStep = 0u; pathStep < 65536u; pathStep++) {
+    if (subsurfaceWalk && subsurfaceEvents >= ${MAX_SSS_WALK_EVENTS}) { break; }
+    // Homogeneous media draw the collision distance first and trace only up to it.
+    let preFlight = inMedium && volumeIndex == 0xffffffffu;
+    var flight = 1.0e30;
+    if (preFlight) { flight = mx_homogeneous_free_flight(medium, state); }
 ${analyticLights ? `    let emitter = mx_intersect_lights(ro, rd);
-    var hit = traverse_min(ro, rd, emitter.distance, false,select(RAY_EPS,1e-7,inMedium));` : '    var hit = traverse_min(ro, rd, 1.0e30, false,select(RAY_EPS,1e-7,inMedium));'}
+    let traceLimit = min(emitter.distance, flight);` : '    let traceLimit = flight;'}
+    var hit = traverse_min(ro, rd, traceLimit, false,select(RAY_EPS,1e-7,inMedium));
     if (inMedium && subsurfaceWalk && subsurfaceSelective) {
       var exhausted = true;
       for (var crossing = 0u; crossing <= 128u; crossing++) {
@@ -751,7 +780,7 @@ ${analyticLights ? `    let emitter = mx_intersect_lights(ro, rd);
           ${dispatch ? 'mx_eval_material_sss_subset' : 'mx_material_sss_subset'}(tri_material(hit.tri)) == subsurfaceSubset, subsurfaceSubset > 0u);
         if (matches) { exhausted = false; break; }
         if (crossing == 128u) { break; }
-        hit = traverse_min(ro, rd, ${analyticLights ? 'emitter.distance' : '1.0e30'}, false, hit.t + 1e-6);
+        hit = traverse_min(ro, rd, traceLimit, false, hit.t + 1e-6);
       }
       if (exhausted) { break; }
     }
@@ -773,6 +802,8 @@ ${displayAovs ? '      *coverage = 1.0; cameraSegment = false;' : ''}
         radiance += beta*vs.emission;
         ms = MxMediumSample(vs.scattered,vs.t,vs.weight);
         g = vs.g;
+      } else if (preFlight) {
+        ms = mx_homogeneous_event(medium, flight, tMax);
       } else {
         ms = mx_sample_homogeneous(medium, tMax, state);
       }

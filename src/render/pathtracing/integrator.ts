@@ -1,16 +1,15 @@
 // Path tracing integrator core (plan section 9.2, T027). A unidirectional path
 // tracer with next-event estimation, multiple importance sampling (MIS) and
-// unbiased Russian-roulette termination -- no fixed, biased path-depth cutoff.
+// Russian-roulette termination with a biased 256-event SSS walk cutoff.
 // The scene is accessed through an injectable SceneSampler so the transport loop
 // can be driven by analytic test scenes without a GPU. This is the reference
-// estimator; the compute backend mirrors its math. No model approximations are
-// introduced here (the path tracer stays unbiased).
+// estimator; the compute backend mirrors its math and SSS walk budget.
 
 import type { Vec3 } from '../../scene/transforms.ts';
 import type { HomogeneousMedium } from './media.ts';
 import { phaseHG, sampleHenyeyGreenstein, sampleHomogeneous } from './media.ts';
 import { sampleVolumeTransport, type VolumeField } from '../volume-field.ts';
-import { sampleDavisDensity, topologyReflectionProbability } from './subsurface.ts';
+import { MAX_SSS_WALK_EVENTS, sampleDavisDensity, topologyReflectionProbability } from './subsurface.ts';
 
 export type Rng = () => number;
 
@@ -212,6 +211,7 @@ export function integratePath(
   let bounces = 0;
 
   for (let pathStep = 0; pathStep < 65536; pathStep++) {
+    if (subsurfaceWalk && subsurfaceEvents >= MAX_SSS_WALK_EVENTS) break;
     let hit = scene.intersect(ray);
     if (subsurfaceWalk && medium && subsurfaceSelective && subsurfaceDomain !== undefined) {
       for (let crossing = 0; hit && hit.subsurfaceDomain !== subsurfaceDomain && crossing < 128; crossing++) {
