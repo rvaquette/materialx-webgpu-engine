@@ -2,18 +2,24 @@
 // (see src/scene/compiled-paths.ts), skipping those whose binaries already exist,
 // and writes the USDA wrapper layers that reference the compiled scene and shader binaries.
 import { existsSync } from 'node:fs';
-import { readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { parseArgs } from 'node:util';
+import { findEmptyCompiledBuffer } from './compiled-buffer-check.mjs';
 import { openExportSession, root } from './export-browser-session.mjs';
+import { renameWithRetry } from './rename-with-retry.mjs';
+import { shareSceneBuffers, sharedPackSize } from './shared-buffers.mjs';
 import {
-  compiledMaterialDirectory, compiledSceneDirectory, compiledWrapperLayer, compiledWrapperPath,
+  compiledMaterialDirectory, compiledSceneDirectory, compiledSharedBuffersDirectory, compiledWrapperLayer, compiledWrapperPath,
 } from '../src/scene/compiled-paths.ts';
 
 const usage = `Usage: npm run compile:scenes -- [options]
 Compiles the scene catalog and scenes/mtlx-library into scenes/compiled, skipping
 scenes whose scene.json/shaders.wgsl.zst and materials whose material.json already exist.
+Unexpectedly empty buffer files are recompiled; empty shared packs are reported as errors.
 Each compiled scene gets a USDA wrapper layer (scenes/compiled/<scene>.usda) shown in the UI.
+Scenes of a shared group (scenes/lama) pool their buffers into one deduplicated, append-only
+pack (scenes/compiled/lama/_shared/buffers.bin.zst); already compiled scenes are migrated to it.
 Options:
   --scenes-only | --materials-only   restrict the batch
   --filter <text>                    only sources whose path contains <text> (repeatable)
@@ -27,13 +33,14 @@ Requires Node.js >=22 and Chrome/Edge (MX_CHROME overrides its executable).`;
 const projectPath = path => join(root, ...path.split('/'));
 
 /** Writes a package through a sibling temporary directory so partial output never looks compiled. */
-async function writeAtomically(session, result, directory, manifest, generatedFrom) {
+async function writeAtomically(session, result, directory, manifest, generatedFrom, sharedBuffers) {
   const out = projectPath(directory);
   const staging = `${out}.partial`;
-  await rm(staging, { recursive: true, force: true });
+  await rm(staging, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
   await session.writePackage(result, staging, manifest, generatedFrom);
-  await rm(out, { recursive: true, force: true });
-  await rename(staging, out);
+  if (sharedBuffers) await shareSceneBuffers(staging, projectPath(sharedBuffers));
+  await rm(out, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+  await renameWithRetry(staging, out);
 }
 
 async function writeWrapper(source) {
@@ -66,8 +73,22 @@ async function main() {
 
   const session = await openExportSession({ label: 'compile-browser', quiet: true });
   const failures = [];
-  const counts = { scenes: 0, materials: 0, skipped: 0, noMaterial: 0, wrappers: 0 };
+  const counts = { scenes: 0, materials: 0, skipped: 0, noMaterial: 0, wrappers: 0, pooled: 0 };
+  const sharedGroups = new Set();
   let compilations = 0;
+  const checkBuffers = async (label, directory, manifestName, sharedBuffers) => {
+    try {
+      const empty = await findEmptyCompiledBuffer(projectPath(directory), manifestName,
+        sharedBuffers ? projectPath(sharedBuffers) : undefined);
+      if (empty?.shared) throw new Error(`Shared buffer is empty: ${empty.path}. Rebuild the shared group before compiling.`);
+      if (empty) console.log(`[compile-scenes] Recompiling ${label}: empty buffer ${empty.path}`);
+      return { empty: !!empty };
+    } catch (error) {
+      failures.push({ label, error });
+      console.error(`[compile-scenes] FAILED ${label}: ${error.message.split('\n')[0]}`);
+      return undefined;
+    }
+  };
   const run = async (label, task) => {
     if (compilations > 0 && (compilations % restartEvery === 0 || !session.alive)) await session.restart();
     compilations++;
@@ -91,19 +112,36 @@ async function main() {
 
     for (const [index, source] of scenes.entries()) {
       const directory = compiledSceneDirectory(source);
+      const sharedBuffers = compiledSharedBuffersDirectory(source);
       const label = `[scene ${index + 1}/${scenes.length}] ${source}`;
       const compiled = ['scene.json', 'shaders.wgsl.zst'].some(file => existsSync(projectPath(`${directory}/${file}`)));
-      if (compiled && !values.force) counts.skipped++;
+      const buffers = compiled ? await checkBuffers(label, directory, 'scene.json', sharedBuffers) : { empty: false };
+      if (!buffers) continue;
+      if (compiled && !values.force && !buffers.empty) {
+        counts.skipped++;
+        // Pool the buffers of scenes compiled before their group was shared.
+        if (sharedBuffers && !values['dry-run'] && existsSync(projectPath(`${directory}/buffers.bin.zst`))) {
+          try {
+            await shareSceneBuffers(projectPath(directory), projectPath(sharedBuffers));
+            counts.pooled++;
+          } catch (error) {
+            failures.push({ label, error });
+            console.error(`[compile-scenes] FAILED pooling ${label}: ${error.message}`);
+            continue;
+          }
+        }
+      }
       else if (values['dry-run']) { console.log(`[compile-scenes] would compile ${label}`); continue; }
       else {
         const ok = await run(label, async () => {
           const result = await session.call('compileScene', [session.url(source), compressionLevel], timeout);
-          await writeAtomically(session, result, directory, 'scene.json', source);
+          await writeAtomically(session, result, directory, 'scene.json', source, sharedBuffers);
           return true;
         });
         if (!ok) continue;
         counts.scenes++;
       }
+      if (sharedBuffers) sharedGroups.add(sharedBuffers);
       if (!values['dry-run'] && existsSync(projectPath(`${directory}/scene.json`)) && await writeWrapper(source)) counts.wrappers++;
     }
 
@@ -111,7 +149,10 @@ async function main() {
     for (const [index, source] of materials.entries()) {
       const directory = compiledMaterialDirectory(source);
       const label = `[material ${index + 1}/${materials.length}] ${source}`;
-      if (existsSync(projectPath(`${directory}/material.json`)) && !values.force) { counts.skipped++; continue; }
+      const compiled = existsSync(projectPath(`${directory}/material.json`));
+      const buffers = compiled ? await checkBuffers(label, directory, 'material.json') : { empty: false };
+      if (!buffers) continue;
+      if (compiled && !values.force && !buffers.empty) { counts.skipped++; continue; }
       if (!/<surfacematerial\b/.test(await readFile(projectPath(source), 'utf8'))) { counts.noMaterial++; continue; }
       if (values['dry-run']) { console.log(`[compile-scenes] would compile ${label}`); continue; }
       const ok = await run(label, async () => {
@@ -127,7 +168,11 @@ async function main() {
   }
   console.log(`[compile-scenes] Compiled ${counts.scenes} scenes and ${counts.materials} materials; ` +
     `${counts.wrappers} wrapper layers written; ${counts.skipped} already compiled; ` +
+    `${counts.pooled} existing scenes moved to shared buffers; ` +
     `${counts.noMaterial} documents without surfacematerial; ${failures.length} failures.`);
+  for (const group of sharedGroups) {
+    console.log(`[compile-scenes] Shared buffers ${group}/buffers.bin.zst: ${((await sharedPackSize(projectPath(group))) / 1048576).toFixed(1)} MiB.`);
+  }
   for (const { label, error } of failures) console.error(`  - ${label}: ${error.message.split('\n')[0]}`);
   if (failures.length) process.exitCode = 1;
 }

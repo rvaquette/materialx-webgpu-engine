@@ -17,7 +17,7 @@ import type { PtImageProvider } from '../render/pathtracing/device-bindings.ts';
 import { applySceneDisplacement } from '../render/displacement.ts';
 import {
   decodeCompiledScene, encodeCompiledScene, isRecord,
-  type CompiledScenePackage, type CompiledSceneEncodeOptions,
+  type ByteRange, type CompiledScenePackage, type CompiledSceneEncodeOptions,
 } from './compiled-scene-codec.ts';
 
 export interface CompiledSceneRuntime {
@@ -193,7 +193,8 @@ export async function loadCompiledMaterial(url: string, fetchResource: typeof fe
   const response = await fetchResource(url);
   if (!response.ok) throw new Error(`HTTP ${response.status}: ${url}`);
   const base = response.url || url;
-  const data = await decodeCompiledScene(await response.json(), path => fetchBytes(new URL(path, base).href, fetchResource));
+  const manifest: unknown = await response.json();
+  const data = await decodeCompiledScene(manifest, packageReader(manifest, base, fetchResource));
   validateMaterialData(data);
   return {
     url, material: data.material, surface: data.surface,
@@ -249,12 +250,14 @@ export async function applyCompiledMaterials(
 export interface CompiledLayerReferences {
   scene: string;
   shaders?: string;
+  buffers?: string;
   source?: string;
 }
 
 export const COMPILED_LAYER_KEYS = {
   scene: 'materialx:compiledScene',
   shaders: 'materialx:compiledShaders',
+  buffers: 'materialx:compiledBuffers',
   source: 'materialx:source',
 } as const;
 
@@ -270,10 +273,12 @@ export function parseCompiledLayerReferences(text: string, layerUrl: string): Co
   const scene = values.get(COMPILED_LAYER_KEYS.scene);
   if (!scene) return undefined;
   const shaders = values.get(COMPILED_LAYER_KEYS.shaders);
+  const buffers = values.get(COMPILED_LAYER_KEYS.buffers);
   const source = values.get(COMPILED_LAYER_KEYS.source);
   return {
     scene: new URL(scene, layerUrl).href,
     ...(shaders ? { shaders: new URL(shaders, layerUrl).href } : {}),
+    ...(buffers ? { buffers: new URL(buffers, layerUrl).href } : {}),
     ...(source ? { source: new URL(source, layerUrl).href } : {}),
   };
 }
@@ -478,6 +483,38 @@ async function fetchBytes(url: string, fetchResource: typeof fetch): Promise<Uin
   return new Uint8Array(await resource.arrayBuffer());
 }
 
+/**
+ * Resolves a package's packed files: explicit overrides (USDA references), then shared-pack
+ * `location`s, then siblings of the manifest. Ranged reads fall back to slicing the whole file
+ * when the server ignores `Range`.
+ */
+function packageReader(
+  manifest: unknown, base: string, fetchResource: typeof fetch, overrides: Readonly<Record<string, string | undefined>> = {},
+): (path: string, range?: ByteRange) => Promise<Uint8Array<ArrayBuffer>> {
+  const files = isRecord(manifest) && Array.isArray(manifest.files) ? manifest.files : [];
+  const urlOf = (path: string): string => {
+    const override = overrides[path];
+    if (override) return override;
+    const location = files.find(file => isRecord(file) && file.path === path && typeof file.location === 'string')?.location;
+    return new URL(typeof location === 'string' ? location : path, base).href;
+  };
+  const whole = new Map<string, Promise<Uint8Array<ArrayBuffer>>>();
+  return async (path, range) => {
+    const url = urlOf(path);
+    if (!range) return fetchBytes(url, fetchResource) as Promise<Uint8Array<ArrayBuffer>>;
+    let full = whole.get(url);
+    if (!full) {
+      const response = await fetchResource(url, { headers: { Range: `bytes=${range.offset}-${range.offset + range.length - 1}` } });
+      if (!response.ok) throw new Error(`HTTP ${response.status}: ${url}`);
+      const bytes = new Uint8Array(await response.arrayBuffer());
+      if (response.status === 206) return bytes;
+      full = Promise.resolve(bytes);
+      whole.set(url, full);
+    }
+    return (await full).slice(range.offset, range.offset + range.length);
+  };
+}
+
 const appBaseUrl = (): string => typeof document === 'undefined' ? '/' : import.meta.env.BASE_URL;
 const documentBaseUrl = (fallback: string): string => typeof document === 'undefined' ? fallback : document.baseURI;
 
@@ -523,6 +560,8 @@ function externalImageProvider(
 export interface CompiledSceneLoadOptions {
   /** Overrides the location of the grouped WGSL payload (from a USDA `materialx:compiledShaders` reference). */
   shaders?: string;
+  /** Overrides the location of the (possibly shared) buffer pack (from a USDA `materialx:compiledBuffers` reference). */
+  buffers?: string;
 }
 
 export async function loadCompiledScene(
@@ -535,10 +574,9 @@ export async function loadCompiledScene(
     const response = await fetchResource(entry);
     if (!response.ok) throw new Error(`HTTP ${response.status}: ${entry}`);
     const manifest: unknown = await response.json();
-    const data = await decodeCompiledScene(manifest, path => fetchBytes(
-      path === 'shaders.wgsl.zst' && options.shaders ? options.shaders : new URL(path, response.url || entry).href,
-      fetchResource,
-    ));
+    const data = await decodeCompiledScene(manifest, packageReader(manifest, response.url || entry, fetchResource, {
+      'shaders.wgsl.zst': options.shaders, 'buffers.bin.zst': options.buffers,
+    }));
     validateData(data);
     const appBase = appBaseUrl();
     const documentBase = documentBaseUrl(response.url || entry);

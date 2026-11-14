@@ -1,0 +1,9 @@
+#usda 1.0
+(
+    customLayerData = {
+        string "materialx:compiledScene" = "./orangeJuice_grp/scene.json"
+        string "materialx:compiledShaders" = "./orangeJuice_grp/shaders.wgsl.zst"
+        string "materialx:source" = "../../../OpenPBRShaderPlayground/orangeJuice_grp/orangeJuice_grp.usda"
+    }
+    subLayers = [@../../../OpenPBRShaderPlayground/orangeJuice_grp/orangeJuice_grp.usda@]
+)

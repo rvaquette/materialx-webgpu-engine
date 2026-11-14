@@ -1,0 +1,10 @@
+#usda 1.0
+(
+    customLayerData = {
+        string "materialx:compiledScene" = "./lama_iridescence_target_hue/scene.json"
+        string "materialx:compiledShaders" = "./lama_iridescence_target_hue/shaders.wgsl.zst"
+        string "materialx:compiledBuffers" = "../_shared/buffers.bin.zst"
+        string "materialx:source" = "../../../lama/iridescence/lama_iridescence_target_hue.usda"
+    }
+    subLayers = [@../../../lama/iridescence/lama_iridescence_target_hue.usda@]
+)

@@ -3,6 +3,7 @@
     customLayerData = {
         string "materialx:compiledScene" = "./lama_add_yellow/scene.json"
         string "materialx:compiledShaders" = "./lama_add_yellow/shaders.wgsl.zst"
+        string "materialx:compiledBuffers" = "../_shared/buffers.bin.zst"
         string "materialx:source" = "../../../lama/add/lama_add_yellow.usda"
     }
     subLayers = [@../../../lama/add/lama_add_yellow.usda@]

@@ -10,7 +10,7 @@
     {
       "path": "buffers/3730202c6098c09f55491c8eadb64c2681b3642eae7eda40933a7eb3613c73dc.bin.zst",
       "file": "buffers.bin.zst",
-      "offset": 0,
+      "offset": 32271098,
       "byteLength": 221184,
       "compressedByteLength": 12842,
       "sha256": "3730202c6098c09f55491c8eadb64c2681b3642eae7eda40933a7eb3613c73dc"
@@ -18,7 +18,7 @@
     {
       "path": "buffers/81aa148bf21bae20fc02c0d9d8c3c340fa62835f7d12dda4d16dc70eb56b5fd2.bin.zst",
       "file": "buffers.bin.zst",
-      "offset": 12842,
+      "offset": 32283940,
       "byteLength": 221184,
       "compressedByteLength": 2671,
       "sha256": "81aa148bf21bae20fc02c0d9d8c3c340fa62835f7d12dda4d16dc70eb56b5fd2"
@@ -26,7 +26,7 @@
     {
       "path": "buffers/91f31c306af7b788e87e011f7340a3062963fbe5b0e51c7e1e1d34d46c985cdc.bin.zst",
       "file": "buffers.bin.zst",
-      "offset": 15513,
+      "offset": 32286611,
       "byteLength": 147456,
       "compressedByteLength": 15325,
       "sha256": "91f31c306af7b788e87e011f7340a3062963fbe5b0e51c7e1e1d34d46c985cdc"
@@ -34,7 +34,7 @@
     {
       "path": "buffers/391376078e551439681a3a8de781e117b6ed92381eccb0de6cb4d4b12fcace35.bin.zst",
       "file": "buffers.bin.zst",
-      "offset": 30838,
+      "offset": 32301936,
       "byteLength": 294912,
       "compressedByteLength": 11544,
       "sha256": "391376078e551439681a3a8de781e117b6ed92381eccb0de6cb4d4b12fcace35"
@@ -42,7 +42,7 @@
     {
       "path": "buffers/83c3195eb54c83b978b19f9d1d5533e743591d285f4b083fb3177d4989e363b3.bin.zst",
       "file": "buffers.bin.zst",
-      "offset": 42382,
+      "offset": 32313480,
       "byteLength": 73728,
       "compressedByteLength": 18834,
       "sha256": "83c3195eb54c83b978b19f9d1d5533e743591d285f4b083fb3177d4989e363b3"
@@ -50,7 +50,7 @@
     {
       "path": "buffers/bcb67cdd2b782dceea7da88c7d361fabe0cdea86f58631eac01b80fff78ec96c.bin.zst",
       "file": "buffers.bin.zst",
-      "offset": 61216,
+      "offset": 32332314,
       "byteLength": 327600,
       "compressedByteLength": 24585,
       "sha256": "bcb67cdd2b782dceea7da88c7d361fabe0cdea86f58631eac01b80fff78ec96c"
@@ -58,7 +58,7 @@
     {
       "path": "buffers/c408aa5bf6afe8bfb8e82ed1487295356b763b6d08ac97d02fb9d39886d88177.bin.zst",
       "file": "buffers.bin.zst",
-      "offset": 85801,
+      "offset": 32356899,
       "byteLength": 24576,
       "compressedByteLength": 7638,
       "sha256": "c408aa5bf6afe8bfb8e82ed1487295356b763b6d08ac97d02fb9d39886d88177"
@@ -66,113 +66,113 @@
     {
       "path": "buffers/d3bad5f3efc9ffb7370632eb4ee727d30e5b427af595ae2deeb6edd1ddf97c06.bin.zst",
       "file": "buffers.bin.zst",
-      "offset": 93439,
+      "offset": 0,
       "byteLength": 9289728,
-      "compressedByteLength": 1829879,
+      "compressedByteLength": 1960843,
       "sha256": "d3bad5f3efc9ffb7370632eb4ee727d30e5b427af595ae2deeb6edd1ddf97c06"
     },
     {
       "path": "buffers/cce564315d56a4af85adcad74fe2c5067a0fd4ba2ba479ae9b2316a59f12c580.bin.zst",
       "file": "buffers.bin.zst",
-      "offset": 1923318,
+      "offset": 1960843,
       "byteLength": 9289728,
-      "compressedByteLength": 1431650,
+      "compressedByteLength": 1480930,
       "sha256": "cce564315d56a4af85adcad74fe2c5067a0fd4ba2ba479ae9b2316a59f12c580"
     },
     {
       "path": "buffers/d05f871a39e32d2b730708bbf1b4148b5513ac6074180171c2e17088096a16f4.bin.zst",
       "file": "buffers.bin.zst",
-      "offset": 3354968,
+      "offset": 3441773,
       "byteLength": 6193152,
-      "compressedByteLength": 1638855,
+      "compressedByteLength": 1668841,
       "sha256": "d05f871a39e32d2b730708bbf1b4148b5513ac6074180171c2e17088096a16f4"
     },
     {
       "path": "buffers/d59b10cec4948140f10721e1852823900a441a5f4f1e12b9b6f163621bbfd699.bin.zst",
       "file": "buffers.bin.zst",
-      "offset": 4993823,
+      "offset": 5110614,
       "byteLength": 12386304,
-      "compressedByteLength": 6467484,
+      "compressedByteLength": 6670803,
       "sha256": "d59b10cec4948140f10721e1852823900a441a5f4f1e12b9b6f163621bbfd699"
     },
     {
       "path": "buffers/157e6fa026261c257732ba67125054eeecbaa6cda60b30d830133634545ee428.bin.zst",
       "file": "buffers.bin.zst",
-      "offset": 11461307,
+      "offset": 11781417,
       "byteLength": 3096576,
-      "compressedByteLength": 645980,
+      "compressedByteLength": 2077404,
       "sha256": "157e6fa026261c257732ba67125054eeecbaa6cda60b30d830133634545ee428"
     },
     {
       "path": "buffers/8b5b8fe6b349f5ed7ee31bfd474fbefde0fd9d2b41a84bf419d1c531c854aaac.bin.zst",
       "file": "buffers.bin.zst",
-      "offset": 12107287,
+      "offset": 13858821,
       "byteLength": 10485680,
-      "compressedByteLength": 1644912,
+      "compressedByteLength": 1811716,
       "sha256": "8b5b8fe6b349f5ed7ee31bfd474fbefde0fd9d2b41a84bf419d1c531c854aaac"
     },
     {
       "path": "buffers/400fa970411a7fa12cc16587cbeb6ea69fbfd7e2454990f68fb8999606fa8d05.bin.zst",
       "file": "buffers.bin.zst",
-      "offset": 13752199,
+      "offset": 15670537,
       "byteLength": 1032192,
-      "compressedByteLength": 340359,
+      "compressedByteLength": 697597,
       "sha256": "400fa970411a7fa12cc16587cbeb6ea69fbfd7e2454990f68fb8999606fa8d05"
     },
     {
       "path": "buffers/555e26115850e66a7705a3df802ffe2bf01fa575268ff732645e3b045abb93f4.bin.zst",
       "file": "buffers.bin.zst",
-      "offset": 14092558,
+      "offset": 16368134,
       "byteLength": 164160,
-      "compressedByteLength": 39913,
+      "compressedByteLength": 39003,
       "sha256": "555e26115850e66a7705a3df802ffe2bf01fa575268ff732645e3b045abb93f4"
     },
     {
       "path": "buffers/e2c395f27383e2dae94c7ad1c9566eaca900400b4ff09f0e2fff43e1fe58fa10.bin.zst",
       "file": "buffers.bin.zst",
-      "offset": 14132471,
+      "offset": 16407137,
       "byteLength": 164160,
-      "compressedByteLength": 39580,
+      "compressedByteLength": 39000,
       "sha256": "e2c395f27383e2dae94c7ad1c9566eaca900400b4ff09f0e2fff43e1fe58fa10"
     },
     {
       "path": "buffers/958c9b1a9778089662b63b67801de04e49be9cd39fca1e982510ea609cbb56d4.bin.zst",
       "file": "buffers.bin.zst",
-      "offset": 14172051,
+      "offset": 16446137,
       "byteLength": 109440,
-      "compressedByteLength": 28926,
+      "compressedByteLength": 28441,
       "sha256": "958c9b1a9778089662b63b67801de04e49be9cd39fca1e982510ea609cbb56d4"
     },
     {
       "path": "buffers/2adc239ebcb1b4a116648d822a3cde1f783784b902399cc2d6efef5baa49d7e9.bin.zst",
       "file": "buffers.bin.zst",
-      "offset": 14200977,
+      "offset": 16474578,
       "byteLength": 218880,
-      "compressedByteLength": 138584,
+      "compressedByteLength": 144386,
       "sha256": "2adc239ebcb1b4a116648d822a3cde1f783784b902399cc2d6efef5baa49d7e9"
     },
     {
       "path": "buffers/5cd83d403dc30ba039aac047a62492813e7fb0d51808573c71f5dd21030e928f.bin.zst",
       "file": "buffers.bin.zst",
-      "offset": 14339561,
+      "offset": 16618964,
       "byteLength": 54720,
-      "compressedByteLength": 13948,
+      "compressedByteLength": 32361,
       "sha256": "5cd83d403dc30ba039aac047a62492813e7fb0d51808573c71f5dd21030e928f"
     },
     {
       "path": "buffers/e156db50beb5cbf61877dec02aaffdc58c8a177c160103fb6ccd9897c8291b9f.bin.zst",
       "file": "buffers.bin.zst",
-      "offset": 14353509,
+      "offset": 16651325,
       "byteLength": 238000,
-      "compressedByteLength": 45938,
+      "compressedByteLength": 48787,
       "sha256": "e156db50beb5cbf61877dec02aaffdc58c8a177c160103fb6ccd9897c8291b9f"
     },
     {
       "path": "buffers/fbc1964157292d54d90bc36613abb4a2bfa7179c85aed9184c98fc1aba315209.bin.zst",
       "file": "buffers.bin.zst",
-      "offset": 14399447,
+      "offset": 16700112,
       "byteLength": 18240,
-      "compressedByteLength": 6414,
+      "compressedByteLength": 10089,
       "sha256": "fbc1964157292d54d90bc36613abb4a2bfa7179c85aed9184c98fc1aba315209"
     },
     {
@@ -210,7 +210,7 @@
     {
       "path": "buffers/8bff4adc69a724f14769bddcdcbed7521ff28c354515ab854f363c87cd31daf0.bin.zst",
       "file": "buffers.bin.zst",
-      "offset": 14405861,
+      "offset": 32364537,
       "byteLength": 240,
       "compressedByteLength": 98,
       "sha256": "8bff4adc69a724f14769bddcdcbed7521ff28c354515ab854f363c87cd31daf0"
@@ -218,7 +218,7 @@
     {
       "path": "buffers/363f012b74b9c88d828c809a568dc50627214866415aeb36ef6effbc3061741f.bin.zst",
       "file": "buffers.bin.zst",
-      "offset": 14405959,
+      "offset": 32364635,
       "byteLength": 12,
       "compressedByteLength": 21,
       "sha256": "363f012b74b9c88d828c809a568dc50627214866415aeb36ef6effbc3061741f"
@@ -226,7 +226,7 @@
     {
       "path": "buffers/76f2b0a697b8719008d2c33f7afbd4bf4ed499f1088ff8904f4574bd8d77da03.bin.zst",
       "file": "buffers.bin.zst",
-      "offset": 14405980,
+      "offset": 32364656,
       "byteLength": 7935312,
       "compressedByteLength": 2064836,
       "sha256": "76f2b0a697b8719008d2c33f7afbd4bf4ed499f1088ff8904f4574bd8d77da03"
@@ -234,7 +234,7 @@
     {
       "path": "buffers/c860b0e43da8beaba9744f3c256cbece2449585e0e9bc90002abc2aa995153a4.bin.zst",
       "file": "buffers.bin.zst",
-      "offset": 16470816,
+      "offset": 34429492,
       "byteLength": 20425152,
       "compressedByteLength": 3386502,
       "sha256": "c860b0e43da8beaba9744f3c256cbece2449585e0e9bc90002abc2aa995153a4"
@@ -242,7 +242,7 @@
     {
       "path": "buffers/913e2e7cb1df0e77057e3b7ba8ecd4ab58bec5ae948a659ef1c965eac8d873cc.bin.zst",
       "file": "buffers.bin.zst",
-      "offset": 19857318,
+      "offset": 37815994,
       "byteLength": 1075008,
       "compressedByteLength": 353425,
       "sha256": "913e2e7cb1df0e77057e3b7ba8ecd4ab58bec5ae948a659ef1c965eac8d873cc"
@@ -250,7 +250,7 @@
     {
       "path": "buffers/47dfbb85b58cfaff439dbf755ee48036e6db2aa7991395f8f27b25f12739f125.bin.zst",
       "file": "buffers.bin.zst",
-      "offset": 20210743,
+      "offset": 38169419,
       "byteLength": 3276,
       "compressedByteLength": 75,
       "sha256": "47dfbb85b58cfaff439dbf755ee48036e6db2aa7991395f8f27b25f12739f125"
@@ -258,7 +258,7 @@
     {
       "path": "buffers/98e00f8640a113950801296bfa9ba7db7d60b24814eae16029ed3f9cb09f72a1.bin.zst",
       "file": "buffers.bin.zst",
-      "offset": 20210818,
+      "offset": 38169494,
       "byteLength": 6450048,
       "compressedByteLength": 1683169,
       "sha256": "98e00f8640a113950801296bfa9ba7db7d60b24814eae16029ed3f9cb09f72a1"
@@ -266,7 +266,7 @@
     {
       "path": "buffers/3880dc5c207eb59bb323841f74fe991f5cfa6beee0ad5564a8f21c02ef398875.bin.zst",
       "file": "buffers.bin.zst",
-      "offset": 21893987,
+      "offset": 39852663,
       "byteLength": 12900096,
       "compressedByteLength": 6619405,
       "sha256": "3880dc5c207eb59bb323841f74fe991f5cfa6beee0ad5564a8f21c02ef398875"
@@ -274,7 +274,7 @@
     {
       "path": "buffers/41a2b9813cca7c63be91c6aef2ebe6a5dfffec14e0eb7403b45de01145384388.bin.zst",
       "file": "buffers.bin.zst",
-      "offset": 28513392,
+      "offset": 46472068,
       "byteLength": 224,
       "compressedByteLength": 143,
       "sha256": "41a2b9813cca7c63be91c6aef2ebe6a5dfffec14e0eb7403b45de01145384388"
@@ -386,7 +386,7 @@
     {
       "path": "buffers/74c1b9abe60c07259c15c0d1dbdf1e3bd905b3368529a3bd5e86121f816b18c9.bin.zst",
       "file": "buffers.bin.zst",
-      "offset": 28513535,
+      "offset": 46472211,
       "byteLength": 108,
       "compressedByteLength": 117,
       "sha256": "74c1b9abe60c07259c15c0d1dbdf1e3bd905b3368529a3bd5e86121f816b18c9"
@@ -403,7 +403,8 @@
   "files": [
     {
       "path": "buffers.bin.zst",
-      "byteLength": 28513652
+      "byteLength": 46472328,
+      "location": "../../_shared/buffers.bin.zst"
     },
     {
       "path": "shaders.wgsl.zst",

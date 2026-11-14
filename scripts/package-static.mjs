@@ -36,9 +36,10 @@ function validateCompiledScenes(directory) {
           !Number.isSafeInteger(file.byteLength) || file.byteLength < 0) {
         throw new Error(`Invalid grouped-scene file descriptor in ${path}`);
       }
-      const actual = statSync(join(directory, file.path)).size;
-      if (actual !== file.byteLength) {
-        throw new Error(`Compiled scene file is incomplete: ${join(directory, file.path)} (${actual} bytes; expected ${file.byteLength}). ` +
+      const packed = join(directory, file.location ?? file.path);
+      const actual = statSync(packed).size;
+      if (file.location === undefined ? actual !== file.byteLength : actual < file.byteLength) {
+        throw new Error(`Compiled scene file is incomplete: ${packed} (${actual} bytes; expected ${file.byteLength}). ` +
           'Check that Git LFS files were hydrated before packaging.');
       }
     }

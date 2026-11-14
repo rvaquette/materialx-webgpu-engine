@@ -1,0 +1,49 @@
+{
+  "format": "materialx-compiled-scene",
+  "version": "2.0",
+  "engineAbi": 1,
+  "compression": "zstd",
+  "byteOrder": "little-endian",
+  "generatedFrom": "scenes/mtlx-library/Examples/DisneyPrincipled/disney_principled_default.mtlx",
+  "state": "metadata/e3f4aa665e7ae00dc41ac6aed4fa4eeda9f3c3f32246824e27118ed11a53969e.json.zst",
+  "resources": [
+    {
+      "path": "shaders/c0025a782040cefa7d4629e8969bd8a5d652a3fc7b6b68a2010e17210f336d84.wgsl.zst",
+      "file": "shaders.wgsl.zst",
+      "offset": 0,
+      "byteLength": 78604,
+      "compressedByteLength": 16089,
+      "sha256": "c0025a782040cefa7d4629e8969bd8a5d652a3fc7b6b68a2010e17210f336d84"
+    },
+    {
+      "path": "shaders/a07edda1b2c1404bfd4b2b000c2957267d1e08a0fb2977dc7ee520c76e50bf5e.wgsl.zst",
+      "file": "shaders.wgsl.zst",
+      "offset": 16089,
+      "byteLength": 66347,
+      "compressedByteLength": 13210,
+      "sha256": "a07edda1b2c1404bfd4b2b000c2957267d1e08a0fb2977dc7ee520c76e50bf5e"
+    },
+    {
+      "path": "metadata/e3f4aa665e7ae00dc41ac6aed4fa4eeda9f3c3f32246824e27118ed11a53969e.json.zst",
+      "file": "metadata.json.zst",
+      "offset": 0,
+      "byteLength": 14627,
+      "compressedByteLength": 1993,
+      "sha256": "e3f4aa665e7ae00dc41ac6aed4fa4eeda9f3c3f32246824e27118ed11a53969e"
+    }
+  ],
+  "files": [
+    {
+      "path": "buffers.bin.zst",
+      "byteLength": 0
+    },
+    {
+      "path": "shaders.wgsl.zst",
+      "byteLength": 29299
+    },
+    {
+      "path": "metadata.json.zst",
+      "byteLength": 1993
+    }
+  ]
+}

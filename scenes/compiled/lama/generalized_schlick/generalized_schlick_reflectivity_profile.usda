@@ -1,0 +1,10 @@
+#usda 1.0
+(
+    customLayerData = {
+        string "materialx:compiledScene" = "./generalized_schlick_reflectivity_profile/scene.json"
+        string "materialx:compiledShaders" = "./generalized_schlick_reflectivity_profile/shaders.wgsl.zst"
+        string "materialx:compiledBuffers" = "../_shared/buffers.bin.zst"
+        string "materialx:source" = "../../../lama/generalized_schlick/generalized_schlick_reflectivity_profile.usda"
+    }
+    subLayers = [@../../../lama/generalized_schlick/generalized_schlick_reflectivity_profile.usda@]
+)

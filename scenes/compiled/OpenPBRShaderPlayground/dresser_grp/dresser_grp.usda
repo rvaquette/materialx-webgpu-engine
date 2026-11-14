@@ -1,0 +1,9 @@
+#usda 1.0
+(
+    customLayerData = {
+        string "materialx:compiledScene" = "./dresser_grp/scene.json"
+        string "materialx:compiledShaders" = "./dresser_grp/shaders.wgsl.zst"
+        string "materialx:source" = "../../../OpenPBRShaderPlayground/dresser_grp/dresser_grp.usda"
+    }
+    subLayers = [@../../../OpenPBRShaderPlayground/dresser_grp/dresser_grp.usda@]
+)

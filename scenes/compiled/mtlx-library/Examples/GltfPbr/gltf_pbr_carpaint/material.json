@@ -1,0 +1,49 @@
+{
+  "format": "materialx-compiled-scene",
+  "version": "2.0",
+  "engineAbi": 1,
+  "compression": "zstd",
+  "byteOrder": "little-endian",
+  "generatedFrom": "scenes/mtlx-library/Examples/GltfPbr/gltf_pbr_carpaint.mtlx",
+  "state": "metadata/5b40053e792ca21db7656adae05313f140e9387f9318e07a9a5e777123a7453c.json.zst",
+  "resources": [
+    {
+      "path": "shaders/3b9a98ec0304d782f2501ae3cd0ab9ae6be28057c37e00b506c86f905b80416d.wgsl.zst",
+      "file": "shaders.wgsl.zst",
+      "offset": 0,
+      "byteLength": 81622,
+      "compressedByteLength": 16511,
+      "sha256": "3b9a98ec0304d782f2501ae3cd0ab9ae6be28057c37e00b506c86f905b80416d"
+    },
+    {
+      "path": "shaders/e554c53332ed915c059f59512ade7c9d092c70dedb8d09684a73ada0d9e46ec1.wgsl.zst",
+      "file": "shaders.wgsl.zst",
+      "offset": 16511,
+      "byteLength": 66750,
+      "compressedByteLength": 13303,
+      "sha256": "e554c53332ed915c059f59512ade7c9d092c70dedb8d09684a73ada0d9e46ec1"
+    },
+    {
+      "path": "metadata/5b40053e792ca21db7656adae05313f140e9387f9318e07a9a5e777123a7453c.json.zst",
+      "file": "metadata.json.zst",
+      "offset": 0,
+      "byteLength": 19186,
+      "compressedByteLength": 2490,
+      "sha256": "5b40053e792ca21db7656adae05313f140e9387f9318e07a9a5e777123a7453c"
+    }
+  ],
+  "files": [
+    {
+      "path": "buffers.bin.zst",
+      "byteLength": 0
+    },
+    {
+      "path": "shaders.wgsl.zst",
+      "byteLength": 29814
+    },
+    {
+      "path": "metadata.json.zst",
+      "byteLength": 2490
+    }
+  ]
+}

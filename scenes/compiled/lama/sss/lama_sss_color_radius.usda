@@ -1,0 +1,10 @@
+#usda 1.0
+(
+    customLayerData = {
+        string "materialx:compiledScene" = "./lama_sss_color_radius/scene.json"
+        string "materialx:compiledShaders" = "./lama_sss_color_radius/shaders.wgsl.zst"
+        string "materialx:compiledBuffers" = "../_shared/buffers.bin.zst"
+        string "materialx:source" = "../../../lama/sss/lama_sss_color_radius.usda"
+    }
+    subLayers = [@../../../lama/sss/lama_sss_color_radius.usda@]
+)

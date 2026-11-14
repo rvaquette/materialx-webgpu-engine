@@ -1,0 +1,49 @@
+{
+  "format": "materialx-compiled-scene",
+  "version": "2.0",
+  "engineAbi": 1,
+  "compression": "zstd",
+  "byteOrder": "little-endian",
+  "generatedFrom": "scenes/mtlx-library/nodes/uv_default/uv_default.mtlx",
+  "state": "metadata/5ee52b7218d2948d724b0d186364a4391fc268951ff0095cf623b5a6688d13ca.json.zst",
+  "resources": [
+    {
+      "path": "shaders/ff646b8a9a7d899c50e364970f2984f537e38cd1af9736b1a6cc2655811ba72d.wgsl.zst",
+      "file": "shaders.wgsl.zst",
+      "offset": 0,
+      "byteLength": 79316,
+      "compressedByteLength": 16239,
+      "sha256": "ff646b8a9a7d899c50e364970f2984f537e38cd1af9736b1a6cc2655811ba72d"
+    },
+    {
+      "path": "shaders/54c1cdfb945417000b65c1a1e7c39c8b8478ae6dca923540a6849f462c346564.wgsl.zst",
+      "file": "shaders.wgsl.zst",
+      "offset": 16239,
+      "byteLength": 67059,
+      "compressedByteLength": 13354,
+      "sha256": "54c1cdfb945417000b65c1a1e7c39c8b8478ae6dca923540a6849f462c346564"
+    },
+    {
+      "path": "metadata/5ee52b7218d2948d724b0d186364a4391fc268951ff0095cf623b5a6688d13ca.json.zst",
+      "file": "metadata.json.zst",
+      "offset": 0,
+      "byteLength": 30152,
+      "compressedByteLength": 3198,
+      "sha256": "5ee52b7218d2948d724b0d186364a4391fc268951ff0095cf623b5a6688d13ca"
+    }
+  ],
+  "files": [
+    {
+      "path": "buffers.bin.zst",
+      "byteLength": 0
+    },
+    {
+      "path": "shaders.wgsl.zst",
+      "byteLength": 29593
+    },
+    {
+      "path": "metadata.json.zst",
+      "byteLength": 3198
+    }
+  ]
+}

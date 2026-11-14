@@ -1,0 +1,9 @@
+#usda 1.0
+(
+    customLayerData = {
+        string "materialx:compiledScene" = "./tube_mug_grp/scene.json"
+        string "materialx:compiledShaders" = "./tube_mug_grp/shaders.wgsl.zst"
+        string "materialx:source" = "../../../OpenPBRShaderPlayground/tube_mug_grp/tube_mug_grp.usda"
+    }
+    subLayers = [@../../../OpenPBRShaderPlayground/tube_mug_grp/tube_mug_grp.usda@]
+)

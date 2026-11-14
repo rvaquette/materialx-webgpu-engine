@@ -1,0 +1,9 @@
+#usda 1.0
+(
+    customLayerData = {
+        string "materialx:compiledScene" = "./wallsFloor_grp/scene.json"
+        string "materialx:compiledShaders" = "./wallsFloor_grp/shaders.wgsl.zst"
+        string "materialx:source" = "../../../OpenPBRShaderPlayground/wallsFloor_grp/wallsFloor_grp.usda"
+    }
+    subLayers = [@../../../OpenPBRShaderPlayground/wallsFloor_grp/wallsFloor_grp.usda@]
+)

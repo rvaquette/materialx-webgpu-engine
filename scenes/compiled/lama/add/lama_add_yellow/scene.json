@@ -299,7 +299,8 @@
   "files": [
     {
       "path": "buffers.bin.zst",
-      "byteLength": 32271098
+      "byteLength": 32271098,
+      "location": "../../_shared/buffers.bin.zst"
     },
     {
       "path": "shaders.wgsl.zst",

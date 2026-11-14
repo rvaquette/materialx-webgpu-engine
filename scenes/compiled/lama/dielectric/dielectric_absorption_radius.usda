@@ -1,0 +1,10 @@
+#usda 1.0
+(
+    customLayerData = {
+        string "materialx:compiledScene" = "./dielectric_absorption_radius/scene.json"
+        string "materialx:compiledShaders" = "./dielectric_absorption_radius/shaders.wgsl.zst"
+        string "materialx:compiledBuffers" = "../_shared/buffers.bin.zst"
+        string "materialx:source" = "../../../lama/dielectric/dielectric_absorption_radius.usda"
+    }
+    subLayers = [@../../../lama/dielectric/dielectric_absorption_radius.usda@]
+)

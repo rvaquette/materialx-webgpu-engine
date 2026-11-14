@@ -1,0 +1,49 @@
+{
+  "format": "materialx-compiled-scene",
+  "version": "2.0",
+  "engineAbi": 1,
+  "compression": "zstd",
+  "byteOrder": "little-endian",
+  "generatedFrom": "scenes/mtlx-library/showcase/standard_surface/wood_tiled/wood_tiled.mtlx",
+  "state": "metadata/36364595b042b1933f3e44ec2874cc9c9ade2ec1235eaf39278af29f89d040ff.json.zst",
+  "resources": [
+    {
+      "path": "shaders/316ce726f51641e12d73189970879963767ad4e131dd0db97688cd4ca743a7b0.wgsl.zst",
+      "file": "shaders.wgsl.zst",
+      "offset": 0,
+      "byteLength": 82973,
+      "compressedByteLength": 16803,
+      "sha256": "316ce726f51641e12d73189970879963767ad4e131dd0db97688cd4ca743a7b0"
+    },
+    {
+      "path": "shaders/78d449611aa1c567a30ea51b8cf8d117c4cb5b57d08d60108a3fbef0ecffb685.wgsl.zst",
+      "file": "shaders.wgsl.zst",
+      "offset": 16803,
+      "byteLength": 68073,
+      "compressedByteLength": 13598,
+      "sha256": "78d449611aa1c567a30ea51b8cf8d117c4cb5b57d08d60108a3fbef0ecffb685"
+    },
+    {
+      "path": "metadata/36364595b042b1933f3e44ec2874cc9c9ade2ec1235eaf39278af29f89d040ff.json.zst",
+      "file": "metadata.json.zst",
+      "offset": 0,
+      "byteLength": 37023,
+      "compressedByteLength": 3650,
+      "sha256": "36364595b042b1933f3e44ec2874cc9c9ade2ec1235eaf39278af29f89d040ff"
+    }
+  ],
+  "files": [
+    {
+      "path": "buffers.bin.zst",
+      "byteLength": 0
+    },
+    {
+      "path": "shaders.wgsl.zst",
+      "byteLength": 30401
+    },
+    {
+      "path": "metadata.json.zst",
+      "byteLength": 3650
+    }
+  ]
+}

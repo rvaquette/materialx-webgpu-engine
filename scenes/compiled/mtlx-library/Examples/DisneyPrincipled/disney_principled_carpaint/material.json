@@ -1,0 +1,49 @@
+{
+  "format": "materialx-compiled-scene",
+  "version": "2.0",
+  "engineAbi": 1,
+  "compression": "zstd",
+  "byteOrder": "little-endian",
+  "generatedFrom": "scenes/mtlx-library/Examples/DisneyPrincipled/disney_principled_carpaint.mtlx",
+  "state": "metadata/792d18d13c632443724c5ead8d1d8aa4976260ac0bfc9e503797159cedd4cbc5.json.zst",
+  "resources": [
+    {
+      "path": "shaders/9178523d0bab6243643ca96b75ffab1c7e162c13893240953e22d14932802400.wgsl.zst",
+      "file": "shaders.wgsl.zst",
+      "offset": 0,
+      "byteLength": 81421,
+      "compressedByteLength": 16466,
+      "sha256": "9178523d0bab6243643ca96b75ffab1c7e162c13893240953e22d14932802400"
+    },
+    {
+      "path": "shaders/8e430bd93f89b79f32815502c361c4d908421d2fc1d039d535edffc4c63eb36c.wgsl.zst",
+      "file": "shaders.wgsl.zst",
+      "offset": 16466,
+      "byteLength": 66549,
+      "compressedByteLength": 13258,
+      "sha256": "8e430bd93f89b79f32815502c361c4d908421d2fc1d039d535edffc4c63eb36c"
+    },
+    {
+      "path": "metadata/792d18d13c632443724c5ead8d1d8aa4976260ac0bfc9e503797159cedd4cbc5.json.zst",
+      "file": "metadata.json.zst",
+      "offset": 0,
+      "byteLength": 12069,
+      "compressedByteLength": 1935,
+      "sha256": "792d18d13c632443724c5ead8d1d8aa4976260ac0bfc9e503797159cedd4cbc5"
+    }
+  ],
+  "files": [
+    {
+      "path": "buffers.bin.zst",
+      "byteLength": 0
+    },
+    {
+      "path": "shaders.wgsl.zst",
+      "byteLength": 29724
+    },
+    {
+      "path": "metadata.json.zst",
+      "byteLength": 1935
+    }
+  ]
+}

@@ -1,0 +1,49 @@
+{
+  "format": "materialx-compiled-scene",
+  "version": "2.0",
+  "engineAbi": 1,
+  "compression": "zstd",
+  "byteOrder": "little-endian",
+  "generatedFrom": "scenes/mtlx-library/Examples/UsdPreviewSurface/usd_preview_surface_carpaint.mtlx",
+  "state": "metadata/ebd33f04ae585f445bba3d44cd9a331ef1294165d4eb39619fabe0eaacb78bf1.json.zst",
+  "resources": [
+    {
+      "path": "shaders/cc9527c67b1ada3f87b19978e8ad732ef3e1309aa9bcb8cbce8762c7bd2cf02c.wgsl.zst",
+      "file": "shaders.wgsl.zst",
+      "offset": 0,
+      "byteLength": 83609,
+      "compressedByteLength": 16754,
+      "sha256": "cc9527c67b1ada3f87b19978e8ad732ef3e1309aa9bcb8cbce8762c7bd2cf02c"
+    },
+    {
+      "path": "shaders/712225ff9aba5b93380e742cf9c53b105ea3a99499de6d061d0d25089795cdc3.wgsl.zst",
+      "file": "shaders.wgsl.zst",
+      "offset": 16754,
+      "byteLength": 66815,
+      "compressedByteLength": 13290,
+      "sha256": "712225ff9aba5b93380e742cf9c53b105ea3a99499de6d061d0d25089795cdc3"
+    },
+    {
+      "path": "metadata/ebd33f04ae585f445bba3d44cd9a331ef1294165d4eb39619fabe0eaacb78bf1.json.zst",
+      "file": "metadata.json.zst",
+      "offset": 0,
+      "byteLength": 12674,
+      "compressedByteLength": 2049,
+      "sha256": "ebd33f04ae585f445bba3d44cd9a331ef1294165d4eb39619fabe0eaacb78bf1"
+    }
+  ],
+  "files": [
+    {
+      "path": "buffers.bin.zst",
+      "byteLength": 0
+    },
+    {
+      "path": "shaders.wgsl.zst",
+      "byteLength": 30044
+    },
+    {
+      "path": "metadata.json.zst",
+      "byteLength": 2049
+    }
+  ]
+}

@@ -1,0 +1,9 @@
+#usda 1.0
+(
+    customLayerData = {
+        string "materialx:compiledScene" = "./paintSpill_grp/scene.json"
+        string "materialx:compiledShaders" = "./paintSpill_grp/shaders.wgsl.zst"
+        string "materialx:source" = "../../../OpenPBRShaderPlayground/paintSpill_grp/paintSpill_grp.usda"
+    }
+    subLayers = [@../../../OpenPBRShaderPlayground/paintSpill_grp/paintSpill_grp.usda@]
+)

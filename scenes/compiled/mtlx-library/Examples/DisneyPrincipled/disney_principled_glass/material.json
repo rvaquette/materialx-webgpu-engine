@@ -1,0 +1,49 @@
+{
+  "format": "materialx-compiled-scene",
+  "version": "2.0",
+  "engineAbi": 1,
+  "compression": "zstd",
+  "byteOrder": "little-endian",
+  "generatedFrom": "scenes/mtlx-library/Examples/DisneyPrincipled/disney_principled_glass.mtlx",
+  "state": "metadata/d799441c37a038b2bed91e608a31a1bc8af00c996c66aa6924112e51349458b6.json.zst",
+  "resources": [
+    {
+      "path": "shaders/9121d9500bd852a57f6cf1cb0c433f3578f1e5f1d6ebb4c788af44c5302a7867.wgsl.zst",
+      "file": "shaders.wgsl.zst",
+      "offset": 0,
+      "byteLength": 80858,
+      "compressedByteLength": 16399,
+      "sha256": "9121d9500bd852a57f6cf1cb0c433f3578f1e5f1d6ebb4c788af44c5302a7867"
+    },
+    {
+      "path": "shaders/134e4ca3d88befe8912bbd24fd0785cf251a5a4932eb483d9259f6b320609147.wgsl.zst",
+      "file": "shaders.wgsl.zst",
+      "offset": 16399,
+      "byteLength": 66679,
+      "compressedByteLength": 13252,
+      "sha256": "134e4ca3d88befe8912bbd24fd0785cf251a5a4932eb483d9259f6b320609147"
+    },
+    {
+      "path": "metadata/d799441c37a038b2bed91e608a31a1bc8af00c996c66aa6924112e51349458b6.json.zst",
+      "file": "metadata.json.zst",
+      "offset": 0,
+      "byteLength": 11916,
+      "compressedByteLength": 1918,
+      "sha256": "d799441c37a038b2bed91e608a31a1bc8af00c996c66aa6924112e51349458b6"
+    }
+  ],
+  "files": [
+    {
+      "path": "buffers.bin.zst",
+      "byteLength": 0
+    },
+    {
+      "path": "shaders.wgsl.zst",
+      "byteLength": 29651
+    },
+    {
+      "path": "metadata.json.zst",
+      "byteLength": 1918
+    }
+  ]
+}

@@ -37,18 +37,44 @@ export function compiledMaterialDirectory(source: string): string {
   return `${COMPILED_ROOT}/${match[1]}`;
 }
 
+/**
+ * Scene groups (first directory below scenes/) whose compiled buffers go into one append-only,
+ * content-deduplicated pack: the Lama scenes reuse the same geometry/BVH and differ by material.
+ */
+export const SHARED_BUFFER_GROUPS: readonly string[] = ['lama'];
+export const SHARED_BUFFERS_FILE = 'buffers.bin.zst';
+export const SHARED_BUFFERS_INDEX = 'buffers.json';
+
+/** `scenes/compiled/<group>/_shared` when the source's buffers are pooled, else undefined. */
+export function compiledSharedBuffersDirectory(source: string): string | undefined {
+  const group = compiledSceneStem(source).split('/')[0]!;
+  return SHARED_BUFFER_GROUPS.includes(group) ? `${COMPILED_ROOT}/${group}/_shared` : undefined;
+}
+
+/** Relative URL from directory `from` to project path `to` (both relative to the project root). */
+export function relativeProjectPath(from: string, to: string): string {
+  const a = from.split('/').filter(Boolean);
+  const b = to.split('/').filter(Boolean);
+  let common = 0;
+  while (common < a.length && common < b.length - 1 && a[common] === b[common]) common++;
+  return `${'../'.repeat(a.length - common)}${b.slice(common).join('/')}`;
+}
+
 /** USDA layer whose customLayerData points at the compiled scene and shader binaries. */
 export function compiledWrapperLayer(source: string): string {
   const stem = compiledSceneStem(source);
   const name = stem.split('/').at(-1)!;
   const sourcePath = `${'../'.repeat(stem.split('/').length)}${sceneRelative(source)}`;
   const isUsd = /\.usd[ac]?$/i.test(source);
+  const shared = compiledSharedBuffersDirectory(source);
+  const wrapperDirectory = compiledWrapperPath(source).split('/').slice(0, -1).join('/');
   return [
     '#usda 1.0',
     '(',
     '    customLayerData = {',
     `        string "materialx:compiledScene" = "./${name}/scene.json"`,
     `        string "materialx:compiledShaders" = "./${name}/shaders.wgsl.zst"`,
+    ...(shared ? [`        string "materialx:compiledBuffers" = "${relativeProjectPath(wrapperDirectory, `${shared}/${SHARED_BUFFERS_FILE}`)}"`] : []),
     `        string "materialx:source" = "${sourcePath}"`,
     '    }',
     ...(isUsd ? [`    subLayers = [@${sourcePath}@]`] : []),

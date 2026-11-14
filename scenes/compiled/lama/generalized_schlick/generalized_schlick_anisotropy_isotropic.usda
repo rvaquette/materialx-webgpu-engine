@@ -1,0 +1,10 @@
+#usda 1.0
+(
+    customLayerData = {
+        string "materialx:compiledScene" = "./generalized_schlick_anisotropy_isotropic/scene.json"
+        string "materialx:compiledShaders" = "./generalized_schlick_anisotropy_isotropic/shaders.wgsl.zst"
+        string "materialx:compiledBuffers" = "../_shared/buffers.bin.zst"
+        string "materialx:source" = "../../../lama/generalized_schlick/generalized_schlick_anisotropy_isotropic.usda"
+    }
+    subLayers = [@../../../lama/generalized_schlick/generalized_schlick_anisotropy_isotropic.usda@]
+)

@@ -1,0 +1,10 @@
+#usda 1.0
+(
+    customLayerData = {
+        string "materialx:compiledScene" = "./dielectric_lobe_name/scene.json"
+        string "materialx:compiledShaders" = "./dielectric_lobe_name/shaders.wgsl.zst"
+        string "materialx:compiledBuffers" = "../_shared/buffers.bin.zst"
+        string "materialx:source" = "../../../lama/dielectric/dielectric_lobe_name.usda"
+    }
+    subLayers = [@../../../lama/dielectric/dielectric_lobe_name.usda@]
+)

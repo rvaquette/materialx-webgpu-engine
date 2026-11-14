@@ -1,0 +1,10 @@
+#usda 1.0
+(
+    customLayerData = {
+        string "materialx:compiledScene" = "./surface_compute_opacity/scene.json"
+        string "materialx:compiledShaders" = "./surface_compute_opacity/shaders.wgsl.zst"
+        string "materialx:compiledBuffers" = "../_shared/buffers.bin.zst"
+        string "materialx:source" = "../../../lama/surface/surface_compute_opacity.usda"
+    }
+    subLayers = [@../../../lama/surface/surface_compute_opacity.usda@]
+)

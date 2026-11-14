@@ -1,0 +1,10 @@
+#usda 1.0
+(
+    customLayerData = {
+        string "materialx:compiledScene" = "./dielectric_rotation/scene.json"
+        string "materialx:compiledShaders" = "./dielectric_rotation/shaders.wgsl.zst"
+        string "materialx:compiledBuffers" = "../_shared/buffers.bin.zst"
+        string "materialx:source" = "../../../lama/dielectric/dielectric_rotation.usda"
+    }
+    subLayers = [@../../../lama/dielectric/dielectric_rotation.usda@]
+)

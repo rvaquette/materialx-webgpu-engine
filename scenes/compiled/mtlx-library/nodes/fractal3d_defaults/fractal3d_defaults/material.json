@@ -1,0 +1,49 @@
+{
+  "format": "materialx-compiled-scene",
+  "version": "2.0",
+  "engineAbi": 1,
+  "compression": "zstd",
+  "byteOrder": "little-endian",
+  "generatedFrom": "scenes/mtlx-library/nodes/fractal3d_defaults/fractal3d_defaults.mtlx",
+  "state": "metadata/bfd50223eb0f0907c68ec862a1dae8a30b0fad96b687e45ae9da2d65f9da5f6f.json.zst",
+  "resources": [
+    {
+      "path": "shaders/0f03348d838f2646c85b0b1958417117dde3cb2a56c56d1701a5c85c94a88947.wgsl.zst",
+      "file": "shaders.wgsl.zst",
+      "offset": 0,
+      "byteLength": 83905,
+      "compressedByteLength": 17162,
+      "sha256": "0f03348d838f2646c85b0b1958417117dde3cb2a56c56d1701a5c85c94a88947"
+    },
+    {
+      "path": "shaders/3648b90de26aae22cac506b2de84023e81d97971e68151e80ab272f1b605a857.wgsl.zst",
+      "file": "shaders.wgsl.zst",
+      "offset": 17162,
+      "byteLength": 71648,
+      "compressedByteLength": 14277,
+      "sha256": "3648b90de26aae22cac506b2de84023e81d97971e68151e80ab272f1b605a857"
+    },
+    {
+      "path": "metadata/bfd50223eb0f0907c68ec862a1dae8a30b0fad96b687e45ae9da2d65f9da5f6f.json.zst",
+      "file": "metadata.json.zst",
+      "offset": 0,
+      "byteLength": 50565,
+      "compressedByteLength": 3874,
+      "sha256": "bfd50223eb0f0907c68ec862a1dae8a30b0fad96b687e45ae9da2d65f9da5f6f"
+    }
+  ],
+  "files": [
+    {
+      "path": "buffers.bin.zst",
+      "byteLength": 0
+    },
+    {
+      "path": "shaders.wgsl.zst",
+      "byteLength": 31439
+    },
+    {
+      "path": "metadata.json.zst",
+      "byteLength": 3874
+    }
+  ]
+}

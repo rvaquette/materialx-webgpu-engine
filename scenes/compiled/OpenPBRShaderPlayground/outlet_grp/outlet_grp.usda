@@ -1,0 +1,9 @@
+#usda 1.0
+(
+    customLayerData = {
+        string "materialx:compiledScene" = "./outlet_grp/scene.json"
+        string "materialx:compiledShaders" = "./outlet_grp/shaders.wgsl.zst"
+        string "materialx:source" = "../../../OpenPBRShaderPlayground/outlet_grp/outlet_grp.usda"
+    }
+    subLayers = [@../../../OpenPBRShaderPlayground/outlet_grp/outlet_grp.usda@]
+)

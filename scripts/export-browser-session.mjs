@@ -66,6 +66,25 @@ function chromeExecutable() {
   return chromePath;
 }
 
+export async function waitForExportPage(connection, url, timeout = 30000) {
+  const deadline = Date.now() + timeout;
+  let page;
+  while (Date.now() < deadline) {
+    try {
+      const result = await connection.send('Runtime.evaluate', {
+        expression: '({ url: location.href, readyState: document.readyState })',
+        returnByValue: true,
+      }, Math.max(1, deadline - Date.now()));
+      page = result.result.value;
+      if (page?.url === url && ['interactive', 'complete'].includes(page.readyState)) return;
+    } catch (error) {
+      if (!/execution context was destroyed|cannot find context with specified id/i.test(error.message)) throw error;
+    }
+    await sleep(Math.min(100, Math.max(0, deadline - Date.now())));
+  }
+  throw new Error(`Timed out loading export page ${url}; last page: ${page?.url ?? 'unknown'} (${page?.readyState ?? 'unknown'}).`);
+}
+
 async function launchBrowser(origin, label, quiet) {
   const chromePath = chromeExecutable();
   const profile = await mkdtemp(join(tmpdir(), 'mx-scene-export-'));
@@ -120,6 +139,7 @@ async function launchBrowser(origin, label, quiet) {
     await connection.ready;
     await connection.send('Runtime.enable');
     await connection.send('Inspector.enable');
+    await waitForExportPage(connection, `${origin}${harnessPath}`);
     return { connection, close };
   } catch (error) {
     await close();

@@ -377,7 +377,10 @@ export class InteractiveViewer {
       return loadUsdScene(references.source, sink, () => { }, overrides, sourceOptions);
     }
     try {
-      const loaded = await loadCompiledScene(references.scene, sink, fetch, references.shaders ? { shaders: references.shaders } : {});
+      const { shaders, buffers } = references;
+      const loaded = await loadCompiledScene(references.scene, sink, fetch, {
+        ...(shaders ? { shaders } : {}), ...(buffers ? { buffers } : {}),
+      });
       return { ...loaded, entry };
     } catch (error) {
       if (!references.source) throw error;

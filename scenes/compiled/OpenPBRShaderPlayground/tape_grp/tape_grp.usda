@@ -1,0 +1,9 @@
+#usda 1.0
+(
+    customLayerData = {
+        string "materialx:compiledScene" = "./tape_grp/scene.json"
+        string "materialx:compiledShaders" = "./tape_grp/shaders.wgsl.zst"
+        string "materialx:source" = "../../../OpenPBRShaderPlayground/tape_grp/tape_grp.usda"
+    }
+    subLayers = [@../../../OpenPBRShaderPlayground/tape_grp/tape_grp.usda@]
+)

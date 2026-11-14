@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { compiledSceneCatalog, SCENE_CATALOG, SOURCE_SCENE_CATALOG } from '../../src/scene/scene-catalog.ts';
 import { compiledMaterialCatalog } from '../../src/scene/material-catalog.ts';
 import {
-  compiledMaterialDirectory, compiledSceneDirectory, compiledWrapperLayer, compiledWrapperPath,
+  compiledMaterialDirectory, compiledSceneDirectory, compiledSharedBuffersDirectory, compiledWrapperLayer, compiledWrapperPath,
 } from '../../src/scene/compiled-paths.ts';
 import { parseCompiledLayerReferences } from '../../src/scene/compiled-scene.ts';
 
@@ -118,8 +118,12 @@ describe('scene selector catalog', () => {
     expect(parseCompiledLayerReferences(layer, 'https://x.test/app/scenes/compiled/lama/add/a.usda')).toEqual({
       scene: 'https://x.test/app/scenes/compiled/lama/add/a/scene.json',
       shaders: 'https://x.test/app/scenes/compiled/lama/add/a/shaders.wgsl.zst',
+      buffers: 'https://x.test/app/scenes/compiled/lama/_shared/buffers.bin.zst',
       source: 'https://x.test/app/scenes/lama/add/a.usda',
     });
+    expect(compiledSharedBuffersDirectory('scenes/lama/add/a.usda')).toBe('scenes/compiled/lama/_shared');
+    expect(compiledSharedBuffersDirectory('scenes/pathtracer/ajax.usda')).toBeUndefined();
+    expect(compiledWrapperLayer('scenes/pathtracer/ajax.usda')).not.toContain('compiledBuffers');
     expect(compiledWrapperLayer('scenes/pathtracer/duck.glb')).not.toContain('subLayers');
     expect(parseCompiledLayerReferences('#usda 1.0\ndef Xform "World" {}\n', 'https://x.test/a.usda')).toBeUndefined();
   });

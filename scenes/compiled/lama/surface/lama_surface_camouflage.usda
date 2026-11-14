@@ -1,0 +1,10 @@
+#usda 1.0
+(
+    customLayerData = {
+        string "materialx:compiledScene" = "./lama_surface_camouflage/scene.json"
+        string "materialx:compiledShaders" = "./lama_surface_camouflage/shaders.wgsl.zst"
+        string "materialx:compiledBuffers" = "../_shared/buffers.bin.zst"
+        string "materialx:source" = "../../../lama/surface/lama_surface_camouflage.usda"
+    }
+    subLayers = [@../../../lama/surface/lama_surface_camouflage.usda@]
+)

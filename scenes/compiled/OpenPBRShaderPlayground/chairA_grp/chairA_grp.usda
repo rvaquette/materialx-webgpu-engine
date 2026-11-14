@@ -1,0 +1,9 @@
+#usda 1.0
+(
+    customLayerData = {
+        string "materialx:compiledScene" = "./chairA_grp/scene.json"
+        string "materialx:compiledShaders" = "./chairA_grp/shaders.wgsl.zst"
+        string "materialx:source" = "../../../OpenPBRShaderPlayground/chairA_grp/chairA_grp.usda"
+    }
+    subLayers = [@../../../OpenPBRShaderPlayground/chairA_grp/chairA_grp.usda@]
+)

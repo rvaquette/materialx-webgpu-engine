@@ -1,0 +1,9 @@
+#usda 1.0
+(
+    customLayerData = {
+        string "materialx:compiledScene" = "./stringLights_grp/scene.json"
+        string "materialx:compiledShaders" = "./stringLights_grp/shaders.wgsl.zst"
+        string "materialx:source" = "../../../OpenPBRShaderPlayground/stringLights_grp/stringLights_grp.usda"
+    }
+    subLayers = [@../../../OpenPBRShaderPlayground/stringLights_grp/stringLights_grp.usda@]
+)

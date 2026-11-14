@@ -1,0 +1,9 @@
+#usda 1.0
+(
+    customLayerData = {
+        string "materialx:compiledScene" = "./plane_grp/scene.json"
+        string "materialx:compiledShaders" = "./plane_grp/shaders.wgsl.zst"
+        string "materialx:source" = "../../../OpenPBRShaderPlayground/plane_grp/plane_grp.usda"
+    }
+    subLayers = [@../../../OpenPBRShaderPlayground/plane_grp/plane_grp.usda@]
+)

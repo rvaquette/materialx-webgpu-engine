@@ -1,0 +1,49 @@
+{
+  "format": "materialx-compiled-scene",
+  "version": "2.0",
+  "engineAbi": 1,
+  "compression": "zstd",
+  "byteOrder": "little-endian",
+  "generatedFrom": "scenes/mtlx-library/displacements/Rock063_1K-JPG/Rock063_1K-JPG.mtlx",
+  "state": "metadata/3a3b7e6ebf2862837e1d5a60c0acefc6409d12667ea681af72ccb9ff0d5db1bd.json.zst",
+  "resources": [
+    {
+      "path": "shaders/e9dbdc773d3f930ecdf7aa29844b6d6d803f792989bb94ca99968c160d7ad680.wgsl.zst",
+      "file": "shaders.wgsl.zst",
+      "offset": 0,
+      "byteLength": 81101,
+      "compressedByteLength": 16680,
+      "sha256": "e9dbdc773d3f930ecdf7aa29844b6d6d803f792989bb94ca99968c160d7ad680"
+    },
+    {
+      "path": "shaders/912e34619a289f7a241c118b5ca55e253007993765b00f6edfe001ee4924a92d.wgsl.zst",
+      "file": "shaders.wgsl.zst",
+      "offset": 16680,
+      "byteLength": 68489,
+      "compressedByteLength": 13706,
+      "sha256": "912e34619a289f7a241c118b5ca55e253007993765b00f6edfe001ee4924a92d"
+    },
+    {
+      "path": "metadata/3a3b7e6ebf2862837e1d5a60c0acefc6409d12667ea681af72ccb9ff0d5db1bd.json.zst",
+      "file": "metadata.json.zst",
+      "offset": 0,
+      "byteLength": 47889,
+      "compressedByteLength": 4170,
+      "sha256": "3a3b7e6ebf2862837e1d5a60c0acefc6409d12667ea681af72ccb9ff0d5db1bd"
+    }
+  ],
+  "files": [
+    {
+      "path": "buffers.bin.zst",
+      "byteLength": 0
+    },
+    {
+      "path": "shaders.wgsl.zst",
+      "byteLength": 30386
+    },
+    {
+      "path": "metadata.json.zst",
+      "byteLength": 4170
+    }
+  ]
+}

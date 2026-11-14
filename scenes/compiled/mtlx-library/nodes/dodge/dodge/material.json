@@ -1,0 +1,49 @@
+{
+  "format": "materialx-compiled-scene",
+  "version": "2.0",
+  "engineAbi": 1,
+  "compression": "zstd",
+  "byteOrder": "little-endian",
+  "generatedFrom": "scenes/mtlx-library/nodes/dodge/dodge.mtlx",
+  "state": "metadata/2cdac40115c8ab2938bea906af5193cdd6cfe728bdbf597e4fbc691e5c9c8f8b.json.zst",
+  "resources": [
+    {
+      "path": "shaders/95e6f4448d5215dce7e40602fea27499732a0659ff3657bad60ed6f31ea73681.wgsl.zst",
+      "file": "shaders.wgsl.zst",
+      "offset": 0,
+      "byteLength": 79612,
+      "compressedByteLength": 16326,
+      "sha256": "95e6f4448d5215dce7e40602fea27499732a0659ff3657bad60ed6f31ea73681"
+    },
+    {
+      "path": "shaders/be4fd913d3f641c523e5a175873af5bd2b17090c0d6c60b6d64de12e0df6681e.wgsl.zst",
+      "file": "shaders.wgsl.zst",
+      "offset": 16326,
+      "byteLength": 67355,
+      "compressedByteLength": 13438,
+      "sha256": "be4fd913d3f641c523e5a175873af5bd2b17090c0d6c60b6d64de12e0df6681e"
+    },
+    {
+      "path": "metadata/2cdac40115c8ab2938bea906af5193cdd6cfe728bdbf597e4fbc691e5c9c8f8b.json.zst",
+      "file": "metadata.json.zst",
+      "offset": 0,
+      "byteLength": 37878,
+      "compressedByteLength": 3551,
+      "sha256": "2cdac40115c8ab2938bea906af5193cdd6cfe728bdbf597e4fbc691e5c9c8f8b"
+    }
+  ],
+  "files": [
+    {
+      "path": "buffers.bin.zst",
+      "byteLength": 0
+    },
+    {
+      "path": "shaders.wgsl.zst",
+      "byteLength": 29764
+    },
+    {
+      "path": "metadata.json.zst",
+      "byteLength": 3551
+    }
+  ]
+}

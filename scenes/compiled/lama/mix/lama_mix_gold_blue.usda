@@ -1,0 +1,10 @@
+#usda 1.0
+(
+    customLayerData = {
+        string "materialx:compiledScene" = "./lama_mix_gold_blue/scene.json"
+        string "materialx:compiledShaders" = "./lama_mix_gold_blue/shaders.wgsl.zst"
+        string "materialx:compiledBuffers" = "../_shared/buffers.bin.zst"
+        string "materialx:source" = "../../../lama/mix/lama_mix_gold_blue.usda"
+    }
+    subLayers = [@../../../lama/mix/lama_mix_gold_blue.usda@]
+)
