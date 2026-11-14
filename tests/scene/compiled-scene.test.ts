@@ -450,6 +450,24 @@ over "World" {
     await expect(exportCompiledScene(loaded)).rejects.toThrow('Cannot export missing texture');
   });
 
+  it('embeds temporary blob textures so they remain available after export', async () => {
+    const loaded = await fixture();
+    const file = 'blob:https://example.test/temporary-texture';
+    const material = [...loaded.resources.materials.values()][0]!;
+    material.surfaceModule?.textures.push({ name: 'image', handle: 'image', group: 1, binding: 0, fileRef: file });
+    const pixels: DecodedPixelImage = {
+      kind: 'pixels', width: 1, height: 1, channels: 4, componentType: 'uint8',
+      colorSpace: 'lin_rec709', data: new Uint8Array([10, 20, 30, 255]),
+    };
+    loaded.mtlx.imageProvider.decode = () => pixels;
+    const scene = await exportCompiledScene(loaded, { compressionLevel: 3 });
+    const fetchResource = packageFetch(scene);
+    const restored = await loadCompiledScene('https://relocated.test/scenes/compiled/scene.json', vi.fn(), fetchResource);
+    const fetchesBefore = fetchResource.mock.calls.length;
+    expect(await restored.mtlx.imageProvider.decode(file)).toEqual(pixels);
+    expect(fetchResource).toHaveBeenCalledTimes(fetchesBefore);
+  });
+
   it('reports missing original textures and allows retrying after they become available', async () => {
     const loaded = await fixture();
     const material = [...loaded.resources.materials.values()][0]!;

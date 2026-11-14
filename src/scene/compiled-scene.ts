@@ -33,6 +33,8 @@ interface ExternalImage {
   tiles?: number[];
 }
 
+type CompiledImage = ExternalImage | DecodedPixelImage;
+
 interface CompiledSceneData extends CompiledSceneRuntime {
   layout: { sceneBufferVersion: number; nodeFloats: number; triangleFloats: number; materialFloats: number };
   scene: LoadedUsdScene['scene'];
@@ -43,7 +45,7 @@ interface CompiledSceneData extends CompiledSceneRuntime {
   environment?: LoadedUsdScene['environment'];
   environmentSource?: Omit<NonNullable<LoadedUsdScene['environment']>, 'image'> & { url: string };
   surfaces: Map<string, RasterSurface>;
-  images: Map<string, ExternalImage>;
+  images: Map<string, CompiledImage>;
 }
 
 export function compiledRasterShaderKey(materialKey: string, quality: RasterQuality): string {
@@ -127,17 +129,21 @@ export async function exportCompiledScene(
 }
 
 /** Texture files keep their opaque compile-time keys; URLs are portable relative to the app. */
-async function collectExternalImages(loaded: LoadedUsdScene, files: Iterable<string>): Promise<Map<string, ExternalImage>> {
+async function collectExternalImages(loaded: LoadedUsdScene, files: Iterable<string>): Promise<Map<string, CompiledImage>> {
   const sourceEntry = new URL(loaded.entry, typeof document === 'undefined' ? undefined : document.baseURI);
   const portableUrl = (url: URL): string => url.origin === sourceEntry.origin
     ? `${url.pathname}${url.search}${url.hash}` : url.href;
   const materialDirectories = [...new Set(loaded.scene.materials.map(ref =>
     new URL('.', new URL(ref.assetPath, new URL(ref.authoringLayer ?? loaded.entry, sourceEntry))).href))];
   if (!materialDirectories.length) materialDirectories.push(new URL('.', sourceEntry).href);
-  const images = new Map<string, ExternalImage>();
+  const images = new Map<string, CompiledImage>();
   for (const file of files) {
     const image = await loaded.mtlx.imageProvider.decode(file);
     if (!image) throw new Error(`Cannot export missing texture: ${file}`);
+    if (/^blob:/i.test(file)) {
+      images.set(file, image);
+      continue;
+    }
     images.set(file, {
       kind: 'external',
       urls: [...new Set(materialDirectories.map(dir => portableUrl(new URL(AssetResolver.normalizeUdim(file), dir))))],
@@ -151,7 +157,7 @@ interface CompiledMaterialData {
   kind: 'material';
   material: MaterialResource;
   surface: RasterSurface;
-  images: Map<string, ExternalImage>;
+  images: Map<string, CompiledImage>;
 }
 
 export interface CompiledMaterial {
@@ -466,6 +472,16 @@ function validateMaterialData(value: unknown): asserts value is CompiledMaterial
 function validateExternalImages(images: Map<unknown, unknown>): void {
   for (const [file, image] of images) {
     if (typeof file !== 'string') fail('texture reference');
+    if (isRecord(image) && image.kind === 'pixels') {
+      if (!uint(image.width) || image.width === 0 || !uint(image.height) || image.height === 0 ||
+          ![1, 2, 3, 4].includes(Number(image.channels)) ||
+          typeof image.colorSpace !== 'string' || image.udim !== undefined ||
+          !((image.componentType === 'uint8' && image.data instanceof Uint8Array) ||
+            (['uint16', 'float16'].includes(String(image.componentType)) && image.data instanceof Uint16Array) ||
+            (image.componentType === 'float32' && image.data instanceof Float32Array)) ||
+          image.data.length !== image.width * image.height * Number(image.channels)) fail('embedded texture');
+      continue;
+    }
     if (!isRecord(image) || image.kind !== 'external' || !Array.isArray(image.urls) ||
         !image.urls.length || image.urls.some(url => typeof url !== 'string' || !url ||
           (!url.startsWith('/') && !/^https?:\/\//i.test(url)))) fail('external texture URL');
@@ -520,7 +536,7 @@ const documentBaseUrl = (fallback: string): string => typeof document === 'undef
 
 /** Lazily fetches and caches exported texture references (app-relative or absolute URLs). */
 function externalImageProvider(
-  images: ReadonlyMap<string, ExternalImage>, base: string, fetchResource: typeof fetch, label: string,
+  images: ReadonlyMap<string, CompiledImage>, base: string, fetchResource: typeof fetch, label: string,
 ): PtImageProvider {
   const appBase = appBaseUrl();
   const documentBase = documentBaseUrl(base);
@@ -548,6 +564,7 @@ function externalImageProvider(
   return { decode: file => {
     const image = images.get(file);
     if (!image) throw new MissingCompiledImageError(`Texture absent from ${label}: ${file}`);
+    if (image.kind === 'pixels') return image;
     let decoded = decodedImages.get(file);
     if (!decoded) {
       decoded = decodeExternal(image).catch(error => { decodedImages.delete(file); throw error; });

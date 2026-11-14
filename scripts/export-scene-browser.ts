@@ -1,6 +1,7 @@
 import { loadUsdScene } from '../src/render/usd-scene-assets.ts';
 import { exportCompiledMaterial, exportCompiledScene } from '../src/scene/compiled-scene.ts';
 import { SOURCE_SCENE_CATALOG } from '../src/scene/scene-catalog.ts';
+import { importLocalGltf } from '../src/scene/local-gltf.ts';
 import type { CompiledScenePackage } from '../src/scene/compiled-scene-codec.ts';
 import type { DiagnosticSink } from '../src/core/diagnostics.ts';
 
@@ -27,15 +28,23 @@ export function listSources(): { scenes: string[]; materials: string[] } {
 
 export async function compileScene(entry: string, compressionLevel = 22) {
   scenePackage = undefined;
-  console.log('Loading USD scene...');
-  const loaded = await loadUsdScene(entry, sink, message => console.log(message), new Map(), { editableParameters: true });
+  console.log('Loading scene...');
+  const imported = /\.(gltf|glb)$/i.test(new URL(entry).pathname)
+    ? await importLocalGltf([], undefined, entry) : undefined;
   try {
-    console.log('Preparing and compressing compiled scene...');
-    scenePackage = await exportCompiledScene(loaded, { compressionLevel, onProgress: message => console.log(message) });
-    console.log(`Compiled scene ready: ${scenePackage.files.size} payloads.`);
-    return packageSummary(scenePackage);
+    for (const warning of imported?.warnings ?? []) console.warn(warning);
+    const loaded = await loadUsdScene(entry, sink, message => console.log(message), new Map(),
+      { ...imported?.options, editableParameters: true });
+    try {
+      console.log('Preparing and compressing compiled scene...');
+      scenePackage = await exportCompiledScene(loaded, { compressionLevel, onProgress: message => console.log(message) });
+      console.log(`Compiled scene ready: ${scenePackage.files.size} payloads.`);
+      return packageSummary(scenePackage);
+    } finally {
+      loaded.mtlx.documents?.delete();
+    }
   } finally {
-    loaded.mtlx.documents?.delete();
+    imported?.dispose();
   }
 }
 

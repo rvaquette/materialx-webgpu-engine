@@ -13,7 +13,7 @@ async function main() {
   if (values.help) {
     console.log('Usage: npm run export:scene -- --entry scenes\\pathtracer\\volume_cube.usda --out scenes\\compiled\\volume_cube\n' +
       'Requires Node.js >=22 and Chrome/Edge (MX_CHROME overrides its executable).\n' +
-      'Loads and compiles USD/USDA/USDC using the shared browser loaders, without opening the viewer UI.\n' +
+      'Loads and compiles USD/USDA/USDC and glTF/GLB using the shared browser loaders, without opening the viewer UI.\n' +
       'Options: --compression-level 1..22 (default 22), --timeout milliseconds (default 1800000).\n' +
       'The output directory must be empty or absent. No source files are modified.\n' +
       'To compile every catalog scene and library material with their wrapper layers, use npm run compile:scenes.');
@@ -27,8 +27,8 @@ async function main() {
   const entry = resolve(values.entry);
   const entryRelative = relative(root, entry);
   if (entryRelative === '..' || entryRelative.startsWith(`..${sep}`) || isAbsolute(entryRelative) ||
-      !/\.(usd|usda|usdc)$/i.test(entry) || !(await stat(entry)).isFile()) {
-    throw new Error('The entry must be an existing USD/USDA/USDC file inside the project.');
+      !/\.(usd|usda|usdc|gltf|glb)$/i.test(entry) || !(await stat(entry)).isFile()) {
+    throw new Error('The entry must be an existing USD/USDA/USDC or glTF/GLB file inside the project.');
   }
   const out = resolve(values.out);
   if (existsSync(out) && (await readdir(out)).length) throw new Error('Output directory is not empty. Choose a new directory.');
