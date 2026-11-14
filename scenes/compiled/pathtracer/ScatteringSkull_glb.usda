@@ -1,0 +1,8 @@
+#usda 1.0
+(
+    customLayerData = {
+        string "materialx:compiledScene" = "./ScatteringSkull_glb/scene.json"
+        string "materialx:compiledShaders" = "./ScatteringSkull_glb/shaders.wgsl.zst"
+        string "materialx:source" = "../../pathtracer/ScatteringSkull.glb"
+    }
+)

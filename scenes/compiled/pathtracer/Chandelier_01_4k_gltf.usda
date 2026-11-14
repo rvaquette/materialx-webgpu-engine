@@ -1,0 +1,8 @@
+#usda 1.0
+(
+    customLayerData = {
+        string "materialx:compiledScene" = "./Chandelier_01_4k_gltf/scene.json"
+        string "materialx:compiledShaders" = "./Chandelier_01_4k_gltf/shaders.wgsl.zst"
+        string "materialx:source" = "../../pathtracer/Chandelier_01_4k.gltf"
+    }
+)

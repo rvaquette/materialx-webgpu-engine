@@ -1,0 +1,8 @@
+#usda 1.0
+(
+    customLayerData = {
+        string "materialx:compiledScene" = "./jinx_gltf/scene.json"
+        string "materialx:compiledShaders" = "./jinx_gltf/shaders.wgsl.zst"
+        string "materialx:source" = "../../pathtracer/jinx.gltf"
+    }
+)

@@ -1,0 +1,8 @@
+#usda 1.0
+(
+    customLayerData = {
+        string "materialx:compiledScene" = "./tea_set_01_4k_gltf/scene.json"
+        string "materialx:compiledShaders" = "./tea_set_01_4k_gltf/shaders.wgsl.zst"
+        string "materialx:source" = "../../pathtracer/tea_set_01_4k.gltf"
+    }
+)
