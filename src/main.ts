@@ -49,7 +49,7 @@ async function main(): Promise<void> {
       !(/\.((usda?)|gltf|glb)$/i.test(scenePath) || /\/scene\.json$/i.test(scenePath))) {
     throw new Error('Invalid scene entry: expected USD, glTF, GLB or scene.json under /scenes/.');
   }
-  if (initialBackend !== 'raster' && initialBackend !== 'pathtracing') throw new Error('Unsupported backend.');
+  if (initialBackend !== 'raster' && initialBackend !== 'pathtracing' && initialBackend !== 'disney') throw new Error('Unsupported backend.');
   if (initialResolution !== '1024x768' && ![128, 256, 512, 1024].includes(initialResolution)) throw new Error('Interactive resolution must be 128, 256, 512, 1024 or 1024x768.');
   if (!('gpu' in navigator)) { setStatus('WebGPU is not available in this browser.'); return; }
   const withTimeout = <T>(promise: Promise<T>, ms: number): Promise<T | undefined> =>
@@ -107,18 +107,25 @@ async function main(): Promise<void> {
       state.status = status;
       state.backend = status.backend;
       state.environmentEnabled = status.environmentEnabled;
+      const pathTracerBackend = status.backend === 'pathtracing' || status.backend === 'disney';
       const spp = document.getElementById('pathtracing-spp');
       if (spp) {
-        spp.hidden = status.backend !== 'pathtracing' || status.pathTracer !== 'ready';
+        spp.hidden = !pathTracerBackend || status.pathTracer !== 'ready';
         spp.textContent = `${status.samples} spp${status.pathTracingPaused ? ' (pause)' : ''}`;
       }
-      shaderBusy = status.backend === 'pathtracing' && (status.pathTracer === 'idle' || status.pathTracer === 'compiling');
+      shaderBusy = pathTracerBackend && (status.pathTracer === 'idle' || status.pathTracer === 'compiling');
       if (shaderBusy) {
-        shaderBusyMessage = status.pathTracer === 'compiling' ? 'Compilation des shaders du path tracer...' : 'Préparation du path tracer...';
+        const tracerName = status.backend === 'disney' ? 'path tracer Disney' : 'path tracer';
+        shaderBusyMessage = status.pathTracer === 'compiling'
+          ? `Compilation des shaders du ${tracerName}...`
+          : `Préparation du ${tracerName}...`;
         if (!operationBusy) setBusyMessage(shaderBusyMessage);
       } else if (!operationBusy) setBusyMessage('');
       showBusy(operationBusy || shaderBusy);
-      if (status.backend === 'pathtracing' && status.pathTracer === 'error') setStatus('Echec de preparation ou de compilation du path tracer. Consulter les erreurs WGSL.');
+      if (pathTracerBackend && status.pathTracer === 'error') {
+        const tracerName = status.backend === 'disney' ? 'path tracer Disney' : 'path tracer';
+        setStatus(`Echec de preparation ou de compilation du ${tracerName}. Consulter les erreurs WGSL.`);
+      }
       else if (status.backend === 'pathtracing' && status.denoiser.state === 'error') setStatus(`Echec denoiser JS : ${status.denoiser.error}`);
     },
     onShaderErrors: errors => {

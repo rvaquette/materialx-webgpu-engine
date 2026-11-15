@@ -33,7 +33,7 @@ import { assertSceneStorageSize, assertSceneTextureBindings } from '../gpu/devic
 import { uploadMaterialImage, uploadMaterialImageArray } from '../gpu/material-texture.ts';
 import { packPtTextureArrays } from './pathtracing/texture-arrays.ts';
 import { OrbitCamera, attachOrbitControls } from '../scene/orbit-camera.ts';
-import { inverse4, lookAt4, multiply4, perspective4, type Vec3 } from '../scene/transforms.ts';
+import { inverse4, lookAt4, multiply4, perspective4, transformDirection, type Vec3 } from '../scene/transforms.ts';
 import type { DiagnosticSink } from '../core/diagnostics.ts';
 import { compileShaderWithDiagnostics, type ShaderCompilationError } from '../gpu/shader-diagnostics.ts';
 import { packHdrTexture } from '../assets/hdr-texture.ts';
@@ -45,6 +45,12 @@ import { JsDenoiser } from './pathtracing/js-denoiser.ts';
 import { changeMaterialParameters, compileEditableMaterial, materialUniformData, packParameterUniforms, visibleMaterialParameters, type MaterialParameter } from './material-parameters.ts';
 import { applySceneDisplacement } from './displacement.ts';
 import type { MaterialResource } from './scene-resources.ts';
+import { prepareDisneyScene } from './pathtracing/disney-scene.ts';
+import { DisneyGpuBackend } from './pathtracing/disney-gpu-backend.ts';
+import { packDisneyLights } from './pathtracing/disney-lights.ts';
+import { buildDisneyEnvironmentCdf } from './pathtracing/disney-environment.ts';
+import { disneyTileForIndex, type DisneyRenderSettings } from './pathtracing/disney-render.ts';
+import type { SceneLight } from '../usd/lights.ts';
 import {
   applyCompiledMaterials, compiledRasterShaderKey, loadCompiledMaterial, loadCompiledScene, readCompiledLayerReferences,
   type CompiledMaterial,
@@ -73,7 +79,47 @@ function previewCamera(aspect: number, exposure: number): FrameCamera {
   return { viewProj: multiply4(perspective4(0.62, aspect, 0.001, 10000), lookAt4(eye, target, [0, 1, 0])), eye, exposure };
 }
 
-export type BackendKind = 'raster' | 'pathtracing';
+const DISNEY_TEXTURE_SIZE = 2048;
+const DISNEY_TILE_SIZE = 64;
+const DISNEY_TILES_PER_FRAME = 4;
+
+function disneyCamera(orbit: OrbitCamera): DisneyRenderSettings['camera'] {
+  const eye = orbit.eye;
+  const forwardVector: Vec3 = [orbit.target[0] - eye[0], orbit.target[1] - eye[1], orbit.target[2] - eye[2]];
+  const forwardLength = Math.hypot(...forwardVector);
+  if (!(forwardLength > 0) || !Number.isFinite(forwardLength)) throw new Error('Invalid Disney camera direction.');
+  const forward: Vec3 = [
+    forwardVector[0] / forwardLength, forwardVector[1] / forwardLength, forwardVector[2] / forwardLength,
+  ];
+  const rightVector: Vec3 = [-forward[2], 0, forward[0]];
+  const rightLength = Math.hypot(...rightVector);
+  if (!(rightLength > 0) || !Number.isFinite(rightLength)) throw new Error('Invalid Disney camera right vector.');
+  const right: Vec3 = [rightVector[0] / rightLength, rightVector[1] / rightLength, rightVector[2] / rightLength];
+  const up: Vec3 = [
+    right[1] * forward[2] - right[2] * forward[1],
+    right[2] * forward[0] - right[0] * forward[2],
+    right[0] * forward[1] - right[1] * forward[0],
+  ];
+  return {
+    position: eye, right, up, forward, fov: orbit.fovY, focalDistance: orbit.distance, aperture: 0,
+    orthographic: orbit.projection === 'orthographic',
+  };
+}
+
+function disneyEnvironmentRotation(lights: readonly SceneLight[]): number {
+  const dome = lights.find(light => light.type === 'dome');
+  if (!dome) return 0;
+  const x = transformDirection(dome.transform, [1, 0, 0]);
+  const y = transformDirection(dome.transform, [0, 1, 0]);
+  if (Math.abs(x[1]) > 1e-5 || Math.abs(y[0]) > 1e-5 || Math.abs(y[2]) > 1e-5 || y[1] < 0) {
+    throw new Error(`Disney environment supports only upright dome rotations: ${dome.path}.`);
+  }
+  const rotation = Math.atan2(-x[2], x[0]) / (2 * Math.PI);
+  if (!Number.isFinite(rotation)) throw new Error(`Invalid Disney environment rotation: ${dome.path}.`);
+  return rotation;
+}
+
+export type BackendKind = 'raster' | 'pathtracing' | 'disney';
 
 export type PathTracerState = 'idle' | 'compiling' | 'ready' | 'error';
 export type DenoiserStatus =
@@ -99,13 +145,14 @@ interface SceneRender {
   setEnvironmentEnabled: (enabled: boolean) => void;
   updateMaterial: (key: string, material: MaterialResource) => void;
   frame: SceneFramePlan;
-  resize: (width: number, height: number) => void;
+  resize: (width: number, height: number) => Promise<void>;
   setRasterQuality: (quality: RasterQuality) => Promise<void>;
   pathTracingDepth: () => number;
   setPathTracingDepth: (depth: number) => void;
   renderRaster: (targetView: GPUTextureView) => void;
   /** Starts the path tracer build on first call; renders nothing until it is ready. */
   renderPathTrace: (targetView: GPUTextureView, tiled: boolean, accumulate: boolean) => void;
+  renderDisney: (targetView: GPUTextureView, accumulate: boolean) => void;
   reportFrameTime: (milliseconds: number) => void;
   invalidateDenoise: () => void;
   denoiserStatus: () => DenoiserStatus;
@@ -203,7 +250,7 @@ export class InteractiveViewer {
     if (enabled === this.#environmentEnabled) return;
     this.#environmentEnabled = enabled;
     this.#current?.setEnvironmentEnabled(enabled);
-    this.#current?.resetPathTrace();
+    if (this.#backend === 'pathtracing' || this.#backend === 'disney') this.#current?.resetPathTrace();
     this.#rasterDirty = true;
     this.#ptDisplayDirty = true;
     this.#emitStatus();
@@ -414,7 +461,7 @@ export class InteractiveViewer {
     this.#backend = kind;
     this.#canvas.style.imageRendering = 'auto';
     this.#ptDisplayDirty = true;
-    if (kind === 'pathtracing') this.#current?.resetPathTrace();
+    if (kind === 'pathtracing' || kind === 'disney') this.#current?.resetPathTrace();
     else {
       this.#current?.invalidateDenoise();
       this.#rasterDirty = true;
@@ -436,7 +483,7 @@ export class InteractiveViewer {
   async resize(width: number, height = width): Promise<void> {
     if (!(width === height && [128, 256, 512, 1024].includes(width)) && !(width === 1024 && height === 768)) throw new Error('Unsupported render resolution.');
     if (width === this.#width && height === this.#height) return;
-    this.#current?.resize(width, height);
+    await this.#current?.resize(width, height);
     this.#width = width;
     this.#height = height;
     this.#canvas.width = width;
@@ -557,7 +604,7 @@ export class InteractiveViewer {
     this.#current.applyCamera(this.#orbit.viewProj(), this.#orbit.eye, inverse4(this.#orbit.backgroundViewProj()));
     this.#rasterDirty = true;
     this.#ptDisplayDirty = true;
-    if (this.#backend === 'pathtracing') this.#current.resetPathTrace();
+    if (this.#backend === 'pathtracing' || this.#backend === 'disney') this.#current.resetPathTrace();
   }
 
   #emitStatus(): void {
@@ -589,14 +636,19 @@ export class InteractiveViewer {
     if (current && !this.#framePending) {
       let submitted = false;
       const started = performance.now();
-      const pathTracingFrame = this.#backend === 'pathtracing';
+      const pathTracingFrame = this.#backend === 'pathtracing' || this.#backend === 'disney';
       const denoising = current.denoiserStatus().state === 'running';
-      if (this.#backend === 'pathtracing' && ((!this.#pathTracingPaused && !denoising) || this.#ptDisplayDirty)) {
+        if (this.#backend === 'pathtracing' && ((!this.#pathTracingPaused && !denoising) || this.#ptDisplayDirty)) {
         const tiled = performance.now() - this.#lastCameraChange >= 200;
         current.renderPathTrace(this.#context.getCurrentTexture().createView(), tiled, !this.#pathTracingPaused && !denoising);
         this.#ptDisplayDirty = false;
         submitted = true;
         this.#emitStatus();
+        } else if (this.#backend === 'disney' && ((!this.#pathTracingPaused) || this.#ptDisplayDirty)) {
+          current.renderDisney(this.#context.getCurrentTexture().createView(), !this.#pathTracingPaused);
+          this.#ptDisplayDirty = false;
+          submitted = true;
+          this.#emitStatus();
       } else if (this.#backend === 'raster' && this.#rasterDirty) {
         this.#rasterDirty = false;
         current.renderRaster(this.#context.getCurrentTexture().createView());
@@ -610,11 +662,11 @@ export class InteractiveViewer {
         void this.#device.queue.onSubmittedWorkDone().then(() => {
           if (firstFrameStart !== undefined) {
             performance.measure('viewer:first-frame', { start: firstFrameStart, end: performance.now(),
-              detail: { entry: this.#sceneEntry, backend: pathTracingFrame ? 'pathtracing' : 'raster' } });
+              detail: { entry: this.#sceneEntry, backend: this.#backend } });
           }
           if (pathTracingFrame) current.reportFrameTime(performance.now() - started);
           this.#framePending = false;
-          if (!this.#disposed && current === this.#current && this.#backend === 'pathtracing'
+          if (!this.#disposed && current === this.#current && (this.#backend === 'pathtracing' || this.#backend === 'disney')
             && !this.#pathTracingPaused && performance.now() - this.#lastCameraChange >= 200
             && this.#pathTraceRefill === undefined) {
             // Refill after a task-boundary yield, not another display-vsync wait.
@@ -1524,6 +1576,155 @@ export class InteractiveViewer {
       };
     };
 
+    let disneyState: PathTracerState = 'idle';
+    let disneyBackend: DisneyGpuBackend | undefined;
+    let disneyBuildRevision = 0;
+    let disneyFrameIndex = 0;
+    let disneySeedFrame = 1;
+    let disneyTileIndex = 0;
+    let disneyErrorReadback = false;
+    let disneyErrors: ShaderCompilationError[] = [];
+    let disneySceneData: ReturnType<typeof prepareDisneyScene> | undefined;
+    let disneyLightCount = 0;
+    let disneyEnvironmentTotal = 0;
+    let disneyEnvironmentRotationValue = 0;
+    let disneyHasEnvironment = false;
+
+    const resetDisneyPathTrace = (): void => {
+      disneyFrameIndex = 0;
+      disneySeedFrame = 1;
+      disneyTileIndex = 0;
+      disneyBackend?.reset();
+    };
+
+    const setDisneyError = (error: unknown, shader: string): void => {
+      if (disposed) return;
+      disneyState = 'error';
+      const message = error instanceof Error ? error.message : String(error);
+      disneyErrors = [{ shader, message, line: 0, column: 0, source: '' }];
+      this.#onShaderErrors?.([...rasterErrors, ...pathTraceErrors, ...disneyErrors]);
+      console.error(`Disney path tracer: ${message}`);
+      this.#ptDisplayDirty = true;
+      this.#emitStatus();
+    };
+
+    const startDisneyTracer = (): void => {
+      if (disneyState !== 'idle') return;
+      disneyState = 'compiling';
+      this.#emitStatus();
+      const revision = ++disneyBuildRevision;
+      void (async () => {
+        await new Promise(resolve => setTimeout(resolve, 0));
+        if (disposed || revision !== disneyBuildRevision) return;
+        const proxyPaths = new Set(loaded.lights.map(light => `${light.path}_Geometry`));
+        const disneyResources = {
+          ...resources,
+          instances: resources.instances.filter(instance =>
+            instance.hasGeometry && !proxyPaths.has(instance.primPath)),
+        };
+        const scene = prepareDisneyScene(loaded.scene, disneyResources);
+        for (const warning of scene.warnings) {
+          sink({ level: 'warning', message: warning.message, detail: warning.materialKey });
+        }
+        const lightData = packDisneyLights(loaded.lights);
+        let environment: { width: number; height: number; data: Float32Array } | undefined;
+        if (envAsset) {
+          const data = new Float32Array(envAsset.image.data.length);
+          for (let i = 0; i < data.length; i++) {
+            const value = Math.fround(envAsset.image.data[i]! * envAsset.tint[i % 3]! * envAsset.intensity);
+            if (!Number.isFinite(value)) throw new Error(`Disney environment exceeds float32 range at pixel ${Math.floor(i / 3)}.`);
+            data[i] = value;
+          }
+          environment = { width: envAsset.image.width, height: envAsset.image.height, data };
+        }
+        const environmentTotal = environment ? buildDisneyEnvironmentCdf(environment).totalSum : 0;
+        const environmentRotation = environment ? disneyEnvironmentRotation(loaded.lights) : 0;
+        const backend = await DisneyGpuBackend.create(device, scene, {
+          width, height, textureSize: DISNEY_TEXTURE_SIZE, imageProvider: loaded.mtlx.imageProvider,
+          outputFormat, lights: lightData.data, ...(environment ? { environment } : {}),
+        });
+        if (disposed || revision !== disneyBuildRevision) {
+          backend.dispose();
+          return;
+        }
+        disneyBackend = backend;
+        disneySceneData = scene;
+        disneyLightCount = lightData.count;
+        disneyEnvironmentTotal = environmentTotal;
+        disneyEnvironmentRotationValue = environmentRotation;
+        disneyHasEnvironment = environment !== undefined;
+        trash.push({ destroy: () => backend.dispose() });
+        disneyState = 'ready';
+        this.#ptDisplayDirty = true;
+        this.#emitStatus();
+      })().catch(error => {
+        if (revision === disneyBuildRevision) setDisneyError(error, 'Disney path tracing - preparation / pipeline');
+      });
+    };
+
+    const renderDisney = (targetView: GPUTextureView, accumulate: boolean): void => {
+      if (disneyState === 'idle') startDisneyTracer();
+      const backend = disneyBackend;
+      if (!backend || disneyState !== 'ready') {
+        clearOutput(targetView);
+        return;
+      }
+      if (!accumulate) {
+        try {
+          backend.display(targetView, [width, height], exposure);
+        } catch (error) {
+          setDisneyError(error, 'Disney path tracing - display');
+        }
+        return;
+      }
+      try {
+        for (let i = 0; i < DISNEY_TILES_PER_FRAME; i++) {
+          renderDisneyTile(backend, targetView, i === DISNEY_TILES_PER_FRAME - 1);
+        }
+        if (!disneyErrorReadback) {
+          disneyErrorReadback = true;
+          void backend.readError().then(error => {
+            if (error !== 0 && backend === disneyBackend) {
+              setDisneyError(new Error(`GPU render status ${error}.`), 'Disney path tracing - dispatch');
+            }
+          }).catch(error => {
+            if (backend === disneyBackend) setDisneyError(error, 'Disney path tracing - status readback');
+          }).finally(() => {
+            if (backend === disneyBackend) disneyErrorReadback = false;
+          });
+        }
+        this.#ptDisplayDirty = false;
+        this.#emitStatus();
+      } catch (error) {
+        setDisneyError(error, 'Disney path tracing - dispatch');
+      }
+    };
+
+    const renderDisneyTile = (backend: DisneyGpuBackend, targetView: GPUTextureView, display: boolean): void => {
+      const tile = disneyTileForIndex(disneyTileIndex, [width, height], DISNEY_TILE_SIZE);
+      const scene = disneySceneData;
+      if (!scene) throw new Error('Disney scene preparation did not produce render data.');
+      if (disneySeedFrame > 0xffffffff) throw new Error('Disney source frame counter overflow.');
+      const settings: DisneyRenderSettings = {
+        resolution: [width, height], ...tile, frame: disneySeedFrame,
+        root: scene.geometry.topLevelIndex,
+        camera: disneyCamera(this.#orbit),
+        lightCount: disneyLightCount, maxDepth: pathTracingDepth, rrDepth: 2, russianRoulette: true,
+        environment: disneyHasEnvironment && frame.environment.enabled !== false, uniformLight: false, hideEmitters: false,
+        transparentBackground: false, alphaTest: true, medium: false, volumeMis: false,
+        flipNormalY: false, mollify: false, environmentLinear: true, mollificationAmount: 0,
+        environmentTotal: disneyEnvironmentTotal, environmentRotation: disneyEnvironmentRotationValue,
+        environmentIntensity: 1, uniformColor: [0, 0, 0],
+      };
+      backend.renderTile(settings, display ? targetView : undefined, exposure);
+      disneySeedFrame++;
+      disneyTileIndex++;
+      if (disneyTileIndex === tile.tileCount) {
+        disneyTileIndex = 0;
+        disneyFrameIndex++;
+      }
+    };
+
     let ptState: PathTracerState = 'idle';
     let pathTracer: Awaited<ReturnType<typeof buildPathTracer>> | undefined;
     const startPathTracer = (): void => {
@@ -1594,6 +1795,7 @@ export class InteractiveViewer {
           const data = buildSceneFrameUniform(frame, draw);
           device.queue.writeBuffer(buffer, 44 * 4, data.subarray(44));
         }
+        resetDisneyPathTrace();
       },
       updateMaterial: (key, material) => {
         resources.materials.set(key, material);
@@ -1602,11 +1804,20 @@ export class InteractiveViewer {
         uploadPtParameters?.();
       },
       frame,
-      resize: (w, h) => {
+      resize: async (w, h) => {
         pathTracer?.resize(w, h);
         raster?.resize(w, h);
         width = w;
         height = h;
+        if (disneyBackend || disneyState === 'compiling') {
+          disneyBuildRevision++;
+          disneyBackend?.dispose();
+          disneyBackend = undefined;
+          disneySceneData = undefined;
+          disneyErrorReadback = false;
+          disneyState = 'idle';
+          if (this.#backend === 'disney') startDisneyTracer();
+        }
       },
       setRasterQuality: async (quality) => {
         if (this.#backend === 'raster' || raster) {
@@ -1626,6 +1837,7 @@ export class InteractiveViewer {
         if (depth === pathTracingDepth) return;
         pathTracingDepth = depth;
         pathTracer?.resetPathTrace();
+        resetDisneyPathTrace();
       },
       renderRaster: targetView => {
         if (raster) raster.render(targetView);
@@ -1651,15 +1863,20 @@ export class InteractiveViewer {
           clearOutput(targetView);
         }
       },
+      renderDisney,
       reportFrameTime: (milliseconds) => pathTracer?.reportFrameTime(milliseconds),
       invalidateDenoise: () => pathTracer?.invalidateDenoise(),
       denoiserStatus: () => pathTracer?.denoiserStatus() ?? { state: this.#pathTracingDenoise ? 'waiting' : 'off' },
-      resetPathTrace: () => pathTracer?.resetPathTrace(),
+      resetPathTrace: () => {
+        pathTracer?.resetPathTrace();
+        resetDisneyPathTrace();
+      },
       applyCamera,
-      frameCount: () => pathTracer?.frameCount() ?? 0,
-      pathTracerState: () => ptState,
+      frameCount: () => this.#backend === 'disney' ? disneyFrameIndex : pathTracer?.frameCount() ?? 0,
+      pathTracerState: () => this.#backend === 'disney' ? disneyState : ptState,
       dispose: () => {
         disposed = true;
+        disneyBuildRevision++;
         pathTracer?.invalidateDenoise();
         pathTracer = undefined;
         for (const o of trash) o.destroy();

@@ -162,15 +162,19 @@ export async function startViewerUi(
         if (ImGui.RadioButton('Raster', state.backend === 'raster')) actions.backend('raster');
         ImGui.SameLine();
         if (ImGui.RadioButton('Path tracing', state.backend === 'pathtracing')) actions.backend('pathtracing');
+        ImGui.SameLine();
+        if (ImGui.RadioButton('Disney', state.backend === 'disney')) actions.backend('disney');
         const environment: [boolean] = [state.environmentEnabled];
         if (ImGui.Checkbox('Envmap', environment)) actions.environment(environment[0]);
         ImGui.SameLine();
         const denoise: [boolean] = [state.denoise];
+        ImGui.BeginDisabled(state.backend === 'disney');
         if (ImGui.Checkbox('Denoiser JS (neural)', denoise)) actions.denoise(denoise[0]);
-        ImGui.BeginDisabled(state.backend !== 'pathtracing');
+        ImGui.EndDisabled();
+        ImGui.BeginDisabled(state.backend !== 'pathtracing' && state.backend !== 'disney');
         if (ImGui.Button(state.status?.pathTracingPaused ? 'Reprendre' : 'Pause')) actions.pause();
         ImGui.EndDisabled();
-        if (state.backend === 'pathtracing' && state.status?.pathTracer === 'ready') {
+        if ((state.backend === 'pathtracing' || state.backend === 'disney') && state.status?.pathTracer === 'ready') {
           ImGui.SameLine();
           ImGui.Text(`${state.status.samples} spp${state.status.pathTracingPaused ? ' (pause)' : ''}`);
         }

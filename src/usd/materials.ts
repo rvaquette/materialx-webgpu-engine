@@ -58,6 +58,10 @@ function defaultIsRenderable(prim: ScenePrim): boolean {
 
 const DEFAULT_STRENGTH: BindingStrength = 'weakerThanDescendants';
 
+export function materialUnitKey(ref: Pick<MaterialXReference, 'assetPath' | 'referencedPrimPath'>): string {
+  return `${ref.assetPath}::${ref.referencedPrimPath}`;
+}
+
 export function resolveSceneMaterials(
   scene: SceneAsset,
   options: ResolveSceneMaterialsOptions = {},
@@ -73,7 +77,7 @@ export function resolveSceneMaterials(
   const unitByKey = new Map<string, { unit: MaterialCompileUnit; prims: string[] }>();
 
   const addToUnit = (ref: MaterialXReference, primPath: string): void => {
-    const key = `${ref.assetPath}::${ref.referencedPrimPath}`;
+    const key = materialUnitKey(ref);
     let entry = unitByKey.get(key);
     if (!entry) {
       const prims: string[] = [];
@@ -138,7 +142,7 @@ export function resolveSceneMaterials(
   const units = [...unitByKey.values()]
     .map((e) => e.unit)
     .sort((a, b) =>
-      `${a.assetPath}::${a.referencedPrimPath}`.localeCompare(`${b.assetPath}::${b.referencedPrimPath}`),
+      materialUnitKey(a).localeCompare(materialUnitKey(b)),
     );
 
   return { bindings, units, unbound };

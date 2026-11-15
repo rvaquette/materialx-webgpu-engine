@@ -28,7 +28,7 @@ import { assembleIrForwardShader, IR_FORWARD_FRAME_GROUP, type IrForwardShader }
 import { buildSceneInstances, type Mat4 } from '../scene/instances.ts';
 import { transformPoint } from '../scene/transforms.ts';
 import type { SceneAsset, ScenePrim } from '../scene/types.ts';
-import { resolveSceneMaterials, type MaterialCompileUnit } from '../usd/materials.ts';
+import { materialUnitKey, resolveSceneMaterials, type MaterialCompileUnit } from '../usd/materials.ts';
 
 /** Supplies the geometry cage for a prototype prim (crate payload bridge). */
 export interface MeshSource {
@@ -166,10 +166,6 @@ export function requireCompiledMaterials(resources: Pick<SceneResources, 'pendin
   if (resources.pendingMaterials.length > 0) {
     throw new Error(`Material compilation failed: ${resources.pendingMaterials.join(', ')}`);
   }
-}
-
-function unitKey(assetPath: string, referencedPrimPath: string): string {
-  return `${assetPath}::${referencedPrimPath}`;
 }
 
 function pipelineKeyFor(
@@ -366,7 +362,7 @@ export async function buildSceneResources(
   const materials = new Map<string, MaterialResource>();
   const pendingMaterials: string[] = [];
   for (const unit of sceneMaterials.units) {
-    const key = unitKey(unit.assetPath, unit.referencedPrimPath);
+    const key = materialUnitKey(unit);
     const build = await options.materialCompiler.compile(unit);
     if (!build) {
       pendingMaterials.push(key);
@@ -403,7 +399,7 @@ export async function buildSceneResources(
     const geometry = geometries.get(inst.prototypeId);
     const binding = sceneMaterials.bindings.get(inst.primPath) ?? sceneMaterials.bindings.get(inst.prototypeId);
     const materialKey = binding?.materialX
-      ? unitKey(binding.materialX.assetPath, binding.materialX.referencedPrimPath)
+      ? materialUnitKey(binding.materialX)
       : undefined;
     instances.push({
       id: inst.id,
