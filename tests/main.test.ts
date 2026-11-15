@@ -162,6 +162,46 @@ describe('viewer loading indicator', () => {
     expect(status.textContent).toContain('Echec de preparation ou de compilation');
   });
 
+  it('clears scene diagnostics and ignores the old tracer status while switching scenes', async () => {
+    await import('../src/main.ts');
+    await settle();
+    finishLoad();
+    await settle();
+    state.onShaderErrors!([{ shader: 'Disney', message: 'Unsupported material', line: 0, column: 0, source: '' }]);
+    emit('error', 'disney');
+    expect(shaderDiagnostics.hidden).toBe(false);
+    expect(status.hidden).toBe(false);
+
+    state.actions!.scene('/scenes/pathtracer/ajax.usda');
+    expect(shaderDiagnostics.hidden).toBe(true);
+    expect(shaderMessages.textContent).toBe('');
+    expect(state.ui?.shaderErrors).toBe('');
+    expect(status.hidden).toBe(true);
+    emit('error', 'disney');
+    expect(status.hidden).toBe(true);
+    finishLoad();
+    await settle();
+    expect(status.hidden).toBe(true);
+    expect(indicator.hidden).toBe(true);
+
+    emit('error', 'disney');
+    expect(status.hidden).toBe(false);
+  });
+
+  it('reports a new scene load failure after clearing the previous diagnostics', async () => {
+    await import('../src/main.ts');
+    await settle();
+    finishLoad();
+    await settle();
+    state.onShaderErrors!([{ shader: 'Disney', message: 'Old error', line: 0, column: 0, source: '' }]);
+    state.load.mockRejectedValueOnce(new Error('New scene unavailable'));
+    state.actions!.scene('/scenes/pathtracer/ajax.usda');
+    await settle();
+    expect(shaderDiagnostics.hidden).toBe(true);
+    expect(status.hidden).toBe(false);
+    expect(status.textContent).toContain('New scene unavailable');
+  });
+
   it('shows live spp only for a ready path tracer and preserves its count in pause', async () => {
     await import('../src/main.ts');
     await settle();

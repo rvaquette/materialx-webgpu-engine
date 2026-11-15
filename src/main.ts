@@ -99,6 +99,8 @@ async function main(): Promise<void> {
   ui = state;
   if (!state.scenes.some(scene => scene.entry === initialEntry)) state.scenes.push({ entry: initialEntry, label: initialEntry });
   let operationBusy = false;
+  let hasLoadedScene = false;
+  let sceneChanging = false;
   let shaderBusy = false;
   let shaderBusyMessage = 'Préparation du path tracer...';
   const viewerCallbacks: Pick<ConstructorParameters<typeof InteractiveViewer>[0], 'onStatus' | 'onShaderErrors'> = {
@@ -122,11 +124,11 @@ async function main(): Promise<void> {
         if (!operationBusy) setBusyMessage(shaderBusyMessage);
       } else if (!operationBusy) setBusyMessage('');
       showBusy(operationBusy || shaderBusy);
-      if (pathTracerBackend && status.pathTracer === 'error') {
+      if (!sceneChanging && pathTracerBackend && status.pathTracer === 'error') {
         const tracerName = status.backend === 'disney' ? 'path tracer Disney' : 'path tracer';
         setStatus(`Echec de preparation ou de compilation du ${tracerName}. Consulter les erreurs WGSL.`);
       }
-      else if (status.backend === 'pathtracing' && status.denoiser.state === 'error') setStatus(`Echec denoiser JS : ${status.denoiser.error}`);
+      else if (!sceneChanging && status.backend === 'pathtracing' && status.denoiser.state === 'error') setStatus(`Echec denoiser JS : ${status.denoiser.error}`);
     },
     onShaderErrors: errors => {
       state.shaderErrors = errors.map(error => `${error.shader}${error.line > 0 ? ` (${error.line}:${error.column})` : ''}\n${error.message}${error.source ? `\n> ${error.source}` : ''}`).join('\n\n');
@@ -172,6 +174,13 @@ async function main(): Promise<void> {
   }
 
   async function loadEntry(entry: string): Promise<boolean> {
+    sceneChanging = hasLoadedScene;
+    if (sceneChanging) {
+      state.shaderErrors = '';
+      state.warnings = '';
+      setDiagnostics('shader', '');
+      setDiagnostics('import', '');
+    }
     setBusy(true, `Chargement de ${entry}...`);
     let imported: LocalGltfScene | undefined;
     try {
@@ -197,12 +206,16 @@ async function main(): Promise<void> {
       if (imported) localScene = imported;
       state.warnings = localScene?.warnings.join('\n\n') ?? '';
       setDiagnostics('import', state.warnings);
+      hasLoadedScene = true;
       return true;
     } catch (error) {
       imported?.dispose();
       if (!deviceLost) setStatus(`Echec du chargement: ${error instanceof Error ? error.message : String(error)}`);
       return false;
-    } finally { setBusy(false); }
+    } finally {
+      sceneChanging = false;
+      setBusy(false);
+    }
   }
 
   async function openLocalFiles(input: HTMLInputElement): Promise<void> {
