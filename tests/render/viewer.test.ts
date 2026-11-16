@@ -13,6 +13,7 @@ import { editableSceneMaterials, materialUniformData } from '../../src/render/ma
 import { PT_UNIFORM_SIZE, pathTraceTile, pathTraceTileCount } from '../../src/render/pathtracing/compute.ts';
 import type { ShaderCompilationError } from '../../src/gpu/shader-diagnostics.ts';
 import { exportCompiledMaterial, exportCompiledScene } from '../../src/scene/compiled-scene.ts';
+import { DisneyGpuBackend } from '../../src/render/pathtracing/disney-gpu-backend.ts';
 
 vi.mock('../../src/render/usd-scene-assets.ts', async (original) => ({
   ...await original<typeof import('../../src/render/usd-scene-assets.ts')>(),
@@ -31,7 +32,8 @@ function fakeDevice() {
   };
   const textures: Array<{ destroy: ReturnType<typeof vi.fn> }> = [];
   const device = {
-    limits: { maxStorageBufferBindingSize: 1 << 28, maxBufferSize: 1 << 28, maxTextureArrayLayers: 256 },
+    limits: { maxStorageBufferBindingSize: 1 << 28, maxBufferSize: 1 << 28, maxTextureArrayLayers: 256,
+      maxTextureDimension2D: 8192, maxComputeWorkgroupsPerDimension: 65535 },
     createBuffer: vi.fn((desc: GPUBufferDescriptor) => ({
       destroy: vi.fn(), mapAsync: vi.fn(async () => {}), getMappedRange: () => new ArrayBuffer(desc.size), unmap: vi.fn(),
     })),
@@ -603,6 +605,59 @@ describe('interactive viewer resource lifecycle', () => {
       expect(buildCachedPathTraceScene).toHaveBeenCalledTimes(1);
       expect(error).toHaveBeenCalledWith('Path tracer: test preparation');
     } finally { error.mockRestore(); }
+  });
+
+  it('does not repeatedly clear the Disney canvas while its pipeline is compiling or after an error', async () => {
+    let rejectPipeline!: (error: Error) => void;
+    const create = vi.spyOn(DisneyGpuBackend, 'create').mockImplementation(() =>
+      new Promise((_resolve, reject) => { rejectPipeline = reject; }));
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const { viewer, device, statuses } = await setup(false, true);
+      viewer.setBackend('disney');
+      device.queue.submit.mockClear();
+      tick(0);
+      await new Promise(resolve => setTimeout(resolve, 20));
+      expect(error.mock.calls).toEqual([]);
+      expect(statuses.at(-1)?.pathTracer).toBe('compiling');
+      const initialSubmits = device.queue.submit.mock.calls.length;
+      for (let i = 0; i < 5; i++) { tick(i + 1); await Promise.resolve(); }
+      await new Promise(resolve => setTimeout(resolve, 10));
+      expect(device.queue.submit).toHaveBeenCalledTimes(initialSubmits);
+      rejectPipeline(new Error('pipeline failed'));
+      await new Promise(resolve => setTimeout(resolve, 0));
+      expect(statuses.at(-1)?.pathTracer).toBe('error');
+      tick(10);
+      await Promise.resolve();
+      const errorSubmits = device.queue.submit.mock.calls.length;
+      expect(errorSubmits).toBe(initialSubmits + 1);
+      for (let i = 0; i < 5; i++) { tick(i + 11); await Promise.resolve(); }
+      expect(device.queue.submit).toHaveBeenCalledTimes(errorSubmits);
+      expect(error).toHaveBeenCalledWith('Disney path tracer: pipeline failed');
+    } finally { create.mockRestore(); error.mockRestore(); }
+  });
+
+  it('resumes Disney rendering when compilation completes, honoring pause', async () => {
+    const { viewer, device, pass, statuses } = await setup(false, true);
+    let finish!: () => void;
+    device.createComputePipelineAsync.mockImplementation(() => new Promise(resolve => {
+      finish = () => resolve({ getBindGroupLayout: vi.fn(() => ({})) });
+    }));
+    viewer.setBackend('disney');
+    tick(0);
+    await new Promise(resolve => setTimeout(resolve, 20));
+    expect(statuses.at(-1)?.pathTracer).toBe('compiling');
+    viewer.setPathTracingPaused(true);
+    finish();
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(statuses.at(-1)?.pathTracer).toBe('ready');
+    tick(1);
+    await Promise.resolve();
+    expect(pass.dispatchWorkgroups).not.toHaveBeenCalled();
+    viewer.setPathTracingPaused(false);
+    tick(2);
+    await Promise.resolve();
+    expect(pass.dispatchWorkgroups).toHaveBeenCalledTimes(4);
   });
 
   it('keeps the preview while refining tiles, defaults to raw and resizes without recompilation', async () => {

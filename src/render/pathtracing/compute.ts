@@ -503,9 +503,13 @@ ${assigns.join('\n')}
   ].join('\n');
 }
 
-function wgslIntegrator(textures: boolean, dispatch: PtMaterialDispatch | undefined, environment: boolean, displayAovs: boolean, opaque: boolean, analyticLights: boolean): string {
+function wgslIntegrator(
+  textures: boolean, dispatch: PtMaterialDispatch | undefined, environment: boolean,
+  displayAovs: boolean, opaque: boolean, analyticLights: boolean, rouletteDepth?: number,
+): string {
   const envMiss = environment ? 'env_radiance(rd)' : 'U.env.xyz';
   const envNee = environment ? 'env_radiance(wiW)' : 'U.env.xyz';
+  const rouletteDepthExpr = rouletteDepth === undefined ? 'i32(U.transport.y)' : `i32(${rouletteDepth})`;
   const texOverride = textures
     ? /* wgsl */ `
     let layer = matLayer[tri_material(hit.tri)];
@@ -822,7 +826,7 @@ ${analyticLights ? '        analyticNee = false; // No analytic-light NEE is per
         ro = sp;
         rd = wiM;
         let rouletteDepth = select(bounce, subsurfaceEvents, subsurfaceWalk);
-        if (rouletteDepth >= i32(U.transport.y) && (!subsurfaceWalk || (subsurfaceEvents - i32(U.transport.y)) % 32 == 0)) {
+        if (rouletteDepth >= ${rouletteDepthExpr} && (!subsurfaceWalk || (subsurfaceEvents - ${rouletteDepthExpr}) % 32 == 0)) {
           let q = clamp(max(beta.x, max(beta.y, beta.z)), 0.0, 0.95);
           if (rng_next(state) >= q) { break; }
           beta = beta / q;
@@ -887,7 +891,7 @@ ${closureBuild}
       if (totalInternal || (topologyProbability > 0.0 && rng_next(state) < topologyProbability)) {
         rd = reflect(rd, geometricNormal); ro = pos + rd * 1e-6;
         if (subsurfaceWalk) {
-          if (subsurfaceEvents >= i32(U.transport.y) && (subsurfaceEvents - i32(U.transport.y)) % 32 == 0) {
+          if (subsurfaceEvents >= ${rouletteDepthExpr} && (subsurfaceEvents - ${rouletteDepthExpr}) % 32 == 0) {
             let probability = clamp(max(beta.x, max(beta.y, beta.z)), 0.0, 0.95);
             if (rng_next(state) >= probability) { break; }
             beta /= probability; environmentBeta /= probability;
@@ -1163,7 +1167,7 @@ ${analyticLights ? '    analyticNee = allowDirectLighting && !specular && mx_lig
       }
     }
 
-    if (bounce >= i32(U.transport.y)) {
+    if (bounce >= ${rouletteDepthExpr}) {
       let q = clamp(max(beta.x, max(beta.y, beta.z)), 0.0, 0.95);
       if (rng_next(state) >= q) { break; }
       beta = beta / q;
@@ -1285,10 +1289,16 @@ export interface PathTraceComputeOptions {
     analyticLights?: boolean;
     /** Remove unreachable functions without altering any reachable function body. */
     pruneUnusedFunctions?: boolean;
+    /** Compile-time roulette threshold; omit to keep reading it from the frame uniform. */
+    rouletteDepth?: number;
 }
 
 /** Full WGSL source of the compute path tracer. */
 export function pathTraceComputeWgsl(options: PathTraceComputeOptions = {}): string {
+  if (options.rouletteDepth !== undefined &&
+      (!Number.isSafeInteger(options.rouletteDepth) || options.rouletteDepth < 0 || options.rouletteDepth > 0x7fffffff)) {
+    throw new Error('Path-tracing roulette depth specialization must be a non-negative 32-bit integer.');
+  }
   const textures = options.textures ?? false;
   const environment = options.environment ?? false;
   const dispatch = options.dispatch;
@@ -1308,7 +1318,8 @@ export function pathTraceComputeWgsl(options: PathTraceComputeOptions = {}): str
     ...(options.analyticLights ? [ANALYTIC_LIGHTS_WGSL] : []),
     ...(varyings !== undefined ? [wgslVaryings(varyings)] : []),
     ...(dispatch !== undefined ? [wgslDispatch(dispatch)] : []),
-    wgslIntegrator(textures, dispatch, environment, options.displayAovs ?? false, options.opaque ?? false, options.analyticLights ?? false),
+    wgslIntegrator(textures, dispatch, environment, options.displayAovs ?? false, options.opaque ?? false,
+      options.analyticLights ?? false, options.rouletteDepth),
     wgslEntry(options.displayAovs ?? false),
   ].join('\n');
   return options.pruneUnusedFunctions ? pruneWgslFunctions(code, [PT_COMPUTE_ENTRY]) : code;

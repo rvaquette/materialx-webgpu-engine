@@ -13,6 +13,9 @@ import { DISNEY_CAMERA_WGSL } from './disney-camera-wgsl.ts';
 import { DISNEY_RENDER_PIXEL_BYTES, DISNEY_RENDER_UNIFORM_BYTES, DISNEY_RENDER_WGSL, packDisneyRenderSettings, type DisneyRenderSettings } from './disney-render.ts';
 import type { DisneySceneData } from './disney-scene.ts';
 import { DISNEY_SURFACE_WGSL } from './disney-surface-wgsl.ts';
+import {
+  assertDisneyShaderSpecialization, specializeDisneyShader, type DisneyShaderSpecialization,
+} from './disney-shader-specialization.ts';
 import { uploadDisneyTextureArray } from './disney-texture-array.ts';
 import { DISNEY_TRAVERSAL_WGSL } from './disney-traversal-wgsl.ts';
 import { displayTransformWgsl } from '../raster/shaders.ts';
@@ -25,6 +28,8 @@ export interface DisneyGpuBackendOptions {
   outputFormat: GPUTextureFormat;
   /** Five RGBA texels per light, matching DisneyPathOptions.lightCount. */
   lights: Float32Array;
+  /** Scene-constant options that may be compiled into the path shader. */
+  specialization?: DisneyShaderSpecialization;
   environment?: HdrImage;
 }
 
@@ -132,6 +137,7 @@ export class DisneyGpuBackend {
   readonly #height: number;
   readonly #pixelCount: number;
   readonly #owned: Array<{ destroy(): void }>;
+  readonly #specialization: DisneyShaderSpecialization | undefined;
   #disposed = false;
 
   private constructor(
@@ -139,6 +145,7 @@ export class DisneyGpuBackend {
     sceneGroup: GPUBindGroup, renderGroup: GPUBindGroup, displayGroup: GPUBindGroup,
     parameters: GPUBuffer, displayParameters: GPUBuffer, pixels: GPUBuffer, error: GPUBuffer, errorReadback: GPUBuffer,
     pixelReadback: GPUBuffer, width: number, height: number, owned: Array<{ destroy(): void }>,
+    specialization: DisneyShaderSpecialization | undefined,
   ) {
     this.#device = device;
     this.#pipeline = pipeline;
@@ -156,6 +163,7 @@ export class DisneyGpuBackend {
     this.#height = height;
     this.#pixelCount = width * height;
     this.#owned = owned;
+    this.#specialization = specialization;
   }
 
   static async create(
@@ -220,7 +228,11 @@ export class DisneyGpuBackend {
       }));
       device.queue.writeBuffer(lightBuffer, 0, options.lights);
 
-      const module = device.createShaderModule({ label: 'Disney path tracer', code: DISNEY_RENDER_SHADER });
+      const specialization = options.specialization ? { ...options.specialization } : undefined;
+      const shader = specialization
+        ? specializeDisneyShader(DISNEY_RENDER_SHADER, specialization)
+        : DISNEY_RENDER_SHADER;
+      const module = device.createShaderModule({ label: 'Disney path tracer', code: shader });
       const compilation = await module.getCompilationInfo();
       const errors = compilation.messages.filter(message => message.type === 'error');
       if (errors.length) throw new Error(`Disney WGSL compilation failed:\n${errors.map(error => `${error.lineNum}: ${error.message}`).join('\n')}`);
@@ -290,7 +302,8 @@ export class DisneyGpuBackend {
         ],
       });
       return new DisneyGpuBackend(device, pipeline, displayPipeline, sceneGroup, renderGroup, displayGroup,
-        parameters, displayParameters, pixels, error, errorReadback, pixelReadback, options.width, options.height, created);
+        parameters, displayParameters, pixels, error, errorReadback, pixelReadback, options.width, options.height,
+        created, specialization);
     } catch (error) {
       for (const resource of created.reverse()) resource.destroy();
       throw error;
@@ -308,6 +321,7 @@ export class DisneyGpuBackend {
     if (settings.resolution[0] !== this.#width || settings.resolution[1] !== this.#height) {
       throw new Error('Disney render tile resolution does not match the backend buffers.');
     }
+    if (this.#specialization) assertDisneyShaderSpecialization(settings, this.#specialization);
     const workgroupsX = Math.ceil(settings.tileSize[0] / 8);
     const workgroupsY = Math.ceil(settings.tileSize[1] / 8);
     if (workgroupsX > this.#device.limits.maxComputeWorkgroupsPerDimension ||

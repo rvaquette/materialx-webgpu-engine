@@ -48,6 +48,7 @@ import type { MaterialResource } from './scene-resources.ts';
 import { prepareDisneyScene } from './pathtracing/disney-scene.ts';
 import { DisneyGpuBackend } from './pathtracing/disney-gpu-backend.ts';
 import { packDisneyLights } from './pathtracing/disney-lights.ts';
+import type { DisneyShaderSpecialization } from './pathtracing/disney-shader-specialization.ts';
 import { buildDisneyEnvironmentCdf } from './pathtracing/disney-environment.ts';
 import { disneyTileForIndex, type DisneyRenderSettings } from './pathtracing/disney-render.ts';
 import type { SceneLight } from '../usd/lights.ts';
@@ -82,6 +83,11 @@ function previewCamera(aspect: number, exposure: number): FrameCamera {
 const DISNEY_TEXTURE_SIZE = 2048;
 const DISNEY_TILE_SIZE = 64;
 const DISNEY_TILES_PER_FRAME = 4;
+const DISNEY_STATIC_PATH_OPTIONS = {
+  rrDepth: 2, russianRoulette: true, uniformLight: false, hideEmitters: false,
+  transparentBackground: false, alphaTest: true, medium: false, volumeMis: false,
+  flipNormalY: false, mollify: false, environmentLinear: true,
+} satisfies Omit<DisneyShaderSpecialization, 'lightCount'>;
 
 function disneyCamera(orbit: OrbitCamera): DisneyRenderSettings['camera'] {
   const eye = orbit.eye;
@@ -644,7 +650,8 @@ export class InteractiveViewer {
         this.#ptDisplayDirty = false;
         submitted = true;
         this.#emitStatus();
-        } else if (this.#backend === 'disney' && ((!this.#pathTracingPaused) || this.#ptDisplayDirty)) {
+        } else if (this.#backend === 'disney' && (this.#ptDisplayDirty ||
+          (!this.#pathTracingPaused && (current.pathTracerState() === 'idle' || current.pathTracerState() === 'ready')))) {
           current.renderDisney(this.#context.getCurrentTexture().createView(), !this.#pathTracingPaused);
           this.#ptDisplayDirty = false;
           submitted = true;
@@ -668,6 +675,7 @@ export class InteractiveViewer {
           this.#framePending = false;
           if (!this.#disposed && current === this.#current && (this.#backend === 'pathtracing' || this.#backend === 'disney')
             && !this.#pathTracingPaused && performance.now() - this.#lastCameraChange >= 200
+            && (this.#backend !== 'disney' || current.pathTracerState() === 'ready')
             && this.#pathTraceRefill === undefined) {
             // Refill after a task-boundary yield, not another display-vsync wait.
             // The same framePending gate keeps only one bounded batch in flight.
@@ -1224,6 +1232,7 @@ export class InteractiveViewer {
           opaque: pathTraceOpaqueScene(dispatch, ptScene.materials),
           analyticLights: ptScene.analyticLights !== undefined,
           pruneUnusedFunctions: true,
+          rouletteDepth: ptOptions.settings.rouletteDepth,
         }), 'Path tracing');
       if (ptCompilation.errors.length > 0) {
         pathTraceErrors = ptCompilation.errors;
@@ -1641,7 +1650,8 @@ export class InteractiveViewer {
         const environmentRotation = environment ? disneyEnvironmentRotation(loaded.lights) : 0;
         const backend = await DisneyGpuBackend.create(device, scene, {
           width, height, textureSize: DISNEY_TEXTURE_SIZE, imageProvider: loaded.mtlx.imageProvider,
-          outputFormat, lights: lightData.data, ...(environment ? { environment } : {}),
+          outputFormat, lights: lightData.data, specialization: { ...DISNEY_STATIC_PATH_OPTIONS, lightCount: lightData.count },
+          ...(environment ? { environment } : {}),
         });
         if (disposed || revision !== disneyBuildRevision) {
           backend.dispose();
@@ -1709,10 +1719,9 @@ export class InteractiveViewer {
         resolution: [width, height], ...tile, frame: disneySeedFrame,
         root: scene.geometry.topLevelIndex,
         camera: disneyCamera(this.#orbit),
-        lightCount: disneyLightCount, maxDepth: pathTracingDepth, rrDepth: 2, russianRoulette: true,
-        environment: disneyHasEnvironment && frame.environment.enabled !== false, uniformLight: false, hideEmitters: false,
-        transparentBackground: false, alphaTest: true, medium: false, volumeMis: false,
-        flipNormalY: false, mollify: false, environmentLinear: true, mollificationAmount: 0,
+        lightCount: disneyLightCount, maxDepth: pathTracingDepth, ...DISNEY_STATIC_PATH_OPTIONS,
+        environment: disneyHasEnvironment && frame.environment.enabled !== false,
+        mollificationAmount: 0,
         environmentTotal: disneyEnvironmentTotal, environmentRotation: disneyEnvironmentRotationValue,
         environmentIntensity: 1, uniformColor: [0, 0, 0],
       };

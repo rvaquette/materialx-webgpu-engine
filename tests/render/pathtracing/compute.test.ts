@@ -76,6 +76,24 @@ function fakeScene(): PathTraceScene {
 }
 
 describe('pathTraceComputeWgsl', () => {
+  it('specializes the scene roulette threshold but leaves it uniform by default', () => {
+    const defaultShader = pathTraceComputeWgsl();
+    expect(defaultShader).toContain('rouletteDepth >= i32(U.transport.y)');
+
+    const specialized = pathTraceComputeWgsl({ rouletteDepth: 2 });
+    expect(specialized).not.toContain('U.transport.y');
+    expect(specialized).toContain('rouletteDepth >= i32(2)');
+    expect(specialized).toContain('subsurfaceEvents >= i32(2)');
+    expect(specialized).toContain('if (bounce >= i32(2))');
+    expect(specialized).toContain('if (bounce >= i32(U.transport.x))');
+  });
+
+  it('rejects invalid roulette-depth specialization values', () => {
+    expect(() => pathTraceComputeWgsl({ rouletteDepth: -1 })).toThrow(/roulette depth specialization/);
+    expect(() => pathTraceComputeWgsl({ rouletteDepth: 1.5 })).toThrow(/roulette depth specialization/);
+    expect(() => pathTraceComputeWgsl({ rouletteDepth: 0x80000000 })).toThrow(/roulette depth specialization/);
+  });
+
   it('keeps SSS collisions and internal reflections outside the surface budget', () => {
     const shader = pathTraceComputeWgsl();
     expect(shader).toContain('if (!subsurfaceWalk && bounce >= i32(U.transport.x))');
