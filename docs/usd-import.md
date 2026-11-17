@@ -417,6 +417,10 @@ renderer's visible-hemisphere strategy; identical noise is not expected.
 The Disney backend converts centered USD rectangles emitting along local -Z
 to corner-based quads with the same bounds and emitting side. The Coffee Pot
 light-packing regression test checks these quads against their emissive proxies.
+MaterialX PT metallic lobes use base-color reflectance (F0), not the dielectric
+IOR default. The eta/k conductor mode is enabled only for explicitly supplied
+optical indices, as in `LamaConductor`. Recompile existing scene packages to
+update their stored WGSL after a material shader correction.
 Disney material textures use nearest-texel lookup with periodic UV addressing
 within each image layer. Negative UVs, repeated tiles and exact integer seams
 must not select another texture layer or fail the render. This supports the

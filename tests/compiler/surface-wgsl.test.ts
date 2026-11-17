@@ -637,6 +637,30 @@ describe('emitLayeredSurface (T055d)', () => {
     expect(mod.code).toMatch(/c\.lobes\[0\] = MxBsdfLobe\(MX_LOBE_CONDUCTOR, mx_metal, clamp\(e\d+, vec3f\(0\.0\), vec3f\(1\.0\)\),/);
   });
 
+  it.each([
+    ['standard_surface', 'metalness'],
+    ['open_pbr_surface', 'base_metalness'],
+    ['gltf_pbr', 'metallic'],
+    ['UsdPreviewSurface', 'metallic'],
+    ['disney_principled', 'metallic'],
+  ])('keeps %s metallic reflectance in F0 mode rather than interpreting it as eta/k', (family, input) => {
+    const mod = emit(surfaceGraph(family, [value(input, 'float', '1')]));
+    const conductor = mod.code.split('\n').find(line => line.includes('= MxBsdfLobe(MX_LOBE_CONDUCTOR,'));
+    expect(conductor).toBeDefined();
+    expect(conductor).toMatch(/, 0\.0, vec3f\(0\.0\), 0\.0, 0\.0, vec3f\(1\.0\)\);$/);
+  });
+
+  it('retains explicit eta/k mode for Lama conductors', () => {
+    const mod = emit(surfaceGraph('LamaConductor', [
+      value('fresnelMode', 'integer', '1'),
+      value('IOR', 'color3', '0.18, 0.42, 1.37'),
+      value('extinction', 'color3', '3.42, 2.35, 1.77'),
+    ]));
+    const conductor = mod.code.split('\n').find(line => line.includes('= MxBsdfLobe(MX_LOBE_CONDUCTOR,'));
+    expect(conductor).toBeDefined();
+    expect(conductor).toMatch(/, 1\.0, \(select\(/);
+  });
+
   it('bounds standard_surface base reflectance without clipping HDR emission', () => {
     const mod = emit(surfaceGraph('standard_surface', [
       value('base_color', 'color3', '5, -1, 0.5'),

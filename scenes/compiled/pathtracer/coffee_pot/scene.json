@@ -5,7 +5,7 @@
   "compression": "zstd",
   "byteOrder": "little-endian",
   "generatedFrom": "scenes/pathtracer/coffee_pot.usda",
-  "state": "metadata/b87c915a08ddc1e73fede504086f99eb11c9292013bcabd0e04533b8e723e02a.json.zst",
+  "state": "metadata/1d174a47d7b340384f4d6b47a3e88f2affd34b3500544470def4fc141173e298.json.zst",
   "resources": [
     {
       "path": "buffers/7a396b82c3c127d8983457bebd8945d0c1cd0629cd4d1e397c10f4d3b68d10db.bin.zst",
@@ -1168,25 +1168,25 @@
       "sha256": "851250225e4c3ddd4f8d8d9c651d127ff5963b1e15b4bdba0aa0bf0ae1b5b164"
     },
     {
-      "path": "shaders/827bd50464da4e48a63c4f6d649d5088144916cbc21b7233a41dbe8d5e9c1556.wgsl.zst",
+      "path": "shaders/da6f63737a4a369320ef1cbfec0612cc9f494573b8a53bdf6b9fbd74970db704.wgsl.zst",
       "file": "shaders.wgsl.zst",
       "offset": 89590,
       "byteLength": 79895,
-      "compressedByteLength": 16306,
-      "sha256": "827bd50464da4e48a63c4f6d649d5088144916cbc21b7233a41dbe8d5e9c1556"
+      "compressedByteLength": 16307,
+      "sha256": "da6f63737a4a369320ef1cbfec0612cc9f494573b8a53bdf6b9fbd74970db704"
     },
     {
-      "path": "shaders/aa1d8c0d59d0f39e4227da4f19360e7c99086ed660735fd5533e822e25dfed85.wgsl.zst",
+      "path": "shaders/abdad13bf15b145820707e7a20a3e4eadba22b4f191191d59493b54ef0d91e7b.wgsl.zst",
       "file": "shaders.wgsl.zst",
-      "offset": 105896,
+      "offset": 105897,
       "byteLength": 67638,
-      "compressedByteLength": 13419,
-      "sha256": "aa1d8c0d59d0f39e4227da4f19360e7c99086ed660735fd5533e822e25dfed85"
+      "compressedByteLength": 13420,
+      "sha256": "abdad13bf15b145820707e7a20a3e4eadba22b4f191191d59493b54ef0d91e7b"
     },
     {
       "path": "shaders/e176c3abb19b091586983d88ab15d77d8364a7c3443548569c7e6a4c8e21c1cd.wgsl.zst",
       "file": "shaders.wgsl.zst",
-      "offset": 119315,
+      "offset": 119317,
       "byteLength": 80906,
       "compressedByteLength": 16412,
       "sha256": "e176c3abb19b091586983d88ab15d77d8364a7c3443548569c7e6a4c8e21c1cd"
@@ -1194,7 +1194,7 @@
     {
       "path": "shaders/418ce47b0438081bda251e7910370bba4f94b2cc2676f59a6d384c60b7ce86a6.wgsl.zst",
       "file": "shaders.wgsl.zst",
-      "offset": 135727,
+      "offset": 135729,
       "byteLength": 66727,
       "compressedByteLength": 13266,
       "sha256": "418ce47b0438081bda251e7910370bba4f94b2cc2676f59a6d384c60b7ce86a6"
@@ -1274,7 +1274,7 @@
     {
       "path": "shaders/5bcdf256d9a1191f516f96548b2695469d82cae03041ca82a28e8f75f728f417.wgsl.zst",
       "file": "shaders.wgsl.zst",
-      "offset": 148993,
+      "offset": 148995,
       "byteLength": 83,
       "compressedByteLength": 92,
       "sha256": "5bcdf256d9a1191f516f96548b2695469d82cae03041ca82a28e8f75f728f417"
@@ -1282,7 +1282,7 @@
     {
       "path": "shaders/2ceaa53fa032d4d31a566e25b61c9c603af00433fbd89dbb0e4990d4a1e04c55.wgsl.zst",
       "file": "shaders.wgsl.zst",
-      "offset": 149085,
+      "offset": 149087,
       "byteLength": 1210,
       "compressedByteLength": 448,
       "sha256": "2ceaa53fa032d4d31a566e25b61c9c603af00433fbd89dbb0e4990d4a1e04c55"
@@ -1290,7 +1290,7 @@
     {
       "path": "shaders/19d2a6d9f91bd093a6708159419e66b0d4312f358b8f613024d11b1e913c2436.wgsl.zst",
       "file": "shaders.wgsl.zst",
-      "offset": 149533,
+      "offset": 149535,
       "byteLength": 1533,
       "compressedByteLength": 642,
       "sha256": "19d2a6d9f91bd093a6708159419e66b0d4312f358b8f613024d11b1e913c2436"
@@ -1298,7 +1298,7 @@
     {
       "path": "shaders/90dce9fcbef9d1533241341e5e4d920c0471a2df2173c3773b3bbd9e8df847c9.wgsl.zst",
       "file": "shaders.wgsl.zst",
-      "offset": 150175,
+      "offset": 150177,
       "byteLength": 83,
       "compressedByteLength": 92,
       "sha256": "90dce9fcbef9d1533241341e5e4d920c0471a2df2173c3773b3bbd9e8df847c9"
@@ -1306,7 +1306,7 @@
     {
       "path": "shaders/f08b6dd41ca9f8d0fc03ff5cafc70f416a299e78bb29ed0abc25e4e5bd73b50f.wgsl.zst",
       "file": "shaders.wgsl.zst",
-      "offset": 150267,
+      "offset": 150269,
       "byteLength": 1210,
       "compressedByteLength": 448,
       "sha256": "f08b6dd41ca9f8d0fc03ff5cafc70f416a299e78bb29ed0abc25e4e5bd73b50f"
@@ -1314,7 +1314,7 @@
     {
       "path": "shaders/3e381b9387b4c942f9047f0653c97885fb2b046b8e3c1dc4bf5a44382f3ad033.wgsl.zst",
       "file": "shaders.wgsl.zst",
-      "offset": 150715,
+      "offset": 150717,
       "byteLength": 83,
       "compressedByteLength": 92,
       "sha256": "3e381b9387b4c942f9047f0653c97885fb2b046b8e3c1dc4bf5a44382f3ad033"
@@ -1322,7 +1322,7 @@
     {
       "path": "shaders/4b17210720591a07e1a702ea0e7e5f0e4893cab6b69645b2295559be526e75d2.wgsl.zst",
       "file": "shaders.wgsl.zst",
-      "offset": 150807,
+      "offset": 150809,
       "byteLength": 1210,
       "compressedByteLength": 450,
       "sha256": "4b17210720591a07e1a702ea0e7e5f0e4893cab6b69645b2295559be526e75d2"
@@ -1330,7 +1330,7 @@
     {
       "path": "shaders/a8b41cf3873c7f69de8f817f34992a58195909a84bc0c0386dcb7a89d884bc13.wgsl.zst",
       "file": "shaders.wgsl.zst",
-      "offset": 151257,
+      "offset": 151259,
       "byteLength": 83,
       "compressedByteLength": 92,
       "sha256": "a8b41cf3873c7f69de8f817f34992a58195909a84bc0c0386dcb7a89d884bc13"
@@ -1338,7 +1338,7 @@
     {
       "path": "shaders/cb6f46c87d93ce7dd16ab132b63a6aea75e56901aa78393c105946f20b2a9724.wgsl.zst",
       "file": "shaders.wgsl.zst",
-      "offset": 151349,
+      "offset": 151351,
       "byteLength": 1210,
       "compressedByteLength": 449,
       "sha256": "cb6f46c87d93ce7dd16ab132b63a6aea75e56901aa78393c105946f20b2a9724"
@@ -1346,7 +1346,7 @@
     {
       "path": "shaders/f8a52a3c2311c14bba307c77ea6bdafeb1714c806c2750c8f27063f543c94d5e.wgsl.zst",
       "file": "shaders.wgsl.zst",
-      "offset": 151798,
+      "offset": 151800,
       "byteLength": 83,
       "compressedByteLength": 92,
       "sha256": "f8a52a3c2311c14bba307c77ea6bdafeb1714c806c2750c8f27063f543c94d5e"
@@ -1354,7 +1354,7 @@
     {
       "path": "shaders/c9043708ec4853570118a7ba018b784dcef4c364ebe6a1130a92012ae3124cd5.wgsl.zst",
       "file": "shaders.wgsl.zst",
-      "offset": 151890,
+      "offset": 151892,
       "byteLength": 1210,
       "compressedByteLength": 450,
       "sha256": "c9043708ec4853570118a7ba018b784dcef4c364ebe6a1130a92012ae3124cd5"
@@ -1362,7 +1362,7 @@
     {
       "path": "shaders/6c100a9e2505584b6eb48d65ec64c74acd214882d50cb8e9d95b4da4dbe24712.wgsl.zst",
       "file": "shaders.wgsl.zst",
-      "offset": 152340,
+      "offset": 152342,
       "byteLength": 83,
       "compressedByteLength": 92,
       "sha256": "6c100a9e2505584b6eb48d65ec64c74acd214882d50cb8e9d95b4da4dbe24712"
@@ -1370,7 +1370,7 @@
     {
       "path": "shaders/db8b3e65fe0d65290444ce4a4737ee5bf46ed6e54fc9c41d80601ef42b0373c7.wgsl.zst",
       "file": "shaders.wgsl.zst",
-      "offset": 152432,
+      "offset": 152434,
       "byteLength": 1210,
       "compressedByteLength": 450,
       "sha256": "db8b3e65fe0d65290444ce4a4737ee5bf46ed6e54fc9c41d80601ef42b0373c7"
@@ -1378,7 +1378,7 @@
     {
       "path": "shaders/9ac1576c2cb2196dcee7fad5674d9b23abea51c132725f3dc91a51f605a2b200.wgsl.zst",
       "file": "shaders.wgsl.zst",
-      "offset": 152882,
+      "offset": 152884,
       "byteLength": 83,
       "compressedByteLength": 92,
       "sha256": "9ac1576c2cb2196dcee7fad5674d9b23abea51c132725f3dc91a51f605a2b200"
@@ -1386,7 +1386,7 @@
     {
       "path": "shaders/206b5138068fedc866f70ce0ba0464eccf4e97bb7db6a9e1aa789a4cc8332658.wgsl.zst",
       "file": "shaders.wgsl.zst",
-      "offset": 152974,
+      "offset": 152976,
       "byteLength": 1210,
       "compressedByteLength": 449,
       "sha256": "206b5138068fedc866f70ce0ba0464eccf4e97bb7db6a9e1aa789a4cc8332658"
@@ -1394,7 +1394,7 @@
     {
       "path": "shaders/275df601f72d8d825fa5de9aa9311cdf09339cda6767512ae1d2199903371d4a.wgsl.zst",
       "file": "shaders.wgsl.zst",
-      "offset": 153423,
+      "offset": 153425,
       "byteLength": 83,
       "compressedByteLength": 92,
       "sha256": "275df601f72d8d825fa5de9aa9311cdf09339cda6767512ae1d2199903371d4a"
@@ -1402,7 +1402,7 @@
     {
       "path": "shaders/d64fc28b7bfafce299d1649a0389bd03bad85f040725dfc57aca41cb70bb5eae.wgsl.zst",
       "file": "shaders.wgsl.zst",
-      "offset": 153515,
+      "offset": 153517,
       "byteLength": 1210,
       "compressedByteLength": 450,
       "sha256": "d64fc28b7bfafce299d1649a0389bd03bad85f040725dfc57aca41cb70bb5eae"
@@ -1410,7 +1410,7 @@
     {
       "path": "shaders/62a892052ef6e7a06a86ae2f0465a4fe7671b842ff87808723756bbcbe43b1e2.wgsl.zst",
       "file": "shaders.wgsl.zst",
-      "offset": 153965,
+      "offset": 153967,
       "byteLength": 83,
       "compressedByteLength": 92,
       "sha256": "62a892052ef6e7a06a86ae2f0465a4fe7671b842ff87808723756bbcbe43b1e2"
@@ -1418,7 +1418,7 @@
     {
       "path": "shaders/d4efc4928341419cad147dd3745216e6ba1b77cca32d46d705a0795c127350dd.wgsl.zst",
       "file": "shaders.wgsl.zst",
-      "offset": 154057,
+      "offset": 154059,
       "byteLength": 1210,
       "compressedByteLength": 449,
       "sha256": "d4efc4928341419cad147dd3745216e6ba1b77cca32d46d705a0795c127350dd"
@@ -1426,7 +1426,7 @@
     {
       "path": "shaders/2825fc7aeb9e351b1eb122fbc52426f717853b59b703dbb4afa5b80e6d5fd50b.wgsl.zst",
       "file": "shaders.wgsl.zst",
-      "offset": 154506,
+      "offset": 154508,
       "byteLength": 83,
       "compressedByteLength": 92,
       "sha256": "2825fc7aeb9e351b1eb122fbc52426f717853b59b703dbb4afa5b80e6d5fd50b"
@@ -1434,7 +1434,7 @@
     {
       "path": "shaders/53c0456d75dd24adce1dc2e4dc8630bd3016af7e1e94417b9e867f33bb6bcfa0.wgsl.zst",
       "file": "shaders.wgsl.zst",
-      "offset": 154598,
+      "offset": 154600,
       "byteLength": 1210,
       "compressedByteLength": 450,
       "sha256": "53c0456d75dd24adce1dc2e4dc8630bd3016af7e1e94417b9e867f33bb6bcfa0"
@@ -1442,7 +1442,7 @@
     {
       "path": "shaders/bc89922a7144d67a653846e0e7740535afdcaf5f600fe88181efb83a30cd54f5.wgsl.zst",
       "file": "shaders.wgsl.zst",
-      "offset": 155048,
+      "offset": 155050,
       "byteLength": 84,
       "compressedByteLength": 93,
       "sha256": "bc89922a7144d67a653846e0e7740535afdcaf5f600fe88181efb83a30cd54f5"
@@ -1450,7 +1450,7 @@
     {
       "path": "shaders/38c740d2c38612bbc6229d4e3cea405b8aa43e5502655d1183552436c21f536b.wgsl.zst",
       "file": "shaders.wgsl.zst",
-      "offset": 155141,
+      "offset": 155143,
       "byteLength": 1452,
       "compressedByteLength": 498,
       "sha256": "38c740d2c38612bbc6229d4e3cea405b8aa43e5502655d1183552436c21f536b"
@@ -1458,7 +1458,7 @@
     {
       "path": "shaders/a2b3dce1c3f4c2c60d283976e94d04f2c46a59804ee434789e17216d5a59604b.wgsl.zst",
       "file": "shaders.wgsl.zst",
-      "offset": 155639,
+      "offset": 155641,
       "byteLength": 84,
       "compressedByteLength": 93,
       "sha256": "a2b3dce1c3f4c2c60d283976e94d04f2c46a59804ee434789e17216d5a59604b"
@@ -1466,7 +1466,7 @@
     {
       "path": "shaders/fa7f4df87902685433bdaf2525da2603950d6888c9e06451f1d8b1f1ecf04787.wgsl.zst",
       "file": "shaders.wgsl.zst",
-      "offset": 155732,
+      "offset": 155734,
       "byteLength": 1452,
       "compressedByteLength": 498,
       "sha256": "fa7f4df87902685433bdaf2525da2603950d6888c9e06451f1d8b1f1ecf04787"
@@ -1474,7 +1474,7 @@
     {
       "path": "shaders/543da76402f1e1714e54e99eadc63c1e6ee040958d385eb6cd9d4fcfdd13e207.wgsl.zst",
       "file": "shaders.wgsl.zst",
-      "offset": 156230,
+      "offset": 156232,
       "byteLength": 84,
       "compressedByteLength": 93,
       "sha256": "543da76402f1e1714e54e99eadc63c1e6ee040958d385eb6cd9d4fcfdd13e207"
@@ -1482,7 +1482,7 @@
     {
       "path": "shaders/178ccaba5d383c692ced4761a9504e40dd0edfc171abbe2aa5711016dd489c1a.wgsl.zst",
       "file": "shaders.wgsl.zst",
-      "offset": 156323,
+      "offset": 156325,
       "byteLength": 1452,
       "compressedByteLength": 498,
       "sha256": "178ccaba5d383c692ced4761a9504e40dd0edfc171abbe2aa5711016dd489c1a"
@@ -1490,7 +1490,7 @@
     {
       "path": "shaders/6d659e1b945a6984970f6c5556e538db607318ef7b50338617f565bd9c05784e.wgsl.zst",
       "file": "shaders.wgsl.zst",
-      "offset": 156821,
+      "offset": 156823,
       "byteLength": 84,
       "compressedByteLength": 93,
       "sha256": "6d659e1b945a6984970f6c5556e538db607318ef7b50338617f565bd9c05784e"
@@ -1498,7 +1498,7 @@
     {
       "path": "shaders/5a9f28f89c1b2e6582ff5daa430b83bfcf9994df960051cf210f3086a17d55cd.wgsl.zst",
       "file": "shaders.wgsl.zst",
-      "offset": 156914,
+      "offset": 156916,
       "byteLength": 1452,
       "compressedByteLength": 498,
       "sha256": "5a9f28f89c1b2e6582ff5daa430b83bfcf9994df960051cf210f3086a17d55cd"
@@ -1506,7 +1506,7 @@
     {
       "path": "shaders/99f5f98613f2bf8a0a1be7be8f41990365e6890160b17c918db0e4733bd0f129.wgsl.zst",
       "file": "shaders.wgsl.zst",
-      "offset": 157412,
+      "offset": 157414,
       "byteLength": 84,
       "compressedByteLength": 93,
       "sha256": "99f5f98613f2bf8a0a1be7be8f41990365e6890160b17c918db0e4733bd0f129"
@@ -1514,7 +1514,7 @@
     {
       "path": "shaders/4da7e2a7ccc908a55147d7cce9007836302a0c4f8e86f8cab3941b4bebba8b0f.wgsl.zst",
       "file": "shaders.wgsl.zst",
-      "offset": 157505,
+      "offset": 157507,
       "byteLength": 1452,
       "compressedByteLength": 498,
       "sha256": "4da7e2a7ccc908a55147d7cce9007836302a0c4f8e86f8cab3941b4bebba8b0f"
@@ -1522,7 +1522,7 @@
     {
       "path": "shaders/900318840ff240c2882e18bd536a2f43b5d68ad2f2901580a6cb416a68007a0e.wgsl.zst",
       "file": "shaders.wgsl.zst",
-      "offset": 158003,
+      "offset": 158005,
       "byteLength": 84,
       "compressedByteLength": 93,
       "sha256": "900318840ff240c2882e18bd536a2f43b5d68ad2f2901580a6cb416a68007a0e"
@@ -1530,7 +1530,7 @@
     {
       "path": "shaders/7e6d4a27f25f8f4bf8f6cde5b8914dbc8c8f174f34d612343be0239953b35078.wgsl.zst",
       "file": "shaders.wgsl.zst",
-      "offset": 158096,
+      "offset": 158098,
       "byteLength": 1452,
       "compressedByteLength": 498,
       "sha256": "7e6d4a27f25f8f4bf8f6cde5b8914dbc8c8f174f34d612343be0239953b35078"
@@ -1538,7 +1538,7 @@
     {
       "path": "shaders/090ccb692563decf055cd9ef6474bf20940185b81dd70d3c5ad589d0b5498879.wgsl.zst",
       "file": "shaders.wgsl.zst",
-      "offset": 158594,
+      "offset": 158596,
       "byteLength": 84,
       "compressedByteLength": 93,
       "sha256": "090ccb692563decf055cd9ef6474bf20940185b81dd70d3c5ad589d0b5498879"
@@ -1546,7 +1546,7 @@
     {
       "path": "shaders/e538cd733367f3975f6ea8accd8f8723fad8cfa3b3beebe767111e665bebb486.wgsl.zst",
       "file": "shaders.wgsl.zst",
-      "offset": 158687,
+      "offset": 158689,
       "byteLength": 1450,
       "compressedByteLength": 514,
       "sha256": "e538cd733367f3975f6ea8accd8f8723fad8cfa3b3beebe767111e665bebb486"
@@ -1554,39 +1554,39 @@
     {
       "path": "shaders/d0e04278c1afe6d752dd816a90997a4ec5ed83f35057f2dfae2ebf614f0b7cc5.wgsl.zst",
       "file": "shaders.wgsl.zst",
-      "offset": 159201,
+      "offset": 159203,
       "byteLength": 84,
       "compressedByteLength": 93,
       "sha256": "d0e04278c1afe6d752dd816a90997a4ec5ed83f35057f2dfae2ebf614f0b7cc5"
     },
     {
-      "path": "shaders/f46a3937bf93698035dffd9cdb67447deed517dbaf295f8313287e78e870e231.wgsl.zst",
+      "path": "shaders/57f6ffe453063a26b2fa11c71d6e9bfb87b964b7724d65d5a18a7e9a2049ac16.wgsl.zst",
       "file": "shaders.wgsl.zst",
-      "offset": 159294,
+      "offset": 159296,
       "byteLength": 1434,
-      "compressedByteLength": 479,
-      "sha256": "f46a3937bf93698035dffd9cdb67447deed517dbaf295f8313287e78e870e231"
+      "compressedByteLength": 482,
+      "sha256": "57f6ffe453063a26b2fa11c71d6e9bfb87b964b7724d65d5a18a7e9a2049ac16"
     },
     {
       "path": "shaders/ffa0f674269dc0394470ca2d72de97917493ebca5ff4022ed2f3adc0ef22cb38.wgsl.zst",
       "file": "shaders.wgsl.zst",
-      "offset": 159773,
+      "offset": 159778,
       "byteLength": 84,
       "compressedByteLength": 93,
       "sha256": "ffa0f674269dc0394470ca2d72de97917493ebca5ff4022ed2f3adc0ef22cb38"
     },
     {
-      "path": "shaders/a6ac96eaf832da5feca47ea35bccb912145afc1eedc9c47a56057887ff1ce1d9.wgsl.zst",
+      "path": "shaders/7a9c8f770543f59f473b0e9e39a2545768074518e9b4fddaaccf6ed61691e2b2.wgsl.zst",
       "file": "shaders.wgsl.zst",
-      "offset": 159866,
+      "offset": 159871,
       "byteLength": 1434,
-      "compressedByteLength": 478,
-      "sha256": "a6ac96eaf832da5feca47ea35bccb912145afc1eedc9c47a56057887ff1ce1d9"
+      "compressedByteLength": 482,
+      "sha256": "7a9c8f770543f59f473b0e9e39a2545768074518e9b4fddaaccf6ed61691e2b2"
     },
     {
       "path": "shaders/35b0884e755c791f8cf6bf3b2fbc6c22c1f1e78612cb40de69c7d89759305847.wgsl.zst",
       "file": "shaders.wgsl.zst",
-      "offset": 160344,
+      "offset": 160353,
       "byteLength": 84,
       "compressedByteLength": 93,
       "sha256": "35b0884e755c791f8cf6bf3b2fbc6c22c1f1e78612cb40de69c7d89759305847"
@@ -1594,23 +1594,23 @@
     {
       "path": "shaders/86a36bf6a26bea4a7df354bd2f9b8b53d71ee24a2b0c9cb4e2ed420e7720237f.wgsl.zst",
       "file": "shaders.wgsl.zst",
-      "offset": 160437,
+      "offset": 160446,
       "byteLength": 1224,
       "compressedByteLength": 450,
       "sha256": "86a36bf6a26bea4a7df354bd2f9b8b53d71ee24a2b0c9cb4e2ed420e7720237f"
     },
     {
-      "path": "shaders/1af7130dce06f3fa282f23564ceaf89ae569b8c2b5100de6d0edb5ace6223f71.wgsl.zst",
+      "path": "shaders/d9cfe25a17050ed561ad0327626c7dab9d4c1fa990c4a093a1e054186a5d3b58.wgsl.zst",
       "file": "shaders.wgsl.zst",
-      "offset": 160887,
+      "offset": 160896,
       "byteLength": 27598,
-      "compressedByteLength": 1290,
-      "sha256": "1af7130dce06f3fa282f23564ceaf89ae569b8c2b5100de6d0edb5ace6223f71"
+      "compressedByteLength": 1292,
+      "sha256": "d9cfe25a17050ed561ad0327626c7dab9d4c1fa990c4a093a1e054186a5d3b58"
     },
     {
       "path": "shaders/25720d600932fd49e01bb9723922f78e6f5b59127fdd11d417c50440b73a3f3c.wgsl.zst",
       "file": "shaders.wgsl.zst",
-      "offset": 162177,
+      "offset": 162188,
       "byteLength": 2928,
       "compressedByteLength": 297,
       "sha256": "25720d600932fd49e01bb9723922f78e6f5b59127fdd11d417c50440b73a3f3c"
@@ -1618,7 +1618,7 @@
     {
       "path": "shaders/bf7033f6b740788481375bdaa728bc61dd95338a128f7f059747b7627caa4bf6.wgsl.zst",
       "file": "shaders.wgsl.zst",
-      "offset": 162474,
+      "offset": 162485,
       "byteLength": 82165,
       "compressedByteLength": 16852,
       "sha256": "bf7033f6b740788481375bdaa728bc61dd95338a128f7f059747b7627caa4bf6"
@@ -1626,7 +1626,7 @@
     {
       "path": "shaders/308ed7ad6042cb5e8ecf050b2a1f598cb9f9084ec713fbcdc85a84e26cdf388e.wgsl.zst",
       "file": "shaders.wgsl.zst",
-      "offset": 179326,
+      "offset": 179337,
       "byteLength": 84118,
       "compressedByteLength": 17167,
       "sha256": "308ed7ad6042cb5e8ecf050b2a1f598cb9f9084ec713fbcdc85a84e26cdf388e"
@@ -1634,7 +1634,7 @@
     {
       "path": "shaders/e36802bf40cac6e96751e09bf76f3ced8a91cfbd402707664a94c769045cc61e.wgsl.zst",
       "file": "shaders.wgsl.zst",
-      "offset": 196493,
+      "offset": 196504,
       "byteLength": 84313,
       "compressedByteLength": 17127,
       "sha256": "e36802bf40cac6e96751e09bf76f3ced8a91cfbd402707664a94c769045cc61e"
@@ -1642,7 +1642,7 @@
     {
       "path": "shaders/b3d8710f53ed0f1c7a963fb637b2f78b2d76a7a404b94fbf8886d518216da0a1.wgsl.zst",
       "file": "shaders.wgsl.zst",
-      "offset": 213620,
+      "offset": 213631,
       "byteLength": 86966,
       "compressedByteLength": 17539,
       "sha256": "b3d8710f53ed0f1c7a963fb637b2f78b2d76a7a404b94fbf8886d518216da0a1"
@@ -1650,7 +1650,7 @@
     {
       "path": "shaders/c3fa999035c127ffb115eb505d335a45b6d0a8dc1b491be790b3eb58e675e064.wgsl.zst",
       "file": "shaders.wgsl.zst",
-      "offset": 231159,
+      "offset": 231170,
       "byteLength": 84463,
       "compressedByteLength": 17181,
       "sha256": "c3fa999035c127ffb115eb505d335a45b6d0a8dc1b491be790b3eb58e675e064"
@@ -1658,31 +1658,31 @@
     {
       "path": "shaders/72c115248b5214ff85c208e35c14994c34c914faeed007496aded6775beef310.wgsl.zst",
       "file": "shaders.wgsl.zst",
-      "offset": 248340,
+      "offset": 248351,
       "byteLength": 86416,
       "compressedByteLength": 17498,
       "sha256": "72c115248b5214ff85c208e35c14994c34c914faeed007496aded6775beef310"
     },
     {
-      "path": "shaders/e6805178775321606c6b7ec900bf5518d95d6395b259d80f307c22b3b66e3783.wgsl.zst",
+      "path": "shaders/da07b2ddbf0c709a05b0f12d7c895865bef1e0befc54d1a7c562fd0e86d03bee.wgsl.zst",
       "file": "shaders.wgsl.zst",
-      "offset": 265838,
+      "offset": 265849,
       "byteLength": 82681,
-      "compressedByteLength": 16917,
-      "sha256": "e6805178775321606c6b7ec900bf5518d95d6395b259d80f307c22b3b66e3783"
+      "compressedByteLength": 16919,
+      "sha256": "da07b2ddbf0c709a05b0f12d7c895865bef1e0befc54d1a7c562fd0e86d03bee"
     },
     {
-      "path": "shaders/c1311225f07040189b52623534c679ed61e236a73fae8155d46c573c57f9c8a0.wgsl.zst",
+      "path": "shaders/f9b9777c8b526927f42e21615535e0f6840dffef85d20e4ea01eeffbe0f29983.wgsl.zst",
       "file": "shaders.wgsl.zst",
-      "offset": 282755,
+      "offset": 282768,
       "byteLength": 84634,
-      "compressedByteLength": 17234,
-      "sha256": "c1311225f07040189b52623534c679ed61e236a73fae8155d46c573c57f9c8a0"
+      "compressedByteLength": 17235,
+      "sha256": "f9b9777c8b526927f42e21615535e0f6840dffef85d20e4ea01eeffbe0f29983"
     },
     {
       "path": "shaders/b01d44f3df1a832eadc0af0ce98a3e1e4d42d7801078b3952a831670a5151ba1.wgsl.zst",
       "file": "shaders.wgsl.zst",
-      "offset": 299989,
+      "offset": 300003,
       "byteLength": 83692,
       "compressedByteLength": 17031,
       "sha256": "b01d44f3df1a832eadc0af0ce98a3e1e4d42d7801078b3952a831670a5151ba1"
@@ -1690,18 +1690,18 @@
     {
       "path": "shaders/27ddb69e0df6c27b45840758f369cbcbda2b864fe00e1d043e0fcf12c51df123.wgsl.zst",
       "file": "shaders.wgsl.zst",
-      "offset": 317020,
+      "offset": 317034,
       "byteLength": 85645,
       "compressedByteLength": 17348,
       "sha256": "27ddb69e0df6c27b45840758f369cbcbda2b864fe00e1d043e0fcf12c51df123"
     },
     {
-      "path": "metadata/b87c915a08ddc1e73fede504086f99eb11c9292013bcabd0e04533b8e723e02a.json.zst",
+      "path": "metadata/1d174a47d7b340384f4d6b47a3e88f2affd34b3500544470def4fc141173e298.json.zst",
       "file": "metadata.json.zst",
       "offset": 0,
       "byteLength": 1841050,
-      "compressedByteLength": 19961,
-      "sha256": "b87c915a08ddc1e73fede504086f99eb11c9292013bcabd0e04533b8e723e02a"
+      "compressedByteLength": 19968,
+      "sha256": "1d174a47d7b340384f4d6b47a3e88f2affd34b3500544470def4fc141173e298"
     }
   ],
   "files": [
@@ -1711,11 +1711,11 @@
     },
     {
       "path": "shaders.wgsl.zst",
-      "byteLength": 334368
+      "byteLength": 334382
     },
     {
       "path": "metadata.json.zst",
-      "byteLength": 19961
+      "byteLength": 19968
     }
   ]
 }

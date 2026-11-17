@@ -568,7 +568,8 @@ function lobeAssign(index: number, lobe: LobeWgsl): string {
     lobe.roughness ?? '0.0',
     lobe.anisotropy ?? '0.0',
     lobe.rotation ?? '0.0',
-    lobe.conductorEta ? '1.0' : lobe.ior ?? '1.5',
+    // Conductors use this slot as an explicit eta/k mode flag, not a dielectric IOR.
+    lobe.kind === 'conductor' ? (lobe.conductorEta ? '1.0' : '0.0') : lobe.ior ?? '1.5',
     lobe.extinction ?? 'vec3f(0.0)',
     lobe.thin ?? '0.0',
     auxiliary,
