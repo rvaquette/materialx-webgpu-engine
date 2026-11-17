@@ -93,6 +93,7 @@ async function main(): Promise<void> {
   const state: ViewerUiState = {
     entry: initialEntry, scenes: [...SCENE_CATALOG], resolution: initialResolution, pathTracingDepth: 12,
     rasterQuality: 'interactive', backend: initialBackend, environmentEnabled: true, denoise: false,
+    exposure: 0, tonemap: 'acesFilmic',
     status: undefined, busy: true, busyMessage: 'Initialisation...', error: '', shaderErrors: '', warnings: '',
     objectPath: '', objects: [], materialFolderPath: [], materialTree: buildMaterialTree(MATERIAL_CATALOG), materialPath: '',
   };
@@ -270,6 +271,8 @@ async function main(): Promise<void> {
     }); },
     environment: enabled => { viewer.setEnvironmentEnabled(enabled); state.environmentEnabled = enabled; },
     denoise: enabled => { viewer.setPathTracingDenoise(enabled); state.denoise = enabled; },
+    exposure: value => { viewer.setExposure(value); state.exposure = value; },
+    tonemap: value => { void operation('Mise à jour du tonemapping...', async () => { await viewer.setTonemap(value); state.tonemap = value; }); },
     pause: () => viewer.setPathTracingPaused(!viewer.pathTracingPaused),
     openFiles: folder => (folder ? localFolder : localFiles)?.click(),
     object: path => { state.objectPath = path; refreshMaterialSelection(); },

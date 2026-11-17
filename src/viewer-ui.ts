@@ -13,6 +13,8 @@ export interface ViewerUiState {
   backend: BackendKind;
   environmentEnabled: boolean;
   denoise: boolean;
+  exposure: number;
+  tonemap: 'none' | 'reinhard' | 'acesFilmic';
   status: ViewerStatus | undefined;
   busy: boolean;
   busyMessage: string;
@@ -34,6 +36,8 @@ export interface ViewerUiActions {
   backend: (backend: BackendKind) => void;
   environment: (enabled: boolean) => void;
   denoise: (enabled: boolean) => void;
+  exposure: (value: number) => void;
+  tonemap: (value: 'none' | 'reinhard' | 'acesFilmic') => void;
   pause: () => void;
   openFiles: (folder: boolean) => void;
   object: (path: string) => void;
@@ -171,6 +175,21 @@ export async function startViewerUi(
         ImGui.BeginDisabled(state.backend === 'disney');
         if (ImGui.Checkbox('Denoiser JS (neural)', denoise)) actions.denoise(denoise[0]);
         ImGui.EndDisabled();
+        ImGui.Text('Affichage');
+        ImGui.SetNextItemWidth(-1);
+        const exposureValue: [number] = [state.exposure];
+        if (ImGui.SliderFloat('##exposure', exposureValue, -5, 5, `Exposition: ${exposureValue[0].toFixed(2)} EV`)) {
+          actions.exposure(exposureValue[0]);
+        }
+        combo('##tonemap', state.tonemap, [
+          { label: 'Aucun (linéaire)', value: 'none' },
+          { label: 'Reinhard', value: 'reinhard' },
+          { label: 'ACES Filmic (défaut)', value: 'acesFilmic' },
+        ], value => {
+          if (value === 'none' || value === 'reinhard' || value === 'acesFilmic') {
+            actions.tonemap(value);
+          }
+        });
         ImGui.BeginDisabled(state.backend !== 'pathtracing' && state.backend !== 'disney');
         if (ImGui.Button(state.status?.pathTracingPaused ? 'Reprendre' : 'Pause')) actions.pause();
         ImGui.EndDisabled();

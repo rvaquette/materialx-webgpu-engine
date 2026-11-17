@@ -133,14 +133,15 @@ describe('ImGui material parameter editing', () => {
 function fixture() {
   const state: ViewerUiState = {
     entry: 'books.usda', scenes: [{ label: 'Books', entry: 'books.usda' }, { label: 'Chair', entry: 'chair.usda' }],
-    resolution: 256, pathTracingDepth: 12, rasterQuality: 'interactive', backend: 'raster',     environmentEnabled: true, denoise: false,
+    resolution: 256, pathTracingDepth: 12, rasterQuality: 'interactive', backend: 'raster', 
+    environmentEnabled: true, denoise: false, exposure: 0, tonemap: 'acesFilmic',
     status: undefined, busy: false, busyMessage: '', error: '', shaderErrors: '', warnings: '',
     objectPath: '/Book', objects: [{ path: '/Book', material: 'Paper' }], materialPath: '',
     materialFolderPath: [], materialTree: { folders: new Map(), materials: [{ label: 'Gold', path: './gold.mtlx' }] },
   };
   const actions: ViewerUiActions = {
     scene: vi.fn(), resolution: vi.fn(), pathTracingDepth: vi.fn(), quality: vi.fn(), backend: vi.fn(), environment: vi.fn(),
-    denoise: vi.fn(), pause: vi.fn(), openFiles: vi.fn(), object: vi.fn(), material: vi.fn(),
+    denoise: vi.fn(), exposure: vi.fn(), tonemap: vi.fn(), pause: vi.fn(), openFiles: vi.fn(), object: vi.fn(), material: vi.fn(),
   };
   const parameters = new MaterialParameterEditor({ parameters: () => [], apply: vi.fn(), error: vi.fn() });
   let tick!: FrameRequestCallback;

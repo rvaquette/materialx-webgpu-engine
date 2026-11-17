@@ -977,4 +977,18 @@ describe('interactive viewer resource lifecycle', () => {
     generateEnvironmentMipmaps(gpu, texture as unknown as GPUTexture);
     expect(device.createRenderPipeline).toHaveBeenCalledTimes(1);
   });
+
+  it('allows setting exposure and tonemap for display adjustments', async () => {
+    const { viewer } = await setup();
+    // Test setExposure - should not throw
+    expect(() => viewer.setExposure(2.0)).not.toThrow();
+    expect(() => viewer.setExposure(0)).not.toThrow();
+    
+    // Test setTonemap - should not throw
+    await expect(viewer.setTonemap('reinhard')).resolves.not.toThrow();
+    await expect(viewer.setTonemap('acesFilmic')).resolves.not.toThrow();
+    await expect(viewer.setTonemap('none')).resolves.not.toThrow();
+  });
 });
+
+

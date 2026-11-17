@@ -28,6 +28,7 @@ import { buildMaterialDispatch } from './pathtracing/material-variant.ts';
 import { buildPtDeviceBindings } from './pathtracing/device-bindings.ts';
 import { maxRecordLobes, PT_MAX_LOBES } from './pathtracing/material-record.ts';
 import type { DecodedPixelImage } from '../assets/images.ts';
+import type { Tonemap } from './output.ts';
 import { loadUsdScene, uploadMaterialTextures, type LoadedUsdScene, type ObjectMaterialOverride, type SceneLoadOptions } from './usd-scene-assets.ts';
 import { assertSceneStorageSize, assertSceneTextureBindings } from '../gpu/device.ts';
 import { uploadMaterialImage, uploadMaterialImageArray } from '../gpu/material-texture.ts';
@@ -154,6 +155,8 @@ interface SceneRender {
   setRasterQuality: (quality: RasterQuality) => Promise<void>;
   pathTracingDepth: () => number;
   setPathTracingDepth: (depth: number) => void;
+  setExposure: (exposure: number) => void;
+  setTonemap: (tonemap: Tonemap) => Promise<void>;
   renderRaster: (targetView: GPUTextureView) => void;
   /** Starts the path tracer build on first call; renders nothing until it is ready. */
   renderPathTrace: (targetView: GPUTextureView, tiled: boolean, accumulate: boolean) => void;
@@ -203,6 +206,8 @@ export class InteractiveViewer {
   #detachControls: () => void;
   #onStatus: ((s: ViewerStatus) => void) | undefined;
   #onShaderErrors: ((errors: readonly ShaderCompilationError[]) => void) | undefined;
+  #exposure = 0;
+  #tonemap: Tonemap = 'acesFilmic';
 
   constructor(opts: {
     device: GPUDevice;
@@ -474,6 +479,22 @@ export class InteractiveViewer {
     this.#emitStatus();
   }
 
+  setExposure(value: number): void {
+    if (value === this.#exposure) return;
+    this.#exposure = value;
+    this.#current?.setExposure(value);
+    this.#ptDisplayDirty = true;
+    this.#emitStatus();
+  }
+
+  async setTonemap(value: Tonemap): Promise<void> {
+    if (value === this.#tonemap) return;
+    this.#tonemap = value;
+    await this.#current?.setTonemap(value);
+    this.#ptDisplayDirty = true;
+    this.#emitStatus();
+  }
+
   dispose(): void {
     if (this.#pathTraceRefill !== undefined) clearTimeout(this.#pathTraceRefill);
     this.#disposed = true;
@@ -724,6 +745,7 @@ export class InteractiveViewer {
     let cameraViewProj = frame.camera.viewProj;
     let cameraEye = frame.camera.eye;
     let backgroundInvViewProj = inverse4(frame.camera.viewProj);
+    let currentExposure = exposure;
     const outputFormat = this.#outputFormat;
     const resources = { ...loaded.resources, materials: new Map(loaded.resources.materials) };
     const parameterBuffers = new Map<string, GPUBuffer[]>();
@@ -958,7 +980,7 @@ export class InteractiveViewer {
       await buildRasterQuality(rasterQuality);
 
       const resolveUniform = track(device.createBuffer({ size: RESOLVE_UNIFORM_SIZE, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST }));
-      device.queue.writeBuffer(resolveUniform, 0, new Float32Array([frame.camera.exposure]));
+      device.queue.writeBuffer(resolveUniform, 0, new Float32Array([currentExposure]));
       const sampler = device.createSampler({ magFilter: 'linear', minFilter: 'linear' });
       let volumePipeline: GPURenderPipeline | undefined;
       const volumeEntries: GPUBindGroupEntry[] = [];
@@ -1135,6 +1157,7 @@ export class InteractiveViewer {
           pass.draw(3);
           pass.end();
         }
+        device.queue.writeBuffer(resolveUniform, 0, new Float32Array([currentExposure]));
         resolveBackend.recordResolvePass(encoder, { outputView: targetView, bindGroup: resolveBindGroup });
         device.queue.submit([encoder.finish()]);
       };
@@ -1680,7 +1703,7 @@ export class InteractiveViewer {
       }
       if (!accumulate) {
         try {
-          backend.display(targetView, [width, height], exposure);
+          backend.display(targetView, [width, height], currentExposure);
         } catch (error) {
           setDisneyError(error, 'Disney path tracing - display');
         }
@@ -1724,7 +1747,7 @@ export class InteractiveViewer {
         environmentTotal: disneyEnvironmentTotal, environmentRotation: disneyEnvironmentRotationValue,
         environmentIntensity: 1, uniformColor: [0, 0, 0],
       };
-      backend.renderTile(settings, display ? targetView : undefined, exposure);
+      backend.renderTile(settings, display ? targetView : undefined, currentExposure);
       disneySeedFrame++;
       disneyTileIndex++;
       if (disneyTileIndex === tile.tileCount) {
@@ -1878,6 +1901,13 @@ export class InteractiveViewer {
       resetPathTrace: () => {
         pathTracer?.resetPathTrace();
         resetDisneyPathTrace();
+      },
+      setExposure: (value: number) => {
+        currentExposure = value;
+        this.#ptDisplayDirty = true;
+      },
+      setTonemap: async (_tonemap: Tonemap) => {
+        this.#ptDisplayDirty = true;
       },
       applyCamera,
       frameCount: () => this.#backend === 'disney' ? disneyFrameIndex : pathTracer?.frameCount() ?? 0,
