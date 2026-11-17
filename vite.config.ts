@@ -3,7 +3,7 @@ import { defineConfig, configDefaults } from 'vitest/config';
 import { existsSync, readFileSync } from 'fs';
 import { extname, join, normalize } from 'path';
 import { fileURLToPath } from 'node:url';
-import { sceneBufferCachePlugin } from './scripts/pathtracer-cache-server.mjs';
+import { sceneBufferCachePlugin } from './pathtracer-cache-server.mjs';
 
 // The installed OpenUSD crate runtime requires shared memory and isolation.
 const crossOriginIsolationHeaders = {

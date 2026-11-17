@@ -1090,6 +1090,32 @@ fn mx_rgb_hue(color: vec3f) -> f32 {
   }
   return hue / 6.0;
 }
+fn mx_rotate_rgb_hue_with_target(color: vec3f, targetHue: vec3f) -> vec3f {
+  let targetMax = max(targetHue.r, max(targetHue.g, targetHue.b));
+  let targetMin = min(targetHue.r, min(targetHue.g, targetHue.b));
+  let targetChroma = targetMax - targetMin;
+  if (targetChroma <= 1e-8) { return color; }
+  
+  let colorMax = max(color.r, max(color.g, color.b));
+  let colorMin = min(color.r, min(color.g, color.b));
+  let colorChroma = colorMax - colorMin;
+  if (colorChroma <= 1e-8) { return color; }
+  
+  let targetHueValue = mx_rgb_hue(targetHue);
+  let colorHueValue = mx_rgb_hue(color);
+  let hueOffset = targetHueValue - colorHueValue;
+  
+  let sector = fract(colorHueValue + hueOffset) * 6.0;
+  let x = colorChroma * (1.0 - abs(sector - 2.0 * floor(sector * 0.5) - 1.0));
+  var rgb: vec3f;
+  if (sector < 1.0) { rgb = vec3f(colorChroma, x, 0.0); }
+  else if (sector < 2.0) { rgb = vec3f(x, colorChroma, 0.0); }
+  else if (sector < 3.0) { rgb = vec3f(0.0, colorChroma, x); }
+  else if (sector < 4.0) { rgb = vec3f(0.0, x, colorChroma); }
+  else if (sector < 5.0) { rgb = vec3f(x, 0.0, colorChroma); }
+  else { rgb = vec3f(colorChroma, 0.0, x); }
+  return rgb + vec3f(colorMin);
+}
 fn mx_rotate_rgb_hue(color: vec3f, hueOffset: f32) -> vec3f {
   let maximum = max(color.r, max(color.g, color.b));
   let minimum = min(color.r, min(color.g, color.b));
@@ -1115,8 +1141,10 @@ fn mx_thin_film_fresnel(baseFresnel: vec3f, baseF0: vec3f, cosVH: f32, film: MxT
   if (film.weight <= 0.0 || film.thickness <= 0.0) { return baseFresnel; }
   let filmCosine = mx_remap_thin_film_cosine(cosVH, film.incidentAngleScale, film.incidentAngleOffset);
   var tint = mx_thin_film_tint(film.thickness, filmCosine, film.ior, baseF0);
-  if (max(film.targetHue.r, max(film.targetHue.g, film.targetHue.b)) - min(film.targetHue.r, min(film.targetHue.g, film.targetHue.b)) > 1e-8) {
-    tint = mx_rotate_rgb_hue(tint, mx_rgb_hue(film.targetHue) - mx_rgb_hue(tint));
+  let targetMax = max(film.targetHue.r, max(film.targetHue.g, film.targetHue.b));
+  let targetMin = min(film.targetHue.r, min(film.targetHue.g, film.targetHue.b));
+  if (targetMax - targetMin > 1e-8) {
+    tint = mx_rotate_rgb_hue_with_target(tint, film.targetHue);
   }
   return mix(baseFresnel, tint, clamp(film.weight, 0.0, 1.0));
 }
