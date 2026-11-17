@@ -43,21 +43,9 @@ fn disneySampleTexture(layer: i32, uv: vec2f) -> DisneyTextureSample {
       any((bitcast<vec2u>(uv) & vec2u(0x7f800000u)) == vec2u(0x7f800000u))) {
     return sample;
   }
-  var v = uv.y;
-  if (v < 0.0) { v = 1.0 - fract(v); }
-  else if (v > 1.0) { v = fract(v); }
-  let xFloat = floor(uv.x * f32(size.x));
-  if (xFloat < -2147483648.0 || xFloat >= 2147483648.0) { return sample; }
-  let width = i32(size.x);
-  let x = i32(xFloat);
-  var rowOffset = x / width;
-  var column = x % width;
-  if (column < 0) { column += width; rowOffset--; }
-  let baseRow = layer * width + i32(floor(v * f32(size.y)));
-  let totalRows = i32(layers * size.y);
-  if (rowOffset < -baseRow || rowOffset >= totalRows - baseRow) { return sample; }
-  let row = baseRow + rowOffset;
-  sample.color = vec4f(textureLoad(disneyTextureMaps, vec2i(column, row % width), row / width, 0)) / 255.0;
+  // Repeat within the selected image, never into another array layer.
+  let texel = min(vec2u(fract(uv) * vec2f(size)), size - vec2u(1u));
+  sample.color = vec4f(textureLoad(disneyTextureMaps, vec2i(texel), layer, 0)) / 255.0;
   sample.valid = true;
   return sample;
 }

@@ -3,7 +3,7 @@ import { uploadDisneyMaterials, type DisneyMaterial } from '../../src/render/pat
 import { DISNEY_MATERIAL_WGSL } from '../../src/render/pathtracing/disney-material-wgsl.ts';
 import { DisneyTextureRegistry, uploadDisneyTextureArray } from '../../src/render/pathtracing/disney-texture-array.ts';
 
-/** Exercise material decoding and the source renderer's integer lookup on WebGPU. */
+/** Exercise material decoding and periodic, layer-isolated texture lookup on WebGPU. */
 export async function runDisneyMaterialProbe(device: GPUDevice): Promise<void> {
   const registry = new DisneyTextureRegistry();
   const pixels = [
@@ -28,7 +28,7 @@ export async function runDisneyMaterialProbe(device: GPUDevice): Promise<void> {
     textures: [-1, -1, -1, -1], opacity: 0.75, alphaMode: 2, alphaCutoff: 0.4,
   };
   const records = uploadDisneyMaterials(device, [material, { ...material, textures: [0, 1, 2, 3] }], 4);
-  const bytes = 25 * 6 * 4 * 4;
+  const bytes = 27 * 6 * 4 * 4;
   const output = device.createBuffer({ size: bytes, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC });
   const readback = device.createBuffer({ size: bytes, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST });
   try {
@@ -41,8 +41,11 @@ ${DISNEY_MATERIAL_WGSL}
 fn main(@builtin(global_invocation_id) id: vec3u) {
   let base = id.x * 6u;
   if (id.x >= 20u) {
-    let coords = array<vec2f, 5>(vec2f(-0.1,0), vec2f(0,-0.25), vec2f(1e30,0), vec2f(0,-0.75), vec2f(0,2));
-    let sample = disneySampleTexture(select(0, 1, id.x == 20u), coords[id.x - 20u]);
+    let coords = array<vec2f, 7>(
+      vec2f(-0.1,0), vec2f(0,-0.25), vec2f(bitcast<f32>(0x7f800000u + id.y),0),
+      vec2f(0,-0.75), vec2f(0,2), vec2f(-4.75,5.75), vec2f(5.75,-4.75));
+    let layer = select(select(0, 1, id.x == 20u), 3, id.x >= 25u);
+    let sample = disneySampleTexture(layer, coords[id.x - 20u]);
     output[base] = vec4f(sample.color.rgb, select(-1.0, sample.color.a, sample.valid));
     return;
   }
@@ -56,7 +59,7 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
     return;
   }
   var ctx: DisneyMaterialContext;
-  ctx.uv = select(vec2f(0.1,0.1), vec2f(-0.1,0), id.x == 16u);
+  ctx.uv = select(vec2f(0.1,0.1), vec2f(0,bitcast<f32>(0x7fc00000u + id.y)), id.x == 16u);
   ctx.normal = vec3f(0,0,1); ctx.tangent = vec3f(1,0,0); ctx.bitangent = vec3f(0,1,0);
   ctx.direction = select(vec3f(0,0,-1), vec3f(0,0,1), id.x == 13u);
   if (id.x == 18u) { ctx.direction = vec3f(0); }
@@ -90,7 +93,7 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
     ] });
     const encoder = device.createCommandEncoder();
     const pass = encoder.beginComputePass();
-    pass.setPipeline(pipeline); pass.setBindGroup(0, bindGroup); pass.dispatchWorkgroups(25); pass.end();
+    pass.setPipeline(pipeline); pass.setBindGroup(0, bindGroup); pass.dispatchWorkgroups(27); pass.end();
     encoder.copyBufferToBuffer(output, 0, readback, 0, bytes);
     device.queue.submit([encoder.finish()]);
     await readback.mapAsync(GPUMapMode.READ);
@@ -104,10 +107,10 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
     };
     const texel = (p: number[]) => p.map(v => v / 255);
     approx(0, 0, texel(pixels[0]!.slice(0, 4)));
-    approx(1, 0, [1, 0, 0, 1]); approx(2, 0, [0, 1, 0, 1]); approx(3, 0, [1, 0, 0, 1]);
-    approx(4, 0, texel(pixels[1]!.slice(0, 4))); approx(5, 0, texel(pixels[1]!.slice(0, 4)));
-    approx(6, 0, [0, 0, 0, -1]); approx(7, 0, texel(pixels[0]!.slice(0, 4)));
-    approx(8, 0, [0, 0, 0, -1]); approx(9, 0, [0, 0, 0, -1]);
+    approx(1, 0, [1, 0, 0, 1]); approx(2, 0, texel(pixels[0]!.slice(0, 4))); approx(3, 0, [0, 0, 1, 1]);
+    approx(4, 0, texel(pixels[0]!.slice(0, 4))); approx(5, 0, texel(pixels[0]!.slice(0, 4)));
+    approx(6, 0, texel(pixels[3]!.slice(0, 4))); approx(7, 0, texel(pixels[0]!.slice(0, 4)));
+    approx(8, 0, [1, 0, 0, 1]); approx(9, 0, [0, 0, 0, -1]);
     approx(10, 0, [0.8, 0.4, 0.2, 0.75]); approx(10, 4, [3, 2, 1, 0.7]);
     approx(10, 8, [0.001, 0.0505, 0.9, 1 / 1.5]); approx(10, 12, [0, 0, 1, 0]);
     const gamma = (v: number) => (v / 255) ** 2.2;
@@ -130,11 +133,13 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
     approx(17, 15, [3]);
     approx(18, 15, [4]);
     approx(19, 15, [5]);
-    approx(20, 0, [0, 0, 1, 1]);
-    approx(21, 0, texel(pixels[0]!.slice(0, 4)));
+    approx(20, 0, texel(pixels[1]!.slice(4, 8)));
+    approx(21, 0, [0, 1, 0, 1]);
     approx(22, 0, [0, 0, 0, -1]);
-    approx(23, 0, [0, 1, 0, 1]);
+    approx(23, 0, texel(pixels[0]!.slice(0, 4)));
     approx(24, 0, texel(pixels[0]!.slice(0, 4)));
+    approx(25, 0, texel(pixels[3]!.slice(8, 12)));
+    approx(26, 0, texel(pixels[3]!.slice(4, 8)));
   } finally {
     textures.destroy(); records.destroy(); output.destroy(); readback.destroy();
   }

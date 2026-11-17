@@ -22,10 +22,43 @@ describe('Disney render settings', () => {
       inverseTileCount: [0.5, 0.5], tileCount: 4,
     });
     expect(disneyTileForIndex(3, [100, 70], 64)).toEqual({
-      tileOrigin: [64, 0], tileSize: [36, 64], tileOffset: [0.5, 0],
-      inverseTileCount: [0.5, 0.5], tileCount: 4,
+      tileOrigin: [64, 0], tileSize: [36, 64], tileOffset: [0.64, 0],
+      inverseTileCount: [0.36, 64 / 70], tileCount: 4,
     });
     expect(() => disneyTileForIndex(4, [128, 128], 64)).toThrow(/outside/);
+  });
+
+  it('derives source-default rectangular tiles from each resolution axis', () => {
+    expect(disneyTileForIndex(0, [512, 512])).toEqual({
+      tileOrigin: [0, 384], tileSize: [128, 128], tileOffset: [0, 0.75],
+      inverseTileCount: [0.25, 0.25], tileCount: 16,
+    });
+    expect(disneyTileForIndex(15, [1024, 768])).toEqual({
+      tileOrigin: [768, 0], tileSize: [256, 192], tileOffset: [0.75, 0],
+      inverseTileCount: [0.25, 0.25], tileCount: 16,
+    });
+    expect(disneyTileForIndex(0, [1, 2]).tileSize).toEqual([1, 1]);
+  });
+
+  it('covers an uneven rectangular image once without stretching edge-tile camera coordinates', () => {
+    const resolution = [101, 71] as const;
+    const coverage = new Uint8Array(resolution[0] * resolution[1]);
+    const count = disneyTileForIndex(0, resolution).tileCount;
+    for (let index = 0; index < count; index++) {
+      const tile = disneyTileForIndex(index, resolution);
+      for (let y = 0; y < tile.tileSize[1]; y++) {
+        for (let x = 0; x < tile.tileSize[0]; x++) {
+          const pixelX = tile.tileOrigin[0] + x, pixelY = tile.tileOrigin[1] + y;
+          coverage[pixelY * resolution[0] + pixelX]!++;
+          expect(tile.tileOffset[0] + (x + 0.5) / tile.tileSize[0] * tile.inverseTileCount[0])
+            .toBeCloseTo((pixelX + 0.5) / resolution[0], 12);
+          expect(tile.tileOffset[1] + (y + 0.5) / tile.tileSize[1] * tile.inverseTileCount[1])
+            .toBeCloseTo((pixelY + 0.5) / resolution[1], 12);
+        }
+      }
+    }
+    expect(coverage.every(value => value === 1)).toBe(true);
+    expect(() => disneyTileForIndex(0, resolution, [25, 0])).toThrow(/extent/);
   });
 
   it('packs tile coordinates, flags and camera values in the GPU layout', () => {

@@ -81,7 +81,6 @@ function previewCamera(aspect: number, exposure: number): FrameCamera {
 }
 
 const DISNEY_TEXTURE_SIZE = 2048;
-const DISNEY_TILE_SIZE = 64;
 const DISNEY_TILES_PER_FRAME = 4;
 const DISNEY_STATIC_PATH_OPTIONS = {
   rrDepth: 2, russianRoulette: true, uniformLight: false, hideEmitters: false,
@@ -1711,7 +1710,7 @@ export class InteractiveViewer {
     };
 
     const renderDisneyTile = (backend: DisneyGpuBackend, targetView: GPUTextureView, display: boolean): void => {
-      const tile = disneyTileForIndex(disneyTileIndex, [width, height], DISNEY_TILE_SIZE);
+      const tile = disneyTileForIndex(disneyTileIndex, [width, height]);
       const scene = disneySceneData;
       if (!scene) throw new Error('Disney scene preparation did not produce render data.');
       if (disneySeedFrame > 0xffffffff) throw new Error('Disney source frame counter overflow.');

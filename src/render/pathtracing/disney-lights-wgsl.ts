@@ -77,11 +77,12 @@ fn disneyLightValid(light: DisneyLight) -> bool {
 
 fn disneySelectLight(random: f32, count: u32) -> DisneyLightSelection {
   var result: DisneyLightSelection;
-  if (count == 0u || !disneyLightFinite(random) || random < 0.0 || random >= 1.0) {
+  if (count == 0u || !disneyLightFinite(random) || random < 0.0 || random > 1.0) {
     result.error = 1u; return result;
   }
   let scaled = random * f32(count);
-  if (scaled >= f32(count)) { result.error = 1u; return result; }
+  // PCG's float conversion can round the upper endpoint to 1.0.
+  if (scaled >= f32(count)) { result.index = count - 1u; return result; }
   result.index = u32(scaled);
   return result;
 }
@@ -130,7 +131,12 @@ fn disneySampleLight(light: DisneyLight, scatterPos: vec3f, random: vec2f, count
     result.direction = offset / result.distance;
     var area = light.area;
     if (light.kind == 1u) { area *= 0.5; }
-    result.pdf = result.distance * result.distance / (area * abs(dot(result.normal, result.direction)));
+    let cosine = abs(dot(result.normal, result.direction));
+    if (!disneyLightFinite(cosine)) { result.error = 2u; return result; }
+    if (cosine > 0.0) {
+      result.pdf = result.distance * result.distance / (area * cosine);
+      if (!disneyLightFinite(result.pdf)) { result.pdf = 0.0; }
+    }
   }
   if (!disneyLightFinite3(result.direction) || !disneyLightFinite3(result.normal) ||
       !disneyLightFinite3(result.emission) || !disneyLightFinite(result.pdf)) {

@@ -82,7 +82,7 @@ void main() {
 }`);
   const program = gl.createProgram(), target = gl.createTexture(), framebuffer = gl.createFramebuffer(), lights = gl.createTexture();
   if (!program || !target || !framebuffer || !lights) throw new Error('Cannot create light probe resources.');
-  const size = (cases.length + 11) * 48;
+  const size = (cases.length + 13) * 48;
   const output = device.createBuffer({ size, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC });
   const readback = device.createBuffer({ size, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST });
   try {
@@ -124,7 +124,7 @@ void main() {
     const invalid = [...records[0]!]; invalid[8] = 0; invalid[9] = 0; invalid[10] = 0;
     const selection = [...records[0]!]; selection[23] = 2; selection[19] = 1; selection[7] = 3;
     const emptySelection = [...selection]; emptySelection[7] = 0; emptySelection[19] = 0.5;
-    const selections = [0, 0.34, 0.99].map(value => {
+    const selections = [0, 0.34, 0.99, 1].map(value => {
       const record = [...selection]; record[19] = value; return record;
     });
     const zeroDistance = [...records[0]!]; zeroDistance.splice(16, 3, -1, 1, 2); zeroDistance[15] = 0; zeroDistance[19] = 0;
@@ -132,8 +132,15 @@ void main() {
     const shadowFront = [...records[0]!]; shadowFront.splice(16, 3, 0, 0, 0); shadowFront.splice(20, 4, 0, 0, 1, 3);
     const shadowBack = [...shadowFront]; shadowBack.splice(16, 3, 0, 0, 4); shadowBack.splice(20, 3, 0, 0, -1);
     const shadowMiss = [...shadowBack]; shadowMiss[16] = 5;
-    records.push(invalid, selection, zeroDistance, nonUnit, emptySelection, ...selections, shadowFront, shadowBack, shadowMiss);
-    const inputData = new Float32Array((cases.length + 11) * 24);
+    const grazingSample = [...records[0]!];
+    grazingSample.splice(0, 4, 0, 0, 0, 0);
+    grazingSample.splice(4, 4, 1, 1, 1, 1);
+    grazingSample.splice(8, 4, 1, 0, 0, 0);
+    grazingSample.splice(12, 4, 0, 1, 0, 0.5);
+    grazingSample.splice(16, 4, 0, 0, 0, 0.5);
+    grazingSample.splice(20, 4, 0, 0, 1, 1);
+    records.push(invalid, selection, zeroDistance, nonUnit, emptySelection, ...selections, shadowFront, shadowBack, shadowMiss, grazingSample);
+    const inputData = new Float32Array((cases.length + 13) * 24);
     inputData.set(records.flat());
     // Input records contain twice as many floats as the three-vec4 output records.
     const fullInput = device.createBuffer({ size: inputData.byteLength, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
@@ -190,12 +197,17 @@ ${DISNEY_LIGHTS_WGSL}
       }
       for (let i = 0; i < selections.length; i++) {
         const base = (cases.length + 5 + i) * 12;
-        if (actual[base] !== i || actual[base + 11] !== 0) throw new Error(`Disney light selection ${i} failed.`);
+        const expected = [0, 1, 2, 2][i]!;
+        if (actual[base] !== expected || actual[base + 11] !== 0) throw new Error(`Disney light selection ${i} failed.`);
       }
       for (const [i, expected] of [1, 1, 0].entries()) {
-        if (actual[(cases.length + 8 + i) * 12 + 11] !== expected) {
+        if (actual[(cases.length + 9 + i) * 12 + 11] !== expected) {
           throw new Error(`Disney two-sided shadow case ${i} failed.`);
         }
+      }
+      const grazingBase = (cases.length + 12) * 12;
+      if (actual[grazingBase + 7] !== 0 || actual[grazingBase + 11] !== 0) {
+        throw new Error('Disney grazing light sample should have zero PDF and no error.');
       }
     } finally { fullInput.destroy(); }
     return cases.length;

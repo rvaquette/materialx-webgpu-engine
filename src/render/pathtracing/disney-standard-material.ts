@@ -158,7 +158,7 @@ export function disneyMaterialFromStandard(
   const alpha = (opacity[0] + opacity[1] + opacity[2]) / 3;
   if (opacity.some(value => value !== opacity[0])) warnings.push('Colored opacity is approximated by its mean.');
   if (alpha < 1 && albedoFile) throw new Error('Disney albedo texture alpha would alter standard_surface opacity.');
-  if (albedoFile || metalRoughFile) warnings.push('Disney WebGL uses manual nearest-texel sampling and different addressing from MaterialX image nodes.');
+  if (albedoFile || metalRoughFile) warnings.push('Disney uses nearest-texel sampling with periodic addressing rather than MaterialX linear filtering.');
   const material: DisneyMaterial = {
     baseColor, anisotropic: unit('specular_anisotropy'),
     emission: [emissionWeight * emissionColor[0], emissionWeight * emissionColor[1], emissionWeight * emissionColor[2]],

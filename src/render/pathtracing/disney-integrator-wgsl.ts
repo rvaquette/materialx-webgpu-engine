@@ -219,7 +219,7 @@ fn disneyPathDirect(options: DisneyPathOptions, direction: vec3f,
     }
     let sample = disneySampleLight(light.light, scatterPos, random, options.lightCount);
     if (sample.error != 0u) { result.error = 4u; return result; }
-    if (dot(sample.direction, sample.normal) < 0.0) {
+    if (sample.pdf > 0.0 && dot(sample.direction, sample.normal) < 0.0) {
       var visibility = vec3f(1.0);
       if (options.medium && options.volumeMis) {
         let transmittance = disneyPathTransmittance(options, scatterPos, sample.direction, seed);

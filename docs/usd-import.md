@@ -414,6 +414,21 @@ geometry (but kept for raster). Distant lights use delta sampling. Unsupported
 light shaping, non-uniform/sheared sphere transforms and degenerate lights are
 rejected explicitly. Sphere sampling uses the full sphere surface, not the source
 renderer's visible-hemisphere strategy; identical noise is not expected.
+The Disney backend converts centered USD rectangles emitting along local -Z
+to corner-based quads with the same bounds and emitting side. The Coffee Pot
+light-packing regression test checks these quads against their emissive proxies.
+Disney material textures use nearest-texel lookup with periodic UV addressing
+within each image layer. Negative UVs, repeated tiles and exact integer seams
+must not select another texture layer or fail the render. This supports the
+tiled checker background in `renderman_teapot_cloth` without replacing its assets.
+Disney viewer tiles follow the external renderer's default `pixelRatio = 0.25`
+at `screenZoom = 1`: each axis is `floor(renderResolution * 0.25)`, with a minimum
+of one pixel. Thus 512 x 512 uses 128 x 128 tiles, while 1024 x 768 uses
+256 x 192 tiles. The grid uses ceiling division and visits tiles left-to-right,
+top-to-bottom. Camera coordinates use pixel offsets divided by the image
+resolution, not the rounded grid size; clipped edge tiles retain the same
+pixel-to-ray mapping. Four tiles are still submitted per viewer frame, and the
+sample count advances only after a complete sweep.
 For these converted stages, `pathtracer:maxDepth` (integer 0..64) controls the
 number of surface scattering events, roulette starts at depth 2, and an absent
 dome is black rather than the ordinary USD preview environment.

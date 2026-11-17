@@ -42,9 +42,10 @@ export function packDisneyLights(lights: readonly SceneLight[]): DisneyLightData
       if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
         throw new Error(`Degenerate Disney rectangular light at ${light.path}.`);
       }
-      position = transformPoint(light.transform, [0, 0, 0]);
+      // USD rectangles are centered and emit along -Z; Disney uses a corner and cross(u, v).
+      position = transformPoint(light.transform, [-width / 2, height / 2, 0]);
       u = transformDirection(light.transform, [width, 0, 0]);
-      v = transformDirection(light.transform, [0, height, 0]);
+      v = transformDirection(light.transform, [0, -height, 0]);
       area = length(cross(u, v));
       if (!(area > 0) || !Number.isFinite(area)) throw new Error(`Degenerate Disney rectangular light at ${light.path}.`);
       kind = 0;

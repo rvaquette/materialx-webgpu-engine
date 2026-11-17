@@ -104,28 +104,36 @@ export interface DisneyTileCoordinates {
   tileCount: number;
 }
 
-/** Source tile iteration is left-to-right, top-to-bottom in its bottom-left tile coordinates. */
-export function disneyTileForIndex(index: number, resolution: Vec2, tileExtent: number): DisneyTileCoordinates {
+/** Source defaults use a quarter of each image axis; iteration is left-to-right, top-to-bottom. */
+export function disneyTileForIndex(
+  index: number, resolution: Vec2,
+  tileExtent: number | Vec2 = [
+    Math.max(1, Math.floor(resolution[0] * 0.25)),
+    Math.max(1, Math.floor(resolution[1] * 0.25)),
+  ],
+): DisneyTileCoordinates {
+  const extent: Vec2 = typeof tileExtent === 'number' ? [tileExtent, tileExtent] : tileExtent;
   if (!Number.isSafeInteger(index) || index < 0 ||
       resolution.some(value => !Number.isSafeInteger(value) || value <= 0) ||
-      !Number.isSafeInteger(tileExtent) || tileExtent <= 0) {
+      extent.some(value => !Number.isSafeInteger(value) || value <= 0)) {
     throw new Error('Invalid Disney tile index, resolution or extent.');
   }
-  const tilesX = Math.ceil(resolution[0] / tileExtent);
-  const tilesY = Math.ceil(resolution[1] / tileExtent);
+  const tilesX = Math.ceil(resolution[0] / extent[0]);
+  const tilesY = Math.ceil(resolution[1] / extent[1]);
   const tileCount = tilesX * tilesY;
   if (!Number.isSafeInteger(tileCount) || index >= tileCount) throw new Error('Disney tile index is outside the render grid.');
   const tileX = index % tilesX;
   const tileY = tilesY - 1 - Math.floor(index / tilesX);
-  const tileOrigin: [number, number] = [tileX * tileExtent, tileY * tileExtent];
+  const tileOrigin: [number, number] = [tileX * extent[0], tileY * extent[1]];
   const tileSize: [number, number] = [
-    Math.min(tileExtent, resolution[0] - tileOrigin[0]),
-    Math.min(tileExtent, resolution[1] - tileOrigin[1]),
+    Math.min(extent[0], resolution[0] - tileOrigin[0]),
+    Math.min(extent[1], resolution[1] - tileOrigin[1]),
   ];
   return {
     tileOrigin, tileSize,
-    tileOffset: [tileX / tilesX, tileY / tilesY],
-    inverseTileCount: [1 / tilesX, 1 / tilesY],
+    tileOffset: [tileOrigin[0] / resolution[0], tileOrigin[1] / resolution[1]],
+    // The compute dispatch clips edge tiles, unlike the source's full-size viewport.
+    inverseTileCount: [tileSize[0] / resolution[0], tileSize[1] / resolution[1]],
     tileCount,
   };
 }
