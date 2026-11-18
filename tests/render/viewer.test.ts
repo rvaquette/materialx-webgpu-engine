@@ -172,6 +172,53 @@ describe('interactive viewer resource lifecycle', () => {
     expect(canvas.addEventListener).not.toHaveBeenCalled();
   });
 
+  it('submits a headless raster frame only when given an output texture', async () => {
+    const requestFrame = vi.fn();
+    vi.stubGlobal('requestAnimationFrame', requestFrame);
+    const { device, gpu, pass } = fakeDevice();
+    vi.mocked(loadUsdScene).mockResolvedValue(await sceneFixture());
+    viewer = new InteractiveViewer({ device: gpu, outputFormat: 'rgba8unorm', width: 130, height: 80 });
+    await viewer.load('scene.usda');
+    expect(requestFrame).not.toHaveBeenCalled();
+    expect(device.queue.submit).not.toHaveBeenCalled();
+
+    const output = device.createTexture({ size: [130, 80], format: 'rgba8unorm', usage: GPUTextureUsage.RENDER_ATTACHMENT });
+    const outputView = output.createView() as GPUTextureView;
+    viewer.renderRasterTo(outputView);
+
+    expect(device.queue.submit).toHaveBeenCalledOnce();
+    expect(pass.drawIndexed).toHaveBeenCalled();
+    expect(requestFrame).not.toHaveBeenCalled();
+  });
+
+  it('captures exactly the requested full-resolution path-tracing sweeps from scratch', async () => {
+    const actual = await vi.importActual<typeof import('../../src/render/pathtracing/scene-buffers.ts')>(
+      '../../src/render/pathtracing/scene-buffers.ts');
+    vi.mocked(buildCachedPathTraceScene).mockImplementation(actual.buildCachedPathTraceScene);
+    vi.mocked(loadUsdScene).mockResolvedValue(await sceneFixture());
+    const { gpu, device, pass } = fakeDevice();
+    Object.assign(device, { pushErrorScope: vi.fn(), popErrorScope: async () => null });
+    const width = 270, height = 80;
+    viewer = new InteractiveViewer({ device: gpu, outputFormat: 'rgba8unorm', width, height });
+    await viewer.load('scene.usda');
+    const texture = device.createTexture({ size: [width, height], format: 'rgba8unorm', usage: GPUTextureUsage.RENDER_ATTACHMENT });
+    const target = texture.createView() as GPUTextureView;
+
+    for (const samples of [2, 1]) {
+      pass.dispatchWorkgroups.mockClear();
+      device.queue.writeBuffer.mockClear();
+      await viewer.renderPathTraceTo(target, samples);
+      const tiles = pathTraceTileCount(width, height);
+      const uniforms = device.queue.writeBuffer.mock.calls.map(call => call[2])
+        .filter((data): data is Float32Array => data instanceof Float32Array && data.byteLength === PT_UNIFORM_SIZE);
+      expect(pass.dispatchWorkgroups).toHaveBeenCalledTimes(tiles * samples);
+      expect(uniforms.map(u => Array.from(u.subarray(32, 36)))).toEqual(
+        Array.from({ length: tiles * samples }, (_, i) => [Math.floor(i / tiles), 1, width, height]),
+      );
+    }
+    expect(buildCachedPathTraceScene).toHaveBeenCalledOnce();
+  });
+
   it('does not allocate raster textures, geometry or pipelines on a path-tracing-only load', async () => {
     const { viewer, device } = await setup(false, false, 'pathtracing');
     expect(device.createRenderPipeline).not.toHaveBeenCalled();
@@ -1235,7 +1282,7 @@ describe('interactive viewer resource lifecycle', () => {
     viewer.setPathTracingView('albedo');
     viewer.setBackend('pathtracing');
     tick(0);
-    await new Promise(resolve => setTimeout(resolve, 20));
+    await vi.waitFor(() => expect(statuses.at(-1)?.pathTracer).toBe('ready'));
     tick(1);
     await Promise.resolve();
     viewer.setPathTracingPaused(true);

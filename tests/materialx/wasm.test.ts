@@ -61,13 +61,24 @@ describe('loadMaterialXCore', () => {
   });
 
   it('allows retry after a failed load', async () => {
-    const bad = vi.fn(async () => {
+    const bad = vi.fn(async (): Promise<MaterialXCoreModule> => {
       throw new Error('boom');
     });
     await expect(loadMaterialXCore({ factory: bad })).rejects.toThrow('boom');
     const module = makeModule();
-    const good = vi.fn(async () => module);
-    await expect(loadMaterialXCore({ factory: good })).resolves.toBeInstanceOf(MaterialXCore);
+    bad.mockResolvedValueOnce(module);
+    await expect(loadMaterialXCore({ factory: bad })).resolves.toBeInstanceOf(MaterialXCore);
+  });
+
+  it('caches separate runtime modules by URL', async () => {
+    const url = (version: string) => `data:text/javascript,${encodeURIComponent(
+      `export default async () => ({ version: '${version}' })`,
+    )}`;
+    const first = loadMaterialXCore({ moduleUrl: url('first') });
+    const second = loadMaterialXCore({ moduleUrl: url('second') });
+    expect(loadMaterialXCore({ moduleUrl: url('first') })).toBe(first);
+    expect((await first).module).toHaveProperty('version', 'first');
+    expect((await second).module).toHaveProperty('version', 'second');
   });
 });
 

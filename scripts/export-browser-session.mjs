@@ -12,7 +12,6 @@ import { createServer } from 'vite';
 export const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 export const PAYLOAD_FILES = ['buffers.bin.zst', 'shaders.wgsl.zst', 'metadata.json.zst'];
 const harnessPath = '/__export_scene.html';
-const browserModule = '/scripts/export-scene-browser.ts';
 
 function connect(url, onEvent = () => {}) {
   const socket = new WebSocket(url);
@@ -85,12 +84,12 @@ export async function waitForExportPage(connection, url, timeout = 30000) {
   throw new Error(`Timed out loading export page ${url}; last page: ${page?.url ?? 'unknown'} (${page?.readyState ?? 'unknown'}).`);
 }
 
-async function launchBrowser(origin, label, quiet) {
+async function launchBrowser(origin, label, quiet, browserArgs) {
   const chromePath = chromeExecutable();
   const profile = await mkdtemp(join(tmpdir(), 'mx-scene-export-'));
   const chrome = spawn(chromePath, [
     '--headless=new', '--remote-debugging-port=0', `--user-data-dir=${profile}`,
-    '--no-first-run', '--no-default-browser-check', `${origin}${harnessPath}`,
+    '--no-first-run', '--no-default-browser-check', ...browserArgs, `${origin}${harnessPath}`,
   ], { stdio: 'ignore' });
   let launchError;
   chrome.on('error', error => { launchError = error; });
@@ -149,12 +148,16 @@ async function launchBrowser(origin, label, quiet) {
 
 /**
  * Starts Vite and a headless browser. `call(name, args)` invokes an export of
- * scripts/export-scene-browser.ts; `restart()` replaces the browser (fresh WASM heap).
+ * the selected browser module; `restart()` replaces the browser (fresh WASM heap).
  */
-export async function openExportSession({ label = 'export-browser', quiet = false } = {}) {
-  if (typeof WebSocket === 'undefined') throw new Error('Scene export requires Node.js >=22 (built-in WebSocket).');
+export async function openExportSession({
+  label = 'export-browser', quiet = false, browserModule = '/scripts/export-scene-browser.ts', browserArgs = [],
+  serverRoot = root,
+} = {}) {
+  if (typeof WebSocket === 'undefined') throw new Error('This browser session requires Node.js >=22 (built-in WebSocket).');
   const server = await createServer({
-    root, logLevel: 'error', server: { host: '127.0.0.1', port: 0, open: false, hmr: false, watch: null },
+    root: serverRoot, ...(serverRoot !== root ? { configFile: false } : {}),
+    logLevel: 'error', server: { host: '127.0.0.1', port: 0, open: false, hmr: false, watch: null },
     optimizeDeps: { noDiscovery: true, entries: [] },
     plugins: [{
       name: 'compiled-scene-export',
@@ -173,7 +176,7 @@ export async function openExportSession({ label = 'export-browser', quiet = fals
     const address = server.httpServer.address();
     if (!address || typeof address === 'string') throw new Error('Export server has no TCP address.');
     const origin = `http://127.0.0.1:${address.port}`;
-    browser = await launchBrowser(origin, label, quiet);
+    browser = await launchBrowser(origin, label, quiet, browserArgs);
     const evaluate = async (expression, timeout) => {
       const result = await browser.connection.send('Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true }, timeout);
       if (result.exceptionDetails) throw new Error(result.exceptionDetails.exception?.description ?? result.exceptionDetails.text);
@@ -189,7 +192,7 @@ export async function openExportSession({ label = 'export-browser', quiet = fals
       get alive() { return !browser.connection.closed; },
       async restart() {
         await browser.close();
-        browser = await launchBrowser(origin, label, quiet);
+        browser = await launchBrowser(origin, label, quiet, browserArgs);
       },
       /** Streams the payloads of the last compiled package into `out`, then writes its manifest. */
       async writePackage(result, out, manifestName, generatedFrom) {

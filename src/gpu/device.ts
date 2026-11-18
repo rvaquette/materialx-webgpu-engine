@@ -32,6 +32,17 @@ export interface DeviceLostDetail {
 
 export type Unsubscribe = () => void;
 
+/** Scope synchronous WebGPU commands without spanning unrelated async submissions. */
+export async function withGpuValidation(device: GPUDevice, operation: () => void): Promise<void> {
+  device.pushErrorScope('validation');
+  try {
+    operation();
+  } finally {
+    const error = await device.popErrorScope();
+    if (error) throw new Error(`WebGPU validation failed: ${error.message}`);
+  }
+}
+
 /** Imported scenes negotiate storage and shared material texture capacity. */
 export function sceneDeviceDescriptor(adapter: GPUAdapter): GPUDeviceDescriptor {
   return {

@@ -9,6 +9,8 @@ const viewer = vi.hoisted(() => ({
   setPathTracingPaused: vi.fn(),
   setPathTracingLimits: vi.fn(),
   setObjectMaterial: vi.fn(async (_path: string, _asset?: string, _compiled?: string) => {}),
+  renderRasterTo: vi.fn(),
+  renderPathTraceTo: vi.fn(async (_view: unknown, _samples: number) => {}),
   objects: [{ path: '/World/Triangle', material: 'Matte' }],
   isCompiledScene: false,
   pathTracingLimits: { targetRelativeError: 0.05, stopOnConvergence: false, timeBudgetSeconds: 0 },
@@ -37,6 +39,51 @@ function fixture() {
 }
 
 describe('MaterialXEngine', () => {
+  it('captures tightly packed top-down RGBA pixels without a canvas', async () => {
+    const { device } = fixture();
+    const data = new Uint8Array(512).fill(99);
+    data.set([1, 2, 3, 255, 4, 5, 6, 255]);
+    data.set([7, 8, 9, 255, 10, 11, 12, 255], 256);
+    const buffer = { mapAsync: vi.fn(async () => {}), getMappedRange: () => data.buffer, unmap: vi.fn(), destroy: vi.fn() };
+    const view = {};
+    const texture = { createView: () => view, destroy: vi.fn() };
+    const encoder = { copyTextureToBuffer: vi.fn(), finish: vi.fn() };
+    Object.assign(device, {
+      limits: { maxTextureDimension2D: 4096, maxBufferSize: 1024 },
+      createTexture: vi.fn(() => texture), createBuffer: vi.fn(() => buffer),
+      createCommandEncoder: () => encoder, queue: { submit: vi.fn() },
+      pushErrorScope: vi.fn(), popErrorScope: async () => null,
+    });
+    vi.stubGlobal('GPUTextureUsage', { RENDER_ATTACHMENT: 1, COPY_SRC: 2 });
+    vi.stubGlobal('GPUBufferUsage', { MAP_READ: 1, COPY_DST: 2 });
+    vi.stubGlobal('GPUMapMode', { READ: 1 });
+    const engine = await MaterialXEngine.createHeadless({ device, width: 2, height: 2 });
+    await expect(engine.capture()).rejects.toThrow('Load a USD scene');
+    await engine.loadUsd('scene.usda');
+    await expect(engine.render({ backend: 'pathtracing' })).rejects.toThrow('Use capture()');
+    const image = await engine.capture();
+    expect(viewer.renderRasterTo).toHaveBeenCalledWith(view);
+    expect(encoder.copyTextureToBuffer).toHaveBeenCalledWith(
+      { texture }, { buffer, bytesPerRow: 256 }, [2, 2],
+    );
+    expect(image).toEqual({ width: 2, height: 2, rgba: new Uint8Array([1, 2, 3, 255, 4, 5, 6, 255, 7, 8, 9, 255, 10, 11, 12, 255]) });
+    expect(buffer.unmap).toHaveBeenCalledOnce();
+    expect(buffer.destroy).toHaveBeenCalledOnce();
+    expect(texture.destroy).toHaveBeenCalledOnce();
+
+    buffer.mapAsync.mockRejectedValueOnce(new Error('Readback failed'));
+    await expect(engine.capture()).rejects.toThrow('Readback failed');
+    expect(buffer.unmap).toHaveBeenCalledOnce();
+    expect(buffer.destroy).toHaveBeenCalledTimes(2);
+    expect(texture.destroy).toHaveBeenCalledTimes(2);
+    await expect(engine.capture({ backend: 'pathtracing', samples: 1.5 })).rejects.toThrow('samples must be an integer');
+    await engine.capture({ backend: 'pathtracing', samples: 7 });
+    expect(viewer.renderPathTraceTo).toHaveBeenCalledExactlyOnceWith(view, 7);
+    expect(viewer.renderRasterTo).toHaveBeenCalledTimes(2);
+    engine.dispose();
+    expect(device.destroy).not.toHaveBeenCalled();
+  });
+
   it('loads a scene and starts path tracing with the requested automatic noise target', async () => {
     const { canvas, context, device } = fixture();
     const onStatus = vi.fn();
@@ -48,6 +95,7 @@ describe('MaterialXEngine', () => {
     expect(viewer.setPathTracingLimits).toHaveBeenCalledWith({
       stopOnConvergence: true, targetRelativeError: 0.02, timeBudgetSeconds: 0,
     });
+
     expect(viewer.setBackend).toHaveBeenCalledWith('pathtracing');
     expect(viewer.setPathTracingPaused).toHaveBeenCalledWith(false);
 
@@ -57,6 +105,32 @@ describe('MaterialXEngine', () => {
     expect(viewer.dispose).toHaveBeenCalledOnce();
     expect(device.destroy).not.toHaveBeenCalled();
     await expect(engine.loadUsd('scene.usda')).rejects.toThrow('disposed');
+  });
+
+  it('resolves runtime directories at creation and keeps them separate for canvas and headless engines', async () => {
+    const { canvas, device } = fixture();
+    Object.assign(device, { limits: { maxTextureDimension2D: 4096, maxBufferSize: 1024 } });
+    vi.stubGlobal('document', { baseURI: 'https://example.test/host/index.html' });
+    const materialxCore = new URL('https://cdn.example.test/mx/core');
+    const canvasEngine = await MaterialXEngine.create(canvas, {
+      device, runtimeAssets: { materialxCore, materialxLibraries: './libraries' },
+    });
+    const headless = await MaterialXEngine.createHeadless({
+      device, width: 2, height: 2, runtimeAssets: { materialxCore: './other-core', openUsd: '/usd/' },
+    });
+    materialxCore.pathname = '/changed';
+    await canvasEngine.loadUsd('canvas.usda');
+    await headless.loadUsd('headless.usda');
+    expect(viewer.load.mock.calls).toEqual([
+      ['canvas.usda', undefined, undefined, { runtimeAssets: {
+        materialxCore: 'https://cdn.example.test/mx/core/', materialxLibraries: 'https://example.test/host/libraries/',
+      } }],
+      ['headless.usda', undefined, undefined, { runtimeAssets: {
+        materialxCore: 'https://example.test/host/other-core/', openUsd: 'https://example.test/usd/',
+      } }],
+    ]);
+    canvasEngine.dispose();
+    headless.dispose();
   });
 
   it('rejects overlapping operations and allows a new load after a failure', async () => {

@@ -53,11 +53,10 @@ import { FloatType } from 'three';
 import { applySceneDisplacement } from './displacement.ts';
 import { editableSceneMaterials, uniformSceneMaterials } from './material-parameters.ts';
 import type { CompiledSceneRuntime } from '../scene/compiled-scene.ts';
+import type { RuntimeAssetUrls } from '../assets/runtime.ts';
 
 /** App-relative paths also work when dist/ is served below the workspace root. */
 const MATERIALX_ROOT = `${import.meta.env.BASE_URL}materialx/`;
-const MATERIALX_CORE_URL = `${MATERIALX_ROOT}JsMaterialXCore.js`;
-const MATERIALX_WASM_DIR = MATERIALX_ROOT;
 const MATERIALX_LIBRARIES_ROOT = `${MATERIALX_ROOT}libraries`;
 const appAssetUrl = (path: string): string => new URL(path, document.baseURI).href;
 const decodedTextureCache = new DecodedImageCache();
@@ -194,6 +193,7 @@ export async function loadMtlxSceneContext(
   line: (m: string) => void = () => {},
   textureRoot?: string,
   materialTexts?: ReadonlyMap<string, string>,
+  runtimeAssets?: RuntimeAssetUrls,
 ): Promise<MtlxSceneContext & { documents: Awaited<ReturnType<typeof loadMaterialXDocuments>> }> {
   const baseDir = dirOf(entry);
   const surfaces = new Map<string, RasterSurface>();
@@ -225,13 +225,14 @@ export async function loadMtlxSceneContext(
     (scene.materials as MaterialXReference[]).push(material.reference);
     surfaces.set(material.reference.materialName, surfaceFromMtlx(material.xml));
   }
+  const coreRoot = runtimeAssets?.materialxCore ?? appAssetUrl(MATERIALX_ROOT);
   const core = await loadMaterialXCore({
-    moduleUrl: appAssetUrl(MATERIALX_CORE_URL),
-    locateFile: (path) => appAssetUrl(MATERIALX_WASM_DIR + path),
+    moduleUrl: new URL('JsMaterialXCore.js', coreRoot).href,
+    locateFile: (path) => new URL(path, coreRoot).href,
     onDiagnostic: sink,
   });
   const libraries = await loadSharedMaterialXLibraries(core, {
-    sources: defaultLibrarySources(MATERIALX_LIBRARIES_ROOT),
+    sources: defaultLibrarySources(runtimeAssets?.materialxLibraries ?? appAssetUrl(MATERIALX_LIBRARIES_ROOT)),
     fetchText: async (url) => {
       const response = await fetch(url);
       if (!response.ok) throw new Error(`HTTP ${response.status}: ${url}`);
@@ -429,6 +430,7 @@ export function applyObjectMaterialOverrides(
 
 export interface SceneLoadOptions {
   editableParameters?: boolean;
+  runtimeAssets?: RuntimeAssetUrls;
   /** `uniform`: material literals live in a parameter buffer so value-only variants share one pipeline. */
   parameterMode?: 'literal' | 'uniform';
   /** Explicit root for scene-authored MaterialX texture paths, not runtime overrides. */
@@ -467,7 +469,7 @@ export async function loadUsdScene(
       if (!response.ok) throw new Error(`HTTP ${response.status} for ${url}`);
       return new Uint8Array(await response.arrayBuffer());
     } },
-    loadCrateModule: options.loadCrateModule ?? loadBrowserOpenUsd,
+    loadCrateModule: options.loadCrateModule ?? (() => loadBrowserOpenUsd(options.runtimeAssets?.openUsd)),
     sink: sceneSink,
   });
   if (failedComposition) {
@@ -479,7 +481,9 @@ export async function loadUsdScene(
   performance.measure('usd:composition', { start: started, end: composedAt, detail: { entry, prims: scene.prims.size } });
   const lights = importLights(scene, { sink });
   const cameras = importCameras(scene, { sink });
-  const mtlx = await loadMtlxSceneContext(scene, entry, sink, line, options.textureRoot, options.imported?.materialTexts);
+  const mtlx = await loadMtlxSceneContext(
+    scene, entry, sink, line, options.textureRoot, options.imported?.materialTexts, options.runtimeAssets,
+  );
   const materialsAt = performance.now();
   performance.measure('usd:materials', { start: composedAt, end: materialsAt, detail: { entry, documents: scene.materials.length } });
   try {

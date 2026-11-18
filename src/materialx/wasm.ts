@@ -123,21 +123,24 @@ export class MaterialXCore {
   }
 }
 
-let cached: Promise<MaterialXCore> | undefined;
+const cached = new Map<string | MaterialXModuleFactory | undefined, Promise<MaterialXCore>>();
 
-/** Load and instantiate the MaterialX Core module once (memoized). */
+/** Memoize each MaterialX Core module by its URL or injected factory. */
 export function loadMaterialXCore(options: LoadMaterialXOptions = {}): Promise<MaterialXCore> {
-  if (cached) return cached;
-  cached = instantiate(options).catch((error) => {
-    cached = undefined; // allow a retry after a failed load
+  const key = options.factory ?? options.moduleUrl;
+  const existing = cached.get(key);
+  if (existing) return existing;
+  const loading = instantiate(options).catch((error) => {
+    if (cached.get(key) === loading) cached.delete(key);
     throw error;
   });
-  return cached;
+  cached.set(key, loading);
+  return loading;
 }
 
 /** Reset the memoized Core instance (tests / device-independent reinitialization). */
 export function resetMaterialXCore(): void {
-  cached = undefined;
+  cached.clear();
 }
 
 async function instantiate(options: LoadMaterialXOptions): Promise<MaterialXCore> {

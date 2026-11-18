@@ -235,16 +235,114 @@ Les URL relatives sont résolues par rapport à la page hôte. Si
 manifeste `material.json` compatible avec la scène. L'exemple minimal permet
 d'appliquer puis de restaurer un matériau dans une scène source.
 
+**Troisième étape implémentée :** `createHeadless()` permet de capturer un
+rendu raster sans canvas, ImGui ni boucle d'animation. `capture()` déclenche
+le rendu puis renvoie les pixels `RGBA8` après tonemapping, de haut en bas,
+sans octets de remplissage entre les lignes.
+
+```ts
+const engine = await MaterialXEngine.createHeadless({ width: 640, height: 480 });
+try {
+  await engine.loadUsd(sceneUrl);
+  const { width, height, rgba } = await engine.capture();
+  // Passer les pixels à un encodeur ou les comparer à une image de référence.
+} finally {
+  engine.dispose();
+}
+```
+
+**Quatrième étape implémentée :** remplacer `capture()` par
+`capture({ backend: 'pathtracing', samples: 16 })` pour lancer le path tracing
+MaterialX hors écran. Chaque appel repart de zéro et calcule le nombre demandé
+d'échantillons par pixel à pleine résolution, sans aperçu, convergence
+automatique, échantillonnage adaptatif ni débruitage. Les lots GPU sont bornés
+et l'image n'est résolue qu'après le dernier balayage. `capture()` sans option
+reste en raster.
+
+Ces captures sont prévues pour un navigateur compatible WebGPU, y compris sans
+fenêtre visible si le runner donne accès à WebGPU. L'API ne fournit pas de
+runtime Node.js, d'encodeur PNG ni de capture Disney.
+
+**Cinquième étape :** `npm run test:headless-capture` vérifie dans Chrome les
+captures raster et path tracing du triangle USD source, sans canvas. Le test
+contrôle le format RGBA8 à une largeur non alignée, distingue le triangle du
+fond et compare les captures entre elles sur le même périphérique, sans image
+de référence propre à un GPU. Il nécessite Node.js 22 ou plus, Chrome et les
+assets MaterialX (`MX_CORE_DIR`, `MX_LIB_ROOT`).
+
+Le workflow GitHub Actions lance le raster sur Linux avec SwiftShader
+(`MX_CAPTURE_RASTER_ONLY=1`) et échoue si aucun adaptateur WebGPU n'est
+disponible. Le test complet a réussi sous Windows ; sous Linux avec
+SwiftShader, la première capture path tracing n'a pas terminé dans le délai
+de six minutes. L'exécution sur le runner GitHub Actions reste à confirmer.
+
+**Sixième étape :** l'application hôte peut choisir où servir les fichiers
+d'exécution via `runtimeAssets`, avec `create()` ou `createHeadless()` :
+
+```ts
+const engine = await MaterialXEngine.createHeadless({
+  width: 640,
+  height: 480,
+  runtimeAssets: {
+    materialxCore: '/engine-assets/core/',
+    materialxLibraries: '/engine-assets/libraries/',
+    openUsd: '/engine-assets/openusd/',
+  },
+});
+```
+
+Le premier répertoire contient `JsMaterialXCore.js` et son WASM ; le deuxième
+contient l'arborescence standard MaterialX ; le troisième contient `index.js`
+et les fichiers associés aux bindings OpenUSD. OpenUSD n'est chargé qu'à la
+rencontre d'une couche binaire et nécessite toujours l'isolation inter-origines
+(COOP/COEP). Les chemins relatifs utilisent l'URL de base de la page ; les
+champs omis conservent les emplacements du viewer. Si les fichiers sont servis
+depuis une autre origine, celle-ci doit autoriser leur chargement par CORS.
+
+**Septième étape :** le moteur peut être installé comme paquet npm local.
+Depuis le dépôt, générer l'archive :
+
+```powershell
+npm run build:engine-package
+npm pack .\build-engine
+```
+
+Installer le `.tgz` produit avec `npm install <chemin-vers-le-tgz>` dans
+l'application hôte, puis utiliser le point d'entrée public :
+
+```ts
+import { MaterialXEngine } from 'materialx-webgpu-engine';
+```
+
+Le paquet fournit un module ESM pour navigateur et ses déclarations
+TypeScript, sans ImGui, scènes de démonstration ni fichiers d'exécution
+MaterialX/OpenUSD. L'application hôte sert ces fichiers et indique leurs URL
+via `runtimeAssets`. Le paquet reste privé ; cette étape ne publie rien.
+
+`npm run test:engine-package` installe l'archive dans une application
+TypeScript temporaire, vérifie ses types, compile l'application avec Vite
+et valide une capture raster WebGPU dans Chrome depuis les URL de l'hôte.
+Le test nécessite Node.js 22 ou plus, Chrome et les assets MaterialX
+(`MX_CORE_DIR`, `MX_LIB_ROOT`).
+
+Avec `MX_CAPTURE_PATH_TRACING=1`, ce même test vérifie aussi le path tracing
+du paquet installé : il capture le triangle à 1, 2, puis de nouveau à 1
+échantillon par pixel. Les deux captures à 1 échantillon doivent être
+identiques octet pour octet ; celle à 2 doit différer. Le test du paquet reste
+en raster par défaut. Les deux modes ont été vérifiés dans Chrome sous
+Windows ; le workflow Linux n'exécute pas le path tracing.
+
 Travaux restants :
 
 - stabilisation du contrat public ;
-- mode headless pour tests, captures et rendu en CI ;
-- publication sous forme de modules réutilisables ;
+- intégration du path tracing en CI sur un runner WebGPU adapté ;
+- publication du paquet dans un registre, si souhaitée ;
 - adaptateurs optionnels pour Three.js, React ou une application existante ;
 - exemples d'intégration au viewer et de rendu automatisé.
 
-**Critère d'aboutissement :** une application extérieure peut charger une scène
-et effectuer un rendu sans dépendre du code interne du viewer.
+**Critère d'aboutissement atteint :** une application extérieure peut charger
+une scène et effectuer un rendu raster ou path tracing avec le paquet installé,
+sans dépendre du code interne du viewer.
 
 ## Priorité 3 : éditeur de matériaux MaterialX
 

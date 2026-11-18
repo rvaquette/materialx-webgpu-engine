@@ -1,9 +1,11 @@
-import { sceneDeviceDescriptor } from './gpu/device.ts';
+import { sceneDeviceDescriptor, withGpuValidation } from './gpu/device.ts';
 import { InteractiveViewer } from './render/viewer.ts';
 import type { BackendKind, ViewerStatus } from './render/viewer.ts';
 import type { DiagnosticSink } from './core/diagnostics.ts';
 import type { ShaderCompilationError } from './gpu/shader-diagnostics.ts';
+import { resolveRuntimeAssets, type EngineRuntimeAssets, type RuntimeAssetUrls } from './assets/runtime.ts';
 
+export type { EngineRuntimeAssets } from './assets/runtime.ts';
 export type { BackendKind, ViewerStatus as EngineStatus } from './render/viewer.ts';
 export type { Diagnostic, DiagnosticSink } from './core/diagnostics.ts';
 export type { ShaderCompilationError } from './gpu/shader-diagnostics.ts';
@@ -11,11 +13,28 @@ export type { ShaderCompilationError } from './gpu/shader-diagnostics.ts';
 export interface EngineOptions {
   /** An optional borrowed device; the caller retains ownership. */
   device?: GPUDevice;
+  runtimeAssets?: EngineRuntimeAssets;
   orbitControls?: boolean;
   onStatus?: (status: ViewerStatus) => void;
   onDiagnostic?: DiagnosticSink;
   onShaderErrors?: (errors: readonly ShaderCompilationError[]) => void;
 }
+
+export interface HeadlessEngineOptions extends Omit<EngineOptions, 'orbitControls'> {
+  width: number;
+  height: number;
+}
+
+export interface EngineCapture {
+  readonly width: number;
+  readonly height: number;
+  /** Tightly packed, top-down RGBA8 after the display transform. */
+  readonly rgba: Uint8Array;
+}
+
+export type EngineCaptureOptions =
+  | { backend?: 'raster'; samples?: never }
+  | { backend: 'pathtracing'; samples: number };
 
 export type EngineRenderOptions =
   | { backend?: 'raster' | 'disney'; targetNoise?: never }
@@ -33,7 +52,15 @@ export interface EngineMaterial {
   compiledUrl?: string | URL;
 }
 
-/** Canvas-based rendering without the ImGui application. */
+async function requestSceneDevice(): Promise<GPUDevice> {
+  const gpu = globalThis.navigator?.gpu;
+  if (!gpu) throw new Error('WebGPU is not available in this browser.');
+  const adapter = await gpu.requestAdapter();
+  if (!adapter) throw new Error('No WebGPU adapter found.');
+  return adapter.requestDevice(sceneDeviceDescriptor(adapter));
+}
+
+/** Canvas-based or offscreen rendering without the ImGui application. */
 export class MaterialXEngine {
   #disposed = false;
   #busy = false;
@@ -41,8 +68,10 @@ export class MaterialXEngine {
 
   private constructor(
     private readonly viewer: InteractiveViewer,
-    private readonly context: GPUCanvasContext,
+    private readonly context: GPUCanvasContext | undefined,
     private readonly ownedDevice: GPUDevice | undefined,
+    private readonly headless?: { device: GPUDevice; width: number; height: number; bytesPerRow: number },
+    private readonly runtimeAssets?: RuntimeAssetUrls,
   ) {}
 
   static async create(canvas: HTMLCanvasElement, options: EngineOptions = {}): Promise<MaterialXEngine> {
@@ -51,12 +80,8 @@ export class MaterialXEngine {
     if (!(canvas.width > 0 && canvas.height > 0)) throw new RangeError('The canvas must have a positive width and height.');
     const context = canvas.getContext('webgpu');
     if (!context) throw new Error('No WebGPU canvas context.');
-    let device = options.device;
-    if (!device) {
-      const adapter = await gpu.requestAdapter();
-      if (!adapter) throw new Error('No WebGPU adapter found.');
-      device = await adapter.requestDevice(sceneDeviceDescriptor(adapter));
-    }
+    const runtimeAssets = options.runtimeAssets && resolveRuntimeAssets(options.runtimeAssets);
+    const device = options.device ?? await requestSceneDevice();
     const ownedDevice = options.device ? undefined : device;
     let configured = false;
     try {
@@ -69,7 +94,7 @@ export class MaterialXEngine {
         ...(options.onDiagnostic ? { onDiagnostic: options.onDiagnostic } : {}),
         ...(options.onShaderErrors ? { onShaderErrors: options.onShaderErrors } : {}),
       });
-      return new MaterialXEngine(viewer, context, ownedDevice);
+      return new MaterialXEngine(viewer, context, ownedDevice, undefined, runtimeAssets);
     } catch (error) {
       try {
         if (configured) context.unconfigure();
@@ -80,12 +105,43 @@ export class MaterialXEngine {
     }
   }
 
+  static async createHeadless(options: HeadlessEngineOptions): Promise<MaterialXEngine> {
+    const { width, height, onStatus, onDiagnostic, onShaderErrors } = options;
+    if (![width, height].every(value => Number.isSafeInteger(value) && value > 0)) {
+      throw new RangeError('Headless dimensions must be positive integers.');
+    }
+    const runtimeAssets = options.runtimeAssets && resolveRuntimeAssets(options.runtimeAssets);
+    const device = options.device ?? await requestSceneDevice();
+    const ownedDevice = options.device ? undefined : device;
+    try {
+      const bytesPerRow = Math.ceil(width * 4 / 256) * 256;
+      if (Math.max(width, height) > device.limits.maxTextureDimension2D ||
+          bytesPerRow * height > device.limits.maxBufferSize) {
+        throw new RangeError('Headless dimensions exceed GPU texture or readback limits.');
+      }
+      const viewer = new InteractiveViewer({
+        width, height, device, outputFormat: 'rgba8unorm',
+        ...(onStatus ? { onStatus } : {}),
+        ...(onDiagnostic ? { onDiagnostic } : {}),
+        ...(onShaderErrors ? { onShaderErrors } : {}),
+      });
+      return new MaterialXEngine(viewer, undefined, ownedDevice, { device, width, height, bytesPerRow }, runtimeAssets);
+    } catch (error) {
+      ownedDevice?.destroy();
+      throw error;
+    }
+  }
+
   async loadUsd(entry: string | URL): Promise<void> {
     this.#assertAvailable();
     this.#busy = true;
     this.#loaded = false;
     try {
-      await this.viewer.load(String(entry));
+      if (this.runtimeAssets) {
+        await this.viewer.load(String(entry), undefined, undefined, { runtimeAssets: this.runtimeAssets });
+      } else {
+        await this.viewer.load(String(entry));
+      }
       if (this.#disposed) throw new Error('MaterialXEngine was disposed during scene loading.');
       this.#loaded = true;
     } finally {
@@ -122,6 +178,9 @@ export class MaterialXEngine {
     this.#assertAvailable();
     if (!this.#loaded) throw new Error('Load a USD scene before rendering.');
     const backend: BackendKind = options.backend ?? 'raster';
+    if (this.headless && backend !== 'raster') {
+      throw new Error('Use capture() to run headless path tracing. Headless Disney is not supported.');
+    }
     this.#busy = true;
     try {
       if (backend === 'pathtracing') {
@@ -141,6 +200,62 @@ export class MaterialXEngine {
     }
   }
 
+  async capture(options: EngineCaptureOptions = {}): Promise<EngineCapture> {
+    this.#assertAvailable();
+    if (!this.headless) throw new Error('Capture requires a headless engine.');
+    if (!this.#loaded) throw new Error('Load a USD scene before capturing.');
+    const backend = options.backend ?? 'raster';
+    const samples = options.backend === 'pathtracing' ? options.samples : 0;
+    if (backend !== 'raster' && backend !== 'pathtracing') throw new Error('Unsupported headless capture backend.');
+    if (backend === 'pathtracing' && (!Number.isInteger(samples) || samples < 1 || samples > 2 ** 24)) {
+      throw new RangeError('Path-tracing capture samples must be an integer from 1 to 16777216.');
+    }
+    const { device, width, height, bytesPerRow } = this.headless;
+    this.#busy = true;
+    let texture: GPUTexture | undefined;
+    let buffer: GPUBuffer | undefined;
+    let mapped = false;
+    try {
+      await withGpuValidation(device, () => {
+        texture = device.createTexture({
+          size: [width, height], format: 'rgba8unorm',
+          usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC,
+        });
+        buffer = device.createBuffer({
+          size: bytesPerRow * height, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
+        });
+      });
+      if (this.#disposed) throw new Error('MaterialXEngine was disposed during capture.');
+      if (!texture || !buffer) throw new Error('WebGPU capture targets were not allocated.');
+      const output = texture;
+      const readback = buffer;
+      if (backend === 'pathtracing') await this.viewer.renderPathTraceTo(output.createView(), samples);
+      if (this.#disposed) throw new Error('MaterialXEngine was disposed during capture.');
+      await withGpuValidation(device, () => {
+        if (backend === 'raster') this.viewer.renderRasterTo(output.createView());
+        const encoder = device.createCommandEncoder();
+        encoder.copyTextureToBuffer({ texture: output }, { buffer: readback, bytesPerRow }, [width, height]);
+        device.queue.submit([encoder.finish()]);
+      });
+      await buffer.mapAsync(GPUMapMode.READ);
+      mapped = true;
+      if (this.#disposed) throw new Error('MaterialXEngine was disposed during capture.');
+      const padded = new Uint8Array(buffer.getMappedRange());
+      const rowBytes = width * 4;
+      const rgba = new Uint8Array(rowBytes * height);
+      for (let y = 0; y < height; y++) {
+        const offset = y * bytesPerRow;
+        rgba.set(padded.subarray(offset, offset + rowBytes), y * rowBytes);
+      }
+      return { width, height, rgba };
+    } finally {
+      if (mapped) buffer?.unmap();
+      buffer?.destroy();
+      texture?.destroy();
+      this.#busy = false;
+    }
+  }
+
   dispose(): void {
     if (this.#disposed) return;
     this.#disposed = true;
@@ -148,7 +263,7 @@ export class MaterialXEngine {
       this.viewer.dispose();
     } finally {
       try {
-        this.context.unconfigure();
+        this.context?.unconfigure();
       } finally {
         this.ownedDevice?.destroy();
       }
