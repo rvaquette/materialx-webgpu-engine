@@ -10,13 +10,20 @@ const surfaceDefinitions = new Map([
 const literalTypes = new Set(['float', 'integer', 'boolean', 'color3', 'color4', 'vector2', 'vector3', 'vector4']);
 const proceduralVariants = new Map([
   ['add', ['float', 'color3', 'color3FA']],
+  ['subtract', ['float', 'color3', 'color3FA']],
   ['multiply', ['float', 'color3', 'color3FA']],
+  ['divide', ['float', 'color3', 'color3FA']],
   ['power', ['float', 'color3', 'color3FA']],
+  ['absval', ['float', 'color3']],
+  ['min', ['float', 'color3', 'color3FA']],
+  ['max', ['float', 'color3', 'color3FA']],
   ['clamp', ['float', 'color3', 'color3FA']],
   ['mix', ['float', 'color3']],
   ['noise2d', ['float', 'color3', 'color3FA']],
   ['checkerboard', ['color3']],
   ['texcoord', ['vector2']],
+  ['place2d', ['vector2']],
+  ['rotate2d', ['vector2']],
 ]);
 
 function isExportableProcedure(node: ResolvedNode): boolean {

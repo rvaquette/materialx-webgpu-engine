@@ -1,9 +1,10 @@
 import { downloadBlob } from './assets/download.ts';
+import { compareMaterialGraphs } from './materialx/graph-comparison.ts';
 import { makeMaterialExport } from './materialx/graph-export.ts';
 import type { ResolvedGraph } from './materialx/graph.ts';
 import type { SurfaceInputDiagnostic } from './materialx/surface-graph.ts';
-import type { MaterialVariantSlot } from './render/viewer.ts';
-import type { MaterialParameter } from './render/material-parameters.ts';
+import type { InteractiveViewer, MaterialVariantSlot } from './render/viewer.ts';
+import type { EditableInputNode, MaterialParameter } from './render/material-parameters.ts';
 
 const NODE_WIDTH = 174;
 const NODE_HEIGHT = 54;
@@ -17,15 +18,138 @@ const savedPositions = new WeakMap<ResolvedGraph, Map<string, NodePosition>>();
 interface GraphParameterEditing {
   parameters(nodeId: string): readonly MaterialParameter[];
   diagnostics(nodeId: string): readonly SurfaceInputDiagnostic[];
+  disneyDiagnostics?(): ReturnType<InteractiveViewer['objectDisneyMaterialDiagnostics']>;
   apply(changes: ReadonlyMap<string, readonly number[]>): Promise<ResolvedGraph | undefined>;
-  canInsertConstant(nodeId: string, input: string): boolean;
-  setConstant(nodeId: string, input: string, insert: boolean): Promise<ResolvedGraph>;
+  canInsertConstant(nodeId: string, input: string, kind?: EditableInputNode): boolean;
+  setConstant(nodeId: string, input: string, insert: boolean, kind?: EditableInputNode): Promise<ResolvedGraph>;
   constantSources(nodeId: string, input: string): readonly string[];
   canUnlinkConstant(nodeId: string, input: string): boolean;
   setConstantLink(nodeId: string, input: string, sourceId: string | null): Promise<ResolvedGraph>;
   variants(): Readonly<Record<MaterialVariantSlot, 'empty' | 'active' | 'saved'>> | undefined;
+  variantGraph(slot: MaterialVariantSlot): ResolvedGraph | undefined;
   saveVariant(slot: MaterialVariantSlot): void;
   applyVariant(slot: MaterialVariantSlot): Promise<ResolvedGraph>;
+  captureVariants?(
+    options: Parameters<InteractiveViewer['captureObjectMaterialVariants']>[1], signal: AbortSignal,
+  ): ReturnType<InteractiveViewer['captureObjectMaterialVariants']>;
+}
+
+function variantRenderComparison(dialog: HTMLDialogElement, capture: NonNullable<GraphParameterEditing['captureVariants']>) {
+  const section = document.createElement('details');
+  section.className = 'material-variant-renders';
+  const summary = document.createElement('summary');
+  summary.textContent = 'Comparer les rendus A/B';
+  const form = document.createElement('form');
+  const controls = document.createElement('fieldset');
+  const mode = document.createElement('select');
+  mode.add(new Option('Raster', 'raster'));
+  mode.add(new Option('Path tracing', 'pathtracing'));
+  const modeLabel = document.createElement('label');
+  modeLabel.append('Moteur : ', mode);
+  const samples = document.createElement('input');
+  Object.assign(samples, { type: 'number', min: '1', max: '64', step: '1', value: '8', required: true, disabled: true });
+  const samplesLabel = document.createElement('label');
+  samplesLabel.append('Échantillons par pixel : ', samples);
+  samplesLabel.hidden = true;
+  mode.onchange = () => { samplesLabel.hidden = samples.disabled = mode.value !== 'pathtracing'; };
+  const button = document.createElement('button');
+  button.textContent = 'Générer les aperçus';
+  controls.append(modeLabel, ' ', samplesLabel, ' ', button);
+  form.append(controls);
+  const status = document.createElement('p');
+  status.setAttribute('role', 'status');
+  const images = document.createElement('div');
+  images.className = 'material-variant-images';
+  section.append(summary, form, status, images);
+  form.onsubmit = async event => {
+    event.preventDefault();
+    if (controls.disabled) return;
+    const options = samples.disabled ? { backend: 'raster' as const }
+      : { backend: 'pathtracing' as const, samples: samples.valueAsNumber };
+    const controller = new AbortController();
+    const abort = () => controller.abort();
+    const isCurrent = () => dialog.open && section.isConnected && !controller.signal.aborted;
+    dialog.addEventListener('close', abort, { once: true });
+    controls.disabled = true;
+    images.replaceChildren();
+    status.textContent = 'Calcul des deux aperçus…';
+    try {
+      const pair = await capture(options, controller.signal);
+      if (!isCurrent()) return;
+      const figures = (['A', 'B'] as const).map(slot => {
+        const { width, height, rgba } = pair[slot];
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        canvas.setAttribute('role', 'img');
+        canvas.setAttribute('aria-label', `Rendu de la variante ${slot}`);
+        const context = canvas.getContext('2d');
+        if (!context) throw new Error('Impossible d’afficher les aperçus.');
+        const pixels = context.createImageData(width, height);
+        pixels.data.set(rgba);
+        context.putImageData(pixels, 0, 0);
+        const figure = document.createElement('figure');
+        const caption = document.createElement('figcaption');
+        caption.textContent = `Variante ${slot}`;
+        figure.append(canvas, caption);
+        return figure;
+      });
+      images.replaceChildren(...figures);
+      const engine = options.backend === 'raster' ? 'Raster' : `Path tracing · ${options.samples} échantillon(s) par pixel`;
+      status.textContent = `${engine} · ${pair.A.width} × ${pair.A.height}`;
+    } catch (error) {
+      if (isCurrent()) status.textContent = `Comparaison impossible : ${error instanceof Error ? error.message : String(error)}`;
+    } finally {
+      dialog.removeEventListener('close', abort);
+      controls.disabled = false;
+    }
+  };
+  return {
+    section,
+    invalidate() {
+      images.replaceChildren();
+      status.textContent = '';
+    },
+  };
+}
+
+function variantComparison(graphs: readonly [ResolvedGraph, ResolvedGraph]): HTMLDetailsElement {
+  const comparison = document.createElement('details');
+  comparison.className = 'material-variant-comparison';
+  const summary = document.createElement('summary');
+  summary.textContent = 'Différences A/B';
+  comparison.append(summary);
+  comparison.ontoggle = () => {
+    if (!comparison.open || comparison.childElementCount > 1) return;
+    const differences = compareMaterialGraphs(...graphs);
+    if (!differences.length) {
+      const empty = document.createElement('p');
+      empty.textContent = 'Aucune différence de valeur, de nœud ou de connexion.';
+      comparison.append(empty);
+      return;
+    }
+    const table = document.createElement('table');
+    table.setAttribute('aria-label', summary.textContent!);
+    const headers = table.createTHead().insertRow();
+    for (const label of ['Élément', 'Variante A', 'Variante B']) {
+      const cell = document.createElement('th');
+      cell.scope = 'col';
+      cell.textContent = label;
+      headers.append(cell);
+    }
+    const body = table.createTBody();
+    for (const difference of differences) {
+      const row = body.insertRow();
+      const name = document.createElement('th');
+      name.scope = 'row';
+      name.textContent = difference.input === undefined ? difference.node : `${difference.node} · ${difference.input}`;
+      row.append(name);
+      row.insertCell().textContent = difference.a ?? 'Absent';
+      row.insertCell().textContent = difference.b ?? 'Absent';
+    }
+    comparison.append(table);
+  };
+  return comparison;
 }
 
 function diagnosticText(diagnostic: SurfaceInputDiagnostic): string {
@@ -97,6 +221,11 @@ export function showMaterialGraph(
   const reset = dialog.querySelector<HTMLButtonElement>('#reset-material-graph')!;
   const exportButton = dialog.querySelector<HTMLButtonElement>('#export-material-graph')!;
   const exportStatus = dialog.querySelector<HTMLElement>('#material-graph-export-status')!;
+  const backend = dialog.querySelector<HTMLDetailsElement>('#material-graph-backend');
+  const comparisonHost = dialog.querySelector<HTMLElement>('#material-variant-renders');
+  const comparison = comparisonHost && graph?.nodes.size && editing?.captureVariants
+    ? variantRenderComparison(dialog, editing.captureVariants) : undefined;
+  comparisonHost?.replaceChildren(...(comparison ? [comparison.section] : []));
   title.textContent = `Graphe du matériau${material ? ` : ${material}` : ''}`;
   diagram.replaceChildren();
   details.replaceChildren();
@@ -106,6 +235,23 @@ export function showMaterialGraph(
   exportButton.disabled = false;
   exportButton.onclick = null;
   exportStatus.textContent = '';
+  function refreshBackendDiagnostics(): void {
+    if (!backend) return;
+    const list = backend.querySelector('ul')!;
+    list.replaceChildren();
+    const diagnostics = graph?.nodes.size ? editing?.disneyDiagnostics?.() : undefined;
+    const messages = diagnostics && ('error' in diagnostics
+      ? [`Conversion refusée : ${diagnostics.error}`] : diagnostics.warnings);
+    backend.hidden = !messages?.length;
+    if (backend.hidden) backend.open = false;
+    for (const message of messages ?? []) {
+      const item = document.createElement('li');
+      item.textContent = message;
+      list.append(item);
+    }
+  }
+  if (backend && !selection) backend.open = false;
+  refreshBackendDiagnostics();
   if (!graph?.nodes.size) {
     diagram.textContent = 'Aucun graphe de surface disponible. Essaie avec une scène USD source.';
     if (!dialog.open) dialog.showModal();
@@ -114,24 +260,28 @@ export function showMaterialGraph(
 
   let currentGraph = graph;
   let exporting = false;
-  exportButton.onclick = async () => {
-    if (exporting) return;
-    exporting = true;
-    exportButton.disabled = true;
+  function setExporting(value: boolean): void {
+    exporting = value;
+    exportButton.disabled = value || applying;
+    for (const button of details.querySelectorAll<HTMLButtonElement>('[data-export-variant]')) button.disabled = value;
+  }
+  async function exportGraph(snapshot: ResolvedGraph, name: string): Promise<void> {
+    if (exporting || applying) return;
+    setExporting(true);
     exportStatus.textContent = 'Préparation de l’export…';
     const handler = exportButton.onclick;
     try {
-      const { filename, blob } = await makeMaterialExport(currentGraph, material);
+      const { filename, blob } = await makeMaterialExport(snapshot, name);
       if (!dialog.open || exportButton.onclick !== handler) return;
       downloadBlob(blob, filename);
       exportStatus.textContent = `Téléchargement lancé : ${filename}`;
     } catch (error) {
       if (exportButton.onclick === handler) exportStatus.textContent = `Export impossible : ${error instanceof Error ? error.message : String(error)}`;
     } finally {
-      exporting = false;
-      if (exportButton.onclick === handler) exportButton.disabled = applying;
+      if (exportButton.onclick === handler) setExporting(false);
     }
-  };
+  }
+  exportButton.onclick = () => exportGraph(currentGraph, material);
   const layout = layoutMaterialGraph(graph);
   const original = new Map(layout.positions);
   const overrides = savedPositions.get(graph) ?? new Map<string, NodePosition>();
@@ -253,10 +403,13 @@ export function showMaterialGraph(
       }
     }
     const variants = editing?.variants();
+    if (comparison) comparison.section.hidden = !variants || variants.A === 'empty' || variants.B === 'empty';
     if (editing && variants) {
       const tools = document.createElement('div');
       tools.setAttribute('role', 'group');
       tools.setAttribute('aria-label', 'Variantes A/B');
+      const a = editing.variantGraph('A');
+      const b = editing.variantGraph('B');
       for (const slot of ['A', 'B'] as const) {
         const save = document.createElement('button');
         save.type = 'button';
@@ -269,6 +422,7 @@ export function showMaterialGraph(
           }
           try {
             editing.saveVariant(slot);
+            comparison?.invalidate();
             select(id, `Variante ${slot} enregistrée.`);
             buttons.get(id)?.focus({ preventScroll: true });
           } catch (error) {
@@ -283,7 +437,18 @@ export function showMaterialGraph(
           updated.nodes.has(id) ? id : updated.terminals.find(terminal => terminal.name === 'surfaceshader')?.nodeId ?? id,
         `Variante ${slot} affichée.`);
         tools.append(save, ' ', apply, ' ');
+        const snapshot = slot === 'A' ? a : b;
+        if (snapshot) {
+          const download = document.createElement('button');
+          download.type = 'button';
+          download.textContent = `Exporter ${slot}`;
+          download.dataset.exportVariant = slot;
+          download.disabled = exporting;
+          download.onclick = () => exportGraph(snapshot, `${material || 'Material'}_${slot}`);
+          tools.append(download, ' ');
+        }
       }
+      if (a && b) tools.append(variantComparison([a, b]));
       fields.prepend(tools);
     }
     for (const input of node.inputs) {
@@ -310,37 +475,28 @@ export function showMaterialGraph(
         });
         row.append(...controls);
         editors.push({ parameter, controls });
-        const insert = editing?.canInsertConstant(id, input.name);
-        if (editing && (insert || parameter.constantFor !== undefined)) {
+        for (const [kind, name, owned] of [
+          ['constant', 'Constant', parameter.constantFor !== undefined],
+          ['multiply', 'Multiply', parameter.arithmeticFor?.kind === 'multiply'],
+          ['add', 'Add', parameter.arithmeticFor?.kind === 'add'],
+        ] as const) {
+          if (!editing) continue;
+          const insert = editing.canInsertConstant(id, input.name, kind);
+          if (!insert && !owned) continue;
           const action = document.createElement('button');
           action.type = 'button';
-          action.textContent = insert ? 'Insérer un Constant' : 'Revenir à une valeur littérale';
+          action.textContent = insert ? `Insérer un ${name}` : 'Revenir à une valeur littérale';
           action.setAttribute('aria-label', `${action.textContent} : ${input.name}`);
           if (!insert && layout.edges.filter(edge => edge.from === id).length > 1) {
             action.disabled = true;
             row.append(' Retire d’abord les liens supplémentaires.');
           }
-          action.onclick = () => changeTopology(() => editing.setConstant(id, input.name, !!insert), updated => {
+          action.onclick = () => changeTopology(() => editing.setConstant(id, input.name, insert, kind), updated => {
             const binding = updated.nodes.get(id)?.inputs.find(candidate => candidate.name === input.name)?.source;
             return binding?.kind === 'connection' ? binding.nodeId
               : updated.terminals.find(terminal => terminal.name === 'surfaceshader')?.nodeId ?? id;
-          }, insert ? 'Nœud Constant connecté.' : 'Valeur littérale restaurée.');
+          }, insert ? `Nœud ${name} connecté.` : 'Valeur littérale restaurée.');
           row.append(' ', action);
-        }
-        const candidates = editing?.constantSources(id, input.name) ?? [];
-        if (editing && candidates.length) {
-          const sources = document.createElement('select');
-          sources.setAttribute('aria-label', `Constant existant : ${input.name}`);
-          sources.add(new Option('Choisir un Constant…', ''));
-          for (const candidate of candidates) sources.add(new Option(candidate, candidate));
-          const connect = document.createElement('button');
-          connect.type = 'button';
-          connect.textContent = 'Connecter';
-          connect.setAttribute('aria-label', `Connecter un Constant : ${input.name}`);
-          connect.disabled = true;
-          sources.onchange = () => { connect.disabled = !sources.value; };
-          connect.onclick = () => changeTopology(() => editing.setConstantLink(id, input.name, sources.value), () => id, 'Lien créé.');
-          row.append(' ', sources, ' ', connect);
         }
       } else if (source.kind === 'connection') {
         const upstream = buttons.get(source.nodeId);
@@ -363,6 +519,23 @@ export function showMaterialGraph(
       } else {
         row.append(source.kind === 'value' ? source.value
           : source.kind === 'interface' ? `interface ${source.name}` : 'valeur par défaut');
+      }
+      const candidates = (parameter || source.kind === 'connection') ? editing?.constantSources(id, input.name) ?? [] : [];
+      if (editing && candidates.length) {
+        const replacing = source.kind === 'connection';
+        const sources = document.createElement('select');
+        sources.setAttribute('aria-label', `Constant existant : ${input.name}`);
+        sources.add(new Option(replacing ? 'Choisir un autre Constant…' : 'Choisir un Constant…', ''));
+        for (const candidate of candidates) sources.add(new Option(candidate, candidate));
+        const connect = document.createElement('button');
+        connect.type = 'button';
+        connect.textContent = replacing ? 'Remplacer le lien' : 'Connecter';
+        connect.setAttribute('aria-label', `${replacing ? 'Remplacer le lien' : 'Connecter un Constant'} : ${input.name}`);
+        connect.disabled = true;
+        sources.onchange = () => { connect.disabled = !sources.value; };
+        connect.onclick = () => changeTopology(() => editing.setConstantLink(id, input.name, sources.value), () => id,
+          replacing ? 'Lien remplacé.' : 'Lien créé.');
+        row.append(' ', sources, ' ', connect);
       }
       const diagnostic = diagnostics.get(input.name);
       if (diagnostic) {
@@ -406,6 +579,7 @@ export function showMaterialGraph(
         if (surface.isConnected) exportButton.disabled = exporting;
       }
       if (dialog.open && surface.isConnected) {
+        refreshBackendDiagnostics();
         select(id, 'Valeurs appliquées.');
         buttons.get(id)?.focus({ preventScroll: true });
       }

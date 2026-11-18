@@ -1,4 +1,5 @@
-import { sceneDeviceDescriptor, withGpuValidation } from './gpu/device.ts';
+import { sceneDeviceDescriptor } from './gpu/device.ts';
+import { captureRgba, rgbaCaptureStride } from './gpu/capture.ts';
 import { InteractiveViewer } from './render/viewer.ts';
 import type { BackendKind, ViewerStatus } from './render/viewer.ts';
 import type { DiagnosticSink } from './core/diagnostics.ts';
@@ -70,7 +71,7 @@ export class MaterialXEngine {
     private readonly viewer: InteractiveViewer,
     private readonly context: GPUCanvasContext | undefined,
     private readonly ownedDevice: GPUDevice | undefined,
-    private readonly headless?: { device: GPUDevice; width: number; height: number; bytesPerRow: number },
+    private readonly headless?: { device: GPUDevice; width: number; height: number },
     private readonly runtimeAssets?: RuntimeAssetUrls,
   ) {}
 
@@ -114,7 +115,7 @@ export class MaterialXEngine {
     const device = options.device ?? await requestSceneDevice();
     const ownedDevice = options.device ? undefined : device;
     try {
-      const bytesPerRow = Math.ceil(width * 4 / 256) * 256;
+      const bytesPerRow = rgbaCaptureStride(width);
       if (Math.max(width, height) > device.limits.maxTextureDimension2D ||
           bytesPerRow * height > device.limits.maxBufferSize) {
         throw new RangeError('Headless dimensions exceed GPU texture or readback limits.');
@@ -125,7 +126,7 @@ export class MaterialXEngine {
         ...(onDiagnostic ? { onDiagnostic } : {}),
         ...(onShaderErrors ? { onShaderErrors } : {}),
       });
-      return new MaterialXEngine(viewer, undefined, ownedDevice, { device, width, height, bytesPerRow }, runtimeAssets);
+      return new MaterialXEngine(viewer, undefined, ownedDevice, { device, width, height }, runtimeAssets);
     } catch (error) {
       ownedDevice?.destroy();
       throw error;
@@ -210,48 +211,15 @@ export class MaterialXEngine {
     if (backend === 'pathtracing' && (!Number.isInteger(samples) || samples < 1 || samples > 2 ** 24)) {
       throw new RangeError('Path-tracing capture samples must be an integer from 1 to 16777216.');
     }
-    const { device, width, height, bytesPerRow } = this.headless;
+    const { device, width, height } = this.headless;
     this.#busy = true;
-    let texture: GPUTexture | undefined;
-    let buffer: GPUBuffer | undefined;
-    let mapped = false;
     try {
-      await withGpuValidation(device, () => {
-        texture = device.createTexture({
-          size: [width, height], format: 'rgba8unorm',
-          usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC,
-        });
-        buffer = device.createBuffer({
-          size: bytesPerRow * height, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
-        });
+      return await captureRgba(device, width, height, backend === 'pathtracing'
+        ? { pathTrace: target => this.viewer.renderPathTraceTo(target, samples) }
+        : { raster: target => this.viewer.renderRasterTo(target) }, () => {
+        if (this.#disposed) throw new Error('MaterialXEngine was disposed during capture.');
       });
-      if (this.#disposed) throw new Error('MaterialXEngine was disposed during capture.');
-      if (!texture || !buffer) throw new Error('WebGPU capture targets were not allocated.');
-      const output = texture;
-      const readback = buffer;
-      if (backend === 'pathtracing') await this.viewer.renderPathTraceTo(output.createView(), samples);
-      if (this.#disposed) throw new Error('MaterialXEngine was disposed during capture.');
-      await withGpuValidation(device, () => {
-        if (backend === 'raster') this.viewer.renderRasterTo(output.createView());
-        const encoder = device.createCommandEncoder();
-        encoder.copyTextureToBuffer({ texture: output }, { buffer: readback, bytesPerRow }, [width, height]);
-        device.queue.submit([encoder.finish()]);
-      });
-      await buffer.mapAsync(GPUMapMode.READ);
-      mapped = true;
-      if (this.#disposed) throw new Error('MaterialXEngine was disposed during capture.');
-      const padded = new Uint8Array(buffer.getMappedRange());
-      const rowBytes = width * 4;
-      const rgba = new Uint8Array(rowBytes * height);
-      for (let y = 0; y < height; y++) {
-        const offset = y * bytesPerRow;
-        rgba.set(padded.subarray(offset, offset + rowBytes), y * rowBytes);
-      }
-      return { width, height, rgba };
     } finally {
-      if (mapped) buffer?.unmap();
-      buffer?.destroy();
-      texture?.destroy();
       this.#busy = false;
     }
   }

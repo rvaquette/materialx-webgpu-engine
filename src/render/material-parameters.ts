@@ -27,6 +27,7 @@ export interface MaterialParameter {
   input: string;
   /** Surface input driven by a Constant inserted by the graph editor. */
   constantFor?: string;
+  arithmeticFor?: { kind: 'add' | 'multiply'; original: MaterialParameter };
   /** While linked, this parameter retains the literal to restore on disconnect. */
   linkedConstant?: string;
 }
@@ -158,8 +159,39 @@ export function visibleMaterialParameters(material: MaterialResource, nodeId?: s
     if (nodeId !== undefined && node?.id !== nodeId) return false;
     const input = node?.inputs.find(input => input.name === parameter.input);
     if (input?.source.kind !== 'value' || input.interfaceName) return false;
-    return parameter.constantFor !== undefined || (explicitSelection ? input.editable === true : !parameter.nodeId);
+    return parameter.constantFor !== undefined || parameter.arithmeticFor !== undefined
+      || (explicitSelection ? input.editable === true : !parameter.nodeId);
   });
+}
+
+export type EditableInputNode = 'constant' | 'add' | 'multiply';
+
+export function editorArithmeticValue(parameter: MaterialParameter): number[] | undefined {
+  const arithmetic = parameter.arithmeticFor;
+  const operand = parameter.value[0]!;
+  return arithmetic?.original.value.map(component => arithmetic.kind === 'add' ? component + operand : component * operand);
+}
+
+function addOperandBounds(parameter: MaterialParameter): { min: number[]; max: number[] } | undefined {
+  const value = parameter.value[0]!;
+  const min = (parameter.min?.[0] ?? -Infinity) - value;
+  const max = (parameter.max?.[0] ?? Infinity) - value;
+  return parameter.type === 'float' && Number.isFinite(min) && Number.isFinite(max) && min <= 0 && max >= 0 && min < max
+    ? { min: [min], max: [max] } : undefined;
+}
+
+export function canInsertMaterialInputNode(
+  material: MaterialResource, nodeId: string, inputName: string, kind: EditableInputNode,
+): boolean {
+  if (!canInsertMaterialConstant(material, nodeId, inputName)) return false;
+  if (kind === 'constant') return true;
+  const parameter = material.parameters?.find(candidate => !candidate.nodeId && candidate.input === inputName);
+  if (!parameter) return false;
+  if (kind === 'add') return addOperandBounds(parameter) !== undefined;
+  return parameter.value.every((component, index) =>
+    Number.isFinite(component)
+    && (parameter.min?.[index] ?? -Infinity) <= Math.min(0, component)
+    && (parameter.max?.[index] ?? Infinity) >= Math.max(0, component));
 }
 
 export function canInsertMaterialConstant(material: MaterialResource, nodeId: string, inputName: string): boolean {
@@ -176,14 +208,25 @@ export function canInsertMaterialConstant(material: MaterialResource, nodeId: st
 }
 
 export function materialConstantSources(material: MaterialResource, nodeId: string, input: string): string[] {
-  if (!canInsertMaterialConstant(material, nodeId, input)) return [];
-  const target = material.parameters!.find(parameter => !parameter.nodeId && parameter.input === input)!;
-  return material.parameters!.flatMap(source => {
-    if (!source.nodeId || source.constantFor === undefined || source.type !== target.type
+  const parameters = material.parameters ?? [];
+  const target = parameters.find(parameter => !parameter.nodeId && parameter.input === input);
+  if (!target || (!canInsertMaterialConstant(material, nodeId, input)
+    && !secondaryConstantSource(material, nodeId, input, target))) return [];
+  return parameters.flatMap(source => {
+    if (!source.nodeId || source.nodeId === target.linkedConstant || source.constantFor === undefined || source.type !== target.type
       || target.min?.some((min, index) => (source.min?.[index] ?? -Infinity) < min)
       || target.max?.some((max, index) => (source.max?.[index] ?? Infinity) > max)) return [];
     return [source.nodeId];
   });
+}
+
+function secondaryConstantSource(material: MaterialResource, nodeId: string, input: string, target: MaterialParameter) {
+  const surface = material.resolvedSurface;
+  const authored = material.surfaceGraph?.nodes.get(nodeId)?.inputs.find(candidate => candidate.name === input)?.source;
+  const resolved = surface?.inputs.get(input)?.source;
+  const source = target.linkedConstant;
+  return source && surface?.nodeId === nodeId && authored?.kind === 'connection' && authored.nodeId === source
+    && resolved?.kind === 'connection' && resolved.nodeId === source ? source : undefined;
 }
 
 export function changeMaterialConstantLink(
@@ -200,14 +243,16 @@ export function changeMaterialConstantLink(
   const inputs = new Map(surface.inputs);
   let replacement: MaterialParameter;
   let binding: typeof authored.source;
+  const previous = secondaryConstantSource(material, nodeId, input, target);
   if (sourceId !== null) {
+    if (sourceId === previous) return material;
     if (!materialConstantSources(material, nodeId, input).includes(sourceId)) throw new Error('Constant incompatible avec cette entrée.');
     binding = { kind: 'connection', nodeId: sourceId };
     const { parameter: _uniform, ...entry } = normalized;
     inputs.set(input, { ...entry, source: binding });
     replacement = { ...target, linkedConstant: sourceId };
   } else {
-    if (!target.linkedConstant || authored.source.kind !== 'connection' || authored.source.nodeId !== target.linkedConstant) {
+    if (!previous) {
       throw new Error('Ce lien ne peut pas être retiré.');
     }
     binding = { kind: 'value', type: target.type, value: target.value.join(', ') };
@@ -223,9 +268,9 @@ export function changeMaterialConstantLink(
   });
 }
 
-/** Insert a Constant in place of a surface literal, or fold an editor Constant back into its input. */
+/** Insert an editor node in place of a surface literal, or fold it back into its input. */
 export function changeMaterialConstant(
-  material: MaterialResource, nodeId: string, inputName: string, insert: boolean,
+  material: MaterialResource, nodeId: string, inputName: string, insert: boolean, kind: EditableInputNode = 'constant',
 ): MaterialResource {
   const graph = material.surfaceGraph;
   const surface = material.resolvedSurface;
@@ -233,43 +278,67 @@ export function changeMaterialConstant(
   const parameters = material.parameters ?? [];
   const parameter = insert
     ? parameters.find(parameter => !parameter.nodeId && parameter.input === inputName)
-    : parameters.find(parameter => parameter.nodeId === nodeId && parameter.input === inputName && parameter.constantFor !== undefined);
-  if (!parameter || !parameter.uniform || (insert && !canInsertMaterialConstant(material, nodeId, inputName))) {
+    : parameters.find(parameter => parameter.nodeId === nodeId && parameter.input === inputName
+      && (kind === 'constant' ? parameter.constantFor !== undefined : parameter.arithmeticFor?.kind === kind));
+  if (!parameter || !parameter.uniform || (insert && !canInsertMaterialInputNode(material, nodeId, inputName, kind))) {
     throw new Error('Cette entrée ne permet pas cette modification de structure.');
   }
   const nodes = new Map(graph.nodes);
   const inputs = new Map(surface.inputs);
   const root = nodes.get(surface.nodeId)!;
-  const destination = parameter.constantFor ?? inputName;
+  const original = parameter.arithmeticFor?.original;
+  const destination = original?.input ?? parameter.constantFor ?? inputName;
   const authored = root.inputs.find(input => input.name === destination)!;
   const resolved = inputs.get(destination)!;
   const literal = { kind: 'value' as const, type: parameter.type, value: parameter.value.join(', ') };
   let replacement: MaterialParameter;
   if (insert) {
-    let id = `${destination}_constant`;
-    for (let suffix = 2; nodes.has(id); suffix++) id = `${destination}_constant_${suffix}`;
+    let id = `${destination}_${kind}`;
+    for (let suffix = 2; nodes.has(id); suffix++) id = `${destination}_${kind}_${suffix}`;
     const source = { kind: 'connection' as const, nodeId: id };
     const { parameter: _uniform, ...normalized } = resolved;
     inputs.set(destination, { ...normalized, source });
     nodes.set(root.id, { ...root, inputs: root.inputs.map(input => input === authored ? { ...input, source } : input) });
-    nodes.set(id, {
-      id, category: 'constant', type: parameter.type, provenance: { namePath: id },
-      inputs: [{ name: 'value', type: parameter.type, source: literal, parameter: parameter.uniform,
-        provenance: { namePath: `${id}/value` } }],
-    });
-    replacement = { ...parameter, nodeId: id, input: 'value', constantFor: destination, label: `${id} / value` };
+    if (kind !== 'constant') {
+      const type = parameter.type;
+      const neutral = kind === 'add' ? 0 : 1;
+      const bounds = kind === 'add' ? addOperandBounds(parameter)! : { min: [0], max: [1] };
+      nodes.set(id, {
+        id, category: kind, type, provenance: { namePath: id },
+        nodeDef: { name: `ND_${kind}_${type === 'color3' ? 'color3FA' : 'float'}`, nodeString: kind, type,
+          implementation: { kind: 'unresolved' }, inputs: [{ name: 'in1', type }, { name: 'in2', type: 'float' }] },
+        inputs: [
+          { name: 'in1', type, source: literal, provenance: { namePath: `${id}/in1` } },
+          { name: 'in2', type: 'float', source: { kind: 'value', type: 'float', value: String(neutral) },
+            parameter: parameter.uniform, provenance: { namePath: `${id}/in2` } },
+        ],
+      });
+      replacement = {
+        id: `node:${id}/in2`, label: `${id} / in2`, type: 'float', value: [neutral], initial: [neutral], ...bounds,
+        update: 'uniform', uniform: parameter.uniform, nodeId: id, input: 'in2', arithmeticFor: { kind, original: parameter },
+      };
+    } else {
+      nodes.set(id, {
+        id, category: kind, type: parameter.type, provenance: { namePath: id },
+        inputs: [{ name: 'value', type: parameter.type, source: literal, parameter: parameter.uniform,
+          provenance: { namePath: `${id}/value` } }],
+      });
+      replacement = { ...parameter, nodeId: id, input: 'value', constantFor: destination, label: `${id} / value` };
+    }
   } else {
     // Refuse to remove a node if a future editor operation has wired it elsewhere.
     const consumers = [...nodes.values()].flatMap(node => node.inputs.filter(input =>
       input.source.kind === 'connection' && input.source.nodeId === nodeId));
     if (consumers.length !== 1 || consumers[0] !== authored || graph.terminals.some(terminal => terminal.nodeId === nodeId)) {
-      throw new Error('Ce nœud Constant est utilisé ailleurs dans le graphe.');
+      throw new Error('Ce nœud est utilisé ailleurs dans le graphe.');
     }
-    inputs.set(destination, { ...resolved, parameter: parameter.uniform, source: { kind: 'value', value: parameter.value } });
-    nodes.set(root.id, { ...root, inputs: root.inputs.map(input => input === authored ? { ...input, source: literal } : input) });
+    const value = editorArithmeticValue(parameter) ?? parameter.value;
+    inputs.set(destination, { ...resolved, parameter: parameter.uniform, source: { kind: 'value', value } });
+    nodes.set(root.id, { ...root, inputs: root.inputs.map(input => input === authored
+      ? { ...input, source: { ...literal, type: original?.type ?? parameter.type, value: value.join(', ') } } : input) });
     nodes.delete(nodeId);
     const { nodeId: _node, constantFor: _destination, ...rest } = parameter;
-    replacement = { ...rest, input: destination, label: destination };
+    replacement = original ? { ...original, value } : { ...rest, input: destination, label: destination };
   }
   return compileEditableMaterial({
     ...material, surfaceGraph: { ...graph, nodes }, resolvedSurface: { ...surface, inputs },

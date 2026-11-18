@@ -430,14 +430,79 @@ actif sans changer la caméra ; fermer le diagramme permet de voir le rendu
 en entier. Les variantes sont propres à l'objet et ne sont conservées qu'en
 mémoire, jusqu'au rechargement de la scène.
 
+**Treizième étape :** une fois les deux variantes enregistrées, **Différences
+A/B** affiche les nœuds ajoutés ou retirés et présente les valeurs et
+connexions modifiées dans deux colonnes. Cette comparaison du graphe résolu
+ne bascule pas le matériau actif et ne relance pas le rendu.
+
+**Quatorzième étape :** **Exporter A** et **Exporter B** téléchargent
+directement la variante enregistrée sans l'appliquer à l'objet. Le suffixe
+`_A` ou `_B` distingue les fichiers. Les règles habituelles s'appliquent :
+`.mtlx` seul ou ZIP avec textures. L'export est durable, mais ne recharge
+pas automatiquement les emplacements A/B dans le viewer.
+
+**Quinzième étape :** avec le moteur Disney sélectionné, **Voir le graphe**
+affiche les approximations ou le motif de refus de conversion du matériau
+de l'objet sélectionné. Le diagnostic utilise le même convertisseur que le
+rendu, sans compiler de pipeline ni charger de textures. Il est recalculé
+après les modifications appliquées et ne valide pas la scène entière.
+
+**Seizième étape :** l'export du matériau courant et des variantes A/B
+conserve aussi les nœuds de calcul standard `subtract`, `divide`, `absval`,
+`min` et `max` en `float` ou `color3`, y compris les variantes couleur/scalaires
+prévues par la bibliothèque standard. Les connexions sont conservées dans le
+document `.mtlx` : les calculs ne sont pas remplacés par des constantes.
+
+**Dix-septième étape :** après avoir enregistré A et B, **Comparer les rendus
+A/B** génère deux aperçus côte à côte, en raster ou en path tracing avec un
+nombre fixe d'échantillons par pixel pour chaque variante (de 1 à 64).
+Les captures hors écran reprennent le cadrage de la scène, à une résolution
+limitée à 256 pixels sur le plus grand côté. Elles ne changent ni le matériau
+actif ni le moteur du viewer. Fermer le graphe annule la comparaison.
+
+**Dix-huitième étape :** l'export conserve les transformations UV standard
+`place2d` et `rotate2d`. Dans un ZIP texturé, les images conservent leurs
+connexions aux transformations (y compris les nœuds partagés) et les
+paramètres de placement et de rotation restent éditables dans le `.mtlx`.
+
+**Dix-neuvième étape :** **Remplacer le lien** redirige une connexion
+secondaire créée dans le diagramme vers un autre Constant compatible, en
+une seule opération. **Retirer le lien** rétablit toujours la valeur
+littérale qui précédait la toute première connexion. Les connexions
+primaires et celles du graphe source ne sont pas modifiées par cette commande.
+
+**Vingtième étape :** **Insérer un Multiply** remplace une valeur scalaire
+éditable compatible par sa multiplication avec un facteur initial de `1`.
+Le facteur s'édite dans `in2`, entre `0` et `1`. **Revenir à une valeur
+littérale** supprime le nœud et conserve le produit. Le nœud reste
+exportable en `.mtlx` tant qu'il est connecté.
+
+**Vingt-et-unième étape :** **Insérer un Multiply** est aussi proposé sur
+les entrées `color3` compatibles. Le même facteur scalaire multiplie R, V
+et B. Le `.mtlx` conserve le nœud standard `ND_multiply_color3FA` et le
+retrait du nœud conserve le résultat sous forme de littéral `color3`.
+
+**Vingt-deuxième étape :** modifier `in2` met à jour les uniformes des
+pipelines raster et path tracing MaterialX déjà prêts, sans les recompiler.
+L'accumulation repart pour le nouveau matériau. Disney prépare à nouveau
+ses données matériau au prochain rendu Disney, sans reconstruire le raster.
+L'insertion et le retrait du Multiply restent des modifications de topologie.
+
+**Vingt-troisième étape :** **Insérer un Add** est proposé sur les entrées
+`float` compatibles dont les deux bornes sont connues. Le décalage `in2`
+démarre à `0` et peut être négatif ou positif dans les limites de l'entrée
+de surface. Son édition réutilise les uniformes des pipelines MaterialX ;
+le `.mtlx` conserve le nœud standard `ND_add_float` et son retrait conserve
+la somme sous forme de littéral.
+
 Travaux restants :
 
-- généraliser l'ajout, la suppression et la connexion des nœuds depuis le diagramme ;
-- compilation incrémentale à chaque modification ;
+- étendre l'ajout, la suppression et la connexion au-delà des Constants, du Multiply à facteur scalaire et de l'Add scalaire ;
+- étendre la compilation incrémentale aux modifications de topologie ;
 - aperçu sur l'objet sélectionné ou sur un shaderball ;
-- sauvegarde durable et comparaison côte à côte des variantes ;
+- restauration des emplacements A/B après rechargement ;
 - étendre l'export `.mtlx` aux UDIM, séquences et autres nœuds ;
-- étendre les diagnostics aux approximations propres à chaque moteur de rendu.
+- étendre les diagnostics aux approximations des autres moteurs de rendu.
 
 **Critère d'aboutissement :** un utilisateur peut créer ou modifier un graphe
 MaterialX, l'évaluer immédiatement et exporter le document obtenu.

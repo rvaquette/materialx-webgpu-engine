@@ -31,6 +31,7 @@ import type { DecodedPixelImage } from '../assets/images.ts';
 import { tonemapIndex, type Tonemap } from './output.ts';
 import { loadUsdScene, uploadMaterialTextures, type LoadedUsdScene, type ObjectMaterialOverride, type SceneLoadOptions } from './usd-scene-assets.ts';
 import { assertSceneStorageSize, assertSceneTextureBindings, withGpuValidation } from '../gpu/device.ts';
+import { captureRgba, type RgbaCapture } from '../gpu/capture.ts';
 import { uploadMaterialImage, uploadMaterialImageArray } from '../gpu/material-texture.ts';
 import { packPtTextureArrays } from './pathtracing/texture-arrays.ts';
 import { OrbitCamera, attachOrbitControls } from '../scene/orbit-camera.ts';
@@ -55,10 +56,11 @@ import {
 } from './pathtracing/convergence.ts';
 import { JsDenoiser } from './pathtracing/js-denoiser.ts';
 import { PathTraceStopping, pathTraceMetrics, type PathTraceRenderLimits, type PathTraceProgress, type PathTraceMetrics } from './pathtracing/render-limits.ts';
-import { canInsertMaterialConstant, changeMaterialConstant, changeMaterialConstantLink, changeMaterialParameters, compileEditableMaterial, materialConstantSources, materialUniformData, packParameterUniforms, visibleMaterialParameters, type MaterialParameter } from './material-parameters.ts';
+import { canInsertMaterialInputNode, changeMaterialConstant, changeMaterialConstantLink, changeMaterialParameters, compileEditableMaterial, materialConstantSources, materialUniformData, packParameterUniforms, visibleMaterialParameters, type EditableInputNode, type MaterialParameter } from './material-parameters.ts';
 import { applySceneDisplacement } from './displacement.ts';
 import type { MaterialResource, SceneResources } from './scene-resources.ts';
-import { prepareDisneyScene } from './pathtracing/disney-scene.ts';
+import { convertDisneySceneMaterial, prepareDisneyScene } from './pathtracing/disney-scene.ts';
+import { DisneyTextureRegistry } from './pathtracing/disney-texture-array.ts';
 import { DisneyGpuBackend } from './pathtracing/disney-gpu-backend.ts';
 import { packDisneyLights } from './pathtracing/disney-lights.ts';
 import type { DisneyShaderSpecialization } from './pathtracing/disney-shader-specialization.ts';
@@ -170,7 +172,7 @@ export interface ViewerStatus {
 /** A disposable per-scene GPU render set (raster + lazily built path tracer) for one loaded USD. */
 interface SceneRender {
   setEnvironmentEnabled: (enabled: boolean) => void;
-  updateMaterial: (key: string, material: MaterialResource) => void;
+  updateMaterial: (key: string, material: MaterialResource, refreshDisney: boolean) => void;
   frame: SceneFramePlan;
   resize: (width: number, height: number) => Promise<void>;
   setRasterQuality: (quality: RasterQuality) => Promise<void>;
@@ -181,7 +183,7 @@ interface SceneRender {
   renderRaster: (targetView: GPUTextureView) => void;
   /** Starts the path tracer build on first call; renders nothing until it is ready. */
   renderPathTrace: (targetView: GPUTextureView, tiled: boolean, accumulate: boolean) => void;
-  capturePathTrace: (targetView: GPUTextureView, samples: number) => Promise<void>;
+  capturePathTrace: (targetView: GPUTextureView, samples: number, check?: () => void) => Promise<void>;
   renderDisney: (targetView: GPUTextureView, accumulate: boolean) => void;
   reportFrameTime: (milliseconds: number) => void;
   invalidateDenoise: () => void;
@@ -341,6 +343,19 @@ export class InteractiveViewer {
     return surface?.nodeId === nodeId ? surface.inputDiagnostics ?? [] : [];
   }
 
+  objectDisneyMaterialDiagnostics(path: string): { warnings: readonly string[] } | { error: string } | undefined {
+    if (this.#backend !== 'disney') return undefined;
+    const resources = this.#loaded?.parameterResources ?? this.#loaded?.resources;
+    const key = resources?.instances.find(instance => instance.primPath === path)?.materialKey;
+    const material = key ? resources?.materials.get(key) : undefined;
+    if (!key || !material?.surfaceGraph) return undefined;
+    try {
+      return { warnings: convertDisneySceneMaterial(key, material, new DisneyTextureRegistry()).warnings };
+    } catch (error) {
+      return { error: error instanceof Error ? error.message : String(error) };
+    }
+  }
+
   objectMaterialVariants(path: string) {
     const material = this.#editableObjectMaterial(path);
     if (!material?.surfaceGraph) return undefined;
@@ -349,6 +364,10 @@ export class InteractiveViewer {
       A: saved?.A === undefined ? 'empty' : saved.A === material ? 'active' : 'saved',
       B: saved?.B === undefined ? 'empty' : saved.B === material ? 'active' : 'saved',
     } as const;
+  }
+
+  objectMaterialVariantGraph(path: string, slot: MaterialVariantSlot) {
+    return this.#materialVariants.get(path)?.[slot]?.surfaceGraph;
   }
 
   saveObjectMaterialVariant(path: string, slot: MaterialVariantSlot): void {
@@ -363,19 +382,83 @@ export class InteractiveViewer {
     await this.#editObjectGraph(path, () => saved);
   }
 
+  async captureObjectMaterialVariants(
+    path: string, options: { backend: 'raster' } | { backend: 'pathtracing'; samples: number }, signal: AbortSignal,
+  ): Promise<Readonly<Record<MaterialVariantSlot, RgbaCapture>>> {
+    const loaded = this.#loaded;
+    const current = this.#current;
+    const source = loaded?.parameterResources;
+    const key = source?.instances.find(instance => instance.primPath === path && instance.hasGeometry)?.materialKey;
+    const variants = this.#materialVariants.get(path);
+    if (!loaded || !current || !source || !key || !variants?.A || !variants.B) {
+      throw new Error('Enregistre les variantes A et B d’un objet visible avant de les comparer.');
+    }
+    if (options.backend === 'pathtracing' && (!Number.isInteger(options.samples) || options.samples < 1 || options.samples > 64)) {
+      throw new RangeError('Le nombre d’échantillons doit être un entier de 1 à 64.');
+    }
+    const check = () => {
+      signal.throwIfAborted();
+      if (this.#disposed || this.#loaded !== loaded || this.#current !== current) {
+        throw new Error('La scène a changé pendant la comparaison.');
+      }
+    };
+    const scale = Math.min(1, 256 / Math.max(this.#width, this.#height));
+    const width = Math.max(1, Math.round(this.#width * scale));
+    const height = Math.max(1, Math.round(this.#height * scale));
+    const exposure = this.#exposure ?? loaded.cameras[0]?.exposure ?? 0;
+    const frameCamera = { viewProj: this.#orbit.viewProj(), eye: this.#orbit.eye, exposure };
+    const background = inverse4(this.#orbit.backgroundViewProj());
+    const environment = { ...current.frame.environment };
+    const rasterQuality = this.#rasterQuality;
+    const tonemap = this.#tonemap;
+    const depth = this.#pathTracingDepthOverride;
+    const capture = async (material: MaterialResource): Promise<RgbaCapture> => {
+      check();
+      const materials = new Map(source.materials).set(key, material);
+      const resources = await applySceneDisplacement({ ...source, materials }, loaded.mtlx.imageProvider);
+      check();
+      const candidate = { ...loaded, resources };
+      delete candidate.compiled;
+      const frame = buildSceneFrame(resources, {
+        lights: candidate.lights, surfaceFor: candidate.mtlx.surfaceFor,
+        environment: { ...environment }, frameCamera,
+      });
+      const offscreen = new InteractiveViewer({ device: this.#device, width, height, outputFormat: 'rgba8unorm' });
+      offscreen.#backend = options.backend;
+      offscreen.#rasterQuality = rasterQuality;
+      offscreen.#tonemap = tonemap;
+      try {
+        // The temporary viewer owns only the GPU render set, not the shared MaterialX documents.
+        const render = offscreen.#current = await offscreen.#buildSceneRender(candidate, frame, exposure, diagnostic => {
+          if (diagnostic.level === 'error') console.error(diagnostic.message, diagnostic.detail ?? '');
+          else if (diagnostic.level === 'warning') console.warn(diagnostic.message, diagnostic.detail ?? '');
+        });
+        check();
+        render.applyCamera(frameCamera.viewProj, frameCamera.eye, background);
+        if (depth !== undefined) render.setPathTracingDepth(depth);
+        return await captureRgba(this.#device, width, height, options.backend === 'pathtracing'
+          ? { pathTrace: target => render.capturePathTrace(target, options.samples, check) }
+          : { raster: render.renderRaster }, check);
+      } finally {
+        offscreen.dispose();
+      }
+    };
+    return { A: await capture(variants.A), B: await capture(variants.B) };
+  }
+
   #editableObjectMaterial(path: string): MaterialResource | undefined {
     const source = this.#loaded?.parameterResources;
     const key = source?.instances.find(instance => instance.primPath === path)?.materialKey;
     return key ? source?.materials.get(key) : undefined;
   }
 
-  canInsertObjectConstant(path: string, nodeId: string, input: string): boolean {
+  canInsertObjectConstant(path: string, nodeId: string, input: string, kind: EditableInputNode = 'constant'): boolean {
     const material = this.#editableObjectMaterial(path);
-    return !!material && canInsertMaterialConstant(material, nodeId, input);
+    return !!material && canInsertMaterialInputNode(material, nodeId, input, kind);
   }
 
-  async setObjectConstant(path: string, nodeId: string, input: string, insert: boolean): Promise<void> {
-    await this.#editObjectGraph(path, material => changeMaterialConstant(material, nodeId, input, insert));
+  async setObjectConstant(path: string, nodeId: string, input: string, insert: boolean, kind: EditableInputNode = 'constant'): Promise<void> {
+    await this.#editObjectGraph(path, material => changeMaterialConstant(material, nodeId, input, insert, kind));
   }
 
   objectConstantSources(path: string, nodeId: string, input: string): string[] {
@@ -443,7 +526,8 @@ export class InteractiveViewer {
       // Keep baked geometry metadata; source materials retain displacement for future rebuilds.
       const baked = { ...loaded.resources.materials.get(key)!, parameters: updated.parameters!,
         surfaceGraph: updated.surfaceGraph!, resolvedSurface: updated.resolvedSurface! };
-      this.#current.updateMaterial(key, baked);
+      const refreshDisney = updated.parameters!.some(parameter => parameter.arithmeticFor && changes.has(parameter.id));
+      this.#current.updateMaterial(key, baked, refreshDisney);
       const bakedMaterials = new Map(loaded.resources.materials);
       bakedMaterials.set(key, baked);
       loaded.resources = { ...loaded.resources, materials: bakedMaterials };
@@ -2175,6 +2259,20 @@ export class InteractiveViewer {
       disneyBackend?.reset();
     };
 
+    const invalidateDisneyTracer = (): void => {
+      disneyBuildRevision++;
+      disneyBackend?.dispose();
+      disneyBackend = undefined;
+      disneySceneData = undefined;
+      disneyErrorReadback = false;
+      disneyState = 'idle';
+      resetDisneyPathTrace();
+      if (disneyErrors.length) {
+        disneyErrors = [];
+        this.#onShaderErrors?.([...rasterErrors, ...pathTraceErrors]);
+      }
+    };
+
     const setDisneyError = (error: unknown, shader: string): void => {
       if (disposed) return;
       disneyState = 'error';
@@ -2232,7 +2330,6 @@ export class InteractiveViewer {
         disneyEnvironmentTotal = environmentTotal;
         disneyEnvironmentRotationValue = environmentRotation;
         disneyHasEnvironment = environment !== undefined;
-        trash.push({ destroy: () => backend.dispose() });
         disneyState = 'ready';
         this.#ptDisplayDirty = true;
         this.#emitStatus();
@@ -2337,8 +2434,9 @@ export class InteractiveViewer {
       return pathTraceBuild;
     };
 
-    const capturePathTrace = async (targetView: GPUTextureView, samples: number): Promise<void> => {
+    const capturePathTrace = async (targetView: GPUTextureView, samples: number, check?: () => void): Promise<void> => {
       await startPathTracer();
+      check?.();
       if (disposed) throw new Error('Viewer disposed during capture.');
       if (!pathTracer) throw pathTraceBuildError ?? new Error('Path tracer preparation failed.');
       const { renderPathTrace, resetPathTrace } = pathTracer;
@@ -2348,6 +2446,7 @@ export class InteractiveViewer {
         const tiles = Math.min(remaining, PATH_TRACE_MAX_TILES_PER_REFRESH);
         await withGpuValidation(device, () => renderPathTrace(undefined, true, true, tiles));
         await device.queue.onSubmittedWorkDone();
+        check?.();
         if (disposed) throw new Error('Viewer disposed during capture.');
         remaining -= tiles;
       }
@@ -2396,11 +2495,12 @@ export class InteractiveViewer {
         }
         resetDisneyPathTrace();
       },
-      updateMaterial: (key, material) => {
+      updateMaterial: (key, material, refreshDisney) => {
         resources.materials.set(key, material);
         const data = materialUniformData(material);
         for (const buffer of parameterBuffers.get(key) ?? []) device.queue.writeBuffer(buffer, 0, data);
         uploadPtParameters?.();
+        if (refreshDisney && disneyState !== 'idle') invalidateDisneyTracer();
       },
       frame,
       resize: async (w, h) => {
@@ -2409,12 +2509,7 @@ export class InteractiveViewer {
         width = w;
         height = h;
         if (disneyBackend || disneyState === 'compiling') {
-          disneyBuildRevision++;
-          disneyBackend?.dispose();
-          disneyBackend = undefined;
-          disneySceneData = undefined;
-          disneyErrorReadback = false;
-          disneyState = 'idle';
+          invalidateDisneyTracer();
           if (this.#backend === 'disney') startDisneyTracer();
         }
       },
@@ -2495,6 +2590,7 @@ export class InteractiveViewer {
       dispose: () => {
         disposed = true;
         disneyBuildRevision++;
+        disneyBackend?.dispose();
         pathTracer?.invalidateDenoise();
         pathTracer = undefined;
         for (const o of trash) o.destroy();

@@ -1,6 +1,6 @@
 import type { ResolvedGraph } from '../../materialx/graph.ts';
 import type { NormalizedSurfaceInput, ResolvedSurface } from '../../materialx/surface-graph.ts';
-import type { MaterialParameter } from '../material-parameters.ts';
+import { editorArithmeticValue, type MaterialParameter } from '../material-parameters.ts';
 import { packDisneyMaterials, type DisneyMaterial } from './disney-material.ts';
 import { disneyAlbedoTexture, disneyMetallicRoughnessTexture } from './disney-texture-graphs.ts';
 
@@ -29,13 +29,17 @@ export function disneyMaterialFromStandard(
     (t.name === 'volumeshader' || t.name === 'displacementshader') && t.nodeId)) {
     throw new Error('Disney standard material does not support back, volume, or displacement terminals.');
   }
-  const constants = new Map(parameters.filter(parameter => parameter.constantFor !== undefined)
-    .map(parameter => [parameter.nodeId, parameter.value] as const));
-  if (constants.size) {
+  const editorValues = new Map<string, readonly number[]>();
+  for (const parameter of parameters) {
+    if (!parameter.nodeId) continue;
+    const value = parameter.constantFor !== undefined ? parameter.value : editorArithmeticValue(parameter);
+    if (value) editorValues.set(parameter.nodeId, value);
+  }
+  if (editorValues.size) {
     const inputs = new Map(surface.inputs);
     for (const [name, input] of inputs) {
       if (input.source.kind !== 'connection') continue;
-      const value = constants.get(input.source.nodeId);
+      const value = editorValues.get(input.source.nodeId);
       if (value) inputs.set(name, { ...input, source: { kind: 'value', value } });
     }
     surface = { ...surface, inputs };

@@ -22,15 +22,33 @@ const playgroundRoot = process.env['MX_PLAYGROUND_ROOT']
 const coreFile = join(coreRoot, 'JsMaterialXCore.js');
 
 describe.skipIf(!existsSync(coreFile) || !existsSync(libraryRoot))('installed MaterialX Core resolution', () => {
-  it('packages the original texture bytes once and round-trips the material with relative image paths', async () => {
+  it('packages texture bytes once and round-trips relative image paths and shared UV transforms', async () => {
     const module = await import(/* @vite-ignore */ pathToFileURL(coreFile).href) as { default: MaterialXModuleFactory };
     const core = new MaterialXCore(await module.default());
     const libraries = new MaterialXLibraries(core);
     await libraries.load({ sources: defaultLibrarySources(libraryRoot), fetchText: async path => readFileSync(path, 'utf8') });
     const textureUrl = 'https://example.test/assets/checker.png';
     const documents = await loadMaterialXDocuments({ core, libraries, texts: new Map([['source', `<materialx version="1.39">
-      <image name="albedo" type="color3"><input name="file" type="filename" value="${textureUrl}" colorspace="srgb_texture" /></image>
-      <image name="roughness" type="float"><input name="file" type="filename" value="${textureUrl}" /></image>
+      <texcoord name="uv" type="vector2"><input name="index" type="integer" value="0" /></texcoord>
+      <place2d name="placement" type="vector2">
+        <input name="texcoord" type="vector2" nodename="uv" />
+        <input name="pivot" type="vector2" value="0.5, 0.5" />
+        <input name="scale" type="vector2" value="2, 3" />
+        <input name="offset" type="vector2" value="0.1, 0.2" />
+        <input name="operationorder" type="integer" value="1" />
+      </place2d>
+      <rotate2d name="rotation" type="vector2">
+        <input name="in" type="vector2" nodename="placement" />
+        <input name="amount" type="float" value="45" unit="degree" unittype="angle" />
+      </rotate2d>
+      <image name="albedo" type="color3">
+        <input name="file" type="filename" value="${textureUrl}" colorspace="srgb_texture" />
+        <input name="texcoord" type="vector2" nodename="rotation" />
+      </image>
+      <image name="roughness" type="float">
+        <input name="file" type="filename" value="${textureUrl}" />
+        <input name="texcoord" type="vector2" nodename="rotation" />
+      </image>
       <standard_surface name="surface" type="surfaceshader">
         <input name="base_color" type="color3" nodename="albedo" />
         <input name="specular_roughness" type="float" nodename="roughness" />
@@ -65,6 +83,21 @@ describe.skipIf(!existsSync(coreFile) || !existsSync(libraryRoot))('installed Ma
         });
         expect(restored.nodes.get('roughness')?.inputs[0]?.source)
           .toMatchObject({ kind: 'value', value: 'textures/checker.png' });
+        for (const id of ['albedo', 'roughness']) {
+          expect(restored.nodes.get(id)?.inputs.find(input => input.name === 'texcoord')?.source)
+            .toEqual({ kind: 'connection', nodeId: 'rotation' });
+        }
+        expect(restored.nodes.get('rotation')?.inputs).toEqual(expect.arrayContaining([
+          expect.objectContaining({ name: 'in', source: { kind: 'connection', nodeId: 'placement' } }),
+          expect.objectContaining({ name: 'amount', unit: 'degree', unitType: 'angle',
+            source: { kind: 'value', type: 'float', value: '45' } }),
+        ]));
+        expect(restored.nodes.get('placement')?.inputs).toEqual(expect.arrayContaining([
+          expect.objectContaining({ name: 'texcoord', source: { kind: 'connection', nodeId: 'uv' } }),
+          ...[['pivot', 'vector2', '0.5, 0.5'], ['scale', 'vector2', '2, 3'], ['offset', 'vector2', '0.1, 0.2'],
+            ['operationorder', 'integer', '1']].map(([name, type, value]) =>
+            expect.objectContaining({ name, source: { kind: 'value', type, value } })),
+        ]));
       } finally {
         imported.delete();
       }
@@ -88,6 +121,23 @@ describe.skipIf(!existsSync(coreFile) || !existsSync(libraryRoot))('installed Ma
         <input name="in1" type="float" nodename="rough" />
         <input name="in2" type="float" nodename="rough" />
       </multiply><output name="roughness" type="float" nodename="scale" /></nodegraph>
+      <subtract name="offset" type="float">
+        <input name="in1" type="float" nodegraph="NG" output="roughness" />
+        <input name="in2" type="float" value="0.5" />
+      </subtract>
+      <absval name="absolute" type="float"><input name="in" type="float" nodename="offset" /></absval>
+      <min name="bounded" type="float">
+        <input name="in1" type="float" nodename="absolute" />
+        <input name="in2" type="float" value="0.2" />
+      </min>
+      <divide name="half" type="color3" nodedef="ND_divide_color3FA">
+        <input name="in1" type="color3" value="0.25, 0.5, 0.75" />
+        <input name="in2" type="float" value="2" />
+      </divide>
+      <max name="glow" type="color3">
+        <input name="in1" type="color3" nodename="half" />
+        <input name="in2" type="color3" value="0.25, 0.25, 0.25" />
+      </max>
       <texcoord name="uv" type="vector2"><input name="index" type="integer" value="0" /></texcoord>
       <checkerboard name="checks" type="color3">
         <input name="texcoord" type="vector2" nodename="uv" />
@@ -96,7 +146,9 @@ describe.skipIf(!existsSync(coreFile) || !existsSync(libraryRoot))('installed Ma
       <standard_surface name="surface" type="surfaceshader">
         <input name="base_color" type="color3" nodename="checks" />
         <input name="specular_color" type="color3" value="0.2, 0.3, 0.4" />
-        <input name="specular_roughness" type="float" nodegraph="NG" output="roughness" />
+        <input name="specular_roughness" type="float" nodename="bounded" />
+        <input name="emission" type="float" value="1" />
+        <input name="emission_color" type="color3" nodename="glow" />
       </standard_surface>
       <surfacematerial name="mat" type="material"><input name="surfaceshader" type="surfaceshader" nodename="surface" /></surfacematerial>
     </materialx>`]]) });
@@ -119,7 +171,16 @@ describe.skipIf(!existsSync(coreFile) || !existsSync(libraryRoot))('installed Ma
           ...unit, materialName: 'NG_rough', referencedPrimPath: '/MaterialX/Materials/NG_rough',
         });
         expect(roundTrip?.surface?.inputs.get('specular_roughness')?.source)
-          .toEqual({ kind: 'connection', nodeId: 'NG_scale' });
+          .toEqual({ kind: 'connection', nodeId: 'bounded' });
+        for (const [node, input, upstream] of [
+          ['bounded', 'in1', 'absolute'], ['absolute', 'in', 'offset'], ['offset', 'in1', 'NG_scale'], ['glow', 'in1', 'half'],
+        ]) {
+          expect(roundTrip?.graph?.nodes.get(node!)?.inputs.find(binding => binding.name === input)?.source)
+            .toEqual({ kind: 'connection', nodeId: upstream });
+        }
+        expect(roundTrip?.graph?.nodes.get('half')?.nodeDef?.name).toBe('ND_divide_color3FA');
+        expect(evaluateSurfaceToLayered(roundTrip!.graph!, roundTrip!.surface!, {}).emission)
+          .toEqual([0.25, 0.25, 0.375]);
         expect(roundTrip?.graph?.nodes.get('NG_scale')?.inputs.map(input => input.source))
           .toEqual(Array(2).fill({ kind: 'connection', nodeId: 'NG_rough_2' }));
         expect(roundTrip?.graph?.nodes.get('NG_rough_2')?.inputs[0]?.source)

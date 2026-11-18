@@ -1,6 +1,6 @@
 import type { SceneAsset } from '../../scene/types.ts';
 import { materialUnitKey } from '../../usd/materials.ts';
-import type { SceneResources } from '../scene-resources.ts';
+import type { MaterialResource, SceneResources } from '../scene-resources.ts';
 import { buildDisneyAcceleration } from './disney-acceleration.ts';
 import { packDisneyGeometryTextures, type DisneyGeometryTextures } from './disney-geometry-textures.ts';
 import { disneyMaterialFromPrincipled, packDisneyMaterials, type DisneyMaterial } from './disney-material.ts';
@@ -12,6 +12,22 @@ export interface DisneySceneData {
   materials: readonly DisneyMaterial[];
   textures: DisneyTextureRegistry;
   warnings: readonly { materialKey: string; message: string }[];
+}
+
+export function convertDisneySceneMaterial(key: string, resource: MaterialResource, textures: DisneyTextureRegistry) {
+  const surface = resource.resolvedSurface;
+  if (!surface) throw new Error(`Missing resolved Disney surface: ${key}.`);
+  if (resource.volumeIr || resource.volumeMedium || resource.volumeBoundary || resource.displacement ||
+      surface.backNodeId || resource.surfaceGraph?.terminals.some(terminal =>
+        (terminal.name === 'volumeshader' || terminal.name === 'displacementshader') && terminal.nodeId)) {
+    throw new Error(`Unsupported volume, displacement or back surface in Disney material: ${key}.`);
+  }
+  if (surface.family === 'disney_principled') return disneyMaterialFromPrincipled(surface, resource.parameters);
+  if (surface.family === 'standard_surface' && resource.surfaceGraph) {
+    return disneyMaterialFromStandard(surface, resource.surfaceGraph, resource.parameters,
+      (file, usage) => textures.add(file, usage));
+  }
+  throw new Error(`Unsupported Disney material family or missing graph for ${key}: ${surface.family}.`);
 }
 
 /**
@@ -31,22 +47,7 @@ export function prepareDisneyScene(scene: SceneAsset, resources: SceneResources)
     if (existing !== undefined) return existing;
     const resource = resources.materials.get(key);
     if (!resource) throw new Error(`Missing compiled Disney material: ${key}.`);
-    const surface = resource.resolvedSurface;
-    if (!surface) throw new Error(`Missing resolved Disney surface: ${key}.`);
-    if (resource.volumeIr || resource.volumeMedium || resource.volumeBoundary || resource.displacement ||
-        surface.backNodeId || resource.surfaceGraph?.terminals.some(terminal =>
-          (terminal.name === 'volumeshader' || terminal.name === 'displacementshader') && terminal.nodeId)) {
-      throw new Error(`Unsupported volume, displacement or back surface in Disney material: ${key}.`);
-    }
-    let converted: ReturnType<typeof disneyMaterialFromPrincipled>;
-    if (surface.family === 'disney_principled') {
-      converted = disneyMaterialFromPrincipled(surface, resource.parameters);
-    } else if (surface.family === 'standard_surface' && resource.surfaceGraph) {
-      converted = disneyMaterialFromStandard(surface, resource.surfaceGraph, resource.parameters,
-        (file, usage) => textures.add(file, usage));
-    } else {
-      throw new Error(`Unsupported Disney material family or missing graph for ${key}: ${surface.family}.`);
-    }
+    const converted = convertDisneySceneMaterial(key, resource, textures);
     const index = materials.length;
     materials.push(converted.material);
     materialIndices.set(key, index);

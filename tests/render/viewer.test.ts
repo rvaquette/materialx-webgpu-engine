@@ -98,8 +98,9 @@ def Xform "World" {
     nodes: new Map([['s', { id: 's', category: 'standard_surface', type: 'surfaceshader', inputs: [
       { name: 'base_color', type: 'color3', source: { kind: 'value' as const, type: 'color3', value: '0.8, 0.8, 0.8' }, provenance: { namePath: '/s/base_color' } },
       { name: 'coat', type: 'float', source: { kind: 'value' as const, type: 'float', value: '0' }, provenance: { namePath: '/s/coat' } },
-      { name: 'specular_roughness', type: 'float', source: { kind: 'value' as const, type: 'float', value: '0.2' }, provenance: { namePath: '/s/specular_roughness' } },
+      { name: 'specular_roughness', type: 'float', min: [0], max: [1], source: { kind: 'value' as const, type: 'float', value: '0.2' }, provenance: { namePath: '/s/specular_roughness' } },
       { name: 'diffuse_roughness', type: 'float', source: { kind: 'value' as const, type: 'float', value: '0.8' }, provenance: { namePath: '/s/diffuse_roughness' } },
+      { name: 'coat_roughness', type: 'float', source: { kind: 'value' as const, type: 'float', value: '0.1' }, provenance: { namePath: '/s/coat_roughness' } },
     ], provenance: { namePath: '/s' } }]]),
   };
   const builder = new IrModuleBuilder();
@@ -582,6 +583,61 @@ describe('interactive viewer resource lifecycle', () => {
     expect(loadUsdScene).toHaveBeenCalledTimes(loads);
   });
 
+  it.each(['raster', 'pathtracing'] as const)('captures the A/B pair in %s without changing the live scene', async backend => {
+    const { viewer, loaded, device, pass } = await setup(false, true);
+    Object.assign(device, { pushErrorScope: vi.fn(), popErrorScope: async () => null });
+    const actual = await vi.importActual<typeof import('../../src/render/pathtracing/scene-buffers.ts')>(
+      '../../src/render/pathtracing/scene-buffers.ts');
+    vi.mocked(buildCachedPathTraceScene).mockImplementation(actual.buildCachedPathTraceScene);
+    const path = '/World/Ball';
+    const loads = vi.mocked(loadUsdScene).mock.calls.length;
+    viewer.saveObjectMaterialVariant(path, 'A');
+    await viewer.setObjectParameters(path, new Map([['surface:specular_roughness', [0.7]]]));
+    viewer.saveObjectMaterialVariant(path, 'B');
+    const graph = viewer.objectSurfaceGraph(path);
+    const signal = new AbortController().signal;
+    const options = backend === 'raster' ? { backend } : { backend, samples: 2 };
+    const pair = await viewer.captureObjectMaterialVariants(path, options, signal);
+    for (const image of [pair.A, pair.B]) {
+      expect(image.width).toBe(256);
+      expect(image.height).toBe(256);
+      expect(image.rgba).toHaveLength(256 * 256 * 4);
+    }
+    const copies = device.createCommandEncoder.mock.results.flatMap(({ value }) => value.copyTextureToBuffer.mock.calls);
+    expect(copies).toHaveLength(2);
+    if (backend === 'pathtracing') {
+      const inputs = vi.mocked(buildCachedPathTraceScene).mock.calls;
+      expect(inputs).toHaveLength(2);
+      expect(inputs[0]![1]?.frameCamera).toEqual(inputs[1]![1]?.frameCamera);
+      expect(inputs.map(([resources]) => [...resources.materials.values()][0]?.parameters
+        ?.find(parameter => parameter.input === 'specular_roughness')?.value)).toEqual([[0.2], [0.7]]);
+      expect(pass.dispatchWorkgroups).toHaveBeenCalledTimes(2 * 2 * pathTraceTileCount(256, 256));
+    } else {
+      expect(pass.drawIndexed).toHaveBeenCalled();
+      expect(buildCachedPathTraceScene).not.toHaveBeenCalled();
+    }
+    expect(viewer.backend).toBe('raster');
+    expect(viewer.objectSurfaceGraph(path)).toBe(graph);
+    expect(viewer.objectMaterialVariants(path)).toEqual({ A: 'saved', B: 'active' });
+    expect(loadUsdScene).toHaveBeenCalledTimes(loads);
+    expect(loaded.mtlx.documents?.delete).not.toHaveBeenCalled();
+  });
+
+  it('refuses incomplete or cancelled comparisons without allocating a render target', async () => {
+    const { viewer, device } = await setup(false, true);
+    const path = '/World/Ball';
+    const abort = new AbortController();
+    const textures = device.createTexture.mock.calls.length;
+    viewer.saveObjectMaterialVariant(path, 'A');
+    await expect(viewer.captureObjectMaterialVariants(path, { backend: 'raster' }, abort.signal)).rejects.toThrow('Enregistre');
+    viewer.saveObjectMaterialVariant(path, 'B');
+    await expect(viewer.captureObjectMaterialVariants(path, { backend: 'pathtracing', samples: 0 }, abort.signal))
+      .rejects.toThrow('1 à 64');
+    abort.abort();
+    await expect(viewer.captureObjectMaterialVariants(path, { backend: 'raster' }, abort.signal)).rejects.toThrow('aborted');
+    expect(device.createTexture).toHaveBeenCalledTimes(textures);
+  });
+
   it('shares a Constant between two surface inputs and restores the previous secondary literal', async () => {
     const { viewer } = await setup(false, true);
     const path = '/World/Ball';
@@ -604,6 +660,156 @@ describe('interactive viewer resource lifecycle', () => {
     expect(binding('specular_roughness')).toEqual({ kind: 'connection', nodeId: source });
     await viewer.setObjectConstant(path, source, 'value', false);
     expect(binding('specular_roughness')).toEqual({ kind: 'value', type: 'float', value: '0.5' });
+  });
+
+  it('redirects a secondary link atomically and still restores its original literal', async () => {
+    const { viewer } = await setup(false, true);
+    const path = '/World/Ball';
+    const input = 'diffuse_roughness';
+    const first = 'specular_roughness_constant';
+    const second = 'coat_roughness_constant';
+    const binding = () => viewer.objectSurfaceGraph(path)?.nodes.get('s')?.inputs.find(entry => entry.name === input)?.source;
+    await viewer.setObjectConstant(path, 's', 'specular_roughness', true);
+    await viewer.setObjectConstant(path, 's', 'coat_roughness', true);
+    await viewer.setObjectConstant(path, 's', 'base_color', true);
+    await viewer.setObjectConstantLink(path, 's', input, first);
+    const connected = viewer.objectSurfaceGraph(path);
+    expect(viewer.objectConstantSources(path, 's', input)).toEqual([second]);
+    expect(viewer.objectConstantSources(path, 's', 'specular_roughness')).toEqual([]);
+    await expect(viewer.setObjectConstantLink(path, 's', input, 'base_color_constant')).rejects.toThrow('incompatible');
+    await viewer.setObjectConstantLink(path, 's', input, first);
+    expect(viewer.objectSurfaceGraph(path)).toBe(connected);
+    await viewer.setObjectConstantLink(path, 's', input, second);
+    expect(binding()).toEqual({ kind: 'connection', nodeId: second });
+    await viewer.setObjectConstant(path, first, 'value', false);
+    await expect(viewer.setObjectConstant(path, second, 'value', false)).rejects.toThrow('utilisé ailleurs');
+    await viewer.setObjectConstantLink(path, 's', input, null);
+    expect(binding()).toEqual({ kind: 'value', type: 'float', value: '0.8' });
+  });
+
+  it('inserts a neutral Multiply, validates its factor and folds the computed value back into the surface', async () => {
+    const { viewer } = await setup(false, true);
+    const path = '/World/Ball';
+    const input = 'specular_roughness';
+    const nodeId = `${input}_multiply`;
+    const loads = vi.mocked(loadUsdScene).mock.calls.length;
+    expect(viewer.canInsertObjectConstant(path, 's', input, 'multiply')).toBe(true);
+    await viewer.setObjectConstant(path, 's', input, true, 'multiply');
+    const read = () => viewer.objectSurfaceGraph(path)!;
+    const multiply = read().nodes.get(nodeId)!;
+    expect(multiply.inputs.map(entry => entry.source)).toEqual([
+      { kind: 'value', type: 'float', value: '0.2' },
+      { kind: 'value', type: 'float', value: '1' },
+    ]);
+    expect(read().nodes.get('s')?.inputs.find(entry => entry.name === input)?.source)
+      .toEqual({ kind: 'connection', nodeId });
+    expect(viewer.objectConstantSources(path, 's', 'diffuse_roughness')).not.toContain(nodeId);
+    const factor = viewer.objectParameters(path, nodeId)[0]!;
+    await expect(viewer.setObjectParameters(path, new Map([[factor.id, [1.01]]]))).rejects.toThrow('above its maximum');
+    await viewer.setObjectParameters(path, new Map([[factor.id, [0.5]]]));
+    expect(read().nodes.get(nodeId)?.inputs.find(entry => entry.name === 'in2')?.source)
+      .toEqual({ kind: 'value', type: 'float', value: '0.5' });
+    await viewer.setObjectConstant(path, nodeId, 'in2', false, 'multiply');
+    expect(read().nodes.has(nodeId)).toBe(false);
+    expect(viewer.objectParameters(path, 's').find(entry => entry.input === input)?.value).toEqual([0.1]);
+    expect(loadUsdScene).toHaveBeenCalledTimes(loads);
+  });
+
+  it('inserts a neutral Add, bounds its offset and preserves the sum when removed', async () => {
+    const { viewer, device } = await setup(false, true);
+    const path = '/World/Ball';
+    const input = 'specular_roughness';
+    const nodeId = `${input}_add`;
+    expect(viewer.canInsertObjectConstant(path, 's', 'base_color', 'add')).toBe(false);
+    expect(viewer.canInsertObjectConstant(path, 's', 'diffuse_roughness', 'add')).toBe(false);
+    await viewer.setObjectConstant(path, 's', input, true, 'add');
+    const node = () => viewer.objectSurfaceGraph(path)?.nodes.get(nodeId);
+    expect(node()?.nodeDef?.name).toBe('ND_add_float');
+    expect(node()?.inputs.map(entry => entry.source)).toEqual([
+      { kind: 'value', type: 'float', value: '0.2' },
+      { kind: 'value', type: 'float', value: '0' },
+    ]);
+    const offset = viewer.objectParameters(path, nodeId)[0]!;
+    await expect(viewer.setObjectParameters(path, new Map([[offset.id, [-0.21]]]))).rejects.toThrow('below its minimum');
+    await expect(viewer.setObjectParameters(path, new Map([[offset.id, [0.81]]]))).rejects.toThrow('above its maximum');
+    const pipelines = device.createRenderPipeline.mock.calls.length;
+    await viewer.setObjectParameters(path, new Map([[offset.id, [0.3]]]));
+    expect(device.createRenderPipeline).toHaveBeenCalledTimes(pipelines);
+    expect(node()?.inputs[1]?.source).toEqual({ kind: 'value', type: 'float', value: '0.3' });
+    await viewer.setObjectConstant(path, nodeId, 'in2', false, 'add');
+    expect(node()).toBeUndefined();
+    expect(viewer.objectParameters(path, 's').find(entry => entry.input === input)?.value).toEqual([0.5]);
+  });
+
+  it('scales all three color components with one editable factor, then folds the result as color3', async () => {
+    const { viewer, device } = await setup(false, true);
+    const path = '/World/Ball';
+    const input = 'base_color';
+    const nodeId = `${input}_multiply`;
+    await viewer.setObjectParameters(path, new Map([['surface:base_color', [0.2, 0.4, 0.8]]]));
+    await viewer.setObjectConstant(path, 's', input, true, 'multiply');
+    const multiply = viewer.objectSurfaceGraph(path)?.nodes.get(nodeId);
+    expect(multiply?.nodeDef?.name).toBe('ND_multiply_color3FA');
+    expect(multiply?.inputs[0]?.source).toEqual({ kind: 'value', type: 'color3', value: '0.2, 0.4, 0.8' });
+    const factor = viewer.objectParameters(path, nodeId)[0]!;
+    expect(factor.value).toEqual([1]);
+    const pipelines = device.createRenderPipeline.mock.calls.length;
+    device.queue.writeBuffer.mockClear();
+    await viewer.setObjectParameters(path, new Map([[factor.id, [0.5]]]));
+    expect(device.createRenderPipeline).toHaveBeenCalledTimes(pipelines);
+    expect(device.queue.writeBuffer.mock.calls.some(([, , data]) =>
+      data instanceof ArrayBuffer && new Float32Array(data).includes(0.5))).toBe(true);
+    await viewer.setObjectConstant(path, nodeId, 'in2', false, 'multiply');
+    expect(viewer.objectSurfaceGraph(path)?.nodes.get('s')?.inputs.find(entry => entry.name === input)?.source)
+      .toEqual({ kind: 'value', type: 'color3', value: '0.1, 0.2, 0.4' });
+    expect(viewer.objectParameters(path, 's').find(entry => entry.input === input)?.value).toEqual([0.1, 0.2, 0.4]);
+  });
+
+  it('updates a Multiply factor in a prepared MaterialX path tracer without recompiling', async () => {
+    const actual = await vi.importActual<typeof import('../../src/render/pathtracing/scene-buffers.ts')>(
+      '../../src/render/pathtracing/scene-buffers.ts');
+    vi.mocked(buildCachedPathTraceScene).mockImplementation(actual.buildCachedPathTraceScene);
+    const { viewer, device, statuses } = await setup(false, true, 'pathtracing');
+    const path = '/World/Ball';
+    await viewer.setObjectConstant(path, 's', 'base_color', true, 'multiply');
+    const factor = viewer.objectParameters(path, 'base_color_multiply')[0]!;
+    tick(0);
+    await vi.waitFor(() => expect(statuses.at(-1)?.pathTracer).toBe('ready'));
+    const pipelines = device.createComputePipelineAsync.mock.calls.length;
+    device.queue.writeBuffer.mockClear();
+    await viewer.setObjectParameters(path, new Map([[factor.id, [0.375]]]));
+    expect(statuses.at(-1)).toMatchObject({ pathTracer: 'ready', samples: 0 });
+    expect(device.createComputePipelineAsync).toHaveBeenCalledTimes(pipelines);
+    expect(buildCachedPathTraceScene).toHaveBeenCalledOnce();
+    expect(device.queue.writeBuffer.mock.calls.some(([, , data]) =>
+      data instanceof ArrayBuffer && new Float32Array(data).includes(0.375))).toBe(true);
+  });
+
+  it('refreshes Disney material data after a Multiply edit without rebuilding raster', async () => {
+    const dispose = vi.fn();
+    const create = vi.spyOn(DisneyGpuBackend, 'create').mockResolvedValue(
+      { dispose, reset: vi.fn() } as Pick<DisneyGpuBackend, 'dispose' | 'reset'> as DisneyGpuBackend,
+    );
+    try {
+      const { viewer, device, statuses } = await setup(false, true);
+      const path = '/World/Ball';
+      await viewer.setObjectConstant(path, 's', 'base_color', true, 'multiply');
+      const factor = viewer.objectParameters(path, 'base_color_multiply')[0]!;
+      viewer.setBackend('disney');
+      tick(0);
+      await vi.waitFor(() => expect(statuses.at(-1)?.pathTracer).toBe('ready'));
+      expect(create.mock.calls[0]?.[1].materials[0]?.baseColor).toEqual([0.8, 0.8, 0.8]);
+      viewer.setBackend('raster');
+      const pipelines = device.createRenderPipeline.mock.calls.length;
+      await viewer.setObjectParameters(path, new Map([[factor.id, [0.5]]]));
+      expect(device.createRenderPipeline).toHaveBeenCalledTimes(pipelines);
+      expect(create).toHaveBeenCalledOnce();
+      expect(dispose).toHaveBeenCalledOnce();
+      viewer.setBackend('disney');
+      tick(1);
+      await vi.waitFor(() => expect(create).toHaveBeenCalledTimes(2));
+      expect(create.mock.calls[1]?.[1].materials[0]?.baseColor).toEqual([0.4, 0.4, 0.4]);
+    } finally { create.mockRestore(); }
   });
 
   it('connects an editable Constant and restores the literal with its updated value without reloading USD', async () => {
@@ -745,6 +951,26 @@ describe('interactive viewer resource lifecycle', () => {
       expect(buildCachedPathTraceScene).toHaveBeenCalledTimes(1);
       expect(error).toHaveBeenCalledWith('Path tracer: test preparation');
     } finally { error.mockRestore(); }
+  });
+
+  it('reports the selected material’s Disney approximations from applied values before GPU preparation', async () => {
+    const { viewer, device } = await setup(false, true);
+    const path = '/World/Ball';
+    const diffuseWarning = 'Independent diffuse roughness is replaced by the squared specular roughness.';
+    expect(viewer.objectDisneyMaterialDiagnostics(path)).toBeUndefined();
+    viewer.setBackend('disney');
+    expect(viewer.objectDisneyMaterialDiagnostics('/World/Unknown')).toBeUndefined();
+    expect(viewer.objectDisneyMaterialDiagnostics(path)).toMatchObject({
+      warnings: expect.arrayContaining([diffuseWarning]),
+    });
+    await viewer.setObjectParameters(path, new Map([
+      ['surface:specular_roughness', [0]],
+      ['surface:diffuse_roughness', [0]],
+    ]));
+    expect(viewer.objectDisneyMaterialDiagnostics(path)).toMatchObject({
+      warnings: expect.not.arrayContaining([diffuseWarning]),
+    });
+    expect(device.createComputePipelineAsync).not.toHaveBeenCalled();
   });
 
   it('does not repeatedly clear the Disney canvas while its pipeline is compiling or after an error', async () => {

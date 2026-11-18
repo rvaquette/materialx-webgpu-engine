@@ -171,21 +171,29 @@ async function main(): Promise<void> {
       showMaterialGraph(graphDialog, target.objectSurfaceGraph(path), material, {
         parameters: nodeId => target.objectParameters(path, nodeId),
         diagnostics: nodeId => target.objectSurfaceInputDiagnostics(path, nodeId),
+        disneyDiagnostics: () => target.objectDisneyMaterialDiagnostics(path),
         async apply(changes) {
           await editMaterial('Application des paramètres du matériau...', () => target.setObjectParameters(path, changes));
           return target.objectSurfaceGraph(path);
         },
-        canInsertConstant: (nodeId, input) => target.canInsertObjectConstant(path, nodeId, input),
-        setConstant: (nodeId, input, insert) => editGraph(() => target.setObjectConstant(path, nodeId, input, insert)),
+        canInsertConstant: (nodeId, input, kind) => target.canInsertObjectConstant(path, nodeId, input, kind),
+        setConstant: (nodeId, input, insert, kind) => editGraph(() => target.setObjectConstant(path, nodeId, input, insert, kind)),
         constantSources: (nodeId, input) => target.objectConstantSources(path, nodeId, input),
         canUnlinkConstant: (nodeId, input) => target.canUnlinkObjectConstant(path, nodeId, input),
         setConstantLink: (nodeId, input, sourceId) => editGraph(() => target.setObjectConstantLink(path, nodeId, input, sourceId)),
         variants: () => target.objectMaterialVariants(path),
+        variantGraph: slot => target.objectMaterialVariantGraph(path, slot),
         saveVariant(slot) {
           ensureEditable();
           target.saveObjectMaterialVariant(path, slot);
         },
         applyVariant: slot => editGraph(() => target.applyObjectMaterialVariant(path, slot)),
+        async captureVariants(options, signal) {
+          ensureEditable();
+          setBusy(true, 'Calcul des aperçus A/B…');
+          try { return await target.captureObjectMaterialVariants(path, options, signal); }
+          finally { setBusy(false); }
+        },
       });
     };
   }
