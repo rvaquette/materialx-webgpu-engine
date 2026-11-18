@@ -220,9 +220,24 @@ L'[exemple minimal](../examples/engine/index.html) est accessible à
 `/examples/engine/` avec `npm run dev`. Ce point d'entrée est utilisable
 depuis les sources Vite ; aucun paquet autonome n'est encore publié.
 
+**Deuxième étape implémentée :** `engine.objects` liste les objets rendus et leur
+chemin de prim USD. `engine.setMaterial()` remplace le matériau d'un objet sans
+réécrire le fichier de scène. Sans deuxième argument, la méthode restaure
+l'affectation d'origine.
+
+```ts
+await engine.setMaterial('/World/Triangle', { url: './orange.mtlx' });
+await engine.setMaterial('/World/Triangle'); // Restaurer le matériau USD
+```
+
+Les URL relatives sont résolues par rapport à la page hôte. Si
+`engine.isCompiledScene` vaut `true`, fournir aussi `compiledUrl`, l'URL du
+manifeste `material.json` compatible avec la scène. L'exemple minimal permet
+d'appliquer puis de restaurer un matériau dans une scène source.
+
 Travaux restants :
 
-- remplacement de matériaux via l'API et stabilisation du contrat public ;
+- stabilisation du contrat public ;
 - mode headless pour tests, captures et rendu en CI ;
 - publication sous forme de modules réutilisables ;
 - adaptateurs optionnels pour Three.js, React ou une application existante ;

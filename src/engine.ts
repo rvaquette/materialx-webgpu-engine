@@ -21,6 +21,18 @@ export type EngineRenderOptions =
   | { backend?: 'raster' | 'disney'; targetNoise?: never }
   | { backend: 'pathtracing'; targetNoise?: number };
 
+export interface EngineObject {
+  readonly path: string;
+  readonly material: string;
+  readonly assetPath?: string;
+}
+
+export interface EngineMaterial {
+  url: string | URL;
+  /** Required when replacing a material on a precompiled scene. */
+  compiledUrl?: string | URL;
+}
+
 /** Canvas-based rendering without the ImGui application. */
 export class MaterialXEngine {
   #disposed = false;
@@ -76,6 +88,30 @@ export class MaterialXEngine {
       await this.viewer.load(String(entry));
       if (this.#disposed) throw new Error('MaterialXEngine was disposed during scene loading.');
       this.#loaded = true;
+    } finally {
+      this.#busy = false;
+    }
+  }
+
+  get objects(): readonly EngineObject[] {
+    return this.#loaded && !this.#disposed ? this.viewer.objects.map(object => ({ ...object })) : [];
+  }
+
+  get isCompiledScene(): boolean {
+    return this.#loaded && !this.#disposed && this.viewer.isCompiledScene;
+  }
+
+  /** Omit the material to restore the object's original USD binding. */
+  async setMaterial(path: string, material?: EngineMaterial): Promise<void> {
+    this.#assertAvailable();
+    if (!this.#loaded) throw new Error('Load a USD scene before changing a material.');
+    const base = globalThis.document?.baseURI;
+    const url = material === undefined ? undefined : new URL(material.url, base).href;
+    const compiledUrl = material?.compiledUrl === undefined ? undefined : new URL(material.compiledUrl, base).href;
+    this.#busy = true;
+    try {
+      await this.viewer.setObjectMaterial(path, url, compiledUrl);
+      if (this.#disposed) throw new Error('MaterialXEngine was disposed during material replacement.');
     } finally {
       this.#busy = false;
     }
