@@ -11,6 +11,9 @@ const state = vi.hoisted(() => ({
   ui: undefined as ViewerUiState | undefined,
   actions: undefined as ViewerUiActions | undefined,
   environment: vi.fn(),
+  adaptive: vi.fn(),
+  limits: vi.fn(),
+  restart: vi.fn(),
 }));
 vi.mock('../src/viewer-ui.ts', () => ({
   startViewerUi: vi.fn(async (_canvas: unknown, ui: ViewerUiState, actions: ViewerUiActions) => {
@@ -29,6 +32,9 @@ vi.mock('../src/render/viewer.ts', () => ({
     load = state.load;
     setBackend = vi.fn();
     setEnvironmentEnabled = state.environment;
+    setPathTracingAdaptive = state.adaptive;
+    setPathTracingLimits = state.limits;
+    restartPathTracing = state.restart;
   },
 }));
 
@@ -89,11 +95,12 @@ describe('viewer loading indicator', () => {
   afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
   const settle = () => new Promise(resolve => setTimeout(resolve, 0));
-  const emit = (pathTracer: ViewerStatus['pathTracer'], backend: ViewerStatus['backend'] = 'pathtracing', samples = 0, paused = true) => {
+  const emit = (pathTracer: ViewerStatus['pathTracer'], backend: ViewerStatus['backend'] = 'pathtracing', samples = 0, paused = true, adaptive = false) => {
     state.onStatus!({
       backend, pathTracer, pathTracingPaused: paused, rasterQuality: 'interactive',
       environmentEnabled: true,
-      pathTracingDenoise: false, denoiser: { state: 'off' }, drawCount: 2, passes: [],
+      pathTracingDenoise: false, pathTracingAdaptive: adaptive, pathTracingView: 'beauty', denoiser: { state: 'off' }, drawCount: 2, passes: [],
+      pathTracingLimits: { stopOnConvergence: false, timeBudgetSeconds: 0, targetRelativeError: 0.05 },
       samples, warnings: 0,
     });
   };
@@ -227,6 +234,32 @@ describe('viewer loading indicator', () => {
     expect(indicator.hidden).toBe(true);
     expect(status.hidden).toBe(false);
     expect(status.textContent).toContain('WebGPU is not available');
+  });
+
+  it('wires adaptive sampling and labels its counter as sweeps, not per-pixel samples', async () => {
+    await import('../src/main.ts');
+    await settle();
+    state.actions!.adaptive(true);
+    expect(state.adaptive).toHaveBeenLastCalledWith(true);
+    emit('ready', 'pathtracing', 80, false, true);
+    expect(spp.textContent).toBe('80 balayages');
+    emit('ready', 'disney', 80, false, true);
+    expect(spp.textContent).toBe('80 spp');
+    finishLoad();
+    await settle();
+  });
+
+  it('wires render limits and explicit restart to the renderer', async () => {
+    await import('../src/main.ts');
+    await settle();
+    const limits = { stopOnConvergence: true, timeBudgetSeconds: 30, targetRelativeError: 0.05 };
+    state.actions!.limits(limits);
+    await settle();
+    expect(state.limits).toHaveBeenLastCalledWith(limits);
+    state.actions!.restartPathTracing();
+    expect(state.restart).toHaveBeenCalled();
+    finishLoad();
+    await settle();
   });
 
   it('wires the ImGui environment checkbox to the renderer and keeps its state', async () => {

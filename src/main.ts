@@ -6,6 +6,7 @@ import { MaterialParameterEditor } from './material-parameter-editor.ts';
 import { sceneDeviceDescriptor } from './gpu/device.ts';
 import { startViewerUi, type ViewerUiState, type ViewerUiActions } from './viewer-ui.ts';
 import type { LocalGltfScene } from './scene/local-gltf.ts';
+import { downloadDisplayedAovPng, downloadPathTraceAovPfm } from './render/aov-export.ts';
 
 let ui: ViewerUiState | undefined;
 let statusIsError = false;
@@ -114,7 +115,8 @@ async function main(): Promise<void> {
       const spp = document.getElementById('pathtracing-spp');
       if (spp) {
         spp.hidden = !pathTracerBackend || status.pathTracer !== 'ready';
-        spp.textContent = `${status.samples} spp${status.pathTracingPaused ? ' (pause)' : ''}`;
+        const unit = status.backend === 'pathtracing' && status.pathTracingAdaptive ? 'balayages' : 'spp';
+        spp.textContent = `${status.samples} ${unit}${status.pathTracingPaused ? ' (pause)' : ''}`;
       }
       shaderBusy = pathTracerBackend && (status.pathTracer === 'idle' || status.pathTracer === 'compiling');
       if (shaderBusy) {
@@ -271,6 +273,37 @@ async function main(): Promise<void> {
     }); },
     environment: enabled => { viewer.setEnvironmentEnabled(enabled); state.environmentEnabled = enabled; },
     denoise: enabled => { viewer.setPathTracingDenoise(enabled); state.denoise = enabled; },
+    compareDenoiser: enabled => viewer.setPathTracingDenoiserComparison(enabled),
+    adaptive: enabled => viewer.setPathTracingAdaptive(enabled),
+    pathTracingView: view => viewer.setPathTracingView(view),
+    exportAov: () => {
+      const current = state.status;
+      const selectedView = current?.pathTracingView;
+      if (current?.backend !== 'pathtracing' || current.pathTracer !== 'ready' ||
+          selectedView === undefined || selectedView === 'beauty') {
+        setStatus('Sélectionnez un AOV path tracing prêt avant de l’exporter.');
+        return;
+      }
+      void operation('Export de l’AOV...', async () => {
+        await device.queue.onSubmittedWorkDone();
+        await downloadDisplayedAovPng(canvas, state.entry, selectedView);
+      });
+    },
+    exportAovHdr: () => {
+      const current = state.status;
+      const selectedView = current?.pathTracingView;
+      if (current?.backend !== 'pathtracing' || current.pathTracer !== 'ready' ||
+          selectedView === undefined || selectedView === 'beauty' || current.samples === 0) {
+        setStatus('Attendez des samples dans un AOV path tracing avant de l’exporter en HDR.');
+        return;
+      }
+      void operation('Export HDR de l’AOV...', async () => {
+        const image = await viewer.readPathTracingAov();
+        await downloadPathTraceAovPfm(state.entry, selectedView, image);
+      });
+    },
+    limits: limits => { void operation('Mise a jour des limites de rendu...', async () => viewer.setPathTracingLimits(limits)); },
+    restartPathTracing: () => viewer.restartPathTracing(),
     exposure: value => { viewer.setExposure(value); state.exposure = value; },
     tonemap: value => { void operation('Mise à jour du tonemapping...', async () => { await viewer.setTonemap(value); state.tonemap = value; }); },
     pause: () => viewer.setPathTracingPaused(!viewer.pathTracingPaused),
@@ -303,6 +336,9 @@ async function main(): Promise<void> {
       const quality = viewer.rasterQuality;
       const pathTracingDepth = viewer.pathTracingDepth;
       const denoise = viewer.pathTracingDenoise;
+      const adaptive = viewer.pathTracingAdaptive;
+      const pathTracingView = viewer.pathTracingView;
+      const limits = viewer.pathTracingLimits;
       const environment = viewer.environmentEnabled;
       const paused = viewer.pathTracingPaused;
       viewer.dispose();
@@ -315,6 +351,10 @@ async function main(): Promise<void> {
         viewer = new InteractiveViewer({ device: next.device, context: context!, outputFormat, canvas: canvas!, ...viewerCallbacks });
         await viewer.setRasterQuality(quality);
         viewer.setPathTracingDenoise(denoise);
+        viewer.setPathTracingAdaptive(adaptive);
+        viewer.setPathTracingView(pathTracingView);
+        viewer.setPathTracingLimits(limits);
+        await viewer.setTonemap(state.tonemap);
         viewer.setEnvironmentEnabled(environment);
         viewer.setPathTracingPaused(paused);
         viewer.setBackend(backend);

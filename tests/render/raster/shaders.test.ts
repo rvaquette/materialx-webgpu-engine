@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { tonemapResolveWgsl } from '../../../src/render/raster/shaders.ts';
+import { displayTransformWgsl, tonemapResolveWgsl } from '../../../src/render/raster/shaders.ts';
+import { pathTraceDisplayWgsl } from '../../../src/render/pathtracing/display.ts';
 
 describe('tonemapResolveWgsl', () => {
   it('emits a fullscreen pass that samples the HDR target and applies sRGB', () => {
@@ -17,5 +18,13 @@ describe('tonemapResolveWgsl', () => {
     expect(tonemapResolveWgsl('acesFilmic')).toContain('2.51 * c');
     const none = tonemapResolveWgsl('none');
     expect(none).toContain('c = c;');
+  });
+
+  it('uses the runtime selector in viewer displays while retaining static transforms for reference renders', () => {
+    expect(tonemapResolveWgsl('acesFilmic', true)).toContain(displayTransformWgsl('acesFilmic', 'r.tonemap'));
+    expect(pathTraceDisplayWgsl(false, true)).toContain(displayTransformWgsl('acesFilmic', 'info.constantEnv.w'));
+    expect(tonemapResolveWgsl('none', true)).toContain('if (r.tonemap == 1.0)');
+    expect(tonemapResolveWgsl('none', true)).toContain('else if (r.tonemap == 2.0)');
+    expect(tonemapResolveWgsl('none')).not.toContain('r.tonemap');
   });
 });

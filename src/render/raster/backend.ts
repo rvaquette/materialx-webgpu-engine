@@ -164,9 +164,20 @@ export class RasterBackend {
   }
 
   /** Compiles and caches the fullscreen tonemap resolve pipeline. */
-  createResolvePipeline(): GPURenderPipeline {
-    const module = this.device.createShaderModule({ code: tonemapResolveWgsl(this.tonemap) });
+  createResolvePipeline(dynamicTonemap = false): GPURenderPipeline {
+    const module = this.device.createShaderModule({ code: tonemapResolveWgsl(this.tonemap, dynamicTonemap) });
     this.resolve = this.device.createRenderPipeline({
+      layout: 'auto',
+      vertex: { module, entryPoint: 'vs_main' },
+      fragment: { module, entryPoint: 'fs_main', targets: [{ format: this.outputFormat }] },
+      primitive: { topology: 'triangle-list' },
+    });
+    return this.resolve;
+  }
+
+  async createResolvePipelineAsync(dynamicTonemap = false): Promise<GPURenderPipeline> {
+    const module = this.device.createShaderModule({ code: tonemapResolveWgsl(this.tonemap, dynamicTonemap) });
+    this.resolve = await this.device.createRenderPipelineAsync({
       layout: 'auto',
       vertex: { module, entryPoint: 'vs_main' },
       fragment: { module, entryPoint: 'fs_main', targets: [{ format: this.outputFormat }] },
@@ -190,6 +201,29 @@ export class RasterBackend {
     const module = checkedModule ?? this.device.createShaderModule({ code });
     const transparent = pass === 'transmission';
     const pipeline = this.device.createRenderPipeline({
+      layout: 'auto',
+      vertex: { module, entryPoint: IR_FORWARD_VERTEX_ENTRY, buffers: SCENE_IR_VERTEX_LAYOUTS },
+      fragment: { module, entryPoint: IR_FORWARD_FRAGMENT_ENTRY, targets: [this.sceneColorTarget(transparent)] },
+      primitive: { topology: 'triangle-list', cullMode: pass === 'opaque' && !doubleSided ? 'back' : 'none' },
+      depthStencil: { format: this.depthFormat, depthWriteEnabled: !transparent, depthCompare: 'less' },
+    });
+    this.sceneVariants.set(cacheKey, pipeline);
+    return pipeline;
+  }
+
+  async createSceneVariantPipelineAsync(
+    pass: ScenePassKind,
+    pipelineKey: string,
+    code: string,
+    checkedModule?: GPUShaderModule,
+    doubleSided = false,
+  ): Promise<GPURenderPipeline> {
+    const cacheKey = `${pass}:${pipelineKey}`;
+    const cached = this.sceneVariants.get(cacheKey);
+    if (cached) return cached;
+    const module = checkedModule ?? this.device.createShaderModule({ code });
+    const transparent = pass === 'transmission';
+    const pipeline = await this.device.createRenderPipelineAsync({
       layout: 'auto',
       vertex: { module, entryPoint: IR_FORWARD_VERTEX_ENTRY, buffers: SCENE_IR_VERTEX_LAYOUTS },
       fragment: { module, entryPoint: IR_FORWARD_FRAGMENT_ENTRY, targets: [this.sceneColorTarget(transparent)] },

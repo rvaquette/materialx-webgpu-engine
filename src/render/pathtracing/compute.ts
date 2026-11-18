@@ -29,6 +29,8 @@ import {
 import { ANALYTIC_LIGHTS_WGSL } from './analytic-lights.ts';
 import { pruneWgslFunctions } from '../../compiler/wgsl-reachability.ts';
 import { MAX_SSS_WALK_EVENTS, sssCoefficientsWgsl } from './subsurface.ts';
+import { pathTraceAdaptiveSamplingWgsl, PT_CONVERGENCE_TARGET_RELATIVE_ERROR } from './convergence.ts';
+import { pathTraceViewIndex, type PathTraceView } from './display.ts';
 
 /** Compute workgroup tile edge (threads per dimension). */
 export const PT_WORKGROUP_SIZE = 8;
@@ -37,7 +39,7 @@ export const PT_COMPUTE_ENTRY = 'mx_path_trace';
 /** Floats in the path-trace uniform (PT_UNIFORM_SIZE / 4). Slots 0..39 hold the
  *  camera/light/env/frame blocks; 40..75 hold the 9 RGB SH irradiance coefficients
  *  (one vec4 per coefficient, w unused); 76..79 hold the tile and 80..83 the HDR
- *  texture radiance scale (x) and panorama flag (y); 84..99 hold the optional
+ *  texture radiance scale (x), panorama flag (y) and adaptive flag (z); 84..99 hold the optional
  *  display-only inverse background view-projection; 100..103 hold max depth,
  *  roulette depth, analytic light count and converted primary-camera flag. */
 export const PT_UNIFORM_FLOATS = 104;
@@ -151,9 +153,9 @@ struct Uniforms {
   env : vec4<f32>, // xyz = skyColor, w = skyPower (dome intensity; > 0 selects textured path)
   frame : vec4<f32>, // x = frameIndex, y = samplesPerFrame, z = width, w = height
   envExtra : vec4<f32>, // x = envResX, y = envResY, z = envTotalSum, w = hasEnvCdf
-  sh : array<vec4<f32>, 9>, // 9 RGB SH9 irradiance coefficients (.xyz), w unused
+  sh : array<vec4<f32>, 9>, // SH9 irradiance (.xyz); sh[8].w = relative noise target
   tile : vec4<f32>,
-  envTexture : vec4<f32>, // x = half-float texture radiance scale
+  envTexture : vec4<f32>, // radiance scale, panorama flag, adaptive flag, selected AOV index
   backgroundInvViewProj : mat4x4<f32>,
   transport : vec4<f32>, // depth, roulette depth, analytic light count, converted camera
 };
@@ -734,7 +736,8 @@ fn mx_alpha_visibility(origin: vec3f, direction: vec3f) -> f32 {
   return mx_visibility(origin, direction, 1.0e30);
 }
 
-fn integrate(ro0 : vec3<f32>, rd0 : vec3<f32>, backgroundDirection : vec3<f32>, state : ptr<function, u32>${displayAovs ? ', coverage: ptr<function, f32>' : ''}) -> vec3<f32> {
+${displayAovs ? 'struct MxSurfaceAov { value: vec4f };' : ''}
+fn integrate(ro0 : vec3<f32>, rd0 : vec3<f32>, backgroundDirection : vec3<f32>, state : ptr<function, u32>${displayAovs ? ', coverage: ptr<function, f32>, surfaceAov: ptr<function, MxSurfaceAov>' : ''}) -> vec3<f32> {
   var radiance = vec3<f32>(0.0);
   var beta = vec3<f32>(1.0);
   var ro = ro0;
@@ -921,8 +924,24 @@ ${displayAovs ? '      if (inMedium && cameraSegment) { *coverage = 1.0; cameraS
       ro = pos + rd * RAY_EPS;
       continue;
     }
-${displayAovs ? `    if (cameraSegment) {
+${displayAovs ? `    let aovMode = u32(U.envTexture.w);
+    if (cameraSegment) {
       *coverage = 1.0;
+      if (aovMode != 0u && aovMode != 4u) {
+        let aovNormal = mx_closure_oriented_normal(c, mx_closure_shading_normal(c, n), -rd);
+        let aovWo = transpose(basis(aovNormal)) * -rd;
+        if (aovMode == 1u) {
+          (*surfaceAov).value = vec4f(mx_closure_diffuse_albedo(c, aovWo), 1.0);
+        } else if (aovMode == 2u) {
+          (*surfaceAov).value = vec4f(aovNormal, 1.0);
+        } else if (aovMode == 3u) {
+          (*surfaceAov).value = vec4f(length(pos - ro0), 0.0, 0.0, 1.0);
+        } else if (aovMode == 5u) {
+          (*surfaceAov).value = vec4f(c.emission, 1.0);
+        } else if (aovMode == 6u) {
+          (*surfaceAov).value = vec4f(mx_closure_transmission_albedo(c), 1.0);
+        }
+      }
     }` : ''}
     cameraSegment = false;
     if (c.hasEmission != 0u) { radiance = radiance + beta * c.emission; }
@@ -1212,6 +1231,7 @@ fn camera_ray(px : vec2<f32>, dims : vec2<f32>, jitter : vec2<f32>) -> MxCameraR
 }
 
 ${displayAovs ? `
+${pathTraceAdaptiveSamplingWgsl()}
 fn camera_jitter(index: u32, pixel: u32) -> vec2f {
   var n = index + 1u;
   var base3 = 0.0;
@@ -1237,29 +1257,45 @@ fn ${PT_COMPUTE_ENTRY}(@builtin(global_invocation_id) gid : vec3<u32>) {
   let frameIndex = u32(U.frame.x);
   let spp = max(u32(U.frame.y), 1u);
   let dims = vec2<f32>(U.frame.z, U.frame.w);
+${displayAovs ? `  let outputPixel = pixel * 2u;
+  let previous = accum[outputPixel];
+  let adaptive = U.envTexture.z > 0.5;
+  if (adaptive && !mx_adaptive_sample(previous.xyz, accum[outputPixel + 1u].y, previous.w, frameIndex, pixel)) {
+    return;
+  }
+  // Skipped sweeps must not skip or repeat a pixel's own sampling sequence.
+  let sampleIndex = select(frameIndex * spp, u32(previous.w), adaptive);
+` : ''}
 
-  var state = pcg_hash(pixel + 0x9e3779b9u * (frameIndex + 1u));
+  var state = pcg_hash(pixel + 0x9e3779b9u * (${displayAovs ? 'select(frameIndex, u32(previous.w), adaptive)' : 'frameIndex'} + 1u));
   // eye.w carries an optional per-sample luminance clamp; 0 keeps the tracer
   // unbiased, > 0 tames glossy/env fireflies (hue-preserving down-scale).
   let fireflyMax = U.eye.w;
   var sample = vec3<f32>(0.0);
 ${displayAovs ? '  var coverage = 0.0;' : ''}
+${displayAovs ? '  var batchMeanLuminance = 0.0;\n  var batchM2 = 0.0;' : ''}
+${displayAovs ? '  var surfaceSum: MxSurfaceAov;' : ''}
   for (var i = 0u; i < spp; i = i + 1u) {
-    let jitter = ${displayAovs ? 'camera_jitter(frameIndex * spp + i, pixel)' : 'vec2<f32>(rng_next(&state), rng_next(&state))'};
+    let jitter = ${displayAovs ? 'camera_jitter(sampleIndex + i, pixel)' : 'vec2<f32>(rng_next(&state), rng_next(&state))'};
     let ray = camera_ray(vec2<f32>(pixelCoord), dims, jitter);
 ${displayAovs ? '    var hitCoverage = 0.0;' : ''}
-    var radiance = integrate(ray.origin, ray.direction, ray.backgroundDirection, &state${displayAovs ? ', &hitCoverage' : ''});
+${displayAovs ? '    var surfaceAov: MxSurfaceAov;' : ''}
+    var radiance = integrate(ray.origin, ray.direction, ray.backgroundDirection, &state${displayAovs ? ', &hitCoverage, &surfaceAov' : ''});
 ${displayAovs ? '    coverage += hitCoverage;' : ''}
+${displayAovs ? '    surfaceSum.value += surfaceAov.value;' : ''}
     if (fireflyMax > 0.0) {
       let lum = dot(radiance, vec3<f32>(0.2126, 0.7152, 0.0722));
       if (lum > fireflyMax) { radiance = radiance * (fireflyMax / lum); }
     }
+${displayAovs ? `    let sampleLuminance = dot(radiance, vec3<f32>(0.2126, 0.7152, 0.0722));
+    let batchDelta = sampleLuminance - batchMeanLuminance;
+    batchMeanLuminance += batchDelta / f32(i + 1u);
+    batchM2 += batchDelta * (sampleLuminance - batchMeanLuminance);` : ''}
     sample = sample + radiance;
   }
   sample = sample / f32(spp);
 
   // Progressive accumulation: running mean keyed by frame index.
-${displayAovs ? '  let outputPixel = pixel * 2u;' : ''}
   let prev = accum[${displayAovs ? 'outputPixel' : 'pixel'}];
   let count = prev.w;
   let sampleCount = f32(spp);
@@ -1268,7 +1304,17 @@ ${displayAovs ? '  let outputPixel = pixel * 2u;' : ''}
   accum[${displayAovs ? 'outputPixel' : 'pixel'}] = vec4<f32>(mean, totalCount);
 ${displayAovs ? `  let oldCoverage = accum[outputPixel + 1u].x;
   let hits = coverage / f32(spp);
-  accum[outputPixel + 1u] = vec4f((oldCoverage * count + hits * sampleCount) / totalCount, 0.0, 0.0, 0.0);` : ''}
+  let oldM2 = accum[outputPixel + 1u].y;
+  let oldMeanLuminance = dot(prev.xyz, vec3f(0.2126, 0.7152, 0.0722));
+  let delta = batchMeanLuminance - oldMeanLuminance;
+  let totalM2 = oldM2 + batchM2 + delta * delta * count * sampleCount / totalCount;
+  accum[outputPixel + 1u] = vec4f((oldCoverage * count + hits * sampleCount) / totalCount, totalM2, 0.0, 0.0);
+  // Only the explicitly selected guide is stored after the radiance/moments prefix.
+  let aovMode = u32(U.envTexture.w);
+  if (aovMode != 0u && aovMode != 4u) {
+    let aovPixel = width * height * 2u + pixel;
+    accum[aovPixel] = (accum[aovPixel] * count + surfaceSum.value) / totalCount;
+  }` : ''}
 }
 `;
 }
@@ -1283,7 +1329,7 @@ export interface PathTraceComputeOptions {
     maxLobes?: number;
     /** Specialize runtime lobe dispatch only when all scene materials are known. */
     closureDispatch?: ClosureDispatchSpec;
-    /** Viewer-only radiance/coverage records; reference layout stays unchanged. */
+    /** Viewer-only radiance/moments prefix followed by one explicitly selected AOV. */
     displayAovs?: boolean;
     opaque?: boolean;
     analyticLights?: boolean;
@@ -1367,6 +1413,9 @@ export function buildPathTraceUniform(
   fireflyClamp = 0,
   tile?: PathTraceTile,
   maxDepthOverride?: number,
+  adaptiveSampling = false,
+  pathTracingView: PathTraceView = 'beauty',
+  targetRelativeError = PT_CONVERGENCE_TARGET_RELATIVE_ERROR,
 ): Float32Array {
   const d = new Float32Array(PT_UNIFORM_FLOATS);
   d.set(scene.camera.invViewProj, 0);
@@ -1392,8 +1441,11 @@ export function buildPathTraceUniform(
       d.set([sh[k * 3] ?? 0, sh[k * 3 + 1] ?? 0, sh[k * 3 + 2] ?? 0, 0], 40 + k * 4);
     }
   }
+  d[75] = targetRelativeError;
   d.set(tile ? [tile.x, tile.y, tile.width, tile.height] : [0, 0, width, height], 76);
   d[80] = env.textureRadianceScale ?? 1;
+  d[82] = adaptiveSampling ? 1 : 0;
+  d[83] = pathTraceViewIndex(pathTracingView);
   if (scene.camera.backgroundInvViewProj) {
     d[81] = 1;
     d.set(scene.camera.backgroundInvViewProj, 84);

@@ -11,6 +11,7 @@ const controls = vi.hoisted(() => ({
   io: { ConfigFlags: 0, AddMouseSourceEvent: vi.fn(), AddMousePosEvent: vi.fn() },
   style: { ScrollbarSize: 14, GrabMinSize: 12, FramePadding: {}, ItemSpacing: {}, WindowPadding: { x: 8, y: 8 } },
   number: undefined as number | undefined,
+  numberLabel: '',
   color: undefined as [number, number, number] | undefined,
 }));
 vi.mock('@mori2003/jsimgui', () => ({
@@ -50,10 +51,11 @@ vi.mock('@mori2003/jsimgui', () => ({
       controls.color = undefined;
       return true;
     }),
-    InputFloat: vi.fn((_label: string, value: [number]) => {
-      if (controls.number === undefined) return false;
+    InputFloat: vi.fn((label: string, value: [number]) => {
+      if (controls.number === undefined || (controls.numberLabel && controls.numberLabel !== label)) return false;
       value[0] = controls.number;
       controls.number = undefined;
+      controls.numberLabel = '';
       controls.color = undefined;
       controls.style.ScrollbarSize = 14;
       return true;
@@ -68,6 +70,7 @@ afterEach(() => {
   controls.selection = '';
   controls.header = false;
   controls.number = undefined;
+  controls.numberLabel = '';
   vi.useRealTimers();
 });
 
@@ -141,7 +144,8 @@ function fixture() {
   };
   const actions: ViewerUiActions = {
     scene: vi.fn(), resolution: vi.fn(), pathTracingDepth: vi.fn(), quality: vi.fn(), backend: vi.fn(), environment: vi.fn(),
-    denoise: vi.fn(), exposure: vi.fn(), tonemap: vi.fn(), pause: vi.fn(), openFiles: vi.fn(), object: vi.fn(), material: vi.fn(),
+    denoise: vi.fn(), compareDenoiser: vi.fn(), adaptive: vi.fn(), exposure: vi.fn(), tonemap: vi.fn(), pause: vi.fn(), openFiles: vi.fn(), object: vi.fn(), material: vi.fn(),
+    exportAov: vi.fn(), exportAovHdr: vi.fn(), limits: vi.fn(), restartPathTracing: vi.fn(), pathTracingView: vi.fn(),
   };
   const parameters = new MaterialParameterEditor({ parameters: () => [], apply: vi.fn(), error: vi.fn() });
   let tick!: FrameRequestCallback;
@@ -156,6 +160,109 @@ function fixture() {
 }
 
 describe('Dear ImGui viewer controls', () => {
+  it('starts raw/denoised comparison only for a paused beauty accumulation', async () => {
+    const f = fixture();
+    f.state.backend = 'pathtracing';
+    f.state.status = {
+      backend: 'pathtracing', pathTracer: 'ready', pathTracingPaused: true, pathTracingAdaptive: false,
+      pathTracingDenoise: true, pathTracingView: 'beauty', denoiser: { state: 'ready' }, rasterQuality: 'interactive',
+      environmentEnabled: true, samples: 8, drawCount: 1, passes: [], warnings: 0,
+      pathTracingLimits: { stopOnConvergence: false, timeBudgetSeconds: 0, targetRelativeError: 0.05 },
+    };
+    f.state.denoise = true;
+    vi.mocked(ImGui.Button).mockImplementation(label => label === 'Comparer brut / débruité');
+    const stop = await startViewerUi(f.canvas, f.state, f.actions, f.parameters);
+    f.render();
+    expect(f.actions.compareDenoiser).toHaveBeenCalledWith(true);
+    f.state.status.denoiserComparison = true;
+    vi.mocked(ImGui.Button).mockImplementation(label => label === 'Terminer la comparaison');
+    f.render();
+    expect(f.actions.compareDenoiser).toHaveBeenLastCalledWith(false);
+    expect(ImGui.Button).toHaveBeenCalledWith('Terminer la comparaison');
+    vi.mocked(ImGui.Button).mockImplementation(() => false);
+    stop();
+  });
+
+  it.each([[1.25, 0.0125], [30, 0.25], [0.2, 0.005]])(
+    'updates the shared convergence target from the UI (%s%%)',
+    async (percent, targetRelativeError) => {
+      const f = fixture();
+      f.state.backend = 'pathtracing';
+      f.state.status = {
+        backend: 'pathtracing', pathTracer: 'ready', pathTracingPaused: true, pathTracingAdaptive: false,
+        pathTracingDenoise: false, pathTracingView: 'beauty', denoiser: { state: 'off' }, rasterQuality: 'interactive',
+        environmentEnabled: true, samples: 80, drawCount: 1, passes: [], warnings: 0,
+        pathTracingLimits: { stopOnConvergence: false, timeBudgetSeconds: 0, targetRelativeError: 0.05 },
+      };
+      controls.number = percent;
+      controls.numberLabel = 'Cible de bruit (%)';
+      const stop = await startViewerUi(f.canvas, f.state, f.actions, f.parameters);
+      f.render();
+      expect(f.actions.limits).toHaveBeenLastCalledWith({
+        stopOnConvergence: false, timeBudgetSeconds: 0, targetRelativeError,
+      });
+      stop();
+    },
+  );
+
+  it('toggles adaptive sampling and shows sweeps for adaptive convergence', async () => {
+    const f = fixture();
+    f.state.backend = 'pathtracing';
+    f.state.status = {
+      backend: 'pathtracing', pathTracer: 'ready', pathTracingPaused: false, pathTracingAdaptive: true,
+      pathTracingDenoise: false, pathTracingView: 'beauty', denoiser: { state: 'off' }, rasterQuality: 'interactive',
+      environmentEnabled: true, samples: 80, drawCount: 1, passes: [], warnings: 0,
+      pathTracingLimits: { stopOnConvergence: false, timeBudgetSeconds: 0, targetRelativeError: 0.05 },
+      convergence: { columns: 1, rows: 1, samples: 80, targetRelativeError: 0.05, zones: [
+        { relativeError: 0.01, maximumRelativeError: 0.02, convergedFraction: 1, validFraction: 1 },
+      ] },
+    };
+    controls.checkbox = 'Echantillonnage adaptatif';
+    const stop = await startViewerUi(f.canvas, f.state, f.actions, f.parameters);
+    f.render();
+    expect(f.actions.adaptive).toHaveBeenCalledWith(false);
+    expect(ImGui.Text).toHaveBeenCalledWith('80 balayages');
+    expect(ImGui.Text).toHaveBeenCalledWith('Convergence par zone (80 balayages) : 100% des pixels mesurables');
+    controls.selection = 'Normales (monde)##normal';
+    f.render();
+    expect(f.actions.pathTracingView).toHaveBeenCalledWith('normal');
+    controls.selection = 'Émission primaire##emission';
+    f.render();
+    expect(f.actions.pathTracingView).toHaveBeenCalledWith('emission');
+    controls.selection = 'Transmission matériau##transmission';
+    f.render();
+    expect(f.actions.pathTracingView).toHaveBeenCalledWith('transmission');
+    controls.checkbox = 'Arret automatique (convergence)';
+    f.render();
+    expect(f.actions.limits).toHaveBeenLastCalledWith({ stopOnConvergence: true, timeBudgetSeconds: 0, targetRelativeError: 0.05 });
+    controls.checkbox = '';
+    controls.number = 12.5;
+    f.render();
+    expect(f.actions.limits).toHaveBeenLastCalledWith({ stopOnConvergence: false, timeBudgetSeconds: 12.5, targetRelativeError: 0.05 });
+    f.state.status.pathTracingProgress = { elapsedSeconds: 12.6, stopReason: 'time-budget' };
+    f.state.status.pathTracingMetrics = {
+      sweepsPerSecond: 4, budgetRemainingSeconds: 0, relativeNoise: 0.01, maximumRelativeNoise: 0.02,
+    };
+    vi.mocked(ImGui.Button).mockImplementation(label => label === 'Relancer le rendu');
+    f.render();
+    expect(ImGui.Text).toHaveBeenCalledWith('Temps de rendu actif : 12.6 s');
+    expect(ImGui.Text).toHaveBeenCalledWith('Arret auto : budget de temps atteint');
+    expect(ImGui.Text).toHaveBeenCalledWith('Debit moyen : 4.00 balayages/s');
+    expect(ImGui.Text).toHaveBeenCalledWith('Budget restant : 0.0 s actives');
+    expect(ImGui.Text).toHaveBeenCalledWith('Cible 5.0% : estimation indisponible (mode adaptatif)');
+    expect(ImGui.Text).toHaveBeenCalledWith('Bruit RMS (zones) : 1.00% ; max : 2.00%');
+    expect(f.actions.restartPathTracing).toHaveBeenCalled();
+    f.state.status.pathTracingAdaptive = false;
+    f.state.status.pathTracingMetrics = { sweepsPerSecond: 4, convergenceRemainingSeconds: 48, relativeVariance: 0.125 };
+    f.render();
+    expect(ImGui.Text).toHaveBeenCalledWith('Debit moyen : 4.00 spp/s');
+    expect(ImGui.Text).toHaveBeenCalledWith('Cible 5.0% : ~48.0 s actives restantes');
+    expect(ImGui.Text).toHaveBeenCalledWith('Variance normalisee : 1.250e-1');
+    expect(ImGui.Text).toHaveBeenCalledWith('Budget restant : illimite');
+    vi.mocked(ImGui.Button).mockImplementation(() => false);
+    stop();
+  });
+
   it('bounds the scene popup to the panel and keeps full labels in tooltips while selecting compact labels', async () => {
     const f = fixture();
     const label = 'LamaGeneralizedSchlick - Motion Mollification - NOT SUPPORTED';
@@ -172,12 +279,25 @@ describe('Dear ImGui viewer controls', () => {
     stop();
   });
 
-  it('keeps export out of the UI', async () => {
+  it('offers export only for a selected path tracing AOV', async () => {
     const f = fixture();
-    controls.header = true;
+    f.state.backend = 'pathtracing';
+    f.state.status = {
+      backend: 'pathtracing', pathTracer: 'ready', pathTracingPaused: false, pathTracingAdaptive: false,
+      pathTracingDenoise: false, pathTracingView: 'beauty', denoiser: { state: 'off' }, rasterQuality: 'interactive',
+      environmentEnabled: true, samples: 1, drawCount: 1, passes: [], warnings: 0,
+      pathTracingLimits: { stopOnConvergence: false, timeBudgetSeconds: 0, targetRelativeError: 0.05 },
+    };
     const stop = await startViewerUi(f.canvas, f.state, f.actions, f.parameters);
     f.render();
-    expect(vi.mocked(ImGui.Button).mock.calls.some(([label]) => label.includes('Exporter'))).toBe(false);
+    expect(vi.mocked(ImGui.Button).mock.calls.some(([label]) =>
+      label === 'Exporter AOV affiché (PNG)' || label === 'Exporter HDR (PFM)')).toBe(false);
+    f.state.status.pathTracingView = 'transmission';
+    vi.mocked(ImGui.Button).mockImplementation(label =>
+      label === 'Exporter AOV affiché (PNG)' || label === 'Exporter HDR (PFM)');
+    f.render();
+    expect(f.actions.exportAov).toHaveBeenCalledOnce();
+    expect(f.actions.exportAovHdr).toHaveBeenCalledOnce();
     vi.mocked(ImGui.Button).mockImplementation(() => false);
     stop();
   });

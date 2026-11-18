@@ -24,9 +24,11 @@ function mockPass(): MockPass {
 }
 
 function mockDevice() {
+  const createRenderPipeline = vi.fn((desc: Record<string, unknown>) => ({ desc }));
   return {
     createShaderModule: vi.fn((desc: { code: string }) => ({ desc })),
-    createRenderPipeline: vi.fn((desc: Record<string, unknown>) => ({ desc })),
+    createRenderPipeline,
+    createRenderPipelineAsync: vi.fn(async (desc: Record<string, unknown>) => createRenderPipeline(desc)),
   };
 }
 
@@ -79,6 +81,18 @@ describe('RasterBackend pipelines', () => {
     expect(desc.fragment.targets[0].format).toBe('bgra8unorm');
     expect(desc.depthStencil).toBeUndefined();
     expect(backend.resolvePipeline).toBe(pipeline);
+  });
+
+  it('creates resolve and scene pipelines through the asynchronous WebGPU APIs', async () => {
+    const { device, backend } = makeBackend();
+    const resolve = await backend.createResolvePipelineAsync(true);
+    const scene = await backend.createSceneVariantPipelineAsync('opaque', 'async-key', '// async shader');
+    expect(device.createRenderPipelineAsync).toHaveBeenCalledTimes(2);
+    expect(device.createRenderPipelineAsync.mock.calls[0]![0]).toMatchObject({
+      fragment: { targets: [{ format: 'bgra8unorm' }] },
+    });
+    expect(backend.resolvePipeline).toBe(resolve);
+    expect(backend.sceneVariantPipeline('opaque', 'async-key')).toBe(scene);
   });
 });
 

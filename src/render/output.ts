@@ -8,6 +8,10 @@
 import type { Vec3 } from '../scene/transforms.ts';
 
 export type Tonemap = 'none' | 'reinhard' | 'acesFilmic';
+export function tonemapIndex(op: Tonemap): number {
+  return { none: 0, reinhard: 1, acesFilmic: 2 }[op];
+}
+
 export type OutputColorSpace = 'lin_rec709' | 'raw';
 export type AntialiasMethod = 'none' | 'msaa' | 'supersample';
 

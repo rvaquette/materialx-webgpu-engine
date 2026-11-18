@@ -1395,6 +1395,18 @@ fn mx_closure_diffuse_albedo(c: LayeredClosure, wo: vec3f) -> vec3f {
   }
   return a;
 }
+// Material transmission diagnostic: weighted tint of transmissive closure lobes,
+// without Fresnel attenuation or tracing the radiance behind the surface.
+fn mx_closure_transmission_albedo(c: LayeredClosure) -> vec3f {
+  var a = vec3f(0.0);
+  for (var i = 0u; i < c.lobeCount; i = i + 1u) {
+    let l = c.lobes[i];
+    if (l.kind == MX_LOBE_TRANSLUCENT || l.kind == MX_LOBE_DIELECTRIC_TRANSMISSION) {
+      a = a + l.color * max(l.weight, 0.0);
+    }
+  }
+  return a;
+}
 // True when a BSDF sample drawn with random scalar uz picks a diffuse lobe (lit by
 // the SH probe, so the integrator suppresses its env miss), including LTC fuzz.
 fn mx_closure_sampled_is_diffuse(c: LayeredClosure, wo: vec3f, uz: f32) -> bool {

@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { pathTraceDisplayWgsl, previewScale, PT_DISPLAY_INFO_BYTES, PT_DISPLAY_PIXEL_BYTES } from '../../../src/render/pathtracing/display.ts';
+import {
+  PATH_TRACE_VIEWS, pathTraceDisplayWgsl, pathTraceStorageBytesPerPixel, pathTraceViewStoresAov, previewScale,
+  PT_DISPLAY_INFO_BYTES, PT_DISPLAY_PIXEL_BYTES, PT_SURFACE_AOV_PIXEL_BYTES,
+} from '../../../src/render/pathtracing/display.ts';
 import { pathTraceComputeWgsl } from '../../../src/render/pathtracing/compute.ts';
 import { displayTransformWgsl, tonemapResolveWgsl } from '../../../src/render/raster/shaders.ts';
 
@@ -10,6 +13,14 @@ describe('path tracing presentation', () => {
     expect(pathTraceDisplayWgsl(true)).toContain(transform);
     expect(PT_DISPLAY_INFO_BYTES).toBe(144);
     expect(PT_DISPLAY_PIXEL_BYTES).toBe(2 * 16);
+    expect(PT_SURFACE_AOV_PIXEL_BYTES).toBe(16);
+    expect(pathTraceStorageBytesPerPixel('beauty')).toBe(32);
+    expect(pathTraceStorageBytesPerPixel('variance')).toBe(32);
+    expect(pathTraceStorageBytesPerPixel('transmission')).toBe(48);
+    expect(pathTraceViewStoresAov('variance')).toBe(false);
+    expect(pathTraceViewStoresAov('normal')).toBe(true);
+    expect(PATH_TRACE_VIEWS.find(view => view.value === 'emission')).toEqual({ value: 'emission', label: 'Émission primaire' });
+    expect(PATH_TRACE_VIEWS.at(-1)).toEqual({ value: 'transmission', label: 'Transmission matériau' });
   });
 
   it('reconstructs previews, falls back only for unrendered tiles, and samples the dome at output resolution', () => {
@@ -27,6 +38,9 @@ describe('path tracing presentation', () => {
     expect(code).toContain('info.neuralEnabled == 0u');
     expect(code).toContain('textureLoad(neuralOutput');
     expect(code).toContain('mix(raw.xyz, denoised, clamp(coverage');
+    expect(code).toContain('info.env.w > 0.0');
+    expect(code).toContain('if (frag.x < split) { return raw; }');
+    expect(code).toContain('return vec4f(denoisedComposite, 1.0)');
     expect(code).not.toContain('fn filtered');
     expect(code).not.toContain('guide');
   });
@@ -52,5 +66,38 @@ describe('path tracing presentation', () => {
     expect(previewScale(4, 35)).toBe(4);
     expect(previewScale(4, 55)).toBe(4);
     expect(previewScale(4, 22)).toBe(4);
+  });
+
+  it('captures primary surface guides after opacity without changing the reference integrator', () => {
+    const reference = pathTraceComputeWgsl();
+    const viewer = pathTraceComputeWgsl({ displayAovs: true });
+    expect(reference).not.toContain('surfaceAov');
+    const capture = viewer.indexOf('(*surfaceAov).value = vec4f(mx_closure_diffuse_albedo(c, aovWo), 1.0)');
+    expect(capture).toBeGreaterThan(viewer.indexOf('rng_next(state) >= opacity'));
+    expect(capture).toBeLessThan(viewer.indexOf('cameraSegment = false;', capture));
+    expect(viewer).toContain('mx_closure_diffuse_albedo(c, aovWo)');
+    expect(viewer).toContain('mx_closure_transmission_albedo(c)');
+    expect(viewer).toContain('let aovMode = u32(U.envTexture.w)');
+    expect(viewer).toContain('if (aovMode != 0u && aovMode != 4u)');
+    expect(viewer).toContain('if (l.kind == MX_LOBE_TRANSLUCENT || l.kind == MX_LOBE_DIELECTRIC_TRANSMISSION)');
+    expect(viewer).toContain('a = a + l.color * max(l.weight, 0.0)');
+    expect(viewer).toContain('(*surfaceAov).value = vec4f(mx_closure_transmission_albedo(c), 1.0)');
+    expect(viewer).toContain('(*surfaceAov).value = vec4f(c.emission, 1.0)');
+    expect(viewer).toContain('width * height * 2u + pixel');
+    expect(viewer).toContain('(accum[aovPixel] * count + surfaceSum.value) / totalCount');
+  });
+
+  it('displays raw AOVs ahead of denoising with preview fallback and per-pixel sample variance', () => {
+    const shader = pathTraceDisplayWgsl(false, true, true);
+    expect(pathTraceDisplayWgsl(false)).not.toContain('fn aov_color');
+    expect(shader).toContain('aov = preview[aovIndex]');
+    expect(shader).toContain('aov.xyz / aov.w');
+    expect(shader).toContain('aov.x / aov.w');
+    expect(shader).toContain('srgb(clamp(aov.xyz, vec3f(0.0), vec3f(1.0)))');
+    expect(shader).toContain('srgb(emitted / (vec3f(1.0) + emitted))');
+    expect(shader).toContain('normalize(n) * 0.5 + 0.5');
+    expect(shader).toContain('dims.x * dims.y * 2u + xy.y * dims.x + xy.x');
+    expect(shader).toContain('moments.y, 0.0) / (pixel.w - 1.0)');
+    expect(shader.indexOf('return aov_color(frag)')).toBeLessThan(shader.indexOf('let raw = raw_color(frag)'));
   });
 });

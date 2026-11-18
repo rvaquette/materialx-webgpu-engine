@@ -3,6 +3,7 @@ import type { ViewerStatus, BackendKind } from './render/viewer.ts';
 import type { RasterQuality } from './render/raster/ir-forward.ts';
 import type { MaterialParameterEditor } from './material-parameter-editor.ts';
 import type { MaterialFolder } from './scene/material-tree.ts';
+import { PATH_TRACE_VIEWS, type PathTraceView } from './render/pathtracing/display.ts';
 
 export interface ViewerUiState {
   entry: string;
@@ -36,6 +37,13 @@ export interface ViewerUiActions {
   backend: (backend: BackendKind) => void;
   environment: (enabled: boolean) => void;
   denoise: (enabled: boolean) => void;
+  compareDenoiser: (enabled: boolean) => void;
+  adaptive: (enabled: boolean) => void;
+  pathTracingView: (view: PathTraceView) => void;
+  exportAov: () => void;
+  exportAovHdr: () => void;
+  limits: (limits: ViewerStatus['pathTracingLimits']) => void;
+  restartPathTracing: () => void;
   exposure: (value: number) => void;
   tonemap: (value: 'none' | 'reinhard' | 'acesFilmic') => void;
   pause: () => void;
@@ -175,6 +183,22 @@ export async function startViewerUi(
         ImGui.BeginDisabled(state.backend === 'disney');
         if (ImGui.Checkbox('Denoiser JS (neural)', denoise)) actions.denoise(denoise[0]);
         ImGui.EndDisabled();
+        if (state.backend === 'pathtracing' && state.status?.pathTracer === 'ready') {
+          const comparing = state.status.denoiserComparison === true;
+          const canCompare = comparing || (state.status.pathTracingPaused && state.status.pathTracingDenoise
+            && state.status.pathTracingView === 'beauty' && state.status.samples > 0);
+          ImGui.BeginDisabled(!canCompare);
+          if (ImGui.Button(comparing ? 'Terminer la comparaison' : 'Comparer brut / débruité')) {
+            actions.compareDenoiser(!comparing);
+          }
+          ImGui.SetItemTooltip(comparing
+            ? 'Affiche le rendu débruité seul. Reprendre le rendu quitte aussi la comparaison.'
+            : 'Activez le débruiteur, mettez le rendu en pause, puis comparez la même accumulation.');
+          ImGui.EndDisabled();
+          if (comparing && state.status.denoiser.state !== 'ready') {
+            ImGui.Text('Préparation de la comparaison...');
+          }
+        }
         ImGui.Text('Affichage');
         ImGui.SetNextItemWidth(-1);
         const exposureValue: [number] = [state.exposure];
@@ -195,7 +219,107 @@ export async function startViewerUi(
         ImGui.EndDisabled();
         if ((state.backend === 'pathtracing' || state.backend === 'disney') && state.status?.pathTracer === 'ready') {
           ImGui.SameLine();
-          ImGui.Text(`${state.status.samples} spp${state.status.pathTracingPaused ? ' (pause)' : ''}`);
+          const unit = state.backend === 'pathtracing' && state.status.pathTracingAdaptive ? 'balayages' : 'spp';
+          ImGui.Text(`${state.status.samples} ${unit}${state.status.pathTracingPaused ? ' (pause)' : ''}`);
+        }
+        if (state.backend === 'pathtracing' && state.status?.pathTracer === 'ready') {
+          combo('##path-tracing-view', state.status.pathTracingView, PATH_TRACE_VIEWS, value => {
+            const option = PATH_TRACE_VIEWS.find(option => option.value === value);
+            if (option) actions.pathTracingView(option.value);
+          });
+          ImGui.SetItemTooltip('Un seul AOV est stocké (+16 octets/pixel). Le choisir réinitialise l’accumulation ; si elle était en pause, reprenez-la. Beauté et variance n’ajoutent pas de sidecar.');
+          if (state.status.pathTracingView !== 'beauty' && state.status.samples > 0) {
+            if (ImGui.Button('Exporter AOV affiché (PNG)')) actions.exportAov();
+            const selectedView = PATH_TRACE_VIEWS.find(option => option.value === state.status?.pathTracingView);
+            ImGui.SetItemTooltip(`Exporte ${selectedView?.label ?? 'l’AOV sélectionné'} tel qu’affiché, en PNG 8 bits.`);
+            ImGui.SameLine();
+            if (ImGui.Button('Exporter HDR (PFM)')) actions.exportAovHdr();
+            ImGui.SetItemTooltip(`Exporte ${selectedView?.label ?? 'l’AOV sélectionné'} en valeurs flottantes brutes.`);
+          }
+          if (state.status.pathTracingView === 'albedo') {
+            ImGui.Text('Albedo diffus : les surfaces purement speculaires sont noires.');
+          } else if (state.status.pathTracingView === 'depth') {
+            ImGui.Text('Distance depuis l\'origine du rayon : gris = 1 / (1 + distance).');
+          } else if (state.status.pathTracingView === 'variance') {
+            ImGui.Text('Variance HDR : gris = V / (1 + V), magenta = moins de 2 samples.');
+          } else if (state.status.pathTracingView === 'emission') {
+            ImGui.Text('Émission de la surface primaire uniquement ; dynamique HDR compressée.');
+          } else if (state.status.pathTracingView === 'transmission') {
+            ImGui.Text('Somme des teintes pondérées des lobes transmissifs ; sans Fresnel ni éclairage traversant.');
+          }
+          const limits = state.status.pathTracingLimits;
+          const targetValuePercent = limits.targetRelativeError * 100;
+          const targetPercent = `${targetValuePercent.toFixed(1)}%`;
+          const adaptive: [boolean] = [state.status.pathTracingAdaptive];
+          if (ImGui.Checkbox('Echantillonnage adaptatif', adaptive)) actions.adaptive(adaptive[0]);
+          ImGui.SetItemTooltip(`Cible ${targetPercent}, minimum 64 samples/pixel, sonde tous les 8 balayages. Relance le rendu.`);
+          const stopOnConvergence: [boolean] = [limits.stopOnConvergence];
+          if (ImGui.Checkbox('Arret automatique (convergence)', stopOnConvergence)) {
+            actions.limits({ ...limits, stopOnConvergence: stopOnConvergence[0] });
+          }
+          ImGui.SetItemTooltip(`Tous les pixels sous ${targetPercent}, apres 64 balayages et 3 mesures consecutives. Estimation, pas une garantie.`);
+          const budget: [number] = [limits.timeBudgetSeconds];
+          if (ImGui.InputFloat('Budget actif (secondes)', budget, 1, 10, '%.1f')) {
+            actions.limits({ ...limits, timeBudgetSeconds: budget[0] });
+          }
+          ImGui.SetItemTooltip('0 = illimite. Temps des lots pleine resolution termines, hors pause et compilation. Depassement possible d\'un lot GPU.');
+          const target: [number] = [limits.targetRelativeError * 100];
+          if (ImGui.InputFloat('Cible de bruit (%)', target, 0.5, 1, '%.1f')) {
+            actions.limits({ ...limits, targetRelativeError: Math.min(25, Math.max(0.5, target[0])) / 100 });
+          }
+          ImGui.SetItemTooltip('Seuil relatif de confiance à 95%, entre 0,5% et 25%. S’applique à l’adaptatif et à l’arrêt automatique.');
+          const progress = state.status.pathTracingProgress;
+          if (progress) {
+            ImGui.Text(`Temps de rendu actif : ${progress.elapsedSeconds.toFixed(1)} s`);
+            const metrics = state.status.pathTracingMetrics;
+            const rateUnit = state.status.pathTracingAdaptive ? 'balayages/s' : 'spp/s';
+            ImGui.Text(metrics?.sweepsPerSecond === undefined ? 'Debit moyen : en attente'
+              : `Debit moyen : ${metrics.sweepsPerSecond.toFixed(2)} ${rateUnit}`);
+            ImGui.Text(metrics?.budgetRemainingSeconds === undefined ? 'Budget restant : illimite'
+              : `Budget restant : ${metrics.budgetRemainingSeconds.toFixed(1)} s actives`);
+            ImGui.Text(metrics?.convergenceRemainingSeconds === undefined
+              ? `Cible ${targetPercent} : estimation indisponible (${state.status.pathTracingAdaptive ? 'mode adaptatif' : 'mesure mature requise'})`
+              : `Cible ${targetPercent} : ~${metrics.convergenceRemainingSeconds.toFixed(1)} s actives restantes`);
+            ImGui.SetItemTooltip('Extrapolation du pire pixel en 1/racine(N), apres 64 spp uniformes. Hors confirmation des 3 mesures ; ni garantie, ni temps mural.');
+            if (metrics?.relativeNoise !== undefined && metrics.maximumRelativeNoise !== undefined) {
+              ImGui.Text(`Bruit RMS (zones) : ${(metrics.relativeNoise * 100).toFixed(2)}% ; max : ${(metrics.maximumRelativeNoise * 100).toFixed(2)}%`);
+            }
+            if (metrics?.relativeVariance !== undefined) {
+              ImGui.Text(`Variance normalisee : ${metrics.relativeVariance.toExponential(3)}`);
+              ImGui.SetItemTooltip('Moyenne des variances de luminance / max(|luminance|, 0.01)^2. Mesure uniforme uniquement ; pas la variance HDR absolue.');
+            }
+            if (progress.stopReason) {
+              ImGui.Text(progress.stopReason === 'convergence'
+                ? 'Arret auto : convergence estimee' : 'Arret auto : budget de temps atteint');
+              if (ImGui.Button('Relancer le rendu')) actions.restartPathTracing();
+            }
+          }
+          const convergence = state.status.convergence;
+          if (state.status.convergenceError) {
+            ImGui.Text(`Convergence indisponible : ${state.status.convergenceError}`);
+          } else if (convergence) {
+            const convergedWeight = convergence.zones.reduce(
+              (sum, zone) => sum + zone.convergedFraction * zone.validFraction, 0,
+            );
+            const validWeight = convergence.zones.reduce((sum, zone) => sum + zone.validFraction, 0);
+            const convergedPercent = validWeight > 0 ? Math.round(100 * convergedWeight / validWeight) : 0;
+            const unit = state.status.pathTracingAdaptive ? 'balayages' : 'spp';
+            ImGui.Text(`Convergence par zone (${convergence.samples} ${unit}) : ${convergedPercent}% des pixels mesurables`);
+            for (let row = 0; row < convergence.rows; row++) {
+              const cells = convergence.zones.slice(
+                row * convergence.columns, (row + 1) * convergence.columns,
+              ).map(zone => {
+                if (zone.validFraction === 0) return '?';
+                if (zone.relativeError <= convergence.targetRelativeError * 0.25) return '.';
+                if (zone.relativeError <= convergence.targetRelativeError * 0.5) return ':';
+                if (zone.relativeError <= convergence.targetRelativeError) return '+';
+                return '#';
+              }).join('');
+              ImGui.Text(cells);
+            }
+            ImGui.Text(`Légende : . < ${(targetValuePercent * 0.25).toFixed(2)}%, : < ${(targetValuePercent * 0.5).toFixed(2)}%, `
+              + `+ < ${targetPercent}, # >= ${targetPercent}, ? échantillons insuffisants`);
+          }
         }
         if (ImGui.CollapsingHeader('Materiaux')) {
           ImGui.BeginDisabled(!state.objects.length);

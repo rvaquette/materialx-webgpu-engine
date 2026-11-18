@@ -14,6 +14,11 @@ import { PT_UNIFORM_SIZE, pathTraceTile, pathTraceTileCount } from '../../src/re
 import type { ShaderCompilationError } from '../../src/gpu/shader-diagnostics.ts';
 import { exportCompiledMaterial, exportCompiledScene } from '../../src/scene/compiled-scene.ts';
 import { DisneyGpuBackend } from '../../src/render/pathtracing/disney-gpu-backend.ts';
+import { tonemapIndex } from '../../src/render/output.ts';
+import {
+  pathTraceViewIndex, PT_DISPLAY_INFO_BYTES, PT_DISPLAY_PIXEL_BYTES, PT_SURFACE_AOV_PIXEL_BYTES,
+} from '../../src/render/pathtracing/display.ts';
+import { PT_CONVERGENCE_UNIFORM_BYTES } from '../../src/render/pathtracing/convergence.ts';
 
 vi.mock('../../src/render/usd-scene-assets.ts', async (original) => ({
   ...await original<typeof import('../../src/render/usd-scene-assets.ts')>(),
@@ -31,6 +36,7 @@ function fakeDevice() {
     dispatchWorkgroups: vi.fn(),
   };
   const textures: Array<{ destroy: ReturnType<typeof vi.fn> }> = [];
+  const createRenderPipeline = vi.fn((_descriptor?: GPURenderPipelineDescriptor) => ({ getBindGroupLayout: vi.fn(() => ({})) }));
   const device = {
     limits: { maxStorageBufferBindingSize: 1 << 28, maxBufferSize: 1 << 28, maxTextureArrayLayers: 256,
       maxTextureDimension2D: 8192, maxComputeWorkgroupsPerDimension: 65535 },
@@ -45,7 +51,8 @@ function fakeDevice() {
     createShaderModule: vi.fn((_desc: GPUShaderModuleDescriptor) => ({
       getCompilationInfo: async (): Promise<Pick<GPUCompilationInfo, 'messages'>> => ({ messages: [] }),
     })),
-    createRenderPipeline: vi.fn(() => ({ getBindGroupLayout: vi.fn(() => ({})) })),
+    createRenderPipeline,
+    createRenderPipelineAsync: vi.fn(async (descriptor: GPURenderPipelineDescriptor) => createRenderPipeline(descriptor)),
     createComputePipelineAsync: vi.fn(async () => ({ getBindGroupLayout: vi.fn(() => ({})) })),
     createBindGroup: vi.fn((_desc: GPUBindGroupDescriptor) => ({})),
     createSampler: vi.fn(() => ({})),
@@ -134,7 +141,7 @@ describe('interactive viewer resource lifecycle', () => {
   });
   afterEach(() => { viewer?.dispose(); vi.unstubAllGlobals(); });
 
-  async function setup(environment = false, editable = false, backend: 'raster' | 'pathtracing' = 'raster') {
+  async function setup(environment = false, editable = false, backend: 'raster' | 'pathtracing' = 'raster', orbitControls = true) {
     const loaded = await sceneFixture(editable);
     if (environment) {
       const image = { width: 4, height: 2, data: new Float32Array(24).fill(1) };
@@ -151,13 +158,19 @@ describe('interactive viewer resource lifecycle', () => {
     const diagnostics: Array<readonly ShaderCompilationError[]> = [];
     viewer = new InteractiveViewer({
       device: mock.gpu, context: { getCurrentTexture: () => ({ createView: () => ({}) }) } as unknown as GPUCanvasContext,
-      outputFormat: 'bgra8unorm', canvas, onStatus: (status) => statuses.push(status),
+      outputFormat: 'bgra8unorm', canvas, orbitControls, onStatus: (status) => statuses.push(status),
       onShaderErrors: errors => diagnostics.push(errors),
     });
     viewer.setBackend(backend);
     await viewer.load('scene.usda');
     return { ...mock, loaded, canvas, statuses, diagnostics, viewer };
   }
+
+  it('keeps canvas orbit listeners disabled after loading a scene', async () => {
+    const { canvas, viewer } = await setup(false, false, 'raster', false);
+    await viewer.load('another-scene.usda');
+    expect(canvas.addEventListener).not.toHaveBeenCalled();
+  });
 
   it('does not allocate raster textures, geometry or pipelines on a path-tracing-only load', async () => {
     const { viewer, device } = await setup(false, false, 'pathtracing');
@@ -235,7 +248,7 @@ describe('interactive viewer resource lifecycle', () => {
     const { viewer, device, statuses } = await setup(false, false, 'pathtracing');
     tick(0);
     await vi.waitFor(() => expect(statuses.at(-1)?.pathTracer).toBe('ready'));
-    expect(device.createComputePipelineAsync).toHaveBeenCalledTimes(1);
+    expect(device.createComputePipelineAsync).toHaveBeenCalledTimes(2);
     expect(device.createShaderModule.mock.calls.some(call =>
       /^Raster/.test(call[0].label ?? ''))).toBe(false);
     viewer.dispose();
@@ -385,7 +398,7 @@ describe('interactive viewer resource lifecycle', () => {
       viewer.setBackend('pathtracing');
       tick(0);
       await vi.waitFor(() => expect(statuses.at(-1)?.pathTracer).toBe('error'));
-      expect(diagnostics.at(-1)).toHaveLength(1);
+      expect(diagnostics.at(-1)).toHaveLength(3);
       expect(diagnostics.at(-1)?.[0]).toMatchObject({
         shader: 'Path tracing', message: 'Invalid call', line: 2, column: 3,
       });
@@ -451,7 +464,7 @@ describe('interactive viewer resource lifecycle', () => {
       .find((data): data is ArrayBuffer => data instanceof ArrayBuffer);
     expect(info).toBeDefined();
     expect([...new Float32Array(info!).slice(28, 35)]).toEqual(Array(7).fill(0));
-    expect(device.createComputePipelineAsync).toHaveBeenCalledTimes(1);
+    expect(device.createComputePipelineAsync).toHaveBeenCalledTimes(2);
   });
 
   it('frames imported local scenes from their bounds instead of using the fixed USD preview distance', async () => {
@@ -669,7 +682,7 @@ describe('interactive viewer resource lifecycle', () => {
     tick(0);
     await new Promise(r => setTimeout(r, 20));
     await Promise.resolve();
-    expect(device.createComputePipelineAsync).toHaveBeenCalledTimes(1);
+    expect(device.createComputePipelineAsync).toHaveBeenCalledTimes(2);
     device.createCommandEncoder.mockClear();
     tick(1);
     await Promise.resolve();
@@ -684,7 +697,9 @@ describe('interactive viewer resource lifecycle', () => {
     tick(2);
     await Promise.resolve();
     const refinement = device.createCommandEncoder.mock.results[0]!.value;
-    expect(refinement.copyBufferToBuffer).toHaveBeenCalledWith(expect.anything(), 0, expect.anything(), 0, 128 * 128 * 32);
+    expect(refinement.copyBufferToBuffer).toHaveBeenCalledWith(
+      expect.anything(), 0, expect.anything(), 0, 128 * 128 * PT_DISPLAY_PIXEL_BYTES,
+    );
     expect(pass.dispatchWorkgroups.mock.calls).toEqual(Array(16).fill([8, 8, 1]));
     expect(device.queue.submit).toHaveBeenCalledTimes(1);
     expect(device.queue.onSubmittedWorkDone).toHaveBeenCalledTimes(1);
@@ -704,7 +719,7 @@ describe('interactive viewer resource lifecycle', () => {
       sum + result.value.copyBufferToBuffer.mock.calls.length, 0);
     await viewer.resize(256);
     expect(device.createShaderModule).toHaveBeenCalledTimes(shaders);
-    expect(device.createComputePipelineAsync).toHaveBeenCalledTimes(1);
+    expect(device.createComputePipelineAsync).toHaveBeenCalledTimes(2);
     viewer.setPathTracingPaused(false);
     tick(4);
     await Promise.resolve();
@@ -712,11 +727,13 @@ describe('interactive viewer resource lifecycle', () => {
       sum + result.value.copyBufferToBuffer.mock.calls.length, 0)).toBe(copyCalls);
   });
 
-  it('reaches 16 spp in 64 refreshes with unchanged tile/sample order and bounded work in flight', async () => {
+  it.each([false, true])('keeps tile/sweep order and bounded work in flight (adaptive=%s)', async adaptive => {
     const actual = await vi.importActual<typeof import('../../src/render/pathtracing/scene-buffers.ts')>(
       '../../src/render/pathtracing/scene-buffers.ts');
     vi.mocked(buildCachedPathTraceScene).mockImplementation(actual.buildCachedPathTraceScene);
     const { viewer, device, statuses } = await setup();
+    expect(viewer.pathTracingAdaptive).toBe(false);
+    viewer.setPathTracingAdaptive(adaptive);
     viewer.setBackend('pathtracing');
     tick(0);
     await new Promise(r => setTimeout(r, 20));
@@ -734,6 +751,10 @@ describe('interactive viewer resource lifecycle', () => {
       await Promise.resolve();
     }
     expect(statuses.at(-1)?.samples).toBe(16);
+    await vi.waitFor(() => expect(statuses.at(-1)?.convergence?.samples).toBe(16));
+    const convergenceCopies = device.createCommandEncoder.mock.results.flatMap(result =>
+      result.value.copyBufferToBuffer.mock.calls).filter(([, , , , size]) => size === 8 * 8 * 16);
+    expect(convergenceCopies.length).toBeGreaterThan(0);
     expect(device.queue.submit).toHaveBeenCalledTimes(64);
     expect(device.queue.onSubmittedWorkDone).toHaveBeenCalledTimes(64);
     const uniforms = device.queue.writeBuffer.mock.calls.map(call => call[2])
@@ -742,6 +763,7 @@ describe('interactive viewer resource lifecycle', () => {
     expect(uniforms).toHaveLength(64 * 16);
     for (const [index, data] of uniforms.entries()) {
       expect(Array.from(data.slice(32, 36))).toEqual([Math.floor(index / tileCount), 1, 512, 512]);
+      expect(data[82]).toBe(adaptive ? 1 : 0);
       const tile = pathTraceTile(512, 512, index % tileCount);
       expect(Array.from(data.slice(76, 80))).toEqual([tile.x, tile.y, tile.width, tile.height]);
       const writeIndex = device.queue.writeBuffer.mock.calls.findIndex(call => call[2] === data);
@@ -757,6 +779,136 @@ describe('interactive viewer resource lifecycle', () => {
       expect(device.createBindGroup.mock.calls.some(([desc]) => Array.from(desc.entries).some(entry =>
         'buffer' in entry.resource && entry.resource.buffer === buffer))).toBe(true);
     }
+    viewer.setPathTracingAdaptive(adaptive);
+    expect(statuses.at(-1)?.samples).toBe(16);
+    viewer.setPathTracingAdaptive(!adaptive);
+    expect(viewer.pathTracingAdaptive).toBe(!adaptive);
+    expect(statuses.at(-1)?.samples).toBe(0);
+    expect(statuses.at(-1)?.convergence).toBeUndefined();
+    device.queue.writeBuffer.mockClear();
+    tick(100);
+    const preview = device.queue.writeBuffer.mock.calls.map(call => call[2])
+      .find((data): data is Float32Array => data instanceof Float32Array && data.byteLength === PT_UNIFORM_SIZE);
+    expect(preview?.[82]).toBe(0);
+  });
+
+  it('stops compute and refills at the time budget, but can redisplay and restart without counting stale work', async () => {
+    let clock = 0;
+    const now = vi.spyOn(performance, 'now').mockImplementation(() => clock);
+    try {
+      const actual = await vi.importActual<typeof import('../../src/render/pathtracing/scene-buffers.ts')>(
+        '../../src/render/pathtracing/scene-buffers.ts');
+      vi.mocked(buildCachedPathTraceScene).mockImplementation(actual.buildCachedPathTraceScene);
+      const { viewer, device, statuses } = await setup();
+      for (const budget of [-1, NaN, Infinity]) {
+        expect(() => viewer.setPathTracingLimits({
+          stopOnConvergence: false, timeBudgetSeconds: budget, targetRelativeError: 0.05,
+        })).toThrow(RangeError);
+      }
+      for (const targetRelativeError of [NaN, 0.004, 0.251]) {
+        expect(() => viewer.setPathTracingLimits({
+          stopOnConvergence: false, timeBudgetSeconds: 0, targetRelativeError,
+        })).toThrow(RangeError);
+      }
+      viewer.setPathTracingLimits({ stopOnConvergence: false, timeBudgetSeconds: 1, targetRelativeError: 0.05 });
+      viewer.setBackend('pathtracing');
+      tick(0);
+      await new Promise(r => setTimeout(r, 20));
+      tick(1);
+      clock = 100;
+      await Promise.resolve();
+      expect(statuses.at(-1)?.pathTracingProgress?.elapsedSeconds).toBe(0);
+      clock = 300;
+      tick(2);
+      clock = 1300;
+      await Promise.resolve();
+      expect(statuses.at(-1)?.pathTracingProgress).toEqual({ elapsedSeconds: 1, stopReason: 'time-budget' });
+      expect(statuses.at(-1)?.pathTracingMetrics?.budgetRemainingSeconds).toBe(0);
+      const computeWrites = () => device.queue.writeBuffer.mock.calls.filter(call =>
+        call[2] instanceof Float32Array && call[2].byteLength === PT_UNIFORM_SIZE).length;
+      const writes = computeWrites();
+      tick(3);
+      viewer.setExposure(1);
+      tick(4);
+      await Promise.resolve();
+      await new Promise(r => setTimeout(r, 0));
+      expect(computeWrites()).toBe(writes);
+      expect(statuses.at(-1)?.pathTracingPaused).toBe(false);
+      expect(statuses.at(-1)?.pathTracingProgress?.elapsedSeconds).toBe(1);
+      await viewer.setTonemap('none');
+      tick(5);
+      await Promise.resolve();
+      expect(computeWrites()).toBe(writes);
+      expect(statuses.at(-1)?.pathTracingProgress?.stopReason).toBe('time-budget');
+      const displayData = device.queue.writeBuffer.mock.calls.map(call => call[2])
+        .filter((data): data is ArrayBuffer => data instanceof ArrayBuffer && data.byteLength === PT_DISPLAY_INFO_BYTES);
+      expect(new Float32Array(displayData.at(-1)!)[35]).toBe(tonemapIndex('none'));
+      viewer.setPathTracingLimits({ stopOnConvergence: false, timeBudgetSeconds: 0, targetRelativeError: 0.05 });
+      tick(5);
+      expect(computeWrites()).toBeGreaterThan(writes);
+      viewer.restartPathTracing();
+      clock = 2300;
+      await Promise.resolve();
+      expect(statuses.at(-1)?.samples).toBe(0);
+      expect(statuses.at(-1)?.pathTracingProgress).toEqual({ elapsedSeconds: 0, stopReason: undefined });
+      expect(statuses.at(-1)?.pathTracingMetrics).toEqual({});
+      viewer.setPathTracingPaused(true);
+      clock = 100000;
+      tick(6);
+      await Promise.resolve();
+      expect(statuses.at(-1)?.pathTracingProgress?.elapsedSeconds).toBe(0);
+    } finally { now.mockRestore(); }
+  });
+
+  it('stops only after three mature convergence readbacks and resumes when limits are disabled', async () => {
+    const actual = await vi.importActual<typeof import('../../src/render/pathtracing/scene-buffers.ts')>(
+      '../../src/render/pathtracing/scene-buffers.ts');
+    vi.mocked(buildCachedPathTraceScene).mockImplementation(actual.buildCachedPathTraceScene);
+    const { viewer, device, statuses } = await setup();
+    await viewer.resize(128);
+    viewer.setPathTracingLimits({ stopOnConvergence: true, timeBudgetSeconds: 0, targetRelativeError: 0.025 });
+    viewer.setBackend('pathtracing');
+    tick(0);
+    await new Promise(r => setTimeout(r, 20));
+    tick(1);
+    await Promise.resolve();
+    await new Promise(r => setTimeout(r, 220));
+    const readbackIndex = device.createBuffer.mock.calls.findIndex(([desc]) =>
+      desc.size === 8 * 8 * 16 && (desc.usage & GPUBufferUsage.MAP_READ) !== 0);
+    const values = new Float32Array(8 * 8 * 4);
+    for (let i = 0; i < 64; i++) values.set([0.01, 0.02, 1, 1], i * 4);
+    device.createBuffer.mock.results[readbackIndex]!.value.getMappedRange = () => values.buffer;
+    let refresh = 2;
+    for (let sweep = 1; sweep <= 80; sweep++) {
+      for (let batch = 0; batch < 4; batch++) {
+        tick(refresh++);
+        await Promise.resolve();
+      }
+      expect(statuses.at(-1)?.samples).toBe(sweep);
+      expect(statuses.at(-1)?.pathTracingProgress?.stopReason).toBe(sweep === 80 ? 'convergence' : undefined);
+    }
+    tick(refresh++);
+    expect(statuses.at(-1)?.samples).toBe(80);
+    expect(statuses.at(-1)?.pathTracingMetrics?.sweepsPerSecond).toBeGreaterThan(0);
+    expect(statuses.at(-1)?.pathTracingMetrics?.convergenceRemainingSeconds).toBe(0);
+    expect(statuses.at(-1)?.pathTracingMetrics?.maximumRelativeNoise).toBeCloseTo(0.02);
+    expect(statuses.at(-1)?.convergence?.targetRelativeError).toBe(0.025);
+    const convergenceUniform = device.queue.writeBuffer.mock.calls.map(call => call[2])
+      .filter((data): data is ArrayBuffer => data instanceof ArrayBuffer && data.byteLength === PT_CONVERGENCE_UNIFORM_BYTES)
+      .at(-1)!;
+    expect(new Float32Array(convergenceUniform)[4]).toBeCloseTo(0.025);
+    viewer.setPathTracingLimits({ stopOnConvergence: false, timeBudgetSeconds: 0, targetRelativeError: 0.01 });
+    for (let batch = 0; batch < 4; batch++) {
+      tick(refresh++);
+      await Promise.resolve();
+    }
+    expect(statuses.at(-1)?.samples).toBe(81);
+    expect(statuses.at(-1)?.pathTracingProgress?.stopReason).toBeUndefined();
+    await vi.waitFor(() => expect(statuses.at(-1)?.convergence?.targetRelativeError).toBe(0.01));
+    await viewer.resize(256);
+    expect(statuses.at(-1)?.samples).toBe(0);
+    expect(statuses.at(-1)?.pathTracingProgress?.elapsedSeconds).toBe(0);
+    expect(statuses.at(-1)?.pathTracingMetrics).toEqual({});
   });
 
   it('refills after GPU completion without another animation frame, but yields and honors pause/dispose', async () => {
@@ -878,6 +1030,42 @@ describe('interactive viewer resource lifecycle', () => {
     } finally { run.mockRestore(); busyGetter.mockRestore(); }
   });
 
+  it('compares a frozen beauty accumulation against a fresh denoiser result', async () => {
+    const actual = await vi.importActual<typeof import('../../src/render/pathtracing/scene-buffers.ts')>(
+      '../../src/render/pathtracing/scene-buffers.ts');
+    vi.mocked(buildCachedPathTraceScene).mockImplementation(actual.buildCachedPathTraceScene);
+    const image = new ImageData(new Uint8ClampedArray(512 * 512 * 4), 512, 512);
+    const run = vi.spyOn(JsDenoiser.prototype, 'run').mockResolvedValue(image);
+    try {
+      const { viewer, device, statuses } = await setup(false, false, 'pathtracing');
+      viewer.setPathTracingDenoise(true);
+      expect(() => viewer.setPathTracingDenoiserComparison(true)).toThrow('requires a paused MaterialX beauty render');
+      tick(0);
+      await new Promise(r => setTimeout(r, 20));
+      tick(1);
+      await new Promise(r => setTimeout(r, 220));
+      for (let i = 0; i < 16; i++) { tick(i + 2); await Promise.resolve(); }
+      await vi.waitFor(() => expect(statuses.at(-1)?.denoiser.state).toBe('ready'));
+      viewer.setPathTracingPaused(true);
+      const frozenSamples = statuses.at(-1)!.samples;
+      expect(frozenSamples).toBeGreaterThan(0);
+      viewer.setPathTracingDenoiserComparison(true);
+      expect(statuses.at(-1)?.denoiserComparison).toBe(true);
+      tick(20);
+      await vi.waitFor(() => expect(run).toHaveBeenCalledTimes(2));
+      await vi.waitFor(() => expect(statuses.at(-1)?.denoiser.state).toBe('ready'));
+      expect(statuses.at(-1)?.samples).toBe(frozenSamples);
+      tick(21);
+      const displayInfo = [...device.queue.writeBuffer.mock.calls].reverse()
+        .map(call => call[2]).find(data => data instanceof ArrayBuffer && data.byteLength === PT_DISPLAY_INFO_BYTES);
+      expect(new Float32Array(displayInfo as ArrayBuffer)[31]).toBe(0.5);
+      viewer.setExposure(0.5);
+      expect(statuses.at(-1)?.denoiserComparison).toBe(false);
+      viewer.setPathTracingPaused(false);
+      expect(statuses.at(-1)?.denoiserComparison).toBe(false);
+    } finally { run.mockRestore(); }
+  });
+
   it('shares the real HDR CDF with the path tracer and keeps its sampling metadata', async () => {
     const actual = await vi.importActual<typeof import('../../src/render/pathtracing/scene-buffers.ts')>(
       '../../src/render/pathtracing/scene-buffers.ts');
@@ -978,17 +1166,186 @@ describe('interactive viewer resource lifecycle', () => {
     expect(device.createRenderPipeline).toHaveBeenCalledTimes(1);
   });
 
-  it('allows setting exposure and tonemap for display adjustments', async () => {
-    const { viewer } = await setup();
-    // Test setExposure - should not throw
-    expect(() => viewer.setExposure(2.0)).not.toThrow();
-    expect(() => viewer.setExposure(0)).not.toThrow();
-    
-    // Test setTonemap - should not throw
-    await expect(viewer.setTonemap('reinhard')).resolves.not.toThrow();
-    await expect(viewer.setTonemap('acesFilmic')).resolves.not.toThrow();
-    await expect(viewer.setTonemap('none')).resolves.not.toThrow();
+  it('allocates only the selected AOV and resets samples when a guide is selected', async () => {
+    const actual = await vi.importActual<typeof import('../../src/render/pathtracing/scene-buffers.ts')>(
+      '../../src/render/pathtracing/scene-buffers.ts');
+    vi.mocked(buildCachedPathTraceScene).mockImplementation(actual.buildCachedPathTraceScene);
+    const { viewer, device, pass, statuses } = await setup();
+    viewer.setBackend('pathtracing');
+    tick(0);
+    await new Promise(resolve => setTimeout(resolve, 20));
+    tick(1);
+    await Promise.resolve();
+    viewer.setPathTracingPaused(true);
+    const samples = statuses.at(-1)?.samples;
+    expect(samples).toBeGreaterThan(0);
+    const pipelines = device.createRenderPipeline.mock.calls.length;
+    let refresh = 2;
+    for (const value of ['variance', 'beauty'] as const) {
+      device.queue.writeBuffer.mockClear();
+      device.queue.submit.mockClear();
+      pass.dispatchWorkgroups.mockClear();
+      viewer.setPathTracingView(value);
+      tick(refresh++);
+      await Promise.resolve();
+      const uniform = device.queue.writeBuffer.mock.calls.map(call => call[2])
+        .find((data): data is ArrayBuffer => data instanceof ArrayBuffer && data.byteLength === PT_DISPLAY_INFO_BYTES);
+      expect(uniform).toBeDefined();
+      expect(new Float32Array(uniform!)[27]).toBe(pathTraceViewIndex(value));
+      expect(device.queue.submit).toHaveBeenCalled();
+      expect(pass.dispatchWorkgroups).not.toHaveBeenCalled();
+      expect(device.createRenderPipeline).toHaveBeenCalledTimes(pipelines);
+      expect(statuses.at(-1)?.samples).toBe(samples);
+      expect(statuses.at(-1)?.pathTracingView).toBe(value);
+    }
+
+    viewer.setPathTracingView('normal');
+    tick(refresh++);
+    await Promise.resolve();
+    expect(statuses.at(-1)?.samples).toBe(0);
+    expect(device.createBuffer.mock.calls.some(([descriptor]) =>
+      descriptor.size === 512 * 512 * (PT_DISPLAY_PIXEL_BYTES + PT_SURFACE_AOV_PIXEL_BYTES))).toBe(true);
+    expect(device.createBuffer.mock.calls.some(([descriptor]) =>
+      descriptor.size === 256 * 256 * (PT_DISPLAY_PIXEL_BYTES + PT_SURFACE_AOV_PIXEL_BYTES))).toBe(true);
+    expect(pass.dispatchWorkgroups).not.toHaveBeenCalled();
+    expect(device.createRenderPipeline).toHaveBeenCalledTimes(pipelines);
+
+    viewer.setPathTracingView('transmission');
+    tick(refresh++);
+    await Promise.resolve();
+    expect(statuses.at(-1)?.samples).toBe(0);
+
+    viewer.setPathTracingView('variance');
+    tick(refresh++);
+    await Promise.resolve();
+    expect(statuses.at(-1)?.samples).toBe(0);
+    expect(device.createBuffer.mock.calls.some(([descriptor]) =>
+      descriptor.size === 512 * 512 * PT_DISPLAY_PIXEL_BYTES)).toBe(true);
+    expect(device.createBuffer.mock.calls.some(([descriptor]) =>
+      descriptor.size === 256 * 256 * PT_DISPLAY_PIXEL_BYTES)).toBe(true);
+    expect(pass.dispatchWorkgroups).not.toHaveBeenCalled();
+    expect(device.createRenderPipeline).toHaveBeenCalledTimes(pipelines);
   });
+
+  it('reads raw selected guides and derives variance from the accumulated moments', async () => {
+    const actual = await vi.importActual<typeof import('../../src/render/pathtracing/scene-buffers.ts')>(
+      '../../src/render/pathtracing/scene-buffers.ts');
+    vi.mocked(buildCachedPathTraceScene).mockImplementation(actual.buildCachedPathTraceScene);
+    const { viewer, device, statuses } = await setup();
+    viewer.setPathTracingView('albedo');
+    viewer.setBackend('pathtracing');
+    tick(0);
+    await new Promise(resolve => setTimeout(resolve, 20));
+    tick(1);
+    await Promise.resolve();
+    viewer.setPathTracingPaused(true);
+    expect(statuses.at(-1)?.samples).toBeGreaterThan(0);
+
+    const width = 128;
+    const height = 128;
+    const pixelCount = width * height;
+    const guideValues = new Float32Array(pixelCount * 12);
+    guideValues[3] = 1;
+    const guideOffset = pixelCount * 8;
+    guideValues[guideOffset] = 0.25;
+    guideValues[guideOffset + 1] = 0.125;
+    guideValues[guideOffset + 2] = -0.5;
+    guideValues[guideOffset + 3] = 0.5;
+    const guideRead = viewer.readPathTracingAov();
+    const guideReadback = device.createBuffer.mock.results.at(-1)!.value;
+    const guideCopy = device.createCommandEncoder.mock.results.at(-1)!.value.copyBufferToBuffer;
+    guideReadback.getMappedRange = () => guideValues.buffer;
+    const guide = await guideRead;
+    expect(guide).toMatchObject({ width, height, channels: 3 });
+    expect(Array.from(guide.values.slice(0, 3))).toEqual([0.5, 0.25, -1]);
+    expect(Number.isNaN(guide.values[3])).toBe(true);
+    expect(guideCopy).toHaveBeenCalledWith(
+      expect.anything(), 0, guideReadback, 0, pixelCount * (PT_DISPLAY_PIXEL_BYTES + PT_SURFACE_AOV_PIXEL_BYTES),
+    );
+
+    viewer.setPathTracingView('variance');
+    tick(2);
+    await Promise.resolve();
+    const varianceValues = new Float32Array(pixelCount * 8);
+    varianceValues[3] = 2;
+    varianceValues[5] = 3;
+    varianceValues[8 + 3] = 1;
+    const varianceRead = viewer.readPathTracingAov();
+    const varianceReadback = device.createBuffer.mock.results.at(-1)!.value;
+    const varianceCopy = device.createCommandEncoder.mock.results.at(-1)!.value.copyBufferToBuffer;
+    varianceReadback.getMappedRange = () => varianceValues.buffer;
+    const variance = await varianceRead;
+    expect(variance.channels).toBe(1);
+    expect(variance.values[0]).toBe(3);
+    expect(Number.isNaN(variance.values[1])).toBe(true);
+    expect(varianceCopy).toHaveBeenCalledWith(
+      expect.anything(), 0, varianceReadback, 0, pixelCount * PT_DISPLAY_PIXEL_BYTES,
+    );
+  });
+
+  it.each(['raster', 'pathtracing', 'disney'] as const)(
+    'updates the %s tonemap and exposure while paused, without recompilation or resetting samples', async backend => {
+      const actual = await vi.importActual<typeof import('../../src/render/pathtracing/scene-buffers.ts')>(
+        '../../src/render/pathtracing/scene-buffers.ts');
+      vi.mocked(buildCachedPathTraceScene).mockImplementation(actual.buildCachedPathTraceScene);
+      const { viewer, device, pass, statuses } = await setup(false, true);
+      await viewer.setTonemap('reinhard');
+      viewer.setBackend(backend);
+      tick(0);
+      await new Promise(resolve => setTimeout(resolve, 20));
+      tick(1);
+      await Promise.resolve();
+      viewer.setPathTracingPaused(true);
+      const samples = statuses.at(-1)?.samples;
+      const pipelines = device.createRenderPipeline.mock.calls.length;
+      let refresh = 2;
+      for (const op of ['none', 'acesFilmic', 'reinhard'] as const) {
+        device.queue.writeBuffer.mockClear();
+        device.queue.submit.mockClear();
+        pass.dispatchWorkgroups.mockClear();
+        await viewer.setTonemap(op);
+        tick(refresh++);
+        await Promise.resolve();
+        const writes = device.queue.writeBuffer.mock.calls.map(call => call[2]);
+        if (backend === 'raster') {
+          const uniform = writes.find((data): data is Float32Array => data instanceof Float32Array && data.length === 2);
+          expect(uniform?.[1]).toBe(tonemapIndex(op));
+        } else {
+          const size = backend === 'pathtracing' ? PT_DISPLAY_INFO_BYTES : 16;
+          const data = writes.find((value): value is ArrayBuffer => value instanceof ArrayBuffer && value.byteLength === size);
+          expect(data).toBeDefined();
+          expect(new Float32Array(data!)[backend === 'pathtracing' ? 35 : 3]).toBe(tonemapIndex(op));
+        }
+        expect(device.queue.submit).toHaveBeenCalled();
+        expect(pass.dispatchWorkgroups).not.toHaveBeenCalled();
+        expect(device.createRenderPipeline).toHaveBeenCalledTimes(pipelines);
+        expect(statuses.at(-1)?.samples).toBe(samples);
+      }
+      for (const exposure of [2, -2, 0]) {
+        device.queue.writeBuffer.mockClear();
+        device.queue.submit.mockClear();
+        pass.dispatchWorkgroups.mockClear();
+        viewer.setExposure(exposure);
+        tick(refresh++);
+        await Promise.resolve();
+        const writes = device.queue.writeBuffer.mock.calls.map(call => call[2]);
+        if (backend === 'raster') {
+          const uniform = writes.find((data): data is Float32Array => data instanceof Float32Array && data.length === 2);
+          expect(uniform?.[0]).toBe(exposure);
+          expect(uniform?.[1]).toBe(tonemapIndex('reinhard'));
+        } else {
+          const size = backend === 'pathtracing' ? PT_DISPLAY_INFO_BYTES : 16;
+          const data = writes.find((value): value is ArrayBuffer => value instanceof ArrayBuffer && value.byteLength === size);
+          expect(data).toBeDefined();
+          expect(new Float32Array(data!)[2]).toBe(exposure);
+        }
+        expect(device.queue.submit).toHaveBeenCalled();
+        expect(pass.dispatchWorkgroups).not.toHaveBeenCalled();
+        expect(device.createRenderPipeline).toHaveBeenCalledTimes(pipelines);
+        expect(statuses.at(-1)?.samples).toBe(samples);
+      }
+    },
+  );
 });
 
 

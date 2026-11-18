@@ -19,6 +19,7 @@ import {
 import { uploadDisneyTextureArray } from './disney-texture-array.ts';
 import { DISNEY_TRAVERSAL_WGSL } from './disney-traversal-wgsl.ts';
 import { displayTransformWgsl } from '../raster/shaders.ts';
+import { tonemapIndex, type Tonemap } from '../output.ts';
 
 export interface DisneyGpuBackendOptions {
   width: number;
@@ -74,7 +75,7 @@ struct DisneyRenderPixel {
 struct DisneyDisplayParameters {
   size: vec2u,
   exposure: f32,
-  padding: u32,
+  tonemap: f32,
 };
 @group(0) @binding(0) var<storage, read> disneyDisplayPixels: array<DisneyRenderPixel>;
 @group(0) @binding(1) var<uniform> disneyDisplayParameters: DisneyDisplayParameters;
@@ -83,7 +84,7 @@ struct DisneyDisplayVertex { @builtin(position) position: vec4f };
   let uv = vec2f(f32((index << 1u) & 2u), f32(index & 2u));
   return DisneyDisplayVertex(vec4f(uv * 2.0 - 1.0, 0.0, 1.0));
 }
-${displayTransformWgsl('acesFilmic')}
+${displayTransformWgsl('acesFilmic', 'disneyDisplayParameters.tonemap')}
 @fragment fn disneyDisplayFragment(@builtin(position) position: vec4f) -> @location(0) vec4f {
   let p = vec2u(position.xy);
   let index = p.y * disneyDisplayParameters.size.x + p.x;
@@ -233,18 +234,33 @@ export class DisneyGpuBackend {
         ? specializeDisneyShader(DISNEY_RENDER_SHADER, specialization)
         : DISNEY_RENDER_SHADER;
       const module = device.createShaderModule({ label: 'Disney path tracer', code: shader });
-      const compilation = await module.getCompilationInfo();
+      const displayModule = device.createShaderModule({ label: 'Disney display shader', code: displayShader() });
+      const [compilation, displayCompilation] = await Promise.all([
+        module.getCompilationInfo(),
+        displayModule.getCompilationInfo(),
+      ]);
       const errors = compilation.messages.filter(message => message.type === 'error');
       if (errors.length) throw new Error(`Disney WGSL compilation failed:\n${errors.map(error => `${error.lineNum}: ${error.message}`).join('\n')}`);
-      let pipeline: GPUComputePipeline;
-      try {
-        pipeline = await device.createComputePipelineAsync({
+      const displayErrors = displayCompilation.messages.filter(message => message.type === 'error');
+      if (displayErrors.length) {
+        throw new Error(`Disney display WGSL compilation failed:\n${displayErrors.map(error => `${error.lineNum}: ${error.message}`).join('\n')}`);
+      }
+      const [pipeline, displayPipeline] = await Promise.all([
+        device.createComputePipelineAsync({
           label: 'Disney progressive path tracer', layout: 'auto',
           compute: { module, entryPoint: 'disneyRenderTile' },
-        });
-      } catch (error) {
-        throw new Error(`Disney GPU pipeline creation failed: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
-      }
+        }).catch(error => {
+          throw new Error(`Disney compute pipeline creation failed: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
+        }),
+        device.createRenderPipelineAsync({
+          label: 'Disney display pipeline', layout: 'auto',
+          vertex: { module: displayModule, entryPoint: 'disneyDisplayVertex' },
+          fragment: { module: displayModule, entryPoint: 'disneyDisplayFragment', targets: [{ format: options.outputFormat }] },
+          primitive: { topology: 'triangle-list' },
+        }).catch(error => {
+          throw new Error(`Disney display pipeline creation failed: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
+        }),
+      ]);
       const sceneGroup = device.createBindGroup({
         label: 'Disney scene resources', layout: pipeline.getBindGroupLayout(0),
         entries: [
@@ -280,18 +296,6 @@ export class DisneyGpuBackend {
           { binding: 2, resource: { buffer: error } },
         ],
       });
-      const displayModule = device.createShaderModule({ label: 'Disney display shader', code: displayShader() });
-      const displayCompilation = await displayModule.getCompilationInfo();
-      const displayErrors = displayCompilation.messages.filter(message => message.type === 'error');
-      if (displayErrors.length) {
-        throw new Error(`Disney display WGSL compilation failed:\n${displayErrors.map(error => `${error.lineNum}: ${error.message}`).join('\n')}`);
-      }
-      const displayPipeline = device.createRenderPipeline({
-        label: 'Disney display pipeline', layout: 'auto',
-        vertex: { module: displayModule, entryPoint: 'disneyDisplayVertex' },
-        fragment: { module: displayModule, entryPoint: 'disneyDisplayFragment', targets: [{ format: options.outputFormat }] },
-        primitive: { topology: 'triangle-list' },
-      });
       const displayParameters = createBuffer('Disney display parameters', 16,
         GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
       const displayGroup = device.createBindGroup({
@@ -316,7 +320,7 @@ export class DisneyGpuBackend {
     this.#device.queue.writeBuffer(this.#error, 0, new Uint32Array([0]));
   }
 
-  renderTile(settings: DisneyRenderSettings, targetView?: GPUTextureView, exposure = 0): void {
+  renderTile(settings: DisneyRenderSettings, targetView?: GPUTextureView, exposure = 0, tonemap: Tonemap = 'acesFilmic'): void {
     this.#assertLive();
     if (settings.resolution[0] !== this.#width || settings.resolution[1] !== this.#height) {
       throw new Error('Disney render tile resolution does not match the backend buffers.');
@@ -336,6 +340,7 @@ export class DisneyGpuBackend {
       const displayData = new ArrayBuffer(16);
       new Uint32Array(displayData).set(settings.resolution, 0);
       new Float32Array(displayData)[2] = exposure;
+      new Float32Array(displayData)[3] = tonemapIndex(tonemap);
       this.#device.queue.writeBuffer(this.#displayParameters, 0, displayData);
     }
     const encoder = this.#device.createCommandEncoder({ label: 'Disney render tile' });
@@ -358,7 +363,7 @@ export class DisneyGpuBackend {
     this.#device.queue.submit([encoder.finish()]);
   }
 
-  display(targetView: GPUTextureView, resolution: readonly [number, number], exposure = 0): void {
+  display(targetView: GPUTextureView, resolution: readonly [number, number], exposure = 0, tonemap: Tonemap = 'acesFilmic'): void {
     this.#assertLive();
     if (resolution[0] !== this.#width || resolution[1] !== this.#height) {
       throw new Error('Disney display resolution does not match the backend buffers.');
@@ -369,6 +374,7 @@ export class DisneyGpuBackend {
     const displayData = new ArrayBuffer(16);
     new Uint32Array(displayData).set(resolution, 0);
     new Float32Array(displayData)[2] = exposure;
+    new Float32Array(displayData)[3] = tonemapIndex(tonemap);
     this.#device.queue.writeBuffer(this.#displayParameters, 0, displayData);
     const encoder = this.#device.createCommandEncoder({ label: 'Disney display' });
     const display = encoder.beginRenderPass({

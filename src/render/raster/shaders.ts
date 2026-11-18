@@ -4,7 +4,7 @@
 // the swapchain, mirroring the CPU reference in src/render/output.ts so both
 // paths agree.
 
-import type { Tonemap } from '../output.ts';
+import { tonemapIndex, type Tonemap } from '../output.ts';
 
 function tonemapExpr(op: Tonemap): string {
   switch (op) {
@@ -18,7 +18,7 @@ function tonemapExpr(op: Tonemap): string {
 }
 
 /** Shared display transform; inputs are linear HDR, outputs are encoded sRGB. */
-export function displayTransformWgsl(op: Tonemap): string {
+export function displayTransformWgsl(op: Tonemap, selector?: string): string {
   return `
 fn srgb(c : vec3<f32>) -> vec3<f32> {
   let lo = c * 12.92;
@@ -27,7 +27,12 @@ fn srgb(c : vec3<f32>) -> vec3<f32> {
 }
 fn display_color(hdr: vec3<f32>, exposure: f32) -> vec3<f32> {
   var c = max(hdr, vec3<f32>(0.0)) * exp2(exposure);
-  c = ${tonemapExpr(op)};
+  ${selector === undefined ? `c = ${tonemapExpr(op)};` : `
+  if (${selector} == ${tonemapIndex('reinhard')}.0) {
+    c = ${tonemapExpr('reinhard')};
+  } else if (${selector} == ${tonemapIndex('acesFilmic')}.0) {
+    c = ${tonemapExpr('acesFilmic')};
+  }`}
   return srgb(clamp(c, vec3<f32>(0.0), vec3<f32>(1e8)));
 }`;
 }
@@ -37,9 +42,10 @@ fn display_color(hdr: vec3<f32>, exposure: f32) -> vec3<f32> {
  * fragment stage samples the linear HDR target, applies exposure and the chosen
  * tonemap, then encodes with the sRGB OETF. Exposure is a push-style uniform.
  */
-export function tonemapResolveWgsl(op: Tonemap): string {
+export function tonemapResolveWgsl(op: Tonemap, dynamicTonemap = false): string {
   return `struct Resolve {
   exposure : f32,
+  ${dynamicTonemap ? 'tonemap : f32,' : ''}
 };
 @group(0) @binding(0) var hdrTex : texture_2d<f32>;
 @group(0) @binding(1) var hdrSampler : sampler;
@@ -59,7 +65,7 @@ fn vs_main(@builtin(vertex_index) vid : u32) -> VsOut {
   return out;
 }
 
-${displayTransformWgsl(op)}
+${displayTransformWgsl(op, dynamicTonemap ? 'r.tonemap' : undefined)}
 
 @fragment
 fn fs_main(in : VsOut) -> @location(0) vec4<f32> {

@@ -28,7 +28,7 @@ import { buildMaterialDispatch } from './pathtracing/material-variant.ts';
 import { buildPtDeviceBindings } from './pathtracing/device-bindings.ts';
 import { maxRecordLobes, PT_MAX_LOBES } from './pathtracing/material-record.ts';
 import type { DecodedPixelImage } from '../assets/images.ts';
-import type { Tonemap } from './output.ts';
+import { tonemapIndex, type Tonemap } from './output.ts';
 import { loadUsdScene, uploadMaterialTextures, type LoadedUsdScene, type ObjectMaterialOverride, type SceneLoadOptions } from './usd-scene-assets.ts';
 import { assertSceneStorageSize, assertSceneTextureBindings } from '../gpu/device.ts';
 import { uploadMaterialImage, uploadMaterialImageArray } from '../gpu/material-texture.ts';
@@ -36,13 +36,25 @@ import { packPtTextureArrays } from './pathtracing/texture-arrays.ts';
 import { OrbitCamera, attachOrbitControls } from '../scene/orbit-camera.ts';
 import { inverse4, lookAt4, multiply4, perspective4, transformDirection, type Vec3 } from '../scene/transforms.ts';
 import type { DiagnosticSink } from '../core/diagnostics.ts';
-import { compileShaderWithDiagnostics, type ShaderCompilationError } from '../gpu/shader-diagnostics.ts';
+import {
+  compileShaderBatch, SHADER_COMPILATION_CONCURRENCY, type ShaderCompilationError,
+} from '../gpu/shader-diagnostics.ts';
 import { packHdrTexture } from '../assets/hdr-texture.ts';
 import { generateEnvironmentMipmaps } from './env/mipmaps.ts';
 import { assembleIrForwardShader, type RasterQuality } from './raster/ir-forward.ts';
 import { rasterVolumeWgsl, RASTER_VOLUME_UNIFORM_BYTES } from './raster/volume-pass.ts';
-import { pathTraceDisplayWgsl, previewScale, PT_DISPLAY_INFO_BYTES, PT_DISPLAY_PIXEL_BYTES } from './pathtracing/display.ts';
+import {
+  pathTraceDisplayWgsl, pathTraceStorageBytesPerPixel, pathTraceViewIndex, pathTraceViewStoresAov, previewScale,
+  PT_DISPLAY_INFO_BYTES, PT_DISPLAY_PIXEL_BYTES, PT_SURFACE_AOV_PIXEL_BYTES, type PathTraceAovData, type PathTraceView,
+} from './pathtracing/display.ts';
+import {
+  pathTraceConvergenceWgsl, PT_CONVERGENCE_COLUMNS, PT_CONVERGENCE_MIN_SAMPLES,
+  PT_CONVERGENCE_MAX_TARGET_RELATIVE_ERROR, PT_CONVERGENCE_MIN_TARGET_RELATIVE_ERROR,
+  PT_CONVERGENCE_ROWS, PT_CONVERGENCE_TARGET_RELATIVE_ERROR, PT_CONVERGENCE_UNIFORM_BYTES, PT_CONVERGENCE_ZONE_BYTES,
+  type PathTraceConvergence,
+} from './pathtracing/convergence.ts';
 import { JsDenoiser } from './pathtracing/js-denoiser.ts';
+import { PathTraceStopping, pathTraceMetrics, type PathTraceRenderLimits, type PathTraceProgress, type PathTraceMetrics } from './pathtracing/render-limits.ts';
 import { changeMaterialParameters, compileEditableMaterial, materialUniformData, packParameterUniforms, visibleMaterialParameters, type MaterialParameter } from './material-parameters.ts';
 import { applySceneDisplacement } from './displacement.ts';
 import type { MaterialResource } from './scene-resources.ts';
@@ -139,11 +151,19 @@ export interface ViewerStatus {
   pathTracer: PathTracerState;
   rasterQuality: RasterQuality;
   pathTracingDenoise: boolean;
+  denoiserComparison?: boolean;
+  pathTracingAdaptive: boolean;
+  pathTracingView: PathTraceView;
+  pathTracingLimits: PathTraceRenderLimits;
+  pathTracingProgress?: PathTraceProgress;
+  pathTracingMetrics?: PathTraceMetrics;
   denoiser: DenoiserStatus;
   drawCount: number;
   passes: readonly ScenePassKind[];
   samples: number;
   warnings: number;
+  convergence?: PathTraceConvergence;
+  convergenceError?: string;
 }
 
 /** A disposable per-scene GPU render set (raster + lazily built path tracer) for one loaded USD. */
@@ -164,6 +184,11 @@ interface SceneRender {
   reportFrameTime: (milliseconds: number) => void;
   invalidateDenoise: () => void;
   denoiserStatus: () => DenoiserStatus;
+  pathTraceConvergence: () => PathTraceConvergence | undefined;
+  pathTraceConvergenceError: () => string | undefined;
+  readPathTracingAov: (view: Exclude<PathTraceView, 'beauty'>) => Promise<PathTraceAovData>;
+  pathTraceProgress: () => PathTraceProgress | undefined;
+  setPathTracingLimits: (limits: PathTraceRenderLimits) => void;
   resetPathTrace: () => void;
   applyCamera: (viewProj: readonly number[], eye: Vec3, backgroundInvViewProj: readonly number[]) => void;
   frameCount: () => number;
@@ -183,6 +208,12 @@ export class InteractiveViewer {
   #pathTracingDepthOverride: number | undefined;
   #pathTracingPaused = false;
   #pathTracingDenoise = false;
+  #pathTracingDenoiserComparison = false;
+  #pathTracingAdaptive = false;
+  #pathTracingView: PathTraceView = 'beauty';
+  #pathTracingLimits: PathTraceRenderLimits = {
+    stopOnConvergence: false, timeBudgetSeconds: 0, targetRelativeError: PT_CONVERGENCE_TARGET_RELATIVE_ERROR,
+  };
   #environmentEnabled = true;
   readonly #jsDenoiser: JsDenoiser;
   #ptDisplayDirty = true;
@@ -203,10 +234,12 @@ export class InteractiveViewer {
   #pathTraceRefill: ReturnType<typeof setTimeout> | undefined;
   #disposed = false;
   #lastCameraChange = -Infinity;
+  readonly #orbitControls: boolean;
   #detachControls: () => void;
   #onStatus: ((s: ViewerStatus) => void) | undefined;
   #onShaderErrors: ((errors: readonly ShaderCompilationError[]) => void) | undefined;
-  #exposure = 0;
+  #onDiagnostic: DiagnosticSink | undefined;
+  #exposure: number | undefined;
   #tonemap: Tonemap = 'acesFilmic';
 
   constructor(opts: {
@@ -214,8 +247,10 @@ export class InteractiveViewer {
     context: GPUCanvasContext;
     outputFormat: GPUTextureFormat;
     canvas: HTMLCanvasElement;
+    orbitControls?: boolean;
     onStatus?: (s: ViewerStatus) => void;
     onShaderErrors?: (errors: readonly ShaderCompilationError[]) => void;
+    onDiagnostic?: DiagnosticSink;
   }) {
     this.#device = opts.device;
     this.#jsDenoiser = new JsDenoiser(opts.device);
@@ -226,8 +261,10 @@ export class InteractiveViewer {
     this.#height = opts.canvas.height;
     this.#onStatus = opts.onStatus;
     this.#onShaderErrors = opts.onShaderErrors;
+    this.#onDiagnostic = opts.onDiagnostic;
+    this.#orbitControls = opts.orbitControls !== false;
     this.#orbit = OrbitCamera.fromEyeTarget([0, 0.3 + 0.438 * 7, 0], [0, 0.3, 0], this.#width / this.#height);
-    this.#detachControls = attachOrbitControls(this.#canvas, this.#orbit, () => this.#onCameraChanged());
+    this.#detachControls = this.#bindOrbitControls();
     this.#loop();
   }
 
@@ -248,6 +285,7 @@ export class InteractiveViewer {
       throw new Error('Path-tracing depth must be an integer between 0 and 64.');
     }
     if (depth === this.pathTracingDepth) return;
+    this.#clearDenoiserComparison();
     this.#pathTracingDepthOverride = depth;
     this.#current?.setPathTracingDepth(depth);
     this.#ptDisplayDirty = true;
@@ -258,6 +296,7 @@ export class InteractiveViewer {
 
   setEnvironmentEnabled(enabled: boolean): void {
     if (enabled === this.#environmentEnabled) return;
+    this.#clearDenoiserComparison();
     this.#environmentEnabled = enabled;
     this.#current?.setEnvironmentEnabled(enabled);
     if (this.#backend === 'pathtracing' || this.#backend === 'disney') this.#current?.resetPathTrace();
@@ -454,20 +493,107 @@ export class InteractiveViewer {
     return this.#pathTracingDenoise;
   }
 
+  get pathTracingAdaptive(): boolean {
+    return this.#pathTracingAdaptive;
+  }
+
+  get pathTracingView(): PathTraceView {
+    return this.#pathTracingView;
+  }
+
+  setPathTracingView(view: PathTraceView): void {
+    if (pathTraceViewIndex(view) < 0) throw new RangeError(`Unknown path-tracing view: ${view}`);
+    if (view === this.#pathTracingView) return;
+    if (view !== 'beauty') this.#clearDenoiserComparison();
+    this.#pathTracingView = view;
+    if (pathTraceViewStoresAov(view)) this.#current?.resetPathTrace();
+    this.#ptDisplayDirty = true;
+    this.#emitStatus();
+  }
+
+  readPathTracingAov(): Promise<PathTraceAovData> {
+    if (this.#backend !== 'pathtracing' || this.#pathTracingView === 'beauty' || !this.#current) {
+      throw new Error('A path-tracing AOV must be selected before exporting it.');
+    }
+    return this.#current.readPathTracingAov(this.#pathTracingView);
+  }
+
+  setPathTracingAdaptive(enabled: boolean): void {
+    if (enabled === this.#pathTracingAdaptive) return;
+    this.#clearDenoiserComparison();
+    this.#pathTracingAdaptive = enabled;
+    this.#current?.resetPathTrace();
+    this.#ptDisplayDirty = true;
+    this.#emitStatus();
+  }
+
+  get pathTracingLimits(): PathTraceRenderLimits {
+    return { ...this.#pathTracingLimits };
+  }
+
+  setPathTracingLimits(limits: PathTraceRenderLimits): void {
+    if (!Number.isFinite(limits.timeBudgetSeconds) || limits.timeBudgetSeconds < 0) {
+      throw new RangeError('Path-tracing time budget must be finite and non-negative.');
+    }
+    if (!Number.isFinite(limits.targetRelativeError)
+      || limits.targetRelativeError < PT_CONVERGENCE_MIN_TARGET_RELATIVE_ERROR
+      || limits.targetRelativeError > PT_CONVERGENCE_MAX_TARGET_RELATIVE_ERROR) {
+      throw new RangeError('Path-tracing noise target must be between 0.5% and 25%.');
+    }
+    const targetChanged = limits.targetRelativeError !== this.#pathTracingLimits.targetRelativeError;
+    if (limits.stopOnConvergence === this.#pathTracingLimits.stopOnConvergence
+      && limits.timeBudgetSeconds === this.#pathTracingLimits.timeBudgetSeconds
+      && !targetChanged) return;
+    this.#pathTracingLimits = { ...limits };
+    this.#current?.setPathTracingLimits(this.#pathTracingLimits);
+    if (targetChanged) this.#ptDisplayDirty = true;
+    this.#emitStatus();
+  }
+
+  restartPathTracing(): void {
+    this.#clearDenoiserComparison();
+    this.#current?.resetPathTrace();
+    this.#pathTracingPaused = false;
+    this.#ptDisplayDirty = true;
+    this.#emitStatus();
+  }
+
   setPathTracingDenoise(enabled: boolean): void {
     this.#pathTracingDenoise = enabled;
+    if (!enabled) this.#clearDenoiserComparison();
     this.#current?.invalidateDenoise();
     this.#ptDisplayDirty = true;
     this.#emitStatus();
   }
 
   setPathTracingPaused(paused: boolean): void {
+    if (paused !== this.#pathTracingPaused) this.#ptDisplayDirty = true;
+    if (!paused) this.#clearDenoiserComparison();
     this.#pathTracingPaused = paused;
+    this.#emitStatus();
+  }
+
+  setPathTracingDenoiserComparison(enabled: boolean): void {
+    if (!enabled) {
+      if (!this.#pathTracingDenoiserComparison) return;
+      this.#pathTracingDenoiserComparison = false;
+      this.#ptDisplayDirty = true;
+      this.#emitStatus();
+      return;
+    }
+    if (this.#backend !== 'pathtracing' || !this.#pathTracingPaused || !this.#pathTracingDenoise
+      || this.#pathTracingView !== 'beauty' || !this.#current || this.#current.frameCount() < 1) {
+      throw new Error('Denoiser comparison requires a paused MaterialX beauty render with samples and denoising enabled.');
+    }
+    this.#pathTracingDenoiserComparison = true;
+    this.#current.invalidateDenoise();
+    this.#ptDisplayDirty = true;
     this.#emitStatus();
   }
 
   setBackend(kind: BackendKind): void {
     if (kind === this.#backend) return;
+    this.#clearDenoiserComparison();
     this.#backend = kind;
     this.#canvas.style.imageRendering = 'auto';
     this.#ptDisplayDirty = true;
@@ -481,17 +607,21 @@ export class InteractiveViewer {
 
   setExposure(value: number): void {
     if (value === this.#exposure) return;
+    this.#clearDenoiserComparison();
     this.#exposure = value;
     this.#current?.setExposure(value);
     this.#ptDisplayDirty = true;
+    this.#rasterDirty = true;
     this.#emitStatus();
   }
 
   async setTonemap(value: Tonemap): Promise<void> {
     if (value === this.#tonemap) return;
+    this.#clearDenoiserComparison();
     this.#tonemap = value;
     await this.#current?.setTonemap(value);
     this.#ptDisplayDirty = true;
+    this.#rasterDirty = true;
     this.#emitStatus();
   }
 
@@ -532,7 +662,8 @@ export class InteractiveViewer {
     this.#warnings = 0;
     const sink: DiagnosticSink = (d) => {
       if (d.level === 'warning' || d.level === 'error') this.#warnings++;
-      if (d.level === 'error') console.error(d.message, d.detail ?? '');
+      if (this.#onDiagnostic) this.#onDiagnostic(d);
+      else if (d.level === 'error') console.error(d.message, d.detail ?? '');
       else if (d.level === 'warning') console.warn(d.message, d.detail ?? '');
     };
     const loaded = await this.#loadEntry(entry, overrides, options, sink);
@@ -540,6 +671,7 @@ export class InteractiveViewer {
     let frame: SceneFramePlan;
     let render: SceneRender;
     try {
+      if (this.#disposed) throw new Error('Viewer disposed during load.');
       if (overrides.size > 0 && loaded.resources.pendingMaterials.length > 0) {
         throw new Error('MaterialX compilation failed.');
       }
@@ -558,6 +690,7 @@ export class InteractiveViewer {
       this.#current?.dispose();
       this.#current = null;
       await new Promise((resolve) => setTimeout(resolve, 0));
+      if (this.#disposed) throw new Error('Viewer disposed during load.');
       const gpuBuildStarted = performance.now();
       render = await this.#buildSceneRender(loaded, frame, exposure, sink);
       performance.measure('viewer:raster-build', { start: gpuBuildStarted, end: performance.now(), detail: { entry } });
@@ -619,13 +752,14 @@ export class InteractiveViewer {
       }
     }
     this.#detachControls();
-    this.#detachControls = attachOrbitControls(this.#canvas, this.#orbit, () => this.#onCameraChanged());
+    this.#detachControls = this.#bindOrbitControls();
     this.#onCameraChanged();
     this.#emitStatus();
   }
 
   #onCameraChanged(): void {
     if (!this.#current) return;
+    this.#clearDenoiserComparison();
     this.#lastCameraChange = performance.now();
     this.#current.applyCamera(this.#orbit.viewProj(), this.#orbit.eye, inverse4(this.#orbit.backgroundViewProj()));
     this.#rasterDirty = true;
@@ -635,6 +769,9 @@ export class InteractiveViewer {
 
   #emitStatus(): void {
     if (!this.#onStatus || !this.#current) return;
+    const convergence = this.#current.pathTraceConvergence();
+    const convergenceError = this.#current.pathTraceConvergenceError();
+    const progress = this.#current.pathTraceProgress();
     this.#onStatus({
       environmentEnabled: this.#environmentEnabled,
       backend: this.#backend,
@@ -642,12 +779,33 @@ export class InteractiveViewer {
       pathTracer: this.#current.pathTracerState(),
       rasterQuality: this.#rasterQuality,
       pathTracingDenoise: this.#pathTracingDenoise,
+      denoiserComparison: this.#pathTracingDenoiserComparison,
+      pathTracingAdaptive: this.#pathTracingAdaptive,
+      pathTracingView: this.#pathTracingView,
+      pathTracingLimits: this.pathTracingLimits,
+      ...(progress ? { pathTracingProgress: progress } : {}),
+      ...(progress && this.#backend === 'pathtracing' ? {
+        pathTracingMetrics: pathTraceMetrics(progress, this.#pathTracingLimits, this.#current.frameCount(),
+          this.#pathTracingAdaptive, convergenceError ? undefined : convergence),
+      } : {}),
       denoiser: this.#current.denoiserStatus(),
       drawCount: this.#current.frame.draws.length,
       passes: this.#current.frame.passes,
       samples: this.#current.frameCount(),
       warnings: this.#warnings,
+      ...(convergence ? { convergence } : {}),
+      ...(convergenceError ? { convergenceError } : {}),
     });
+  }
+
+  #clearDenoiserComparison(): void {
+    this.#pathTracingDenoiserComparison = false;
+  }
+
+  #bindOrbitControls(): () => void {
+    return this.#orbitControls
+      ? attachOrbitControls(this.#canvas, this.#orbit, () => this.#onCameraChanged())
+      : () => {};
   }
 
   #loop = (): void => {
@@ -664,9 +822,10 @@ export class InteractiveViewer {
       const started = performance.now();
       const pathTracingFrame = this.#backend === 'pathtracing' || this.#backend === 'disney';
       const denoising = current.denoiserStatus().state === 'running';
-        if (this.#backend === 'pathtracing' && ((!this.#pathTracingPaused && !denoising) || this.#ptDisplayDirty)) {
+      const stopped = current.pathTraceProgress()?.stopReason !== undefined;
+        if (this.#backend === 'pathtracing' && ((!this.#pathTracingPaused && !denoising && !stopped) || this.#ptDisplayDirty)) {
         const tiled = performance.now() - this.#lastCameraChange >= 200;
-        current.renderPathTrace(this.#context.getCurrentTexture().createView(), tiled, !this.#pathTracingPaused && !denoising);
+        current.renderPathTrace(this.#context.getCurrentTexture().createView(), tiled, !this.#pathTracingPaused && !denoising && !stopped);
         this.#ptDisplayDirty = false;
         submitted = true;
         this.#emitStatus();
@@ -692,9 +851,11 @@ export class InteractiveViewer {
               detail: { entry: this.#sceneEntry, backend: this.#backend } });
           }
           if (pathTracingFrame) current.reportFrameTime(performance.now() - started);
+          if (!this.#disposed && current === this.#current) this.#emitStatus();
           this.#framePending = false;
           if (!this.#disposed && current === this.#current && (this.#backend === 'pathtracing' || this.#backend === 'disney')
             && !this.#pathTracingPaused && performance.now() - this.#lastCameraChange >= 200
+            && (this.#backend !== 'pathtracing' || current.pathTraceProgress()?.stopReason === undefined)
             && (this.#backend !== 'disney' || current.pathTracerState() === 'ready')
             && this.#pathTraceRefill === undefined) {
             // Refill after a task-boundary yield, not another display-vsync wait.
@@ -745,7 +906,8 @@ export class InteractiveViewer {
     let cameraViewProj = frame.camera.viewProj;
     let cameraEye = frame.camera.eye;
     let backgroundInvViewProj = inverse4(frame.camera.viewProj);
-    let currentExposure = exposure;
+    let currentExposure = this.#exposure ?? exposure;
+    let currentTonemap = this.#tonemap;
     const outputFormat = this.#outputFormat;
     const resources = { ...loaded.resources, materials: new Map(loaded.resources.materials) };
     const parameterBuffers = new Map<string, GPUBuffer[]>();
@@ -813,7 +975,7 @@ export class InteractiveViewer {
     const buildRaster = async () => {
       let backend = new RasterBackend({ device, outputFormat, tonemap: 'acesFilmic' });
       const resolveBackend = backend;
-      const resolvePipeline = resolveBackend.createResolvePipeline();
+      const resolvePipeline = await resolveBackend.createResolvePipelineAsync(true);
 
       const imageCache = new Map<string, DecodedPixelImage | undefined>();
       const materialTextures = new Map<string, { textureViews: Map<string, GPUTextureView>; samplers: Map<string, GPUSampler> }>();
@@ -879,23 +1041,55 @@ export class InteractiveViewer {
           return;
         }
         const nextBackend = new RasterBackend({ device, outputFormat, tonemap: 'acesFilmic' });
-        const shaders = new Map<string, ReturnType<typeof assembleIrForwardShader>>();
+        const shaderMaterials = new Map<string, NonNullable<ReturnType<typeof resources.materials.get>>>();
         for (const draw of frame.draws) {
           const material = draw.materialKey ? resources.materials.get(draw.materialKey) : undefined;
-          if (material?.volumeBoundary) continue;
-          if (!material?.surfaceModule || shaders.has(material.variant.pipelineKey)) continue;
-          const shader = loaded.compiled?.rasterShaders.get(compiledRasterShaderKey(material.unitKey, quality)) ??
-            assembleIrForwardShader(material.surfaceModule, {
-            displacement: material.displacement !== undefined, rasterQuality: quality,
-            analyticLights: rasterLights !== undefined,
-          });
-          const compiled = await compileShaderWithDiagnostics(device, shader.code, `Raster ${quality}: ${material.materialName}`);
-          if (disposed) throw new Error('Viewer disposed during raster compilation.');
-          rasterErrors = compiled.errors;
-          this.#onShaderErrors?.(rasterErrors);
-          if (rasterErrors.length > 0) throw new Error(`WGSL: ${rasterErrors.length} erreur(s) de compilation.`);
-          shaders.set(material.variant.pipelineKey, shader);
-          nextBackend.createSceneVariantPipeline(draw.pass, material.variant.pipelineKey, shader.code, compiled.module, !!material.resolvedSurface?.backNodeId);
+          if (material?.volumeBoundary || !material?.surfaceModule || shaderMaterials.has(material.variant.pipelineKey)) continue;
+          shaderMaterials.set(material.variant.pipelineKey, material);
+        }
+        const shaders = new Map<string, ReturnType<typeof assembleIrForwardShader>>();
+        const shaderMaterialsInOrder = [...shaderMaterials];
+        const compiledShaders = await compileShaderBatch(device, shaderMaterialsInOrder.map(([key, material]) => ({
+          label: `Raster ${quality}: ${material.materialName}`,
+          code: () => {
+            const shader = loaded.compiled?.rasterShaders.get(compiledRasterShaderKey(material.unitKey, quality)) ??
+              assembleIrForwardShader(material.surfaceModule!, {
+                displacement: material.displacement !== undefined, rasterQuality: quality,
+                analyticLights: rasterLights !== undefined,
+              });
+            shaders.set(key, shader);
+            return shader.code;
+          },
+        })));
+        if (disposed) throw new Error('Viewer disposed during raster compilation.');
+        rasterErrors = compiledShaders.flatMap(compiled => compiled.errors);
+        this.#onShaderErrors?.([...rasterErrors, ...pathTraceErrors]);
+        if (rasterErrors.length > 0) throw new Error(`WGSL: ${rasterErrors.length} erreur(s) de compilation.`);
+        const compiledByKey = new Map(shaderMaterialsInOrder.map(([key], index) => [key, compiledShaders[index]!]));
+        const pipelineRequests = new Map<string, { pass: ScenePassKind; key: string; material: NonNullable<ReturnType<typeof resources.materials.get>> }>();
+        for (const draw of frame.draws) {
+          const material = draw.materialKey ? resources.materials.get(draw.materialKey) : undefined;
+          if (material?.volumeBoundary || !material?.surfaceModule) continue;
+          const key = material.variant.pipelineKey;
+          const cacheKey = `${draw.pass}:${key}`;
+          if (!pipelineRequests.has(cacheKey)) pipelineRequests.set(cacheKey, { pass: draw.pass, key, material });
+        }
+        const pipelineJobs = [...pipelineRequests.values()];
+        const createPipeline = async ({ pass, key, material }: typeof pipelineJobs[number]): Promise<void> => {
+          const shader = shaders.get(key);
+          const compiled = compiledByKey.get(key);
+          if (!shader || !compiled) throw new Error(`Missing compiled raster shader: ${material.materialName}`);
+          await nextBackend.createSceneVariantPipelineAsync(
+            pass, key, shader.code, compiled.module, !!material.resolvedSurface?.backNodeId,
+          );
+        };
+        for (let start = 0; start < pipelineJobs.length; start += SHADER_COMPILATION_CONCURRENCY) {
+          const batch = await Promise.allSettled(
+            pipelineJobs.slice(start, start + SHADER_COMPILATION_CONCURRENCY).map(createPipeline),
+          );
+          for (const result of batch) {
+            if (result.status === 'rejected') throw result.reason;
+          }
         }
         const nextDraws = new Map<ScenePassKind, SceneDrawCall[]>();
         for (const draw of frame.draws) {
@@ -980,7 +1174,7 @@ export class InteractiveViewer {
       await buildRasterQuality(rasterQuality);
 
       const resolveUniform = track(device.createBuffer({ size: RESOLVE_UNIFORM_SIZE, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST }));
-      device.queue.writeBuffer(resolveUniform, 0, new Float32Array([currentExposure]));
+      device.queue.writeBuffer(resolveUniform, 0, new Float32Array([currentExposure, tonemapIndex(currentTonemap)]));
       const sampler = device.createSampler({ magFilter: 'linear', minFilter: 'linear' });
       let volumePipeline: GPURenderPipeline | undefined;
       const volumeEntries: GPUBindGroupEntry[] = [];
@@ -990,12 +1184,15 @@ export class InteractiveViewer {
           frameCamera: { viewProj: cameraViewProj, eye: cameraEye, exposure },
           environment: frame.environment, settings: pathTraceSettings(loaded.scene),
         });
-        const code = rasterVolumeWgsl(volumeScene.volumeData !== undefined,rasterLights !== undefined);
-        const compiled = await compileShaderWithDiagnostics(device,code,'Raster volume');
+        const [compiled] = await compileShaderBatch(device, [{
+          label: 'Raster volume',
+          code: () => rasterVolumeWgsl(volumeScene.volumeData !== undefined, rasterLights !== undefined),
+        }]);
+        if (!compiled) throw new Error('Raster volume shader compilation produced no result.');
         rasterErrors = compiled.errors;
-        this.#onShaderErrors?.(rasterErrors);
+        this.#onShaderErrors?.([...rasterErrors, ...pathTraceErrors]);
         if (rasterErrors.length) throw new Error(`WGSL volume raster: ${rasterErrors.length} erreur(s).`);
-        volumePipeline = device.createRenderPipeline({
+        volumePipeline = await device.createRenderPipelineAsync({
           layout: 'auto', vertex: { module: compiled.module, entryPoint: 'vs' },
           fragment: { module: compiled.module, entryPoint: 'fs', targets: [{ format: backend.hdrFormat }] },
           primitive: { topology: 'triangle-list' },
@@ -1092,7 +1289,7 @@ export class InteractiveViewer {
   }
   `,
         });
-        envBgPipeline = device.createRenderPipeline({
+        envBgPipeline = await device.createRenderPipelineAsync({
           layout: 'auto',
           vertex: { module: envBgModule, entryPoint: 'vs' },
           fragment: { module: envBgModule, entryPoint: 'fs', targets: [{ format: backend.hdrFormat }] },
@@ -1157,7 +1354,7 @@ export class InteractiveViewer {
           pass.draw(3);
           pass.end();
         }
-        device.queue.writeBuffer(resolveUniform, 0, new Float32Array([currentExposure]));
+        device.queue.writeBuffer(resolveUniform, 0, new Float32Array([currentExposure, tonemapIndex(currentTonemap)]));
         resolveBackend.recordResolvePass(encoder, { outputView: targetView, bindGroup: resolveBindGroup });
         device.queue.submit([encoder.finish()]);
       };
@@ -1246,20 +1443,32 @@ export class InteractiveViewer {
           maxRecordLobes(ptScene.materials, new Set(dispatch.variants.map((variant) => variant.index))),
         ),
       );
-      const ptCompilation = await compileShaderWithDiagnostics(
-        device, pathTraceComputeWgsl({
-          volumeGrid: ptScene.volumeData !== undefined,
-          dispatch, environment: loaded.environment !== undefined, maxLobes, displayAovs: true,
-          closureDispatch: pathTraceClosureDispatch(dispatch, ptScene.materials),
-          opaque: pathTraceOpaqueScene(dispatch, ptScene.materials),
-          analyticLights: ptScene.analyticLights !== undefined,
-          pruneUnusedFunctions: true,
-          rouletteDepth: ptOptions.settings.rouletteDepth,
-        }), 'Path tracing');
-      if (ptCompilation.errors.length > 0) {
-        pathTraceErrors = ptCompilation.errors;
+      const [ptCompilation, displayCompilation, convergenceCompilation] = await compileShaderBatch(device, [
+        {
+          label: 'Path tracing',
+          code: () => pathTraceComputeWgsl({
+            volumeGrid: ptScene.volumeData !== undefined,
+            dispatch, environment: loaded.environment !== undefined, maxLobes, displayAovs: true,
+            closureDispatch: pathTraceClosureDispatch(dispatch, ptScene.materials),
+            opaque: pathTraceOpaqueScene(dispatch, ptScene.materials),
+            analyticLights: ptScene.analyticLights !== undefined,
+            pruneUnusedFunctions: true,
+            rouletteDepth: ptOptions.settings.rouletteDepth,
+          }),
+        },
+        {
+          label: 'Path tracing display',
+          code: () => pathTraceDisplayWgsl(envAsset !== undefined, true, true),
+        },
+        {
+          label: 'Path tracing convergence',
+          code: pathTraceConvergenceWgsl,
+        },
+      ]);
+      pathTraceErrors = [...ptCompilation!.errors, ...displayCompilation!.errors, ...convergenceCompilation!.errors];
+      if (pathTraceErrors.length > 0) {
         this.#onShaderErrors?.([...rasterErrors, ...pathTraceErrors]);
-        throw new Error(`WGSL: ${ptCompilation.errors.length} erreur(s) de compilation (path tracing).`);
+        throw new Error(`WGSL: ${pathTraceErrors.length} erreur(s) de compilation (path tracing).`);
       }
       const ptParameterData = (): ArrayBuffer => packParameterUniforms(dispatch.uniforms, field => {
         const index = /^m(\d+)_/.exec(field.field)?.[1];
@@ -1269,15 +1478,21 @@ export class InteractiveViewer {
         return parameter.value;
       });
       const ptBackend = new PathTraceBackend(device, { dispatch, ...(envAsset ? { environment: true } : {}) });
-      const { pipeline: ptPipeline } = await ptBackend.createPipelineAsync(ptCompilation.module);
-      const displayCompilation = await compileShaderWithDiagnostics(
-        device, pathTraceDisplayWgsl(envAsset !== undefined), 'Path tracing display');
-      if (displayCompilation.errors.length > 0) {
-        pathTraceErrors = displayCompilation.errors;
-        this.#onShaderErrors?.([...rasterErrors, ...pathTraceErrors]);
-        throw new Error(`WGSL: ${displayCompilation.errors.length} erreur(s) de compilation (path tracing display).`);
-      }
       if (disposed) throw new Error('Viewer disposed during path tracer compilation.');
+      const [ptPipelineResult, ptDisplayPipeline, ptConvergencePipeline] = await Promise.all([
+        ptBackend.createPipelineAsync(ptCompilation!.module),
+        device.createRenderPipelineAsync({
+          layout: 'auto',
+          vertex: { module: displayCompilation!.module, entryPoint: 'vs' },
+          fragment: { module: displayCompilation!.module, entryPoint: 'fs', targets: [{ format: outputFormat }] },
+          primitive: { topology: 'triangle-list' },
+        }),
+        device.createComputePipelineAsync({
+          layout: 'auto',
+          compute: { module: convergenceCompilation!.module, entryPoint: 'mx_path_trace_convergence' },
+        }),
+      ]);
+      const ptPipeline = ptPipelineResult.pipeline;
       let pixelScale = 4;
       let interactiveScale = 4;
       let previewWidth = 0;
@@ -1289,6 +1504,7 @@ export class InteractiveViewer {
       let measuredTime = 0;
       let ptWidth = Math.ceil(width / pixelScale);
       let ptHeight = Math.ceil(height / pixelScale);
+      let aovStorageEnabled = pathTraceViewStoresAov(this.#pathTracingView);
       const storage = (data: Float32Array | Uint32Array): GPUBuffer => {
         assertSceneStorageSize(device, Math.max(data.byteLength, 4));
         return track(device.createBuffer({ size: Math.max(data.byteLength, 4), usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST }));
@@ -1300,13 +1516,37 @@ export class InteractiveViewer {
         return buf;
       };
 
-      const accumulation = (w: number, h: number): GPUBuffer => device.createBuffer({
-        size: w * h * PT_DISPLAY_PIXEL_BYTES,
-        usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC,
-      });
-      let accumBuffer = accumulation(width, height);
+      const accumulation = (w: number, h: number, view: PathTraceView): GPUBuffer => {
+        const size = w * h * pathTraceStorageBytesPerPixel(view);
+        assertSceneStorageSize(device, size);
+        return device.createBuffer({
+          size, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC,
+        });
+      };
+      let accumBuffer = accumulation(width, height, this.#pathTracingView);
       ptTrash.push({ destroy: () => accumBuffer.destroy() });
-      let previewBuffer = accumulation(Math.ceil(width / 2), Math.ceil(height / 2));
+      const convergenceBuffer = track(device.createBuffer({
+        size: PT_CONVERGENCE_COLUMNS * PT_CONVERGENCE_ROWS * PT_CONVERGENCE_ZONE_BYTES,
+        usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
+      }));
+      const convergenceReadback = track(device.createBuffer({
+        size: PT_CONVERGENCE_COLUMNS * PT_CONVERGENCE_ROWS * PT_CONVERGENCE_ZONE_BYTES,
+        usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST,
+      }));
+      const convergenceUniform = track(device.createBuffer({
+        size: PT_CONVERGENCE_UNIFORM_BYTES,
+        usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+      }));
+      const convergenceBindGroup = (accum: GPUBuffer): GPUBindGroup => device.createBindGroup({
+        layout: ptConvergencePipeline.getBindGroupLayout(0),
+        entries: [
+          { binding: 0, resource: { buffer: accum } },
+          { binding: 1, resource: { buffer: convergenceUniform } },
+          { binding: 2, resource: { buffer: convergenceBuffer } },
+        ],
+      });
+      let ptConvergenceBindGroup = convergenceBindGroup(accumBuffer);
+      let previewBuffer = accumulation(Math.ceil(width / 2), Math.ceil(height / 2), this.#pathTracingView);
       ptTrash.push({ destroy: () => previewBuffer.destroy() });
       const ptUniform = track(device.createBuffer({ size: PT_UNIFORM_SIZE, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST }));
       const ptUniforms = [ptUniform, ...Array.from({ length: PATH_TRACE_MAX_TILES_PER_REFRESH - 1 }, () =>
@@ -1377,13 +1617,6 @@ export class InteractiveViewer {
           })
           : undefined;
 
-      const ptDisplayModule = displayCompilation.module;
-      const ptDisplayPipeline = device.createRenderPipeline({
-        layout: 'auto',
-        vertex: { module: ptDisplayModule, entryPoint: 'vs' },
-        fragment: { module: ptDisplayModule, entryPoint: 'fs', targets: [{ format: outputFormat }] },
-        primitive: { topology: 'triangle-list' },
-      });
       const ptInfo = track(device.createBuffer({ size: PT_DISPLAY_INFO_BYTES, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST }));
       const neuralTarget = (w: number, h: number): GPUTexture => device.createTexture({
         size: [w, h], format: 'rgba8unorm', usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
@@ -1408,6 +1641,21 @@ export class InteractiveViewer {
       let denoiserRevision = 0;
       let lastDenoisedSample = 0;
       let denoiserStatus: DenoiserStatus = { state: 'waiting' };
+      let convergenceBusy = false;
+      let convergenceRevision = 0;
+      let lastConvergenceSample = 0;
+      let convergenceRefreshPending = false;
+      let convergenceTarget = this.#pathTracingLimits.targetRelativeError;
+      let convergenceStatus: PathTraceConvergence | undefined;
+      let convergenceError: string | undefined;
+      const stopping = new PathTraceStopping(this.#pathTracingLimits);
+      let timedBatch = false;
+      const invalidateConvergence = (): void => {
+        convergenceRevision++;
+        lastConvergenceSample = 0;
+        convergenceStatus = undefined;
+        convergenceError = undefined;
+      };
       const invalidateDenoise = (): void => {
         denoiserRevision++;
         neuralReady = false;
@@ -1416,22 +1664,64 @@ export class InteractiveViewer {
         if (denoiserBusy) this.#jsDenoiser.abort();
       };
       const resetPathTrace = (): void => {
+        stopping.reset();
+        timedBatch = false;
         invalidateDenoise();
+        invalidateConvergence();
         ptBackend.resetAccumulation();
         resetPending = true;
         needsPreview = true;
         previewWidth = 0;
         previewHeight = 0;
       };
+      const readConvergence = async (
+        revision: number, samples: number, columns: number, rows: number,
+      ): Promise<void> => {
+        convergenceBusy = true;
+        let mapped = false;
+        try {
+          await convergenceReadback.mapAsync(GPUMapMode.READ);
+          mapped = true;
+          const values = new Float32Array(convergenceReadback.getMappedRange().slice(0));
+          convergenceReadback.unmap();
+          mapped = false;
+          if (disposed || revision !== convergenceRevision) return;
+          convergenceStatus = {
+            columns, rows, samples, targetRelativeError: this.#pathTracingLimits.targetRelativeError,
+            zones: Array.from({ length: columns * rows }, (_, index) => ({
+              relativeError: values[index * 4]!,
+              maximumRelativeError: values[index * 4 + 1]!,
+              convergedFraction: values[index * 4 + 2]!,
+              validFraction: values[index * 4 + 3]!,
+            })),
+          };
+          convergenceError = undefined;
+          stopping.observe(convergenceStatus);
+        } catch (error) {
+          if (!disposed && revision === convergenceRevision) {
+            stopping.observe(undefined);
+            convergenceError = error instanceof Error ? error.message : String(error);
+            console.error('Path-tracing convergence readback failed:', error);
+          }
+        } finally {
+          if (mapped) convergenceReadback.unmap();
+          convergenceBusy = false;
+          if (!disposed) {
+            if (convergenceRefreshPending) this.#ptDisplayDirty = true;
+            this.#emitStatus();
+          }
+        }
+      };
       const resizePathTrace = (w: number, h: number): void => {
-        const nextAccum = accumulation(w, h);
+        const nextAccum = accumulation(w, h, this.#pathTracingView);
         let nextPreview: GPUBuffer | undefined;
         let nextNeural: GPUTexture | undefined;
         try {
-          nextPreview = accumulation(Math.ceil(w / 2), Math.ceil(h / 2));
+          nextPreview = accumulation(Math.ceil(w / 2), Math.ceil(h / 2), this.#pathTracingView);
           nextNeural = neuralTarget(w, h);
           const nextComputeGroups = computeGroups(nextAccum);
           const nextDisplay = displayGroup(nextAccum, nextPreview, nextNeural);
+          const nextConvergence = convergenceBindGroup(nextAccum);
           accumBuffer.destroy();
           previewBuffer.destroy();
           neuralTexture.destroy();
@@ -1440,6 +1730,8 @@ export class InteractiveViewer {
           neuralTexture = nextNeural;
           ptComputeGroups = nextComputeGroups;
           ptDisplayBindGroup = nextDisplay;
+          ptConvergenceBindGroup = nextConvergence;
+          aovStorageEnabled = pathTraceViewStoresAov(this.#pathTracingView);
           ptWidth = Math.max(1, Math.ceil(w / pixelScale));
           ptHeight = Math.max(1, Math.ceil(h / pixelScale));
           resetPathTrace();
@@ -1451,6 +1743,39 @@ export class InteractiveViewer {
         }
       };
       const renderPathTrace = (targetView: GPUTextureView, tiled: boolean, accumulate: boolean): void => {
+        const nextAovStorageEnabled = pathTraceViewStoresAov(this.#pathTracingView);
+        if (nextAovStorageEnabled !== aovStorageEnabled) {
+          const nextAccum = accumulation(width, height, this.#pathTracingView);
+          let nextPreview: GPUBuffer | undefined;
+          try {
+            nextPreview = accumulation(Math.ceil(width / 2), Math.ceil(height / 2), this.#pathTracingView);
+            const nextComputeGroups = computeGroups(nextAccum);
+            const nextDisplay = displayGroup(nextAccum, nextPreview, neuralTexture);
+            const nextConvergence = convergenceBindGroup(nextAccum);
+            if (!nextAovStorageEnabled && !resetPending) {
+              const copy = device.createCommandEncoder();
+              copy.copyBufferToBuffer(accumBuffer, 0, nextAccum, 0, ptWidth * ptHeight * PT_DISPLAY_PIXEL_BYTES);
+              if (previewWidth > 0 && previewHeight > 0) {
+                copy.copyBufferToBuffer(
+                  previewBuffer, 0, nextPreview, 0, previewWidth * previewHeight * PT_DISPLAY_PIXEL_BYTES,
+                );
+              }
+              device.queue.submit([copy.finish()]);
+            }
+            accumBuffer.destroy();
+            previewBuffer.destroy();
+            accumBuffer = nextAccum;
+            previewBuffer = nextPreview;
+            ptComputeGroups = nextComputeGroups;
+            ptDisplayBindGroup = nextDisplay;
+            ptConvergenceBindGroup = nextConvergence;
+            aovStorageEnabled = nextAovStorageEnabled;
+          } catch (error) {
+            nextAccum.destroy();
+            nextPreview?.destroy();
+            throw error;
+          }
+        }
         const encoder = device.createCommandEncoder();
         tiled = tiled && !needsPreview;
         const nextPixelScale = accumulate ? (tiled ? 1 : interactiveScale) : pixelScale;
@@ -1459,7 +1784,8 @@ export class InteractiveViewer {
           resetPending = false;
         } else if (pixelScale > 1 && nextPixelScale === 1) {
           // Preserve this camera's complete preview until each full-resolution tile arrives.
-          encoder.copyBufferToBuffer(accumBuffer, 0, previewBuffer, 0, ptWidth * ptHeight * PT_DISPLAY_PIXEL_BYTES);
+          encoder.copyBufferToBuffer(accumBuffer, 0, previewBuffer, 0,
+            ptWidth * ptHeight * pathTraceStorageBytesPerPixel(this.#pathTracingView));
           previewWidth = ptWidth;
           previewHeight = ptHeight;
         }
@@ -1468,22 +1794,25 @@ export class InteractiveViewer {
           ptWidth = Math.max(1, Math.ceil(width / pixelScale));
           ptHeight = Math.max(1, Math.ceil(height / pixelScale));
           ptBackend.resetAccumulation();
+          invalidateConvergence();
           encoder.clearBuffer(accumBuffer);
         }
         const info = new ArrayBuffer(PT_DISPLAY_INFO_BYTES);
         const floats = new Float32Array(info);
         const ints = new Uint32Array(info);
         ints.set([ptWidth, ptHeight], 0);
-        floats[2] = exposure;
+        floats[2] = currentExposure;
         ints[3] = this.#pathTracingDenoise && neuralReady ? 1 : 0;
         ints.set([previewWidth, previewHeight, width, height], 4);
         floats.set(backgroundInvViewProj, 8);
-        floats.set([...cameraEye, 0], 24);
+        floats.set([...cameraEye, pathTraceViewIndex(this.#pathTracingView)], 24);
         const tint = envAsset?.tint ?? [1, 1, 1];
         floats.set(tint.map((v) => frame.environment.enabled === false ? 0 : v * (envAsset?.intensity ?? 1) * envRadianceScale), 28);
-        floats.set(rasterBackground(), 32);
+        floats[31] = this.#pathTracingDenoiserComparison && neuralReady ? 0.5 : 0;
+        floats.set([...rasterBackground(), tonemapIndex(currentTonemap)], 32);
         device.queue.writeBuffer(ptInfo, 0, info);
         lastPreview = accumulate && !tiled;
+        timedBatch = accumulate && pixelScale === 1;
         if (accumulate) {
           needsPreview = false;
           const tileCount = tiled ? Math.min(PATH_TRACE_MAX_TILES_PER_REFRESH, Math.max(
@@ -1497,7 +1826,8 @@ export class InteractiveViewer {
             const [wgX, wgY] = PathTraceBackend.workgroupCount(tile.width, tile.height);
             // Separate uniforms let watchdog-sized tile dispatches share a submission.
             device.queue.writeBuffer(ptUniforms[i]!, 0,
-              buildPathTraceUniform(ptScene, frameIndex, 1, ptWidth, ptHeight, 0, tile, pathTracingDepth));
+              buildPathTraceUniform(ptScene, frameIndex, 1, ptWidth, ptHeight, 0, tile, pathTracingDepth,
+                this.#pathTracingAdaptive && tiled, this.#pathTracingView, this.#pathTracingLimits.targetRelativeError));
             const compute = encoder.beginComputePass();
             compute.setPipeline(ptPipeline);
             compute.setBindGroup(0, ptComputeGroups[i]!);
@@ -1508,6 +1838,32 @@ export class InteractiveViewer {
             compute.end();
           }
         }
+        let convergenceRequest: { revision: number; samples: number; columns: number; rows: number } | undefined;
+        const samples = ptBackend.frameIndex;
+        if (pixelScale === 1 && samples >= PT_CONVERGENCE_MIN_SAMPLES && !convergenceBusy
+          && (convergenceRefreshPending || (accumulate
+            && samples >= lastConvergenceSample + PT_CONVERGENCE_MIN_SAMPLES))) {
+          const columns = Math.min(PT_CONVERGENCE_COLUMNS, ptWidth);
+          const rows = Math.min(PT_CONVERGENCE_ROWS, ptHeight);
+          const settings = new ArrayBuffer(PT_CONVERGENCE_UNIFORM_BYTES);
+          const settingInts = new Uint32Array(settings);
+          settingInts.set([ptWidth, ptHeight, columns, rows], 0);
+          settingInts[5] = PT_CONVERGENCE_MIN_SAMPLES;
+          new Float32Array(settings)[4] = this.#pathTracingLimits.targetRelativeError;
+          device.queue.writeBuffer(convergenceUniform, 0, settings);
+          const convergencePass = encoder.beginComputePass();
+          convergencePass.setPipeline(ptConvergencePipeline);
+          convergencePass.setBindGroup(0, ptConvergenceBindGroup);
+          convergencePass.dispatchWorkgroups(columns, rows, 1);
+          convergencePass.end();
+          encoder.copyBufferToBuffer(
+            convergenceBuffer, 0, convergenceReadback, 0,
+            columns * rows * PT_CONVERGENCE_ZONE_BYTES,
+          );
+          lastConvergenceSample = samples;
+          convergenceRefreshPending = false;
+          convergenceRequest = { revision: convergenceRevision, samples, columns, rows };
+        }
         const renderPass = encoder.beginRenderPass({
           colorAttachments: [{ view: targetView, loadOp: 'clear', storeOp: 'store', clearValue: { r: 0, g: 0, b: 0, a: 1 } }],
         });
@@ -1516,10 +1872,74 @@ export class InteractiveViewer {
         renderPass.draw(3);
         renderPass.end();
         device.queue.submit([encoder.finish()]);
-        const samples = ptBackend.frameIndex;
-        if (this.#pathTracingDenoise && !denoiserBusy && !this.#jsDenoiser.busy && denoiserStatus.state !== 'error'
+        if (convergenceRequest) void readConvergence(
+          convergenceRequest.revision,
+          convergenceRequest.samples,
+          convergenceRequest.columns,
+          convergenceRequest.rows,
+        );
+        if (this.#pathTracingView === 'beauty' && this.#pathTracingDenoise && !denoiserBusy && !this.#jsDenoiser.busy && denoiserStatus.state !== 'error'
           && pixelScale === 1 && samples >= 1 && (lastDenoisedSample === 0 || samples >= lastDenoisedSample + 8)) {
           void runDenoise(info, samples);
+        }
+      };
+      const readPathTracingAov = async (view: Exclude<PathTraceView, 'beauty'>): Promise<PathTraceAovData> => {
+        if (disposed || this.#pathTracingView !== view) {
+          throw new Error('The selected path-tracing AOV changed before export.');
+        }
+        if (ptBackend.frameIndex < 1) throw new Error('The path tracer has not accumulated any samples.');
+        const exportWidth = ptWidth;
+        const exportHeight = ptHeight;
+        const pixelCount = exportWidth * exportHeight;
+        const variance = view === 'variance';
+        const channels = variance ? 1 : 3;
+        const source = accumBuffer;
+        const sourceOffset = 0;
+        const byteLength = variance ? pixelCount * PT_DISPLAY_PIXEL_BYTES
+          : pixelCount * (PT_DISPLAY_PIXEL_BYTES + PT_SURFACE_AOV_PIXEL_BYTES);
+        const readback = device.createBuffer({
+          size: byteLength, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
+        });
+        let mapped = false;
+        try {
+          const encoder = device.createCommandEncoder();
+          encoder.copyBufferToBuffer(source, sourceOffset, readback, 0, byteLength);
+          device.queue.submit([encoder.finish()]);
+          await readback.mapAsync(GPUMapMode.READ);
+          mapped = true;
+          if (disposed || this.#pathTracingView !== view) {
+            throw new Error('The selected path-tracing AOV changed during export.');
+          }
+          const sourceValues = new Float32Array(readback.getMappedRange().slice(0));
+          const values = new Float32Array(pixelCount * channels);
+          for (let pixel = 0; pixel < pixelCount; pixel++) {
+            if (variance) {
+              const index = pixel * 8;
+              const count = sourceValues[index + 3]!;
+              values[pixel] = count < 2 ? Number.NaN : Math.max(0, sourceValues[index + 5]!) / (count - 1);
+            } else {
+              const sampleCount = sourceValues[pixel * 8 + 3]!;
+              const sourceIndex = pixelCount * 8 + pixel * 4;
+              const destinationIndex = pixel * 3;
+              const coverage = sourceValues[sourceIndex + 3]!;
+              if (sampleCount === 0) {
+                values.fill(Number.NaN, destinationIndex, destinationIndex + 3);
+                continue;
+              }
+              const divisor = view === 'emission' ? 1 : coverage;
+              if (coverage === 0 && view !== 'emission') {
+                values.fill(0, destinationIndex, destinationIndex + 3);
+              } else {
+                for (let channel = 0; channel < 3; channel++) {
+                  values[destinationIndex + channel] = sourceValues[sourceIndex + channel]! / divisor;
+                }
+              }
+            }
+          }
+          return { width: exportWidth, height: exportHeight, channels, values };
+        } finally {
+          if (mapped) readback.unmap();
+          readback.destroy();
         }
       };
       const runDenoise = async (displayInfo: ArrayBuffer, samples: number): Promise<void> => {
@@ -1541,6 +1961,8 @@ export class InteractiveViewer {
           const rawInfo = own(device.createBuffer({ size: PT_DISPLAY_INFO_BYTES, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST }));
           const data = displayInfo.slice(0);
           new Uint32Array(data)[3] = 0;
+          new Float32Array(data)[27] = 0;
+          new Float32Array(data)[31] = 0;
           device.queue.writeBuffer(rawInfo, 0, data);
           const rawGroup = displayGroup(accumBuffer, previewBuffer, neuralTexture, rawInfo);
           const encoder = device.createCommandEncoder();
@@ -1579,6 +2001,7 @@ export class InteractiveViewer {
           if (!disposed && revision === denoiserRevision) {
             const message = error instanceof Error ? error.message : String(error);
             denoiserStatus = { state: 'error', error: message };
+            this.#clearDenoiserComparison();
             console.error('JS denoiser failed:', error);
           }
         } finally {
@@ -1591,6 +2014,10 @@ export class InteractiveViewer {
         }
       };
       const reportFrameTime = (milliseconds: number): void => {
+        if (timedBatch) {
+          stopping.recordBatch(milliseconds);
+          timedBatch = false;
+        }
         if (!lastPreview) return;
         measuredFrames++;
         measuredTime += milliseconds;
@@ -1603,6 +2030,18 @@ export class InteractiveViewer {
       return {
         renderPathTrace, reportFrameTime, resetPathTrace, invalidateDenoise,
         denoiserStatus: (): DenoiserStatus => this.#pathTracingDenoise ? denoiserStatus : { state: 'off' },
+        pathTraceConvergence: (): PathTraceConvergence | undefined => convergenceStatus,
+        pathTraceConvergenceError: (): string | undefined => convergenceError,
+        readPathTracingAov,
+        pathTraceProgress: (): PathTraceProgress => stopping.progress,
+        setPathTracingLimits: (limits: PathTraceRenderLimits): void => {
+          stopping.configure(limits);
+          if (limits.targetRelativeError !== convergenceTarget) {
+            convergenceTarget = limits.targetRelativeError;
+            invalidateConvergence();
+            convergenceRefreshPending = true;
+          }
+        },
         resize: resizePathTrace, frameCount: () => ptBackend.frameIndex,
       };
     };
@@ -1703,7 +2142,7 @@ export class InteractiveViewer {
       }
       if (!accumulate) {
         try {
-          backend.display(targetView, [width, height], currentExposure);
+          backend.display(targetView, [width, height], currentExposure, currentTonemap);
         } catch (error) {
           setDisneyError(error, 'Disney path tracing - display');
         }
@@ -1747,7 +2186,7 @@ export class InteractiveViewer {
         environmentTotal: disneyEnvironmentTotal, environmentRotation: disneyEnvironmentRotationValue,
         environmentIntensity: 1, uniformColor: [0, 0, 0],
       };
-      backend.renderTile(settings, display ? targetView : undefined, currentExposure);
+      backend.renderTile(settings, display ? targetView : undefined, currentExposure, currentTonemap);
       disneySeedFrame++;
       disneyTileIndex++;
       if (disneyTileIndex === tile.tileCount) {
@@ -1898,15 +2337,26 @@ export class InteractiveViewer {
       reportFrameTime: (milliseconds) => pathTracer?.reportFrameTime(milliseconds),
       invalidateDenoise: () => pathTracer?.invalidateDenoise(),
       denoiserStatus: () => pathTracer?.denoiserStatus() ?? { state: this.#pathTracingDenoise ? 'waiting' : 'off' },
+      pathTraceConvergence: () => pathTracer?.pathTraceConvergence(),
+      pathTraceConvergenceError: () => pathTracer?.pathTraceConvergenceError(),
+      readPathTracingAov: view => {
+        if (!pathTracer) throw new Error('The path tracer is not ready to export an AOV.');
+        return pathTracer.readPathTracingAov(view);
+      },
+      pathTraceProgress: () => pathTracer?.pathTraceProgress(),
+      setPathTracingLimits: limits => pathTracer?.setPathTracingLimits(limits),
       resetPathTrace: () => {
         pathTracer?.resetPathTrace();
         resetDisneyPathTrace();
       },
       setExposure: (value: number) => {
         currentExposure = value;
+        pathTracer?.invalidateDenoise();
         this.#ptDisplayDirty = true;
       },
-      setTonemap: async (_tonemap: Tonemap) => {
+      setTonemap: async (tonemap: Tonemap) => {
+        currentTonemap = tonemap;
+        pathTracer?.invalidateDenoise();
         this.#ptDisplayDirty = true;
       },
       applyCamera,

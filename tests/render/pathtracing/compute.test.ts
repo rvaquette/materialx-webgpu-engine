@@ -120,8 +120,19 @@ describe('pathTraceComputeWgsl', () => {
     expect(src).not.toContain('fn camera_jitter');
     expect(src).toContain('let jitter = vec2<f32>(rng_next(&state), rng_next(&state));');
     const viewer = pathTraceComputeWgsl({ displayAovs: true });
-    expect(viewer).toContain('let jitter = camera_jitter(frameIndex * spp + i, pixel);');
+    expect(viewer).toContain('let sampleIndex = select(frameIndex * spp, u32(previous.w), adaptive);');
+    expect(viewer).toContain('let jitter = camera_jitter(sampleIndex + i, pixel);');
     expect(viewer).not.toContain('pcgJitter');
+    expect(viewer).toContain('batchM2 += batchDelta * (sampleLuminance - batchMeanLuminance);');
+    expect(viewer).toContain('oldM2 + batchM2 + delta * delta * count * sampleCount / totalCount');
+  });
+  it('only skips converged pixels in the opt-in display path and seeds by their actual sample count', () => {
+    const viewer = pathTraceComputeWgsl({ displayAovs: true, pruneUnusedFunctions: true });
+    expect(viewer).toContain('fn mx_adaptive_sample(');
+    expect(viewer).toContain('if (adaptive && !mx_adaptive_sample(');
+    expect(viewer).toContain('select(frameIndex, u32(previous.w), adaptive) + 1u');
+    expect(src).not.toContain('mx_adaptive_sample');
+    expect(src).toContain('pcg_hash(pixel + 0x9e3779b9u * (frameIndex + 1u))');
   });
   it('covers partial tiles with the fixed production workgroup', () => {
     const backend = new PathTraceBackend({} as GPUDevice);
@@ -603,6 +614,21 @@ describe('pathTraceComputeWgsl texture registry (T057j)', () => {
 
 
 describe('buildPathTraceUniform layout', () => {
+  it('enables adaptive sampling without changing the existing transport fields', () => {
+    const scene = fakeScene();
+    const uniform = buildPathTraceUniform(scene, 7, 1, 128, 128);
+    const adaptive = buildPathTraceUniform(scene, 7, 1, 128, 128, 0, undefined, undefined, true);
+    const transmission = buildPathTraceUniform(scene, 7, 1, 128, 128, 0, undefined, undefined, false, 'transmission');
+    const target = buildPathTraceUniform(scene, 7, 1, 128, 128, 0, undefined, undefined, true, 'beauty', 0.125);
+    expect(uniform[82]).toBe(0);
+    expect(adaptive[82]).toBe(1);
+    expect(uniform[83]).toBe(0);
+    expect(transmission[83]).toBe(6);
+    expect(uniform[75]).toBeCloseTo(0.05);
+    expect(target[75]).toBe(0.125);
+    adaptive[82] = 0;
+    expect(adaptive).toEqual(uniform);
+  });
   it.each([false, true])('disables all environment transport without changing other lights (textured=%s)', hasTexture => {
     const scene = fakeScene();
     scene.environment = {
@@ -614,7 +640,8 @@ describe('buildPathTraceUniform layout', () => {
     const disabled = buildPathTraceUniform(scene, 0, 1, 256, 256);
     expect([...disabled.slice(28, 32)]).toEqual([0, 0, 0, 0]);
     expect(disabled[39]).toBe(0);
-    expect([...disabled.slice(40, 76)]).toEqual(Array(36).fill(0));
+    expect([...disabled.slice(40, 75)]).toEqual(Array(35).fill(0));
+    expect(disabled[75]).toBeCloseTo(0.05);
     expect(disabled.slice(20, 28)).toEqual(enabled.slice(20, 28));
     scene.environment.enabled = true;
     expect(buildPathTraceUniform(scene, 0, 1, 256, 256)).toEqual(enabled);
