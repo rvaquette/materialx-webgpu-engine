@@ -48,6 +48,13 @@ export interface NormalizedSurfaceInput {
   readonly parameter?: string;
 }
 
+export type SurfaceInputDiagnostic = { readonly input: string } & (
+  | { readonly kind: 'ignored-input' }
+  | { readonly kind: 'unresolved-interface'; readonly interfaceName: string }
+  | { readonly kind: 'unsupported-node'; readonly nodeId: string; readonly category: string }
+  | { readonly kind: 'missing-node'; readonly nodeId: string }
+);
+
 export interface ResolvedSurface {
   readonly family: SurfaceFamily;
   readonly nodeId: string;
@@ -57,6 +64,7 @@ export interface ResolvedSurface {
   readonly version?: string;
   /** Every declared interface input, resolved to a normalized source. */
   readonly inputs: ReadonlyMap<string, NormalizedSurfaceInput>;
+  readonly inputDiagnostics?: readonly SurfaceInputDiagnostic[];
 }
 
 export interface ResolveSurfaceOptions {
@@ -416,6 +424,7 @@ export function resolveSurface(graph: ResolvedGraph, options: ResolveSurfaceOpti
 
   const authored = new Map(node.inputs.map((input) => [input.name, input] as const));
   const inputs = new Map<string, NormalizedSurfaceInput>();
+  const inputDiagnostics: SurfaceInputDiagnostic[] = [];
 
   for (const def of defs) {
     const input = authored.get(def.name);
@@ -431,7 +440,10 @@ export function resolveSurface(graph: ResolvedGraph, options: ResolveSurfaceOpti
         case 'connection': {
           const connected = graph.nodes.get(input.source.nodeId);
           const category = connected?.category;
-          if (def.type !== 'BSDF' && def.type !== 'EDF' && category !== undefined && !supportedUpstream.has(category)) {
+          if (category === undefined) {
+            inputDiagnostics.push({ input: def.name, kind: 'missing-node', nodeId: input.source.nodeId });
+          } else if (def.type !== 'BSDF' && def.type !== 'EDF' && !supportedUpstream.has(category)) {
+            inputDiagnostics.push({ input: def.name, kind: 'unsupported-node', nodeId: input.source.nodeId, category });
             diag({
               level: 'warning',
               message: `Input '${family}.${def.name}' is driven by unsupported node '${category}' (${input.source.nodeId}); its contribution would be lost (REQ-013).`,
@@ -448,6 +460,7 @@ export function resolveSurface(graph: ResolvedGraph, options: ResolveSurfaceOpti
           if (resolved) {
             source = resolved;
           } else {
+            inputDiagnostics.push({ input: def.name, kind: 'unresolved-interface', interfaceName: input.source.name });
             diag({
               level: 'warning',
               message: `Interface input '${input.source.name}' for '${family}.${def.name}' is unresolved; falling back to the nodedef default (REQ-013).`,
@@ -468,6 +481,7 @@ export function resolveSurface(graph: ResolvedGraph, options: ResolveSurfaceOpti
 
   for (const input of node.inputs) {
     if (!declared.has(input.name)) {
+      inputDiagnostics.push({ input: input.name, kind: 'ignored-input' });
       diag({
         level: 'warning',
         message: `Unknown input '${input.name}' on '${family}' surface (${node.id}); not part of the nodedef interface and ignored (REQ-013).`,
@@ -499,5 +513,6 @@ export function resolveSurface(graph: ResolvedGraph, options: ResolveSurfaceOpti
     ...(node.nodeDef?.name !== undefined ? { nodeDefName: node.nodeDef.name } : {}),
     ...(version !== undefined ? { version } : {}),
     inputs,
+    ...(inputDiagnostics.length ? { inputDiagnostics } : {}),
   };
 }

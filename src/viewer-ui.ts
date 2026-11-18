@@ -342,6 +342,7 @@ export async function startViewerUi(
             ...folder.materials.map(material => ({ label: material.label, value: material.path })),
           ], actions.material);
           if (ImGui.CollapsingHeader('Parametres du materiau')) parameters.draw();
+          if (ImGui.CollapsingHeader('Graphe du matériau')) parameters.drawGraph();
           ImGui.EndDisabled();
         }
         ImGui.EndDisabled();

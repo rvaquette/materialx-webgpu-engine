@@ -25,6 +25,10 @@ export interface MaterialParameter {
   uniform?: string;
   nodeId?: string;
   input: string;
+  /** Surface input driven by a Constant inserted by the graph editor. */
+  constantFor?: string;
+  /** While linked, this parameter retains the literal to restore on disconnect. */
+  linkedConstant?: string;
 }
 
 const numericTypes = new Set(['float', 'integer', 'boolean', 'color3', 'vector2', 'vector3', 'vector4']);
@@ -144,16 +148,132 @@ function applyFeatureStates(surface: ResolvedSurface, parameters: readonly Mater
   return { ...surface, inputs };
 }
 
-export function visibleMaterialParameters(material: MaterialResource): readonly MaterialParameter[] {
+export function visibleMaterialParameters(material: MaterialResource, nodeId?: string): readonly MaterialParameter[] {
   const graph = material.surfaceGraph;
   const surfaceNode = graph?.nodes.get(material.resolvedSurface?.nodeId ?? '');
   const explicitSelection = [...(graph?.nodes.values() ?? [])].some(node =>
     node.inputs.some(input => input.editable !== undefined));
   return (material.parameters ?? []).filter(parameter => {
     const node = parameter.nodeId ? graph?.nodes.get(parameter.nodeId) : surfaceNode;
+    if (nodeId !== undefined && node?.id !== nodeId) return false;
     const input = node?.inputs.find(input => input.name === parameter.input);
     if (input?.source.kind !== 'value' || input.interfaceName) return false;
-    return explicitSelection ? input.editable === true : !parameter.nodeId;
+    return parameter.constantFor !== undefined || (explicitSelection ? input.editable === true : !parameter.nodeId);
+  });
+}
+
+export function canInsertMaterialConstant(material: MaterialResource, nodeId: string, inputName: string): boolean {
+  const surface = material.resolvedSurface;
+  const graph = material.surfaceGraph;
+  const input = graph?.nodes.get(nodeId)?.inputs.find(input => input.name === inputName);
+  const normalized = surface?.inputs.get(inputName);
+  return surface?.nodeId === nodeId && !surface.backNodeId && !graph?.lamaSurface
+    && input?.source.kind === 'value' && !input.defaulted && !input.colorSpace && !input.unit && !input.unitType
+    && normalized?.source.kind === 'value' && normalized.type === input.type
+    && visibleMaterialParameters(material, nodeId).some(parameter => parameter.input === inputName && !parameter.nodeId
+      && parameter.update === 'uniform' && parameter.uniform === normalized.parameter
+      && (parameter.type === 'float' || parameter.type === 'color3'));
+}
+
+export function materialConstantSources(material: MaterialResource, nodeId: string, input: string): string[] {
+  if (!canInsertMaterialConstant(material, nodeId, input)) return [];
+  const target = material.parameters!.find(parameter => !parameter.nodeId && parameter.input === input)!;
+  return material.parameters!.flatMap(source => {
+    if (!source.nodeId || source.constantFor === undefined || source.type !== target.type
+      || target.min?.some((min, index) => (source.min?.[index] ?? -Infinity) < min)
+      || target.max?.some((max, index) => (source.max?.[index] ?? Infinity) > max)) return [];
+    return [source.nodeId];
+  });
+}
+
+export function changeMaterialConstantLink(
+  material: MaterialResource, nodeId: string, input: string, sourceId: string | null,
+): MaterialResource {
+  const { surfaceGraph: graph, resolvedSurface: surface, parameters } = material;
+  const root = graph?.nodes.get(nodeId);
+  const authored = root?.inputs.find(candidate => candidate.name === input);
+  const normalized = surface?.inputs.get(input);
+  const target = parameters?.find(parameter => !parameter.nodeId && parameter.input === input);
+  if (!graph || !surface || surface.nodeId !== nodeId || !parameters || !root || !authored || !normalized || !target?.uniform) {
+    throw new Error('Entrée de surface non éditable.');
+  }
+  const inputs = new Map(surface.inputs);
+  let replacement: MaterialParameter;
+  let binding: typeof authored.source;
+  if (sourceId !== null) {
+    if (!materialConstantSources(material, nodeId, input).includes(sourceId)) throw new Error('Constant incompatible avec cette entrée.');
+    binding = { kind: 'connection', nodeId: sourceId };
+    const { parameter: _uniform, ...entry } = normalized;
+    inputs.set(input, { ...entry, source: binding });
+    replacement = { ...target, linkedConstant: sourceId };
+  } else {
+    if (!target.linkedConstant || authored.source.kind !== 'connection' || authored.source.nodeId !== target.linkedConstant) {
+      throw new Error('Ce lien ne peut pas être retiré.');
+    }
+    binding = { kind: 'value', type: target.type, value: target.value.join(', ') };
+    inputs.set(input, { ...normalized, parameter: target.uniform, source: { kind: 'value', value: target.value } });
+    const { linkedConstant: _link, ...entry } = target;
+    replacement = entry;
+  }
+  const nodes = new Map(graph.nodes);
+  nodes.set(nodeId, { ...root, inputs: root.inputs.map(candidate => candidate === authored ? { ...candidate, source: binding } : candidate) });
+  return compileEditableMaterial({
+    ...material, surfaceGraph: { ...graph, nodes }, resolvedSurface: { ...surface, inputs },
+    parameters: parameters.map(parameter => parameter === target ? replacement : parameter),
+  });
+}
+
+/** Insert a Constant in place of a surface literal, or fold an editor Constant back into its input. */
+export function changeMaterialConstant(
+  material: MaterialResource, nodeId: string, inputName: string, insert: boolean,
+): MaterialResource {
+  const graph = material.surfaceGraph;
+  const surface = material.resolvedSurface;
+  if (!graph || !surface) throw new Error('Graphe de surface non éditable.');
+  const parameters = material.parameters ?? [];
+  const parameter = insert
+    ? parameters.find(parameter => !parameter.nodeId && parameter.input === inputName)
+    : parameters.find(parameter => parameter.nodeId === nodeId && parameter.input === inputName && parameter.constantFor !== undefined);
+  if (!parameter || !parameter.uniform || (insert && !canInsertMaterialConstant(material, nodeId, inputName))) {
+    throw new Error('Cette entrée ne permet pas cette modification de structure.');
+  }
+  const nodes = new Map(graph.nodes);
+  const inputs = new Map(surface.inputs);
+  const root = nodes.get(surface.nodeId)!;
+  const destination = parameter.constantFor ?? inputName;
+  const authored = root.inputs.find(input => input.name === destination)!;
+  const resolved = inputs.get(destination)!;
+  const literal = { kind: 'value' as const, type: parameter.type, value: parameter.value.join(', ') };
+  let replacement: MaterialParameter;
+  if (insert) {
+    let id = `${destination}_constant`;
+    for (let suffix = 2; nodes.has(id); suffix++) id = `${destination}_constant_${suffix}`;
+    const source = { kind: 'connection' as const, nodeId: id };
+    const { parameter: _uniform, ...normalized } = resolved;
+    inputs.set(destination, { ...normalized, source });
+    nodes.set(root.id, { ...root, inputs: root.inputs.map(input => input === authored ? { ...input, source } : input) });
+    nodes.set(id, {
+      id, category: 'constant', type: parameter.type, provenance: { namePath: id },
+      inputs: [{ name: 'value', type: parameter.type, source: literal, parameter: parameter.uniform,
+        provenance: { namePath: `${id}/value` } }],
+    });
+    replacement = { ...parameter, nodeId: id, input: 'value', constantFor: destination, label: `${id} / value` };
+  } else {
+    // Refuse to remove a node if a future editor operation has wired it elsewhere.
+    const consumers = [...nodes.values()].flatMap(node => node.inputs.filter(input =>
+      input.source.kind === 'connection' && input.source.nodeId === nodeId));
+    if (consumers.length !== 1 || consumers[0] !== authored || graph.terminals.some(terminal => terminal.nodeId === nodeId)) {
+      throw new Error('Ce nœud Constant est utilisé ailleurs dans le graphe.');
+    }
+    inputs.set(destination, { ...resolved, parameter: parameter.uniform, source: { kind: 'value', value: parameter.value } });
+    nodes.set(root.id, { ...root, inputs: root.inputs.map(input => input === authored ? { ...input, source: literal } : input) });
+    nodes.delete(nodeId);
+    const { nodeId: _node, constantFor: _destination, ...rest } = parameter;
+    replacement = { ...rest, input: destination, label: destination };
+  }
+  return compileEditableMaterial({
+    ...material, surfaceGraph: { ...graph, nodes }, resolvedSurface: { ...surface, inputs },
+    parameters: parameters.map(current => current === parameter ? replacement : current),
   });
 }
 
@@ -364,6 +484,7 @@ export function changeMaterialParameters(
   const parameters = material.parameters.map(parameter => {
     const change = changes.get(parameter.id);
     if (!change) return parameter;
+    if (parameter.linkedConstant) throw new Error(`Entrée connectée : ${parameter.input}.`);
     const value = parameterValues(parameter, change);
     if (parameter.nodeId) {
       const node = nodes.get(parameter.nodeId)!;

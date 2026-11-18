@@ -1,8 +1,10 @@
 import { ImGui, ImGuiComboFlags, ImVec2 } from '@mori2003/jsimgui';
 import { activeParameterPreset, parameterPresetChanges, parameterPresetNames, type MaterialParameter } from './render/material-parameters.ts';
+import type { ResolvedGraph } from './materialx/graph.ts';
 
 interface ParameterEditorOptions {
   parameters: () => readonly MaterialParameter[];
+  graph?: () => ResolvedGraph | undefined;
   apply: (changes: ReadonlyMap<string, readonly number[]>) => Promise<void>;
   error: (error: unknown) => void;
 }
@@ -15,6 +17,7 @@ export class MaterialParameterEditor {
   #timer: ReturnType<typeof setTimeout> | undefined;
   #running = false;
   #generation = 0;
+  #selectedNode: string | undefined;
 
   constructor(options: ParameterEditorOptions) { this.#options = options; }
 
@@ -23,6 +26,59 @@ export class MaterialParameterEditor {
     this.#pending.clear();
     this.#drafts.clear();
     this.#generation++;
+    this.#selectedNode = undefined;
+  }
+
+  drawGraph(): void {
+    const graph = this.#options.graph?.();
+    ImGui.TextWrapped('Graphe de surface résolu (lecture seule).');
+    if (!graph?.nodes.size) {
+      ImGui.TextWrapped('Aucun graphe de surface disponible pour ce matériau.');
+      return;
+    }
+
+    const firstTerminal = graph.terminals.find(terminal => terminal.nodeId && graph.nodes.has(terminal.nodeId));
+    let node = graph.nodes.get(this.#selectedNode ?? '') ?? graph.nodes.get(firstTerminal?.nodeId ?? '')
+      ?? graph.nodes.values().next().value;
+    ImGui.Text(`${graph.nodes.size} nœud(s)`);
+    for (const [index, terminal] of graph.terminals.entries()) {
+      const target = terminal.nodeId ? graph.nodes.get(terminal.nodeId) : undefined;
+      if (target) {
+        if (ImGui.Selectable(`${terminal.name} → ${target.id}##terminal-${index}`, node === target)) {
+          node = target;
+          this.#selectedNode = target.id;
+        }
+      } else {
+        ImGui.TextWrapped(`${terminal.name} : non connecté`);
+      }
+    }
+    ImGui.SetNextItemWidth(-1);
+    if (ImGui.BeginCombo('##graph-node', node?.id ?? 'Choisir un nœud', ImGuiComboFlags.HeightLarge)) {
+      for (const candidate of graph.nodes.values()) {
+        if (ImGui.Selectable(`${candidate.id} (${candidate.category})##graph-node-${candidate.id}`, node === candidate)) {
+          node = candidate;
+          this.#selectedNode = candidate.id;
+        }
+      }
+      ImGui.EndCombo();
+    }
+    if (!node) return;
+    ImGui.TextWrapped(`${node.id} · ${node.category} (${node.type})`);
+    for (const input of node.inputs) {
+      const { source } = input;
+      const label = `${input.name} (${input.type})`;
+      if (source.kind === 'connection') {
+        const destination = `${source.nodeId}${source.output ? `.${source.output}` : ''}`;
+        if (!graph.nodes.has(source.nodeId)) ImGui.TextWrapped(`${label} ← ${destination} (indisponible)`);
+        else if (ImGui.Selectable(`${label} ← ${destination}##graph-input-${node.id}/${input.name}`, false)) {
+          this.#selectedNode = source.nodeId;
+        }
+      } else {
+        const detail = source.kind === 'value' ? source.value
+          : source.kind === 'interface' ? `interface ${source.name}` : 'valeur par défaut';
+        ImGui.TextWrapped(`${label} : ${detail}`);
+      }
+    }
   }
 
   draw(): void {

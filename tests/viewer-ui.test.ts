@@ -3,6 +3,7 @@ import { startViewerUi, type ViewerUiState, type ViewerUiActions } from '../src/
 import { MaterialParameterEditor } from '../src/material-parameter-editor.ts';
 import { ImGui } from '@mori2003/jsimgui';
 import type { MaterialParameter } from '../src/render/material-parameters.ts';
+import type { ResolvedGraph, ResolvedNode } from '../src/materialx/graph.ts';
 
 const controls = vi.hoisted(() => ({
   checkbox: '',
@@ -133,7 +134,7 @@ describe('ImGui material parameter editing', () => {
   });
 });
 
-function fixture() {
+function fixture(graph?: () => ResolvedGraph | undefined) {
   const state: ViewerUiState = {
     entry: 'books.usda', scenes: [{ label: 'Books', entry: 'books.usda' }, { label: 'Chair', entry: 'chair.usda' }],
     resolution: 256, pathTracingDepth: 12, rasterQuality: 'interactive', backend: 'raster', 
@@ -147,7 +148,7 @@ function fixture() {
     denoise: vi.fn(), compareDenoiser: vi.fn(), adaptive: vi.fn(), exposure: vi.fn(), tonemap: vi.fn(), pause: vi.fn(), openFiles: vi.fn(), object: vi.fn(), material: vi.fn(),
     exportAov: vi.fn(), exportAovHdr: vi.fn(), limits: vi.fn(), restartPathTracing: vi.fn(), pathTracingView: vi.fn(),
   };
-  const parameters = new MaterialParameterEditor({ parameters: () => [], apply: vi.fn(), error: vi.fn() });
+  const parameters = new MaterialParameterEditor({ parameters: () => [], apply: vi.fn(), error: vi.fn(), ...(graph ? { graph } : {}) });
   let tick!: FrameRequestCallback;
   vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => { tick = callback; return 1; });
   vi.stubGlobal('cancelAnimationFrame', vi.fn());
@@ -160,6 +161,41 @@ function fixture() {
 }
 
 describe('Dear ImGui viewer controls', () => {
+  it('opens the selected surface graph, follows an upstream input and resets navigation on material change', async () => {
+    const surface: ResolvedNode = {
+      id: 'surface', category: 'standard_surface', type: 'surfaceshader', provenance: { namePath: 'surface' },
+      inputs: [{ name: 'base_color', type: 'color3', provenance: { namePath: 'surface/base_color' },
+        source: { kind: 'connection', nodeId: 'color', output: 'out' } }],
+    };
+    const color: ResolvedNode = {
+      id: 'color', category: 'constant', type: 'color3', provenance: { namePath: 'color' },
+      inputs: [{ name: 'value', type: 'color3', provenance: { namePath: 'color/value' },
+        source: { kind: 'value', value: '0, 0, 1', type: 'color3' } }],
+    };
+    let graph: ResolvedGraph | undefined = {
+      nodes: new Map([[color.id, color], [surface.id, surface]]),
+      terminals: [{ name: 'surfaceshader', type: 'surfaceshader', nodeId: 'surface', provenance: { namePath: 'material' } }],
+    };
+    const f = fixture(() => graph);
+    controls.header = true;
+    const stop = await startViewerUi(f.canvas, f.state, f.actions, f.parameters);
+    try {
+      controls.selection = 'base_color (color3) ← color.out##graph-input-surface/base_color';
+      f.render();
+      expect(ImGui.TextWrapped).toHaveBeenCalledWith('surface · standard_surface (surfaceshader)');
+      f.render();
+      expect(ImGui.TextWrapped).toHaveBeenCalledWith('value (color3) : 0, 0, 1');
+      vi.mocked(ImGui.TextWrapped).mockClear();
+      f.parameters.refresh();
+      f.render();
+      expect(ImGui.TextWrapped).toHaveBeenCalledWith('surface · standard_surface (surfaceshader)');
+      expect(ImGui.TextWrapped).not.toHaveBeenCalledWith('value (color3) : 0, 0, 1');
+      graph = undefined;
+      f.render();
+      expect(ImGui.TextWrapped).toHaveBeenCalledWith('Aucun graphe de surface disponible pour ce matériau.');
+    } finally { stop(); }
+  });
+
   it('starts raw/denoised comparison only for a paused beauty accumulation', async () => {
     const f = fixture();
     f.state.backend = 'pathtracing';
@@ -438,7 +474,7 @@ describe('Dear ImGui viewer controls', () => {
     f.render();
     expect(f.actions.material).toHaveBeenCalledWith('./gold.mtlx');
     expect(draw).toHaveBeenCalledTimes(2);
-    expect(ImGui.TextWrapped).not.toHaveBeenCalled();
+    expect(vi.mocked(ImGui.TextWrapped).mock.calls.flat().join('\n')).not.toMatch(/Import failed|WGSL error|Missing texture/);
     f.state.busy = true;
     f.render();
     expect(ImGui.BeginDisabled).toHaveBeenCalledWith(true);

@@ -3,6 +3,8 @@ import { SCENE_CATALOG, SOURCE_SCENE_CATALOG } from './scene/scene-catalog.ts';
 import { MATERIAL_CATALOG } from './scene/material-catalog.ts';
 import { buildMaterialTree } from './scene/material-tree.ts';
 import { MaterialParameterEditor } from './material-parameter-editor.ts';
+import { showMaterialGraph } from './material-graph-diagram.ts';
+import { bindMaterialLibrary } from './material-library.ts';
 import { sceneDeviceDescriptor } from './gpu/device.ts';
 import { startViewerUi, type ViewerUiState, type ViewerUiActions } from './viewer-ui.ts';
 import type { LocalGltfScene } from './scene/local-gltf.ts';
@@ -140,8 +142,56 @@ async function main(): Promise<void> {
   };
   let viewer = new InteractiveViewer({ device, context, outputFormat, canvas, ...viewerCallbacks });
   viewer.setBackend(initialBackend);
+  const graphButton = document.querySelector<HTMLButtonElement>('#open-material-graph');
+  const graphDialog = document.querySelector<HTMLDialogElement>('#material-graph');
+  const libraryButton = document.querySelector<HTMLButtonElement>('#open-material-library');
+  const libraryDialog = document.querySelector<HTMLDialogElement>('#material-library');
+  if (graphButton && graphDialog) {
+    graphButton.onclick = () => {
+      const path = state.objectPath;
+      const target = viewer;
+      const material = target.objects.find(object => object.path === path)?.material ?? '';
+      function ensureEditable() {
+        if (operationBusy || deviceLost || viewer !== target || state.objectPath !== path) {
+          throw new Error('Le matériau ne peut pas être modifié pendant cette opération.');
+        }
+      }
+      async function editMaterial(message: string, edit: () => Promise<void>) {
+        ensureEditable();
+        setBusy(true, message);
+        try { await edit(); }
+        finally { setBusy(false); }
+      }
+      async function editGraph(edit: () => Promise<void>) {
+        await editMaterial('Compilation du graphe du matériau...', edit);
+        const updated = target.objectSurfaceGraph(path);
+        if (!updated) throw new Error('Graphe de surface indisponible après recompilation.');
+        return updated;
+      }
+      showMaterialGraph(graphDialog, target.objectSurfaceGraph(path), material, {
+        parameters: nodeId => target.objectParameters(path, nodeId),
+        diagnostics: nodeId => target.objectSurfaceInputDiagnostics(path, nodeId),
+        async apply(changes) {
+          await editMaterial('Application des paramètres du matériau...', () => target.setObjectParameters(path, changes));
+          return target.objectSurfaceGraph(path);
+        },
+        canInsertConstant: (nodeId, input) => target.canInsertObjectConstant(path, nodeId, input),
+        setConstant: (nodeId, input, insert) => editGraph(() => target.setObjectConstant(path, nodeId, input, insert)),
+        constantSources: (nodeId, input) => target.objectConstantSources(path, nodeId, input),
+        canUnlinkConstant: (nodeId, input) => target.canUnlinkObjectConstant(path, nodeId, input),
+        setConstantLink: (nodeId, input, sourceId) => editGraph(() => target.setObjectConstantLink(path, nodeId, input, sourceId)),
+        variants: () => target.objectMaterialVariants(path),
+        saveVariant(slot) {
+          ensureEditable();
+          target.saveObjectMaterialVariant(path, slot);
+        },
+        applyVariant: slot => editGraph(() => target.applyObjectMaterialVariant(path, slot)),
+      });
+    };
+  }
   const parameterEditor = new MaterialParameterEditor({
     parameters: () => viewer.objectParameters(state.objectPath),
+    graph: () => viewer.objectSurfaceGraph(state.objectPath),
     apply: async changes => {
       setBusy(true, 'Application des paramètres du matériau...');
       try { await viewer.setObjectParameters(state.objectPath, changes); }
@@ -153,6 +203,8 @@ async function main(): Promise<void> {
   function setBusy(busy: boolean, message?: string): void {
     operationBusy = busy;
     state.busy = busy;
+    if (graphButton) graphButton.disabled = busy;
+    if (libraryButton) libraryButton.disabled = busy;
     if (busy) setStatus('', false);
     if (busy && message) setBusyMessage(message);
     if (!busy && !statusIsError) setStatus('', false);
@@ -167,6 +219,10 @@ async function main(): Promise<void> {
     const material = MATERIAL_CATALOG.find(item => new URL(item.path, document.baseURI).href === selected);
     state.materialPath = material?.path ?? '';
     state.materialFolderPath = material ? material.path.split('/mtlx-library/')[1]!.split('/').slice(0, -1) : [];
+    if (graphButton) graphButton.hidden = !state.objectPath;
+    if (libraryButton) libraryButton.hidden = !state.objectPath;
+    if (graphDialog?.open) graphDialog.close();
+    if (libraryDialog?.open) libraryDialog.close();
     parameterEditor.refresh();
   }
 
@@ -321,6 +377,12 @@ async function main(): Promise<void> {
       finally { refreshObjects(); }
     }); },
   };
+  if (libraryButton && libraryDialog) {
+    const openLibrary = bindMaterialLibrary(libraryDialog, MATERIAL_CATALOG, actions.material);
+    libraryButton.onclick = () => {
+      if (!operationBusy && !deviceLost && state.objectPath) openLibrary(state.objectPath, state.materialPath);
+    };
+  }
   const stopUi = await startViewerUi(uiCanvas, state, actions, parameterEditor);
   document.getElementById('app')?.classList.add('ui-ready');
 

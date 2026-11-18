@@ -178,6 +178,7 @@ describe('resolveSurface (T055a)', () => {
       { onDiagnostic: diag },
     )!;
     expect(resolved.inputs.get('base_color')!.source).toEqual({ kind: 'connection', nodeId: 'tex', output: 'out' });
+    expect(resolved.inputDiagnostics).toBeUndefined();
     expect(diag).not.toHaveBeenCalled();
   });
 
@@ -195,6 +196,17 @@ describe('resolveSurface (T055a)', () => {
     expect(resolved.inputs.get('base_color')!.source).toEqual({ kind: 'connection', nodeId: 'weird' });
     const warnings = diag.mock.calls.map((c) => c[0]).filter((d) => d.level === 'warning');
     expect(warnings.some((d) => d.message.includes('unsupported node'))).toBe(true);
+    expect(resolved.inputDiagnostics).toEqual([
+      { input: 'base_color', kind: 'unsupported-node', nodeId: 'weird', category: 'triplanarprojection_zzz' },
+    ]);
+  });
+
+  it('identifies a missing connection target separately from an unsupported node', () => {
+    const resolved = resolveSurface(graphOf({
+      category: 'standard_surface',
+      inputs: [input('base_color', 'color3', { kind: 'connection', nodeId: 'absent' })],
+    }))!;
+    expect(resolved.inputDiagnostics).toEqual([{ input: 'base_color', kind: 'missing-node', nodeId: 'absent' }]);
   });
 
   it('resolves standard_surface version inheritance (1.0.0 vs default 1.0.1)', () => {
@@ -236,11 +248,14 @@ describe('resolveSurface (T055a)', () => {
     )!;
     expect(resolved.inputs.get('specular_roughness')!.source).toEqual({ kind: 'default', value: [0.2] });
     expect(diag.mock.calls.some((c) => c[0].message.includes('unresolved'))).toBe(true);
+    expect(resolved.inputDiagnostics).toEqual([
+      { input: 'specular_roughness', kind: 'unresolved-interface', interfaceName: 'missing' },
+    ]);
   });
 
   it('warns for inputs outside the family nodedef interface (REQ-013)', () => {
     const diag = vi.fn<(d: Diagnostic) => void>();
-    resolveSurface(
+    const resolved = resolveSurface(
       graphOf({
         category: 'standard_surface',
         inputs: [input('not_a_real_input', 'float', { kind: 'value', value: '1', type: 'float' })],
@@ -248,6 +263,7 @@ describe('resolveSurface (T055a)', () => {
       { onDiagnostic: diag },
     );
     expect(diag.mock.calls.some((c) => c[0].message.includes("Unknown input 'not_a_real_input'"))).toBe(true);
+    expect(resolved?.inputDiagnostics).toEqual([{ input: 'not_a_real_input', kind: 'ignored-input' }]);
   });
 
   it('diagnoses and returns null for an unsupported surface family (REQ-013)', () => {

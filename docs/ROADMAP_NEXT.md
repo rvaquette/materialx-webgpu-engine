@@ -349,14 +349,95 @@ sans dépendre du code interne du viewer.
 Étendre l'édition de paramètres actuelle vers un véritable atelier MaterialX
 dans le navigateur :
 
-- édition visuelle du graphe ;
-- ajout, déplacement, suppression et connexion des nœuds ;
+**Première étape :** dans **Matériaux → Graphe du matériau**, le viewer affiche
+le graphe de surface résolu de l'objet sélectionné. Les terminaux et les entrées
+connectées permettent de naviguer entre les nœuds. Les types et les valeurs
+résolues sont consultables sans relancer la compilation. Si le graphe n'est pas
+fourni, par exemple pour une scène uniquement précompilée, le panneau l'indique.
+
+**Deuxième étape :** le bouton **Voir le graphe**, à côté du rendu, ouvre
+un diagramme défilable de l'objet sélectionné. Les nœuds sont disposés
+des entrées vers les sorties ; sélectionner un nœud met ses liens en
+surbrillance et affiche ses entrées. Le diagramme reste en lecture seule.
+
+**Troisième étape :** les nœuds du diagramme sont déplaçables à la souris
+ou avec les flèches du clavier. Les liens suivent le déplacement et le bouton
+**Réinitialiser la disposition** restaure le placement automatique. La
+disposition est conservée à la réouverture tant que le même graphe est chargé ;
+elle ne modifie pas le matériau et n'est pas enregistrée dans le fichier USD.
+
+**Quatrième étape :** le diagramme permet de modifier les entrées numériques
+et booléennes déjà éditables dans le viewer. **Appliquer les valeurs** met à
+jour l'aperçu via le même mécanisme que le panneau de paramètres ; les entrées
+connectées restent en lecture seule. Les changements ne sont pas sauvegardés
+dans les fichiers source.
+
+**Cinquième étape :** sur une entrée littérale éditable de surface, **Insérer
+un Constant** crée et connecte un nœud de même type (`float` ou `color3`)
+en conservant la valeur courante. Sur ce nœud, **Revenir à une valeur
+littérale** retire le nœud et réinjecte sa valeur dans l'entrée. Cette
+première opération de topologie est limitée aux entrées pilotées par un
+uniforme, hors entrées à unité ou espace colorimétrique explicites. Le
+viewer recompile sans relire l'USD ; le document source n'est pas modifié.
+
+**Sixième étape :** **Exporter .mtlx** télécharge un nouveau document MaterialX
+avec les valeurs déjà appliquées et les connexions du graphe résolu. Ce premier
+export couvre `standard_surface` et `open_pbr_surface` avec des entrées
+littérales ou alimentées par des nœuds `constant` (`float` et `color3`). Il
+utilise la bibliothèque standard MaterialX et ne réécrit pas le document source.
+Un message explique le refus pour les graphes hors de ce périmètre, par exemple
+les shaders USD, les textures, le déplacement et les volumes.
+
+**Septième étape :** le même export accepte aussi certaines variantes
+standard de `add`, `multiply`, `clamp`, `mix` et `noise2d` (`float` et
+`color3`), ainsi que `checkerboard` (`color3`) et `texcoord` (`vector2`).
+Les connexions et les nœuds partagés sont conservés sans fichier de texture.
+Les variantes non prises en charge et les définitions personnalisées restent
+refusées.
+
+**Huitième étape :** **Exporter .mtlx** produit automatiquement un ZIP
+lorsque le graphe utilise des nœuds `image` statiques (`float` ou `color3`).
+Décompresser l'archive, puis ouvrir le `.mtlx` : les fichiers originaux sont
+dans `textures/` et les chemins du document sont relatifs. Une même URL n'est
+embarquée qu'une fois. L'export est refusé si une image HTTP(S) est inaccessible
+ou si le total des textures dépasse 64 Mio. Les graphes sans image téléchargent
+toujours un `.mtlx` seul ; UDIM, séquences et sources locales temporaires ne
+sont pas encore pris en charge.
+
+**Neuvième étape :** le diagramme affiche les diagnostics de résolution
+à côté des entrées du nœud de surface : entrée ignorée car absente du NodeDef,
+interface introuvable avec repli sur la valeur par défaut, ou connexion vers
+un nœud manquant ou non pris en charge. Ces indications ne changent pas le rendu.
+
+**Dixième étape :** le bouton **Bibliothèque de matériaux**, à côté du rendu,
+ouvre le catalogue existant. La recherche combine des mots du nom et du dossier,
+sans distinction de casse ou d'accent. L'étoile marque un matériau comme favori ;
+le filtre **Favoris uniquement** peut être combiné avec la recherche. Les
+favoris sont conservés dans le navigateur. Choisir un résultat applique le
+matériau à l'objet sélectionné, comme depuis le sélecteur ImGui.
+
+**Onzième étape :** un Constant créé dans le diagramme peut aussi être
+connecté à d'autres entrées littérales éditables de la surface. Les entrées
+doivent accepter le même type et la plage de valeurs du Constant. Modifier
+le Constant met à jour toutes ses connexions ; retirer un lien secondaire
+restaure la valeur précédente de l'entrée. Le Constant ne peut être retiré
+qu'après ses liens secondaires.
+
+**Douzième étape :** dans **Voir le graphe**, deux emplacements **A** et **B**
+permettent de mémoriser puis de réafficher le matériau appliqué à l'objet
+sélectionné, valeurs et connexions comprises. **Afficher A/B** remplace l'état
+actif sans changer la caméra ; fermer le diagramme permet de voir le rendu
+en entier. Les variantes sont propres à l'objet et ne sont conservées qu'en
+mémoire, jusqu'au rechargement de la scène.
+
+Travaux restants :
+
+- généraliser l'ajout, la suppression et la connexion des nœuds depuis le diagramme ;
 - compilation incrémentale à chaque modification ;
 - aperçu sur l'objet sélectionné ou sur un shaderball ;
-- duplication et comparaison de variantes ;
-- sauvegarde d'un document `.mtlx` ;
-- diagnostic des entrées approximées, ignorées ou incompatibles ;
-- bibliothèque de matériaux recherchable et favoris locaux.
+- sauvegarde durable et comparaison côte à côte des variantes ;
+- étendre l'export `.mtlx` aux UDIM, séquences et autres nœuds ;
+- étendre les diagnostics aux approximations propres à chaque moteur de rendu.
 
 **Critère d'aboutissement :** un utilisateur peut créer ou modifier un graphe
 MaterialX, l'évaluer immédiatement et exporter le document obtenu.

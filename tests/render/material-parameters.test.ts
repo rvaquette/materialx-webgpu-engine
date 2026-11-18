@@ -236,6 +236,8 @@ describe('dynamic MaterialX parameters', () => {
     const parameters = visibleMaterialParameters(material);
     const ior = parameters.find(parameter => parameter.input === 'IOR')!;
     const topMix = parameters.find(parameter => parameter.input === 'topMix')!;
+    expect(visibleMaterialParameters(material, 'coat')).toEqual([ior]);
+    expect(visibleMaterialParameters(material, 'gold')).toEqual([]);
     expect(ior.update).toBe('uniform');
     expect(topMix.update).toBe('uniform');
     expect(topMix.min).toEqual([0]);

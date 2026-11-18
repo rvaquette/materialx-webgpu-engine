@@ -15,6 +15,32 @@
       #messages #status, #messages #shader-diagnostics { background: #331818ed; }
       #messages summary { cursor: pointer; font-weight: bold; }
       #messages pre { margin: 8px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }
+      #material-tools { position: absolute; bottom: 12px; right: 12px; display: flex; flex-wrap: wrap; justify-content: end; gap: 8px; margin-left: 12px; }
+      #material-graph, #material-library { box-sizing: border-box; width: min(94vw, 1100px); max-height: 90dvh; color: inherit; background: #171721; border: 1px solid #596278; border-radius: 8px; }
+      #material-library { width: min(94vw, 760px); }
+      #material-graph::backdrop, #material-library::backdrop { background: #000a; }
+      #material-graph header, #material-library header { display: flex; justify-content: space-between; align-items: start; gap: 12px; }
+      #material-graph h2, #material-library h2 { margin: 0; font-size: 1.2rem; }
+      #material-library-target { overflow-wrap: anywhere; }
+      #material-library-filters { display: flex; flex-wrap: wrap; gap: 8px 16px; }
+      #material-library-results { max-height: 53dvh; overflow: auto; margin: 0; padding: 0; list-style: none; }
+      #material-library-results li { display: flex; align-items: center; gap: 8px; padding: 6px; border-bottom: 1px solid #444d61; }
+      #material-library-results li span { flex: 1; min-width: 0; overflow-wrap: anywhere; font-size: 0.9em; }
+      #material-library-storage:not(:empty) { color: #ffce91; }
+      #material-graph-diagram { overflow: auto; min-height: 64px; max-height: 52dvh; margin-top: 12px; background: #101018; border: 1px solid #444d61; }
+      .material-graph-surface { position: relative; }
+      .material-graph-surface svg { position: absolute; inset: 0; pointer-events: none; }
+      .material-graph-surface path { fill: none; stroke: #8290ab; stroke-width: 2; }
+      .material-graph-surface path.active { stroke: #9adeff; stroke-width: 3; }
+      .material-graph-node { box-sizing: border-box; position: absolute; width: var(--node-width); height: var(--node-height); color: inherit; background: #263248; border: 1px solid #7789a9; border-radius: 6px; cursor: grab; touch-action: none; user-select: none; }
+      .material-graph-node:active { cursor: grabbing; }
+      .material-graph-node[aria-pressed="true"] { border: 2px solid #9adeff; background: #344a67; }
+      .material-graph-node > * { display: block; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+      #material-graph-details { max-height: 22dvh; overflow: auto; overflow-wrap: anywhere; }
+      #material-graph-details p { margin: 0.35em 0; }
+      .material-graph-warning { display: block; color: #ffce91; }
+      #material-graph-details fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }
+      #material-graph-details input[type="number"] { width: 5.5em; margin-inline-end: 4px; }
       .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
       @media (max-width: 700px) {
         #app { flex-direction: column; }
@@ -28,6 +54,10 @@
       <canvas id="ui" aria-label="Contrôles Dear ImGui" tabindex="0"></canvas>
       <div id="canvas-container">
         <canvas id="view" width="512" height="512" aria-label="Rendu de la scène" aria-busy="true"></canvas>
+        <div id="material-tools">
+          <button id="open-material-library" type="button" aria-haspopup="dialog" hidden>Bibliothèque de matériaux</button>
+          <button id="open-material-graph" type="button" aria-haspopup="dialog" hidden>Voir le graphe</button>
+        </div>
         <div id="messages" aria-label="Messages du viewer">
           <div id="status" role="alert" hidden></div>
           <div id="busy-indicator" role="status" aria-live="polite">Initialisation de WebGPU...</div>
@@ -40,6 +70,32 @@
             <pre id="import-messages"></pre>
           </details>
         </div>
+        <dialog id="material-graph" aria-labelledby="material-graph-title">
+          <header>
+            <h2 id="material-graph-title">Graphe du matériau</h2>
+            <form method="dialog"><button autofocus>Fermer</button></form>
+          </header>
+          <p id="material-graph-help">Sélectionne un nœud pour voir ses entrées. Déplace-le par glisser-déposer ou avec les flèches du clavier.</p>
+          <button id="reset-material-graph" type="button" hidden>Réinitialiser la disposition</button>
+          <button id="export-material-graph" type="button" title="Télécharge le .mtlx ou un ZIP si le matériau utilise des textures" hidden>Exporter .mtlx</button>
+          <span id="material-graph-export-status" role="status"></span>
+          <div id="material-graph-diagram" role="region" aria-label="Diagramme des nœuds"></div>
+          <section id="material-graph-details" aria-label="Entrées du nœud" aria-live="polite"></section>
+        </dialog>
+        <dialog id="material-library" aria-labelledby="material-library-title">
+          <header>
+            <h2 id="material-library-title">Bibliothèque de matériaux</h2>
+            <form method="dialog"><button>Fermer</button></form>
+          </header>
+          <p id="material-library-target"></p>
+          <div id="material-library-filters">
+            <label>Rechercher <input id="material-library-search" type="search" autofocus></label>
+            <label><input id="material-library-favorites" type="checkbox"> Favoris uniquement</label>
+          </div>
+          <p id="material-library-count" role="status"></p>
+          <p id="material-library-storage" role="status"></p>
+          <ul id="material-library-results" aria-label="Matériaux"></ul>
+        </dialog>
       </div>
       <input id="local-scene-files" type="file" multiple hidden />
       <input id="local-scene-folder" type="file" webkitdirectory multiple hidden />

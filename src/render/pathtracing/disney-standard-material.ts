@@ -29,6 +29,17 @@ export function disneyMaterialFromStandard(
     (t.name === 'volumeshader' || t.name === 'displacementshader') && t.nodeId)) {
     throw new Error('Disney standard material does not support back, volume, or displacement terminals.');
   }
+  const constants = new Map(parameters.filter(parameter => parameter.constantFor !== undefined)
+    .map(parameter => [parameter.nodeId, parameter.value] as const));
+  if (constants.size) {
+    const inputs = new Map(surface.inputs);
+    for (const [name, input] of inputs) {
+      if (input.source.kind !== 'connection') continue;
+      const value = constants.get(input.source.nodeId);
+      if (value) inputs.set(name, { ...input, source: { kind: 'value', value } });
+    }
+    surface = { ...surface, inputs };
+  }
   const field = (name: string): NormalizedSurfaceInput => {
     const item = surface.inputs.get(name);
     if (!item) throw new Error(`Missing standard_surface input ${name}.`);
@@ -39,7 +50,7 @@ export function disneyMaterialFromStandard(
     if (item.source.kind !== 'value' && item.source.kind !== 'default') {
       throw new Error(`Unsupported connected standard_surface input ${name}.`);
     }
-    const parameter = parameters.find(p => !p.nodeId && p.input === name);
+    const parameter = parameters.find(p => !p.nodeId && !p.linkedConstant && p.input === name);
     if (item.parameter && !parameter) throw new Error(`Missing editable standard_surface parameter ${name}.`);
     const values = parameter?.value ?? item.source.value;
     if (values.length !== count || values.some(value => !Number.isFinite(value))) {

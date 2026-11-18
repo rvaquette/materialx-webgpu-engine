@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { compiledSceneCatalog, SCENE_CATALOG, SOURCE_SCENE_CATALOG } from '../../src/scene/scene-catalog.ts';
 import { compiledMaterialCatalog } from '../../src/scene/material-catalog.ts';
+import { filterMaterials } from '../../src/material-library.ts';
 import {
   compiledMaterialDirectory, compiledSceneDirectory, compiledSharedBuffersDirectory, compiledWrapperLayer, compiledWrapperPath,
 } from '../../src/scene/compiled-paths.ts';
@@ -107,6 +108,15 @@ describe('scene selector catalog', () => {
       path: './scenes/mtlx-library/metals/gold/gold_polished.mtlx', group: 'metals', label: 'gold polished',
       compiled: './scenes/compiled/mtlx-library/metals/gold/gold_polished/material.json',
     }]);
+  });
+  it('combines normalized name and folder search with the favorites filter', () => {
+    const gold = { label: 'Or poli', group: 'Métaux', path: './scenes/mtlx-library/Métaux/Tests/Or_poli.mtlx', compiled: './or.json' };
+    const silver = { label: 'Argent poli', group: 'Métaux', path: './scenes/mtlx-library/Métaux/Presets/Argent_poli.mtlx', compiled: './argent.json' };
+    const catalog = [gold, silver];
+    expect(filterMaterials(catalog, '  POLI metaux  ')).toEqual(catalog);
+    expect(filterMaterials(catalog, 'tests poli')).toEqual([gold]);
+    expect(filterMaterials(catalog, 'poli', new Set([silver.path, './obsolete.mtlx']))).toEqual([silver]);
+    expect(filterMaterials(catalog, 'tests poli', new Set([silver.path]))).toEqual([]);
   });
   it('maps sources to compiled paths and wrapper layers that resolve back to the binaries and source', () => {
     expect(compiledWrapperPath('./scenes/lama/add/a.usda')).toBe('scenes/compiled/lama/add/a.usda');

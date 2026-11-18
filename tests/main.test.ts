@@ -78,6 +78,7 @@ describe('viewer loading indicator', () => {
         'shader-messages': shaderMessages, 'shader-diagnostics': shaderDiagnostics,
         'import-messages': importMessages, 'import-diagnostics': importDiagnostics,
       })[id],
+      querySelector: () => null,
       querySelectorAll: () => [],
     });
     const device = { addEventListener: vi.fn((type: string, handler: (event: Event) => void) => {

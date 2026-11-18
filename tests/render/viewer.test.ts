@@ -99,6 +99,7 @@ def Xform "World" {
       { name: 'base_color', type: 'color3', source: { kind: 'value' as const, type: 'color3', value: '0.8, 0.8, 0.8' }, provenance: { namePath: '/s/base_color' } },
       { name: 'coat', type: 'float', source: { kind: 'value' as const, type: 'float', value: '0' }, provenance: { namePath: '/s/coat' } },
       { name: 'specular_roughness', type: 'float', source: { kind: 'value' as const, type: 'float', value: '0.2' }, provenance: { namePath: '/s/specular_roughness' } },
+      { name: 'diffuse_roughness', type: 'float', source: { kind: 'value' as const, type: 'float', value: '0.8' }, provenance: { namePath: '/s/diffuse_roughness' } },
     ], provenance: { namePath: '/s' } }]]),
   };
   const builder = new IrModuleBuilder();
@@ -541,6 +542,10 @@ describe('interactive viewer resource lifecycle', () => {
     device.queue.writeBuffer.mockClear();
     await viewer.setObjectParameters(path, new Map([['surface:base_color', [0.2, 0.4, 0.8]]]));
     expect(viewer.objectParameters(path).find(parameter => parameter.id === 'surface:base_color')!.value).toEqual([0.2, 0.4, 0.8]);
+    const graph = viewer.objectSurfaceGraph(path);
+    expect(graph?.nodes.get('s')?.inputs.find(input => input.name === 'base_color')?.source)
+      .toMatchObject({ kind: 'value', value: '0.2, 0.4, 0.8' });
+    expect(viewer.objectSurfaceGraph('/World/Unknown')).toBeUndefined();
     expect(device.createShaderModule).toHaveBeenCalledTimes(shaders);
     expect(device.createBuffer).toHaveBeenCalledTimes(buffers);
     expect(loadUsdScene).toHaveBeenCalledTimes(loads);
@@ -551,6 +556,81 @@ describe('interactive viewer resource lifecycle', () => {
       && new Uint8Array(call[2]).every((value, i) => value === new Uint8Array(data)[i]))).toBe(true);
     await viewer.resetObjectParameters(path);
     expect(viewer.objectParameters(path).find(parameter => parameter.id === 'surface:base_color')!.value).toEqual(original);
+  });
+
+  it('switches A/B between a literal and an edited graph without reloading USD', async () => {
+    const { viewer } = await setup(false, true);
+    const path = '/World/Ball';
+    const loads = vi.mocked(loadUsdScene).mock.calls.length;
+    expect(viewer.objectMaterialVariants(path)).toEqual({ A: 'empty', B: 'empty' });
+    await expect(viewer.applyObjectMaterialVariant(path, 'B')).rejects.toThrow('variante B est vide');
+    viewer.saveObjectMaterialVariant(path, 'A');
+    await viewer.setObjectConstant(path, 's', 'specular_roughness', true);
+    await viewer.setObjectParameters(path, new Map([['surface:specular_roughness', [0.42]]]));
+    viewer.saveObjectMaterialVariant(path, 'B');
+    expect(viewer.objectMaterialVariants(path)).toEqual({ A: 'saved', B: 'active' });
+    await viewer.applyObjectMaterialVariant(path, 'A');
+    expect(viewer.objectSurfaceGraph(path)?.nodes.has('specular_roughness_constant')).toBe(false);
+    expect(viewer.objectParameters(path, 's').find(parameter => parameter.input === 'specular_roughness')?.value).toEqual([0.2]);
+    await viewer.setObjectParameters(path, new Map([['surface:specular_roughness', [0.8]]]));
+    await viewer.applyObjectMaterialVariant(path, 'B');
+    expect(viewer.objectSurfaceGraph(path)?.nodes.get('s')?.inputs.find(input => input.name === 'specular_roughness')?.source)
+      .toEqual({ kind: 'connection', nodeId: 'specular_roughness_constant' });
+    expect(viewer.objectParameters(path, 'specular_roughness_constant')[0]?.value).toEqual([0.42]);
+    await viewer.applyObjectMaterialVariant(path, 'A');
+    expect(viewer.objectParameters(path, 's').find(parameter => parameter.input === 'specular_roughness')?.value).toEqual([0.2]);
+    expect(loadUsdScene).toHaveBeenCalledTimes(loads);
+  });
+
+  it('shares a Constant between two surface inputs and restores the previous secondary literal', async () => {
+    const { viewer } = await setup(false, true);
+    const path = '/World/Ball';
+    const source = 'specular_roughness_constant';
+    const input = 'diffuse_roughness';
+    const binding = (name: string) => viewer.objectSurfaceGraph(path)?.nodes.get('s')?.inputs.find(entry => entry.name === name)?.source;
+    await viewer.setObjectConstant(path, 's', 'specular_roughness', true);
+    expect(viewer.objectConstantSources(path, 's', input)).toEqual([source]);
+    await expect(viewer.setObjectConstantLink(path, 's', 'base_color', source)).rejects.toThrow('incompatible');
+    await viewer.setObjectConstantLink(path, 's', input, source);
+    expect(binding(input)).toEqual({ kind: 'connection', nodeId: source });
+    expect(binding('specular_roughness')).toEqual(binding(input));
+    await expect(viewer.setObjectConstant(path, source, 'value', false)).rejects.toThrow('utilisé ailleurs');
+    await expect(viewer.setObjectParameters(path, new Map([[`surface:${input}`, [0.1]]]))).rejects.toThrow('Entrée connectée');
+    await viewer.setObjectParameters(path, new Map([['surface:specular_roughness', [0.5]]]));
+    expect(viewer.objectSurfaceGraph(path)?.nodes.get(source)?.inputs[0]?.source)
+      .toEqual({ kind: 'value', type: 'float', value: '0.5' });
+    await viewer.setObjectConstantLink(path, 's', input, null);
+    expect(binding(input)).toEqual({ kind: 'value', type: 'float', value: '0.8' });
+    expect(binding('specular_roughness')).toEqual({ kind: 'connection', nodeId: source });
+    await viewer.setObjectConstant(path, source, 'value', false);
+    expect(binding('specular_roughness')).toEqual({ kind: 'value', type: 'float', value: '0.5' });
+  });
+
+  it('connects an editable Constant and restores the literal with its updated value without reloading USD', async () => {
+    const { viewer } = await setup(false, true);
+    const path = '/World/Ball';
+    const input = 'base_color';
+    const id = 'base_color_constant';
+    const original = viewer.objectSurfaceGraph(path)!;
+    const originalValue = viewer.objectParameters(path, 's').find(parameter => parameter.input === input)!.value;
+    const readInput = () => viewer.objectSurfaceGraph(path)?.nodes.get('s')?.inputs.find(candidate => candidate.name === input)?.source;
+    const loads = vi.mocked(loadUsdScene).mock.calls.length;
+    await expect(viewer.setObjectConstant(path, 's', 'coat', true)).rejects.toThrow();
+    expect(viewer.objectSurfaceGraph(path)).toBe(original);
+    await viewer.setObjectConstant(path, 's', input, true);
+    expect(original.nodes.has(id)).toBe(false);
+    expect(readInput()).toEqual({ kind: 'connection', nodeId: id });
+    expect(viewer.objectParameters(path, 's').some(parameter => parameter.input === input)).toBe(false);
+    const parameter = viewer.objectParameters(path, id)[0]!;
+    expect(parameter.value).toEqual(originalValue);
+    await viewer.setObjectParameters(path, new Map([[parameter.id, [0.2, 0.4, 0.8]]]));
+    expect(viewer.objectSurfaceGraph(path)?.nodes.get(id)?.inputs[0]?.source)
+      .toEqual({ kind: 'value', type: 'color3', value: '0.2, 0.4, 0.8' });
+    await viewer.setObjectConstant(path, id, 'value', false);
+    expect(viewer.objectSurfaceGraph(path)?.nodes.has(id)).toBe(false);
+    expect(readInput()).toEqual({ kind: 'value', type: 'color3', value: '0.2, 0.4, 0.8' });
+    expect(viewer.objectParameters(path, 's').find(parameter => parameter.input === input)?.value).toEqual([0.2, 0.4, 0.8]);
+    expect(loadUsdScene).toHaveBeenCalledTimes(loads);
   });
 
   it('rebuilds when an optional lobe activates or deactivates but keeps edits live while active', async () => {

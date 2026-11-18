@@ -55,9 +55,9 @@ import {
 } from './pathtracing/convergence.ts';
 import { JsDenoiser } from './pathtracing/js-denoiser.ts';
 import { PathTraceStopping, pathTraceMetrics, type PathTraceRenderLimits, type PathTraceProgress, type PathTraceMetrics } from './pathtracing/render-limits.ts';
-import { changeMaterialParameters, compileEditableMaterial, materialUniformData, packParameterUniforms, visibleMaterialParameters, type MaterialParameter } from './material-parameters.ts';
+import { canInsertMaterialConstant, changeMaterialConstant, changeMaterialConstantLink, changeMaterialParameters, compileEditableMaterial, materialConstantSources, materialUniformData, packParameterUniforms, visibleMaterialParameters, type MaterialParameter } from './material-parameters.ts';
 import { applySceneDisplacement } from './displacement.ts';
-import type { MaterialResource } from './scene-resources.ts';
+import type { MaterialResource, SceneResources } from './scene-resources.ts';
 import { prepareDisneyScene } from './pathtracing/disney-scene.ts';
 import { DisneyGpuBackend } from './pathtracing/disney-gpu-backend.ts';
 import { packDisneyLights } from './pathtracing/disney-lights.ts';
@@ -138,6 +138,7 @@ function disneyEnvironmentRotation(lights: readonly SceneLight[]): number {
 }
 
 export type BackendKind = 'raster' | 'pathtracing' | 'disney';
+export type MaterialVariantSlot = 'A' | 'B';
 
 export type PathTracerState = 'idle' | 'compiling' | 'ready' | 'error';
 export type DenoiserStatus =
@@ -221,6 +222,7 @@ export class InteractiveViewer {
   #orbit: OrbitCamera;
   #current: SceneRender | null = null;
   #loaded: Awaited<ReturnType<typeof loadUsdScene>> | undefined;
+  readonly #materialVariants = new Map<string, Partial<Record<MaterialVariantSlot, MaterialResource>>>();
   #loadOptions: SceneLoadOptions = {};
   #firstFrameStart: number | undefined;
   #sceneEntry: string | undefined;
@@ -319,11 +321,89 @@ export class InteractiveViewer {
     return this.#objects;
   }
 
-  objectParameters(path: string): readonly MaterialParameter[] {
+  objectParameters(path: string, nodeId?: string): readonly MaterialParameter[] {
     const resources = this.#loaded?.parameterResources;
     const key = resources?.instances.find(instance => instance.primPath === path)?.materialKey;
     const material = key ? resources?.materials.get(key) : undefined;
-    return material ? visibleMaterialParameters(material) : [];
+    return material ? visibleMaterialParameters(material, nodeId) : [];
+  }
+
+  objectSurfaceGraph(path: string) {
+    const resources = this.#loaded?.parameterResources ?? this.#loaded?.resources;
+    const key = resources?.instances.find(instance => instance.primPath === path)?.materialKey;
+    return key ? resources?.materials.get(key)?.surfaceGraph : undefined;
+  }
+
+  objectSurfaceInputDiagnostics(path: string, nodeId: string) {
+    const resources = this.#loaded?.parameterResources ?? this.#loaded?.resources;
+    const key = resources?.instances.find(instance => instance.primPath === path)?.materialKey;
+    const surface = key ? resources?.materials.get(key)?.resolvedSurface : undefined;
+    return surface?.nodeId === nodeId ? surface.inputDiagnostics ?? [] : [];
+  }
+
+  objectMaterialVariants(path: string) {
+    const material = this.#editableObjectMaterial(path);
+    if (!material?.surfaceGraph) return undefined;
+    const saved = this.#materialVariants.get(path);
+    return {
+      A: saved?.A === undefined ? 'empty' : saved.A === material ? 'active' : 'saved',
+      B: saved?.B === undefined ? 'empty' : saved.B === material ? 'active' : 'saved',
+    } as const;
+  }
+
+  saveObjectMaterialVariant(path: string, slot: MaterialVariantSlot): void {
+    const material = this.#editableObjectMaterial(path);
+    if (!material?.surfaceGraph) throw new Error('Aucun graphe éditable pour cet objet.');
+    this.#materialVariants.set(path, { ...this.#materialVariants.get(path), [slot]: material });
+  }
+
+  async applyObjectMaterialVariant(path: string, slot: MaterialVariantSlot): Promise<void> {
+    const saved = this.#materialVariants.get(path)?.[slot];
+    if (!saved) throw new Error(`La variante ${slot} est vide.`);
+    await this.#editObjectGraph(path, () => saved);
+  }
+
+  #editableObjectMaterial(path: string): MaterialResource | undefined {
+    const source = this.#loaded?.parameterResources;
+    const key = source?.instances.find(instance => instance.primPath === path)?.materialKey;
+    return key ? source?.materials.get(key) : undefined;
+  }
+
+  canInsertObjectConstant(path: string, nodeId: string, input: string): boolean {
+    const material = this.#editableObjectMaterial(path);
+    return !!material && canInsertMaterialConstant(material, nodeId, input);
+  }
+
+  async setObjectConstant(path: string, nodeId: string, input: string, insert: boolean): Promise<void> {
+    await this.#editObjectGraph(path, material => changeMaterialConstant(material, nodeId, input, insert));
+  }
+
+  objectConstantSources(path: string, nodeId: string, input: string): string[] {
+    const material = this.#editableObjectMaterial(path);
+    return material ? materialConstantSources(material, nodeId, input) : [];
+  }
+
+  canUnlinkObjectConstant(path: string, nodeId: string, input: string): boolean {
+    const material = this.#editableObjectMaterial(path);
+    return material?.resolvedSurface?.nodeId === nodeId
+      && !!material.parameters?.some(parameter => parameter.input === input && parameter.linkedConstant !== undefined);
+  }
+
+  async setObjectConstantLink(path: string, nodeId: string, input: string, sourceId: string | null): Promise<void> {
+    await this.#editObjectGraph(path, material => changeMaterialConstantLink(material, nodeId, input, sourceId));
+  }
+
+  async #editObjectGraph(path: string, edit: (material: MaterialResource) => MaterialResource): Promise<void> {
+    const loaded = this.#loaded;
+    const source = loaded?.parameterResources;
+    const key = source?.instances.find(instance => instance.primPath === path)?.materialKey;
+    const material = key ? source?.materials.get(key) : undefined;
+    if (!loaded || !source || !key || !material || !this.#current) throw new Error(`Unknown editable object: ${path}`);
+    const updated = edit(material);
+    if (updated === material) return;
+    const materials = new Map(source.materials);
+    materials.set(key, updated);
+    await this.#rebuildMaterialResources(loaded, { ...source, materials });
   }
 
   get isCompiledScene(): boolean {
@@ -374,10 +454,14 @@ export class InteractiveViewer {
       this.#emitStatus();
       return;
     }
+    await this.#rebuildMaterialResources(loaded, parameterResources);
+  }
+
+  async #rebuildMaterialResources(loaded: LoadedUsdScene, parameterResources: SceneResources): Promise<void> {
     const resources = await applySceneDisplacement(parameterResources, loaded.mtlx.imageProvider);
     const candidate = { ...loaded, resources, parameterResources };
     delete candidate.compiled;
-    await this.#replaceLoaded(loaded, candidate, 'Scene changed during parameter update.');
+    await this.#replaceLoaded(loaded, candidate, 'Scene changed during material update.');
   }
 
   /** Swap the active scene state without reparsing USD (frame + GPU render set rebuilt from resources). */
@@ -635,6 +719,7 @@ export class InteractiveViewer {
     this.#jsDenoiser.dispose();
     this.#loaded?.mtlx.documents?.delete();
     this.#loaded = undefined;
+    this.#materialVariants.clear();
   }
 
   async resize(width: number, height = width): Promise<void> {
@@ -710,6 +795,7 @@ export class InteractiveViewer {
     this.#firstFrameStart = loadStarted;
     this.#loaded?.mtlx.documents?.delete();
     this.#loaded = loaded;
+    this.#materialVariants.clear();
     this.#loadOptions = options;
     this.#sceneEntry = entry;
     this.#materialOverrides = new Map(overrides);

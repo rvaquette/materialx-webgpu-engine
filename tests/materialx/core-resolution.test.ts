@@ -5,6 +5,7 @@ import { describe, it, expect } from 'vitest';
 import { MaterialXCore, type MaterialXModuleFactory } from '../../src/materialx/wasm.ts';
 import { MaterialXLibraries, defaultLibrarySources } from '../../src/materialx/libraries.ts';
 import { loadMaterialXDocuments } from '../../src/materialx/document-source.ts';
+import { exportSurfaceGraph, makeMaterialExport } from '../../src/materialx/graph-export.ts';
 import { createGraphMaterialCompiler } from '../../src/render/graph-material-compiler.ts';
 import { activeParameterPreset, changeMaterialParameters, compileEditableMaterial, editableSceneMaterials, parameterPresetChanges, parameterPresetNames, visibleMaterialParameters } from '../../src/render/material-parameters.ts';
 import { surfaceGraphToLayered } from '../../src/compiler/surface-lower.ts';
@@ -21,6 +22,127 @@ const playgroundRoot = process.env['MX_PLAYGROUND_ROOT']
 const coreFile = join(coreRoot, 'JsMaterialXCore.js');
 
 describe.skipIf(!existsSync(coreFile) || !existsSync(libraryRoot))('installed MaterialX Core resolution', () => {
+  it('packages the original texture bytes once and round-trips the material with relative image paths', async () => {
+    const module = await import(/* @vite-ignore */ pathToFileURL(coreFile).href) as { default: MaterialXModuleFactory };
+    const core = new MaterialXCore(await module.default());
+    const libraries = new MaterialXLibraries(core);
+    await libraries.load({ sources: defaultLibrarySources(libraryRoot), fetchText: async path => readFileSync(path, 'utf8') });
+    const textureUrl = 'https://example.test/assets/checker.png';
+    const documents = await loadMaterialXDocuments({ core, libraries, texts: new Map([['source', `<materialx version="1.39">
+      <image name="albedo" type="color3"><input name="file" type="filename" value="${textureUrl}" colorspace="srgb_texture" /></image>
+      <image name="roughness" type="float"><input name="file" type="filename" value="${textureUrl}" /></image>
+      <standard_surface name="surface" type="surfaceshader">
+        <input name="base_color" type="color3" nodename="albedo" />
+        <input name="specular_roughness" type="float" nodename="roughness" />
+      </standard_surface>
+      <surfacematerial name="mat" type="material"><input name="surfaceshader" type="surfaceshader" nodename="surface" /></surfacematerial>
+    </materialx>`]]) });
+    try {
+      const unit = { assetPath: 'source', materialName: 'mat', referencedPrimPath: '/MaterialX/Materials/mat', boundPrims: [] };
+      const graph = (await createGraphMaterialCompiler({ documents }).compile(unit))!.graph!;
+      const bytes = new Uint8Array(readFileSync(join('scenes', 'pathtracer', 'renderman', 'textures', 'checker.png')));
+      const requests: string[] = [];
+      const { filename, blob } = await makeMaterialExport(graph, 'mat', async url => {
+        requests.push(String(url));
+        return new Response(bytes, { headers: { 'Content-Type': 'image/png' } });
+      });
+      expect(filename).toBe('mat.zip');
+      expect(requests).toEqual([textureUrl]);
+      const { unzipSync, strFromU8 } = await import('three/addons/libs/fflate.module.js');
+      const archive = unzipSync(new Uint8Array(await blob.arrayBuffer()));
+      expect(Object.keys(archive).sort()).toEqual(['mat.mtlx', 'textures/checker.png']);
+      expect(archive['textures/checker.png']).toEqual(bytes);
+      const xml = strFromU8(archive['mat.mtlx']!);
+      expect(xml).not.toContain(textureUrl);
+      const imported = await loadMaterialXDocuments({
+        core, texts: new Map([['source', xml]]),
+        libraries: { importInto(doc) { libraries.importInto(doc); expect(core.validate(doc)).toBe(true); } },
+      });
+      try {
+        const restored = (await createGraphMaterialCompiler({ documents: imported }).compile(unit))!.graph!;
+        expect(restored.nodes.get('albedo')?.inputs[0]).toMatchObject({
+          colorSpace: 'srgb_texture', source: { kind: 'value', value: 'textures/checker.png' },
+        });
+        expect(restored.nodes.get('roughness')?.inputs[0]?.source)
+          .toMatchObject({ kind: 'value', value: 'textures/checker.png' });
+      } finally {
+        imported.delete();
+      }
+      await expect(makeMaterialExport(graph, 'mat', async () => new Response(null, { status: 404 })))
+        .rejects.toThrow('Impossible d’inclure textures/checker.png : HTTP 404');
+    } finally {
+      documents.delete();
+      libraries.delete();
+    }
+  }, 30000);
+
+  it('round-trips an edited surface with a shared Constant, procedural color and arithmetic in MaterialX Core', async () => {
+    const module = await import(/* @vite-ignore */ pathToFileURL(coreFile).href) as { default: MaterialXModuleFactory };
+    const core = new MaterialXCore(await module.default());
+    const libraries = new MaterialXLibraries(core);
+    await libraries.load({ sources: defaultLibrarySources(libraryRoot), fetchText: async path => readFileSync(path, 'utf8') });
+    const documents = await loadMaterialXDocuments({ core, libraries, texts: new Map([['source', `<materialx version="1.39">
+      <nodegraph name="NG"><constant name="rough" type="float">
+        <input name="value" type="float" value="0.7" />
+      </constant><multiply name="scale" type="float">
+        <input name="in1" type="float" nodename="rough" />
+        <input name="in2" type="float" nodename="rough" />
+      </multiply><output name="roughness" type="float" nodename="scale" /></nodegraph>
+      <texcoord name="uv" type="vector2"><input name="index" type="integer" value="0" /></texcoord>
+      <checkerboard name="checks" type="color3">
+        <input name="texcoord" type="vector2" nodename="uv" />
+        <input name="uvtiling" type="vector2" value="4, 8" />
+      </checkerboard>
+      <standard_surface name="surface" type="surfaceshader">
+        <input name="base_color" type="color3" nodename="checks" />
+        <input name="specular_color" type="color3" value="0.2, 0.3, 0.4" />
+        <input name="specular_roughness" type="float" nodegraph="NG" output="roughness" />
+      </standard_surface>
+      <surfacematerial name="mat" type="material"><input name="surfaceshader" type="surfaceshader" nodename="surface" /></surfacematerial>
+    </materialx>`]]) });
+    try {
+      const unit = { assetPath: 'source', materialName: 'mat', referencedPrimPath: '/MaterialX/Materials/mat', boundPrims: [] };
+      const build = await createGraphMaterialCompiler({ documents }).compile(unit);
+      const graph = build!.graph!;
+      const rough = graph.nodes.get('NG/rough')!;
+      rough.inputs[0]!.source = { kind: 'value', type: 'float', value: '0.42' };
+      const { filename, xml } = exportSurfaceGraph(graph, 'NG rough');
+      expect(filename).toBe('NG_rough.mtlx');
+      let valid = false;
+      const imported = await loadMaterialXDocuments({
+        core, texts: new Map([['source', xml]]),
+        libraries: { importInto(doc) { libraries.importInto(doc); valid = core.validate(doc); } },
+      });
+      try {
+        expect(valid).toBe(true);
+        const roundTrip = await createGraphMaterialCompiler({ documents: imported }).compile({
+          ...unit, materialName: 'NG_rough', referencedPrimPath: '/MaterialX/Materials/NG_rough',
+        });
+        expect(roundTrip?.surface?.inputs.get('specular_roughness')?.source)
+          .toEqual({ kind: 'connection', nodeId: 'NG_scale' });
+        expect(roundTrip?.graph?.nodes.get('NG_scale')?.inputs.map(input => input.source))
+          .toEqual(Array(2).fill({ kind: 'connection', nodeId: 'NG_rough_2' }));
+        expect(roundTrip?.graph?.nodes.get('NG_rough_2')?.inputs[0]?.source)
+          .toEqual({ kind: 'value', type: 'float', value: '0.42' });
+        expect(roundTrip?.surface?.inputs.get('base_color')?.source).toEqual({ kind: 'connection', nodeId: 'checks' });
+        expect(roundTrip?.graph?.nodes.get('checks')?.inputs.find(input => input.name === 'texcoord')?.source)
+          .toEqual({ kind: 'connection', nodeId: 'uv' });
+        expect(roundTrip?.surface?.inputs.get('specular_color')?.source).toEqual({ kind: 'value', value: [0.2, 0.3, 0.4] });
+      } finally {
+        imported.delete();
+      }
+      expect(() => exportSurfaceGraph({ ...graph, nodes: new Map(graph.nodes).set(rough.id, { ...rough, category: 'image' }) }, 'mat'))
+        .toThrow('Nœud non pris en charge');
+      const scale = graph.nodes.get('NG/scale')!;
+      expect(() => exportSurfaceGraph({ ...graph, nodes: new Map(graph.nodes).set(scale.id, {
+        ...scale, nodeDef: { ...scale.nodeDef!, name: 'ND_custom_multiply_float' },
+      }) }, 'mat')).toThrow('Nœud non pris en charge');
+    } finally {
+      documents.delete();
+      libraries.delete();
+    }
+  }, 30000);
+
   it('evaluates the chrome cutout on the front without cutting the back', async () => {
     const module = await import(/* @vite-ignore */ pathToFileURL(coreFile).href) as { default: MaterialXModuleFactory };
     const core = new MaterialXCore(await module.default());
