@@ -130,6 +130,55 @@ it('packs per-instance transforms in the existing UV binding for shading and opa
   await expect(buildPtDeviceBindings(dispatch, scene, countingProvider(undefined).provider)).rejects.toThrow(/lacks instance transforms/);
 });
 
+it('packs shared object vertices for transformed geometry and opacity without changing UVs', async () => {
+  const graph = surfaceGraph('standard_surface', [
+    conn('base_color', 'color3', 'point'), conn('opacity', 'color3', 'point'),
+    conn('normal', 'vector3', 'normal'),
+  ], [
+    upstream('point', 'transformpoint', 'vector3', [
+      conn('in', 'vector3', 'position'), value('fromspace', 'string', 'object'), value('tospace', 'string', 'world'),
+    ]),
+    upstream('position', 'position', 'vector3', []),
+    upstream('normal', 'transformnormal', 'vector3', [
+      conn('in', 'vector3', 'normalObject'), value('fromspace', 'string', 'object'), value('tospace', 'string', 'world'),
+    ]),
+    upstream('normalObject', 'normal', 'vector3', []),
+  ]);
+  const dispatch = buildMaterialDispatch([source(0, graph)]);
+  const scene = fakeScene();
+  scene.triangleCount = 3;
+  scene.triangles = new Float32Array(3 * 19);
+  scene.triangles[19 + 18] = 1;
+  scene.triangleUv = new Float32Array(Array.from({ length: 18 }, (_, i) => i / 20));
+  scene.transformRanges = [
+    { firstTriangle: 0, triangleCount: 1, materialIndex: 0, instanceId: '/a', prototypeId: '/mesh', model: translation4(1, 2, 3) },
+    { firstTriangle: 1, triangleCount: 1, materialIndex: 1, instanceId: '/other', prototypeId: '/otherMesh', model: IDENTITY4 },
+    { firstTriangle: 2, triangleCount: 1, materialIndex: 0, instanceId: '/b', prototypeId: '/mesh', model: scaling4(2, 3, 4) },
+  ];
+  scene.objectGeometry = new Map([['/mesh', {
+    indices: new Uint32Array([2, 0, 1]),
+    positions: new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]),
+    normals: new Float32Array([0, 0, 1, 0, 0, 1, 0, 0, 1]),
+    tangents: new Float32Array([1, 0, 0, -1, 1, 0, 0, -1, 1, 0, 0, -1]),
+    tangentComponents: 4,
+  }]]);
+  const bindings = await buildPtDeviceBindings(dispatch, scene, countingProvider(undefined).provider);
+  const packed = bindings.group0.find(slot => slot.role === 'triangleUv')!.data as Float32Array;
+  expect(Array.from(packed.slice(0, 18))).toEqual(Array.from(scene.triangleUv));
+  expect(Array.from(packed.slice(18, 21))).toEqual([0, 1, 2]);
+  expect(Array.from(packed.slice(117, 126))).toEqual([3, 1, 2, 0, 0, 0, 3, 1, 2]);
+  expect(Array.from(packed.slice(137, 148))).toEqual([0, 0, 0, 0, 0, 1, 1, 0, 0, -1, 1]);
+  expect(packed.length).toBe(126 + 4 * 11);
+  expect(dispatch.opacityReadsVaryings).toBe(true);
+  const wgsl = pathTraceComputeWgsl({ dispatch });
+  expect(wgsl).toContain('vary.in_mx_objectPosition = oa.position * objectWeight');
+  expect(wgsl).toContain('vary.in_mx_objectNormal = objectN;');
+  expect(wgsl).toContain('mx_hit_varyings(hit, pos, surface_hit_normal(hit), normalize(-rd))');
+
+  scene.objectGeometry.delete('/mesh');
+  await expect(buildPtDeviceBindings(dispatch, scene, countingProvider(undefined).provider)).rejects.toThrow(/Missing object-space geometry/);
+});
+
 function fakeScene(): PathTraceScene {
   return {
     nodes: new Float32Array([1]),

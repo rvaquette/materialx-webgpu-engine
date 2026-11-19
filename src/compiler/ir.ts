@@ -30,6 +30,14 @@ export const BOOL: IrType = { kind: 'scalar', scalar: 'bool' };
 
 export const OBJECT_TO_WORLD_INPUT = 'mx_objectToWorld';
 export const WORLD_TO_OBJECT_INPUT = 'mx_worldToObject';
+export const OBJECT_POSITION_INPUT = 'mx_objectPosition';
+export const OBJECT_NORMAL_INPUT = 'mx_objectNormal';
+export const OBJECT_TANGENT_INPUT = 'mx_objectTangent';
+export const OBJECT_BITANGENT_INPUT = 'mx_objectBitangent';
+
+export const OBJECT_GEOMETRY_INPUTS: ReadonlySet<string> = new Set([
+  OBJECT_POSITION_INPUT, OBJECT_NORMAL_INPUT, OBJECT_TANGENT_INPUT, OBJECT_BITANGENT_INPUT,
+]);
 
 export function vector(size: 2 | 3 | 4, scalar: Scalar = 'float', semantic?: VectorSemantic): IrType {
   return semantic !== undefined ? { kind: 'vector', scalar, size, semantic } : { kind: 'vector', scalar, size };

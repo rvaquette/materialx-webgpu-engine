@@ -5,7 +5,7 @@ import { buildCachedPathTraceScene } from '../../src/render/pathtracing/scene-bu
 import { generateEnvironmentMipmaps } from '../../src/render/env/mipmaps.ts';
 import { buildSceneResources } from '../../src/render/scene-resources.ts';
 import { importUsdStage } from '../../src/usd/importer.ts';
-import { NEUTRAL_SURFACE } from '../../src/render/raster/scene-frame.ts';
+import { NEUTRAL_SURFACE, SCENE_FRAME_UNIFORM_FLOATS } from '../../src/render/raster/scene-frame.ts';
 import { projectIrradianceSH } from '../../src/render/env/irradiance.ts';
 import { buildEnvCdf } from '../../src/assets/environment-cdf.ts';
 import { JsDenoiser } from '../../src/render/pathtracing/js-denoiser.ts';
@@ -21,7 +21,7 @@ import { tonemapIndex } from '../../src/render/output.ts';
 import {
   loadMaterialPreviewShaderBall, materialPreviewCamera, materialPreviewResources,
 } from '../../src/render/material-preview.ts';
-import { IDENTITY4 } from '../../src/scene/transforms.ts';
+import { IDENTITY4, inverse4, translation4 } from '../../src/scene/transforms.ts';
 import {
   pathTraceViewIndex, PT_DISPLAY_INFO_BYTES, PT_DISPLAY_PIXEL_BYTES, PT_SURFACE_AOV_PIXEL_BYTES,
 } from '../../src/render/pathtracing/display.ts';
@@ -88,6 +88,7 @@ interface SceneFixtureOptions {
   transmission?: boolean;
   displaced?: boolean;
   volumeBoundary?: boolean;
+  transformNode?: boolean;
 }
 
 async function sceneFixture(editable = false, options: SceneFixtureOptions = {}): Promise<LoadedUsdScene> {
@@ -140,6 +141,23 @@ def Xform "World" {
       provenance: { namePath: '/amount/value' } }],
     provenance: { namePath: '/amount' },
   });
+  if (options.transformNode) {
+    graph.nodes.set('spaceTransform', {
+      id: 'spaceTransform', category: 'transformpoint', type: 'vector3',
+      inputs: [
+        { name: 'in', type: 'vector3', source: { kind: 'value', type: 'vector3', value: '1,2,3' }, provenance: { namePath: '/spaceTransform/in' } },
+        { name: 'fromspace', type: 'string', source: { kind: 'value', type: 'string', value: 'world' }, provenance: { namePath: '/spaceTransform/fromspace' } },
+        { name: 'tospace', type: 'string', source: { kind: 'value', type: 'string', value: 'object' }, provenance: { namePath: '/spaceTransform/tospace' } },
+      ],
+      provenance: { namePath: '/spaceTransform' },
+    });
+    graph.nodes.set('transformColor', {
+      id: 'transformColor', category: 'convert', type: 'color3',
+      inputs: [{ name: 'in', type: 'vector3', source: { kind: 'connection', nodeId: 'spaceTransform' },
+        provenance: { namePath: '/transformColor/in' } }],
+      provenance: { namePath: '/transformColor' },
+    });
+  }
   if (options.displaced) {
     for (const [id, file] of [['height', 'height.png'], ['otherHeight', 'other.png']] as const) {
       graph.nodes.set(id, {
@@ -176,6 +194,7 @@ def Xform "World" {
         ...(editable ? { graph, surface: resolveSurface(graph, {})! } : {}) }),
     },
   });
+  if (options.transformNode) resources.instances[0]!.transform = translation4(2, 3, 4);
   if (options.twoObjects) {
     resources = { ...resources, instances: [...resources.instances, {
       ...resources.instances[0]!, id: '/World/Other', primPath: '/World/Other',
@@ -571,7 +590,7 @@ describe('interactive viewer resource lifecycle', () => {
     await viewer.load('scene.usda');
     expect(viewer.environmentEnabled).toBe(false);
     const uniforms = device.queue.writeBuffer.mock.calls.map(call => call[2])
-      .filter((data): data is Float32Array => data instanceof Float32Array && data.length === 92);
+      .filter((data): data is Float32Array => data instanceof Float32Array && data.length === SCENE_FRAME_UNIFORM_FLOATS);
     expect(uniforms.length).toBeGreaterThan(0);
     expect(uniforms.at(-1)!.slice(44, 84).every(value => value === 0)).toBe(true);
   });
@@ -678,6 +697,17 @@ describe('interactive viewer resource lifecycle', () => {
     expect(device.createShaderModule).toHaveBeenCalledTimes(shaders + 2);
     expect(viewer.objectSurfaceGraph('/World/Other')).toBe(otherGraph);
     for (const buffer of geometry) expect(buffer.destroy).not.toHaveBeenCalled();
+  });
+
+  it('updates the per-instance inverse when a raster material edit introduces a transform', async () => {
+    const { viewer, device } = await setup(false, true, 'raster', true, { transformNode: true });
+    device.queue.writeBuffer.mockClear();
+    await viewer.setObjectGraphInputLink('/World/Ball', 's', 'base_color', 'transformColor');
+    const inverseWrite = device.queue.writeBuffer.mock.calls.find(call =>
+      call[1] === 92 * 4 && call[2] instanceof Float32Array && call[2].length === 16);
+    const data = inverseWrite?.[2];
+    if (!(data instanceof Float32Array)) throw new Error('Missing inverse matrix update.');
+    expect(Array.from(data)).toEqual(inverse4(translation4(2, 3, 4), true));
   });
 
   it('updates material textures independently and moves connected transmission between raster passes', async () => {

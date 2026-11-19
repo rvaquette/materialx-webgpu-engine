@@ -12,12 +12,15 @@
 // testable); pipeline creation is exercised against a mock device; the GPUBuffer
 // uploads and dispatch run in the browser (src/main.ts) and are device-only.
 
-import type { PathTraceScene } from './scene-buffers.ts';
+import { PT_OBJECT_VERTEX_FLOATS, type PathTraceScene } from './scene-buffers.ts';
 import { BVH_TRI_STRIDE, BVH_TRAVERSAL_WGSL } from './bvh-wgsl.ts';
 import { LAYERED_CLOSURE_PRELUDE } from '../../compiler/surface-wgsl.ts';
 import { closureLibraryPrelude, type ClosureDispatchSpec } from '../../compiler/closure-library.ts';
 import { emitVaryingsStruct, textureWgslType } from '../../compiler/wgsl.ts';
-import { OBJECT_TO_WORLD_INPUT, WORLD_TO_OBJECT_INPUT, type IrType } from '../../compiler/ir.ts';
+import {
+  OBJECT_TO_WORLD_INPUT, WORLD_TO_OBJECT_INPUT, OBJECT_POSITION_INPUT,
+  OBJECT_NORMAL_INPUT, OBJECT_TANGENT_INPUT, OBJECT_BITANGENT_INPUT, type IrType,
+} from '../../compiler/ir.ts';
 import { materialClosureReaderWgsl, PT_MAX_LOBES, PT_MATERIAL_RECORD_FLOATS, PT_MATERIAL_HEADER_FLOATS, PT_LOBE_FLOATS } from './material-record.ts';
 import { volumeFieldWgsl, VOLUME_TRANSPORT_WGSL } from '../volume-field.ts';
 import {
@@ -454,10 +457,60 @@ function wgslVaryings(varyings: PtVaryings): string {
   }
   const objectToWorld = varyings.extraInputs.has(OBJECT_TO_WORLD_INPUT);
   const worldToObject = varyings.extraInputs.has(WORLD_TO_OBJECT_INPUT);
+  const objectPosition = varyings.extraInputs.has(OBJECT_POSITION_INPUT);
+  const objectTangent = varyings.extraInputs.has(OBJECT_TANGENT_INPUT) || varyings.extraInputs.has(OBJECT_BITANGENT_INPUT);
+  const objectNormal = varyings.extraInputs.has(OBJECT_NORMAL_INPUT) || objectTangent;
+  const objectGeometry = objectPosition || objectNormal;
   if (objectToWorld) assigns.push(`  vary.in_${OBJECT_TO_WORLD_INPUT} = mx_hit_transform(h.tri, 0u);`);
   if (worldToObject) assigns.push(`  vary.in_${WORLD_TO_OBJECT_INPUT} = mx_hit_transform(h.tri, 1u);`);
+  if (objectGeometry) {
+    assigns.push('  let oa = mx_object_vertex(h.tri, 0u);', '  let ob = mx_object_vertex(h.tri, 1u);',
+      '  let oc = mx_object_vertex(h.tri, 2u);', '  let objectWeight = 1.0 - h.u - h.v;');
+    if (objectPosition) assigns.push(`  vary.in_${OBJECT_POSITION_INPUT} = oa.position * objectWeight + ob.position * h.u + oc.position * h.v;`);
+    if (objectNormal) {
+      assigns.push(
+        '  var objectN: vec3f;',
+        '  if (oa.hasNormal) { objectN = normalize(oa.normal * objectWeight + ob.normal * h.u + oc.normal * h.v); }',
+        '  else { objectN = normalize(cross(ob.position - oa.position, oc.position - oa.position)); }',
+      );
+      if (varyings.extraInputs.has(OBJECT_NORMAL_INPUT)) assigns.push(`  vary.in_${OBJECT_NORMAL_INPUT} = objectN;`);
+    }
+    if (objectTangent) {
+      assigns.push(
+        '  let objectFrame = basis(objectN);',
+        '  let objectRaw = oa.tangent * objectWeight + ob.tangent * h.u + oc.tangent * h.v;',
+        '  let objectProjected = objectRaw.xyz - objectN * dot(objectN, objectRaw.xyz);',
+        '  let hasObjectTangent = dot(objectProjected, objectProjected) > 1e-10;',
+        '  let objectT = select(objectFrame[0], normalize(objectProjected), hasObjectTangent);',
+      );
+      if (varyings.extraInputs.has(OBJECT_TANGENT_INPUT)) assigns.push(`  vary.in_${OBJECT_TANGENT_INPUT} = objectT;`);
+      if (varyings.extraInputs.has(OBJECT_BITANGENT_INPUT)) {
+        assigns.push(`  vary.in_${OBJECT_BITANGENT_INPUT} = select(objectFrame[1], normalize(cross(objectN, objectT)) * select(1.0, -1.0, objectRaw.w < 0.0), hasObjectTangent);`);
+      }
+    }
+  }
   return [
     emitVaryingsStruct(varyings.primvarFields, varyings.extraInputs),
+    ...(objectGeometry ? [/* wgsl */ `
+struct MxObjectVertex {
+  position: vec3f,
+  normal: vec3f,
+  tangent: vec4f,
+  hasNormal: bool,
+};
+fn mx_object_vertex(tri: u32, slot: u32) -> MxObjectVertex {
+  let count = arrayLength(&tris) / TRI_STRIDE;
+  // The final triangle belongs to the final contiguous instance range.
+  let rangeCount = u32(triUv[count * (UV_STRIDE + 1u) - 1u]) + 1u;
+  let indices = count * (UV_STRIDE + 1u) + rangeCount * 32u;
+  let vertex = u32(triUv[indices + tri * 3u + slot]);
+  let b = indices + count * 3u + vertex * ${PT_OBJECT_VERTEX_FLOATS}u;
+  return MxObjectVertex(
+    vec3f(triUv[b], triUv[b + 1u], triUv[b + 2u]),
+    vec3f(triUv[b + 3u], triUv[b + 4u], triUv[b + 5u]),
+    vec4f(triUv[b + 6u], triUv[b + 7u], triUv[b + 8u], triUv[b + 9u]),
+    triUv[b + 10u] != 0.0);
+}`] : []),
     ...(objectToWorld || worldToObject ? [/* wgsl */ `
 fn mx_hit_transform(tri : u32, inverseFlag : u32) -> mat4x4f {
   let count = arrayLength(&tris) / TRI_STRIDE;

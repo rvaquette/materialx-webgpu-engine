@@ -1,5 +1,8 @@
 import type { ResolvedVolume } from '../materialx/volume-graph.ts';
-import { IrModuleBuilder, FLOAT, vector, shaderType, type IrRef, type IrExpr, type ShaderIr } from './ir.ts';
+import {
+  IrModuleBuilder, FLOAT, OBJECT_GEOMETRY_INPUTS, OBJECT_TO_WORLD_INPUT, WORLD_TO_OBJECT_INPUT,
+  vector, shaderType, type IrRef, type IrExpr, type ShaderIr,
+} from './ir.ts';
 import { evaluateIrRef, type IrEvalVaryings } from './ir-eval.ts';
 import { lowerValueInputsToIr } from './surface-ir.ts';
 import type { ResolvedGraph } from '../materialx/graph.ts';
@@ -21,9 +24,16 @@ export function lowerVolumeInputsToIr(volume: ResolvedVolume, builder: IrModuleB
       if (!graph) throw new Error(`Volume input '${name}' requires its resolved graph.`);
       validateVolumeCoordinates(graph,input.source.nodeId);
       const declared = new Map<string, NormalizedSurfaceInput>([[name, input]]);
+      const existing = new Set(builder.build().exprs.keys());
       const lowered = lowerValueInputsToIr(graph, declared, builder, diagnostic => {
         if (diagnostic.level === 'warning' || diagnostic.level === 'error') throw new Error(diagnostic.message);
       });
+      for (const [ref, expr] of builder.build().exprs) {
+        if (!existing.has(ref) && expr.kind === 'input' &&
+            (OBJECT_GEOMETRY_INPUTS.has(expr.name) || expr.name === OBJECT_TO_WORLD_INPUT || expr.name === WORLD_TO_OBJECT_INPUT)) {
+          throw new Error(`Volume input '${name}' needs per-instance geometric data; only world-space fields are supported.`);
+        }
+      }
       inputs[name] = lowered.get(name)!;
       continue;
     }

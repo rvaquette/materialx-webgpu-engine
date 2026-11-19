@@ -10,9 +10,9 @@
 import type { DecodedPixelImage, TextureExportSource } from '../../assets/images.ts';
 import type { Diagnostic, DiagnosticSink } from '../../core/diagnostics.ts';
 import type { PtMaterialDispatch } from './material-variant.ts';
-import { PT_TRIANGLE_FLOATS, type PathTraceScene } from './scene-buffers.ts';
+import { PT_OBJECT_VERTEX_FLOATS, PT_TRIANGLE_FLOATS, type PathTraceObjectGeometry, type PathTraceScene } from './scene-buffers.ts';
 import { inverse4 } from '../../scene/transforms.ts';
-import { OBJECT_TO_WORLD_INPUT, WORLD_TO_OBJECT_INPUT } from '../../compiler/ir.ts';
+import { OBJECT_TO_WORLD_INPUT, WORLD_TO_OBJECT_INPUT, OBJECT_GEOMETRY_INPUTS } from '../../compiler/ir.ts';
 import { imageSamplerDescriptor, type ImageSamplerDescriptor } from '../../assets/samplers.ts';
 import type { WgslBinding } from '../../compiler/wgsl.ts';
 
@@ -87,7 +87,8 @@ export interface BuildPtDeviceBindingsOptions {
 }
 
 function group0Slots(scene: PathTraceScene, dispatch: PtMaterialDispatch): PtBufferSlot[] {
-  const transforms = dispatch.extraInputs.has(OBJECT_TO_WORLD_INPUT) || dispatch.extraInputs.has(WORLD_TO_OBJECT_INPUT);
+  const transforms = dispatch.extraInputs.has(OBJECT_TO_WORLD_INPUT) || dispatch.extraInputs.has(WORLD_TO_OBJECT_INPUT)
+    || [...dispatch.extraInputs.keys()].some(name => OBJECT_GEOMETRY_INPUTS.has(name));
   const slots: PtBufferSlot[] = [
     { binding: 0, role: 'uniform', usage: 'uniform', access: 'read' },
     { binding: 1, role: 'nodes', usage: 'storage', access: 'read', data: scene.nodes },
@@ -115,9 +116,60 @@ function packUvAndTransforms(scene: PathTraceScene, dispatch: PtMaterialDispatch
   const inverseMaterials = new Set(dispatch.variants
     .filter(variant => variant.extraInputs.has(WORLD_TO_OBJECT_INPUT))
     .map(variant => variant.index));
+  const geometryMaterials = new Set(dispatch.variants
+    .filter(variant => [...variant.extraInputs.keys()].some(name => OBJECT_GEOMETRY_INPUTS.has(name)))
+    .map(variant => variant.index));
+  if ([...dispatch.extraInputs.keys()].some(name => OBJECT_GEOMETRY_INPUTS.has(name)) && geometryMaterials.size === 0) {
+    throw new Error('Object-space geometry is missing from path tracing material variants.');
+  }
   if (ranges.length > 2 ** 24) throw new Error('Too many instances for path tracing transform indices.');
-  const data = new Float32Array(count * 7 + ranges.length * 32);
+  const geometryOffsets = new Map<string, { first: number; geometry: PathTraceObjectGeometry }>();
+  let vertexCount = geometryMaterials.size ? 1 : 0;
+  for (const range of ranges) {
+    if (!geometryMaterials.has(range.materialIndex)) continue;
+    const id = range.prototypeId;
+    const geometry = id !== undefined ? scene.objectGeometry?.get(id) : undefined;
+    if (!id || !geometry) throw new Error(`Missing object-space geometry for instance '${range.instanceId}'; rebuild or re-export the scene.`);
+    const vertices = geometry.positions.length / 3;
+    if (!Number.isSafeInteger(vertices) || geometry.indices.length !== range.triangleCount * 3
+        || geometry.indices.some(index => index >= vertices)
+        || (geometry.normals && geometry.normals.length !== vertices * 3)
+        || (geometry.tangents && (geometry.tangentComponents !== 3 && geometry.tangentComponents !== 4
+          || geometry.tangents.length !== vertices * geometry.tangentComponents))
+        || geometry.positions.some(value => !Number.isFinite(value))
+        || geometry.normals?.some(value => !Number.isFinite(value))
+        || geometry.tangents?.some(value => !Number.isFinite(value))) {
+      throw new Error(`Invalid object-space geometry for instance '${range.instanceId}'.`);
+    }
+    if (!geometryOffsets.has(id)) {
+      geometryOffsets.set(id, { first: vertexCount, geometry });
+      vertexCount += vertices;
+      if (vertexCount > 2 ** 24) throw new Error('Too many object-space vertices for path tracing indices.');
+    }
+  }
+  // UVs, per-triangle range indices and matrices stay at their existing offsets.
+  const triangleIndexBase = count * 7 + ranges.length * 32;
+  const vertexBase = triangleIndexBase + (geometryMaterials.size ? count * 3 : 0);
+  const data = new Float32Array(vertexBase + vertexCount * PT_OBJECT_VERTEX_FLOATS);
   data.set(scene.triangleUv);
+  if (geometryMaterials.size) {
+    data[vertexBase + 5] = 1;
+    data[vertexBase + 10] = 1;
+    for (const { first, geometry } of geometryOffsets.values()) {
+      const vertices = geometry.positions.length / 3;
+      for (let vertex = 0; vertex < vertices; vertex++) {
+        const offset = vertexBase + (first + vertex) * PT_OBJECT_VERTEX_FLOATS;
+        data.set(geometry.positions.subarray(vertex * 3, vertex * 3 + 3), offset);
+        if (geometry.normals) data.set(geometry.normals.subarray(vertex * 3, vertex * 3 + 3), offset + 3);
+        if (geometry.tangents && geometry.tangentComponents) {
+          const stride = geometry.tangentComponents;
+          data.set(geometry.tangents.subarray(vertex * stride, vertex * stride + 3), offset + 6);
+          data[offset + 9] = stride === 4 ? geometry.tangents[vertex * stride + 3]! : 1;
+        }
+        data[offset + 10] = geometry.normals ? 1 : 0;
+      }
+    }
+  }
   let first = 0;
   for (const [index, range] of ranges.entries()) {
     if (range.firstTriangle !== first || !Number.isSafeInteger(range.triangleCount) || range.triangleCount <= 0
@@ -131,6 +183,12 @@ function packUvAndTransforms(scene: PathTraceScene, dispatch: PtMaterialDispatch
       }
     }
     data.fill(index, count * 6 + first, count * 6 + first + range.triangleCount);
+    if (geometryMaterials.has(range.materialIndex)) {
+      const { first: vertexOffset, geometry } = geometryOffsets.get(range.prototypeId!)!;
+      for (let i = 0; i < geometry.indices.length; i++) {
+        data[triangleIndexBase + first * 3 + i] = vertexOffset + geometry.indices[i]!;
+      }
+    }
     const offset = count * 7 + index * 32;
     data.set(range.model, offset);
     if (inverseMaterials.has(range.materialIndex)) data.set(inverse4(range.model, true), offset + 16);

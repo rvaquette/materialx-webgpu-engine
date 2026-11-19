@@ -29,7 +29,11 @@ import {
 import { burleyInterfaceTransmission, evalWorld, layeredSurfaceBsdf, sampleWorld, spatialBaseAttenuation } from './bsdf.ts';
 import { absorbingMedium, type HomogeneousMedium } from './media.ts';
 import { subsurfaceMedium, exponentialSubsurfaceMedium, sampleBurleySurface } from './subsurface.ts';
-import { OBJECT_TO_WORLD_INPUT, WORLD_TO_OBJECT_INPUT, canonicalSurfaceToLayered, type LayeredClosure } from '../../compiler/ir.ts';
+import {
+  OBJECT_TO_WORLD_INPUT, WORLD_TO_OBJECT_INPUT, OBJECT_GEOMETRY_INPUTS, OBJECT_POSITION_INPUT,
+  OBJECT_NORMAL_INPUT, OBJECT_TANGENT_INPUT, OBJECT_BITANGENT_INPUT,
+  canonicalSurfaceToLayered, type LayeredClosure,
+} from '../../compiler/ir.ts';
 import { composeSurfaceLayered, prepareSurface, type PreparedSurface } from '../../compiler/surface-eval.ts';
 import type { IrEvalVaryings } from '../../compiler/ir-eval.ts';
 import { packLayeredMaterial, unpackLayeredMaterial, unpackMaterialMedium, isVolumeBoundary, PT_MATERIAL_RECORD_FLOATS } from './material-record.ts';
@@ -49,6 +53,7 @@ import type {
 export const PT_NODE_FLOATS = 12;
 /** Scalar array packing: v0,v1,v2, n0,n1,n2 (18) + materialIndex; no struct padding. */
 export const PT_TRIANGLE_FLOATS = BVH_TRI_STRIDE;
+export const PT_OBJECT_VERTEX_FLOATS = 11;
 /** Floats per packed material: the flat LayeredClosure record (T057b, megakernel-ready). */
 export const PT_MATERIAL_FLOATS = PT_MATERIAL_RECORD_FLOATS;
 
@@ -67,7 +72,16 @@ export interface PathTraceTransformRange {
   triangleCount: number;
   materialIndex: number;
   instanceId: string;
+  prototypeId?: string;
   model: Mat4;
+}
+
+export interface PathTraceObjectGeometry {
+  indices: Uint32Array;
+  positions: Float32Array;
+  normals?: Float32Array;
+  tangents?: Float32Array;
+  tangentComponents?: number;
 }
 
 export interface PathTraceScene {
@@ -82,6 +96,8 @@ export interface PathTraceScene {
   triangleCount: number;
   /** Instance matrices and their contiguous ranges in the original triangle soup. */
   transformRanges?: PathTraceTransformRange[];
+  /** Shared original vertex streams for geometry read by coordinate transforms. */
+  objectGeometry?: Map<string, PathTraceObjectGeometry>;
   /** Packed LayeredClosure records (PT_MATERIAL_FLOATS each, T057b). */
   materials: Float32Array;
   materialCount: number;
@@ -224,7 +240,7 @@ export function buildPathTraceScene(
     const count = Math.floor(geom.indices.length / 3);
     if (count > 0) {
       transformRanges.push({ firstTriangle: rangeTriangleCount, triangleCount: count,
-        materialIndex: matIdx, instanceId: draw.instanceId, model: draw.model });
+        materialIndex: matIdx, instanceId: draw.instanceId, prototypeId: draw.prototypeId, model: draw.model });
       rangeTriangleCount += count;
     }
     // A file-cache hit still rebuilds live materials/frame, but never visits vertices.
@@ -322,6 +338,42 @@ export function buildPathTraceScene(
   let maxDisp = 0;
   for (const s of displaceScaleArr) maxDisp = Math.max(maxDisp, Math.max(midpoint, 1 - midpoint) * Math.abs(s));
   const hasDisplacement = displaceMapFile !== undefined && maxDisp > 0;
+  const geometryMaterials = new Set<number>();
+  for (const variant of variantSources) {
+    const categories = new Set([...variant.graph.nodes.values()].map(node => node.category));
+    if (![...categories].some(category => ['transformpoint', 'transformvector', 'transformnormal'].includes(category))
+        || ![...categories].some(category => ['position', 'normal', 'tangent', 'bitangent'].includes(category))) continue;
+    const module = resources.materials.get(materialKeys[variant.materialIndex]!)?.surfaceModule;
+    const names = [
+      ...(module?.extraInputs.keys() ?? []),
+      ...[...prepareSurface(variant.graph, variant.surface).ir.exprs.values()]
+        .filter(expr => expr.kind === 'input').map(expr => expr.name),
+    ];
+    if ([...names].some(name => OBJECT_GEOMETRY_INPUTS.has(name))) geometryMaterials.add(variant.materialIndex);
+  }
+  const objectGeometry = new Map<string, PathTraceObjectGeometry>();
+  for (const range of transformRanges) {
+    if (!geometryMaterials.has(range.materialIndex)) continue;
+    if (hasDisplacement && displaceScaleArr[range.materialIndex] !== 0) {
+      throw new Error(`Object-space geometry for '${range.instanceId}' requires displacement to be baked before path tracing.`);
+    }
+    const id = range.prototypeId!;
+    if (objectGeometry.has(id)) continue;
+    const geometry = resources.geometries.get(id)!;
+    const position = geometry.streams.find(stream => stream.name === 'position');
+    const normal = geometry.streams.find(stream => stream.name === 'normal');
+    const tangent = geometry.streams.find(stream => stream.name === 'tangent');
+    if (!position || position.components !== 3 || (normal && normal.components !== 3)
+        || (tangent && tangent.components !== 3 && tangent.components !== 4)) {
+      throw new Error(`Invalid object-space vertex streams for '${id}'.`);
+    }
+    objectGeometry.set(id, {
+      indices: geometry.indices,
+      positions: position.data,
+      ...(normal ? { normals: normal.data } : {}),
+      ...(tangent ? { tangents: tangent.data, tangentComponents: tangent.components } : {}),
+    });
+  }
 
   const nodes = preparedGeometry?.nodes ?? packNodes(bvh!, hasDisplacement ? maxDisp : 0);
   const materials = packMaterials(surfaces, media, volumeBoundaries);
@@ -366,6 +418,7 @@ export function buildPathTraceScene(
     triangleOrder,
     triangleCount: preparedGeometry?.triangleCount ?? triCount,
     transformRanges,
+    ...(objectGeometry.size ? { objectGeometry } : {}),
     materials,
     materialCount: surfaces.length,
     triangleUv,
@@ -676,6 +729,56 @@ function hitVaryings(scene: PathTraceScene, hit: PtHit, inputs?: Readonly<Record
   };
 }
 
+function objectGeometryVaryings(scene: PathTraceScene, range: PathTraceTransformRange, hit: PtHit): Record<string, readonly number[]> {
+  const geometry = range.prototypeId !== undefined ? scene.objectGeometry?.get(range.prototypeId) : undefined;
+  if (!geometry) throw new Error(`Missing object-space geometry for instance '${range.instanceId}'; rebuild or re-export the scene.`);
+  const offset = (hit.triangle - range.firstTriangle) * 3;
+  const a = geometry.indices[offset];
+  const b = geometry.indices[offset + 1];
+  const c = geometry.indices[offset + 2];
+  if (a === undefined || b === undefined || c === undefined
+      || [a, b, c].some(index => index * 3 + 2 >= geometry.positions.length)) {
+    throw new Error(`Invalid object-space geometry for instance '${range.instanceId}'.`);
+  }
+  const w = 1 - hit.u - hit.v;
+  const interpolate = (data: Float32Array, stride: number): V3 => {
+    const va = readVec3Strided(data, a, stride);
+    const vb = readVec3Strided(data, b, stride);
+    const vc = readVec3Strided(data, c, stride);
+    return [va[0] * w + vb[0] * hit.u + vc[0] * hit.v,
+      va[1] * w + vb[1] * hit.u + vc[1] * hit.v,
+      va[2] * w + vb[2] * hit.u + vc[2] * hit.v];
+  };
+  const position = interpolate(geometry.positions, 3);
+  const normal = geometry.normals
+    ? normalize3(interpolate(geometry.normals, 3))
+    : normalize3(cross3(sub3(readVec3(geometry.positions, b), readVec3(geometry.positions, a)),
+      sub3(readVec3(geometry.positions, c), readVec3(geometry.positions, a))));
+  const sign = normal[2] >= 0 ? 1 : -1;
+  const factor = -1 / (sign + normal[2]);
+  const cross = normal[0] * normal[1] * factor;
+  let tangent: V3 = [1 + sign * normal[0] * normal[0] * factor, sign * cross, -sign * normal[0]];
+  let bitangent: V3 = [cross, sign + normal[1] * normal[1] * factor, -normal[1]];
+  if (geometry.tangents && geometry.tangentComponents) {
+    const raw = interpolate(geometry.tangents, geometry.tangentComponents);
+    const projected = sub3(raw, scale3(normal, dot3(normal, raw)));
+    if (dot3(projected, projected) > 1e-10) {
+      tangent = normalize3(projected);
+      const stride = geometry.tangentComponents;
+      const handedness = stride === 4
+        && geometry.tangents[a * stride + 3]! * w + geometry.tangents[b * stride + 3]! * hit.u
+          + geometry.tangents[c * stride + 3]! * hit.v < 0 ? -1 : 1;
+      bitangent = scale3(normalize3(cross3(normal, tangent)), handedness);
+    }
+  }
+  return {
+    [OBJECT_POSITION_INPUT]: position,
+    [OBJECT_NORMAL_INPUT]: normal,
+    [OBJECT_TANGENT_INPUT]: tangent,
+    [OBJECT_BITANGENT_INPUT]: bitangent,
+  };
+}
+
 /** Barycentric-interpolate a packed per-triangle tangent, or undefined when unauthored. */
 function packedTangent(
   tan: Float32Array,
@@ -718,11 +821,12 @@ export function createSceneSampler(scene: PathTraceScene): SceneSampler {
   // constant record. Constant-only materials keep the packed record fallback.
   const prepared = new Map<number, PreparedSurface>();
   for (const v of scene.variantSources) prepared.set(v.materialIndex, prepareSurface(v.graph, v.surface));
-  const transformNeeds = new Map<number, { model: boolean; inverse: boolean }>();
+  const transformNeeds = new Map<number, { model: boolean; inverse: boolean; geometry: boolean }>();
   for (const [index, variant] of prepared) {
     const names = new Set([...variant.ir.exprs.values()].filter(expr => expr.kind === 'input').map(expr => expr.name));
-    if (names.has(OBJECT_TO_WORLD_INPUT) || names.has(WORLD_TO_OBJECT_INPUT)) {
-      transformNeeds.set(index, { model: names.has(OBJECT_TO_WORLD_INPUT), inverse: names.has(WORLD_TO_OBJECT_INPUT) });
+    const geometry = [...names].some(name => OBJECT_GEOMETRY_INPUTS.has(name));
+    if (names.has(OBJECT_TO_WORLD_INPUT) || names.has(WORLD_TO_OBJECT_INPUT) || geometry) {
+      transformNeeds.set(index, { model: names.has(OBJECT_TO_WORLD_INPUT), inverse: names.has(WORLD_TO_OBJECT_INPUT), geometry });
     }
   }
   const inverseModels = new Map<PathTraceTransformRange, Mat4>();
@@ -758,6 +862,7 @@ export function createSceneSampler(scene: PathTraceScene): SceneSampler {
       throw new Error(`Missing instance transform for triangle ${hit.triangle}.`);
     }
     const inputs: Record<string, readonly number[]> = {};
+    if (needs.geometry) Object.assign(inputs, objectGeometryVaryings(scene, range, hit));
     if (needs.model) inputs[OBJECT_TO_WORLD_INPUT] = range.model;
     if (needs.inverse) {
       let inverse = inverseModels.get(range);

@@ -14,7 +14,10 @@ import type {
 } from '../../src/materialx/graph.ts';
 import { resolveSurface } from '../../src/materialx/surface-graph.ts';
 import { lowerSurfaceInputsToIr } from '../../src/compiler/surface-ir.ts';
-import { IrModuleBuilder, BOOL, COLOR3, FLOAT, INT, OBJECT_TO_WORLD_INPUT, WORLD_TO_OBJECT_INPUT, vector, type IrRef } from '../../src/compiler/ir.ts';
+import {
+  IrModuleBuilder, BOOL, COLOR3, FLOAT, INT, OBJECT_TO_WORLD_INPUT, WORLD_TO_OBJECT_INPUT,
+  OBJECT_POSITION_INPUT, OBJECT_NORMAL_INPUT, OBJECT_TANGENT_INPUT, OBJECT_BITANGENT_INPUT, vector, type IrRef,
+} from '../../src/compiler/ir.ts';
 import { emitWgsl, lowerExprs, type WgslModule } from '../../src/compiler/wgsl.ts';
 import { evaluateShaderIr } from '../../src/compiler/ir-eval.ts';
 import { inverse4 } from '../../src/scene/transforms.ts';
@@ -173,6 +176,96 @@ describe('lowerSurfaceInputsToIr (T055c)', () => {
       expect(warnings[0]!.message).toMatch(/unresolved|does not support/);
       expect(warnings[0]!.message).toContain('identity fallback');
     }
+  });
+
+  it.each([
+    { category: 'position', op: 'transformpoint', field: OBJECT_POSITION_INPUT, input: [1, 2, -1], expected: [4, 0, -1] },
+    { category: 'normal', op: 'transformnormal', field: OBJECT_NORMAL_INPUT, input: [1, 1, 1], expected: [-4 / Math.sqrt(61), 6 / Math.sqrt(61), 3 / Math.sqrt(61)] },
+    { category: 'tangent', op: 'transformvector', field: OBJECT_TANGENT_INPUT, input: [1, 0, 0], expected: [0, 2, 0] },
+    { category: 'bitangent', op: 'transformvector', field: OBJECT_BITANGENT_INPUT, input: [0, -1, 0], expected: [3, 0, 0] },
+  ])('uses object-space $category through an intermediate node', ({ category, op, field, input, expected }) => {
+    const graph = surfaceGraph([conn('base_color', 'color3', 'space')], [
+      upstream('space', op, 'vector3', [
+        conn('in', 'vector3', 'scaled'), value('fromspace', 'string', 'model'), value('tospace', 'string', 'world'),
+      ]),
+      upstream('scaled', 'multiply', 'vector3', [
+        conn('in1', 'vector3', 'geometric'), value('in2', 'vector3', '1,1,1'),
+      ]),
+      upstream('geometric', category, 'vector3', []),
+    ]);
+    const diagnostics: Diagnostic[] = [];
+    const { ir, module } = lowerAndEmit(graph, [{ name: 'base_color', type: COLOR3 }], d => diagnostics.push(d));
+    const result = evaluateShaderIr(ir, {
+      position: [99, 99, 99], normal: [0, 0, 1], tangent: [0, 1, 0], bitangent: [1, 0, 0],
+      inputs: { [field]: input, [OBJECT_TO_WORLD_INPUT]: instanceModel, [WORLD_TO_OBJECT_INPUT]: instanceInverse },
+    }).get('base_color')!;
+    expected.forEach((component, index) => expect(result[index]).toBeCloseTo(component, 7));
+    expect(module.code).toContain(`in_${field}: vec3f`);
+    expect(diagnostics).toEqual([]);
+    expect(() => evaluateShaderIr(ir, { inputs: { [OBJECT_TO_WORLD_INPUT]: instanceModel, [WORLD_TO_OBJECT_INPUT]: instanceInverse } }))
+      .toThrow('Missing or invalid object-space geometry');
+  });
+
+  it.each(['object', 'model', 'world'] as const)('respects %s geometric normal space through transformations', space => {
+    const world = space === 'world';
+    const graph = surfaceGraph([conn('base_color', 'color3', 'space')], [
+      upstream('space', 'transformnormal', 'vector3', [
+        conn('in', 'vector3', 'geometric'), value('fromspace', 'string', space), value('tospace', 'string', world ? 'object' : 'world'),
+      ]),
+      upstream('geometric', 'normal', 'vector3', [value('space', 'string', space)]),
+    ]);
+    const diagnostics: Diagnostic[] = [];
+    const { ir } = lowerAndEmit(graph, [{ name: 'base_color', type: COLOR3 }], d => diagnostics.push(d));
+    const result = evaluateShaderIr(ir, {
+      normal: [0, 0, 1],
+      inputs: { [OBJECT_NORMAL_INPUT]: [1, 1, 1], [OBJECT_TO_WORLD_INPUT]: instanceModel, [WORLD_TO_OBJECT_INPUT]: instanceInverse },
+    }).get('base_color')!;
+    const expected = world ? [1 / Math.sqrt(3), 1 / Math.sqrt(3), 1 / Math.sqrt(3)]
+      : [-4 / Math.sqrt(61), 6 / Math.sqrt(61), 3 / Math.sqrt(61)];
+    expected.forEach((component, index) => expect(result[index]).toBeCloseTo(component, 7));
+    expect(diagnostics).toEqual([]);
+  });
+
+  it('warns for unsupported geometric spaces without changing direct geometric uses', () => {
+    const graph = surfaceGraph([conn('base_color', 'color3', 'space'), conn('normal', 'vector3', 'geometric')], [
+      upstream('space', 'transformnormal', 'vector3', [
+        conn('in', 'vector3', 'geometric'), value('fromspace', 'string', 'world'), value('tospace', 'string', 'world'),
+      ]),
+      upstream('geometric', 'normal', 'vector3', [value('space', 'string', 'camera')]),
+    ]);
+    const diagnostics: Diagnostic[] = [];
+    const { ir } = lowerAndEmit(graph, [{ name: 'base_color', type: COLOR3 }], d => diagnostics.push(d));
+    expect(evaluateShaderIr(ir, { normal: [0, 0, 1] }).get('base_color')).toEqual([0, 0, 1]);
+    expect(diagnostics.map(d => d.message)).toEqual([expect.stringContaining("unsupported or unresolved space 'camera'")]);
+  });
+
+  it('keeps direct and transformed uses of the same geometry node distinct', () => {
+    const graph = surfaceGraph([
+      conn('base_color', 'color3', 'geometric'), conn('specular_color', 'color3', 'space'),
+    ], [
+      upstream('geometric', 'normal', 'vector3', [value('space', 'string', 'object')]),
+      upstream('space', 'transformnormal', 'vector3', [
+        conn('in', 'vector3', 'geometric'), value('fromspace', 'string', 'object'), value('tospace', 'string', 'world'),
+      ]),
+    ]);
+    const { ir } = lowerAndEmit(graph, [{ name: 'base_color', type: COLOR3 }, { name: 'specular_color', type: COLOR3 }]);
+    const result = evaluateShaderIr(ir, {
+      normal: [0, 0, 1], inputs: { [OBJECT_NORMAL_INPUT]: [1, 0, 0], [WORLD_TO_OBJECT_INPUT]: instanceInverse },
+    });
+    expect(result.get('base_color')).toEqual([0, 0, 1]);
+    expect(result.get('specular_color')).toEqual([0, 1, 0]);
+  });
+
+  it('diagnoses tangent sets other than index zero in transformed geometry', () => {
+    const graph = surfaceGraph([conn('base_color', 'color3', 'space')], [
+      upstream('space', 'transformvector', 'vector3', [
+        conn('in', 'vector3', 'geometric'), value('fromspace', 'string', 'object'), value('tospace', 'string', 'world'),
+      ]),
+      upstream('geometric', 'tangent', 'vector3', [value('index', 'integer', '1')]),
+    ]);
+    const diagnostics: Diagnostic[] = [];
+    lowerAndEmit(graph, [{ name: 'base_color', type: COLOR3 }], d => diagnostics.push(d));
+    expect(diagnostics.map(d => d.message)).toEqual([expect.stringContaining('supports tangent index 0 only')]);
   });
 
   it('evaluates connected 2D transforms in a surface graph', () => {

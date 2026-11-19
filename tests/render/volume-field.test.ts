@@ -1,6 +1,8 @@
 import { expect, it } from 'vitest';
-import { FLOAT, IrModuleBuilder, shaderType, vector, type ShaderIr } from '../../src/compiler/ir.ts';
-import { isSpatialVolumeIr } from '../../src/compiler/volume-ir.ts';
+import { FLOAT, IrModuleBuilder, OBJECT_TO_WORLD_INPUT, matrix, shaderType, vector, type ShaderIr } from '../../src/compiler/ir.ts';
+import { isSpatialVolumeIr, lowerVolumeInputsToIr } from '../../src/compiler/volume-ir.ts';
+import type { ResolvedGraph, ResolvedNode } from '../../src/materialx/graph.ts';
+import type { ResolvedVolume } from '../../src/materialx/volume-graph.ts';
 import { bakeVolumeGrid, sampleVolumeGrid, sampleVolumeTransport } from '../../src/render/volume-field.ts';
 import { createPcg32, integratePath, type SceneSampler } from '../../src/render/pathtracing/integrator.ts';
 import { PT_MATERIAL_RECORD_FLOATS } from '../../src/render/pathtracing/material-record.ts';
@@ -18,6 +20,34 @@ function spatialIr(): ShaderIr {
   b.output({ name:'volumeshader',type:shaderType('volume'),ref:volume });
   return b.build();
 }
+
+it('rejects instance-dependent volume transforms without rejecting unrelated surface inputs', () => {
+  const value = (name: string, type: string, raw: string) => ({
+    name, type, source: { kind: 'value' as const, type, value: raw }, provenance: { namePath: `/${name}` },
+  });
+  const connection = (name: string, nodeId: string) => ({
+    name, type: 'vector3', source: { kind: 'connection' as const, nodeId }, provenance: { namePath: `/${name}` },
+  });
+  const volume: ResolvedVolume = { nodeId: 'v', inputs: new Map([
+    ['absorption', { name: 'absorption', type: 'vector3', source: { kind: 'connection', nodeId: 'transform' } }],
+  ]) };
+  const graph = (from: string, to: string, geometry: boolean): ResolvedGraph => ({
+    terminals: [],
+    nodes: new Map<string, ResolvedNode>([
+      ['transform', { id: 'transform', category: 'transformpoint', type: 'vector3', provenance: { namePath: '/transform' },
+        inputs: [geometry ? connection('in', 'position') : value('in', 'vector3', '1,2,3'),
+          value('fromspace', 'string', from), value('tospace', 'string', to)] }],
+      ['position', { id: 'position', category: 'position', type: 'vector3', inputs: [], provenance: { namePath: '/position' } }],
+    ]),
+  });
+  expect(() => lowerVolumeInputsToIr(volume, new IrModuleBuilder(), graph('object', 'world', false)))
+    .toThrow('needs per-instance geometric data');
+  expect(() => lowerVolumeInputsToIr(volume, new IrModuleBuilder(), graph('object', 'object', true)))
+    .toThrow('needs per-instance geometric data');
+  const builder = new IrModuleBuilder();
+  builder.add({ kind: 'input', type: matrix(4), name: OBJECT_TO_WORLD_INPUT });
+  expect(() => lowerVolumeInputsToIr(volume, builder, graph('world', 'world', false))).not.toThrow();
+});
 
 it('bakes a spatial field, interpolates all coefficients and bounds extinction', () => {
   const ir = spatialIr();

@@ -7,7 +7,7 @@
 
 import { hashString } from '../compiler/cache.ts';
 import { emitWgsl, type WgslModule } from '../compiler/wgsl.ts';
-import { OBJECT_TO_WORLD_INPUT, WORLD_TO_OBJECT_INPUT, type IrType, type ShaderIr } from '../compiler/ir.ts';
+import { OBJECT_TO_WORLD_INPUT, WORLD_TO_OBJECT_INPUT, OBJECT_GEOMETRY_INPUTS, type IrType, type ShaderIr } from '../compiler/ir.ts';
 import { PipelineCache } from './pipelines.ts';
 
 export const COMPUTE_ENTRY = 'mx_exec';
@@ -170,6 +170,9 @@ export function composeComputeModule(
     const supplied = overrides.inputs?.[f.name];
     if (!supplied && (f.name === OBJECT_TO_WORLD_INPUT || f.name === WORLD_TO_OBJECT_INPUT)) {
       throw new Error(`Missing instance transformation '${f.name}'.`);
+    }
+    if (!supplied && OBJECT_GEOMETRY_INPUTS.has(f.name)) {
+      throw new Error(`Missing object-space geometry '${f.name}'.`);
     }
     const value = supplied ?? new Array(f.width).fill(0);
     assigns.push(`  vary.in_${f.name} = ${litField(f, value)};`);

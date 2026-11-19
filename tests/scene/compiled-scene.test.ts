@@ -12,9 +12,10 @@ import {
 import { importUsdStage } from '../../src/usd/importer.ts';
 import { buildSceneResources } from '../../src/render/scene-resources.ts';
 import { buildPathTraceScene, PT_MATERIAL_FLOATS, type PathTraceScene } from '../../src/render/pathtracing/scene-buffers.ts';
+import { applySceneDisplacement } from '../../src/render/displacement.ts';
 import { buildMaterialDispatch } from '../../src/render/pathtracing/material-variant.ts';
 import { NEUTRAL_SURFACE } from '../../src/render/raster/scene-frame.ts';
-import { IrModuleBuilder, FLOAT, OBJECT_TO_WORLD_INPUT } from '../../src/compiler/ir.ts';
+import { IrModuleBuilder, FLOAT, OBJECT_TO_WORLD_INPUT, OBJECT_POSITION_INPUT } from '../../src/compiler/ir.ts';
 import { emitWgsl } from '../../src/compiler/wgsl.ts';
 import { emitLayeredSurface } from '../../src/compiler/surface-wgsl.ts';
 import { resolveSurface } from '../../src/materialx/surface-graph.ts';
@@ -126,6 +127,19 @@ async function transformFixture(category = 'transformpoint'): Promise<LoadedUsdS
   material.resolvedSurface = surface;
   material.surfaceModule = emitLayeredSurface(graph, surface);
   loaded.resources.instances[0]!.transform = translation4(2, 3, 4);
+  return loaded;
+}
+
+async function geometryTransformFixture(): Promise<LoadedUsdScene> {
+  const loaded = await transformFixture();
+  const material = [...loaded.resources.materials.values()][0]!;
+  const graph = material.surfaceGraph!;
+  const source = graph.nodes.get('transform')!.inputs.find(input => input.name === 'in')!;
+  source.source = { kind: 'connection', nodeId: 'position' };
+  graph.nodes.set('position', {
+    id: 'position', category: 'position', type: 'vector3', inputs: [], provenance: { namePath: '/position' },
+  });
+  material.surfaceModule = emitLayeredSurface(graph, material.resolvedSurface!);
   return loaded;
 }
 
@@ -436,6 +450,46 @@ over "World" {
       .toContain('in_mx_objectToWorld');
   });
 
+  it('round trips object-space geometry needed by transformed attributes', async () => {
+    const loaded = await geometryTransformFixture();
+    const scene = await exportCompiledScene(loaded);
+    const restored = await loadCompiledScene('https://example.test/scenes/compiled/scene.json', vi.fn(), packageFetch(scene));
+    const pathTrace = restored.compiled!.pathTrace;
+    expect(pathTrace.objectGeometry?.size).toBe(1);
+    expect(restored.compiled!.dispatch.extraInputs.has(OBJECT_POSITION_INPUT)).toBe(true);
+    const range = pathTrace.transformRanges![0]!;
+    expect(pathTrace.objectGeometry?.get(range.prototypeId!)?.indices.length).toBe(range.triangleCount * 3);
+
+    const data = await decodeCompiledScene(scene.manifest, readPackage(scene)) as {
+      spaceTransformVersion?: number; pathTrace: PathTraceScene;
+    };
+    data.spaceTransformVersion = 1;
+    const old = await encodeCompiledScene(data, loaded.entry);
+    await expect(loadCompiledScene('https://example.test/scenes/compiled/scene.json', vi.fn(), packageFetch(old)))
+      .rejects.toThrow('re-export the scene or material from its source');
+    data.spaceTransformVersion = 2;
+    delete data.pathTrace.objectGeometry;
+    const damaged = await encodeCompiledScene(data, loaded.entry);
+    await expect(loadCompiledScene('https://example.test/scenes/compiled/scene.json', vi.fn(), packageFetch(damaged)))
+      .rejects.toThrow('missing object-space geometry');
+  });
+
+  it('uses the baked displaced object geometry in transformed attributes', async () => {
+    const loaded = await geometryTransformFixture();
+    const material = [...loaded.resources.materials.values()][0]!;
+    material.displacement = { file: 'height.png', scale: 0.4 };
+    const image: DecodedPixelImage = {
+      kind: 'pixels', width: 1, height: 1, channels: 4, componentType: 'uint8',
+      colorSpace: 'raw', data: new Uint8Array([255, 255, 255, 255]),
+    };
+    const baked = await applySceneDisplacement(loaded.resources, { decode: () => image });
+    const scene = buildPathTraceScene(baked);
+    const range = scene.transformRanges![0]!;
+    const geometry = scene.objectGeometry!.get(range.prototypeId!)!;
+    expect(geometry.positions[2]).toBeCloseTo(0.2, 6);
+    expect([...baked.materials.values()][0]!.displacement).toBeUndefined();
+  });
+
   it('keeps older scenes without space transforms and instance metadata loadable', async () => {
     const loaded = await fixture();
     const scene = await exportCompiledScene(loaded);
@@ -462,6 +516,17 @@ over "World" {
       expect(sink).toHaveBeenCalledWith(expect.objectContaining({ level: 'error' }));
     },
   );
+
+  it('retains version 1 scenes without transformed geometric inputs', async () => {
+    for (const loaded of [await transformFixture(), await fixture()]) {
+      const scene = await exportCompiledScene(loaded);
+      const data = await decodeCompiledScene(scene.manifest, readPackage(scene)) as { spaceTransformVersion?: number };
+      data.spaceTransformVersion = 1;
+      const old = await encodeCompiledScene(data, loaded.entry);
+      await expect(loadCompiledScene('https://example.test/scenes/compiled/scene.json', vi.fn(), packageFetch(old)))
+        .resolves.toBeDefined();
+    }
+  });
 
   it.each(['missing', 'gap', 'empty', 'non-finite'])(
     'rejects compiled instance transform ranges that are %s', async mutation => {

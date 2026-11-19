@@ -11,6 +11,7 @@
 import {
   OBJECT_TO_WORLD_INPUT,
   WORLD_TO_OBJECT_INPUT,
+  OBJECT_GEOMETRY_INPUTS,
   type IrConstValue,
   type IrExpr,
   type IrRef,
@@ -484,6 +485,13 @@ function readInput(env: IrEvalVaryings, name: string, size: number): IrValue {
     const value = env.inputs?.[name];
     if (!value || value.length !== 16 || value.some(component => !Number.isFinite(component))) {
       throw new IrEvalTransformError(`Missing or invalid instance transformation '${name}'.`);
+    }
+    return value;
+  }
+  if (OBJECT_GEOMETRY_INPUTS.has(name)) {
+    const value = env.inputs?.[name];
+    if (!value || value.length !== 3 || value.some(component => !Number.isFinite(component))) {
+      throw new IrEvalTransformError(`Missing or invalid object-space geometry '${name}'.`);
     }
     return value;
   }

@@ -172,7 +172,7 @@ describe('prepared scene buffer file cache', () => {
     const { resources } = fixture(), { store } = memoryStore();
     const cold = await buildFileCachedPathTraceScene(resources, {}, 'use', store);
     const material = resources.materials.get('m')!;
-    material.surfaceGraph = {} as NonNullable<MaterialResource['surfaceGraph']>;
+    material.surfaceGraph = { nodes: new Map(), terminals: [] };
     material.resolvedSurface = { family: 'standard_surface', nodeId: 'material', inputs: new Map() };
     const warm = await buildFileCachedPathTraceScene(resources, {}, 'use', store);
     expect(warm.cache.status).toBe('hit');

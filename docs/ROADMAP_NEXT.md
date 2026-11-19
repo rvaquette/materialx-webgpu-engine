@@ -862,9 +862,43 @@ catégorie et ne sont pas incluses dans cette étape.
 `invert` sont reconnues dans les graphes de surface. Les variantes scalaires,
 vectorielles et colorées sont évaluées sur CPU et en WGSL, y compris les
 variantes `invert` à montant scalaire. Les valeurs par défaut et les arguments
-IR nommés ou positionnels sont pris en charge. Les transformations
-`transformpoint`, `transformvector` et `transformnormal` nécessitent encore
-un traitement des espaces de coordonnées.
+IR nommés ou positionnels sont pris en charge.
+
+**Soixante-douzième étape :** les nœuds de surface `transformpoint`,
+`transformvector` et `transformnormal` convertissent entre `object`/`model`
+et `world`, sur CPU et en WGSL, en raster et en path tracing MaterialX. Les
+matrices sont propres à chaque instance, y compris pour l'opacité. La
+translation affecte les points mais pas les vecteurs ; les normales utilisent
+la transposée inverse et sont renormalisées. Les espaces égaux ou vides
+conservent la valeur d'entrée, avec normalisation pour les normales. Un espace
+inconnu ou dynamique déclenche un avertissement et un repli identité ; une
+matrice singulière ou dont l'inverse ne tient pas en flottants GPU est refusée
+si son inverse est nécessaire.
+
+Lorsqu'ils alimentent une transformation, les nœuds `position`, `normal`,
+`tangent` et `bitangent` respectent `object`/`model` et `world`, y compris au
+travers de nœuds intermédiaires. Leur espace par défaut est `object`. Les
+attributs locaux sont interpolés avant transformation ; le repère tangent utilise
+son orientation et, en l'absence de tangente, une base calculée depuis la
+normale. Seul l'indice de tangente 0 est pris en charge. Un espace géométrique
+inconnu ou dynamique et un autre indice de tangente déclenchent un avertissement.
+Les nœuds géométriques hors des entrées de transformation conservent leur
+comportement historique en espace monde ; les normales monde utilisées ailleurs
+restent approximatives sous échelle non uniforme.
+
+Le path tracer partage les attributs locaux par géométrie entre les instances et
+les récupère aussi sur un cache de géométrie préparée. Ils ajoutent, pour les
+matériaux concernés, trois indices par triangle et onze flottants par sommet
+partagé dans le buffer UV existant ; les limites de taille des buffers GPU
+continuent de s'appliquer. Un déplacement doit être cuit avant cette étape, comme
+le fait le viewer ; le prépass de déplacement GPU non cuit est explicitement
+refusé pour ces matériaux. Les coefficients de volume qui nécessitent les
+attributs ou matrices d'instance restent non pris en charge et sont refusés.
+
+Les paquets compilés antérieurs à la première version des transformations qui
+contiennent ces nœuds doivent être réexportés. Ceux de la première version
+doivent également l'être si une transformation dépend d'un nœud géométrique.
+Les autres anciens paquets restent chargeables.
 
 Travaux restants :
 

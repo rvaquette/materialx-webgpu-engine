@@ -10,7 +10,10 @@
 // BSDF/environment MIS samples; interactive IBL uses 16 mip-filtered BSDF samples.
 
 import type { LayeredSurfaceModule, SurfaceFeatures } from '../../compiler/surface-wgsl.ts';
-import { OBJECT_TO_WORLD_INPUT, WORLD_TO_OBJECT_INPUT } from '../../compiler/ir.ts';
+import {
+  OBJECT_TO_WORLD_INPUT, WORLD_TO_OBJECT_INPUT, OBJECT_POSITION_INPUT,
+  OBJECT_NORMAL_INPUT, OBJECT_TANGENT_INPUT, OBJECT_BITANGENT_INPUT,
+} from '../../compiler/ir.ts';
 import { analyticLightsWgsl } from '../pathtracing/analytic-lights.ts';
 
 const ALL_FEATURES: SurfaceFeatures = { coat: true, transmission: true, dispersion: true, thinFilm: true, lobeKinds: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9] };
@@ -351,7 +354,10 @@ function basisHelper(): string {
  *  by (height - midpoint) * scale sampled from the height map at the vertex UV
  *  (vertex texture fetch); the interpolated normal is kept and the normal map
  *  carries the fine shading relief. */
-function vertexStage(displacement: boolean): string {
+function vertexStage(displacement: boolean, extraInputs: readonly string[]): string {
+  const position = extraInputs.includes(OBJECT_POSITION_INPUT);
+  const tangent = extraInputs.includes(OBJECT_TANGENT_INPUT) || extraInputs.includes(OBJECT_BITANGENT_INPUT);
+  const normal = extraInputs.includes(OBJECT_NORMAL_INPUT) || tangent;
   const dispBindings = displacement
     ? `struct MxDisp { scale: f32, midpoint: f32, pad0: f32, pad1: f32 };
 @group(${IR_FORWARD_DISP_GROUP}) @binding(1) var dispTex: texture_2d<f32>;
@@ -376,7 +382,7 @@ struct MxVertexOut {
   @location(2) texcoord: vec2f,
   @location(3) viewDir: vec3f,
   @location(4) worldTangent: vec4f,
-};
+${position ? '  @location(5) objectPos: vec3f,\n' : ''}${normal ? '  @location(6) objectNormal: vec3f,\n' : ''}${tangent ? '  @location(7) objectTangent: vec4f,\n' : ''}};
 @vertex
 fn ${IR_FORWARD_VERTEX_ENTRY}(vin: MxVertexIn) -> MxVertexOut {
 ${dispOffset}
@@ -392,6 +398,7 @@ ${dispOffset}
   let tangent = (fu.model * vec4f(vin.tangent.xyz, 0.0)).xyz;
   let modelSign = select(1.0, -1.0, determinant(mat3x3f(fu.model[0].xyz, fu.model[1].xyz, fu.model[2].xyz)) < 0.0);
   out.worldTangent = vec4f(tangent / max(length(tangent), 1e-20), vin.tangent.w * modelSign);
+${position ? '  out.objectPos = localPos;\n' : ''}${normal ? '  out.objectNormal = vin.normal;\n' : ''}${tangent ? '  out.objectTangent = vin.tangent;\n' : ''}\
   return out;
 }`;
 }
@@ -412,6 +419,24 @@ function fragmentStage(surfaceEntry: string, primvarNames: readonly string[], ex
     ...(extraInputs.includes(OBJECT_TO_WORLD_INPUT) ? [`  vary.in_${OBJECT_TO_WORLD_INPUT} = fu.model;`] : []),
     ...(extraInputs.includes(WORLD_TO_OBJECT_INPUT) ? [`  vary.in_${WORLD_TO_OBJECT_INPUT} = fu.inverseModel;`] : []),
   ].join('\n');
+  const needsPosition = extraInputs.includes(OBJECT_POSITION_INPUT);
+  const needsTangent = extraInputs.includes(OBJECT_TANGENT_INPUT) || extraInputs.includes(OBJECT_BITANGENT_INPUT);
+  const needsNormal = extraInputs.includes(OBJECT_NORMAL_INPUT) || needsTangent;
+  const objectAssigns = [
+    ...(needsPosition ? [`  vary.in_${OBJECT_POSITION_INPUT} = fin.objectPos;`] : []),
+    ...(needsNormal ? ['  let objectNormal = normalize(fin.objectNormal);'] : []),
+    ...(extraInputs.includes(OBJECT_NORMAL_INPUT) ? [`  vary.in_${OBJECT_NORMAL_INPUT} = objectNormal;`] : []),
+    ...(needsTangent ? [
+      '  let objectFrame = basis(objectNormal);',
+      '  let objectProjected = fin.objectTangent.xyz - objectNormal * dot(objectNormal, fin.objectTangent.xyz);',
+      '  let hasObjectTangent = dot(objectProjected, objectProjected) > 1e-10;',
+      '  let objectTangent = select(objectFrame[0], normalize(objectProjected), hasObjectTangent);',
+    ] : []),
+    ...(extraInputs.includes(OBJECT_TANGENT_INPUT) ? [`  vary.in_${OBJECT_TANGENT_INPUT} = objectTangent;`] : []),
+    ...(extraInputs.includes(OBJECT_BITANGENT_INPUT) ? [
+      `  vary.in_${OBJECT_BITANGENT_INPUT} = select(objectFrame[1], normalize(cross(objectNormal, objectTangent)) * select(1.0, -1.0, fin.objectTangent.w < 0.0), hasObjectTangent);`,
+    ] : []),
+  ].join('\n');
   return `@fragment
 fn ${IR_FORWARD_FRAGMENT_ENTRY}(fin: MxVertexOut, @builtin(front_facing) frontFacing: bool) -> @location(0) vec4f {
   var vary: MxVaryings;
@@ -429,7 +454,7 @@ fn ${IR_FORWARD_FRAGMENT_ENTRY}(fin: MxVertexOut, @builtin(front_facing) frontFa
   vary.bitangent = bitangent;
   vary.viewDir = normalize(fin.viewDir);
   vary.frontFacing = select(-1.0, 1.0, frontFacing);
-  vary.texcoord = fin.texcoord;${primvarAssigns ? '\n' + primvarAssigns : ''}${transformAssigns ? '\n' + transformAssigns : ''}
+  vary.texcoord = fin.texcoord;${primvarAssigns ? '\n' + primvarAssigns : ''}${transformAssigns ? '\n' + transformAssigns : ''}${objectAssigns ? '\n' + objectAssigns : ''}
   let c = ${surfaceEntry}(vary);
   if (c.opacity <= 0.0) { discard; }
   var authoredNormal = mx_closure_shading_normal(c, vary.normal);
@@ -554,7 +579,7 @@ export function assembleIrForwardShader(surface: LayeredSurfaceModule, options: 
     frameBlock(features, rasterQuality),
     ...(options.analyticLights ? [analyticLightsWgsl(IR_FORWARD_FRAME_GROUP, 7, 'arrayLength(&analyticLights) / 7u', 'MX_PI', '1e-4')] : []),
     basisHelper(),
-    vertexStage(displacement),
+    vertexStage(displacement, [...surface.extraInputs.keys()]),
     fragmentStage(surface.entryPoint, [...surface.primvarFields.keys()], [...surface.extraInputs.keys()], features, rasterQuality, options.analyticLights === true),
   ].join('\n\n') + '\n';
   return {

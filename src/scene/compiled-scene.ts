@@ -9,7 +9,7 @@ import { buildSceneFrame, type RasterSurface } from '../render/raster/scene-fram
 import { buildCachedPathTraceScene, PT_MATERIAL_FLOATS, PT_NODE_FLOATS, PT_TRIANGLE_FLOATS, type PathTraceScene } from '../render/pathtracing/scene-buffers.ts';
 import { SCENE_BUFFER_CACHE_VERSION, validatePreparedGeometry } from '../render/pathtracing/scene-buffer-cache.ts';
 import { buildMaterialDispatch, type PtMaterialDispatch } from '../render/pathtracing/material-variant.ts';
-import { OBJECT_TO_WORLD_INPUT, WORLD_TO_OBJECT_INPUT } from '../compiler/ir.ts';
+import { OBJECT_TO_WORLD_INPUT, WORLD_TO_OBJECT_INPUT, OBJECT_GEOMETRY_INPUTS } from '../compiler/ir.ts';
 import { pathTraceSettings } from '../render/pathtracing/scene-settings.ts';
 import type { LoadedUsdScene } from '../render/usd-scene-assets.ts';
 import { loadEnvironment } from '../render/usd-scene-assets.ts';
@@ -36,8 +36,9 @@ interface ExternalImage {
 
 type CompiledImage = ExternalImage | DecodedPixelImage;
 
-const SPACE_TRANSFORM_VERSION = 1;
+const SPACE_TRANSFORM_VERSION = 2;
 const SPACE_TRANSFORM_CATEGORIES = new Set(['transformpoint', 'transformvector', 'transformnormal']);
+const TRANSFORM_GEOMETRY_CATEGORIES = new Set(['position', 'normal', 'tangent', 'bitangent']);
 
 interface CompiledSceneData extends CompiledSceneRuntime {
   layout: { sceneBufferVersion: number; nodeFloats: number; triangleFloats: number; materialFloats: number };
@@ -338,12 +339,30 @@ function fail(detail: string): never {
 
 function validateSpaceTransformVersion(version: unknown, graphs: Iterable<unknown>): void {
   if (version === SPACE_TRANSFORM_VERSION) return;
-  if (version !== undefined) fail('unsupported coordinate transform version');
+  if (version !== undefined && version !== 1) fail('unsupported coordinate transform version');
   for (const graph of graphs) {
     if (!isRecord(graph) || !(graph.nodes instanceof Map)) continue;
+    const nodes = graph.nodes;
     for (const node of graph.nodes.values()) {
       if (isRecord(node) && typeof node.category === 'string' && SPACE_TRANSFORM_CATEGORIES.has(node.category)) {
-        fail('legacy coordinate-transform shaders; re-export the scene or material from its source');
+        if (version === undefined) fail('legacy coordinate-transform shaders; re-export the scene or material from its source');
+        const visited = new Set<string>();
+        const usesGeometry = (id: string): boolean => {
+          if (visited.has(id)) return false;
+          visited.add(id);
+          const upstream = nodes.get(id);
+          if (!isRecord(upstream)) return false;
+          if (typeof upstream.category === 'string' && TRANSFORM_GEOMETRY_CATEGORIES.has(upstream.category)) return true;
+          if (!Array.isArray(upstream.inputs)) return false;
+          return upstream.inputs.some(input => isRecord(input) && isRecord(input.source) &&
+            input.source.kind === 'connection' && typeof input.source.nodeId === 'string' && usesGeometry(input.source.nodeId));
+        };
+        const input = Array.isArray(node.inputs) ? node.inputs.find(candidate =>
+          isRecord(candidate) && candidate.name === 'in') : undefined;
+        if (isRecord(input) && isRecord(input.source) && input.source.kind === 'connection' &&
+            typeof input.source.nodeId === 'string' && usesGeometry(input.source.nodeId)) {
+          fail('legacy coordinate-transform geometry; re-export the scene or material from its source');
+        }
       }
     }
   }
@@ -451,6 +470,7 @@ function validateData(value: unknown): asserts value is CompiledSceneData {
           !uint(range.triangleCount) || range.triangleCount === 0 ||
           !uint(range.materialIndex) || range.materialIndex >= value.pathTrace.materialCount ||
           typeof range.instanceId !== 'string' || !finiteArray(range.model, 16) ||
+          (range.prototypeId !== undefined && typeof range.prototypeId !== 'string') ||
           first + range.triangleCount > value.pathTrace.triangleCount) fail('instance transform range');
       for (let triangle = first; triangle < first + range.triangleCount; triangle++) {
         if (value.pathTrace.triangles[triangle * PT_TRIANGLE_FLOATS + 18] !== range.materialIndex) fail('instance transform material');
@@ -467,6 +487,47 @@ function validateData(value: unknown): asserts value is CompiledSceneData {
       !isRecord(value.dispatch.textureRegistry) || !Array.isArray(value.dispatch.textureRegistry.images)) fail('WGSL dispatch');
   if ((value.dispatch.extraInputs.has(OBJECT_TO_WORLD_INPUT) || value.dispatch.extraInputs.has(WORLD_TO_OBJECT_INPUT))
       && !Array.isArray(ranges)) fail('missing instance transforms');
+  const objectGeometry = value.pathTrace.objectGeometry;
+  if (objectGeometry !== undefined) {
+    if (!(objectGeometry instanceof Map)) fail('object-space geometry');
+    for (const [id, geometry] of objectGeometry) {
+      if (typeof id !== 'string' || !isRecord(geometry) || !(geometry.indices instanceof Uint32Array) ||
+          !(geometry.positions instanceof Float32Array) || geometry.positions.length % 3 !== 0 ||
+          !finiteArray(geometry.positions)) fail('object-space geometry');
+      const positions = geometry.positions;
+      if (geometry.indices.some(index => index * 3 + 2 >= positions.length) ||
+          (geometry.normals !== undefined && (!(geometry.normals instanceof Float32Array) ||
+            !finiteArray(geometry.normals, positions.length))) ||
+          (geometry.tangents !== undefined && (!(geometry.tangents instanceof Float32Array) ||
+            (geometry.tangentComponents !== 3 && geometry.tangentComponents !== 4) ||
+            !finiteArray(geometry.tangents, positions.length / 3 * geometry.tangentComponents))) ||
+          (geometry.tangents === undefined && geometry.tangentComponents !== undefined)) fail('object-space geometry');
+    }
+  }
+  const geometryMaterials = new Set<number>();
+  const objectInputs = [...value.dispatch.extraInputs.keys()].some(name => typeof name === 'string' && OBJECT_GEOMETRY_INPUTS.has(name));
+  if (objectInputs) {
+    for (const variant of value.dispatch.variants) {
+      if (!isRecord(variant) || !uint(variant.index) || !(variant.extraInputs instanceof Map)) fail('WGSL variant');
+      if ([...variant.extraInputs.keys()].some(name => typeof name === 'string' && OBJECT_GEOMETRY_INPUTS.has(name))) {
+        geometryMaterials.add(variant.index);
+      }
+    }
+    if (!geometryMaterials.size) fail('object-space geometry dispatch');
+  } else if (value.dispatch.variants.some(variant => isRecord(variant) && variant.extraInputs instanceof Map &&
+      [...variant.extraInputs.keys()].some(name => typeof name === 'string' && OBJECT_GEOMETRY_INPUTS.has(name)))) {
+    fail('object-space geometry dispatch');
+  }
+  if (geometryMaterials.size) {
+    if (!Array.isArray(ranges)) fail('missing instance transforms');
+    for (const range of ranges) {
+      if (!geometryMaterials.has(range.materialIndex)) continue;
+      const geometry = typeof range.prototypeId === 'string' && objectGeometry instanceof Map
+        ? objectGeometry.get(range.prototypeId) : undefined;
+      if (!isRecord(geometry) || !(geometry.indices instanceof Uint32Array) ||
+          geometry.indices.length !== range.triangleCount * 3) fail('missing object-space geometry');
+    }
+  }
   const graphFromMaterial = (material: unknown): unknown => isRecord(material) ? material.surfaceGraph : undefined;
   const resourceGraphs = (resources: unknown): unknown[] =>
     isRecord(resources) && resources.materials instanceof Map

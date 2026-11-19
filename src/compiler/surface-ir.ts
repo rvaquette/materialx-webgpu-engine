@@ -23,6 +23,10 @@ import {
   BOOL,
   OBJECT_TO_WORLD_INPUT,
   WORLD_TO_OBJECT_INPUT,
+  OBJECT_POSITION_INPUT,
+  OBJECT_NORMAL_INPUT,
+  OBJECT_TANGENT_INPUT,
+  OBJECT_BITANGENT_INPUT,
   closureType,
   IrModuleBuilder,
   irTypeFromMaterialX,
@@ -141,6 +145,8 @@ export function lowerValueInputsToIr(
   const geomMemo = new Map<string, IrRef>();
   const diagnosedFlakeSize = new Set<string>();
   const diagnosedSplit = new Set<string>();
+  const diagnosedTransformGeometry = new Set<string>();
+  let transformDepth = 0;
   let uvRef: IrRef | undefined;
 
   const neutralColor = (): IrRef => builder.constant(COLOR3, [0, 0, 0]);
@@ -490,30 +496,90 @@ export function lowerValueInputsToIr(
     );
   };
 
+  const staticStringInput = (nodeId: string, name: string, fallback = ''): string | undefined => {
+    const node = graph.nodes.get(nodeId)!;
+    let candidate = node.inputs.find(item => item.name === name);
+    let declared = node.nodeDef?.inputs?.find(item => item.name === name)?.value;
+    const seen = new Set<string>();
+    while (!candidate?.parameter && candidate?.source.kind === 'connection') {
+      const { nodeId: upstreamId, output } = candidate.source;
+      const upstream = graph.nodes.get(upstreamId);
+      if (!upstream || seen.has(upstreamId) || upstream.category !== 'constant' || upstream.type !== 'string'
+          || (output !== undefined && output !== 'out')) break;
+      seen.add(upstreamId);
+      candidate = upstream.inputs.find(item => item.name === 'value');
+      declared = upstream.nodeDef?.inputs?.find(item => item.name === 'value')?.value;
+    }
+    if (candidate?.parameter || candidate?.source.kind === 'connection' || candidate?.source.kind === 'interface') {
+      return undefined;
+    }
+    return (candidate?.source.kind === 'value' ? candidate.source.value : declared ?? fallback).trim();
+  };
+
+  const lowerTransformGeometry = (nodeId: string): IrRef => {
+    const node = graph.nodes.get(nodeId)!;
+    const space = staticStringInput(nodeId, 'space', 'object');
+    if (node.category === 'tangent' || node.category === 'bitangent') {
+      const index = node.inputs.find(input => input.name === 'index');
+      const raw = index?.source.kind === 'value' ? index.source.value
+        : index && index.source.kind !== 'default' ? undefined
+          : node.nodeDef?.inputs?.find(input => input.name === 'index')?.value ?? '0';
+      if (index?.parameter || raw === undefined || Number(raw) !== 0) {
+        sink({
+          level: 'warning',
+          message: `Geometric node '${nodeId}' supports tangent index 0 only; using index 0.`,
+          detail: { nodeId, index: raw },
+        });
+      }
+    }
+    if (space !== 'object' && space !== 'model' && space !== 'world') {
+      if (!diagnosedTransformGeometry.has(nodeId)) {
+        diagnosedTransformGeometry.add(nodeId);
+        sink({
+          level: 'warning',
+          message: `Geometric node '${nodeId}' has unsupported or unresolved space '${space ?? '<dynamic>'}'; using world-space data.`,
+          detail: { nodeId, space },
+        });
+      }
+      return lowerCall(nodeId);
+    }
+    const type = vector(3, 'float', 'vector');
+    if (space === 'world' && node.category === 'position') {
+      return builder.add({ kind: 'input', type, name: 'position' });
+    }
+    const names: Record<string, string> = {
+      position: OBJECT_POSITION_INPUT,
+      normal: OBJECT_NORMAL_INPUT,
+      tangent: OBJECT_TANGENT_INPUT,
+      bitangent: OBJECT_BITANGENT_INPUT,
+    };
+    const source = builder.add({ kind: 'input', type, name: names[node.category]! });
+    if (space !== 'world') return source;
+    const normal = node.category === 'normal';
+    const mat = builder.add({ kind: 'input', type: matrix(4), name: normal ? WORLD_TO_OBJECT_INPUT : OBJECT_TO_WORLD_INPUT });
+    const transformed = callRef(normal ? 'transformnormal' : 'transformvector', type, { in: source, mat });
+    return normal ? transformed : callRef('normalize', type, { in: transformed });
+  };
+
   const lowerSpaceTransform = (nodeId: string): IrRef => {
     const node = graph.nodes.get(nodeId)!;
     const type = vector(3, 'float', 'vector');
     const input = node.inputs.find(candidate => candidate.name === 'in');
     const defaultInput = node.nodeDef?.inputs?.find(candidate => candidate.name === 'in')?.value;
     const fallback = node.category === 'transformnormal' ? '0,0,1' : '0,0,0';
-    const source = (input ? lowerInput(input) : undefined)
-      ?? constOfIrType(builder, type, parseNumbers(defaultInput ?? fallback));
+    transformDepth++;
+    let source: IrRef;
+    try {
+      source = (input ? lowerInput(input) : undefined)
+        ?? constOfIrType(builder, type, parseNumbers(defaultInput ?? fallback));
+    } finally {
+      transformDepth--;
+    }
     const namedArgs: Record<string, IrRef> = { in: coerce(source, type) };
 
     const space = (name: string): string | undefined => {
-      let candidate = node.inputs.find(item => item.name === name);
-      let declared = node.nodeDef?.inputs?.find(item => item.name === name)?.value;
-      const seen = new Set<string>();
-      while (!candidate?.parameter && candidate?.source.kind === 'connection') {
-        const { nodeId: upstreamId, output } = candidate.source;
-        const upstream = graph.nodes.get(upstreamId);
-        if (!upstream || seen.has(upstreamId) || upstream.category !== 'constant' || upstream.type !== 'string'
-            || (output !== undefined && output !== 'out')) break;
-        seen.add(upstreamId);
-        candidate = upstream.inputs.find(item => item.name === 'value');
-        declared = upstream.nodeDef?.inputs?.find(item => item.name === 'value')?.value;
-      }
-      if (candidate?.parameter || candidate?.source.kind === 'connection' || candidate?.source.kind === 'interface') {
+      const result = staticStringInput(nodeId, name);
+      if (result === undefined) {
         sink({
           level: 'warning',
           message: `${node.category} '${nodeId}' has an unresolved ${name}; using the MaterialX identity fallback.`,
@@ -521,7 +587,6 @@ export function lowerValueInputsToIr(
         });
         return undefined;
       }
-      const result = (candidate?.source.kind === 'value' ? candidate.source.value : declared ?? '').trim();
       if (result !== '' && result !== 'object' && result !== 'model' && result !== 'world') {
         sink({
           level: 'warning',
@@ -545,7 +610,7 @@ export function lowerValueInputsToIr(
   };
 
   function lowerNode(nodeId: string, output?: string): IrRef {
-    const key = JSON.stringify([nodeId, output]);
+    const key = JSON.stringify([nodeId, output, transformDepth > 0]);
     const memo = nodeMemo.get(key);
     if (memo !== undefined) return memo;
     const node = graph.nodes.get(nodeId);
@@ -658,6 +723,8 @@ export function lowerValueInputsToIr(
       ref = lowerConvert(nodeId);
     } else if (node.category === 'transformpoint' || node.category === 'transformvector' || node.category === 'transformnormal') {
       ref = lowerSpaceTransform(nodeId);
+    } else if (transformDepth > 0 && ['position', 'normal', 'tangent', 'bitangent'].includes(node.category)) {
+      ref = lowerTransformGeometry(nodeId);
     } else if (getNodeLowering(node.category)) {
       ref = lowerCall(nodeId, output);
     } else {
