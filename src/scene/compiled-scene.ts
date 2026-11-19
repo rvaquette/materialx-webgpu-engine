@@ -36,7 +36,7 @@ interface ExternalImage {
 
 type CompiledImage = ExternalImage | DecodedPixelImage;
 
-const SPACE_TRANSFORM_VERSION = 2;
+const SPACE_TRANSFORM_VERSION = 4;
 const SPACE_TRANSFORM_CATEGORIES = new Set(['transformpoint', 'transformvector', 'transformnormal']);
 const TRANSFORM_GEOMETRY_CATEGORIES = new Set(['position', 'normal', 'tangent', 'bitangent']);
 
@@ -339,11 +339,18 @@ function fail(detail: string): never {
 
 function validateSpaceTransformVersion(version: unknown, graphs: Iterable<unknown>): void {
   if (version === SPACE_TRANSFORM_VERSION) return;
-  if (version !== undefined && version !== 1) fail('unsupported coordinate transform version');
+  if (version !== undefined && version !== 1 && version !== 2 && version !== 3) fail('unsupported coordinate transform version');
   for (const graph of graphs) {
     if (!isRecord(graph) || !(graph.nodes instanceof Map)) continue;
     const nodes = graph.nodes;
     for (const node of graph.nodes.values()) {
+      if (isRecord(node) && node.category === 'triplanarprojection') {
+        fail('legacy triplanarprojection shaders; re-export the scene or material from its source');
+      }
+      if (version !== 3 && isRecord(node) && node.category === 'flake3d') {
+        fail('legacy flake3d shaders; re-export the scene or material from its source');
+      }
+      if (version === 2 || version === 3) continue;
       if (isRecord(node) && typeof node.category === 'string' && SPACE_TRANSFORM_CATEGORIES.has(node.category)) {
         if (version === undefined) fail('legacy coordinate-transform shaders; re-export the scene or material from its source');
         const visited = new Set<string>();

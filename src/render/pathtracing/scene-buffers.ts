@@ -341,8 +341,9 @@ export function buildPathTraceScene(
   const geometryMaterials = new Set<number>();
   for (const variant of variantSources) {
     const categories = new Set([...variant.graph.nodes.values()].map(node => node.category));
-    if (![...categories].some(category => ['transformpoint', 'transformvector', 'transformnormal'].includes(category))
-        || ![...categories].some(category => ['position', 'normal', 'tangent', 'bitangent'].includes(category))) continue;
+    if (!categories.has('flake3d') && !categories.has('triplanarprojection')
+        && (![...categories].some(category => ['transformpoint', 'transformvector', 'transformnormal'].includes(category))
+        || ![...categories].some(category => ['position', 'normal', 'tangent', 'bitangent'].includes(category)))) continue;
     const module = resources.materials.get(materialKeys[variant.materialIndex]!)?.surfaceModule;
     const names = [
       ...(module?.extraInputs.keys() ?? []),

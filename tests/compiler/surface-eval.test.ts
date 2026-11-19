@@ -54,6 +54,19 @@ function constantGraph(): ResolvedGraph {
 const diffuse = (c: ReturnType<typeof surfaceGraphToLayered>) => c.lobes.find((l) => l.kind === 'burley_diffuse')!;
 
 describe('evaluateSurfaceToLayered (T057i3)', () => {
+  it.each(['flake2d', 'flake3d'])('does not silently replace an invalid %s size', category => {
+    const graph = brickGraph();
+    graph.nodes.get('SR')!.inputs[0]!.source = { kind: 'connection', nodeId: 'brick', output: 'flakenormal' };
+    graph.nodes.set('brick', {
+      id: 'brick', category, type: 'multioutput', provenance: { namePath: '/mat/brick' },
+      inputs: [
+        { name: 'size', type: 'float', source: { kind: 'value', type: 'float', value: '0' }, provenance: { namePath: '/mat/brick/size' } },
+        { name: 'position', type: 'vector3', source: { kind: 'value', type: 'vector3', value: '0, 0, 0' }, provenance: { namePath: '/mat/brick/position' } },
+      ],
+    });
+    expect(() => evaluateSurfaceToLayered(graph, resolveSurface(graph)!)).toThrow(`${category} size must be finite and nonzero`);
+  });
+
   it('keeps a connected LamaDiffuse closure intact through CPU preparation', () => {
     const root: ResolvedNode = {
       id: 'SR', category: 'surface', type: 'surfaceshader',

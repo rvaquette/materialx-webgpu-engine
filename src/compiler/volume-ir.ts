@@ -33,6 +33,10 @@ export function lowerVolumeInputsToIr(volume: ResolvedVolume, builder: IrModuleB
             (OBJECT_GEOMETRY_INPUTS.has(expr.name) || expr.name === OBJECT_TO_WORLD_INPUT || expr.name === WORLD_TO_OBJECT_INPUT)) {
           throw new Error(`Volume input '${name}' needs per-instance geometric data; only world-space fields are supported.`);
         }
+        if (!existing.has(ref) && expr.kind === 'call' && expr.op === 'flake3d_flakenormal' &&
+            ['normal', 'tangent', 'bitangent'].some(component => expr.namedArgs?.[component] === undefined)) {
+          throw new Error(`Volume input '${name}' needs a surface tangent frame; provide all flake3d frame inputs explicitly.`);
+        }
       }
       inputs[name] = lowered.get(name)!;
       continue;

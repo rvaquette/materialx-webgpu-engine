@@ -553,7 +553,7 @@ fn mx_materialx_cellnoise3(p: vec3f) -> f32 {
 `;
 
 // MaterialX stdlib flake2d uses the same 3D flake distribution with z = 0.
-const FLAKE_PRELUDE = `struct MxFlake2dResult {
+const FLAKE_PRELUDE = `struct MxFlakeResult {
   id: i32,
   rand: f32,
   presence: f32,
@@ -588,13 +588,13 @@ fn mx_flake_rotate(p: vec3f, random: vec3f) -> vec3f {
     vec3f(v.z * x, v.z * y, 1.0 - z)
   ) * p;
 }
-fn mx_flake2d(size: f32, roughness: f32, coverage: f32, uv: vec2f, normal: vec3f, tangent: vec3f, bitangent: vec3f) -> MxFlake2dResult {
+fn mx_flake3d(size: f32, roughness: f32, coverage: f32, coordinate: vec3f, normal: vec3f, tangent: vec3f, bitangent: vec3f) -> MxFlakeResult {
   let density = clamp(coverage, 0.0, 1.0);
   let d2 = density * density;
   let probability = (-26.19771808 * d2 + 26.39663835 * density) /
     (85.53857017 * d2 * density - 102.35069432 * d2 - 101.42634862 * density + 118.45082288);
   let diameter = 1.5 / sqrt(3.0);
-  let position = vec3f(uv, 0.0) / size;
+  let position = coordinate / size;
   let base = vec3i(floor(position));
   var priority = 0.0;
   var selected = vec3i(0);
@@ -615,14 +615,17 @@ fn mx_flake2d(size: f32, roughness: f32, coverage: f32, uv: vec2f, normal: vec3f
       }
     }
   }
-  if (priority <= 0.0) { return MxFlake2dResult(0, 0.0, 0.0, normal); }
+  if (priority <= 0.0) { return MxFlakeResult(0, 0.0, 0.0, normal); }
   let random = mx_flake_hash4(selected, 2u, 5u);
   let phi = 6.283185307179586 * random.x;
   let tanTheta = roughness * roughness * sqrt(random.y) / sqrt(1.0 - random.y);
   let sinTheta = tanTheta / sqrt(1.0 + tanTheta * tanTheta);
   let cosTheta = sqrt(1.0 - sinTheta * sinTheta);
   let flakeNormal = normalize(tangent * cos(phi) * sinTheta + bitangent * sin(phi) * sinTheta + normal * cosTheta);
-  return MxFlake2dResult(i32(random.z * 16777215.0), random.z, priority, flakeNormal);
+  return MxFlakeResult(i32(random.z * 16777215.0), random.z, priority, flakeNormal);
+}
+fn mx_flake2d(size: f32, roughness: f32, coverage: f32, uv: vec2f, normal: vec3f, tangent: vec3f, bitangent: vec3f) -> MxFlakeResult {
+  return mx_flake3d(size, roughness, coverage, vec3f(uv, 0.0), normal, tangent, bitangent);
 }
 `;
 
@@ -1473,12 +1476,16 @@ const LOWERINGS: readonly NodeLowering[] = [
     `${ctx.wgslType(type)}(mx_cellnoise2(${inp.named('texcoord', ctx.varyings.texcoord, 0)}))`, [MATERIALX_NOISE_HASH_PRELUDE, CELL_NOISE_PRELUDE]),
   expr('cellnoise3d', (inp, type, ctx) =>
     `${ctx.wgslType(type)}(mx_materialx_cellnoise3(${inp.named('position', ctx.varyings.position, 0)}))`, [MATERIALX_NOISE_HASH_PRELUDE, CELL_NOISE_PRELUDE]),
-  ...(['id', 'rand', 'presence', 'flakenormal'] as const).map((output) =>
-    expr(`flake2d_${output}`, (inp, _type, ctx) =>
-      `mx_flake2d(${inp.named('size', '0.01')}, ${inp.named('roughness', '0.1')}, ${inp.named('coverage', '0.5')}, `
-      + `${inp.named('texcoord', ctx.varyings.texcoord)}, ${inp.named('normal', ctx.varyings.normal)}, `
-      + `${inp.named('tangent', ctx.varyings.tangent)}, ${inp.named('bitangent', ctx.varyings.bitangent)}).${output === 'flakenormal' ? 'normal' : output}`,
-    [MATERIALX_NOISE_HASH_PRELUDE, WORLEY_PRELUDE, FLAKE_PRELUDE])),
+  ...(['flake2d', 'flake3d'] as const).flatMap((category) =>
+    (['id', 'rand', 'presence', 'flakenormal'] as const).map((output) =>
+      expr(`${category}_${output}`, (inp, _type, ctx) => {
+        const coordinate = category === 'flake2d'
+          ? inp.named('texcoord', ctx.varyings.texcoord, 3)
+          : inp.named('position', undefined, 3);
+        return `mx_${category}(${inp.named('size', '0.01', 0)}, ${inp.named('roughness', '0.1', 1)}, ${inp.named('coverage', '0.5', 2)}, `
+          + `${coordinate}, ${inp.named('normal', ctx.varyings.normal, 4)}, `
+          + `${inp.named('tangent', ctx.varyings.tangent, 5)}, ${inp.named('bitangent', ctx.varyings.bitangent, 6)}).${output === 'flakenormal' ? 'normal' : output}`;
+      }, [MATERIALX_NOISE_HASH_PRELUDE, WORLEY_PRELUDE, FLAKE_PRELUDE]))),
   expr('randomfloat', (inp) => {
     const value = `f32(${inp.named('in', '0.0', 0)})`;
     const inputType = inp.typeOf('in', 0);

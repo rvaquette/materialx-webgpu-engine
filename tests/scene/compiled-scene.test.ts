@@ -143,6 +143,36 @@ async function geometryTransformFixture(): Promise<LoadedUsdScene> {
   return loaded;
 }
 
+async function flake3dFixture(): Promise<LoadedUsdScene> {
+  const loaded = await fixture();
+  const material = [...loaded.resources.materials.values()][0]!;
+  const originalGraph = material.surfaceGraph;
+  const root = originalGraph?.nodes.get('s');
+  if (!originalGraph || !root) throw new Error('Missing fixture graph.');
+  const graph: ResolvedGraph = {
+    ...originalGraph,
+    nodes: new Map([
+      ['s', { ...root, inputs: [{
+        name: 'base', type: 'float', source: { kind: 'connection', nodeId: 'flake', output: 'presence' },
+        provenance: { namePath: '/s/base' },
+      }] }],
+      ['flake', {
+        id: 'flake', category: 'flake3d', type: 'multioutput', provenance: { namePath: '/flake' },
+        inputs: [
+          { name: 'size', type: 'float', source: { kind: 'value', type: 'float', value: '0.1' }, provenance: { namePath: '/flake/size' } },
+          { name: 'coverage', type: 'float', source: { kind: 'value', type: 'float', value: '1' }, provenance: { namePath: '/flake/coverage' } },
+        ],
+      }],
+    ]),
+  };
+  const surface = resolveSurface(graph);
+  if (!surface) throw new Error('flake3d fixture failed.');
+  material.surfaceGraph = graph;
+  material.resolvedSurface = surface;
+  material.surfaceModule = emitLayeredSurface(graph, surface);
+  return loaded;
+}
+
 describe('compiled scene binary codec', () => {
   it('resolves root-relative original assets beneath the deployed application base', () => {
     expect(compiledSceneAssetUrl(
@@ -461,8 +491,14 @@ over "World" {
     expect(pathTrace.objectGeometry?.get(range.prototypeId!)?.indices.length).toBe(range.triangleCount * 3);
 
     const data = await decodeCompiledScene(scene.manifest, readPackage(scene)) as {
-      spaceTransformVersion?: number; pathTrace: PathTraceScene;
+      spaceTransformVersion?: number; pathTrace: PathTraceScene; dispatch: ReturnType<typeof buildMaterialDispatch>;
     };
+    const objectPositionType = data.dispatch.extraInputs.get(OBJECT_POSITION_INPUT)!;
+    data.dispatch.extraInputs.delete(OBJECT_POSITION_INPUT);
+    const inconsistent = await encodeCompiledScene(data, loaded.entry);
+    await expect(loadCompiledScene('https://example.test/scenes/compiled/scene.json', vi.fn(), packageFetch(inconsistent)))
+      .rejects.toThrow('object-space geometry dispatch');
+    data.dispatch.extraInputs.set(OBJECT_POSITION_INPUT, objectPositionType);
     data.spaceTransformVersion = 1;
     const old = await encodeCompiledScene(data, loaded.entry);
     await expect(loadCompiledScene('https://example.test/scenes/compiled/scene.json', vi.fn(), packageFetch(old)))
@@ -472,6 +508,27 @@ over "World" {
     const damaged = await encodeCompiledScene(data, loaded.entry);
     await expect(loadCompiledScene('https://example.test/scenes/compiled/scene.json', vi.fn(), packageFetch(damaged)))
       .rejects.toThrow('missing object-space geometry');
+  });
+
+  it('round trips flake3d geometry and rejects older stale scene and material shaders', async () => {
+    const loaded = await flake3dFixture();
+    const scene = await exportCompiledScene(loaded);
+    const restored = await loadCompiledScene('https://example.test/scenes/compiled/scene.json', vi.fn(), packageFetch(scene));
+    expect(restored.compiled!.pathTrace.objectGeometry?.size).toBe(1);
+    expect(restored.compiled!.dispatch.extraInputs.has(OBJECT_POSITION_INPUT)).toBe(true);
+
+    const material = await exportCompiledMaterial(loaded, loaded.resources.instances[0]!.primPath);
+    const restoredMaterial = await loadCompiledMaterial('https://example.test/scenes/compiled/scene.json', packageFetch(material));
+    expect(restoredMaterial.material.surfaceModule?.extraInputs.has(OBJECT_POSITION_INPUT)).toBe(true);
+    for (const [encoded, load] of [
+      [scene, (old: CompiledScenePackage) => loadCompiledScene('https://example.test/scenes/compiled/scene.json', vi.fn(), packageFetch(old))],
+      [material, (old: CompiledScenePackage) => loadCompiledMaterial('https://example.test/scenes/compiled/scene.json', packageFetch(old))],
+    ] as const) {
+      const data = await decodeCompiledScene(encoded.manifest, readPackage(encoded)) as { spaceTransformVersion?: number };
+      data.spaceTransformVersion = 2;
+      const old = await encodeCompiledScene(data, loaded.entry);
+      await expect(load(old)).rejects.toThrow('legacy flake3d shaders; re-export');
+    }
   });
 
   it('uses the baked displaced object geometry in transformed attributes', async () => {
@@ -526,6 +583,16 @@ over "World" {
       await expect(loadCompiledScene('https://example.test/scenes/compiled/scene.json', vi.fn(), packageFetch(old)))
         .resolves.toBeDefined();
     }
+  });
+
+  it('retains version 2 scenes with transformed geometric inputs', async () => {
+    const loaded = await geometryTransformFixture();
+    const scene = await exportCompiledScene(loaded);
+    const data = await decodeCompiledScene(scene.manifest, readPackage(scene)) as { spaceTransformVersion?: number };
+    data.spaceTransformVersion = 2;
+    const old = await encodeCompiledScene(data, loaded.entry);
+    await expect(loadCompiledScene('https://example.test/scenes/compiled/scene.json', vi.fn(), packageFetch(old)))
+      .resolves.toBeDefined();
   });
 
   it.each(['missing', 'gap', 'empty', 'non-finite'])(

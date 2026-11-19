@@ -49,6 +49,33 @@ it('rejects instance-dependent volume transforms without rejecting unrelated sur
   expect(() => lowerVolumeInputsToIr(volume, builder, graph('world', 'world', false))).not.toThrow();
 });
 
+it('rejects implicit object-space flake3d in a volume but accepts an explicit position', () => {
+  const volume: ResolvedVolume = { nodeId: 'v', inputs: new Map([
+    ['anisotropy', { name: 'anisotropy', type: 'float', source: { kind: 'connection', nodeId: 'flake', output: 'presence' } }],
+  ]) };
+  const flake: ResolvedNode = {
+    id: 'flake', category: 'flake3d', type: 'multioutput', inputs: [], provenance: { namePath: '/flake' },
+  };
+  const graph: ResolvedGraph = { terminals: [], nodes: new Map([['flake', flake]]) };
+  expect(() => lowerVolumeInputsToIr(volume, new IrModuleBuilder(), graph)).toThrow('needs per-instance geometric data');
+  flake.inputs.push({
+    name: 'position', type: 'vector3', source: { kind: 'value', type: 'vector3', value: '0.1, 0.2, 0.3' },
+    provenance: { namePath: '/flake/position' },
+  });
+  expect(() => lowerVolumeInputsToIr(volume, new IrModuleBuilder(), graph)).not.toThrow();
+
+  const normalVolume: ResolvedVolume = { ...volume, inputs: new Map([
+    ['absorption', { name: 'absorption', type: 'vector3', source: { kind: 'connection', nodeId: 'flake', output: 'flakenormal' } }],
+  ]) };
+  expect(() => lowerVolumeInputsToIr(normalVolume, new IrModuleBuilder(), graph)).toThrow('needs a surface tangent frame');
+  for (const [name, raw] of [['normal', '0, 0, 1'], ['tangent', '1, 0, 0'], ['bitangent', '0, 1, 0']] as const) {
+    flake.inputs.push({
+      name, type: 'vector3', source: { kind: 'value', type: 'vector3', value: raw }, provenance: { namePath: `/flake/${name}` },
+    });
+  }
+  expect(() => lowerVolumeInputsToIr(normalVolume, new IrModuleBuilder(), graph)).not.toThrow();
+});
+
 it('bakes a spatial field, interpolates all coefficients and bounds extinction', () => {
   const ir = spatialIr();
   expect(isSpatialVolumeIr(ir)).toBe(true);

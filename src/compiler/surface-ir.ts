@@ -47,7 +47,7 @@ export interface LoweredSurfaceInputs {
 }
 
 const TEXTURE_CATEGORIES: ReadonlySet<string> = new Set(['image', 'tiledimage', 'hextiledimage']);
-const NODEGRAPH_TEXTURE_CATEGORIES: ReadonlySet<string> = new Set(['gltf_image', 'gltf_colorimage', 'gltf_normalmap', 'gltf_iridescence_thickness', 'hextilednormalmap', 'latlongimage']);
+const NODEGRAPH_TEXTURE_CATEGORIES: ReadonlySet<string> = new Set(['gltf_image', 'gltf_colorimage', 'gltf_normalmap', 'gltf_iridescence_thickness', 'hextilednormalmap', 'latlongimage', 'triplanarprojection']);
 
 /** Upstream node categories this lowering emits (registry + special-cased nodes). */
 export const SURFACE_IR_UPSTREAM: ReadonlySet<string> = new Set([
@@ -57,6 +57,7 @@ export const SURFACE_IR_UPSTREAM: ReadonlySet<string> = new Set([
   'convert',
   'geompropvalue',
   'flake2d',
+  'flake3d',
   'separate2',
   'separate3',
   'separate4',
@@ -144,10 +145,29 @@ export function lowerValueInputsToIr(
   const nodeMemo = new Map<string, IrRef>();
   const geomMemo = new Map<string, IrRef>();
   const diagnosedFlakeSize = new Set<string>();
+  const diagnosedGeometryDefaults = new Set<string>();
   const diagnosedSplit = new Set<string>();
   const diagnosedTransformGeometry = new Set<string>();
   let transformDepth = 0;
   let uvRef: IrRef | undefined;
+
+  const resourceIdentifier = (name: string): string =>
+    name.replace(/[^A-Za-z0-9_]/g, '_').replace(/^([0-9])/, '_$1');
+  const reservedResources = new Set([...graph.nodes.keys()].flatMap(name => [
+    resourceIdentifier(name), resourceIdentifier(`${name}_udim_index`),
+  ]));
+  const triplanarResources = new Map<string, Record<'x' | 'y' | 'z', string>>();
+  for (const id of [...graph.nodes.keys()].filter(key => graph.nodes.get(key)?.category === 'triplanarprojection').sort()) {
+    const names: Record<'x' | 'y' | 'z', string> = { x: '', y: '', z: '' };
+    for (const axis of ['x', 'y', 'z'] as const) {
+      let name = `${id}__triplanar_${axis}`;
+      while (reservedResources.has(resourceIdentifier(name)) || reservedResources.has(resourceIdentifier(`${name}_udim_index`))) name += '_';
+      reservedResources.add(resourceIdentifier(name));
+      reservedResources.add(resourceIdentifier(`${name}_udim_index`));
+      names[axis] = name;
+    }
+    triplanarResources.set(id, names);
+  }
 
   const neutralColor = (): IrRef => builder.constant(COLOR3, [0, 0, 0]);
 
@@ -325,10 +345,138 @@ export function lowerValueInputsToIr(
     return ref !== undefined ? coerce(ref, type) : undefined;
   };
 
+  const geometryDefault = (nodeId: string, name: 'position' | 'normal', ref: IrRef | undefined): IrRef => {
+    const node = graph.nodes.get(nodeId)!;
+    const authored = node.inputs.find(input => input.name === name);
+    const objectProp = name === 'position' ? 'Pobject' : 'Nobject';
+    const worldProp = name === 'position' ? 'Pworld' : 'Nworld';
+    const geomprop = node.nodeDef?.inputs?.find(input => input.name === name)?.geomprop ?? objectProp;
+    const key = JSON.stringify([nodeId, name]);
+    if ((authored?.source.kind === 'interface' || (ref === undefined && geomprop !== objectProp && geomprop !== worldProp))
+        && !diagnosedGeometryDefaults.has(key)) {
+      diagnosedGeometryDefaults.add(key);
+      const fallback = ref === undefined ? `${geomprop === worldProp ? 'world' : 'object'}-space` : 'declared';
+      sink({
+        level: 'warning',
+        message: `${node.category} '${nodeId}' has an unsupported or unresolved ${name}; using its ${fallback} default.`,
+        detail: { nodeId, geomprop },
+      });
+    }
+    return ref ?? builder.add({
+      kind: 'input', type: vector(3, 'float', 'vector'),
+      name: geomprop === worldProp ? name : name === 'position' ? OBJECT_POSITION_INPUT : OBJECT_NORMAL_INPUT,
+    });
+  };
+
   // Nodegraph-backed texture nodes lower to texture samples and small IR graphs.
   const lowerNodegraphTexture = (nodeId: string, output?: string): IrRef => {
     const node = graph.nodes.get(nodeId)!;
     switch (node.category) {
+      case 'triplanarprojection': {
+        const type = irTypeFromMaterialX(node.type);
+        if (!type || !(type.kind === 'scalar' && type.scalar === 'float'
+            || type.kind === 'vector' && type.scalar === 'float')) {
+          sink({ level: 'warning', message: `Unsupported triplanarprojection type '${node.type}' on '${nodeId}'; using zero.`, detail: { nodeId } });
+          return neutralColor();
+        }
+        const input = (name: string, inputType: IrType, fallback: readonly number[]): IrRef => {
+          const authored = authoredRef(nodeId, name, inputType);
+          if (authored !== undefined) return authored;
+          const declared = node.nodeDef?.inputs?.find(candidate => candidate.name === name)?.value;
+          return constOfIrType(builder, inputType, declared !== undefined ? parseNumbers(declared) : fallback);
+        };
+        const fallback = input('default', type, [0]);
+        const rawFilter = staticStringInput(nodeId, 'filtertype', 'linear');
+        const filter = rawFilter === 'closest' || rawFilter === 'linear' || rawFilter === 'cubic' ? rawFilter : 'linear';
+        if (rawFilter === undefined || rawFilter !== filter) {
+          sink({ level: 'warning', message: `triplanarprojection '${nodeId}' has an unsupported or unresolved filter; using linear.`, detail: { nodeId, filter: rawFilter } });
+        } else if (filter === 'cubic') {
+          sink({ level: 'warning', message: `triplanarprojection '${nodeId}' approximates cubic filtering with linear filtering.`, detail: { nodeId } });
+        }
+        const axes = ['x', 'y', 'z'] as const;
+        const files = new Map<typeof axes[number], string>();
+        for (const axis of axes) {
+          const layer = staticStringInput(nodeId, `layer${axis}`);
+          if (layer === undefined || layer !== '') {
+            sink({ level: 'warning', message: `triplanarprojection '${nodeId}' cannot select layer${axis}; using the base image.`, detail: { nodeId, axis, layer } });
+          }
+          const file = staticStringInput(nodeId, `file${axis}`);
+          if (file === undefined || /(?:\{(?:frame|0[1-9]\d*frame)\}|%7b|\[[A-Za-z_][A-Za-z0-9_]*\]|%5b)/i.test(file)) {
+            sink({ level: 'warning', message: `triplanarprojection '${nodeId}' has an unsupported or unresolved file${axis}; using its default.`, detail: { nodeId, axis } });
+          } else if (file !== '') {
+            files.set(axis, file);
+          }
+        }
+        if (files.size === 0) return fallback;
+
+        const vec2 = vector(2, 'float', 'texcoord');
+        const vec3 = vector(3, 'float', 'vector');
+        const geometry = (name: 'position' | 'normal'): IrRef => {
+          transformDepth++;
+          let authored: IrRef | undefined;
+          try { authored = authoredRef(nodeId, name, vec3); } finally { transformDepth--; }
+          const declared = node.nodeDef?.inputs?.find(candidate => candidate.name === name)?.value;
+          return geometryDefault(nodeId, name, authored ?? (declared === undefined
+            ? undefined : constOfIrType(builder, vec3, parseNumbers(declared))));
+        };
+        const position = geometry('position');
+        const normal = geometry('normal');
+        const component = (source: IrRef, pattern: string): IrRef =>
+          builder.add({ kind: 'swizzle', type: FLOAT, source, pattern });
+        const combine = (a: IrRef, b: IrRef): IrRef => callRef('combine2', vec2, { in1: a, in2: b });
+        const x = component(position, 'x');
+        const y = component(position, 'y');
+        const z = component(position, 'z');
+        const upaxis = input('upaxis', INT, [2]);
+        const choose = (a: IrRef, b: IrRef, c: IrRef): IrRef =>
+          callRef('switch', vec2, { in1: a, in2: b, in3: c, which: upaxis });
+        const xy = combine(x, y);
+        const xz = combine(x, z);
+        const yz = combine(y, z);
+        const coordinates = {
+          x: choose(combine(z, y), combine(z, y), yz),
+          y: choose(combine(z, x), xz, xz),
+          z: choose(combine(callRef('multiply', FLOAT, { in1: y, in2: builder.constant(FLOAT, -1) }), x), xy, xy),
+        };
+        const names = triplanarResources.get(nodeId)!;
+        const samples = axes.map(axis => {
+          const file = files.get(axis);
+          if (file === undefined) return fallback;
+          const udim = AssetResolver.hasUdim(file);
+          const texture = names[axis];
+          const sampler = udim ? names.y : names.x;
+          const source = node.inputs.find(candidate => candidate.name === `file${axis}`);
+          builder.declareTexture({
+            name: texture, valueType: type, fileRef: file,
+            ...(source?.colorSpace !== undefined ? { colorSpace: source.colorSpace } : {}),
+          });
+          builder.declareSampler({
+            name: sampler, addressU: udim ? 'clamp' : 'periodic', addressV: udim ? 'clamp' : 'periodic', filter,
+          });
+          const uv = udim ? coordinates[axis] : callRef('add', vec2, {
+            in1: callRef('multiply', vec2, { in1: coordinates[axis], in2: builder.constant(vec2, [1, -1]) }),
+            in2: builder.constant(vec2, [0, 1]),
+          });
+          return builder.add({
+            kind: 'texture', type, texture, uv, sampler, ...(udim ? { fallback } : {}),
+          });
+        });
+        const ones = builder.constant(vec3, [1, 1, 1]);
+        const absolute = callRef('absval', vec3, { in: callRef('normalize', vec3, { in: normal }) });
+        const sum = (value: IrRef): IrRef => callRef('dotproduct', FLOAT, { in1: value, in2: ones });
+        const weights = callRef('divide', vec3, { in1: absolute, in2: sum(absolute) });
+        const blend = callRef('clamp', FLOAT, { in: input('blend', FLOAT, [1]), low: builder.constant(FLOAT, 0.03) });
+        const power = callRef('power', vec3, {
+          in1: weights, in2: callRef('divide', FLOAT, { in1: builder.constant(FLOAT, 1), in2: blend }),
+        });
+        const normalized = callRef('divide', vec3, { in1: power, in2: sum(power) });
+        const weighted = samples.map((sample, index) => callRef('multiply', type, {
+          in1: sample, in2: component(normalized, axes[index]!),
+        }));
+        return callRef('add', type, {
+          in1: callRef('add', type, { in1: weighted[0]!, in2: weighted[1]! }), in2: weighted[2]!,
+        });
+      }
       case 'latlongimage': {
         const file = node.inputs.find((input) => input.name === 'file');
         if (file && file.source.kind !== 'value' && file.source.kind !== 'default') {
@@ -488,6 +636,7 @@ export function lowerValueInputsToIr(
         namedArgs[input.name] = constOfIrType(builder, inputType, parseNumbers(input.value));
       }
     }
+    if (node.category === 'flake3d') namedArgs.position = geometryDefault(nodeId, 'position', namedArgs.position);
     const op = override?.op ?? (node.category === 'artistic_ior' && output === 'extinction' ? 'artistic_ior_extinction' : node.category);
     return builder.add(
       node.nodeDef !== undefined
@@ -504,7 +653,7 @@ export function lowerValueInputsToIr(
     while (!candidate?.parameter && candidate?.source.kind === 'connection') {
       const { nodeId: upstreamId, output } = candidate.source;
       const upstream = graph.nodes.get(upstreamId);
-      if (!upstream || seen.has(upstreamId) || upstream.category !== 'constant' || upstream.type !== 'string'
+      if (!upstream || seen.has(upstreamId) || upstream.category !== 'constant' || !['string', 'filename'].includes(upstream.type)
           || (output !== undefined && output !== 'out')) break;
       seen.add(upstreamId);
       candidate = upstream.inputs.find(item => item.name === 'value');
@@ -676,7 +825,7 @@ export function lowerValueInputsToIr(
           detail: { nodeId },
         });
       }
-    } else if (node.category === 'flake2d') {
+    } else if (node.category === 'flake2d' || node.category === 'flake3d') {
       const size = node.inputs.find((input) => input.name === 'size');
       const rawSize = size?.source.kind === 'value' ? size.source.value
         : !size || size.source.kind === 'default' ? node.nodeDef?.inputs?.find((input) => input.name === 'size')?.value : undefined;
@@ -685,17 +834,17 @@ export function lowerValueInputsToIr(
         diagnosedFlakeSize.add(nodeId);
         sink({
           level: 'warning',
-          message: `flake2d '${nodeId}' requires a finite, nonzero size; its result is undefined.`,
+          message: `${node.category} '${nodeId}' requires a finite, nonzero size; its result is undefined.`,
           detail: { nodeId, size: rawSize },
         });
       }
       if (output === 'id' || output === 'rand' || output === 'presence' || output === 'flakenormal') {
         const type = output === 'id' ? INT : output === 'flakenormal' ? vector(3, 'float', 'vector') : FLOAT;
-        ref = lowerCall(nodeId, output, { op: `flake2d_${output}`, type });
+        ref = lowerCall(nodeId, output, { op: `${node.category}_${output}`, type });
       } else {
         sink({
           level: 'warning',
-          message: `Unsupported flake2d output '${output ?? '<unspecified>'}' on '${nodeId}'; using zero.`,
+          message: `Unsupported ${node.category} output '${output ?? '<unspecified>'}' on '${nodeId}'; using zero.`,
           detail: { nodeId, output },
         });
         ref = builder.constant(FLOAT, 0);

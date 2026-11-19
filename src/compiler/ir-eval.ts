@@ -53,6 +53,10 @@ export class IrEvalTransformError extends IrEvalError {
   override readonly name = 'IrEvalTransformError';
 }
 
+export class IrEvalFlakeError extends IrEvalError {
+  override readonly name = 'IrEvalFlakeError';
+}
+
 const LUMA: IrValue = [0.2722287, 0.6740818, 0.0536895];
 
 function typeSize(type: IrType): number {
@@ -301,17 +305,17 @@ interface FlakeResult {
   normal: number[];
 }
 
-function materialXFlake2d(
-  size: number, roughness: number, coverage: number, uv: IrValue,
+function materialXFlake(
+  category: 'flake2d' | 'flake3d', size: number, roughness: number, coverage: number, coordinate: IrValue,
   normal: IrValue, tangent: IrValue, bitangent: IrValue,
 ): FlakeResult {
-  if (!Number.isFinite(size) || size === 0) throw new IrEvalError('flake2d size must be finite and nonzero');
+  if (!Number.isFinite(size) || size === 0) throw new IrEvalFlakeError(`${category} size must be finite and nonzero`);
   const density = clampNum(coverage, 0, 1);
   const squared = density * density;
   const probability = (-26.19771808 * squared + 26.39663835 * density) /
     (85.53857017 * squared * density - 102.35069432 * squared - 101.42634862 * density + 118.45082288);
   const diameter = 1.5 / Math.sqrt(3);
-  const position = [uv[0]! / size, uv[1]! / size, 0];
+  const position = [coordinate[0]! / size, coordinate[1]! / size, category === 'flake3d' ? coordinate[2]! / size : 0];
   const base = position.map(Math.floor);
   let priority = 0;
   let selected = [0, 0, 0];
@@ -515,17 +519,25 @@ function evalCall(op: string, args: IrValue[], env: IrEvalVaryings, type: IrType
     if (color.length !== type.size) throw new IrEvalError(`${op} input must match its output`);
     return transformColor(color, colorTransform);
   }
-  if (op === 'flake2d_id' || op === 'flake2d_rand' || op === 'flake2d_presence' || op === 'flake2d_flakenormal') {
-    const result = materialXFlake2d(
+  if (/^flake[23]d_(id|rand|presence|flakenormal)$/.test(op)) {
+    const category = op.startsWith('flake3d_') ? 'flake3d' : 'flake2d';
+    const coordinate = category === 'flake3d'
+      ? input('position', 3)
+      : input('texcoord', 3, [...(env.texcoord ?? [0, 0])]);
+    if (category === 'flake3d' && (coordinate.length !== 3 || coordinate.some(component => !Number.isFinite(component)))) {
+      throw new IrEvalFlakeError('flake3d requires a finite vector3 position');
+    }
+    const result = materialXFlake(
+      category,
       input('size', 0, [0.01])[0]!, input('roughness', 1, [0.1])[0]!, input('coverage', 2, [0.5])[0]!,
-      input('texcoord', 3, [...(env.texcoord ?? [0, 0])]),
+      coordinate,
       input('normal', 4, [...(env.normal ?? [0, 0, 1])]),
       input('tangent', 5, [...(env.tangent ?? [1, 0, 0])]),
       input('bitangent', 6, [...(env.bitangent ?? [0, 1, 0])]),
     );
-    if (op === 'flake2d_flakenormal') return result.normal;
-    if (op === 'flake2d_id') return [result.id];
-    if (op === 'flake2d_rand') return [result.rand];
+    if (op.endsWith('_flakenormal')) return result.normal;
+    if (op.endsWith('_id')) return [result.id];
+    if (op.endsWith('_rand')) return [result.rand];
     return [result.presence];
   }
   if (op === 'creatematrix') {

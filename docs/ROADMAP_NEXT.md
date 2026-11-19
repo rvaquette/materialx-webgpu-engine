@@ -693,8 +693,8 @@ du flocon. Son évaluation CPU et WGSL utilise le même voisinage cellulaire et
 les mêmes paramètres `size`, `roughness`, `coverage` et repère de surface que
 la bibliothèque MaterialX. La taille doit être non nulle. Chaque sortie
 connectée recalcule actuellement le motif ; ce nœud peut donc être coûteux.
-`flake3d` et `triplanarprojection` restent à traiter : leurs valeurs par défaut
-nécessitent les coordonnées en espace objet, absentes du path tracer actuel.
+La variante `flake3d` est traitée à la soixante-treizième étape ;
+`triplanarprojection` reste à traiter.
 
 **Cinquante-quatrième étape :** le lowering reconnaît `blur` et reproduit le
 nodegraph de la bibliothèque standard MaterialX, qui est actuellement un
@@ -887,18 +887,35 @@ comportement historique en espace monde ; les normales monde utilisées ailleurs
 restent approximatives sous échelle non uniforme.
 
 Le path tracer partage les attributs locaux par géométrie entre les instances et
-les récupère aussi sur un cache de géométrie préparée. Ils ajoutent, pour les
-matériaux concernés, trois indices par triangle et onze flottants par sommet
-partagé dans le buffer UV existant ; les limites de taille des buffers GPU
-continuent de s'appliquer. Un déplacement doit être cuit avant cette étape, comme
-le fait le viewer ; le prépass de déplacement GPU non cuit est explicitement
-refusé pour ces matériaux. Les coefficients de volume qui nécessitent les
+les récupère aussi sur un cache de géométrie préparée. Dès qu'un matériau en a
+besoin, ils ajoutent trois indices par triangle de la scène et onze flottants par
+sommet concerné partagé, plus un sommet factice, dans le buffer UV existant ;
+les limites de taille des buffers GPU continuent de s'appliquer. Un déplacement
+doit être cuit avant cette étape, comme le fait le viewer ; le prépass GPU non
+cuit est explicitement refusé pour ces matériaux. Les coefficients de volume qui nécessitent les
 attributs ou matrices d'instance restent non pris en charge et sont refusés.
 
 Les paquets compilés antérieurs à la première version des transformations qui
 contiennent ces nœuds doivent être réexportés. Ceux de la première version
 doivent également l'être si une transformation dépend d'un nœud géométrique.
 Les autres anciens paquets restent chargeables.
+
+**Soixante-treizième étape :** le nœud `flake3d` expose les mêmes quatre sorties
+et utilise le même calcul CPU et WGSL que `flake2d`, avec une position 3D en
+espace objet par défaut. Une position et un repère de surface peuvent aussi
+être fournis explicitement. Les coordonnées objet sont conservées pour les
+instances en raster et en path tracing, y compris avec un cache de géométrie
+préparée. Comme pour `flake2d`, une taille nulle ou non finie est invalide et
+chaque sortie connectée recalcule le motif. Une position d'interface non résolue
+ou une propriété géométrique par défaut inconnue produit un avertissement et un
+repli explicite.
+
+Dans un volume, les sorties scalaires exigent une position explicite ou un
+défaut de position en espace monde ; `flakenormal` exige aussi un repère
+normal, tangent et bitangent fourni explicitement. Le path tracer refuse les
+matériaux nécessitant la position objet si leur déplacement n'est pas encore
+cuit. Les anciens paquets de scène ou de matériau contenant `flake3d` doivent
+être réexportés ; les autres restent compatibles selon les règles précédentes.
 
 Travaux restants :
 

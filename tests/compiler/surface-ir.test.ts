@@ -13,10 +13,11 @@ import type {
   ResolvedValueSource,
 } from '../../src/materialx/graph.ts';
 import { resolveSurface } from '../../src/materialx/surface-graph.ts';
-import { lowerSurfaceInputsToIr } from '../../src/compiler/surface-ir.ts';
+import { lowerSurfaceInputsToIr, lowerValueInputsToIr } from '../../src/compiler/surface-ir.ts';
 import {
   IrModuleBuilder, BOOL, COLOR3, FLOAT, INT, OBJECT_TO_WORLD_INPUT, WORLD_TO_OBJECT_INPUT,
-  OBJECT_POSITION_INPUT, OBJECT_NORMAL_INPUT, OBJECT_TANGENT_INPUT, OBJECT_BITANGENT_INPUT, vector, type IrRef,
+  OBJECT_POSITION_INPUT, OBJECT_NORMAL_INPUT, OBJECT_TANGENT_INPUT, OBJECT_BITANGENT_INPUT,
+  irTypeFromMaterialX, vector, type IrRef,
 } from '../../src/compiler/ir.ts';
 import { emitWgsl, lowerExprs, type WgslModule } from '../../src/compiler/wgsl.ts';
 import { evaluateShaderIr } from '../../src/compiler/ir-eval.ts';
@@ -91,9 +92,172 @@ function lowerAndEmit(
   return { module: emitWgsl(ir), ir, refFor };
 }
 
+function lowerTriplanar(type: string, inputs: ResolvedInput[], nodes: ResolvedNode[] = [], diagnostics: Diagnostic[] = []) {
+  const graph: ResolvedGraph = {
+    terminals: [],
+    nodes: new Map([['tri', upstream('tri', 'triplanarprojection', type, inputs)], ...nodes.map(node => [node.id, node] as const)]),
+  };
+  const builder = new IrModuleBuilder();
+  const declared = new Map([['result', {
+    name: 'result', type: type === 'float' ? 'float' as const : 'color3' as const,
+    source: { kind: 'connection' as const, nodeId: 'tri' },
+  }]]);
+  const lowered = lowerValueInputsToIr(graph, declared, builder, diagnostic => diagnostics.push(diagnostic));
+  const ref = lowered.get('result')!;
+  const result = builder.get(ref);
+  builder.output({ name: 'result', type: irTypeFromMaterialX(type)!, ref: result?.kind === 'convert' ? result.source : ref });
+  return builder.build();
+}
+
 describe('lowerSurfaceInputsToIr (T055c)', () => {
   const instanceModel = [0, 2, 0, 0, -3, 0, 0, 0, 0, 0, 4, 0, 10, -2, 3, 1];
   const instanceInverse = inverse4(instanceModel, true);
+
+  it.each([
+    ['float', [0.2]], ['color3', [0.2, 0.3, 0.4]], ['color4', [0.2, 0.3, 0.4, 0.5]],
+    ['vector2', [0.2, 0.3]], ['vector3', [0.2, 0.3, 0.4]], ['vector4', [0.2, 0.3, 0.4, 0.5]],
+  ] as const)('samples triplanarprojection %s with its declared output shape', (type, expected) => {
+    const ir = lowerTriplanar(type, [
+      value('filez', 'filename', 'z.png'), value('position', 'vector3', '0.2,0.3,0.6'),
+      value('normal', 'vector3', '0,0,1'),
+    ]);
+    const result = evaluateShaderIr(ir, { textures: { [ir.textures[0]!.name]: () => [0.2, 0.3, 0.4, 0.5] } }).get('result')!;
+    expect(result).toHaveLength(expected.length);
+    expected.forEach((component, index) => expect(result[index]).toBeCloseTo(component));
+    for (const compute of [false, true]) {
+      expect(lowerExprs(ir, '', compute).body.join('\n')).toContain(compute ? 'textureSampleLevel(' : 'textureSample(');
+    }
+  });
+
+  it.each([
+    [-1, [[0.6, 0.7], [0.6, 0.8], [-0.3, 0.8]]],
+    [0, [[0.6, 0.7], [0.6, 0.8], [-0.3, 0.8]]],
+    [1, [[0.6, 0.7], [0.2, 0.4], [0.2, 0.7]]],
+    [2, [[0.3, 0.4], [0.2, 0.4], [0.2, 0.7]]],
+    [3, [[0, 1], [0, 1], [0, 1]]],
+  ] as const)('projects all three MaterialX axes with upaxis %s', (upaxis, expected) => {
+    const ir = lowerTriplanar('color3', [
+      value('filex', 'filename', 'x.png', 'srgb_texture'),
+      value('filey', 'filename', 'y.png'), value('filez', 'filename', 'z.png'),
+      conn('position', 'vector3', 'pos'), conn('normal', 'vector3', 'norm'),
+      conn('blend', 'float', 'blend'), conn('upaxis', 'integer', 'axis'),
+    ], [
+      upstream('pos', 'constant', 'vector3', [value('value', 'vector3', '0.2,0.3,0.6')]),
+      upstream('norm', 'constant', 'vector3', [value('value', 'vector3', '1,2,-3')]),
+      upstream('blend', 'constant', 'float', [value('value', 'float', '0.5')]),
+      upstream('axis', 'constant', 'integer', [value('value', 'integer', String(upaxis))]),
+    ]);
+    const seen: number[][] = [];
+    const colors = [[1, 0, 0, 1], [0, 1, 0, 1], [0, 0, 1, 1]];
+    const textures = Object.fromEntries(ir.textures.map((texture, index) => [texture.name, (u: number, v: number) => {
+      seen[index] = [u, v];
+      return colors[index]!;
+    }]));
+    const result = evaluateShaderIr(ir, { textures }).get('result')!;
+    expect(ir.textures.map(texture => texture.fileRef)).toEqual(['x.png', 'y.png', 'z.png']);
+    expect(ir.textures[0]!.colorSpace).toBe('srgb_texture');
+    expect(ir.samplers).toHaveLength(1);
+    expected.forEach((coordinate, axis) => coordinate.forEach((component, i) => expect(seen[axis]![i]).toBeCloseTo(component)));
+    [1 / 14, 4 / 14, 9 / 14].forEach((component, index) => expect(result[index]).toBeCloseTo(component));
+  });
+
+  it.each([-1, 0.03, 0.5, 1, 4])('clamps triplanar blend %s before normalizing weights', blend => {
+    const ir = lowerTriplanar('color3', [
+      value('filex', 'filename', 'x.png'), value('filey', 'filename', 'y.png'), value('filez', 'filename', 'z.png'),
+      value('position', 'vector3', '0,0,0'), value('normal', 'vector3', '1,2,3'),
+      value('blend', 'float', String(blend)),
+    ]);
+    const textures = Object.fromEntries(ir.textures.map((texture, index) => [texture.name, () =>
+      [[1, 0, 0, 1], [0, 1, 0, 1], [0, 0, 1, 1]][index]!]));
+    const result = evaluateShaderIr(ir, { textures }).get('result')!;
+    const powers = [1 / 6, 2 / 6, 3 / 6].map(weight => weight ** (1 / Math.min(1, Math.max(0.03, blend))));
+    const total = powers.reduce((a, b) => a + b);
+    powers.forEach((power, index) => expect(result[index]).toBeCloseTo(power / total, 10));
+  });
+
+  it('uses object geometry for implicit and connected triplanar inputs', () => {
+    for (const connected of [false, true]) {
+      const inputs = [
+        value('filex', 'filename', 'x.png'),
+        ...(connected ? [conn('position', 'vector3', 'pos'), conn('normal', 'vector3', 'norm')] : []),
+      ];
+      const ir = lowerTriplanar('color3', inputs, [
+        upstream('pos', 'position', 'vector3', []), upstream('norm', 'normal', 'vector3', []),
+      ]);
+      const textures = { [ir.textures[0]!.name]: (u: number, v: number) => [u, v, 1, 1] };
+      expect(() => evaluateShaderIr(ir, { textures })).toThrow('Missing or invalid object-space geometry');
+      const result = evaluateShaderIr(ir, {
+        position: [9, 8, 7], normal: [0, 1, 0], textures,
+        inputs: { [OBJECT_POSITION_INPUT]: [0.2, 0.3, 0.6], [OBJECT_NORMAL_INPUT]: [1, 0, 0] },
+      }).get('result')!;
+      [0.3, 0.4, 1].forEach((component, index) => expect(result[index]).toBeCloseTo(component));
+    }
+  });
+
+  it('uses per-axis defaults and preserves UDIM coordinates and sampler modes', () => {
+    const ir = lowerTriplanar('color3', [
+      value('filex', 'filename', 'tiles.<UDIM>.png'), value('filey', 'filename', 'y.png'),
+      value('default', 'color3', '0.2,0.4,0.6'), value('position', 'vector3', '1.25,2.25,0.5'),
+      value('normal', 'vector3', '1,1,1'), value('filtertype', 'string', 'closest'),
+    ]);
+    expect(ir.textures.map(texture => texture.fileRef)).toEqual(['tiles.<UDIM>.png', 'y.png']);
+    expect(ir.samplers).toEqual(expect.arrayContaining([
+      expect.objectContaining({ addressU: 'clamp', addressV: 'clamp', filter: 'closest' }),
+      expect.objectContaining({ addressU: 'periodic', addressV: 'periodic', filter: 'closest' }),
+    ]));
+    const seen: number[][] = [];
+    const result = evaluateShaderIr(ir, { textures: {
+      [ir.textures[0]!.name]: (u, v) => { seen.push([u, v]); return [0.8, 0.2, 0.4, 1]; },
+      [ir.textures[1]!.name]: (u, v) => { seen.push([u, v]); return [0.2, 0.7, 0.5, 1]; },
+    } }).get('result')!;
+    expect(seen).toEqual([[2.25, 0.5], [1.25, 0.5]]);
+    [0.4, 1.3 / 3, 0.5].forEach((component, index) => expect(result[index]).toBeCloseTo(component));
+    const missing = evaluateShaderIr(ir, { textures: { [ir.textures[1]!.name]: () => [0.2, 0.7, 0.5, 1] } }).get('result')!;
+    [0.2, 0.5, 1.7 / 3].forEach((component, index) => expect(missing[index]).toBeCloseTo(component));
+    for (const compute of [false, true]) {
+      expect(lowerExprs(ir, '', compute).body.join('\n')).toContain('mx_sample_udim');
+    }
+  });
+
+  it('reports unresolved filenames, sequence tokens, layers and filtering instead of sampling them', () => {
+    const diagnostics: Diagnostic[] = [];
+    const ir = lowerTriplanar('color3', [
+      conn('filex', 'filename', 'dynamic'), value('filey', 'filename', 'image.{frame}.png'),
+      value('filez', 'filename', '[unresolved].png'), value('layerx', 'string', 'beauty'),
+      value('filtertype', 'string', 'cubic'), value('default', 'color3', '0.2,0.4,0.6'),
+    ], [upstream('dynamic', 'image', 'filename', [])], diagnostics);
+    expect(ir.textures).toEqual([]);
+    expect(evaluateShaderIr(ir).get('result')).toEqual([0.2, 0.4, 0.6]);
+    for (const fragment of ['filex', 'filey', 'filez', 'layerx', 'cubic']) {
+      expect(diagnostics.some(diagnostic => diagnostic.message.includes(fragment))).toBe(true);
+    }
+  });
+
+  it('resolves constant filename connections and NodeDef geometry and value defaults', () => {
+    const diagnostics: Diagnostic[] = [];
+    const tri = upstream('tri', 'triplanarprojection', 'color3', [conn('filex', 'filename', 'filename')]);
+    tri.nodeDef = {
+      name: 'ND_triplanarprojection_color3', nodeString: 'triplanarprojection', type: 'color3',
+      implementation: { kind: 'unresolved' },
+      inputs: [
+        { name: 'position', type: 'vector3', geomprop: 'Pworld' },
+        { name: 'normal', type: 'vector3', geomprop: 'Nworld' },
+        { name: 'upaxis', type: 'integer', value: '1' },
+        { name: 'blend', type: 'float', value: '1' },
+      ],
+    };
+    const graph = surfaceGraph([conn('base_color', 'color3', 'tri')], [
+      tri, upstream('filename', 'constant', 'filename', [value('value', 'filename', 'texture.png')]),
+    ]);
+    const { ir } = lowerAndEmit(graph, [{ name: 'base_color', type: COLOR3 }], diagnostic => diagnostics.push(diagnostic));
+    expect(ir.textures[0]!.fileRef).toBe('texture.png');
+    const result = evaluateShaderIr(ir, {
+      position: [0.2, 0.3, 0.6], normal: [1, 0, 0],
+      textures: { [ir.textures[0]!.name]: (u, v) => [u, v, 1, 1] },
+    }).get('base_color')!;
+    [0.6, 0.7, 1].forEach((component, index) => expect(result[index]).toBeCloseTo(component));
+    expect(diagnostics).toEqual([]);
+  });
 
   it.each([
     { op: 'transformpoint', from: 'model', to: 'world', input: '1,2,-1', expected: [4, 0, -1], field: OBJECT_TO_WORLD_INPUT },
@@ -870,29 +1034,202 @@ describe('lowerSurfaceInputsToIr (T055c)', () => {
     result.forEach((component, i) => expect(component).toBeCloseTo(expected[i]!, 5));
   });
 
-  it('diagnoses an unspecified flake2d output instead of selecting one silently', () => {
-    const graph = surfaceGraph([conn('base', 'float', 'flake')], [upstream('flake', 'flake2d', 'multioutput', [])]);
+  it('ignores extra geometric UV components in the CPU flake2d pattern', () => {
+    const graph = surfaceGraph([conn('base', 'float', 'flake', 'presence')], [
+      upstream('flake', 'flake2d', 'multioutput', [value('size', 'float', '0.1'), value('coverage', 'float', '1')]),
+    ]);
+    const { ir } = lowerAndEmit(graph, [{ name: 'base', type: FLOAT }]);
+    const uv = evaluateShaderIr(ir, { texcoord: [0.13, 0.27] }).get('base')![0]!;
+    const uvw = evaluateShaderIr(ir, { texcoord: [0.13, 0.27, 0.19] }).get('base')![0]!;
+    expect(uv).toBeCloseTo(0.7175992727279663, 6);
+    expect(uvw).toBeCloseTo(uv, 6);
+  });
+
+  it.each([
+    {
+      position: '0.13, 0.27, 0', size: '0.1', roughness: '0.5', coverage: '1',
+      expected: [13538935, 0.806983470916748, 0.7175992727279663, -0.09195718169212341, 0.7116554975509644, 0.6964842081069946],
+    },
+    {
+      position: '0.13, 0.27, 0.19', size: '0.1', roughness: '0.5', coverage: '1',
+      expected: [1398013, 0.08332812786102295, 0.9631859660148621, 0.2168615758419037, 0.13723254203796387, 0.9665082693099976],
+    },
+    {
+      position: '0.75, -1.25, -0.6', size: '0.3', roughness: '0.3', coverage: '1',
+      expected: [1134785, 0.06763850897550583, 0.9824497699737549, -0.021726474165916443, 0.07746688276529312, 0.9967581629753113],
+    },
+    { position: '0.13, 0.27, 0.19', size: '0.1', roughness: '0.5', coverage: '0', expected: [0, 0, 0, 0, 0, 1] },
+  ])('evaluates the four flake3d outputs at position $position', ({ position, size, roughness, coverage, expected }) => {
+    const graph = surfaceGraph([
+      conn('specular', 'float', 'flake', 'id'),
+      conn('metalness', 'float', 'flake', 'rand'),
+      conn('base', 'float', 'flake', 'presence'),
+      conn('base_color', 'color3', 'flake', 'flakenormal'),
+    ], [upstream('flake', 'flake3d', 'multioutput', [
+      value('position', 'vector3', position), value('size', 'float', size),
+      value('roughness', 'float', roughness), value('coverage', 'float', coverage),
+    ])]);
+    const diagnostics: Diagnostic[] = [];
+    const { ir, module } = lowerAndEmit(graph, [
+      { name: 'specular', type: FLOAT }, { name: 'metalness', type: FLOAT },
+      { name: 'base', type: FLOAT }, { name: 'base_color', type: COLOR3 },
+    ], d => diagnostics.push(d));
+    const outputs = evaluateShaderIr(ir, { normal: [0, 0, 1], tangent: [1, 0, 0], bitangent: [0, 1, 0] });
+    const actual = [outputs.get('specular')![0]!, outputs.get('metalness')![0]!, outputs.get('base')![0]!, ...outputs.get('base_color')!];
+    expect(diagnostics).toEqual([]);
+    expect(actual[0]).toBe(expected[0]);
+    actual.slice(1).forEach((component, i) => expect(component).toBeCloseTo(expected[i + 1]!, 5));
+    expect(module.code).toContain('fn mx_flake3d(');
+    expect(module.code).not.toContain(`in_${OBJECT_POSITION_INPUT}:`);
+  });
+
+  it('uses object-space position and the world-space frame by default for flake3d', () => {
+    const graph = surfaceGraph([
+      conn('base', 'float', 'flake', 'presence'),
+      conn('base_color', 'color3', 'flake', 'flakenormal'),
+    ], [upstream('flake', 'flake3d', 'multioutput', [
+      value('size', 'float', '0.1'), value('roughness', 'float', '0.5'), value('coverage', 'float', '1'),
+    ])]);
+    const { ir, module } = lowerAndEmit(graph, [{ name: 'base', type: FLOAT }, { name: 'base_color', type: COLOR3 }]);
+    const outputs = evaluateShaderIr(ir, {
+      position: [11, -9, 6], normal: [0, 0, 1], tangent: [1, 0, 0], bitangent: [0, 1, 0],
+      inputs: { [OBJECT_POSITION_INPUT]: [0.13, 0.27, 0.19] },
+    });
+    expect(outputs.get('base')![0]).toBeCloseTo(0.9631859660148621, 6);
+    const expected = [0.2168615758419037, 0.13723254203796387, 0.9665082693099976];
+    outputs.get('base_color')!.forEach((component, i) => expect(component).toBeCloseTo(expected[i]!, 5));
+    expect(module.code).toContain(`in_${OBJECT_POSITION_INPUT}: vec3f`);
+    expect(() => evaluateShaderIr(ir, { position: [0.13, 0.27, 0.19] })).toThrow('Missing or invalid object-space geometry');
+  });
+
+  it('uses connected flake3d coordinates and tangent-frame inputs', () => {
+    const graph = surfaceGraph([conn('base_color', 'color3', 'flake', 'flakenormal')], [
+      upstream('flake', 'flake3d', 'multioutput', [
+        value('size', 'float', '0.1'), conn('roughness', 'float', 'roughness'), value('coverage', 'float', '1'),
+        conn('position', 'vector3', 'point'), conn('normal', 'vector3', 'normal'),
+        conn('tangent', 'vector3', 'tangent'), conn('bitangent', 'vector3', 'bitangent'),
+      ]),
+      upstream('roughness', 'constant', 'float', [value('value', 'float', '0.5')]),
+      upstream('point', 'constant', 'vector3', [value('value', 'vector3', '0.13, 0.27, 0.19')]),
+      upstream('normal', 'constant', 'vector3', [value('value', 'vector3', '0, 1, 0')]),
+      upstream('tangent', 'constant', 'vector3', [value('value', 'vector3', '0, 0, 1')]),
+      upstream('bitangent', 'constant', 'vector3', [value('value', 'vector3', '1, 0, 0')]),
+    ]);
+    const { ir, module } = lowerAndEmit(graph, [{ name: 'base_color', type: COLOR3 }]);
+    const result = evaluateShaderIr(ir).get('base_color')!;
+    const expected = [0.13723254203796387, 0.9665082693099976, 0.2168615758419037];
+    result.forEach((component, i) => expect(component).toBeCloseTo(expected[i]!, 5));
+    expect(module.code).not.toContain(`in_${OBJECT_POSITION_INPUT}:`);
+  });
+
+  it('honors an explicit NodeDef position default for flake3d', () => {
+    const flake = upstream('flake', 'flake3d', 'multioutput', [value('coverage', 'float', '1'), value('size', 'float', '0.1')]);
+    flake.nodeDef = {
+      name: 'ND_flake3d', nodeString: 'flake3d', type: 'multioutput', implementation: { kind: 'unresolved' },
+      inputs: [{ name: 'position', type: 'vector3', value: '0.13, 0.27, 0.19' }],
+    };
+    const graph = surfaceGraph([conn('base', 'float', 'flake', 'presence')], [flake]);
+    const { ir, module } = lowerAndEmit(graph, [{ name: 'base', type: FLOAT }]);
+    expect(evaluateShaderIr(ir).get('base')![0]).toBeCloseTo(0.9631859660148621, 6);
+    expect(module.code).not.toContain(`in_${OBJECT_POSITION_INPUT}:`);
+  });
+
+  it('uses a NodeDef world position and diagnoses an unsupported geometric default', () => {
+    const flake = upstream('flake', 'flake3d', 'multioutput', [value('coverage', 'float', '1'), value('size', 'float', '0.1')]);
+    flake.nodeDef = {
+      name: 'ND_flake3d', nodeString: 'flake3d', type: 'multioutput', implementation: { kind: 'unresolved' },
+      inputs: [{ name: 'position', type: 'vector3', geomprop: 'Pworld' }],
+    };
+    const graph = surfaceGraph([
+      conn('base', 'float', 'flake', 'presence'), conn('base_color', 'color3', 'flake', 'flakenormal'),
+    ], [flake]);
+    const diagnostics: Diagnostic[] = [];
+    const outputs = [{ name: 'base', type: FLOAT }, { name: 'base_color', type: COLOR3 }];
+    const world = lowerAndEmit(graph, outputs, d => diagnostics.push(d));
+    expect(evaluateShaderIr(world.ir, { position: [0.13, 0.27, 0.19] }).get('base')![0]).toBeCloseTo(0.9631859660148621, 6);
+    expect(world.module.code).not.toContain(`in_${OBJECT_POSITION_INPUT}:`);
+    expect(diagnostics).toEqual([]);
+
+    flake.nodeDef.inputs = [{ name: 'position', type: 'vector3', geomprop: 'unsupported' }];
+    const fallback = lowerAndEmit(graph, outputs, d => diagnostics.push(d));
+    expect(fallback.module.code).toContain(`in_${OBJECT_POSITION_INPUT}: vec3f`);
+    expect(diagnostics.filter(d => d.message.includes('unsupported or unresolved position'))).toHaveLength(1);
+  });
+
+  it.each([
+    { positionDefault: { name: 'position', type: 'vector3', geomprop: 'Pobject' }, fallback: 'object-space', needsObject: true },
+    { positionDefault: { name: 'position', type: 'vector3', value: '0.13, 0.27, 0.19' }, fallback: 'declared', needsObject: false },
+  ])('diagnoses an unresolved flake3d position with a $fallback default', ({ positionDefault, fallback, needsObject }) => {
+    const flake = upstream('flake', 'flake3d', 'multioutput', [
+      value('coverage', 'float', '1'), value('size', 'float', '0.1'),
+      { name: 'position', type: 'vector3', source: { kind: 'interface', name: 'missing' }, provenance: { namePath: '/flake/position' } },
+    ]);
+    flake.nodeDef = {
+      name: 'ND_flake3d', nodeString: 'flake3d', type: 'multioutput', implementation: { kind: 'unresolved' },
+      inputs: [positionDefault],
+    };
+    const graph = surfaceGraph([
+      conn('base', 'float', 'flake', 'presence'), conn('metalness', 'float', 'flake', 'rand'),
+    ], [flake]);
+    const diagnostics: Diagnostic[] = [];
+    const { ir, module } = lowerAndEmit(graph, [{ name: 'base', type: FLOAT }, { name: 'metalness', type: FLOAT }], d => diagnostics.push(d));
+    const outputs = evaluateShaderIr(ir, { inputs: { [OBJECT_POSITION_INPUT]: [0.13, 0.27, 0.19] } });
+    expect(outputs.get('base')![0]).toBeCloseTo(0.9631859660148621, 6);
+    expect(module.code.includes(`in_${OBJECT_POSITION_INPUT}: vec3f`)).toBe(needsObject);
+    expect(diagnostics.map(d => d.message)).toEqual([
+      expect.stringContaining(`unsupported or unresolved position; using its ${fallback} default`),
+    ]);
+  });
+
+  it.each([
+    { category: 'flake2d', coordinate: [0.13, 0.27], expected: 0.7175992727279663 },
+    { category: 'flake3d', coordinate: [0.13, 0.27, 0.19], expected: 0.9631859660148621 },
+  ])('supports positional $category IR consistently on CPU and WGSL', ({ category, coordinate, expected }) => {
+    const builder = new IrModuleBuilder();
+    const args = [
+      builder.constant(FLOAT, 0.1), builder.constant(FLOAT, 0.5), builder.constant(FLOAT, 1),
+      builder.constant(vector(coordinate.length === 2 ? 2 : 3), coordinate),
+    ];
+    const ref = builder.add({ kind: 'call', type: FLOAT, op: `${category}_presence`, args });
+    builder.output({ name: 'presence', type: FLOAT, ref });
+    const ir = builder.build();
+    expect(evaluateShaderIr(ir).get('presence')![0]).toBeCloseTo(expected, 6);
+    expect(lowerExprs(ir, '', true).body.join('\n')).toContain(`mx_${category}(${args.join(', ')},`);
+  });
+
+  it('rejects direct flake3d IR without a position', () => {
+    const builder = new IrModuleBuilder();
+    const ref = builder.add({ kind: 'call', type: FLOAT, op: 'flake3d_presence', args: [] });
+    builder.output({ name: 'presence', type: FLOAT, ref });
+    const ir = builder.build();
+    expect(() => evaluateShaderIr(ir)).toThrow('flake3d requires a finite vector3 position');
+    expect(() => emitWgsl(ir)).toThrow("missing named input 'position'");
+  });
+
+  it.each(['flake2d', 'flake3d'])('diagnoses an unspecified %s output instead of selecting one silently', category => {
+    const graph = surfaceGraph([conn('base', 'float', 'flake')], [upstream('flake', category, 'multioutput', [])]);
     const diagnostics: Diagnostic[] = [];
     const builder = new IrModuleBuilder();
     const surface = resolveSurface(graph, { onDiagnostic: d => diagnostics.push(d) });
     const lowered = lowerSurfaceInputsToIr(graph, surface!, builder, d => diagnostics.push(d));
     builder.output({ name: 'base', type: FLOAT, ref: lowered.inputs.get('base')! });
     expect(evaluateShaderIr(builder.build()).get('base')).toEqual([0]);
-    expect(diagnostics.some(d => d.message.includes("Unsupported flake2d output '<unspecified>'"))).toBe(true);
+    expect(diagnostics.some(d => d.message.includes(`Unsupported ${category} output '<unspecified>'`))).toBe(true);
   });
 
-  it('diagnoses a zero flake size once and rejects CPU evaluation', () => {
+  it.each(['flake2d', 'flake3d'])('diagnoses a zero %s size once and rejects CPU evaluation', category => {
     const graph = surfaceGraph([
       conn('base', 'float', 'flake', 'presence'),
       conn('metalness', 'float', 'flake', 'rand'),
-    ], [upstream('flake', 'flake2d', 'multioutput', [value('size', 'float', '0')])]);
+    ], [upstream('flake', category, 'multioutput', [value('size', 'float', '0')])]);
     const diagnostics: Diagnostic[] = [];
     const builder = new IrModuleBuilder();
     const surface = resolveSurface(graph, { onDiagnostic: d => diagnostics.push(d) });
     const lowered = lowerSurfaceInputsToIr(graph, surface!, builder, d => diagnostics.push(d));
     builder.output({ name: 'base', type: FLOAT, ref: lowered.inputs.get('base')! });
     expect(diagnostics.filter(d => d.message.includes('requires a finite, nonzero size'))).toHaveLength(1);
-    expect(() => evaluateShaderIr(builder.build())).toThrow('flake2d size must be finite and nonzero');
+    expect(() => evaluateShaderIr(builder.build(), { inputs: { [OBJECT_POSITION_INPUT]: [0, 0, 0] } }))
+      .toThrow(`${category} size must be finite and nonzero`);
   });
 
   it('evaluates integer randomfloat inputs in a surface graph', () => {

@@ -14,6 +14,7 @@ import type {
 } from '../../src/materialx/graph.ts';
 import { resolveSurface } from '../../src/materialx/surface-graph.ts';
 import { emitLayeredSurface, emitSurfaceVariant } from '../../src/compiler/surface-wgsl.ts';
+import { OBJECT_POSITION_INPUT } from '../../src/compiler/ir.ts';
 import { surfaceGraphToLayered } from '../../src/compiler/surface-lower.ts';
 import type { Diagnostic } from '../../src/core/diagnostics.ts';
 
@@ -269,11 +270,11 @@ describe('emitLayeredSurface (T055d)', () => {
     }
   });
 
-  it('carries flake2d presence and flake normal into raster and path-tracing closures', () => {
+  it.each(['flake2d', 'flake3d'])('carries %s presence and flake normal into raster and path-tracing closures', category => {
     const graph = surfaceGraph('standard_surface', [
       conn('base', 'float', 'flake', 'presence'),
       conn('normal', 'vector3', 'flake', 'flakenormal'),
-    ], [upstream('flake', 'flake2d', 'multioutput', [value('size', 'float', '0.1')])]);
+    ], [upstream('flake', category, 'multioutput', [value('size', 'float', '0.1')])]);
     const surface = resolveSurface(graph)!;
     const raster = emitLayeredSurface(graph, surface);
     const pathtracer = emitSurfaceVariant(graph, surface, 0);
@@ -282,8 +283,10 @@ describe('emitLayeredSurface (T055d)', () => {
       expect(code).toContain('.normal');
       expect(code).toContain('c.hasShadingNormal = 1u;');
     }
-    expect(raster.code).toContain('fn mx_flake2d(');
-    expect(pathtracer.preludes.join('\n')).toContain('fn mx_flake2d(');
+    expect(raster.code).toContain(`fn mx_${category}(`);
+    expect(pathtracer.preludes.join('\n')).toContain(`fn mx_${category}(`);
+    expect(raster.extraInputs.has(OBJECT_POSITION_INPUT)).toBe(category === 'flake3d');
+    expect(pathtracer.extraInputs.has(OBJECT_POSITION_INPUT)).toBe(category === 'flake3d');
   });
 
   const sssGraph = (options: ResolvedInput[]) => surfaceGraph('surface', [conn('bsdf', 'BSDF', 'skin')], [

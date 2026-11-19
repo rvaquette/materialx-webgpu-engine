@@ -427,6 +427,68 @@ describe('variantSources classification (T057i1)', () => {
 describe('createSceneSampler procedural oracle (T057i3)', () => {
   const normalLength = Math.hypot(0.475, 0.775);
   const interpolatedNormal = [0.475 / normalLength, 0, 0.775 / normalLength];
+
+  it('uses the same object-space flake3d pattern on transformed instances and cached geometry', () => {
+    const graph: ResolvedGraph = {
+      terminals: [{ name: 'surfaceshader', type: 'surfaceshader', nodeId: 's', provenance: { namePath: '/s' } }],
+      nodes: new Map<string, ResolvedNode>([
+        ['s', { id: 's', category: 'standard_surface', type: 'surfaceshader', inputs: [
+          { name: 'base', type: 'float', source: { kind: 'connection', nodeId: 'flake', output: 'presence' }, provenance: { namePath: '/s/base' } },
+          { name: 'specular', type: 'float', source: { kind: 'value', type: 'float', value: '0' }, provenance: { namePath: '/s/specular' } },
+        ], provenance: { namePath: '/s' } }],
+        ['flake', { id: 'flake', category: 'flake3d', type: 'multioutput', inputs: [
+          { name: 'size', type: 'float', source: { kind: 'value', type: 'float', value: '0.1' }, provenance: { namePath: '/flake/size' } },
+          { name: 'coverage', type: 'float', source: { kind: 'value', type: 'float', value: '1' }, provenance: { namePath: '/flake/coverage' } },
+        ], provenance: { namePath: '/flake' } }],
+      ]),
+    };
+    const surface = resolveSurface(graph)!;
+    const { resources, lights } = sceneWith({ surfaceGraph: graph, resolvedSurface: surface });
+    const models = [
+      translation4(-4, 0, 0),
+      multiply4(translation4(4, 0, 0), multiply4(rotationAxis4(2, 90), scaling4(2, 3, 4))),
+    ];
+    resources.instances = models.map((transform, index) => ({
+      id: `/instance${index}`, primPath: `/instance${index}`, prototypeId: '/proto',
+      materialKey: 'mat', hasGeometry: true, transform,
+    }));
+    const scene = buildPathTraceScene(resources, { lights });
+    const cached = buildPathTraceScene(resources, { lights }, undefined, undefined, scene);
+    expect(scene.objectGeometry?.size).toBe(1);
+    expect(cached.objectGeometry?.size).toBe(1);
+    expect(cached.objectGeometry?.get('/proto')?.positions).toBe(resources.geometries.get('/proto')!.streams[0]!.data);
+
+    const sampler = createSceneSampler(cached);
+    const localPosition = [0.13, 0.27, 0] as const;
+    const direction = [0, 0, 1] as const;
+    const evaluated: (readonly number[])[] = [];
+    for (const model of models) {
+      const worldPosition = transformPoint(model, localPosition);
+      const hit = sampler.intersect({ origin: [worldPosition[0], worldPosition[1], 2], direction: [0, 0, -1] })!;
+      expect(hit).not.toBeNull();
+      const actual = sampler.evalBsdf(hit, direction, direction);
+      const closure = evaluateSurfaceToLayered(graph, surface, {
+        position: worldPosition, inputs: { [OBJECT_POSITION_INPUT]: localPosition },
+      });
+      const expected = evalWorld(layeredSurfaceBsdf(closure), hit.normal, direction, direction);
+      actual.value.forEach((value, i) => expect(value).toBeCloseTo(expected.value[i]!, 6));
+      evaluated.push(actual.value);
+    }
+    evaluated[0]!.forEach((value, i) => expect(value).toBeCloseTo(evaluated[1]![i]!, 6));
+
+    const material = resources.materials.get('mat')!;
+    const unbaked = { ...resources, materials: new Map([['mat', { ...material, displacement: { file: 'height.png', scale: 1 } }]]) };
+    expect(() => buildPathTraceScene(unbaked, { lights })).toThrow('requires displacement to be baked');
+    expect(() => buildPathTraceScene(unbaked, { lights, displacementScale: 0 })).not.toThrow();
+
+    graph.nodes.get('flake')!.inputs.push({
+      name: 'position', type: 'vector3', source: { kind: 'value', type: 'vector3', value: '0.13, 0.27, 0.19' },
+      provenance: { namePath: '/flake/position' },
+    });
+    expect(buildPathTraceScene(resources, { lights }).objectGeometry?.size ?? 0).toBe(0);
+    expect(() => buildPathTraceScene(unbaked, { lights })).not.toThrow();
+  });
+
   it.each([
     { category: 'position', op: 'transformpoint', field: OBJECT_POSITION_INPUT, local: [0.25, 0, 0] },
     { category: 'normal', op: 'transformnormal', field: OBJECT_NORMAL_INPUT, local: interpolatedNormal },
@@ -495,6 +557,53 @@ describe('createSceneSampler procedural oracle (T057i3)', () => {
       const expected = evalWorld(layeredSurfaceBsdf(closure), hit.normal, direction, direction);
       actual.value.forEach((value, i) => expect(value).toBeCloseTo(expected.value[i]!, 6));
     }
+  });
+
+  it.each([
+    { category: 'normal', op: 'transformnormal', field: OBJECT_NORMAL_INPUT, local: [-Math.SQRT1_2, 0, Math.SQRT1_2] },
+    { category: 'tangent', op: 'transformvector', field: OBJECT_TANGENT_INPUT, local: [Math.SQRT1_2, 0, Math.SQRT1_2] },
+    { category: 'bitangent', op: 'transformvector', field: OBJECT_BITANGENT_INPUT, local: [0, 1, 0] },
+  ])('uses the face-normal fallback without normals or tangents for transformed $category', ({ category, op, field, local }) => {
+    const connection = (name: string, nodeId: string) => ({
+      name, type: 'vector3', source: { kind: 'connection' as const, nodeId }, provenance: { namePath: `/${name}` },
+    });
+    const value = (name: string, type: string, raw: string) => ({
+      name, type, source: { kind: 'value' as const, type, value: raw }, provenance: { namePath: `/${name}` },
+    });
+    const graph: ResolvedGraph = {
+      terminals: [{ name: 'surfaceshader', type: 'surfaceshader', nodeId: 's', provenance: { namePath: '/s' } }],
+      nodes: new Map<string, ResolvedNode>([
+        ['s', { id: 's', category: 'standard_surface', type: 'surfaceshader',
+          inputs: [{ ...connection('base_color', 'biased'), type: 'color3' }], provenance: { namePath: '/s' } }],
+        ['biased', { id: 'biased', category: 'add', type: 'vector3',
+          inputs: [connection('in1', 'scaled'), value('in2', 'vector3', '0.5,0.5,0.5')], provenance: { namePath: '/biased' } }],
+        ['scaled', { id: 'scaled', category: 'multiply', type: 'vector3',
+          inputs: [connection('in1', 'transformed'), value('in2', 'vector3', '0.1,0.1,0.1')], provenance: { namePath: '/scaled' } }],
+        ['transformed', { id: 'transformed', category: op, type: 'vector3',
+          inputs: [connection('in', 'geometry'), value('fromspace', 'string', 'object'), value('tospace', 'string', 'world')],
+          provenance: { namePath: '/transformed' } }],
+        ['geometry', { id: 'geometry', category, type: 'vector3', inputs: [], provenance: { namePath: '/geometry' } }],
+      ]),
+    };
+    const surface = resolveSurface(graph)!;
+    const { resources, lights } = sceneWith({ surfaceGraph: graph, resolvedSurface: surface });
+    const geometry = resources.geometries.get('/proto')!;
+    const positions = new Float32Array([-1, -1, -1, 1, -1, 1, 1, 1, 1, -1, 1, -1]);
+    resources.geometries = new Map([['/proto', {
+      ...geometry, streams: [{ name: 'position', components: 3, data: positions }],
+    }]]);
+    const model = scaling4(1, 2, 3);
+    resources.instances[0]!.transform = model;
+    const sampler = createSceneSampler(buildPathTraceScene(resources, { lights }));
+    const hit = sampler.intersect({ origin: [0, 0, 3], direction: [0, 0, -1] })!;
+    expect(hit).not.toBeNull();
+    const direction = [0, 0, 1] as const;
+    const actual = sampler.evalBsdf(hit, direction, direction);
+    const closure = evaluateSurfaceToLayered(graph, surface, {
+      inputs: { [field]: local, [OBJECT_TO_WORLD_INPUT]: model, [WORLD_TO_OBJECT_INPUT]: inverse4(model, true) },
+    });
+    const expected = evalWorld(layeredSurfaceBsdf(closure), hit.normal, direction, direction);
+    actual.value.forEach((value, i) => expect(value).toBeCloseTo(expected.value[i]!, 6));
   });
 
   it('uses the hit instance transform for two instances sharing one material, including cached geometry', () => {

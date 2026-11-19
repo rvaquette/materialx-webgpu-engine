@@ -11,7 +11,7 @@
 // resolve to the interpreter's neutral until real sampling (T057k).
 
 import { IrModuleBuilder, type LayeredClosure, type ShaderIr } from './ir.ts';
-import { evaluateIrRef, IrEvalTransformError, type IrEvalVaryings } from './ir-eval.ts';
+import { evaluateIrRef, IrEvalFlakeError, IrEvalTransformError, type IrEvalVaryings } from './ir-eval.ts';
 import { lowerSurfaceInputsToIr } from './surface-ir.ts';
 import { surfaceGraphToLayered } from './surface-lower.ts';
 import type { DiagnosticSink } from '../core/diagnostics.ts';
@@ -113,7 +113,7 @@ export function composeSurfaceLayered(prepared: PreparedSurface, env: IrEvalVary
       try {
         value = evaluateIrRef(prepared.ir, ref, env, cache);
       } catch (error) {
-        if (error instanceof IrEvalTransformError) throw error;
+        if (error instanceof IrEvalTransformError || error instanceof IrEvalFlakeError) throw error;
         // Nodes without a CPU mirror (noise, matrices...) keep the authored/default input.
         value = undefined;
       }
@@ -129,7 +129,7 @@ export function composeSurfaceLayered(prepared: PreparedSurface, env: IrEvalVary
   for (const { nodeId, input, ref } of prepared.lamaInputs) {
     let values: readonly number[] | undefined;
     try { values = evaluateIrRef(prepared.ir, ref, env, cache); } catch (error) {
-      if (error instanceof IrEvalTransformError) throw error;
+      if (error instanceof IrEvalTransformError || error instanceof IrEvalFlakeError) throw error;
       values = undefined;
     }
     if (values === undefined) continue;

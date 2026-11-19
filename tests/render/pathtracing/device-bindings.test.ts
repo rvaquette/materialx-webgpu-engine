@@ -175,6 +175,12 @@ it('packs shared object vertices for transformed geometry and opacity without ch
   expect(wgsl).toContain('vary.in_mx_objectNormal = objectN;');
   expect(wgsl).toContain('mx_hit_varyings(hit, pos, surface_hit_normal(hit), normalize(-rd))');
 
+  const geometry = scene.objectGeometry.get('/mesh')!;
+  scene.objectGeometry.set('/mesh', { indices: geometry.indices, positions: geometry.positions });
+  const noFrame = await buildPtDeviceBindings(dispatch, scene, countingProvider(undefined).provider);
+  const noFramePacked = noFrame.group0.find(slot => slot.role === 'triangleUv')!.data as Float32Array;
+  expect(Array.from(noFramePacked.slice(140, 148))).toEqual(Array(8).fill(0));
+
   scene.objectGeometry.delete('/mesh');
   await expect(buildPtDeviceBindings(dispatch, scene, countingProvider(undefined).provider)).rejects.toThrow(/Missing object-space geometry/);
 });
