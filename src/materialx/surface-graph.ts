@@ -320,6 +320,8 @@ export const DEFAULT_SUPPORTED_UPSTREAM: ReadonlySet<string> = new Set([
   'triplanarprojection',
   'flake2d',
   'flake3d',
+  'worleynoise2d',
+  'worleynoise3d',
   'constant',
   'multiply',
   'blur',

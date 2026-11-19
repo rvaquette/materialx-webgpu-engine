@@ -400,7 +400,7 @@ export function lowerValueInputsToIr(
           if (layer === undefined || layer !== '') {
             sink({ level: 'warning', message: `triplanarprojection '${nodeId}' cannot select layer${axis}; using the base image.`, detail: { nodeId, axis, layer } });
           }
-          const file = staticStringInput(nodeId, `file${axis}`);
+          const file = staticStringInput(nodeId, `file${axis}`, '', true);
           if (file === undefined || /(?:\{(?:frame|0[1-9]\d*frame)\}|%7b|\[[A-Za-z_][A-Za-z0-9_]*\]|%5b)/i.test(file)) {
             sink({ level: 'warning', message: `triplanarprojection '${nodeId}' has an unsupported or unresolved file${axis}; using its default.`, detail: { nodeId, axis } });
           } else if (file !== '') {
@@ -421,6 +421,10 @@ export function lowerValueInputsToIr(
         };
         const position = geometry('position');
         const normal = geometry('normal');
+        const normalExpr = builder.get(normal);
+        if (normalExpr?.kind === 'const' && Array.isArray(normalExpr.value) && normalExpr.value.every(component => component === 0)) {
+          sink({ level: 'warning', message: `triplanarprojection '${nodeId}' has a zero normal; its blend weights are undefined.`, detail: { nodeId } });
+        }
         const component = (source: IrRef, pattern: string): IrRef =>
           builder.add({ kind: 'swizzle', type: FLOAT, source, pattern });
         const combine = (a: IrRef, b: IrRef): IrRef => callRef('combine2', vec2, { in1: a, in2: b });
@@ -626,7 +630,13 @@ export function lowerValueInputsToIr(
     for (const input of node.nodeDef?.inputs ?? []) declaredTypes.set(input.name, irTypeFromMaterialX(input.type));
     const namedArgs: Record<string, IrRef> = {};
     for (const input of node.inputs) {
-      const ref = lowerInput(input);
+      let ref: IrRef | undefined;
+      if (node.category === 'worleynoise3d' && input.name === 'position') {
+        transformDepth++;
+        try { ref = lowerInput(input); } finally { transformDepth--; }
+      } else {
+        ref = lowerInput(input);
+      }
       if (ref !== undefined) namedArgs[input.name] = coerce(ref, declaredTypes.get(input.name) ?? irTypeFromMaterialX(input.type));
     }
     for (const input of node.nodeDef?.inputs ?? []) {
@@ -636,7 +646,9 @@ export function lowerValueInputsToIr(
         namedArgs[input.name] = constOfIrType(builder, inputType, parseNumbers(input.value));
       }
     }
-    if (node.category === 'flake3d') namedArgs.position = geometryDefault(nodeId, 'position', namedArgs.position);
+    if (node.category === 'flake3d' || node.category === 'worleynoise3d') {
+      namedArgs.position = geometryDefault(nodeId, 'position', namedArgs.position);
+    }
     const op = override?.op ?? (node.category === 'artistic_ior' && output === 'extinction' ? 'artistic_ior_extinction' : node.category);
     return builder.add(
       node.nodeDef !== undefined
@@ -645,11 +657,13 @@ export function lowerValueInputsToIr(
     );
   };
 
-  const staticStringInput = (nodeId: string, name: string, fallback = ''): string | undefined => {
+  const staticStringInput = (nodeId: string, name: string, fallback = '', resolveFilenameTokens = false): string | undefined => {
     const node = graph.nodes.get(nodeId)!;
     let candidate = node.inputs.find(item => item.name === name);
     let declared = node.nodeDef?.inputs?.find(item => item.name === name)?.value;
     const seen = new Set<string>();
+    const tokenSources: Readonly<Record<string, string>>[] = [];
+    if (resolveFilenameTokens && candidate?.filenameTokens) tokenSources.push(candidate.filenameTokens);
     while (!candidate?.parameter && candidate?.source.kind === 'connection') {
       const { nodeId: upstreamId, output } = candidate.source;
       const upstream = graph.nodes.get(upstreamId);
@@ -658,11 +672,17 @@ export function lowerValueInputsToIr(
       seen.add(upstreamId);
       candidate = upstream.inputs.find(item => item.name === 'value');
       declared = upstream.nodeDef?.inputs?.find(item => item.name === 'value')?.value;
+      if (resolveFilenameTokens && candidate?.filenameTokens) tokenSources.push(candidate.filenameTokens);
     }
     if (candidate?.parameter || candidate?.source.kind === 'connection' || candidate?.source.kind === 'interface') {
       return undefined;
     }
-    return (candidate?.source.kind === 'value' ? candidate.source.value : declared ?? fallback).trim();
+    let result = (candidate?.source.kind === 'value' ? candidate.source.value : declared ?? fallback).trim();
+    for (const tokens of tokenSources) {
+      result = result.replace(/(?:\[|%5b)([A-Za-z_][A-Za-z0-9_]*)(?:\]|%5d)/gi,
+        (token, key: string) => Object.hasOwn(tokens, key) ? tokens[key]! : token);
+    }
+    return result;
   };
 
   const lowerTransformGeometry = (nodeId: string): IrRef => {

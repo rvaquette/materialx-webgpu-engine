@@ -24,6 +24,7 @@ import { evaluateShaderIr } from '../../src/compiler/ir-eval.ts';
 import { inverse4 } from '../../src/scene/transforms.ts';
 import type { Diagnostic } from '../../src/core/diagnostics.ts';
 import { createImageSampler } from '../../src/render/pathtracing/texture-sample.ts';
+import { WORLEY_ORACLES } from '../fixtures/worley-cases.ts';
 
 function value(name: string, type: string, raw: string, colorSpace?: string): ResolvedInput {
   const source: ResolvedValueSource = { kind: 'value', value: raw, type };
@@ -112,6 +113,65 @@ function lowerTriplanar(type: string, inputs: ResolvedInput[], nodes: ResolvedNo
 describe('lowerSurfaceInputsToIr (T055c)', () => {
   const instanceModel = [0, 2, 0, 0, -3, 0, 0, 0, 0, 0, 4, 0, 10, -2, 3, 1];
   const instanceInverse = inverse4(instanceModel, true);
+
+  it.each([2, 3] as const)('recognizes Worley %sD and uses its declared geometric default', dims => {
+    const node = upstream('worley', `worleynoise${dims}d`, 'float', []);
+    node.nodeDef = {
+      name: `ND_worleynoise${dims}d_float`, nodeString: node.category, type: 'float',
+      implementation: { kind: 'unresolved' },
+      inputs: [
+        dims === 2 ? { name: 'texcoord', type: 'vector2', geomprop: 'UV0' }
+          : { name: 'position', type: 'vector3', geomprop: 'Pobject' },
+        { name: 'jitter', type: 'float', value: '0.65' },
+        { name: 'style', type: 'integer', value: '1' },
+      ],
+    };
+    const diagnostics: Diagnostic[] = [];
+    const graph = surfaceGraph([conn('base', 'float', 'worley')], [node]);
+    const { ir, module } = lowerAndEmit(graph, [{ name: 'base', type: FLOAT }], d => diagnostics.push(d));
+    const actual = evaluateShaderIr(ir, {
+      texcoord: [0.3, 0.7], position: [9, 9, 9], inputs: { [OBJECT_POSITION_INPUT]: [0.3, 0.7, 0.2] },
+    }).get('base')![0]!;
+    expect(actual).toBeCloseTo(WORLEY_ORACLES[dims - 2]!.scalar, 6);
+    expect(diagnostics).toEqual([]);
+    if (dims === 3) {
+      expect(module.code).toContain(`in_${OBJECT_POSITION_INPUT}: vec3f`);
+      expect(() => evaluateShaderIr(ir, { position: [9, 9, 9] })).toThrow('Missing or invalid object-space geometry');
+    }
+  });
+
+  it.each(['object', 'world'] as const)('respects a connected %s-space position without changing unrelated uses', space => {
+    const graph = surfaceGraph([
+      conn('base', 'float', 'worley'), conn('emission_color', 'color3', 'position'),
+    ], [
+      upstream('worley', 'worleynoise3d', 'float', [
+        conn('position', 'vector3', 'position'), value('jitter', 'float', '0.65'), value('style', 'integer', '1'),
+      ]),
+      upstream('position', 'position', 'vector3', [value('space', 'string', space)]),
+    ]);
+    const { ir } = lowerAndEmit(graph, [{ name: 'base', type: FLOAT }, { name: 'emission_color', type: COLOR3 }]);
+    const position = [0.3, 0.7, 0.2];
+    const world = [3.3, -1.3, 2.2];
+    const result = evaluateShaderIr(ir, { position: world, inputs: { [OBJECT_POSITION_INPUT]: position } });
+    const reference = evaluateShaderIr(ir, { position: space === 'object' ? world : position, inputs: { [OBJECT_POSITION_INPUT]: position } });
+    expect(reference.get('base')![0]).toBeCloseTo(WORLEY_ORACLES[1].scalar, 6);
+    if (space === 'object') expect(result.get('base')![0]).toBeCloseTo(WORLEY_ORACLES[1].scalar, 6);
+    else expect(result.get('base')![0]).not.toBeCloseTo(WORLEY_ORACLES[1].scalar, 4);
+    expect(result.get('emission_color')).toEqual(world);
+  });
+
+  it('honors a Worley 3D world-space NodeDef default', () => {
+    const node = upstream('worley', 'worleynoise3d', 'float', [
+      value('jitter', 'float', '0.65'), value('style', 'integer', '1'),
+    ]);
+    node.nodeDef = {
+      name: 'custom_worley', nodeString: 'worleynoise3d', type: 'float',
+      implementation: { kind: 'unresolved' }, inputs: [{ name: 'position', type: 'vector3', geomprop: 'Pworld' }],
+    };
+    const { ir, module } = lowerAndEmit(surfaceGraph([conn('base', 'float', 'worley')], [node]), [{ name: 'base', type: FLOAT }]);
+    expect(evaluateShaderIr(ir, { position: [0.3, 0.7, 0.2] }).get('base')![0]).toBeCloseTo(WORLEY_ORACLES[1].scalar, 6);
+    expect(module.code).not.toContain(`in_${OBJECT_POSITION_INPUT}`);
+  });
 
   it.each([
     ['float', [0.2]], ['color3', [0.2, 0.3, 0.4]], ['color4', [0.2, 0.3, 0.4, 0.5]],
@@ -257,6 +317,57 @@ describe('lowerSurfaceInputsToIr (T055c)', () => {
     }).get('base_color')!;
     [0.6, 0.7, 1].forEach((component, index) => expect(result[index]).toBeCloseTo(component));
     expect(diagnostics).toEqual([]);
+  });
+
+  it('resolves authored filename tokens, including tokens on connected constants', () => {
+    const diagnostics: Diagnostic[] = [];
+    const ir = lowerTriplanar('color3', [
+      { ...value('filex', 'filename', '[asset].png'), filenameTokens: { asset: 'brick' } },
+      conn('filey', 'filename', 'filename'),
+    ], [upstream('filename', 'constant', 'filename', [
+      { ...value('value', 'filename', '%5Basset%5D.<UDIM>.png'), filenameTokens: { asset: 'stone' } },
+    ])], diagnostics);
+    expect(ir.textures.map(texture => texture.fileRef)).toEqual(['brick.png', 'stone.<UDIM>.png']);
+    expect(diagnostics).toEqual([]);
+  });
+
+  it('diagnoses a zero triplanar normal', () => {
+    const diagnostics: Diagnostic[] = [];
+    lowerTriplanar('float', [
+      value('filex', 'filename', 'x.png'), value('normal', 'vector3', '0,0,0'),
+    ], [], diagnostics);
+    expect(diagnostics.some(diagnostic => diagnostic.message.includes('zero normal'))).toBe(true);
+  });
+
+  it('allocates stable triplanar resource names without collisions after WGSL sanitization', () => {
+    const graph = surfaceGraph([
+      conn('base_color', 'color3', 'sum'), conn('opacity', 'color3', 'tri-a'),
+      conn('emission_color', 'color3', 'tri-a__triplanar_x'),
+    ], [
+      upstream('sum', 'add', 'color3', [conn('in1', 'color3', 'tri-a'), conn('in2', 'color3', 'tri_a')]),
+      upstream('tri-a', 'triplanarprojection', 'color3', [
+        value('filex', 'filename', 'a.<UDIM>.png'), value('filez', 'filename', 'a-z.png'),
+      ]),
+      upstream('tri_a', 'triplanarprojection', 'color3', [value('filex', 'filename', 'b.png')]),
+      upstream('tri-a__triplanar_x', 'image', 'color3', [value('file', 'filename', 'original.png')]),
+      upstream('tri-a__triplanar_z_udim_index', 'image', 'color3', [value('file', 'filename', 'unused.png')]),
+    ]);
+    const surface = resolveSurface(graph)!;
+    const builder = new IrModuleBuilder();
+    lowerSurfaceInputsToIr(graph, surface, builder);
+    const ir = builder.build();
+    const module = emitWgsl(ir);
+    const handles = module.textures.map(texture => texture.handle);
+    expect(new Set(handles).size).toBe(handles.length);
+    expect(ir.textures.map(texture => texture.fileRef)).toEqual(expect.arrayContaining([
+      'a.<UDIM>.png', 'a-z.png', 'b.png', 'original.png',
+    ]));
+    const opacityBuilder = new IrModuleBuilder();
+    lowerValueInputsToIr(graph, new Map([['opacity', surface.inputs.get('opacity')!]]), opacityBuilder);
+    const opacityTextures = opacityBuilder.build().textures;
+    for (const texture of opacityTextures) {
+      expect(ir.textures.find(candidate => candidate.fileRef === texture.fileRef)?.name).toBe(texture.name);
+    }
   });
 
   it.each([

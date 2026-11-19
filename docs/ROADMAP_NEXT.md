@@ -685,7 +685,8 @@ en U, miroir en V et un filtrage linéaire hors UDIM. Les UDIM et les registres
 de textures et samplers utilisent les chemins existants. Un nom de fichier vide
 utilise la couleur `default` ; un nom dynamique non résolu produit un avertissement. Comme pour
 les autres images du moteur, un fichier nommé mais introuvable ne garantit pas
-encore l'utilisation de cette couleur. `triplanarprojection` reste à traiter.
+encore l'utilisation de cette couleur. `triplanarprojection` est traité à la
+soixante-quatorzième étape.
 
 **Cinquante-troisième étape :** le nœud procédural 2D `flake2d` expose les
 quatre sorties MaterialX : identifiant, valeur aléatoire, présence et normale
@@ -693,8 +694,7 @@ du flocon. Son évaluation CPU et WGSL utilise le même voisinage cellulaire et
 les mêmes paramètres `size`, `roughness`, `coverage` et repère de surface que
 la bibliothèque MaterialX. La taille doit être non nulle. Chaque sortie
 connectée recalcule actuellement le motif ; ce nœud peut donc être coûteux.
-La variante `flake3d` est traitée à la soixante-treizième étape ;
-`triplanarprojection` reste à traiter.
+La variante `flake3d` est traitée à la soixante-treizième étape.
 
 **Cinquante-quatrième étape :** le lowering reconnaît `blur` et reproduit le
 nodegraph de la bibliothèque standard MaterialX, qui est actuellement un
@@ -916,6 +916,26 @@ normal, tangent et bitangent fourni explicitement. Le path tracer refuse les
 matériaux nécessitant la position objet si leur déplacement n'est pas encore
 cuit. Les anciens paquets de scène ou de matériau contenant `flake3d` doivent
 être réexportés ; les autres restent compatibles selon les règles précédentes.
+
+**Soixante-quatorzième étape :** `triplanarprojection` prend en charge les six
+types MaterialX scalaires, couleurs et vecteurs en raster et en path tracing.
+Les trois images et leurs coordonnées projetées suivent `upaxis`, la normale
+et le mélange `blend` du nodegraph MaterialX. Position et normale utilisent
+l'espace objet par défaut, y compris pour les instances ; elles peuvent aussi
+être connectées ou fournies explicitement. Les textures ordinaires et UDIM
+réutilisent les registres et samplers du moteur ; une image sans nom ou une
+tuile UDIM absente utilise `default`. Comme pour les autres images, un fichier
+ordinaire nommé mais introuvable ne garantit pas encore ce repli.
+
+Les noms dynamiques, les séquences ou tokens non résolus et les couches
+d'image non prises en charge produisent des avertissements. Le filtrage
+`cubic` est approximé par `linear` avec avertissement ; une normale nulle
+produit des poids indéfinis et est signalée lorsqu'elle est connue. Les volumes
+refusent les attributs d'instance et le baking des textures ; un déplacement
+doit être cuit avant le path tracing lorsque la projection utilise des
+attributs objet. Les anciens paquets contenant `triplanarprojection` doivent
+être réexportés ; les paquets version 3 contenant seulement `flake3d` restent
+compatibles.
 
 Travaux restants :
 

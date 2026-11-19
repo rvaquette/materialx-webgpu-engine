@@ -15,7 +15,7 @@ import { buildPathTraceScene, PT_MATERIAL_FLOATS, type PathTraceScene } from '..
 import { applySceneDisplacement } from '../../src/render/displacement.ts';
 import { buildMaterialDispatch } from '../../src/render/pathtracing/material-variant.ts';
 import { NEUTRAL_SURFACE } from '../../src/render/raster/scene-frame.ts';
-import { IrModuleBuilder, FLOAT, OBJECT_TO_WORLD_INPUT, OBJECT_POSITION_INPUT } from '../../src/compiler/ir.ts';
+import { IrModuleBuilder, FLOAT, OBJECT_TO_WORLD_INPUT, OBJECT_POSITION_INPUT, OBJECT_NORMAL_INPUT } from '../../src/compiler/ir.ts';
 import { emitWgsl } from '../../src/compiler/wgsl.ts';
 import { emitLayeredSurface } from '../../src/compiler/surface-wgsl.ts';
 import { resolveSurface } from '../../src/materialx/surface-graph.ts';
@@ -170,6 +170,64 @@ async function flake3dFixture(): Promise<LoadedUsdScene> {
   material.surfaceGraph = graph;
   material.resolvedSurface = surface;
   material.surfaceModule = emitLayeredSurface(graph, surface);
+  return loaded;
+}
+
+async function worley3dFixture(): Promise<LoadedUsdScene> {
+  const loaded = await fixture();
+  const material = [...loaded.resources.materials.values()][0]!;
+  const originalGraph = material.surfaceGraph!;
+  const root = originalGraph.nodes.get('s')!;
+  const graph: ResolvedGraph = {
+    ...originalGraph,
+    nodes: new Map([
+      ['s', { ...root, inputs: [{
+        name: 'base', type: 'float', source: { kind: 'connection', nodeId: 'worley' },
+        provenance: { namePath: '/s/base' },
+      }] }],
+      ['worley', {
+        id: 'worley', category: 'worleynoise3d', type: 'float', inputs: [], provenance: { namePath: '/worley' },
+      }],
+    ]),
+  };
+  const surface = resolveSurface(graph);
+  if (!surface) throw new Error('Worley fixture failed.');
+  material.surfaceGraph = graph;
+  material.resolvedSurface = surface;
+  material.surfaceModule = emitLayeredSurface(graph, surface);
+  return loaded;
+}
+
+async function triplanarFixture(): Promise<LoadedUsdScene> {
+  const loaded = await fixture();
+  const material = [...loaded.resources.materials.values()][0]!;
+  const originalGraph = material.surfaceGraph!;
+  const root = originalGraph.nodes.get('s')!;
+  const graph: ResolvedGraph = {
+    ...originalGraph,
+    nodes: new Map([
+      ['s', { ...root, inputs: [{
+        name: 'base_color', type: 'color3', source: { kind: 'connection', nodeId: 'tri' },
+        provenance: { namePath: '/s/base_color' },
+      }] }],
+      ['tri', {
+        id: 'tri', category: 'triplanarprojection', type: 'color3', provenance: { namePath: '/tri' },
+        inputs: [{
+          name: 'filez', type: 'filename', source: { kind: 'value', type: 'filename', value: 'z.png' },
+          provenance: { namePath: '/tri/filez' },
+        }],
+      }],
+    ]),
+  };
+  const surface = resolveSurface(graph);
+  if (!surface) throw new Error('triplanar fixture failed.');
+  material.surfaceGraph = graph;
+  material.resolvedSurface = surface;
+  material.surfaceModule = emitLayeredSurface(graph, surface);
+  loaded.mtlx.imageProvider.decode = () => ({
+    kind: 'pixels', width: 1, height: 1, channels: 4, componentType: 'uint8',
+    colorSpace: 'lin_rec709', data: new Uint8Array([10, 20, 30, 255]),
+  });
   return loaded;
 }
 
@@ -525,9 +583,66 @@ over "World" {
       [material, (old: CompiledScenePackage) => loadCompiledMaterial('https://example.test/scenes/compiled/scene.json', packageFetch(old))],
     ] as const) {
       const data = await decodeCompiledScene(encoded.manifest, readPackage(encoded)) as { spaceTransformVersion?: number };
+      for (const version of [3, 4]) {
+        data.spaceTransformVersion = version;
+        const compatible = await encodeCompiledScene(data, loaded.entry, { compressionLevel: 1 });
+        await expect(load(compatible)).resolves.toBeDefined();
+      }
       data.spaceTransformVersion = 2;
       const old = await encodeCompiledScene(data, loaded.entry);
       await expect(load(old)).rejects.toThrow('legacy flake3d shaders; re-export');
+    }
+  });
+
+  it('round trips triplanar textures and geometry while rejecting stale scene and material shaders', async () => {
+    const loaded = await triplanarFixture();
+    const scene = await exportCompiledScene(loaded, { compressionLevel: 1 });
+    const restored = await loadCompiledScene('https://example.test/scenes/compiled/scene.json', vi.fn(), packageFetch(scene));
+    expect(restored.compiled!.pathTrace.objectGeometry?.size).toBe(1);
+    expect(restored.compiled!.dispatch.extraInputs.has(OBJECT_POSITION_INPUT)).toBe(true);
+    expect(restored.compiled!.dispatch.extraInputs.has(OBJECT_NORMAL_INPUT)).toBe(true);
+    expect(restored.compiled!.dispatch.textureRegistry.images).toContain('z.png');
+    const material = await exportCompiledMaterial(loaded, loaded.resources.instances[0]!.primPath, { compressionLevel: 1 });
+    const restoredMaterial = await loadCompiledMaterial('https://example.test/scenes/compiled/scene.json', packageFetch(material));
+    expect(restoredMaterial.material.surfaceModule?.textures.some(texture => texture.fileRef === 'z.png')).toBe(true);
+    expect(restoredMaterial.material.surfaceModule?.extraInputs.has(OBJECT_NORMAL_INPUT)).toBe(true);
+    for (const [encoded, load] of [
+      [scene, (old: CompiledScenePackage) => loadCompiledScene('https://example.test/scenes/compiled/scene.json', vi.fn(), packageFetch(old))],
+      [material, (old: CompiledScenePackage) => loadCompiledMaterial('https://example.test/scenes/compiled/scene.json', packageFetch(old))],
+    ] as const) {
+      const data = await decodeCompiledScene(encoded.manifest, readPackage(encoded)) as { spaceTransformVersion?: number };
+      data.spaceTransformVersion = 4;
+      const compatible = await encodeCompiledScene(data, loaded.entry, { compressionLevel: 1 });
+      await expect(load(compatible)).resolves.toBeDefined();
+      for (const version of [undefined, 1, 2, 3]) {
+        if (version === undefined) delete data.spaceTransformVersion;
+        else data.spaceTransformVersion = version;
+        const old = await encodeCompiledScene(data, loaded.entry, { compressionLevel: 1 });
+        await expect(load(old)).rejects.toThrow('legacy triplanarprojection shaders; re-export');
+      }
+    }
+  });
+
+  it('round trips Worley 3D geometry and rejects stale scene and material shaders', async () => {
+    const loaded = await worley3dFixture();
+    const scene = await exportCompiledScene(loaded, { compressionLevel: 1 });
+    const restored = await loadCompiledScene('https://example.test/scenes/compiled/scene.json', vi.fn(), packageFetch(scene));
+    expect(restored.compiled!.pathTrace.objectGeometry?.size).toBe(1);
+    expect(restored.compiled!.dispatch.extraInputs.has(OBJECT_POSITION_INPUT)).toBe(true);
+    const material = await exportCompiledMaterial(loaded, loaded.resources.instances[0]!.primPath, { compressionLevel: 1 });
+    const restoredMaterial = await loadCompiledMaterial('https://example.test/scenes/compiled/scene.json', packageFetch(material));
+    expect(restoredMaterial.material.surfaceModule?.extraInputs.has(OBJECT_POSITION_INPUT)).toBe(true);
+    for (const [encoded, load] of [
+      [scene, (old: CompiledScenePackage) => loadCompiledScene('https://example.test/scenes/compiled/scene.json', vi.fn(), packageFetch(old))],
+      [material, (old: CompiledScenePackage) => loadCompiledMaterial('https://example.test/scenes/compiled/scene.json', packageFetch(old))],
+    ] as const) {
+      const data = await decodeCompiledScene(encoded.manifest, readPackage(encoded)) as { spaceTransformVersion?: number };
+      for (const version of [undefined, 1, 2, 3, 4]) {
+        if (version === undefined) delete data.spaceTransformVersion;
+        else data.spaceTransformVersion = version;
+        const old = await encodeCompiledScene(data, loaded.entry, { compressionLevel: 1 });
+        await expect(load(old)).rejects.toThrow('legacy worleynoise3d shaders; re-export');
+      }
     }
   });
 

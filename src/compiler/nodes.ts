@@ -1513,11 +1513,11 @@ const LOWERINGS: readonly NodeLowering[] = [
     HSV_PRELUDE, MATERIALX_NOISE_HASH_PRELUDE, CELL_NOISE_PRELUDE,
   ]),
   expr('worleynoise2d', (inp, type, ctx) => {
-    const w = `mx_worley(vec3f(${texcoordOf(inp, ctx)}, 0.0), ${inp.named('jitter', '1.0')}, 2, i32(${inp.named('style', '0')}), ${vectorSize(type)})`;
+    const w = `mx_worley(vec3f(${inp.named('texcoord', ctx.varyings.texcoord, 0)}, 0.0), ${inp.named('jitter', '1.0', 1)}, 2, i32(${inp.named('style', '0', 2)}), ${vectorSize(type)})`;
     return vectorSize(type) === 1 ? `${w}.x` : vectorSize(type) === 2 ? `${w}.xy` : w;
   }, [MATERIALX_NOISE_HASH_PRELUDE, WORLEY_PRELUDE]),
   expr('worleynoise3d', (inp, type, ctx) => {
-    const w = `mx_worley(${positionOf(inp, ctx)}, ${inp.named('jitter', '1.0')}, 3, i32(${inp.named('style', '0')}), ${vectorSize(type)})`;
+    const w = `mx_worley(${inp.named('position', ctx.varyings.position, 0)}, ${inp.named('jitter', '1.0', 1)}, 3, i32(${inp.named('style', '0', 2)}), ${vectorSize(type)})`;
     return vectorSize(type) === 1 ? `${w}.x` : vectorSize(type) === 2 ? `${w}.xy` : w;
   }, [MATERIALX_NOISE_HASH_PRELUDE, WORLEY_PRELUDE]),
   ...(['unifiednoise2d', 'unifiednoise3d'] as const).map((category) => expr(category, (inp, _type, ctx) => {

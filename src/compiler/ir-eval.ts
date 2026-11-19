@@ -290,6 +290,45 @@ function noiseMixedCell(cell: IrValue, dimensions: number): [number, number, num
   return [a, b, c];
 }
 
+function worleyCellColor(cell: IrValue, dimensions: 2 | 3): number[] {
+  if (dimensions === 2) {
+    return [0, 1, 2].map(z => materialXCellNoise(cell[0]!, cell[1]!, z));
+  }
+  const [a, b, c] = noiseMixedCell(cell, 4);
+  return [0, 1, 2].map(offset => noiseUnit(noiseFinal((a + offset) >>> 0, b, c)));
+}
+
+function materialXWorley(position: IrValue, jitter: number, style: number, dimensions: 2 | 3, channels: number): number[] {
+  const base = position.map(Math.floor);
+  const fraction = position.map((value, index) => value - base[index]!);
+  const distances = [1e6, 1e6, 1e6];
+  let nearest = base;
+  const zRadius = dimensions === 3 ? 1 : 0;
+  for (let x = -1; x <= 1; x++) for (let y = -1; y <= 1; y++) for (let z = -zRadius; z <= zRadius; z++) {
+    const offset = [x, y, z];
+    const cell = offset.slice(0, dimensions).map((value, index) => base[index]! + value);
+    const random = worleyCellColor(cell, dimensions);
+    const cellPosition = cell.map((_, index) => offset[index]! + 0.5 + (random[index]! - 0.5) * jitter);
+    const distance = cellPosition.reduce((sum, value, index) => sum + (value - fraction[index]!) ** 2, 0);
+    if (distance < distances[0]!) {
+      distances[2] = distances[1]!;
+      distances[1] = distances[0]!;
+      distances[0] = distance;
+      nearest = cellPosition.map((value, index) => Math.floor(value + base[index]!));
+    } else if (distance < distances[1]!) {
+      distances[2] = distances[1]!;
+      distances[1] = distance;
+    } else if (distance < distances[2]!) {
+      distances[2] = distance;
+    }
+  }
+  if (style === 1) {
+    if (channels === 1) return [materialXCellNoise(nearest[0]!, nearest[1]!, dimensions === 3 ? nearest[2]! : undefined)];
+    return worleyCellColor(nearest, dimensions).slice(0, channels);
+  }
+  return distances.slice(0, channels).map(Math.sqrt);
+}
+
 function flakeNoise(cell: IrValue, tail?: number, vector = false): number[] {
   const [a0, b, c] = noiseMixedCell(cell, tail === undefined ? 4 : vector ? 5 : 4);
   const a = (a0 + (tail ?? 0)) >>> 0;
@@ -539,6 +578,22 @@ function evalCall(op: string, args: IrValue[], env: IrEvalVaryings, type: IrType
     if (op.endsWith('_id')) return [result.id];
     if (op.endsWith('_rand')) return [result.rand];
     return [result.presence];
+  }
+  if (op === 'worleynoise2d' || op === 'worleynoise3d') {
+    if ((type.kind !== 'scalar' && type.kind !== 'vector') || type.scalar !== 'float' ||
+        (type.kind === 'vector' && type.size > 3)) {
+      throw new IrEvalError(`${op} requires a float, vector2, or vector3 output`);
+    }
+    const dimensions = op === 'worleynoise2d' ? 2 : 3;
+    const coordinate = dimensions === 2
+      ? input('texcoord', 0, [...(env.texcoord ?? [0, 0])])
+      : input('position', 0, [...(env.position ?? [0, 0, 0])]);
+    const jitter = input('jitter', 1, [1])[0]!;
+    if (coordinate.length !== dimensions || coordinate.some(value => !Number.isFinite(value)) || !Number.isFinite(jitter)) {
+      throw new IrEvalError(`${op} requires finite ${dimensions}D coordinates and jitter`);
+    }
+    return materialXWorley(coordinate, jitter, Math.trunc(input('style', 2, [0])[0]!), dimensions,
+      type.kind === 'scalar' ? 1 : type.size);
   }
   if (op === 'creatematrix') {
     if (type.kind !== 'matrix') throw new IrEvalError('creatematrix requires a matrix output');

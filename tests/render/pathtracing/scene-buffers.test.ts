@@ -428,6 +428,125 @@ describe('createSceneSampler procedural oracle (T057i3)', () => {
   const normalLength = Math.hypot(0.475, 0.775);
   const interpolatedNormal = [0.475 / normalLength, 0, 0.775 / normalLength];
 
+  it('uses object-space Worley 3D on transformed instances and cached geometry', () => {
+    const graph: ResolvedGraph = {
+      terminals: [{ name: 'surfaceshader', type: 'surfaceshader', nodeId: 's', provenance: { namePath: '/s' } }],
+      nodes: new Map<string, ResolvedNode>([
+        ['s', { id: 's', category: 'standard_surface', type: 'surfaceshader', inputs: [
+          { name: 'base', type: 'float', source: { kind: 'connection', nodeId: 'worley' }, provenance: { namePath: '/s/base' } },
+          { name: 'specular', type: 'float', source: { kind: 'value', type: 'float', value: '0' }, provenance: { namePath: '/s/specular' } },
+        ], provenance: { namePath: '/s' } }],
+        ['worley', { id: 'worley', category: 'worleynoise3d', type: 'float', inputs: [
+          { name: 'jitter', type: 'float', source: { kind: 'value', type: 'float', value: '0.65' }, provenance: { namePath: '/worley/jitter' } },
+        ], provenance: { namePath: '/worley' } }],
+      ]),
+    };
+    const surface = resolveSurface(graph)!;
+    const { resources, lights } = sceneWith({ surfaceGraph: graph, resolvedSurface: surface });
+    const models = [
+      translation4(-4, 0, 0),
+      multiply4(translation4(4, 0, 0), multiply4(rotationAxis4(2, 90), scaling4(2, 3, 4))),
+    ];
+    resources.instances = models.map((transform, index) => ({
+      id: `/instance${index}`, primPath: `/instance${index}`, prototypeId: '/proto',
+      materialKey: 'mat', hasGeometry: true, transform,
+    }));
+    const scene = buildPathTraceScene(resources, { lights });
+    const cached = buildPathTraceScene(resources, { lights }, undefined, undefined, scene);
+    expect(cached.objectGeometry?.get('/proto')?.positions).toBe(resources.geometries.get('/proto')!.streams[0]!.data);
+    const sampler = createSceneSampler(cached);
+    const localPosition = [0.13, 0.27, 0] as const;
+    const direction = [0, 0, 1] as const;
+    const evaluated: (readonly number[])[] = [];
+    for (const model of models) {
+      const worldPosition = transformPoint(model, localPosition);
+      const hit = sampler.intersect({ origin: [worldPosition[0], worldPosition[1], 2], direction: [0, 0, -1] })!;
+      expect(hit).not.toBeNull();
+      const actual = sampler.evalBsdf(hit, direction, direction);
+      const closure = evaluateSurfaceToLayered(graph, surface, {
+        position: worldPosition, inputs: { [OBJECT_POSITION_INPUT]: localPosition },
+      });
+      const expected = evalWorld(layeredSurfaceBsdf(closure), hit.normal, direction, direction);
+      actual.value.forEach((value, i) => expect(value).toBeCloseTo(expected.value[i]!, 6));
+      evaluated.push(actual.value);
+    }
+    evaluated[0]!.forEach((value, i) => expect(value).toBeCloseTo(evaluated[1]![i]!, 6));
+
+    const material = resources.materials.get('mat')!;
+    const unbaked = { ...resources, materials: new Map([['mat', { ...material, displacement: { file: 'height.png', scale: 1 } }]]) };
+    expect(() => buildPathTraceScene(unbaked, { lights })).toThrow('requires displacement to be baked');
+    graph.nodes.get('worley')!.inputs.push({
+      name: 'position', type: 'vector3', source: { kind: 'value', type: 'vector3', value: '0.13, 0.27, 0.19' },
+      provenance: { namePath: '/worley/position' },
+    });
+    expect(buildPathTraceScene(resources, { lights }).objectGeometry?.size ?? 0).toBe(0);
+    expect(() => buildPathTraceScene(unbaked, { lights })).not.toThrow();
+  });
+
+  it('preserves triplanar object-space attributes on transformed instances and cached geometry', () => {
+    const graph: ResolvedGraph = {
+      terminals: [{ name: 'surfaceshader', type: 'surfaceshader', nodeId: 's', provenance: { namePath: '/s' } }],
+      nodes: new Map<string, ResolvedNode>([
+        ['s', { id: 's', category: 'standard_surface', type: 'surfaceshader', inputs: [
+          { name: 'base_color', type: 'color3', source: { kind: 'connection', nodeId: 'tri' }, provenance: { namePath: '/s/base_color' } },
+          { name: 'specular', type: 'float', source: { kind: 'value', type: 'float', value: '0' }, provenance: { namePath: '/s/specular' } },
+        ], provenance: { namePath: '/s' } }],
+        ['tri', { id: 'tri', category: 'triplanarprojection', type: 'color3', inputs: [
+          { name: 'filex', type: 'filename', source: { kind: 'value', type: 'filename', value: 'x.png' }, provenance: { namePath: '/tri/filex' } },
+          { name: 'default', type: 'color3', source: { kind: 'value', type: 'color3', value: '0.3,0.6,0.9' }, provenance: { namePath: '/tri/default' } },
+        ], provenance: { namePath: '/tri' } }],
+      ]),
+    };
+    const surface = resolveSurface(graph)!;
+    const { resources, lights } = sceneWith({ surfaceGraph: graph, resolvedSurface: surface });
+    const normals = resources.geometries.get('/proto')!.streams.find(stream => stream.name === 'normal')!.data;
+    normals.set([0.6, 0, 0.8, 0.6, 0, 0.8, 0.6, 0, 0.8, 0.6, 0, 0.8]);
+    const models = [
+      translation4(-4, 0, 0),
+      multiply4(translation4(4, 0, 0), multiply4(rotationAxis4(2, 90), scaling4(2, 3, 4))),
+    ];
+    resources.instances = models.map((transform, index) => ({
+      id: `/instance${index}`, primPath: `/instance${index}`, prototypeId: '/proto',
+      materialKey: 'mat', hasGeometry: true, transform,
+    }));
+    const scene = buildPathTraceScene(resources, { lights });
+    const cached = buildPathTraceScene(resources, { lights }, undefined, undefined, scene);
+    expect(cached.objectGeometry?.size).toBe(1);
+    expect(cached.objectGeometry?.get('/proto')?.normals).toBe(normals);
+    const sampler = createSceneSampler(cached);
+    const localPosition = [0.13, 0.27, 0] as const;
+    const localNormal = [0.6, 0, 0.8] as const;
+    const direction = [0, 0, 1] as const;
+    for (const [index, model] of models.entries()) {
+      const worldPosition = transformPoint(model, localPosition);
+      const hit = sampler.intersect({ origin: [worldPosition[0], worldPosition[1], 2], direction: [0, 0, -1] })!;
+      expect(hit).not.toBeNull();
+      const actual = sampler.evalBsdf(hit, direction, direction);
+      const closure = evaluateSurfaceToLayered(graph, surface, {
+        position: worldPosition, inputs: { [OBJECT_POSITION_INPUT]: localPosition, [OBJECT_NORMAL_INPUT]: localNormal },
+      });
+      const expected = evalWorld(layeredSurfaceBsdf(closure), hit.normal, direction, direction);
+      actual.value.forEach((value, i) => expect(value).toBeCloseTo(expected.value[i]!, 6));
+      if (index === 1) {
+        const wrong = evaluateSurfaceToLayered(graph, surface, {
+          position: worldPosition, inputs: { [OBJECT_POSITION_INPUT]: localPosition, [OBJECT_NORMAL_INPUT]: hit.normal },
+        });
+        const worldWeighted = evalWorld(layeredSurfaceBsdf(wrong), hit.normal, direction, direction);
+        expect(Math.abs(actual.value[0] - worldWeighted.value[0])).toBeGreaterThan(0.001);
+      }
+    }
+
+    const material = resources.materials.get('mat')!;
+    const unbaked = { ...resources, materials: new Map([['mat', { ...material, displacement: { file: 'height.png', scale: 1 } }]]) };
+    expect(() => buildPathTraceScene(unbaked, { lights })).toThrow('requires displacement to be baked');
+    graph.nodes.get('tri')!.inputs.push(
+      { name: 'position', type: 'vector3', source: { kind: 'value', type: 'vector3', value: '0.1,0.2,0.3' }, provenance: { namePath: '/tri/position' } },
+      { name: 'normal', type: 'vector3', source: { kind: 'value', type: 'vector3', value: '0,0,1' }, provenance: { namePath: '/tri/normal' } },
+    );
+    expect(buildPathTraceScene(resources, { lights }).objectGeometry?.size ?? 0).toBe(0);
+    expect(() => buildPathTraceScene(unbaked, { lights })).not.toThrow();
+  });
+
   it('uses the same object-space flake3d pattern on transformed instances and cached geometry', () => {
     const graph: ResolvedGraph = {
       terminals: [{ name: 'surfaceshader', type: 'surfaceshader', nodeId: 's', provenance: { namePath: '/s' } }],

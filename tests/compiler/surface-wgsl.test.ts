@@ -14,7 +14,7 @@ import type {
 } from '../../src/materialx/graph.ts';
 import { resolveSurface } from '../../src/materialx/surface-graph.ts';
 import { emitLayeredSurface, emitSurfaceVariant } from '../../src/compiler/surface-wgsl.ts';
-import { OBJECT_POSITION_INPUT } from '../../src/compiler/ir.ts';
+import { OBJECT_NORMAL_INPUT, OBJECT_POSITION_INPUT } from '../../src/compiler/ir.ts';
 import { surfaceGraphToLayered } from '../../src/compiler/surface-lower.ts';
 import type { Diagnostic } from '../../src/core/diagnostics.ts';
 
@@ -287,6 +287,51 @@ describe('emitLayeredSurface (T055d)', () => {
     expect(pathtracer.preludes.join('\n')).toContain(`fn mx_${category}(`);
     expect(raster.extraInputs.has(OBJECT_POSITION_INPUT)).toBe(category === 'flake3d');
     expect(pathtracer.extraInputs.has(OBJECT_POSITION_INPUT)).toBe(category === 'flake3d');
+  });
+
+  it('carries all triplanar textures and object-space attributes to raster and path tracing', () => {
+    const graph = surfaceGraph('standard_surface', [
+      conn('base_color', 'color3', 'tri'), conn('opacity', 'color3', 'tri'),
+    ], [upstream('tri', 'triplanarprojection', 'color3', [
+      value('filex', 'filename', 'x.<UDIM>.png'), value('filey', 'filename', 'y.png'),
+      value('filez', 'filename', 'z.png'), value('default', 'color3', '0.2,0.3,0.4'),
+    ])]);
+    const diagnostics: Diagnostic[] = [];
+    const surface = resolveSurface(graph, { onDiagnostic: diagnostic => diagnostics.push(diagnostic) })!;
+    const raster = emitLayeredSurface(graph, surface, diagnostic => diagnostics.push(diagnostic));
+    const pathtracer = emitSurfaceVariant(graph, surface, 0, diagnostic => diagnostics.push(diagnostic));
+    expect(diagnostics).toEqual([]);
+    for (const module of [raster, pathtracer]) {
+      expect(module.extraInputs.has(OBJECT_POSITION_INPUT)).toBe(true);
+      expect(module.extraInputs.has(OBJECT_NORMAL_INPUT)).toBe(true);
+      expect(module.textures.map(texture => texture.fileRef).filter(Boolean))
+        .toEqual(expect.arrayContaining(['x.<UDIM>.png', 'y.png', 'z.png']));
+    }
+    expect(raster.code).toContain('mx_sample_udim(');
+    expect(raster.code).toContain('textureSample(');
+    expect(pathtracer.fnCode).toContain('mx_sample_udim(');
+    expect(pathtracer.fnCode).toContain('textureSampleLevel(');
+    for (const texture of pathtracer.textures) {
+      expect(pathtracer.opacity!.fnCode).toContain(texture.handle);
+    }
+  });
+
+  it('uses the same triplanar bindings in separately lowered Lama closure and opacity', () => {
+    const graph = surfaceGraph('surface', [conn('bsdf', 'BSDF', 'front')], [
+      upstream('front', 'LamaDiffuse', 'BSDF', [conn('color', 'color3', 'tri')]),
+      upstream('tri', 'triplanarprojection', 'color3', [
+        value('filex', 'filename', 'x.<UDIM>.png'), value('filey', 'filename', 'y.png'),
+      ]),
+      upstream('tri__triplanar_x', 'image', 'color3', [value('file', 'filename', 'other.png')]),
+    ]);
+    graph.lamaSurface = { presence: conn('presence', 'float', 'tri') };
+    const surface = resolveSurface(graph)!;
+    const variant = emitSurfaceVariant(graph, surface, 0);
+    expect(variant.textures.length).toBeGreaterThan(0);
+    for (const texture of variant.textures) {
+      expect(variant.fnCode).toContain(texture.handle);
+      expect(variant.opacity!.fnCode).toContain(texture.handle);
+    }
   });
 
   const sssGraph = (options: ResolvedInput[]) => surfaceGraph('surface', [conn('bsdf', 'BSDF', 'skin')], [

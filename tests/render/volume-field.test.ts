@@ -1,6 +1,6 @@
 import { expect, it } from 'vitest';
 import { FLOAT, IrModuleBuilder, OBJECT_TO_WORLD_INPUT, matrix, shaderType, vector, type ShaderIr } from '../../src/compiler/ir.ts';
-import { isSpatialVolumeIr, lowerVolumeInputsToIr } from '../../src/compiler/volume-ir.ts';
+import { appendVolumeIr, isSpatialVolumeIr, lowerVolumeInputsToIr } from '../../src/compiler/volume-ir.ts';
 import type { ResolvedGraph, ResolvedNode } from '../../src/materialx/graph.ts';
 import type { ResolvedVolume } from '../../src/materialx/volume-graph.ts';
 import { bakeVolumeGrid, sampleVolumeGrid, sampleVolumeTransport } from '../../src/render/volume-field.ts';
@@ -74,6 +74,55 @@ it('rejects implicit object-space flake3d in a volume but accepts an explicit po
     });
   }
   expect(() => lowerVolumeInputsToIr(normalVolume, new IrModuleBuilder(), graph)).not.toThrow();
+});
+
+it('rejects implicit object-space Worley 3D in a volume and bakes an explicit world-space field', () => {
+  const volume: ResolvedVolume = { nodeId: 'v', inputs: new Map([
+    ['absorption', { name: 'absorption', type: 'vector3', source: { kind: 'connection', nodeId: 'worley' } }],
+    ['scattering', { name: 'scattering', type: 'vector3', source: { kind: 'value', value: [0, 0, 0] } }],
+    ['anisotropy', { name: 'anisotropy', type: 'float', source: { kind: 'value', value: [0] } }],
+  ]) };
+  const worley: ResolvedNode = { id: 'worley', category: 'worleynoise3d', type: 'vector3', inputs: [
+    { name: 'jitter', type: 'float', source: { kind: 'value', type: 'float', value: '0' }, provenance: { namePath: '/worley/jitter' } },
+  ], provenance: { namePath: '/worley' } };
+  const position: ResolvedNode = { id: 'position', category: 'position', type: 'vector3', inputs: [
+    { name: 'space', type: 'string', source: { kind: 'value', type: 'string', value: 'world' }, provenance: { namePath: '/position/space' } },
+  ], provenance: { namePath: '/position' } };
+  const graph: ResolvedGraph = { terminals: [], nodes: new Map([['worley', worley], ['position', position]]) };
+  expect(() => lowerVolumeInputsToIr(volume, new IrModuleBuilder(), graph)).toThrow('needs per-instance geometric data');
+  worley.inputs.push({
+    name: 'position', type: 'vector3', source: { kind: 'connection', nodeId: 'position' }, provenance: { namePath: '/worley/position' },
+  });
+  const builder = new IrModuleBuilder();
+  appendVolumeIr(volume, builder, graph);
+  const ir = builder.build();
+  expect(isSpatialVolumeIr(ir)).toBe(true);
+  const grid = bakeVolumeGrid(ir, { min: [0, 0, 0], max: [1, 1, 1] }, 2);
+  expect(grid.data.every(Number.isFinite)).toBe(true);
+  expect(grid.majorant).toBeGreaterThan(0);
+});
+
+it('rejects object-space or image-dependent triplanar volume fields explicitly', () => {
+  const volume: ResolvedVolume = { nodeId: 'v', inputs: new Map([
+    ['absorption', { name: 'absorption', type: 'vector3', source: { kind: 'connection', nodeId: 'tri' } }],
+    ['scattering', { name: 'scattering', type: 'vector3', source: { kind: 'value', value: [0, 0, 0] } }],
+    ['anisotropy', { name: 'anisotropy', type: 'float', source: { kind: 'value', value: [0] } }],
+  ]) };
+  const tri: ResolvedNode = {
+    id: 'tri', category: 'triplanarprojection', type: 'vector3', inputs: [
+      { name: 'filex', type: 'filename', source: { kind: 'value', type: 'filename', value: 'x.png' }, provenance: { namePath: '/tri/filex' } },
+    ], provenance: { namePath: '/tri' },
+  };
+  const graph: ResolvedGraph = { terminals: [], nodes: new Map([['tri', tri]]) };
+  expect(() => lowerVolumeInputsToIr(volume, new IrModuleBuilder(), graph)).toThrow('needs per-instance geometric data');
+  tri.inputs.push(
+    { name: 'position', type: 'vector3', source: { kind: 'value', type: 'vector3', value: '0.1,0.2,0.3' }, provenance: { namePath: '/tri/position' } },
+    { name: 'normal', type: 'vector3', source: { kind: 'value', type: 'vector3', value: '0,0,1' }, provenance: { namePath: '/tri/normal' } },
+  );
+  const builder = new IrModuleBuilder();
+  appendVolumeIr(volume, builder, graph);
+  expect(() => bakeVolumeGrid(builder.build(), { min: [0, 0, 0], max: [1, 1, 1] }, 2))
+    .toThrow('Volume image inputs require a 3D image sampler');
 });
 
 it('bakes a spatial field, interpolates all coefficients and bounds extinction', () => {
