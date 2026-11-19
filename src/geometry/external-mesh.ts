@@ -134,6 +134,14 @@ export function extractMesh(root: Object3D, objectName: string | undefined, sink
   };
 }
 
+/** Load one named mesh through the same geometry-only path used by USD assets. */
+export async function loadExternalMesh(
+  uri: string, objectName: string | undefined, sink: DiagnosticSink, read: GeometryReader = fetchGeometry,
+): Promise<RawMesh> {
+  const { root, flipV } = await parseGeometry(await read(uri), uri, read, sink);
+  return extractMesh(root, objectName, sink, flipV);
+}
+
 /** Preload engine geometry assets once per URI; inline USDA remains the fallback. */
 export async function loadExternalMeshSource(
   scene: SceneAsset,

@@ -5,6 +5,7 @@ import { emitWgsl } from '../../src/compiler/wgsl.ts';
 import {
   IrModuleBuilder,
   FLOAT,
+  BOOL,
   COLOR3,
   vector,
   shaderType,
@@ -66,6 +67,16 @@ describe('optimize', () => {
     const out = optimize(b.build());
     const folded = out.exprs.get(out.outputs[0]!.ref);
     expect(folded).toMatchObject({ kind: 'const', value: 0.5 });
+  });
+
+  it('preserves boolean normalization when optimizing a vector conversion', () => {
+    const b = new IrModuleBuilder();
+    const source = b.constant(BOOL, 2);
+    const result = b.add({ kind: 'convert', type: COLOR3, source, from: BOOL });
+    b.output({ name: 'out', type: COLOR3, ref: result });
+    const ir = b.build();
+    expect(evaluateShaderIr(ir).get('out')).toEqual([1, 1, 1]);
+    expect(evaluateShaderIr(optimize(ir)).get('out')).toEqual([1, 1, 1]);
   });
 
   it('merges common subexpressions including commutative closure combines', () => {

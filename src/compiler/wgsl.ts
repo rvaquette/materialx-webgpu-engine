@@ -224,7 +224,9 @@ function emitConvert(src: string, from: IrType, to: IrType): string {
   if (to.kind === 'vector') {
     const target = wgslType(to);
     if (from.kind === 'scalar') {
-      const scalar = from.scalar === to.scalar ? src : `${wgslType({ kind: 'scalar', scalar: to.scalar })}(${src})`;
+      const scalar = from.scalar === 'bool' && to.scalar !== 'bool'
+        ? `select(${to.scalar === 'float' ? '0.0, 1.0' : '0, 1'}, ${src})`
+        : from.scalar === to.scalar ? src : `${wgslType({ kind: 'scalar', scalar: to.scalar })}(${src})`;
       return `${target}(${scalar})`;
     }
     if (from.kind === 'vector') {
@@ -247,6 +249,7 @@ function emitConvert(src: string, from: IrType, to: IrType): string {
     if (from.kind !== 'vector' && from.kind !== 'scalar') return to.scalar === 'bool' ? 'false' : `${wgslType(to)}(0)`;
     if (fromScalar === to.scalar) return component;
     if (to.scalar === 'bool') return `(${component} != ${fromScalar === 'float' ? '0.0' : '0'})`;
+    if (fromScalar === 'bool') return `select(${to.scalar === 'float' ? '0.0, 1.0' : '0, 1'}, ${component})`;
     return `${wgslType(to)}(${component})`;
   }
   return src;

@@ -41,6 +41,12 @@ export interface PtVariantSource {
   surface: ResolvedSurface;
 }
 
+export type PtMaterialVariantCache = Map<number, {
+  graph: ResolvedGraph;
+  surface: ResolvedSurface;
+  variant: SurfaceVariantModule;
+}>;
+
 /** The assembled dispatcher plus the merged declarations the megakernel emits
  *  once around it. */
 export interface PtMaterialDispatch {
@@ -82,11 +88,22 @@ function mergeMaps(maps: readonly Map<string, IrType>[]): Map<string, IrType> {
   return out;
 }
 
-/** Lower every graph-backed material to a variant and assemble the dispatcher. */
-export function buildMaterialDispatch(sources: readonly PtVariantSource[]): PtMaterialDispatch {
+/** Lower graph-backed materials and assemble the dispatcher, reusing unchanged variants. */
+export function buildMaterialDispatch(
+  sources: readonly PtVariantSource[], cache?: PtMaterialVariantCache,
+): PtMaterialDispatch {
+  const indices = new Set(sources.map(source => source.materialIndex));
+  if (cache) for (const index of cache.keys()) if (!indices.has(index)) cache.delete(index);
   const variants = [...sources]
     .sort((a, b) => a.materialIndex - b.materialIndex)
-    .map((s) => emitSurfaceVariant(s.graph, s.surface, s.materialIndex));
+    .map((source) => {
+      const cached = cache?.get(source.materialIndex);
+      const variant = cached?.graph === source.graph && cached.surface === source.surface
+        ? cached.variant : emitSurfaceVariant(source.graph, source.surface, source.materialIndex);
+      cache?.set(source.materialIndex, { graph: source.graph, surface: source.surface, variant });
+      // Texture aliases belong to this dispatch, not to the cached raw variant.
+      return { ...variant, ...(variant.opacity ? { opacity: { ...variant.opacity } } : {}) };
+    });
 
   const preludes = [...new Set(variants.flatMap((v) => v.preludes))];
   const textureRegistry = buildTextureRegistry(variants);

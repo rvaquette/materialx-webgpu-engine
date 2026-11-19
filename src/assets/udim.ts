@@ -28,6 +28,27 @@ export function indexUdimFiles(files: readonly string[], base: string): Readonly
   return index;
 }
 
+/** Match a UDIM template against inventoried paths, without guessing tile URLs. */
+export function matchUdimFiles(files: readonly string[], file: string, base: string): readonly number[] {
+  const url = new URL(AssetResolver.normalizeUdim(file), base);
+  url.search = '';
+  url.hash = '';
+  const template = url.href.replace(/%3cudim%3e/gi, '<UDIM>');
+  const parts = template.split('<UDIM>');
+  if (parts.length !== 2) return [];
+  const escape = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const pattern = new RegExp(`^${escape(parts[0]!)}(1\\d{3})${escape(parts[1]!)}$`);
+  const tiles = new Set<number>();
+  for (const path of files) {
+    const candidate = new URL(path, base);
+    candidate.search = '';
+    candidate.hash = '';
+    const match = pattern.exec(candidate.href);
+    if (match && Number(match[1]) >= 1001) tiles.add(Number(match[1]));
+  }
+  return [...tiles].sort((a, b) => a - b);
+}
+
 export async function decodeUdimImage(
   file: string,
   tiles: readonly number[],

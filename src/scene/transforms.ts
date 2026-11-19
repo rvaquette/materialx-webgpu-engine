@@ -77,7 +77,7 @@ export function quaternion4(w: number, x: number, y: number, z: number): Mat4 {
   ];
 }
 
-export function inverse4(m: Mat4): Mat4 {
+export function inverse4(m: Mat4, requireInvertible = false): Mat4 {
   const inv = new Array<number>(16);
   inv[0] = m[5]! * m[10]! * m[15]! - m[5]! * m[11]! * m[14]! - m[9]! * m[6]! * m[15]! + m[9]! * m[7]! * m[14]! + m[13]! * m[6]! * m[11]! - m[13]! * m[7]! * m[10]!;
   inv[4] = -m[4]! * m[10]! * m[15]! + m[4]! * m[11]! * m[14]! + m[8]! * m[6]! * m[15]! - m[8]! * m[7]! * m[14]! - m[12]! * m[6]! * m[11]! + m[12]! * m[7]! * m[10]!;
@@ -96,9 +96,16 @@ export function inverse4(m: Mat4): Mat4 {
   inv[11] = -m[0]! * m[5]! * m[11]! + m[0]! * m[7]! * m[9]! + m[4]! * m[1]! * m[11]! - m[4]! * m[3]! * m[9]! - m[8]! * m[1]! * m[7]! + m[8]! * m[3]! * m[5]!;
   inv[15] = m[0]! * m[5]! * m[10]! - m[0]! * m[6]! * m[9]! - m[4]! * m[1]! * m[10]! + m[4]! * m[2]! * m[9]! + m[8]! * m[1]! * m[6]! - m[8]! * m[2]! * m[5]!;
   let det = m[0]! * inv[0]! + m[1]! * inv[4]! + m[2]! * inv[8]! + m[3]! * inv[12]!;
+  if (requireInvertible && (!Number.isFinite(det) || det === 0)) {
+    throw new Error('Instance transform is singular or non-finite and cannot be inverted.');
+  }
   if (det === 0) return IDENTITY4;
   det = 1 / det;
-  return inv.map((v) => v * det);
+  const result = inv.map((v) => v * det);
+  if (requireInvertible && result.some(value => !Number.isFinite(value) || !Number.isFinite(Math.fround(value)))) {
+    throw new Error('Instance inverse transform cannot be represented as finite GPU values.');
+  }
+  return result;
 }
 
 function opMatrix(op: XformOp, sink?: DiagnosticSink): Mat4 {

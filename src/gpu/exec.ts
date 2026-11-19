@@ -7,7 +7,7 @@
 
 import { hashString } from '../compiler/cache.ts';
 import { emitWgsl, type WgslModule } from '../compiler/wgsl.ts';
-import type { IrType, ShaderIr } from '../compiler/ir.ts';
+import { OBJECT_TO_WORLD_INPUT, WORLD_TO_OBJECT_INPUT, type IrType, type ShaderIr } from '../compiler/ir.ts';
 import { PipelineCache } from './pipelines.ts';
 
 export const COMPUTE_ENTRY = 'mx_exec';
@@ -51,11 +51,12 @@ const KNOWN_VARYINGS = new Set(['position', 'normal', 'tangent', 'bitangent', 't
 const isViewName = (n: string): boolean => n === 'view' || n === 'viewdir' || n === 'viewdirection';
 
 function widthOf(type: IrType): number {
-  return type.kind === 'vector' ? type.size : 1;
+  return type.kind === 'matrix' ? type.size * type.size : type.kind === 'vector' ? type.size : 1;
 }
 function wgslOf(type: IrType): string {
   if (type.kind === 'scalar') return type.scalar === 'float' ? 'f32' : type.scalar === 'int' ? 'i32' : 'bool';
   if (type.kind === 'vector') return `vec${type.size}${type.scalar === 'float' ? 'f' : type.scalar === 'int' ? 'i' : 'u'}`;
+  if (type.kind === 'matrix') return `mat${type.size}x${type.size}f`;
   return 'f32';
 }
 
@@ -86,6 +87,15 @@ function litFloat(n: number): string {
 function litVec(values: readonly number[]): string {
   if (values.length === 1) return litFloat(values[0]!);
   return `vec${values.length}f(${values.map(litFloat).join(', ')})`;
+}
+
+function litField(field: VaryingField, values: readonly number[]): string {
+  if (values.length !== field.width) throw new Error(`Invalid varying '${field.name}' width.`);
+  const matrix = /^mat([34])x[34]f$/.exec(field.wgslType);
+  if (!matrix) return litVec(values);
+  const size = Number(matrix[1]);
+  return `${field.wgslType}(${Array.from({ length: size }, (_, column) =>
+    litVec(values.slice(column * size, (column + 1) * size))).join(', ')})`;
 }
 
 export function outputComponentCount(wgslType: string): number {
@@ -154,11 +164,15 @@ export function composeComputeModule(
   ];
   for (const f of fields.primvars) {
     const value = overrides.primvars?.[f.name] ?? defaultPrimvar(f.width, v);
-    assigns.push(`  vary.v_${f.name} = ${litVec(value)};`);
+    assigns.push(`  vary.v_${f.name} = ${litField(f, value)};`);
   }
   for (const f of fields.inputs) {
-    const value = overrides.inputs?.[f.name] ?? new Array(f.width).fill(0);
-    assigns.push(`  vary.in_${f.name} = ${litVec(value)};`);
+    const supplied = overrides.inputs?.[f.name];
+    if (!supplied && (f.name === OBJECT_TO_WORLD_INPUT || f.name === WORLD_TO_OBJECT_INPUT)) {
+      throw new Error(`Missing instance transformation '${f.name}'.`);
+    }
+    const value = supplied ?? new Array(f.width).fill(0);
+    assigns.push(`  vary.in_${f.name} = ${litField(f, value)};`);
   }
 
   const wrapper = [

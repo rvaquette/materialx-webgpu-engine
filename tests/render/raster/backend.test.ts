@@ -94,6 +94,22 @@ describe('RasterBackend pipelines', () => {
     expect(backend.resolvePipeline).toBe(resolve);
     expect(backend.sceneVariantPipeline('opaque', 'async-key')).toBe(scene);
   });
+
+  it('evicts only excess unused scene variants, retaining active pipelines', () => {
+    const { backend } = makeBackend();
+    for (let index = 0; index < 19; index++) backend.createSceneVariantPipeline('opaque', `variant-${index}`, '// shader');
+    const active = [{ pass: 'opaque' as const, pipelineKey: 'variant-0' }];
+    backend.trimSceneVariantPipelines(active, 16);
+    expect(backend.sceneVariantPipeline('opaque', 'variant-0')).toBeDefined();
+    expect(backend.sceneVariantPipeline('opaque', 'variant-1')).toBeUndefined();
+    expect(backend.sceneVariantPipeline('opaque', 'variant-2')).toBeUndefined();
+    for (let index = 3; index < 19; index++) {
+      expect(backend.sceneVariantPipeline('opaque', `variant-${index}`)).toBeDefined();
+    }
+    backend.trimSceneVariantPipelines(active, 0);
+    expect(backend.sceneVariantPipeline('opaque', 'variant-0')).toBeDefined();
+    expect(backend.sceneVariantPipeline('opaque', 'variant-18')).toBeUndefined();
+  });
 });
 
 describe('RasterBackend frame recording', () => {

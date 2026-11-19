@@ -40,6 +40,12 @@ export interface DecodedPixelImage {
 
 export type DecodedImage = DecodedBitmapImage | DecodedPixelImage;
 
+/** Original resources for a logical texture reference, before decoding. */
+export interface TextureExportSource {
+  urls: readonly string[];
+  tiles?: readonly number[];
+}
+
 export interface DecodeImageRequest {
   bytes: ArrayBuffer | Uint8Array;
   /** Declared by MaterialX; required and never inferred from the file. */

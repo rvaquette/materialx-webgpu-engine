@@ -29,7 +29,7 @@ import {
 import { burleyInterfaceTransmission, evalWorld, layeredSurfaceBsdf, sampleWorld, spatialBaseAttenuation } from './bsdf.ts';
 import { absorbingMedium, type HomogeneousMedium } from './media.ts';
 import { subsurfaceMedium, exponentialSubsurfaceMedium, sampleBurleySurface } from './subsurface.ts';
-import { canonicalSurfaceToLayered, type LayeredClosure } from '../../compiler/ir.ts';
+import { OBJECT_TO_WORLD_INPUT, WORLD_TO_OBJECT_INPUT, canonicalSurfaceToLayered, type LayeredClosure } from '../../compiler/ir.ts';
 import { composeSurfaceLayered, prepareSurface, type PreparedSurface } from '../../compiler/surface-eval.ts';
 import type { IrEvalVaryings } from '../../compiler/ir-eval.ts';
 import { packLayeredMaterial, unpackLayeredMaterial, unpackMaterialMedium, isVolumeBoundary, PT_MATERIAL_RECORD_FLOATS } from './material-record.ts';
@@ -62,6 +62,14 @@ export interface PathTraceCamera {
   exposure: number;
 }
 
+export interface PathTraceTransformRange {
+  firstTriangle: number;
+  triangleCount: number;
+  materialIndex: number;
+  instanceId: string;
+  model: Mat4;
+}
+
 export interface PathTraceScene {
   volumeData?: Float32Array;
   /** Packed BVH nodes (PT_NODE_FLOATS each), world-space over all triangles. */
@@ -72,6 +80,8 @@ export interface PathTraceScene {
   /** BVH leaf-order permutation of triangle ordinals (node start/count index this). */
   triangleOrder: Uint32Array;
   triangleCount: number;
+  /** Instance matrices and their contiguous ranges in the original triangle soup. */
+  transformRanges?: PathTraceTransformRange[];
   /** Packed LayeredClosure records (PT_MATERIAL_FLOATS each, T057b). */
   materials: Float32Array;
   materialCount: number;
@@ -190,7 +200,9 @@ export function buildPathTraceScene(
   const triFloats: number[] = [];
   const uvFloats: number[] = [];
   const tanFloats: number[] = [];
+  const transformRanges: PathTraceTransformRange[] = [];
   let triCount = 0;
+  let rangeTriangleCount = 0;
   let hasTangents = false;
 
   for (const draw of frame.draws) {
@@ -209,6 +221,12 @@ export function buildPathTraceScene(
       hasTangents = true;
     }
     const matIdx = indexFor(materialKeyOf(draw.materialKey), draw.surface, draw.materialKey);
+    const count = Math.floor(geom.indices.length / 3);
+    if (count > 0) {
+      transformRanges.push({ firstTriangle: rangeTriangleCount, triangleCount: count,
+        materialIndex: matIdx, instanceId: draw.instanceId, model: draw.model });
+      rangeTriangleCount += count;
+    }
     // A file-cache hit still rebuilds live materials/frame, but never visits vertices.
     if (preparedGeometry) continue;
     const model = draw.model;
@@ -336,6 +354,9 @@ export function buildPathTraceScene(
   const triangleOrder = preparedGeometry?.triangleOrder ?? bvh!.triangleOrder;
   const triangleUv = preparedGeometry?.triangleUv ?? new Float32Array(uvFloats);
   const triangleTangent = preparedGeometry?.triangleTangent ?? (hasTangents ? new Float32Array(tanFloats) : new Float32Array(0));
+  if (rangeTriangleCount !== (preparedGeometry?.triangleCount ?? triCount)) {
+    throw new Error('Instance transforms do not match the prepared path tracing geometry.');
+  }
 
   return {
     ...(volumeData.length ? { volumeData } : {}),
@@ -344,6 +365,7 @@ export function buildPathTraceScene(
     triangles,
     triangleOrder,
     triangleCount: preparedGeometry?.triangleCount ?? triCount,
+    transformRanges,
     materials,
     materialCount: surfaces.length,
     triangleUv,
@@ -631,7 +653,7 @@ function hitSurface(scene: PathTraceScene, hit: TriHit, ray: Ray): PtHit {
 }
 
 /** Interpolate the hit's shading varyings for the procedural surface oracle (T057i3). */
-function hitVaryings(scene: PathTraceScene, hit: PtHit): IrEvalVaryings {
+function hitVaryings(scene: PathTraceScene, hit: PtHit, inputs?: Readonly<Record<string, readonly number[]>>): IrEvalVaryings {
   const uv = scene.triangleUv;
   const b = hit.triangle * PT_UV_STRIDE;
   const w = 1 - hit.u - hit.v;
@@ -649,6 +671,7 @@ function hitVaryings(scene: PathTraceScene, hit: PtHit): IrEvalVaryings {
     position: hit.position,
     normal: hit.normal,
     texcoord: [s, t],
+    ...(inputs ? { inputs } : {}),
     ...(tangent !== undefined ? { tangent, bitangent: scale3(normalize3(cross3(hit.normal, tangent)), handedness) } : {}),
   };
 }
@@ -695,6 +718,14 @@ export function createSceneSampler(scene: PathTraceScene): SceneSampler {
   // constant record. Constant-only materials keep the packed record fallback.
   const prepared = new Map<number, PreparedSurface>();
   for (const v of scene.variantSources) prepared.set(v.materialIndex, prepareSurface(v.graph, v.surface));
+  const transformNeeds = new Map<number, { model: boolean; inverse: boolean }>();
+  for (const [index, variant] of prepared) {
+    const names = new Set([...variant.ir.exprs.values()].filter(expr => expr.kind === 'input').map(expr => expr.name));
+    if (names.has(OBJECT_TO_WORLD_INPUT) || names.has(WORLD_TO_OBJECT_INPUT)) {
+      transformNeeds.set(index, { model: names.has(OBJECT_TO_WORLD_INPUT), inverse: names.has(WORLD_TO_OBJECT_INPUT) });
+    }
+  }
+  const inverseModels = new Map<PathTraceTransformRange, Mat4>();
   const spatialLayers = new WeakMap<SurfaceHit, { closure: LayeredClosure; outgoingCosine: number; ior: number }>();
 
   function spatialValue(hit: SurfaceHit, incoming: Vec3, value: Vec3): Vec3 {
@@ -711,7 +742,32 @@ export function createSceneSampler(scene: PathTraceScene): SceneSampler {
     const override = (hit as PtHit & { closureOverride?: LayeredClosure }).closureOverride;
     if (override) return override;
     const variant = prepared.get(hit.materialIndex);
-    return variant ? composeSurfaceLayered(variant, hitVaryings(scene, hit)) : readLayeredClosure(scene, hit.materialIndex);
+    if (!variant) return readLayeredClosure(scene, hit.materialIndex);
+    const needs = transformNeeds.get(hit.materialIndex);
+    if (!needs) return composeSurfaceLayered(variant, hitVaryings(scene, hit));
+    const ranges = scene.transformRanges;
+    if (!ranges) throw new Error('Path tracing scene lacks instance transforms; rebuild or re-export it.');
+    let low = 0, high = ranges.length;
+    while (low < high) {
+      const mid = (low + high) >>> 1;
+      if (ranges[mid]!.firstTriangle <= hit.triangle) low = mid + 1;
+      else high = mid;
+    }
+    const range = ranges[low - 1];
+    if (!range || hit.triangle >= range.firstTriangle + range.triangleCount || range.materialIndex !== hit.materialIndex) {
+      throw new Error(`Missing instance transform for triangle ${hit.triangle}.`);
+    }
+    const inputs: Record<string, readonly number[]> = {};
+    if (needs.model) inputs[OBJECT_TO_WORLD_INPUT] = range.model;
+    if (needs.inverse) {
+      let inverse = inverseModels.get(range);
+      if (!inverse) {
+        inverse = inverse4(range.model, true);
+        inverseModels.set(range, inverse);
+      }
+      inputs[WORLD_TO_OBJECT_INPUT] = inverse;
+    }
+    return composeSurfaceLayered(variant, hitVaryings(scene, hit, inputs));
   }
 
   function lobeFor(hit: SurfaceHit) {

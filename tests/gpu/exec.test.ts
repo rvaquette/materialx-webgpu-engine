@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { NODE_CASES } from '../fixtures/node-cases.ts';
 import { buildNodeIr, isRunnableOnGpu } from '../fixtures/node-ir.ts';
 import { emitWgsl } from '../../src/compiler/wgsl.ts';
-import { IrModuleBuilder, closureType, shaderType } from '../../src/compiler/ir.ts';
+import { IrModuleBuilder, OBJECT_TO_WORLD_INPUT, closureType, matrix, shaderType, vector } from '../../src/compiler/ir.ts';
 import {
   COMPUTE_ENTRY,
   collectVaryingFields,
@@ -39,6 +39,23 @@ describe('collectVaryingFields', () => {
 });
 
 describe('composeComputeModule', () => {
+  it('requires and emits the matrix varying for an instance transformation', () => {
+    const builder = new IrModuleBuilder();
+    const type = vector(3);
+    const point = builder.constant(type, [1, 2, 3]);
+    const mat = builder.add({ kind: 'input', type: matrix(4), name: OBJECT_TO_WORLD_INPUT });
+    const ref = builder.add({ kind: 'call', type, op: 'transformpoint', args: [], namedArgs: { in: point, mat } });
+    builder.output({ name: 'result', type, ref });
+    const ir = builder.build();
+    const module = emitWgsl(ir);
+    const fields = collectVaryingFields(ir);
+    expect(() => composeComputeModule(module, fields)).toThrow('Missing instance transformation');
+    const code = composeComputeModule(module, fields, { inputs: {
+      [OBJECT_TO_WORLD_INPUT]: [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 5, 6, 7, 1],
+    } });
+    expect(code).toContain('vary.in_mx_objectToWorld = mat4x4f(vec4f(1.0, 0.0, 0.0, 0.0)');
+  });
+
   const runnable = NODE_CASES.filter(isRunnableOnGpu);
 
   for (const c of runnable) {

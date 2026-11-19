@@ -7,10 +7,12 @@
 // sharing a file share a single upload -- and orders the scene storage buffers.
 // No WebGPU here: device.createTexture/createBindGroup stay in the harness (m3).
 
-import type { DecodedPixelImage } from '../../assets/images.ts';
+import type { DecodedPixelImage, TextureExportSource } from '../../assets/images.ts';
 import type { Diagnostic, DiagnosticSink } from '../../core/diagnostics.ts';
 import type { PtMaterialDispatch } from './material-variant.ts';
-import type { PathTraceScene } from './scene-buffers.ts';
+import { PT_TRIANGLE_FLOATS, type PathTraceScene } from './scene-buffers.ts';
+import { inverse4 } from '../../scene/transforms.ts';
+import { OBJECT_TO_WORLD_INPUT, WORLD_TO_OBJECT_INPUT } from '../../compiler/ir.ts';
 import { imageSamplerDescriptor, type ImageSamplerDescriptor } from '../../assets/samplers.ts';
 import type { WgslBinding } from '../../compiler/wgsl.ts';
 
@@ -19,6 +21,7 @@ import type { WgslBinding } from '../../compiler/wgsl.ts';
  *  unique file (the registry already deduped by file reference). */
 export interface PtImageProvider {
   decode(fileRef: string): Promise<DecodedPixelImage | undefined> | DecodedPixelImage | undefined;
+  exportSource?(fileRef: string): TextureExportSource | undefined;
 }
 
 /** A group-0 buffer slot in megakernel binding order. `data` is the scene-sourced
@@ -84,6 +87,7 @@ export interface BuildPtDeviceBindingsOptions {
 }
 
 function group0Slots(scene: PathTraceScene, dispatch: PtMaterialDispatch): PtBufferSlot[] {
+  const transforms = dispatch.extraInputs.has(OBJECT_TO_WORLD_INPUT) || dispatch.extraInputs.has(WORLD_TO_OBJECT_INPUT);
   const slots: PtBufferSlot[] = [
     { binding: 0, role: 'uniform', usage: 'uniform', access: 'read' },
     { binding: 1, role: 'nodes', usage: 'storage', access: 'read', data: scene.nodes },
@@ -91,7 +95,7 @@ function group0Slots(scene: PathTraceScene, dispatch: PtMaterialDispatch): PtBuf
     { binding: 3, role: 'triangleOrder', usage: 'storage', access: 'read', data: scene.triangleOrder },
     { binding: 4, role: 'materials', usage: 'storage', access: 'read', data: scene.materials },
     { binding: 5, role: 'accum', usage: 'storage', access: 'read_write' },
-    { binding: 6, role: 'triangleUv', usage: 'storage', access: 'read', data: scene.triangleUv },
+    { binding: 6, role: 'triangleUv', usage: 'storage', access: 'read', data: transforms ? packUvAndTransforms(scene, dispatch) : scene.triangleUv },
     { binding: 7, role: 'triangleTangent', usage: 'storage', access: 'read', data: scene.triangleTangent },
   ];
   // The editable-params block sits past the scene buffers (currently empty, T057i3).
@@ -101,6 +105,39 @@ function group0Slots(scene: PathTraceScene, dispatch: PtMaterialDispatch): PtBuf
   if (scene.analyticLights) slots.push({ binding: 9, role: 'analyticLights', usage: 'storage', access: 'read', data: scene.analyticLights });
   if (scene.volumeData) slots.push({ binding: 10, role: 'volumeData', usage: 'storage', access: 'read', data: scene.volumeData });
   return slots;
+}
+
+function packUvAndTransforms(scene: PathTraceScene, dispatch: PtMaterialDispatch): Float32Array {
+  const ranges = scene.transformRanges;
+  if (!ranges) throw new Error('Path tracing scene lacks instance transforms; rebuild or re-export it.');
+  const count = scene.triangleCount;
+  if (scene.triangleUv.length !== count * 6) throw new Error('Invalid triangle UV buffer for instance transforms.');
+  const inverseMaterials = new Set(dispatch.variants
+    .filter(variant => variant.extraInputs.has(WORLD_TO_OBJECT_INPUT))
+    .map(variant => variant.index));
+  if (ranges.length > 2 ** 24) throw new Error('Too many instances for path tracing transform indices.');
+  const data = new Float32Array(count * 7 + ranges.length * 32);
+  data.set(scene.triangleUv);
+  let first = 0;
+  for (const [index, range] of ranges.entries()) {
+    if (range.firstTriangle !== first || !Number.isSafeInteger(range.triangleCount) || range.triangleCount <= 0
+        || first + range.triangleCount > count || range.model.length !== 16
+        || range.model.some(value => !Number.isFinite(value) || !Number.isFinite(Math.fround(value)))) {
+      throw new Error(`Invalid path tracing instance transform range '${range.instanceId}'.`);
+    }
+    for (let triangle = first; triangle < first + range.triangleCount; triangle++) {
+      if (scene.triangles[triangle * PT_TRIANGLE_FLOATS + 18] !== range.materialIndex) {
+        throw new Error(`Material mismatch in instance transform range '${range.instanceId}'.`);
+      }
+    }
+    data.fill(index, count * 6 + first, count * 6 + first + range.triangleCount);
+    const offset = count * 7 + index * 32;
+    data.set(range.model, offset);
+    if (inverseMaterials.has(range.materialIndex)) data.set(inverse4(range.model, true), offset + 16);
+    first += range.triangleCount;
+  }
+  if (first !== count) throw new Error('Instance transform ranges do not cover the path tracing triangles.');
+  return data;
 }
 
 /** Build the graph-path device binding plan: decode the deduped registry images,

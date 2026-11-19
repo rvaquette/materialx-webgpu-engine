@@ -11,7 +11,7 @@
 // resolve to the interpreter's neutral until real sampling (T057k).
 
 import { IrModuleBuilder, type LayeredClosure, type ShaderIr } from './ir.ts';
-import { evaluateIrRef, type IrEvalVaryings } from './ir-eval.ts';
+import { evaluateIrRef, IrEvalTransformError, type IrEvalVaryings } from './ir-eval.ts';
 import { lowerSurfaceInputsToIr } from './surface-ir.ts';
 import { surfaceGraphToLayered } from './surface-lower.ts';
 import type { DiagnosticSink } from '../core/diagnostics.ts';
@@ -112,7 +112,8 @@ export function composeSurfaceLayered(prepared: PreparedSurface, env: IrEvalVary
     if (ref !== undefined) {
       try {
         value = evaluateIrRef(prepared.ir, ref, env, cache);
-      } catch {
+      } catch (error) {
+        if (error instanceof IrEvalTransformError) throw error;
         // Nodes without a CPU mirror (noise, matrices...) keep the authored/default input.
         value = undefined;
       }
@@ -127,7 +128,10 @@ export function composeSurfaceLayered(prepared: PreparedSurface, env: IrEvalVary
   const nodeInputs = new Map<string, Map<string, ResolvedInput>>();
   for (const { nodeId, input, ref } of prepared.lamaInputs) {
     let values: readonly number[] | undefined;
-    try { values = evaluateIrRef(prepared.ir, ref, env, cache); } catch { values = undefined; }
+    try { values = evaluateIrRef(prepared.ir, ref, env, cache); } catch (error) {
+      if (error instanceof IrEvalTransformError) throw error;
+      values = undefined;
+    }
     if (values === undefined) continue;
     const inputs = nodeInputs.get(nodeId) ?? new Map(nodes.get(nodeId)?.inputs.map(item => [item.name, item] as const) ?? []);
     inputs.set(input.name, { ...input, source: { kind: 'value', value: values.join(', '), type: input.type } });

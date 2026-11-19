@@ -158,7 +158,7 @@ function foldToFixpoint(exprs: Map<IrRef, IrExpr>): void {
 function foldConvert(from: IrType, to: IrType, value: IrConstValue): IrConstValue | undefined {
   if (typesEqual(from, to)) return value;
   // Scalar -> vector broadcast is the only numeric widening we fold.
-  if (from.kind === 'scalar' && to.kind === 'vector' && typeof value === 'number') {
+  if (from.kind === 'scalar' && to.kind === 'vector' && from.scalar === to.scalar && typeof value === 'number') {
     return Array.from({ length: to.size }, () => value);
   }
   return undefined;

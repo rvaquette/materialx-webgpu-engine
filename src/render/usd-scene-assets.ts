@@ -47,7 +47,7 @@ import { composeStage } from '../usd/compose.ts';
 import { loadBrowserOpenUsd } from '../usd/browser-loader.ts';
 import { AssetResolver } from '../assets/resolver.ts';
 import { withUdimImages } from '../assets/udim.ts';
-import { sceneUdimIndex } from '../assets/scene-udim.ts';
+import { sceneUdimIndex, sceneUdimTiles } from '../assets/scene-udim.ts';
 import { uploadMaterialImage } from '../gpu/material-texture.ts';
 import type { OpenUsdModule } from '../usd/crate.ts';
 import { FloatType } from 'three';
@@ -271,6 +271,16 @@ export async function loadMtlxSceneContext(
   const imageProvider: PtImageProvider = {
     decode: withUdimImages(async file => singleImageProvider.decode(file),
       () => sceneUdimIndex(document.baseURI), new URL(baseDir, document.baseURI).href, sink),
+    exportSource(fileRef) {
+      const urls = [...new Set(materialDirs.map(dir => new URL(fileRef, new URL(dir, document.baseURI)).href))];
+      if (AssetResolver.hasUdim(fileRef)) {
+        for (const url of urls) {
+          const tiles = sceneUdimTiles(url, document.baseURI);
+          if (tiles.length) return { urls: [url], tiles };
+        }
+      }
+      return { urls };
+    },
   };
   const surfaceFor = (material: MaterialResource): RasterSurface => surfaces.get(material.materialName) ?? NEUTRAL_SURFACE;
   return { documents, nodeDefinitions: documents.nodeDefinitions?.() ?? [], imageProvider, surfaceFor };
@@ -289,23 +299,28 @@ export async function uploadMaterialTextures(
   const textures: GPUTexture[] = [];
   const module = material.surfaceModule;
   if (!module) return { textureViews, samplers, textures };
-  for (const t of module.textures) {
-    const fileRef = t.fileRef;
-    if (fileRef === undefined) continue;
-    let image = cache.get(fileRef);
-    if (!cache.has(fileRef)) {
-      image = (await imageProvider.decode(fileRef)) ?? undefined;
-      cache.set(fileRef, image);
+  try {
+    for (const t of module.textures) {
+      const fileRef = t.fileRef;
+      if (fileRef === undefined) continue;
+      let image = cache.get(fileRef);
+      if (!cache.has(fileRef)) {
+        image = (await imageProvider.decode(fileRef)) ?? undefined;
+        cache.set(fileRef, image);
+      }
+      const gpuTex = uploadMaterialImage(device, image,
+        t.colorSpace === 'srgb_texture' ? 'rgba8unorm-srgb' : 'rgba8unorm', t.textureKind);
+      textures.push(gpuTex);
+      textureViews.set(t.name, gpuTex.createView(t.textureKind === 'udim' ? { dimension: '2d-array' } : {}));
     }
-    const gpuTex = uploadMaterialImage(device, image,
-      t.colorSpace === 'srgb_texture' ? 'rgba8unorm-srgb' : 'rgba8unorm', t.textureKind);
-    textures.push(gpuTex);
-    textureViews.set(t.name, gpuTex.createView(t.textureKind === 'udim' ? { dimension: '2d-array' } : {}));
+    for (const s of module.samplers) {
+      samplers.set(s.name, device.createSampler(imageSamplerDescriptor(s.sampler ?? {})));
+    }
+    return { textureViews, samplers, textures };
+  } catch (error) {
+    for (const texture of textures) texture.destroy();
+    throw error;
   }
-  for (const s of module.samplers) {
-    samplers.set(s.name, device.createSampler(imageSamplerDescriptor(s.sampler ?? {})));
-  }
-  return { textureViews, samplers, textures };
 }
 
 /** A loaded dome environment: the decoded equirect map plus derived lighting. */

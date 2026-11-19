@@ -398,11 +398,11 @@ refusées.
 **Huitième étape :** **Exporter .mtlx** produit automatiquement un ZIP
 lorsque le graphe utilise des nœuds `image` statiques (`float` ou `color3`).
 Décompresser l'archive, puis ouvrir le `.mtlx` : les fichiers originaux sont
-dans `textures/` et les chemins du document sont relatifs. Une même URL n'est
-embarquée qu'une fois. L'export est refusé si une image HTTP(S) est inaccessible
-ou si le total des textures dépasse 64 Mio. Les graphes sans image téléchargent
-toujours un `.mtlx` seul ; UDIM, séquences et sources locales temporaires ne
-sont pas encore pris en charge.
+dans `textures/` et les chemins du document sont relatifs. Les images statiques
+partagées sont dédupliquées. L'export est refusé si une image HTTP(S) est
+inaccessible ou si le total des textures dépasse 64 Mio. Les graphes sans image
+téléchargent toujours un `.mtlx` seul. L'extension aux UDIM et aux séquences est
+décrite plus loin ; les sources locales temporaires restent non prises en charge.
 
 **Neuvième étape :** le diagramme affiche les diagnostics de résolution
 à côté des entrées du nœud de surface : entrée ignorée car absente du NodeDef,
@@ -762,8 +762,9 @@ restitue une colonne entière pour les matrices 3 × 3 et 4 × 4 ; `separate`
 respecte les valeurs par défaut déclarées et signale les sorties invalides.
 Les indices d'extraction doivent rester dans les bornes : le GPU ne garantit
 pas de résultat hors limites et l'évaluation CPU signale les indices matriciels
-invalides. Le nœud MaterialX `swizzle` reste non pris en charge et est signalé
-comme tel, indépendamment des swizzles internes utilisés par le compilateur.
+invalides. Un nœud personnalisé `swizzle` reste non pris en charge et est
+signalé comme tel, indépendamment des swizzles internes du compilateur ; la
+bibliothèque standard chargée ne définit pas de NodeDef `swizzle`.
 
 **Soixante-quatrième étape :** les masques procéduraux `splitlr` et `splittb`
 sont évaluables sur CPU et en WGSL, avec des entrées nommées ou positionnelles,
@@ -791,12 +792,83 @@ sortie, composante par composante, comme pour le `remap` du moteur. Si
 avant écrêtage. Pour `clamp`, des bornes inversées restent indéfinies sur GPU.
 Les cas de gamma nul ou négatif ne garantissent pas un résultat défini.
 
+**Soixante-septième étape :** les modifications de topologie du graphe
+MaterialX, y compris les connexions et les variantes A/B, ne relisent plus l'USD.
+En raster, seuls les shaders, pipelines et liaisons du matériau modifié sont
+préparés ; la géométrie, les autres matériaux et les textures inchangées sont
+conservés. Les deux qualités raster déjà préparées sont mises à jour. Leurs
+pipelines inutilisés sont conservés pour les retours arrière, dans la limite de
+16 par qualité, en plus des pipelines actifs. Une erreur de préparation conserve
+l'ancien graphe et les anciennes ressources ; une édition devenue obsolète à
+cause d'une modification concurrente est rejetée.
+
+En path tracing MaterialX, la géométrie et les variantes de matériaux inchangés
+sont réutilisées, mais le shader commun est réassemblé et recompilé. L'accumulation
+repart de zéro ; une capture en cours est annulée. La compilation GPU est
+différée jusqu'au prochain rendu : si elle échoue, l'édition reste appliquée et
+l'erreur est affichée ; revenir à un graphe valide permet de relancer le rendu.
+Le backend Disney reconstruit ses données au prochain rendu. Les graphes de
+déplacement et de volume sont également réévalués : une modification du
+déplacement, ou la présence d'un volume, conserve la reconstruction complète des
+ressources depuis la géométrie source, sans rechargement USD.
+
+**Soixante-huitième étape :** le graphe affiche un aperçu du matériau sur
+l'objet sélectionné ou sur un shaderball, en raster ou en path tracing MaterialX
+(de 1 à 64 échantillons par pixel). L'image de 256 × 256 pixels est actualisée
+à l'ouverture, après application des valeurs ou modification du graphe, et lors
+du changement de support ou de moteur. Les captures isolent le matériau et la
+géométrie, reprennent l'éclairage, l'exposition et la direction de vue, et
+n'interrompent pas le viewer principal. Les demandes sont sérialisées : seule
+la plus récente est affichée ; fermer le graphe annule l'aperçu en cours, même
+si une compilation GPU déjà lancée peut encore se terminer.
+
+Le déplacement est recuit avant le cadrage. Pour une ancienne scène compilée
+sans ressources éditables, l'objet conserve sa géométrie déjà déplacée et le
+shaderball utilise le déplacement extrait du graphe ; si la texture nécessaire
+est absente du paquet, l'erreur est affichée. La classification raster des
+matériaux `UsdPreviewSurface` opaques a aussi été corrigée : ils écrivent de
+nouveau la profondeur au lieu d'être traités comme transparents.
+
+**Soixante-neuvième étape :** l'export du matériau courant ou des variantes A/B
+préserve les paramètres et connexions des textures, y compris les interfaces
+résolues et les noms fournis par des nœuds `constant`. Le ZIP contient les
+fichiers originaux et conserve les substitutions `<UDIM>`, `{frame}`,
+`{0Nframe}` et les jetons `[nom]` résolus dans le document. Les tuiles UDIM
+éparses proviennent de l'inventaire de la scène ou des métadonnées de la scène
+compilée, sans sonder de tuiles au hasard. Les mêmes règles s'appliquent aux
+différentes images d'une projection triplanaire.
+
+Une séquence nécessite un `framerange` entier et fini, par exemple `1-24` ;
+les fichiers inclus correspondent aux numéros de cette plage. `frameoffset`
+et `frameendaction` restent éditables et ne décalent pas l'inventaire.
+L'archive contient les valeurs courantes des jetons : les modifier ensuite peut
+nécessiter d'y ajouter les textures correspondantes. Les NodeDefs personnalisés
+restent des références et doivent être disponibles dans l'application cible.
+
+L'export est refusé explicitement si un nom dynamique ou un jeton n'est pas
+résolu, si une plage est absente ou invalide, si une tuile ou une image
+inventoriée est inaccessible, ou si les fichiers originaux ne sont pas
+disponibles. Il est limité à 10 000 fichiers et 64 Mio de textures.
+
+**Soixante-dixième étape :** les conversions numériques `convert` de la
+catégorie standard des canaux utilisent le type et la valeur par défaut de
+l'entrée du NodeDef, même lorsque celle-ci est omise. Les conversions depuis
+un booléen produisent maintenant un WGSL valide ; vers un booléen, le CPU
+normalise aussi les entiers non nuls à `true`. L'optimisation conserve ces
+résultats. Les conversions vers `surfaceshader` appartiennent à une autre
+catégorie et ne sont pas incluses dans cette étape.
+
+**Soixante-et-onzième étape :** les opérations mathématiques `sign` et
+`invert` sont reconnues dans les graphes de surface. Les variantes scalaires,
+vectorielles et colorées sont évaluées sur CPU et en WGSL, y compris les
+variantes `invert` à montant scalaire. Les valeurs par défaut et les arguments
+IR nommés ou positionnels sont pris en charge. Les transformations
+`transformpoint`, `transformvector` et `transformnormal` nécessitent encore
+un traitement des espaces de coordonnées.
+
 Travaux restants :
 
 - étendre les lowerings WGSL afin d'évaluer fidèlement les autres NodeDefs MaterialX actuellement signalés comme non pris en charge ;
-- étendre la compilation incrémentale aux modifications de topologie ;
-- aperçu sur l'objet sélectionné ou sur un shaderball ;
-- étendre l'export `.mtlx` aux UDIM, séquences et textures paramétriques ;
 - étendre les diagnostics aux approximations des autres moteurs de rendu.
 
 **Critère d'aboutissement :** un utilisateur peut créer ou modifier un graphe

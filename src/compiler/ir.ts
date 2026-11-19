@@ -28,6 +28,9 @@ export const FLOAT: IrType = { kind: 'scalar', scalar: 'float' };
 export const INT: IrType = { kind: 'scalar', scalar: 'int' };
 export const BOOL: IrType = { kind: 'scalar', scalar: 'bool' };
 
+export const OBJECT_TO_WORLD_INPUT = 'mx_objectToWorld';
+export const WORLD_TO_OBJECT_INPUT = 'mx_worldToObject';
+
 export function vector(size: 2 | 3 | 4, scalar: Scalar = 'float', semantic?: VectorSemantic): IrType {
   return semantic !== undefined ? { kind: 'vector', scalar, size, semantic } : { kind: 'vector', scalar, size };
 }

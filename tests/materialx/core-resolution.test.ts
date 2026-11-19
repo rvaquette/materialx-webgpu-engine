@@ -1,7 +1,7 @@
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { MaterialXCore, type MaterialXModuleFactory } from '../../src/materialx/wasm.ts';
 import { MaterialXLibraries, defaultLibrarySources } from '../../src/materialx/libraries.ts';
 import { loadMaterialXDocuments } from '../../src/materialx/document-source.ts';
@@ -107,6 +107,229 @@ describe.skipIf(!existsSync(coreFile) || !existsSync(libraryRoot))('installed Ma
       }
       await expect(makeMaterialExport(graph, 'mat', async () => new Response(null, { status: 404 })))
         .rejects.toThrow('Impossible d’inclure textures/checker.png : HTTP 404');
+    } finally {
+      documents.delete();
+      libraries.delete();
+    }
+  }, 30000);
+
+  it('round-trips UDIM filename tokens and nodegraph texture interfaces through MaterialX Core', async () => {
+    const module = await import(/* @vite-ignore */ pathToFileURL(coreFile).href) as { default: MaterialXModuleFactory };
+    const core = new MaterialXCore(await module.default());
+    const libraries = new MaterialXLibraries(core);
+    await libraries.load({ sources: defaultLibrarySources(libraryRoot), fetchText: async path => readFileSync(path, 'utf8') });
+    const documents = await loadMaterialXDocuments({ core, libraries, texts: new Map([['source', `<materialx version="1.39">
+      <nodegraph name="NG">
+        <token name="variant" type="string" value="wood" />
+        <input name="texture_file" type="filename" value="https://assets.test/albedo.[variant].%3CUDIM%3E.png" />
+        <input name="tiling" type="vector2" value="2, 3" />
+        <tiledimage name="image" type="color3">
+          <input name="file" type="filename" interfacename="texture_file" />
+          <input name="uvtiling" type="vector2" interfacename="tiling" />
+          <input name="uvoffset" type="vector2" value="0.1, 0.2" />
+        </tiledimage>
+        <image name="detail" type="color3"><input name="file" type="filename" interfacename="texture_file" /></image>
+        <output name="color" type="color3" nodename="image" />
+        <output name="detail_color" type="color3" nodename="detail" />
+      </nodegraph>
+      <standard_surface name="surface" type="surfaceshader">
+        <input name="base_color" type="color3" nodegraph="NG" output="color" />
+        <input name="emission_color" type="color3" nodegraph="NG" output="detail_color" />
+      </standard_surface>
+      <surfacematerial name="mat" type="material"><input name="surfaceshader" type="surfaceshader" nodename="surface" /></surfacematerial>
+    </materialx>`]]) });
+    try {
+      const unit = { assetPath: 'source', materialName: 'mat', referencedPrimPath: '/MaterialX/Materials/mat', boundPrims: [] };
+      const graph = (await createGraphMaterialCompiler({ documents }).compile(unit))!.graph!;
+      const image = graph.nodes.get('NG/image')!;
+      expect(image.inputs.find(input => input.name === 'file')).toMatchObject({
+        interfaceName: 'texture_file', filenameTokens: { variant: 'wood' },
+      });
+      expect(image.inputs.find(input => input.name === 'file')?.filenameTokenScopes)
+        .toEqual(graph.nodes.get('NG/detail')?.inputs[0]?.filenameTokenScopes);
+      const fetches: string[] = [];
+      const result = await makeMaterialExport(graph, 'mat', async url => {
+        fetches.push(String(url));
+        return new Response(`bytes:${String(url)}`);
+      }, file => ({ urls: [file], tiles: [1001, 1011] }));
+      const { unzipSync, strFromU8 } = await import('three/addons/libs/fflate.module.js');
+      const files = unzipSync(new Uint8Array(await result.blob.arrayBuffer()));
+      expect(fetches).toEqual(['https://assets.test/albedo.wood.1001.png', 'https://assets.test/albedo.wood.1011.png']);
+      expect(Object.keys(files).sort()).toEqual([
+        'mat.mtlx', 'textures/texture_1/albedo.wood.1001.png', 'textures/texture_1/albedo.wood.1011.png',
+      ]);
+      const imported = await loadMaterialXDocuments({
+        core, texts: new Map([['source', strFromU8(files['mat.mtlx']!)]]),
+        libraries: { importInto(doc) { libraries.importInto(doc); expect(core.validate(doc)).toBe(true); } },
+      });
+      try {
+        const restored = (await createGraphMaterialCompiler({ documents: imported }).compile(unit))!.graph!;
+        const roundTrip = [...restored.nodes.values()].find(node => node.category === 'tiledimage')!;
+        expect(roundTrip.inputs.find(input => input.name === 'file')).toMatchObject({
+          interfaceName: 'texture_file', filenameTokens: { variant: 'wood' },
+          source: { kind: 'value', value: 'textures/texture_1/albedo.[variant].<UDIM>.png' },
+        });
+        expect(roundTrip.inputs.find(input => input.name === 'uvtiling')).toMatchObject({
+          interfaceName: 'tiling', source: { kind: 'value', value: '2, 3' },
+        });
+        expect(roundTrip.inputs.find(input => input.name === 'uvoffset')?.source)
+          .toEqual({ kind: 'value', type: 'vector2', value: '0.1, 0.2' });
+        const detail = [...restored.nodes.values()].find(node => node.category === 'image')!;
+        expect(detail.inputs.find(input => input.name === 'file')).toMatchObject({
+          interfaceName: 'texture_file', source: { kind: 'value', value: 'textures/texture_1/albedo.[variant].<UDIM>.png' },
+        });
+      } finally {
+        imported.delete();
+      }
+    } finally {
+      documents.delete();
+      libraries.delete();
+    }
+  }, 30000);
+
+  it('preserves a nodegraph texture interface connected to an upstream value', async () => {
+    const module = await import(/* @vite-ignore */ pathToFileURL(coreFile).href) as { default: MaterialXModuleFactory };
+    const core = new MaterialXCore(await module.default());
+    const libraries = new MaterialXLibraries(core);
+    await libraries.load({ sources: defaultLibrarySources(libraryRoot), fetchText: async path => readFileSync(path, 'utf8') });
+    const documents = await loadMaterialXDocuments({ core, libraries, texts: new Map([['source', `<materialx version="1.39">
+      <constant name="uv_scale" type="vector2"><input name="value" type="vector2" value="2, 4" /></constant>
+      <nodegraph name="NG">
+        <input name="tiling" type="vector2" nodename="uv_scale" />
+        <tiledimage name="image" type="color3">
+          <input name="file" type="filename" value="https://assets.test/wood.png" />
+          <input name="uvtiling" type="vector2" interfacename="tiling" />
+        </tiledimage>
+        <output name="color" type="color3" nodename="image" />
+      </nodegraph>
+      <standard_surface name="surface" type="surfaceshader">
+        <input name="base_color" type="color3" nodegraph="NG" output="color" />
+      </standard_surface>
+      <surfacematerial name="mat" type="material"><input name="surfaceshader" type="surfaceshader" nodename="surface" /></surfacematerial>
+    </materialx>`]]) });
+    try {
+      const unit = { assetPath: 'source', materialName: 'mat', referencedPrimPath: '/MaterialX/Materials/mat', boundPrims: [] };
+      const graph = (await createGraphMaterialCompiler({ documents }).compile(unit))!.graph!;
+      expect(graph.nodes.get('NG/image')?.inputs.find(input => input.name === 'uvtiling')).toMatchObject({
+        interfaceName: 'tiling', source: { kind: 'connection', nodeId: 'uv_scale' },
+      });
+      const { xml } = exportSurfaceGraph(graph, 'mat');
+      const imported = await loadMaterialXDocuments({
+        core, texts: new Map([['source', xml]]),
+        libraries: { importInto(doc) { libraries.importInto(doc); expect(core.validate(doc)).toBe(true); } },
+      });
+      try {
+        const restored = (await createGraphMaterialCompiler({ documents: imported }).compile(unit))!.graph!;
+        const image = [...restored.nodes.values()].find(node => node.category === 'tiledimage')!;
+        const tiling = image.inputs.find(input => input.name === 'uvtiling')!;
+        expect(tiling).toMatchObject({ interfaceName: 'tiling', source: { kind: 'connection', nodeId: 'MaterialGraph/uv_scale' } });
+        expect(restored.nodes.get('MaterialGraph/uv_scale')?.inputs[0]?.source)
+          .toEqual({ kind: 'value', type: 'vector2', value: '2, 4' });
+      } finally {
+        imported.delete();
+      }
+    } finally {
+      documents.delete();
+      libraries.delete();
+    }
+  }, 30000);
+
+  it('keeps equally valued tokens from separate texture scopes independent', async () => {
+    const module = await import(/* @vite-ignore */ pathToFileURL(coreFile).href) as { default: MaterialXModuleFactory };
+    const core = new MaterialXCore(await module.default());
+    const libraries = new MaterialXLibraries(core);
+    await libraries.load({ sources: defaultLibrarySources(libraryRoot), fetchText: async path => readFileSync(path, 'utf8') });
+    const documents = await loadMaterialXDocuments({ core, libraries, texts: new Map([['source', `<materialx version="1.39">
+      <nodegraph name="NG">
+        <image name="a" type="color3">
+          <token name="variant" type="string" value="wood" />
+          <input name="file" type="filename" value="https://assets.test/[variant].png" />
+        </image>
+        <image name="b" type="color3">
+          <token name="variant" type="string" value="wood" />
+          <input name="file" type="filename" value="https://assets.test/[variant].png" />
+        </image>
+        <output name="a_out" type="color3" nodename="a" />
+        <output name="b_out" type="color3" nodename="b" />
+      </nodegraph>
+      <standard_surface name="surface" type="surfaceshader">
+        <input name="base_color" type="color3" nodegraph="NG" output="a_out" />
+        <input name="emission_color" type="color3" nodegraph="NG" output="b_out" />
+      </standard_surface>
+      <surfacematerial name="mat" type="material"><input name="surfaceshader" type="surfaceshader" nodename="surface" /></surfacematerial>
+    </materialx>`]]) });
+    try {
+      const unit = { assetPath: 'source', materialName: 'mat', referencedPrimPath: '/MaterialX/Materials/mat', boundPrims: [] };
+      const graph = (await createGraphMaterialCompiler({ documents }).compile(unit))!.graph!;
+      const a = graph.nodes.get('NG/a')!.inputs[0]!;
+      const b = graph.nodes.get('NG/b')!.inputs[0]!;
+      expect(a.filenameTokenScopes?.['variant']).toContain('NG/a/variant');
+      expect(b.filenameTokenScopes?.['variant']).toContain('NG/b/variant');
+      const fetchTexture = vi.fn(async () => new Response('wood'));
+      const { blob } = await makeMaterialExport(graph, 'mat', fetchTexture);
+      const { unzipSync, strFromU8 } = await import('three/addons/libs/fflate.module.js');
+      const files = unzipSync(new Uint8Array(await blob.arrayBuffer()));
+      expect(Object.keys(files).sort()).toEqual(['mat.mtlx', 'textures/texture_1/wood.png', 'textures/texture_2/wood.png']);
+      expect(fetchTexture).toHaveBeenCalledOnce();
+      const xml = strFromU8(files['mat.mtlx']!);
+      expect(xml).toContain('<token name="variant" type="string" value="wood" />');
+      expect(xml).toContain('<token name="variant_2" type="string" value="wood" />');
+      expect(xml).toContain('textures/texture_1/[variant].png');
+      expect(xml).toContain('textures/texture_2/[variant_2].png');
+      const imported = await loadMaterialXDocuments({
+        core, texts: new Map([['source', xml]]),
+        libraries: { importInto(doc) { libraries.importInto(doc); expect(core.validate(doc)).toBe(true); } },
+      });
+      imported.delete();
+    } finally {
+      documents.delete();
+      libraries.delete();
+    }
+  }, 30000);
+
+  it('round-trips an animated filename connected to a constant through MaterialX Core', async () => {
+    const module = await import(/* @vite-ignore */ pathToFileURL(coreFile).href) as { default: MaterialXModuleFactory };
+    const core = new MaterialXCore(await module.default());
+    const libraries = new MaterialXLibraries(core);
+    await libraries.load({ sources: defaultLibrarySources(libraryRoot), fetchText: async path => readFileSync(path, 'utf8') });
+    const documents = await loadMaterialXDocuments({ core, libraries, texts: new Map([['source', `<materialx version="1.39">
+      <constant name="filename" type="filename"><input name="value" type="filename" value="https://assets.test/anim.%7B04frame%7D.png" /></constant>
+      <constant name="offset" type="integer"><input name="value" type="integer" value="2" /></constant>
+      <image name="image" type="color3">
+        <input name="file" type="filename" nodename="filename" />
+        <input name="framerange" type="string" value="1-2" />
+        <input name="frameoffset" type="integer" nodename="offset" />
+        <input name="frameendaction" type="string" value="periodic" />
+      </image>
+      <standard_surface name="surface" type="surfaceshader"><input name="base_color" type="color3" nodename="image" /></standard_surface>
+      <surfacematerial name="mat" type="material"><input name="surfaceshader" type="surfaceshader" nodename="surface" /></surfacematerial>
+    </materialx>`]]) });
+    try {
+      const unit = { assetPath: 'source', materialName: 'mat', referencedPrimPath: '/MaterialX/Materials/mat', boundPrims: [] };
+      const graph = (await createGraphMaterialCompiler({ documents }).compile(unit))!.graph!;
+      expect(graph.nodes.get('image')?.inputs.find(input => input.name === 'file')?.source)
+        .toEqual({ kind: 'connection', nodeId: 'filename' });
+      const result = await makeMaterialExport(graph, 'mat', async url => new Response(String(url)));
+      const { unzipSync, strFromU8 } = await import('three/addons/libs/fflate.module.js');
+      const files = unzipSync(new Uint8Array(await result.blob.arrayBuffer()));
+      expect(Object.keys(files).sort()).toEqual(['mat.mtlx', 'textures/texture_1/anim.0001.png', 'textures/texture_1/anim.0002.png']);
+      const imported = await loadMaterialXDocuments({
+        core, texts: new Map([['source', strFromU8(files['mat.mtlx']!)]]),
+        libraries: { importInto(doc) { libraries.importInto(doc); expect(core.validate(doc)).toBe(true); } },
+      });
+      try {
+        const restored = (await createGraphMaterialCompiler({ documents: imported }).compile(unit))!.graph!;
+        expect(restored.nodes.get('image')?.inputs.find(input => input.name === 'file')?.source)
+          .toEqual({ kind: 'connection', nodeId: 'filename' });
+        expect(restored.nodes.get('filename')?.inputs[0]?.source)
+          .toEqual({ kind: 'value', type: 'filename', value: 'textures/texture_1/anim.{04frame}.png' });
+        expect(restored.nodes.get('image')?.inputs.find(input => input.name === 'frameoffset')?.source)
+          .toEqual({ kind: 'connection', nodeId: 'offset' });
+        expect(restored.nodes.get('image')?.inputs.find(input => input.name === 'frameendaction')?.source)
+          .toEqual({ kind: 'value', type: 'string', value: 'periodic' });
+      } finally {
+        imported.delete();
+      }
     } finally {
       documents.delete();
       libraries.delete();

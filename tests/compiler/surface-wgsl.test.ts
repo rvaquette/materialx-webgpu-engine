@@ -56,6 +56,24 @@ function emit(graph: ResolvedGraph, sink?: (d: Diagnostic) => void) {
 }
 
 describe('emitLayeredSurface (T055d)', () => {
+  it('emits connected sign and invert in raster and compute surfaces', () => {
+    const graph = surfaceGraph('standard_surface', [conn('base_color', 'color3', 'inverse')], [
+      upstream('inverse', 'invert', 'color3', [
+        conn('in', 'color3', 'sign'), value('amount', 'float', '0.5'),
+      ]),
+      upstream('sign', 'sign', 'color3', [value('in', 'color3', '-2,0,3')]),
+    ]);
+    const diagnostics: Diagnostic[] = [];
+    const surface = resolveSurface(graph, { onDiagnostic: d => diagnostics.push(d) })!;
+    const raster = emitLayeredSurface(graph, surface, d => diagnostics.push(d));
+    const compute = emitSurfaceVariant(graph, surface, 0, d => diagnostics.push(d));
+    expect(diagnostics).toEqual([]);
+    for (const code of [raster.code, compute.fnCode]) {
+      expect(code).toContain('sign(');
+      expect(code).toMatch(/vec3f\(e\d+\) - e\d+/);
+    }
+  });
+
   it('emits connected range and clamp nodes for both surface stages', () => {
     const graph = surfaceGraph('standard_surface', [conn('base_color', 'color3', 'clip')], [
       upstream('clip', 'clamp', 'color3', [
@@ -229,7 +247,7 @@ describe('emitLayeredSurface (T055d)', () => {
     for (const code of [raster.code, compute.fnCode]) {
       expect(code).toMatch(/!\s*e\d+/);
       expect(code).toContain('!=');
-      expect(code).toMatch(/f32\(e\d+\)/);
+      expect(code).toMatch(/select\(0\.0, 1\.0, e\d+\)/);
     }
   });
 

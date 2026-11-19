@@ -40,6 +40,13 @@
       #material-graph-details p { margin: 0.35em 0; }
       .material-graph-warning { display: block; color: #ffce91; }
       #material-graph-backend ul { max-height: 18dvh; overflow: auto; overflow-wrap: anywhere; margin-block: 0.4em; }
+      .material-preview { display: flex; align-items: start; justify-content: space-between; gap: 12px; margin-block: 0.5em; padding: 8px; border: 1px solid #444d61; }
+      .material-preview h3 { margin: 0 0 0.35em; font-size: 1em; }
+      .material-preview label { display: inline-block; margin: 0 12px 0.35em 0; }
+      .material-preview input { width: 4.5em; }
+      .material-preview p { margin: 0.35em 0; overflow-wrap: anywhere; }
+      .material-preview canvas { width: min(160px, 30vw); height: auto; }
+      .material-preview [hidden] { display: none; }
       .material-variant-comparison { margin-block: 0.4em; }
       .material-variant-renders { margin-block: 0.4em; }
       .material-variant-renders fieldset { border: 0; padding: 0; margin: 0.4em 0; }
@@ -93,6 +100,7 @@
             <summary>Compatibilité du matériau avec le moteur Disney</summary>
             <ul class="material-graph-warning"></ul>
           </details>
+          <div id="material-preview"></div>
           <div id="material-variant-renders"></div>
           <div id="material-graph-diagram" role="region" aria-label="Diagramme des nœuds"></div>
           <section id="material-graph-details" aria-label="Entrées du nœud" aria-live="polite"></section>

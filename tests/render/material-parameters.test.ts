@@ -15,6 +15,7 @@ import {
   uniformSceneMaterials, visibleMaterialParameters,
 } from '../../src/render/material-parameters.ts';
 import { applySceneDisplacement } from '../../src/render/displacement.ts';
+import { buildSceneFrame } from '../../src/render/raster/scene-frame.ts';
 import { resolveVolume } from '../../src/materialx/volume-graph.ts';
 import { appendVolumeIr } from '../../src/compiler/volume-ir.ts';
 import { surfaceGraphToLayered } from '../../src/compiler/surface-lower.ts';
@@ -380,6 +381,33 @@ describe('dynamic MaterialX parameters', () => {
     expect(material.volumeMedium?.absorption).toEqual([0.1, 0.2, 0.3]);
     expect(() => changeMaterialParameters(material, new Map([[parameter.id, [-1, 0, 0]]]))).toThrow('Invalid volume coefficient');
   });
+  it('recompiles volume coefficients when its VDF connection changes', async () => {
+    const resources = await fixture(false, graph => {
+      graph.terminals = [...graph.terminals, { name: 'volumeshader', type: 'volumeshader', nodeId: 'volume', provenance: { namePath: '/volume' } }];
+      graph.nodes.set('volume', {
+        id: 'volume', category: 'volume', type: 'volumeshader', provenance: { namePath: '/volume' },
+        inputs: [{ name: 'vdf', type: 'VDF', source: { kind: 'connection', nodeId: 'vdf' }, provenance: { namePath: '/volume/vdf' } }],
+      });
+      for (const [id, value] of [['vdf', '0.1, 0.2, 0.3'], ['vdf2', '0.4, 0.5, 0.6']] as const) {
+        graph.nodes.set(id, {
+          id, category: 'anisotropic_vdf', type: 'VDF', provenance: { namePath: `/${id}` },
+          inputs: [{ name: 'absorption', type: 'vector3', source: { kind: 'value', type: 'vector3', value }, provenance: { namePath: `/${id}/absorption` } }],
+        });
+      }
+      graph.nodes.set('invalidVdf', {
+        id: 'invalidVdf', category: 'constant', type: 'VDF', inputs: [], provenance: { namePath: '/invalidVdf' },
+      });
+    });
+    const material = [...resources.materials.values()][0]!;
+    const changed = changeMaterialGraphInputLink(material, 'volume', 'vdf', 'vdf2');
+    expect(changed.volumeMedium?.absorption).toEqual([0.4, 0.5, 0.6]);
+    expect(changed.volumeIr).not.toBe(material.volumeIr);
+    expect(changeMaterialGraphInputLink(changed, 'volume', 'vdf', null).volumeMedium?.absorption)
+      .toEqual([0.1, 0.2, 0.3]);
+    expect(material.volumeMedium?.absorption).toEqual([0.1, 0.2, 0.3]);
+    expect(() => changeMaterialGraphInputLink(material, 'volume', 'vdf', 'invalidVdf'))
+      .toThrow('anisotropic_vdf');
+  });
   it('shows only authored unbound surface inputs, as in absval, not implicit defaults or graph internals', async () => {
     const resources = await fixture(false, graph => {
       graph.nodes.get('surface')!.inputs = [
@@ -455,6 +483,30 @@ describe('dynamic MaterialX parameters', () => {
     expect(z(resources)).toBe(0);
     materials.set(instance.materialKey!, changeMaterialParameters(updated, new Map([[scale.id, scale.initial]])));
     expect(z(await applySceneDisplacement({ ...resources, materials }, provider))).toBeCloseTo(0.05);
+  });
+  it('refreshes displacement when its height source is rewired or removed', async () => {
+    const resources = await fixture(true, graph => {
+      const height = graph.nodes.get('height')!;
+      graph.nodes.set('otherHeight', {
+        ...height, id: 'otherHeight', inputs: [{
+          name: 'file', type: 'filename', source: { kind: 'value', type: 'filename', value: 'other.png' },
+          provenance: { namePath: '/otherHeight/file' },
+        }],
+      });
+      graph.nodes.set('flatHeight', {
+        id: 'flatHeight', category: 'constant', type: 'float',
+        inputs: [{ name: 'value', type: 'float', source: { kind: 'value', type: 'float', value: '0' },
+          provenance: { namePath: '/flatHeight/value' } }],
+        provenance: { namePath: '/flatHeight' },
+      });
+    });
+    const material = [...resources.materials.values()][0]!;
+    const changed = changeMaterialGraphInputLink(material, 'disp', 'displacement', 'otherHeight');
+    expect(changed.displacement).toMatchObject({ file: 'other.png', scale: 0.1 });
+    expect(changeMaterialGraphInputLink(changed, 'disp', 'displacement', null).displacement)
+      .toMatchObject({ file: 'height.png', scale: 0.1 });
+    expect(changeMaterialGraphInputLink(material, 'disp', 'displacement', 'flatHeight').displacement).toBeUndefined();
+    expect(material.displacement?.file).toBe('height.png');
   });
   it('discovers upstream default inputs and their types from arbitrary NodeDefs', async () => {
     const resources = await fixture();
@@ -597,6 +649,32 @@ describe('dynamic MaterialX parameters', () => {
     const cutout = compileEditableMaterial(changeMaterialParameters(usd, new Map([['surface:opacity', [0.1]]])));
     expect(cutout.surfaceModule!.features!.opaque).toBe(false);
     expect(cutout.sceneShader!.code).not.toBe(usd.sceneShader!.code);
+  });
+
+  it('routes editable USD opacity across the opaque boundary', async () => {
+    const resources = await fixture(false, graph => {
+      const surface = graph.nodes.get('surface')!;
+      surface.category = 'UsdPreviewSurface';
+      surface.inputs = [
+        { name: 'opacity', type: 'float', source: { kind: 'value', type: 'float', value: '1' }, provenance: { namePath: '/surface/opacity' } },
+        { name: 'opacityThreshold', type: 'float', source: { kind: 'value', type: 'float', value: '0' }, provenance: { namePath: '/surface/opacityThreshold' } },
+      ];
+    });
+    const key = resources.instances[0]!.materialKey!;
+    const original = resources.materials.get(key)!;
+    const pass = (material: typeof original) => {
+      const materials = new Map(resources.materials).set(key, material);
+      return buildSceneFrame({ ...resources, materials }).draws[0]!.pass;
+    };
+
+    expect(pass(original)).toBe('opaque');
+    const transparent = compileEditableMaterial(changeMaterialParameters(original, new Map([['surface:opacity', [0.5]]])));
+    expect(pass(transparent)).toBe('transmission');
+    const edited = compileEditableMaterial(changeMaterialParameters(transparent, new Map([['surface:opacity', [0.25]]])));
+    expect(pass(edited)).toBe('transmission');
+    expect(edited.sceneShader!.code).toBe(transparent.sceneShader!.code);
+    const restored = compileEditableMaterial(changeMaterialParameters(edited, new Map([['surface:opacity', [1]]])));
+    expect(pass(restored)).toBe('opaque');
   });
 
   it('namespaces uniforms for multi-material path tracing', async () => {

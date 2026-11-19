@@ -8,12 +8,14 @@
 // caller-supplied bilinear image sampler (T057k, env.textures) or fall back to a
 // neutral value. Closure/string expressions are not value-evaluable and throw.
 
-import type {
-  IrConstValue,
-  IrExpr,
-  IrRef,
-  IrType,
-  ShaderIr,
+import {
+  OBJECT_TO_WORLD_INPUT,
+  WORLD_TO_OBJECT_INPUT,
+  type IrConstValue,
+  type IrExpr,
+  type IrRef,
+  type IrType,
+  type ShaderIr,
 } from './ir.ts';
 import { COLOR_TRANSFORMS, transformColor } from './color-transforms.ts';
 
@@ -43,7 +45,11 @@ export interface IrEvalVaryings {
 }
 
 export class IrEvalError extends Error {
-  override readonly name = 'IrEvalError';
+  override readonly name: string = 'IrEvalError';
+}
+
+export class IrEvalTransformError extends IrEvalError {
+  override readonly name = 'IrEvalTransformError';
 }
 
 const LUMA: IrValue = [0.2722287, 0.6740818, 0.0536895];
@@ -439,21 +445,26 @@ function swizzle(src: IrValue, pattern: string): number[] {
 }
 
 function convert(src: IrValue, from: IrType, to: IrType): number[] {
+  const scalar = (value: number, fromScalar: 'float' | 'int' | 'bool', toScalar: 'float' | 'int' | 'bool'): number => {
+    const normalized = fromScalar === 'bool' ? (value !== 0 ? 1 : 0) : value;
+    return toScalar === 'bool' ? (normalized !== 0 ? 1 : 0)
+      : toScalar === 'int' ? Math.trunc(normalized) : normalized;
+  };
   if (to.kind === 'vector') {
-    if (from.kind === 'scalar') return new Array(to.size).fill(src[0] ?? 0) as number[];
+    if (from.kind === 'scalar') return new Array(to.size).fill(scalar(src[0] ?? 0, from.scalar, to.scalar)) as number[];
     if (from.kind === 'vector') {
-      if (from.size === to.size) return [...src];
+      const components = src.map(value => scalar(value, from.scalar, to.scalar));
+      if (from.size === to.size) return components;
       if (from.size < to.size) {
-        const out = [...src];
+        const out = [...components];
         while (out.length < to.size) out.push(out.length === 3 ? 1 : 0);
         return out;
       }
-      return src.slice(0, to.size);
+      return components.slice(0, to.size);
     }
   }
-  if (to.kind === 'scalar') {
-    if (from.kind === 'vector') return [src[0] ?? 0];
-    return [src[0] ?? 0];
+  if (to.kind === 'scalar' && (from.kind === 'scalar' || from.kind === 'vector')) {
+    return [scalar(src[0] ?? 0, from.scalar, to.scalar)];
   }
   throw new IrEvalError(`cannot convert to type ${to.kind}`);
 }
@@ -469,6 +480,13 @@ function readInput(env: IrEvalVaryings, name: string, size: number): IrValue {
   if (lower === 'texcoord') return env.texcoord ?? zeros(size);
   if (lower === 'view' || lower === 'viewdir' || lower === 'viewdirection') return env.viewDir ?? zeros(size);
   if (KNOWN_VARYINGS.has(lower)) return zeros(size);
+  if (name === OBJECT_TO_WORLD_INPUT || name === WORLD_TO_OBJECT_INPUT) {
+    const value = env.inputs?.[name];
+    if (!value || value.length !== 16 || value.some(component => !Number.isFinite(component))) {
+      throw new IrEvalTransformError(`Missing or invalid instance transformation '${name}'.`);
+    }
+    return value;
+  }
   return env.inputs?.[name] ?? zeros(size);
 }
 
@@ -559,6 +577,24 @@ function evalCall(op: string, args: IrValue[], env: IrEvalVaryings, type: IrType
     if (type.kind !== 'vector' || type.scalar !== 'float') throw new IrEvalError('transformmatrix requires a float vector output');
     return transformMatrixVector(matrixValue, vectorValue, type.size);
   }
+  if (op === 'transformpoint' || op === 'transformvector' || op === 'transformnormal') {
+    if (type.kind !== 'vector' || type.scalar !== 'float' || type.size !== 3) {
+      throw new IrEvalError(`${op} requires a vector3 output`);
+    }
+    const value = input('in', 0, op === 'transformnormal' ? [0, 0, 1] : [0, 0, 0]);
+    if (value.length !== 3) throw new IrEvalError(`${op} requires a vector3 input`);
+    const mat = named?.mat ?? (named === undefined ? args[1] : undefined);
+    if (!mat) return op === 'transformnormal' ? normalize(value) : [...value];
+    if (mat.length !== 16) throw new IrEvalError(`${op} requires a matrix44 transform`);
+    const result = Array.from({ length: 3 }, (_, row) => {
+      let component = op === 'transformpoint' ? mat[12 + row]! : 0;
+      for (let column = 0; column < 3; column++) {
+        component += mat[op === 'transformnormal' ? row * 4 + column : column * 4 + row]! * value[column]!;
+      }
+      return component;
+    });
+    return op === 'transformnormal' ? normalize(result) : result;
+  }
   switch (op) {
     case 'absval':
       return unary(input('in', 0), Math.abs);
@@ -581,7 +617,7 @@ function evalCall(op: string, args: IrValue[], env: IrEvalVaryings, type: IrType
     case 'ln':
       return unary(input('in', 0), (x) => x > 0 ? Math.log(x) : 0);
     case 'sign':
-      return unary(input('in', 0), Math.sign);
+      return unary(input('in', 0, zeros(typeSize(type))), Math.sign);
     case 'normalize':
       return normalize(input('in', 0));
     case 'reflect': {
@@ -622,7 +658,7 @@ function evalCall(op: string, args: IrValue[], env: IrEvalVaryings, type: IrType
       return [...input('in', 0)];
     case 'invert': {
       const amount = input('amount', 1, [1]);
-      return input('in', 0).map((x, i) => (amount.length === 1 ? amount[0]! : amount[i] ?? 0) - x);
+      return input('in', 0, zeros(typeSize(type))).map((x, i) => (amount.length === 1 ? amount[0]! : amount[i] ?? 0) - x);
     }
     case 'mix':
       return mix(input('fg', 0), input('bg', 1), input('mix', 2, [0]));

@@ -18,10 +18,10 @@ import type { SceneLight } from '../../../src/usd/lights.ts';
 import { PT_LIGHT_FLOATS } from '../../../src/render/pathtracing/analytic-lights.ts';
 import { createPcg32, integratePath, type Ray } from '../../../src/render/pathtracing/integrator.ts';
 import { evalWorld, layeredSurfaceBsdf, surfaceBsdf } from '../../../src/render/pathtracing/bsdf.ts';
-import { canonicalSurfaceToLayered, type LayeredClosure } from '../../../src/compiler/ir.ts';
+import { OBJECT_TO_WORLD_INPUT, canonicalSurfaceToLayered, type LayeredClosure } from '../../../src/compiler/ir.ts';
 import { packLayeredMaterial, unpackMaterialMedium, isVolumeBoundary } from '../../../src/render/pathtracing/material-record.ts';
 import { evaluateSurfaceToLayered } from '../../../src/compiler/surface-eval.ts';
-import { IDENTITY4 } from '../../../src/scene/transforms.ts';
+import { IDENTITY4, multiply4, scaling4, translation4 } from '../../../src/scene/transforms.ts';
 import { resolveSurface, type ResolvedSurface } from '../../../src/materialx/surface-graph.ts';
 import type { ResolvedGraph, ResolvedNode } from '../../../src/materialx/graph.ts';
 
@@ -422,6 +422,43 @@ describe('variantSources classification (T057i1)', () => {
 });
 
 describe('createSceneSampler procedural oracle (T057i3)', () => {
+  it('uses the hit instance transform for two instances sharing one material, including cached geometry', () => {
+    const graph: ResolvedGraph = {
+      terminals: [{ name: 'surfaceshader', type: 'surfaceshader', nodeId: 's', provenance: { namePath: '/s' } }],
+      nodes: new Map([
+        ['s', { id: 's', category: 'standard_surface', type: 'surfaceshader', inputs: [
+          { name: 'base_color', type: 'color3', source: { kind: 'connection', nodeId: 'v' }, provenance: { namePath: '/s/base_color' } },
+        ], provenance: { namePath: '/s' } }],
+        ['v', { id: 'v', category: 'transformvector', type: 'vector3', inputs: [
+          { name: 'in', type: 'vector3', source: { kind: 'value', type: 'vector3', value: '0.2,0.2,0.2' }, provenance: { namePath: '/v/in' } },
+          { name: 'fromspace', type: 'string', source: { kind: 'value', type: 'string', value: 'object' }, provenance: { namePath: '/v/fromspace' } },
+          { name: 'tospace', type: 'string', source: { kind: 'value', type: 'string', value: 'world' }, provenance: { namePath: '/v/tospace' } },
+        ], provenance: { namePath: '/v' } }],
+      ]),
+    };
+    const surface = resolveSurface(graph)!;
+    const { resources, lights } = sceneWith({ surfaceGraph: graph, resolvedSurface: surface });
+    const second = multiply4(translation4(5, 0, 0), scaling4(2, 1, 1));
+    resources.instances = [
+      { id: '/a', primPath: '/a', prototypeId: '/proto', materialKey: 'mat', hasGeometry: true, transform: IDENTITY4 },
+      { id: '/b', primPath: '/b', prototypeId: '/proto', materialKey: 'mat', hasGeometry: true, transform: second },
+    ];
+    const scene = buildPathTraceScene(resources, { lights });
+    const cached = buildPathTraceScene(resources, { lights }, undefined, undefined, scene);
+    expect(cached.transformRanges).toEqual(scene.transformRanges);
+    expect(scene.transformRanges?.map(range => [range.firstTriangle, range.triangleCount])).toEqual([[0, 2], [2, 2]]);
+    const sampler = createSceneSampler(cached);
+    for (const [x, model] of [[0, IDENTITY4], [5, second]] as const) {
+      const hit = sampler.intersect({ origin: [x, 0, 2], direction: [0, 0, -1] })!;
+      const direction = [0, 0, 1] as const;
+      const actual = sampler.evalBsdf(hit, direction, direction);
+      const expected = evalWorld(layeredSurfaceBsdf(evaluateSurfaceToLayered(graph, surface, {
+        inputs: { [OBJECT_TO_WORLD_INPUT]: model },
+      })), hit.normal, direction, direction);
+      actual.value.forEach((value, i) => expect(value).toBeCloseTo(expected.value[i]!, 6));
+    }
+  });
+
   it('shades a variant material with its evaluated graph, not the packed constant', () => {
     const { graph, surface } = brickGraph();
     const { resources, lights } = sceneWith({ surfaceGraph: graph, resolvedSurface: surface });

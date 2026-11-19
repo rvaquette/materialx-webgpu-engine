@@ -9,7 +9,9 @@ import { NEUTRAL_SURFACE } from '../../src/render/raster/scene-frame.ts';
 import { projectIrradianceSH } from '../../src/render/env/irradiance.ts';
 import { buildEnvCdf } from '../../src/assets/environment-cdf.ts';
 import { JsDenoiser } from '../../src/render/pathtracing/js-denoiser.ts';
-import { editableSceneMaterials, materialUniformData } from '../../src/render/material-parameters.ts';
+import { compileEditableMaterial, editableSceneMaterials, materialUniformData } from '../../src/render/material-parameters.ts';
+import { applySceneDisplacement } from '../../src/render/displacement.ts';
+import { uploadMaterialTextures } from '../../src/render/usd-scene-assets.ts';
 import { PT_UNIFORM_SIZE, pathTraceTile, pathTraceTileCount } from '../../src/render/pathtracing/compute.ts';
 import type { ShaderCompilationError } from '../../src/gpu/shader-diagnostics.ts';
 import { exportCompiledMaterial, exportCompiledScene } from '../../src/scene/compiled-scene.ts';
@@ -17,9 +19,14 @@ import { exportSurfaceGraph } from '../../src/materialx/graph-export.ts';
 import { DisneyGpuBackend } from '../../src/render/pathtracing/disney-gpu-backend.ts';
 import { tonemapIndex } from '../../src/render/output.ts';
 import {
+  loadMaterialPreviewShaderBall, materialPreviewCamera, materialPreviewResources,
+} from '../../src/render/material-preview.ts';
+import { IDENTITY4 } from '../../src/scene/transforms.ts';
+import {
   pathTraceViewIndex, PT_DISPLAY_INFO_BYTES, PT_DISPLAY_PIXEL_BYTES, PT_SURFACE_AOV_PIXEL_BYTES,
 } from '../../src/render/pathtracing/display.ts';
 import { PT_CONVERGENCE_UNIFORM_BYTES } from '../../src/render/pathtracing/convergence.ts';
+import type { ResolvedGraph } from '../../src/materialx/graph.ts';
 
 vi.mock('../../src/render/usd-scene-assets.ts', async (original) => ({
   ...await original<typeof import('../../src/render/usd-scene-assets.ts')>(),
@@ -28,6 +35,10 @@ vi.mock('../../src/render/usd-scene-assets.ts', async (original) => ({
 vi.mock('../../src/render/pathtracing/scene-buffers.ts', async (original) => ({
   ...await original<typeof import('../../src/render/pathtracing/scene-buffers.ts')>(),
   buildCachedPathTraceScene: vi.fn(),
+}));
+vi.mock('../../src/render/material-preview.ts', async (original) => ({
+  ...await original<typeof import('../../src/render/material-preview.ts')>(),
+  loadMaterialPreviewShaderBall: vi.fn(),
 }));
 
 function fakeDevice() {
@@ -61,6 +72,8 @@ function fakeDevice() {
       beginRenderPass: vi.fn(() => pass), beginComputePass: vi.fn(() => pass),
       clearBuffer: vi.fn(), copyBufferToBuffer: vi.fn(), copyTextureToBuffer: vi.fn(), finish: vi.fn(() => ({})),
     })),
+    pushErrorScope: vi.fn(),
+    popErrorScope: vi.fn(async () => null),
     queue: {
       writeBuffer: vi.fn(), writeTexture: vi.fn(), submit: vi.fn(),
       onSubmittedWorkDone: vi.fn(async () => {}),
@@ -69,7 +82,15 @@ function fakeDevice() {
   return { device, gpu: device as unknown as GPUDevice, pass, textures };
 }
 
-async function sceneFixture(editable = false): Promise<LoadedUsdScene> {
+interface SceneFixtureOptions {
+  twoObjects?: boolean;
+  textureNode?: boolean;
+  transmission?: boolean;
+  displaced?: boolean;
+  volumeBoundary?: boolean;
+}
+
+async function sceneFixture(editable = false, options: SceneFixtureOptions = {}): Promise<LoadedUsdScene> {
   const imported = await importUsdStage('scene.usda', {
     reader: { read: async () => `#usda 1.0
 def Xform "World" {
@@ -94,7 +115,7 @@ def Xform "World" {
   const { emitLayeredSurface } = await import('../../src/compiler/surface-wgsl.ts');
   const { IrModuleBuilder, FLOAT } = await import('../../src/compiler/ir.ts');
   const { emitWgsl } = await import('../../src/compiler/wgsl.ts');
-  const graph = {
+  const graph: ResolvedGraph = {
     terminals: [{ name: 'surfaceshader', type: 'surfaceshader', nodeId: 's', provenance: { namePath: '/s' } }],
     nodes: new Map([['s', { id: 's', category: 'standard_surface', type: 'surfaceshader', inputs: [
       { name: 'base_color', type: 'color3', source: { kind: 'value' as const, type: 'color3', value: '0.8, 0.8, 0.8' }, provenance: { namePath: '/s/base_color' } },
@@ -102,28 +123,91 @@ def Xform "World" {
       { name: 'specular_roughness', type: 'float', min: [0], max: [1], source: { kind: 'value' as const, type: 'float', value: '0.2' }, provenance: { namePath: '/s/specular_roughness' } },
       { name: 'diffuse_roughness', type: 'float', source: { kind: 'value' as const, type: 'float', value: '0.8' }, provenance: { namePath: '/s/diffuse_roughness' } },
       { name: 'coat_roughness', type: 'float', source: { kind: 'value' as const, type: 'float', value: '0.1' }, provenance: { namePath: '/s/coat_roughness' } },
+      ...(options.transmission ? [
+        { name: 'transmission', type: 'float', source: { kind: 'value' as const, type: 'float', value: '0' }, provenance: { namePath: '/s/transmission' } },
+      ] : []),
     ], provenance: { namePath: '/s' } }]]),
   };
+  if (options.textureNode) graph.nodes.set('image', {
+    id: 'image', category: 'image', type: 'color3',
+    inputs: [{ name: 'file', type: 'filename', source: { kind: 'value', type: 'filename', value: 'texture.png' },
+      provenance: { namePath: '/image/file' } }],
+    provenance: { namePath: '/image' },
+  });
+  if (options.transmission) graph.nodes.set('amount', {
+    id: 'amount', category: 'constant', type: 'float',
+    inputs: [{ name: 'value', type: 'float', source: { kind: 'value', type: 'float', value: '0.5' },
+      provenance: { namePath: '/amount/value' } }],
+    provenance: { namePath: '/amount' },
+  });
+  if (options.displaced) {
+    for (const [id, file] of [['height', 'height.png'], ['otherHeight', 'other.png']] as const) {
+      graph.nodes.set(id, {
+        id, category: 'image', type: 'float',
+        inputs: [{ name: 'file', type: 'filename', source: { kind: 'value', type: 'filename', value: file },
+          provenance: { namePath: `/${id}/file` } }],
+        provenance: { namePath: `/${id}` },
+      });
+    }
+    graph.nodes.set('disp', {
+      id: 'disp', category: 'displacement', type: 'displacementshader',
+      inputs: [
+        { name: 'scale', type: 'float', source: { kind: 'value', type: 'float', value: '0.1' }, provenance: { namePath: '/disp/scale' } },
+        { name: 'displacement', type: 'float', source: { kind: 'connection', nodeId: 'height' }, provenance: { namePath: '/disp/displacement' } },
+      ],
+      provenance: { namePath: '/disp' },
+    });
+    graph.terminals = [...graph.terminals, {
+      name: 'displacementshader', type: 'displacementshader', nodeId: 'disp', provenance: { namePath: '/disp' },
+    }];
+  }
   const builder = new IrModuleBuilder();
   builder.output({ name: 'color', type: FLOAT, ref: builder.constant(FLOAT, 1) });
   const ir = builder.build();
-  const resources = await buildSceneResources(scene, {
+  let resources = await buildSceneResources(scene, {
     meshSource: { meshFor: () => ({
       points: [-1, 0, 0, 1, 0, 0, 0, 1, 0], faceVertexCounts: [3], faceVertexIndices: [0, 1, 2],
+      ...(options.displaced ? { primvars: [
+        { name: 'st', interpolation: 'vertex' as const, elementSize: 2, values: [0, 0, 1, 0, 0, 1] },
+      ] } : {}),
     }) },
     materialCompiler: {
       compile: () => ({ ir, module: emitWgsl(ir), layered: emitLayeredSurface(graph, resolveSurface(graph, {})!),
         ...(editable ? { graph, surface: resolveSurface(graph, {})! } : {}) }),
     },
   });
+  if (options.twoObjects) {
+    resources = { ...resources, instances: [...resources.instances, {
+      ...resources.instances[0]!, id: '/World/Other', primPath: '/World/Other',
+    }] };
+  }
+  const imageProvider = { decode: async () => options.textureNode || options.displaced ? {
+    kind: 'pixels' as const, componentType: 'uint8' as const, channels: 4 as const, colorSpace: 'raw',
+    width: 1, height: 1, data: new Uint8Array([128, 64, 32, 255]),
+  } : undefined };
+  let parameterResources = editable ? editableSceneMaterials(resources) : undefined;
+  if (parameterResources && options.displaced) {
+    const key = parameterResources.instances[0]!.materialKey!;
+    const materials = new Map(parameterResources.materials);
+    materials.set(key, compileEditableMaterial({ ...materials.get(key)!, displacement: { file: 'height.png', scale: 0.1 } }));
+    parameterResources = { ...parameterResources, materials };
+  }
+  if (parameterResources && options.volumeBoundary) {
+    const key = parameterResources.instances.at(-1)!.materialKey!;
+    const materials = new Map(parameterResources.materials);
+    materials.set(key, { ...materials.get(key)!, volumeBoundary: true });
+    parameterResources = { ...parameterResources, materials };
+  }
+  const renderResources = parameterResources
+    ? await applySceneDisplacement(parameterResources, imageProvider) : resources;
   return {
     entry: 'https://example.test/scenes/source/scene.usda', scene,
-    resources: editable ? editableSceneMaterials(resources) : resources,
-    ...(editable ? { parameterResources: editableSceneMaterials(resources) } : {}), lights: [], cameras: [],
+    resources: renderResources,
+    ...(parameterResources ? { parameterResources } : {}), lights: [], cameras: [],
     mtlx: {
       documents: { documentFor: () => undefined, delete: vi.fn() },
       surfaceFor: () => NEUTRAL_SURFACE,
-      imageProvider: { decode: async () => undefined },
+      imageProvider,
     },
   };
 }
@@ -146,11 +230,15 @@ describe('interactive viewer resource lifecycle', () => {
       constructor(public data: Uint8ClampedArray, public width: number, public height: number) {}
     });
     vi.mocked(buildCachedPathTraceScene).mockReset();
+    vi.mocked(loadMaterialPreviewShaderBall).mockReset();
   });
   afterEach(() => { viewer?.dispose(); vi.unstubAllGlobals(); });
 
-  async function setup(environment = false, editable = false, backend: 'raster' | 'pathtracing' = 'raster', orbitControls = true) {
-    const loaded = await sceneFixture(editable);
+  async function setup(
+    environment = false, editable = false, backend: 'raster' | 'pathtracing' = 'raster',
+    orbitControls = true, options: SceneFixtureOptions = {},
+  ) {
+    const loaded = await sceneFixture(editable, options);
     if (environment) {
       const image = { width: 4, height: 2, data: new Float32Array(24).fill(1) };
       loaded.environment = {
@@ -565,8 +653,315 @@ describe('interactive viewer resource lifecycle', () => {
     expect(viewer.objectParameters(path).find(parameter => parameter.id === 'surface:base_color')!.value).toEqual(original);
   });
 
+  it('updates only the edited raster material in both quality caches and reuses the original pipeline on undo', async () => {
+    const { viewer, device, textures } = await setup(true, true, 'raster', true, { twoObjects: true });
+    await viewer.setRasterQuality('reference');
+    await viewer.setRasterQuality('interactive');
+    const otherGraph = viewer.objectSurfaceGraph('/World/Other');
+    const geometry = device.createBuffer.mock.calls.flatMap(([descriptor], index) =>
+      descriptor.usage & (GPUBufferUsage.VERTEX | GPUBufferUsage.INDEX)
+        ? [device.createBuffer.mock.results[index]!.value] : []);
+    const textureCount = textures.length;
+    const pipelines = device.createRenderPipeline.mock.calls.length;
+    const shaders = device.createShaderModule.mock.calls.length;
+    await viewer.setObjectConstant('/World/Ball', 's', 'specular_roughness', true, 'multiply');
+    expect(viewer.objectSurfaceGraph('/World/Other')).toBe(otherGraph);
+    expect(device.createRenderPipeline).toHaveBeenCalledTimes(pipelines + 2);
+    expect(device.createShaderModule).toHaveBeenCalledTimes(shaders + 2);
+    expect(textures).toHaveLength(textureCount);
+    expect(device.createBuffer.mock.calls.filter(([descriptor]) =>
+      descriptor.usage & (GPUBufferUsage.VERTEX | GPUBufferUsage.INDEX))).toHaveLength(geometry.length);
+    for (const buffer of geometry) expect(buffer.destroy).not.toHaveBeenCalled();
+
+    await viewer.setObjectConstant('/World/Ball', 'specular_roughness_multiply', 'in2', false, 'multiply');
+    expect(device.createRenderPipeline).toHaveBeenCalledTimes(pipelines + 2);
+    expect(device.createShaderModule).toHaveBeenCalledTimes(shaders + 2);
+    expect(viewer.objectSurfaceGraph('/World/Other')).toBe(otherGraph);
+    for (const buffer of geometry) expect(buffer.destroy).not.toHaveBeenCalled();
+  });
+
+  it('updates material textures independently and moves connected transmission between raster passes', async () => {
+    const { viewer, textures, statuses, device } = await setup(false, true, 'raster', true, {
+      twoObjects: true, textureNode: true, transmission: true,
+    });
+    await viewer.setObjectGraphInputLink('/World/Other', 's', 'base_color', 'image');
+    const otherTexture = textures.at(-1)!;
+    const before = textures.length;
+    await viewer.setObjectGraphInputLink('/World/Ball', 's', 'base_color', 'image');
+    expect(textures).toHaveLength(before + 1);
+    const editedTexture = textures.at(-1)!;
+    await viewer.setObjectGraphInputLink('/World/Ball', 's', 'transmission', 'amount');
+    expect(statuses.at(-1)?.passes).toEqual(['opaque', 'transmission']);
+    expect(textures).toHaveLength(before + 1);
+    expect(editedTexture.destroy).not.toHaveBeenCalled();
+    await viewer.setObjectGraphInputLink('/World/Ball', 's', 'transmission', null);
+    expect(statuses.at(-1)?.passes).toEqual(['opaque']);
+    await viewer.setObjectGraphInputLink('/World/Ball', 's', 'base_color', null);
+    expect(editedTexture.destroy).toHaveBeenCalledOnce();
+    expect(otherTexture.destroy).not.toHaveBeenCalled();
+    expect(device.createBuffer.mock.calls.filter(([descriptor]) =>
+      descriptor.usage & GPUBufferUsage.INDEX)).toHaveLength(1);
+  });
+
+  it('keeps the active scene intact if a topology pipeline fails', async () => {
+    const { viewer, device } = await setup(false, true, 'raster', true, { twoObjects: true });
+    const original = viewer.objectSurfaceGraph('/World/Ball');
+    const geometry = device.createBuffer.mock.calls.flatMap(([descriptor], index) =>
+      descriptor.usage & GPUBufferUsage.INDEX ? [device.createBuffer.mock.results[index]!.value] : []);
+    device.createRenderPipelineAsync.mockRejectedValueOnce(new Error('topology pipeline failed'));
+    await expect(viewer.setObjectConstant('/World/Ball', 's', 'specular_roughness', true, 'multiply'))
+      .rejects.toThrow('topology pipeline failed');
+    expect(viewer.objectSurfaceGraph('/World/Ball')).toBe(original);
+    for (const buffer of geometry) expect(buffer.destroy).not.toHaveBeenCalled();
+    tick(1);
+    expect(device.queue.submit).toHaveBeenCalled();
+  });
+
+  it('reports WGSL errors without committing the edited raster graph', async () => {
+    const { viewer, device, diagnostics } = await setup(false, true);
+    const original = viewer.objectSurfaceGraph('/World/Ball');
+    const shaderError: GPUCompilationMessage = {
+      __brand: 'GPUCompilationMessage', type: 'error', message: 'invalid edited shader',
+      lineNum: 1, linePos: 1, offset: 0, length: 1,
+    };
+    device.createShaderModule.mockImplementationOnce(() => ({
+      getCompilationInfo: async () => ({ messages: [shaderError] }),
+    }));
+    await expect(viewer.setObjectConstant('/World/Ball', 's', 'specular_roughness', true, 'multiply'))
+      .rejects.toThrow('WGSL: 1 erreur');
+    expect(viewer.objectSurfaceGraph('/World/Ball')).toBe(original);
+    expect(diagnostics.at(-1)).toEqual([expect.objectContaining({ message: 'invalid edited shader' })]);
+    await viewer.setObjectConstant('/World/Ball', 's', 'specular_roughness', true, 'multiply');
+    expect(diagnostics.at(-1)).toEqual([]);
+  });
+
+  it('serializes a quality switch with a concurrent topology edit', async () => {
+    const { viewer, device } = await setup(false, true);
+    let release!: () => void;
+    let started!: () => void;
+    const blocked = new Promise<void>(resolve => { release = resolve; });
+    const compiling = new Promise<void>(resolve => { started = resolve; });
+    device.createRenderPipelineAsync.mockImplementationOnce(async descriptor => {
+      started();
+      await blocked;
+      return device.createRenderPipeline(descriptor);
+    });
+    const originalPipelines = device.createRenderPipeline.mock.calls.length;
+    const quality = viewer.setRasterQuality('reference');
+    await compiling;
+    const edit = viewer.setObjectConstant('/World/Ball', 's', 'specular_roughness', true, 'multiply');
+    release();
+    await Promise.all([quality, edit]);
+    expect(viewer.rasterQuality).toBe('reference');
+    expect(viewer.objectSurfaceGraph('/World/Ball')?.nodes.has('specular_roughness_multiply')).toBe(true);
+    expect(device.createRenderPipeline).toHaveBeenCalledTimes(originalPipelines + 3);
+    await viewer.setRasterQuality('interactive');
+    await viewer.setRasterQuality('reference');
+    expect(device.createRenderPipeline).toHaveBeenCalledTimes(originalPipelines + 3);
+  });
+
+  it('rejects a stale topology edit rather than losing a concurrent uniform edit', async () => {
+    const { viewer, device } = await setup(false, true);
+    let release!: () => void;
+    let started!: () => void;
+    const blocked = new Promise<void>(resolve => { release = resolve; });
+    const compiling = new Promise<void>(resolve => { started = resolve; });
+    device.createRenderPipelineAsync.mockImplementationOnce(async descriptor => {
+      started();
+      await blocked;
+      return device.createRenderPipeline(descriptor);
+    });
+    const edit = viewer.setObjectConstant('/World/Ball', 's', 'specular_roughness', true, 'multiply');
+    const rejected = expect(edit).rejects.toThrow('Scene changed during material update.');
+    await compiling;
+    await viewer.setObjectParameters('/World/Ball', new Map([['surface:base_color', [0.2, 0.4, 0.8]]]));
+    release();
+    await rejected;
+    expect(viewer.objectSurfaceGraph('/World/Ball')?.nodes.has('specular_roughness_multiply')).toBe(false);
+    expect(viewer.objectParameters('/World/Ball').find(parameter => parameter.input === 'base_color')?.value).toEqual([0.2, 0.4, 0.8]);
+  });
+
+  it('retains baked displacement geometry while updating its surface graph', async () => {
+    const { viewer, loaded, device } = await setup(false, true, 'raster', true, { displaced: true });
+    const bakedGeometry = loaded.resources.geometries;
+    const bakedInstances = loaded.resources.instances;
+    const indexBuffers = device.createBuffer.mock.calls.flatMap(([descriptor], index) =>
+      descriptor.usage & GPUBufferUsage.INDEX ? [device.createBuffer.mock.results[index]!.value] : []);
+    await viewer.setObjectConstant('/World/Ball', 's', 'specular_roughness', true, 'multiply');
+    expect(loaded.resources.geometries).toBe(bakedGeometry);
+    expect(loaded.resources.instances).toBe(bakedInstances);
+    expect([...loaded.resources.materials.values()][0]?.displacement).toBeUndefined();
+    expect([...loaded.parameterResources!.materials.values()][0]?.displacement?.file).toBe('height.png');
+    for (const buffer of indexBuffers) expect(buffer.destroy).not.toHaveBeenCalled();
+  });
+
+  it('rebakes geometry when the displacement graph is rewired and restored', async () => {
+    const { viewer, device } = await setup(false, true, 'raster', true, { displaced: true });
+    const indices = () => device.createBuffer.mock.calls.flatMap(([descriptor], index) =>
+      descriptor.usage & GPUBufferUsage.INDEX ? [device.createBuffer.mock.results[index]!.value] : []);
+    const original = indices()[0]!;
+    await viewer.setObjectGraphInputLink('/World/Ball', 'disp', 'displacement', 'otherHeight');
+    expect(original.destroy).toHaveBeenCalledOnce();
+    expect(indices()).toHaveLength(2);
+    expect(viewer.objectSurfaceGraph('/World/Ball')?.nodes.get('disp')?.inputs[1]?.source)
+      .toMatchObject({ kind: 'connection', nodeId: 'otherHeight' });
+    const changed = indices()[1]!;
+    await viewer.setObjectGraphInputLink('/World/Ball', 'disp', 'displacement', null);
+    expect(changed.destroy).toHaveBeenCalledOnce();
+    expect(indices()).toHaveLength(3);
+    expect(viewer.objectSurfaceGraph('/World/Ball')?.nodes.get('disp')?.inputs[1]?.source)
+      .toMatchObject({ kind: 'connection', nodeId: 'height' });
+  });
+
+  it('falls back to rebuilding the scene when a volume boundary is present', async () => {
+    const { viewer, device } = await setup(false, true, 'raster', true, { twoObjects: true, volumeBoundary: true });
+    const oldIndex = device.createBuffer.mock.calls.findIndex(([descriptor]) => !!(descriptor.usage & GPUBufferUsage.INDEX));
+    const oldBuffer = device.createBuffer.mock.results[oldIndex]!.value;
+    await viewer.setObjectConstant('/World/Ball', 's', 'specular_roughness', true, 'multiply');
+    expect(oldBuffer.destroy).toHaveBeenCalledOnce();
+    expect(device.createBuffer.mock.calls.filter(([descriptor]) => descriptor.usage & GPUBufferUsage.INDEX)).toHaveLength(2);
+  });
+
+  it('cleans up staged textures when a later texture decode fails', async () => {
+    const { viewer, loaded, gpu, textures } = await setup(false, true, 'raster', true, { textureNode: true });
+    await viewer.setObjectGraphInputLink('/World/Ball', 's', 'base_color', 'image');
+    const material = [...loaded.parameterResources!.materials.values()][0]!;
+    const module = material.surfaceModule!;
+    const texture = module.textures[0]!;
+    const twoTextures = { ...material, surfaceModule: {
+      ...module, textures: [texture, { ...texture, name: 'other', fileRef: 'missing.png' }],
+    } };
+    const before = textures.length;
+    await expect(uploadMaterialTextures(gpu, twoTextures, {
+      decode: async file => {
+        if (file === 'missing.png') throw new Error('decode failed');
+        return loaded.mtlx.imageProvider.decode(file);
+      },
+    }, new Map())).rejects.toThrow('decode failed');
+    expect(textures).toHaveLength(before + 1);
+    expect(textures.at(-1)?.destroy).toHaveBeenCalledOnce();
+  });
+
+  it('rebuilds the shared path-tracing shader while retaining packed geometry and resetting samples', async () => {
+    const actual = await vi.importActual<typeof import('../../src/render/pathtracing/scene-buffers.ts')>(
+      '../../src/render/pathtracing/scene-buffers.ts');
+    vi.mocked(buildCachedPathTraceScene).mockImplementation(actual.buildCachedPathTraceScene);
+    const { viewer, device, statuses } = await setup(false, true, 'pathtracing', true, { twoObjects: true });
+    tick(0);
+    await vi.waitFor(() => expect(statuses.at(-1)?.pathTracer).toBe('ready'));
+    tick(1);
+    await vi.waitFor(() => expect(statuses.at(-1)?.samples).toBeGreaterThan(0));
+    const geometry = device.createBuffer.mock.calls.flatMap(([descriptor], index) =>
+      descriptor.label?.startsWith('Path tracing ') && !['Path tracing materials', 'Path tracing analyticLights', 'Path tracing volumeData'].includes(descriptor.label)
+        ? [device.createBuffer.mock.results[index]!.value] : []);
+    expect(geometry).toHaveLength(5);
+    const buffers = device.createBuffer.mock.calls.filter(([descriptor]) => descriptor.label?.startsWith('Path tracing ')).length;
+    const pipelines = device.createComputePipelineAsync.mock.calls.length;
+    await viewer.setObjectConstant('/World/Ball', 's', 'specular_roughness', true, 'multiply');
+    expect(statuses.at(-1)).toMatchObject({ pathTracer: 'idle', samples: 0 });
+    for (const buffer of geometry) expect(buffer.destroy).not.toHaveBeenCalled();
+    tick(2);
+    await vi.waitFor(() => expect(statuses.at(-1)?.pathTracer).toBe('ready'));
+    expect(buildCachedPathTraceScene).toHaveBeenCalledOnce();
+    expect(device.createBuffer.mock.calls.filter(([descriptor]) => descriptor.label?.startsWith('Path tracing ')))
+      .toHaveLength(buffers + 1);
+    expect(device.createComputePipelineAsync).toHaveBeenCalledTimes(pipelines + 2);
+    for (const buffer of geometry) expect(buffer.destroy).not.toHaveBeenCalled();
+  });
+
+  it('reports a deferred path-tracing compilation failure and recovers after undo', async () => {
+    const actual = await vi.importActual<typeof import('../../src/render/pathtracing/scene-buffers.ts')>(
+      '../../src/render/pathtracing/scene-buffers.ts');
+    vi.mocked(buildCachedPathTraceScene).mockImplementation(actual.buildCachedPathTraceScene);
+    const { viewer, device, statuses, diagnostics } = await setup(false, true, 'pathtracing');
+    tick(0);
+    await vi.waitFor(() => expect(statuses.at(-1)?.pathTracer).toBe('ready'));
+    await viewer.setObjectConstant('/World/Ball', 's', 'specular_roughness', true, 'multiply');
+    device.createComputePipelineAsync.mockRejectedValueOnce(new Error('edited path-tracing pipeline failed'));
+    tick(1);
+    await vi.waitFor(() => expect(statuses.at(-1)?.pathTracer).toBe('error'));
+    expect(viewer.objectSurfaceGraph('/World/Ball')?.nodes.has('specular_roughness_multiply')).toBe(true);
+    expect(diagnostics.at(-1)).toEqual([expect.objectContaining({ message: 'edited path-tracing pipeline failed' })]);
+    await viewer.setObjectConstant('/World/Ball', 'specular_roughness_multiply', 'in2', false, 'multiply');
+    expect(diagnostics.at(-1)).toEqual([]);
+    tick(2);
+    await vi.waitFor(() => expect(statuses.at(-1)?.pathTracer).toBe('ready'));
+  });
+
+  it('does not publish an obsolete path-tracing build after a topology edit', async () => {
+    const actual = await vi.importActual<typeof import('../../src/render/pathtracing/scene-buffers.ts')>(
+      '../../src/render/pathtracing/scene-buffers.ts');
+    vi.mocked(buildCachedPathTraceScene).mockImplementation(actual.buildCachedPathTraceScene);
+    const { viewer, device, statuses } = await setup(false, true, 'pathtracing');
+    let release!: () => void;
+    let started!: () => void;
+    const blocked = new Promise<void>(resolve => { release = resolve; });
+    const compiling = new Promise<void>(resolve => { started = resolve; });
+    device.createComputePipelineAsync.mockImplementationOnce(async () => {
+      started();
+      await blocked;
+      return { getBindGroupLayout: vi.fn(() => ({})) };
+    });
+    tick(0);
+    await compiling;
+    await viewer.setObjectConstant('/World/Ball', 's', 'specular_roughness', true, 'multiply');
+    expect(statuses.at(-1)?.pathTracer).toBe('idle');
+    tick(1);
+    await vi.waitFor(() => expect(statuses.at(-1)?.pathTracer).toBe('ready'));
+    release();
+    await new Promise(resolve => setTimeout(resolve, 10));
+    expect(statuses.at(-1)?.pathTracer).toBe('ready');
+    expect(viewer.objectSurfaceGraph('/World/Ball')?.nodes.has('specular_roughness_multiply')).toBe(true);
+  });
+
+  it('cancels a headless capture when its material topology changes', async () => {
+    const actual = await vi.importActual<typeof import('../../src/render/pathtracing/scene-buffers.ts')>(
+      '../../src/render/pathtracing/scene-buffers.ts');
+    vi.mocked(buildCachedPathTraceScene).mockImplementation(actual.buildCachedPathTraceScene);
+    vi.mocked(loadUsdScene).mockResolvedValue(await sceneFixture(true));
+    const { device, gpu } = fakeDevice();
+    viewer = new InteractiveViewer({ device: gpu, outputFormat: 'rgba8unorm', width: 130, height: 80 });
+    viewer.setBackend('pathtracing');
+    await viewer.load('scene.usda');
+    let release!: () => void;
+    let submitted!: () => void;
+    const blocked = new Promise<void>(resolve => { release = resolve; });
+    const submission = new Promise<void>(resolve => { submitted = resolve; });
+    device.queue.onSubmittedWorkDone.mockImplementationOnce(async () => { submitted(); await blocked; });
+    const target = device.createTexture({ size: [130, 80], format: 'rgba8unorm', usage: GPUTextureUsage.RENDER_ATTACHMENT });
+    const capture = viewer.renderPathTraceTo(target.createView() as GPUTextureView, 2);
+    const rejected = expect(capture).rejects.toThrow('Scene changed during path-tracing capture.');
+    await submission;
+    await viewer.setObjectConstant('/World/Ball', 's', 'specular_roughness', true, 'multiply');
+    release();
+    await rejected;
+  });
+
+  it('invalidates Disney material data on topology edits without rebuilding raster resources', async () => {
+    const dispose = vi.fn();
+    const create = vi.spyOn(DisneyGpuBackend, 'create').mockResolvedValue(
+      { dispose, reset: vi.fn() } as Pick<DisneyGpuBackend, 'dispose' | 'reset'> as DisneyGpuBackend,
+    );
+    try {
+      const { viewer, device, statuses } = await setup(false, true);
+      viewer.setBackend('disney');
+      tick(0);
+      await vi.waitFor(() => expect(statuses.at(-1)?.pathTracer).toBe('ready'));
+      const indexBuffers = device.createBuffer.mock.calls.filter(([descriptor]) => descriptor.usage & GPUBufferUsage.INDEX).length;
+      await viewer.setObjectConstant('/World/Ball', 's', 'base_color', true, 'multiply');
+      expect(dispose).toHaveBeenCalledOnce();
+      expect(statuses.at(-1)).toMatchObject({ pathTracer: 'idle', samples: 0 });
+      expect(device.createBuffer.mock.calls.filter(([descriptor]) => descriptor.usage & GPUBufferUsage.INDEX)).toHaveLength(indexBuffers);
+      const factor = viewer.objectParameters('/World/Ball', 'base_color_multiply')[0]!;
+      await viewer.setObjectParameters('/World/Ball', new Map([[factor.id, [0.5]]]));
+      tick(1);
+      await vi.waitFor(() => expect(create).toHaveBeenCalledTimes(2));
+      expect(create.mock.calls[1]?.[1].materials[0]?.baseColor).toEqual([0.4, 0.4, 0.4]);
+    } finally { create.mockRestore(); }
+  });
+
   it('switches A/B between a literal and an edited graph without reloading USD', async () => {
-    const { viewer } = await setup(false, true);
+    const { viewer, device } = await setup(false, true);
     const path = '/World/Ball';
     const loads = vi.mocked(loadUsdScene).mock.calls.length;
     expect(viewer.objectMaterialVariants(path)).toEqual({ A: 'empty', B: 'empty' });
@@ -575,6 +970,7 @@ describe('interactive viewer resource lifecycle', () => {
     await viewer.setObjectConstant(path, 's', 'specular_roughness', true);
     await viewer.setObjectParameters(path, new Map([['surface:specular_roughness', [0.42]]]));
     viewer.saveObjectMaterialVariant(path, 'B');
+    const pipelines = device.createRenderPipeline.mock.calls.length;
     expect(viewer.objectMaterialVariants(path)).toEqual({ A: 'saved', B: 'active' });
     await viewer.applyObjectMaterialVariant(path, 'A');
     expect(viewer.objectSurfaceGraph(path)?.nodes.has('specular_roughness_constant')).toBe(false);
@@ -587,6 +983,7 @@ describe('interactive viewer resource lifecycle', () => {
     await viewer.applyObjectMaterialVariant(path, 'A');
     expect(viewer.objectParameters(path, 's').find(parameter => parameter.input === 'specular_roughness')?.value).toEqual([0.2]);
     expect(loadUsdScene).toHaveBeenCalledTimes(loads);
+    expect(device.createRenderPipeline).toHaveBeenCalledTimes(pipelines);
   });
 
   it('restores persisted A/B material snapshots after reloading the scene', async () => {
@@ -646,6 +1043,212 @@ describe('interactive viewer resource lifecycle', () => {
     expect(viewer.objectSurfaceGraph(path)).toBe(graph);
     expect(viewer.objectMaterialVariants(path)).toEqual({ A: 'saved', B: 'active' });
     expect(loadUsdScene).toHaveBeenCalledTimes(loads);
+    expect(loaded.mtlx.documents?.delete).not.toHaveBeenCalled();
+  });
+
+  it('isolates the selected material, bakes displacement and frames all transformed bounds', async () => {
+    const loaded = await sceneFixture(true, { twoObjects: true, displaced: true });
+    const source = loaded.parameterResources!;
+    const selected = source.instances[0]!;
+    const key = selected.materialKey!;
+    const moved = [...selected.transform];
+    moved[12] = 37;
+    moved[13] = -12;
+    moved[14] = 8;
+    const scene = {
+      ...source,
+      materials: new Map([...source.materials, ['other', { ...source.materials.get(key)!, materialName: 'other' }]]),
+      instances: [{ ...selected, transform: moved }, { ...source.instances[1]!, materialKey: 'other' }],
+    };
+    const isolated = materialPreviewResources(scene, selected.primPath);
+    expect(isolated.instances).toHaveLength(1);
+    expect([...isolated.materials.keys()]).toEqual([key]);
+    expect(isolated.instances[0]!.transform).toEqual(moved);
+    expect(isolated.instances[0]!.primPath).not.toBe(selected.primPath);
+    expect(scene.instances).toHaveLength(2);
+    const geometry = isolated.geometries.get(isolated.instances[0]!.prototypeId)!;
+    const shaderBall = { ...geometry, prototypeId: 'shaderball' };
+    const ball = materialPreviewResources(scene, selected.primPath, shaderBall);
+    expect(ball.instances[0]!.prototypeId).toBe('shaderball');
+    expect(ball.instances[0]!.transform).toEqual(IDENTITY4);
+    const displaced = await applySceneDisplacement(isolated, loaded.mtlx.imageProvider);
+    expect(displaced.instances[0]!.prototypeId).toContain('::displacement::');
+    expect(displaced.tlas.bounds).not.toEqual(isolated.tlas.bounds);
+    const { camera } = materialPreviewCamera(displaced, [0.4, 0.6, 0.8], 0);
+    const matrix = camera.viewProj;
+    const { min, max } = displaced.tlas.bounds;
+    for (const x of [min[0], max[0]]) for (const y of [min[1], max[1]]) for (const z of [min[2], max[2]]) {
+      const clip = [0, 1, 2, 3].map(row => matrix[row]! * x + matrix[row + 4]! * y + matrix[row + 8]! * z + matrix[row + 12]!);
+      expect(Math.abs(clip[0]! / clip[3]!)).toBeLessThan(1);
+      expect(Math.abs(clip[1]! / clip[3]!)).toBeLessThan(1);
+      expect(clip[2]! / clip[3]!).toBeGreaterThanOrEqual(0);
+      expect(clip[2]! / clip[3]!).toBeLessThanOrEqual(1);
+    }
+  });
+
+  it.each(['raster', 'pathtracing'] as const)('captures an isolated object in %s without changing the live viewer', async backend => {
+    const { viewer, loaded, device, pass } = await setup(false, true, 'raster', true, { twoObjects: true });
+    const actual = await vi.importActual<typeof import('../../src/render/pathtracing/scene-buffers.ts')>(
+      '../../src/render/pathtracing/scene-buffers.ts');
+    vi.mocked(buildCachedPathTraceScene).mockImplementation(actual.buildCachedPathTraceScene);
+    const graph = viewer.objectSurfaceGraph('/World/Ball');
+    const originalResources = loaded.resources;
+    const options = backend === 'raster'
+      ? { target: 'object' as const, backend } : { target: 'object' as const, backend, samples: 2 };
+    const capture = await viewer.captureObjectMaterialPreview('/World/Ball', options, new AbortController().signal);
+    expect(capture).toMatchObject({ width: 256, height: 256 });
+    expect(capture.rgba).toHaveLength(256 * 256 * 4);
+    if (backend === 'pathtracing') {
+      const resources = vi.mocked(buildCachedPathTraceScene).mock.calls[0]![0];
+      expect(resources.instances).toHaveLength(1);
+      expect(resources.materials.size).toBe(1);
+      expect(pass.dispatchWorkgroups).toHaveBeenCalledTimes(2 * pathTraceTileCount(256, 256));
+    } else {
+      expect(pass.drawIndexed).toHaveBeenCalled();
+      expect(buildCachedPathTraceScene).not.toHaveBeenCalled();
+    }
+    expect(device.createCommandEncoder.mock.results.flatMap(({ value }) => value.copyTextureToBuffer.mock.calls)).toHaveLength(1);
+    expect(viewer.backend).toBe('raster');
+    expect(viewer.objectSurfaceGraph('/World/Ball')).toBe(graph);
+    expect(loaded.resources).toBe(originalResources);
+    expect(loaded.mtlx.documents?.delete).not.toHaveBeenCalled();
+  });
+
+  it('loads the shaderball only once and keeps the selected material', async () => {
+    const { viewer, loaded } = await setup(false, true);
+    const source = loaded.parameterResources!;
+    const geometry = source.geometries.get(source.instances[0]!.prototypeId)!;
+    vi.stubGlobal('document', { baseURI: 'https://example.test/engine/' });
+    vi.mocked(loadMaterialPreviewShaderBall).mockResolvedValue({ ...geometry, prototypeId: 'shaderball' });
+    const actual = await vi.importActual<typeof import('../../src/render/pathtracing/scene-buffers.ts')>(
+      '../../src/render/pathtracing/scene-buffers.ts');
+    vi.mocked(buildCachedPathTraceScene).mockImplementation(actual.buildCachedPathTraceScene);
+    const signal = new AbortController().signal;
+    await viewer.captureObjectMaterialPreview('/World/Ball', { target: 'shaderball', backend: 'pathtracing', samples: 1 }, signal);
+    await viewer.captureObjectMaterialPreview('/World/Ball', { target: 'shaderball', backend: 'raster' }, signal);
+    expect(loadMaterialPreviewShaderBall).toHaveBeenCalledOnce();
+    const resources = vi.mocked(buildCachedPathTraceScene).mock.calls[0]![0];
+    expect(resources.instances[0]!.prototypeId).toBe('shaderball');
+    expect(resources.instances[0]!.materialKey).toBe(source.instances[0]!.materialKey);
+    expect(resources.instances[0]!.transform).toEqual(IDENTITY4);
+  });
+
+  it('previews a compiled scene that has no editable resources', async () => {
+    const { viewer, loaded } = await setup(false, true);
+    const source = loaded.parameterResources!;
+    const geometry = source.geometries.get(source.instances[0]!.prototypeId)!;
+    delete loaded.parameterResources;
+    const actual = await vi.importActual<typeof import('../../src/render/pathtracing/scene-buffers.ts')>(
+      '../../src/render/pathtracing/scene-buffers.ts');
+    vi.mocked(buildCachedPathTraceScene).mockImplementation(actual.buildCachedPathTraceScene);
+    const compiled = await exportCompiledScene(loaded);
+    vi.stubGlobal('document', { baseURI: 'https://example.test/' });
+    vi.stubGlobal('fetch', async (input: string) => {
+      if (input.endsWith('/scene.json')) return new Response(JSON.stringify(compiled.manifest));
+      const path = new URL(input).pathname.slice('/scenes/prepared/'.length);
+      const bytes = compiled.files.get(path);
+      return bytes ? new Response(bytes) : new Response(null, { status: 404 });
+    });
+    vi.mocked(loadMaterialPreviewShaderBall).mockResolvedValue({ ...geometry, prototypeId: 'shaderball' });
+    await viewer.load('https://example.test/scenes/prepared/scene.json');
+    expect(viewer.isCompiledScene).toBe(true);
+    expect(viewer.objectSurfaceGraph('/World/Ball')).toBeDefined();
+    expect(viewer.objectParameters('/World/Ball')).toEqual([]);
+    const signal = new AbortController().signal;
+    for (const target of ['object', 'shaderball'] as const) {
+      const raster = await viewer.captureObjectMaterialPreview('/World/Ball', { target, backend: 'raster' }, signal);
+      const pathtracing = await viewer.captureObjectMaterialPreview(
+        '/World/Ball', { target, backend: 'pathtracing', samples: 1 }, signal,
+      );
+      expect(raster).toMatchObject({ width: 256, height: 256 });
+      expect(pathtracing).toMatchObject({ width: 256, height: 256 });
+    }
+    expect(viewer.backend).toBe('raster');
+  });
+
+  it('previews read-only compiled resources without displacing the object twice', async () => {
+    const { viewer, loaded } = await setup(false, true, 'raster', true, { displaced: true });
+    const source = loaded.parameterResources!;
+    const geometry = source.geometries.get(source.instances[0]!.prototypeId)!;
+    const baked = loaded.resources;
+    const bakedId = baked.instances[0]!.prototypeId;
+    delete loaded.parameterResources;
+    vi.stubGlobal('document', { baseURI: 'https://example.test/engine/' });
+    vi.mocked(loadMaterialPreviewShaderBall).mockResolvedValue({ ...geometry, prototypeId: 'shaderball' });
+    const actual = await vi.importActual<typeof import('../../src/render/pathtracing/scene-buffers.ts')>(
+      '../../src/render/pathtracing/scene-buffers.ts');
+    vi.mocked(buildCachedPathTraceScene).mockImplementation(actual.buildCachedPathTraceScene);
+    const decode = vi.spyOn(loaded.mtlx.imageProvider, 'decode');
+    const signal = new AbortController().signal;
+
+    await viewer.captureObjectMaterialPreview('/World/Ball', { target: 'object', backend: 'pathtracing', samples: 1 }, signal);
+    const object = vi.mocked(buildCachedPathTraceScene).mock.calls[0]![0];
+    expect(object.instances[0]!.prototypeId).toBe(bakedId);
+    expect(object.geometries.get(bakedId)).toBe(baked.geometries.get(bakedId));
+    expect(decode).not.toHaveBeenCalled();
+
+    await viewer.captureObjectMaterialPreview('/World/Ball', { target: 'shaderball', backend: 'pathtracing', samples: 1 }, signal);
+    const ball = vi.mocked(buildCachedPathTraceScene).mock.calls[1]![0];
+    expect(ball.instances[0]!.prototypeId).toContain('shaderball::displacement::');
+    expect(decode).toHaveBeenCalledWith('height.png');
+    expect(loaded.resources).toBe(baked);
+  });
+
+  it('reports unavailable displacement textures for a read-only shaderball preview', async () => {
+    const { viewer, loaded } = await setup(false, true, 'raster', true, { displaced: true });
+    const source = loaded.parameterResources!;
+    const geometry = source.geometries.get(source.instances[0]!.prototypeId)!;
+    delete loaded.parameterResources;
+    vi.stubGlobal('document', { baseURI: 'https://example.test/engine/' });
+    vi.mocked(loadMaterialPreviewShaderBall).mockResolvedValue({ ...geometry, prototypeId: 'shaderball' });
+    vi.spyOn(loaded.mtlx.imageProvider, 'decode').mockRejectedValue(new Error('Texture absent from compiled scene: height.png'));
+    await expect(viewer.captureObjectMaterialPreview(
+      '/World/Ball', { target: 'shaderball', backend: 'raster' }, new AbortController().signal,
+    )).rejects.toThrow('Texture absent from compiled scene: height.png');
+  });
+
+  it('discards a read-only preview when its render resources change', async () => {
+    const { viewer, device, loaded } = await setup(false, true);
+    delete loaded.parameterResources;
+    let resume!: () => void;
+    const waiting = new Promise<void>(resolve => { resume = resolve; });
+    let started = false;
+    device.createRenderPipelineAsync.mockImplementationOnce(async descriptor => {
+      started = true;
+      await waiting;
+      return device.createRenderPipeline(descriptor);
+    });
+    const pending = viewer.captureObjectMaterialPreview(
+      '/World/Ball', { target: 'object', backend: 'raster' }, new AbortController().signal,
+    );
+    await vi.waitFor(() => expect(started).toBe(true));
+    loaded.resources = { ...loaded.resources };
+    resume();
+    await expect(pending).rejects.toThrow('La scène a changé');
+  });
+
+  it('rejects invalid previews and discards a capture when the edited scene changes', async () => {
+    const { viewer, device, loaded } = await setup(false, true);
+    const signal = new AbortController().signal;
+    const textures = device.createTexture.mock.calls.length;
+    await expect(viewer.captureObjectMaterialPreview('/missing', { target: 'object', backend: 'raster' }, signal))
+      .rejects.toThrow('indisponible');
+    await expect(viewer.captureObjectMaterialPreview('/World/Ball', { target: 'object', backend: 'pathtracing', samples: 0 }, signal))
+      .rejects.toThrow('1 à 64');
+    expect(device.createTexture).toHaveBeenCalledTimes(textures);
+    let resume!: () => void;
+    const waiting = new Promise<void>(resolve => { resume = resolve; });
+    let started = false;
+    device.createRenderPipelineAsync.mockImplementationOnce(async descriptor => {
+      started = true;
+      await waiting;
+      return device.createRenderPipeline(descriptor);
+    });
+    const pending = viewer.captureObjectMaterialPreview('/World/Ball', { target: 'object', backend: 'raster' }, signal);
+    await vi.waitFor(() => expect(started).toBe(true));
+    await viewer.setObjectParameters('/World/Ball', new Map([['surface:specular_roughness', [0.7]]]));
+    resume();
+    await expect(pending).rejects.toThrow('La scène a changé');
     expect(loaded.mtlx.documents?.delete).not.toHaveBeenCalled();
   });
 

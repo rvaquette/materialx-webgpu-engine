@@ -23,6 +23,7 @@ import type {
 import type { PathTraceScene } from '../../../src/render/pathtracing/scene-buffers.ts';
 import type { DecodedPixelImage } from '../../../src/assets/images.ts';
 import { pathTraceComputeWgsl } from '../../../src/render/pathtracing/compute.ts';
+import { inverse4, scaling4, translation4 } from '../../../src/scene/transforms.ts';
 
 const IDENTITY4: [number, number, number, number, number, number, number, number, number, number, number, number, number, number, number, number] =
   [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
@@ -85,6 +86,49 @@ function countingProvider(image: DecodedPixelImage | undefined): { calls: string
   const calls: string[] = [];
   return { calls, provider: { decode: (f: string) => { calls.push(f); return image; } } };
 }
+
+it('packs per-instance transforms in the existing UV binding for shading and opacity', async () => {
+  const graph = surfaceGraph('standard_surface', [
+    conn('base_color', 'color3', 'point'), conn('opacity', 'color3', 'point'),
+    conn('normal', 'vector3', 'normal'),
+  ], [
+    upstream('point', 'transformpoint', 'vector3', [
+      value('in', 'vector3', '0.2,0.3,0.4'), value('fromspace', 'string', 'object'), value('tospace', 'string', 'world'),
+    ]),
+    upstream('normal', 'transformnormal', 'vector3', [
+      value('in', 'vector3', '0,0,1'), value('fromspace', 'string', 'object'), value('tospace', 'string', 'world'),
+    ]),
+  ]);
+  const dispatch = buildMaterialDispatch([source(0, graph)]);
+  const scene = fakeScene();
+  scene.triangleCount = 3;
+  scene.triangles = new Float32Array(3 * 19);
+  scene.triangleUv = new Float32Array(Array.from({ length: 18 }, (_, i) => i / 20));
+  const firstModel = translation4(2, 3, 4);
+  const secondModel = scaling4(2, 3, 4);
+  scene.transformRanges = [
+    { firstTriangle: 0, triangleCount: 1, materialIndex: 0, instanceId: '/a', model: firstModel },
+    { firstTriangle: 1, triangleCount: 2, materialIndex: 0, instanceId: '/b', model: secondModel },
+  ];
+  const bindings = await buildPtDeviceBindings(dispatch, scene, countingProvider(undefined).provider);
+  expect(bindings.group0).toHaveLength(8);
+  const packed = bindings.group0.find(slot => slot.role === 'triangleUv')!.data as Float32Array;
+  expect(Array.from(packed.slice(0, 18))).toEqual(Array.from(scene.triangleUv));
+  expect(Array.from(packed.slice(18, 21))).toEqual([0, 1, 1]);
+  expect(Array.from(packed.slice(21, 37))).toEqual(firstModel);
+  expect(Array.from(packed.slice(37, 53))).toEqual(inverse4(firstModel, true));
+  Array.from(packed.slice(69, 85)).forEach((value, i) => expect(value).toBeCloseTo(inverse4(secondModel, true)[i]!, 6));
+  const wgsl = pathTraceComputeWgsl({ dispatch });
+  expect(wgsl).toContain('vary.in_mx_objectToWorld = mx_hit_transform(h.tri, 0u);');
+  expect(wgsl).toContain('vary.in_mx_worldToObject = mx_hit_transform(h.tri, 1u);');
+  expect(dispatch.opacityReadsVaryings).toBe(true);
+  expect(wgsl).toContain('mx_hit_varyings(hit, pos, surface_hit_normal(hit), normalize(-rd))');
+
+  scene.transformRanges[1]!.model = scaling4(0, 1, 1);
+  await expect(buildPtDeviceBindings(dispatch, scene, countingProvider(undefined).provider)).rejects.toThrow(/singular/);
+  delete scene.transformRanges;
+  await expect(buildPtDeviceBindings(dispatch, scene, countingProvider(undefined).provider)).rejects.toThrow(/lacks instance transforms/);
+});
 
 function fakeScene(): PathTraceScene {
   return {

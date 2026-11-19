@@ -22,6 +22,7 @@ import {
   buildOpacityDispatch,
   PT_MATERIAL_OPACITY_ENTRY,
   PT_MATERIAL_OPACITY_VARYINGS,
+  type PtMaterialVariantCache,
   type PtVariantSource,
 } from '../../../src/render/pathtracing/material-variant.ts';
 
@@ -87,6 +88,25 @@ describe('emitSurfaceVariant (T057g)', () => {
 });
 
 describe('buildMaterialDispatch (T057g)', () => {
+  it('reuses unchanged variants without retaining aliases from the previous texture registry', () => {
+    const first = source(0, texturedBaseColor('shared.png'));
+    const second = source(1, texturedBaseColor('shared.png'));
+    const cache: PtMaterialVariantCache = new Map();
+    const shared = buildMaterialDispatch([first, second], cache);
+    const unchanged = cache.get(1)!.variant;
+    expect(shared.dispatcherWgsl).not.toContain('m1_tex_tex');
+
+    const alone = buildMaterialDispatch([second], cache);
+    expect(cache.get(1)!.variant).toBe(unchanged);
+    expect(cache.has(0)).toBe(false);
+    expect(alone.dispatcherWgsl).toContain('m1_tex_tex');
+    expect(alone.dispatcherWgsl).toBe(buildMaterialDispatch([second]).dispatcherWgsl);
+
+    const changed = source(1, texturedBaseColor('other.png'));
+    buildMaterialDispatch([changed], cache);
+    expect(cache.get(1)!.variant).not.toBe(unchanged);
+  });
+
   it('dispatches uniform SSS groups from graphs instead of stale packed fallback records', () => {
     const skin = (label: string) => surfaceGraph('surface', [conn('bsdf', 'BSDF', 'skin')], [
       upstream('skin', 'LamaSSS', 'BSDF', [value('sssRadius', 'color3', '1,1,1'), value('sssSubset', 'string', label)]),

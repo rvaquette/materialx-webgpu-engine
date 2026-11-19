@@ -17,7 +17,7 @@ import { BVH_TRI_STRIDE, BVH_TRAVERSAL_WGSL } from './bvh-wgsl.ts';
 import { LAYERED_CLOSURE_PRELUDE } from '../../compiler/surface-wgsl.ts';
 import { closureLibraryPrelude, type ClosureDispatchSpec } from '../../compiler/closure-library.ts';
 import { emitVaryingsStruct, textureWgslType } from '../../compiler/wgsl.ts';
-import type { IrType } from '../../compiler/ir.ts';
+import { OBJECT_TO_WORLD_INPUT, WORLD_TO_OBJECT_INPUT, type IrType } from '../../compiler/ir.ts';
 import { materialClosureReaderWgsl, PT_MAX_LOBES, PT_MATERIAL_RECORD_FLOATS, PT_MATERIAL_HEADER_FLOATS, PT_LOBE_FLOATS } from './material-record.ts';
 import { volumeFieldWgsl, VOLUME_TRANSPORT_WGSL } from '../volume-field.ts';
 import {
@@ -452,8 +452,23 @@ function wgslVaryings(varyings: PtVaryings): string {
   for (const [name] of varyings.primvarFields) {
     if (name === 'st') assigns.push('  vary.v_st = uv;');
   }
+  const objectToWorld = varyings.extraInputs.has(OBJECT_TO_WORLD_INPUT);
+  const worldToObject = varyings.extraInputs.has(WORLD_TO_OBJECT_INPUT);
+  if (objectToWorld) assigns.push(`  vary.in_${OBJECT_TO_WORLD_INPUT} = mx_hit_transform(h.tri, 0u);`);
+  if (worldToObject) assigns.push(`  vary.in_${WORLD_TO_OBJECT_INPUT} = mx_hit_transform(h.tri, 1u);`);
   return [
     emitVaryingsStruct(varyings.primvarFields, varyings.extraInputs),
+    ...(objectToWorld || worldToObject ? [/* wgsl */ `
+fn mx_hit_transform(tri : u32, inverseFlag : u32) -> mat4x4f {
+  let count = arrayLength(&tris) / TRI_STRIDE;
+  let objectIndex = u32(triUv[count * UV_STRIDE + tri]);
+  let b = count * (UV_STRIDE + 1u) + objectIndex * 32u + inverseFlag * 16u;
+  return mat4x4f(
+    vec4f(triUv[b], triUv[b + 1u], triUv[b + 2u], triUv[b + 3u]),
+    vec4f(triUv[b + 4u], triUv[b + 5u], triUv[b + 6u], triUv[b + 7u]),
+    vec4f(triUv[b + 8u], triUv[b + 9u], triUv[b + 10u], triUv[b + 11u]),
+    vec4f(triUv[b + 12u], triUv[b + 13u], triUv[b + 14u], triUv[b + 15u]));
+}`] : []),
     /* wgsl */ `
 fn mx_tri_uv(tri : u32, slot : u32) -> vec2<f32> {
   let b = tri * UV_STRIDE + slot * 2u;

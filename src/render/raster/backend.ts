@@ -13,12 +13,11 @@ import { IR_FORWARD_FRAME_GROUP, IR_FORWARD_VERTEX_ENTRY, IR_FORWARD_FRAGMENT_EN
 export const RESOLVE_UNIFORM_SIZE = 16;
 
 /**
- * Scene forward frame uniform (T058c): a per-instance model(64) matrix followed
- * by viewProj(64) + eye(16) + lightDir(16) + lightColor(16) + environment(16) =
- * 192 bytes. Kept in sync with the IR forward shader's Frame struct
+ * Scene forward frame uniform: model, camera, lighting, environment and inverse
+ * model matrix. Kept in sync with the IR forward shader's Frame struct
  * (ir-forward.ts) and buildSceneFrameUniform in scene-frame.ts.
  */
-export const SCENE_FRAME_UNIFORM_SIZE = 368;
+export const SCENE_FRAME_UNIFORM_SIZE = 432;
 /**
  * Scene forward material uniform: baseColor(16) + params(16: metalness,
  * roughness, transmission, subsurface) + coat(16: ior, specular) = 48 bytes, at
@@ -145,6 +144,12 @@ export class RasterBackend {
   /** Per-material scene pipeline compiled by createSceneVariantPipeline, if any. */
   sceneVariantPipeline(pass: ScenePassKind, pipelineKey: string): GPURenderPipeline | undefined {
     return this.sceneVariants.get(`${pass}:${pipelineKey}`);
+  }
+
+  trimSceneVariantPipelines(active: readonly { pass: ScenePassKind; pipelineKey: string }[], maxUnused: number): void {
+    const retained = new Set(active.map(({ pass, pipelineKey }) => `${pass}:${pipelineKey}`));
+    const unused = [...this.sceneVariants.keys()].filter(key => !retained.has(key));
+    for (const key of unused.slice(0, Math.max(0, unused.length - maxUnused))) this.sceneVariants.delete(key);
   }
 
   /** Compiles and caches the single-object forward pipeline from an IR-assembled

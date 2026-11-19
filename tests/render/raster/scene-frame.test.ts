@@ -14,10 +14,12 @@ import {
 import type { MaterialResource, SceneResources } from '../../../src/render/scene-resources.ts';
 import type { SceneCamera } from '../../../src/usd/cameras.ts';
 import type { SceneLight } from '../../../src/usd/lights.ts';
-import { IDENTITY4 } from '../../../src/scene/transforms.ts';
+import { IDENTITY4, inverse4, scaling4 } from '../../../src/scene/transforms.ts';
 import type { ResolvedSurface } from '../../../src/materialx/surface-graph.ts';
 import { resolveSurface } from '../../../src/materialx/surface-graph.ts';
 import type { ResolvedGraph } from '../../../src/materialx/graph.ts';
+import { emitLayeredSurface } from '../../../src/compiler/surface-wgsl.ts';
+import { assembleIrForwardShader } from '../../../src/render/raster/ir-forward.ts';
 import featureTransmissionXml from '../../../scenes/mtlx-library/surfaces/gltf_pbr/feature_transmission/feature_transmission.mtlx?raw';
 import featureDispersionXml from '../../../scenes/mtlx-library/surfaces/gltf_pbr/feature_dispersion/feature_dispersion.mtlx?raw';
 
@@ -88,6 +90,26 @@ describe('camera/light/environment derivation', () => {
 });
 
 describe('buildSceneFrame', () => {
+  it('routes a newly connected transmission graph to the transparent pass', () => {
+    const graph: ResolvedGraph = {
+      terminals: [{ name: 'surfaceshader', type: 'surfaceshader', nodeId: 's', provenance: { namePath: '/s' } }],
+      nodes: new Map([
+        ['s', { id: 's', category: 'standard_surface', type: 'surfaceshader', inputs: [
+          { name: 'transmission', type: 'float', source: { kind: 'connection', nodeId: 'amount' }, provenance: { namePath: '/s/transmission' } },
+        ], provenance: { namePath: '/s' } }],
+        ['amount', { id: 'amount', category: 'constant', type: 'float', inputs: [
+          { name: 'value', type: 'float', source: { kind: 'value', type: 'float', value: '0.5' }, provenance: { namePath: '/amount/value' } },
+        ], provenance: { namePath: '/amount' } }],
+      ]),
+    };
+    const resolvedSurface = resolveSurface(graph)!;
+    const mat = { ...material('opaque'), resolvedSurface, surfaceModule: emitLayeredSurface(graph, resolvedSurface) };
+    const frame = buildSceneFrame(resources(new Map([['mat', mat]]), [
+      { id: '/a', primPath: '/a', prototypeId: '/pa', materialKey: 'mat', hasGeometry: true, transform: IDENTITY4 },
+    ]));
+    expect(frame.passes).toEqual(['transmission']);
+  });
+
   it.each([false, true])('mutes constant, SH and textured illumination reversibly (textured=%s)', hasTexture => {
     const frame = buildSceneFrame(resources(new Map(), []), {
       environment: { radiance: [1, 2, 3], intensity: 2, tint: [0.3, 0.6, 0.9], hasTexture, sh: new Float32Array(27).fill(1) },
@@ -211,6 +233,34 @@ describe('buildSceneFrame', () => {
 });
 
 describe('buildSceneFrameUniform / buildSceneMaterialUniform', () => {
+  it('supplies and validates the inverse matrix per draw only when the graph needs it', () => {
+    const graph: ResolvedGraph = {
+      terminals: [{ name: 'surfaceshader', type: 'surfaceshader', nodeId: 's', provenance: { namePath: '/s' } }],
+      nodes: new Map([
+        ['s', { id: 's', category: 'standard_surface', type: 'surfaceshader', inputs: [
+          { name: 'base_color', type: 'color3', source: { kind: 'connection', nodeId: 'p' }, provenance: { namePath: '/s/base_color' } },
+        ], provenance: { namePath: '/s' } }],
+        ['p', { id: 'p', category: 'transformpoint', type: 'vector3', inputs: [
+          { name: 'in', type: 'vector3', source: { kind: 'value', type: 'vector3', value: '1,2,3' }, provenance: { namePath: '/p/in' } },
+          { name: 'fromspace', type: 'string', source: { kind: 'value', type: 'string', value: 'world' }, provenance: { namePath: '/p/fromspace' } },
+          { name: 'tospace', type: 'string', source: { kind: 'value', type: 'string', value: 'object' }, provenance: { namePath: '/p/tospace' } },
+        ], provenance: { namePath: '/p' } }],
+      ]),
+    };
+    const module = emitLayeredSurface(graph, resolveSurface(graph)!);
+    const model = [2, 0, 0, 0, 0, 3, 0, 0, 0, 0, 4, 0, 5, 6, 7, 1];
+    const frame = buildSceneFrame(resources(new Map([['mat', { ...material('opaque'), surfaceModule: module }]]), [
+      { id: '/a', primPath: '/a', prototypeId: '/pa', materialKey: 'mat', hasGeometry: true, transform: model },
+    ]));
+    const draw = frame.draws[0]!;
+    expect(draw.needsInverse).toBe(true);
+    const inverse = inverse4(model, true);
+    Array.from(buildSceneFrameUniform(frame, draw).slice(92)).forEach((value, i) => expect(value).toBeCloseTo(inverse[i]!, 6));
+    expect(assembleIrForwardShader(module).code).toContain('vary.in_mx_worldToObject = fu.inverseModel;');
+    expect(() => buildSceneFrameUniform(frame, { ...draw, model: scaling4(0, 1, 1) })).toThrow(/singular/);
+    expect(() => buildSceneFrameUniform(frame, { ...draw, needsInverse: false, model: scaling4(0, 1, 1) })).not.toThrow();
+  });
+
   it('packs the frame block (model, camera, light, environment) at the WGSL offsets', () => {
     const frame = buildSceneFrame(
       resources(new Map(), [{ id: '/a', prototypeId: '/pa', primPath: '/a', transform: IDENTITY4, hasGeometry: true }]),
@@ -236,7 +286,7 @@ describe('buildSceneFrameUniform / buildSceneMaterialUniform', () => {
         hasTexture: true, envResX: 16, envResY: 8, envTotalSum: 100 } },
     );
     const u = buildSceneFrameUniform(frame, frame.draws[0]!);
-    expect(Array.from(u.slice(84))).toEqual([8, 4, 2, 1, 16, 8, 100, 4]);
+    expect(Array.from(u.slice(84, 92))).toEqual([8, 4, 2, 1, 16, 8, 100, 4]);
   });
 
   it('packs the material block (baseColor, params, coat) at the WGSL offsets', () => {

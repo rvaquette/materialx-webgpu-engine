@@ -9,6 +9,7 @@ import { buildSceneFrame, type RasterSurface } from '../render/raster/scene-fram
 import { buildCachedPathTraceScene, PT_MATERIAL_FLOATS, PT_NODE_FLOATS, PT_TRIANGLE_FLOATS, type PathTraceScene } from '../render/pathtracing/scene-buffers.ts';
 import { SCENE_BUFFER_CACHE_VERSION, validatePreparedGeometry } from '../render/pathtracing/scene-buffer-cache.ts';
 import { buildMaterialDispatch, type PtMaterialDispatch } from '../render/pathtracing/material-variant.ts';
+import { OBJECT_TO_WORLD_INPUT, WORLD_TO_OBJECT_INPUT } from '../compiler/ir.ts';
 import { pathTraceSettings } from '../render/pathtracing/scene-settings.ts';
 import type { LoadedUsdScene } from '../render/usd-scene-assets.ts';
 import { loadEnvironment } from '../render/usd-scene-assets.ts';
@@ -35,8 +36,12 @@ interface ExternalImage {
 
 type CompiledImage = ExternalImage | DecodedPixelImage;
 
+const SPACE_TRANSFORM_VERSION = 1;
+const SPACE_TRANSFORM_CATEGORIES = new Set(['transformpoint', 'transformvector', 'transformnormal']);
+
 interface CompiledSceneData extends CompiledSceneRuntime {
   layout: { sceneBufferVersion: number; nodeFloats: number; triangleFloats: number; materialFloats: number };
+  spaceTransformVersion?: number;
   scene: LoadedUsdScene['scene'];
   resources: SceneResources;
   parameterResources?: SceneResources;
@@ -117,6 +122,7 @@ export async function exportCompiledScene(
       sceneBufferVersion: SCENE_BUFFER_CACHE_VERSION, nodeFloats: PT_NODE_FLOATS,
       triangleFloats: PT_TRIANGLE_FLOATS, materialFloats: PT_MATERIAL_FLOATS,
     },
+    spaceTransformVersion: SPACE_TRANSFORM_VERSION,
     scene: loaded.scene, resources: loaded.resources, lights: loaded.lights, cameras: loaded.cameras,
     pathTrace, dispatch, rasterShaders, surfaces, images,
     ...(loaded.parameterResources ? { parameterResources: loaded.parameterResources } : {}),
@@ -155,6 +161,7 @@ async function collectExternalImages(loaded: LoadedUsdScene, files: Iterable<str
 
 interface CompiledMaterialData {
   kind: 'material';
+  spaceTransformVersion?: number;
   material: MaterialResource;
   surface: RasterSurface;
   images: Map<string, CompiledImage>;
@@ -187,6 +194,7 @@ export async function exportCompiledMaterial(
   }
   const data: CompiledMaterialData = {
     kind: 'material',
+    spaceTransformVersion: SPACE_TRANSFORM_VERSION,
     material: { ...material, boundPrims: [] },
     surface: loaded.mtlx.surfaceFor(material),
     images: await collectExternalImages(loaded, files),
@@ -235,17 +243,26 @@ export async function applyCompiledMaterials(
   const mtlx = {
     ...base.mtlx,
     surfaceFor: (material: MaterialResource) => surfaces.get(material.unitKey) ?? base.mtlx.surfaceFor(material),
-    imageProvider: { decode: async (file: string) => {
-      for (const provider of providers) {
-        try {
-          const image = await provider.decode(file);
-          if (image) return image;
-        } catch (error) {
-          if (!(error instanceof MissingCompiledImageError)) throw error;
+    imageProvider: {
+      decode: async (file: string) => {
+        for (const provider of providers) {
+          try {
+            const image = await provider.decode(file);
+            if (image) return image;
+          } catch (error) {
+            if (!(error instanceof MissingCompiledImageError)) throw error;
+          }
         }
-      }
-      return fallback.decode(file);
-    } },
+        return fallback.decode(file);
+      },
+      exportSource: (file: string) => {
+        for (const provider of providers) {
+          const source = provider.exportSource?.(file);
+          if (source) return source;
+        }
+        return fallback.exportSource?.(file);
+      },
+    },
   };
   const resources = await applySceneDisplacement(parameterResources, mtlx.imageProvider);
   const result: LoadedUsdScene = { ...base, resources, parameterResources, mtlx };
@@ -317,6 +334,19 @@ const finiteArray = (value: unknown, length?: number): boolean =>
 const uint = (value: unknown): value is number => typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
 function fail(detail: string): never {
   throw new Error(`Invalid compiled scene: ${detail}`);
+}
+
+function validateSpaceTransformVersion(version: unknown, graphs: Iterable<unknown>): void {
+  if (version === SPACE_TRANSFORM_VERSION) return;
+  if (version !== undefined) fail('unsupported coordinate transform version');
+  for (const graph of graphs) {
+    if (!isRecord(graph) || !(graph.nodes instanceof Map)) continue;
+    for (const node of graph.nodes.values()) {
+      if (isRecord(node) && typeof node.category === 'string' && SPACE_TRANSFORM_CATEGORIES.has(node.category)) {
+        fail('legacy coordinate-transform shaders; re-export the scene or material from its source');
+      }
+    }
+  }
 }
 
 function validateBounds(value: unknown): void {
@@ -412,12 +442,39 @@ function validateData(value: unknown): asserts value is CompiledSceneData {
     nodeCount: value.pathTrace.nodeCount, triangleCount: value.pathTrace.triangleCount,
     bounds: { min: [bounds.min[0], bounds.min[1], bounds.min[2]], max: [bounds.max[0], bounds.max[1], bounds.max[2]] },
   }, value.pathTrace.materialCount);
+  const ranges = value.pathTrace.transformRanges;
+  if (ranges !== undefined) {
+    if (!Array.isArray(ranges) || ranges.length > 2 ** 24) fail('instance transform ranges');
+    let first = 0;
+    for (const range of ranges) {
+      if (!isRecord(range) || !uint(range.firstTriangle) || range.firstTriangle !== first ||
+          !uint(range.triangleCount) || range.triangleCount === 0 ||
+          !uint(range.materialIndex) || range.materialIndex >= value.pathTrace.materialCount ||
+          typeof range.instanceId !== 'string' || !finiteArray(range.model, 16) ||
+          first + range.triangleCount > value.pathTrace.triangleCount) fail('instance transform range');
+      for (let triangle = first; triangle < first + range.triangleCount; triangle++) {
+        if (value.pathTrace.triangles[triangle * PT_TRIANGLE_FLOATS + 18] !== range.materialIndex) fail('instance transform material');
+      }
+      first += range.triangleCount;
+    }
+    if (first !== value.pathTrace.triangleCount) fail('instance transform coverage');
+  }
   if (!isRecord(value.dispatch) || typeof value.dispatch.dispatcherWgsl !== 'string' ||
       typeof value.dispatch.opacityDispatcherWgsl !== 'string' || !Array.isArray(value.dispatch.variants) ||
       !Array.isArray(value.dispatch.textures) || !Array.isArray(value.dispatch.samplers) ||
       !Array.isArray(value.dispatch.uniforms) || !Array.isArray(value.dispatch.preludes) ||
       !(value.dispatch.primvarFields instanceof Map) || !(value.dispatch.extraInputs instanceof Map) ||
       !isRecord(value.dispatch.textureRegistry) || !Array.isArray(value.dispatch.textureRegistry.images)) fail('WGSL dispatch');
+  if ((value.dispatch.extraInputs.has(OBJECT_TO_WORLD_INPUT) || value.dispatch.extraInputs.has(WORLD_TO_OBJECT_INPUT))
+      && !Array.isArray(ranges)) fail('missing instance transforms');
+  const graphFromMaterial = (material: unknown): unknown => isRecord(material) ? material.surfaceGraph : undefined;
+  const resourceGraphs = (resources: unknown): unknown[] =>
+    isRecord(resources) && resources.materials instanceof Map
+      ? [...resources.materials.values()].map(graphFromMaterial) : [];
+  validateSpaceTransformVersion(value.spaceTransformVersion, [
+    ...resourceGraphs(value.resources), ...resourceGraphs(value.parameterResources),
+    ...value.pathTrace.variantSources.map(source => isRecord(source) ? source.graph : undefined),
+  ]);
   validateExternalImages(value.images);
   const images = value.images;
   const requireImage = (file: unknown): void => {
@@ -460,6 +517,7 @@ function validateMaterialData(value: unknown): asserts value is CompiledMaterial
     geometries: new Map(), materials: new Map([[material.unitKey, material]]), instances: [], pendingGeometry: [],
     pendingMaterials: [], unboundGprims: [], tlas: { instanceOrder: new Uint32Array(), nodes: [], bounds: { min: [0, 0, 0], max: [0, 0, 0] } },
   });
+  validateSpaceTransformVersion(value.spaceTransformVersion, [material.surfaceGraph]);
   validateExternalImages(value.images);
   for (const texture of isRecord(material.surfaceModule) && Array.isArray(material.surfaceModule.textures)
     ? material.surfaceModule.textures : []) {
@@ -561,17 +619,28 @@ function externalImageProvider(
     }
     throw new Error(`Missing external texture: ${image.urls.join(', ')}`);
   };
-  return { decode: file => {
-    const image = images.get(file);
-    if (!image) throw new MissingCompiledImageError(`Texture absent from ${label}: ${file}`);
-    if (image.kind === 'pixels') return image;
-    let decoded = decodedImages.get(file);
-    if (!decoded) {
-      decoded = decodeExternal(image).catch(error => { decodedImages.delete(file); throw error; });
-      decodedImages.set(file, decoded);
-    }
-    return decoded;
-  } };
+  return {
+    decode: file => {
+      const image = images.get(file);
+      if (!image) throw new MissingCompiledImageError(`Texture absent from ${label}: ${file}`);
+      if (image.kind === 'pixels') return image;
+      let decoded = decodedImages.get(file);
+      if (!decoded) {
+        decoded = decodeExternal(image).catch(error => { decodedImages.delete(file); throw error; });
+        decodedImages.set(file, decoded);
+      }
+      return decoded;
+    },
+    exportSource: file => {
+      const image = images.get(file);
+      if (!image) return undefined;
+      if (image.kind === 'pixels') return { urls: [] };
+      return {
+        urls: image.urls.map(reference => compiledSceneAssetUrl(reference, base, appBase, documentBase)),
+        ...(image.tiles ? { tiles: image.tiles } : {}),
+      };
+    },
+  };
 }
 
 export interface CompiledSceneLoadOptions {

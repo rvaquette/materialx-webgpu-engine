@@ -4,6 +4,7 @@ import {
   IrModuleBuilder,
   FLOAT,
   INT,
+  BOOL,
   COLOR3,
   matrix,
   vector,
@@ -39,6 +40,18 @@ describe('wgslType', () => {
 });
 
 describe('emitWgsl', () => {
+  it.each([
+    { to: FLOAT, expected: 'select(0.0, 1.0, ' },
+    { to: INT, expected: 'select(0, 1, ' },
+    { to: COLOR3, expected: 'vec3f(select(0.0, 1.0, ' },
+  ])('emits WGSL boolean-to-numeric conversion', ({ to, expected }) => {
+    const b = new IrModuleBuilder();
+    const source = b.constant(BOOL, true);
+    const result = b.add({ kind: 'convert', type: to, source, from: BOOL });
+    b.output({ name: 'out', type: to, ref: result });
+    expect(emitWgsl(b.build()).code).toContain(expected);
+  });
+
   function unifiedNoiseModule(dimensions: 2 | 3, explicitPosition = false, kind = 1) {
     const b = new IrModuleBuilder();
     const namedArgs = {

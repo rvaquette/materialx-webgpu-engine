@@ -154,7 +154,7 @@ function applyFeatureStates(surface: ResolvedSurface, parameters: readonly Mater
     const opacity = value('opacity', [1])[0]!;
     const threshold = value('opacityThreshold', [0])[0]!;
     if (threshold <= 0) {
-      setFeatureInput(inputs, parameters, 'opacity', true, [1]);
+      setFeatureInput(inputs, parameters, 'opacity', opacity < 1, [1]);
       setFeatureInput(inputs, parameters, 'opacityThreshold', false, [0]);
     } else if (opacity >= threshold) {
       setFeatureInput(inputs, parameters, 'opacity', false, [1]);
@@ -988,11 +988,32 @@ function parameterizeMaterial(material: MaterialResource, policy: ParameterPolic
   }
 }
 
+function compileGraphVolume(graph: ResolvedGraph) {
+  const volume = resolveVolume(graph);
+  if (!volume) return undefined;
+  const builder = new IrModuleBuilder();
+  appendVolumeIr(volume, builder, graph);
+  const volumeIr = builder.build();
+  return { volumeIr, volumeMedium: isSpatialVolumeIr(volumeIr) ? undefined : evaluateVolumeIr(volumeIr) };
+}
+
 export function compileEditableMaterial(material: MaterialResource): MaterialResource {
-  if (!material.surfaceGraph || !material.resolvedSurface) throw new Error('Missing editable material graph.');
-  const surfaceModule = emitLayeredSurface(material.surfaceGraph, material.resolvedSurface);
-  const sceneShader = assembleIrForwardShader(surfaceModule, { displacement: material.displacement !== undefined });
-  return { ...material, surfaceModule, sceneShader, variant: { ...material.variant, pipelineKey: hashString(sceneShader.code) } };
+  const graph = material.surfaceGraph;
+  if (!graph || !material.resolvedSurface) throw new Error('Missing editable material graph.');
+  const displacement = graph.terminals.some(terminal => terminal.name === 'displacementshader')
+    ? extractDisplacement(graph) : material.displacement;
+  const graphHasVolume = graph.terminals.some(terminal => terminal.type === 'volumeshader');
+  const volume = graphHasVolume ? compileGraphVolume(graph) : undefined;
+  const volumeIr = graphHasVolume ? volume?.volumeIr : material.volumeIr;
+  const volumeMedium = graphHasVolume ? volume?.volumeMedium : material.volumeMedium;
+  const { displacement: _displacement, volumeIr: _volumeIr, volumeMedium: _volumeMedium, ...rest } = material;
+  const surfaceModule = emitLayeredSurface(graph, material.resolvedSurface);
+  const sceneShader = assembleIrForwardShader(surfaceModule, { displacement: displacement !== undefined });
+  return {
+    ...rest, ...(displacement ? { displacement } : {}), ...(volumeIr ? { volumeIr } : {}),
+    ...(volumeMedium ? { volumeMedium } : {}), surfaceModule, sceneShader,
+    variant: { ...material.variant, pipelineKey: hashString(sceneShader.code) },
+  };
 }
 
 export function changeMaterialParameters(
@@ -1044,12 +1065,10 @@ export function changeMaterialParameters(
   let volumeMedium = material.volumeMedium;
   let volumeIr = material.volumeIr;
   if (volumeMedium || volumeIr) {
-    const volume = resolveVolume(graph);
+    const volume = compileGraphVolume(graph);
     if (!volume) throw new Error('Missing volumeshader in edited material.');
-    const builder = new IrModuleBuilder();
-    appendVolumeIr(volume, builder, graph);
-    volumeIr = builder.build();
-    volumeMedium = isSpatialVolumeIr(volumeIr) ? undefined : evaluateVolumeIr(volumeIr);
+    volumeIr = volume.volumeIr;
+    volumeMedium = volume.volumeMedium;
   }
   return {
     ...material, parameters, resolvedSurface: surface, surfaceGraph: graph,

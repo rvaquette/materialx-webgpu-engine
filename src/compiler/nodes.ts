@@ -1009,7 +1009,7 @@ const LOWERINGS: readonly NodeLowering[] = [
     const positive = `${input} > ${t}(0.0)`;
     return `select(${t}(0.0), log(select(${t}(1.0), ${input}, ${positive})), ${positive})`;
   }),
-  expr('sign', fn1('sign')),
+  expr('sign', (inp, type, ctx) => `sign(${inp.named('in', `${ctx.wgslType(type)}(0.0)`, 0)})`),
   expr('normalize', (inp) => {
     const value = inp.named('in', undefined, 0);
     return `(${value} / select(1.0, length(${value}), length(${value}) > 0.0))`;
@@ -1047,7 +1047,10 @@ const LOWERINGS: readonly NodeLowering[] = [
   }),
   expr('dotproduct', fn2('dot')),
   expr('dot', (inp) => inp.named('in', undefined, 0)),
-  expr('invert', (inp) => `(${inp.named('amount', '1.0', 1)} - ${inp.named('in', undefined, 0)})`),
+  expr('invert', (inp, type, ctx) => {
+    const target = ctx.wgslType(type);
+    return `(${target}(${inp.named('amount', '1.0', 1)}) - ${inp.named('in', `${target}(0.0)`, 0)})`;
+  }),
   // compositing / channel
   expr('mix', (inp) => `mix(${inp.named('bg', undefined, 1)}, ${inp.named('fg', undefined, 0)}, ${inp.named('mix', undefined, 2)})`),
   expr('extract', (inp) => `${inp.named('in', undefined, 0)}[${inp.named('index', undefined, 1)}]`),
@@ -1180,11 +1183,15 @@ const LOWERINGS: readonly NodeLowering[] = [
     }
     return `(${m} * ${v})`;
   }),
-  // spaces: the shading frame is world space for both backends, so space
-  // transforms between object/world are identity here.
-  expr('transformpoint', (inp) => inp.named('in')),
-  expr('transformvector', (inp) => inp.named('in')),
-  expr('transformnormal', (inp) => `normalize(${inp.named('in')})`),
+  expr('transformpoint', (inp) => inp.has('mat', 1)
+    ? `(${inp.named('mat', undefined, 1)} * vec4f(${inp.named('in', 'vec3f(0.0)', 0)}, 1.0)).xyz`
+    : inp.named('in', 'vec3f(0.0)', 0)),
+  expr('transformvector', (inp) => inp.has('mat', 1)
+    ? `(${inp.named('mat', undefined, 1)} * vec4f(${inp.named('in', 'vec3f(0.0)', 0)}, 0.0)).xyz`
+    : inp.named('in', 'vec3f(0.0)', 0)),
+  expr('transformnormal', (inp) => inp.has('mat', 1)
+    ? `normalize((transpose(${inp.named('mat', undefined, 1)}) * vec4f(${inp.named('in', 'vec3f(0.0, 0.0, 1.0)', 0)}, 0.0)).xyz)`
+    : `normalize(${inp.named('in', 'vec3f(0.0, 0.0, 1.0)', 0)})`),
   // compositing
   expr('plus', blend((fg, bg) => `(${bg} + ${fg})`)),
   expr('minus', blend((fg, bg) => `(${bg} - ${fg})`)),

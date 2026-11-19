@@ -21,9 +21,12 @@ import {
   FLOAT,
   INT,
   BOOL,
+  OBJECT_TO_WORLD_INPUT,
+  WORLD_TO_OBJECT_INPUT,
   closureType,
   IrModuleBuilder,
   irTypeFromMaterialX,
+  matrix,
   vector,
   type IrRef,
   type IrType,
@@ -454,8 +457,10 @@ export function lowerValueInputsToIr(
     const node = graph.nodes.get(nodeId)!;
     const to = irTypeFromMaterialX(node.type) ?? COLOR3;
     const inInput = node.inputs.find((i) => i.name === 'in');
-    const declared = inInput ? irTypeFromMaterialX(inInput.type) ?? FLOAT : FLOAT;
-    const source = (inInput ? lowerInput(inInput) : undefined) ?? builder.constant(declared, 0);
+    const def = node.nodeDef?.inputs?.find((input) => input.name === 'in');
+    const declared = irTypeFromMaterialX(def?.type ?? inInput?.type ?? '') ?? FLOAT;
+    const raw = (inInput ? lowerInput(inInput) : undefined) ?? constOfIrType(builder, declared, parseNumbers(def?.value ?? '0'));
+    const source = coerce(raw, declared);
     const from = builder.get(source)?.type ?? declared;
     return builder.add({ kind: 'convert', type: to, source, from });
   };
@@ -483,6 +488,60 @@ export function lowerValueInputsToIr(
         ? { kind: 'call', type, op, args: [], namedArgs, nodeDef: node.nodeDef }
         : { kind: 'call', type, op, args: [], namedArgs },
     );
+  };
+
+  const lowerSpaceTransform = (nodeId: string): IrRef => {
+    const node = graph.nodes.get(nodeId)!;
+    const type = vector(3, 'float', 'vector');
+    const input = node.inputs.find(candidate => candidate.name === 'in');
+    const defaultInput = node.nodeDef?.inputs?.find(candidate => candidate.name === 'in')?.value;
+    const fallback = node.category === 'transformnormal' ? '0,0,1' : '0,0,0';
+    const source = (input ? lowerInput(input) : undefined)
+      ?? constOfIrType(builder, type, parseNumbers(defaultInput ?? fallback));
+    const namedArgs: Record<string, IrRef> = { in: coerce(source, type) };
+
+    const space = (name: string): string | undefined => {
+      let candidate = node.inputs.find(item => item.name === name);
+      let declared = node.nodeDef?.inputs?.find(item => item.name === name)?.value;
+      const seen = new Set<string>();
+      while (!candidate?.parameter && candidate?.source.kind === 'connection') {
+        const { nodeId: upstreamId, output } = candidate.source;
+        const upstream = graph.nodes.get(upstreamId);
+        if (!upstream || seen.has(upstreamId) || upstream.category !== 'constant' || upstream.type !== 'string'
+            || (output !== undefined && output !== 'out')) break;
+        seen.add(upstreamId);
+        candidate = upstream.inputs.find(item => item.name === 'value');
+        declared = upstream.nodeDef?.inputs?.find(item => item.name === 'value')?.value;
+      }
+      if (candidate?.parameter || candidate?.source.kind === 'connection' || candidate?.source.kind === 'interface') {
+        sink({
+          level: 'warning',
+          message: `${node.category} '${nodeId}' has an unresolved ${name}; using the MaterialX identity fallback.`,
+          detail: { nodeId, input: name },
+        });
+        return undefined;
+      }
+      const result = (candidate?.source.kind === 'value' ? candidate.source.value : declared ?? '').trim();
+      if (result !== '' && result !== 'object' && result !== 'model' && result !== 'world') {
+        sink({
+          level: 'warning',
+          message: `${node.category} '${nodeId}' does not support ${name} '${result}'; using the MaterialX identity fallback.`,
+          detail: { nodeId, input: name, space: result },
+        });
+        return undefined;
+      }
+      return result === 'model' ? 'object' : result;
+    };
+
+    const from = space('fromspace');
+    const to = space('tospace');
+    if (from && to && from !== to) {
+      const forward = from === 'object' && to === 'world';
+      const needsInverse = node.category === 'transformnormal' ? forward : !forward;
+      const name = needsInverse ? WORLD_TO_OBJECT_INPUT : OBJECT_TO_WORLD_INPUT;
+      namedArgs.mat = builder.add({ kind: 'input', type: matrix(4), name });
+    }
+    return callRef(node.category, type, namedArgs);
   };
 
   function lowerNode(nodeId: string, output?: string): IrRef {
@@ -597,6 +656,8 @@ export function lowerValueInputsToIr(
       ref = lowerNodegraphTexture(nodeId, output);
     } else if (node.category === 'convert') {
       ref = lowerConvert(nodeId);
+    } else if (node.category === 'transformpoint' || node.category === 'transformvector' || node.category === 'transformnormal') {
+      ref = lowerSpaceTransform(nodeId);
     } else if (getNodeLowering(node.category)) {
       ref = lowerCall(nodeId, output);
     } else {

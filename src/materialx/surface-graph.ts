@@ -332,6 +332,8 @@ export const DEFAULT_SUPPORTED_UPSTREAM: ReadonlySet<string> = new Set([
   'reflect',
   'refract',
   'absval',
+  'sign',
+  'invert',
   'fract',
   'floor',
   'ceil',
@@ -442,6 +444,9 @@ export const DEFAULT_SUPPORTED_UPSTREAM: ReadonlySet<string> = new Set([
   'transpose',
   'invertmatrix',
   'transformmatrix',
+  'transformpoint',
+  'transformvector',
+  'transformnormal',
 ]);
 
 /** Resolve the declared default for a family input into a normalized source. */

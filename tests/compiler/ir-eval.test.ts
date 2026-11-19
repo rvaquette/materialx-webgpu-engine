@@ -3,7 +3,7 @@ import { BOOL, COLOR3, COLOR4, FLOAT, INT, IrModuleBuilder, matrix, vector } fro
 import { evaluateIrRef, evaluateShaderIr, IrEvalError } from '../../src/compiler/ir-eval.ts';
 import { buildNodeIr } from '../fixtures/node-ir.ts';
 import { NODE_CASES, VARYINGS } from '../fixtures/node-cases.ts';
-import { emitWgsl } from '../../src/compiler/wgsl.ts';
+import { emitWgsl, wgslType } from '../../src/compiler/wgsl.ts';
 
 const varyingEnv = {
   position: VARYINGS.position,
@@ -785,6 +785,26 @@ describe('evaluateShaderIr (T057i2)', () => {
     }
   });
 
+  it.each([
+    { op: 'transformpoint', expected: [7, 12, 19] },
+    { op: 'transformvector', expected: [2, 6, 12] },
+    { op: 'transformnormal', expected: [2 / Math.sqrt(184), 6 / Math.sqrt(184), 12 / Math.sqrt(184)] },
+  ])('evaluates $op with named and positional matrix inputs', ({ op, expected }) => {
+    for (const named of [false, true]) {
+      const builder = new IrModuleBuilder();
+      const type = vector(3);
+      const input = builder.constant(type, [1, 2, 3]);
+      const mat = builder.constant(matrix(4), [2, 0, 0, 0, 0, 3, 0, 0, 0, 0, 4, 0, 5, 6, 7, 1]);
+      const ref = builder.add(named
+        ? { kind: 'call', type, op, args: [], namedArgs: { in: input, mat } }
+        : { kind: 'call', type, op, args: [input, mat] });
+      builder.output({ name: 'result', type, ref });
+      const ir = builder.build();
+      evaluateIrRef(ir, ref).forEach((value, index) => expect(value).toBeCloseTo(expected[index]!, 10));
+      expect(emitWgsl(ir).code).toContain(op === 'transformnormal' ? 'transpose(' : `vec4f(${input},`);
+    }
+  });
+
   it('uses identity defaults for matrix operations', () => {
     const builder = new IrModuleBuilder();
     const transpose = builder.add({ kind: 'call', type: matrix(4), op: 'transpose', args: [], namedArgs: {} });
@@ -1118,6 +1138,50 @@ describe('evaluateShaderIr (T057i2)', () => {
     const code = emitWgsl(ir).code;
     expect(code).toContain(`${op === 'absval' ? 'abs' : op === 'fract' ? 'floor' : op}(`);
     if (op === 'fract') expect(code).toContain(`${input} - floor(${input})`);
+  });
+
+  it.each([
+    { type: FLOAT, values: [-2], amount: [0.5], expected: [2.5] },
+    { type: vector(2), values: [-2, 0.5], amount: [0.5], expected: [2.5, 0] },
+    { type: COLOR3, values: [-2, 0, 0.5], amount: [0.5, 1, 2], expected: [2.5, 1, 1.5] },
+    { type: COLOR4, values: [-2, 0, 0.5, 3], amount: [0.5], expected: [2.5, 0.5, 0, -2.5] },
+  ])('evaluates invert with named and positional scalar or vector amounts', ({ type, values, amount, expected }) => {
+    for (const named of [false, true]) {
+      const builder = new IrModuleBuilder();
+      const source = builder.constant(type, type.kind === 'scalar' ? values[0]! : values);
+      const amountRef = builder.constant(amount.length === 1 ? FLOAT : type, amount.length === 1 ? amount[0]! : amount);
+      const ref = builder.add(named
+        ? { kind: 'call', type, op: 'invert', args: [], namedArgs: { in: source, amount: amountRef } }
+        : { kind: 'call', type, op: 'invert', args: [source, amountRef] });
+      builder.output({ name: 'result', type, ref });
+      const ir = builder.build();
+      expect(evaluateIrRef(ir, ref)).toEqual(expected);
+      expect(emitWgsl(ir).code).toContain(`(${wgslType(type)}(${amountRef}) - ${source})`);
+    }
+  });
+
+  it.each(['sign', 'invert'])('uses zero and the MaterialX defaults for %s without inputs', op => {
+    const builder = new IrModuleBuilder();
+    const type = vector(3);
+    const ref = builder.add({ kind: 'call', type, op, args: [], namedArgs: {} });
+    builder.output({ name: 'result', type, ref });
+    const ir = builder.build();
+    expect(evaluateIrRef(ir, ref)).toEqual(op === 'sign' ? [0, 0, 0] : [1, 1, 1]);
+    expect(emitWgsl(ir).code).toContain(op === 'sign' ? 'sign(vec3f(0.0))' : '(vec3f(1.0) - vec3f(0.0))');
+  });
+
+  it('evaluates sign componentwise for negative, zero and positive values', () => {
+    for (const named of [false, true]) {
+      const builder = new IrModuleBuilder();
+      const source = builder.constant(COLOR3, [-3, 0, 0.25]);
+      const ref = builder.add(named
+        ? { kind: 'call', type: COLOR3, op: 'sign', args: [], namedArgs: { in: source } }
+        : { kind: 'call', type: COLOR3, op: 'sign', args: [source] });
+      builder.output({ name: 'result', type: COLOR3, ref });
+      const ir = builder.build();
+      expect(evaluateIrRef(ir, ref)).toEqual([-1, 0, 1]);
+      expect(emitWgsl(ir).code).toContain(`sign(${source})`);
+    }
   });
 
   it.each([
@@ -1632,6 +1696,26 @@ describe('evaluateShaderIr (T057i2)', () => {
     b.output({ name: 'up', type: COLOR3, ref: up });
     const ir = b.build();
     expect([...evaluateIrRef(ir, up)]).toEqual([0.3, 0.3, 0.3]);
+  });
+
+  it.each([
+    { from: BOOL, to: FLOAT, value: true, expected: [1] },
+    { from: BOOL, to: INT, value: false, expected: [0] },
+    { from: BOOL, to: COLOR3, value: true, expected: [1, 1, 1] },
+    { from: BOOL, to: COLOR4, value: false, expected: [0, 0, 0, 0] },
+    { from: INT, to: BOOL, value: -2, expected: [1] },
+    { from: INT, to: BOOL, value: 0, expected: [0] },
+    { from: INT, to: COLOR4, value: -2, expected: [-2, -2, -2, -2] },
+    { from: FLOAT, to: INT, value: -1.7, expected: [-1] },
+    { from: vector(2), to: COLOR4, value: [0.2, 0.4], expected: [0.2, 0.4, 0, 1] },
+    { from: COLOR3, to: vector(2), value: [0.2, 0.4, 0.6], expected: [0.2, 0.4] },
+    { from: vector(3), to: vector(4), value: [0.2, 0.4, 0.6], expected: [0.2, 0.4, 0.6, 1] },
+    { from: vector(4), to: vector(2), value: [0.2, 0.4, 0.6, 0.8], expected: [0.2, 0.4] },
+  ])('evaluates scalar and channel conversions', ({ from, to, value, expected }) => {
+    const b = new IrModuleBuilder();
+    const input = b.constant(from, value);
+    const result = b.add({ kind: 'convert', type: to, source: input, from });
+    expect(evaluateIrRef(b.build(), result)).toEqual(expected);
   });
 
   it('throws on a closure expression and on an unknown node', () => {

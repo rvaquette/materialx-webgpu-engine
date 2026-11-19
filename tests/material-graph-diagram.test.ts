@@ -1,10 +1,11 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
-  graphNodePositionStorageKey, layoutMaterialGraph, parseGraphNodePositions, readGraphNodePositions,
+  createMaterialPreviewScheduler, graphNodePositionStorageKey, layoutMaterialGraph, parseGraphNodePositions, readGraphNodePositions,
   unsupportedSurfaceGraphNodes, writeGraphNodePositions,
 } from '../src/material-graph-diagram.ts';
 import { compareMaterialGraphs } from '../src/materialx/graph-comparison.ts';
 import type { ResolvedGraph, ResolvedNode } from '../src/materialx/graph.ts';
+import type { RgbaCapture } from '../src/gpu/capture.ts';
 
 function node(id: string, upstream: readonly string[] = [], category = 'test'): ResolvedNode {
   return {
@@ -31,6 +32,58 @@ describe('MaterialX graph diagram layout', () => {
       .toEqual(new Map([['a', { x: 48, y: 96 }]]));
     expect(() => parseGraphNodePositions('{"a":{"x":-1,"y":96}}', new Set(['a']))).toThrow('Position enregistrée invalide');
     expect(() => parseGraphNodePositions('{', new Set(['a']))).toThrow();
+  });
+
+  describe('automatic material preview scheduling', () => {
+    const image = (value: number): RgbaCapture => ({ width: 1, height: 1, rgba: new Uint8Array([value, 0, 0, 255]) });
+    const deferred = () => {
+      let resolve!: (value: RgbaCapture) => void;
+      const promise = new Promise<RgbaCapture>(done => { resolve = done; });
+      return { promise, resolve };
+    };
+
+    it('serializes captures, drops intermediate requests and never displays an obsolete result', async () => {
+      const first = deferred();
+      const last = deferred();
+      const capture = vi.fn()
+        .mockImplementationOnce(() => first.promise)
+        .mockImplementationOnce(() => last.promise);
+      const result = vi.fn();
+      const error = vi.fn();
+      const scheduler = createMaterialPreviewScheduler(result, error);
+      scheduler.request(capture, { target: 'object', backend: 'raster' });
+      const firstSignal: AbortSignal = capture.mock.calls[0]![1];
+      scheduler.request(capture, { target: 'shaderball', backend: 'raster' });
+      scheduler.request(capture, { target: 'shaderball', backend: 'pathtracing', samples: 2 });
+      expect(firstSignal.aborted).toBe(true);
+      expect(capture).toHaveBeenCalledTimes(1);
+      first.resolve(image(1));
+      await vi.waitFor(() => expect(capture).toHaveBeenCalledTimes(2));
+      expect(result).not.toHaveBeenCalled();
+      expect(capture.mock.calls[1]![0]).toEqual({ target: 'shaderball', backend: 'pathtracing', samples: 2 });
+      last.resolve(image(2));
+      await vi.waitFor(() => expect(result).toHaveBeenCalledOnce());
+      expect(result).toHaveBeenCalledWith(image(2), { target: 'shaderball', backend: 'pathtracing', samples: 2 });
+      expect(error).not.toHaveBeenCalled();
+    });
+
+    it('cancels pending work on close and reports genuine capture failures', async () => {
+      const first = deferred();
+      const capture = vi.fn(() => first.promise);
+      const result = vi.fn();
+      const error = vi.fn();
+      const scheduler = createMaterialPreviewScheduler(result, error);
+      scheduler.request(capture, { target: 'object', backend: 'raster' });
+      scheduler.request(capture, { target: 'shaderball', backend: 'raster' });
+      scheduler.cancel();
+      first.resolve(image(1));
+      await Promise.resolve();
+      expect(capture).toHaveBeenCalledOnce();
+      expect(result).not.toHaveBeenCalled();
+      expect(error).not.toHaveBeenCalled();
+      scheduler.request(async () => { throw new Error('GPU indisponible'); }, { target: 'object', backend: 'raster' });
+      await vi.waitFor(() => expect(error).toHaveBeenCalledWith(expect.objectContaining({ message: 'GPU indisponible' })));
+    });
   });
 
   it('round-trips layouts with independent object, material and variant keys', () => {

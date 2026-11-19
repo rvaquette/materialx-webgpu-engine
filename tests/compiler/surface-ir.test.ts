@@ -14,9 +14,10 @@ import type {
 } from '../../src/materialx/graph.ts';
 import { resolveSurface } from '../../src/materialx/surface-graph.ts';
 import { lowerSurfaceInputsToIr } from '../../src/compiler/surface-ir.ts';
-import { IrModuleBuilder, BOOL, COLOR3, FLOAT, INT, vector, type IrRef } from '../../src/compiler/ir.ts';
+import { IrModuleBuilder, BOOL, COLOR3, FLOAT, INT, OBJECT_TO_WORLD_INPUT, WORLD_TO_OBJECT_INPUT, vector, type IrRef } from '../../src/compiler/ir.ts';
 import { emitWgsl, lowerExprs, type WgslModule } from '../../src/compiler/wgsl.ts';
 import { evaluateShaderIr } from '../../src/compiler/ir-eval.ts';
+import { inverse4 } from '../../src/scene/transforms.ts';
 import type { Diagnostic } from '../../src/core/diagnostics.ts';
 import { createImageSampler } from '../../src/render/pathtracing/texture-sample.ts';
 
@@ -88,6 +89,92 @@ function lowerAndEmit(
 }
 
 describe('lowerSurfaceInputsToIr (T055c)', () => {
+  const instanceModel = [0, 2, 0, 0, -3, 0, 0, 0, 0, 0, 4, 0, 10, -2, 3, 1];
+  const instanceInverse = inverse4(instanceModel, true);
+
+  it.each([
+    { op: 'transformpoint', from: 'model', to: 'world', input: '1,2,-1', expected: [4, 0, -1], field: OBJECT_TO_WORLD_INPUT },
+    { op: 'transformpoint', from: 'world', to: 'object', input: '4,0,-1', expected: [1, 2, -1], field: WORLD_TO_OBJECT_INPUT },
+    { op: 'transformvector', from: 'object', to: 'world', input: '1,2,-1', expected: [-6, 2, -4], field: OBJECT_TO_WORLD_INPUT },
+    { op: 'transformvector', from: 'world', to: 'model', input: '-6,2,-4', expected: [1, 2, -1], field: WORLD_TO_OBJECT_INPUT },
+    { op: 'transformnormal', from: 'object', to: 'world', input: '1,1,1', expected: [-4 / Math.sqrt(61), 6 / Math.sqrt(61), 3 / Math.sqrt(61)], field: WORLD_TO_OBJECT_INPUT },
+    { op: 'transformnormal', from: 'world', to: 'object', input: '1,1,1', expected: [2 / Math.sqrt(29), -3 / Math.sqrt(29), 4 / Math.sqrt(29)], field: OBJECT_TO_WORLD_INPUT },
+  ])('lowers $op from $from to $to with the instance transform', ({ op, from, to, input, expected, field }) => {
+    const graph = surfaceGraph([conn('base_color', 'color3', 'space')], [
+      upstream('space', op, 'vector3', [
+        value('in', 'vector3', input), value('fromspace', 'string', from), value('tospace', 'string', to),
+      ]),
+    ]);
+    const diagnostics: Diagnostic[] = [];
+    const { ir, module } = lowerAndEmit(graph, [{ name: 'base_color', type: COLOR3 }], d => diagnostics.push(d));
+    const result = evaluateShaderIr(ir, { inputs: {
+      [OBJECT_TO_WORLD_INPUT]: instanceModel, [WORLD_TO_OBJECT_INPUT]: instanceInverse,
+    } }).get('base_color')!;
+    expected.forEach((component, index) => expect(result[index]).toBeCloseTo(component, 10));
+    expect(diagnostics).toEqual([]);
+    expect(module.code).toContain(`in_${field}: mat4x4f`);
+    expect(() => evaluateShaderIr(ir)).toThrow('Missing or invalid instance transformation');
+  });
+
+  it.each([
+    { op: 'transformpoint', fallback: '0,0,0', expected: [10, -2, 3] },
+    { op: 'transformvector', fallback: '0,0,0', expected: [0, 0, 0] },
+    { op: 'transformnormal', fallback: '0,0,1', expected: [0, 0, 1] },
+  ])('uses the NodeDef default input of $op', ({ op, fallback, expected }) => {
+    const node = upstream('space', op, 'vector3', [value('fromspace', 'string', 'object'), value('tospace', 'string', 'world')]);
+    node.nodeDef = {
+      name: `ND_${op}_vector3`, nodeString: op, type: 'vector3', implementation: { kind: 'unresolved' },
+      inputs: [{ name: 'in', type: 'vector3', value: fallback }],
+    };
+    const graph = surfaceGraph([conn('base_color', 'color3', 'space')], [node]);
+    const { ir } = lowerAndEmit(graph, [{ name: 'base_color', type: COLOR3 }]);
+    const result = evaluateShaderIr(ir, { inputs: {
+      [OBJECT_TO_WORLD_INPUT]: instanceModel, [WORLD_TO_OBJECT_INPUT]: instanceInverse,
+    } }).get('base_color')!;
+    expected.forEach((component, index) => expect(result[index]).toBeCloseTo(component, 10));
+  });
+
+  it('uses identity for equal, empty and object/model-equivalent spaces', () => {
+    for (const [from, to] of [['', 'world'], ['world', 'world'], ['model', 'object']]) {
+      const graph = surfaceGraph([conn('base_color', 'color3', 'space')], [
+        upstream('space', 'transformnormal', 'vector3', [
+          value('in', 'vector3', '0,3,4'), value('fromspace', 'string', from!), value('tospace', 'string', to!),
+        ]),
+      ]);
+      const diagnostics: Diagnostic[] = [];
+      const { ir, module } = lowerAndEmit(graph, [{ name: 'base_color', type: COLOR3 }], d => diagnostics.push(d));
+      expect(evaluateShaderIr(ir).get('base_color')).toEqual([0, 0.6, 0.8]);
+      expect(module.code).not.toContain('in_mx_objectToWorld');
+      expect(module.code).not.toContain('in_mx_worldToObject');
+      expect(diagnostics).toEqual([]);
+    }
+  });
+
+  it('resolves constant space strings and diagnoses unresolved or unsupported spaces', () => {
+    const transform = upstream('space', 'transformpoint', 'vector3', [
+      value('in', 'vector3', '1,2,3'), conn('fromspace', 'string', 'constant'),
+      value('tospace', 'string', 'world'),
+    ]);
+    const constant = upstream('constant', 'constant', 'string', [value('value', 'string', 'object')]);
+    const graph = surfaceGraph([conn('base_color', 'color3', 'space')], [transform, constant]);
+    const diagnostics: Diagnostic[] = [];
+    const { ir } = lowerAndEmit(graph, [{ name: 'base_color', type: COLOR3 }], d => diagnostics.push(d));
+    expect(evaluateShaderIr(ir, { inputs: { [OBJECT_TO_WORLD_INPUT]: instanceModel } }).get('base_color')).toEqual([4, 0, 15]);
+    expect(diagnostics).toEqual([]);
+
+    for (const from of [conn('fromspace', 'string', 'missing'), value('fromspace', 'string', 'camera')]) {
+      const bad = surfaceGraph([conn('base_color', 'color3', 'space')], [
+        upstream('space', 'transformpoint', 'vector3', [value('in', 'vector3', '1,2,3'), from, value('tospace', 'string', 'world')]),
+      ]);
+      const warnings: Diagnostic[] = [];
+      const lowered = lowerAndEmit(bad, [{ name: 'base_color', type: COLOR3 }], d => warnings.push(d));
+      expect(evaluateShaderIr(lowered.ir).get('base_color')).toEqual([1, 2, 3]);
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0]!.message).toMatch(/unresolved|does not support/);
+      expect(warnings[0]!.message).toContain('identity fallback');
+    }
+  });
+
   it('evaluates connected 2D transforms in a surface graph', () => {
     const graph = surfaceGraph([conn('base', 'float', 'channel')], [
       upstream('position', 'constant', 'vector2', [value('value', 'vector2', '3,5')]),
@@ -949,6 +1036,24 @@ describe('lowerSurfaceInputsToIr (T055c)', () => {
     expect(diagnostics).toEqual([]);
     expect(evaluateShaderIr(ir).get('result')).toEqual(expected);
     expect(emitWgsl(ir).code).toContain(`${category === 'absval' ? 'abs' : category === 'modulo' || category === 'fract' ? 'floor' : category}(`);
+  });
+
+  it('evaluates connected sign and invert nodes using the NodeDef scalar amount default', () => {
+    const inverse = upstream('inverse', 'invert', 'color3', [conn('in', 'color3', 'sign')]);
+    inverse.nodeDef = {
+      name: 'ND_invert_color3FA', nodeString: 'invert', type: 'color3',
+      inputs: [{ name: 'in', type: 'color3', value: '0,0,0' }, { name: 'amount', type: 'float', value: '0.5' }],
+      implementation: { kind: 'sourcecode' },
+    };
+    const graph = surfaceGraph([conn('base_color', 'color3', 'inverse')], [
+      inverse, upstream('sign', 'sign', 'color3', [value('in', 'color3', '-2,0,3')]),
+    ]);
+    const diagnostics: Diagnostic[] = [];
+    const { ir, module } = lowerAndEmit(graph, [{ name: 'base_color', type: COLOR3 }], d => diagnostics.push(d));
+    expect(diagnostics).toEqual([]);
+    expect(evaluateShaderIr(ir).get('base_color')).toEqual([1.5, 0.5, -0.5]);
+    expect(module.code).toContain('sign(');
+    expect(module.code).toMatch(/vec3f\(e\d+\) - e\d+/);
   });
 
   it('lowers color modulo with a scalar divisor', () => {
@@ -1868,6 +1973,48 @@ describe('lowerSurfaceInputsToIr (T055c)', () => {
     expect(module.code).toMatch(/vec3f\(e\d+\)/);
   });
 
+  it('uses a convert NodeDef input type and value when its input is omitted', () => {
+    const node = upstream('cvt', 'convert', 'color3', []);
+    node.nodeDef = {
+      name: 'ND_convert_vector2_color3', nodeString: 'convert', type: 'color3',
+      inputs: [{ name: 'in', type: 'vector2', value: '0.2, 0.4' }],
+      implementation: { kind: 'nodegraph', name: 'NG_convert_vector2_color3' },
+    };
+    const diagnostics: Diagnostic[] = [];
+    const { ir, module } = lowerAndEmit(surfaceGraph([conn('base_color', 'color3', 'cvt')], [node]),
+      [{ name: 'base_color', type: COLOR3 }], d => diagnostics.push(d));
+    expect(diagnostics).toEqual([]);
+    expect(evaluateShaderIr(ir).get('base_color')).toEqual([0.2, 0.4, 0]);
+    expect(module.code).toMatch(/vec3f\(e\d+, 0\.0\)/);
+  });
+
+  it('uses a boolean convert NodeDef default when its input is omitted', () => {
+    const node = upstream('cvt', 'convert', 'float', []);
+    node.nodeDef = {
+      name: 'ND_convert_boolean_float', nodeString: 'convert', type: 'float',
+      inputs: [{ name: 'in', type: 'boolean', value: 'true' }],
+      implementation: { kind: 'sourcecode' },
+    };
+    const { ir, module } = lowerAndEmit(surfaceGraph([conn('base', 'float', 'cvt')], [node]),
+      [{ name: 'base', type: FLOAT }]);
+    expect(evaluateShaderIr(ir).get('base')).toEqual([1]);
+    expect(module.code).toMatch(/select\(0\.0, 1\.0, e\d+\)/);
+  });
+
+  it('converts an upstream value to the convert NodeDef input type first', () => {
+    const node = upstream('cvt', 'convert', 'color3', [conn('in', 'vector2', 'source')]);
+    node.nodeDef = {
+      name: 'ND_convert_vector2_color3', nodeString: 'convert', type: 'color3',
+      inputs: [{ name: 'in', type: 'vector2', value: '0, 0' }],
+      implementation: { kind: 'nodegraph', name: 'NG_convert_vector2_color3' },
+    };
+    const graph = surfaceGraph([conn('base_color', 'color3', 'cvt')], [
+      node, upstream('source', 'constant', 'color4', [value('value', 'color4', '0.2, 0.4, 0.6, 0.8')]),
+    ]);
+    const { ir } = lowerAndEmit(graph, [{ name: 'base_color', type: COLOR3 }]);
+    expect(evaluateShaderIr(ir).get('base_color')).toEqual([0.2, 0.4, 0]);
+  });
+
   it('shares a sub-graph feeding two inputs (CSE across surface fields)', () => {
     const graph = surfaceGraph(
       [conn('base_color', 'color3', 'tex'), conn('coat_color', 'color3', 'tex')],
@@ -1905,7 +2052,7 @@ describe('lowerSurfaceInputsToIr (T055c)', () => {
     const { module } = lowerAndEmit(graph, [{ name: 'base_color', type: COLOR3 }]);
     expect(module.code).toMatch(/= \(e\d+ > e\d+\);/);
     expect(module.code).toMatch(/= \(!e\d+\);/);
-    expect(module.code).toMatch(/= i32\(e\d+\);/);
+    expect(module.code).toMatch(/= select\(0, 1, e\d+\);/);
     expect(module.code).toContain('select(');
   });
 

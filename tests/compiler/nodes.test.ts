@@ -18,6 +18,11 @@ const LEAVES = [
 ];
 
 describe('node coverage', () => {
+  it.each(['sign', 'invert'])('reports %s as supported for surface graphs', category => {
+    expect(isNodeCovered(category)).toBe(true);
+    expect(DEFAULT_SUPPORTED_UPSTREAM.has(category)).toBe(true);
+  });
+
   it.each([
     'g18_rec709_to_lin_rec709', 'g22_rec709_to_lin_rec709', 'rec709_display_to_lin_rec709',
     'acescg_to_lin_rec709', 'g22_ap1_to_lin_rec709', 'srgb_texture_to_lin_rec709',

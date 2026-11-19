@@ -5,22 +5,26 @@ import { promisify } from 'node:util';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { decodeCompiledScene, encodeCompiledScene, writeCompiledScene, type CompiledScenePackage, type SceneDirectory } from '../../src/scene/compiled-scene-codec.ts';
-import { compiledRasterShaderKey, compiledSceneAssetUrl, exportCompiledScene, loadCompiledScene } from '../../src/scene/compiled-scene.ts';
+import {
+  compiledRasterShaderKey, compiledSceneAssetUrl, exportCompiledMaterial, exportCompiledScene,
+  loadCompiledMaterial, loadCompiledScene,
+} from '../../src/scene/compiled-scene.ts';
 import { importUsdStage } from '../../src/usd/importer.ts';
 import { buildSceneResources } from '../../src/render/scene-resources.ts';
-import { buildPathTraceScene, PT_MATERIAL_FLOATS } from '../../src/render/pathtracing/scene-buffers.ts';
+import { buildPathTraceScene, PT_MATERIAL_FLOATS, type PathTraceScene } from '../../src/render/pathtracing/scene-buffers.ts';
 import { buildMaterialDispatch } from '../../src/render/pathtracing/material-variant.ts';
 import { NEUTRAL_SURFACE } from '../../src/render/raster/scene-frame.ts';
-import { IrModuleBuilder, FLOAT } from '../../src/compiler/ir.ts';
+import { IrModuleBuilder, FLOAT, OBJECT_TO_WORLD_INPUT } from '../../src/compiler/ir.ts';
 import { emitWgsl } from '../../src/compiler/wgsl.ts';
 import { emitLayeredSurface } from '../../src/compiler/surface-wgsl.ts';
 import { resolveSurface } from '../../src/materialx/surface-graph.ts';
+import { makeMaterialExport } from '../../src/materialx/graph-export.ts';
 import type { ResolvedGraph } from '../../src/materialx/graph.ts';
 import type { LoadedUsdScene } from '../../src/render/usd-scene-assets.ts';
 import type { DecodedPixelImage } from '../../src/assets/images.ts';
 import * as acceleration from '../../src/geometry/bvh.ts';
 import * as materialCompiler from '../../src/compiler/surface-wgsl.ts';
-import { IDENTITY4 } from '../../src/scene/transforms.ts';
+import { IDENTITY4, translation4 } from '../../src/scene/transforms.ts';
 import { projectIrradianceSH } from '../../src/render/env/irradiance.ts';
 import { buildEnvCdf } from '../../src/assets/environment-cdf.ts';
 import { bootstrapUsdImage, compiledPathTraceInput, loadRenderScene } from '../render/usd-scene.harness.ts';
@@ -91,6 +95,38 @@ def Xform "World" {
       imageProvider: { decode: () => undefined },
     },
   };
+}
+
+async function transformFixture(category = 'transformpoint'): Promise<LoadedUsdScene> {
+  const loaded = await fixture();
+  const material = [...loaded.resources.materials.values()][0]!;
+  const originalGraph = material.surfaceGraph;
+  const root = originalGraph?.nodes.get('s');
+  if (!originalGraph || !root) throw new Error('Missing fixture graph.');
+  const graph: ResolvedGraph = {
+    ...originalGraph,
+    nodes: new Map([
+      ['s', { ...root, inputs: [{
+        name: 'base_color', type: 'color3', source: { kind: 'connection', nodeId: 'transform' },
+        provenance: { namePath: '/s/base_color' },
+      }] }],
+      ['transform', {
+        id: 'transform', category, type: 'vector3', provenance: { namePath: '/transform' },
+        inputs: [
+          { name: 'in', type: 'vector3', source: { kind: 'value', type: 'vector3', value: '0.1, 0.2, 0.3' }, provenance: { namePath: '/transform/in' } },
+          { name: 'fromspace', type: 'string', source: { kind: 'value', type: 'string', value: 'object' }, provenance: { namePath: '/transform/fromspace' } },
+          { name: 'tospace', type: 'string', source: { kind: 'value', type: 'string', value: 'world' }, provenance: { namePath: '/transform/tospace' } },
+        ],
+      }],
+    ]),
+  };
+  const surface = resolveSurface(graph, {});
+  if (!surface) throw new Error('Transform fixture failed.');
+  material.surfaceGraph = graph;
+  material.resolvedSurface = surface;
+  material.surfaceModule = emitLayeredSurface(graph, surface);
+  loaded.resources.instances[0]!.transform = translation4(2, 3, 4);
+  return loaded;
 }
 
 describe('compiled scene binary codec', () => {
@@ -316,6 +352,7 @@ over "World" {
     expect(fetchResource.mock.calls.every(([url]) => String(url).startsWith('https://example.test/scenes/compiled/'))).toBe(true);
     if (!loaded.compiled) throw new Error('Missing compiled snapshot.');
     const prepared = loaded.compiled.pathTrace;
+    expect(prepared.transformRanges).toBeDefined();
     const originalCamera = prepared.camera;
     const frameCamera = { ...originalCamera,eye:[5,6,7] as [number,number,number],exposure:2 };
     const environment = { ...prepared.environment,intensity:0.25 };
@@ -385,6 +422,76 @@ over "World" {
     expect(() => restored.mtlx.imageProvider.decode('missing.png')).toThrow('Texture absent');
   });
 
+  it('round trips instance transforms and their raster and path tracing shaders', async () => {
+    const loaded = await transformFixture();
+    const expected = buildPathTraceScene(loaded.resources, { surfaceFor: loaded.mtlx.surfaceFor });
+    const scene = await exportCompiledScene(loaded);
+    const restored = await loadCompiledScene('https://example.test/scenes/compiled/scene.json', vi.fn(), packageFetch(scene));
+    expect(restored.compiled?.pathTrace.transformRanges).toEqual(expected.transformRanges);
+    expect(restored.compiled?.pathTrace.transformRanges?.[0]?.model).toEqual(translation4(2, 3, 4));
+    expect(restored.compiled?.dispatch.extraInputs.has(OBJECT_TO_WORLD_INPUT)).toBe(true);
+    const material = [...restored.resources.materials.values()][0]!;
+    expect(material.surfaceModule?.extraInputs.has(OBJECT_TO_WORLD_INPUT)).toBe(true);
+    expect(restored.compiled?.rasterShaders.get(compiledRasterShaderKey(material.unitKey, 'interactive'))?.code)
+      .toContain('in_mx_objectToWorld');
+  });
+
+  it('keeps older scenes without space transforms and instance metadata loadable', async () => {
+    const loaded = await fixture();
+    const scene = await exportCompiledScene(loaded);
+    const data = await decodeCompiledScene(scene.manifest, readPackage(scene)) as {
+      spaceTransformVersion?: number; pathTrace: PathTraceScene;
+    };
+    delete data.spaceTransformVersion;
+    delete data.pathTrace.transformRanges;
+    const legacy = await encodeCompiledScene(data, loaded.entry);
+    const restored = await loadCompiledScene('https://example.test/scenes/compiled/scene.json', vi.fn(), packageFetch(legacy));
+    expect(restored.compiled?.pathTrace.transformRanges).toBeUndefined();
+  });
+
+  it.each(['transformpoint', 'transformvector', 'transformnormal'])(
+    'rejects legacy scenes containing %s instead of using stale shaders', async category => {
+      const loaded = await transformFixture(category);
+      const scene = await exportCompiledScene(loaded);
+      const data = await decodeCompiledScene(scene.manifest, readPackage(scene)) as { spaceTransformVersion?: number };
+      delete data.spaceTransformVersion;
+      const legacy = await encodeCompiledScene(data, loaded.entry);
+      const sink = vi.fn();
+      await expect(loadCompiledScene('https://example.test/scenes/compiled/scene.json', sink, packageFetch(legacy)))
+        .rejects.toThrow('re-export the scene or material from its source');
+      expect(sink).toHaveBeenCalledWith(expect.objectContaining({ level: 'error' }));
+    },
+  );
+
+  it.each(['missing', 'gap', 'empty', 'non-finite'])(
+    'rejects compiled instance transform ranges that are %s', async mutation => {
+      const loaded = await transformFixture();
+      const scene = await exportCompiledScene(loaded);
+      const data = await decodeCompiledScene(scene.manifest, readPackage(scene)) as { pathTrace: PathTraceScene };
+      const range = data.pathTrace.transformRanges?.[0];
+      if (!range) throw new Error('Missing fixture transform range.');
+      if (mutation === 'missing') delete data.pathTrace.transformRanges;
+      if (mutation === 'gap') range.firstTriangle = 1;
+      if (mutation === 'empty') range.triangleCount = 0;
+      if (mutation === 'non-finite') range.model = [NaN, ...range.model.slice(1)];
+      const damaged = await encodeCompiledScene(data, loaded.entry);
+      await expect(loadCompiledScene('https://example.test/scenes/compiled/scene.json', vi.fn(), packageFetch(damaged)))
+        .rejects.toThrow('instance transform');
+    },
+  );
+
+  it('rejects stale precompiled materials with space transforms', async () => {
+    const loaded = await transformFixture();
+    const material = await exportCompiledMaterial(loaded, loaded.resources.instances[0]!.primPath);
+    const restored = await loadCompiledMaterial('https://example.test/scenes/compiled/scene.json', packageFetch(material));
+    expect(restored.material.surfaceModule?.extraInputs.has(OBJECT_TO_WORLD_INPUT)).toBe(true);
+    const data = await decodeCompiledScene(material.manifest, readPackage(material)) as { spaceTransformVersion?: number };
+    delete data.spaceTransformVersion;
+    const legacy = await encodeCompiledScene(data, loaded.entry);
+    await expect(loadCompiledMaterial('https://example.test/scenes/compiled/scene.json', packageFetch(legacy)))
+      .rejects.toThrow('re-export the scene or material from its source');
+  });
+
   it('references original textures and sparse UDIM tiles instead of bundling decoded pixels', async () => {
     const loaded = await fixture();
     const material = [...loaded.resources.materials.values()][0]!;
@@ -441,6 +548,35 @@ over "World" {
       expect.objectContaining({ textureFile: 'https://relocated.test/original/source/environment.hdr' }),
     ], 'https://relocated.test/original/source/environment.hdr', expect.any(Function), fetchResource);
     expect(scene.manifest.resources.filter(resource => resource.path.startsWith('textures/'))).toHaveLength(0);
+
+    const graph: ResolvedGraph = {
+      terminals: [{ name: 'surfaceshader', type: 'surfaceshader', nodeId: 's', provenance: { namePath: 's' } }],
+      nodes: new Map([
+        ['s', {
+          id: 's', category: 'standard_surface', type: 'surfaceshader', provenance: { namePath: 's' },
+          nodeDef: { name: 'ND_standard_surface_surfaceshader', nodeString: 'standard_surface', type: 'surfaceshader',
+            implementation: { kind: 'unresolved' }, inputs: [{ name: 'base_color', type: 'color3' }] },
+          inputs: [{ name: 'base_color', type: 'color3', provenance: { namePath: 's/base_color' },
+            source: { kind: 'connection', nodeId: 'texture' } }],
+        }],
+        ['texture', {
+          id: 'texture', category: 'image', type: 'color3', provenance: { namePath: 'texture' },
+          nodeDef: { name: 'ND_image_color3', nodeString: 'image', type: 'color3', implementation: { kind: 'unresolved' },
+            inputs: [{ name: 'file', type: 'filename' }], outputs: [{ name: 'out', type: 'color3' }] },
+          inputs: [{ name: 'file', type: 'filename', provenance: { namePath: 'texture/file' },
+            source: { kind: 'value', type: 'filename', value: 'source/<UDIM>.png' } }],
+        }],
+      ]),
+    };
+    const result = await makeMaterialExport(graph, 'relocated', fetchResource, restored.mtlx.imageProvider.exportSource);
+    const { unzipSync, strFromU8 } = await import('three/addons/libs/fflate.module.js');
+    const files = unzipSync(new Uint8Array(await result.blob.arrayBuffer()));
+    expect(Object.keys(files).sort()).toEqual([
+      'relocated.mtlx', 'textures/texture_1/1001.png', 'textures/texture_1/1011.png',
+    ]);
+    expect(strFromU8(files['textures/texture_1/1011.png']!)).toBe('original image');
+    expect(fetchResource).toHaveBeenCalledWith('https://relocated.test/original/source/1001.png');
+    expect(fetchResource).toHaveBeenCalledWith('https://relocated.test/original/source/1011.png');
   });
 
   it('fails export when a referenced texture is missing', async () => {

@@ -21,6 +21,8 @@ export interface MxVector<T> {
 export interface MxInput extends MxElement {
   getAttribute?(name: string): string;
   getDefaultGeomPropString?(): string;
+  createStringResolver?(): { getFilenameSubstitutions(): Record<string, string>; delete(): void };
+  getParent?(): MxTokenScope | null;
   getType(): string;
   getValueString(): string;
   hasValue?(): boolean;
@@ -34,6 +36,16 @@ export interface MxInput extends MxElement {
   getUnit?(): string;
   getUnitType?(): string;
   getActiveSourceUri?(): string;
+}
+
+interface MxToken extends MxElement {
+  getActiveSourceUri?(): string;
+}
+
+interface MxTokenScope extends MxElement {
+  getParent?(): MxTokenScope | null;
+  getActiveTokens?(): MxVector<MxToken> | MxToken[];
+  getNodeDef?(): MxNodeDef | null;
 }
 
 export interface MxOutput extends MxElement {
@@ -66,6 +78,7 @@ export interface MxNodeDef extends MxElement {
   getInputs?(): MxVector<MxInput> | MxInput[];
   getActiveOutputs?(): MxVector<MxOutput> | MxOutput[];
   getOutputs?(): MxVector<MxOutput> | MxOutput[];
+  getActiveTokens?(): MxVector<MxToken> | MxToken[];
 }
 
 export interface Provenance {
@@ -90,6 +103,10 @@ export interface ResolvedInput {
   source: ResolvedValueSource;
   /** Preserve interface bindings even when their source resolves to a literal. */
   interfaceName?: string;
+  /** MaterialX token values in scope for an authored filename. */
+  filenameTokens?: Readonly<Record<string, string>>;
+  /** Source identity of each filename token, for preserving shared interfaces. */
+  filenameTokenScopes?: Readonly<Record<string, string>>;
   /** Engine editor opt-in; when authored, only true inputs are shown for this graph. */
   editable?: boolean;
   /** Runtime uniform field assigned to an editable upstream input. */
@@ -297,12 +314,59 @@ function resolveInput(input: MxInput): { resolved: ResolvedInput; connected: MxN
     source = { kind: 'default', type };
   }
 
+  let filenameTokens: Record<string, string> | undefined;
+  let filenameTokenScopes: Record<string, string> | undefined;
+  if (type === 'filename' && source.kind === 'value' && /(?:\[|%5b)/i.test(source.value)) {
+    const resolver = input.createStringResolver?.();
+    if (resolver) {
+      try {
+        const substitutions = resolver.getFilenameSubstitutions();
+        const value = source.value.replace(/%5b/gi, '[').replace(/%5d/gi, ']');
+        for (const match of value.matchAll(/\[([A-Za-z_][A-Za-z0-9_]*)\]/g)) {
+          const replacement = substitutions[match[0]];
+          if (replacement !== undefined) (filenameTokens ??= Object.create(null))[match[1]!] = replacement;
+        }
+      } finally {
+        resolver.delete();
+      }
+    }
+    if (filenameTokens) {
+      const recordTokens = (tokens: MxVector<MxToken> | MxToken[] | undefined) => {
+        if (!tokens) return;
+        for (const token of toArray(tokens)) {
+          const tokenName = token.getName();
+          if (Object.hasOwn(filenameTokens!, tokenName) && !Object.hasOwn(filenameTokenScopes ?? {}, tokenName)) {
+            (filenameTokenScopes ??= Object.create(null))[tokenName] =
+              `${token.getActiveSourceUri?.() ?? ''}\0${token.getNamePath()}`;
+          }
+          token.delete();
+        }
+      };
+      let scope = input.getParent?.() ?? null;
+      while (scope) {
+        const parent: MxTokenScope | null = scope.getParent?.() ?? null;
+        recordTokens(scope.getActiveTokens?.());
+        if (scope.getCategory?.() === 'nodegraph') {
+          const definition = scope.getNodeDef?.();
+          if (definition) {
+            recordTokens(definition.getActiveTokens?.());
+            definition.delete();
+          }
+        }
+        scope.delete();
+        scope = parent;
+      }
+    }
+  }
+
   return {
     resolved: {
       name,
       type,
       source,
       ...(interfaceName !== undefined ? { interfaceName } : {}),
+      ...(filenameTokens !== undefined ? { filenameTokens } : {}),
+      ...(filenameTokenScopes !== undefined ? { filenameTokenScopes } : {}),
       ...(editable !== undefined ? { editable: editable === 'true' } : {}),
       ...(min !== undefined ? { min } : {}),
       ...(max !== undefined ? { max } : {}),

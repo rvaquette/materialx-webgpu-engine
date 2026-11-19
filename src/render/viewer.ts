@@ -20,12 +20,12 @@ import {
 } from './raster/backend.ts';
 import { createSceneBindGroups, uploadGeometry, type SceneDrawBuffers } from './scene-resources.ts';
 import { buildEnvCdf } from '../assets/environment-cdf.ts';
-import { buildCachedPathTraceScene, type PathTraceScene } from './pathtracing/scene-buffers.ts';
+import { buildCachedPathTraceScene, buildPathTraceScene, type PathTraceScene } from './pathtracing/scene-buffers.ts';
 import { buildPathTraceUniform, pathTraceComputeWgsl, pathTraceClosureDispatch, pathTraceOpaqueScene, PathTraceBackend, pathTraceTileCount, PT_UNIFORM_SIZE } from './pathtracing/compute.ts';
 import { pathTraceSettings } from './pathtracing/scene-settings.ts';
 import { cameraFovY } from '../usd/cameras.ts';
-import { buildMaterialDispatch } from './pathtracing/material-variant.ts';
-import { buildPtDeviceBindings } from './pathtracing/device-bindings.ts';
+import { buildMaterialDispatch, type PtMaterialVariantCache } from './pathtracing/material-variant.ts';
+import { buildPtDeviceBindings, type PtBufferRole } from './pathtracing/device-bindings.ts';
 import { maxRecordLobes, PT_MAX_LOBES } from './pathtracing/material-record.ts';
 import type { DecodedPixelImage } from '../assets/images.ts';
 import { tonemapIndex, type Tonemap } from './output.ts';
@@ -66,7 +66,11 @@ import {
 import type { ResolvedGraph, ResolvedNode, ResolvedNodeDefRef } from '../materialx/graph.ts';
 import type { NormalizedSurfaceInput, ResolvedSurface } from '../materialx/surface-graph.ts';
 import { applySceneDisplacement } from './displacement.ts';
-import type { MaterialResource, SceneResources } from './scene-resources.ts';
+import { extractDisplacement } from './graph-material-compiler.ts';
+import type { GeometryResource, MaterialResource, SceneResources } from './scene-resources.ts';
+import {
+  loadMaterialPreviewShaderBall, materialPreviewCamera, materialPreviewResources, type MaterialPreviewOptions,
+} from './material-preview.ts';
 import { convertDisneySceneMaterial, prepareDisneyScene } from './pathtracing/disney-scene.ts';
 import { DisneyTextureRegistry } from './pathtracing/disney-texture-array.ts';
 import { DisneyGpuBackend } from './pathtracing/disney-gpu-backend.ts';
@@ -93,6 +97,7 @@ function describeObjects(
 /** Preview fill + framing shared with the capture harness so the live view matches. */
 const PREVIEW_ENV: Vec3 = [0.65, 0.68, 0.72];
 const RASTER_BAND_PIXELS = 256 * 256;
+const RASTER_UNUSED_VARIANT_LIMIT = 16;
 const PATH_TRACE_TILES_PER_REFRESH = 4;
 const PATH_TRACE_MAX_TILES_PER_REFRESH = 16;
 function previewCamera(aspect: number, exposure: number): FrameCamera {
@@ -210,6 +215,9 @@ export interface ViewerStatus {
 interface SceneRender {
   setEnvironmentEnabled: (enabled: boolean) => void;
   updateMaterial: (key: string, material: MaterialResource, refreshDisney: boolean) => void;
+  updateTopology: (
+    key: string, material: MaterialResource, frame: SceneFramePlan, check: () => void, commit: () => void,
+  ) => Promise<void>;
   frame: SceneFramePlan;
   resize: (width: number, height: number) => Promise<void>;
   setRasterQuality: (quality: RasterQuality) => Promise<void>;
@@ -262,6 +270,7 @@ export class InteractiveViewer {
   #current: SceneRender | null = null;
   #loaded: Awaited<ReturnType<typeof loadUsdScene>> | undefined;
   readonly #materialVariants = new Map<string, Partial<Record<MaterialVariantSlot, MaterialResource>>>();
+  #materialPreviewShaderBall: Promise<GeometryResource> | undefined;
   #loadOptions: SceneLoadOptions = {};
   #firstFrameStart: number | undefined;
   #sceneEntry: string | undefined;
@@ -373,6 +382,13 @@ export class InteractiveViewer {
     return key ? resources?.materials.get(key)?.surfaceGraph : undefined;
   }
 
+  objectTextureExportSource(path: string, file: string) {
+    if (!this.#loaded || !this.#objects.some(object => object.path === path)) {
+      throw new Error(`Objet introuvable pour l’export : ${path}.`);
+    }
+    return this.#loaded.mtlx.imageProvider.exportSource?.(file);
+  }
+
   objectSurfaceInputDiagnostics(path: string, nodeId: string) {
     const resources = this.#loaded?.parameterResources ?? this.#loaded?.resources;
     const key = resources?.instances.find(instance => instance.primPath === path)?.materialKey;
@@ -440,7 +456,7 @@ export class InteractiveViewer {
     }
     const check = () => {
       signal.throwIfAborted();
-      if (this.#disposed || this.#loaded !== loaded || this.#current !== current) {
+      if (this.#disposed || this.#loaded !== loaded || this.#current !== current || loaded.parameterResources !== source) {
         throw new Error('La scène a changé pendant la comparaison.');
       }
     };
@@ -486,6 +502,97 @@ export class InteractiveViewer {
       }
     };
     return { A: await capture(variants.A), B: await capture(variants.B) };
+  }
+
+  async captureObjectMaterialPreview(path: string, options: MaterialPreviewOptions, signal: AbortSignal): Promise<RgbaCapture> {
+    if (options.target !== 'object' && options.target !== 'shaderball') throw new Error('Support d’aperçu inconnu.');
+    if (options.backend !== 'raster' && options.backend !== 'pathtracing') throw new Error('Moteur d’aperçu inconnu.');
+    if (options.backend === 'pathtracing' && (!Number.isInteger(options.samples) || options.samples < 1 || options.samples > 64)) {
+      throw new RangeError('Le nombre d’échantillons doit être un entier de 1 à 64.');
+    }
+    const loaded = this.#loaded;
+    const current = this.#current;
+    const parameterResources = loaded?.parameterResources;
+    const source = parameterResources ?? loaded?.resources;
+    if (!loaded || !current || !source) throw new Error('Aucune scène pour l’aperçu.');
+    const check = () => {
+      signal.throwIfAborted();
+      if (this.#disposed || this.#loaded !== loaded || this.#current !== current
+        || loaded.parameterResources !== parameterResources || (!parameterResources && loaded.resources !== source)) {
+        throw new Error('La scène a changé pendant l’aperçu.');
+      }
+    };
+    check();
+    const sink: DiagnosticSink = diagnostic => {
+      if (diagnostic.level === 'error') console.error(diagnostic.message, diagnostic.detail ?? '');
+      else if (diagnostic.level === 'warning') console.warn(diagnostic.message, diagnostic.detail ?? '');
+    };
+    const isolatedObject = materialPreviewResources(source, path);
+    let shaderBall: GeometryResource | undefined;
+    if (options.target === 'shaderball') {
+      if (!this.#materialPreviewShaderBall) {
+        this.#materialPreviewShaderBall = loadMaterialPreviewShaderBall(document.baseURI, sink);
+      }
+      const build = this.#materialPreviewShaderBall;
+      try { shaderBall = await build; }
+      catch (error) {
+        if (this.#materialPreviewShaderBall === build) this.#materialPreviewShaderBall = undefined;
+        throw error;
+      }
+      check();
+    }
+    let isolated = shaderBall ? materialPreviewResources(source, path, shaderBall) : isolatedObject;
+    if (!parameterResources && shaderBall) {
+      const key = isolated.instances[0]!.materialKey!;
+      const material = isolated.materials.get(key)!;
+      const displacement = material.displacement ?? (material.surfaceGraph && extractDisplacement(material.surfaceGraph));
+      if (displacement && !material.displacement) {
+        isolated = { ...isolated, materials: new Map(isolated.materials).set(key, { ...material, displacement }) };
+      }
+    }
+    // Render resources already contain baked displacement; only a new shaderball needs it reapplied.
+    const resources = parameterResources || shaderBall
+      ? await applySceneDisplacement(isolated, loaded.mtlx.imageProvider) : isolated;
+    check();
+    const exposure = this.#exposure ?? loaded.cameras[0]?.exposure ?? 0;
+    const eye = this.#orbit.eye;
+    const target = this.#orbit.target;
+    const { camera, backgroundInvViewProj } = materialPreviewCamera(
+      resources, [eye[0] - target[0], eye[1] - target[1], eye[2] - target[2]], exposure,
+    );
+    const candidate = { ...loaded, resources };
+    delete candidate.compiled;
+    const frame = buildSceneFrame(resources, {
+      lights: loaded.lights, surfaceFor: loaded.mtlx.surfaceFor,
+      environment: { ...current.frame.environment }, frameCamera: camera,
+    });
+    let shaderErrors: readonly ShaderCompilationError[] = [];
+    const size = 256;
+    const offscreen = new InteractiveViewer({
+      device: this.#device, width: size, height: size, outputFormat: 'rgba8unorm',
+      onShaderErrors: errors => { shaderErrors = errors; },
+    });
+    offscreen.#backend = options.backend;
+    offscreen.#rasterQuality = 'interactive';
+    offscreen.#tonemap = this.#tonemap;
+    try {
+      const render = offscreen.#current = await offscreen.#buildSceneRender(candidate, frame, exposure, sink);
+      check();
+      render.applyCamera(camera.viewProj, camera.eye, backgroundInvViewProj);
+      if (this.#pathTracingDepthOverride !== undefined) render.setPathTracingDepth(this.#pathTracingDepthOverride);
+      return await captureRgba(this.#device, size, size, options.backend === 'pathtracing'
+        ? { pathTrace: targetView => render.capturePathTrace(targetView, options.samples, check) }
+        : { raster: render.renderRaster }, check);
+    } catch (error) {
+      check();
+      if (shaderErrors.length) {
+        const detail = shaderErrors.map(diagnostic => `${diagnostic.shader}: ${diagnostic.message}`).join('; ');
+        throw new Error(`Compilation de l’aperçu : ${detail}`, { cause: error });
+      }
+      throw error;
+    } finally {
+      offscreen.dispose();
+    }
   }
 
   #editableObjectMaterial(path: string): MaterialResource | undefined {
@@ -607,7 +714,45 @@ export class InteractiveViewer {
     if (updated === material) return;
     const materials = new Map(source.materials);
     materials.set(key, updated);
-    await this.#rebuildMaterialResources(loaded, { ...source, materials });
+    const parameterResources = { ...source, materials };
+    const bakedBefore = loaded.resources.materials.get(key);
+    const hasVolume = [...source.materials.values()].some(candidate => candidate.volumeIr || candidate.volumeBoundary);
+    if (!bakedBefore || hasVolume
+      || JSON.stringify(material.displacement) !== JSON.stringify(updated.displacement)
+      || material.volumeIr !== updated.volumeIr || material.volumeMedium !== updated.volumeMedium
+      || material.volumeBoundary !== updated.volumeBoundary) {
+      await this.#rebuildMaterialResources(loaded, parameterResources);
+      return;
+    }
+
+    let baked = updated;
+    if (updated.displacement && !bakedBefore.displacement) {
+      const { displacement: _displacement, ...withoutDisplacement } = updated;
+      baked = {
+        ...withoutDisplacement,
+        ...(updated.surfaceModule ? { sceneShader: assembleIrForwardShader(updated.surfaceModule) } : {}),
+      };
+    }
+    const bakedMaterials = new Map(loaded.resources.materials);
+    bakedMaterials.set(key, baked);
+    const resources = { ...loaded.resources, materials: bakedMaterials };
+    const current = this.#current;
+    const frame = buildSceneFrame(resources, {
+      lights: loaded.lights, surfaceFor: loaded.mtlx.surfaceFor,
+      environment: current.frame.environment, frameCamera: current.frame.camera,
+    });
+    const check = () => {
+      if (this.#disposed || this.#loaded !== loaded || this.#current !== current || loaded.parameterResources !== source) {
+        throw new Error('Scene changed during material update.');
+      }
+    };
+    await current.updateTopology(key, baked, frame, check, () => {
+      loaded.resources = resources;
+      loaded.parameterResources = parameterResources;
+      delete loaded.compiled;
+    });
+    this.#onCameraChanged();
+    this.#emitStatus();
   }
 
   get isCompiledScene(): boolean {
@@ -663,19 +808,30 @@ export class InteractiveViewer {
   }
 
   async #rebuildMaterialResources(loaded: LoadedUsdScene, parameterResources: SceneResources): Promise<void> {
+    const source = loaded.parameterResources;
+    const current = this.#current;
+    const check = () => {
+      if (this.#disposed || this.#loaded !== loaded || this.#current !== current || loaded.parameterResources !== source) {
+        throw new Error('Scene changed during material update.');
+      }
+    };
     const resources = await applySceneDisplacement(parameterResources, loaded.mtlx.imageProvider);
+    check();
     const candidate = { ...loaded, resources, parameterResources };
     delete candidate.compiled;
-    await this.#replaceLoaded(loaded, candidate, 'Scene changed during material update.');
+    await this.#replaceLoaded(loaded, candidate, 'Scene changed during material update.', check);
   }
 
   /** Swap the active scene state without reparsing USD (frame + GPU render set rebuilt from resources). */
-  async #replaceLoaded(loaded: LoadedUsdScene, candidate: LoadedUsdScene, changedMessage: string): Promise<void> {
-    if (!this.#current) throw new Error('No scene loaded.');
+  async #replaceLoaded(
+    loaded: LoadedUsdScene, candidate: LoadedUsdScene, changedMessage: string, check?: () => void,
+  ): Promise<void> {
+    const current = this.#current;
+    if (!current) throw new Error('No scene loaded.');
     const exposure = candidate.cameras[0]?.exposure ?? 0;
     const frame = buildSceneFrame(candidate.resources, {
       lights: candidate.lights, surfaceFor: candidate.mtlx.surfaceFor,
-      environment: this.#current.frame.environment,
+      environment: current.frame.environment,
       frameCamera: { viewProj: this.#orbit.viewProj(), eye: this.#orbit.eye, exposure },
     });
     const sink: DiagnosticSink = diagnostic => {
@@ -683,11 +839,12 @@ export class InteractiveViewer {
       else if (diagnostic.level === 'warning') console.warn(diagnostic.message, diagnostic.detail ?? '');
     };
     const render = await this.#buildSceneRender(candidate, frame, exposure, sink);
-    if (this.#loaded !== loaded || this.#disposed) {
+    if (this.#loaded !== loaded || this.#current !== current || this.#disposed) {
       render.dispose();
       throw new Error(changedMessage);
     }
-    this.#current.dispose();
+    try { check?.(); } catch (error) { render.dispose(); throw error; }
+    current.dispose();
     this.#current = render;
     if (this.#pathTracingDepthOverride !== undefined) render.setPathTracingDepth(this.#pathTracingDepthOverride);
     this.#loaded = candidate;
@@ -925,6 +1082,7 @@ export class InteractiveViewer {
     this.#loaded?.mtlx.documents?.delete();
     this.#loaded = undefined;
     this.#materialVariants.clear();
+    this.#materialPreviewShaderBall = undefined;
   }
 
   async resize(width: number, height = width): Promise<void> {
@@ -1233,6 +1391,11 @@ export class InteractiveViewer {
       trash.push(o);
       return o;
     };
+    const release = (resource: { destroy(): void }): void => {
+      const index = trash.indexOf(resource);
+      if (index >= 0) trash.splice(index, 1);
+      resource.destroy();
+    };
 
     // Shared equirect environment texture (dome envmap), uploaded once as a
     // filterable rgba16float and consumed by both the raster background pass and
@@ -1285,7 +1448,9 @@ export class InteractiveViewer {
       const resolvePipeline = await resolveBackend.createResolvePipelineAsync(true);
 
       const imageCache = new Map<string, DecodedPixelImage | undefined>();
-      const materialTextures = new Map<string, { textureViews: Map<string, GPUTextureView>; samplers: Map<string, GPUSampler> }>();
+      const materialTextures = new Map<string, {
+        textureViews: Map<string, GPUTextureView>; samplers: Map<string, GPUSampler>; textures: GPUTexture[];
+      }>();
       for (const [key, material] of resources.materials) {
         if (material.surfaceModule && material.surfaceModule.textures.length > 0) {
           const uploadedTextures = await uploadMaterialTextures(device, material, loaded.mtlx.imageProvider, imageCache);
@@ -1339,7 +1504,20 @@ export class InteractiveViewer {
         ? track(device.createBuffer({ size: frame.analyticLights.byteLength, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST }))
         : undefined;
       if (rasterLights && frame.analyticLights) device.queue.writeBuffer(rasterLights, 0, frame.analyticLights);
-      const rasterSets = new Map<RasterQuality, { backend: RasterBackend; draws: Map<ScenePassKind, SceneDrawCall[]> }>();
+      type RasterDraw = {
+        draw: SceneFramePlan['draws'][number];
+        call: SceneDrawCall;
+        frameUniform: typeof frameUniforms[number];
+        materialUniform: GPUBuffer;
+      };
+      type RasterSet = { backend: RasterBackend; draws: Map<ScenePassKind, SceneDrawCall[]>; entries: RasterDraw[] };
+      const rasterSets = new Map<RasterQuality, RasterSet>();
+      let rasterOperation: Promise<void> = Promise.resolve();
+      const serializeRaster = <T>(operation: () => Promise<T>): Promise<T> => {
+        const result = rasterOperation.then(operation);
+        rasterOperation = result.then(() => {}, () => {});
+        return result;
+      };
       const buildRasterQuality = async (quality: RasterQuality): Promise<void> => {
         const cached = rasterSets.get(quality);
         if (cached) {
@@ -1399,6 +1577,7 @@ export class InteractiveViewer {
           }
         }
         const nextDraws = new Map<ScenePassKind, SceneDrawCall[]>();
+        const entries: RasterDraw[] = [];
         for (const draw of frame.draws) {
           const buffers = uploaded.get(draw.prototypeId);
           const geometry = resources.geometries.get(draw.prototypeId);
@@ -1429,7 +1608,8 @@ export class InteractiveViewer {
             zeroTangents.set(draw.prototypeId, tangent);
           }
           device.queue.writeBuffer(frameUniform, 0, buildSceneFrameUniform(frame, draw));
-          frameUniforms.push({ buffer: frameUniform, draw });
+          const frameEntry = { buffer: frameUniform, draw };
+          frameUniforms.push(frameEntry);
           const materialData = material.parameters ? materialUniformData(material) : buildSceneMaterialUniform(draw);
           const materialUniform = track(device.createBuffer({ size: Math.max(SCENE_MATERIAL_UNIFORM_SIZE, materialData.byteLength), usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST }));
           device.queue.writeBuffer(materialUniform, 0, materialData);
@@ -1460,7 +1640,7 @@ export class InteractiveViewer {
             }
           }
           const list = nextDraws.get(draw.pass) ?? [];
-          list.push({
+          const call: SceneDrawCall = {
             materialBindGroup: bindGroups.materialBindGroup,
             frameBindGroup: bindGroups.frameBindGroup,
             positionBuffer: position,
@@ -1471,14 +1651,150 @@ export class InteractiveViewer {
             indexCount: buffers.indexCount,
             pipelineKey: material.variant.pipelineKey,
             ...(textureBindGroups.size > 0 ? { textureBindGroups } : {}),
-          });
+          };
+          list.push(call);
+          entries.push({ draw, call, frameUniform: frameEntry, materialUniform });
           nextDraws.set(draw.pass, list);
         }
-        rasterSets.set(quality, { backend: nextBackend, draws: nextDraws });
+        rasterSets.set(quality, { backend: nextBackend, draws: nextDraws, entries });
         backend = nextBackend;
         drawsByPass = nextDraws;
       };
       await buildRasterQuality(rasterQuality);
+
+      const updateRasterTopology = (
+        key: string, material: MaterialResource, nextFrame: SceneFramePlan, check: () => void, commit: () => void,
+      ): Promise<void> => serializeRaster(async () => {
+        const previous = resources.materials.get(key);
+        if (!previous || !material.surfaceModule || !material.sceneShader) {
+          throw new Error(`Missing editable raster material: ${key}`);
+        }
+        const sameTextures = JSON.stringify([previous.surfaceModule?.textures, previous.surfaceModule?.samplers])
+          === JSON.stringify([material.surfaceModule.textures, material.surfaceModule.samplers]);
+        const staged: Array<{ destroy(): void }> = [];
+        let nextTextures = sameTextures ? materialTextures.get(key) : undefined;
+        let committed = false;
+        try {
+          if (!sameTextures && material.surfaceModule.textures.length > 0) {
+            nextTextures = await uploadMaterialTextures(device, material, loaded.mtlx.imageProvider, imageCache);
+            staged.push(...nextTextures.textures);
+          }
+          const replacements: Array<{ set: RasterSet; old: RasterDraw; next: RasterDraw; inverseData: Float32Array }> = [];
+          for (const [quality, set] of rasterSets) {
+            const affected = set.entries.filter(entry => entry.draw.materialKey === key);
+            if (affected.length === 0) continue;
+            const nextDraws = affected.map(entry => {
+              const draw = nextFrame.draws.find(candidate => candidate.instanceId === entry.draw.instanceId);
+              if (!draw || draw.materialKey !== key || draw.prototypeId !== entry.draw.prototypeId) {
+                throw new Error(`Geometry changed during material update: ${entry.draw.instanceId}`);
+              }
+              return draw;
+            });
+            const shader = assembleIrForwardShader(material.surfaceModule, {
+              displacement: material.displacement !== undefined, rasterQuality: quality,
+              analyticLights: rasterLights !== undefined,
+            });
+            const passes = [...new Set(nextDraws.map(draw => draw.pass))];
+            const missing = passes.filter(pass => !set.backend.sceneVariantPipeline(pass, material.variant.pipelineKey));
+            if (missing.length > 0) {
+              const [compiled] = await compileShaderBatch(device, [{
+                label: `Raster ${quality}: ${material.materialName}`, code: () => shader.code,
+              }]);
+              if (!compiled) throw new Error(`Missing compiled raster shader: ${material.materialName}`);
+              if (disposed) throw new Error('Viewer disposed during raster compilation.');
+              if (compiled.errors.length > 0) {
+                rasterErrors = compiled.errors;
+                this.#onShaderErrors?.([...rasterErrors, ...pathTraceErrors]);
+                throw new Error(`WGSL: ${rasterErrors.length} erreur(s) de compilation.`);
+              }
+              for (const pass of missing) {
+                await set.backend.createSceneVariantPipelineAsync(
+                  pass, material.variant.pipelineKey, shader.code, compiled.module, !!material.resolvedSurface?.backNodeId,
+                );
+              }
+            }
+            await withGpuValidation(device, () => {
+              for (let index = 0; index < affected.length; index++) {
+                const old = affected[index]!;
+                const draw = nextDraws[index]!;
+                const pipeline = set.backend.sceneVariantPipeline(draw.pass, material.variant.pipelineKey);
+                if (!pipeline) throw new Error(`Missing raster pipeline: ${material.materialName}`);
+                const data = material.parameters ? materialUniformData(material) : buildSceneMaterialUniform(draw);
+                const materialUniform = device.createBuffer({
+                  size: Math.max(SCENE_MATERIAL_UNIFORM_SIZE, data.byteLength),
+                  usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+                });
+                staged.push(materialUniform);
+                device.queue.writeBuffer(materialUniform, 0, data);
+                const displacement = materialDisplacement.get(key);
+                const groups = createSceneBindGroups(device, { ...material, sceneShader: shader }, {
+                  frame: old.frameUniform.buffer, material: materialUniform,
+                  ...(rasterLights ? { analyticLights: rasterLights } : {}),
+                  ...(nextTextures ? { textureViews: nextTextures.textureViews, samplers: nextTextures.samplers } : {}),
+                  ...(displacement ? { displacement } : {}),
+                  ...(envTextureView && envSampler && envCdfBuffer
+                    ? { environment: { textureView: envTextureView, sampler: envSampler, cdf: envCdfBuffer } } : {}),
+                }, group => pipeline.getBindGroupLayout(group));
+                const textureBindGroups = new Map<number, GPUBindGroup>();
+                for (const [group, bindGroup] of groups.byGroup) {
+                  if (bindGroup !== groups.materialBindGroup && bindGroup !== groups.frameBindGroup) {
+                    textureBindGroups.set(group, bindGroup);
+                  }
+                }
+                const { textureBindGroups: _oldTextures, ...call } = old.call;
+                replacements.push({
+                  set, old, inverseData: buildSceneFrameUniform(nextFrame, draw).subarray(92), next: {
+                    draw, frameUniform: old.frameUniform, materialUniform,
+                    call: { ...call, materialBindGroup: groups.materialBindGroup, frameBindGroup: groups.frameBindGroup,
+                      pipelineKey: material.variant.pipelineKey,
+                      ...(textureBindGroups.size > 0 ? { textureBindGroups } : {}) },
+                  },
+                });
+              }
+            });
+          }
+
+          check();
+          for (const replacement of replacements) {
+            device.queue.writeBuffer(replacement.next.frameUniform.buffer, 92 * 4, replacement.inverseData);
+          }
+          for (const resource of staged) track(resource);
+          for (const set of rasterSets.values()) {
+            const byOld = new Map(replacements.filter(entry => entry.set === set).map(entry => [entry.old, entry.next]));
+            if (byOld.size === 0) continue;
+            set.entries = set.entries.map(entry => byOld.get(entry) ?? entry);
+            set.draws = new Map();
+            for (const entry of set.entries) {
+              entry.frameUniform.draw = entry.draw;
+              const draws = set.draws.get(entry.draw.pass) ?? [];
+              draws.push(entry.call);
+              set.draws.set(entry.draw.pass, draws);
+            }
+            if (backend === set.backend) drawsByPass = set.draws;
+          }
+          if (material.parameters) parameterBuffers.set(key, replacements.map(entry => entry.next.materialUniform));
+          else parameterBuffers.delete(key);
+          for (const entry of replacements) release(entry.old.materialUniform);
+          if (!sameTextures) {
+            const oldTextures = materialTextures.get(key);
+            if (nextTextures) materialTextures.set(key, nextTextures);
+            else materialTextures.delete(key);
+            for (const texture of oldTextures?.textures ?? []) release(texture);
+          }
+          committed = true;
+          commit();
+          rasterErrors = [];
+          this.#onShaderErrors?.([...rasterErrors, ...pathTraceErrors]);
+        } finally {
+          if (!committed) for (const resource of staged) resource.destroy();
+          for (const set of rasterSets.values()) {
+            set.backend.trimSceneVariantPipelines(
+              set.entries.map(entry => ({ pass: entry.draw.pass, pipelineKey: entry.call.pipelineKey })),
+              RASTER_UNUSED_VARIANT_LIMIT,
+            );
+          }
+        }
+      });
 
       const resolveUniform = track(device.createBuffer({ size: RESOLVE_UNIFORM_SIZE, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST }));
       device.queue.writeBuffer(resolveUniform, 0, new Float32Array([currentExposure, tonemapIndex(currentTonemap)]));
@@ -1672,7 +1988,8 @@ export class InteractiveViewer {
           targets.destroy();
           targets = next;
         },
-        setQuality: buildRasterQuality,
+        setQuality: (quality: RasterQuality) => serializeRaster(() => buildRasterQuality(quality)),
+        updateTopology: updateRasterTopology,
       };
     };
     let raster: Awaited<ReturnType<typeof buildRaster>> | undefined;
@@ -1698,10 +2015,20 @@ export class InteractiveViewer {
       device.queue.submit([encoder.finish()]);
     };
 
+    let pathTraceBuildRevision = 0;
+    let preparedPathTraceScene: PathTraceScene | undefined;
+    const ptVariantCache: PtMaterialVariantCache = new Map();
+    const ptGeometryBuffers = new Map<PtBufferRole, { data: Float32Array | Uint32Array; buffer: GPUBuffer }>();
+    const reusablePtRoles = new Set<PtBufferRole>(['nodes', 'triangles', 'triangleOrder', 'triangleUv', 'triangleTangent']);
+    const trackScene = track;
+
     // --- path tracer (built on first use: its pipeline costs ~230 MB of driver memory on mobile) ---
-    const buildPathTracer = async (ptTrash: Array<{ destroy(): void }>) => {
+    const buildPathTracer = async (ptTrash: Array<{ destroy(): void }>, revision: number) => {
+      const checkBuild = (): void => {
+        if (disposed || revision !== pathTraceBuildRevision) throw new Error('Path tracer preparation was superseded.');
+      };
       await new Promise((resolve) => setTimeout(resolve, 0));
-      if (disposed) throw new Error('Viewer disposed during path tracer preparation.');
+      checkBuild();
       const pathTraceBuildStarted = performance.now();
       const ptOptions = {
         lights: loaded.lights,
@@ -1716,7 +2043,10 @@ export class InteractiveViewer {
           camera: { ...loaded.compiled.pathTrace.camera, ...ptOptions.frameCamera, invViewProj: inverse4(cameraViewProj) },
           environment: frame.environment,
         }
-        : await buildCachedPathTraceScene(resources, ptOptions);
+        : preparedPathTraceScene
+          ? buildPathTraceScene(resources, ptOptions, undefined, undefined, preparedPathTraceScene)
+          : await buildCachedPathTraceScene(resources, ptOptions);
+      checkBuild();
       performance.measure('pathtracing:scene-build', {
         start: pathTraceBuildStarted,
         end: performance.now(),
@@ -1724,9 +2054,9 @@ export class InteractiveViewer {
       });
       ptScene.environment.textureRadianceScale = envRadianceScale;
       ptScene.camera.backgroundInvViewProj = backgroundInvViewProj;
-      pathTraceScene = ptScene;
-      const sourceDispatch = loaded.compiled?.dispatch ?? buildMaterialDispatch(ptScene.variantSources);
+      const sourceDispatch = loaded.compiled?.dispatch ?? buildMaterialDispatch(ptScene.variantSources, ptVariantCache);
       const sourceBindings = await buildPtDeviceBindings(sourceDispatch, ptScene, loaded.mtlx.imageProvider, { sink });
+      checkBuild();
       const { dispatch, bindings } = packPtTextureArrays(sourceDispatch, sourceBindings, device.limits.maxTextureArrayLayers);
       const storageSlots = bindings.group0.filter(slot => slot.usage === 'storage').length;
       if (storageSlots > device.limits.maxStorageBuffersPerShaderStage) {
@@ -1772,6 +2102,7 @@ export class InteractiveViewer {
           code: pathTraceConvergenceWgsl,
         },
       ]);
+      checkBuild();
       pathTraceErrors = [...ptCompilation!.errors, ...displayCompilation!.errors, ...convergenceCompilation!.errors];
       if (pathTraceErrors.length > 0) {
         this.#onShaderErrors?.([...rasterErrors, ...pathTraceErrors]);
@@ -1785,7 +2116,7 @@ export class InteractiveViewer {
         return parameter.value;
       });
       const ptBackend = new PathTraceBackend(device, { dispatch, ...(envAsset ? { environment: true } : {}) });
-      if (disposed) throw new Error('Viewer disposed during path tracer compilation.');
+      checkBuild();
       const [ptPipelineResult, ptDisplayPipeline, ptConvergencePipeline] = await Promise.all([
         ptBackend.createPipelineAsync(ptCompilation!.module),
         device.createRenderPipelineAsync({
@@ -1799,6 +2130,7 @@ export class InteractiveViewer {
           compute: { module: convergenceCompilation!.module, entryPoint: 'mx_path_trace_convergence' },
         }),
       ]);
+      checkBuild();
       const ptPipeline = ptPipelineResult.pipeline;
       let pixelScale = 4;
       let interactiveScale = 4;
@@ -1812,14 +2144,21 @@ export class InteractiveViewer {
       let ptWidth = Math.ceil(width / pixelScale);
       let ptHeight = Math.ceil(height / pixelScale);
       let aovStorageEnabled = pathTraceViewStoresAov(this.#pathTracingView);
-      const storage = (data: Float32Array | Uint32Array): GPUBuffer => {
+      const storage = (data: Float32Array | Uint32Array, role: PtBufferRole): GPUBuffer => {
         assertSceneStorageSize(device, Math.max(data.byteLength, 4));
-        return track(device.createBuffer({ size: Math.max(data.byteLength, 4), usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST }));
+        return device.createBuffer({ label: `Path tracing ${role}`,
+          size: Math.max(data.byteLength, 4), usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
       };
-      const storageData = (data: Float32Array | Uint32Array): GPUBuffer => {
+      const storageData = (data: Float32Array | Uint32Array, role: PtBufferRole): GPUBuffer => {
+        const cached = reusablePtRoles.has(role) ? ptGeometryBuffers.get(role) : undefined;
+        if (cached?.data === data) return cached.buffer;
         const safe = data.byteLength > 0 ? data : data instanceof Uint32Array ? new Uint32Array(1) : new Float32Array(1);
-        const buf = storage(safe);
+        const buf = reusablePtRoles.has(role) ? trackScene(storage(safe, role)) : track(storage(safe, role));
         device.queue.writeBuffer(buf, 0, safe);
+        if (reusablePtRoles.has(role)) {
+          if (cached) release(cached.buffer);
+          ptGeometryBuffers.set(role, { data, buffer: buf });
+        }
         return buf;
       };
 
@@ -1859,17 +2198,18 @@ export class InteractiveViewer {
       const ptUniforms = [ptUniform, ...Array.from({ length: PATH_TRACE_MAX_TILES_PER_REFRESH - 1 }, () =>
         track(device.createBuffer({ size: PT_UNIFORM_SIZE, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST })))];
 
+      let uploadParameters: (() => void) | undefined;
       const group0Entries: GPUBindGroupEntry[] = bindings.group0.map((slot) => {
         if (slot.role === 'uniform') return { binding: slot.binding, resource: { buffer: ptUniform } };
         if (slot.role === 'accum') return { binding: slot.binding, resource: { buffer: accumBuffer } };
         if (slot.role === 'mxUniforms') {
           const data = ptParameterData();
           const mx = track(device.createBuffer({ size: data.byteLength, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST }));
-          uploadPtParameters = () => device.queue.writeBuffer(mx, 0, ptParameterData());
-          uploadPtParameters();
+          uploadParameters = () => device.queue.writeBuffer(mx, 0, ptParameterData());
+          uploadParameters();
           return { binding: slot.binding, resource: { buffer: mx } };
         }
-        return { binding: slot.binding, resource: { buffer: storageData(slot.data ?? new Float32Array(1)) } };
+        return { binding: slot.binding, resource: { buffer: storageData(slot.data ?? new Float32Array(1), slot.role) } };
       });
       const computeGroups = (accum: GPUBuffer): GPUBindGroup[] => ptUniforms.map(uniform =>
         device.createBindGroup({
@@ -2341,7 +2681,7 @@ export class InteractiveViewer {
         }
       };
       return {
-        renderPathTrace, reportFrameTime, resetPathTrace, invalidateDenoise,
+        scene: ptScene, uploadParameters, renderPathTrace, reportFrameTime, resetPathTrace, invalidateDenoise,
         denoiserStatus: (): DenoiserStatus => this.#pathTracingDenoise ? denoiserStatus : { state: 'off' },
         pathTraceConvergence: (): PathTraceConvergence | undefined => convergenceStatus,
         pathTraceConvergenceError: (): string | undefined => convergenceError,
@@ -2525,23 +2865,33 @@ export class InteractiveViewer {
     let pathTracer: Awaited<ReturnType<typeof buildPathTracer>> | undefined;
     let pathTraceBuild: Promise<void> | undefined;
     let pathTraceBuildError: unknown;
+    let pathTraceOwned: Array<{ destroy(): void }> = [];
     const startPathTracer = (): Promise<void> => {
       if (pathTraceBuild) return pathTraceBuild;
       ptState = 'compiling';
+      const revision = ++pathTraceBuildRevision;
       const ptTrash: Array<{ destroy(): void }> = [];
-      pathTraceBuild = buildPathTracer(ptTrash).then((built) => {
-        if (disposed) {
+      pathTraceBuild = buildPathTracer(ptTrash, revision).then((built) => {
+        if (disposed || revision !== pathTraceBuildRevision) {
           for (const o of ptTrash) o.destroy();
           return;
         }
-        trash.push(...ptTrash);
+        pathTraceOwned = ptTrash;
         pathTracer = built;
+        pathTraceScene = built.scene;
+        uploadPtParameters = built.uploadParameters;
+        applyCamera(cameraViewProj, cameraEye, backgroundInvViewProj);
+        uploadPtParameters?.();
         ptState = 'ready';
         this.#ptDisplayDirty = true;
         this.#emitStatus();
-      }, (error: unknown) => {
+      }).catch((error: unknown) => {
         for (const o of ptTrash) o.destroy();
-        if (disposed) return;
+        if (disposed || revision !== pathTraceBuildRevision) return;
+        if (pathTraceOwned === ptTrash) pathTraceOwned = [];
+        pathTracer = undefined;
+        pathTraceScene = undefined;
+        uploadPtParameters = undefined;
         ptState = 'error';
         pathTraceBuildError = error;
         const message = error instanceof Error ? error.message : String(error);
@@ -2555,23 +2905,46 @@ export class InteractiveViewer {
       return pathTraceBuild;
     };
 
+    const invalidatePathTracer = (): void => {
+      pathTraceBuildRevision++;
+      pathTracer?.resetPathTrace();
+      if (pathTraceScene) preparedPathTraceScene = pathTraceScene;
+      for (const resource of pathTraceOwned) resource.destroy();
+      pathTraceOwned = [];
+      pathTracer = undefined;
+      pathTraceScene = undefined;
+      uploadPtParameters = undefined;
+      pathTraceBuild = undefined;
+      pathTraceBuildError = undefined;
+      ptState = 'idle';
+      const hadErrors = pathTraceErrors.length > 0;
+      pathTraceErrors = [];
+      if (hadErrors && !disposed) this.#onShaderErrors?.([...rasterErrors]);
+    };
+
     const capturePathTrace = async (targetView: GPUTextureView, samples: number, check?: () => void): Promise<void> => {
-      await startPathTracer();
-      check?.();
-      if (disposed) throw new Error('Viewer disposed during capture.');
+      const build = startPathTracer();
+      const revision = pathTraceBuildRevision;
+      const checkCapture = (): void => {
+        check?.();
+        if (disposed || revision !== pathTraceBuildRevision) throw new Error('Scene changed during path-tracing capture.');
+      };
+      await build;
+      checkCapture();
       if (!pathTracer) throw pathTraceBuildError ?? new Error('Path tracer preparation failed.');
       const { renderPathTrace, resetPathTrace } = pathTracer;
       resetPathTrace();
       let remaining = samples * pathTraceTileCount(width, height);
       while (remaining > 0) {
+        checkCapture();
         const tiles = Math.min(remaining, PATH_TRACE_MAX_TILES_PER_REFRESH);
         await withGpuValidation(device, () => renderPathTrace(undefined, true, true, tiles));
         await device.queue.onSubmittedWorkDone();
-        check?.();
-        if (disposed) throw new Error('Viewer disposed during capture.');
+        checkCapture();
         remaining -= tiles;
       }
       await withGpuValidation(device, () => renderPathTrace(targetView, true, false, 0));
+      checkCapture();
     };
 
     const applyCamera = (viewProj: readonly number[], eye: Vec3, backgroundInverse: readonly number[]): void => {
@@ -2622,6 +2995,23 @@ export class InteractiveViewer {
         for (const buffer of parameterBuffers.get(key) ?? []) device.queue.writeBuffer(buffer, 0, data);
         uploadPtParameters?.();
         if (refreshDisney && disneyState !== 'idle') invalidateDisneyTracer();
+      },
+      updateTopology: async (key, material, nextFrame, check, commit) => {
+        if (rasterBuild) await rasterBuild;
+        const finalize = (): void => {
+          resources.materials.set(key, material);
+          frame.draws = nextFrame.draws;
+          frame.passes = nextFrame.passes;
+          frame.skipped = nextFrame.skipped;
+          commit();
+          invalidatePathTracer();
+          invalidateDisneyTracer();
+        };
+        if (raster) await raster.updateTopology(key, material, nextFrame, check, finalize);
+        else {
+          check();
+          finalize();
+        }
       },
       frame,
       resize: async (w, h) => {
@@ -2712,8 +3102,7 @@ export class InteractiveViewer {
         disposed = true;
         disneyBuildRevision++;
         disneyBackend?.dispose();
-        pathTracer?.invalidateDenoise();
-        pathTracer = undefined;
+        invalidatePathTracer();
         for (const o of trash) o.destroy();
       },
     };

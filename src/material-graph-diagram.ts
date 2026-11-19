@@ -1,10 +1,12 @@
 import { downloadBlob } from './assets/download.ts';
 import { SURFACE_IR_UPSTREAM } from './compiler/surface-ir.ts';
 import { compareMaterialGraphs } from './materialx/graph-comparison.ts';
-import { makeMaterialExport } from './materialx/graph-export.ts';
+import { makeMaterialExport, type TextureSourceResolver } from './materialx/graph-export.ts';
 import type { ResolvedGraph, ResolvedNodeDefRef } from './materialx/graph.ts';
 import type { SurfaceInputDiagnostic } from './materialx/surface-graph.ts';
 import type { InteractiveViewer, MaterialVariantSlot } from './render/viewer.ts';
+import type { MaterialPreviewOptions } from './render/material-preview.ts';
+import type { RgbaCapture } from './gpu/capture.ts';
 import { compatibleNodeOutputChoices, type MaterialGraphOutput, type MaterialParameter } from './render/material-parameters.ts';
 
 const NODE_WIDTH = 174;
@@ -36,7 +38,142 @@ interface GraphParameterEditing {
   captureVariants?(
     options: Parameters<InteractiveViewer['captureObjectMaterialVariants']>[1], signal: AbortSignal,
   ): ReturnType<InteractiveViewer['captureObjectMaterialVariants']>;
+  capturePreview?(options: MaterialPreviewOptions, signal: AbortSignal): Promise<RgbaCapture>;
+  textureSource?: TextureSourceResolver;
 }
+
+type PreviewCapture = NonNullable<GraphParameterEditing['capturePreview']>;
+
+/** Serialize GPU captures and discard superseded results, even if a capture cannot stop immediately. */
+export function createMaterialPreviewScheduler(
+  onResult: (image: RgbaCapture, options: MaterialPreviewOptions) => void, onError: (error: unknown) => void,
+) {
+  let pending: { capture: PreviewCapture; options: MaterialPreviewOptions } | undefined;
+  let active: AbortController | undefined;
+  let running = false;
+  async function run(): Promise<void> {
+    running = true;
+    while (pending) {
+      const job = pending;
+      pending = undefined;
+      const controller = active = new AbortController();
+      try {
+        const image = await job.capture(job.options, controller.signal);
+        if (!controller.signal.aborted) onResult(image, job.options);
+      } catch (error) {
+        if (!controller.signal.aborted) onError(error);
+      } finally {
+        active = undefined;
+      }
+    }
+    running = false;
+  }
+  return {
+    request(capture: PreviewCapture, options: MaterialPreviewOptions): void {
+      pending = { capture, options };
+      active?.abort();
+      if (!running) void run();
+    },
+    cancel(): void {
+      pending = undefined;
+      active?.abort();
+    },
+  };
+}
+
+function materialPreview(dialog: HTMLDialogElement) {
+  const section = document.createElement('section');
+  section.className = 'material-preview';
+  section.setAttribute('aria-label', 'Aperçu du matériau');
+  const controls = document.createElement('div');
+  const heading = document.createElement('h3');
+  heading.textContent = 'Aperçu du matériau';
+  const target = document.createElement('select');
+  target.add(new Option('Objet sélectionné', 'object'));
+  target.add(new Option('Shaderball', 'shaderball'));
+  const targetLabel = document.createElement('label');
+  targetLabel.append('Support : ', target);
+  const mode = document.createElement('select');
+  mode.add(new Option('Raster', 'raster'));
+  mode.add(new Option('Path tracing', 'pathtracing'));
+  const modeLabel = document.createElement('label');
+  modeLabel.append('Moteur : ', mode);
+  const samples = document.createElement('input');
+  Object.assign(samples, { type: 'number', min: '1', max: '64', step: '1', value: '1', required: true });
+  const samplesLabel = document.createElement('label');
+  samplesLabel.append('Échantillons par pixel : ', samples);
+  samplesLabel.hidden = true;
+  const refreshButton = document.createElement('button');
+  refreshButton.type = 'button';
+  refreshButton.textContent = 'Actualiser';
+  const status = document.createElement('p');
+  status.setAttribute('role', 'status');
+  const canvas = document.createElement('canvas');
+  canvas.width = canvas.height = 256;
+  canvas.hidden = true;
+  canvas.setAttribute('role', 'img');
+  controls.append(heading, targetLabel, modeLabel, samplesLabel, refreshButton, status);
+  section.append(controls, canvas);
+  let capture: PreviewCapture | undefined;
+  const scheduler = createMaterialPreviewScheduler((image, options) => {
+    if (!dialog.open || !section.isConnected) return;
+    const context = canvas.getContext('2d');
+    if (!context) throw new Error('Impossible d’afficher l’aperçu.');
+    canvas.width = image.width;
+    canvas.height = image.height;
+    const pixels = context.createImageData(image.width, image.height);
+    pixels.data.set(image.rgba);
+    context.putImageData(pixels, 0, 0);
+    const support = options.target === 'object' ? 'Objet sélectionné' : 'Shaderball';
+    const engine = options.backend === 'raster' ? 'Raster' : `Path tracing · ${options.samples} échantillon(s) par pixel`;
+    canvas.setAttribute('aria-label', `Aperçu du matériau sur ${support}`);
+    canvas.hidden = false;
+    status.textContent = `${support} · ${engine} · ${image.width} × ${image.height}`;
+  }, error => {
+    if (!dialog.open || !section.isConnected) return;
+    const previous = canvas.hidden ? '' : ' L’image affichée correspond à l’état précédent.';
+    status.textContent = `Aperçu impossible : ${error instanceof Error ? error.message : String(error)}.${previous}`;
+  });
+  function refresh(): void {
+    if (!capture || !dialog.open || !section.isConnected) return;
+    if (mode.value === 'pathtracing' && !samples.checkValidity()) {
+      scheduler.cancel();
+      status.textContent = 'Le nombre d’échantillons doit être un entier de 1 à 64.';
+      return;
+    }
+    const selectedTarget = target.value === 'shaderball' ? 'shaderball' : 'object';
+    const options: MaterialPreviewOptions = mode.value === 'pathtracing'
+      ? { target: selectedTarget, backend: 'pathtracing', samples: samples.valueAsNumber }
+      : { target: selectedTarget, backend: 'raster' };
+    status.textContent = canvas.hidden ? 'Calcul de l’aperçu…' : 'Actualisation de l’aperçu… (image précédente)';
+    scheduler.request(capture, options);
+  }
+  target.onchange = refresh;
+  mode.onchange = () => {
+    samplesLabel.hidden = mode.value !== 'pathtracing';
+    refresh();
+  };
+  samples.onchange = refresh;
+  refreshButton.onclick = refresh;
+  dialog.addEventListener('close', () => scheduler.cancel());
+  return {
+    section,
+    setCapture(next: PreviewCapture | undefined): void {
+      if (capture !== next) {
+        scheduler.cancel();
+        canvas.hidden = true;
+        capture = next;
+      }
+    },
+    refresh,
+    pause(): void {
+      scheduler.cancel();
+      status.textContent = canvas.hidden ? 'Modification du matériau…' : 'Modification du matériau… (image précédente)';
+    },
+  };
+}
+
+const materialPreviews = new WeakMap<HTMLDialogElement, ReturnType<typeof materialPreview>>();
 
 function variantRenderComparison(dialog: HTMLDialogElement, capture: NonNullable<GraphParameterEditing['captureVariants']>) {
   const section = document.createElement('details');
@@ -288,6 +425,19 @@ export function showMaterialGraph(
   const exportButton = dialog.querySelector<HTMLButtonElement>('#export-material-graph')!;
   const exportStatus = dialog.querySelector<HTMLElement>('#material-graph-export-status')!;
   const backend = dialog.querySelector<HTMLDetailsElement>('#material-graph-backend');
+  const previewHost = dialog.querySelector<HTMLElement>('#material-preview');
+  let preview = materialPreviews.get(dialog);
+  if (previewHost && graph?.nodes.size && editing?.capturePreview) {
+    if (!preview) {
+      preview = materialPreview(dialog);
+      materialPreviews.set(dialog, preview);
+    }
+    preview.setCapture(editing.capturePreview);
+    if (preview.section.parentElement !== previewHost) previewHost.replaceChildren(preview.section);
+  } else {
+    preview?.setCapture(undefined);
+    previewHost?.replaceChildren();
+  }
   const comparisonHost = dialog.querySelector<HTMLElement>('#material-variant-renders');
   const comparison = comparisonHost && graph?.nodes.size && editing?.captureVariants
     ? variantRenderComparison(dialog, editing.captureVariants) : undefined;
@@ -341,7 +491,7 @@ export function showMaterialGraph(
     exportStatus.textContent = 'Préparation de l’export…';
     const handler = exportButton.onclick;
     try {
-      const { filename, blob } = await makeMaterialExport(snapshot, name);
+      const { filename, blob } = await makeMaterialExport(snapshot, name, fetch, editing?.textureSource);
       if (!dialog.open || exportButton.onclick !== handler) return;
       downloadBlob(blob, filename);
       exportStatus.textContent = `Téléchargement lancé : ${filename}`;
@@ -484,6 +634,7 @@ export function showMaterialGraph(
       fields.disabled = true;
       exportButton.disabled = true;
       status.textContent = 'Modification du graphe…';
+      preview?.pause();
       try {
         const updated = await edit();
         if (!savedPositions.has(updated)) {
@@ -494,6 +645,7 @@ export function showMaterialGraph(
         }, positionScope);
       } catch (error) {
         status.textContent = `Échec : ${error instanceof Error ? error.message : String(error)}`;
+        preview?.refresh();
       } finally {
         applying = false;
         fields.disabled = false;
@@ -700,6 +852,7 @@ export function showMaterialGraph(
       fields.disabled = true;
       exportButton.disabled = true;
       status.textContent = 'Application en cours…';
+      preview?.pause();
       try {
         const updated = await editing.apply(changes);
         if (updated) {
@@ -709,6 +862,7 @@ export function showMaterialGraph(
         }
       } catch (error) {
         status.textContent = `Échec : ${error instanceof Error ? error.message : String(error)}`;
+        preview?.refresh();
         return;
       } finally {
         applying = false;
@@ -717,6 +871,7 @@ export function showMaterialGraph(
       }
       if (dialog.open && surface.isConnected) {
         refreshBackendDiagnostics();
+        preview?.refresh();
         select(id, 'Valeurs appliquées.');
         buttons.get(id)?.focus({ preventScroll: true });
       }
@@ -782,4 +937,5 @@ export function showMaterialGraph(
   select(selected, selection?.message);
   if (!dialog.open) dialog.showModal();
   else buttons.get(selected)?.focus();
+  preview?.refresh();
 }

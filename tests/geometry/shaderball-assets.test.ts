@@ -1,6 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { importUsdStage } from '../../src/usd/importer.ts';
 import { importCameras } from '../../src/usd/cameras.ts';
 import { importLights } from '../../src/usd/lights.ts';
@@ -8,6 +8,7 @@ import { resolveSceneMaterials } from '../../src/usd/materials.ts';
 import { loadExternalMeshSource } from '../../src/geometry/external-mesh.ts';
 import { computeWorldTransforms, transformPoint } from '../../src/scene/transforms.ts';
 import type { Diagnostic } from '../../src/core/diagnostics.ts';
+import { loadMaterialPreviewShaderBall } from '../../src/render/material-preview.ts';
 
 const root = resolve('scenes', 'standard-shader-ball');
 const read = async (uri: string) => {
@@ -16,6 +17,24 @@ const read = async (uri: string) => {
 };
 
 describe('local shaderball geometry assets', () => {
+  it('loads the packaged Preview_Mesh lazily with geometry and UVs intact', async () => {
+    const data = await readFile(resolve('scenes', 'pathtracer', 'ShaderBall.glb'));
+    const fetch = vi.fn(async () => ({
+      ok: true, arrayBuffer: async () => data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength),
+    }));
+    vi.stubGlobal('fetch', fetch);
+    try {
+      const diagnostics: Diagnostic[] = [];
+      const geometry = await loadMaterialPreviewShaderBall('https://example.test/engine/', diagnostic => diagnostics.push(diagnostic));
+      expect(fetch).toHaveBeenCalledWith('https://example.test/engine/scenes/pathtracer/ShaderBall.glb');
+      expect(geometry.triangleCount).toBe(70808);
+      expect(geometry.streams.some(stream => stream.name === 'uv')).toBe(true);
+      expect(diagnostics).toEqual([]);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  }, 30000);
+
   it.each([
     ['standard-shader-ball.usda', [
       ['/World/Geometry/NeutralObjects', 9088],

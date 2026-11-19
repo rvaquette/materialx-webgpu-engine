@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
-import { decodeUdimImage, indexUdimFiles, udimLayerIndex, udimTileAt, withUdimImages } from '../../src/assets/udim.ts';
+import { decodeUdimImage, indexUdimFiles, matchUdimFiles, udimLayerIndex, udimTileAt, withUdimImages } from '../../src/assets/udim.ts';
+import { sceneUdimTiles } from '../../src/assets/scene-udim.ts';
 import { AssetResolver } from '../../src/assets/resolver.ts';
 import type { DecodedPixelImage } from '../../src/assets/images.ts';
 import { createImageSampler } from '../../src/render/pathtracing/texture-sample.ts';
@@ -29,6 +30,18 @@ describe('UDIM assets', () => {
     for (const [u, v] of [[-0.1, 0], [10, 0], [0, -1], [9, 99], [NaN, 0], [0, Infinity]]) {
       expect(udimTileAt(u!, v!)).toBeUndefined();
     }
+  });
+
+  it('matches only inventoried tiles for each frame and supports deployed scene URLs', () => {
+    const base = 'https://example.test/app/';
+    const files = ['./scenes/coat.1001.0001.png', './scenes/coat.1011.0001.png',
+      './scenes/coat.1002.0002.png', './scenes/coat.1000.0001.png',
+      './scenes/sets/1001/base.png', './scenes/sets/1011/base.png'];
+    expect(matchUdimFiles(files, `${base}scenes/coat.%3CUDIM%3E.0001.png?version=1`, base)).toEqual([1001, 1011]);
+    expect(matchUdimFiles(files, `${base}scenes/coat.<UDIM>.0002.png`, base)).toEqual([1002]);
+    expect(matchUdimFiles(files, `${base}scenes/sets/<UDIM>/base.png`, base)).toEqual([1001, 1011]);
+    expect(sceneUdimTiles(`${base}scenes/OpenPBRShaderPlayground/wallsFloor_grp/textures/floor_MAT_BaseColor.<UDIM>.jpg`, base))
+      .toEqual([1001]);
   });
 
   it('decodes all inventoried tiles, assigns sparse layers and samples by UV', async () => {

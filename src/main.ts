@@ -187,11 +187,16 @@ async function main(): Promise<void> {
           editGraph(() => target.addObjectNode(path, nodeId, input, nodeDef, output)),
         variants: () => target.objectMaterialVariants(path),
         variantGraph: slot => target.objectMaterialVariantGraph(path, slot),
+        textureSource: file => target.objectTextureExportSource(path, file),
         saveVariant(slot) {
           ensureEditable();
           target.saveObjectMaterialVariant(path, slot);
         },
         applyVariant: slot => editGraph(() => target.applyObjectMaterialVariant(path, slot)),
+        capturePreview(options, signal) {
+          ensureEditable();
+          return target.captureObjectMaterialPreview(path, options, signal);
+        },
         async captureVariants(options, signal) {
           ensureEditable();
           setBusy(true, 'Calcul des aperçus A/B…');

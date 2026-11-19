@@ -10,6 +10,7 @@
 // BSDF/environment MIS samples; interactive IBL uses 16 mip-filtered BSDF samples.
 
 import type { LayeredSurfaceModule, SurfaceFeatures } from '../../compiler/surface-wgsl.ts';
+import { OBJECT_TO_WORLD_INPUT, WORLD_TO_OBJECT_INPUT } from '../../compiler/ir.ts';
 import { analyticLightsWgsl } from '../pathtracing/analytic-lights.ts';
 
 const ALL_FEATURES: SurfaceFeatures = { coat: true, transmission: true, dispersion: true, thinFilm: true, lobeKinds: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9] };
@@ -59,6 +60,7 @@ function frameBlock(f: SurfaceFeatures, quality: RasterQuality): string {
   sh: array<vec4f, 9>,
   envMap: vec4f,
   envInfo: vec4f,
+  inverseModel: mat4x4f,
 };
 @group(${IR_FORWARD_FRAME_GROUP}) @binding(${IR_FORWARD_FRAME_BINDING}) var<uniform> fu: MxFrame;
 @group(${IR_FORWARD_FRAME_GROUP}) @binding(4) var forwardEnv: texture_2d<f32>;
@@ -395,7 +397,7 @@ ${dispOffset}
 }
 
 /** Rebuild the material closure, shade direct light and integrate dome IBL. */
-function fragmentStage(surfaceEntry: string, primvarNames: readonly string[], f: SurfaceFeatures, quality: RasterQuality, analyticLights: boolean): string {
+function fragmentStage(surfaceEntry: string, primvarNames: readonly string[], extraInputs: readonly string[], f: SurfaceFeatures, quality: RasterQuality, analyticLights: boolean): string {
   const reference = quality === 'reference';
   const samples = reference ? 64 : 16;
   // Feed the MxVaryings primvar fields the surface fn reads. 'st' is the default
@@ -406,6 +408,10 @@ function fragmentStage(surfaceEntry: string, primvarNames: readonly string[], f:
     .filter((name) => name === 'st')
     .map((name) => `  vary.v_${name} = fin.texcoord;`)
     .join('\n');
+  const transformAssigns = [
+    ...(extraInputs.includes(OBJECT_TO_WORLD_INPUT) ? [`  vary.in_${OBJECT_TO_WORLD_INPUT} = fu.model;`] : []),
+    ...(extraInputs.includes(WORLD_TO_OBJECT_INPUT) ? [`  vary.in_${WORLD_TO_OBJECT_INPUT} = fu.inverseModel;`] : []),
+  ].join('\n');
   return `@fragment
 fn ${IR_FORWARD_FRAGMENT_ENTRY}(fin: MxVertexOut, @builtin(front_facing) frontFacing: bool) -> @location(0) vec4f {
   var vary: MxVaryings;
@@ -423,7 +429,7 @@ fn ${IR_FORWARD_FRAGMENT_ENTRY}(fin: MxVertexOut, @builtin(front_facing) frontFa
   vary.bitangent = bitangent;
   vary.viewDir = normalize(fin.viewDir);
   vary.frontFacing = select(-1.0, 1.0, frontFacing);
-  vary.texcoord = fin.texcoord;${primvarAssigns ? '\n' + primvarAssigns : ''}
+  vary.texcoord = fin.texcoord;${primvarAssigns ? '\n' + primvarAssigns : ''}${transformAssigns ? '\n' + transformAssigns : ''}
   let c = ${surfaceEntry}(vary);
   if (c.opacity <= 0.0) { discard; }
   var authoredNormal = mx_closure_shading_normal(c, vary.normal);
@@ -549,7 +555,7 @@ export function assembleIrForwardShader(surface: LayeredSurfaceModule, options: 
     ...(options.analyticLights ? [analyticLightsWgsl(IR_FORWARD_FRAME_GROUP, 7, 'arrayLength(&analyticLights) / 7u', 'MX_PI', '1e-4')] : []),
     basisHelper(),
     vertexStage(displacement),
-    fragmentStage(surface.entryPoint, [...surface.primvarFields.keys()], features, rasterQuality, options.analyticLights === true),
+    fragmentStage(surface.entryPoint, [...surface.primvarFields.keys()], [...surface.extraInputs.keys()], features, rasterQuality, options.analyticLights === true),
   ].join('\n\n') + '\n';
   return {
     code,

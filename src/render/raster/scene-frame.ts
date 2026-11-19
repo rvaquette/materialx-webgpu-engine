@@ -15,7 +15,8 @@ import type { ScenePassKind } from './backend.ts';
 import type { MaterialResource, SceneResources } from '../scene-resources.ts';
 import type { SceneCamera } from '../../usd/cameras.ts';
 import type { SceneLight } from '../../usd/lights.ts';
-import { multiply4, transformDirection, type Mat4, type Vec3 } from '../../scene/transforms.ts';
+import { inverse4, multiply4, transformDirection, type Mat4, type Vec3 } from '../../scene/transforms.ts';
+import { WORLD_TO_OBJECT_INPUT } from '../../compiler/ir.ts';
 import { surfaceGraphToLayered } from '../../compiler/surface-lower.ts';
 import { packAnalyticLights } from '../pathtracing/analytic-lights.ts';
 
@@ -84,6 +85,7 @@ export interface SceneDraw {
   model: Mat4;
   surface: RasterSurface;
   materialKey?: string;
+  needsInverse?: boolean;
 }
 
 export interface SceneFramePlan {
@@ -170,7 +172,8 @@ function passFor(material: MaterialResource | undefined, surface: RasterSurface)
   // transmission input (or conservative feature flag) is nonzero.
   const fullyMetallic = metalness !== undefined && metalness >= 1;
   const transmits = !fullyMetallic
-    && (material?.features.passes.some((p) => p.kind === 'transmission') ?? false);
+    && ((material?.features.passes.some((p) => p.kind === 'transmission') ?? false)
+      || material?.surfaceModule?.features?.transmission === true);
   const alphaName = resolved?.family === 'gltf_pbr' ? 'alpha'
     : resolved?.family === 'open_pbr_surface' ? 'geometry_opacity' : 'opacity';
   const modeSource = resolved?.inputs.get('alpha_mode')?.source;
@@ -222,6 +225,7 @@ export function buildSceneFrame(resources: SceneResources, options: BuildSceneFr
       model: inst.transform,
       surface,
       ...(inst.materialKey !== undefined ? { materialKey: inst.materialKey } : {}),
+      ...(material?.surfaceModule?.extraInputs.has(WORLD_TO_OBJECT_INPUT) ? { needsInverse: true } : {}),
     });
   }
 
@@ -236,7 +240,7 @@ export function buildSceneFrame(resources: SceneResources, options: BuildSceneFr
 }
 
 /** Floats in a scene forward frame uniform (SCENE_FRAME_UNIFORM_SIZE / 4). */
-export const SCENE_FRAME_UNIFORM_FLOATS = 92;
+export const SCENE_FRAME_UNIFORM_FLOATS = 108;
 /** Floats in a scene forward material uniform (SCENE_MATERIAL_UNIFORM_SIZE / 4). */
 export const SCENE_MATERIAL_UNIFORM_FLOATS = 12;
 
@@ -277,6 +281,7 @@ export function buildSceneFrameUniform(frame: SceneFramePlan, draw: SceneDraw): 
   const scale = gain * (env.textureRadianceScale ?? 1);
   d.set([tint[0] * scale, tint[1] * scale, tint[2] * scale, env.hasTexture ? 1 : 0], 84);
   d.set([env.envResX ?? 0, env.envResY ?? 0, env.envTotalSum ?? 0, env.textureRadianceScale ?? 1], 88);
+  if (draw.needsInverse) d.set(inverse4(draw.model, true), 92);
   return d;
 }
 
