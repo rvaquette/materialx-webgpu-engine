@@ -97,9 +97,35 @@ it('rejects implicit object-space Worley 3D in a volume and bakes an explicit wo
   appendVolumeIr(volume, builder, graph);
   const ir = builder.build();
   expect(isSpatialVolumeIr(ir)).toBe(true);
-  const grid = bakeVolumeGrid(ir, { min: [0, 0, 0], max: [1, 1, 1] }, 2);
+  const grid = bakeVolumeGrid(ir, { min: [0, 0, 0], max: [1, 1, 1] }, 3);
   expect(grid.data.every(Number.isFinite)).toBe(true);
+  expect(grid.data[0]).toBeCloseTo(Math.sqrt(0.75), 6);
+  expect(grid.data[130]).toBeCloseTo(0, 6);
   expect(grid.majorant).toBeGreaterThan(0);
+});
+
+it('rejects implicit UV-dependent Worley 2D in a volume but accepts explicit coordinates', () => {
+  const volume: ResolvedVolume = { nodeId: 'v', inputs: new Map([
+    ['absorption', { name: 'absorption', type: 'vector3', source: { kind: 'connection', nodeId: 'worley' } }],
+    ['scattering', { name: 'scattering', type: 'vector3', source: { kind: 'value', value: [0, 0, 0] } }],
+    ['anisotropy', { name: 'anisotropy', type: 'float', source: { kind: 'value', value: [0] } }],
+  ]) };
+  const worley: ResolvedNode = { id: 'worley', category: 'worleynoise2d', type: 'vector3', inputs: [
+    { name: 'jitter', type: 'float', source: { kind: 'value', type: 'float', value: '0' }, provenance: { namePath: '/worley/jitter' } },
+  ],
+    provenance: { namePath: '/worley' } };
+  const graph: ResolvedGraph = { terminals: [], nodes: new Map([['worley', worley]]) };
+  expect(() => lowerVolumeInputsToIr(volume, new IrModuleBuilder(), graph)).toThrow('needs per-instance geometric data');
+  worley.inputs.push({
+    name: 'texcoord', type: 'vector2', source: { kind: 'value', type: 'vector2', value: '0.3, 0.7' },
+    provenance: { namePath: '/worley/texcoord' },
+  });
+  const builder = new IrModuleBuilder();
+  appendVolumeIr(volume, builder, graph);
+  const grid = bakeVolumeGrid(builder.build(), { min: [0, 0, 0], max: [1, 1, 1] }, 2);
+  expect(grid.data.every(Number.isFinite)).toBe(true);
+  expect(grid.data[0]).toBeCloseTo(Math.sqrt(0.08), 6);
+  expect(grid.data[10]).toBeCloseTo(grid.data[0]!, 6);
 });
 
 it('rejects object-space or image-dependent triplanar volume fields explicitly', () => {

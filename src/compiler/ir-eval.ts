@@ -57,6 +57,10 @@ export class IrEvalFlakeError extends IrEvalError {
   override readonly name = 'IrEvalFlakeError';
 }
 
+export class IrEvalWorleyError extends IrEvalError {
+  override readonly name = 'IrEvalWorleyError';
+}
+
 const LUMA: IrValue = [0.2722287, 0.6740818, 0.0536895];
 
 function typeSize(type: IrType): number {
@@ -582,17 +586,19 @@ function evalCall(op: string, args: IrValue[], env: IrEvalVaryings, type: IrType
   if (op === 'worleynoise2d' || op === 'worleynoise3d') {
     if ((type.kind !== 'scalar' && type.kind !== 'vector') || type.scalar !== 'float' ||
         (type.kind === 'vector' && type.size > 3)) {
-      throw new IrEvalError(`${op} requires a float, vector2, or vector3 output`);
+      throw new IrEvalWorleyError(`${op} requires a float, vector2, or vector3 output`);
     }
     const dimensions = op === 'worleynoise2d' ? 2 : 3;
     const coordinate = dimensions === 2
       ? input('texcoord', 0, [...(env.texcoord ?? [0, 0])])
       : input('position', 0, [...(env.position ?? [0, 0, 0])]);
     const jitter = input('jitter', 1, [1])[0]!;
+    const style = input('style', 2, [0])[0]!;
     if (coordinate.length !== dimensions || coordinate.some(value => !Number.isFinite(value)) || !Number.isFinite(jitter)) {
-      throw new IrEvalError(`${op} requires finite ${dimensions}D coordinates and jitter`);
+      throw new IrEvalWorleyError(`${op} requires finite ${dimensions}D coordinates and jitter`);
     }
-    return materialXWorley(coordinate, jitter, Math.trunc(input('style', 2, [0])[0]!), dimensions,
+    if (!Number.isFinite(style)) throw new IrEvalWorleyError(`${op} requires a finite style`);
+    return materialXWorley(coordinate, jitter, Math.trunc(style), dimensions,
       type.kind === 'scalar' ? 1 : type.size);
   }
   if (op === 'creatematrix') {

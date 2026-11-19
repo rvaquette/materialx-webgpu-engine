@@ -289,6 +289,23 @@ describe('emitLayeredSurface (T055d)', () => {
     expect(pathtracer.extraInputs.has(OBJECT_POSITION_INPUT)).toBe(category === 'flake3d');
   });
 
+  it.each([2, 3] as const)('carries Worley %sD into raster, path-tracing closures and opacity', dims => {
+    const graph = surfaceGraph('standard_surface', [
+      conn('base_color', 'color3', 'worley'), conn('opacity', 'color3', 'worley'),
+    ], [upstream('worley', `worleynoise${dims}d`, 'vector3', [
+      value('jitter', 'float', '0.65'), value('style', 'integer', '1'),
+    ])]);
+    const surface = resolveSurface(graph)!;
+    const raster = emitLayeredSurface(graph, surface);
+    const pathtracer = emitSurfaceVariant(graph, surface, 0);
+    for (const module of [raster, pathtracer]) {
+      expect(module.extraInputs.has(OBJECT_POSITION_INPUT)).toBe(dims === 3);
+    }
+    expect(raster.code).toContain('mx_worley(');
+    expect(pathtracer.fnCode).toContain('mx_worley(');
+    expect(pathtracer.opacity!.fnCode).toContain('mx_worley(');
+  });
+
   it('carries all triplanar textures and object-space attributes to raster and path tracing', () => {
     const graph = surfaceGraph('standard_surface', [
       conn('base_color', 'color3', 'tri'), conn('opacity', 'color3', 'tri'),

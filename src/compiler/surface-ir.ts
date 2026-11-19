@@ -345,17 +345,18 @@ export function lowerValueInputsToIr(
     return ref !== undefined ? coerce(ref, type) : undefined;
   };
 
-  const geometryDefault = (nodeId: string, name: 'position' | 'normal', ref: IrRef | undefined): IrRef => {
+  const geometryDefault = (nodeId: string, name: 'position' | 'normal' | 'texcoord', ref: IrRef | undefined): IrRef => {
     const node = graph.nodes.get(nodeId)!;
     const authored = node.inputs.find(input => input.name === name);
-    const objectProp = name === 'position' ? 'Pobject' : 'Nobject';
-    const worldProp = name === 'position' ? 'Pworld' : 'Nworld';
+    const objectProp = name === 'position' ? 'Pobject' : name === 'normal' ? 'Nobject' : 'UV0';
+    const worldProp = name === 'position' ? 'Pworld' : name === 'normal' ? 'Nworld' : undefined;
     const geomprop = node.nodeDef?.inputs?.find(input => input.name === name)?.geomprop ?? objectProp;
     const key = JSON.stringify([nodeId, name]);
     if ((authored?.source.kind === 'interface' || (ref === undefined && geomprop !== objectProp && geomprop !== worldProp))
         && !diagnosedGeometryDefaults.has(key)) {
       diagnosedGeometryDefaults.add(key);
-      const fallback = ref === undefined ? `${geomprop === worldProp ? 'world' : 'object'}-space` : 'declared';
+      const fallback = ref !== undefined ? 'declared' : name === 'texcoord' ? 'UV0'
+        : `${geomprop === worldProp ? 'world' : 'object'}-space`;
       sink({
         level: 'warning',
         message: `${node.category} '${nodeId}' has an unsupported or unresolved ${name}; using its ${fallback} default.`,
@@ -363,8 +364,9 @@ export function lowerValueInputsToIr(
       });
     }
     return ref ?? builder.add({
-      kind: 'input', type: vector(3, 'float', 'vector'),
-      name: geomprop === worldProp ? name : name === 'position' ? OBJECT_POSITION_INPUT : OBJECT_NORMAL_INPUT,
+      kind: 'input', type: name === 'texcoord' ? vector(2, 'float', 'texcoord') : vector(3, 'float', 'vector'),
+      name: name === 'texcoord' || geomprop === worldProp ? name
+        : name === 'position' ? OBJECT_POSITION_INPUT : OBJECT_NORMAL_INPUT,
     });
   };
 
@@ -648,6 +650,9 @@ export function lowerValueInputsToIr(
     }
     if (node.category === 'flake3d' || node.category === 'worleynoise3d') {
       namedArgs.position = geometryDefault(nodeId, 'position', namedArgs.position);
+    }
+    if (node.category === 'worleynoise2d') {
+      namedArgs.texcoord = geometryDefault(nodeId, 'texcoord', namedArgs.texcoord);
     }
     const op = override?.op ?? (node.category === 'artistic_ior' && output === 'extinction' ? 'artistic_ior_extinction' : node.category);
     return builder.add(

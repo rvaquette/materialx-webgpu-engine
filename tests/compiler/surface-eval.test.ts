@@ -54,6 +54,26 @@ function constantGraph(): ResolvedGraph {
 const diffuse = (c: ReturnType<typeof surfaceGraphToLayered>) => c.lobes.find((l) => l.kind === 'burley_diffuse')!;
 
 describe('evaluateSurfaceToLayered (T057i3)', () => {
+  it('does not silently replace invalid Worley coordinates in surface or Lama closures', () => {
+    const graph = brickGraph();
+    graph.nodes.set('brick', {
+      id: 'brick', category: 'worleynoise2d', type: 'vector3', inputs: [], provenance: { namePath: '/mat/brick' },
+    });
+    expect(() => evaluateSurfaceToLayered(graph, resolveSurface(graph)!, { texcoord: [NaN, 0] }))
+      .toThrow('finite 2D coordinates and jitter');
+
+    graph.nodes.set('SR', {
+      id: 'SR', category: 'surface', type: 'surfaceshader', provenance: { namePath: '/mat/SR' },
+      inputs: [{ name: 'bsdf', type: 'BSDF', source: { kind: 'connection', nodeId: 'diffuse' }, provenance: { namePath: '/mat/bsdf' } }],
+    });
+    graph.nodes.set('diffuse', {
+      id: 'diffuse', category: 'LamaDiffuse', type: 'BSDF', provenance: { namePath: '/mat/diffuse' },
+      inputs: [{ name: 'color', type: 'color3', source: { kind: 'connection', nodeId: 'brick' }, provenance: { namePath: '/mat/diffuse/color' } }],
+    });
+    expect(() => evaluateSurfaceToLayered(graph, resolveSurface(graph)!, { texcoord: [NaN, 0] }))
+      .toThrow('finite 2D coordinates and jitter');
+  });
+
   it.each(['flake2d', 'flake3d'])('does not silently replace an invalid %s size', category => {
     const graph = brickGraph();
     graph.nodes.get('SR')!.inputs[0]!.source = { kind: 'connection', nodeId: 'brick', output: 'flakenormal' };

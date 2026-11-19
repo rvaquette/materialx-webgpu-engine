@@ -30,7 +30,8 @@ export function lowerVolumeInputsToIr(volume: ResolvedVolume, builder: IrModuleB
       });
       for (const [ref, expr] of builder.build().exprs) {
         if (!existing.has(ref) && expr.kind === 'input' &&
-            (OBJECT_GEOMETRY_INPUTS.has(expr.name) || expr.name === OBJECT_TO_WORLD_INPUT || expr.name === WORLD_TO_OBJECT_INPUT)) {
+            (OBJECT_GEOMETRY_INPUTS.has(expr.name) || expr.name === OBJECT_TO_WORLD_INPUT ||
+             expr.name === WORLD_TO_OBJECT_INPUT || expr.name === 'texcoord')) {
           throw new Error(`Volume input '${name}' needs per-instance geometric data; only world-space fields are supported.`);
         }
         if (!existing.has(ref) && expr.kind === 'call' && expr.op === 'flake3d_flakenormal' &&

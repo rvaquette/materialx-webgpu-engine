@@ -2,9 +2,30 @@ import { describe, expect, it } from 'vitest';
 import { FLOAT, INT, IrModuleBuilder, vector } from '../../src/compiler/ir.ts';
 import { evaluateShaderIr } from '../../src/compiler/ir-eval.ts';
 import { emitWgsl } from '../../src/compiler/wgsl.ts';
-import { buildWorleyIr, WORLEY_ORACLES } from '../fixtures/worley-cases.ts';
+import { buildWorleyIr, WORLEY_EDGE_ORACLES, WORLEY_ORACLES } from '../fixtures/worley-cases.ts';
 
 describe('MaterialX Worley lowering', () => {
+  it('rejects non-finite jitter and unsupported output dimensions', () => {
+    expect(() => evaluateShaderIr(buildWorleyIr(2, 1, 0, { coordinate: [0, 0], jitter: Infinity })))
+      .toThrow('finite 2D coordinates and jitter');
+    const builder = new IrModuleBuilder();
+    const type = vector(4, 'float');
+    const ref = builder.add({ kind: 'call', type, op: 'worleynoise3d', args: [], namedArgs: {} });
+    builder.output({ name: 'out', type, ref });
+    expect(() => evaluateShaderIr(builder.build())).toThrow('requires a float, vector2, or vector3 output');
+  });
+
+  for (const { dims, coordinate, jitter, distances, scalar, color } of WORLEY_EDGE_ORACLES) {
+    it(`matches ${dims}D MaterialX at [${coordinate.join(', ')}] with jitter ${jitter}`, () => {
+      for (const [style, channels, expected] of [
+        [0, 3, distances], [1, 1, [scalar]], [1, 3, color],
+      ] as const) {
+        const actual = evaluateShaderIr(buildWorleyIr(dims, channels, style, { coordinate, jitter })).get('out')!;
+        actual.forEach((value, index) => expect(value).toBeCloseTo(expected[index]!, 6));
+      }
+    });
+  }
+
   for (const { dims, distances, scalar, color } of WORLEY_ORACLES) {
     for (const channels of [1, 2, 3] as const) {
       for (const style of [0, 1] as const) {

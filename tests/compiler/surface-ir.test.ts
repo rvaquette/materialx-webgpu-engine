@@ -173,6 +173,19 @@ describe('lowerSurfaceInputsToIr (T055c)', () => {
     expect(module.code).not.toContain(`in_${OBJECT_POSITION_INPUT}`);
   });
 
+  it('diagnoses an unsupported Worley 2D default UV set', () => {
+    const node = upstream('worley', 'worleynoise2d', 'float', []);
+    node.nodeDef = {
+      name: 'custom_worley', nodeString: 'worleynoise2d', type: 'float',
+      implementation: { kind: 'unresolved' }, inputs: [{ name: 'texcoord', type: 'vector2', geomprop: 'UV1' }],
+    };
+    const diagnostics: Diagnostic[] = [];
+    lowerAndEmit(surfaceGraph([conn('base', 'float', 'worley')], [node]), [{ name: 'base', type: FLOAT }], d => diagnostics.push(d));
+    expect(diagnostics).toHaveLength(1);
+    expect(diagnostics[0]!.message).toContain('unsupported or unresolved texcoord');
+    expect(diagnostics[0]!.message).toContain('UV0');
+  });
+
   it.each([
     ['float', [0.2]], ['color3', [0.2, 0.3, 0.4]], ['color4', [0.2, 0.3, 0.4, 0.5]],
     ['vector2', [0.2, 0.3]], ['vector3', [0.2, 0.3, 0.4]], ['vector4', [0.2, 0.3, 0.4, 0.5]],
