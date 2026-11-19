@@ -381,7 +381,7 @@ const ROTATE3D_PRELUDE = `fn mx_rotate3d(v: vec3f, deg: f32, axis: vec3f) -> vec
   let n = normalize(axis);
   let c = cos(a);
   let s = sin(a);
-  return v * c + cross(n, v) * s + n * dot(n, v) * (1.0 - c);
+  return v * c + cross(v, n) * s + n * dot(n, v) * (1.0 - c);
 }
 `;
 
@@ -713,8 +713,9 @@ const PLACE2D_PRELUDE = `fn mx_place2d(tc: vec2f, pivot: vec2f, scale: vec2f, ro
   let s = sin(a);
   let rot = mat2x2f(c, -s, s, c);
   let centered = tc - pivot;
-  if (order == 0) { return rot * (centered / scale) - offset + pivot; }
-  return (rot * (centered - offset)) / scale + pivot;
+  if (order <= 0) { return rot * (centered / scale) - offset + pivot; }
+  if (order == 1) { return (rot * (centered - offset)) / scale + pivot; }
+  return vec2f(0.0);
 }
 `;
 
@@ -1034,10 +1035,12 @@ const LOWERINGS: readonly NodeLowering[] = [
     const target = ctx.wgslType(type);
     const low = `${target}(${inp.named('inlow', '0.0', 1)})`;
     const high = `${target}(${inp.named('inhigh', '1.0', 2)})`;
-    const outLow = `${target}(${inp.named('outlow', '0.0', 3)})`;
-    const outHigh = `${target}(${inp.named('outhigh', '1.0', 4)})`;
-    const gamma = `${target}(${inp.named('gamma', '1.0', 5)})`;
-    const normalized = `((${inp.named('in', undefined, 0)} - ${low}) / (${high} - ${low}))`;
+    const gamma = `${target}(${inp.named('gamma', '1.0', 3)})`;
+    const outLow = `${target}(${inp.named('outlow', '0.0', 4)})`;
+    const outHigh = `${target}(${inp.named('outhigh', '1.0', 5)})`;
+    const degenerate = `(${high} == ${low})`;
+    const denominator = `select(${high} - ${low}, ${target}(1.0), ${degenerate})`;
+    const normalized = `select((${inp.named('in', undefined, 0)} - ${low}) / ${denominator}, ${target}(0.0), ${degenerate})`;
     const corrected = `(sign(${normalized}) * pow(abs(${normalized}), ${target}(1.0) / ${gamma}))`;
     const mapped = `(${outLow} + (${outHigh} - ${outLow}) * ${corrected})`;
     return `select(${mapped}, clamp(${mapped}, min(${outLow}, ${outHigh}), max(${outLow}, ${outHigh})), ${inp.named('doclamp', 'false', 6)})`;
@@ -1274,14 +1277,14 @@ const LOWERINGS: readonly NodeLowering[] = [
     NORMALMAP_PRELUDE,
   ),
   // texture coordinates / patterns
-  expr('place2d', (inp, _type, ctx) => {
+  expr('place2d', (inp) => {
     const args = [
-      texcoordOf(inp, ctx),
-      inp.named('pivot', 'vec2f(0.0)'),
-      inp.named('scale', 'vec2f(1.0)'),
-      inp.named('rotate', '0.0'),
-      inp.named('offset', 'vec2f(0.0)'),
-      `i32(${inp.named('operationorder', '0')})`,
+      inp.named('texcoord', 'vec2f(0.0)', 0),
+      inp.named('pivot', 'vec2f(0.0)', 1),
+      inp.named('scale', 'vec2f(1.0)', 2),
+      inp.named('rotate', '0.0', 3),
+      inp.named('offset', 'vec2f(0.0)', 4),
+      `i32(${inp.named('operationorder', '0', 5)})`,
     ];
     return `mx_place2d(${args.join(', ')})`;
   }, PLACE2D_PRELUDE),
@@ -1295,8 +1298,8 @@ const LOWERINGS: readonly NodeLowering[] = [
     const top = `mix(${inp.named('valuetl', z)}, ${inp.named('valuetr', z)}, ${s})`;
     return `mix(${bottom}, ${top}, clamp(${tc}.y, 0.0, 1.0))`;
   }),
-  expr('splitlr', (inp, type, ctx) => `mix(${inp.named('valuel', zeroOf(type, ctx))}, ${inp.named('valuer', zeroOf(type, ctx))}, step(${inp.named('center', '0.5')}, ${texcoordOf(inp, ctx)}.x))`),
-  expr('splittb', (inp, type, ctx) => `mix(${inp.named('valueb', zeroOf(type, ctx))}, ${inp.named('valuet', zeroOf(type, ctx))}, step(${inp.named('center', '0.5')}, ${texcoordOf(inp, ctx)}.y))`),
+  expr('splitlr', (inp, type, ctx) => `mix(${inp.named('valuel', zeroOf(type, ctx), 0)}, ${inp.named('valuer', zeroOf(type, ctx), 1)}, step(${inp.named('center', '0.5', 2)}, ${inp.named('texcoord', ctx.varyings.texcoord, 3)}.x))`),
+  expr('splittb', (inp, type, ctx) => `mix(${inp.named('valueb', zeroOf(type, ctx), 1)}, ${inp.named('valuet', zeroOf(type, ctx), 0)}, step(${inp.named('center', '0.5', 2)}, ${inp.named('texcoord', ctx.varyings.texcoord, 3)}.y))`),
   expr('checkerboard', (inp, _type, ctx) => {
     const cell = `floor(${texcoordOf(inp, ctx)} * ${inp.named('uvtiling', 'vec2f(8.0)')} - ${inp.named('uvoffset', 'vec2f(0.0)')})`;
     const sum = `dot(${cell}, vec2f(1.0))`;
@@ -1523,8 +1526,8 @@ const LOWERINGS: readonly NodeLowering[] = [
     return `select(${mapped}, clamp(${mapped}, min(${outMin}, ${outMax}), max(${outMin}, ${outMax})), ${inp.named('clampoutput', 'true')})`;
   }, [ROTATE2D_PRELUDE, ROTATE3D_PRELUDE, NOISE_PRELUDE, MATERIALX_NOISE_HASH_PRELUDE, WORLEY_PRELUDE, UNIFIED_NOISE_PRELUDE])),
   // transforms
-  expr('rotate2d', (inp) => `mx_rotate2d(${inp.named('in', undefined, 0)}, ${inp.named('amount', '0.0', 1)})`, ROTATE2D_PRELUDE),
-  expr('rotate3d', (inp) => `mx_rotate3d(${inp.named('in', undefined, 0)}, ${inp.named('amount', '0.0', 1)}, ${inp.named('axis', 'vec3f(0.0, 0.0, 1.0)', 2)})`, ROTATE3D_PRELUDE),
+  expr('rotate2d', (inp) => `mx_rotate2d(${inp.named('in', 'vec2f(0.0)', 0)}, ${inp.named('amount', '0.0', 1)})`, ROTATE2D_PRELUDE),
+  expr('rotate3d', (inp) => `mx_rotate3d(${inp.named('in', 'vec3f(0.0)', 0)}, ${inp.named('amount', '0.0', 1)}, ${inp.named('axis', 'vec3f(0.0, 1.0, 0.0)', 2)})`, ROTATE3D_PRELUDE),
   // procedural
   expr('fractal3d', (inp, type, ctx) => {
     if (!inp.has('lacunarity') && !inp.has('diminish')) {

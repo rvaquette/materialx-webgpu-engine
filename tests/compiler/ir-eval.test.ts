@@ -15,6 +15,151 @@ const varyingEnv = {
 };
 
 describe('evaluateShaderIr (T057i2)', () => {
+  it('uses the MaterialX positional order for range gamma and output bounds', () => {
+    for (const named of [false, true]) {
+      const b = new IrModuleBuilder();
+      const value = b.constant(COLOR3, [0.25, 0.5, 1]);
+      const inlow = b.constant(FLOAT, 0);
+      const inhigh = b.constant(FLOAT, 1);
+      const gamma = b.constant(FLOAT, 2);
+      const outlow = b.constant(FLOAT, 1);
+      const outhigh = b.constant(FLOAT, 3);
+      const doclamp = b.constant(BOOL, false);
+      const ref = b.add(named
+        ? { kind: 'call', type: COLOR3, op: 'range', args: [], namedArgs: { in: value, inlow, inhigh, gamma, outlow, outhigh, doclamp } }
+        : { kind: 'call', type: COLOR3, op: 'range', args: [value, inlow, inhigh, gamma, outlow, outhigh, doclamp] });
+      b.output({ name: 'result', type: COLOR3, ref });
+      const ir = b.build();
+      const result = evaluateIrRef(ir, ref);
+      [2, 1 + Math.SQRT2, 3].forEach((expected, i) => expect(result[i]).toBeCloseTo(expected, 10));
+      const code = emitWgsl(ir).code;
+      expect(code).toContain(`vec3f(${gamma})`);
+      expect(code).toContain(`vec3f(${outlow})`);
+      expect(code).toContain(`vec3f(${outhigh})`);
+    }
+  });
+
+  it('returns outlow for equal input bounds component-wise in range', () => {
+    const b = new IrModuleBuilder();
+    const input = b.constant(COLOR3, [-4, 3, 2]);
+    const inlow = b.constant(COLOR3, [0, 1, 0]);
+    const inhigh = b.constant(COLOR3, [0, 1, 4]);
+    const gamma = b.constant(FLOAT, 2);
+    const outlow = b.constant(COLOR3, [10, 20, 30]);
+    const outhigh = b.constant(COLOR3, [20, 30, 40]);
+    const ref = b.add({ kind: 'call', type: COLOR3, op: 'range', args: [],
+      namedArgs: { in: input, inlow, inhigh, gamma, outlow, outhigh } });
+    b.output({ name: 'result', type: COLOR3, ref });
+    const ir = b.build();
+    const result = evaluateIrRef(ir, ref);
+    expect(result[0]).toBe(10);
+    expect(result[1]).toBe(20);
+    expect(result[2]).toBeCloseTo(30 + 5 * Math.SQRT2, 10);
+    expect(emitWgsl(ir).code).toContain(`vec3f(${inhigh}) == vec3f(${inlow})`);
+  });
+
+  it('clamps a descending range between its output endpoints', () => {
+    const b = new IrModuleBuilder();
+    const value = b.constant(COLOR3, [0, 0.5, 2]);
+    const outlow = b.constant(FLOAT, 3);
+    const outhigh = b.constant(FLOAT, 1);
+    const doclamp = b.constant(BOOL, true);
+    const ref = b.add({ kind: 'call', type: COLOR3, op: 'range', args: [],
+      namedArgs: { in: value, outlow, outhigh, doclamp } });
+    expect(evaluateIrRef(b.build(), ref)).toEqual([3, 2, 1]);
+  });
+
+  it.each([false, true])('clamps a vector with scalar bounds using named or positional inputs (named=%s)', named => {
+    const b = new IrModuleBuilder();
+    const input = b.constant(COLOR4, [-1, 0.25, 0.75, 2]);
+    const low = b.constant(FLOAT, 0.2);
+    const high = b.constant(FLOAT, 0.8);
+    const ref = b.add(named
+      ? { kind: 'call', type: COLOR4, op: 'clamp', args: [], namedArgs: { in: input, low, high } }
+      : { kind: 'call', type: COLOR4, op: 'clamp', args: [input, low, high] });
+    b.output({ name: 'result', type: COLOR4, ref });
+    const ir = b.build();
+    expect(evaluateIrRef(ir, ref)).toEqual([0.2, 0.25, 0.75, 0.8]);
+    expect(emitWgsl(ir).code).toContain(`clamp(${input}, vec4f(${low}), vec4f(${high}))`);
+  });
+
+  it.each([
+    { order: 0, expected: [1.5, -0.25] },
+    { order: -1, expected: [1.5, -0.25] },
+    { order: 1, expected: [2.875, 0.625] },
+    { order: 2, expected: [0, 0] },
+    { order: 10, expected: [0, 0] },
+  ])('evaluates place2d operation order $order with named and positional inputs', ({ order, expected }) => {
+    for (const named of [false, true]) {
+      const b = new IrModuleBuilder();
+      const type = vector(2);
+      const texcoord = b.constant(type, [3, 5]);
+      const pivot = b.constant(type, [1, 1]);
+      const scale = b.constant(type, [2, 4]);
+      const rotate = b.constant(FLOAT, 90);
+      const offset = b.constant(type, [0.5, 0.25]);
+      const operationorder = b.constant(INT, order);
+      const args = [texcoord, pivot, scale, rotate, offset, operationorder];
+      const ref = b.add(named
+        ? { kind: 'call', type, op: 'place2d', args: [], namedArgs: { texcoord, pivot, scale, rotate, offset, operationorder } }
+        : { kind: 'call', type, op: 'place2d', args });
+      b.output({ name: 'result', type, ref });
+      const ir = b.build();
+      evaluateIrRef(ir, ref, { texcoord: [99, 99] }).forEach((value, i) => expect(value).toBeCloseTo(expected[i]!, 10));
+      expect(emitWgsl(ir).code).toContain(`mx_place2d(${args.slice(0, 5).join(', ')}, i32(${operationorder}))`);
+    }
+  });
+
+  it('uses the place2d NodeDef defaults without an implicit geometric UV', () => {
+    const b = new IrModuleBuilder();
+    const type = vector(2);
+    const ref = b.add({ kind: 'call', type, op: 'place2d', args: [], namedArgs: {} });
+    b.output({ name: 'result', type, ref });
+    expect(evaluateIrRef(b.build(), ref, { texcoord: [0.7, 0.8] })).toEqual([0, 0]);
+    expect(emitWgsl(b.build()).code).toContain('mx_place2d(vec2f(0.0)');
+  });
+
+  it.each([
+    { op: 'rotate2d', input: [1, 0], expected: [0, -1] },
+    { op: 'rotate3d', input: [1, 0, 0], expected: [0, 0, 1] },
+  ])('rotates $op in the MaterialX direction using its default axis', ({ op, input, expected }) => {
+    for (const named of [false, true]) {
+      const b = new IrModuleBuilder();
+      const type = vector(input.length as 2 | 3);
+      const value = b.constant(type, input);
+      const amount = b.constant(FLOAT, 90);
+      const ref = b.add(named
+        ? { kind: 'call', type, op, args: [], namedArgs: { in: value, amount } }
+        : { kind: 'call', type, op, args: [value, amount] });
+      b.output({ name: 'result', type, ref });
+      const ir = b.build();
+      evaluateIrRef(ir, ref).forEach((component, i) => expect(component).toBeCloseTo(expected[i]!, 10));
+      if (op === 'rotate3d') expect(emitWgsl(ir).code).toContain(`mx_rotate3d(${value}, ${amount}, vec3f(0.0, 1.0, 0.0))`);
+    }
+  });
+
+  it('normalizes an authored rotate3d axis and follows the MaterialX rotation direction', () => {
+    const b = new IrModuleBuilder();
+    const type = vector(3);
+    const value = b.constant(type, [1, 0, 0]);
+    const amount = b.constant(FLOAT, 90);
+    const axis = b.constant(type, [0, 2, 0]);
+    const ref = b.add({ kind: 'call', type, op: 'rotate3d', args: [value, amount, axis] });
+    const result = evaluateIrRef(b.build(), ref);
+    expect(result[0]).toBeCloseTo(0, 10);
+    expect(result[1]).toBeCloseTo(0, 10);
+    expect(result[2]).toBeCloseTo(1, 10);
+  });
+
+  it.each([['rotate2d', 2], ['rotate3d', 3]] as const)('uses the %s NodeDef defaults', (op, size) => {
+    const b = new IrModuleBuilder();
+    const type = vector(size);
+    const ref = b.add({ kind: 'call', type, op, args: [], namedArgs: {} });
+    b.output({ name: 'result', type, ref });
+    expect(evaluateIrRef(b.build(), ref)).toEqual(Array(size).fill(0));
+    expect(emitWgsl(b.build()).code).toContain(`mx_${op}(vec${size}f(0.0), 0.0`);
+  });
+
   it.each([
     { first: [1], second: [2], size: 2 as const, expected: [1, 2] },
     { first: [1, 2, 3], second: [4], size: 4 as const, expected: [1, 2, 3, 4] },
@@ -1004,6 +1149,63 @@ describe('evaluateShaderIr (T057i2)', () => {
       expect(evaluateIrRef(builder.build(), ref)).toEqual(expected);
     }
     expect(emitWgsl(builder.build()).code).toContain('floor(');
+  });
+
+  it.each([
+    { op: 'splitlr', uv: [0.24, 0.9], expected: [1, 2, 3, 4] },
+    { op: 'splitlr', uv: [0.25, 0.1], expected: [5, 6, 7, 8] },
+    { op: 'splitlr', uv: [0.8, 0.1], expected: [5, 6, 7, 8] },
+    { op: 'splittb', uv: [0.9, 0.24], expected: [1, 2, 3, 4] },
+    { op: 'splittb', uv: [0.1, 0.25], expected: [5, 6, 7, 8] },
+    { op: 'splittb', uv: [0.1, 0.8], expected: [5, 6, 7, 8] },
+  ])('evaluates $op on each side and at the boundary with named and positional arguments', ({ op, uv, expected }) => {
+    for (const named of [false, true]) {
+      const builder = new IrModuleBuilder();
+      const type = vector(4);
+      const low = builder.constant(type, [1, 2, 3, 4]);
+      const high = builder.constant(type, [5, 6, 7, 8]);
+      const center = builder.constant(FLOAT, 0.25);
+      const texcoord = builder.constant(vector(2), uv);
+      const first = op === 'splitlr' ? low : high;
+      const second = op === 'splitlr' ? high : low;
+      const namedArgs = op === 'splitlr'
+        ? { valuel: first, valuer: second, center, texcoord }
+        : { valuet: first, valueb: second, center, texcoord };
+      const ref = builder.add(named
+        ? { kind: 'call', type, op, args: [], namedArgs }
+        : { kind: 'call', type, op, args: [first, second, center, texcoord] });
+      builder.output({ name: 'result', type, ref });
+      const ir = builder.build();
+      expect(evaluateIrRef(ir, ref, { texcoord: [0, 0] })).toEqual(expected);
+      expect(emitWgsl(ir).code).toContain(`mix(${low}, ${high}, step(${center}, ${texcoord}.${op === 'splitlr' ? 'x' : 'y'}))`);
+    }
+  });
+
+  it.each(['splitlr', 'splittb'])('uses zero values, center 0.5 and geometric UV by default for %s', (op) => {
+    const builder = new IrModuleBuilder();
+    const ref = builder.add({ kind: 'call', type: FLOAT, op, args: [], namedArgs: {} });
+    builder.output({ name: 'result', type: FLOAT, ref });
+    const ir = builder.build();
+    expect(evaluateIrRef(ir, ref, { texcoord: [0.8, 0.1] })).toEqual([0]);
+    expect(emitWgsl(ir).code).toContain(`step(0.5, vary.texcoord.${op === 'splitlr' ? 'x' : 'y'})`);
+    const first = builder.constant(FLOAT, 1);
+    const second = builder.constant(FLOAT, 2);
+    const namedArgs = op === 'splitlr' ? { valuel: first, valuer: second } : { valuet: first, valueb: second };
+    const withValues = builder.add({ kind: 'call', type: FLOAT, op, args: [], namedArgs });
+    expect(evaluateIrRef(builder.build(), withValues, { texcoord: [0.8, 0.1] })).toEqual([2]);
+  });
+
+  it.each([
+    { type: FLOAT, low: [1], high: [2] },
+    { type: vector(2), low: [1, 2], high: [3, 4] },
+    { type: COLOR3, low: [1, 2, 3], high: [4, 5, 6] },
+  ])('preserves $type output shapes in split masks', ({ type, low, high }) => {
+    const builder = new IrModuleBuilder();
+    const valuel = builder.constant(type, low.length === 1 ? low[0]! : low);
+    const valuer = builder.constant(type, high.length === 1 ? high[0]! : high);
+    const ref = builder.add({ kind: 'call', type, op: 'splitlr', args: [], namedArgs: { valuel, valuer } });
+    expect(evaluateIrRef(builder.build(), ref, { texcoord: [0.1, 0.9] })).toEqual(low);
+    expect(evaluateIrRef(builder.build(), ref, { texcoord: [0.9, 0.1] })).toEqual(high);
   });
 
   it.each([

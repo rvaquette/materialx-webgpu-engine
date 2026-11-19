@@ -56,6 +56,68 @@ function emit(graph: ResolvedGraph, sink?: (d: Diagnostic) => void) {
 }
 
 describe('emitLayeredSurface (T055d)', () => {
+  it('emits connected range and clamp nodes for both surface stages', () => {
+    const graph = surfaceGraph('standard_surface', [conn('base_color', 'color3', 'clip')], [
+      upstream('clip', 'clamp', 'color3', [
+        conn('in', 'color3', 'adjust'), value('low', 'float', '0'), value('high', 'float', '1'),
+      ]),
+      upstream('adjust', 'range', 'color3', [
+        value('in', 'color3', '0,0.25,1'), value('gamma', 'float', '2'),
+      ]),
+    ]);
+    const diagnostics: Diagnostic[] = [];
+    const surface = resolveSurface(graph, { onDiagnostic: d => diagnostics.push(d) })!;
+    const raster = emitLayeredSurface(graph, surface, d => diagnostics.push(d));
+    const compute = emitSurfaceVariant(graph, surface, 0, d => diagnostics.push(d));
+    expect(diagnostics).toEqual([]);
+    for (const code of [raster.code, compute.fnCode]) {
+      expect(code).toContain('pow(');
+      expect(code).toContain('clamp(');
+    }
+  });
+
+  it('emits connected coordinate transforms in raster and compute surfaces', () => {
+    const graph = surfaceGraph('standard_surface', [
+      conn('base', 'float', 'channel'), conn('normal', 'vector3', 'rotate'),
+    ], [
+      upstream('place', 'place2d', 'vector2', [
+        value('texcoord', 'vector2', '0.2,0.4'), value('rotate', 'float', '45'),
+      ]),
+      upstream('channel', 'extract', 'float', [
+        conn('in', 'vector2', 'place'), value('index', 'integer', '0'),
+      ]),
+      upstream('rotate', 'rotate3d', 'vector3', [
+        value('in', 'vector3', '1,0,0'), value('amount', 'float', '90'),
+      ]),
+    ]);
+    const diagnostics: Diagnostic[] = [];
+    const surface = resolveSurface(graph, { onDiagnostic: d => diagnostics.push(d) })!;
+    const raster = emitLayeredSurface(graph, surface, d => diagnostics.push(d));
+    const compute = emitSurfaceVariant(graph, surface, 0, d => diagnostics.push(d));
+    expect(diagnostics).toEqual([]);
+    for (const code of [raster.code, compute.fnCode]) {
+      expect(code).toContain('mx_place2d(');
+      expect(code).toContain('mx_rotate3d(');
+    }
+  });
+
+  it.each(['splitlr', 'splittb'])('emits %s as the same hard split in raster and compute', (op) => {
+    const graph = surfaceGraph('standard_surface', [conn('base_color', 'color3', 'split')], [
+      upstream('split', op, 'color3', [
+        value(op === 'splitlr' ? 'valuel' : 'valuet', 'color3', '0.1,0.2,0.3'),
+        value(op === 'splitlr' ? 'valuer' : 'valueb', 'color3', '0.6,0.7,0.8'),
+        value('texcoord', 'vector2', '0.25,0.75'),
+      ]),
+    ]);
+    const surface = resolveSurface(graph)!;
+    const raster = emitLayeredSurface(graph, surface, () => {});
+    const compute = emitSurfaceVariant(graph, surface, 0, () => {});
+    for (const code of [raster.code, compute.fnCode]) {
+      expect(code).toContain('step(0.5,');
+      expect(code).toContain(op === 'splitlr' ? '.x)' : '.y)');
+    }
+  });
+
   it('emits mixed channel assembly and extraction in raster and compute surface variants', () => {
     const graph = surfaceGraph('standard_surface', [conn('base', 'float', 'split', 'outw')], [
       upstream('split', 'separate4', 'multioutput', [conn('in', 'vector4', 'combined')]),

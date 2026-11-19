@@ -765,6 +765,32 @@ pas de résultat hors limites et l'évaluation CPU signale les indices matriciel
 invalides. Le nœud MaterialX `swizzle` reste non pris en charge et est signalé
 comme tel, indépendamment des swizzles internes utilisés par le compilateur.
 
+**Soixante-quatrième étape :** les masques procéduraux `splitlr` et `splittb`
+sont évaluables sur CPU et en WGSL, avec des entrées nommées ou positionnelles,
+des coordonnées UV connectées ou géométriques et des sorties scalaires,
+vectorielles ou colorées. À l'égalité avec `center`, le moteur choisit la
+valeur droite ou haute. Contrairement à l'implémentation GLSL MaterialX utilisant
+les dérivées, les deux moteurs de rendu conservent une frontière abrupte sans
+antialiasing analytique ; cette approximation déclenche un avertissement.
+
+**Soixante-cinquième étape :** les transformations `place2d`, `rotate2d` et
+`rotate3d` sont reconnues dans les graphes de surface et évaluables sur CPU et
+en WGSL. `place2d` prend en charge les arguments positionnels et les deux ordres
+MaterialX ; un ordre négatif utilise SRT et un ordre supérieur à 1 renvoie zéro,
+comme le sélecteur du nodegraph. Sans coordonnée fournie, sa valeur par défaut
+est `(0, 0)` plutôt que l'UV géométrique. `rotate3d` utilise l'axe Y par défaut
+et le sens de rotation MaterialX corrigé : cela modifie aussi les bruits 3D
+unifiés utilisant ce calcul. Les échelles nulles et les axes de rotation nuls
+ne garantissent pas de résultat défini.
+
+**Soixante-sixième étape :** `range` utilise l'ordre positionnel des NodeDefs
+MaterialX : entrée, bornes d'entrée, gamma, bornes de sortie, puis `doclamp`.
+Avec un gamma positif, des bornes d'entrée égales renvoient la borne basse de
+sortie, composante par composante, comme pour le `remap` du moteur. Si
+`doclamp` est actif et les bornes de sortie inversées, le moteur les ordonne
+avant écrêtage. Pour `clamp`, des bornes inversées restent indéfinies sur GPU.
+Les cas de gamma nul ou négatif ne garantissent pas un résultat défini.
+
 Travaux restants :
 
 - étendre les lowerings WGSL afin d'évaluer fidèlement les autres NodeDefs MaterialX actuellement signalés comme non pris en charge ;

@@ -137,6 +137,7 @@ export function lowerValueInputsToIr(
   const nodeMemo = new Map<string, IrRef>();
   const geomMemo = new Map<string, IrRef>();
   const diagnosedFlakeSize = new Set<string>();
+  const diagnosedSplit = new Set<string>();
   let uvRef: IrRef | undefined;
 
   const neutralColor = (): IrRef => builder.constant(COLOR3, [0, 0, 0]);
@@ -519,6 +520,16 @@ export function lowerValueInputsToIr(
         const source = coerce(raw, type);
         ref = builder.add({ kind: 'swizzle', type: FLOAT, source, pattern: channel });
       }
+    } else if (node.category === 'splitlr' || node.category === 'splittb') {
+      if (!diagnosedSplit.has(nodeId)) {
+        diagnosedSplit.add(nodeId);
+        sink({
+          level: 'warning',
+          message: `${node.category} '${nodeId}' uses a hard boundary; MaterialX's GLSL reference antialiases the split.`,
+          detail: { nodeId, category: node.category },
+        });
+      }
+      ref = lowerCall(nodeId, output);
     } else if (node.category === 'blur') {
       const input = node.inputs.find((candidate) => candidate.name === 'in');
       const type = irTypeFromMaterialX(node.type) ?? COLOR3;

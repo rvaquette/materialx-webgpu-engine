@@ -382,7 +382,7 @@ function rotate3d(v: IrValue, deg: number, axis: IrValue): number[] {
   const n = normalize(axis);
   const c = Math.cos(a);
   const s = Math.sin(a);
-  const cr = cross(n, v);
+  const cr = cross(v, n);
   const nd = dot(n, v) * (1 - c);
   return [v[0]! * c + cr[0]! * s + n[0]! * nd, v[1]! * c + cr[1]! * s + n[1]! * nd, v[2]! * c + cr[2]! * s + n[2]! * nd];
 }
@@ -697,6 +697,15 @@ function evalCall(op: string, args: IrValue[], env: IrEvalVaryings, type: IrType
       }
       return mix(result, bg, input('mix', 2, [1])[0]!);
     }
+    case 'splitlr':
+    case 'splittb': {
+      const uv = input('texcoord', 3, [...(env.texcoord ?? [0, 0])]);
+      const fallback = zeros(typeSize(type));
+      const low = op === 'splitlr' ? input('valuel', 0, fallback) : input('valueb', 1, fallback);
+      const high = op === 'splitlr' ? input('valuer', 1, fallback) : input('valuet', 0, fallback);
+      const center = input('center', 2, [0.5])[0]!;
+      return mix(high, low, uv[op === 'splitlr' ? 0 : 1]! >= center ? 1 : 0);
+    }
     case 'ramplr':
     case 'ramptb': {
       const uv = input('texcoord', 2, [...(env.texcoord ?? [0, 0])]);
@@ -955,10 +964,26 @@ function evalCall(op: string, args: IrValue[], env: IrEvalVaryings, type: IrType
       return [...(env.texcoord ?? zeros(2))];
     case 'normalmap':
       return normalMap(input('in', 0), input('scale', 1, [1]), named?.['normal'] ?? env.normal ?? [0, 0, 1], named?.['tangent'] ?? env.tangent ?? [1, 0, 0], named?.['bitangent'] ?? env.bitangent ?? cross(env.normal ?? [0, 0, 1], env.tangent ?? [1, 0, 0]));
+    case 'place2d': {
+      const tc = input('texcoord', 0, [0, 0]);
+      const pivot = input('pivot', 1, [0, 0]);
+      const scale = input('scale', 2, [1, 1]);
+      const rotation = input('rotate', 3, [0])[0]!;
+      const offset = input('offset', 4, [0, 0]);
+      const order = Math.trunc(input('operationorder', 5, [0])[0]!);
+      if (order > 1) return [0, 0];
+      const centered = binary(tc, pivot, (a, b) => a - b);
+      if (order <= 0) {
+        const rotated = rotate2d(binary(centered, scale, (a, b) => a / b), rotation);
+        return binary(binary(rotated, offset, (a, b) => a - b), pivot, (a, b) => a + b);
+      }
+      const rotated = rotate2d(binary(centered, offset, (a, b) => a - b), rotation);
+      return binary(binary(rotated, scale, (a, b) => a / b), pivot, (a, b) => a + b);
+    }
     case 'rotate2d':
-      return rotate2d(input('in', 0), input('amount', 1, [0])[0]!);
+      return rotate2d(input('in', 0, [0, 0]), input('amount', 1, [0])[0]!);
     case 'rotate3d':
-      return rotate3d(input('in', 0), input('amount', 1, [0])[0]!, input('axis', 2, [0, 0, 1]));
+      return rotate3d(input('in', 0, [0, 0, 0]), input('amount', 1, [0])[0]!, input('axis', 2, [0, 1, 0]));
     case 'fractal3d':
       return [fractal3d(env.position ?? zeros(3), input('amplitude', 0, [1])[0]!, input('octaves', 1, [3])[0]!)];
     case 'artistic_ior':
@@ -980,10 +1005,10 @@ function evalCall(op: string, args: IrValue[], env: IrEvalVaryings, type: IrType
       return input('in', 0).map((value, index) => {
         const low = component('inlow', 1, index, 0);
         const high = component('inhigh', 2, index, 1);
-        const outLow = component('outlow', 3, index, 0);
-        const outHigh = component('outhigh', 4, index, 1);
-        const gamma = component('gamma', 5, index, 1);
-        const normalized = (value - low) / (high - low);
+        const gamma = component('gamma', 3, index, 1);
+        const outLow = component('outlow', 4, index, 0);
+        const outHigh = component('outhigh', 5, index, 1);
+        const normalized = high === low ? 0 : (value - low) / (high - low);
         const corrected = Math.sign(normalized) * Math.abs(normalized) ** (1 / gamma);
         const mapped = outLow + (outHigh - outLow) * corrected;
         return input('doclamp', 6, [0])[0] ? clampNum(mapped, Math.min(outLow, outHigh), Math.max(outLow, outHigh)) : mapped;

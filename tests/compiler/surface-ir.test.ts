@@ -88,6 +88,41 @@ function lowerAndEmit(
 }
 
 describe('lowerSurfaceInputsToIr (T055c)', () => {
+  it('evaluates connected 2D transforms in a surface graph', () => {
+    const graph = surfaceGraph([conn('base', 'float', 'channel')], [
+      upstream('position', 'constant', 'vector2', [value('value', 'vector2', '3,5')]),
+      upstream('place', 'place2d', 'vector2', [
+        conn('texcoord', 'vector2', 'position'),
+        value('pivot', 'vector2', '1,1'), value('scale', 'vector2', '2,4'),
+        value('rotate', 'float', '90'), value('offset', 'vector2', '0.5,0.25'),
+        value('operationorder', 'integer', '1'),
+      ]),
+      upstream('channel', 'extract', 'float', [
+        conn('in', 'vector2', 'place'), value('index', 'integer', '0'),
+      ]),
+    ]);
+    const diagnostics: Diagnostic[] = [];
+    const { ir, module } = lowerAndEmit(graph, [{ name: 'base', type: FLOAT }], d => diagnostics.push(d));
+    expect(diagnostics).toEqual([]);
+    expect(evaluateShaderIr(ir).get('base')![0]).toBeCloseTo(2.875, 10);
+    expect(module.code).toContain('mx_place2d(');
+  });
+
+  it('recognizes rotate3d directly connected to a surface normal', () => {
+    const graph = surfaceGraph([conn('normal', 'vector3', 'rotate')], [
+      upstream('rotate', 'rotate3d', 'vector3', [
+        value('in', 'vector3', '1,0,0'), value('amount', 'float', '90'),
+      ]),
+    ]);
+    const diagnostics: Diagnostic[] = [];
+    const { ir } = lowerAndEmit(graph, [{ name: 'normal', type: COLOR3 }], d => diagnostics.push(d));
+    expect(diagnostics).toEqual([]);
+    const normal = evaluateShaderIr(ir).get('normal')!;
+    expect(normal[0]).toBeCloseTo(0, 10);
+    expect(normal[1]).toBeCloseTo(0, 10);
+    expect(normal[2]).toBeCloseTo(1, 10);
+  });
+
   it.each([
     { op: 'separate2', type: 'vector2', values: '0.2,0.7', output: 'outy', expected: 0.7 },
     { op: 'separate3', type: 'color3', values: '0.2,0.7,0.9', output: 'outb', expected: 0.9 },
@@ -164,6 +199,50 @@ describe('lowerSurfaceInputsToIr (T055c)', () => {
     const diagnostics: Diagnostic[] = [];
     resolveSurface(graph, { onDiagnostic: d => diagnostics.push(d) });
     expect(diagnostics.some(d => d.message.includes("unsupported node 'swizzle'"))).toBe(true);
+  });
+
+  it.each([
+    { op: 'splitlr', names: ['valuel', 'valuer'], uv: '0.55, 0.8', expected: 0.2 },
+    { op: 'splittb', names: ['valuet', 'valueb'], uv: '0.8, 0.55', expected: 0.8 },
+  ])('evaluates a $op surface graph and warns about its hard boundary', ({ op, names, uv, expected }) => {
+    const split = upstream('split', op, 'float', [
+      conn(names[0]!, 'float', 'endpoint'), value(names[1]!, 'float', '0.8'),
+      value('texcoord', 'vector2', uv),
+    ]);
+    split.nodeDef = {
+      name: `ND_${op}_float`, nodeString: op, type: 'float',
+      inputs: [
+        { name: names[0]!, type: 'float', value: '0' },
+        { name: names[1]!, type: 'float', value: '0' },
+        { name: 'center', type: 'float', value: '0.6' },
+      ],
+      implementation: { kind: 'sourcecode' },
+    };
+    const graph = surfaceGraph([conn('base', 'float', 'split')], [
+      split, upstream('endpoint', 'constant', 'float', [value('value', 'float', '0.2')]),
+    ]);
+    const diagnostics: Diagnostic[] = [];
+    const { ir, module } = lowerAndEmit(graph, [{ name: 'base', type: FLOAT }], d => diagnostics.push(d));
+    expect(evaluateShaderIr(ir).get('base')).toEqual([expected]);
+    expect(module.code).toContain('step(');
+    expect(diagnostics).toHaveLength(1);
+    expect(diagnostics[0]!.message).toContain('hard boundary');
+  });
+
+  it('uses geometric UV and warns once for multiple references to the same split', () => {
+    const graph = surfaceGraph([
+      conn('base', 'float', 'split'), conn('specular', 'float', 'split', 'out'),
+    ], [upstream('split', 'splitlr', 'float', [
+      value('valuel', 'float', '0.2'), value('valuer', 'float', '0.8'),
+    ])]);
+    const diagnostics: Diagnostic[] = [];
+    const { ir } = lowerAndEmit(graph, [{ name: 'base', type: FLOAT }, { name: 'specular', type: FLOAT }],
+      d => diagnostics.push(d));
+    const output = evaluateShaderIr(ir, { texcoord: [0.8, 0.1] });
+    expect(output.get('base')).toEqual([0.8]);
+    expect(output.get('specular')).toEqual([0.8]);
+    expect(diagnostics).toHaveLength(1);
+    expect(diagnostics[0]!.message).toContain('hard boundary');
   });
 
   it.each([
@@ -1288,6 +1367,30 @@ describe('lowerSurfaceInputsToIr (T055c)', () => {
     expect(evaluateShaderIr(ir).get('color')).toEqual(expected);
     expect(emitWgsl(ir).code).toContain(`= ${doclamp};`);
     expect(diagnostics).toEqual([]);
+  });
+
+  it('uses the range NodeDef defaults for gamma, bounds and clamping', () => {
+    const range = upstream('adjust', 'range', 'color3', [conn('in', 'color3', 'source')]);
+    range.nodeDef = {
+      name: 'ND_range_color3FA', nodeString: 'range', type: 'color3',
+      inputs: [
+        { name: 'in', type: 'color3', value: '0,0,0' },
+        { name: 'inlow', type: 'float', value: '0' },
+        { name: 'inhigh', type: 'float', value: '1' },
+        { name: 'gamma', type: 'float', value: '2' },
+        { name: 'outlow', type: 'float', value: '1' },
+        { name: 'outhigh', type: 'float', value: '3' },
+        { name: 'doclamp', type: 'boolean', value: 'true' },
+      ],
+      implementation: { kind: 'nodegraph', name: 'NG_range_color3FA' },
+    };
+    const graph = surfaceGraph([conn('base_color', 'color3', 'adjust')], [
+      range, upstream('source', 'constant', 'color3', [value('value', 'color3', '-0.25,0.25,4')]),
+    ]);
+    const diagnostics: Diagnostic[] = [];
+    const { ir } = lowerAndEmit(graph, [{ name: 'base_color', type: COLOR3 }], d => diagnostics.push(d));
+    expect(diagnostics).toEqual([]);
+    expect(evaluateShaderIr(ir).get('base_color')).toEqual([1, 2, 3]);
   });
 
   it('preserves both artistic IOR outputs and ranges the copper display instead of substituting black', () => {
