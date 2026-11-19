@@ -495,13 +495,92 @@ de surface. Son édition réutilise les uniformes des pipelines MaterialX ;
 le `.mtlx` conserve le nœud standard `ND_add_float` et son retrait conserve
 la somme sous forme de littéral.
 
+**Vingt-quatrième étape :** si un matériau ne précise pas une borne pour
+**Add**, le diagramme reprend la borne correspondante du NodeDef MaterialX.
+Une borne écrite sur l'entrée reste prioritaire. Cela rend **Add** disponible,
+par exemple, sur une rugosité standard dont le NodeDef fixe la plage à
+`[0, 1]`, sans modifier les règles des autres commandes d'édition.
+
+**Vingt-cinquième étape :** **Insérer un Min** plafonne une entrée `float`
+compatible ; **Insérer un Max** lui donne un plancher. Le seuil `in2` démarre
+à la borne haute pour Min et à la borne basse pour Max : l'insertion ne
+change pas la valeur rendue. Le seuil s'édite dans la plage du matériau ou
+du NodeDef, sans recompiler les pipelines MaterialX déjà prêts. L'export
+`.mtlx` conserve le nœud standard ; son retrait conserve la valeur calculée.
+
+**Vingt-sixième étape :** une sortie d'un nœud arithmétique ajouté par
+l'éditeur (Multiply, Add, Subtract, Divide, Power, Min ou Max) peut être reliée à une
+autre entrée de surface littérale compatible, comme un Constant. Les liens secondaires
+peuvent être remplacés ou retirés ; le retrait restaure le littéral d'origine.
+Les plages de sortie sont vérifiées avant de proposer un lien afin de ne pas
+élargir silencieusement les valeurs permises par l'entrée destinataire.
+
+**Vingt-septième étape :** **Insérer un Subtract** est proposé sur les entrées
+`float` compatibles dont les bornes sont finies. Le décalage `in2` démarre à
+`0` et ses limites garantissent que la différence reste dans la plage de
+l'entrée. Les uniformes existants sont réutilisés ; l'export `.mtlx` conserve
+`ND_subtract_float` et le retrait conserve le résultat calculé.
+
+**Vingt-huitième étape :** **Insérer un Divide** est proposé sur les entrées
+`float` compatibles dont la plage est finie et non négative. Le facteur
+`in2` démarre à `1` et reste strictement positif ; sa plage garantit un
+quotient compris entre la valeur initiale et la borne haute de l'entrée.
+L'export `.mtlx` conserve `ND_divide_float` et le retrait conserve le quotient.
+
+**Vingt-neuvième étape :** **Insérer un Power** est proposé sur les entrées
+`float` positives à bornes finies, lorsque l'exposant peut varier sans
+dépassement de la borne haute. Il démarre à `1`, préserve donc la valeur
+initiale, et ses limites excluent les résultats hors plage. L'export `.mtlx`
+conserve `ND_power_float` ; le retrait conserve la puissance calculée.
+
+**Trentième étape :** **Add** et **Subtract** fonctionnent aussi sur les
+entrées `color3` dont chaque composante possède des limites finies. Un unique
+décalage scalaire est borné par l'intersection des plages R, V et B ; les
+limites `uimin/uimax` vectorielles des NodeDefs `color3` sont conservées lors
+de la résolution. L'export utilise `ND_add_color3FA` ou
+`ND_subtract_color3FA`, et le retrait conserve les trois composantes calculées.
+
+**Trente-et-unième étape :** **Min** et **Max** s'appliquent aussi aux entrées
+`color3`. Leur seuil scalaire initial est neutre pour les trois composantes ;
+ses bornes communes empêchent le plafonnement ou le plancher de sortir une
+composante de sa plage déclarée. L'export conserve les NodeDefs
+`ND_min_color3FA` et `ND_max_color3FA`.
+
+**Trente-deuxième étape :** l'éditeur ajoute depuis un port tout NodeDef des
+bibliothèques MaterialX chargées, quel que soit son type, et ne propose que
+les sorties de type identique au port choisi. Il peut aussi relier une sortie
+existante, refuse les cycles et restaure la source précédente au débranchement.
+Les entrées numériques du nouveau nœud restent éditables et l'export conserve
+le NodeDef et les sorties nommées. Les catégories sans lowering WGSL sont
+signalées dans la liste et sur chaque nœud atteignable du graphe ; leur
+contribution peut être remplacée par une valeur neutre au rendu. Les entrées
+littérales non numériques sont éditables ; les chemins `filename` restent en
+lecture seule jusqu'au rechargement des assets. Les opérations ajoutées
+précédemment, dont **Mix**, restent disponibles par ce même catalogue au lieu
+d'ajouter un parcours dédié. La disposition active est mémorisée localement par
+objet et matériau ; les variantes A/B utilisent aussi des emplacements de
+disposition distincts.
+
+**Trente-troisième étape :** les snapshots A/B sont mémorisés dans le stockage
+local du navigateur, par scène, objet et emplacement. Ils sont restaurés à la
+demande après rechargement de la scène, graphes, valeurs et paramètres compris ;
+les ressources GPU ne sont pas persistées et sont recompilées à la restauration.
+
+**Trente-quatrième étape :** le NodeDef standard `randomcolor` est évalué par
+WGSL, avec son seed, ses plages de teinte/saturation/luminosité et le hash du
+bruit cellulaire MaterialX. Les entrées `float` et `integer` sont prises en
+charge ; le nœud n'est plus signalé comme non pris en charge dans le catalogue.
+
+**Trente-cinquième étape :** le NodeDef standard `grid` produit le motif UV
+régulier ou décalé, avec tiling, offset et épaisseur des lignes. Le calcul suit
+le nodegraph MaterialX et son résultat est aussi évalué par la référence CPU.
+
 Travaux restants :
 
-- étendre l'ajout, la suppression et la connexion au-delà des Constants, du Multiply à facteur scalaire et de l'Add scalaire ;
+- étendre les lowerings WGSL afin d'évaluer fidèlement les autres NodeDefs MaterialX actuellement signalés comme non pris en charge ;
 - étendre la compilation incrémentale aux modifications de topologie ;
 - aperçu sur l'objet sélectionné ou sur un shaderball ;
-- restauration des emplacements A/B après rechargement ;
-- étendre l'export `.mtlx` aux UDIM, séquences et autres nœuds ;
+- étendre l'export `.mtlx` aux UDIM, séquences et textures paramétriques ;
 - étendre les diagnostics aux approximations des autres moteurs de rendu.
 
 **Critère d'aboutissement :** un utilisateur peut créer ou modifier un graphe

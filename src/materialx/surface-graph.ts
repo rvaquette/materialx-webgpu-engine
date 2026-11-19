@@ -338,6 +338,8 @@ export const DEFAULT_SUPPORTED_UPSTREAM: ReadonlySet<string> = new Set([
   'fractal3d',
   'cellnoise2d',
   'cellnoise3d',
+  'grid',
+  'randomcolor',
   'position',
   'normal',
   'tangent',

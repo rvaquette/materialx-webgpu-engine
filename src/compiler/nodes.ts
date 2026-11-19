@@ -361,6 +361,29 @@ fn mx_hsvtorgb(c: vec3f) -> vec3f {
 }
 `;
 
+const RANDOMCOLOR_PRELUDE = `fn mx_randomcolor_rotl(x: u32, k: u32) -> u32 {
+  return (x << k) | (x >> (32u - k));
+}
+fn mx_randomcolor_hash(x: i32, y: i32) -> u32 {
+  let seed = 0xdeadbeefu + 8u + 13u;
+  var a = seed + bitcast<u32>(x);
+  var b = seed + bitcast<u32>(y);
+  var c = seed;
+  c = (c ^ b) - mx_randomcolor_rotl(b, 14u);
+  a = (a ^ c) - mx_randomcolor_rotl(c, 11u);
+  b = (b ^ a) - mx_randomcolor_rotl(a, 25u);
+  c = (c ^ b) - mx_randomcolor_rotl(b, 16u);
+  a = (a ^ c) - mx_randomcolor_rotl(c, 4u);
+  b = (b ^ a) - mx_randomcolor_rotl(a, 14u);
+  c = (c ^ b) - mx_randomcolor_rotl(b, 24u);
+  return c;
+}
+fn mx_randomcolor_cell(p: vec2f) -> f32 {
+  let cell = vec2i(floor(p));
+  return f32(mx_randomcolor_hash(cell.x, cell.y)) / 4294967295.0;
+}
+`;
+
 const ROTATE2D_PRELUDE = `fn mx_rotate2d(v: vec2f, deg: f32) -> vec2f {
   let a = radians(deg);
   let c = cos(a);
@@ -1032,6 +1055,20 @@ const LOWERINGS: readonly NodeLowering[] = [
     const sum = `dot(${cell}, vec2f(1.0))`;
     return `mix(${inp.named('color2', 'vec3f(0.0)')}, ${inp.named('color1', 'vec3f(1.0)')}, (${sum} - 2.0 * floor(${sum} / 2.0)))`;
   }),
+  expr('grid', (inp, _type, ctx) => {
+    const uv = `(${texcoordOf(inp, ctx)} * ${inp.named('uvtiling', 'vec2f(1.0)')} - ${inp.named('uvoffset', 'vec2f(0.0)')})`;
+    const x = `${uv}.x`;
+    const y = `${uv}.y`;
+    const yModuloTwo = `(${y} - 2.0 * floor(${y} / 2.0))`;
+    const rowShift = `select(0.0, 0.5, ${yModuloTwo} > 1.0)`;
+    const xStaggered = `(${x} + select(0.0, ${rowShift}, ${inp.named('staggered', 'false')}))`;
+    const xModulo = `(${xStaggered} - floor(${xStaggered}))`;
+    const yModulo = `(${y} - floor(${y}))`;
+    const threshold = `(1.0 - ${inp.named('thickness', '0.05')})`;
+    const inX = `select(0.0, 1.0, abs(2.0 * ${xModulo} - 1.0) <= ${threshold})`;
+    const inY = `select(0.0, 1.0, abs(2.0 * ${yModulo} - 1.0) <= ${threshold})`;
+    return `vec3f(1.0 - min(${inX}, ${inY}))`;
+  }),
   expr('circle', (inp, _type, ctx) => {
     const delta = `(${texcoordOf(inp, ctx)} - ${inp.named('center', 'vec2f(0.0)')})`;
     const radius = inp.named('radius', '0.5');
@@ -1097,6 +1134,22 @@ const LOWERINGS: readonly NodeLowering[] = [
   }, NOISE_PRELUDE),
   expr('cellnoise2d', (inp, type, ctx) => `${ctx.wgslType(type)}(mx_cellnoise3(vec3f(${texcoordOf(inp, ctx)}, 0.0)))`, NOISE_PRELUDE),
   expr('cellnoise3d', (inp, type, ctx) => `${ctx.wgslType(type)}(mx_cellnoise3(${positionOf(inp, ctx)}))`, NOISE_PRELUDE),
+  expr('randomcolor', (inp) => {
+    const value = `f32(${inp.named('in', '0.0')})`;
+    const seed = `f32(${inp.named('seed', '0')})`;
+    const random = (offset: number) =>
+      `mx_randomcolor_cell(vec2f(${value} * 4096.0, ceil(${seed} + ${offset})))`;
+    const channel = (low: string, high: string, fallbackLow: string, fallbackHigh: string, offset: number) => {
+      const minimum = inp.named(low, fallbackLow);
+      const maximum = inp.named(high, fallbackHigh);
+      return `(${minimum} + ${random(offset)} * (${maximum} - ${minimum}))`;
+    };
+    return `mx_hsvtorgb(vec3f(${channel('huelow', 'huehigh', '0.0', '1.0', 413.3)}, `
+      + `${channel('saturationlow', 'saturationhigh', '0.825', '1.0', 1522.4)}, `
+      + `${channel('brightnesslow', 'brightnesshigh', '1.0', '1.0', 1813.8)}))`;
+  }, [
+    HSV_PRELUDE, RANDOMCOLOR_PRELUDE,
+  ]),
   expr('worleynoise2d', (inp, type, ctx) => {
     const w = `mx_worley(vec3f(${texcoordOf(inp, ctx)}, 0.0), ${inp.named('jitter', '1.0')}, 2, i32(${inp.named('style', '0')}), ${vectorSize(type)})`;
     return vectorSize(type) === 1 ? `${w}.x` : vectorSize(type) === 2 ? `${w}.xy` : w;

@@ -13,6 +13,7 @@ import { editableSceneMaterials, materialUniformData } from '../../src/render/ma
 import { PT_UNIFORM_SIZE, pathTraceTile, pathTraceTileCount } from '../../src/render/pathtracing/compute.ts';
 import type { ShaderCompilationError } from '../../src/gpu/shader-diagnostics.ts';
 import { exportCompiledMaterial, exportCompiledScene } from '../../src/scene/compiled-scene.ts';
+import { exportSurfaceGraph } from '../../src/materialx/graph-export.ts';
 import { DisneyGpuBackend } from '../../src/render/pathtracing/disney-gpu-backend.ts';
 import { tonemapIndex } from '../../src/render/output.ts';
 import {
@@ -136,6 +137,11 @@ describe('interactive viewer resource lifecycle', () => {
     vi.stubGlobal('GPUBufferUsage', { VERTEX: 1, INDEX: 2, COPY_DST: 4, UNIFORM: 8, STORAGE: 16, COPY_SRC: 32, MAP_READ: 64 });
     vi.stubGlobal('GPUTextureUsage', { TEXTURE_BINDING: 1, COPY_DST: 2, RENDER_ATTACHMENT: 4, COPY_SRC: 8 });
     vi.stubGlobal('GPUMapMode', { READ: 1 });
+    const stored = new Map<string, string>();
+    vi.stubGlobal('localStorage', {
+      getItem: (key: string) => stored.get(key) ?? null,
+      setItem: (key: string, value: string) => stored.set(key, value),
+    });
     vi.stubGlobal('ImageData', class {
       constructor(public data: Uint8ClampedArray, public width: number, public height: number) {}
     });
@@ -583,6 +589,26 @@ describe('interactive viewer resource lifecycle', () => {
     expect(loadUsdScene).toHaveBeenCalledTimes(loads);
   });
 
+  it('restores persisted A/B material snapshots after reloading the scene', async () => {
+    const { viewer } = await setup(false, true);
+    const path = '/World/Ball';
+    viewer.saveObjectMaterialVariant(path, 'A');
+    await viewer.setObjectConstant(path, 's', 'specular_roughness', true);
+    await viewer.setObjectParameters(path, new Map([['surface:specular_roughness', [0.42]]]));
+    viewer.saveObjectMaterialVariant(path, 'B');
+
+    vi.mocked(loadUsdScene).mockImplementation(async () => sceneFixture(true));
+    await viewer.load('scene.usda');
+
+    expect(viewer.objectMaterialVariants(path)).toEqual({ A: 'saved', B: 'saved' });
+    expect(viewer.objectMaterialVariantGraph(path, 'B')?.nodes.has('specular_roughness_constant')).toBe(true);
+    await viewer.applyObjectMaterialVariant(path, 'B');
+    expect(viewer.objectParameters(path, 'specular_roughness_constant')[0]?.value).toEqual([0.42]);
+    await viewer.applyObjectMaterialVariant(path, 'A');
+    expect(viewer.objectSurfaceGraph(path)?.nodes.has('specular_roughness_constant')).toBe(false);
+    expect(viewer.objectParameters(path, 's').find(parameter => parameter.input === 'specular_roughness')?.value).toEqual([0.2]);
+  });
+
   it.each(['raster', 'pathtracing'] as const)('captures the A/B pair in %s without changing the live scene', async backend => {
     const { viewer, loaded, device, pass } = await setup(false, true);
     Object.assign(device, { pushErrorScope: vi.fn(), popErrorScope: async () => null });
@@ -662,6 +688,42 @@ describe('interactive viewer resource lifecycle', () => {
     expect(binding('specular_roughness')).toEqual({ kind: 'value', type: 'float', value: '0.5' });
   });
 
+  it('shares an arithmetic editor output and restores the secondary literal when disconnected', async () => {
+    const { viewer } = await setup(false, true);
+    const path = '/World/Ball';
+    const source = 'specular_roughness_min';
+    const input = 'diffuse_roughness';
+    const binding = (name: string) => viewer.objectSurfaceGraph(path)?.nodes.get('s')?.inputs.find(entry => entry.name === name)?.source;
+    await viewer.setObjectConstant(path, 's', 'specular_roughness', true, 'min');
+    const threshold = viewer.objectParameters(path, source)[0]!;
+    await viewer.setObjectParameters(path, new Map([[threshold.id, [0.1]]]));
+    expect(viewer.objectConstantSources(path, 's', input)).toEqual([source]);
+    await viewer.setObjectConstantLink(path, 's', input, source);
+    expect(binding(input)).toEqual({ kind: 'connection', nodeId: source });
+    await expect(viewer.setObjectConstant(path, source, 'in2', false, 'min')).rejects.toThrow('utilisé ailleurs');
+    await viewer.setObjectParameters(path, new Map([[threshold.id, [0.15]]]));
+    expect(viewer.objectSurfaceGraph(path)?.nodes.get(source)?.inputs[1]?.source)
+      .toEqual({ kind: 'value', type: 'float', value: '0.15' });
+    await viewer.setObjectConstantLink(path, 's', input, null);
+    expect(binding(input)).toEqual({ kind: 'value', type: 'float', value: '0.8' });
+    await viewer.setObjectConstant(path, source, 'in2', false, 'min');
+  });
+
+  it('does not connect an arithmetic output whose range exceeds inherited NodeDef limits', async () => {
+    const { viewer } = await setup(false, true);
+    const path = '/World/Ball';
+    const root = viewer.objectSurfaceGraph(path)!.nodes.get('s')!;
+    root.nodeDef = {
+      name: 'ND_standard_surface_surfaceshader', nodeString: root.category, type: root.type,
+      implementation: { kind: 'unresolved' },
+      inputs: root.inputs.map(({ name, type }) => name === 'coat_roughness'
+        ? { name, type, uiMin: 0, uiMax: 0.5 }
+        : name === 'specular_roughness' ? { name, type, uiMin: 0, uiMax: 1 } : { name, type }),
+    };
+    await viewer.setObjectConstant(path, 's', 'specular_roughness', true, 'add');
+    expect(viewer.objectConstantSources(path, 's', 'coat_roughness')).toEqual([]);
+  });
+
   it('redirects a secondary link atomically and still restores its original literal', async () => {
     const { viewer } = await setup(false, true);
     const path = '/World/Ball';
@@ -703,7 +765,7 @@ describe('interactive viewer resource lifecycle', () => {
     ]);
     expect(read().nodes.get('s')?.inputs.find(entry => entry.name === input)?.source)
       .toEqual({ kind: 'connection', nodeId });
-    expect(viewer.objectConstantSources(path, 's', 'diffuse_roughness')).not.toContain(nodeId);
+    expect(viewer.objectConstantSources(path, 's', 'diffuse_roughness')).toContain(nodeId);
     const factor = viewer.objectParameters(path, nodeId)[0]!;
     await expect(viewer.setObjectParameters(path, new Map([[factor.id, [1.01]]]))).rejects.toThrow('above its maximum');
     await viewer.setObjectParameters(path, new Map([[factor.id, [0.5]]]));
@@ -730,6 +792,7 @@ describe('interactive viewer resource lifecycle', () => {
       { kind: 'value', type: 'float', value: '0' },
     ]);
     const offset = viewer.objectParameters(path, nodeId)[0]!;
+    expect(offset).toMatchObject({ min: [-0.2], max: [0.8] });
     await expect(viewer.setObjectParameters(path, new Map([[offset.id, [-0.21]]]))).rejects.toThrow('below its minimum');
     await expect(viewer.setObjectParameters(path, new Map([[offset.id, [0.81]]]))).rejects.toThrow('above its maximum');
     const pipelines = device.createRenderPipeline.mock.calls.length;
@@ -739,6 +802,252 @@ describe('interactive viewer resource lifecycle', () => {
     await viewer.setObjectConstant(path, nodeId, 'in2', false, 'add');
     expect(node()).toBeUndefined();
     expect(viewer.objectParameters(path, 's').find(entry => entry.input === input)?.value).toEqual([0.5]);
+  });
+
+  it('inserts a neutral Subtract, bounds its offset, exports it and preserves the result when removed', async () => {
+    const { viewer, device } = await setup(false, true);
+    const path = '/World/Ball';
+    const input = 'specular_roughness';
+    const nodeId = `${input}_subtract`;
+    const root = viewer.objectSurfaceGraph(path)!.nodes.get('s')!;
+    root.nodeDef = {
+      name: 'ND_standard_surface_surfaceshader', nodeString: root.category, type: root.type,
+      implementation: { kind: 'unresolved' }, inputs: root.inputs.map(({ name, type }) => ({ name, type })),
+    };
+    await viewer.setObjectConstant(path, 's', input, true, 'subtract');
+    const read = () => viewer.objectSurfaceGraph(path)!;
+    expect(read().nodes.get(nodeId)?.nodeDef?.name).toBe('ND_subtract_float');
+    expect(read().nodes.get(nodeId)?.inputs.map(entry => entry.source)).toEqual([
+      { kind: 'value', type: 'float', value: '0.2' },
+      { kind: 'value', type: 'float', value: '0' },
+    ]);
+    const offset = viewer.objectParameters(path, nodeId)[0]!;
+    expect(offset).toMatchObject({ min: [-0.8], max: [0.2], value: [0] });
+    await expect(viewer.setObjectParameters(path, new Map([[offset.id, [-0.81]]]))).rejects.toThrow('below its minimum');
+    await expect(viewer.setObjectParameters(path, new Map([[offset.id, [0.21]]]))).rejects.toThrow('above its maximum');
+    const pipelines = device.createRenderPipeline.mock.calls.length;
+    await viewer.setObjectParameters(path, new Map([[offset.id, [0.1]]]));
+    expect(device.createRenderPipeline).toHaveBeenCalledTimes(pipelines);
+    expect(exportSurfaceGraph(read(), 'mat').xml).toContain(
+      `<subtract name="${nodeId}" type="float" nodedef="ND_subtract_float">`,
+    );
+    await viewer.setObjectConstant(path, nodeId, 'in2', false, 'subtract');
+    expect(read().nodes.has(nodeId)).toBe(false);
+    expect(viewer.objectParameters(path, 's').find(entry => entry.input === input)?.value).toEqual([0.1]);
+  });
+
+  it.each([
+    { kind: 'add', threshold: 0.1, min: -0.2, max: 0.2, result: [0.3, 0.5, 0.9] },
+    { kind: 'subtract', threshold: 0.1, min: -0.2, max: 0.2, result: [0.1, 0.3, 0.7] },
+    { kind: 'min', threshold: 0.5, min: 0, max: 0.8, result: [0.2, 0.4, 0.5] },
+    { kind: 'max', threshold: 0.5, min: 0.2, max: 1, result: [0.5, 0.5, 0.8] },
+  ] as const)('supports $kind with a bounded scalar operand on color3 inputs', async ({ kind, threshold, min, max, result }) => {
+    const { viewer, device } = await setup(false, true);
+    const path = '/World/Ball';
+    const input = 'base_color';
+    const nodeId = `${input}_${kind}`;
+    await viewer.setObjectParameters(path, new Map([['surface:base_color', [0.2, 0.4, 0.8]]]));
+    const root = viewer.objectSurfaceGraph(path)!.nodes.get('s')!;
+    root.nodeDef = {
+      name: 'ND_standard_surface_surfaceshader', nodeString: root.category, type: root.type,
+      implementation: { kind: 'unresolved' },
+      inputs: root.inputs.map(({ name, type }) => name === input
+        ? { name, type, uiMinComponents: [0, 0, 0], uiMaxComponents: [1, 1, 1] }
+        : { name, type }),
+    };
+    expect(viewer.canInsertObjectConstant(path, 's', input, kind)).toBe(true);
+    await viewer.setObjectConstant(path, 's', input, true, kind);
+    const read = () => viewer.objectSurfaceGraph(path)!;
+    expect(read().nodes.get(nodeId)?.nodeDef?.name).toBe(`ND_${kind}_color3FA`);
+    const offset = viewer.objectParameters(path, nodeId)[0]!;
+    expect(offset.min?.[0]).toBeCloseTo(min);
+    expect(offset.max?.[0]).toBeCloseTo(max);
+    expect(offset.value).toEqual([kind === 'min' ? 0.8 : kind === 'max' ? 0.2 : 0]);
+    const pipelines = device.createRenderPipeline.mock.calls.length;
+    await viewer.setObjectParameters(path, new Map([[offset.id, [threshold]]]));
+    expect(device.createRenderPipeline).toHaveBeenCalledTimes(pipelines);
+    expect(exportSurfaceGraph(read(), 'mat').xml).toContain(
+      `<${kind} name="${nodeId}" type="color3" nodedef="ND_${kind}_color3FA">`,
+    );
+    await viewer.setObjectConstant(path, nodeId, 'in2', false, kind);
+    const folded = viewer.objectParameters(path, 's').find(entry => entry.input === input)?.value;
+    expect(folded).toHaveLength(result.length);
+    folded!.forEach((component, index) => expect(component).toBeCloseTo(result[index]!));
+  });
+
+  it.each([
+    { input: 'specular_roughness', type: 'float', initial: [0.2], foreground: [1], edited: [0.8], result: [0.5] },
+    { input: 'base_color', type: 'color3', initial: [0.2, 0.4, 0.8], foreground: [1, 1, 1],
+      edited: [0.8, 0.6, 0.4], result: [0.5, 0.5, 0.6] },
+  ] as const)('inserts a neutral Mix on $type, updates both operands, exports and folds the result', async ({
+    input, type, initial, foreground, edited, result,
+  }) => {
+    const { viewer, device } = await setup(false, true);
+    const path = '/World/Ball';
+    const nodeId = `${input}_mix`;
+    if (type === 'color3') {
+      await viewer.setObjectParameters(path, new Map([['surface:base_color', initial]]));
+    }
+    const root = viewer.objectSurfaceGraph(path)!.nodes.get('s')!;
+    root.nodeDef = {
+      name: 'ND_standard_surface_surfaceshader', nodeString: root.category, type: root.type,
+      implementation: { kind: 'unresolved' },
+      inputs: root.inputs.map(({ name, type: inputType }) => name !== input ? { name, type: inputType }
+        : type === 'color3'
+          ? { name, type: inputType, uiMinComponents: [0, 0, 0], uiMaxComponents: [1, 1, 1] }
+          : { name, type: inputType, uiMin: 0, uiMax: 1 }),
+    };
+    expect(viewer.canInsertObjectConstant(path, 's', input, 'mix')).toBe(true);
+    await viewer.setObjectConstant(path, 's', input, true, 'mix');
+    const read = () => viewer.objectSurfaceGraph(path)!;
+    expect(read().nodes.get(nodeId)?.nodeDef?.name).toBe(`ND_mix_${type}`);
+    expect(read().nodes.get(nodeId)?.inputs.map(entry => entry.source)).toEqual([
+      { kind: 'value', type, value: initial.join(', ') },
+      { kind: 'value', type, value: foreground.join(', ') },
+      { kind: 'value', type: 'float', value: '0' },
+    ]);
+    const parameters = viewer.objectParameters(path, nodeId);
+    const fg = parameters.find(parameter => parameter.input === 'fg')!;
+    const factor = parameters.find(parameter => parameter.input === 'mix')!;
+    expect(fg.value).toEqual(foreground);
+    expect(factor).toMatchObject({ min: [0], max: [1], value: [0] });
+    const pipelines = device.createRenderPipeline.mock.calls.length;
+    const changes = new Map<string, readonly number[]>();
+    changes.set(fg.id, edited);
+    changes.set(factor.id, [0.5]);
+    await viewer.setObjectParameters(path, changes);
+    expect(device.createRenderPipeline).toHaveBeenCalledTimes(pipelines);
+    if (input === 'specular_roughness') {
+      expect(viewer.objectConstantSources(path, 's', 'coat_roughness')).toEqual([nodeId]);
+      await viewer.setObjectConstantLink(path, 's', 'coat_roughness', nodeId);
+      await expect(viewer.setObjectConstant(path, nodeId, 'mix', false, 'mix')).rejects.toThrow('utilisé ailleurs');
+      await viewer.setObjectConstantLink(path, 's', 'coat_roughness', null);
+    }
+    const xml = exportSurfaceGraph(read(), 'mat').xml;
+    expect(xml).toContain(`<mix name="${nodeId}" type="${type}" nodedef="ND_mix_${type}">`);
+    await viewer.setObjectConstant(path, nodeId, 'mix', false, 'mix');
+    expect(read().nodes.has(nodeId)).toBe(false);
+    const folded = viewer.objectParameters(path, 's').find(parameter => parameter.input === input)?.value;
+    expect(folded).toHaveLength(result.length);
+    folded!.forEach((component, index) => expect(component).toBeCloseTo(result[index]!));
+    expect(viewer.objectParameters(path, nodeId)).toHaveLength(0);
+  });
+
+  it('inserts a neutral Divide, keeps its factor positive, exports it and preserves the quotient when removed', async () => {
+    const { viewer, device } = await setup(false, true);
+    const path = '/World/Ball';
+    const input = 'specular_roughness';
+    const nodeId = `${input}_divide`;
+    const root = viewer.objectSurfaceGraph(path)!.nodes.get('s')!;
+    root.nodeDef = {
+      name: 'ND_standard_surface_surfaceshader', nodeString: root.category, type: root.type,
+      implementation: { kind: 'unresolved' }, inputs: root.inputs.map(({ name, type }) => ({ name, type })),
+    };
+    await viewer.setObjectConstant(path, 's', input, true, 'divide');
+    const read = () => viewer.objectSurfaceGraph(path)!;
+    expect(read().nodes.get(nodeId)?.nodeDef?.name).toBe('ND_divide_float');
+    const factor = viewer.objectParameters(path, nodeId)[0]!;
+    expect(factor).toMatchObject({ min: [0.2], max: [1], value: [1] });
+    await expect(viewer.setObjectParameters(path, new Map([[factor.id, [0.19]]]))).rejects.toThrow('below its minimum');
+    const pipelines = device.createRenderPipeline.mock.calls.length;
+    await viewer.setObjectParameters(path, new Map([[factor.id, [0.5]]]));
+    expect(device.createRenderPipeline).toHaveBeenCalledTimes(pipelines);
+    expect(exportSurfaceGraph(read(), 'mat').xml).toContain(
+      `<divide name="${nodeId}" type="float" nodedef="ND_divide_float">`,
+    );
+    await viewer.setObjectConstant(path, nodeId, 'in2', false, 'divide');
+    expect(read().nodes.has(nodeId)).toBe(false);
+    expect(viewer.objectParameters(path, 's').find(entry => entry.input === input)?.value).toEqual([0.4]);
+  });
+
+  it('inserts a neutral Power with bounded exponents and preserves the powered result when removed', async () => {
+    const { viewer, device } = await setup(false, true);
+    const path = '/World/Ball';
+    const input = 'specular_roughness';
+    const nodeId = `${input}_power`;
+    const root = viewer.objectSurfaceGraph(path)!.nodes.get('s')!;
+    root.nodeDef = {
+      name: 'ND_standard_surface_surfaceshader', nodeString: root.category, type: root.type,
+      implementation: { kind: 'unresolved' }, inputs: root.inputs.map(({ name, type }) => ({ name, type })),
+    };
+    expect(viewer.canInsertObjectConstant(path, 's', 'base_color', 'power')).toBe(false);
+    await viewer.setObjectConstant(path, 's', input, true, 'power');
+    const read = () => viewer.objectSurfaceGraph(path)!;
+    expect(read().nodes.get(nodeId)?.nodeDef?.name).toBe('ND_power_float');
+    const exponent = viewer.objectParameters(path, nodeId)[0]!;
+    expect(exponent).toMatchObject({ min: [0], max: [1], value: [1] });
+    const pipelines = device.createRenderPipeline.mock.calls.length;
+    await viewer.setObjectParameters(path, new Map([[exponent.id, [0.5]]]));
+    expect(device.createRenderPipeline).toHaveBeenCalledTimes(pipelines);
+    expect(exportSurfaceGraph(read(), 'mat').xml).toContain(
+      `<power name="${nodeId}" type="float" nodedef="ND_power_float">`,
+    );
+    await viewer.setObjectConstant(path, nodeId, 'in2', false, 'power');
+    expect(read().nodes.has(nodeId)).toBe(false);
+    expect(viewer.objectParameters(path, 's').find(entry => entry.input === input)?.value)
+      .toEqual([Math.sqrt(0.2)]);
+  });
+
+  it('uses the NodeDef bounds for Add when the input has no authored limits', async () => {
+    const { viewer } = await setup(false, true);
+    const path = '/World/Ball';
+    const input = 'coat_roughness';
+    const root = viewer.objectSurfaceGraph(path)!.nodes.get('s')!;
+    root.nodeDef = {
+      name: 'ND_standard_surface_surfaceshader', nodeString: 'standard_surface', type: 'surfaceshader',
+      implementation: { kind: 'unresolved' }, inputs: [
+        { name: 'coat_roughness', type: 'float', uiMin: 0, uiMax: 1 },
+        { name: 'specular_roughness', type: 'float', uiMin: 0.3, uiMax: 0.9 },
+      ],
+    };
+    // The authored range permits the current value (0.2); the NodeDef range would not.
+    expect(viewer.canInsertObjectConstant(path, 's', 'specular_roughness', 'add')).toBe(true);
+    expect(viewer.objectParameters(path, 's').find(entry => entry.input === input)?.min).toBeUndefined();
+    await viewer.setObjectConstant(path, 's', input, true, 'add');
+    const offset = viewer.objectParameters(path, `${input}_add`)[0]!;
+    expect(offset).toMatchObject({ min: [-0.1], max: [0.9] });
+    await expect(viewer.setObjectParameters(path, new Map([[offset.id, [0.91]]]))).rejects.toThrow('above its maximum');
+    await viewer.setObjectParameters(path, new Map([[offset.id, [0.9]]]));
+    await viewer.setObjectConstant(path, `${input}_add`, 'in2', false, 'add');
+    expect(viewer.objectParameters(path, 's').find(entry => entry.input === input)?.value).toEqual([1]);
+  });
+
+  it.each([
+    { kind: 'min', neutral: 1, threshold: 0.125 },
+    { kind: 'max', neutral: 0, threshold: 0.625 },
+  ] as const)('inserts a neutral $kind, edits its threshold live and folds the result', async ({ kind, neutral, threshold }) => {
+    const { viewer, device } = await setup(false, true);
+    const path = '/World/Ball';
+    const input = 'specular_roughness';
+    const nodeId = `${input}_${kind}`;
+    const root = viewer.objectSurfaceGraph(path)!.nodes.get('s')!;
+    root.nodeDef = {
+      name: 'ND_standard_surface_surfaceshader', nodeString: root.category, type: root.type,
+      implementation: { kind: 'unresolved' },
+      inputs: root.inputs.map(({ name, type }) => name === 'coat_roughness'
+        ? { name, type, uiMin: 0, uiMax: 1 }
+        : name === input ? { name, type, uiMin: 0.1, uiMax: 0.9 } : { name, type }),
+    };
+    expect(viewer.canInsertObjectConstant(path, 's', 'base_color', kind)).toBe(false);
+    expect(viewer.canInsertObjectConstant(path, 's', 'diffuse_roughness', kind)).toBe(false);
+    expect(viewer.canInsertObjectConstant(path, 's', 'coat_roughness', kind)).toBe(true);
+    await viewer.setObjectConstant(path, 's', input, true, kind);
+    const read = () => viewer.objectSurfaceGraph(path)!;
+    expect(read().nodes.get('s')?.inputs.find(entry => entry.name === input)?.source)
+      .toEqual({ kind: 'connection', nodeId });
+    const cutoff = viewer.objectParameters(path, nodeId)[0]!;
+    expect(cutoff).toMatchObject({ min: [0], max: [1], value: [neutral] });
+    const pipelines = device.createRenderPipeline.mock.calls.length;
+    await expect(viewer.setObjectParameters(path, new Map([[cutoff.id, [-0.01]]]))).rejects.toThrow('below its minimum');
+    await expect(viewer.setObjectParameters(path, new Map([[cutoff.id, [1.01]]]))).rejects.toThrow('above its maximum');
+    await viewer.setObjectParameters(path, new Map([[cutoff.id, [threshold]]]));
+    expect(device.createRenderPipeline).toHaveBeenCalledTimes(pipelines);
+    const { xml } = exportSurfaceGraph(read(), 'mat');
+    expect(xml).toContain(`<${kind} name="${nodeId}" type="float" nodedef="ND_${kind}_float">`);
+    expect(xml).toContain(`<input name="in2" type="float" value="${threshold}"`);
+    await viewer.setObjectConstant(path, nodeId, 'in2', false, kind);
+    expect(read().nodes.has(nodeId)).toBe(false);
+    expect(viewer.objectParameters(path, 's').find(entry => entry.input === input)?.value).toEqual([threshold]);
   });
 
   it('scales all three color components with one editable factor, then folds the result as color3', async () => {

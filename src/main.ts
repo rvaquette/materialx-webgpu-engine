@@ -170,17 +170,21 @@ async function main(): Promise<void> {
       }
       showMaterialGraph(graphDialog, target.objectSurfaceGraph(path), material, {
         parameters: nodeId => target.objectParameters(path, nodeId),
+        nodeDefinitions: () => target.objectNodeDefinitions(path),
+        outputs: (nodeId, input) => target.objectGraphOutputs(path, nodeId, input),
         diagnostics: nodeId => target.objectSurfaceInputDiagnostics(path, nodeId),
         disneyDiagnostics: () => target.objectDisneyMaterialDiagnostics(path),
         async apply(changes) {
           await editMaterial('Application des paramètres du matériau...', () => target.setObjectParameters(path, changes));
           return target.objectSurfaceGraph(path);
         },
-        canInsertConstant: (nodeId, input, kind) => target.canInsertObjectConstant(path, nodeId, input, kind),
-        setConstant: (nodeId, input, insert, kind) => editGraph(() => target.setObjectConstant(path, nodeId, input, insert, kind)),
-        constantSources: (nodeId, input) => target.objectConstantSources(path, nodeId, input),
-        canUnlinkConstant: (nodeId, input) => target.canUnlinkObjectConstant(path, nodeId, input),
-        setConstantLink: (nodeId, input, sourceId) => editGraph(() => target.setObjectConstantLink(path, nodeId, input, sourceId)),
+        canUnlinkInput: (nodeId, input) => target.canUnlinkObjectGraphInput(path, nodeId, input),
+        setInputLink: (nodeId, input, sourceId, output) =>
+          editGraph(() => target.setObjectGraphInputLink(path, nodeId, input, sourceId, output)),
+        setInputValue: (nodeId, input, value) =>
+          editGraph(() => target.setObjectGraphInputValue(path, nodeId, input, value)),
+        addNode: (nodeId, input, nodeDef, output) =>
+          editGraph(() => target.addObjectNode(path, nodeId, input, nodeDef, output)),
         variants: () => target.objectMaterialVariants(path),
         variantGraph: slot => target.objectMaterialVariantGraph(path, slot),
         saveVariant(slot) {
@@ -194,7 +198,7 @@ async function main(): Promise<void> {
           try { return await target.captureObjectMaterialVariants(path, options, signal); }
           finally { setBusy(false); }
         },
-      });
+      }, undefined, path);
     };
   }
   const parameterEditor = new MaterialParameterEditor({

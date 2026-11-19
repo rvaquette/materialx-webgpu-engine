@@ -7,7 +7,6 @@ const surfaceDefinitions = new Map([
   ['standard_surface', ['ND_standard_surface_surfaceshader', 'ND_standard_surface_surfaceshader_100']],
   ['open_pbr_surface', ['ND_open_pbr_surface_surfaceshader']],
 ]);
-const literalTypes = new Set(['float', 'integer', 'boolean', 'color3', 'color4', 'vector2', 'vector3', 'vector4']);
 const proceduralVariants = new Map([
   ['add', ['float', 'color3', 'color3FA']],
   ['subtract', ['float', 'color3', 'color3FA']],
@@ -88,7 +87,9 @@ export function exportSurfaceGraph(graph: ResolvedGraph, material: string) {
       && (!node.nodeDef || node.nodeDef.name === `ND_constant_${node.type}`);
     const isImage = node.category === 'image' && (node.type === 'float' || node.type === 'color3')
       && node.nodeDef?.name === `ND_image_${node.type}` && node.nodeDef.type === node.type;
-    if (node !== root && !isConstant && !isImage && !isExportableProcedure(node)) {
+    const hasNodeDef = node.nodeDef?.nodeString === node.category && node.nodeDef.type === node.type;
+    if (!namePattern.test(node.category)
+      || node !== root && !isConstant && !isImage && !isExportableProcedure(node) && !hasNodeDef) {
       throw new Error(`Nœud non pris en charge par l’export : ${id} (${node.category}).`);
     }
     if (isImage && node.inputs.find(input => input.name === 'file')?.source.kind !== 'value') {
@@ -105,21 +106,22 @@ export function exportSurfaceGraph(graph: ResolvedGraph, material: string) {
       if (source.kind === 'default') continue;
       const declaredType = isConstant ? (input.name === 'value' ? node.type : undefined)
         : node.nodeDef?.inputs?.find(definition => definition.name === input.name)?.type;
-      const imageLiteral = isImage && source.kind === 'value' && (
-        input.type === 'filename' && input.name === 'file'
-        || input.type === 'string' && ['layer', 'uaddressmode', 'vaddressmode', 'filtertype'].includes(input.name)
-      );
-      if (!namePattern.test(input.name) || (!literalTypes.has(input.type) && !imageLiteral) || input.type !== declaredType
+      if (!namePattern.test(input.name) || !namePattern.test(input.type) || input.type !== declaredType
         || isImage && /^(framerange|frameoffset|frameendaction)$/.test(input.name)) {
         throw new Error(`Entrée non prise en charge : ${location} (${input.type}).`);
       }
       let binding: string;
       if (source.kind === 'connection') {
         const upstream = visit(source.nodeId);
-        if (graph.nodes.get(source.nodeId)?.type !== input.type || (source.output !== undefined && source.output !== 'out')) {
+        const upstreamNode = graph.nodes.get(source.nodeId)!;
+        const outputName = source.output ?? 'out';
+        const output = upstreamNode.nodeDef?.outputs?.find(candidate => candidate.name === outputName)
+          ?? (!upstreamNode.nodeDef?.outputs?.length && outputName === 'out'
+            ? { name: 'out', type: upstreamNode.type } : undefined);
+        if (!output || output.type !== input.type) {
           throw new Error(`Connexion non prise en charge : ${location}.`);
         }
-        binding = `nodename="${upstream}"`;
+        binding = `nodename="${upstream}"${outputName === 'out' ? '' : ` output="${escapeAttribute(outputName)}"`}`;
       } else {
         const value = input.type === 'filename' ? texturePath(source.value, location) : source.value;
         binding = `value="${escapeAttribute(value)}"`;

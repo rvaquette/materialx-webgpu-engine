@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { COLOR3, FLOAT, IrModuleBuilder, vector } from '../../src/compiler/ir.ts';
+import { COLOR3, FLOAT, INT, IrModuleBuilder, vector } from '../../src/compiler/ir.ts';
 import { evaluateIrRef, evaluateShaderIr, IrEvalError } from '../../src/compiler/ir-eval.ts';
 import { buildNodeIr } from '../fixtures/node-ir.ts';
 import { NODE_CASES, VARYINGS } from '../fixtures/node-cases.ts';
@@ -15,6 +15,35 @@ const varyingEnv = {
 };
 
 describe('evaluateShaderIr (T057i2)', () => {
+  it.each([
+    { type: FLOAT, value: 0.125, expected: [0.1346801, 0.4314369, 1] },
+    { type: INT, value: 2, expected: [0.4544628, 0.0772700, 1] },
+  ])('matches MaterialX randomcolor for $type.kind input and emits its WGSL helpers', ({ type, value, expected }) => {
+    const builder = new IrModuleBuilder();
+    const ref = builder.add({
+      kind: 'call', type: COLOR3, op: 'randomcolor', args: [],
+      namedArgs: {
+        in: builder.constant(type, value),
+        seed: builder.constant(INT, 5),
+        huelow: builder.constant(FLOAT, 0),
+        huehigh: builder.constant(FLOAT, 1),
+        saturationlow: builder.constant(FLOAT, 0.825),
+        saturationhigh: builder.constant(FLOAT, 1),
+        brightnesslow: builder.constant(FLOAT, 1),
+        brightnesshigh: builder.constant(FLOAT, 1),
+      },
+    });
+    builder.output({ name: 'color', type: COLOR3, ref });
+    const ir = builder.build();
+
+    const result = evaluateIrRef(ir, ref);
+    result.forEach((component, i) => expect(component).toBeCloseTo(expected[i]!, 5));
+    const code = emitWgsl(ir).code;
+    expect(code).toContain('mx_randomcolor_hash');
+    expect(code).toContain('mx_hsvtorgb');
+    expect(code).toContain('413.3');
+  });
+
   it.each([1, -1])('uses the supplied bitangent with handedness %i for normal maps', (sign) => {
     const builder = new IrModuleBuilder();
     const normal = builder.add({

@@ -1,11 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import { layoutMaterialGraph } from '../src/material-graph-diagram.ts';
+import {
+  graphNodePositionStorageKey, layoutMaterialGraph, parseGraphNodePositions, readGraphNodePositions,
+  unsupportedSurfaceGraphNodes, writeGraphNodePositions,
+} from '../src/material-graph-diagram.ts';
 import { compareMaterialGraphs } from '../src/materialx/graph-comparison.ts';
-import type { ResolvedNode } from '../src/materialx/graph.ts';
+import type { ResolvedGraph, ResolvedNode } from '../src/materialx/graph.ts';
 
-function node(id: string, upstream: readonly string[] = []): ResolvedNode {
+function node(id: string, upstream: readonly string[] = [], category = 'test'): ResolvedNode {
   return {
-    id, category: 'test', type: 'float', provenance: { namePath: id },
+    id, category, type: 'float', provenance: { namePath: id },
     inputs: upstream.map((target, i) => ({
       name: `input${i}`, type: 'float', provenance: { namePath: `${id}/input${i}` },
       source: { kind: 'connection', nodeId: target, output: 'out' },
@@ -22,6 +25,30 @@ function layout(...nodes: ResolvedNode[]) {
 }
 
 describe('MaterialX graph diagram layout', () => {
+  it('restores valid saved positions for existing nodes and rejects corrupt coordinates', () => {
+    expect(parseGraphNodePositions(null, new Set(['a']))).toEqual(new Map());
+    expect(parseGraphNodePositions('{"a":{"x":48,"y":96},"removed":{"x":80,"y":80}}', new Set(['a'])))
+      .toEqual(new Map([['a', { x: 48, y: 96 }]]));
+    expect(() => parseGraphNodePositions('{"a":{"x":-1,"y":96}}', new Set(['a']))).toThrow('Position enregistrée invalide');
+    expect(() => parseGraphNodePositions('{', new Set(['a']))).toThrow();
+  });
+
+  it('round-trips layouts with independent object, material and variant keys', () => {
+    const stored = new Map<string, string>();
+    const storage = {
+      getItem: (key: string) => stored.get(key) ?? null,
+      setItem: (key: string, value: string) => stored.set(key, value),
+    };
+    const current = graphNodePositionStorageKey('/World/Ball', 'mat')!;
+    const variantA = graphNodePositionStorageKey('/World/Ball', 'mat', 'A')!;
+    const variantB = graphNodePositionStorageKey('/World/Ball', 'mat', 'B')!;
+    expect(new Set([current, variantA, variantB]).size).toBe(3);
+    writeGraphNodePositions(storage, variantA, new Map([['surface', { x: 48, y: 96 }]]));
+    expect(readGraphNodePositions(storage, variantA, new Set(['surface'])))
+      .toEqual(new Map([['surface', { x: 48, y: 96 }]]));
+    expect(readGraphNodePositions(storage, variantB, new Set(['surface']))).toEqual(new Map());
+  });
+
   it('places each dependency upstream, including a shared input used twice', () => {
     const { positions, edges } = layout(node('surface', ['mix', 'texture']), node('noise'), node('texture'), node('mix', ['texture', 'texture']));
     expect(positions.get('texture')!.x).toBeLessThan(positions.get('mix')!.x);
@@ -60,5 +87,18 @@ describe('MaterialX graph diagram layout', () => {
     expect(new Set([...positions.values()].map(({ x, y }) => `${x},${y}`)).size).toBe(4);
     expect(positions.get('surface')!.x).toBeGreaterThan(positions.get('constant')!.x);
     expect(edges.map(({ from, to }) => `${from}→${to}`)).toEqual(['b→a', 'a→b', 'constant→surface']);
+  });
+
+  it('flags only unsupported nodes reachable upstream of the surface terminal', () => {
+    const graph: ResolvedGraph = {
+      nodes: new Map([
+        ['surface', { ...node('surface', ['add'], 'standard_surface'), type: 'surfaceshader' }],
+        ['add', node('add', ['custom_noise'], 'add')],
+        ['custom_noise', node('custom_noise', [], 'custom_noise')],
+        ['unreachable', node('unreachable', [], 'custom_node')],
+      ]),
+      terminals: [{ name: 'surfaceshader', type: 'surfaceshader', nodeId: 'surface', provenance: { namePath: 'surface' } }],
+    };
+    expect(unsupportedSurfaceGraphNodes(graph)).toEqual(['custom_noise']);
   });
 });

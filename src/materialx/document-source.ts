@@ -7,6 +7,7 @@
 // MaterialXCore and library importer.
 
 import type { Diagnostic, DiagnosticSink } from '../core/diagnostics.ts';
+import { resolveNodeDefCatalog, type ResolvedNodeDefRef } from './graph.ts';
 import type { MaterialCompileUnit, MtlxDocumentView } from '../usd/materials.ts';
 import type { MaterialDocumentSource } from '../render/graph-material-compiler.ts';
 import type { MaterialXCore, MxDocument } from './wasm.ts';
@@ -18,6 +19,7 @@ export interface DocumentLibraryImporter {
 
 /** A document source that owns the loaded documents and releases them on delete. */
 export interface MaterialXDocumentSource extends MaterialDocumentSource {
+  nodeDefinitions?(): readonly ResolvedNodeDefRef[];
   delete(): void;
 }
 
@@ -63,6 +65,13 @@ export async function loadMaterialXDocuments(
       // The Embind document carries getMaterialNode/getChild at runtime; MxDocument's
       // typed surface does not declare them, so bridge through the view contract.
       return docs.get(unit.assetPath) as unknown as MtlxDocumentView | undefined;
+    },
+    nodeDefinitions(): readonly ResolvedNodeDefRef[] {
+      const definitions = new Map<string, ResolvedNodeDefRef>();
+      for (const document of docs.values()) {
+        for (const definition of resolveNodeDefCatalog(document)) definitions.set(definition.name, definition);
+      }
+      return [...definitions.values()];
     },
     delete(): void {
       for (const doc of docs.values()) doc.delete();

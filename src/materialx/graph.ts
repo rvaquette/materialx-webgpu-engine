@@ -10,7 +10,7 @@
 // qualification in docs/dependencies.md.
 
 import { defaultDiagnosticSink, type DiagnosticSink } from '../core/diagnostics.ts';
-import type { MxElement } from './wasm.ts';
+import type { MxDocument, MxElement } from './wasm.ts';
 
 /** Embind vector surface (`size`/`get`). */
 export interface MxVector<T> {
@@ -34,6 +34,10 @@ export interface MxInput extends MxElement {
   getUnit?(): string;
   getUnitType?(): string;
   getActiveSourceUri?(): string;
+}
+
+export interface MxOutput extends MxElement {
+  getType(): string;
 }
 
 export interface MxNode extends MxElement {
@@ -60,6 +64,8 @@ export interface MxNodeDef extends MxElement {
   getActiveSourceUri?(): string;
   getActiveInputs?(): MxVector<MxInput> | MxInput[];
   getInputs?(): MxVector<MxInput> | MxInput[];
+  getActiveOutputs?(): MxVector<MxOutput> | MxOutput[];
+  getOutputs?(): MxVector<MxOutput> | MxOutput[];
 }
 
 export interface Provenance {
@@ -88,6 +94,9 @@ export interface ResolvedInput {
   editable?: boolean;
   /** Runtime uniform field assigned to an editable upstream input. */
   parameter?: string;
+  /** Source and parameter temporarily replaced by a graph-editor connection. */
+  editorOriginalSource?: ResolvedValueSource;
+  editorOriginalParameter?: string;
   /** Unauthored nodedef default materialized only to back a runtime parameter. */
   defaulted?: boolean;
   min?: readonly number[];
@@ -113,7 +122,11 @@ export interface ResolvedNodeDefRef {
   nodeGroup?: string;
   version?: string;
   implementation: ResolvedImplementation;
-  inputs?: readonly { name: string; type: string; value?: string; geomprop?: string }[];
+  inputs?: readonly {
+    name: string; type: string; value?: string; geomprop?: string; uiMin?: number; uiMax?: number;
+    uiMinComponents?: readonly number[]; uiMaxComponents?: readonly number[];
+  }[];
+  outputs?: readonly { name: string; type: string }[];
 }
 
 export type LamaLayerMode = 'fresnel_blend' | 'smooth_coating' | 'rough_coating' | 'auto';
@@ -303,20 +316,12 @@ function resolveInput(input: MxInput): { resolved: ResolvedInput; connected: MxN
   };
 }
 
-function resolveNodeDef(node: MxNode, target: string | undefined, diag: DiagnosticSink, isCovered?: (category: string) => boolean): ResolvedNodeDefRef | undefined {
+function resolveNodeDefReference(
+  nodeDef: MxNodeDef, target: string | undefined, diag: DiagnosticSink, isCovered?: (category: string) => boolean,
+): ResolvedNodeDefRef {
   // The Core Embind binding types target as std::string; passing undefined trips
   // "Cannot pass non-string to std::string". MaterialX treats "" as "any target".
   const targetArg = target ?? '';
-  const nodeDef = node.getNodeDef?.(targetArg) ?? null;
-  if (!nodeDef) {
-    diag({
-      level: 'warning',
-      message: `Unresolved NodeDef for node '${node.getCategory()}' (${node.getNamePath()}).`,
-      detail: { node: node.getNamePath() },
-    });
-    return undefined;
-  }
-
   const impl = nodeDef.getImplementation?.(targetArg) ?? null;
   const implementation: ResolvedImplementation = impl
     ? classifyImplementation(impl)
@@ -324,7 +329,7 @@ function resolveNodeDef(node: MxNode, target: string | undefined, diag: Diagnost
   // Builtin math/procedural leaves carry no MaterialX implementation element;
   // they are lowered directly to WGSL, so only warn when the renderer does not
   // cover the category.
-  if (!impl && !(isCovered?.(node.getCategory()) ?? false)) {
+  if (!impl && !(isCovered?.(nodeDef.getNodeString()) ?? false)) {
     diag({
       level: 'warning',
       message: `NodeDef '${nodeDef.getName()}' has no implementation for target '${target ?? '<any>'}'; explicit WGSL lowering required.`,
@@ -332,16 +337,30 @@ function resolveNodeDef(node: MxNode, target: string | undefined, diag: Diagnost
     });
   }
 
+  const outputs = toArray(nodeDef.getActiveOutputs?.() ?? nodeDef.getOutputs?.() ?? [])
+    .map(output => ({ name: output.getName(), type: output.getType() }));
   const nodeGroup = nonEmpty(nodeDef.getNodeGroup?.());
   const version = nonEmpty(nodeDef.getVersionString?.());
   const inputs = toArray(nodeDef.getActiveInputs?.() ?? nodeDef.getInputs?.() ?? []).map((input) => {
     const value = nonEmpty(input.getValueString());
     const geomprop = nonEmpty(input.getDefaultGeomPropString?.());
+    const type = input.getType();
+    const uiMinValues = type === 'float' || type === 'color3'
+      ? parseUiLimit(input.getAttribute?.('uimin'), type, 'uimin', input.getNamePath()) : undefined;
+    const uiMaxValues = type === 'float' || type === 'color3'
+      ? parseUiLimit(input.getAttribute?.('uimax'), type, 'uimax', input.getNamePath()) : undefined;
+    if (uiMinValues && uiMaxValues && uiMinValues.some((value, index) => value > uiMaxValues[index]!)) {
+      throw new Error(`Invalid UI range at ${input.getNamePath()}: uimin must not exceed uimax.`);
+    }
     return {
       name: input.getName(),
-      type: input.getType(),
+      type,
       ...(value !== undefined ? { value } : {}),
       ...(geomprop !== undefined ? { geomprop } : {}),
+      ...(type === 'float' && uiMinValues ? { uiMin: uiMinValues[0] } : {}),
+      ...(type === 'float' && uiMaxValues ? { uiMax: uiMaxValues[0] } : {}),
+      ...(type === 'color3' && uiMinValues ? { uiMinComponents: uiMinValues } : {}),
+      ...(type === 'color3' && uiMaxValues ? { uiMaxComponents: uiMaxValues } : {}),
     };
   });
   return {
@@ -351,8 +370,31 @@ function resolveNodeDef(node: MxNode, target: string | undefined, diag: Diagnost
     ...(nodeGroup !== undefined ? { nodeGroup } : {}),
     ...(version !== undefined ? { version } : {}),
     ...(inputs.length > 0 ? { inputs } : {}),
+    ...(outputs.length > 0 ? { outputs } : {}),
     implementation,
   };
+}
+
+function resolveNodeDef(
+  node: MxNode, target: string | undefined, diag: DiagnosticSink, isCovered?: (category: string) => boolean,
+): ResolvedNodeDefRef | undefined {
+  const nodeDef = node.getNodeDef?.(target ?? '') ?? null;
+  if (!nodeDef) {
+    diag({
+      level: 'warning',
+      message: `Unresolved NodeDef for node '${node.getCategory()}' (${node.getNamePath()}).`,
+      detail: { node: node.getNamePath() },
+    });
+    return undefined;
+  }
+  return resolveNodeDefReference(nodeDef, target, diag, isCovered);
+}
+
+/** Snapshot all NodeDefs in a loaded MaterialX document for graph editing. */
+export function resolveNodeDefCatalog(document: MxDocument, target?: string): ResolvedNodeDefRef[] {
+  const definitions = document.getNodeDefs?.();
+  if (!definitions) throw new Error('MaterialX Core does not expose the loaded NodeDef catalog.');
+  return toArray(definitions).map(definition => resolveNodeDefReference(definition, target, () => {}, () => true));
 }
 
 /** Resolve the subgraphs reachable from each terminal into a plain graph. */

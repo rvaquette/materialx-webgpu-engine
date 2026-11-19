@@ -3,11 +3,17 @@ import { IrModuleBuilder, FLOAT } from '../../src/compiler/ir.ts';
 import { emitWgsl } from '../../src/compiler/wgsl.ts';
 import { emitLayeredSurface } from '../../src/compiler/surface-wgsl.ts';
 import { resolveSurface } from '../../src/materialx/surface-graph.ts';
-import type { ResolvedGraph } from '../../src/materialx/graph.ts';
+import type { ResolvedGraph, ResolvedNodeDefRef } from '../../src/materialx/graph.ts';
+import { exportSurfaceGraph } from '../../src/materialx/graph-export.ts';
 import { importUsdStage } from '../../src/usd/importer.ts';
 import { buildSceneResources } from '../../src/render/scene-resources.ts';
 import { buildMaterialDispatch } from '../../src/render/pathtracing/material-variant.ts';
-import { changeMaterialParameters, compileEditableMaterial, editableSceneMaterials, materialUniformData, packParameterUniforms, parameterValues, uniformSceneMaterials, visibleMaterialParameters } from '../../src/render/material-parameters.ts';
+import {
+  addMaterialNodeFromDefinition, changeMaterialGraphInputLink, changeMaterialParameters, compileEditableMaterial,
+  changeMaterialGraphInputValue, compatibleMaterialGraphOutputs, compatibleNodeOutputChoices,
+  editableSceneMaterials, materialUniformData, packParameterUniforms, parameterValues,
+  uniformSceneMaterials, visibleMaterialParameters,
+} from '../../src/render/material-parameters.ts';
 import { applySceneDisplacement } from '../../src/render/displacement.ts';
 import { resolveVolume } from '../../src/materialx/volume-graph.ts';
 import { appendVolumeIr } from '../../src/compiler/volume-ir.ts';
@@ -68,6 +74,73 @@ def Mesh "b" { rel material:binding = </Mat> }` } });
 }
 
 describe('dynamic MaterialX parameters', () => {
+  it('adds arbitrary typed NodeDefs from a compatible port and restores its previous source', async () => {
+    const resources = await fixture(false, graph => {
+      const surface = graph.nodes.get('surface')!;
+      surface.nodeDef = {
+        name: 'ND_standard_surface_surfaceshader', nodeString: 'standard_surface', type: 'surfaceshader',
+        implementation: { kind: 'unresolved' },
+        inputs: [{ name: 'base_color', type: 'color3', value: '0.8, 0.8, 0.8' }],
+      };
+      surface.inputs = [{
+        name: 'base_color', type: 'color3', source: { kind: 'value', type: 'color3', value: '0.8, 0.8, 0.8' },
+        provenance: { namePath: '/surface/base_color' },
+      }];
+    });
+    const material = [...resources.materials.values()][0]!;
+    const definition: ResolvedNodeDefRef = {
+      name: 'ND_custom_color', nodeString: 'custom_color', type: 'color3', implementation: { kind: 'unresolved' },
+      inputs: [
+        { name: 'in1', type: 'color3', value: '0, 0, 0' }, { name: 'in2', type: 'float', value: '0' },
+        { name: 'label', type: 'string', value: 'initial' },
+        { name: 'description', type: 'string' },
+        { name: 'file', type: 'filename', value: 'https://example.test/texture.png' },
+      ],
+      outputs: [{ name: 'out', type: 'color3' }, { name: 'other', type: 'color3' }],
+    };
+    expect(compatibleNodeOutputChoices([definition], 'color3').map(choice => choice.output.name)).toEqual(['out', 'other']);
+    expect(compatibleNodeOutputChoices([definition], 'string')).toEqual([]);
+    const filenameDefinition: ResolvedNodeDefRef = {
+      name: 'ND_filename_source', nodeString: 'custom_filename', type: 'filename',
+      implementation: { kind: 'unresolved' }, outputs: [{ name: 'out', type: 'filename' }],
+    };
+    expect(compatibleNodeOutputChoices([filenameDefinition], 'filename')).toHaveLength(1);
+    const updated = addMaterialNodeFromDefinition(material, 'surface', 'base_color', definition.name, 'other', [definition]);
+    const nodeId = 'editor_node_1';
+    expect(updated.surfaceGraph!.nodes.get('surface')!.inputs[0]!.source).toEqual({
+      kind: 'connection', nodeId, output: 'other',
+    });
+    expect(updated.surfaceGraph!.nodes.get(nodeId)!.inputs[0]!.source)
+      .toEqual({ kind: 'value', type: 'color3', value: '0.8, 0.8, 0.8' });
+    expect(compatibleMaterialGraphOutputs(updated, 'surface', 'base_color'))
+      .toEqual(expect.arrayContaining([expect.objectContaining({ nodeId, output: 'other', type: 'color3' })]));
+    const factor = updated.parameters!.find(parameter => parameter.nodeId === nodeId && parameter.input === 'in2')!;
+    const edited = changeMaterialParameters(updated, new Map([[factor.id, [0.25]]]));
+    expect(edited.surfaceGraph!.nodes.get(nodeId)!.inputs.find(input => input.name === 'in2')?.source)
+      .toMatchObject({ kind: 'value', value: '0.25' });
+    const literalEdited = changeMaterialGraphInputValue(edited, nodeId, 'label', 'updated label');
+    expect(literalEdited.surfaceGraph!.nodes.get(nodeId)!.inputs.find(input => input.name === 'label')?.source)
+      .toEqual({ kind: 'value', type: 'string', value: 'updated label' });
+    const defaultEdited = changeMaterialGraphInputValue(literalEdited, nodeId, 'description', 'added later');
+    expect(defaultEdited.surfaceGraph!.nodes.get(nodeId)!.inputs.find(input => input.name === 'description')?.source)
+      .toEqual({ kind: 'value', type: 'string', value: 'added later' });
+    expect(() => changeMaterialGraphInputValue(literalEdited, nodeId, 'in1', '0.5, 0.5, 0.5'))
+      .toThrow('entrée littérale non paramétrée');
+    expect(() => changeMaterialGraphInputValue(literalEdited, nodeId, 'file', 'https://example.test/other.png'))
+      .toThrow('filename ne peut être modifiée');
+    const xml = exportSurfaceGraph(defaultEdited.surfaceGraph!, 'mat').xml;
+    expect(xml).toContain(`<custom_color name="${nodeId}" type="color3" nodedef="ND_custom_color">`);
+    expect(xml).toContain(`<input name="label" type="string" value="updated label" />`);
+    expect(xml).toContain(`<input name="description" type="string" value="added later" />`);
+    expect(xml).toContain(`<input name="file" type="filename" value="textures/texture.png" />`);
+    expect(xml).toContain(`nodename="${nodeId}" output="other"`);
+    expect(() => changeMaterialGraphInputLink(edited, 'surface', 'base_color', nodeId, 'missing'))
+      .toThrow('Connexion impossible');
+    const restored = changeMaterialGraphInputLink(edited, 'surface', 'base_color', null);
+    expect(restored.surfaceGraph!.nodes.get('surface')!.inputs[0]!.source)
+      .toEqual({ kind: 'value', type: 'color3', value: '0.8, 0.8, 0.8' });
+  });
+
   it('shares one shader across value-only variants in uniform parameter mode', async () => {
     const schlick = (roughness: string, reflectivity: string) => (graph: ResolvedGraph) => {
       const surface = graph.nodes.get('surface')!;

@@ -1,11 +1,14 @@
 import { describe, it, expect, vi } from 'vitest';
 import {
   resolveGraph,
+  resolveNodeDefCatalog,
   type MxNode,
   type MxInput,
   type MxNodeDef,
+  type MxOutput,
   type MxInterfaceElement,
 } from '../../src/materialx/graph.ts';
+import type { MxDocument } from '../../src/materialx/wasm.ts';
 
 interface FakeInputSpec {
   name: string;
@@ -79,6 +82,8 @@ function fakeNodeDef(opts: { name: string; nodeString: string; type: string; imp
     getNodeGroup: () => '',
     getVersionString: () => '',
     getImplementation: () => opts.impl ?? null,
+    getActiveInputs: () => [],
+    getActiveOutputs: () => [],
     getActiveSourceUri: () => 'stdlib.mtlx',
     validate: () => true,
     delete: () => {},
@@ -111,6 +116,25 @@ function fakeNode(opts: {
 }
 
 describe('resolveGraph', () => {
+  it('enumerates NodeDef output ports for the editor catalog', () => {
+    const outputs: MxOutput[] = ['outx', 'outy', 'outz'].map(name => ({
+      getName: () => name, getNamePath: () => `/nd/ND_separate3_vector3/${name}`, getType: () => 'float',
+      validate: () => true, delete: () => {},
+    }));
+    const definition = {
+      ...fakeNodeDef({ name: 'ND_separate3_vector3', nodeString: 'separate3', type: 'float' }),
+      getActiveOutputs: () => outputs,
+    };
+    const catalog = resolveNodeDefCatalog({
+      getNodeDefs: () => [definition],
+    } as unknown as MxDocument);
+    expect(catalog[0]).toMatchObject({
+      name: 'ND_separate3_vector3', outputs: [
+        { name: 'outx', type: 'float' }, { name: 'outy', type: 'float' }, { name: 'outz', type: 'float' },
+      ],
+    });
+  });
+
   it('walks the LamaSurface presence network as well as both closures', () => {
     const front = fakeNode({ name: 'front', category: 'LamaDiffuse', type: 'BSDF' });
     const back = fakeNode({ name: 'back', category: 'LamaSheen', type: 'BSDF' });

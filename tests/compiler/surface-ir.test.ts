@@ -207,6 +207,51 @@ describe('lowerSurfaceInputsToIr (T055c)', () => {
     expect(evaluateShaderIr(ir).get('color')).toEqual([0.2, 0.4, 0.6]);
   });
 
+  it('lowers a connected randomcolor node with MaterialX cell-noise seeding', () => {
+    const graph = surfaceGraph([conn('base_color', 'color3', 'random')], [
+      upstream('random', 'randomcolor', 'color3', [
+        value('in', 'float', '0.125'),
+        value('seed', 'integer', '5'),
+      ]),
+    ]);
+    const diagnostics: Diagnostic[] = [];
+    const builder = new IrModuleBuilder();
+    const surface = resolveSurface(graph, { onDiagnostic: d => diagnostics.push(d) });
+    const lowered = lowerSurfaceInputsToIr(graph, surface!, builder, d => diagnostics.push(d));
+    builder.output({ name: 'color', type: COLOR3, ref: lowered.inputs.get('base_color')! });
+    const ir = builder.build();
+
+    expect(diagnostics).toEqual([]);
+    const color = evaluateShaderIr(ir).get('color')!;
+    expect(color[0]).toBeCloseTo(0.1346801, 5);
+    expect(color[1]).toBeCloseTo(0.4314369, 5);
+    expect(color[2]).toBeCloseTo(1, 5);
+    expect(emitWgsl(ir).code).toContain('mx_randomcolor_hash');
+  });
+
+  it.each([
+    { texcoord: '0.01, 0.5', staggered: 'false', expected: 1 },
+    { texcoord: '0, 1.5', staggered: 'false', expected: 1 },
+    { texcoord: '0, 1.5', staggered: 'true', expected: 0 },
+  ])('lowers grid lines and staggered rows for UV $texcoord', ({ texcoord, staggered, expected }) => {
+    const graph = surfaceGraph([conn('base_color', 'color3', 'grid')], [
+      upstream('grid', 'grid', 'color3', [
+        value('texcoord', 'vector2', texcoord),
+        value('staggered', 'boolean', staggered),
+      ]),
+    ]);
+    const diagnostics: Diagnostic[] = [];
+    const builder = new IrModuleBuilder();
+    const surface = resolveSurface(graph, { onDiagnostic: d => diagnostics.push(d) });
+    const lowered = lowerSurfaceInputsToIr(graph, surface!, builder, d => diagnostics.push(d));
+    builder.output({ name: 'color', type: COLOR3, ref: lowered.inputs.get('base_color')! });
+    const ir = builder.build();
+
+    expect(diagnostics).toEqual([]);
+    expect(evaluateShaderIr(ir).get('color')).toEqual([expected, expected, expected]);
+    expect(emitWgsl(ir).code).toContain('floor(');
+  });
+
   it.each([
     ['false', [-1, 1, 4]],
     ['true', [0, 1, 2]],

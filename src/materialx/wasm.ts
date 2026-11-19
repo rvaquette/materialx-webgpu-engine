@@ -4,6 +4,7 @@
 // REQ-004). Embind objects are released deterministically via `delete()`.
 
 import { defaultDiagnosticSink, type DiagnosticSink } from '../core/diagnostics.ts';
+import type { MxNodeDef } from './graph.ts';
 
 /** Embind-backed object with deterministic release. */
 export interface MxObject {
@@ -22,6 +23,7 @@ export interface MxDocument extends MxElement {
   importLibrary(library: MxDocument): void;
   getChild?(name: string): MxElement | null;
   getNodes?(): MxLibraryNode[];
+  getNodeDefs?(): MxNodeDef[] | { size(): number; get(index: number): MxNodeDef };
 }
 
 export interface MxLibraryNode extends MxElement {

@@ -32,7 +32,7 @@ export function disneyMaterialFromStandard(
   const editorValues = new Map<string, readonly number[]>();
   for (const parameter of parameters) {
     if (!parameter.nodeId) continue;
-    const value = parameter.constantFor !== undefined ? parameter.value : editorArithmeticValue(parameter);
+    const value = parameter.constantFor !== undefined ? parameter.value : editorArithmeticValue(parameter, parameters);
     if (value) editorValues.set(parameter.nodeId, value);
   }
   if (editorValues.size) {
@@ -54,7 +54,7 @@ export function disneyMaterialFromStandard(
     if (item.source.kind !== 'value' && item.source.kind !== 'default') {
       throw new Error(`Unsupported connected standard_surface input ${name}.`);
     }
-    const parameter = parameters.find(p => !p.nodeId && !p.linkedConstant && p.input === name);
+    const parameter = parameters.find(p => !p.nodeId && !p.linkedSource && p.input === name);
     if (item.parameter && !parameter) throw new Error(`Missing editable standard_surface parameter ${name}.`);
     const values = parameter?.value ?? item.source.value;
     if (values.length !== count || values.some(value => !Number.isFinite(value))) {

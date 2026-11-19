@@ -26,6 +26,8 @@ describe('node coverage', () => {
   it('exposes closures and expr lowerings with the correct kind', () => {
     expect(getNodeLowering('add')?.kind).toBe('expr');
     expect(getNodeLowering('dielectric_bsdf')?.kind).toBe('closure');
+    expect(getNodeLowering('randomcolor')?.kind).toBe('expr');
+    expect(getNodeLowering('grid')?.kind).toBe('expr');
     expect(getNodeLowering('nonexistent')).toBeUndefined();
   });
 

@@ -1,30 +1,34 @@
 import { downloadBlob } from './assets/download.ts';
+import { SURFACE_IR_UPSTREAM } from './compiler/surface-ir.ts';
 import { compareMaterialGraphs } from './materialx/graph-comparison.ts';
 import { makeMaterialExport } from './materialx/graph-export.ts';
-import type { ResolvedGraph } from './materialx/graph.ts';
+import type { ResolvedGraph, ResolvedNodeDefRef } from './materialx/graph.ts';
 import type { SurfaceInputDiagnostic } from './materialx/surface-graph.ts';
 import type { InteractiveViewer, MaterialVariantSlot } from './render/viewer.ts';
-import type { EditableInputNode, MaterialParameter } from './render/material-parameters.ts';
+import { compatibleNodeOutputChoices, type MaterialGraphOutput, type MaterialParameter } from './render/material-parameters.ts';
 
 const NODE_WIDTH = 174;
 const NODE_HEIGHT = 54;
 const COLUMN = 232;
 const ROW = 80;
 const PADDING = 16;
+const MAX_SAVED_POSITION = 100_000;
 const SVG = 'http://www.w3.org/2000/svg';
 type NodePosition = { x: number; y: number };
 const savedPositions = new WeakMap<ResolvedGraph, Map<string, NodePosition>>();
+const positionStoragePrefix = 'material-graph-layout:v1:';
 
 interface GraphParameterEditing {
   parameters(nodeId: string): readonly MaterialParameter[];
+  nodeDefinitions(): readonly ResolvedNodeDefRef[];
+  outputs(nodeId: string, input: string): readonly MaterialGraphOutput[];
   diagnostics(nodeId: string): readonly SurfaceInputDiagnostic[];
   disneyDiagnostics?(): ReturnType<InteractiveViewer['objectDisneyMaterialDiagnostics']>;
   apply(changes: ReadonlyMap<string, readonly number[]>): Promise<ResolvedGraph | undefined>;
-  canInsertConstant(nodeId: string, input: string, kind?: EditableInputNode): boolean;
-  setConstant(nodeId: string, input: string, insert: boolean, kind?: EditableInputNode): Promise<ResolvedGraph>;
-  constantSources(nodeId: string, input: string): readonly string[];
-  canUnlinkConstant(nodeId: string, input: string): boolean;
-  setConstantLink(nodeId: string, input: string, sourceId: string | null): Promise<ResolvedGraph>;
+  canUnlinkInput(nodeId: string, input: string): boolean;
+  setInputLink(nodeId: string, input: string, sourceId: string | null, output?: string): Promise<ResolvedGraph>;
+  setInputValue(nodeId: string, input: string, value: string): Promise<ResolvedGraph>;
+  addNode(nodeId: string, input: string, nodeDef: string, output: string): Promise<ResolvedGraph>;
   variants(): Readonly<Record<MaterialVariantSlot, 'empty' | 'active' | 'saved'>> | undefined;
   variantGraph(slot: MaterialVariantSlot): ResolvedGraph | undefined;
   saveVariant(slot: MaterialVariantSlot): void;
@@ -161,6 +165,68 @@ function diagnosticText(diagnostic: SurfaceInputDiagnostic): string {
   }
 }
 
+export function parseGraphNodePositions(raw: string | null, nodeIds: ReadonlySet<string>): Map<string, NodePosition> {
+  if (raw === null) return new Map();
+  const parsed: unknown = JSON.parse(raw);
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error('La disposition enregistrée doit être un objet.');
+  }
+  const positions = new Map<string, NodePosition>();
+  for (const [id, value] of Object.entries(parsed)) {
+    if (!nodeIds.has(id)) continue;
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      throw new Error(`Position enregistrée invalide pour ${id}.`);
+    }
+    const { x, y } = value as { x?: unknown; y?: unknown };
+    if (typeof x !== 'number' || typeof y !== 'number'
+      || !Number.isFinite(x) || !Number.isFinite(y)
+      || x < PADDING || y < PADDING || x > MAX_SAVED_POSITION || y > MAX_SAVED_POSITION) {
+      throw new Error(`Position enregistrée invalide pour ${id}.`);
+    }
+    positions.set(id, { x, y });
+  }
+  return positions;
+}
+
+export function graphNodePositionStorageKey(scope: string | undefined, material: string, slot?: MaterialVariantSlot) {
+  if (scope === undefined) return undefined;
+  return `${positionStoragePrefix}${encodeURIComponent(scope)}:${encodeURIComponent(material)}:${slot ?? 'current'}`;
+}
+
+export function readGraphNodePositions(
+  storage: Pick<Storage, 'getItem'>, key: string, nodeIds: ReadonlySet<string>,
+): Map<string, NodePosition> {
+  return parseGraphNodePositions(storage.getItem(key), nodeIds);
+}
+
+export function writeGraphNodePositions(
+  storage: Pick<Storage, 'setItem'>, key: string, positions: ReadonlyMap<string, NodePosition>,
+): void {
+  storage.setItem(key, JSON.stringify(Object.fromEntries(positions)));
+}
+
+export function unsupportedSurfaceGraphNodes(graph: ResolvedGraph): string[] {
+  const roots = graph.terminals
+    .filter(terminal => terminal.name === 'surfaceshader' && terminal.nodeId)
+    .map(terminal => terminal.nodeId!);
+  const pending = roots.flatMap(id => graph.nodes.get(id)?.inputs.flatMap(input =>
+    input.source.kind === 'connection' ? [input.source.nodeId] : []) ?? []);
+  const visited = new Set(roots);
+  const unsupported: string[] = [];
+  while (pending.length) {
+    const id = pending.pop()!;
+    if (visited.has(id)) continue;
+    visited.add(id);
+    const node = graph.nodes.get(id);
+    if (!node) continue;
+    if (!SURFACE_IR_UPSTREAM.has(node.category)) unsupported.push(id);
+    for (const input of node.inputs) {
+      if (input.source.kind === 'connection') pending.push(input.source.nodeId);
+    }
+  }
+  return unsupported;
+}
+
 export function layoutMaterialGraph(graph: ResolvedGraph) {
   const depths = new Map<string, number>();
   const incoming = new Map<string, number>();
@@ -213,7 +279,7 @@ export function layoutMaterialGraph(graph: ResolvedGraph) {
 
 export function showMaterialGraph(
   dialog: HTMLDialogElement, graph: ResolvedGraph | undefined, material: string, editing?: GraphParameterEditing,
-  selection?: { id: string; message: string },
+  selection?: { id: string; message: string }, positionScope?: string,
 ): void {
   const title = dialog.querySelector<HTMLElement>('#material-graph-title')!;
   const diagram = dialog.querySelector<HTMLElement>('#material-graph-diagram')!;
@@ -235,6 +301,9 @@ export function showMaterialGraph(
   exportButton.disabled = false;
   exportButton.onclick = null;
   exportStatus.textContent = '';
+  const variantStatus = editing?.variants();
+  const activeVariant = variantStatus?.A === 'active' ? 'A' : variantStatus?.B === 'active' ? 'B' : undefined;
+  const storageKey = graphNodePositionStorageKey(positionScope, material, activeVariant);
   function refreshBackendDiagnostics(): void {
     if (!backend) return;
     const list = backend.querySelector('ul')!;
@@ -259,6 +328,7 @@ export function showMaterialGraph(
   }
 
   let currentGraph = graph;
+  const unsupportedNodes = new Set(unsupportedSurfaceGraphNodes(graph));
   let exporting = false;
   function setExporting(value: boolean): void {
     exporting = value;
@@ -284,8 +354,26 @@ export function showMaterialGraph(
   exportButton.onclick = () => exportGraph(currentGraph, material);
   const layout = layoutMaterialGraph(graph);
   const original = new Map(layout.positions);
-  const overrides = savedPositions.get(graph) ?? new Map<string, NodePosition>();
+  const overrides = savedPositions.get(graph) ?? (() => {
+    try {
+      return storageKey === undefined ? new Map<string, NodePosition>()
+        : readGraphNodePositions(localStorage, storageKey, new Set(graph.nodes.keys()));
+    } catch (error) {
+      exportStatus.textContent = `Disposition précédente ignorée : ${error instanceof Error ? error.message : String(error)}`;
+      return new Map<string, NodePosition>();
+    }
+  })();
   savedPositions.set(graph, overrides);
+  const persistPositions = (slot?: MaterialVariantSlot) => {
+    const key = slot === undefined ? storageKey : graphNodePositionStorageKey(positionScope, material, slot);
+    if (key === undefined) return;
+    try {
+      writeGraphNodePositions(localStorage, key, overrides);
+      if ((exportStatus.textContent ?? '').startsWith('Disposition ')) exportStatus.textContent = '';
+    } catch (error) {
+      exportStatus.textContent = `Disposition non sauvegardée : ${error instanceof Error ? error.message : String(error)}`;
+    }
+  };
   for (const [id, position] of overrides) layout.positions.set(id, position);
   let width = Math.max(layout.width + COLUMN, 640);
   let height = Math.max(layout.height + ROW, 260);
@@ -345,6 +433,7 @@ export function showMaterialGraph(
       setPosition(buttons.get(id)!, position);
     }
     layout.edges.forEach((edge, index) => drawLink(edge, paths[index]!));
+    persistPositions();
   };
   let applying = false;
   function select(id: string, message = ''): void {
@@ -355,12 +444,19 @@ export function showMaterialGraph(
     const heading = document.createElement('h3');
     heading.textContent = `${node.id} · ${node.category} (${node.type})`;
     details.replaceChildren(heading);
+    if (unsupportedNodes.has(id)) {
+      const warning = document.createElement('p');
+      warning.className = 'material-graph-warning';
+      warning.textContent = 'Aucun lowering WGSL : la contribution peut être remplacée par une valeur neutre.';
+      details.append(warning);
+    }
     if (!node.inputs.length) details.append('Aucune entrée.');
     const parameters = new Map(editing?.parameters(id).map(parameter => [parameter.input, parameter]));
     const diagnostics = new Map(editing?.diagnostics(id).map(diagnostic => [diagnostic.input, diagnostic]));
     const form = document.createElement('form');
     const fields = document.createElement('fieldset');
     const editors: { parameter: MaterialParameter; controls: HTMLInputElement[] }[] = [];
+    const literalEditors: { control: HTMLInputElement; initial: string }[] = [];
     const status = document.createElement('p');
     status.role = 'status';
     status.textContent = message;
@@ -376,9 +472,11 @@ export function showMaterialGraph(
     };
     async function changeTopology(
       edit: () => Promise<ResolvedGraph>, next: (graph: ResolvedGraph) => string, message: string,
+      committingLiteral?: HTMLInputElement,
     ): Promise<void> {
       if (applying) return;
-      if (changesFromForm().size) {
+      if (changesFromForm().size || literalEditors.some(editor =>
+        editor.control !== committingLiteral && editor.control.value !== editor.initial)) {
         status.textContent = 'Applique les valeurs modifiées avant de modifier le graphe.';
         return;
       }
@@ -393,7 +491,7 @@ export function showMaterialGraph(
         }
         if (dialog.open && surface.isConnected) showMaterialGraph(dialog, updated, material, editing, {
           id: next(updated), message,
-        });
+        }, positionScope);
       } catch (error) {
         status.textContent = `Échec : ${error instanceof Error ? error.message : String(error)}`;
       } finally {
@@ -416,12 +514,13 @@ export function showMaterialGraph(
         save.textContent = variants[slot] === 'empty' ? `Enregistrer ${slot}` : `Remplacer ${slot}`;
         save.disabled = variants[slot] === 'active';
         save.onclick = () => {
-          if (changesFromForm().size) {
+          if (changesFromForm().size || literalEditors.some(editor => editor.control.value !== editor.initial)) {
             status.textContent = 'Applique les valeurs modifiées avant d’enregistrer la variante.';
             return;
           }
           try {
             editing.saveVariant(slot);
+            persistPositions(slot);
             comparison?.invalidate();
             select(id, `Variante ${slot} enregistrée.`);
             buttons.get(id)?.focus({ preventScroll: true });
@@ -475,29 +574,6 @@ export function showMaterialGraph(
         });
         row.append(...controls);
         editors.push({ parameter, controls });
-        for (const [kind, name, owned] of [
-          ['constant', 'Constant', parameter.constantFor !== undefined],
-          ['multiply', 'Multiply', parameter.arithmeticFor?.kind === 'multiply'],
-          ['add', 'Add', parameter.arithmeticFor?.kind === 'add'],
-        ] as const) {
-          if (!editing) continue;
-          const insert = editing.canInsertConstant(id, input.name, kind);
-          if (!insert && !owned) continue;
-          const action = document.createElement('button');
-          action.type = 'button';
-          action.textContent = insert ? `Insérer un ${name}` : 'Revenir à une valeur littérale';
-          action.setAttribute('aria-label', `${action.textContent} : ${input.name}`);
-          if (!insert && layout.edges.filter(edge => edge.from === id).length > 1) {
-            action.disabled = true;
-            row.append(' Retire d’abord les liens supplémentaires.');
-          }
-          action.onclick = () => changeTopology(() => editing.setConstant(id, input.name, insert, kind), updated => {
-            const binding = updated.nodes.get(id)?.inputs.find(candidate => candidate.name === input.name)?.source;
-            return binding?.kind === 'connection' ? binding.nodeId
-              : updated.terminals.find(terminal => terminal.name === 'surfaceshader')?.nodeId ?? id;
-          }, insert ? `Nœud ${name} connecté.` : 'Valeur littérale restaurée.');
-          row.append(' ', action);
-        }
       } else if (source.kind === 'connection') {
         const upstream = buttons.get(source.nodeId);
         const label = `${source.nodeId}${source.output ? `.${source.output}` : ''}`;
@@ -508,34 +584,91 @@ export function showMaterialGraph(
           link.onclick = () => { select(source.nodeId); upstream.focus(); };
           row.append(link);
         } else row.append(`${label} (indisponible)`);
-        if (editing?.canUnlinkConstant(id, input.name)) {
-          const unlink = document.createElement('button');
-          unlink.type = 'button';
-          unlink.textContent = 'Retirer le lien';
-          unlink.setAttribute('aria-label', `Retirer le lien : ${input.name}`);
-          unlink.onclick = () => changeTopology(() => editing.setConstantLink(id, input.name, null), () => id, 'Lien retiré. Valeur précédente restaurée.');
-          row.append(' ', unlink);
-        }
       } else {
         row.append(source.kind === 'value' ? source.value
           : source.kind === 'interface' ? `interface ${source.name}` : 'valeur par défaut');
       }
-      const candidates = (parameter || source.kind === 'connection') ? editing?.constantSources(id, input.name) ?? [] : [];
-      if (editing && candidates.length) {
-        const replacing = source.kind === 'connection';
-        const sources = document.createElement('select');
-        sources.setAttribute('aria-label', `Constant existant : ${input.name}`);
-        sources.add(new Option(replacing ? 'Choisir un autre Constant…' : 'Choisir un Constant…', ''));
-        for (const candidate of candidates) sources.add(new Option(candidate, candidate));
-        const connect = document.createElement('button');
-        connect.type = 'button';
-        connect.textContent = replacing ? 'Remplacer le lien' : 'Connecter';
-        connect.setAttribute('aria-label', `${replacing ? 'Remplacer le lien' : 'Connecter un Constant'} : ${input.name}`);
-        connect.disabled = true;
-        sources.onchange = () => { connect.disabled = !sources.value; };
-        connect.onclick = () => changeTopology(() => editing.setConstantLink(id, input.name, sources.value), () => id,
-          replacing ? 'Lien remplacé.' : 'Lien créé.');
-        row.append(' ', sources, ' ', connect);
+      if (editing && (source.kind === 'value' || source.kind === 'default')
+        && !parameter && input.parameter === undefined && input.type === 'filename') {
+        const warning = document.createElement('span');
+        warning.className = 'material-graph-warning';
+        warning.textContent = 'Fichier en lecture seule : sa modification nécessite de recharger les textures.';
+        row.append(' ', warning);
+      } else if (editing && (source.kind === 'value' || source.kind === 'default')
+        && !parameter && input.parameter === undefined) {
+        const literal = document.createElement('input');
+        literal.type = 'text';
+        literal.value = source.kind === 'value' ? source.value : '';
+        const initial = literal.value;
+        literal.setAttribute('aria-label', `${input.name} (${input.type})`);
+        const applyLiteral = document.createElement('button');
+        applyLiteral.type = 'button';
+        applyLiteral.textContent = 'Appliquer la valeur littérale';
+        applyLiteral.onclick = () => changeTopology(
+          () => editing.setInputValue(id, input.name, literal.value), () => id,
+          'Valeur littérale modifiée.', literal,
+        );
+        literalEditors.push({ control: literal, initial });
+        row.append(' ', literal, ' ', applyLiteral);
+      }
+        if (editing) {
+          const existingOutputs = editing.outputs(id, input.name);
+          const nodeChoices = compatibleNodeOutputChoices(editing.nodeDefinitions(), input.type);
+          if (existingOutputs.length || nodeChoices.length) {
+            type SourceChoice = { kind: 'existing'; nodeId: string; output: string }
+              | { kind: 'new'; nodeDef: string; output: string };
+            const sources = document.createElement('select');
+            sources.setAttribute('aria-label', `Sortie MaterialX compatible : ${input.name}`);
+            sources.add(new Option('Choisir une sortie compatible…', ''));
+            if (existingOutputs.length) {
+              const group = document.createElement('optgroup');
+              group.label = 'Nœuds du graphe';
+              for (const output of existingOutputs) {
+                const choice: SourceChoice = { kind: 'existing', nodeId: output.nodeId, output: output.output };
+                group.append(new Option(output.label, JSON.stringify(choice)));
+              }
+              sources.append(group);
+            }
+            if (nodeChoices.length) {
+              const group = document.createElement('optgroup');
+              group.label = 'Ajouter un NodeDef MaterialX';
+              for (const choice of nodeChoices) {
+                const value: SourceChoice = { kind: 'new', nodeDef: choice.nodeDef.name, output: choice.output.name };
+                const label = SURFACE_IR_UPSTREAM.has(choice.nodeDef.nodeString)
+                  ? choice.label : `${choice.label} — rendu WGSL non pris en charge (valeur neutre possible)`;
+                group.append(new Option(label, JSON.stringify(value)));
+              }
+              sources.append(group);
+            }
+            const connect = document.createElement('button');
+            connect.type = 'button';
+            connect.textContent = 'Connecter au port';
+            connect.setAttribute('aria-label', `Connecter au port : ${input.name}`);
+            connect.disabled = true;
+            sources.onchange = () => { connect.disabled = !sources.value; };
+            connect.onclick = () => {
+              const choice = JSON.parse(sources.value) as SourceChoice;
+              const operation = choice.kind === 'existing'
+                ? editing.setInputLink(id, input.name, choice.nodeId, choice.output)
+                : editing.addNode(id, input.name, choice.nodeDef, choice.output);
+              void changeTopology(() => operation, updated => {
+                const binding = updated.nodes.get(id)?.inputs.find(candidate => candidate.name === input.name)?.source;
+                return binding?.kind === 'connection' ? binding.nodeId
+                  : updated.terminals.find(terminal => terminal.name === 'surfaceshader')?.nodeId ?? id;
+              }, choice.kind === 'new' ? 'Nœud MaterialX ajouté et connecté.' : 'Sortie connectée.');
+            };
+            row.append(' ', sources, ' ', connect);
+          }
+          if (editing.canUnlinkInput(id, input.name)) {
+            const unlink = document.createElement('button');
+            unlink.type = 'button';
+            unlink.textContent = 'Restaurer la connexion précédente';
+            unlink.setAttribute('aria-label', `Restaurer la connexion précédente : ${input.name}`);
+            unlink.onclick = () => changeTopology(
+              () => editing.setInputLink(id, input.name, null), () => id, 'Connexion précédente restaurée.',
+            );
+            row.append(' ', unlink);
+          }
       }
       const diagnostic = diagnostics.get(input.name);
       if (diagnostic) {
@@ -553,6 +686,10 @@ export function showMaterialGraph(
     fields.append(apply);
     form.onsubmit = async event => {
       event.preventDefault();
+      if (literalEditors.some(editor => editor.control.value !== editor.initial)) {
+        status.textContent = 'Applique les valeurs littérales avant les paramètres numériques.';
+        return;
+      }
       if (applying) return;
       const changes = changesFromForm();
       if (!changes.size) {
@@ -591,13 +728,16 @@ export function showMaterialGraph(
     button.type = 'button';
     button.className = 'material-graph-node';
     setPosition(button, layout.positions.get(node.id)!);
-    button.title = `${node.id} · ${node.category}`;
+    const unsupported = unsupportedNodes.has(node.id);
+    button.title = `${node.id} · ${node.category}${unsupported ? ' · Rendu WGSL incomplet' : ''}`;
     button.setAttribute('aria-describedby', 'material-graph-help');
     const label = document.createElement('strong');
     label.textContent = node.id;
     const terminalNames = terminals.filter(terminal => terminal.nodeId === node.id).map(terminal => terminal.name);
     const category = document.createElement('span');
-    category.textContent = terminalNames.length ? `Sortie : ${terminalNames.join(', ')}` : node.category;
+    category.textContent = unsupported ? 'Rendu WGSL incomplet'
+      : terminalNames.length ? `Sortie : ${terminalNames.join(', ')}` : node.category;
+    if (unsupported) category.className = 'material-graph-warning';
     button.append(label, category);
     button.onclick = () => select(node.id);
     let drag: { pointerId: number; offset: NodePosition; client: NodePosition; moved: boolean } | undefined;
@@ -619,7 +759,10 @@ export function showMaterialGraph(
       move(node.id, button, event.clientX - bounds.left - drag.offset.x, event.clientY - bounds.top - drag.offset.y);
     };
     button.onlostpointercapture = event => {
-      if (drag?.pointerId === event.pointerId) drag = undefined;
+      if (drag?.pointerId === event.pointerId) {
+        if (drag.moved) persistPositions();
+        drag = undefined;
+      }
     };
     button.onkeydown = event => {
       const delta = ({ ArrowLeft: [-10, 0], ArrowRight: [10, 0], ArrowUp: [0, -10], ArrowDown: [0, 10] } as const);
@@ -628,6 +771,7 @@ export function showMaterialGraph(
       const [dx, dy] = delta[event.key];
       const { x, y } = layout.positions.get(node.id)!;
       move(node.id, button, x + dx, y + dy);
+      persistPositions();
     };
     buttons.set(node.id, button);
     surface.append(button);

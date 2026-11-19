@@ -3,6 +3,7 @@ import { resolvedGraphFromParsedSurface } from '../../../src/materialx/surface-f
 import { resolveSurface } from '../../../src/materialx/surface-graph.ts';
 import { disneyMaterialFromStandard } from '../../../src/render/pathtracing/disney-standard-material.ts';
 import { packDisneyMaterials } from '../../../src/render/pathtracing/disney-material.ts';
+import type { MaterialParameter } from '../../../src/render/material-parameters.ts';
 
 function convert(inputs: Record<string, number | readonly number[] | boolean>) {
   const graph = resolvedGraphFromParsedSurface({ category: 'standard_surface', inputs });
@@ -33,6 +34,44 @@ describe('standard_surface to Disney', () => {
       update: 'uniform', input: 'specular_roughness',
     }]);
     expect(result.material.roughness).toBeCloseTo(0.16);
+  });
+
+  it('uses the interpolated Mix value when converting editor nodes to Disney', () => {
+    const graph = resolvedGraphFromParsedSurface({ category: 'standard_surface', inputs: { specular_roughness: 0.2 } });
+    const rootId = graph.terminals.find(terminal => terminal.name === 'surfaceshader')!.nodeId!;
+    const root = graph.nodes.get(rootId)!;
+    const nodeId = 'specular_roughness_mix';
+    graph.nodes.set(rootId, {
+      ...root,
+      inputs: root.inputs.map(input => input.name === 'specular_roughness'
+        ? { ...input, source: { kind: 'connection', nodeId } } : input),
+    });
+    graph.nodes.set(nodeId, {
+      id: nodeId, category: 'mix', type: 'float', provenance: { namePath: nodeId },
+      inputs: [
+        { name: 'bg', type: 'float', source: { kind: 'value', type: 'float', value: '0.2' }, provenance: { namePath: `${nodeId}/bg` } },
+        { name: 'fg', type: 'float', source: { kind: 'value', type: 'float', value: '0.8' }, provenance: { namePath: `${nodeId}/fg` } },
+        { name: 'mix', type: 'float', source: { kind: 'value', type: 'float', value: '0.5' }, provenance: { namePath: `${nodeId}/mix` } },
+      ],
+    });
+    const original: MaterialParameter = {
+      id: 'surface:specular_roughness', label: 'specular_roughness', type: 'float', value: [0.2], initial: [0.2],
+      update: 'uniform', input: 'specular_roughness',
+    };
+    const parameters: MaterialParameter[] = [
+      {
+        id: `node:${nodeId}/fg`, label: `${nodeId} / fg`, type: 'float', value: [0.8], initial: [1],
+        update: 'uniform', input: 'fg', uniform: 'mix_fg', nodeId,
+        arithmeticFor: { kind: 'mix', original, role: 'fg' },
+      },
+      {
+        id: `node:${nodeId}/mix`, label: `${nodeId} / mix`, type: 'float', value: [0.5], initial: [0],
+        update: 'uniform', input: 'mix', uniform: 'mix_factor', nodeId,
+        arithmeticFor: { kind: 'mix', original, role: 'mix' },
+      },
+    ];
+    const result = disneyMaterialFromStandard(resolveSurface(graph)!, graph, parameters);
+    expect(result.material.roughness).toBeCloseTo(0.25);
   });
 
   it('rejects unsupported film, thin surfaces and participating transmission', () => {

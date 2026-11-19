@@ -21,6 +21,7 @@ import { createGraphMaterialCompiler } from './graph-material-compiler.ts';
 import { loadMaterialXDocuments } from '../materialx/document-source.ts';
 import { loadMaterialXCore } from '../materialx/wasm.ts';
 import { loadSharedMaterialXLibraries, defaultLibrarySources } from '../materialx/libraries.ts';
+import type { ResolvedNodeDefRef } from '../materialx/graph.ts';
 import type { DecodedPixelImage } from '../assets/images.ts';
 import { DecodedImageCache } from '../assets/decoded-image-cache.ts';
 import { AsyncResourceCache } from '../assets/cache.ts';
@@ -158,6 +159,7 @@ export function surfaceFromMtlx(text: string): RasterSurface {
 
 export interface MtlxSceneContext {
   documents?: Awaited<ReturnType<typeof loadMaterialXDocuments>>;
+  nodeDefinitions?: readonly ResolvedNodeDefRef[];
   imageProvider: PtImageProvider;
   surfaceFor: (material: MaterialResource) => RasterSurface;
 }
@@ -271,7 +273,7 @@ export async function loadMtlxSceneContext(
       () => sceneUdimIndex(document.baseURI), new URL(baseDir, document.baseURI).href, sink),
   };
   const surfaceFor = (material: MaterialResource): RasterSurface => surfaces.get(material.materialName) ?? NEUTRAL_SURFACE;
-  return { documents, imageProvider, surfaceFor };
+  return { documents, nodeDefinitions: documents.nodeDefinitions?.() ?? [], imageProvider, surfaceFor };
 }
 
 /** Decode + upload every texture a compiled surface module samples and key the GPU

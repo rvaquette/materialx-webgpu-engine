@@ -56,6 +56,10 @@ describe.skipIf(!existsSync(coreFile) || !existsSync(libraryRoot))('installed Ma
       <surfacematerial name="mat" type="material"><input name="surfaceshader" type="surfaceshader" nodename="surface" /></surfacematerial>
     </materialx>`]]) });
     try {
+      const separate3 = documents.nodeDefinitions?.().find(definition => definition.name === 'ND_separate3_vector3');
+      expect(separate3?.outputs).toEqual(expect.arrayContaining([
+        { name: 'outx', type: 'float' }, { name: 'outy', type: 'float' }, { name: 'outz', type: 'float' },
+      ]));
       const unit = { assetPath: 'source', materialName: 'mat', referencedPrimPath: '/MaterialX/Materials/mat', boundPrims: [] };
       const graph = (await createGraphMaterialCompiler({ documents }).compile(unit))!.graph!;
       const bytes = new Uint8Array(readFileSync(join('scenes', 'pathtracer', 'renderman', 'textures', 'checker.png')));
@@ -156,6 +160,10 @@ describe.skipIf(!existsSync(coreFile) || !existsSync(libraryRoot))('installed Ma
       const unit = { assetPath: 'source', materialName: 'mat', referencedPrimPath: '/MaterialX/Materials/mat', boundPrims: [] };
       const build = await createGraphMaterialCompiler({ documents }).compile(unit);
       const graph = build!.graph!;
+      expect(graph.nodes.get('surface')?.nodeDef?.inputs?.find(input => input.name === 'specular_roughness'))
+        .toMatchObject({ uiMin: 0, uiMax: 1 });
+      expect(graph.nodes.get('surface')?.nodeDef?.inputs?.find(input => input.name === 'base_color'))
+        .toMatchObject({ uiMinComponents: [0, 0, 0], uiMaxComponents: [1, 1, 1] });
       const rough = graph.nodes.get('NG/rough')!;
       rough.inputs[0]!.source = { kind: 'value', type: 'float', value: '0.42' };
       const { filename, xml } = exportSurfaceGraph(graph, 'NG rough');
@@ -195,9 +203,11 @@ describe.skipIf(!existsSync(coreFile) || !existsSync(libraryRoot))('installed Ma
       expect(() => exportSurfaceGraph({ ...graph, nodes: new Map(graph.nodes).set(rough.id, { ...rough, category: 'image' }) }, 'mat'))
         .toThrow('Nœud non pris en charge');
       const scale = graph.nodes.get('NG/scale')!;
-      expect(() => exportSurfaceGraph({ ...graph, nodes: new Map(graph.nodes).set(scale.id, {
+      const customDefinitionGraph = { ...graph, nodes: new Map(graph.nodes).set(scale.id, {
         ...scale, nodeDef: { ...scale.nodeDef!, name: 'ND_custom_multiply_float' },
-      }) }, 'mat')).toThrow('Nœud non pris en charge');
+      }) };
+      expect(exportSurfaceGraph(customDefinitionGraph, 'mat').xml)
+        .toContain('nodedef="ND_custom_multiply_float"');
     } finally {
       documents.delete();
       libraries.delete();

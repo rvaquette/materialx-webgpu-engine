@@ -141,6 +141,23 @@ function hsvToRgb(c: IrValue): number[] {
   }
 }
 
+function materialXCellNoise2(x: number, y: number): number {
+  const rotateLeft = (value: number, count: number) =>
+    ((value << count) | (value >>> (32 - count))) >>> 0;
+  const seed = (0xdeadbeef + 2 * 4 + 13) >>> 0;
+  let a = (seed + (x >>> 0)) >>> 0;
+  let b = (seed + (y >>> 0)) >>> 0;
+  let c = seed;
+  c = ((c ^ b) - rotateLeft(b, 14)) >>> 0;
+  a = ((a ^ c) - rotateLeft(c, 11)) >>> 0;
+  b = ((b ^ a) - rotateLeft(a, 25)) >>> 0;
+  c = ((c ^ b) - rotateLeft(b, 16)) >>> 0;
+  a = ((a ^ c) - rotateLeft(c, 4)) >>> 0;
+  b = ((b ^ a) - rotateLeft(a, 14)) >>> 0;
+  c = ((c ^ b) - rotateLeft(b, 24)) >>> 0;
+  return Math.fround(Math.fround(c) / Math.fround(0xffffffff));
+}
+
 function hash3(p: IrValue): number {
   return fract(Math.sin(dot(p, [12.9898, 78.233, 37.719])) * 43758.5453);
 }
@@ -335,6 +352,42 @@ function evalCall(op: string, args: IrValue[], env: IrEvalVaryings, type: IrType
       return rgbToHsv(input('in', 0));
     case 'hsvtorgb':
       return hsvToRgb(input('in', 0));
+    case 'randomcolor': {
+      const inputValue = input('in', 0, [0])[0]!;
+      const seed = input('seed', 7, [0])[0]!;
+      const x = Math.floor(Math.fround(Math.fround(inputValue) * 4096));
+      const channel = (
+        lowName: string, highName: string, lowIndex: number, highIndex: number,
+        lowDefault: number, highDefault: number, offset: number,
+      ) => {
+        const low = input(lowName, lowIndex, [lowDefault])[0]!;
+        const high = input(highName, highIndex, [highDefault])[0]!;
+        const seedOffset = Math.fround(Math.fround(seed) + Math.fround(offset));
+        return low + materialXCellNoise2(x, Math.ceil(seedOffset)) * (high - low);
+      };
+      return hsvToRgb([
+        channel('huelow', 'huehigh', 1, 2, 0, 1, 413.3),
+        channel('saturationlow', 'saturationhigh', 3, 4, 0.825, 1, 1522.4),
+        channel('brightnesslow', 'brightnesshigh', 5, 6, 1, 1, 1813.8),
+      ]);
+    }
+    case 'grid': {
+      const uv = input('texcoord', 0, [0, 0]);
+      const tiling = input('uvtiling', 1, [1, 1]);
+      const offset = input('uvoffset', 2, [0, 0]);
+      const x = uv[0]! * (tiling[0] ?? 1) - (offset[0] ?? 0);
+      const y = uv[1]! * (tiling[1] ?? tiling[0] ?? 1) - (offset[1] ?? offset[0] ?? 0);
+      const yModuloTwo = y - 2 * Math.floor(y / 2);
+      const rowShift = yModuloTwo > 1 ? 0.5 : 0;
+      const xStaggered = x + (input('staggered', 4, [0])[0] ? rowShift : 0);
+      const xModulo = xStaggered - Math.floor(xStaggered);
+      const yModulo = y - Math.floor(y);
+      const threshold = 1 - input('thickness', 3, [0.05])[0]!;
+      const inX = Math.abs(2 * xModulo - 1) <= threshold ? 1 : 0;
+      const inY = Math.abs(2 * yModulo - 1) <= threshold ? 1 : 0;
+      const color = 1 - Math.min(inX, inY);
+      return [color, color, color];
+    }
     case 'position':
       return [...(env.position ?? zeros(3))];
     case 'texcoord':

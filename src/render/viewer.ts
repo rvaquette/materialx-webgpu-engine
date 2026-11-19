@@ -56,7 +56,15 @@ import {
 } from './pathtracing/convergence.ts';
 import { JsDenoiser } from './pathtracing/js-denoiser.ts';
 import { PathTraceStopping, pathTraceMetrics, type PathTraceRenderLimits, type PathTraceProgress, type PathTraceMetrics } from './pathtracing/render-limits.ts';
-import { canInsertMaterialInputNode, changeMaterialConstant, changeMaterialConstantLink, changeMaterialParameters, compileEditableMaterial, materialConstantSources, materialUniformData, packParameterUniforms, visibleMaterialParameters, type EditableInputNode, type MaterialParameter } from './material-parameters.ts';
+import {
+  addMaterialNodeFromDefinition, canInsertMaterialInputNode, changeMaterialConstant, changeMaterialConstantLink,
+  changeMaterialGraphInputLink, changeMaterialGraphInputValue, changeMaterialParameters, compileEditableMaterial,
+  compatibleMaterialGraphOutputs,
+  materialConstantSources, materialUniformData, packParameterUniforms, visibleMaterialParameters,
+  type EditableInputNode, type MaterialGraphOutput, type MaterialParameter,
+} from './material-parameters.ts';
+import type { ResolvedGraph, ResolvedNode, ResolvedNodeDefRef } from '../materialx/graph.ts';
+import type { NormalizedSurfaceInput, ResolvedSurface } from '../materialx/surface-graph.ts';
 import { applySceneDisplacement } from './displacement.ts';
 import type { MaterialResource, SceneResources } from './scene-resources.ts';
 import { convertDisneySceneMaterial, prepareDisneyScene } from './pathtracing/disney-scene.ts';
@@ -141,6 +149,35 @@ function disneyEnvironmentRotation(lights: readonly SceneLight[]): number {
 
 export type BackendKind = 'raster' | 'pathtracing' | 'disney';
 export type MaterialVariantSlot = 'A' | 'B';
+
+interface StoredMaterialVariant {
+  version: 1;
+  graph: Omit<ResolvedGraph, 'nodes'> & { nodes: ResolvedNode[] };
+  surface: Omit<ResolvedSurface, 'inputs'> & { inputs: [string, NormalizedSurfaceInput][] };
+  parameters: readonly MaterialParameter[];
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
+function isStoredMaterialVariant(value: unknown): value is StoredMaterialVariant {
+  if (!isRecord(value) || value.version !== 1 || !isRecord(value.graph) || !isRecord(value.surface)) return false;
+  const graph = value.graph;
+  const surface = value.surface;
+  return Array.isArray(graph.terminals)
+    && Array.isArray(graph.nodes)
+    && graph.nodes.every(node => isRecord(node) && typeof node.id === 'string' && Array.isArray(node.inputs))
+    && Array.isArray(surface.inputs)
+    && surface.inputs.every(input => Array.isArray(input) && typeof input[0] === 'string' && isRecord(input[1]))
+    && Array.isArray(value.parameters)
+    && value.parameters.every(parameter => isRecord(parameter) && typeof parameter.id === 'string'
+      && typeof parameter.input === 'string' && Array.isArray(parameter.value) && Array.isArray(parameter.initial));
+}
+
+function materialVariantStorageKey(sceneEntry: string, path: string, unitKey: string, slot: MaterialVariantSlot): string {
+  return `materialx-webgpu:variant:v1:${encodeURIComponent(sceneEntry)}:${encodeURIComponent(path)}:${encodeURIComponent(unitKey)}:${slot}`;
+}
 
 export type PathTracerState = 'idle' | 'compiling' | 'ready' | 'error';
 export type DenoiserStatus =
@@ -359,7 +396,7 @@ export class InteractiveViewer {
   objectMaterialVariants(path: string) {
     const material = this.#editableObjectMaterial(path);
     if (!material?.surfaceGraph) return undefined;
-    const saved = this.#materialVariants.get(path);
+    const saved = this.#materialVariantsFor(path, material);
     return {
       A: saved?.A === undefined ? 'empty' : saved.A === material ? 'active' : 'saved',
       B: saved?.B === undefined ? 'empty' : saved.B === material ? 'active' : 'saved',
@@ -367,17 +404,21 @@ export class InteractiveViewer {
   }
 
   objectMaterialVariantGraph(path: string, slot: MaterialVariantSlot) {
-    return this.#materialVariants.get(path)?.[slot]?.surfaceGraph;
+    const material = this.#editableObjectMaterial(path);
+    return material?.surfaceGraph ? this.#materialVariantsFor(path, material)[slot]?.surfaceGraph : undefined;
   }
 
   saveObjectMaterialVariant(path: string, slot: MaterialVariantSlot): void {
     const material = this.#editableObjectMaterial(path);
     if (!material?.surfaceGraph) throw new Error('Aucun graphe éditable pour cet objet.');
-    this.#materialVariants.set(path, { ...this.#materialVariants.get(path), [slot]: material });
+    const variants = this.#materialVariantsFor(path, material);
+    this.#writeMaterialVariant(path, slot, material);
+    this.#materialVariants.set(path, { ...variants, [slot]: material });
   }
 
   async applyObjectMaterialVariant(path: string, slot: MaterialVariantSlot): Promise<void> {
-    const saved = this.#materialVariants.get(path)?.[slot];
+    const material = this.#editableObjectMaterial(path);
+    const saved = material?.surfaceGraph ? this.#materialVariantsFor(path, material)[slot] : undefined;
     if (!saved) throw new Error(`La variante ${slot} est vide.`);
     await this.#editObjectGraph(path, () => saved);
   }
@@ -389,7 +430,8 @@ export class InteractiveViewer {
     const current = this.#current;
     const source = loaded?.parameterResources;
     const key = source?.instances.find(instance => instance.primPath === path && instance.hasGeometry)?.materialKey;
-    const variants = this.#materialVariants.get(path);
+    const material = this.#editableObjectMaterial(path);
+    const variants = material?.surfaceGraph ? this.#materialVariantsFor(path, material) : undefined;
     if (!loaded || !current || !source || !key || !variants?.A || !variants.B) {
       throw new Error('Enregistre les variantes A et B d’un objet visible avant de les comparer.');
     }
@@ -452,6 +494,47 @@ export class InteractiveViewer {
     return key ? source?.materials.get(key) : undefined;
   }
 
+  #materialVariantsFor(path: string, material: MaterialResource): Partial<Record<MaterialVariantSlot, MaterialResource>> {
+    const cached = this.#materialVariants.get(path);
+    if (cached) return cached;
+    const variants: Partial<Record<MaterialVariantSlot, MaterialResource>> = {};
+    const sceneEntry = this.#sceneEntry;
+    const storage = globalThis.localStorage;
+    if (sceneEntry && storage) {
+      for (const slot of ['A', 'B'] as const) {
+        const serialized = storage.getItem(materialVariantStorageKey(sceneEntry, path, material.unitKey, slot));
+        if (serialized === null) continue;
+        const parsed: unknown = JSON.parse(serialized);
+        if (!isStoredMaterialVariant(parsed)) {
+          throw new Error(`La variante ${slot} mémorisée pour ${path} est invalide.`);
+        }
+        const graph: ResolvedGraph = { ...parsed.graph, nodes: new Map(parsed.graph.nodes.map(node => [node.id, node])) };
+        const surface: ResolvedSurface = { ...parsed.surface, inputs: new Map(parsed.surface.inputs) };
+        variants[slot] = compileEditableMaterial({
+          ...material, surfaceGraph: graph, resolvedSurface: surface, parameters: parsed.parameters,
+        });
+      }
+    }
+    this.#materialVariants.set(path, variants);
+    return variants;
+  }
+
+  #writeMaterialVariant(path: string, slot: MaterialVariantSlot, material: MaterialResource): void {
+    const sceneEntry = this.#sceneEntry;
+    const surface = material.resolvedSurface;
+    const graph = material.surfaceGraph;
+    if (!sceneEntry || !surface || !graph || !material.parameters) {
+      throw new Error('Impossible de mémoriser une variante sans scène et graphe éditable.');
+    }
+    const snapshot: StoredMaterialVariant = {
+      version: 1,
+      graph: { ...graph, nodes: [...graph.nodes.values()] },
+      surface: { ...surface, inputs: [...surface.inputs] },
+      parameters: material.parameters,
+    };
+    globalThis.localStorage?.setItem(materialVariantStorageKey(sceneEntry, path, material.unitKey, slot), JSON.stringify(snapshot));
+  }
+
   canInsertObjectConstant(path: string, nodeId: string, input: string, kind: EditableInputNode = 'constant'): boolean {
     const material = this.#editableObjectMaterial(path);
     return !!material && canInsertMaterialInputNode(material, nodeId, input, kind);
@@ -469,11 +552,49 @@ export class InteractiveViewer {
   canUnlinkObjectConstant(path: string, nodeId: string, input: string): boolean {
     const material = this.#editableObjectMaterial(path);
     return material?.resolvedSurface?.nodeId === nodeId
-      && !!material.parameters?.some(parameter => parameter.input === input && parameter.linkedConstant !== undefined);
+      && !!material.parameters?.some(parameter => parameter.input === input && parameter.linkedSource !== undefined);
   }
 
   async setObjectConstantLink(path: string, nodeId: string, input: string, sourceId: string | null): Promise<void> {
     await this.#editObjectGraph(path, material => changeMaterialConstantLink(material, nodeId, input, sourceId));
+  }
+
+  objectNodeDefinitions(path: string): readonly ResolvedNodeDefRef[] {
+    return this.#editableObjectMaterial(path) ? this.#loaded?.mtlx.nodeDefinitions ?? [] : [];
+  }
+
+  objectGraphOutputs(path: string, nodeId: string, input: string): MaterialGraphOutput[] {
+    const material = this.#editableObjectMaterial(path);
+    return material ? compatibleMaterialGraphOutputs(material, nodeId, input) : [];
+  }
+
+  canUnlinkObjectGraphInput(path: string, nodeId: string, inputName: string): boolean {
+    const material = this.#editableObjectMaterial(path);
+    const input = material?.surfaceGraph?.nodes.get(nodeId)?.inputs.find(candidate => candidate.name === inputName);
+    return input?.editorOriginalSource !== undefined
+      || !!material?.parameters?.some(parameter => parameter.linkedSource !== undefined
+        && parameter.input === inputName && (parameter.nodeId === nodeId
+          || nodeId === material.resolvedSurface?.nodeId && !parameter.nodeId));
+  }
+
+  async addObjectNode(
+    path: string, targetId: string, inputName: string, definitionName: string, outputName: string,
+  ): Promise<void> {
+    const definitions = this.objectNodeDefinitions(path);
+    await this.#editObjectGraph(path, material =>
+      addMaterialNodeFromDefinition(material, targetId, inputName, definitionName, outputName, definitions));
+  }
+
+  async setObjectGraphInputLink(
+    path: string, targetId: string, inputName: string, sourceId: string | null, outputName = 'out',
+  ): Promise<void> {
+    await this.#editObjectGraph(path, material =>
+      changeMaterialGraphInputLink(material, targetId, inputName, sourceId, outputName));
+  }
+
+  async setObjectGraphInputValue(path: string, targetId: string, inputName: string, value: string): Promise<void> {
+    await this.#editObjectGraph(path, material =>
+      changeMaterialGraphInputValue(material, targetId, inputName, value));
   }
 
   async #editObjectGraph(path: string, edit: (material: MaterialResource) => MaterialResource): Promise<void> {

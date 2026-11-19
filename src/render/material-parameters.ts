@@ -1,7 +1,10 @@
 import { emitLayeredSurface } from '../compiler/surface-wgsl.ts';
 import { hashString } from '../compiler/cache.ts';
 import type { WgslUniformField } from '../compiler/wgsl.ts';
-import type { ResolvedGraph } from '../materialx/graph.ts';
+import { resolveSurface } from '../materialx/surface-graph.ts';
+import type {
+  ResolvedGraph, ResolvedInput, ResolvedNode, ResolvedNodeDefRef, ResolvedValueSource,
+} from '../materialx/graph.ts';
 import type { NormalizedSurfaceInput, ResolvedSurface } from '../materialx/surface-graph.ts';
 import { assembleIrForwardShader } from './raster/ir-forward.ts';
 import type { MaterialResource, SceneResources } from './scene-resources.ts';
@@ -27,9 +30,24 @@ export interface MaterialParameter {
   input: string;
   /** Surface input driven by a Constant inserted by the graph editor. */
   constantFor?: string;
-  arithmeticFor?: { kind: 'add' | 'multiply'; original: MaterialParameter };
-  /** While linked, this parameter retains the literal to restore on disconnect. */
-  linkedConstant?: string;
+  arithmeticFor?: { kind: EditableArithmeticNode; original: MaterialParameter; role?: 'fg' | 'mix' };
+  /** While linked, this parameter retains the editor node and literal to restore on disconnect. */
+  linkedSource?: string;
+  /** Literal graph-node input exposed by the generic graph editor. */
+  graphInput?: boolean;
+}
+
+export interface MaterialGraphOutput {
+  nodeId: string;
+  output: string;
+  type: string;
+  label: string;
+}
+
+export interface MaterialNodeOutputChoice {
+  nodeDef: ResolvedNodeDefRef;
+  output: { name: string; type: string };
+  label: string;
 }
 
 const numericTypes = new Set(['float', 'integer', 'boolean', 'color3', 'vector2', 'vector3', 'vector4']);
@@ -159,25 +177,126 @@ export function visibleMaterialParameters(material: MaterialResource, nodeId?: s
     if (nodeId !== undefined && node?.id !== nodeId) return false;
     const input = node?.inputs.find(input => input.name === parameter.input);
     if (input?.source.kind !== 'value' || input.interfaceName) return false;
-    return parameter.constantFor !== undefined || parameter.arithmeticFor !== undefined
+    return parameter.constantFor !== undefined || parameter.arithmeticFor !== undefined || parameter.graphInput === true
       || (explicitSelection ? input.editable === true : !parameter.nodeId);
   });
 }
 
-export type EditableInputNode = 'constant' | 'add' | 'multiply';
+type EditableArithmeticNode = 'add' | 'subtract' | 'multiply' | 'divide' | 'power' | 'min' | 'max' | 'mix';
+export type EditableInputNode = 'constant' | EditableArithmeticNode;
 
-export function editorArithmeticValue(parameter: MaterialParameter): number[] | undefined {
+export function editorArithmeticValue(
+  parameter: MaterialParameter, parameters: readonly MaterialParameter[] = [],
+): number[] | undefined {
   const arithmetic = parameter.arithmeticFor;
+  if (!arithmetic) return undefined;
+  if (arithmetic.kind === 'mix') {
+    const nodeParameters = parameters.filter(candidate => candidate.nodeId === parameter.nodeId);
+    const foreground = nodeParameters.find(candidate => candidate.input === 'fg');
+    const factor = nodeParameters.find(candidate => candidate.input === 'mix');
+    if (!foreground || !factor) throw new Error(`Entrées incomplètes pour le nœud Mix ${parameter.nodeId}.`);
+    return arithmetic.original.value.map((background, index) =>
+      background + (foreground.value[index]! - background) * factor.value[0]!);
+  }
   const operand = parameter.value[0]!;
-  return arithmetic?.original.value.map(component => arithmetic.kind === 'add' ? component + operand : component * operand);
+  return arithmetic.original.value.map(component => {
+    switch (arithmetic.kind) {
+      case 'add': return component + operand;
+      case 'subtract': return component - operand;
+      case 'multiply': return component * operand;
+      case 'divide': return component / operand;
+      case 'power': return component ** operand;
+      case 'min': return Math.min(component, operand);
+      case 'max': return Math.max(component, operand);
+      case 'mix': throw new Error('Le nœud Mix nécessite ses deux paramètres.');
+    }
+  });
 }
 
-function addOperandBounds(parameter: MaterialParameter): { min: number[]; max: number[] } | undefined {
+function arithmeticOperand(
+  material: MaterialResource, nodeId: string, parameter: MaterialParameter,
+  kind: EditableArithmeticNode,
+): { min: number[]; max: number[]; initial: number } | undefined {
+  if (kind === 'mix') {
+    if (parameter.type !== 'float' && parameter.type !== 'color3') return undefined;
+    const { min, max } = surfaceInputRange(material, parameter.input, parameter.type, parameter.min, parameter.max);
+    return parameter.value.every((value, index) =>
+      Number.isFinite(value) && Number.isFinite(min[index]) && Number.isFinite(max[index])
+      && min[index]! <= value && value <= max[index]!)
+      ? { min: [0], max: [1], initial: 0 } : undefined;
+  }
+  if (kind === 'multiply') {
+    return parameter.value.every((component, index) =>
+      Number.isFinite(component)
+      && (parameter.min?.[index] ?? -Infinity) <= Math.min(0, component)
+      && (parameter.max?.[index] ?? Infinity) >= Math.max(0, component))
+      ? { min: [0], max: [1], initial: 1 } : undefined;
+  }
+  const definition = material.surfaceGraph?.nodes.get(nodeId)?.nodeDef?.inputs
+    ?.find(input => input.name === parameter.input && input.type === parameter.type);
+  if (parameter.type === 'color3') {
+    if (kind !== 'add' && kind !== 'subtract' && kind !== 'min' && kind !== 'max') return undefined;
+    const lowerOffsets: number[] = [];
+    const upperOffsets: number[] = [];
+    const componentMins: number[] = [];
+    const componentMaxs: number[] = [];
+    for (let index = 0; index < 3; index++) {
+      const value = parameter.value[index]!;
+      const min = parameter.min?.[index] ?? definition?.uiMinComponents?.[index] ?? -Infinity;
+      const max = parameter.max?.[index] ?? definition?.uiMaxComponents?.[index] ?? Infinity;
+      if (!Number.isFinite(min) || !Number.isFinite(max) || !(min <= value && value <= max) || min >= max) return undefined;
+      componentMins.push(min);
+      componentMaxs.push(max);
+      if (kind === 'add' || kind === 'subtract') {
+        lowerOffsets.push(kind === 'add' ? min - value : value - max);
+        upperOffsets.push(kind === 'add' ? max - value : value - min);
+      }
+    }
+    if (kind === 'min') {
+      const minimum = Math.max(...componentMins);
+      const maximum = Math.max(...parameter.value);
+      return minimum < maximum ? { min: [minimum], max: [maximum], initial: maximum } : undefined;
+    }
+    if (kind === 'max') {
+      const minimum = Math.min(...parameter.value);
+      const maximum = Math.min(...componentMaxs);
+      return minimum < maximum ? { min: [minimum], max: [maximum], initial: minimum } : undefined;
+    }
+    const min = Math.max(...lowerOffsets);
+    const max = Math.min(...upperOffsets);
+    return min <= 0 && max >= 0 && min < max ? { min: [min], max: [max], initial: 0 } : undefined;
+  }
+  if (parameter.type !== 'float') return undefined;
   const value = parameter.value[0]!;
-  const min = (parameter.min?.[0] ?? -Infinity) - value;
-  const max = (parameter.max?.[0] ?? Infinity) - value;
-  return parameter.type === 'float' && Number.isFinite(min) && Number.isFinite(max) && min <= 0 && max >= 0 && min < max
-    ? { min: [min], max: [max] } : undefined;
+  const min = parameter.min?.[0] ?? definition?.uiMin ?? -Infinity;
+  const max = parameter.max?.[0] ?? definition?.uiMax ?? Infinity;
+  if (!Number.isFinite(min) || !Number.isFinite(max) || !(min <= value && value <= max) || min >= max) return undefined;
+  if (kind === 'divide') {
+    if (min < 0 || max <= 0 || value < 0) return undefined;
+    const lowerFactor = Math.max(1e-4, value / max);
+    return lowerFactor < 1 ? { min: [lowerFactor], max: [1], initial: 1 } : undefined;
+  }
+  if (kind === 'power') {
+    if (min < 0 || value <= 0 || max <= value) return undefined;
+    if (value < 1 && max <= 1) {
+      const lowerExponent = Math.max(0, Math.log(max) / Math.log(value));
+      return Number.isFinite(lowerExponent) && lowerExponent >= 0 && lowerExponent < 1
+        ? { min: [lowerExponent], max: [1], initial: 1 } : undefined;
+    }
+    if (value > 1) {
+      const upperExponent = Math.log(max) / Math.log(value);
+      return Number.isFinite(upperExponent) && upperExponent > 1
+        ? { min: [1], max: [upperExponent], initial: 1 } : undefined;
+    }
+    return undefined;
+  }
+  if (kind === 'min' || kind === 'max') {
+    return { min: [min], max: [max], initial: kind === 'min' ? max : min };
+  }
+  const low = kind === 'add' ? min - value : value - max;
+  const high = kind === 'add' ? max - value : value - min;
+  return Number.isFinite(low) && Number.isFinite(high) && low < high
+    ? { min: [low], max: [high], initial: 0 } : undefined;
 }
 
 export function canInsertMaterialInputNode(
@@ -186,12 +305,7 @@ export function canInsertMaterialInputNode(
   if (!canInsertMaterialConstant(material, nodeId, inputName)) return false;
   if (kind === 'constant') return true;
   const parameter = material.parameters?.find(candidate => !candidate.nodeId && candidate.input === inputName);
-  if (!parameter) return false;
-  if (kind === 'add') return addOperandBounds(parameter) !== undefined;
-  return parameter.value.every((component, index) =>
-    Number.isFinite(component)
-    && (parameter.min?.[index] ?? -Infinity) <= Math.min(0, component)
-    && (parameter.max?.[index] ?? Infinity) >= Math.max(0, component));
+  return parameter !== undefined && arithmeticOperand(material, nodeId, parameter, kind) !== undefined;
 }
 
 export function canInsertMaterialConstant(material: MaterialResource, nodeId: string, inputName: string): boolean {
@@ -207,24 +321,318 @@ export function canInsertMaterialConstant(material: MaterialResource, nodeId: st
       && (parameter.type === 'float' || parameter.type === 'color3'));
 }
 
+function outputsOf(node: Pick<ResolvedNode, 'type' | 'nodeDef'>): readonly { name: string; type: string }[] {
+  return node.nodeDef?.outputs?.length ? node.nodeDef.outputs : [{ name: 'out', type: node.type }];
+}
+
+function outputsOfDefinition(definition: ResolvedNodeDefRef): readonly { name: string; type: string }[] {
+  return definition.outputs?.length ? definition.outputs : [{ name: 'out', type: definition.type }];
+}
+
+export function compatibleNodeOutputChoices(
+  definitions: readonly ResolvedNodeDefRef[], inputType: string,
+): MaterialNodeOutputChoice[] {
+  return definitions.flatMap(nodeDef => outputsOfDefinition(nodeDef)
+    .filter(output => output.type === inputType)
+    .map(output => ({
+      nodeDef, output,
+      label: `${nodeDef.nodeString} · ${output.name} (${output.type})`,
+    })));
+}
+
+function createsGraphCycle(graph: ResolvedGraph, targetId: string, sourceId: string): boolean {
+  const pending = [sourceId];
+  const visited = new Set<string>();
+  while (pending.length) {
+    const current = pending.pop()!;
+    if (current === targetId) return true;
+    if (visited.has(current)) continue;
+    visited.add(current);
+    for (const input of graph.nodes.get(current)?.inputs ?? []) {
+      if (input.source.kind === 'connection') pending.push(input.source.nodeId);
+    }
+  }
+  return false;
+}
+
+export function compatibleMaterialGraphOutputs(
+  material: MaterialResource, targetId: string, inputName: string,
+): MaterialGraphOutput[] {
+  const graph = material.surfaceGraph;
+  const target = graph?.nodes.get(targetId)?.inputs.find(input => input.name === inputName);
+  if (!graph || !target) return [];
+  return [...graph.nodes.values()].flatMap(node => {
+    if (createsGraphCycle(graph, targetId, node.id)) return [];
+    return outputsOf(node).filter(output => output.type === target.type).map(output => ({
+      nodeId: node.id, output: output.name, type: output.type,
+      label: `${node.id} · ${output.name} (${output.type})`,
+    }));
+  });
+}
+
+function literalForType(type: string): string | undefined {
+  if (type === 'boolean') return 'false';
+  const count = type === 'color3' || type === 'vector3' ? 3
+    : type === 'color4' || type === 'vector4' ? 4 : type === 'vector2' ? 2 : 1;
+  return ['float', 'integer', 'color3', 'color4', 'vector2', 'vector3', 'vector4'].includes(type)
+    ? Array(count).fill('0').join(', ') : undefined;
+}
+
+function graphParameterValues(type: MaterialParameter['type'], value: string): number[] {
+  if (type === 'boolean') {
+    if (value === 'true') return [1];
+    if (value === 'false') return [0];
+  }
+  return value.trim().split(/[,\s]+/).map(Number);
+}
+
+function surfaceFromEditedGraph(graph: ResolvedGraph): ResolvedSurface {
+  const surface = resolveSurface(graph);
+  if (!surface) throw new Error('Le graphe modifié ne contient plus une surface MaterialX valide.');
+  return surface;
+}
+
+/** Connect a typed graph output to an input; a null source restores the prior binding. */
+export function changeMaterialGraphInputLink(
+  material: MaterialResource, targetId: string, inputName: string, sourceId: string | null, outputName = 'out',
+): MaterialResource {
+  const graph = material.surfaceGraph;
+  const parameters = material.parameters ?? [];
+  const target = graph?.nodes.get(targetId);
+  const input = target?.inputs.find(candidate => candidate.name === inputName);
+  if (!graph || !target || !input) throw new Error('Port d’entrée introuvable.');
+  const parameter = parameters.find(candidate =>
+    candidate.nodeId === targetId && candidate.input === inputName
+    || targetId === material.resolvedSurface?.nodeId && !candidate.nodeId && candidate.input === inputName);
+  let replacement: ResolvedInput;
+  let linkedSource: string | undefined;
+  if (sourceId !== null) {
+    const upstream = graph.nodes.get(sourceId);
+    const output = upstream && outputsOf(upstream).find(candidate => candidate.name === outputName);
+    if (!upstream || !output || output.type !== input.type || createsGraphCycle(graph, targetId, sourceId)) {
+      throw new Error('Connexion impossible : ports incompatibles ou cycle détecté.');
+    }
+    if (input.source.kind === 'connection' && input.source.nodeId === sourceId && (input.source.output ?? 'out') === outputName) {
+      return material;
+    }
+    const { parameter: originalParameter, ...unparameterized } = input;
+    replacement = {
+      ...unparameterized,
+      source: { kind: 'connection', nodeId: sourceId, ...(outputName !== 'out' ? { output: outputName } : {}) },
+      editorOriginalSource: input.editorOriginalSource ?? input.source,
+      ...(input.editorOriginalParameter !== undefined ? { editorOriginalParameter: input.editorOriginalParameter }
+        : originalParameter !== undefined ? { editorOriginalParameter: originalParameter } : {}),
+    };
+    linkedSource = sourceId;
+  } else {
+    const originalSource = input.editorOriginalSource;
+    if (!originalSource && !parameter?.linkedSource) throw new Error('Cette connexion ne peut pas être retirée.');
+    const { editorOriginalSource: _originalSource, editorOriginalParameter, ...rest } = input;
+    const restoredSource: ResolvedValueSource = originalSource
+      ?? { kind: 'value', type: parameter!.type, value: parameter!.value.join(', ') };
+    replacement = {
+      ...rest, source: restoredSource,
+      ...(editorOriginalParameter !== undefined ? { parameter: editorOriginalParameter } : {}),
+    };
+  }
+  const nodes = new Map(graph.nodes);
+  nodes.set(targetId, {
+    ...target,
+    inputs: target.inputs.map(candidate => candidate === input ? replacement : candidate),
+  });
+  const updatedGraph = { ...graph, nodes };
+  const updatedParameters = parameters.map(candidate => {
+    if (candidate !== parameter) return candidate;
+    if (linkedSource !== undefined) return { ...candidate, linkedSource };
+    const { linkedSource: _source, ...rest } = candidate;
+    return rest;
+  });
+  return compileEditableMaterial({
+    ...material, surfaceGraph: updatedGraph, resolvedSurface: surfaceFromEditedGraph(updatedGraph),
+    parameters: updatedParameters,
+  });
+}
+
+/** Update a literal of any MaterialX value type on an unparameterized graph input. */
+export function changeMaterialGraphInputValue(
+  material: MaterialResource, targetId: string, inputName: string, value: string,
+): MaterialResource {
+  const graph = material.surfaceGraph;
+  const node = graph?.nodes.get(targetId);
+  const input = node?.inputs.find(candidate => candidate.name === inputName);
+  if (!graph || !node || !input || input.parameter !== undefined
+    || input.source.kind !== 'value' && input.source.kind !== 'default') {
+    throw new Error('Seule une entrée littérale non paramétrée peut être modifiée ici.');
+  }
+  if (input.type === 'filename') throw new Error('Une entrée filename ne peut être modifiée sans recharger les textures.');
+  if (input.source.kind === 'value' && input.source.value === value) return material;
+  const nodes = new Map(graph.nodes);
+  nodes.set(targetId, {
+    ...node,
+    inputs: node.inputs.map(candidate => candidate === input
+      ? { ...candidate, source: { kind: 'value', type: input.type, value } } : candidate),
+  });
+  const updatedGraph = { ...graph, nodes };
+  return compileEditableMaterial({
+    ...material, surfaceGraph: updatedGraph, resolvedSurface: surfaceFromEditedGraph(updatedGraph),
+  });
+}
+
+/** Add any catalogued NodeDef whose output type matches the selected graph input. */
+export function addMaterialNodeFromDefinition(
+  material: MaterialResource, targetId: string, inputName: string,
+  definitionName: string, outputName: string, definitions: readonly ResolvedNodeDefRef[],
+): MaterialResource {
+  const definition = definitions.find(candidate => candidate.name === definitionName);
+  if (!definition) throw new Error(`NodeDef MaterialX introuvable : ${definitionName}.`);
+  const targetInput = material.surfaceGraph?.nodes.get(targetId)?.inputs.find(input => input.name === inputName);
+  if (!targetInput || !outputsOfDefinition(definition).some(output =>
+    output.name === outputName && output.type === targetInput.type)) {
+    throw new Error('Le type de sortie du NodeDef ne correspond pas au port sélectionné.');
+  }
+  const graph = material.surfaceGraph!;
+  let suffix = 1;
+  while (graph.nodes.has(`editor_node_${suffix}`)) suffix++;
+  const nodeId = `editor_node_${suffix}`;
+  const parameters = [...(material.parameters ?? [])];
+  const sourceToPreserve = targetInput.source.kind === 'value' || targetInput.source.kind === 'connection'
+    ? targetInput.source : undefined;
+  const seedInput = sourceToPreserve
+    ? definition.inputs?.find(input => input.type === targetInput.type && input.geomprop === undefined)
+    : undefined;
+  const inputs = (definition.inputs ?? []).map(input => {
+    const seeded = input.name === seedInput?.name ? sourceToPreserve : undefined;
+    const value = seeded?.kind === 'value' ? seeded.value : input.value ?? literalForType(input.type);
+    const source: ResolvedValueSource = seeded
+      ? seeded : value !== undefined ? { kind: 'value', type: input.type, value } : { kind: 'default', type: input.type };
+    const editable = source.kind === 'value' && isType(input.type);
+    const baseInput: ResolvedInput = {
+      name: input.name, type: input.type, source, provenance: { namePath: `${nodeId}/${input.name}` },
+      ...(input.geomprop !== undefined ? { source: { kind: 'default', type: input.type } as const } : {}),
+      ...(editable ? { editable: true } : {}),
+      ...(input.uiMin !== undefined ? { min: [input.uiMin] } : {}),
+      ...(input.uiMax !== undefined ? { max: [input.uiMax] } : {}),
+      ...(input.uiMinComponents !== undefined ? { min: input.uiMinComponents } : {}),
+      ...(input.uiMaxComponents !== undefined ? { max: input.uiMaxComponents } : {}),
+    };
+    if (!editable || value === undefined) return baseInput;
+    const type = input.type as MaterialParameter['type'];
+    const values = graphParameterValues(type, value);
+    const uniform = UNIFORM_TYPES.has(type) ? `parameter_${parameters.length}` : undefined;
+    const parameter: MaterialParameter = {
+      id: JSON.stringify([nodeId, input.name]), label: `${nodeId} / ${input.name}`, type,
+      value: values, initial: values, update: uniform ? 'uniform' : 'rebuild', nodeId, input: input.name,
+      graphInput: true,
+      ...(uniform !== undefined ? { uniform } : {}),
+      ...(baseInput.min !== undefined ? { min: baseInput.min } : {}),
+      ...(baseInput.max !== undefined ? { max: baseInput.max } : {}),
+    };
+    parameterValues(parameter, values);
+    parameters.push(parameter);
+    return { ...baseInput, ...(uniform !== undefined ? { parameter: uniform } : {}) };
+  });
+  const node: ResolvedNode = {
+    id: nodeId, category: definition.nodeString, type: definition.type,
+    nodeDef: definition, inputs, provenance: { namePath: nodeId },
+  };
+  const nodes = new Map(graph.nodes).set(nodeId, node);
+  const withNode = { ...material, surfaceGraph: { ...graph, nodes }, parameters };
+  return changeMaterialGraphInputLink(withNode, targetId, inputName, nodeId, outputName);
+}
+
+function surfaceInputRange(
+  material: MaterialResource, input: string, type: MaterialParameter['type'],
+  authoredMin?: readonly number[], authoredMax?: readonly number[],
+): { min: number[]; max: number[] } {
+  const definition = material.surfaceGraph?.nodes.get(material.resolvedSurface?.nodeId ?? '')?.nodeDef?.inputs
+    ?.find(candidate => candidate.name === input && candidate.type === type);
+  const componentMin = type === 'color3' ? definition?.uiMinComponents : undefined;
+  const componentMax = type === 'color3' ? definition?.uiMaxComponents : undefined;
+  const scalarMin = type === 'float' ? definition?.uiMin : undefined;
+  const scalarMax = type === 'float' ? definition?.uiMax : undefined;
+  const count = type === 'color3' ? 3 : 1;
+  return {
+    min: Array.from({ length: count }, (_, index) => authoredMin?.[index] ?? componentMin?.[index] ?? scalarMin ?? -Infinity),
+    max: Array.from({ length: count }, (_, index) => authoredMax?.[index] ?? componentMax?.[index] ?? scalarMax ?? Infinity),
+  };
+}
+
+function editorOutputRange(
+  material: MaterialResource, parameter: MaterialParameter,
+): { min: number[]; max: number[] } | undefined {
+  const arithmetic = parameter.arithmeticFor;
+  if (!arithmetic) return parameter.constantFor !== undefined
+    ? surfaceInputRange(material, parameter.constantFor, parameter.type, parameter.min, parameter.max)
+    : undefined;
+  if (arithmetic.kind === 'mix') {
+    return surfaceInputRange(
+      material, arithmetic.original.input, arithmetic.original.type, arithmetic.original.min, arithmetic.original.max,
+    );
+  }
+  const operandMin = parameter.min?.[0] ?? -Infinity;
+  const operandMax = parameter.max?.[0] ?? Infinity;
+  const min: number[] = [];
+  const max: number[] = [];
+  for (let index = 0; index < arithmetic.original.value.length; index++) {
+    const sourceMin = arithmetic.original.value[index]!;
+    const sourceMax = sourceMin;
+    if (arithmetic.kind === 'min') {
+      min.push(Math.min(sourceMin, operandMin));
+      max.push(Math.min(sourceMax, operandMax));
+    } else if (arithmetic.kind === 'max') {
+      min.push(Math.max(sourceMin, operandMin));
+      max.push(Math.max(sourceMax, operandMax));
+    } else if (arithmetic.kind === 'add') {
+      min.push(sourceMin + operandMin);
+      max.push(sourceMax + operandMax);
+    } else if (arithmetic.kind === 'subtract') {
+      min.push(sourceMin - operandMax);
+      max.push(sourceMax - operandMin);
+    } else if (arithmetic.kind === 'divide' && operandMin > 0 && sourceMin >= 0) {
+      min.push(sourceMin / operandMax);
+      max.push(sourceMax / operandMin);
+    } else if (arithmetic.kind === 'power' && sourceMin > 0) {
+      const endpoints = [sourceMin ** operandMin, sourceMin ** operandMax];
+      min.push(Math.min(...endpoints));
+      max.push(Math.max(...endpoints));
+    } else if ([sourceMin, sourceMax, operandMin, operandMax].every(Number.isFinite)) {
+      const products = [sourceMin * operandMin, sourceMin * operandMax, sourceMax * operandMin, sourceMax * operandMax];
+      min.push(Math.min(...products));
+      max.push(Math.max(...products));
+    } else {
+      min.push(-Infinity);
+      max.push(Infinity);
+    }
+  }
+  return { min, max };
+}
+
 export function materialConstantSources(material: MaterialResource, nodeId: string, input: string): string[] {
   const parameters = material.parameters ?? [];
   const target = parameters.find(parameter => !parameter.nodeId && parameter.input === input);
   if (!target || (!canInsertMaterialConstant(material, nodeId, input)
-    && !secondaryConstantSource(material, nodeId, input, target))) return [];
-  return parameters.flatMap(source => {
-    if (!source.nodeId || source.nodeId === target.linkedConstant || source.constantFor === undefined || source.type !== target.type
-      || target.min?.some((min, index) => (source.min?.[index] ?? -Infinity) < min)
-      || target.max?.some((max, index) => (source.max?.[index] ?? Infinity) > max)) return [];
+    && !secondaryEditorSource(material, nodeId, input, target))) return [];
+  return [...new Set(parameters.flatMap(source => {
+    const node = source.nodeId ? material.surfaceGraph?.nodes.get(source.nodeId) : undefined;
+    const output = source.constantFor !== undefined ? source.value : editorArithmeticValue(source, parameters);
+    const range = editorOutputRange(material, source);
+    const targetRange = surfaceInputRange(material, target.input, target.type, target.min, target.max);
+    if (!source.nodeId || !node || (source.constantFor === undefined && source.arithmeticFor === undefined)
+      || source.nodeId === target.linkedSource || source.type !== target.type || node.type !== target.type || !output || !range
+      || output.some((value, index) => !Number.isFinite(value)
+        || value < targetRange.min[index]! || value > targetRange.max[index]!)
+      || range.min.some(Number.isNaN) || range.max.some(Number.isNaN)
+      || targetRange.min.some((min, index) => range.min[index]! < min)
+      || targetRange.max.some((max, index) => range.max[index]! > max)) return [];
     return [source.nodeId];
-  });
+  }))];
 }
 
-function secondaryConstantSource(material: MaterialResource, nodeId: string, input: string, target: MaterialParameter) {
+function secondaryEditorSource(material: MaterialResource, nodeId: string, input: string, target: MaterialParameter) {
   const surface = material.resolvedSurface;
   const authored = material.surfaceGraph?.nodes.get(nodeId)?.inputs.find(candidate => candidate.name === input)?.source;
   const resolved = surface?.inputs.get(input)?.source;
-  const source = target.linkedConstant;
+  const source = target.linkedSource;
   return source && surface?.nodeId === nodeId && authored?.kind === 'connection' && authored.nodeId === source
     && resolved?.kind === 'connection' && resolved.nodeId === source ? source : undefined;
 }
@@ -243,21 +651,21 @@ export function changeMaterialConstantLink(
   const inputs = new Map(surface.inputs);
   let replacement: MaterialParameter;
   let binding: typeof authored.source;
-  const previous = secondaryConstantSource(material, nodeId, input, target);
+  const previous = secondaryEditorSource(material, nodeId, input, target);
   if (sourceId !== null) {
     if (sourceId === previous) return material;
-    if (!materialConstantSources(material, nodeId, input).includes(sourceId)) throw new Error('Constant incompatible avec cette entrée.');
+    if (!materialConstantSources(material, nodeId, input).includes(sourceId)) throw new Error('Nœud éditeur incompatible avec cette entrée.');
     binding = { kind: 'connection', nodeId: sourceId };
     const { parameter: _uniform, ...entry } = normalized;
     inputs.set(input, { ...entry, source: binding });
-    replacement = { ...target, linkedConstant: sourceId };
+    replacement = { ...target, linkedSource: sourceId };
   } else {
     if (!previous) {
       throw new Error('Ce lien ne peut pas être retiré.');
     }
     binding = { kind: 'value', type: target.type, value: target.value.join(', ') };
     inputs.set(input, { ...normalized, parameter: target.uniform, source: { kind: 'value', value: target.value } });
-    const { linkedConstant: _link, ...entry } = target;
+    const { linkedSource: _link, ...entry } = target;
     replacement = entry;
   }
   const nodes = new Map(graph.nodes);
@@ -291,7 +699,7 @@ export function changeMaterialConstant(
   const authored = root.inputs.find(input => input.name === destination)!;
   const resolved = inputs.get(destination)!;
   const literal = { kind: 'value' as const, type: parameter.type, value: parameter.value.join(', ') };
-  let replacement: MaterialParameter;
+  let replacements: MaterialParameter[];
   if (insert) {
     let id = `${destination}_${kind}`;
     for (let suffix = 2; nodes.has(id); suffix++) id = `${destination}_${kind}_${suffix}`;
@@ -299,10 +707,41 @@ export function changeMaterialConstant(
     const { parameter: _uniform, ...normalized } = resolved;
     inputs.set(destination, { ...normalized, source });
     nodes.set(root.id, { ...root, inputs: root.inputs.map(input => input === authored ? { ...input, source } : input) });
-    if (kind !== 'constant') {
+    if (kind === 'mix') {
+      const { min, max } = surfaceInputRange(material, destination, parameter.type, parameter.min, parameter.max);
+      const foreground = [...max];
+      const uniformNames = new Set(parameters.flatMap(current => current.uniform ? [current.uniform] : []));
+      let uniformIndex = parameters.length;
+      while (uniformNames.has(`parameter_${uniformIndex}`)) uniformIndex++;
+      const mixUniform = `parameter_${uniformIndex}`;
+      nodes.set(id, {
+        id, category: 'mix', type: parameter.type, provenance: { namePath: id },
+        nodeDef: { name: `ND_mix_${parameter.type}`, nodeString: 'mix', type: parameter.type,
+          implementation: { kind: 'unresolved' },
+          inputs: [{ name: 'bg', type: parameter.type }, { name: 'fg', type: parameter.type }, { name: 'mix', type: 'float' }] },
+        inputs: [
+          { name: 'bg', type: parameter.type, source: literal, provenance: { namePath: `${id}/bg` } },
+          { name: 'fg', type: parameter.type, source: { kind: 'value', type: parameter.type, value: foreground.join(', ') },
+            parameter: parameter.uniform, provenance: { namePath: `${id}/fg` } },
+          { name: 'mix', type: 'float', source: { kind: 'value', type: 'float', value: '0' },
+            parameter: mixUniform, provenance: { namePath: `${id}/mix` } },
+        ],
+      });
+      replacements = [
+        {
+          id: `node:${id}/fg`, label: `${id} / fg`, type: parameter.type, value: foreground, initial: foreground,
+          min, max, update: 'uniform', uniform: parameter.uniform, nodeId: id, input: 'fg',
+          arithmeticFor: { kind, original: parameter, role: 'fg' },
+        },
+        {
+          id: `node:${id}/mix`, label: `${id} / mix`, type: 'float', value: [0], initial: [0], min: [0], max: [1],
+          update: 'uniform', uniform: mixUniform, nodeId: id, input: 'mix',
+          arithmeticFor: { kind, original: parameter, role: 'mix' },
+        },
+      ];
+    } else if (kind !== 'constant') {
       const type = parameter.type;
-      const neutral = kind === 'add' ? 0 : 1;
-      const bounds = kind === 'add' ? addOperandBounds(parameter)! : { min: [0], max: [1] };
+      const { initial: neutral, min, max } = arithmeticOperand(material, nodeId, parameter, kind)!;
       nodes.set(id, {
         id, category: kind, type, provenance: { namePath: id },
         nodeDef: { name: `ND_${kind}_${type === 'color3' ? 'color3FA' : 'float'}`, nodeString: kind, type,
@@ -313,17 +752,17 @@ export function changeMaterialConstant(
             parameter: parameter.uniform, provenance: { namePath: `${id}/in2` } },
         ],
       });
-      replacement = {
-        id: `node:${id}/in2`, label: `${id} / in2`, type: 'float', value: [neutral], initial: [neutral], ...bounds,
+      replacements = [{
+        id: `node:${id}/in2`, label: `${id} / in2`, type: 'float', value: [neutral], initial: [neutral], min, max,
         update: 'uniform', uniform: parameter.uniform, nodeId: id, input: 'in2', arithmeticFor: { kind, original: parameter },
-      };
+      }];
     } else {
       nodes.set(id, {
         id, category: kind, type: parameter.type, provenance: { namePath: id },
         inputs: [{ name: 'value', type: parameter.type, source: literal, parameter: parameter.uniform,
           provenance: { namePath: `${id}/value` } }],
       });
-      replacement = { ...parameter, nodeId: id, input: 'value', constantFor: destination, label: `${id} / value` };
+      replacements = [{ ...parameter, nodeId: id, input: 'value', constantFor: destination, label: `${id} / value` }];
     }
   } else {
     // Refuse to remove a node if a future editor operation has wired it elsewhere.
@@ -332,17 +771,31 @@ export function changeMaterialConstant(
     if (consumers.length !== 1 || consumers[0] !== authored || graph.terminals.some(terminal => terminal.nodeId === nodeId)) {
       throw new Error('Ce nœud est utilisé ailleurs dans le graphe.');
     }
-    const value = editorArithmeticValue(parameter) ?? parameter.value;
-    inputs.set(destination, { ...resolved, parameter: parameter.uniform, source: { kind: 'value', value } });
+    const value = editorArithmeticValue(parameter, parameters) ?? parameter.value;
+    inputs.set(destination, { ...resolved, parameter: original?.uniform ?? parameter.uniform, source: { kind: 'value', value } });
     nodes.set(root.id, { ...root, inputs: root.inputs.map(input => input === authored
       ? { ...input, source: { ...literal, type: original?.type ?? parameter.type, value: value.join(', ') } } : input) });
     nodes.delete(nodeId);
-    const { nodeId: _node, constantFor: _destination, ...rest } = parameter;
-    replacement = original ? { ...original, value } : { ...rest, input: destination, label: destination };
+    if (original) replacements = [{ ...original, value }];
+    else {
+      const { nodeId: _node, constantFor: _destination, ...rest } = parameter;
+      replacements = [{ ...rest, input: destination, label: destination }];
+    }
   }
+  const updatedParameters = insert
+    ? parameters.flatMap(current => current === parameter ? replacements : [current])
+    : (() => {
+      const removed = parameters.filter(current => current.nodeId === nodeId
+        && (kind === 'constant' ? current.constantFor !== undefined : current.arithmeticFor?.kind === kind));
+      const firstIndex = parameters.findIndex(current => removed.includes(current));
+      if (firstIndex < 0) throw new Error(`Paramètres d'édition introuvables pour le nœud ${nodeId}.`);
+      const remaining = parameters.filter(current => !removed.includes(current));
+      remaining.splice(firstIndex, 0, ...replacements);
+      return remaining;
+    })();
   return compileEditableMaterial({
     ...material, surfaceGraph: { ...graph, nodes }, resolvedSurface: { ...surface, inputs },
-    parameters: parameters.map(current => current === parameter ? replacement : current),
+    parameters: updatedParameters,
   });
 }
 
@@ -553,7 +1006,7 @@ export function changeMaterialParameters(
   const parameters = material.parameters.map(parameter => {
     const change = changes.get(parameter.id);
     if (!change) return parameter;
-    if (parameter.linkedConstant) throw new Error(`Entrée connectée : ${parameter.input}.`);
+    if (parameter.linkedSource) throw new Error(`Entrée connectée : ${parameter.input}.`);
     const value = parameterValues(parameter, change);
     if (parameter.nodeId) {
       const node = nodes.get(parameter.nodeId)!;
