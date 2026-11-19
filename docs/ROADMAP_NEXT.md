@@ -937,6 +937,24 @@ attributs objet. Les anciens paquets contenant `triplanarprojection` doivent
 être réexportés ; les paquets version 3 contenant seulement `flake3d` restent
 compatibles.
 
+**Soixante-quinzième étape :** `worleynoise2d` et `worleynoise3d` prennent en
+charge les sorties `float`, `vector2` et `vector3`, les styles distance et
+solide et le paramètre `jitter`, sur CPU et en WGSL. Comme la bibliothèque
+MaterialX, le calcul examine respectivement 9 et 27 cellules, y compris pour
+un `jitter` supérieur à 1. Le défaut 2D utilise `UV0` ; le défaut 3D utilise la
+position objet propre à chaque instance. Les coordonnées explicites ou
+connectées sont prises en compte et les nœuds de position connectés respectent
+leur espace. Une propriété géométrique inconnue ou une interface non résolue
+produit un avertissement et un repli explicite.
+
+Les volumes refusent les coordonnées UV ou objet implicites, mais peuvent
+utiliser des coordonnées explicites et une position monde. En path tracing,
+un déplacement doit être cuit lorsque la position objet est nécessaire. Les
+paquets de scène ou de matériau antérieurs à la version 5 et contenant
+`worleynoise3d` doivent être réexportés ; les paquets version 4 avec
+`triplanarprojection` et version 3 avec `flake3d` restent compatibles selon
+les règles précédentes.
+
 Travaux restants :
 
 - étendre les lowerings WGSL afin d'évaluer fidèlement les autres NodeDefs MaterialX actuellement signalés comme non pris en charge ;
@@ -944,6 +962,18 @@ Travaux restants :
 
 **Critère d'aboutissement :** un utilisateur peut créer ou modifier un graphe
 MaterialX, l'évaluer immédiatement et exporter le document obtenu.
+
+## Priorité 3bis : scripting
+
+- permettre la création d'un materiau Materialx par script
+idée : 
+node = new <Node>
+node.input = value;
+node2.input = node1.output;
+etc...
+- à partir de ce code le transformer en XML
+- à partir du XMl générer un code script
+- langage de script : JS, ou autre
 
 ## Priorité 4 : accélération du path tracer
 
