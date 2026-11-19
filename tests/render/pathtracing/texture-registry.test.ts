@@ -49,6 +49,25 @@ function variant(file: string, index: number, colorSpace?: string) {
 }
 
 describe('buildTextureRegistry (T057j)', () => {
+  it('shares latlong images with ordinary images but preserves their mirror sampler', () => {
+    const latlong = (index: number) => {
+      const { graph, surface } = imageSurface('shared.png', 'srgb_texture');
+      graph.nodes.get('tex')!.category = 'latlongimage';
+      return emitSurfaceVariant(graph, surface!, index);
+    };
+    const first = latlong(0);
+    const ordinary = variant('shared.png', 1, 'srgb_texture');
+    const second = latlong(2);
+    const reg = buildTextureRegistry([first, ordinary, second]);
+    expect(first.fnCode).toContain('textureSampleLevel(m0_tex_tex, m0_samp_tex');
+    expect(reg.images).toEqual(['shared.png']);
+    expect(reg.textures).toHaveLength(1);
+    expect(reg.samplers).toHaveLength(2);
+    expect(reg.samplers[0]!.sampler).toMatchObject({ addressU: 'periodic', addressV: 'mirror', filter: 'linear' });
+    expect(reg.bindingAliases?.get('m2_samp_tex')).toBe('m0_samp_tex');
+    expect(reg.bindingAliases?.get('m1_tex_tex')).toBe('m0_tex_tex');
+  });
+
   it('does not share fileless resources or views with incompatible texture kinds', () => {
     const a = variant('shared.png', 0);
     const b = variant('shared.png', 1);

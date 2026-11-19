@@ -575,6 +575,196 @@ charge ; le nœud n'est plus signalé comme non pris en charge dans le catalogue
 régulier ou décalé, avec tiling, offset et épaisseur des lignes. Le calcul suit
 le nodegraph MaterialX et son résultat est aussi évalué par la référence CPU.
 
+**Trente-sixième étape :** le NodeDef standard `crosshatch` génère ses deux
+diagonales, avec tiling, offset, épaisseur et décalage des rangées. Le calcul
+reproduit la distance aux segments du nodegraph MaterialX et est couvert par la
+référence CPU.
+
+**Trente-septième étape :** le NodeDef standard `tiledcircles` génère le motif
+régulier ou décalé, avec contrôle du diamètre, du tiling et de l'offset. Le
+lowering reproduit les trois cercles du motif décalé ainsi que le motif régulier
+du nodegraph MaterialX ; l'évaluation CPU est couverte par les tests.
+
+**Trente-huitième étape :** le NodeDef standard `tiledcloverleafs` génère le
+motif de trèfles régulier ou décalé, avec contrôle de la taille, du tiling et de
+l'offset. Les formes sont évaluées comme l'union des quatre cercles du
+nodegraph MaterialX, y compris dans les trois cellules du motif décalé.
+
+**Trente-neuvième étape :** les NodeDefs `hexagon` et `tiledhexagons` sont
+évalués selon le nodegraph MaterialX, y compris son motif régulier et ses trois
+cellules décalées. Le lowering WGSL partage la primitive hexagonale ; les tests
+couvrent aussi la référence CPU.
+
+**Quarantième étape :** les primitives `line`, `circle` et `cloverleaf` sont
+prises en charge dans les graphes de surface et évaluées en WGSL et sur CPU.
+Le trèfle partagé corrige l'échelle de `tiledcloverleafs` ; `crosshatch` inclut
+la frontière de ses lignes. Un segment dégénéré est traité comme un point.
+
+**Quarante-et-unième étape :** les rampes `ramplr`, `ramptb` et `ramp4` ainsi
+que `checkerboard` sont évalués sur CPU et reconnus dans les graphes de
+surface. Leurs lowerings WGSL existants restent partagés entre les variantes
+scalaires, vectorielles et colorées correspondantes.
+
+**Quarante-deuxième étape :** les opérations `absval`, `fract`, `floor`, `ceil`
+et `modulo` sont reconnues dans les graphes de surface. Les variantes entières
+de `floor` et `ceil` produisent une valeur entière WGSL ; `modulo` accepte aussi
+les arguments positionnels de l'IR. `fract` utilise `x - floor(x)` pour éviter
+une erreur de pliage de constantes négatives observée sur WebGPU.
+
+**Quarante-troisième étape :** les nœuds de composition `over`, `in`, `out`,
+`mask`, `matte` et `disjointover` prennent en charge les couleurs RGBA et le
+paramètre `mix` selon les formules MaterialX. `inside` et `outside` appliquent
+un masque scalaire aux valeurs `float`, `color3` et `color4`. Ces opérations
+sont évaluées sur CPU et en WGSL et reconnues dans les graphes de surface.
+
+**Quarante-quatrième étape :** les réductions `mincomponent` et `maxcomponent`
+prennent en charge les vecteurs de 2 à 4 composantes et les couleurs à 3 ou
+4 composantes ; leur sortie est scalaire. `trianglewave` reproduit le nodegraph
+standard, avec une période de 1 et un maximum de 0,5 (malgré le commentaire
+MaterialX indiquant 1).
+Ces nœuds sont évalués sur CPU et en WGSL et reconnus dans les graphes.
+
+**Quarante-cinquième étape :** les dix transformations de couleur explicites
+`cmlib` vers Rec.709 linéaire sont prises en charge pour `color3` et `color4`,
+sur CPU et en WGSL : gamma Rec.709, ACEScg/AP1, sRGB, Adobe RGB et Display P3.
+Les conversions conservent l'alpha et les valeurs hors gamut prévues par les
+nodegraphs MaterialX. Elles ne modifient pas le décodage automatique des textures :
+ajouter une conversion sRGB explicite après une texture déjà décodée la décodera
+une seconde fois.
+
+**Quarante-sixième étape :** les opérations `creatematrix`, `determinant`,
+`transpose`, `invertmatrix` et `transformmatrix` prennent en charge les matrices
+33 et 44 sur CPU et en WGSL. Les vecteurs-colonnes suivent l'ordre MaterialX ;
+la création depuis des colonnes `vector3` remplit la quatrième coordonnée
+homogène selon le NodeDef. Les transformations couvrent les coordonnées 2D
+homogènes et les vecteurs 3D/4D. Les entrées non connectées utilisent les
+identités des NodeDefs, et les catégories sont reconnues par les diagnostics
+des graphes de surface.
+
+**Quarante-septième étape :** le nœud `bump` réévalue son entrée de hauteur
+aux texels voisins dans le path tracer compute, puis transforme la normale
+obtenue avec la normale, la tangente et la bitangente du matériau. Les
+diagnostics de graphes de surface reconnaissent aussi `bump`, `heighttonormal`,
+`ramp`, `ramp_gradient`, `luminance` et `viewdirection`.
+
+**Quarante-huitième étape :** `hextilednormalmap` échantillonne les trois
+tuiles hexagonales, réoriente les normales tangentes de chaque tuile avant leur
+fusion, respecte `flip_g` et applique `strength` avec la normale, la tangente
+et la bitangente du matériau. Le lowering réutilise le graphe IR partagé des
+images hexagonales et reste évaluable sur CPU, en raster et dans le path tracer.
+
+**Quarante-neuvième étape :** les opérations de composition `premult`,
+`unpremult`, `plus`, `minus`, `difference`, `screen`, `overlay`, `burn` et
+`dodge` sont reconnues dans les graphes de surface et évaluables sur CPU et en
+WGSL. `overlay` sélectionne sa formule selon le fond ; `burn` et `dodge`
+retournent zéro pour les composantes dont le dénominateur est inférieur à
+`1e-8`, même lorsque `mix` ne vaut pas 1, conformément à l'implémentation
+GLSL MaterialX. Pour `unpremult`, un alpha nul laisse la couleur inchangée,
+comme indiqué par le NodeDef.
+
+**Cinquantième étape :** les ajustements `hsvadjust`, `saturate`, `contrast` et
+`colorcorrect` sont évaluables sur CPU et en WGSL et reconnus dans les graphes
+de surface. `colorcorrect` applique la saturation par luminance avant gamma,
+lift, gain, contraste et exposition, conformément au nodegraph MaterialX.
+Les conversions RGB/HSV gèrent aussi les couleurs à quatre composantes et les
+teintes négatives ; `luminance` respecte ses coefficients et conserve l'alpha.
+
+**Cinquante-et-unième étape :** les bruits cellulaires `cellnoise2d` et
+`cellnoise3d` utilisent le hash entier de MaterialX sur CPU et en WGSL, à la
+place de l'approximation précédente : leur résultat change donc pour les
+graphes existants. `randomfloat` prend en charge les NodeDefs à entrée flottante
+et entière, leurs bornes et leur seed ; la variante flottante multiplie
+l'entrée par 4096 avant le hash, contrairement à la variante entière.
+`randomcolor` partage ce hash et accepte également les arguments positionnels.
+
+**Cinquante-deuxième étape :** la catégorie des textures 2D prend en charge
+`latlongimage` pour les graphes de surface, en raster et dans le path tracer.
+La direction et la rotation, éventuellement connectées, produisent les
+coordonnées du nodegraph MaterialX ; l'image utilise un adressage périodique
+en U, miroir en V et un filtrage linéaire hors UDIM. Les UDIM et les registres
+de textures et samplers utilisent les chemins existants. Un nom de fichier vide
+utilise la couleur `default` ; un nom dynamique non résolu produit un avertissement. Comme pour
+les autres images du moteur, un fichier nommé mais introuvable ne garantit pas
+encore l'utilisation de cette couleur. `triplanarprojection` reste à traiter.
+
+**Cinquante-troisième étape :** le nœud procédural 2D `flake2d` expose les
+quatre sorties MaterialX : identifiant, valeur aléatoire, présence et normale
+du flocon. Son évaluation CPU et WGSL utilise le même voisinage cellulaire et
+les mêmes paramètres `size`, `roughness`, `coverage` et repère de surface que
+la bibliothèque MaterialX. La taille doit être non nulle. Chaque sortie
+connectée recalcule actuellement le motif ; ce nœud peut donc être coûteux.
+`flake3d` et `triplanarprojection` restent à traiter : leurs valeurs par défaut
+nécessitent les coordonnées en espace objet, absentes du path tracer actuel.
+
+**Cinquante-quatrième étape :** le lowering reconnaît `blur` et reproduit le
+nodegraph de la bibliothèque standard MaterialX, qui est actuellement un
+pass-through documenté plutôt qu'un flou effectif. Un `size` non nul ou
+dynamique déclenche un avertissement explicite ; l'implémentation ne prétend
+donc pas fournir la convolution gaussienne décrite par le NodeDef.
+
+**Cinquante-cinquième étape :** les opérations mathématiques `crossproduct`
+et `distance` sont acceptées dans les graphes de surface. Elles réutilisent
+leurs lowerings WGSL et CPU existants et des tests vérifient le produit vectoriel
+et la distance euclidienne sur des vecteurs 3D.
+
+**Cinquante-sixième étape :** le nœud mathématique `round` est accepté pour les
+sorties flottantes et vectorielles ainsi que pour la variante entière du NodeDef.
+Cette dernière convertit explicitement le résultat arrondi en `i32` dans le WGSL,
+comme dans les implémentations MaterialX.
+
+**Cinquante-septième étape :** les six opérations trigonométriques `sin`, `cos`,
+`tan`, `asin`, `acos` et `atan2` sont reconnues dans les graphes de surface.
+Les lowerings CPU et WGSL existants traitent les scalaires et vecteurs en radians ;
+les entrées omises reprennent les valeurs du NodeDef chargé. Pour `atan2`, l'ordre
+des entrées est `iny`, puis `inx`, y compris pour les appels IR positionnels.
+
+**Cinquante-huitième étape :** les opérations booléennes `and`, `or`, `xor` et
+`not` sont reconnues dans les graphes de surface. Les arguments nommés et
+positionnels sont évalués de la même façon sur CPU et en WGSL, avec `false`
+comme valeur d'entrée par défaut selon les NodeDefs MaterialX.
+
+**Cinquante-neuvième étape :** les comparaisons `ifequal`, `ifgreater`,
+`ifgreatereq` et le sélecteur `switch` sont reconnus dans les graphes de
+surface. Les comparaisons à sortie booléenne et les branches matricielles sont
+prises en charge sur CPU et en WGSL. `switch` suit les dix entrées du nodegraph
+MaterialX : une entrée omise vaut zéro, les indices négatifs sélectionnent
+`in1` et un sélecteur supérieur ou égal à 10 retourne zéro. Ce comportement
+remplace l'ancien écrêtage sur la dernière entrée fournie.
+
+**Soixantième étape :** les opérations vectorielles `dotproduct`, `magnitude`,
+`normalize`, `reflect` et `refract` sont reconnues dans les graphes de surface
+et évaluées sur CPU et en WGSL. Réflexion et réfraction utilisent la normale
+de surface par défaut et le rapport `ior` du nodegraph MaterialX ; la réflexion
+totale interne renvoie un vecteur nul. Pour une entrée nulle, `normalize`
+renvoie explicitement zéro sur CPU et GPU, au lieu de dépendre d'un résultat
+GLSL indéfini.
+
+**Soixante-et-unième étape :** les ajustements `smoothstep` et `remap` sont
+reconnus dans les graphes de surface et acceptent des arguments IR nommés ou
+positionnels. Les bornes scalaires peuvent s'appliquer à chaque composante.
+Pour `smoothstep`, la borne haute est prioritaire lorsque les bornes sont égales
+ou inversées ; pour `remap`, des bornes d'entrée égales renvoient `outlow`
+plutôt que le résultat indéfini de la division GLSL. L'évaluation CPU de `mix`
+respecte désormais les poids vectoriels composante par composante, comme WGSL.
+
+**Soixante-deuxième étape :** les opérations `power`, `safepower`, `sqrt`,
+`ln` et `exp` sont reconnues dans les graphes de surface. Les exposants
+scalaires des variantes vectorielles sont diffusés aussi pour les appels IR
+positionnels, et `safepower` conserve le signe de sa base. Comme auparavant,
+`ln` retourne zéro pour une entrée non positive ; les entrées hors domaine de
+`sqrt` ou `power` ne sont pas garanties identiques entre CPU et GPU.
+
+**Soixante-troisième étape :** les opérations de canaux `combine2/3/4`,
+`separate2/3/4` et `extract` sont utilisables dans les graphes de surface.
+`combine2` assemble aussi les entrées vectorielles des variantes à quatre
+composantes, et `combine4` accepte les arguments IR positionnels. `extract`
+restitue une colonne entière pour les matrices 3 × 3 et 4 × 4 ; `separate`
+respecte les valeurs par défaut déclarées et signale les sorties invalides.
+Les indices d'extraction doivent rester dans les bornes : le GPU ne garantit
+pas de résultat hors limites et l'évaluation CPU signale les indices matriciels
+invalides. Le nœud MaterialX `swizzle` reste non pris en charge et est signalé
+comme tel, indépendamment des swizzles internes utilisés par le compilateur.
+
 Travaux restants :
 
 - étendre les lowerings WGSL afin d'évaluer fidèlement les autres NodeDefs MaterialX actuellement signalés comme non pris en charge ;

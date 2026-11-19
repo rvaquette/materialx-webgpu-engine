@@ -14,12 +14,15 @@ export interface HexTileInputs {
   lumacoeffs: IrRef;
 }
 
-/** Expand the MaterialX hexagonal image algorithm into shared CPU/raster/PT IR. */
+export type HexTileSampleTransform = (sample: IrRef, rotation: IrRef) => IrRef;
+
+/** Expand the shared MaterialX hex-tile pattern into CPU/raster/PT IR. */
 export function lowerHexTiledImage(
   builder: IrModuleBuilder,
   type: IrType,
   inputs: HexTileInputs,
   sample: (uv: IrRef) => IrRef,
+  transformSample?: HexTileSampleTransform,
 ): IrRef {
   const v2 = vector(2);
   const v3 = vector(3);
@@ -93,7 +96,8 @@ export function lowerHexTiledImage(
     const offsetMin = component(inputs.offsetrange, 'x');
     const offsetMax = component(inputs.offsetrange, 'y');
     const offset = pair(mix(offsetMin, offsetMax, mul(rx, inputs.offset)), mix(offsetMin, offsetMax, mul(ry, inputs.offset)));
-    samples.push(sample(add(add(div(rotated, splat(scale, v2), v2), center, v2), offset, v2)));
+    const sampled = sample(add(add(div(rotated, splat(scale, v2), v2), center, v2), offset, v2));
+    samples.push(transformSample ? transformSample(sampled, angle) : sampled);
   }
 
   const blendWeights = (luminance: readonly IrRef[]): IrRef[] => {

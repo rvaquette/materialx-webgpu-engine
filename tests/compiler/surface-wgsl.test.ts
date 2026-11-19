@@ -24,8 +24,8 @@ function value(name: string, type: string, raw: string, colorSpace?: string): Re
     : { name, type, source, provenance: { namePath: `/mat/${name}` } };
 }
 
-function conn(name: string, type: string, nodeId: string): ResolvedInput {
-  return { name, type, source: { kind: 'connection', nodeId }, provenance: { namePath: `/mat/${name}` } };
+function conn(name: string, type: string, nodeId: string, output?: string): ResolvedInput {
+  return { name, type, source: { kind: 'connection', nodeId, ...(output ? { output } : {}) }, provenance: { namePath: `/mat/${name}` } };
 }
 
 function upstream(id: string, category: string, type: string, inputs: ResolvedInput[]): ResolvedNode {
@@ -56,6 +56,156 @@ function emit(graph: ResolvedGraph, sink?: (d: Diagnostic) => void) {
 }
 
 describe('emitLayeredSurface (T055d)', () => {
+  it('emits mixed channel assembly and extraction in raster and compute surface variants', () => {
+    const graph = surfaceGraph('standard_surface', [conn('base', 'float', 'split', 'outw')], [
+      upstream('split', 'separate4', 'multioutput', [conn('in', 'vector4', 'combined')]),
+      upstream('combined', 'combine2', 'vector4', [
+        value('in1', 'vector2', '0.1,0.2'), value('in2', 'vector2', '0.3,0.4'),
+      ]),
+    ]);
+    const diagnostics: Diagnostic[] = [];
+    const surface = resolveSurface(graph, { onDiagnostic: d => diagnostics.push(d) })!;
+    const raster = emitLayeredSurface(graph, surface, d => diagnostics.push(d));
+    const compute = emitSurfaceVariant(graph, surface, 0, d => diagnostics.push(d));
+    expect(diagnostics).toEqual([]);
+    for (const code of [raster.code, compute.fnCode]) {
+      expect(code).toMatch(/vec4f\(e\d+, e\d+\)/);
+      expect(code).toMatch(/e\d+\.w/);
+    }
+  });
+
+  it('emits connected exponential nodes in raster and compute surface variants', () => {
+    const graph = surfaceGraph('standard_surface', [conn('base', 'float', 'exponent')], [
+      upstream('exponent', 'exp', 'float', [conn('in', 'float', 'logarithm')]),
+      upstream('logarithm', 'ln', 'float', [value('in', 'float', '0.25')]),
+    ]);
+    const diagnostics: Diagnostic[] = [];
+    const surface = resolveSurface(graph, { onDiagnostic: d => diagnostics.push(d) })!;
+    const raster = emitLayeredSurface(graph, surface, d => diagnostics.push(d));
+    const compute = emitSurfaceVariant(graph, surface, 0, d => diagnostics.push(d));
+    expect(diagnostics).toEqual([]);
+    for (const code of [raster.code, compute.fnCode]) {
+      expect(code).toContain('log(');
+      expect(code).toContain('exp(');
+    }
+  });
+
+  it('emits connected remap and vector-weight mix in both surface variants', () => {
+    const graph = surfaceGraph('standard_surface', [conn('base_color', 'color3', 'blend')], [
+      upstream('blend', 'mix', 'color3', [
+        value('fg', 'color3', '1,0.2,0'), value('bg', 'color3', '0,0.6,1'),
+        conn('mix', 'color3', 'weights'),
+      ]),
+      upstream('weights', 'remap', 'color3', [value('in', 'color3', '0,0.5,1')]),
+    ]);
+    const diagnostics: Diagnostic[] = [];
+    const surface = resolveSurface(graph, { onDiagnostic: d => diagnostics.push(d) })!;
+    const raster = emitLayeredSurface(graph, surface, d => diagnostics.push(d));
+    const compute = emitSurfaceVariant(graph, surface, 0, d => diagnostics.push(d));
+    expect(diagnostics).toEqual([]);
+    for (const code of [raster.code, compute.fnCode]) {
+      expect(code).toContain('mix(');
+      expect(code).toContain('select(');
+    }
+  });
+
+  it('emits vector refraction in raster and compute surface variants', () => {
+    const graph = surfaceGraph('standard_surface', [conn('normal', 'vector3', 'direction')], [
+      upstream('direction', 'refract', 'vector3', [
+        value('in', 'vector3', '0.6, -0.8, 0'),
+        value('normal', 'vector3', '0, 1, 0'),
+        value('ior', 'float', '0.5'),
+      ]),
+    ]);
+    const diagnostics: Diagnostic[] = [];
+    const surface = resolveSurface(graph, { onDiagnostic: d => diagnostics.push(d) })!;
+    const raster = emitLayeredSurface(graph, surface, d => diagnostics.push(d));
+    const compute = emitSurfaceVariant(graph, surface, 0, d => diagnostics.push(d));
+    expect(diagnostics).toEqual([]);
+    for (const code of [raster.code, compute.fnCode]) {
+      expect(code).toContain('refract(');
+      expect(code).toContain('c.hasShadingNormal = 1u;');
+    }
+  });
+
+  it('emits connected conditional and switch nodes in both surface variants', () => {
+    const graph = surfaceGraph('standard_surface', [conn('base', 'float', 'pick')], [
+      upstream('condition', 'ifgreatereq', 'boolean', [
+        value('value1', 'float', '0.5'), value('value2', 'float', '0.5'),
+      ]),
+      upstream('index', 'convert', 'integer', [conn('in', 'boolean', 'condition')]),
+      upstream('pick', 'switch', 'float', [
+        value('in1', 'float', '0.2'), value('in2', 'float', '0.8'),
+        conn('which', 'integer', 'index'),
+      ]),
+    ]);
+    const diagnostics: Diagnostic[] = [];
+    const surface = resolveSurface(graph, { onDiagnostic: d => diagnostics.push(d) })!;
+    const raster = emitLayeredSurface(graph, surface, d => diagnostics.push(d));
+    const compute = emitSurfaceVariant(graph, surface, 0, d => diagnostics.push(d));
+    expect(diagnostics).toEqual([]);
+    for (const code of [raster.code, compute.fnCode]) {
+      expect(code).toContain(' >= ');
+      expect(code).toContain(' < 10.0');
+      expect(code).toContain('select(');
+    }
+  });
+
+  it('emits connected logical nodes in raster and compute surface variants', () => {
+    const graph = surfaceGraph('standard_surface', [conn('base', 'float', 'number')], [
+      upstream('logic', 'xor', 'boolean', [
+        conn('in1', 'boolean', 'negated'), value('in2', 'boolean', 'false'),
+      ]),
+      upstream('negated', 'not', 'boolean', [value('in', 'boolean', 'false')]),
+      upstream('number', 'convert', 'float', [conn('in', 'boolean', 'logic')]),
+    ]);
+    const diagnostics: Diagnostic[] = [];
+    const surface = resolveSurface(graph, { onDiagnostic: d => diagnostics.push(d) })!;
+    const raster = emitLayeredSurface(graph, surface, d => diagnostics.push(d));
+    const compute = emitSurfaceVariant(graph, surface, 0, d => diagnostics.push(d));
+    expect(diagnostics).toEqual([]);
+    for (const code of [raster.code, compute.fnCode]) {
+      expect(code).toMatch(/!\s*e\d+/);
+      expect(code).toContain('!=');
+      expect(code).toMatch(/f32\(e\d+\)/);
+    }
+  });
+
+  it('emits connected trigonometry in raster and compute surface variants', () => {
+    const graph = surfaceGraph('standard_surface', [conn('base', 'float', 'sine')], [
+      upstream('sine', 'sin', 'float', [conn('in', 'float', 'angle')]),
+      upstream('angle', 'atan2', 'float', [
+        value('iny', 'float', '1'), value('inx', 'float', '-1'),
+      ]),
+    ]);
+    const diagnostics: Diagnostic[] = [];
+    const surface = resolveSurface(graph, { onDiagnostic: d => diagnostics.push(d) })!;
+    const raster = emitLayeredSurface(graph, surface, d => diagnostics.push(d));
+    const compute = emitSurfaceVariant(graph, surface, 0, d => diagnostics.push(d));
+    expect(diagnostics).toEqual([]);
+    for (const code of [raster.code, compute.fnCode]) {
+      expect(code).toContain('atan2(');
+      expect(code).toContain('sin(');
+    }
+  });
+
+  it('carries flake2d presence and flake normal into raster and path-tracing closures', () => {
+    const graph = surfaceGraph('standard_surface', [
+      conn('base', 'float', 'flake', 'presence'),
+      conn('normal', 'vector3', 'flake', 'flakenormal'),
+    ], [upstream('flake', 'flake2d', 'multioutput', [value('size', 'float', '0.1')])]);
+    const surface = resolveSurface(graph)!;
+    const raster = emitLayeredSurface(graph, surface);
+    const pathtracer = emitSurfaceVariant(graph, surface, 0);
+    for (const code of [raster.code, pathtracer.fnCode]) {
+      expect(code).toContain('.presence');
+      expect(code).toContain('.normal');
+      expect(code).toContain('c.hasShadingNormal = 1u;');
+    }
+    expect(raster.code).toContain('fn mx_flake2d(');
+    expect(pathtracer.preludes.join('\n')).toContain('fn mx_flake2d(');
+  });
+
   const sssGraph = (options: ResolvedInput[]) => surfaceGraph('surface', [conn('bsdf', 'BSDF', 'skin')], [
     upstream('skin', 'LamaSSS', 'BSDF', [
       value('sssRadius', 'color3', '1,2,3'), ...options,

@@ -5,6 +5,7 @@ import {
   FLOAT,
   INT,
   COLOR3,
+  matrix,
   vector,
   shaderType,
   closureType,
@@ -83,6 +84,21 @@ describe('emitWgsl', () => {
     expect(explicit).not.toMatch(/mx_unifiednoise\(\(vary\.position \*/);
   });
 
+  it('uses the positional matrix input for transformmatrix', () => {
+    const b = new IrModuleBuilder();
+    const input = b.constant(vector(3), [2, 3, 4]);
+    const transform = b.constant(matrix(4), [
+      2, 0, 0, 0,
+      0, 3, 0, 0,
+      0, 0, 4, 0,
+      5, 6, 7, 1,
+    ]);
+    const ref = b.add({ kind: 'call', type: vector(3), op: 'transformmatrix', args: [input, transform] });
+    b.output({ name: 'out', type: vector(3), ref });
+
+    expect(emitWgsl(b.build()).code).toMatch(/let e\d+ = \(e\d+ \* vec4f\(e\d+, 1\.0\)\)\.xyz;/);
+  });
+
   it('keeps the fractal sum signed instead of lifting its zero to 0.5', () => {
     const code = unifiedNoiseModule(3, true, 3);
     const fractalBranch = code.match(/case 3 \{([\s\S]*?)\}/)?.[1];
@@ -104,7 +120,7 @@ describe('emitWgsl', () => {
     const ref = b.add({ kind: 'call', type: FLOAT, op: 'cellnoise3d', args: [] });
     b.output({ name: 'out', type: FLOAT, ref });
     const code = emitWgsl(b.build()).code;
-    expect(code).toContain('fn mx_cellnoise3(');
+    expect(code).toContain('fn mx_materialx_cellnoise3(');
     expect(code).not.toContain('mx_rotate3d');
     expect(code).not.toContain('mx_unified_cell');
   });
@@ -131,9 +147,9 @@ describe('emitWgsl', () => {
   it('includes a node prelude only when the node is used', () => {
     const b = new IrModuleBuilder();
     const c = b.constant(COLOR3, [0.5, 0.5, 0.5]);
-    const lum = b.add({ kind: 'call', type: COLOR3, op: 'luminance', args: [c] });
-    b.output({ name: 'out', type: COLOR3, ref: lum });
-    expect(emitWgsl(b.build()).code).toContain('fn mx_luminance');
+    const hsv = b.add({ kind: 'call', type: COLOR3, op: 'rgbtohsv', args: [c] });
+    b.output({ name: 'out', type: COLOR3, ref: hsv });
+    expect(emitWgsl(b.build()).code).toContain('fn mx_rgbtohsv');
   });
 
   it('reports metadata for uniforms, textures, samplers and outputs', () => {

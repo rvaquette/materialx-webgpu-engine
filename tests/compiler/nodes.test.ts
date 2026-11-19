@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { coveredCategories, getNodeLowering, isNodeCovered, NODE_REGISTRY } from '../../src/compiler/nodes.ts';
+import { DEFAULT_SUPPORTED_UPSTREAM } from '../../src/materialx/surface-graph.ts';
 
 // The 57 source-code leaves from docs/materialx-node-coverage.md (T014 work list).
 const LEAVES = [
@@ -17,6 +18,73 @@ const LEAVES = [
 ];
 
 describe('node coverage', () => {
+  it.each([
+    'g18_rec709_to_lin_rec709', 'g22_rec709_to_lin_rec709', 'rec709_display_to_lin_rec709',
+    'acescg_to_lin_rec709', 'g22_ap1_to_lin_rec709', 'srgb_texture_to_lin_rec709',
+    'lin_adobergb_to_lin_rec709', 'adobergb_to_lin_rec709',
+    'srgb_displayp3_to_lin_rec709', 'lin_displayp3_to_lin_rec709',
+  ])('reports color transform %s as supported', category => {
+    expect(isNodeCovered(category)).toBe(true);
+    expect(DEFAULT_SUPPORTED_UPSTREAM.has(category)).toBe(true);
+  });
+
+  it.each(['creatematrix', 'determinant', 'transpose', 'invertmatrix', 'transformmatrix'])(
+    'reports matrix operation %s as supported',
+    category => {
+      expect(isNodeCovered(category)).toBe(true);
+      expect(DEFAULT_SUPPORTED_UPSTREAM.has(category)).toBe(true);
+    },
+  );
+
+  it.each(['bump', 'heighttonormal', 'ramp', 'ramp_gradient', 'luminance', 'viewdirection'])(
+    'reports %s as supported for surface graph diagnostics',
+    category => {
+      expect(isNodeCovered(category)).toBe(true);
+      expect(DEFAULT_SUPPORTED_UPSTREAM.has(category)).toBe(true);
+    },
+  );
+
+  it('recognizes hextilednormalmap in surface graph diagnostics', () => {
+    expect(DEFAULT_SUPPORTED_UPSTREAM.has('hextilednormalmap')).toBe(true);
+  });
+
+  it.each(['mincomponent', 'maxcomponent', 'trianglewave'])(
+    'reports %s as supported for graph diagnostics and editing',
+    category => {
+      expect(isNodeCovered(category)).toBe(true);
+      expect(DEFAULT_SUPPORTED_UPSTREAM.has(category)).toBe(true);
+    },
+  );
+
+  it.each(['over', 'in', 'out', 'mask', 'matte', 'disjointover', 'inside', 'outside'])(
+    'reports %s as supported for graph diagnostics and editing',
+    category => {
+      expect(isNodeCovered(category)).toBe(true);
+      expect(DEFAULT_SUPPORTED_UPSTREAM.has(category)).toBe(true);
+    },
+  );
+
+  it.each(['premult', 'unpremult', 'plus', 'minus', 'difference', 'screen', 'overlay', 'burn', 'dodge'])(
+    'reports compositing node %s as supported for surface graphs',
+    category => {
+      expect(isNodeCovered(category)).toBe(true);
+      expect(DEFAULT_SUPPORTED_UPSTREAM.has(category)).toBe(true);
+    },
+  );
+
+  it.each(['hsvadjust', 'saturate', 'contrast', 'colorcorrect'])(
+    'reports color adjustment %s as supported for surface graphs',
+    category => {
+      expect(isNodeCovered(category)).toBe(true);
+      expect(DEFAULT_SUPPORTED_UPSTREAM.has(category)).toBe(true);
+    },
+  );
+
+  it('reports randomfloat as supported for surface graphs', () => {
+    expect(isNodeCovered('randomfloat')).toBe(true);
+    expect(DEFAULT_SUPPORTED_UPSTREAM.has('randomfloat')).toBe(true);
+  });
+
   it('covers every source-code leaf of the coverage doc', () => {
     expect(LEAVES).toHaveLength(57);
     const missing = LEAVES.filter((c) => !isNodeCovered(c));
@@ -28,6 +96,13 @@ describe('node coverage', () => {
     expect(getNodeLowering('dielectric_bsdf')?.kind).toBe('closure');
     expect(getNodeLowering('randomcolor')?.kind).toBe('expr');
     expect(getNodeLowering('grid')?.kind).toBe('expr');
+    expect(getNodeLowering('crosshatch')?.kind).toBe('expr');
+    expect(getNodeLowering('tiledcircles')?.kind).toBe('expr');
+    expect(getNodeLowering('tiledcloverleafs')?.kind).toBe('expr');
+    expect(getNodeLowering('hexagon')?.kind).toBe('expr');
+    expect(getNodeLowering('tiledhexagons')?.kind).toBe('expr');
+    expect(getNodeLowering('line')?.kind).toBe('expr');
+    expect(getNodeLowering('cloverleaf')?.kind).toBe('expr');
     expect(getNodeLowering('nonexistent')).toBeUndefined();
   });
 

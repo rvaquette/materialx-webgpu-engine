@@ -181,6 +181,7 @@ function makeInputs(
   named: Readonly<Record<string, string>>,
   namedCall = false,
   types: Readonly<Record<string, IrType>> = {},
+  positionalTypes: readonly (IrType | undefined)[] = [],
 ): NodeInputs {
   return {
     at(index, fallback) {
@@ -195,11 +196,11 @@ function makeInputs(
       if (fallback !== undefined) return fallback;
       throw new WgslEmitError(`missing named input '${name}'`);
     },
-    has(name) {
-      return named[name] !== undefined;
+    has(name, legacyIndex) {
+      return named[name] !== undefined || (!namedCall && legacyIndex !== undefined && positional[legacyIndex] !== undefined);
     },
-    typeOf(name) {
-      return types[name];
+    typeOf(name, legacyIndex) {
+      return types[name] ?? (!namedCall && legacyIndex !== undefined ? positionalTypes[legacyIndex] : undefined);
     },
   };
 }
@@ -395,8 +396,8 @@ export function lowerExprs(
         const lowering = getNodeLowering(expr.op);
         if (!lowering) throw new WgslEmitError(`no WGSL lowering for node '${expr.op}'`);
         addPreludes(preludes, lowering.prelude);
-        if (expr.op === 'heighttonormal') {
-          const height = expr.namedArgs?.in ?? expr.args[0];
+        if (expr.op === 'heighttonormal' || (expr.op === 'bump' && computeStage)) {
+          const height = expr.namedArgs?.[expr.op === 'bump' ? 'height' : 'in'] ?? expr.args[0];
           if (!height) throw new WgslEmitError(`${expr.op} requires a height input`);
           const heightExpr = ir.exprs.get(height);
           if (!heightExpr) throw new WgslEmitError(`missing height expression '${height}'`);
@@ -431,6 +432,7 @@ export function lowerExprs(
           }
           const gradient = `vec2f((${samples[0]} - ${samples[1]}) / (2.0 * ${stepName}.x), (${samples[2]} - ${samples[3]}) / (2.0 * ${stepName}.y))`;
           const scale = expr.namedArgs?.scale ? varName(expr.namedArgs.scale) : '1.0';
+          const heightScale = expr.op === 'bump' ? '1.0' : scale;
           let du = 'vec2f(1.0, 0.0)';
           let dv = 'vec2f(0.0, 1.0)';
           if (texcoord) {
@@ -441,8 +443,10 @@ export function lowerExprs(
             du = `vec2f(${dx}.x, ${dy}.x)`;
             dv = `vec2f(${dx}.y, ${dy}.y)`;
           }
-          const encoded = `mx_heighttonormal(${gradient}, ${du}, ${dv}, ${scale})`;
-          rhs = encoded;
+          const encoded = `mx_heighttonormal(${gradient}, ${du}, ${dv}, ${heightScale})`;
+          rhs = expr.op === 'bump'
+            ? `mx_normalmap(${encoded}, vec2f(${scale}), ${expr.namedArgs?.normal ? varName(expr.namedArgs.normal) : ctx.varyings.normal}, ${expr.namedArgs?.tangent ? varName(expr.namedArgs.tangent) : ctx.varyings.tangent}, ${expr.namedArgs?.bitangent ? varName(expr.namedArgs.bitangent) : ctx.varyings.bitangent})`
+            : encoded;
           break;
         }
         const named = Object.fromEntries(Object.entries(expr.namedArgs ?? {}).map(([name, ref]) => [name, varName(ref)]));
@@ -451,7 +455,8 @@ export function lowerExprs(
           const argExpr = ir.exprs.get(argRef);
           if (argExpr) types[name] = argExpr.type;
         }
-        rhs = lowering.emit(makeInputs(expr.args.map(varName), named, expr.namedArgs !== undefined, types), expr.type, ctx);
+        const positionalTypes = expr.args.map(arg => ir.exprs.get(arg)?.type);
+        rhs = lowering.emit(makeInputs(expr.args.map(varName), named, expr.namedArgs !== undefined, types, positionalTypes), expr.type, ctx);
         break;
       }
       case 'closure': {

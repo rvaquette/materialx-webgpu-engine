@@ -40,15 +40,16 @@ export interface LoweredSurfaceInputs {
 }
 
 const TEXTURE_CATEGORIES: ReadonlySet<string> = new Set(['image', 'tiledimage', 'hextiledimage']);
-const GLTF_TEXTURE_CATEGORIES: ReadonlySet<string> = new Set(['gltf_image', 'gltf_colorimage', 'gltf_normalmap', 'gltf_iridescence_thickness', 'hextilednormalmap']);
+const NODEGRAPH_TEXTURE_CATEGORIES: ReadonlySet<string> = new Set(['gltf_image', 'gltf_colorimage', 'gltf_normalmap', 'gltf_iridescence_thickness', 'hextilednormalmap', 'latlongimage']);
 
 /** Upstream node categories this lowering emits (registry + special-cased nodes). */
 export const SURFACE_IR_UPSTREAM: ReadonlySet<string> = new Set([
   ...coveredCategories(),
   ...TEXTURE_CATEGORIES,
-  ...GLTF_TEXTURE_CATEGORIES,
+  ...NODEGRAPH_TEXTURE_CATEGORIES,
   'convert',
   'geompropvalue',
+  'flake2d',
   'separate2',
   'separate3',
   'separate4',
@@ -135,6 +136,7 @@ export function lowerValueInputsToIr(
 ): ReadonlyMap<string, IrRef> {
   const nodeMemo = new Map<string, IrRef>();
   const geomMemo = new Map<string, IrRef>();
+  const diagnosedFlakeSize = new Set<string>();
   let uvRef: IrRef | undefined;
 
   const neutralColor = (): IrRef => builder.constant(COLOR3, [0, 0, 0]);
@@ -190,14 +192,13 @@ export function lowerValueInputsToIr(
   const callRef = (op: string, type: IrType, namedArgs: Record<string, IrRef>): IrRef =>
     builder.add({ kind: 'call', type, op, args: [], namedArgs });
 
-  const lowerTexture = (nodeId: string, typeOverride?: IrType, uvOverride?: IrRef): IrRef => {
+  const declareTextureAndSampler = (nodeId: string, valueType: IrType) => {
     const node = graph.nodes.get(nodeId)!;
-    const valueType = typeOverride ?? irTypeFromMaterialX(node.type) ?? COLOR3;
     const file = node.inputs.find((i) => i.name === 'file');
-    // Record the image reference so the PT texture registry can dedup shared
-    // files across materials (T057j).
-    const fileRef = file?.source.kind === 'value' ? file.source.value : undefined;
+    const fileRef = file?.source.kind === 'value' ? file.source.value
+      : node.category === 'latlongimage' ? node.nodeDef?.inputs?.find((input) => input.name === 'file')?.value : undefined;
     const udim = AssetResolver.hasUdim(fileRef ?? '');
+    // Record the image reference so the PT texture registry can dedup shared files.
     builder.declareTexture({
       name: nodeId,
       valueType,
@@ -209,9 +210,9 @@ export function lowerValueInputsToIr(
       if (input?.source.kind === 'value') return input.source.value;
       return node.nodeDef?.inputs?.find((candidate) => candidate.name === name)?.value;
     };
-    const addressU = stringInput('uaddressmode');
-    const addressV = stringInput('vaddressmode');
-    const filter = stringInput('filtertype');
+    const addressU = node.category === 'latlongimage' ? 'periodic' : stringInput('uaddressmode');
+    const addressV = node.category === 'latlongimage' ? 'mirror' : stringInput('vaddressmode');
+    const filter = node.category === 'latlongimage' ? 'linear' : stringInput('filtertype');
     builder.declareSampler({
       name: nodeId,
       ...(udim ? { addressU: 'clamp', addressV: 'clamp' } : node.category === 'tiledimage' ? { addressU: 'periodic', addressV: 'periodic' } : {
@@ -220,6 +221,13 @@ export function lowerValueInputsToIr(
       }),
       ...(filter !== undefined ? { filter } : {}),
     });
+    return { udim, addressU, addressV };
+  };
+
+  const lowerTexture = (nodeId: string, typeOverride?: IrType, uvOverride?: IrRef): IrRef => {
+    const node = graph.nodes.get(nodeId)!;
+    const valueType = typeOverride ?? irTypeFromMaterialX(node.type) ?? COLOR3;
+    const { udim, addressU, addressV } = declareTextureAndSampler(nodeId, valueType);
     const texcoord = node.inputs.find((i) => i.name === 'texcoord');
     let uv = uvOverride ?? (texcoord ? lowerInput(texcoord) : undefined) ?? ensureUv();
     if (uvOverride === undefined && node.category === 'hextiledimage') {
@@ -273,7 +281,7 @@ export function lowerValueInputsToIr(
       if (scale !== undefined) uv = callRef('multiply', uvType, { in1: coerce(uv, uvType), in2: scale });
       if (offset !== undefined) uv = callRef('add', uvType, { in1: coerce(uv, uvType), in2: offset });
     }
-    if (!udim && (node.category === 'image' || node.category === 'tiledimage')) {
+    if (!udim && (node.category === 'image' || node.category === 'tiledimage' || node.category === 'latlongimage')) {
       uv = callRef('add', uvType, {
         in1: callRef('multiply', uvType, { in1: coerce(uv, uvType), in2: builder.constant(uvType, [1, -1]) }),
         in2: builder.constant(uvType, [0, 1]),
@@ -281,7 +289,10 @@ export function lowerValueInputsToIr(
     }
     let sample = builder.add({
       kind: 'texture', type: valueType, texture: nodeId, uv: coerce(uv, uvType), sampler: nodeId,
-      ...(udim ? { fallback: authoredRef(nodeId, 'default', valueType) ?? constOfIrType(builder, valueType, [0]) } : {}),
+      ...(udim ? { fallback: authoredRef(nodeId, 'default', valueType) ?? constOfIrType(builder, valueType,
+        node.category === 'latlongimage'
+          ? parseNumbers(node.nodeDef?.inputs?.find((input) => input.name === 'default')?.value ?? '0')
+          : [0]) } : {}),
     });
     for (const [axis, mode] of [['x', addressU], ['y', addressV]] as const) {
       if (udim) continue;
@@ -304,11 +315,45 @@ export function lowerValueInputsToIr(
     return ref !== undefined ? coerce(ref, type) : undefined;
   };
 
-  // glTF texture nodes are nodegraph-implemented in MaterialX; lower them to
-  // the equivalent texture sample + factor / normal-map / remap primitives.
-  const lowerGltfTexture = (nodeId: string, output?: string): IrRef => {
+  // Nodegraph-backed texture nodes lower to texture samples and small IR graphs.
+  const lowerNodegraphTexture = (nodeId: string, output?: string): IrRef => {
     const node = graph.nodes.get(nodeId)!;
     switch (node.category) {
+      case 'latlongimage': {
+        const file = node.inputs.find((input) => input.name === 'file');
+        if (file && file.source.kind !== 'value' && file.source.kind !== 'default') {
+          sink({
+            level: 'warning',
+            message: `Dynamic filename on latlongimage '${nodeId}' is unsupported; using its default color.`,
+            detail: { nodeId },
+          });
+        }
+        const fileRef = file?.source.kind === 'value' ? file.source.value
+          : file && file.source.kind !== 'default' ? undefined
+            : node.nodeDef?.inputs?.find((input) => input.name === 'file')?.value;
+        const input = (name: string, type: IrType, fallback: readonly number[]): IrRef => {
+          const authored = authoredRef(nodeId, name, type);
+          if (authored !== undefined) return authored;
+          const declared = node.nodeDef?.inputs?.find((candidate) => candidate.name === name)?.value;
+          return constOfIrType(builder, type, declared !== undefined ? parseNumbers(declared) : fallback);
+        };
+        if (!fileRef?.trim()) return input('default', COLOR3, [0, 0, 0]);
+
+        const vec3 = vector(3, 'float', 'vector');
+        const vec2 = vector(2, 'float', 'texcoord');
+        const viewdir = input('viewdir', vec3, [0, 0, 1]);
+        const component = (pattern: string): IrRef =>
+          builder.add({ kind: 'swizzle', type: FLOAT, source: viewdir, pattern });
+        const binary = (op: string, in1: IrRef, in2: IrRef): IrRef => callRef(op, FLOAT, { in1, in2 });
+        const longitude = binary('add',
+          binary('multiply', callRef('atan2', FLOAT, { iny: component('x'), inx: component('z') }), builder.constant(FLOAT, -0.15915494)),
+          builder.constant(FLOAT, 0.5));
+        const u = binary('add', binary('multiply', input('rotation', FLOAT, [0]), builder.constant(FLOAT, 0.00277778)), longitude);
+        const v = binary('add',
+          binary('multiply', callRef('asin', FLOAT, { in: component('y') }), builder.constant(FLOAT, 0.31830989)),
+          builder.constant(FLOAT, 0.5));
+        return lowerTexture(nodeId, COLOR3, callRef('combine2', vec2, { in1: u, in2: v }));
+      }
       case 'gltf_colorimage': {
         let color = lowerTexture(nodeId, COLOR4);
         for (const name of ['color', 'geomcolor']) {
@@ -324,16 +369,63 @@ export function lowerValueInputsToIr(
         return callRef('normalmap', vec3, { in: lowerTexture(nodeId, vec3) });
       }
       case 'hextilednormalmap': {
-        // Approximation: one tiled normal-map sample, without hex-tile blending.
         const vec2 = vector(2, 'float', 'texcoord');
         const vec3 = vector(3, 'float', 'vector');
         const uv = authoredRef(nodeId, 'texcoord', vec2) ?? ensureUv();
-        const tiling = authoredRef(nodeId, 'tiling', vec2);
-        const tiled = tiling !== undefined ? callRef('multiply', vec2, { in1: uv, in2: tiling }) : uv;
-        const args: Record<string, IrRef> = { in: lowerTexture(nodeId, vec3, tiled) };
-        const strength = authoredRef(nodeId, 'strength', FLOAT);
-        if (strength !== undefined) args['scale'] = strength;
-        for (const name of ['normal', 'tangent']) {
+        const input = (name: string, type: IrType, fallback: readonly number[]): IrRef => {
+          const authored = authoredRef(nodeId, name, type);
+          if (authored !== undefined) return authored;
+          const declared = node.nodeDef?.inputs?.find((candidate) => candidate.name === name)?.value;
+          return constOfIrType(builder, type, declared !== undefined ? parseNumbers(declared) : fallback);
+        };
+        declareTextureAndSampler(nodeId, vec3);
+        const flipG = input('flip_g', BOOL, [0]);
+        const one = builder.constant(FLOAT, 1);
+        const half = builder.constant(FLOAT, 0.5);
+        const two = builder.constant(FLOAT, 2);
+        const component = (source: IrRef, pattern: string): IrRef =>
+          builder.add({ kind: 'swizzle', type: FLOAT, source, pattern });
+        const binary = (op: string, in1: IrRef, in2: IrRef): IrRef =>
+          callRef(op, FLOAT, { in1, in2 });
+        const hexNormal = lowerHexTiledImage(builder, vec3, {
+          texcoord: coerce(uv, vec2),
+          tiling: input('tiling', vec2, [1, 1]),
+          rotation: input('rotation', FLOAT, [1]),
+          rotationrange: input('rotationrange', vec2, [0, 360]),
+          scale: input('scale', FLOAT, [1]),
+          scalerange: input('scalerange', vec2, [0.5, 2]),
+          offset: input('offset', FLOAT, [1]),
+          offsetrange: input('offsetrange', vec2, [0, 1]),
+          falloff: input('falloff', FLOAT, [0.5]),
+          falloffcontrast: builder.constant(FLOAT, 0),
+          lumacoeffs: builder.constant(COLOR3, [0.2722287, 0.6740818, 0.0536895]),
+        }, (coord) => builder.add({ kind: 'texture', type: vec3, texture: nodeId, uv: coord, sampler: nodeId }), (sample, rotation) => {
+          const nx = binary('subtract', binary('multiply', two, component(sample, 'x')), one);
+          const sampleY = component(sample, 'y');
+          const ny = binary('subtract', binary('multiply', two, sampleY), one);
+          const flippedY = callRef('ifequal', FLOAT, {
+            value1: flipG,
+            value2: builder.constant(BOOL, 1),
+            in1: binary('multiply', ny, builder.constant(FLOAT, -1)),
+            in2: ny,
+          });
+          const sine = callRef('sin', FLOAT, { in: rotation });
+          const cosine = callRef('cos', FLOAT, { in: rotation });
+          const rotatedX = binary('subtract', binary('multiply', nx, cosine), binary('multiply', flippedY, sine));
+          const rotatedY = binary('add', binary('multiply', nx, sine), binary('multiply', flippedY, cosine));
+          const encodedX = binary('add', binary('multiply', half, rotatedX), half);
+          const encodedY = binary('add', binary('multiply', half, rotatedY), half);
+          return callRef('combine3', vec3, {
+            in1: encodedX,
+            in2: encodedY,
+            in3: component(sample, 'z'),
+          });
+        });
+        const args: Record<string, IrRef> = {
+          in: hexNormal,
+          scale: input('strength', FLOAT, [1]),
+        };
+        for (const name of ['normal', 'tangent', 'bitangent']) {
           const ref = authoredRef(nodeId, name, vec3);
           if (ref !== undefined) args[name] = ref;
         }
@@ -367,9 +459,9 @@ export function lowerValueInputsToIr(
     return builder.add({ kind: 'convert', type: to, source, from });
   };
 
-  const lowerCall = (nodeId: string, output?: string): IrRef => {
+  const lowerCall = (nodeId: string, output?: string, override?: { op: string; type: IrType }): IrRef => {
     const node = graph.nodes.get(nodeId)!;
-    const type = irTypeFromMaterialX(node.type) ?? COLOR3;
+    const type = override?.type ?? irTypeFromMaterialX(node.type) ?? COLOR3;
     const declaredTypes = new Map<string, IrType | undefined>();
     for (const input of node.nodeDef?.inputs ?? []) declaredTypes.set(input.name, irTypeFromMaterialX(input.type));
     const namedArgs: Record<string, IrRef> = {};
@@ -384,7 +476,7 @@ export function lowerValueInputsToIr(
         namedArgs[input.name] = constOfIrType(builder, inputType, parseNumbers(input.value));
       }
     }
-    const op = node.category === 'artistic_ior' && output === 'extinction' ? 'artistic_ior_extinction' : node.category;
+    const op = override?.op ?? (node.category === 'artistic_ior' && output === 'extinction' ? 'artistic_ior_extinction' : node.category);
     return builder.add(
       node.nodeDef !== undefined
         ? { kind: 'call', type, op, args: [], namedArgs, nodeDef: node.nodeDef }
@@ -408,12 +500,71 @@ export function lowerValueInputsToIr(
       return ref;
     }
     let ref: IrRef;
-    if (/^separate[234]$/.test(node.category) && output && /^out[xyzwrgba]$/.test(output)) {
-      const input = node.inputs.find((candidate) => candidate.name === 'in');
+    if (/^separate[234]$/.test(node.category)) {
       const size = Number(node.category.slice(-1)) as 2 | 3 | 4;
-      const raw = (input ? lowerInput(input) : undefined) ?? neutralColor();
-      const source = coerce(raw, input ? irTypeFromMaterialX(input.type) ?? vector(size) : vector(size));
-      ref = builder.add({ kind: 'swizzle', type: FLOAT, source, pattern: output.slice(3) });
+      const channel = output?.match(/^out([xyzwrgba])$/)?.[1];
+      if (!channel || !('xyzw'.slice(0, size).includes(channel) || 'rgba'.slice(0, size).includes(channel))) {
+        sink({
+          level: 'warning',
+          message: `Unsupported ${node.category} output '${output ?? '<unspecified>'}' on '${nodeId}'; using zero.`,
+          detail: { nodeId, output },
+        });
+        ref = builder.constant(FLOAT, 0);
+      } else {
+        const input = node.inputs.find((candidate) => candidate.name === 'in');
+        const declared = node.nodeDef?.inputs?.find((candidate) => candidate.name === 'in');
+        const type = irTypeFromMaterialX(input?.type ?? declared?.type ?? '') ?? vector(size);
+        const raw = (input ? lowerInput(input) : undefined)
+          ?? constOfIrType(builder, type, parseNumbers(declared?.value ?? '0'));
+        const source = coerce(raw, type);
+        ref = builder.add({ kind: 'swizzle', type: FLOAT, source, pattern: channel });
+      }
+    } else if (node.category === 'blur') {
+      const input = node.inputs.find((candidate) => candidate.name === 'in');
+      const type = irTypeFromMaterialX(node.type) ?? COLOR3;
+      const source = input ? lowerInput(input) : undefined;
+      const declaredDefault = node.nodeDef?.inputs?.find((candidate) => candidate.name === 'in')?.value;
+      ref = source !== undefined
+        ? coerce(source, type)
+        : constOfIrType(builder, type, parseNumbers(declaredDefault ?? '0'));
+
+      const size = node.inputs.find((candidate) => candidate.name === 'size');
+      const authoredSize = size?.source.kind === 'value' ? Number.parseFloat(size.source.value) : undefined;
+      const defaultSize = node.nodeDef?.inputs?.find((candidate) => candidate.name === 'size')?.value;
+      const parsedDefaultSize = defaultSize !== undefined ? Number.parseFloat(defaultSize) : 0;
+      if (size?.parameter !== undefined || size?.source.kind === 'connection' || size?.source.kind === 'interface'
+          || authoredSize !== undefined && authoredSize !== 0
+          || (size === undefined || size.source.kind === 'default') && parsedDefaultSize !== 0) {
+        sink({
+          level: 'warning',
+          message: `blur '${nodeId}' uses MaterialX's pass-through implementation; nonzero or dynamic size does not blur the input.`,
+          detail: { nodeId },
+        });
+      }
+    } else if (node.category === 'flake2d') {
+      const size = node.inputs.find((input) => input.name === 'size');
+      const rawSize = size?.source.kind === 'value' ? size.source.value
+        : !size || size.source.kind === 'default' ? node.nodeDef?.inputs?.find((input) => input.name === 'size')?.value : undefined;
+      if (rawSize !== undefined && (!Number.isFinite(Number.parseFloat(rawSize)) || Number.parseFloat(rawSize) === 0)
+          && !diagnosedFlakeSize.has(nodeId)) {
+        diagnosedFlakeSize.add(nodeId);
+        sink({
+          level: 'warning',
+          message: `flake2d '${nodeId}' requires a finite, nonzero size; its result is undefined.`,
+          detail: { nodeId, size: rawSize },
+        });
+      }
+      if (output === 'id' || output === 'rand' || output === 'presence' || output === 'flakenormal') {
+        const type = output === 'id' ? INT : output === 'flakenormal' ? vector(3, 'float', 'vector') : FLOAT;
+        ref = lowerCall(nodeId, output, { op: `flake2d_${output}`, type });
+      } else {
+        sink({
+          level: 'warning',
+          message: `Unsupported flake2d output '${output ?? '<unspecified>'}' on '${nodeId}'; using zero.`,
+          detail: { nodeId, output },
+        });
+        ref = builder.constant(FLOAT, 0);
+      }
     } else if (node.category === 'geompropvalue') {
       const property = node.inputs.find(input => input.name === 'geomprop');
       const name = property?.source.kind === 'value' ? property.source.value : undefined;
@@ -431,8 +582,8 @@ export function lowerValueInputsToIr(
       }
     } else if (TEXTURE_CATEGORIES.has(node.category)) {
       ref = lowerTexture(nodeId);
-    } else if (GLTF_TEXTURE_CATEGORIES.has(node.category)) {
-      ref = lowerGltfTexture(nodeId, output);
+    } else if (NODEGRAPH_TEXTURE_CATEGORIES.has(node.category)) {
+      ref = lowerNodegraphTexture(nodeId, output);
     } else if (node.category === 'convert') {
       ref = lowerConvert(nodeId);
     } else if (getNodeLowering(node.category)) {
