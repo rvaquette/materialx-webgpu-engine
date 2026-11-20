@@ -1,0 +1,36 @@
+<?xml version="1.0"?>
+<materialx version="1.39">
+  <tiledimage name="Fabric022_1K_JPG_Color" type="color3">
+    <input name="file" type="filename" value="./Fabric022_1K-JPG_Color.jpg" colorspace="srgb_texture" />
+    <input name="uvtiling" type="vector2" value="1, 1" />
+  </tiledimage>
+  <tiledimage name="Fabric022_1K_JPG_NormalGL" type="vector3" nodedef="ND_tiledimage_vector3">
+    <input name="file" type="filename" value="./Fabric022_1K-JPG_NormalGL.jpg" />
+    <input name="uvtiling" type="vector2" value="1, 1" />
+  </tiledimage>
+  <normalmap name="NormalMap" type="vector3">
+    <input name="in" type="vector3" nodename="Fabric022_1K_JPG_NormalGL" />
+    <input name="scale" type="float" value="1" />
+  </normalmap>
+  <tiledimage name="Fabric022_1K_JPG_Roughness" type="float" nodedef="ND_tiledimage_float">
+    <input name="file" type="filename" value="./Fabric022_1K-JPG_Roughness.jpg" />
+    <input name="uvtiling" type="vector2" value="1, 1" />
+  </tiledimage>
+  <open_pbr_surface name="Fabric022_1K_JPG_OpenPbrSurface" type="surfaceshader">
+    <input name="base_color" type="color3" nodename="Fabric022_1K_JPG_Color" />
+    <input name="geometry_normal" type="vector3" nodename="NormalMap" />
+    <input name="specular_roughness" type="float" nodename="Fabric022_1K_JPG_Roughness" />
+  </open_pbr_surface>
+  <tiledimage name="Fabric022_1K_JPG_Displacement" type="float" nodedef="ND_tiledimage_float">
+    <input name="file" type="filename" value="./Fabric022_1K-JPG_Displacement.jpg" />
+    <input name="uvtiling" type="vector2" value="1, 1" />
+  </tiledimage>
+  <displacement name="displacement" type="displacementshader">
+    <input name="displacement" type="float" nodename="Fabric022_1K_JPG_Displacement" />
+    <input name="scale" type="float" value="1" />
+  </displacement>
+  <surfacematerial name="Fabric022_1K_JPG" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="Fabric022_1K_JPG_OpenPbrSurface" />
+    <input name="displacementshader" type="displacementshader" nodename="displacement" />
+  </surfacematerial>
+</materialx>

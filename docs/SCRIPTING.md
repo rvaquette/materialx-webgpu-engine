@@ -61,9 +61,12 @@ connexion entre types différents produisent une erreur avec la ligne fautive.
 - **Script → XML** / **XML → Script** : conversion dans les deux sens. L'import
   lit les documents plats (nœuds et `input`), pas encore les `nodegraph`.
 - **Appliquer** (Ctrl+Entrée) : remplace le matériau de l'objet sélectionné.
-  Disponible sur les scènes source (USD, glTF) ; les scènes précompilées
-  exigent un paquet compilé. Les textures relatives sont résolues par rapport à
-  la page du viewer.
+  Sur une scène source (USD, glTF), la scène est rechargée avec le document.
+  Sur une scène précompilée, le document est compilé à la volée dans le
+  navigateur sur un quad sonde (comme `npm run compile:scenes` pour la
+  bibliothèque, sans écrire de paquet) puis lié à l'objet ; raster et path
+  tracer l'utilisent. Les textures relatives sont résolues par rapport à la
+  page du viewer.
 - **Exporter .mtlx** télécharge le document ; Échap ferme l'éditeur.
 
 ## Code

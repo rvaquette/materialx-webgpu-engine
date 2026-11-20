@@ -6,8 +6,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { decodeCompiledScene, encodeCompiledScene, writeCompiledScene, type CompiledScenePackage, type SceneDirectory } from '../../src/scene/compiled-scene-codec.ts';
 import {
-  compiledRasterShaderKey, compiledSceneAssetUrl, exportCompiledMaterial, exportCompiledScene,
-  loadCompiledMaterial, loadCompiledScene,
+  applyCompiledMaterials, compileMaterialDocument, compiledRasterShaderKey, compiledSceneAssetUrl, exportCompiledMaterial,
+  exportCompiledScene, loadCompiledMaterial, loadCompiledScene,
 } from '../../src/scene/compiled-scene.ts';
 import { importUsdStage } from '../../src/usd/importer.ts';
 import { buildSceneResources } from '../../src/render/scene-resources.ts';
@@ -621,6 +621,37 @@ over "World" {
         await expect(load(old)).rejects.toThrow('legacy triplanarprojection shaders; re-export');
       }
     }
+  });
+
+  it('compiles a MaterialX document in memory whose textures stay isolated from the base scene', async () => {
+    const probe = await triplanarFixture();
+    const probeImage = await probe.mtlx.imageProvider.decode('z.png');
+    const releaseProbe = vi.fn();
+    probe.mtlx.documents = { documentFor: () => undefined, delete: releaseProbe };
+    const loadProbe = vi.spyOn(sceneAssets, 'loadUsdScene').mockImplementation(async (_entry, _sink, _line, overrides) => {
+      const primPath = [...overrides!.keys()][0]!;
+      const instances = probe.resources.instances.map(instance => ({ ...instance, primPath }));
+      return { ...probe, parameterResources: { ...probe.resources, instances } };
+    });
+    const material = await compileMaterialDocument('https://example.test/script.mtlx', 'Mat', vi.fn());
+    expect(loadProbe).toHaveBeenCalledWith(
+      expect.stringMatching(/^blob:/), expect.any(Function), expect.any(Function),
+      new Map([['/Probe/Mesh', { assetPath: 'https://example.test/script.mtlx', materialName: 'Mat' }]]),
+      { editableParameters: true },
+    );
+    expect(releaseProbe).toHaveBeenCalledOnce();
+    expect(material.material.boundPrims).toEqual([]);
+    expect(material.material.surfaceModule?.textures.some(texture => texture.fileRef === 'z.png')).toBe(true);
+
+    const base = await fixture();
+    const baseImage: DecodedPixelImage = {
+      kind: 'pixels', width: 1, height: 1, channels: 4, componentType: 'uint8', colorSpace: 'srgb_texture',
+      data: new Uint8Array([1, 2, 3, 255]),
+    };
+    base.mtlx.imageProvider.decode = file => file === 'base.png' ? baseImage : undefined;
+    const applied = await applyCompiledMaterials(base, new Map([[base.resources.instances[0]!.primPath, material]]));
+    await expect(applied.mtlx.imageProvider.decode('z.png')).resolves.toEqual(probeImage);
+    await expect(applied.mtlx.imageProvider.decode('base.png')).resolves.toBe(baseImage);
   });
 
   it('round trips Worley 3D geometry and rejects stale scene and material shaders', async () => {

@@ -80,7 +80,7 @@ import { buildDisneyEnvironmentCdf } from './pathtracing/disney-environment.ts';
 import { disneyTileForIndex, type DisneyRenderSettings } from './pathtracing/disney-render.ts';
 import type { SceneLight } from '../usd/lights.ts';
 import {
-  applyCompiledMaterials, compiledRasterShaderKey, loadCompiledMaterial, loadCompiledScene, readCompiledLayerReferences,
+  applyCompiledMaterials, compileMaterialDocument, compiledRasterShaderKey, loadCompiledMaterial, loadCompiledScene, readCompiledLayerReferences,
   type CompiledMaterial,
 } from '../scene/compiled-scene.ts';
 
@@ -858,7 +858,10 @@ export class InteractiveViewer {
       .map(parameter => [parameter.id, parameter.initial])));
   }
 
-  /** Replace an object's material. Compiled scenes require `compiledUrl`, a precompiled MaterialX package. */
+  /**
+   * Replace an object's material. On compiled scenes `compiledUrl` names a precompiled MaterialX
+   * package; without one the document is compiled in the browser.
+   */
   async setObjectMaterial(path: string, assetPath?: string, compiledUrl?: string): Promise<void> {
     if (!this.#sceneEntry || !this.#objects.some((object) => object.path === path)) {
       throw new Error(`Unknown object: ${path}`);
@@ -866,10 +869,15 @@ export class InteractiveViewer {
     if (this.isCompiledScene) {
       const base = this.#compiledBase;
       if (!base) throw new Error('Compiled scene state is unavailable.');
-      if (assetPath && !compiledUrl) throw new Error('This material has no precompiled package.');
       const overrides = new Map(this.#compiledOverrides);
-      if (assetPath && compiledUrl) overrides.set(path, { assetPath, material: await this.#compiledMaterial(compiledUrl) });
-      else overrides.delete(path);
+      if (assetPath) {
+        const material = compiledUrl
+          ? await this.#compiledMaterial(compiledUrl)
+          : await compileMaterialDocument(assetPath, await this.#materialName(assetPath), this.#diagnosticSink(), this.#loadOptions);
+        overrides.set(path, { assetPath, material });
+      } else {
+        overrides.delete(path);
+      }
       const loaded = this.#loaded!;
       const candidate = overrides.size
         ? await applyCompiledMaterials(base, new Map([...overrides].map(([key, value]) => [key, value.material])))
@@ -880,18 +888,28 @@ export class InteractiveViewer {
       return;
     }
     const overrides = new Map(this.#materialOverrides);
-    if (assetPath) {
-      const response = await fetch(assetPath);
-      if (!response.ok) throw new Error(`HTTP ${response.status}: ${assetPath}`);
-      const document = new DOMParser().parseFromString(await response.text(), 'application/xml');
-      if (document.querySelector('parsererror')) throw new Error('Invalid MaterialX XML.');
-      const materialName = document.getElementsByTagName('surfacematerial')[0]?.getAttribute('name');
-      if (!materialName) throw new Error('No surfacematerial in this MaterialX document.');
-      overrides.set(path, { assetPath, materialName });
-    } else {
-      overrides.delete(path);
-    }
+    if (assetPath) overrides.set(path, { assetPath, materialName: await this.#materialName(assetPath) });
+    else overrides.delete(path);
     await this.load(this.#sceneEntry, overrides, true, this.#loadOptions);
+  }
+
+  /** Name of the first `surfacematerial` of a MaterialX document. */
+  async #materialName(assetPath: string): Promise<string> {
+    const response = await fetch(assetPath);
+    if (!response.ok) throw new Error(`HTTP ${response.status}: ${assetPath}`);
+    const document = new DOMParser().parseFromString(await response.text(), 'application/xml');
+    if (document.querySelector('parsererror')) throw new Error('Invalid MaterialX XML.');
+    const materialName = document.getElementsByTagName('surfacematerial')[0]?.getAttribute('name');
+    if (!materialName) throw new Error('No surfacematerial in this MaterialX document.');
+    return materialName;
+  }
+
+  #diagnosticSink(): DiagnosticSink {
+    return (diagnostic) => {
+      if (this.#onDiagnostic) this.#onDiagnostic(diagnostic);
+      else if (diagnostic.level === 'error') console.error(diagnostic.message, diagnostic.detail ?? '');
+      else if (diagnostic.level === 'warning') console.warn(diagnostic.message, diagnostic.detail ?? '');
+    };
   }
 
   #compiledMaterial(url: string): Promise<CompiledMaterial> {

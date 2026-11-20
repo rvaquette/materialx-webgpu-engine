@@ -265,9 +265,6 @@ async function main(): Promise<void> {
   applyScriptMaterial = async (xml) => {
     if (operationBusy || deviceLost) throw new Error('Une opération du viewer est en cours.');
     if (!state.objectPath) throw new Error('Sélectionner d’abord un objet de la scène.');
-    if (viewer.isCompiledScene) {
-      throw new Error('Scène précompilée : ouvrir une scène source (USD ou glTF) pour appliquer un matériau scripté.');
-    }
     // The viewer re-reads the document whenever the scene reloads, so the URL is kept alive.
     const url = URL.createObjectURL(new Blob([xml], { type: 'application/xml' }));
     setBusy(true, 'Application du matériau scripté...');

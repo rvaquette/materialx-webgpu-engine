@@ -980,12 +980,21 @@ surface.base_color = img.out;
   les entrées et sorties ;
 - script → XML MaterialX et XML → script ;
 - éditeur avec colorisation, IntelliSense et helpers de valeurs ;
-- « Appliquer » remplace le matériau de l'objet sélectionné (scènes source).
+- « Appliquer » remplace le matériau de l'objet sélectionné ; sur une scène
+  précompilée, le document est compilé à la volée dans le navigateur
+  (`compileMaterialDocument`).
 
 Travaux restants :
 
-- appliquer un matériau scripté aux scènes précompilées (compilation à la volée) ;
 - importer les documents contenant des `nodegraph` (seul le format plat est lu).
+- étendre les scripts afin de 
+* charger une scene 
+* modifier les paramètres de rendu (ceux de l'UI)
+* créer ou charger un materiau et l'affecter à un objet de la scene
+* lancer le rendu 
+* enregistrer une image en local
+* autre fonctionnalité à proposer
+- l'API doit permettre de lancer un tel script en ligne de commande
 
 ## Priorité 4 : accélération du path tracer
 

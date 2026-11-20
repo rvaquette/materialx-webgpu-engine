@@ -100,7 +100,11 @@ export function coerceValue(value: unknown, type: string, label: string): Script
 }
 
 function parseValue(text: string, type: string, label: string): ScriptValue {
-  if (VECTOR_SIZE[type]) return coerceValue(text.split(',').map(part => Number(part.trim())), type, label);
+  if (VECTOR_SIZE[type]) {
+    const components = text.split(',').map(part => Number(part.trim()));
+    // A single component is broadcast, as for numbers assigned in scripts.
+    return coerceValue(components.length === 1 ? components[0] : components, type, label);
+  }
   if (type === 'float' || type === 'integer') return coerceValue(text.trim() === '' ? NaN : Number(text), type, label);
   if (type === 'boolean') return coerceValue(text === 'true' ? true : text === 'false' ? false : text, type, label);
   return coerceValue(text, type, label);
@@ -161,7 +165,12 @@ export class ScriptLibrary {
   readonly #byClass = new Map<string, string>();
   readonly #byName = new Map<string, ScriptNodeDef>();
 
-  constructor(defs: Iterable<ScriptNodeDef>) {
+  /**
+   * `defs` are the selectable variants; `versions` are older NodeDef versions, only resolved by
+   * explicit NodeDef name (e.g. documents pinning `ND_standard_surface_surfaceshader_100`).
+   */
+  constructor(defs: Iterable<ScriptNodeDef>, versions: Iterable<ScriptNodeDef> = []) {
+    for (const def of versions) this.#byName.set(def.name, def);
     for (const def of defs) {
       this.#byName.set(def.name, def);
       const variants = this.#byCategory.get(def.category) ?? [];
@@ -197,8 +206,9 @@ export class ScriptLibrary {
     const variants = this.variants(category);
     if (!variants.length) throw new ScriptError(`Unknown node type "${category}".`);
     if (variant === undefined) return variants[0]!;
+    const named = this.#byName.get(variant);
     const def = variant.startsWith('ND_')
-      ? variants.find(candidate => candidate.name === variant)
+      ? (named?.category === category ? named : undefined)
       : variants.find(candidate => nodeType(candidate) === variant);
     if (!def) {
       const types = [...new Set(variants.map(nodeType))].join(', ');
@@ -254,21 +264,24 @@ export class ScriptLibrary {
       if (element.attributes.get('isdefaultversion') === 'true') defaults.add(element.attributes.get('node')!);
     }
     const defs: ScriptNodeDef[] = [];
+    const versions: ScriptNodeDef[] = [];
     for (const [name, element] of elements) {
       const category = element.attributes.get('node')!;
-      if (defaults.has(category) && element.attributes.has('version') && element.attributes.get('isdefaultversion') !== 'true') continue;
       const outputs = [...ports(element, 'output').values()];
       const legacyType = element.attributes.get('type');
       if (!outputs.length && legacyType) outputs.push({ name: 'out', type: legacyType });
       if (!outputs.length) continue;
       const doc = element.attributes.get('doc');
-      defs.push({
+      const def: ScriptNodeDef = {
         name, category, className: scriptClassName(category),
         inputs: [...ports(element, 'input').values()], outputs,
         ...(doc ? { doc } : {}),
-      });
+      };
+      const olderVersion = defaults.has(category) && element.attributes.has('version') &&
+        element.attributes.get('isdefaultversion') !== 'true';
+      (olderVersion ? versions : defs).push(def);
     }
-    return new ScriptLibrary(defs);
+    return new ScriptLibrary(defs, versions);
   }
 }
 
@@ -296,12 +309,25 @@ export interface ScriptNode {
   def: ScriptNodeDef;
   /** Assigned inputs in assignment order. */
   inputs: Map<string, ScriptInput>;
+  /** MaterialX `colorspace` attribute, e.g. `srgb_texture` for color textures. */
+  colorspace?: string;
 }
 
 export type ScriptInput = { value: ScriptValue } | { node: ScriptNode; output: string };
 
 export interface ScriptGraph {
   nodes: ScriptNode[];
+}
+
+/** Standard MaterialX color spaces, offered for the `colorspace` node attribute. */
+export const MATERIALX_COLORSPACES: readonly string[] = [
+  'srgb_texture', 'lin_rec709', 'g22_rec709', 'g18_rec709', 'acescg', 'lin_ap1', 'g22_ap1', 'g18_ap1',
+  'lin_srgb', 'adobergb', 'lin_adobergb', 'srgb_displayp3', 'lin_displayp3',
+];
+
+/** Whether `name` is the node's `colorspace` attribute rather than one of its inputs. */
+export function isColorspaceAttribute(def: ScriptNodeDef, name: string): boolean {
+  return name === 'colorspace' && !def.inputs.some(port => port.name === name);
 }
 
 function inputDef(node: ScriptNode, name: string): ScriptPortDef {
@@ -375,6 +401,7 @@ export function runScript(code: string, library: ScriptLibrary): ScriptGraph {
       get: (_target, key) => {
         if (typeof key !== 'string') return undefined;
         if (key === 'toString') return () => node.name;
+        if (isColorspaceAttribute(def, key)) return node.colorspace;
         const output = def.outputs.find(port => port.name === key);
         if (output && !def.inputs.some(port => port.name === key)) return outputRef(node, output);
         const input = node.inputs.get(inputDef(node, key).name);
@@ -384,6 +411,11 @@ export function runScript(code: string, library: ScriptLibrary): ScriptGraph {
       },
       set: (_target, key, value) => {
         if (typeof key !== 'string') return false;
+        if (isColorspaceAttribute(def, key)) {
+          if (typeof value !== 'string') throw new ScriptError(`${node.name}.colorspace expects a color space name.`);
+          node.colorspace = value;
+          return true;
+        }
         if (def.outputs.some(port => port.name === key) && !def.inputs.some(port => port.name === key)) {
           throw new ScriptError(`${node.name}.${key} is an output and cannot be assigned.`);
         }
@@ -478,7 +510,10 @@ export function toXml(graph: ScriptGraph, library: ScriptLibrary, options: ToXml
   const lines = ['<?xml version="1.0"?>', `<materialx version="1.39"${prefix}>`];
   for (const node of withMaterial(graph, library)) {
     const preferred = library.variantArgument(node.def) === undefined && nodeType(node.def) !== 'multioutput';
-    const open = `  <${node.def.category} name="${escapeXml(node.name)}" type="${nodeType(node.def)}"${preferred ? '' : ` nodedef="${node.def.name}"`}`;
+    // The engine (like MaterialX getColorSpace) reads the color space declared on the file input itself.
+    const fileInputs = [...node.inputs].filter(([name, input]) => 'value' in input && inputDef(node, name).type === 'filename');
+    const colorspace = node.colorspace ? ` colorspace="${escapeXml(node.colorspace)}"` : '';
+    const open = `  <${node.def.category} name="${escapeXml(node.name)}" type="${nodeType(node.def)}"${preferred ? '' : ` nodedef="${node.def.name}"`}${fileInputs.length ? '' : colorspace}`;
     if (!node.inputs.size) {
       lines.push(`${open} />`);
       continue;
@@ -488,7 +523,7 @@ export function toXml(graph: ScriptGraph, library: ScriptLibrary, options: ToXml
       const type = inputDef(node, name).type;
       const source = 'node' in input
         ? `nodename="${escapeXml(input.node.name)}"${input.node.def.outputs.length > 1 ? ` output="${input.output}"` : ''}`
-        : `value="${escapeXml(formatXmlValue(input.value))}"`;
+        : `value="${escapeXml(formatXmlValue(input.value))}"${type === 'filename' ? colorspace : ''}`;
       lines.push(`    <input name="${name}" type="${type}" ${source} />`);
     }
     lines.push(`  </${node.def.category}>`);
@@ -513,41 +548,151 @@ function documentNodeDef(element: XmlElement, library: ScriptLibrary): ScriptNod
   return matches[0]!;
 }
 
-/** Read a flat MaterialX document whose nodes are defined by `library`. */
+/** MaterialX elements that do not describe shading nodes (geometry bindings, layout, metadata). */
+const IGNORED_ELEMENTS = new Set([
+  'look', 'lookgroup', 'materialassign', 'collection', 'geominfo', 'geomprop', 'propertyset', 'propertysetassign',
+  'variantset', 'variantassign', 'visibility', 'backdrop', 'token', 'unitdef', 'unittypedef', 'typedef',
+]);
+const UNSUPPORTED_ELEMENTS = new Set(['nodedef', 'implementation', 'xi:include', 'attributedef', 'targetdef']);
+
+/** A `<materialx>` document or `<nodegraph>`: the naming scope of nodes, outputs and interface inputs. */
+interface DocumentScope {
+  path: string;
+  parent?: DocumentScope;
+  filePrefix: string;
+  nodes: Map<string, ScriptNode>;
+  graphs: Map<string, DocumentScope>;
+  outputs: Map<string, XmlElement>;
+  interface: Map<string, XmlElement>;
+}
+
+type ResolvedSource = { value: string; filePrefix: string } | { node: ScriptNode; output: ScriptPortDef };
+
+const isAbsoluteFile = (file: string): boolean => /^(?:[a-z][a-z0-9+.-]*:|\/)/i.test(file);
+
+/**
+ * Read a MaterialX document whose nodes are defined by `library`. Node graphs are flattened:
+ * their nodes join the script, graph outputs connect to the node behind them, and interface
+ * inputs are replaced by the value or connection they receive.
+ */
 export function fromXml(xml: string, library: ScriptLibrary): ScriptGraph {
   const graph: ScriptGraph = { nodes: [] };
-  const byName = new Map<string, ScriptNode>();
-  const elements = materialxRoot(xml).children;
-  for (const element of elements) {
-    if (element.tag === 'nodedef' || element.tag === 'nodegraph' || element.tag === 'implementation') {
-      throw new ScriptError(`<${element.tag}> is not supported by material scripts.`);
+  const pending: Array<{ node: ScriptNode; element: XmlElement; scope: DocumentScope; localName: string }> = [];
+  const prefixOf = (element: XmlElement, inherited: string): string => element.attributes.get('fileprefix') ?? inherited;
+
+  const collect = (element: XmlElement, scope: DocumentScope): void => {
+    for (const child of element.children) {
+      const name = child.attributes.get('name');
+      if (IGNORED_ELEMENTS.has(child.tag)) continue;
+      if (UNSUPPORTED_ELEMENTS.has(child.tag)) throw new ScriptError(`<${child.tag}> is not supported by material scripts.`);
+      if (!name) throw new ScriptError(`<${child.tag}> has no name.`);
+      if (child.tag === 'output') {
+        scope.outputs.set(name, child);
+      } else if (child.tag === 'input') {
+        if (!scope.parent) throw new ScriptError(`Document-level <input> "${name}" is not supported.`);
+        scope.interface.set(name, child);
+      } else if (child.tag === 'nodegraph') {
+        if (child.attributes.has('nodedef')) throw new ScriptError(`Node graph "${name}" implements a NodeDef and is not supported.`);
+        if (scope.graphs.has(name) || scope.nodes.has(name)) throw new ScriptError(`Duplicate name "${name}".`);
+        const graphScope: DocumentScope = {
+          path: scope.path ? `${scope.path}_${name}` : name, parent: scope, filePrefix: prefixOf(child, scope.filePrefix),
+          nodes: new Map(), graphs: new Map(), outputs: new Map(), interface: new Map(),
+        };
+        scope.graphs.set(name, graphScope);
+        collect(child, graphScope);
+      } else {
+        if (scope.nodes.has(name) || scope.graphs.has(name)) throw new ScriptError(`Duplicate node name "${name}".`);
+        const node: ScriptNode = { name, def: documentNodeDef(child, library), inputs: new Map() };
+        const colorspace = child.attributes.get('colorspace');
+        if (colorspace) node.colorspace = colorspace;
+        scope.nodes.set(name, node);
+        graph.nodes.push(node);
+        pending.push({ node, element: child, scope, localName: name });
+      }
     }
-    const name = element.attributes.get('name');
-    if (!name) throw new ScriptError(`<${element.tag}> has no name.`);
-    if (byName.has(name)) throw new ScriptError(`Duplicate node name "${name}".`);
-    const node: ScriptNode = { name, def: documentNodeDef(element, library), inputs: new Map() };
-    byName.set(name, node);
-    graph.nodes.push(node);
+  };
+  const root = materialxRoot(xml);
+  const document: DocumentScope = {
+    path: '', filePrefix: prefixOf(root, ''), nodes: new Map(), graphs: new Map(), outputs: new Map(), interface: new Map(),
+  };
+  collect(root, document);
+
+  // Flattened nodes keep their name unless another node already uses it.
+  const used = new Set(pending.filter(item => !item.scope.parent).map(item => item.localName));
+  for (const { node, scope, localName } of pending) {
+    if (!scope.parent) continue;
+    let name = used.has(localName) ? `${scope.path}_${localName}` : localName;
+    const base = name;
+    for (let i = 2; used.has(name); i++) name = `${base}_${i}`;
+    used.add(name);
+    node.name = name;
   }
-  elements.forEach((element, index) => {
-    const node = graph.nodes[index]!;
+
+  const describe = (scope: DocumentScope, name: string): string => scope.path ? `${scope.path}/${name}` : name;
+  const graphOutput = (scope: DocumentScope, graphName: string, outputName: string | undefined, label: string): ResolvedSource | undefined => {
+    const target = scope.graphs.get(graphName);
+    if (!target) throw new ScriptError(`${label} references unknown node graph "${graphName}".`);
+    const outputs = [...target.outputs.values()];
+    const output = outputName !== undefined ? target.outputs.get(outputName) : outputs.length === 1 ? outputs[0] : undefined;
+    if (!output) throw new ScriptError(`${label} references unknown output "${graphName}.${outputName ?? ''}".`);
+    return resolve(output, target, label);
+  };
+  // Source of an input or output element in `scope`: a value, a node output, or nothing (NodeDef default).
+  const resolve = (element: XmlElement, scope: DocumentScope, label: string): ResolvedSource | undefined => {
+    const attributes = element.attributes;
+    const nodeName = attributes.get('nodename');
+    const graphName = attributes.get('nodegraph');
+    const interfaceName = attributes.get('interfacename');
+    if (nodeName !== undefined) {
+      const node = scope.nodes.get(nodeName);
+      if (node) {
+        const outputName = attributes.get('output');
+        const output = outputName ? node.def.outputs.find(port => port.name === outputName) : node.def.outputs[0];
+        if (!output) throw new ScriptError(`${label} references unknown output "${nodeName}.${outputName ?? ''}".`);
+        return { node, output };
+      }
+      // MaterialX 1.38 documents reference sibling node graphs through `nodename`.
+      if (scope.graphs.has(nodeName)) return graphOutput(scope, nodeName, attributes.get('output'), label);
+      throw new ScriptError(`${label} references unknown node "${describe(scope, nodeName)}".`);
+    }
+    if (graphName !== undefined) return graphOutput(scope, graphName, attributes.get('output'), label);
+    if (interfaceName !== undefined) {
+      const input = scope.interface.get(interfaceName);
+      if (!input || !scope.parent) throw new ScriptError(`${label} references unknown interface input "${describe(scope, interfaceName)}".`);
+      const value = input.attributes.get('value');
+      if (value !== undefined && !input.attributes.has('nodename') && !input.attributes.has('nodegraph') && !input.attributes.has('interfacename')) {
+        return { value, filePrefix: prefixOf(input, scope.filePrefix) };
+      }
+      return resolve(input, scope.parent, label);
+    }
+    const value = attributes.get('value');
+    if (value === undefined) return undefined;
+    return { value, filePrefix: prefixOf(element, scope.filePrefix) };
+  };
+
+  for (const { node, element, scope } of pending) {
+    const nodePrefix = prefixOf(element, scope.filePrefix);
     for (const child of element.children) {
       if (child.tag !== 'input') throw new ScriptError(`<${child.tag}> in ${node.name} is not supported by material scripts.`);
       const inputName = child.attributes.get('name') ?? '';
       const input = inputDef(node, inputName);
-      const source = child.attributes.get('nodename');
-      if (source === undefined) {
-        node.inputs.set(inputName, { value: parseValue(child.attributes.get('value') ?? '', input.type, `${node.name}.${inputName}`) });
+      const label = `${node.name}.${inputName}`;
+      const source = resolve(child, { ...scope, filePrefix: nodePrefix }, label);
+      if (!source) continue;
+      if ('node' in source) {
+        connect(node, inputName, source.node, source.output);
         continue;
       }
-      const sourceNode = byName.get(source);
-      if (!sourceNode) throw new ScriptError(`${node.name}.${inputName} references unknown node "${source}".`);
-      const output = child.attributes.get('output');
-      const port = output ? sourceNode.def.outputs.find(candidate => candidate.name === output) : sourceNode.def.outputs[0];
-      if (!port) throw new ScriptError(`${node.name}.${inputName} references unknown output "${source}.${output ?? ''}".`);
-      connect(node, inputName, sourceNode, port);
+      // An empty value on a shader or closure input only declares it, unconnected.
+      if (!acceptsValue(input.type) && source.value === '') continue;
+      let value = parseValue(source.value, input.type, label);
+      if (input.type === 'filename' && typeof value === 'string' && value && !isAbsoluteFile(value)) value = source.filePrefix + value;
+      node.inputs.set(inputName, { value });
+      const colorspace = child.attributes.get('colorspace');
+      // A texture's color space travels with the image node in scripts.
+      if (colorspace && input.type === 'filename' && !node.colorspace) node.colorspace = colorspace;
     }
-  });
+  }
   return graph;
 }
 
@@ -591,6 +736,7 @@ export function toScript(graph: ScriptGraph, library: ScriptLibrary): string {
     const name = names.get(node)!;
     const variant = library.variantArgument(node.def);
     const lines = [`${name} = new ${node.def.className}(${variant === undefined ? '' : JSON.stringify(variant)});`];
+    if (node.colorspace) lines.push(`${name}.colorspace = ${JSON.stringify(node.colorspace)};`);
     for (const [input, value] of node.inputs) {
       lines.push(`${name}.${input} = ${'node' in value ? `${names.get(value.node)!}.${value.output}` : formatScriptValue(value.value)};`);
     }

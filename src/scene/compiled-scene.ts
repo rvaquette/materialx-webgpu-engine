@@ -11,8 +11,8 @@ import { SCENE_BUFFER_CACHE_VERSION, validatePreparedGeometry } from '../render/
 import { buildMaterialDispatch, type PtMaterialDispatch } from '../render/pathtracing/material-variant.ts';
 import { OBJECT_TO_WORLD_INPUT, WORLD_TO_OBJECT_INPUT, OBJECT_GEOMETRY_INPUTS } from '../compiler/ir.ts';
 import { pathTraceSettings } from '../render/pathtracing/scene-settings.ts';
-import type { LoadedUsdScene } from '../render/usd-scene-assets.ts';
-import { loadEnvironment } from '../render/usd-scene-assets.ts';
+import type { LoadedUsdScene, SceneLoadOptions } from '../render/usd-scene-assets.ts';
+import { loadEnvironment, loadUsdScene } from '../render/usd-scene-assets.ts';
 import type { MaterialResource, SceneResources } from '../render/scene-resources.ts';
 import type { PtImageProvider } from '../render/pathtracing/device-bindings.ts';
 import { applySceneDisplacement } from '../render/displacement.ts';
@@ -175,10 +175,10 @@ export interface CompiledMaterial {
   imageProvider: PtImageProvider;
 }
 
-/** Precompiled MaterialX material (graph, WGSL, parameters), applied to compiled scenes without MaterialX. */
-export async function exportCompiledMaterial(
-  loaded: LoadedUsdScene, primPath: string, options: CompiledSceneEncodeOptions = {},
-): Promise<CompiledScenePackage> {
+/** The compiled material bound to `primPath` and every texture file it reads (raster, path tracer, displacement). */
+async function boundMaterial(
+  loaded: LoadedUsdScene, primPath: string,
+): Promise<{ material: MaterialResource; files: Set<string> }> {
   if (loaded.resources.pendingMaterials.length) throw new Error('Cannot export a material that failed to compile.');
   const source = loaded.parameterResources ?? loaded.resources;
   const key = source.instances.find(instance => instance.primPath === primPath)?.materialKey;
@@ -193,6 +193,14 @@ export async function exportCompiledMaterial(
     for (const texture of candidate?.surfaceModule?.textures ?? []) if (texture.fileRef !== undefined) files.add(texture.fileRef);
     if (candidate?.displacement) files.add(candidate.displacement.file);
   }
+  return { material, files };
+}
+
+/** Precompiled MaterialX material (graph, WGSL, parameters), applied to compiled scenes without MaterialX. */
+export async function exportCompiledMaterial(
+  loaded: LoadedUsdScene, primPath: string, options: CompiledSceneEncodeOptions = {},
+): Promise<CompiledScenePackage> {
+  const { material, files } = await boundMaterial(loaded, primPath);
   const data: CompiledMaterialData = {
     kind: 'material',
     spaceTransformVersion: SPACE_TRANSFORM_VERSION,
@@ -202,6 +210,73 @@ export async function exportCompiledMaterial(
   };
   validateMaterialData(data);
   return encodeCompiledScene(data, loaded.entry, options);
+}
+
+const PROBE_PRIM = '/Probe/Mesh';
+// Same quad as scripts/material-probe.usda, which precompiles the material library.
+const PROBE_USDA = `#usda 1.0
+(
+    upAxis = "Y"
+)
+
+def Xform "Probe"
+{
+    def Mesh "Mesh"
+    {
+        int[] faceVertexCounts = [4]
+        int[] faceVertexIndices = [0, 1, 2, 3]
+        point3f[] points = [(-1, -1, 0), (1, -1, 0), (1, 1, 0), (-1, 1, 0)]
+        normal3f[] normals = [(0, 0, 1), (0, 0, 1), (0, 0, 1), (0, 0, 1)] (
+            interpolation = "vertex"
+        )
+        texCoord2f[] primvars:st = [(0, 0), (1, 0), (1, 1), (0, 1)] (
+            interpolation = "vertex"
+        )
+    }
+}
+`;
+
+/**
+ * Compile a MaterialX document in the browser into a material for compiled scenes, as
+ * `npm run compile:scenes` does for the material library but without writing a package.
+ */
+export async function compileMaterialDocument(
+  assetPath: string, materialName: string, sink: DiagnosticSink, options: SceneLoadOptions = {},
+): Promise<CompiledMaterial> {
+  const probe = URL.createObjectURL(new Blob([PROBE_USDA], { type: 'text/plain' }));
+  try {
+    const loaded = await loadUsdScene(probe, sink, () => {}, new Map([[PROBE_PRIM, { assetPath, materialName }]]), {
+      ...(options.runtimeAssets ? { runtimeAssets: options.runtimeAssets } : {}), editableParameters: true,
+    });
+    try {
+      const { material, files } = await boundMaterial(loaded, PROBE_PRIM);
+      // Decode now: the probe's MaterialX documents are released below.
+      const images = new Map<string, DecodedPixelImage>();
+      for (const file of files) {
+        const image = await loaded.mtlx.imageProvider.decode(file);
+        if (!image) throw new Error(`Missing texture: ${file}`);
+        images.set(file, image);
+      }
+      const sources = new Map([...files].map(file => [file, loaded.mtlx.imageProvider.exportSource?.(file)] as const));
+      return {
+        url: assetPath,
+        material: { ...material, boundPrims: [] },
+        surface: loaded.mtlx.surfaceFor(material),
+        imageProvider: {
+          decode: (file) => {
+            const image = images.get(file);
+            if (!image) throw new MissingCompiledImageError(`Texture absent from ${assetPath}: ${file}`);
+            return image;
+          },
+          exportSource: file => sources.get(file),
+        },
+      };
+    } finally {
+      loaded.mtlx.documents?.delete();
+    }
+  } finally {
+    URL.revokeObjectURL(probe);
+  }
 }
 
 export async function loadCompiledMaterial(url: string, fetchResource: typeof fetch = fetch): Promise<CompiledMaterial> {
