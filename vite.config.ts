@@ -80,7 +80,7 @@ const materialxAssets = {
 export default defineConfig({
   base: './',
   // scripts/*.test.mjs use node:test and run through `node --test` (see npm test).
-  test: { exclude: [...configDefaults.exclude, 'scripts/**/*.test.mjs', '.tsupgrader/**'] },
+  test: { exclude: [...configDefaults.exclude, 'scripts/**/*.test.mjs', 'tests/playwright/**', '.tsupgrader/**'] },
   optimizeDeps: { exclude: ['@bokuweb/zstd-wasm', '@mori2003/jsimgui'] },
   resolve: {
     alias: [{

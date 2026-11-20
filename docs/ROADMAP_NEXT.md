@@ -965,15 +965,27 @@ MaterialX, l'évaluer immédiatement et exporter le document obtenu.
 
 ## Priorité 3bis : scripting
 
-- permettre la création d'un materiau Materialx par script
-idée : 
-node = new <Node>
-node.input = value;
-node2.input = node1.output;
-etc...
-- à partir de ce code le transformer en XML
-- à partir du XMl générer un code script
-- langage de script : JS, ou autre
+Réalisé : un matériau MaterialX se crée par un script JavaScript minimal, édité
+dans le viewer (bouton « Script » ou F2). Voir [SCRIPTING.md](SCRIPTING.md).
+
+```js
+img = new Image();
+img.file = "textures/wood.jpg";
+surface = new StandardSurface();
+surface.base_color = img.out;
+```
+
+- les nœuds ne sont pas codés en dur : `new Image()` résout au moment de
+  l'instanciation les NodeDefs des bibliothèques MaterialX chargées, qui donnent
+  les entrées et sorties ;
+- script → XML MaterialX et XML → script ;
+- éditeur avec colorisation, IntelliSense et helpers de valeurs ;
+- « Appliquer » remplace le matériau de l'objet sélectionné (scènes source).
+
+Travaux restants :
+
+- appliquer un matériau scripté aux scènes précompilées (compilation à la volée) ;
+- importer les documents contenant des `nodegraph` (seul le format plat est lu).
 
 ## Priorité 4 : accélération du path tracer
 

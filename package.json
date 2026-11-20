@@ -17,6 +17,8 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run && node --test scripts/*.test.mjs",
     "test:watch": "vitest",
+    "test:playwright": "playwright test --project=chromium",
+    "test:playwright:demo": "playwright test --project=demo",
     "test:headless-capture": "node --test scripts/test-headless-capture.mjs",
     "test:local-gpu": "node scripts/run-local-corpus.mjs",
     "test:local-scene": "node scripts/run-local-scene.mjs",
@@ -44,6 +46,7 @@
   },
   "devDependencies": {
     "@needle-tools/usd": "^1.1.2",
+    "@playwright/test": "^1.65.1",
     "@types/three": "^0.186.0",
     "@webgpu/types": "0.1.60",
     "typescript": "5.7.2",

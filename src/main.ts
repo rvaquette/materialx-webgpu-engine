@@ -9,6 +9,8 @@ import { sceneDeviceDescriptor } from './gpu/device.ts';
 import { startViewerUi, type ViewerUiState, type ViewerUiActions } from './viewer-ui.ts';
 import type { LocalGltfScene } from './scene/local-gltf.ts';
 import { downloadDisplayedAovPng, downloadPathTraceAovPfm } from './render/aov-export.ts';
+import { attachScriptEditor } from './materialx/script-editor.ts';
+import { loadScriptLibrary } from './materialx/script-api.ts';
 
 let ui: ViewerUiState | undefined;
 let statusIsError = false;
@@ -42,6 +44,16 @@ function setStatus(text: string, error = true): void {
 }
 
 async function main(): Promise<void> {
+  // The script editor works without WebGPU; applying a material needs the viewer.
+  let applyScriptMaterial: ((xml: string) => Promise<void>) | undefined;
+  attachScriptEditor(document.getElementById('material-tools'), {
+    library: loadScriptLibrary(new URL(`${import.meta.env.BASE_URL}materialx/libraries`, document.baseURI).href),
+    filePrefix: new URL('.', document.baseURI).href,
+    onApply: (xml) => {
+      if (!applyScriptMaterial) throw new Error('Le viewer WebGPU n’est pas prêt.');
+      return applyScriptMaterial(xml);
+    },
+  });
   const params = new URLSearchParams(location.search);
   const initialEntry = params.get('entry') ?? (SCENE_CATALOG[0] ?? SOURCE_SCENE_CATALOG[0]!).entry;
   const initialBackend = params.get('backend') ?? 'raster';
@@ -142,6 +154,7 @@ async function main(): Promise<void> {
   };
   let viewer = new InteractiveViewer({ device, context, outputFormat, canvas, ...viewerCallbacks });
   viewer.setBackend(initialBackend);
+
   const graphButton = document.querySelector<HTMLButtonElement>('#open-material-graph');
   const graphDialog = document.querySelector<HTMLDialogElement>('#material-graph');
   const libraryButton = document.querySelector<HTMLButtonElement>('#open-material-library');
@@ -248,6 +261,22 @@ async function main(): Promise<void> {
     if (!state.objects.some(object => object.path === state.objectPath)) state.objectPath = state.objects[0]?.path ?? '';
     refreshMaterialSelection();
   }
+
+  applyScriptMaterial = async (xml) => {
+    if (operationBusy || deviceLost) throw new Error('Une opération du viewer est en cours.');
+    if (!state.objectPath) throw new Error('Sélectionner d’abord un objet de la scène.');
+    if (viewer.isCompiledScene) {
+      throw new Error('Scène précompilée : ouvrir une scène source (USD ou glTF) pour appliquer un matériau scripté.');
+    }
+    // The viewer re-reads the document whenever the scene reloads, so the URL is kept alive.
+    const url = URL.createObjectURL(new Blob([xml], { type: 'application/xml' }));
+    setBusy(true, 'Application du matériau scripté...');
+    try { await viewer.setObjectMaterial(state.objectPath, url); }
+    finally {
+      refreshObjects();
+      setBusy(false);
+    }
+  };
 
   async function loadEntry(entry: string): Promise<boolean> {
     sceneChanging = hasLoadedScene;

@@ -45,3 +45,7 @@ coverage/
 
 # Offline preview renders
 renders/
+
+# Playwright output
+playwright-report/
+test-results/
