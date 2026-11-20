@@ -3,7 +3,8 @@
 
 import {
   acceptsValue, fromResolvedGraph, fromXml, inlineIncludes, isColorspaceAttribute, MATERIALX_COLORSPACES, nodeType, runScript,
-  ScriptError, toScript, toXml, type ScriptLibrary, type ScriptNodeDef, type ScriptPortDef, type ScriptValue,
+  ScriptError, toScript, toXml, type ScriptHost, type ScriptLibrary, type ScriptNodeDef, type ScriptPortDef, type ScriptRun,
+  type ScriptValue,
 } from './script-api.ts';
 import type { ResolvedGraph } from './graph.ts';
 
@@ -13,6 +14,8 @@ export interface ScriptEditorOptions {
   onApply?: (xml: string) => Promise<void> | void;
   /** Material of the selected object, as resolved by the engine. */
   currentMaterial?: () => Promise<{ graph: ResolvedGraph; name: string }> | { graph: ResolvedGraph; name: string };
+  /** Viewer operations for `scene`, `render`, `assign` in scripts run with « Appliquer ». */
+  host?: ScriptHost;
   /** `fileprefix` used for relative texture paths in applied documents. */
   filePrefix?: string;
   initialScript?: string;
@@ -209,6 +212,8 @@ export class MaterialXScriptEditor {
   #from = 0;
   #selected = 0;
   #validateTimer: ReturnType<typeof setTimeout> | undefined;
+  #validation = 0;
+  readonly #documents = new Map<string, Promise<string>>();
   #helperLine = -1;
 
   constructor(options: ScriptEditorOptions) {
@@ -255,7 +260,7 @@ export class MaterialXScriptEditor {
     options.library.then((library) => {
       this.#library = library;
       this.#render();
-      this.#validate();
+      void this.#validate();
     }, (error: unknown) => this.#setStatus(`Bibliothèque MaterialX indisponible : ${error instanceof Error ? error.message : String(error)}`, true));
   }
 
@@ -272,18 +277,44 @@ export class MaterialXScriptEditor {
     this.#code.focus();
   }
 
-  /** Run the script and return its MaterialX document. */
+  /** Run the script without viewer side effects and return its MaterialX document. */
   async generateXml(options: { filePrefix?: string } = {}): Promise<string> {
     const library = this.#library ?? await this.#options.library;
-    return toXml(runScript(this.#code.value, library), library, options);
+    return toXml(await this.#dryRun(library), library, options);
   }
 
+  /** Dry run: viewer operations are only validated; loaded documents are cached between runs. */
+  #dryRun(library: ScriptLibrary): Promise<ScriptRun> {
+    const fetchText = (url: string): Promise<string> => {
+      let text = this.#documents.get(url);
+      if (!text) {
+        text = fetch(url).then(async (response) => {
+          if (!response.ok) throw new Error(`HTTP ${response.status}: ${url}`);
+          return response.text();
+        });
+        text.catch(() => this.#documents.delete(url));
+        this.#documents.set(url, text);
+      }
+      return text;
+    };
+    return runScript(this.#code.value, library, { fetchText });
+  }
+
+  /**
+   * Execute the script on the viewer. A script that does not drive the viewer (`scene`, `assign`,
+   * `render`, settings) applies its material to the selected object.
+   */
   async apply(): Promise<void> {
     await this.#guard('Matériau appliqué.', async () => {
-      const xml = await this.generateXml();
-      this.#xml.value = xml;
+      const library = this.#library ?? await this.#options.library;
       const prefix = this.#options.filePrefix;
-      await this.#options.onApply?.(prefix ? await this.generateXml({ filePrefix: prefix }) : xml);
+      const run = await runScript(this.#code.value, library, {
+        ...(this.#options.host ? { host: this.#options.host } : {}), ...(prefix ? { filePrefix: prefix } : {}),
+      });
+      this.#xml.value = toXml(run, library);
+      if (run.viewerCommands) return 'Script exécuté.';
+      await this.#options.onApply?.(toXml(run, library, prefix ? { filePrefix: prefix } : {}));
+      return undefined;
     });
   }
 
@@ -324,11 +355,13 @@ export class MaterialXScriptEditor {
     });
   }
 
-  async #guard(success: string, action: () => Promise<void>): Promise<void> {
+  /** Run an editor action; it may return a status message replacing `success`. */
+  async #guard(success: string, action: () => Promise<string | void | undefined>): Promise<void> {
     clearTimeout(this.#validateTimer);
+    // Results of validations started before this action are obsolete.
+    this.#validation++;
     try {
-      await action();
-      this.#setStatus(success);
+      this.#setStatus((await action()) ?? success);
     } catch (error) {
       this.#setStatus(this.#describe(error), true);
     }
@@ -417,7 +450,7 @@ export class MaterialXScriptEditor {
     this.#render();
     this.#updateHelper();
     clearTimeout(this.#validateTimer);
-    if (validate) this.#validateTimer = setTimeout(() => this.#validate(), 250);
+    if (validate) this.#validateTimer = setTimeout(() => void this.#validate(), 250);
   }
 
   #render(): void {
@@ -425,13 +458,17 @@ export class MaterialXScriptEditor {
     this.#highlight.scrollTop = this.#code.scrollTop;
   }
 
-  #validate(): void {
+  async #validate(): Promise<void> {
     if (!this.#library) return;
+    const validation = ++this.#validation;
     try {
-      const count = runScript(this.#code.value, this.#library).nodes.length;
-      this.#setStatus(`✓ Script valide : ${count} nœud${count > 1 ? 's' : ''}.`);
+      const run = await this.#dryRun(this.#library);
+      if (validation !== this.#validation) return;
+      const count = run.nodes.length;
+      const commands = run.viewerCommands ? `, ${run.viewerCommands} commande${run.viewerCommands > 1 ? 's' : ''} viewer` : '';
+      this.#setStatus(`✓ Script valide : ${count} nœud${count > 1 ? 's' : ''}${commands}.`);
     } catch (error) {
-      this.#setStatus(this.#describe(error), true);
+      if (validation === this.#validation) this.#setStatus(this.#describe(error), true);
     }
   }
 

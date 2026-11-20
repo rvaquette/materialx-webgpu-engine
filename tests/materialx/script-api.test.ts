@@ -2,7 +2,8 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
-  fromResolvedGraph, fromXml, inlineIncludes, runScript, ScriptError, ScriptLibrary, SCRIPT_LIBRARY_FILES, toScript, toXml,
+  fromResolvedGraph, fromXml, inlineIncludes, runScript, ScriptError, ScriptLibrary, SCRIPT_LIBRARY_FILES, toScript,
+  toXml, transformScript, type ScriptHost,
 } from '../../src/materialx/script-api.ts';
 import type { ResolvedGraph, ResolvedNode } from '../../src/materialx/graph.ts';
 
@@ -61,7 +62,7 @@ const LIBRARY = ScriptLibrary.fromXml([`<?xml version="1.0"?>
 </materialx>`]);
 
 describe('material script library', () => {
-  it('resolves nodes and their ports from NodeDefs', () => {
+  it('resolves nodes and their ports from NodeDefs', async () => {
     expect(LIBRARY.classNames).toEqual(['Image', 'Mix', 'Noise3d', 'Separate3', 'StandardSurface', 'Surfacematerial']);
     const surface = LIBRARY.resolve('standard_surface');
     expect(surface.name).toBe('ND_standard_surface_surfaceshader');
@@ -71,7 +72,7 @@ describe('material script library', () => {
     expect(LIBRARY.resolve('mix', 'float').inputs.find(input => input.name === 'mix')).toMatchObject({ min: 0, max: 1 });
   });
 
-  it('prefers the color3 variant with the plainest NodeDef name', () => {
+  it('prefers the color3 variant with the plainest NodeDef name', async () => {
     expect(LIBRARY.resolve('mix').name).toBe('ND_mix_color3');
     expect(LIBRARY.resolve('mix', 'float').name).toBe('ND_mix_float');
     expect(LIBRARY.resolve('mix', 'ND_mix_color3_color3').name).toBe('ND_mix_color3_color3');
@@ -80,8 +81,8 @@ describe('material script library', () => {
 });
 
 describe('runScript', () => {
-  it('names nodes after variables and records values and connections', () => {
-    const graph = runScript(`
+  it('names nodes after variables and records values and connections', async () => {
+    const graph = await runScript(`
       img = new Image();
       img.file = "wood.jpg";
       const s = new StandardSurface();
@@ -98,39 +99,39 @@ describe('runScript', () => {
     expect(s!.inputs.get('thin_walled')).toEqual({ value: true });
   });
 
-  it('broadcasts numbers to colors and accepts a node as its single output', () => {
-    const graph = runScript('m = new Mix(); m.fg = 0.25; n = new Mix(); n.bg = m;', LIBRARY);
+  it('broadcasts numbers to colors and accepts a node as its single output', async () => {
+    const graph = await runScript('m = new Mix(); m.fg = 0.25; n = new Mix(); n.bg = m;', LIBRARY);
     expect(graph.nodes[0]!.inputs.get('fg')).toEqual({ value: [0.25, 0.25, 0.25] });
     expect(graph.nodes[1]!.inputs.get('bg')).toEqual({ node: graph.nodes[0], output: 'out' });
   });
 
-  it('selects variants and named outputs of multi-output nodes', () => {
-    const graph = runScript('c = new Separate3(); m = new Mix("float"); m.fg = c.outg;', LIBRARY);
+  it('selects variants and named outputs of multi-output nodes', async () => {
+    const graph = await runScript('c = new Separate3(); m = new Mix("float"); m.fg = c.outg;', LIBRARY);
     expect(graph.nodes[1]!.inputs.get('fg')).toEqual({ node: graph.nodes[0], output: 'outg' });
   });
 
-  it('gives unique names to unnamed and reassigned nodes', () => {
-    const graph = runScript('n = new Image(); n = new Image(); new Noise3d();', LIBRARY);
+  it('gives unique names to unnamed and reassigned nodes', async () => {
+    const graph = await runScript('n = new Image(); n = new Image(); new Noise3d();', LIBRARY);
     expect(graph.nodes.map(node => node.name)).toEqual(['n', 'n_2', 'noise3d']);
   });
 
-  it('reports unknown nodes, inputs and type mismatches', () => {
-    expect(() => runScript('x = new Bogus();', LIBRARY)).toThrow(/Bogus is not defined/);
-    expect(() => runScript('i = new Image(); i.fil = "a";', LIBRARY)).toThrow(/no input "fil".*Inputs: file, default/);
-    expect(() => runScript('n = new Noise3d(); n.octaves = 1.5;', LIBRARY)).toThrow(/n\.octaves expects a integer/);
-    expect(() => runScript('n = new Noise3d(); s = new StandardSurface(); s.base_color = n.out;', LIBRARY))
-      .toThrow(/s\.base_color expects color3 but n\.out is float/);
-    expect(() => runScript('s = new StandardSurface(); s.out = 1;', LIBRARY)).toThrow(/output and cannot be assigned/);
-    expect(() => runScript('s = new StandardSurface(', LIBRARY)).toThrow(/Syntax error/);
+  it('reports unknown nodes, inputs and type mismatches', async () => {
+    await expect(runScript('x = new Bogus();', LIBRARY)).rejects.toThrow(/Bogus is not defined/);
+    await expect(runScript('i = new Image(); i.fil = "a";', LIBRARY)).rejects.toThrow(/no input "fil".*Inputs: file, default/);
+    await expect(runScript('n = new Noise3d(); n.octaves = 1.5;', LIBRARY)).rejects.toThrow(/n\.octaves expects a integer/);
+    await expect(runScript('n = new Noise3d(); s = new StandardSurface(); s.base_color = n.out;', LIBRARY))
+      .rejects.toThrow(/s\.base_color expects color3 but n\.out is float/);
+    await expect(runScript('s = new StandardSurface(); s.out = 1;', LIBRARY)).rejects.toThrow(/output and cannot be assigned/);
+    await expect(runScript('s = new StandardSurface(', LIBRARY)).rejects.toThrow(/Syntax error/);
   });
 
-  it('keeps JavaScript available for computed values', () => {
-    const graph = runScript('m = new Mix("float"); for (let i = 0; i < 3; i++) m.mix = Math.min(1, i * 0.4);', LIBRARY);
+  it('keeps JavaScript available for computed values', async () => {
+    const graph = await runScript('m = new Mix("float"); for (let i = 0; i < 3; i++) m.mix = Math.min(1, i * 0.4);', LIBRARY);
     expect(graph.nodes[0]!.inputs.get('mix')).toEqual({ value: 0.8 });
   });
 
-  it('throws ScriptError instances', () => {
-    expect(() => runScript('undefinedVariable.x = 1;', LIBRARY)).toThrow(ScriptError);
+  it('throws ScriptError instances', async () => {
+    await expect(runScript('undefinedVariable.x = 1;', LIBRARY)).rejects.toThrow(ScriptError);
   });
 });
 
@@ -151,8 +152,8 @@ s.base = m.out;
 s.thin_walled = true;
 `;
 
-  it('writes MaterialX with an automatic surfacematerial', () => {
-    const xml = toXml(runScript(SCRIPT, LIBRARY), LIBRARY, { filePrefix: 'http://host/textures/' });
+  it('writes MaterialX with an automatic surfacematerial', async () => {
+    const xml = toXml(await runScript(SCRIPT, LIBRARY), LIBRARY, { filePrefix: 'http://host/textures/' });
     expect(xml).toContain('<materialx version="1.39" fileprefix="http://host/textures/">');
     expect(xml).toContain('<image name="img" type="color3">');
     expect(xml).toContain('<input name="file" type="filename" value="wood.jpg" />');
@@ -164,17 +165,17 @@ s.thin_walled = true;
     expect(xml).toContain('<input name="surfaceshader" type="surfaceshader" nodename="s" />');
   });
 
-  it('round-trips script → XML → script', () => {
-    const xml = toXml(runScript(SCRIPT, LIBRARY), LIBRARY);
+  it('round-trips script → XML → script', async () => {
+    const xml = toXml(await runScript(SCRIPT, LIBRARY), LIBRARY);
     const script = toScript(fromXml(xml, LIBRARY), LIBRARY);
     expect(script).toBe(`${SCRIPT}
 material = new Surfacematerial();
 material.surfaceshader = s.out;
 `);
-    expect(toXml(runScript(script, LIBRARY), LIBRARY)).toBe(xml);
+    expect(toXml(await runScript(script, LIBRARY), LIBRARY)).toBe(xml);
   });
 
-  it('infers NodeDefs from node and input types and orders sources first', () => {
+  it('infers NodeDefs from node and input types and orders sources first', async () => {
     const graph = fromXml(`<materialx version="1.39">
       <mix name="blend" type="color3">
         <input name="fg" type="color3" nodename="tex" />
@@ -192,12 +193,12 @@ blend.mix = [0.5, 0.5, 0.5];
 `);
   });
 
-  it('renames nodes that collide with JavaScript keywords or node classes', () => {
+  it('renames nodes that collide with JavaScript keywords or node classes', async () => {
     const graph = fromXml('<materialx><image name="new" type="color3" /><image name="Mix" type="color3" /></materialx>', LIBRARY);
     expect(toScript(graph, LIBRARY)).toBe('new_ = new Image();\n\nMix_ = new Image();\n');
   });
 
-  it('flattens node graphs, resolving outputs, interface inputs, file prefixes and color spaces', () => {
+  it('flattens node graphs, resolving outputs, interface inputs, file prefixes and color spaces', async () => {
     const graph = fromXml(`<materialx version="1.39" fileprefix="textures/">
       <noise3d name="weight" type="float"><input name="amplitude" type="float" value="0.5" /></noise3d>
       <image name="img" type="color3"><input name="file" type="filename" value="/abs/base.png" /></image>
@@ -249,7 +250,7 @@ mat.surfaceshader = surface.out;
     expect(xml).toContain('<standard_surface name="surface" type="surfaceshader" nodedef="ND_standard_surface_surfaceshader_100">');
   });
 
-  it('expands nodes of document NodeDefs into the nodes of their nodegraph implementation', () => {
+  it('expands nodes of document NodeDefs into the nodes of their nodegraph implementation', async () => {
     const graph = fromXml(`<materialx version="1.39">
       <nodedef name="ND_tinted" node="tinted">
         <input name="tint" type="color3" value="0.2, 0.4, 0.6" />
@@ -346,15 +347,15 @@ surface.base = second_split.outr;
     expect(() => fromXml('<materialx><xi:include href="x.mtlx" /></materialx>', LIBRARY)).toThrow(/must be inlined/);
   });
 
-  it('sets the color space attribute from scripts and keeps it on nodes without file inputs', () => {
-    const graph = runScript('i = new Image(); i.colorspace = "srgb_texture"; m = new Mix(); m.colorspace = "acescg";', LIBRARY);
+  it('sets the color space attribute from scripts and keeps it on nodes without file inputs', async () => {
+    const graph = await runScript('i = new Image(); i.colorspace = "srgb_texture"; m = new Mix(); m.colorspace = "acescg";', LIBRARY);
     expect(graph.nodes.map(node => node.colorspace)).toEqual(['srgb_texture', 'acescg']);
     const xml = toXml(graph, LIBRARY);
     expect(xml).toContain('<image name="i" type="color3" colorspace="srgb_texture" />');
-    expect(() => runScript('i = new Image(); i.colorspace = 1;', LIBRARY)).toThrow(/colorspace expects a color space name/);
+    await expect(runScript('i = new Image(); i.colorspace = 1;', LIBRARY)).rejects.toThrow(/colorspace expects a color space name/);
   });
 
-  it('rejects unsupported documents', () => {
+  it('rejects unsupported documents', async () => {
     expect(() => fromXml('<foo />', LIBRARY)).toThrow(/<materialx> root is missing/);
     expect(() => fromXml('<materialx><nodegraph name="g" /><image name="i" type="color3"><input name="default" type="color3" nodegraph="g" /></image></materialx>', LIBRARY))
       .toThrow(/unknown output "g\."/);
@@ -362,6 +363,207 @@ surface.base = second_split.outr;
       .toThrow(/No image NodeDef matches/);
     expect(() => fromXml('<materialx><mix name="m" type="float"><input name="fg" type="float" nodename="nope" /></mix></materialx>', LIBRARY))
       .toThrow(/unknown node "nope"/);
+  });
+});
+
+describe('expressions', () => {
+  const nodedef = (name: string, node: string, inputs: string, output: string): string =>
+    `<nodedef name="${name}" node="${node}">${inputs}<output name="out" type="${output}" /></nodedef>`;
+  const input = (name: string, type: string): string => `<input name="${name}" type="${type}" />`;
+  const binary = (node: string, a: string, b: string, out: string, suffix = ''): string =>
+    nodedef(`ND_${node}_${out}${suffix}`, node, input('in1', a) + input('in2', b), out);
+  const EXPRESSIONS = ScriptLibrary.fromXml([`<materialx>
+    ${nodedef('ND_noise3d_float', 'noise3d', input('amplitude', 'float'), 'float')}
+    ${nodedef('ND_noise3d_color3', 'noise3d', input('amplitude', 'vector3'), 'color3')}
+    ${binary('multiply', 'float', 'float', 'float')}${binary('multiply', 'color3', 'color3', 'color3')}
+    ${binary('multiply', 'color3', 'float', 'color3', 'FA')}
+    ${binary('add', 'float', 'float', 'float')}${binary('add', 'color3', 'color3', 'color3')}
+    ${binary('subtract', 'float', 'float', 'float')}${binary('subtract', 'color3', 'color3', 'color3')}
+    ${nodedef('ND_sin_float', 'sin', input('in', 'float'), 'float')}
+    ${nodedef('ND_convert_float_color3', 'convert', input('in', 'float'), 'color3')}
+    ${nodedef('ND_ifgreater_float', 'ifgreater', input('value1', 'float') + input('value2', 'float') + input('in1', 'float') + input('in2', 'float'), 'float')}
+    ${nodedef('ND_ifgreater_color3', 'ifgreater', input('value1', 'float') + input('value2', 'float') + input('in1', 'color3') + input('in2', 'color3'), 'color3')}
+    ${nodedef('ND_ifgreater_boolean', 'ifgreater', input('value1', 'float') + input('value2', 'float'), 'boolean')}
+    ${nodedef('ND_ifgreatereq_float', 'ifgreatereq', input('value1', 'float') + input('value2', 'float') + input('in1', 'float') + input('in2', 'float'), 'float')}
+    ${nodedef('ND_ifequal_color3B', 'ifequal', input('value1', 'boolean') + input('value2', 'boolean') + input('in1', 'color3') + input('in2', 'color3'), 'color3')}
+    ${nodedef('ND_logical_and', 'and', input('in1', 'boolean') + input('in2', 'boolean'), 'boolean')}
+    ${nodedef('ND_logical_not', 'not', input('in', 'boolean'), 'boolean')}
+    ${nodedef('ND_standard_surface_surfaceshader', 'standard_surface', input('base', 'float') + input('base_color', 'color3'), 'surfaceshader')}
+    ${nodedef('ND_surfacematerial', 'surfacematerial', input('surfaceshader', 'surfaceshader'), 'material')}
+    ${nodedef('ND_image_color3', 'image', input('file', 'filename'), 'color3')}
+  </materialx>`]);
+  const script = async (code: string): Promise<string> => toScript(await runScript(code, EXPRESSIONS), EXPRESSIONS);
+
+  it('builds math nodes from operators and Math functions on node outputs', async () => {
+    expect(await script(`n = new Noise3d("float");
+const m = n.out * 2 + 0.5;
+tint = [1, 0.5, 0] * n.out;
+wave = Math.sin(n.out) - 1;
+neg = -n.out;
+color = new Noise3d();
+sum = color + n.out;
+plain = new Noise3d("float");
+plain.amplitude = 2 * 3 + Math.max(1, 2) - 10 % 4;`)).toBe(`n = new Noise3d("float");
+
+multiply = new Multiply("float");
+multiply.in1 = n.out;
+multiply.in2 = 2;
+
+m = new Add("float");
+m.in1 = multiply.out;
+m.in2 = 0.5;
+
+tint = new Multiply("ND_multiply_color3FA");
+tint.in1 = [1, 0.5, 0];
+tint.in2 = n.out;
+
+sin = new Sin();
+sin.in = n.out;
+
+wave = new Subtract("float");
+wave.in1 = sin.out;
+wave.in2 = 1;
+
+neg = new Multiply("float");
+neg.in1 = n.out;
+neg.in2 = -1;
+
+color = new Noise3d();
+
+convert = new Convert();
+convert.in = n.out;
+
+sum = new Add();
+sum.in1 = color.out;
+sum.in2 = convert.out;
+
+plain = new Noise3d("float");
+plain.amplitude = 6;
+`);
+    await expect(runScript('n = new Noise3d("float"); x = n.out * new StandardSurface();', EXPRESSIONS))
+      .rejects.toThrow(/No multiply NodeDef combines float and surfaceshader/);
+  });
+
+  it('turns conditional expressions on node outputs into ifgreater, ifgreatereq, ifequal and logic nodes', async () => {
+    expect(await script(`n = new Noise3d("float");
+red = n.out > 0.5 ? [1, 0, 0] : [0, 0, 1];
+low = n.out <= 0.2 ? 1 : n.out;
+inside = n.out > 0.3 && !(n.out > 0.8);
+band = inside ? [1, 1, 1] : [0, 0, 0];
+lazy = 2 > 1 ? new Noise3d("float") : new Image();`)).toBe(`n = new Noise3d("float");
+
+red = new Ifgreater();
+red.value1 = n.out;
+red.value2 = 0.5;
+red.in1 = [1, 0, 0];
+red.in2 = [0, 0, 1];
+
+low = new Ifgreatereq();
+low.value1 = 0.2;
+low.value2 = n.out;
+low.in1 = 1;
+low.in2 = n.out;
+
+ifgreater = new Ifgreater("boolean");
+ifgreater.value1 = n.out;
+ifgreater.value2 = 0.3;
+
+ifgreater_2 = new Ifgreater("boolean");
+ifgreater_2.value1 = n.out;
+ifgreater_2.value2 = 0.8;
+
+not = new Not();
+not.in = ifgreater_2.out;
+
+inside = new And();
+inside.in1 = ifgreater.out;
+inside.in2 = not.out;
+
+band = new Ifequal();
+band.value1 = inside.out;
+band.value2 = true;
+band.in1 = [1, 1, 1];
+band.in2 = [0, 0, 0];
+
+lazy = new Noise3d("float");
+`);
+    await expect(runScript('n = new Noise3d("float");\nif (n.out > 0.5) {}', EXPRESSIONS)).rejects.toThrow(/evaluated per pixel/);
+    await expect(runScript('n = new Noise3d("float");\nwhile (n.out) {}', EXPRESSIONS)).rejects.toThrow(/evaluated per pixel/);
+  });
+
+  it('keeps source lines for runtime errors and leaves awaited branches alone', async () => {
+    await expect(runScript('n = new Noise3d("float");\nm = n.out * 2;\nm.bogus = 1;', EXPRESSIONS))
+      .rejects.toMatchObject({ line: 3, message: expect.stringMatching(/multiply\.out is a node output: "bogus" must be set on multiply itself/) });
+    expect(transformScript('x = ok ? await f() : 1;\ny = a ? b : c;')).toBe(
+      'x = ok ? await f() : 1;\ny = __mx.cond(a, () => (b), () => (c));');
+    expect(transformScript('for (let i = 0; i < 3; i++) { const k = i; }\nlet unset;')).toBe(
+      'for (let i = 0; __mx.test(__mx.cmp("<", i, 3)); i++) { k = i; }\nlet unset;');
+  });
+
+  it('drives the viewer through the host, in order, and only validates without one', async () => {
+    const calls: unknown[][] = [];
+    const host: ScriptHost = {
+      loadScene: async (entry) => { calls.push(['scene', entry]); },
+      objects: () => ['/World/Ball', '/World/Ground'],
+      renderSettings: () => ({ backend: 'raster' }),
+      setRenderSetting: async (name, value) => { calls.push(['set', name, value]); },
+      assignMaterial: async (object, material) => { calls.push(['assign', object, material]); },
+      render: async (samples) => { calls.push(['render', samples]); return samples ?? 1; },
+    };
+    const code = `await scene("./scenes/ball.usda");
+before = render.backend;
+render.backend = "pathtracing";
+render.depth = 8;
+s = new StandardSurface();
+s.base = render.depth / 16;
+for (const object of objects()) if (object.endsWith("Ball")) await assign(object, s);
+await assign("/World/Ground", "materials/floor.mtlx");
+samples = await render(16);`;
+    const run = await runScript(code, EXPRESSIONS, { host, baseUrl: 'https://host/app/', filePrefix: 'https://host/app/' });
+    expect(run.viewerCommands).toBe(6);
+    expect(calls.map(call => call[0] === 'assign' && typeof call[2] === 'object' && 'xml' in (call[2] as object) ? ['assign', call[1], 'xml'] : call)).toEqual([
+      ['scene', './scenes/ball.usda'], ['set', 'backend', 'pathtracing'], ['set', 'depth', 8],
+      ['assign', '/World/Ball', 'xml'], ['assign', '/World/Ground', { url: 'https://host/app/materials/floor.mtlx' }], ['render', 16],
+    ]);
+    const xml = (calls[3]![2] as { xml: string }).xml;
+    expect(xml).toContain('<materialx version="1.39" fileprefix="https://host/app/">');
+    expect(xml).toContain('<input name="base" type="float" value="0.5" />');
+    expect(xml).toContain('<surfacematerial name="material" type="material">');
+
+    calls.length = 0;
+    // Without a host, objects() is empty: only the ground assignment is requested.
+    expect((await runScript(code, EXPRESSIONS)).viewerCommands).toBe(5);
+    expect(calls).toEqual([]);
+    await expect(runScript('render.backend = "vulkan";', EXPRESSIONS)).rejects.toThrow(/render.backend expects "raster", "pathtracing", "disney"/);
+    await expect(runScript('render.speed = 1;', EXPRESSIONS)).rejects.toThrow(/Unknown render setting "speed"/);
+    await expect(runScript('await render(0);', EXPRESSIONS)).rejects.toThrow(/positive integer/);
+    await expect(runScript('await assign("/x", 3);', EXPRESSIONS)).rejects.toThrow(/surface shader, a material node or a .mtlx path/);
+    await expect(runScript('scene = 1;', EXPRESSIONS)).rejects.toThrow(/reserved/);
+  });
+
+  it('loads MaterialX documents as editable script nodes with absolute texture paths', async () => {
+    const fetchText = async (url: string): Promise<string> => {
+      expect(url).toBe('https://host/app/lib/wood.mtlx');
+      return `<materialx>
+        <image name="tex" type="color3"><input name="file" type="filename" value="wood.png" /></image>
+        <standard_surface name="surface" type="surfaceshader"><input name="base_color" type="color3" nodename="tex" /></standard_surface>
+        <surfacematerial name="Wood" type="material"><input name="surfaceshader" type="surfaceshader" nodename="surface" /></surfacematerial>
+      </materialx>`;
+    };
+    const run = await runScript(`surface = new StandardSurface();
+wood = await load("lib/wood.mtlx");
+wood.surfaceshader = surface;`, EXPRESSIONS, { baseUrl: 'https://host/app/', fetchText });
+    expect(toScript(run, EXPRESSIONS)).toBe(`surface = new StandardSurface();
+
+tex = new Image();
+tex.file = "https://host/app/lib/wood.png";
+
+surface_2 = new StandardSurface();
+surface_2.base_color = tex.out;
+
+Wood = new Surfacematerial();
+Wood.surfaceshader = surface.out;
+`);
   });
 });
 
@@ -390,7 +592,7 @@ describe('fromResolvedGraph', () => {
     ]),
   };
 
-  it('scripts the engine material graph with its current values and a named surfacematerial', () => {
+  it('scripts the engine material graph with its current values and a named surfacematerial', async () => {
     expect(toScript(fromResolvedGraph(resolved, LIBRARY, 'Wood'), LIBRARY)).toBe(`img = new Image();
 img.colorspace = "srgb_texture";
 img.file = "http://host/wood.png";
@@ -404,7 +606,7 @@ Wood.surfaceshader = s.out;
 `);
   });
 
-  it('rejects LamaSurface wrappers', () => {
+  it('rejects LamaSurface wrappers', async () => {
     expect(() => fromResolvedGraph({ ...resolved, lamaSurface: {} }, LIBRARY)).toThrow(/LamaSurface/);
   });
 });
@@ -412,12 +614,12 @@ Wood.surfaceshader = s.out;
 const LIBRARY_ROOT = process.env['MX_LIB_ROOT'] ?? 'D:/WebGL2/MaterialX/MaterialX-rva/libraries';
 
 describe.skipIf(!existsSync(join(LIBRARY_ROOT, 'stdlib', 'stdlib_defs.mtlx')))('installed MaterialX libraries', () => {
-  it('scripts a standard_surface material from the real NodeDefs', () => {
+  it('scripts a standard_surface material from the real NodeDefs', async () => {
     const library = ScriptLibrary.fromXml(SCRIPT_LIBRARY_FILES.map(file => readFileSync(join(LIBRARY_ROOT, file), 'utf8')));
     expect(library.resolve('standard_surface').inputs.length).toBeGreaterThan(30);
     expect(library.resolve('open_pbr_surface').inputs.some(input => input.name === 'base_color')).toBe(true);
     // Lower-case variables may share a node category name (pbrlib defines `surface`).
-    const graph = runScript(`
+    const graph = await runScript(`
       n = new Fractal3d("float");
       n.octaves = 4;
       m = new Mix();

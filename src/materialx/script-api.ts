@@ -12,6 +12,7 @@
 // NodeDef name: `new Mix("float")`, `new Mix("ND_mix_color3_color3")`.
 // A `surfacematerial` is added on export when the script defines none.
 
+import { parse as parseJavaScript, type Node as AcornNode } from 'acorn';
 import { MATERIALX_DEFAULT_LIBRARY_FILES } from './libraries.ts';
 import type { ResolvedGraph } from './graph.ts';
 
@@ -405,9 +406,18 @@ function inputDef(node: ScriptNode, name: string): ScriptPortDef {
 
 const OUTPUT = Symbol('scriptOutput');
 interface OutputRef { readonly [OUTPUT]: { node: ScriptNode; output: ScriptPortDef } }
+/** A comparison involving node outputs, turned into a node where it is used. */
+const COMPARISON = Symbol('scriptComparison');
+interface Comparison { readonly [COMPARISON]: { operator: string; left: unknown; right: unknown } }
 
 function outputRef(node: ScriptNode, output: ScriptPortDef): OutputRef {
-  return Object.freeze({ [OUTPUT]: { node, output }, toString: () => `${node.name}.${output.name}` });
+  const ref = { [OUTPUT]: { node, output }, toString: () => `${node.name}.${output.name}` };
+  // Assigning a property of an output would otherwise be silently ignored.
+  return new Proxy(ref, {
+    set: (_target, key) => {
+      throw new ScriptError(`${node.name}.${output.name} is a node output: "${String(key)}" must be set on ${node.name} itself.`);
+    },
+  }) as OutputRef;
 }
 
 function connect(node: ScriptNode, name: string, source: ScriptNode, output: ScriptPortDef): void {
@@ -425,12 +435,162 @@ function errorLine(error: unknown): number | undefined {
   return match ? Math.max(1, Number(match[1]) - 3) : undefined;
 }
 
-const DECLARATION = /\b(?:const|let|var)\s+(?=[A-Za-z_$][\w$]*\s*=)/g;
+type AstNode = AcornNode & Record<string, unknown>;
+const isAstNode = (value: unknown): value is AstNode =>
+  typeof value === 'object' && value !== null && typeof (value as { type?: unknown }).type === 'string' &&
+  typeof (value as { start?: unknown }).start === 'number';
+const ARITHMETIC = new Set(['+', '-', '*', '/', '%', '**']);
+const COMPARISONS = new Set(['>', '>=', '<', '<=', '==', '===', '!=', '!==']);
 
-/** Execute a material script, creating nodes from `library` as they are instantiated. */
-export function runScript(code: string, library: ScriptLibrary): ScriptGraph {
-  const graph: ScriptGraph = { nodes: [] };
+/**
+ * Rewrite a script for `runScript`: arithmetic operators become `__mx.op(...)` calls (which build
+ * math nodes when an operand is a node output) and `const`/`let`/`var` are dropped so assignments
+ * name their nodes. Lines are preserved, so error lines still match the source.
+ */
+export function transformScript(code: string): string {
+  let program: AstNode;
+  try {
+    program = parseJavaScript(code, {
+      ecmaVersion: 'latest', sourceType: 'script', allowAwaitOutsideFunction: true, allowReturnOutsideFunction: true, locations: true,
+    }) as unknown as AstNode;
+  } catch (error) {
+    const line = (error as { loc?: { line?: number } }).loc?.line;
+    throw new ScriptError(`Syntax error: ${error instanceof Error ? error.message.replace(/ \(\d+:\d+\)$/, '') : String(error)}`, line);
+  }
+  const loopHeads = new Set<unknown>();
+  const statementTests = new Set<unknown>();
+  const children = (node: AstNode): AstNode[] => Object.entries(node)
+    .filter(([key]) => key !== 'loc')
+    .flatMap(([, value]) => Array.isArray(value) ? value.filter(isAstNode) : isAstNode(value) ? [value] : [])
+    .sort((a, b) => a.start - b.start);
+  const containsAwait = (node: AstNode): boolean => node.type === 'AwaitExpression' ||
+    (!/Function/.test(node.type) && children(node).some(containsAwait));
+  const emitFrom = (node: AstNode, start: number): string => {
+    let text = '';
+    let position = start;
+    for (const child of children(node)) {
+      if (child.start < start) continue;
+      text += code.slice(position, child.start) + emit(child);
+      position = child.end;
+    }
+    return text + code.slice(position, node.end);
+  };
+  const emit = (node: AstNode): string => {
+    if (statementTests.delete(node)) return `__mx.test(${emit(node)})`;
+    const operator = node['operator'] as string | undefined;
+    if (node.type === 'BinaryExpression' && ARITHMETIC.has(operator!)) {
+      return `__mx.op(${JSON.stringify(operator)}, ${emit(node['left'] as AstNode)}, ${emit(node['right'] as AstNode)})`;
+    }
+    if (node.type === 'BinaryExpression' && COMPARISONS.has(operator!)) {
+      return `__mx.cmp(${JSON.stringify(operator!.replace(/^(==|!=)=$/, '$1'))}, ${emit(node['left'] as AstNode)}, ${emit(node['right'] as AstNode)})`;
+    }
+    if (node.type === 'UnaryExpression' && operator === '-') return `__mx.neg(${emit(node['argument'] as AstNode)})`;
+    if (node.type === 'UnaryExpression' && operator === '!') return `__mx.not(${emit(node['argument'] as AstNode)})`;
+    // Branches become thunks so plain values keep JavaScript's lazy evaluation; `await` cannot cross them.
+    if (node.type === 'LogicalExpression' && (operator === '&&' || operator === '||') && !containsAwait(node['right'] as AstNode)) {
+      return `__mx.${operator === '&&' ? 'and' : 'or'}(${emit(node['left'] as AstNode)}, () => (${emit(node['right'] as AstNode)}))`;
+    }
+    if (node.type === 'ConditionalExpression' && !containsAwait(node['consequent'] as AstNode) && !containsAwait(node['alternate'] as AstNode)) {
+      return `__mx.cond(${emit(node['test'] as AstNode)}, () => (${emit(node['consequent'] as AstNode)}), () => (${emit(node['alternate'] as AstNode)}))`;
+    }
+    if (node.type === 'AssignmentExpression' && operator !== '=' && ARITHMETIC.has(operator!.slice(0, -1))) {
+      const target = emit(node['left'] as AstNode);
+      return `${target} = __mx.op(${JSON.stringify(operator!.slice(0, -1))}, ${target}, ${emit(node['right'] as AstNode)})`;
+    }
+    // Statement conditions are evaluated while the script runs: reject per-pixel values there.
+    if (['IfStatement', 'WhileStatement', 'DoWhileStatement', 'ForStatement'].includes(node.type) && isAstNode(node['test'])) {
+      statementTests.add(node['test']);
+    }
+    if (node.type === 'ForStatement') loopHeads.add(node['init']);
+    if (node.type === 'ForInStatement' || node.type === 'ForOfStatement') loopHeads.add(node['left']);
+    const declarations = node['declarations'] as AstNode[] | undefined;
+    if (node.type === 'VariableDeclaration' && !loopHeads.has(node) &&
+        declarations!.every(declarator => declarator['init'] && (declarator['id'] as AstNode).type === 'Identifier')) {
+      return emitFrom(node, declarations![0]!.start);
+    }
+    return emitFrom(node, node.start);
+  };
+  return emit(program);
+}
+
+const OPERATOR_NODES: Readonly<Record<string, string>> = {
+  '+': 'add', '-': 'subtract', '*': 'multiply', '/': 'divide', '%': 'modulo', '**': 'power',
+};
+const COMMUTATIVE = new Set(['add', 'multiply', 'min', 'max']);
+/** `Math` functions that build MaterialX nodes when an argument is a node output. */
+export const MATH_NODES: Readonly<Record<string, string>> = {
+  sin: 'sin', cos: 'cos', tan: 'tan', asin: 'asin', acos: 'acos', atan2: 'atan2', abs: 'absval', floor: 'floor',
+  ceil: 'ceil', round: 'round', sqrt: 'sqrt', exp: 'exp', log: 'ln', pow: 'power', min: 'min', max: 'max', sign: 'sign',
+};
+
+/** Render settings scripts can read and write through `render.<name>`, with their allowed values. */
+export const RENDER_SETTINGS: Readonly<Record<string, { doc: string; values?: readonly (string | number)[]; kind?: 'boolean' | 'number' | 'depth' }>> = {
+  backend: { doc: 'Moteur de rendu', values: ['raster', 'pathtracing', 'disney'] },
+  resolution: { doc: 'Résolution du rendu', values: [128, 256, 512, 1024, '1024x768'] },
+  depth: { doc: 'Profondeur du path tracing (0 à 64)', kind: 'depth' },
+  quality: { doc: 'Qualité raster', values: ['interactive', 'reference'] },
+  environment: { doc: 'Éclairage par l’environnement', kind: 'boolean' },
+  denoise: { doc: 'Débruitage du path tracing', kind: 'boolean' },
+  exposure: { doc: 'Exposition (EV)', kind: 'number' },
+  tonemap: { doc: 'Tonemapping', values: ['none', 'reinhard', 'acesFilmic'] },
+};
+
+function checkRenderSetting(name: string, value: unknown): void {
+  const setting = RENDER_SETTINGS[name];
+  if (!setting) throw new ScriptError(`Unknown render setting "${name}". Settings: ${Object.keys(RENDER_SETTINGS).join(', ')}.`);
+  const valid = setting.values ? setting.values.includes(value as string | number)
+    : setting.kind === 'boolean' ? typeof value === 'boolean'
+      : setting.kind === 'depth' ? Number.isInteger(value) && (value as number) >= 0 && (value as number) <= 64
+        : typeof value === 'number' && Number.isFinite(value);
+  if (!valid) {
+    const expected = setting.values ? setting.values.map(option => JSON.stringify(option)).join(', ')
+      : setting.kind === 'depth' ? 'an integer from 0 to 64' : `a ${setting.kind}`;
+    throw new ScriptError(`render.${name} expects ${expected}.`);
+  }
+}
+
+/** Viewer operations available to scripts; without a host, `runScript` only validates them. */
+export interface ScriptHost {
+  loadScene(entry: string): Promise<void>;
+  objects(): readonly string[];
+  renderSettings(): Readonly<Record<string, unknown>>;
+  setRenderSetting(name: string, value: unknown): Promise<void>;
+  /** Bind a MaterialX document (generated `xml`, or a document `url`) to an object. */
+  assignMaterial(objectPath: string, material: { xml: string } | { url: string }): Promise<void>;
+  /** Restart rendering; with `samples`, resolve once that many samples are accumulated. Returns the sample count. */
+  render(samples?: number): Promise<number>;
+}
+
+export interface RunScriptOptions {
+  host?: ScriptHost;
+  /** Base of relative scene, document and texture URLs (the page by default). */
+  baseUrl?: string;
+  /** `fileprefix` of documents generated for `assign`. */
+  filePrefix?: string;
+  fetchText?: (url: string) => Promise<string>;
+}
+
+export interface ScriptRun extends ScriptGraph {
+  /** Number of viewer operations (`scene`, `assign`, `render`, settings) the script requested. */
+  viewerCommands: number;
+}
+
+const SCRIPT_GLOBALS = new Set(['__mx', 'Math', 'scene', 'objects', 'render', 'assign', 'load']);
+// eslint-disable-next-line @typescript-eslint/no-empty-function
+const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor as new (...args: string[]) => (scope: object) => Promise<void>;
+
+/**
+ * Execute a material script, creating nodes from `library` as they are instantiated. Arithmetic on
+ * node outputs and `Math` functions build math nodes; `scene`, `render`, `assign` and `load` drive
+ * the viewer through `options.host`.
+ */
+export async function runScript(code: string, library: ScriptLibrary, options: RunScriptOptions = {}): Promise<ScriptRun> {
+  const graph: ScriptRun = { nodes: [], viewerCommands: 0 };
+  const host = options.host;
+  const baseUrl = options.baseUrl ?? (typeof document === 'undefined' ? 'http://localhost/' : document.baseURI);
+  const fetchText = options.fetchText ?? fetchTextOrThrow;
   const handles = new WeakMap<object, ScriptNode>();
+  const handlesByNode = new Map<ScriptNode, object>();
   const nodeOf = (value: unknown): ScriptNode | undefined =>
     typeof value === 'object' && value !== null ? handles.get(value) : undefined;
   const pending = new Set<ScriptNode>();
@@ -444,27 +604,35 @@ export function runScript(code: string, library: ScriptLibrary): ScriptGraph {
     pending.delete(node);
   };
 
-  const assign = (node: ScriptNode, name: string, value: unknown): void => {
+  /** The output a value designates: an output reference, a single-output node, or a comparison (as a boolean node). */
+  const sourceOf = (value: unknown): { node: ScriptNode; output: ScriptPortDef } | undefined => {
     const ref = (value as Partial<OutputRef> | null)?.[OUTPUT];
-    if (ref) return connect(node, name, ref.node, ref.output);
-    const source = nodeOf(value);
-    if (source) {
-      if (source.def.outputs.length !== 1) {
-        throw new ScriptError(`${source.name} has several outputs; use ${source.name}.${source.def.outputs[0]!.name} or another output.`);
-      }
-      return connect(node, name, source, source.def.outputs[0]!);
+    if (ref) return ref;
+    const comparison = comparisonOf(value);
+    if (comparison) return materialize(comparison)[OUTPUT];
+    const node = nodeOf(value);
+    if (!node) return undefined;
+    if (node.def.outputs.length !== 1) {
+      throw new ScriptError(`${node.name} has several outputs; use ${node.name}.${node.def.outputs[0]!.name} or another output.`);
     }
+    return { node, output: node.def.outputs[0]! };
+  };
+
+  const assign = (node: ScriptNode, name: string, value: unknown): void => {
+    const source = sourceOf(value);
+    if (source) return connect(node, name, source.node, source.output);
     const input = inputDef(node, name);
     node.inputs.set(name, { value: coerceValue(value, input.type, `${node.name}.${name}`) });
   };
 
-  const createHandle = (def: ScriptNodeDef): object => {
-    const node: ScriptNode = { name: def.category, def, inputs: new Map() };
-    graph.nodes.push(node);
-    pending.add(node);
+  const handleFor = (node: ScriptNode): object => {
+    const existing = handlesByNode.get(node);
+    if (existing) return existing;
+    const def = node.def;
     const handle: object = new Proxy(Object.create(null) as object, {
       get: (_target, key) => {
-        if (typeof key !== 'string') return undefined;
+        // `then` is probed when a handle is returned from an async function (e.g. load()).
+        if (typeof key !== 'string' || key === 'then') return undefined;
         if (key === 'toString') return () => node.name;
         if (isColorspaceAttribute(def, key)) return node.colorspace;
         const output = def.outputs.find(port => port.name === key);
@@ -489,9 +657,292 @@ export function runScript(code: string, library: ScriptLibrary): ScriptGraph {
       },
     });
     handles.set(handle, node);
+    handlesByNode.set(node, handle);
     return handle;
   };
 
+  const createNode = (def: ScriptNodeDef): ScriptNode => {
+    const node: ScriptNode = { name: def.category, def, inputs: new Map() };
+    graph.nodes.push(node);
+    pending.add(node);
+    return node;
+  };
+
+  // --- Math nodes -----------------------------------------------------------
+  const isNodeValue = (value: unknown): boolean => comparisonOf(value) !== undefined || sourceOf(value) !== undefined;
+
+  // --- Conditions -------------------------------------------------------------
+  const comparisonOf = (value: unknown): Comparison[typeof COMPARISON] | undefined =>
+    (value as Partial<Comparison> | null)?.[COMPARISON];
+  const materialized = new Map<Comparison[typeof COMPARISON], OutputRef>();
+  /** A comparison used as a value becomes a boolean node (once). */
+  const materialize = (comparison: Comparison[typeof COMPARISON]): OutputRef => {
+    let ref = materialized.get(comparison);
+    if (ref) return ref;
+    const { operator, left, right } = comparison;
+    ref = operator === '>' ? conditionalNode('ifgreater', left, right)
+      : operator === '<' ? conditionalNode('ifgreater', right, left)
+        : operator === '>=' ? conditionalNode('ifgreatereq', left, right)
+          : operator === '<=' ? conditionalNode('ifgreatereq', right, left)
+            : operator === '==' ? conditionalNode('ifequal', left, right)
+              : logicNode('not', [conditionalNode('ifequal', left, right)]);
+    materialized.set(comparison, ref);
+    return ref;
+  };
+  const scalarType = (value: unknown): string | undefined => {
+    const ref = (value as Partial<OutputRef> | null)?.[OUTPUT] ?? (nodeOf(value) || comparisonOf(value) ? sourceOf(value) : undefined);
+    if (ref) return ref.output.type;
+    return typeof value === 'number' ? 'float' : typeof value === 'boolean' ? 'boolean' : undefined;
+  };
+  /** ifgreater/ifgreatereq/ifequal comparing `value1` with `value2`; without branches it outputs a boolean. */
+  const conditionalNode = (category: string, value1: unknown, value2: unknown, branches?: [unknown, unknown]): OutputRef => {
+    const valueTypes = [value1, value2].map(scalarType);
+    const nodeValueType = [value1, value2].map(value => isNodeValue(value) ? scalarType(value) : undefined).find(Boolean);
+    const valueType = nodeValueType ?? valueTypes.find(Boolean);
+    if (!valueType || !['float', 'integer', 'boolean'].includes(valueType)) {
+      throw new ScriptError(`Comparisons apply to float, integer or boolean values, not ${valueType ?? 'this value'}.`);
+    }
+    let outputType = 'boolean';
+    if (branches) {
+      const branchNodeType = branches.map(branch => sourceOf(branch)?.output.type).find(Boolean);
+      outputType = branchNodeType ?? branches.map(branch => literalType(branch)).find(type => type && type !== 'float') ??
+        branches.map(branch => literalType(branch)).find(Boolean) ?? '';
+      if (!outputType) throw new ScriptError('condition ? a : b selects numbers, arrays or node outputs.');
+    }
+    const portType = (def: ScriptNodeDef, name: string): string | undefined => def.inputs.find(port => port.name === name)?.type;
+    const def = library.variants(category).find(candidate => nodeType(candidate) === outputType &&
+      portType(candidate, 'value1') === valueType && (!branches || portType(candidate, 'in1') === outputType));
+    if (!def) throw new ScriptError(`No ${category} NodeDef compares ${valueType} values to select ${outputType}.`);
+    const node = createNode(def);
+    assign(node, 'value1', value1);
+    assign(node, 'value2', value2);
+    if (branches) {
+      assign(node, 'in1', branches[0]);
+      assign(node, 'in2', branches[1]);
+    }
+    return outputRef(node, def.outputs[0]!);
+  };
+  const logicNode = (category: string, args: unknown[]): OutputRef => {
+    const def = library.variants(category)[0];
+    if (!def) throw new ScriptError(`The MaterialX library has no "${category}" node.`);
+    const node = createNode(def);
+    args.forEach((value, i) => assign(node, def.inputs[i]!.name, value));
+    return outputRef(node, def.outputs[0]!);
+  };
+  const literalType = (value: unknown, preferred?: string): string | undefined => {
+    if (typeof value === 'number') return 'float';
+    if (!Array.isArray(value) || !value.every(component => typeof component === 'number')) return undefined;
+    const size = value.length;
+    if (preferred && VECTOR_SIZE[preferred] === size) return preferred;
+    return size === 2 ? 'vector2' : size === 3 ? 'color3' : size === 4 ? 'color4' : undefined;
+  };
+  const mathNode = (category: string, args: unknown[]): OutputRef => {
+    if (!library.variants(category).length) throw new ScriptError(`The MaterialX library has no "${category}" node.`);
+    if ((category === 'min' || category === 'max') && args.length > 2) {
+      return args.slice(1).reduce<OutputRef>((left, right) => mathNode(category, [left, right]), mathNode(category, args.slice(0, 2)));
+    }
+    const nodeTypes = args.map(arg => sourceOf(arg)?.output.type);
+    const target = nodeTypes.find(type => type && type !== 'float') ??
+      args.map(arg => literalType(arg)).find(type => type && type !== 'float') ?? 'float';
+    const types = args.map((arg, i) => nodeTypes[i] ?? literalType(arg, target));
+    if (types.some(type => !type)) throw new ScriptError(`${category} only combines numbers, arrays and node outputs.`);
+    const accepts = (port: ScriptPortDef | undefined, i: number): boolean => !!port &&
+      (port.type === types[i] || (nodeTypes[i] === undefined && (types[i] === 'float' || port.type === target) && VECTOR_SIZE[port.type] !== undefined && literalType(args[i], port.type) === port.type) ||
+        (nodeTypes[i] === undefined && types[i] === 'float' && (port.type === 'float' || VECTOR_SIZE[port.type] !== undefined)));
+    const find = (values: unknown[]): ScriptNodeDef | undefined => library.variants(category)
+      .filter(def => nodeType(def) === target && def.inputs.length >= values.length)
+      .find(def => values.every((_, i) => {
+        const port = def.inputs[i];
+        return nodeTypes[i] !== undefined ? port?.type === nodeTypes[i] : accepts(port, i);
+      }));
+    let values = args;
+    let def = find(values);
+    if (!def && COMMUTATIVE.has(category) && args.length === 2) {
+      values = [args[1], args[0]];
+      [nodeTypes[0], nodeTypes[1]] = [nodeTypes[1], nodeTypes[0]];
+      [types[0], types[1]] = [types[1], types[0]];
+      def = find(values);
+    }
+    if (!def) {
+      // A float node output used with vectors goes through a convert node.
+      values = values.map((value, i) => {
+        if (nodeTypes[i] !== 'float' || target === 'float') return value;
+        const convert = library.variants('convert').find(candidate => nodeType(candidate) === target && candidate.inputs[0]?.type === 'float');
+        if (!convert) return value;
+        const node = createNode(convert);
+        assign(node, convert.inputs[0]!.name, value);
+        nodeTypes[i] = target;
+        types[i] = target;
+        return outputRef(node, convert.outputs[0]!);
+      });
+      def = find(values);
+    }
+    if (!def) throw new ScriptError(`No ${category} NodeDef combines ${types.join(' and ')}.`);
+    const node = createNode(def);
+    values.forEach((value, i) => assign(node, def!.inputs[i]!.name, value));
+    return outputRef(node, def.outputs[0]!);
+  };
+  const componentwise = (a: unknown, b: unknown, apply: (x: number, y: number) => number): unknown => {
+    if (Array.isArray(a) || Array.isArray(b)) {
+      const size = Array.isArray(a) ? a.length : (b as unknown[]).length;
+      if (Array.isArray(a) && Array.isArray(b) && a.length !== b.length) throw new ScriptError('Arrays of different sizes cannot be combined.');
+      return Array.from({ length: size }, (_, i) =>
+        apply(Array.isArray(a) ? a[i] as number : a as number, Array.isArray(b) ? b[i] as number : b as number));
+    }
+    return apply(a as number, b as number);
+  };
+  const arithmetic: Record<string, (x: number, y: number) => number> = {
+    '+': (x, y) => x + y, '-': (x, y) => x - y, '*': (x, y) => x * y, '/': (x, y) => x / y, '%': (x, y) => x % y, '**': (x, y) => x ** y,
+  };
+  const mx = {
+    op: (operator: string, a: unknown, b: unknown): unknown => {
+      if (isNodeValue(a) || isNodeValue(b)) return mathNode(OPERATOR_NODES[operator]!, [a, b]);
+      if (operator === '+' && (typeof a === 'string' || typeof b === 'string')) return String(a) + String(b);
+      if (Array.isArray(a) || Array.isArray(b)) return componentwise(a, b, arithmetic[operator]!);
+      return arithmetic[operator]!(a as number, b as number);
+    },
+    neg: (a: unknown): unknown => {
+      if (isNodeValue(a)) return mathNode('multiply', [a, -1]);
+      return Array.isArray(a) ? a.map(component => -component) : -(a as number);
+    },
+    cmp: (operator: string, left: unknown, right: unknown): unknown => {
+      if (isNodeValue(left) || isNodeValue(right)) {
+        const comparison: Comparison = Object.freeze({ [COMPARISON]: { operator, left, right } });
+        return comparison;
+      }
+      const [a, b] = [left as number, right as number];
+      switch (operator) {
+        case '>': return a > b;
+        case '>=': return a >= b;
+        case '<': return a < b;
+        case '<=': return a <= b;
+        case '==': return a === b;
+        default: return a !== b;
+      }
+    },
+    cond: (test: unknown, consequent: () => unknown, alternate: () => unknown): unknown => {
+      const comparison = comparisonOf(test);
+      if (comparison) {
+        const { operator, left, right } = comparison;
+        const [a, b] = [consequent(), alternate()];
+        // ifgreater/ifgreatereq/ifequal output in1 when value1 >, >= or == value2, else in2.
+        if (operator === '>') return conditionalNode('ifgreater', left, right, [a, b]);
+        if (operator === '<') return conditionalNode('ifgreater', right, left, [a, b]);
+        if (operator === '>=') return conditionalNode('ifgreatereq', left, right, [a, b]);
+        if (operator === '<=') return conditionalNode('ifgreatereq', right, left, [a, b]);
+        return conditionalNode('ifequal', left, right, operator === '==' ? [a, b] : [b, a]);
+      }
+      const source = sourceOf(test);
+      if (source) {
+        if (source.output.type !== 'boolean') {
+          throw new ScriptError(`condition ? a : b needs a comparison or a boolean output, not ${source.output.type}.`);
+        }
+        return conditionalNode('ifequal', test, true, [consequent(), alternate()]);
+      }
+      return test ? consequent() : alternate();
+    },
+    and: (left: unknown, right: () => unknown): unknown => isNodeValue(left) ? logicNode('and', [left, right()]) : left && right(),
+    or: (left: unknown, right: () => unknown): unknown => isNodeValue(left) ? logicNode('or', [left, right()]) : left || right(),
+    not: (value: unknown): unknown => isNodeValue(value) ? logicNode('not', [value]) : !value,
+    test: (value: unknown): unknown => {
+      if (comparisonOf(value) || nodeOf(value) || (value as Partial<OutputRef> | null)?.[OUTPUT]) {
+        throw new ScriptError('A condition on node outputs is evaluated per pixel: use condition ? a : b instead of if, while or for.');
+      }
+      return value;
+    },
+  };
+  const math = new Proxy(Math, {
+    get: (target, key) => {
+      const value = Reflect.get(target, key) as unknown;
+      const category = typeof key === 'string' ? MATH_NODES[key] : undefined;
+      if (!category || typeof value !== 'function') return value;
+      return (...args: unknown[]) => args.some(isNodeValue) ? mathNode(category, args) : (value as (...values: unknown[]) => unknown)(...args);
+    },
+  });
+
+  // --- Viewer -----------------------------------------------------------------
+  let queue: Promise<void> = Promise.resolve();
+  const settings = new Map<string, unknown>();
+  const command = (): void => { graph.viewerCommands++; };
+  const upstream = (root: ScriptNode): ScriptNode[] => {
+    const seen = new Set<ScriptNode>();
+    const visit = (node: ScriptNode): void => {
+      if (seen.has(node)) return;
+      seen.add(node);
+      for (const input of node.inputs.values()) if ('node' in input) visit(input.node);
+    };
+    visit(root);
+    return graph.nodes.filter(node => seen.has(node));
+  };
+  const materialDocument = (material: unknown): { xml: string } | { url: string } => {
+    if (typeof material === 'string') return { url: new URL(material, baseUrl).href };
+    const source = sourceOf(material);
+    if (!source || (source.output.type !== 'surfaceshader' && source.output.type !== 'material')) {
+      throw new ScriptError('assign(object, material) expects a surface shader, a material node or a .mtlx path.');
+    }
+    const nodes = upstream(source.node);
+    for (const node of nodes) if (pending.has(node)) nameNode(node, node.def.category);
+    return { xml: toXml({ nodes }, library, options.filePrefix ? { filePrefix: options.filePrefix } : {}) };
+  };
+  const renderFunction = new Proxy(async function render(samples?: unknown): Promise<number> {
+    if (samples !== undefined && !(Number.isInteger(samples) && (samples as number) > 0)) {
+      throw new ScriptError('render(samples) expects a positive integer.');
+    }
+    command();
+    await queue;
+    return host ? host.render(samples as number | undefined) : 0;
+  }, {
+    get: (target, key) => {
+      if (typeof key !== 'string' || !(key in RENDER_SETTINGS)) return Reflect.get(target, key) as unknown;
+      return settings.has(key) ? settings.get(key) : host?.renderSettings()[key];
+    },
+    set: (_target, key, value) => {
+      if (typeof key !== 'string') return false;
+      checkRenderSetting(key, value);
+      settings.set(key, value);
+      command();
+      if (host) queue = queue.then(() => host.setRenderSetting(key, value));
+      return true;
+    },
+  });
+  const viewer: Record<string, unknown> = {
+    scene: async (entry: unknown): Promise<void> => {
+      if (typeof entry !== 'string' || !entry) throw new ScriptError('scene(entry) expects a scene path.');
+      command();
+      await queue;
+      await host?.loadScene(entry);
+    },
+    objects: (): string[] => [...host?.objects() ?? []],
+    render: renderFunction,
+    assign: async (object: unknown, material: unknown): Promise<void> => {
+      if (typeof object !== 'string' || !object) throw new ScriptError('assign(object, material) expects an object path.');
+      const document = materialDocument(material);
+      command();
+      await queue;
+      await host?.assignMaterial(object, document);
+    },
+    load: async (path: unknown): Promise<object> => {
+      if (typeof path !== 'string' || !path) throw new ScriptError('load(path) expects a .mtlx path.');
+      const url = new URL(path, baseUrl).href;
+      const loaded = fromXml(await inlineIncludes(await fetchText(url), url, fetchText), library);
+      for (const node of loaded.nodes) {
+        for (const [name, input] of node.inputs) {
+          if ('value' in input && typeof input.value === 'string' && input.value && inputDef(node, name).type === 'filename' &&
+              !isAbsoluteFile(input.value)) {
+            node.inputs.set(name, { value: new URL(input.value, url).href });
+          }
+        }
+        nameNode(node, node.name);
+        graph.nodes.push(node);
+      }
+      const material = loaded.nodes.find(node => nodeType(node.def) === 'material') ??
+        [...loaded.nodes].reverse().find(node => nodeType(node.def) === 'surfaceshader');
+      if (!material) throw new ScriptError(`${path} has no surface material.`);
+      return handleFor(material);
+    },
+  };
+
+  // --- Scope ------------------------------------------------------------------
   const classes = new Map<string, unknown>();
   const classFor = (identifier: string): unknown => {
     if (classes.has(identifier)) return classes.get(identifier);
@@ -499,7 +950,7 @@ export function runScript(code: string, library: ScriptLibrary): ScriptGraph {
     const create = category === undefined ? undefined : function (this: unknown, variant?: unknown): object {
       if (!new.target) throw new ScriptError(`Use "new ${identifier}()".`);
       if (variant !== undefined && typeof variant !== 'string') throw new ScriptError(`new ${identifier}(type) expects a type name.`);
-      return createHandle(library.resolve(category, variant));
+      return handleFor(createNode(library.resolve(category, variant)));
     };
     classes.set(identifier, create);
     return create;
@@ -508,33 +959,41 @@ export function runScript(code: string, library: ScriptLibrary): ScriptGraph {
   const variables = new Map<string, unknown>();
   const scope = new Proxy(Object.create(null) as object, {
     has: (_target, key) => typeof key === 'string' &&
-      (variables.has(key) || classFor(key) !== undefined || !(key in globalThis)),
+      (variables.has(key) || SCRIPT_GLOBALS.has(key) || classFor(key) !== undefined || !(key in globalThis)),
     get: (_target, key) => {
       if (typeof key !== 'string') return undefined;
+      if (key === Symbol.unscopables as unknown) return undefined;
       if (variables.has(key)) return variables.get(key);
+      if (key === '__mx') return mx;
+      if (key === 'Math') return math;
+      if (key in viewer) return viewer[key];
       const create = classFor(key);
       if (create) return create;
       throw new ScriptError(`${key} is not defined.`);
     },
     set: (_target, key, value) => {
       if (typeof key !== 'string') return false;
+      if (SCRIPT_GLOBALS.has(key)) throw new ScriptError(`${key} is reserved by material scripts.`);
       if (classFor(key)) throw new ScriptError(`${key} is a node type and cannot be reassigned.`);
       variables.set(key, value);
-      const node = nodeOf(value);
+      const node = nodeOf(value) ?? (value as Partial<OutputRef> | null)?.[OUTPUT]?.node;
       if (node && pending.has(node)) nameNode(node, key);
       return true;
     },
   });
 
-  let run: (scope: object) => void;
+  const body = transformScript(code);
+  let run: (scope: object) => Promise<void>;
   try {
-    run = new Function('scope', `with (scope) {\n${code.replace(DECLARATION, '')}\n}`) as (scope: object) => void;
+    run = new AsyncFunction('scope', `with (scope) {\n${body}\n}`);
   } catch (error) {
     throw new ScriptError(`Syntax error: ${error instanceof Error ? error.message : String(error)}`);
   }
   try {
-    run(scope);
+    await run(scope);
+    await queue;
   } catch (error) {
+    if (error instanceof ScriptError && error.line !== undefined) throw error;
     throw new ScriptError(error instanceof Error ? error.message : String(error), errorLine(error));
   }
   for (const node of [...pending]) nameNode(node, node.def.category);
