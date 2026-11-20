@@ -14,7 +14,8 @@ surface.specular_roughness = 0.3;
 ```
 
 - Le nom de la variable devient le nom du nœud MaterialX (`img`, `surface`).
-  `const`/`let`/`var` sont acceptés et ignorés.
+  `const`/`let`/`var` sont acceptés et ignorés (sauf dans l'en-tête d'une
+  boucle `for`).
 - Les classes sont les catégories MaterialX en PascalCase :
   `standard_surface` → `StandardSurface`, `fractal3d` → `Fractal3d`,
   `surfacematerial` → `Surfacematerial`.
@@ -26,7 +27,7 @@ surface.specular_roughness = 0.3;
   l'export l'écrit sur ses entrées `filename`, là où le moteur le lit.
 - Sans `Surfacematerial`, l'export ajoute un `surfacematerial` nommé
   `material` relié au dernier shader de surface.
-- Le reste du langage JavaScript reste disponible (boucles, `Math`...).
+- Le reste du langage JavaScript reste disponible (boucles, fonctions, `await`).
 
 ## Nœuds résolus à l'instanciation
 
@@ -49,13 +50,94 @@ blend = new Mix("ND_mix_color3_color3");    // nom de NodeDef
 Chaque affectation est vérifiée : entrée inconnue, type de valeur incorrect ou
 connexion entre types différents produisent une erreur avec la ligne fautive.
 
+## Expressions mathématiques
+
+Les opérateurs et les fonctions `Math` appliqués à une sortie de nœud
+construisent les nœuds MaterialX correspondants ; sur des nombres ou des
+tableaux, ils calculent normalement (composante par composante pour les
+tableaux).
+
+```js
+n = new Fractal3d("float");
+rough = Math.abs(n.out) * 0.4 + 0.1;   // absval, multiply, add
+tint = [1, 0.5, 0] * n.out;            // multiply color3 × float (ND_multiply_color3FA)
+wave = Math.sin(n.out * 10);           // multiply, sin
+```
+
+| Script | Nœud |
+|---|---|
+| `+ - * / % **` | `add`, `subtract`, `multiply`, `divide`, `modulo`, `power` |
+| `-x` | `multiply` par -1 |
+| `Math.sin cos tan asin acos atan2` | `sin`, `cos`, `tan`, `asin`, `acos`, `atan2` |
+| `Math.abs floor ceil round sqrt exp log sign` | `absval`, `floor`, `ceil`, `round`, `sqrt`, `exp`, `ln`, `sign` |
+| `Math.pow min max` | `power`, `min`, `max` |
+
+La variante est choisie d'après les types : une couleur multipliée par un
+`float` utilise la variante `…FA` ; à défaut, l'ordre des opérandes est échangé
+pour les opérations commutatives, ou un nœud `convert` est inséré. Le nœud
+prend le nom de la variable qui reçoit le résultat (`rough`).
+
+## Conditions
+
+MaterialX n'a ni boucle ni branchement : un graphe calcule une valeur par
+pixel. Les boucles et `if` du script s'exécutent donc **à la construction** du
+graphe (une boucle peut créer plusieurs nœuds). Une condition sur une sortie de
+nœud, évaluée par pixel, s'écrit avec `? :` et devient un nœud de sélection :
+
+```js
+veins = n.out > 0.05 ? [0.92, 0.88, 0.82] : [0.18, 0.12, 0.1];  // ifgreater
+band = n.out > 0.3 && !(n.out > 0.8) ? 1 : 0;                   // ifgreater, not, and, ifequal
+```
+
+- `a > b ? x : y` → `ifgreater(value1=a, value2=b, in1=x, in2=y)` ; `<` échange
+  `value1`/`value2` ; `>=`/`<=` → `ifgreatereq` ; `==` → `ifequal` ; `!=`
+  échange les branches.
+- `&&`, `||`, `!` sur des comparaisons → nœuds booléens `and`, `or`, `not` ;
+  une condition booléenne sélectionne via `ifequal` (variante `…B`).
+- Sans sortie de nœud, `? :`, `&&` et `||` gardent leur comportement JavaScript
+  (une seule branche évaluée).
+- `if (n.out > 0.5)` est refusé : la valeur n'est connue qu'au rendu.
+
+## Piloter le viewer
+
+Un script peut charger une scène, régler le rendu, affecter des matériaux et
+lancer le rendu. Ces opérations s'exécutent avec **Appliquer** ; la validation
+en direct les vérifie sans les exécuter.
+
+```js
+await scene("./scenes/standard-shader-ball/standard-shader-ball.usda");
+render.backend = "pathtracing";
+render.depth = 6;
+
+surface = new StandardSurface();
+surface.base_color = [0.8, 0.1, 0.1];
+for (const object of objects()) await assign(object, surface);
+
+wood = await load("./scenes/mtlx-library/…/wood.mtlx");   // matériau chargé, modifiable
+await assign("/World/Floor", wood);
+await render(64);                                          // attend 64 échantillons
+```
+
+| Fonction | Effet |
+|---|---|
+| `await scene(chemin)` | Charge une scène (USD, glTF) |
+| `objects()` | Chemins des objets de la scène |
+| `render.<paramètre> = valeur` | Paramètres de l'UI : `backend` (`"raster"`, `"pathtracing"`, `"disney"`), `resolution` (128, 256, 512, 1024, `"1024x768"`), `depth` (0–64), `quality` (`"interactive"`, `"reference"`), `environment`, `denoise` (booléens), `exposure` (EV), `tonemap` (`"none"`, `"reinhard"`, `"acesFilmic"`) |
+| `await assign(objet, matériau)` | Affecte un shader de surface ou un `surfacematerial` du script (avec les nœuds en amont), ou un fichier `.mtlx` |
+| `await load(chemin)` | Ajoute au script les nœuds d'un document `.mtlx` et retourne son matériau |
+| `await render(n)` | Relance le rendu ; avec `n`, attend `n` échantillons du path tracer |
+
+Un script qui n'utilise aucune de ces fonctions garde le comportement simple :
+**Appliquer** affecte son matériau à l'objet sélectionné.
+
 ## Éditeur
 
-- **Colorisation** : nœuds, variables, entrées, sorties ; une entrée inconnue
-  est soulignée en rouge.
+- **Colorisation** : nœuds, variables, entrées, sorties, fonctions du viewer ;
+  une entrée ou un paramètre de rendu inconnu est souligné en rouge.
 - **IntelliSense** (automatique ou Ctrl+Espace) : classes après `new`, variantes
   dans `new Mix("`, entrées et sorties après `variable.` (les sorties en premier
-  à droite d'un `=`).
+  à droite d'un `=`), paramètres et valeurs après `render.`, fonctions après
+  `Math.`, et fonctions du viewer (`scene`, `assign`...).
 - **Helpers de valeurs** : sur une ligne `noeud.entree = valeur`, un contrôle
   adapté au type modifie la valeur : sélecteur de couleur, case à cocher,
   curseur et champ numérique (bornes du NodeDef), liste pour les `enum`,
@@ -65,7 +147,8 @@ connexion entre types différents produisent une erreur avec la ligne fautive.
   le moteur l'a résolu (valeurs modifiées dans l'interface comprises, textures en
   URL absolues), y compris sur les scènes précompilées. Appliquer ce script
   redonne le même rendu.
-- **Appliquer** (Ctrl+Entrée) : remplace le matériau de l'objet sélectionné.
+- **Appliquer** (Ctrl+Entrée) : exécute le script ; s'il ne pilote pas le
+  viewer (voir plus haut), remplace le matériau de l'objet sélectionné.
   Sur une scène source (USD, glTF), la scène est rechargée avec le document.
   Sur une scène précompilée, le document est compilé à la volée dans le
   navigateur sur un quad sonde (comme `npm run compile:scenes` pour la

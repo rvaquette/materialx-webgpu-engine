@@ -234,6 +234,36 @@ test('convertit le matériau courant (avec nodegraph) en script sans changer le 
   expect(difference.mean).toBeLessThan(0.5);
 });
 
+test('pilote le viewer depuis un script : scène, rendu, matériau conditionnel', async ({ page }, info) => {
+  test.setTimeout(300_000);
+  await page.goto('/');
+  const webgpu = await page.evaluate(async () => Boolean(await navigator.gpu?.requestAdapter()));
+  test.skip(!webgpu, 'WebGPU indisponible dans ce navigateur.');
+  await expect(page.locator('#app')).toHaveClass(/ui-ready/, { timeout: 120_000 });
+  await expect(page.locator('#busy-indicator')).toBeHidden({ timeout: 120_000 });
+  await page.locator('#open-script-editor').click();
+  const e = editor(page);
+  await expect(e.status).toContainText('Script valide', { timeout: 30_000 });
+  await e.code.fill(`await scene("${SOURCE_SCENE.replace('/?entry=', '')}");
+render.backend = "pathtracing";
+render.depth = 4;
+n = new Fractal3d("float");
+surface = new StandardSurface();
+surface.base_color = n.out > 0 ? [0.9, 0.2, 0.1] : [0.1, 0.2, 0.9];
+surface.specular_roughness = Math.abs(n.out) * 0.5 + 0.2;
+await assign(objects()[0], surface);
+await render(4);`);
+  await expect(e.status).toContainText('5 commandes viewer', { timeout: 30_000 });
+  await pause(page, info);
+  await e.panel.getByTestId('script-apply').click();
+  await expect(e.status).toHaveText('Script exécuté.', { timeout: 240_000 });
+  await expect(e.xml).toHaveValue(/<ifgreater name="ifgreater" type="color3">/);
+  await expect(e.xml).toHaveValue(/<absval name="absval" type="float">/);
+  await expect(page.locator('#pathtracing-spp')).toBeVisible();
+  await e.panel.getByTestId('script-close').click();
+  await pause(page, info, 4000);
+});
+
 test('applique le matériau scripté à l’objet sélectionné', async ({ page }, info) => {
   test.setTimeout(240_000);
   await page.goto(SOURCE_SCENE);

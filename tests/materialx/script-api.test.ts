@@ -493,7 +493,7 @@ lazy = new Noise3d("float");
 
   it('keeps source lines for runtime errors and leaves awaited branches alone', async () => {
     await expect(runScript('n = new Noise3d("float");\nm = n.out * 2;\nm.bogus = 1;', EXPRESSIONS))
-      .rejects.toMatchObject({ line: 3, message: expect.stringMatching(/multiply\.out is a node output: "bogus" must be set on multiply itself/) });
+      .rejects.toMatchObject({ line: 3, message: expect.stringMatching(/m\.out is a node output: "bogus" must be set on m itself/) });
     expect(transformScript('x = ok ? await f() : 1;\ny = a ? b : c;')).toBe(
       'x = ok ? await f() : 1;\ny = __mx.cond(a, () => (b), () => (c));');
     expect(transformScript('for (let i = 0; i < 3; i++) { const k = i; }\nlet unset;')).toBe(

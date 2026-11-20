@@ -38,6 +38,21 @@ describe('script editor language support', () => {
     expect(html).toContain('<span class="tok-var">m</span>.<span class="tok-error">nope</span>');
   });
 
+  it('colors and completes viewer functions, render settings and Math', () => {
+    const html = highlightScript('await scene("a.usda");\nrender.backend = "raster";\nrender.speed = 1;', LIBRARY);
+    expect(html).toContain('<span class="tok-builtin">scene</span>');
+    expect(html).toContain('<span class="tok-builtin">render</span>.<span class="tok-input">backend</span>');
+    expect(html).toContain('<span class="tok-builtin">render</span>.<span class="tok-error">speed</span>');
+    expect(scriptCompletions('render.ba', '', LIBRARY)?.items).toEqual([
+      { label: 'backend', detail: 'Moteur de rendu : "raster" | "pathtracing" | "disney"', insert: 'backend' },
+    ]);
+    expect(scriptCompletions('x = Math.si', '', LIBRARY)?.items[0]).toEqual({ label: 'sin', detail: 'nœud sin sur une sortie', insert: 'sin(' });
+    expect(scriptCompletions('as', '', LIBRARY)).toEqual({
+      from: 0, items: [{ label: 'assign', detail: 'await assign("/objet", surface) : affecte un matériau', insert: 'await assign("' }],
+    });
+    expect(scriptCompletions('x = img', '', LIBRARY)).toBeUndefined();
+  });
+
   it('completes node classes, variants and ports', () => {
     expect(scriptCompletions('x = new Mi', CODE, LIBRARY)).toEqual({
       from: 8, items: [{ label: 'Mix', detail: 'mix → color3 | float', insert: 'Mix()' }],

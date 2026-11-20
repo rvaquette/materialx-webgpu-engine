@@ -10,7 +10,7 @@ import { startViewerUi, type ViewerUiState, type ViewerUiActions } from './viewe
 import type { LocalGltfScene } from './scene/local-gltf.ts';
 import { downloadDisplayedAovPng, downloadPathTraceAovPfm } from './render/aov-export.ts';
 import { attachScriptEditor } from './materialx/script-editor.ts';
-import { loadScriptLibrary } from './materialx/script-api.ts';
+import { loadScriptLibrary, type ScriptHost } from './materialx/script-api.ts';
 import type { ResolvedGraph } from './materialx/graph.ts';
 
 let ui: ViewerUiState | undefined;
@@ -48,6 +48,11 @@ async function main(): Promise<void> {
   // The script editor works without WebGPU; applying a material needs the viewer.
   let applyScriptMaterial: ((xml: string) => Promise<void>) | undefined;
   let selectedMaterial: (() => { graph: ResolvedGraph; name: string }) | undefined;
+  let viewerHost: ScriptHost | undefined;
+  const readyHost = (): ScriptHost => {
+    if (!viewerHost) throw new Error('Le viewer WebGPU n’est pas prêt.');
+    return viewerHost;
+  };
   attachScriptEditor(document.getElementById('material-tools'), {
     library: loadScriptLibrary(new URL(`${import.meta.env.BASE_URL}materialx/libraries`, document.baseURI).href),
     filePrefix: new URL('.', document.baseURI).href,
@@ -58,6 +63,14 @@ async function main(): Promise<void> {
     currentMaterial: () => {
       if (!selectedMaterial) throw new Error('Le viewer WebGPU n’est pas prêt.');
       return selectedMaterial();
+    },
+    host: {
+      loadScene: entry => readyHost().loadScene(entry),
+      objects: () => readyHost().objects(),
+      renderSettings: () => readyHost().renderSettings(),
+      setRenderSetting: (name, value) => readyHost().setRenderSetting(name, value),
+      assignMaterial: (object, material) => readyHost().assignMaterial(object, material),
+      render: samples => readyHost().render(samples),
     },
   });
   const params = new URLSearchParams(location.search);
@@ -432,6 +445,70 @@ async function main(): Promise<void> {
       }
       finally { refreshObjects(); }
     }); },
+  };
+  viewerHost = {
+    async loadScene(entry) {
+      if (operationBusy || deviceLost) throw new Error('Une opération du viewer est en cours.');
+      parameterEditor.refresh();
+      if (!state.scenes.some(scene => scene.entry === entry)) state.scenes.push({ entry, label: entry });
+      if (!await loadEntry(entry)) throw new Error(state.error || `Échec du chargement de ${entry}.`);
+    },
+    objects: () => viewer.objects.map(object => object.path),
+    renderSettings: () => ({
+      backend: state.backend, resolution: state.resolution, depth: state.pathTracingDepth, quality: state.rasterQuality,
+      environment: state.environmentEnabled, denoise: state.denoise, exposure: state.exposure, tonemap: state.tonemap,
+    }),
+    // Values are validated by the script runtime (RENDER_SETTINGS) before reaching the viewer.
+    async setRenderSetting(name, value) {
+      if (name === 'backend') { viewer.setBackend(value as ViewerUiState['backend']); state.backend = value as ViewerUiState['backend']; }
+      else if (name === 'resolution') {
+        const size = value as ViewerUiState['resolution'];
+        await viewer.resize(size === '1024x768' ? 1024 : size, size === '1024x768' ? 768 : size);
+        state.resolution = size;
+      } else if (name === 'depth') { viewer.setPathTracingDepth(value as number); state.pathTracingDepth = viewer.pathTracingDepth; }
+      else if (name === 'quality') { await viewer.setRasterQuality(value as ViewerUiState['rasterQuality']); state.rasterQuality = value as ViewerUiState['rasterQuality']; }
+      else if (name === 'environment') { viewer.setEnvironmentEnabled(value as boolean); state.environmentEnabled = value as boolean; }
+      else if (name === 'denoise') { viewer.setPathTracingDenoise(value as boolean); state.denoise = value as boolean; }
+      else if (name === 'exposure') { viewer.setExposure(value as number); state.exposure = value as number; }
+      else if (name === 'tonemap') { await viewer.setTonemap(value as ViewerUiState['tonemap']); state.tonemap = value as ViewerUiState['tonemap']; }
+      else throw new Error(`Paramètre de rendu inconnu : ${name}.`);
+    },
+    async assignMaterial(object, material) {
+      if (operationBusy || deviceLost) throw new Error('Une opération du viewer est en cours.');
+      if (!viewer.objects.some(candidate => candidate.path === object)) {
+        throw new Error(`Objet inconnu : ${object}. Objets : ${viewer.objects.map(candidate => candidate.path).join(', ')}.`);
+      }
+      // Generated documents stay readable for later scene reloads, like applied script materials.
+      const url = 'xml' in material ? URL.createObjectURL(new Blob([material.xml], { type: 'application/xml' })) : material.url;
+      const compiled = 'url' in material
+        ? MATERIAL_CATALOG.find(item => new URL(item.path, document.baseURI).href === material.url)?.compiled : undefined;
+      setBusy(true, `Application du matériau à ${object}...`);
+      try { await viewer.setObjectMaterial(object, url, compiled ? new URL(compiled, document.baseURI).href : undefined); }
+      finally {
+        refreshObjects();
+        setBusy(false);
+      }
+    },
+    async render(samples) {
+      if (state.backend === 'raster') {
+        await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
+        return 1;
+      }
+      if (viewer.pathTracingPaused) viewer.setPathTracingPaused(false);
+      viewer.restartPathTracing();
+      if (!samples) return 0;
+      let last = -1;
+      let lastProgress = performance.now();
+      for (;;) {
+        await new Promise(resolve => setTimeout(resolve, 100));
+        if (deviceLost) throw new Error('Périphérique WebGPU perdu pendant le rendu.');
+        const status = state.status;
+        if (status?.pathTracer === 'error') throw new Error('Échec de préparation du path tracer.');
+        if (status?.pathTracer === 'ready' && status.samples >= samples) return status.samples;
+        if (status && status.samples !== last) { last = status.samples; lastProgress = performance.now(); }
+        if (performance.now() - lastProgress > 60_000) throw new Error(`Rendu bloqué à ${last} échantillons sur ${samples}.`);
+      }
+    },
   };
   if (libraryButton && libraryDialog) {
     const openLibrary = bindMaterialLibrary(libraryDialog, MATERIAL_CATALOG, actions.material);

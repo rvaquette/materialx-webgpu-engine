@@ -985,15 +985,16 @@ surface.base_color = img.out;
   (`compileMaterialDocument`) ;
 - l'import aplatit les `nodegraph` (sorties, interfaces, `fileprefix`,
   `colorspace`), intègre les `xi:include`, développe les NodeDefs définis dans
-  le document, et « Matériau → Script » convertit le matériau courant.
+  le document, et « Matériau → Script » convertit le matériau courant ;
+- les expressions mathématiques sur des sorties de nœuds (`+ - * / % **`,
+  `-x`, `Math.sin`, `Math.pow`...) deviennent des nœuds MaterialX, et
+  `condition ? a : b` (avec `> >= < <= == !=`, `&&`, `||`, `!`) devient
+  `ifgreater`, `ifgreatereq`, `ifequal`, `and`, `or`, `not` ;
+- les scripts pilotent le viewer : `await scene(…)`, `render.backend = …` (et
+  les autres paramètres de l'UI), `objects()`, `await load(…)`,
+  `await assign(objet, matériau)`, `await render(échantillons)`.
 
 Tous les objectifs de la priorité 3bis sont atteints.
-- pour les noeuds mathematiques (+, -, *, /, cos, etc...) deduire les noeuds des expressions mathématiques
-- étendre les scripts afin de :
-* charger une scene 
-* modifier les paramètres de rendu (ceux de l'UI)
-* créer ou charger un materiau et l'affecter à un objet de la scene
-* lancer le rendu 
 * enregistrer une image en local
 * autre fonctionnalité à proposer
 - l'API doit permettre de lancer un tel script en ligne de commande

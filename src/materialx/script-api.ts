@@ -675,6 +675,11 @@ export async function runScript(code: string, library: ScriptLibrary, options: R
   const comparisonOf = (value: unknown): Comparison[typeof COMPARISON] | undefined =>
     (value as Partial<Comparison> | null)?.[COMPARISON];
   const materialized = new Map<Comparison[typeof COMPARISON], OutputRef>();
+  /** A comparison as its boolean node output, created now so nodes follow the reading order. */
+  const asValue = (value: unknown): unknown => {
+    const comparison = comparisonOf(value);
+    return comparison ? materialize(comparison) : value;
+  };
   /** A comparison used as a value becomes a boolean node (once). */
   const materialize = (comparison: Comparison[typeof COMPARISON]): OutputRef => {
     let ref = materialized.get(comparison);
@@ -758,10 +763,15 @@ export async function runScript(code: string, library: ScriptLibrary, options: R
     let values = args;
     let def = find(values);
     if (!def && COMMUTATIVE.has(category) && args.length === 2) {
-      values = [args[1], args[0]];
-      [nodeTypes[0], nodeTypes[1]] = [nodeTypes[1], nodeTypes[0]];
-      [types[0], types[1]] = [types[1], types[0]];
+      // Same operation with operands exchanged (e.g. a float times a color uses ND_multiply_color3FA).
+      const swap = (): void => {
+        values = [values[1], values[0]];
+        [nodeTypes[0], nodeTypes[1]] = [nodeTypes[1], nodeTypes[0]];
+        [types[0], types[1]] = [types[1], types[0]];
+      };
+      swap();
       def = find(values);
+      if (!def) swap();
     }
     if (!def) {
       // A float node output used with vectors goes through a convert node.
@@ -841,8 +851,8 @@ export async function runScript(code: string, library: ScriptLibrary, options: R
       }
       return test ? consequent() : alternate();
     },
-    and: (left: unknown, right: () => unknown): unknown => isNodeValue(left) ? logicNode('and', [left, right()]) : left && right(),
-    or: (left: unknown, right: () => unknown): unknown => isNodeValue(left) ? logicNode('or', [left, right()]) : left || right(),
+    and: (left: unknown, right: () => unknown): unknown => isNodeValue(left) ? logicNode('and', [asValue(left), right()]) : left && right(),
+    or: (left: unknown, right: () => unknown): unknown => isNodeValue(left) ? logicNode('or', [asValue(left), right()]) : left || right(),
     not: (value: unknown): unknown => isNodeValue(value) ? logicNode('not', [value]) : !value,
     test: (value: unknown): unknown => {
       if (comparisonOf(value) || nodeOf(value) || (value as Partial<OutputRef> | null)?.[OUTPUT]) {

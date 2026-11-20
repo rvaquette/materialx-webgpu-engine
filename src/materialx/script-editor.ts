@@ -2,9 +2,9 @@
 // helpers for the input under the caret, and script ⇄ MaterialX XML conversion.
 
 import {
-  acceptsValue, fromResolvedGraph, fromXml, inlineIncludes, isColorspaceAttribute, MATERIALX_COLORSPACES, nodeType, runScript,
-  ScriptError, toScript, toXml, type ScriptHost, type ScriptLibrary, type ScriptNodeDef, type ScriptPortDef, type ScriptRun,
-  type ScriptValue,
+  acceptsValue, fromResolvedGraph, fromXml, inlineIncludes, isColorspaceAttribute, MATERIALX_COLORSPACES, MATH_NODES, nodeType,
+  RENDER_SETTINGS, runScript, ScriptError, toScript, toXml, type ScriptHost, type ScriptLibrary, type ScriptNodeDef,
+  type ScriptPortDef, type ScriptRun, type ScriptValue,
 } from './script-api.ts';
 import type { ResolvedGraph } from './graph.ts';
 
@@ -67,6 +67,7 @@ export function highlightScript(code: string, library: ScriptLibrary | undefined
   const identifier = (name: string): string => {
     if (variables.has(name)) return span('var', name);
     if (library?.categoryOf(name) !== undefined) return span('node', name);
+    if (SCRIPT_FUNCTIONS[name]) return span('builtin', name);
     return escapeHtml(name);
   };
   let html = '';
@@ -81,9 +82,10 @@ export function highlightScript(code: string, library: ScriptLibrary | undefined
     else if (keyword) html += span('keyword', text);
     else if (owner && member) {
       const def = variables.get(owner);
-      const kind = !def ? 'member'
-        : def.inputs.some(port => port.name === member) || isColorspaceAttribute(def, member) ? 'input'
-          : def.outputs.some(port => port.name === member) ? 'output' : 'error';
+      const kind = owner === 'render' && !def ? (member in RENDER_SETTINGS ? 'input' : 'error')
+        : !def ? 'member'
+          : def.inputs.some(port => port.name === member) || isColorspaceAttribute(def, member) ? 'input'
+            : def.outputs.some(port => port.name === member) ? 'output' : 'error';
       html += `${identifier(owner)}.${span(kind, member)}`;
     } else html += identifier(name!);
   }
@@ -124,6 +126,18 @@ export function scriptCompletions(prefix: string, code: string, library: ScriptL
     return { from: prefix.length - word.length, items: rank(items, word).slice(0, 200) };
   }
   const member = new RegExp(`(${IDENT})\\.([\\w$]*)$`).exec(prefix);
+  if (member?.[1] === 'render' && !scriptVariables(code, library).has('render')) {
+    const items = Object.entries(RENDER_SETTINGS).map(([name, setting]) => ({
+      label: name,
+      detail: `${setting.doc}${setting.values ? ` : ${setting.values.map(value => JSON.stringify(value)).join(' | ')}` : ''}`,
+      insert: name,
+    }));
+    return { from: prefix.length - member[2]!.length, items: rank(items, member[2]!) };
+  }
+  if (member?.[1] === 'Math') {
+    const items = Object.entries(MATH_NODES).map(([name, category]) => ({ label: name, detail: `nœud ${category} sur une sortie`, insert: `${name}(` }));
+    return { from: prefix.length - member[2]!.length, items: rank(items, member[2]!) };
+  }
   if (member) {
     const def = scriptVariables(code, library).get(member[1]!);
     if (!def) return undefined;
@@ -138,8 +152,24 @@ export function scriptCompletions(prefix: string, code: string, library: ScriptL
     const rhs = /=\s*$/.test(prefix.slice(0, member.index));
     return { from: prefix.length - member[2]!.length, items: rank(rhs ? [...outputs, ...inputs] : [...inputs, ...outputs], member[2]!) };
   }
+  const word = /(?:^|[^\w$.])([A-Za-z]{2,})$/.exec(prefix)?.[1];
+  if (word) {
+    const items = Object.entries(SCRIPT_FUNCTIONS)
+      .filter(([name]) => name.startsWith(word))
+      .map(([name, { detail, insert }]) => ({ label: name, detail, insert }));
+    if (items.length) return { from: prefix.length - word.length, items };
+  }
   return undefined;
 }
+
+/** Viewer functions available in scripts, with their completion text. */
+export const SCRIPT_FUNCTIONS: Readonly<Record<string, { detail: string; insert: string }>> = {
+  scene: { detail: 'await scene("scenes/….usda") : charge une scène', insert: 'await scene("' },
+  objects: { detail: 'objects() : chemins des objets de la scène', insert: 'objects()' },
+  render: { detail: 'render.backend = … ; await render(64) : relance le rendu', insert: 'render' },
+  assign: { detail: 'await assign("/objet", surface) : affecte un matériau', insert: 'await assign("' },
+  load: { detail: 'await load("….mtlx") : charge un matériau dans le script', insert: 'await load("' },
+};
 
 function formatNumber(value: number): string {
   return String(Number(value.toFixed(4)));
@@ -179,7 +209,7 @@ const STYLE = `
 .mx-code textarea { resize: none; color: transparent; background: transparent; caret-color: #fff; outline: none; }
 .mx-code textarea::selection { background: rgba(38, 79, 120, 0.8); color: transparent; }
 .tok-comment { color: #6a9955; } .tok-string { color: #ce9178; } .tok-number { color: #b5cea8; }
-.tok-keyword { color: #569cd6; } .tok-node { color: #4ec9b0; } .tok-var { color: #9cdcfe; }
+.tok-keyword { color: #569cd6; } .tok-node { color: #4ec9b0; } .tok-var { color: #9cdcfe; } .tok-builtin { color: #4fc1ff; font-weight: 600; }
 .tok-input { color: #dcdcaa; } .tok-output { color: #c586c0; } .tok-member { color: #d4d4d4; }
 .tok-error { color: #f48771; text-decoration: wavy underline; }
 .mx-completions { position: absolute; z-index: 2; margin: 0; padding: 2px 0; list-style: none; max-height: 220px; min-width: 260px;
