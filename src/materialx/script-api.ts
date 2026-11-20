@@ -13,6 +13,7 @@
 // A `surfacematerial` is added on export when the script defines none.
 
 import { MATERIALX_DEFAULT_LIBRARY_FILES } from './libraries.ts';
+import type { ResolvedGraph } from './graph.ts';
 
 export type ScriptValue = number | boolean | string | readonly number[];
 
@@ -532,20 +533,30 @@ export function toXml(graph: ScriptGraph, library: ScriptLibrary, options: ToXml
   return lines.join('\n');
 }
 
+/** NodeDef of a node: its explicit NodeDef when the library has it, else the variant matching its type and inputs. */
+function matchNodeDef(
+  library: ScriptLibrary, category: string, type: string | undefined, inputs: readonly { name: string; type?: string | undefined }[],
+  explicit: string | undefined, label: string,
+): ScriptNodeDef {
+  if (explicit) {
+    try { return library.resolve(category, explicit); } catch { /* engine-specific NodeDef: match below */ }
+  }
+  const variants = library.variants(category);
+  if (!variants.length) throw new ScriptError(`Unknown node type <${category}>.`);
+  const matches = variants.filter(def => (!type || nodeType(def) === type) && inputs.every((input) => {
+    const port = def.inputs.find(candidate => candidate.name === input.name);
+    return port && (!input.type || port.type === input.type);
+  }));
+  if (!matches.length) throw new ScriptError(`No ${category} NodeDef matches node "${label}".`);
+  return matches[0]!;
+}
+
 /** NodeDef of a document node: explicit `nodedef`, else the variant matching its type and input types. */
 function documentNodeDef(element: XmlElement, library: ScriptLibrary): ScriptNodeDef {
   const explicit = element.attributes.get('nodedef');
   if (explicit) return library.resolve(element.tag, explicit);
-  const variants = library.variants(element.tag);
-  if (!variants.length) throw new ScriptError(`Unknown node type <${element.tag}>.`);
-  const type = element.attributes.get('type');
-  const matches = variants.filter(def => (!type || nodeType(def) === type) && element.children.every((child) => {
-    const port = def.inputs.find(input => input.name === child.attributes.get('name'));
-    const childType = child.attributes.get('type');
-    return port && (!childType || port.type === childType);
-  }));
-  if (!matches.length) throw new ScriptError(`No ${element.tag} NodeDef matches node "${element.attributes.get('name') ?? ''}".`);
-  return matches[0]!;
+  const inputs = element.children.map(child => ({ name: child.attributes.get('name') ?? '', type: child.attributes.get('type') }));
+  return matchNodeDef(library, element.tag, element.attributes.get('type'), inputs, undefined, element.attributes.get('name') ?? '');
 }
 
 /** MaterialX elements that do not describe shading nodes (geometry bindings, layout, metadata). */
@@ -692,6 +703,69 @@ export function fromXml(xml: string, library: ScriptLibrary): ScriptGraph {
       // A texture's color space travels with the image node in scripts.
       if (colorspace && input.type === 'filename' && !node.colorspace) node.colorspace = colorspace;
     }
+  }
+  return graph;
+}
+
+/**
+ * Script graph of a material as resolved by the engine (`MaterialResource.surfaceGraph`): node graphs
+ * are already flattened, texture paths are absolute and edited parameters hold their current value.
+ * A `surfacematerial` named `materialName` binds the graph terminals.
+ */
+export function fromResolvedGraph(resolved: ResolvedGraph, library: ScriptLibrary, materialName = 'material'): ScriptGraph {
+  if (resolved.lamaSurface) throw new ScriptError('LamaSurface materials cannot be converted to a script.');
+  const graph: ScriptGraph = { nodes: [] };
+  const byId = new Map<string, ScriptNode>();
+  const leaf = (id: string): string => id.split('/').filter(Boolean).at(-1) ?? id;
+  const leafCounts = new Map<string, number>();
+  for (const id of resolved.nodes.keys()) leafCounts.set(leaf(id), (leafCounts.get(leaf(id)) ?? 0) + 1);
+  const used = new Set<string>();
+  const unique = (raw: string): string => {
+    const base = raw.replace(/[^\w]/g, '_') || 'node';
+    let name = base;
+    for (let i = 2; used.has(name); i++) name = `${base}_${i}`;
+    used.add(name);
+    return name;
+  };
+  for (const [id, node] of resolved.nodes) {
+    const def = matchNodeDef(library, node.category, node.type,
+      node.inputs.map(input => ({ name: input.name, type: input.type })), node.nodeDef?.name, id);
+    const name = unique(leafCounts.get(leaf(id))! > 1 ? id.replace(/^\/+/, '') : leaf(id));
+    const scriptNode: ScriptNode = { name, def, inputs: new Map() };
+    byId.set(id, scriptNode);
+    graph.nodes.push(scriptNode);
+  }
+  for (const [id, node] of resolved.nodes) {
+    const scriptNode = byId.get(id)!;
+    for (const input of node.inputs) {
+      const label = `${scriptNode.name}.${input.name}`;
+      const source = input.source;
+      if (source.kind === 'connection') {
+        const upstream = byId.get(source.nodeId);
+        if (!upstream) throw new ScriptError(`${label} references unknown node "${source.nodeId}".`);
+        const output = source.output ? upstream.def.outputs.find(port => port.name === source.output) : upstream.def.outputs[0];
+        if (!output) throw new ScriptError(`${label} references unknown output "${upstream.name}.${source.output ?? ''}".`);
+        connect(scriptNode, input.name, upstream, output);
+      } else if (source.kind === 'value' && !input.defaulted) {
+        const type = inputDef(scriptNode, input.name).type;
+        if (!acceptsValue(type) && source.value === '') continue;
+        scriptNode.inputs.set(input.name, { value: parseValue(source.value, type, label) });
+        if (input.colorSpace && type === 'filename' && !scriptNode.colorspace) scriptNode.colorspace = input.colorSpace;
+      }
+    }
+  }
+  const terminals = resolved.terminals.filter(terminal => terminal.nodeId);
+  if (terminals.length && library.variants('surfacematerial').length) {
+    const material: ScriptNode = { name: unique(materialName), def: library.resolve('surfacematerial'), inputs: new Map() };
+    for (const terminal of terminals) {
+      const upstream = byId.get(terminal.nodeId!);
+      if (!upstream) throw new ScriptError(`Material terminal ${terminal.name} references unknown node "${terminal.nodeId}".`);
+      if (!material.def.inputs.some(port => port.name === terminal.name)) {
+        throw new ScriptError(`Material terminal "${terminal.name}" cannot be bound by a surfacematerial.`);
+      }
+      connect(material, terminal.name, upstream, upstream.def.outputs[0]!);
+    }
+    graph.nodes.push(material);
   }
   return graph;
 }

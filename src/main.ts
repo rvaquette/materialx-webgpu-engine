@@ -11,6 +11,7 @@ import type { LocalGltfScene } from './scene/local-gltf.ts';
 import { downloadDisplayedAovPng, downloadPathTraceAovPfm } from './render/aov-export.ts';
 import { attachScriptEditor } from './materialx/script-editor.ts';
 import { loadScriptLibrary } from './materialx/script-api.ts';
+import type { ResolvedGraph } from './materialx/graph.ts';
 
 let ui: ViewerUiState | undefined;
 let statusIsError = false;
@@ -46,12 +47,17 @@ function setStatus(text: string, error = true): void {
 async function main(): Promise<void> {
   // The script editor works without WebGPU; applying a material needs the viewer.
   let applyScriptMaterial: ((xml: string) => Promise<void>) | undefined;
+  let selectedMaterial: (() => { graph: ResolvedGraph; name: string }) | undefined;
   attachScriptEditor(document.getElementById('material-tools'), {
     library: loadScriptLibrary(new URL(`${import.meta.env.BASE_URL}materialx/libraries`, document.baseURI).href),
     filePrefix: new URL('.', document.baseURI).href,
     onApply: (xml) => {
       if (!applyScriptMaterial) throw new Error('Le viewer WebGPU n’est pas prêt.');
       return applyScriptMaterial(xml);
+    },
+    currentMaterial: () => {
+      if (!selectedMaterial) throw new Error('Le viewer WebGPU n’est pas prêt.');
+      return selectedMaterial();
     },
   });
   const params = new URLSearchParams(location.search);
@@ -262,6 +268,13 @@ async function main(): Promise<void> {
     refreshMaterialSelection();
   }
 
+  selectedMaterial = () => {
+    if (!state.objectPath) throw new Error('Sélectionner d’abord un objet de la scène.');
+    const graph = viewer.objectSurfaceGraph(state.objectPath);
+    if (!graph) throw new Error('L’objet sélectionné n’a pas de graphe MaterialX.');
+    const name = viewer.objects.find(object => object.path === state.objectPath)?.material ?? 'material';
+    return { graph, name: name.split('/').filter(Boolean).at(-1) ?? 'material' };
+  };
   applyScriptMaterial = async (xml) => {
     if (operationBusy || deviceLost) throw new Error('Une opération du viewer est en cours.');
     if (!state.objectPath) throw new Error('Sélectionner d’abord un objet de la scène.');

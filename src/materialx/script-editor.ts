@@ -2,14 +2,17 @@
 // helpers for the input under the caret, and script ⇄ MaterialX XML conversion.
 
 import {
-  acceptsValue, fromXml, nodeType, runScript, ScriptError, toScript, toXml,
-  type ScriptLibrary, type ScriptNodeDef, type ScriptPortDef, type ScriptValue,
+  acceptsValue, fromResolvedGraph, fromXml, isColorspaceAttribute, MATERIALX_COLORSPACES, nodeType, runScript, ScriptError,
+  toScript, toXml, type ScriptLibrary, type ScriptNodeDef, type ScriptPortDef, type ScriptValue,
 } from './script-api.ts';
+import type { ResolvedGraph } from './graph.ts';
 
 export interface ScriptEditorOptions {
   library: Promise<ScriptLibrary>;
   /** Apply the generated MaterialX document to the scene. */
   onApply?: (xml: string) => Promise<void> | void;
+  /** Material of the selected object, as resolved by the engine. */
+  currentMaterial?: () => Promise<{ graph: ResolvedGraph; name: string }> | { graph: ResolvedGraph; name: string };
   /** `fileprefix` used for relative texture paths in applied documents. */
   filePrefix?: string;
   initialScript?: string;
@@ -76,7 +79,7 @@ export function highlightScript(code: string, library: ScriptLibrary | undefined
     else if (owner && member) {
       const def = variables.get(owner);
       const kind = !def ? 'member'
-        : def.inputs.some(port => port.name === member) ? 'input'
+        : def.inputs.some(port => port.name === member) || isColorspaceAttribute(def, member) ? 'input'
           : def.outputs.some(port => port.name === member) ? 'output' : 'error';
       html += `${identifier(owner)}.${span(kind, member)}`;
     } else html += identifier(name!);
@@ -127,6 +130,7 @@ export function scriptCompletions(prefix: string, code: string, library: ScriptL
       insert: p.name,
     });
     const inputs = def.inputs.map(port('entrée'));
+    if (isColorspaceAttribute(def, 'colorspace')) inputs.push({ label: 'colorspace', detail: 'attribut string', insert: 'colorspace' });
     const outputs = def.outputs.filter(p => !def.inputs.some(input => input.name === p.name)).map(port('sortie'));
     const rhs = /=\s*$/.test(prefix.slice(0, member.index));
     return { from: prefix.length - member[2]!.length, items: rank(rhs ? [...outputs, ...inputs] : [...inputs, ...outputs], member[2]!) };
@@ -222,6 +226,8 @@ export class MaterialXScriptEditor {
       <header>
         <strong>Script MaterialX</strong>
         <button type="button" class="primary" data-action="apply" data-testid="script-apply" title="Ctrl+Entrée">Appliquer</button>
+        <button type="button" data-action="from-material" data-testid="script-from-material"
+          title="Convertir le matériau de l’objet sélectionné en script">Matériau → Script</button>
         <button type="button" data-action="to-xml" data-testid="script-to-xml">Script → XML</button>
         <button type="button" data-action="from-xml" data-testid="script-from-xml">XML → Script</button>
         <button type="button" data-action="export" data-testid="script-export">Exporter .mtlx</button>
@@ -294,6 +300,18 @@ export class MaterialXScriptEditor {
     });
   }
 
+  async materialToScript(): Promise<void> {
+    await this.#guard('Script généré depuis le matériau de l’objet sélectionné.', async () => {
+      const current = await this.#options.currentMaterial?.();
+      if (!current) throw new Error('Aucun matériau disponible pour l’objet sélectionné.');
+      const library = this.#library ?? await this.#options.library;
+      const graph = fromResolvedGraph(current.graph, library, current.name);
+      this.#code.value = toScript(graph, library);
+      this.#xml.value = toXml(graph, library);
+      this.#changed(false);
+    });
+  }
+
   async export(): Promise<void> {
     await this.#guard('Document exporté.', async () => {
       const xml = await this.generateXml();
@@ -331,6 +349,7 @@ export class MaterialXScriptEditor {
       if (action === 'apply') void this.apply();
       else if (action === 'to-xml') void this.scriptToXml();
       else if (action === 'from-xml') void this.xmlToScript();
+      else if (action === 'from-material') void this.materialToScript();
       else if (action === 'export') void this.export();
       else if (action === 'close') this.element.dispatchEvent(new CustomEvent('script-editor-close', { bubbles: true }));
     });
@@ -474,7 +493,9 @@ export class MaterialXScriptEditor {
     const lineIndex = text.slice(0, this.#code.selectionStart).split('\n').length - 1;
     const match = ASSIGNMENT.exec(text.split('\n')[lineIndex] ?? '');
     const def = library && match ? scriptVariables(text, library).get(match[2]!) : undefined;
-    const port = def?.inputs.find(input => input.name === match![3]);
+    const port = def && isColorspaceAttribute(def, match![3]!)
+      ? { name: 'colorspace', type: 'string', default: '', enum: MATERIALX_COLORSPACES }
+      : def?.inputs.find(input => input.name === match![3]);
     if (!port || !acceptsValue(port.type)) {
       this.#helper.hidden = true;
       this.#helperLine = -1;
