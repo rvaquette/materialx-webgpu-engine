@@ -155,6 +155,68 @@ function materialxRoot(xml: string): XmlElement {
   return root;
 }
 
+function serializeXml(element: XmlElement, indent = ''): string {
+  const attributes = [...element.attributes].map(([key, value]) => ` ${key}="${escapeXml(value)}"`).join('');
+  if (!element.children.length) return `${indent}<${element.tag}${attributes} />`;
+  return [
+    `${indent}<${element.tag}${attributes}>`,
+    ...element.children.map(child => serializeXml(child, `${indent}  `)),
+    `${indent}</${element.tag}>`,
+  ].join('\n');
+}
+
+async function fetchTextOrThrow(url: string): Promise<string> {
+  const response = await fetch(url);
+  if (!response.ok) throw new Error(`HTTP ${response.status}: ${url}`);
+  return response.text();
+}
+
+/**
+ * Replace the `<xi:include>` elements of a MaterialX document by the elements of the included
+ * documents (recursively, each document once). Included `fileprefix`es become absolute so their
+ * textures still resolve against the included file's directory.
+ */
+export async function inlineIncludes(
+  xml: string, baseUrl: string, fetchText: (url: string) => Promise<string> = fetchTextOrThrow,
+): Promise<string> {
+  if (!/<xi:include\b/.test(xml)) return xml;
+  const root = materialxRoot(xml);
+  const visited = new Set<string>([new URL(baseUrl).href]);
+  const absolutePrefixes = (element: XmlElement, directory: string): XmlElement => {
+    const attributes = new Map(element.attributes);
+    const prefix = attributes.get('fileprefix');
+    if (prefix !== undefined) attributes.set('fileprefix', new URL(prefix, directory).href);
+    return { ...element, attributes, children: element.children.map(child => absolutePrefixes(child, directory)) };
+  };
+  const expand = async (element: XmlElement, base: string): Promise<XmlElement[]> => {
+    const children: XmlElement[] = [];
+    for (const child of element.children) {
+      if (child.tag !== 'xi:include') {
+        children.push(child);
+        continue;
+      }
+      const href = child.attributes.get('href');
+      if (!href) throw new ScriptError('<xi:include> has no href.');
+      const url = new URL(href, base).href;
+      // MaterialX reads a document once; this also stops include cycles.
+      if (visited.has(url)) continue;
+      visited.add(url);
+      const included = materialxRoot(await fetchText(url));
+      const directory = new URL('.', url).href;
+      const inherited = new URL(included.attributes.get('fileprefix') ?? '', directory).href;
+      for (const element of await expand(included, url)) {
+        const absolute = absolutePrefixes(element, directory);
+        if (!absolute.attributes.has('fileprefix') && element.tag !== 'xi:include') absolute.attributes.set('fileprefix', inherited);
+        children.push(absolute);
+      }
+    }
+    return children;
+  };
+  const inlined: XmlElement = { ...root, attributes: new Map(root.attributes), children: await expand(root, baseUrl) };
+  inlined.attributes.delete('xmlns:xi');
+  return `<?xml version="1.0"?>\n${serializeXml(inlined)}\n`;
+}
+
 // ---------------------------------------------------------------------------
 // NodeDef library
 
@@ -234,56 +296,62 @@ export class ScriptLibrary {
         if (element.tag === 'nodedef' && name && element.attributes.get('node')) elements.set(name, element);
       }
     }
-    const ports = (element: XmlElement, tag: 'input' | 'output', seen = new Set<string>()): Map<string, ScriptPortDef> => {
-      const parentName = element.attributes.get('inherit');
-      const parent = parentName && !seen.has(parentName) ? elements.get(parentName) : undefined;
-      const result = parent ? ports(parent, tag, new Set([...seen, parentName!])) : new Map<string, ScriptPortDef>();
-      for (const child of element.children) {
-        const name = child.attributes.get('name');
-        const type = child.attributes.get('type');
-        if (child.tag !== tag || !name || !type) continue;
-        const port: ScriptPortDef = { name, type };
-        const value = child.attributes.get(tag === 'input' ? 'value' : 'default');
-        if (value !== undefined && acceptsValue(type)) {
-          try { port.default = parseValue(value, type, name); } catch { /* keep the port without a default */ }
-        }
-        const doc = child.attributes.get('doc');
-        if (doc) port.doc = doc;
-        const options = child.attributes.get('enum');
-        if (options && (type === 'string' || type === 'filename')) port.enum = options.split(',').map(option => option.trim());
-        const min = Number(child.attributes.get('uimin') ?? child.attributes.get('uisoftmin') ?? NaN);
-        const max = Number(child.attributes.get('uimax') ?? child.attributes.get('uisoftmax') ?? NaN);
-        if (Number.isFinite(min)) port.min = min;
-        if (Number.isFinite(max)) port.max = max;
-        result.set(name, port);
-      }
-      return result;
-    };
-    // Keep only the default version when a node declares several versions.
-    const defaults = new Set<string>();
-    for (const element of elements.values()) {
-      if (element.attributes.get('isdefaultversion') === 'true') defaults.add(element.attributes.get('node')!);
-    }
-    const defs: ScriptNodeDef[] = [];
-    const versions: ScriptNodeDef[] = [];
-    for (const [name, element] of elements) {
-      const category = element.attributes.get('node')!;
-      const outputs = [...ports(element, 'output').values()];
-      const legacyType = element.attributes.get('type');
-      if (!outputs.length && legacyType) outputs.push({ name: 'out', type: legacyType });
-      if (!outputs.length) continue;
-      const doc = element.attributes.get('doc');
-      const def: ScriptNodeDef = {
-        name, category, className: scriptClassName(category),
-        inputs: [...ports(element, 'input').values()], outputs,
-        ...(doc ? { doc } : {}),
-      };
-      const olderVersion = defaults.has(category) && element.attributes.has('version') &&
-        element.attributes.get('isdefaultversion') !== 'true';
-      (olderVersion ? versions : defs).push(def);
-    }
+    const { defs, versions } = readNodeDefs(elements);
     return new ScriptLibrary(defs, versions);
   }
+}
+
+/** ScriptNodeDefs of `<nodedef>` elements by name, resolving `inherit`; older versions are returned apart. */
+function readNodeDefs(elements: ReadonlyMap<string, XmlElement>): { defs: ScriptNodeDef[]; versions: ScriptNodeDef[] } {
+  const ports = (element: XmlElement, tag: 'input' | 'output', seen = new Set<string>()): Map<string, ScriptPortDef> => {
+    const parentName = element.attributes.get('inherit');
+    const parent = parentName && !seen.has(parentName) ? elements.get(parentName) : undefined;
+    const result = parent ? ports(parent, tag, new Set([...seen, parentName!])) : new Map<string, ScriptPortDef>();
+    for (const child of element.children) {
+      const name = child.attributes.get('name');
+      const type = child.attributes.get('type');
+      if (child.tag !== tag || !name || !type) continue;
+      const port: ScriptPortDef = { name, type };
+      const value = child.attributes.get(tag === 'input' ? 'value' : 'default');
+      if (value !== undefined && acceptsValue(type)) {
+        try { port.default = parseValue(value, type, name); } catch { /* keep the port without a default */ }
+      }
+      const doc = child.attributes.get('doc');
+      if (doc) port.doc = doc;
+      const options = child.attributes.get('enum');
+      if (options && (type === 'string' || type === 'filename')) port.enum = options.split(',').map(option => option.trim());
+      const min = Number(child.attributes.get('uimin') ?? child.attributes.get('uisoftmin') ?? NaN);
+      const max = Number(child.attributes.get('uimax') ?? child.attributes.get('uisoftmax') ?? NaN);
+      if (Number.isFinite(min)) port.min = min;
+      if (Number.isFinite(max)) port.max = max;
+      result.set(name, port);
+    }
+    return result;
+  };
+  // Keep only the default version when a node declares several versions.
+  const defaults = new Set<string>();
+  for (const element of elements.values()) {
+    if (element.attributes.get('isdefaultversion') === 'true') defaults.add(element.attributes.get('node')!);
+  }
+  const defs: ScriptNodeDef[] = [];
+  const versions: ScriptNodeDef[] = [];
+  for (const [name, element] of elements) {
+    const category = element.attributes.get('node')!;
+    const outputs = [...ports(element, 'output').values()];
+    const legacyType = element.attributes.get('type');
+    if (!outputs.length && legacyType) outputs.push({ name: 'out', type: legacyType });
+    if (!outputs.length) continue;
+    const doc = element.attributes.get('doc');
+    const def: ScriptNodeDef = {
+      name, category, className: scriptClassName(category),
+      inputs: [...ports(element, 'input').values()], outputs,
+      ...(doc ? { doc } : {}),
+    };
+    const olderVersion = defaults.has(category) && element.attributes.has('version') &&
+      element.attributes.get('isdefaultversion') !== 'true';
+    (olderVersion ? versions : defs).push(def);
+  }
+  return { defs, versions };
 }
 
 /** Library documents containing NodeDefs (targets and nodegraph implementations are skipped). */
@@ -292,11 +360,7 @@ export const SCRIPT_LIBRARY_FILES: readonly string[] = MATERIALX_DEFAULT_LIBRARY
 
 /** Fetch the MaterialX libraries under `rootUrl` and read their NodeDefs. */
 export async function loadScriptLibrary(
-  rootUrl: string, fetchText: (url: string) => Promise<string> = async (url) => {
-    const response = await fetch(url);
-    if (!response.ok) throw new Error(`HTTP ${response.status}: ${url}`);
-    return response.text();
-  },
+  rootUrl: string, fetchText: (url: string) => Promise<string> = fetchTextOrThrow,
 ): Promise<ScriptLibrary> {
   const base = rootUrl.replace(/\/+$/, '');
   return ScriptLibrary.fromXml(await Promise.all(SCRIPT_LIBRARY_FILES.map(file => fetchText(`${base}/${file}`))));
@@ -555,7 +619,8 @@ function matchNodeDef(
 function documentNodeDef(element: XmlElement, library: ScriptLibrary): ScriptNodeDef {
   const explicit = element.attributes.get('nodedef');
   if (explicit) return library.resolve(element.tag, explicit);
-  const inputs = element.children.map(child => ({ name: child.attributes.get('name') ?? '', type: child.attributes.get('type') }));
+  const inputs = element.children.filter(child => child.tag === 'input')
+    .map(child => ({ name: child.attributes.get('name') ?? '', type: child.attributes.get('type') }));
   return matchNodeDef(library, element.tag, element.attributes.get('type'), inputs, undefined, element.attributes.get('name') ?? '');
 }
 
@@ -563,8 +628,8 @@ function documentNodeDef(element: XmlElement, library: ScriptLibrary): ScriptNod
 const IGNORED_ELEMENTS = new Set([
   'look', 'lookgroup', 'materialassign', 'collection', 'geominfo', 'geomprop', 'propertyset', 'propertysetassign',
   'variantset', 'variantassign', 'visibility', 'backdrop', 'token', 'unitdef', 'unittypedef', 'typedef',
+  'attributedef', 'targetdef', 'nodedef', 'implementation',
 ]);
-const UNSUPPORTED_ELEMENTS = new Set(['nodedef', 'implementation', 'xi:include', 'attributedef', 'targetdef']);
 
 /** A `<materialx>` document or `<nodegraph>`: the naming scope of nodes, outputs and interface inputs. */
 interface DocumentScope {
@@ -582,20 +647,50 @@ type ResolvedSource = { value: string; filePrefix: string } | { node: ScriptNode
 const isAbsoluteFile = (file: string): boolean => /^(?:[a-z][a-z0-9+.-]*:|\/)/i.test(file);
 
 /**
- * Read a MaterialX document whose nodes are defined by `library`. Node graphs are flattened:
- * their nodes join the script, graph outputs connect to the node behind them, and interface
- * inputs are replaced by the value or connection they receive.
+ * Read a MaterialX document whose nodes are defined by `library` or by the document's own NodeDefs.
+ * Node graphs are flattened: their nodes join the script, graph outputs connect to the node behind
+ * them, and interface inputs are replaced by the value or connection they receive. A node of a
+ * document NodeDef is replaced by the nodes of its nodegraph implementation, fed by the node's
+ * inputs or the NodeDef defaults. `<xi:include>` must be inlined first (`inlineIncludes`).
  */
 export function fromXml(xml: string, library: ScriptLibrary): ScriptGraph {
   const graph: ScriptGraph = { nodes: [] };
   const pending: Array<{ node: ScriptNode; element: XmlElement; scope: DocumentScope; localName: string }> = [];
   const prefixOf = (element: XmlElement, inherited: string): string => element.attributes.get('fileprefix') ?? inherited;
+  const root = materialxRoot(xml);
 
-  const collect = (element: XmlElement, scope: DocumentScope): void => {
+  // Document NodeDefs, by category, and their nodegraph implementations.
+  const nodeDefElements = new Map<string, XmlElement>();
+  const implementations = new Map<string, XmlElement>();
+  for (const child of root.children) {
+    const name = child.attributes.get('name');
+    if (child.tag === 'nodedef' && name && child.attributes.get('node')) nodeDefElements.set(name, child);
+    const implemented = child.attributes.get('nodedef');
+    if (child.tag === 'nodegraph' && implemented) implementations.set(implemented, child);
+  }
+  const customDefs = readNodeDefs(nodeDefElements);
+  const custom = new Map<string, ScriptNodeDef[]>();
+  for (const def of [...customDefs.defs, ...customDefs.versions]) custom.set(def.category, [...(custom.get(def.category) ?? []), def]);
+  const customDef = (element: XmlElement): ScriptNodeDef | undefined => {
+    const candidates = custom.get(element.tag);
+    if (!candidates) return undefined;
+    const explicit = element.attributes.get('nodedef');
+    const type = element.attributes.get('type');
+    return explicit ? candidates.find(def => def.name === explicit)
+      : candidates.find(def => !type || nodeType(def) === type) ?? candidates[0];
+  };
+
+  const newScope = (name: string, parent: DocumentScope, filePrefix: string): DocumentScope => ({
+    path: parent.path ? `${parent.path}_${name}` : name, parent, filePrefix,
+    nodes: new Map(), graphs: new Map(), outputs: new Map(), interface: new Map(),
+  });
+  const collect = (element: XmlElement, scope: DocumentScope, expanding: readonly string[]): void => {
     for (const child of element.children) {
       const name = child.attributes.get('name');
       if (IGNORED_ELEMENTS.has(child.tag)) continue;
-      if (UNSUPPORTED_ELEMENTS.has(child.tag)) throw new ScriptError(`<${child.tag}> is not supported by material scripts.`);
+      if (child.tag === 'xi:include') {
+        throw new ScriptError(`<xi:include href="${child.attributes.get('href') ?? ''}"> must be inlined before reading the document.`);
+      }
       if (!name) throw new ScriptError(`<${child.tag}> has no name.`);
       if (child.tag === 'output') {
         scope.outputs.set(name, child);
@@ -603,14 +698,34 @@ export function fromXml(xml: string, library: ScriptLibrary): ScriptGraph {
         if (!scope.parent) throw new ScriptError(`Document-level <input> "${name}" is not supported.`);
         scope.interface.set(name, child);
       } else if (child.tag === 'nodegraph') {
-        if (child.attributes.has('nodedef')) throw new ScriptError(`Node graph "${name}" implements a NodeDef and is not supported.`);
+        // NodeDef implementations are expanded where their nodes are used.
+        if (child.attributes.has('nodedef')) continue;
         if (scope.graphs.has(name) || scope.nodes.has(name)) throw new ScriptError(`Duplicate name "${name}".`);
-        const graphScope: DocumentScope = {
-          path: scope.path ? `${scope.path}_${name}` : name, parent: scope, filePrefix: prefixOf(child, scope.filePrefix),
-          nodes: new Map(), graphs: new Map(), outputs: new Map(), interface: new Map(),
-        };
+        const graphScope = newScope(name, scope, prefixOf(child, scope.filePrefix));
         scope.graphs.set(name, graphScope);
-        collect(child, graphScope);
+        collect(child, graphScope, expanding);
+      } else if (customDef(child)) {
+        if (scope.nodes.has(name) || scope.graphs.has(name)) throw new ScriptError(`Duplicate node name "${name}".`);
+        const def = customDef(child)!;
+        if (expanding.includes(def.name)) throw new ScriptError(`NodeDef "${def.name}" is implemented recursively.`);
+        const implementation = implementations.get(def.name);
+        if (!implementation) throw new ScriptError(`NodeDef "${def.name}" has no nodegraph implementation in the document.`);
+        const instance = newScope(name, scope, prefixOf(child, scope.filePrefix));
+        scope.graphs.set(name, instance);
+        collect(implementation, instance, [...expanding, def.name]);
+        for (const input of child.children.filter(element => element.tag === 'input')) {
+          const inputName = input.attributes.get('name') ?? '';
+          if (!def.inputs.some(port => port.name === inputName)) {
+            throw new ScriptError(`${def.category} (${def.name}) has no input "${inputName}".`);
+          }
+        }
+        for (const port of def.inputs) {
+          const authored = child.children.find(input => input.tag === 'input' && input.attributes.get('name') === port.name);
+          const declared = new Map([['name', port.name], ['type', port.type]]);
+          if (port.default !== undefined) declared.set('value', formatXmlValue(port.default));
+          // Without a usable default, the implementation node keeps its own default.
+          instance.interface.set(port.name, authored ?? { tag: 'input', children: [], attributes: declared });
+        }
       } else {
         if (scope.nodes.has(name) || scope.graphs.has(name)) throw new ScriptError(`Duplicate node name "${name}".`);
         const node: ScriptNode = { name, def: documentNodeDef(child, library), inputs: new Map() };
@@ -622,11 +737,10 @@ export function fromXml(xml: string, library: ScriptLibrary): ScriptGraph {
       }
     }
   };
-  const root = materialxRoot(xml);
   const document: DocumentScope = {
     path: '', filePrefix: prefixOf(root, ''), nodes: new Map(), graphs: new Map(), outputs: new Map(), interface: new Map(),
   };
-  collect(root, document);
+  collect(root, document, []);
 
   // Flattened nodes keep their name unless another node already uses it.
   const used = new Set(pending.filter(item => !item.scope.parent).map(item => item.localName));
@@ -684,6 +798,8 @@ export function fromXml(xml: string, library: ScriptLibrary): ScriptGraph {
   for (const { node, element, scope } of pending) {
     const nodePrefix = prefixOf(element, scope.filePrefix);
     for (const child of element.children) {
+      // Multi-output nodes may declare their outputs; connections name them explicitly.
+      if (child.tag === 'output') continue;
       if (child.tag !== 'input') throw new ScriptError(`<${child.tag}> in ${node.name} is not supported by material scripts.`);
       const inputName = child.attributes.get('name') ?? '';
       const input = inputDef(node, inputName);
@@ -728,8 +844,10 @@ export function fromResolvedGraph(resolved: ResolvedGraph, library: ScriptLibrar
     return name;
   };
   for (const [id, node] of resolved.nodes) {
+    // Engine-materialized defaults do not identify the authored NodeDef variant.
+    const authored = node.inputs.filter(input => !input.defaulted && (input.source.kind === 'value' || input.source.kind === 'connection'));
     const def = matchNodeDef(library, node.category, node.type,
-      node.inputs.map(input => ({ name: input.name, type: input.type })), node.nodeDef?.name, id);
+      authored.map(input => ({ name: input.name, type: input.type })), node.nodeDef?.name, id);
     const name = unique(leafCounts.get(leaf(id))! > 1 ? id.replace(/^\/+/, '') : leaf(id));
     const scriptNode: ScriptNode = { name, def, inputs: new Map() };
     byId.set(id, scriptNode);

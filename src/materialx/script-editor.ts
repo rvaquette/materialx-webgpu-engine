@@ -2,8 +2,8 @@
 // helpers for the input under the caret, and script ⇄ MaterialX XML conversion.
 
 import {
-  acceptsValue, fromResolvedGraph, fromXml, isColorspaceAttribute, MATERIALX_COLORSPACES, nodeType, runScript, ScriptError,
-  toScript, toXml, type ScriptLibrary, type ScriptNodeDef, type ScriptPortDef, type ScriptValue,
+  acceptsValue, fromResolvedGraph, fromXml, inlineIncludes, isColorspaceAttribute, MATERIALX_COLORSPACES, nodeType, runScript,
+  ScriptError, toScript, toXml, type ScriptLibrary, type ScriptNodeDef, type ScriptPortDef, type ScriptValue,
 } from './script-api.ts';
 import type { ResolvedGraph } from './graph.ts';
 
@@ -294,7 +294,8 @@ export class MaterialXScriptEditor {
   async xmlToScript(): Promise<void> {
     await this.#guard('Script généré depuis le document MaterialX.', async () => {
       const library = this.#library ?? await this.#options.library;
-      this.#code.value = toScript(fromXml(this.#xml.value, library), library);
+      const xml = await inlineIncludes(this.#xml.value, document.baseURI);
+      this.#code.value = toScript(fromXml(xml, library), library);
       // The generated script is valid; a pending validation must not replace the status.
       this.#changed(false);
     });

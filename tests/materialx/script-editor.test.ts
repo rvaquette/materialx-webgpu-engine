@@ -28,7 +28,8 @@ describe('script editor language support', () => {
   });
 
   it('colors node types, variables, inputs, outputs and unknown members', () => {
-    const html = highlightScript(`${CODE}img.file = "a<b>.png"; // note\nm.fg = img.out; m.nope = 1;`, LIBRARY);
+    const html = highlightScript(`${CODE}img.file = "a<b>.png"; // note\nm.fg = img.out; m.nope = 1; img.colorspace = "acescg";`, LIBRARY);
+    expect(html).toContain('<span class="tok-var">img</span>.<span class="tok-input">colorspace</span>');
     expect(html).toContain('<span class="tok-keyword">new</span> <span class="tok-node">Image</span>()');
     expect(html).toContain('<span class="tok-var">img</span>.<span class="tok-input">file</span>');
     expect(html).toContain('<span class="tok-string">"a&lt;b&gt;.png"</span>');
@@ -43,7 +44,9 @@ describe('script editor language support', () => {
     });
     expect(scriptCompletions('x = new Mix("fl', CODE, LIBRARY)?.items.map(item => item.label)).toEqual(['float', 'ND_mix_float']);
     const ports = scriptCompletions(`${CODE}img.`, CODE, LIBRARY)!;
-    expect(ports.items.map(item => [item.label, item.detail])).toEqual([['file', 'entrée filename = ""'], ['out', 'sortie color3']]);
+    expect(ports.items.map(item => [item.label, item.detail])).toEqual([
+      ['file', 'entrée filename = ""'], ['colorspace', 'attribut string'], ['out', 'sortie color3'],
+    ]);
     expect(scriptCompletions(`${CODE}m.fg = img.`, CODE, LIBRARY)?.items[0]?.label).toBe('out');
     expect(scriptCompletions(`${CODE}unknown.`, CODE, LIBRARY)).toBeUndefined();
   });

@@ -51,6 +51,30 @@ async function expectCode(e: Editor, text: string): Promise<void> {
   await expect(e.code).toHaveValue(new RegExp(text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
 }
 
+type Screenshot = Awaited<ReturnType<Locator['screenshot']>>;
+
+/** Mean and maximum per-channel difference (0-255) between two PNG screenshots of equal size. */
+async function imageDifference(page: Page, a: Screenshot, b: Screenshot): Promise<{ mean: number; max: number }> {
+  return page.evaluate(async ([first, second]) => {
+    const pixels = async (base64: string): Promise<ImageData> => {
+      const bitmap = await createImageBitmap(await (await fetch(`data:image/png;base64,${base64}`)).blob());
+      const context = new OffscreenCanvas(bitmap.width, bitmap.height).getContext('2d')!;
+      context.drawImage(bitmap, 0, 0);
+      return context.getImageData(0, 0, bitmap.width, bitmap.height);
+    };
+    const [x, y] = [await pixels(first), await pixels(second)];
+    if (x.width !== y.width || x.height !== y.height) return { mean: 255, max: 255 };
+    let sum = 0;
+    let max = 0;
+    for (let i = 0; i < x.data.length; i++) {
+      const delta = Math.abs(x.data[i]! - y.data[i]!);
+      sum += delta;
+      max = Math.max(max, delta);
+    }
+    return { mean: sum / x.data.length, max };
+  }, [a.toString('base64'), b.toString('base64')] as const);
+}
+
 /** Put the caret at the end of the first line containing `text`. */
 async function caretOn(e: Editor, text: string): Promise<void> {
   await e.code.evaluate((element, needle) => {
@@ -178,6 +202,36 @@ test('convertit le script en XML MaterialX et le XML en script', async ({ page }
   await e.panel.getByTestId('script-from-xml').click();
   await expect(e.status).toContainText('Unknown node type <bogus>');
   await pause(page, info);
+});
+
+test('convertit le matériau courant (avec nodegraph) en script sans changer le rendu', async ({ page }, info) => {
+  test.setTimeout(300_000);
+  await page.goto(`${SOURCE_SCENE}&openpbr=./scenes/mtlx-library/Examples/StandardSurface/standard_surface_brick_procedural.mtlx`);
+  const webgpu = await page.evaluate(async () => Boolean(await navigator.gpu?.requestAdapter()));
+  test.skip(!webgpu, 'WebGPU indisponible dans ce navigateur.');
+  await expect(page.locator('#app')).toHaveClass(/ui-ready/, { timeout: 120_000 });
+  await expect(page.locator('#busy-indicator')).toBeHidden({ timeout: 120_000 });
+  await page.waitForTimeout(3000);
+  const before = await page.locator('#view').screenshot();
+
+  await page.locator('#open-script-editor').click();
+  const e = editor(page);
+  await expect(e.status).toContainText('Script valide', { timeout: 30_000 });
+  await e.panel.getByTestId('script-from-material').click();
+  await expect(e.status).toHaveText('Script généré depuis le matériau de l’objet sélectionné.');
+  await expectCode(e, 'M_BrickPattern = new Surfacematerial();');
+  await expectCode(e, 'node_convert_1.in = 3;');
+  await expect(e.xml).toHaveValue(/<surfacematerial name="M_BrickPattern" type="material">/);
+  await pause(page, info, 3000);
+
+  await e.panel.getByTestId('script-apply').click();
+  await expect(e.status).toHaveText('Matériau appliqué.', { timeout: 180_000 });
+  await e.panel.getByTestId('script-close').click();
+  await expect(page.locator('#busy-indicator')).toBeHidden({ timeout: 120_000 });
+  await page.waitForTimeout(3000);
+  const difference = await imageDifference(page, before, await page.locator('#view').screenshot());
+  console.log(`rendu avant/après : écart moyen ${difference.mean.toFixed(4)}, max ${difference.max}`);
+  expect(difference.mean).toBeLessThan(0.5);
 });
 
 test('applique le matériau scripté à l’objet sélectionné', async ({ page }, info) => {

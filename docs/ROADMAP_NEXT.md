@@ -982,12 +982,14 @@ surface.base_color = img.out;
 - éditeur avec colorisation, IntelliSense et helpers de valeurs ;
 - « Appliquer » remplace le matériau de l'objet sélectionné ; sur une scène
   précompilée, le document est compilé à la volée dans le navigateur
-  (`compileMaterialDocument`).
+  (`compileMaterialDocument`) ;
+- l'import aplatit les `nodegraph` (sorties, interfaces, `fileprefix`,
+  `colorspace`), intègre les `xi:include`, développe les NodeDefs définis dans
+  le document, et « Matériau → Script » convertit le matériau courant.
 
-Travaux restants :
-
-- importer les documents contenant des `nodegraph` (seul le format plat est lu).
-- étendre les scripts afin de 
+Tous les objectifs de la priorité 3bis sont atteints.
+- pour les noeuds mathematiques (+, -, *, /, cos, etc...) deduire les noeuds des expressions mathématiques
+- étendre les scripts afin de :
 * charger une scene 
 * modifier les paramètres de rendu (ceux de l'UI)
 * créer ou charger un materiau et l'affecter à un objet de la scene

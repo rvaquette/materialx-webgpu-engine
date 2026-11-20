@@ -22,6 +22,8 @@ surface.specular_roughness = 0.3;
   nombre affecté à une couleur ou un vecteur est répété sur chaque composante.
 - `noeud.out` (ou une autre sortie, ex. `sep.outr`) connecte une sortie ; un
   nœud à sortie unique peut être affecté directement (`m.fg = img`).
+- `noeud.colorspace = "srgb_texture"` fixe l'espace colorimétrique du nœud ;
+  l'export l'écrit sur ses entrées `filename`, là où le moteur le lit.
 - Sans `Surfacematerial`, l'export ajoute un `surfacematerial` nommé
   `material` relié au dernier shader de surface.
 - Le reste du langage JavaScript reste disponible (boucles, `Math`...).
@@ -58,8 +60,11 @@ connexion entre types différents produisent une erreur avec la ligne fautive.
   adapté au type modifie la valeur : sélecteur de couleur, case à cocher,
   curseur et champ numérique (bornes du NodeDef), liste pour les `enum`,
   composantes des vecteurs.
-- **Script → XML** / **XML → Script** : conversion dans les deux sens. L'import
-  lit les documents plats (nœuds et `input`), pas encore les `nodegraph`.
+- **Script → XML** / **XML → Script** : conversion dans les deux sens.
+- **Matériau → Script** : convertit le matériau de l'objet sélectionné, tel que
+  le moteur l'a résolu (valeurs modifiées dans l'interface comprises, textures en
+  URL absolues), y compris sur les scènes précompilées. Appliquer ce script
+  redonne le même rendu.
 - **Appliquer** (Ctrl+Entrée) : remplace le matériau de l'objet sélectionné.
   Sur une scène source (USD, glTF), la scène est rechargée avec le document.
   Sur une scène précompilée, le document est compilé à la volée dans le
@@ -68,6 +73,38 @@ connexion entre types différents produisent une erreur avec la ligne fautive.
   tracer l'utilisent. Les textures relatives sont résolues par rapport à la
   page du viewer.
 - **Exporter .mtlx** télécharge le document ; Échap ferme l'éditeur.
+
+## Import des documents MaterialX
+
+Un script n'a pas de `nodegraph` : l'import les **aplatit**. Les nœuds des
+graphes rejoignent le script (préfixés par le nom du graphe en cas de conflit,
+ex. `NG_img`), les sorties de graphe (`nodegraph="NG" output="out"`) se
+connectent au nœud qui les produit, et les entrées d'interface (`interfacename`)
+sont remplacées par leur valeur ou leur connexion. Les `fileprefix` imbriqués
+sont appliqués aux chemins de texture, le `colorspace` des textures est
+conservé, et les versions explicites de NodeDef (`nodedef="…_100"`) sont
+respectées. Les éléments sans effet sur l'ombrage (`look`, `materialassign`,
+`backdrop`...) sont ignorés.
+
+Un nœud dont le NodeDef est **défini dans le document** (`<nodedef>` +
+`<nodegraph nodedef="…">`) est remplacé par les nœuds de son implémentation,
+préfixés par le nom de l'instance en cas de conflit ; ses entrées, ou à défaut
+les valeurs par défaut du NodeDef, alimentent l'interface du graphe. Le script
+ne contient ainsi que des nœuds des bibliothèques standard. Une implémentation
+en code source ou récursive est refusée avec un message explicite.
+
+Les **`<xi:include>`** sont intégrés avant la conversion (`inlineIncludes`) :
+chaque document inclus n'est lu qu'une fois et ses `fileprefix` deviennent
+absolus, pour que ses textures restent résolues par rapport à son propre
+dossier. Dans l'éditeur, les `href` relatifs d'un XML collé sont résolus par
+rapport à la page du viewer.
+
+Sur la bibliothèque `scenes/mtlx-library`, 804 documents sur 869 (dont 507 avec
+nodegraphs) se convertissent ; le reste est invalide au sens MaterialX (entrées
+inexistantes, conversions implicites, noms dupliqués) ou utilise
+`viewdirection`, défini dans `nprlib` que le moteur ne charge pas. Les rendus
+d'origine et convertis vérifiés (nodegraphs, `colorspace`, `xi:include`) sont
+identiques au pixel près.
 
 ## Code
 

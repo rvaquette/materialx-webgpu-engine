@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
-  fromResolvedGraph, fromXml, runScript, ScriptError, ScriptLibrary, SCRIPT_LIBRARY_FILES, toScript, toXml,
+  fromResolvedGraph, fromXml, inlineIncludes, runScript, ScriptError, ScriptLibrary, SCRIPT_LIBRARY_FILES, toScript, toXml,
 } from '../../src/materialx/script-api.ts';
 import type { ResolvedGraph, ResolvedNode } from '../../src/materialx/graph.ts';
 
@@ -55,6 +55,7 @@ const LIBRARY = ScriptLibrary.fromXml([`<?xml version="1.0"?>
   </nodedef>
   <nodedef name="ND_surfacematerial" node="surfacematerial">
     <input name="surfaceshader" type="surfaceshader" value="" />
+    <input name="displacementshader" type="displacementshader" value="" />
     <output name="out" type="material" />
   </nodedef>
 </materialx>`]);
@@ -248,6 +249,103 @@ mat.surfaceshader = surface.out;
     expect(xml).toContain('<standard_surface name="surface" type="surfaceshader" nodedef="ND_standard_surface_surfaceshader_100">');
   });
 
+  it('expands nodes of document NodeDefs into the nodes of their nodegraph implementation', () => {
+    const graph = fromXml(`<materialx version="1.39">
+      <nodedef name="ND_tinted" node="tinted">
+        <input name="tint" type="color3" value="0.2, 0.4, 0.6" />
+        <input name="amount" type="float" value="1 2" />
+        <input name="source" type="color3" />
+        <output name="out" type="color3" />
+        <output name="red" type="float" />
+      </nodedef>
+      <nodegraph name="NG_tinted" nodedef="ND_tinted">
+        <mix name="blend" type="color3">
+          <input name="fg" type="color3" interfacename="tint" />
+          <input name="bg" type="color3" interfacename="source" />
+          <input name="mix" type="float" interfacename="amount" />
+        </mix>
+        <separate3 name="split" type="multioutput">
+          <input name="in" type="color3" nodename="blend" />
+          <output name="outr" type="float" />
+        </separate3>
+        <output name="out" type="color3" nodename="blend" />
+        <output name="red" type="float" nodename="split" output="outr" />
+      </nodegraph>
+      <image name="tex" type="color3"><input name="file" type="filename" value="a.png" /></image>
+      <tinted name="first" type="multioutput">
+        <input name="source" type="color3" nodename="tex" />
+      </tinted>
+      <tinted name="second" type="multioutput">
+        <input name="tint" type="color3" value="1, 0, 0" />
+      </tinted>
+      <standard_surface name="surface" type="surfaceshader">
+        <input name="base_color" type="color3" nodename="first" output="out" />
+        <input name="base" type="float" nodename="second" output="red" />
+      </standard_surface>
+    </materialx>`, LIBRARY);
+    expect(toScript(graph, LIBRARY)).toBe(`tex = new Image();
+tex.file = "a.png";
+
+blend = new Mix();
+blend.fg = [0.2, 0.4, 0.6];
+blend.bg = tex.out;
+
+split = new Separate3();
+split.in = blend.out;
+
+second_blend = new Mix();
+second_blend.fg = [1, 0, 0];
+
+second_split = new Separate3();
+second_split.in = second_blend.out;
+
+surface = new StandardSurface();
+surface.base_color = blend.out;
+surface.base = second_split.outr;
+`);
+    expect(graph.nodes.map(node => node.name)).toEqual(['tex', 'blend', 'split', 'second_blend', 'second_split', 'surface']);
+    expect(() => fromXml(`<materialx><nodedef name="ND_loop" node="loop"><output name="out" type="float" /></nodedef>
+      <nodegraph name="NG_loop" nodedef="ND_loop"><loop name="again" type="float" /><output name="out" type="float" nodename="again" /></nodegraph>
+      <loop name="l" type="float" /></materialx>`, LIBRARY)).toThrow(/implemented recursively/);
+    expect(() => fromXml('<materialx><nodedef name="ND_ext" node="ext"><output name="out" type="float" /></nodedef><ext name="e" type="float" /></materialx>', LIBRARY))
+      .toThrow(/has no nodegraph implementation/);
+  });
+
+  it('inlines xi:include documents once, keeping their textures relative to their own folder', async () => {
+    const files: Record<string, string> = {
+      'https://host/page/lib/a.mtlx': `<materialx fileprefix="tex/" xmlns:xi="http://www.w3.org/2001/XInclude">
+        <xi:include href="../shared/b.mtlx" />
+        <image name="ia" type="color3"><input name="file" type="filename" value="a.png" /></image>
+      </materialx>`,
+      'https://host/page/shared/b.mtlx': `<materialx>
+        <nodegraph name="NG" fileprefix="maps/">
+          <image name="ib" type="color3"><input name="file" type="filename" value="b.png" /></image>
+          <output name="out" type="color3" nodename="ib" />
+        </nodegraph>
+        <image name="ic" type="color3"><input name="file" type="filename" value="c.png" /></image>
+      </materialx>`,
+    };
+    const fetched: string[] = [];
+    const fetchText = async (url: string): Promise<string> => { fetched.push(url); return files[url]!; };
+    const xml = await inlineIncludes(`<materialx xmlns:xi="http://www.w3.org/2001/XInclude">
+      <xi:include href="lib/a.mtlx" />
+      <xi:include href="shared/b.mtlx" />
+      <image name="root" type="color3"><input name="file" type="filename" value="r.png" /></image>
+    </materialx>`, 'https://host/page/index.html', fetchText);
+    expect(fetched).toEqual(['https://host/page/lib/a.mtlx', 'https://host/page/shared/b.mtlx']);
+    expect(xml).not.toContain('xi:include');
+    const graph = fromXml(xml, LIBRARY);
+    expect(graph.nodes.map(node => [node.name, node.inputs.get('file')])).toEqual([
+      ['ib', { value: 'https://host/page/shared/maps/b.png' }],
+      ['ic', { value: 'https://host/page/shared/c.png' }],
+      ['ia', { value: 'https://host/page/lib/tex/a.png' }],
+      ['root', { value: 'r.png' }],
+    ]);
+    await expect(inlineIncludes('<materialx><image name="i" type="color3" /></materialx>', 'https://host/', fetchText))
+      .resolves.toBe('<materialx><image name="i" type="color3" /></materialx>');
+    expect(() => fromXml('<materialx><xi:include href="x.mtlx" /></materialx>', LIBRARY)).toThrow(/must be inlined/);
+  });
+
   it('sets the color space attribute from scripts and keeps it on nodes without file inputs', () => {
     const graph = runScript('i = new Image(); i.colorspace = "srgb_texture"; m = new Mix(); m.colorspace = "acescg";', LIBRARY);
     expect(graph.nodes.map(node => node.colorspace)).toEqual(['srgb_texture', 'acescg']);
@@ -258,8 +356,6 @@ mat.surfaceshader = surface.out;
 
   it('rejects unsupported documents', () => {
     expect(() => fromXml('<foo />', LIBRARY)).toThrow(/<materialx> root is missing/);
-    expect(() => fromXml('<materialx><nodedef name="ND_x" node="x" /></materialx>', LIBRARY)).toThrow(/<nodedef> is not supported/);
-    expect(() => fromXml('<materialx><nodegraph name="g" nodedef="ND_x" /></materialx>', LIBRARY)).toThrow(/implements a NodeDef/);
     expect(() => fromXml('<materialx><nodegraph name="g" /><image name="i" type="color3"><input name="default" type="color3" nodegraph="g" /></image></materialx>', LIBRARY))
       .toThrow(/unknown output "g\."/);
     expect(() => fromXml('<materialx><image name="i" type="color3"><input name="x" type="float" value="1" /></image></materialx>', LIBRARY))
