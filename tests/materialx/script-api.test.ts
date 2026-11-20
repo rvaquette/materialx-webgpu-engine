@@ -2,8 +2,9 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
-  fromXml, runScript, ScriptError, ScriptLibrary, SCRIPT_LIBRARY_FILES, toScript, toXml,
+  fromResolvedGraph, fromXml, runScript, ScriptError, ScriptLibrary, SCRIPT_LIBRARY_FILES, toScript, toXml,
 } from '../../src/materialx/script-api.ts';
+import type { ResolvedGraph, ResolvedNode } from '../../src/materialx/graph.ts';
 
 const LIBRARY = ScriptLibrary.fromXml([`<?xml version="1.0"?>
 <materialx version="1.39">
@@ -195,13 +196,120 @@ blend.mix = [0.5, 0.5, 0.5];
     expect(toScript(graph, LIBRARY)).toBe('new_ = new Image();\n\nMix_ = new Image();\n');
   });
 
+  it('flattens node graphs, resolving outputs, interface inputs, file prefixes and color spaces', () => {
+    const graph = fromXml(`<materialx version="1.39" fileprefix="textures/">
+      <noise3d name="weight" type="float"><input name="amplitude" type="float" value="0.5" /></noise3d>
+      <image name="img" type="color3"><input name="file" type="filename" value="/abs/base.png" /></image>
+      <nodegraph name="NG" fileprefix="wood/">
+        <input name="tint" type="color3" value="0.5" />
+        <input name="amount" type="float" nodename="weight" />
+        <image name="img" type="color3">
+          <input name="file" type="filename" value="albedo.png" colorspace="srgb_texture" />
+        </image>
+        <mix name="blend" type="color3">
+          <input name="fg" type="color3" nodename="img" />
+          <input name="bg" type="color3" interfacename="tint" />
+          <input name="mix" type="float" interfacename="amount" />
+        </mix>
+        <output name="color" type="color3" nodename="blend" />
+      </nodegraph>
+      <standard_surface name="surface" type="surfaceshader" nodedef="ND_standard_surface_surfaceshader_100">
+        <input name="base_color" type="color3" nodegraph="NG" output="color" />
+      </standard_surface>
+      <surfacematerial name="mat" type="material">
+        <input name="surfaceshader" type="surfaceshader" nodename="surface" />
+        <input name="displacementshader" type="displacementshader" value="" />
+      </surfacematerial>
+      <look name="default"><materialassign name="assign" material="mat" geom="/World" /></look>
+    </materialx>`, LIBRARY);
+    expect(toScript(graph, LIBRARY)).toBe(`weight = new Noise3d();
+weight.amplitude = 0.5;
+
+img = new Image();
+img.file = "/abs/base.png";
+
+NG_img = new Image();
+NG_img.colorspace = "srgb_texture";
+NG_img.file = "wood/albedo.png";
+
+blend = new Mix();
+blend.fg = NG_img.out;
+blend.bg = [0.5, 0.5, 0.5];
+blend.mix = weight.out;
+
+surface = new StandardSurface("ND_standard_surface_surfaceshader_100");
+surface.base_color = blend.out;
+
+mat = new Surfacematerial();
+mat.surfaceshader = surface.out;
+`);
+    const xml = toXml(graph, LIBRARY);
+    expect(xml).toContain('<input name="file" type="filename" value="wood/albedo.png" colorspace="srgb_texture" />');
+    expect(xml).toContain('<standard_surface name="surface" type="surfaceshader" nodedef="ND_standard_surface_surfaceshader_100">');
+  });
+
+  it('sets the color space attribute from scripts and keeps it on nodes without file inputs', () => {
+    const graph = runScript('i = new Image(); i.colorspace = "srgb_texture"; m = new Mix(); m.colorspace = "acescg";', LIBRARY);
+    expect(graph.nodes.map(node => node.colorspace)).toEqual(['srgb_texture', 'acescg']);
+    const xml = toXml(graph, LIBRARY);
+    expect(xml).toContain('<image name="i" type="color3" colorspace="srgb_texture" />');
+    expect(() => runScript('i = new Image(); i.colorspace = 1;', LIBRARY)).toThrow(/colorspace expects a color space name/);
+  });
+
   it('rejects unsupported documents', () => {
     expect(() => fromXml('<foo />', LIBRARY)).toThrow(/<materialx> root is missing/);
-    expect(() => fromXml('<materialx><nodegraph name="g" /></materialx>', LIBRARY)).toThrow(/nodegraph> is not supported/);
+    expect(() => fromXml('<materialx><nodedef name="ND_x" node="x" /></materialx>', LIBRARY)).toThrow(/<nodedef> is not supported/);
+    expect(() => fromXml('<materialx><nodegraph name="g" nodedef="ND_x" /></materialx>', LIBRARY)).toThrow(/implements a NodeDef/);
+    expect(() => fromXml('<materialx><nodegraph name="g" /><image name="i" type="color3"><input name="default" type="color3" nodegraph="g" /></image></materialx>', LIBRARY))
+      .toThrow(/unknown output "g\."/);
     expect(() => fromXml('<materialx><image name="i" type="color3"><input name="x" type="float" value="1" /></image></materialx>', LIBRARY))
       .toThrow(/No image NodeDef matches/);
     expect(() => fromXml('<materialx><mix name="m" type="float"><input name="fg" type="float" nodename="nope" /></mix></materialx>', LIBRARY))
       .toThrow(/unknown node "nope"/);
+  });
+});
+
+describe('fromResolvedGraph', () => {
+  const provenance = { namePath: '/' };
+  const resolved: ResolvedGraph = {
+    terminals: [{ name: 'surfaceshader', type: 'surfaceshader', nodeId: 's', provenance }],
+    nodes: new Map<string, ResolvedNode>([
+      ['NG/img', {
+        id: 'NG/img', category: 'image', type: 'color3', provenance,
+        nodeDef: { name: 'ND_engine_image_color3', nodeString: 'image', type: 'color3', implementation: { kind: 'unresolved' } },
+        inputs: [{
+          name: 'file', type: 'filename', colorSpace: 'srgb_texture', provenance,
+          source: { kind: 'value', type: 'filename', value: 'http://host/wood.png' },
+        }],
+      }],
+      ['s', {
+        id: 's', category: 'standard_surface', type: 'surfaceshader', provenance,
+        inputs: [
+          { name: 'base_color', type: 'color3', source: { kind: 'connection', nodeId: 'NG/img' }, provenance },
+          { name: 'base', type: 'float', source: { kind: 'value', type: 'float', value: '0.7' }, provenance },
+          { name: 'thin_walled', type: 'boolean', defaulted: true, source: { kind: 'value', type: 'boolean', value: 'false' }, provenance },
+          { name: 'normal', type: 'vector3', source: { kind: 'default', type: 'vector3' }, provenance },
+        ],
+      }],
+    ]),
+  };
+
+  it('scripts the engine material graph with its current values and a named surfacematerial', () => {
+    expect(toScript(fromResolvedGraph(resolved, LIBRARY, 'Wood'), LIBRARY)).toBe(`img = new Image();
+img.colorspace = "srgb_texture";
+img.file = "http://host/wood.png";
+
+s = new StandardSurface();
+s.base_color = img.out;
+s.base = 0.7;
+
+Wood = new Surfacematerial();
+Wood.surfaceshader = s.out;
+`);
+  });
+
+  it('rejects LamaSurface wrappers', () => {
+    expect(() => fromResolvedGraph({ ...resolved, lamaSurface: {} }, LIBRARY)).toThrow(/LamaSurface/);
   });
 });
 
