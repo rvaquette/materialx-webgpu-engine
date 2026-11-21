@@ -61,6 +61,7 @@ export const SURFACE_IR_UPSTREAM: ReadonlySet<string> = new Set([
   'separate2',
   'separate3',
   'separate4',
+  'blur',
 ]);
 
 function isValueType(type: IrType | undefined): type is IrType {

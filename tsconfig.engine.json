@@ -9,5 +9,5 @@
     "rootDir": "./src",
     "outDir": "./build-engine/types"
   },
-  "include": ["src/engine.ts"]
+  "include": ["src/engine.ts", "src/engine-element.ts"]
 }

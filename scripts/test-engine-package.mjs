@@ -81,6 +81,8 @@ test(`installs the packed engine and captures a USD scene (${pathTracing ? 'rast
       } else {
         assert.equal(samples.length, 0);
       }
+      const element = await session.call('verifyInstalledElement', [], 120_000);
+      assert.deepEqual(element, { objects: ['/World/Triangle'], events: ['load'], errors: [], canvas: [64, 48] });
     } finally {
       await session.close();
     }

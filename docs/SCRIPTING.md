@@ -127,6 +127,20 @@ await render(64);                                          // attend 64 échanti
 | `await load(chemin)` | Ajoute au script les nœuds d'un document `.mtlx` et retourne son matériau |
 | `await render(n)` | Relance le rendu ; avec `n`, attend `n` échantillons du path tracer |
 
+| `await save("rendu.png")` | Enregistre le rendu affiché en PNG |
+| `await save("materiau.mtlx", matériau)` | Enregistre le document MaterialX d'un matériau du script |
+
+Dans le viewer, `save` télécharge le fichier. En ligne de commande, il l'écrit
+dans le dossier `--out` :
+
+```bash
+npm run script -- mon-script.js --out sortie [--xml materiau.mtlx] [--timeout ms] [--headed]
+```
+
+Le script s'exécute dans Chrome/Edge avec WebGPU (`MX_CHROME` désigne
+l'exécutable) devant un serveur Vite local ; `--xml` écrit aussi le matériau du
+script.
+
 Un script qui n'utilise aucune de ces fonctions garde le comportement simple :
 **Appliquer** affecte son matériau à l'objet sélectionné.
 

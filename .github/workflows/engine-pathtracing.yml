@@ -1,0 +1,60 @@
+name: Engine path tracing (GPU runner)
+
+# GitHub-hosted runners have no GPU and SwiftShader is too slow for path tracing,
+# so this workflow needs a self-hosted runner labelled `webgpu` with Chrome and a
+# WebGPU-capable GPU. It runs on demand, or on every push and pull request once
+# the repository variable WEBGPU_RUNNER is set to `true`.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  pathtracing:
+    if: github.event_name == 'workflow_dispatch' || vars.WEBGPU_RUNNER == 'true'
+    runs-on: [self-hosted, webgpu]
+    timeout-minutes: 30
+    env:
+      MX_CORE_DIR: ${{ github.workspace }}/materialx/javascript/build/bin
+      MX_LIB_ROOT: ${{ github.workspace }}/materialx/libraries
+    steps:
+      - name: Checkout application
+        uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - name: Checkout MaterialX
+        uses: actions/checkout@v5
+        with:
+          repository: rvaquette/MaterialX
+          ref: bea1e9251d8f936a73930ad19a6f3b37265d46f5
+          path: materialx
+          persist-credentials: false
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Raster and path-traced headless captures
+        run: npm run test:headless-capture
+
+      - name: Installed package, raster and path tracing
+        run: npm run test:engine-package
+        env:
+          MX_CAPTURE_PATH_TRACING: '1'
+
+      - name: Automated path-traced renders through the public API
+        run: npm run render:engine -- --backend pathtracing --samples 16 --material examples/engine/orange.mtlx --out renders
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: engine-pathtracing-renders
+          path: renders/

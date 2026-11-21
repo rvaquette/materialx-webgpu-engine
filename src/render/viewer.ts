@@ -72,6 +72,7 @@ import {
   loadMaterialPreviewShaderBall, materialPreviewCamera, materialPreviewResources, type MaterialPreviewOptions,
 } from './material-preview.ts';
 import { convertDisneySceneMaterial, prepareDisneyScene } from './pathtracing/disney-scene.ts';
+import { materialBackendApproximations } from './material-approximations.ts';
 import { DisneyTextureRegistry } from './pathtracing/disney-texture-array.ts';
 import { DisneyGpuBackend } from './pathtracing/disney-gpu-backend.ts';
 import { packDisneyLights } from './pathtracing/disney-lights.ts';
@@ -407,6 +408,25 @@ export class InteractiveViewer {
     } catch (error) {
       return { error: error instanceof Error ? error.message : String(error) };
     }
+  }
+
+  /** Approximations of the selected object's material in the active backend, without compiling pipelines. */
+  objectMaterialBackendDiagnostics(path: string):
+    ({ backend: BackendKind } & ({ warnings: readonly string[] } | { error: string })) | undefined {
+    const backend = this.#backend;
+    if (backend === 'disney') {
+      const diagnostics = this.objectDisneyMaterialDiagnostics(path);
+      return diagnostics && { backend, ...diagnostics };
+    }
+    const loaded = this.#loaded;
+    const resources = loaded?.parameterResources ?? loaded?.resources;
+    const instance = resources?.instances.find(candidate => candidate.primPath === path);
+    const material = instance?.materialKey ? resources?.materials.get(instance.materialKey) : undefined;
+    if (!loaded || !resources || !instance || !material?.surfaceGraph) return undefined;
+    const pass = backend === 'raster'
+      ? buildSceneFrame({ ...resources, instances: [instance] }, { surfaceFor: loaded.mtlx.surfaceFor }).draws[0]?.pass
+      : undefined;
+    return { backend, warnings: materialBackendApproximations(material, backend, pass) };
   }
 
   objectMaterialVariants(path: string) {

@@ -4,7 +4,7 @@ import { compareMaterialGraphs } from './materialx/graph-comparison.ts';
 import { makeMaterialExport, type TextureSourceResolver } from './materialx/graph-export.ts';
 import type { ResolvedGraph, ResolvedNodeDefRef } from './materialx/graph.ts';
 import type { SurfaceInputDiagnostic } from './materialx/surface-graph.ts';
-import type { InteractiveViewer, MaterialVariantSlot } from './render/viewer.ts';
+import type { BackendKind, InteractiveViewer, MaterialVariantSlot } from './render/viewer.ts';
 import type { MaterialPreviewOptions } from './render/material-preview.ts';
 import type { RgbaCapture } from './gpu/capture.ts';
 import { compatibleNodeOutputChoices, type MaterialGraphOutput, type MaterialParameter } from './render/material-parameters.ts';
@@ -19,13 +19,14 @@ const SVG = 'http://www.w3.org/2000/svg';
 type NodePosition = { x: number; y: number };
 const savedPositions = new WeakMap<ResolvedGraph, Map<string, NodePosition>>();
 const positionStoragePrefix = 'material-graph-layout:v1:';
+const BACKEND_LABELS: Readonly<Record<BackendKind, string>> = { raster: 'raster', pathtracing: 'path tracing MaterialX', disney: 'Disney' };
 
 interface GraphParameterEditing {
   parameters(nodeId: string): readonly MaterialParameter[];
   nodeDefinitions(): readonly ResolvedNodeDefRef[];
   outputs(nodeId: string, input: string): readonly MaterialGraphOutput[];
   diagnostics(nodeId: string): readonly SurfaceInputDiagnostic[];
-  disneyDiagnostics?(): ReturnType<InteractiveViewer['objectDisneyMaterialDiagnostics']>;
+  backendDiagnostics?(): ReturnType<InteractiveViewer['objectMaterialBackendDiagnostics']>;
   apply(changes: ReadonlyMap<string, readonly number[]>): Promise<ResolvedGraph | undefined>;
   canUnlinkInput(nodeId: string, input: string): boolean;
   setInputLink(nodeId: string, input: string, sourceId: string | null, output?: string): Promise<ResolvedGraph>;
@@ -458,9 +459,11 @@ export function showMaterialGraph(
     if (!backend) return;
     const list = backend.querySelector('ul')!;
     list.replaceChildren();
-    const diagnostics = graph?.nodes.size ? editing?.disneyDiagnostics?.() : undefined;
+    const diagnostics = graph?.nodes.size ? editing?.backendDiagnostics?.() : undefined;
     const messages = diagnostics && ('error' in diagnostics
       ? [`Conversion refusée : ${diagnostics.error}`] : diagnostics.warnings);
+    const summary = backend.querySelector('summary');
+    if (summary && diagnostics) summary.textContent = `Compatibilité du matériau avec le moteur ${BACKEND_LABELS[diagnostics.backend]}`;
     backend.hidden = !messages?.length;
     if (backend.hidden) backend.open = false;
     for (const message of messages ?? []) {

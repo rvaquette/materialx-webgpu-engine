@@ -34,6 +34,11 @@ jobs:
 
       - run: npm ci
 
+      - name: Check the engine API contract and element adapter
+        run: |
+          node --test scripts/engine-api.test.mjs
+          npx vitest run tests/engine.test.ts tests/engine-element.test.ts
+
       - name: Verify raster captures in Chrome
         run: |
           google-chrome --version

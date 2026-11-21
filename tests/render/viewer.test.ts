@@ -1915,6 +1915,21 @@ describe('interactive viewer resource lifecycle', () => {
     expect(device.createComputePipelineAsync).not.toHaveBeenCalled();
   });
 
+  it('reports raster-only approximations of the selected material, but not in MaterialX path tracing', async () => {
+    const { viewer } = await setup(false, true, 'raster', true, { transmission: true });
+    const path = '/World/Ball';
+    expect(viewer.objectMaterialBackendDiagnostics(path)).toEqual({ backend: 'raster', warnings: [] });
+    await viewer.setObjectGraphInputLink(path, 's', 'transmission', 'amount');
+    const raster = viewer.objectMaterialBackendDiagnostics(path);
+    expect(raster).toMatchObject({ backend: 'raster', warnings: expect.arrayContaining([
+      expect.stringContaining('Surface transparente'),
+      expect.stringContaining('la réfraction ne montre que l’environnement'),
+    ]) });
+    expect(viewer.objectMaterialBackendDiagnostics('/World/Unknown')).toBeUndefined();
+    viewer.setBackend('pathtracing');
+    expect(viewer.objectMaterialBackendDiagnostics(path)).toEqual({ backend: 'pathtracing', warnings: [] });
+  });
+
   it('does not repeatedly clear the Disney canvas while its pipeline is compiling or after an error', async () => {
     let rejectPipeline!: (error: Error) => void;
     const create = vi.spyOn(DisneyGpuBackend, 'create').mockImplementation(() =>

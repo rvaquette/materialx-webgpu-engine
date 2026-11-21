@@ -24,7 +24,10 @@ await build({
     outDir,
     emptyOutDir: true,
     target: 'es2022',
-    lib: { entry: join(source, 'engine.ts'), formats: ['es'], fileName: () => 'engine.js' },
+    lib: {
+      entry: { engine: join(source, 'engine.ts'), element: join(source, 'engine-element.ts') },
+      formats: ['es'], fileName: (_format, entry) => `${entry}.js`,
+    },
     rolldownOptions: {
       external: id => externals.some(name => id === name || id.startsWith(`${name}/`)),
     },
@@ -38,6 +41,7 @@ execFileSync(process.execPath, [join(root, 'node_modules', 'typescript', 'bin', 
 
 // Expose the WebGPU globals to consumers without requiring changes to their tsconfig.
 await writeFile(join(outDir, 'index.d.ts'), '/// <reference types="@webgpu/types" />\nexport * from "./types/engine.js";\n');
+await writeFile(join(outDir, 'element.d.ts'), '/// <reference types="@webgpu/types" />\nexport * from "./types/engine-element.js";\n');
 const manifest = {
   name: project.name,
   version: project.version,
@@ -45,7 +49,10 @@ const manifest = {
   private: true,
   type: 'module',
   types: './index.d.ts',
-  exports: { '.': { types: './index.d.ts', import: './engine.js' } },
+  exports: {
+    '.': { types: './index.d.ts', import: './engine.js' },
+    './element': { types: './element.d.ts', import: './element.js' },
+  },
   dependencies,
 };
 await writeFile(join(outDir, 'package.json'), `${JSON.stringify(manifest, null, 2)}\n`);

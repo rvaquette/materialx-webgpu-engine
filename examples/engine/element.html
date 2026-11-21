@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="fr">
+<meta charset="utf-8">
+<title>&lt;materialx-viewer&gt; dans une page existante</title>
+<style>
+  materialx-viewer { display: inline-block; border: 1px solid #888; }
+</style>
+<h1>&lt;materialx-viewer&gt;</h1>
+<materialx-viewer src="./triangle.usda" width="320" height="240"></materialx-viewer>
+<p>
+  <label>Moteur
+    <select name="backend">
+      <option value="raster">Raster</option>
+      <option value="pathtracing">Path tracing</option>
+      <option value="disney">Disney</option>
+    </select>
+  </label>
+  <button type="button" disabled>Appliquer le matériau orange</button>
+</p>
+<p role="status">Chargement…</p>
+<script type="module" src="./element.ts"></script>
+</html>

@@ -10,7 +10,8 @@ import { startViewerUi, type ViewerUiState, type ViewerUiActions } from './viewe
 import type { LocalGltfScene } from './scene/local-gltf.ts';
 import { downloadDisplayedAovPng, downloadPathTraceAovPfm } from './render/aov-export.ts';
 import { attachScriptEditor } from './materialx/script-editor.ts';
-import { loadScriptLibrary, type ScriptHost } from './materialx/script-api.ts';
+import { loadScriptLibrary, runScript, ScriptError, toXml, type ScriptHost } from './materialx/script-api.ts';
+import { downloadBlob } from './assets/download.ts';
 import type { ResolvedGraph } from './materialx/graph.ts';
 
 let ui: ViewerUiState | undefined;
@@ -53,9 +54,24 @@ async function main(): Promise<void> {
     if (!viewerHost) throw new Error('Le viewer WebGPU n’est pas prêt.');
     return viewerHost;
   };
+  // Queries answer before the viewer is ready so live validation keeps working.
+  const scriptHost: ScriptHost = {
+    loadScene: entry => readyHost().loadScene(entry),
+    objects: () => viewerHost?.objects() ?? [],
+    renderSettings: () => viewerHost?.renderSettings() ?? {},
+    setRenderSetting: (name, value) => readyHost().setRenderSetting(name, value),
+    assignMaterial: (object, material) => readyHost().assignMaterial(object, material),
+    render: samples => readyHost().render(samples),
+    saveImage: name => readyHost().saveImage(name),
+    saveText: (name, text) => readyHost().saveText(name, text),
+    objectMaterial: object => viewerHost?.objectMaterial(object),
+    log: message => console.info(`[script] ${message}`),
+  };
+  const scriptLibrary = loadScriptLibrary(new URL(`${import.meta.env.BASE_URL}materialx/libraries`, document.baseURI).href);
+  const scriptFilePrefix = new URL('.', document.baseURI).href;
   attachScriptEditor(document.getElementById('material-tools'), {
-    library: loadScriptLibrary(new URL(`${import.meta.env.BASE_URL}materialx/libraries`, document.baseURI).href),
-    filePrefix: new URL('.', document.baseURI).href,
+    library: scriptLibrary,
+    filePrefix: scriptFilePrefix,
     onApply: (xml) => {
       if (!applyScriptMaterial) throw new Error('Le viewer WebGPU n’est pas prêt.');
       return applyScriptMaterial(xml);
@@ -64,14 +80,7 @@ async function main(): Promise<void> {
       if (!selectedMaterial) throw new Error('Le viewer WebGPU n’est pas prêt.');
       return selectedMaterial();
     },
-    host: {
-      loadScene: entry => readyHost().loadScene(entry),
-      objects: () => readyHost().objects(),
-      renderSettings: () => readyHost().renderSettings(),
-      setRenderSetting: (name, value) => readyHost().setRenderSetting(name, value),
-      assignMaterial: (object, material) => readyHost().assignMaterial(object, material),
-      render: samples => readyHost().render(samples),
-    },
+    host: scriptHost,
   });
   const params = new URLSearchParams(location.search);
   const initialEntry = params.get('entry') ?? (SCENE_CATALOG[0] ?? SOURCE_SCENE_CATALOG[0]!).entry;
@@ -205,7 +214,7 @@ async function main(): Promise<void> {
         nodeDefinitions: () => target.objectNodeDefinitions(path),
         outputs: (nodeId, input) => target.objectGraphOutputs(path, nodeId, input),
         diagnostics: nodeId => target.objectSurfaceInputDiagnostics(path, nodeId),
-        disneyDiagnostics: () => target.objectDisneyMaterialDiagnostics(path),
+        backendDiagnostics: () => target.objectMaterialBackendDiagnostics(path),
         async apply(changes) {
           await editMaterial('Application des paramètres du matériau...', () => target.setObjectParameters(path, changes));
           return target.objectSurfaceGraph(path);
@@ -509,6 +518,45 @@ async function main(): Promise<void> {
         if (performance.now() - lastProgress > 60_000) throw new Error(`Rendu bloqué à ${last} échantillons sur ${samples}.`);
       }
     },
+    async saveImage(name) {
+      await device.queue.onSubmittedWorkDone();
+      const blob = await new Promise<Blob>((resolve, reject) => {
+        canvas.toBlob(value => value ? resolve(value) : reject(new Error('Le navigateur n’a pas pu encoder le rendu en PNG.')), 'image/png');
+      });
+      await saveScriptFile(name, blob);
+    },
+    saveText: (name, text) => saveScriptFile(name, new Blob([text], { type: 'application/xml' })),
+    objectMaterial(object) {
+      const graph = viewer.objectSurfaceGraph(object);
+      if (!graph) return undefined;
+      const name = viewer.objects.find(candidate => candidate.path === object)?.material ?? 'material';
+      return { graph, name: name.split('/').filter(Boolean).at(-1) ?? 'material' };
+    },
+  };
+  /** Files saved by scripts: written by the command-line runner when present, downloaded otherwise. */
+  async function saveScriptFile(name: string, blob: Blob): Promise<void> {
+    const sink = (globalThis as { __mxSaveFile?: (name: string, base64: string) => Promise<void> }).__mxSaveFile;
+    if (!sink) {
+      downloadBlob(blob, name.split(/[\\/]/).at(-1)!);
+      return;
+    }
+    const bytes = new Uint8Array(await blob.arrayBuffer());
+    let binary = '';
+    for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+    await sink(name, btoa(binary));
+  }
+  // Entry point of `npm run script` (scripts/run-material-script.mjs).
+  (globalThis as { __mxRunScript?: unknown }).__mxRunScript = async (code: string) => {
+    try {
+      const library = await scriptLibrary;
+      const run = await runScript(code, library, { host: scriptHost, filePrefix: scriptFilePrefix });
+      return { ok: true, nodes: run.nodes.length, viewerCommands: run.viewerCommands, logs: run.logs, xml: toXml(run, library) };
+    } catch (error) {
+      return {
+        ok: false, message: error instanceof Error ? error.message : String(error),
+        ...(error instanceof ScriptError && error.line !== undefined ? { line: error.line } : {}),
+      };
+    }
   };
   if (libraryButton && libraryDialog) {
     const openLibrary = bindMaterialLibrary(libraryDialog, MATERIAL_CATALOG, actions.material);

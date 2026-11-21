@@ -509,9 +509,12 @@ lazy = new Noise3d("float");
       setRenderSetting: async (name, value) => { calls.push(['set', name, value]); },
       assignMaterial: async (object, material) => { calls.push(['assign', object, material]); },
       render: async (samples) => { calls.push(['render', samples]); return samples ?? 1; },
+      saveImage: async () => {},
+      saveText: async () => {},
+      objectMaterial: () => undefined,
     };
     const code = `await scene("./scenes/ball.usda");
-before = render.backend;
+    before = render.backend;
 render.backend = "pathtracing";
 render.depth = 8;
 s = new StandardSurface();

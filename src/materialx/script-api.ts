@@ -559,10 +559,19 @@ export interface ScriptHost {
   assignMaterial(objectPath: string, material: { xml: string } | { url: string }): Promise<void>;
   /** Restart rendering; with `samples`, resolve once that many samples are accumulated. Returns the sample count. */
   render(samples?: number): Promise<number>;
+  /** Save the displayed render as a PNG image. */
+  saveImage(name: string): Promise<void>;
+  /** Save a text document (e.g. a MaterialX file). */
+  saveText(name: string, text: string): Promise<void>;
+  /** Material of an object as resolved by the engine. */
+  objectMaterial(objectPath: string): { graph: ResolvedGraph; name: string } | undefined;
+  log?(message: string): void;
 }
 
 export interface RunScriptOptions {
   host?: ScriptHost;
+  /** Validate viewer operations without performing them; the host still answers queries (objects, materials). */
+  dryRun?: boolean;
   /** Base of relative scene, document and texture URLs (the page by default). */
   baseUrl?: string;
   /** `fileprefix` of documents generated for `assign`. */
@@ -571,11 +580,13 @@ export interface RunScriptOptions {
 }
 
 export interface ScriptRun extends ScriptGraph {
-  /** Number of viewer operations (`scene`, `assign`, `render`, settings) the script requested. */
+  /** Number of viewer operations (`scene`, `assign`, `render`, `save`, settings) the script requested. */
   viewerCommands: number;
+  /** Messages written with `log(...)`. */
+  logs: string[];
 }
 
-const SCRIPT_GLOBALS = new Set(['__mx', 'Math', 'scene', 'objects', 'render', 'assign', 'load']);
+const SCRIPT_GLOBALS = new Set(['__mx', 'Math', 'scene', 'objects', 'render', 'assign', 'load', 'save', 'log', 'node', 'material']);
 // eslint-disable-next-line @typescript-eslint/no-empty-function
 const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor as new (...args: string[]) => (scope: object) => Promise<void>;
 
@@ -585,8 +596,10 @@ const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor as
  * the viewer through `options.host`.
  */
 export async function runScript(code: string, library: ScriptLibrary, options: RunScriptOptions = {}): Promise<ScriptRun> {
-  const graph: ScriptRun = { nodes: [], viewerCommands: 0 };
-  const host = options.host;
+  const graph: ScriptRun = { nodes: [], viewerCommands: 0, logs: [] };
+  // Queries (objects, renderSettings, objectMaterial) use the host even in dry runs; actions do not.
+  const queries = options.host;
+  const host = options.dryRun ? undefined : options.host;
   const baseUrl = options.baseUrl ?? (typeof document === 'undefined' ? 'http://localhost/' : document.baseURI);
   const fetchText = options.fetchText ?? fetchTextOrThrow;
   const handles = new WeakMap<object, ScriptNode>();
@@ -904,7 +917,7 @@ export async function runScript(code: string, library: ScriptLibrary, options: R
   }, {
     get: (target, key) => {
       if (typeof key !== 'string' || !(key in RENDER_SETTINGS)) return Reflect.get(target, key) as unknown;
-      return settings.has(key) ? settings.get(key) : host?.renderSettings()[key];
+      return settings.has(key) ? settings.get(key) : queries?.renderSettings()[key];
     },
     set: (_target, key, value) => {
       if (typeof key !== 'string') return false;
@@ -915,6 +928,17 @@ export async function runScript(code: string, library: ScriptLibrary, options: R
       return true;
     },
   });
+  /** Add nodes read from a document or an object material to the script; returns the material handle. */
+  const importNodes = (nodes: readonly ScriptNode[], label: string): object => {
+    for (const node of nodes) {
+      nameNode(node, node.name);
+      graph.nodes.push(node);
+    }
+    const material = nodes.find(node => nodeType(node.def) === 'material') ??
+      [...nodes].reverse().find(node => nodeType(node.def) === 'surfaceshader');
+    if (!material) throw new ScriptError(`${label} has no surface material.`);
+    return handleFor(material);
+  };
   const viewer: Record<string, unknown> = {
     scene: async (entry: unknown): Promise<void> => {
       if (typeof entry !== 'string' || !entry) throw new ScriptError('scene(entry) expects a scene path.');
@@ -922,7 +946,7 @@ export async function runScript(code: string, library: ScriptLibrary, options: R
       await queue;
       await host?.loadScene(entry);
     },
-    objects: (): string[] => [...host?.objects() ?? []],
+    objects: (): string[] => [...queries?.objects() ?? []],
     render: renderFunction,
     assign: async (object: unknown, material: unknown): Promise<void> => {
       if (typeof object !== 'string' || !object) throw new ScriptError('assign(object, material) expects an object path.');
@@ -942,13 +966,41 @@ export async function runScript(code: string, library: ScriptLibrary, options: R
             node.inputs.set(name, { value: new URL(input.value, url).href });
           }
         }
-        nameNode(node, node.name);
-        graph.nodes.push(node);
       }
-      const material = loaded.nodes.find(node => nodeType(node.def) === 'material') ??
-        [...loaded.nodes].reverse().find(node => nodeType(node.def) === 'surfaceshader');
-      if (!material) throw new ScriptError(`${path} has no surface material.`);
-      return handleFor(material);
+      return importNodes(loaded.nodes, path);
+    },
+    material: (object: unknown): object => {
+      if (typeof object !== 'string' || !object) throw new ScriptError('material(object) expects an object path.');
+      if (!queries) throw new ScriptError('material(object) needs the viewer.');
+      const current = queries.objectMaterial(object);
+      if (!current) throw new ScriptError(`${object} has no MaterialX material.`);
+      return importNodes(fromResolvedGraph(current.graph, library, current.name).nodes, object);
+    },
+    node: (name: unknown): object => {
+      const node = graph.nodes.find(candidate => candidate.name === name && !pending.has(candidate));
+      if (!node) {
+        const names = graph.nodes.filter(candidate => !pending.has(candidate)).map(candidate => candidate.name);
+        throw new ScriptError(`No node named "${String(name)}". Nodes: ${names.join(', ') || 'none'}.`);
+      }
+      return handleFor(node);
+    },
+    save: async (name: unknown, material?: unknown): Promise<void> => {
+      if (typeof name !== 'string' || !name || /(^|[\\/])\.\.([\\/]|$)/.test(name)) {
+        throw new ScriptError('save(name) expects a file name, e.g. save("render.png") or save("material.mtlx", surface).');
+      }
+      const document = material === undefined ? undefined : materialDocument(material);
+      if (document && !('xml' in document)) throw new ScriptError('save(name, material) expects a material of the script.');
+      if (!document && !/\.png$/i.test(name)) throw new ScriptError('save(name) writes PNG images: use a .png name.');
+      command();
+      await queue;
+      if (document) await host?.saveText(name, document.xml);
+      else await host?.saveImage(name);
+    },
+    log: (...values: unknown[]): void => {
+      const message = values.map(value => typeof value === 'string' ? value
+        : (value as Partial<OutputRef> | null)?.[OUTPUT] || nodeOf(value) ? String(value) : JSON.stringify(value)).join(' ');
+      graph.logs.push(message);
+      queries?.log?.(message);
     },
   };
 
@@ -983,7 +1035,8 @@ export async function runScript(code: string, library: ScriptLibrary, options: R
     },
     set: (_target, key, value) => {
       if (typeof key !== 'string') return false;
-      if (SCRIPT_GLOBALS.has(key)) throw new ScriptError(`${key} is reserved by material scripts.`);
+      // `material` and `node` are also the natural names of nodes; assigning them shadows the functions.
+      if (SCRIPT_GLOBALS.has(key) && key !== 'material' && key !== 'node') throw new ScriptError(`${key} is reserved by material scripts.`);
       if (classFor(key)) throw new ScriptError(`${key} is a node type and cannot be reassigned.`);
       variables.set(key, value);
       const node = nodeOf(value) ?? (value as Partial<OutputRef> | null)?.[OUTPUT]?.node;

@@ -169,6 +169,10 @@ export const SCRIPT_FUNCTIONS: Readonly<Record<string, { detail: string; insert:
   render: { detail: 'render.backend = … ; await render(64) : relance le rendu', insert: 'render' },
   assign: { detail: 'await assign("/objet", surface) : affecte un matériau', insert: 'await assign("' },
   load: { detail: 'await load("….mtlx") : charge un matériau dans le script', insert: 'await load("' },
+  material: { detail: 'material("/objet") : matériau courant d’un objet, modifiable', insert: 'material("' },
+  node: { detail: 'node("nom") : nœud du script par son nom', insert: 'node("' },
+  save: { detail: 'await save("rendu.png") ou save("mat.mtlx", surface) : enregistre', insert: 'await save("' },
+  log: { detail: 'log(…) : affiche un message', insert: 'log(' },
 };
 
 function formatNumber(value: number): string {
@@ -327,7 +331,7 @@ export class MaterialXScriptEditor {
       }
       return text;
     };
-    return runScript(this.#code.value, library, { fetchText });
+    return runScript(this.#code.value, library, { fetchText, ...(this.#options.host ? { host: this.#options.host, dryRun: true } : {}) });
   }
 
   /**
@@ -342,9 +346,10 @@ export class MaterialXScriptEditor {
         ...(this.#options.host ? { host: this.#options.host } : {}), ...(prefix ? { filePrefix: prefix } : {}),
       });
       this.#xml.value = toXml(run, library);
-      if (run.viewerCommands) return 'Script exécuté.';
+      const logs = run.logs.length ? `\n${run.logs.join('\n')}` : '';
+      if (run.viewerCommands) return `Script exécuté.${logs}`;
       await this.#options.onApply?.(toXml(run, library, prefix ? { filePrefix: prefix } : {}));
-      return undefined;
+      return `Matériau appliqué.${logs}`;
     });
   }
 
