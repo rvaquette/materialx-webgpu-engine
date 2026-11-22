@@ -566,8 +566,16 @@ export function assembleIrForwardShader(surface: LayeredSurfaceModule, options: 
   const displacement = options.displacement === true;
   const rasterQuality = options.rasterQuality ?? 'reference';
   const features = surface.features ?? ALL_FEATURES;
+  // Handles derive from MaterialX node names; renaming them by bind slot makes
+  // structurally identical materials emit identical WGSL and share one pipeline.
+  const handles = [...surface.textures, ...surface.samplers]
+    .map(binding => [binding.handle, `mx_g${binding.group}_b${binding.binding}`] as const)
+    .filter(([handle, canonical]) => handle !== canonical);
+  const surfaceCode = handles.length === 0 ? surface.code : surface.code.replace(
+    new RegExp(`\\b(${handles.map(([handle]) => handle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})\\b`, 'g'),
+    handle => handles.find(([candidate]) => candidate === handle)![1]);
   const code = [
-    surface.code.trimEnd(),
+    surfaceCode.trimEnd(),
     frameBlock(features, rasterQuality),
     ...(options.analyticLights ? [analyticLightsWgsl(IR_FORWARD_FRAME_GROUP, 7, 'arrayLength(&analyticLights) / 7u', 'MX_PI', '1e-4')] : []),
     basisHelper(),
