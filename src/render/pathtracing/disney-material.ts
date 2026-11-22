@@ -1,3 +1,4 @@
+import { GpuLimitError } from '../../gpu/device.ts';
 import type { ResolvedSurface } from '../../materialx/surface-graph.ts';
 import type { MaterialParameter } from '../material-parameters.ts';
 
@@ -121,7 +122,7 @@ export function uploadDisneyMaterials(device: GPUDevice, materials: readonly Dis
     throw new Error('Disney material references a missing texture layer.');
   }
   if (data.byteLength > device.limits.maxStorageBufferBindingSize || data.byteLength > device.limits.maxBufferSize) {
-    throw new Error('Disney material buffer exceeds device limits.');
+    throw new GpuLimitError('Disney material buffer exceeds device limits.', 'maxStorageBufferBindingSize', data.byteLength, Math.min(device.limits.maxStorageBufferBindingSize, device.limits.maxBufferSize));
   }
   const buffer = device.createBuffer({
     label: 'Disney materials', size: data.byteLength,

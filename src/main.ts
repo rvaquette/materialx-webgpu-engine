@@ -12,6 +12,7 @@ import { downloadDisplayedAovPng, downloadPathTraceAovPfm } from './render/aov-e
 import { attachScriptEditor } from './materialx/script-editor.ts';
 import { loadScriptLibrary, runScript, ScriptError, toXml, type ScriptHost } from './materialx/script-api.ts';
 import { downloadBlob } from './assets/download.ts';
+import { DiagnosticJournal } from './diagnostics/journal.ts';
 import type { ResolvedGraph } from './materialx/graph.ts';
 
 let ui: ViewerUiState | undefined;
@@ -111,8 +112,10 @@ async function main(): Promise<void> {
   const { device } = gpu;
   (globalThis as { __mxGpu?: unknown }).__mxGpu = gpu;
   let deviceLost = false;
+  const journal = new DiagnosticJournal();
   const reportGpuError = (event: Event): void => {
     const message = (event as GPUUncapturedErrorEvent).error.message;
+    journal.record({ level: 'error', code: 'uncaptured-gpu-error', message });
     console.error(`WebGPU error: ${message}`);
     if (ui) {
       ui.shaderErrors += `${ui.shaderErrors ? '\n\n' : ''}WebGPU - validation\n${message}`;
@@ -147,7 +150,12 @@ async function main(): Promise<void> {
   let sceneChanging = false;
   let shaderBusy = false;
   let shaderBusyMessage = 'Préparation du path tracer...';
-  const viewerCallbacks: Pick<ConstructorParameters<typeof InteractiveViewer>[0], 'onStatus' | 'onShaderErrors'> = {
+  const viewerCallbacks: Pick<ConstructorParameters<typeof InteractiveViewer>[0], 'onStatus' | 'onShaderErrors' | 'onDiagnostic'> = {
+    onDiagnostic: diagnostic => {
+      journal.record(diagnostic);
+      if (diagnostic.level === 'error') console.error(diagnostic.message, diagnostic.detail ?? '');
+      else if (diagnostic.level === 'warning') console.warn(diagnostic.message, diagnostic.detail ?? '');
+    },
     onStatus: status => {
       if (deviceLost) return;
       state.status = status;
@@ -176,11 +184,23 @@ async function main(): Promise<void> {
       else if (!sceneChanging && status.backend === 'pathtracing' && status.denoiser.state === 'error') setStatus(`Echec denoiser JS : ${status.denoiser.error}`);
     },
     onShaderErrors: errors => {
+      for (const error of errors) {
+        journal.record({ level: 'error', code: error.line > 0 ? 'shader-compilation' : 'backend-preparation', message: `${error.shader}: ${error.message}` },
+          { name: error.shader, line: error.line, column: error.column, source: error.source });
+      }
       state.shaderErrors = errors.map(error => `${error.shader}${error.line > 0 ? ` (${error.line}:${error.column})` : ''}\n${error.message}${error.source ? `\n> ${error.source}` : ''}`).join('\n\n');
       setDiagnostics('shader', state.shaderErrors);
     },
   };
-  let viewer = new InteractiveViewer({ device, context, outputFormat, canvas, ...viewerCallbacks });
+  let viewer = new InteractiveViewer({ device, context, outputFormat, canvas, streaming: true, ...viewerCallbacks });
+  const exportDiagnostics = document.querySelector<HTMLButtonElement>('#export-diagnostics');
+  if (exportDiagnostics) {
+    exportDiagnostics.hidden = false;
+    exportDiagnostics.onclick = () => {
+      const json = journal.export({ scene: state.entry, backend: viewer.backend, gpuMemory: viewer.gpuMemory, status: state.status });
+      downloadBlob(new Blob([json], { type: 'application/json' }), `materialx-diagnostics-${new Date().toISOString().replace(/[:.]/g, '-')}.json`);
+    };
+  }
   viewer.setBackend(initialBackend);
 
   const graphButton = document.querySelector<HTMLButtonElement>('#open-material-graph');
@@ -626,18 +646,16 @@ async function main(): Promise<void> {
     void watched.lost.then(async info => {
       if (info.reason === 'destroyed') return;
       console.error(`WebGPU device lost (${info.reason}): ${info.message}`);
+      journal.record({ level: 'warning', code: 'device-lost', message: `GPU device lost (${info.reason}): ${info.message}` });
       deviceLost = true;
       setBusy(true, 'Réinitialisation du moteur WebGPU...');
-      if (++recoveries > 3) { setStatus(`GPU perdu (${info.message || info.reason}). Recharger la page.`); return; }
-      const backend = viewer.backend;
-      const quality = viewer.rasterQuality;
-      const pathTracingDepth = viewer.pathTracingDepth;
-      const denoise = viewer.pathTracingDenoise;
-      const adaptive = viewer.pathTracingAdaptive;
-      const pathTracingView = viewer.pathTracingView;
-      const limits = viewer.pathTracingLimits;
-      const environment = viewer.environmentEnabled;
-      const paused = viewer.pathTracingPaused;
+      if (++recoveries > 3) {
+        journal.record({ level: 'error', code: 'device-recovery-failed', message: 'GPU device lost more than three times in a row.' });
+        setStatus(`GPU perdu (${info.message || info.reason}). Recharger la page.`);
+        return;
+      }
+      // Scene, camera, material overrides and edits, time and settings survive the new device.
+      const snapshot = viewer.snapshotState();
       viewer.dispose();
       try {
         const next = await requestGpu();
@@ -645,24 +663,24 @@ async function main(): Promise<void> {
         (globalThis as { __mxGpu?: unknown }).__mxGpu = next;
         next.device.addEventListener('uncapturederror', reportGpuError);
         context!.configure({ device: next.device, format: outputFormat, alphaMode: 'opaque' });
-        viewer = new InteractiveViewer({ device: next.device, context: context!, outputFormat, canvas: canvas!, ...viewerCallbacks });
-        await viewer.setRasterQuality(quality);
-        viewer.setPathTracingDenoise(denoise);
-        viewer.setPathTracingAdaptive(adaptive);
-        viewer.setPathTracingView(pathTracingView);
-        viewer.setPathTracingLimits(limits);
-        await viewer.setTonemap(state.tonemap);
-        viewer.setEnvironmentEnabled(environment);
-        viewer.setPathTracingPaused(paused);
-        viewer.setBackend(backend);
+        viewer = new InteractiveViewer({ device: next.device, context: context!, outputFormat, canvas: canvas!, streaming: true, ...viewerCallbacks });
         deviceLost = false;
         watchDevice(next.device);
-        if (await loadEntry(state.entry)) {
-          viewer.setPathTracingDepth(pathTracingDepth);
-          state.pathTracingDepth = viewer.pathTracingDepth;
-          recoveries = 0;
+        setBusy(true, 'Restauration de la scène...');
+        try {
+          await viewer.restoreState(snapshot);
+        } finally {
+          setBusy(false);
         }
-      } catch (error) { setStatus(`GPU perdu : ${String(error)}. Recharger la page.`); }
+        state.pathTracingDepth = viewer.pathTracingDepth;
+        refreshObjects();
+        refreshAnimation();
+        journal.record({ level: 'info', code: 'device-restored', message: 'GPU device recreated; scene and settings restored.' });
+        recoveries = 0;
+      } catch (error) {
+        journal.record({ level: 'error', code: 'device-recovery-failed', message: `GPU device recovery failed: ${String(error)}` });
+        setStatus(`GPU perdu : ${String(error)}. Recharger la page.`);
+      }
     });
   }
   watchDevice(device);

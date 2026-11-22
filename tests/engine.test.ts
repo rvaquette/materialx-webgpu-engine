@@ -18,6 +18,10 @@ const viewer = vi.hoisted(() => ({
   setVariant: vi.fn(async (_path: string, _set: string, _variant: string) => {}),
   setPathTracingTemporalHistory: vi.fn(),
   pathTracingLimits: { targetRelativeError: 0.05, stopOnConvergence: false, timeBudgetSeconds: 0 },
+  snapshotState: vi.fn(() => ({ settings: { backend: 'raster' } })),
+  restoreState: vi.fn(async (_snapshot: unknown) => {}),
+  gpuMemory: { buffers: 10, textures: 20, total: 30, peak: 40, textureLimit: 8192 },
+  backend: 'raster',
 }));
 
 vi.mock('../src/render/viewer.ts', () => ({
@@ -43,6 +47,70 @@ function fixture() {
 }
 
 describe('MaterialXEngine', () => {
+  it('journals structured diagnostics and shader errors and exports them as JSON', async () => {
+    const { canvas, device } = fixture();
+    const onDiagnostic = vi.fn();
+    const engine = await MaterialXEngine.create(canvas, { device, onDiagnostic });
+    const options = viewer.initialize.mock.calls[0]![0] as {
+      onDiagnostic(diagnostic: unknown): void; onShaderErrors(errors: unknown[]): void;
+    };
+    options.onDiagnostic({ level: 'warning', code: 'texture-downscaled', message: 'Texture reduced', detail: { error: new Error('x'), data: new Float32Array(4) } });
+    const shaderError = { shader: 'Path tracing', message: 'unknown identifier', line: 12, column: 4, source: 'let a = b;' };
+    options.onShaderErrors([shaderError]);
+    options.onShaderErrors([shaderError]);
+    expect(onDiagnostic).toHaveBeenCalledWith(expect.objectContaining({ code: 'texture-downscaled' }));
+    expect(engine.diagnostics.map(record => record.code)).toEqual(['texture-downscaled', 'shader-compilation']);
+    expect(engine.diagnostics[1]!.shader).toEqual({ name: 'Path tracing', line: 12, column: 4, source: 'let a = b;' });
+    const exported = JSON.parse(engine.exportDiagnostics());
+    expect(exported).toMatchObject({ format: 'materialx-webgpu-diagnostics', version: 1, backend: 'raster', gpuMemory: { total: 30 } });
+    expect(exported.diagnostics[0].detail).toEqual({ error: { name: 'Error', message: 'x' }, data: { type: 'Float32Array', byteLength: 16 } });
+    expect(engine.capabilities.backends.raster).toBeDefined();
+    expect(engine.telemetry()).toBeUndefined();
+    engine.dispose();
+  });
+
+  it('recreates an owned device after a loss and restores the scene', async () => {
+    const { canvas, context } = fixture();
+    let lose!: (info: GPUDeviceLostInfo) => void;
+    const lost = new Promise<GPUDeviceLostInfo>(resolve => { lose = resolve; });
+    const first = { destroy: vi.fn(), lost } as unknown as GPUDevice;
+    const second = { destroy: vi.fn(), lost: new Promise(() => {}) } as unknown as GPUDevice;
+    const requestDevice = vi.fn().mockResolvedValueOnce(first).mockResolvedValueOnce(second);
+    vi.stubGlobal('navigator', { gpu: {
+      getPreferredCanvasFormat: () => 'bgra8unorm',
+      requestAdapter: async () => ({ limits: {}, requestDevice }),
+    } });
+    const events: Array<{ reason: string; recovery: Promise<boolean> }> = [];
+    const engine = await MaterialXEngine.create(canvas, { onDeviceLost: event => events.push(event) });
+    await engine.loadUsd('scene.usda');
+    let restored!: () => void;
+    viewer.restoreState.mockImplementationOnce(() => new Promise<void>(resolve => { restored = resolve; }));
+    lose({ reason: 'unknown', message: 'GPU process crashed' } as GPUDeviceLostInfo);
+    await vi.waitFor(() => expect(viewer.restoreState).toHaveBeenCalled());
+    await expect(engine.loadUsd('other.usda')).rejects.toThrow('restoring the scene');
+    restored();
+    expect(await events[0]!.recovery).toBe(true);
+    expect(viewer.snapshotState).toHaveBeenCalledOnce();
+    expect(viewer.restoreState).toHaveBeenCalledWith({ settings: { backend: 'raster' } });
+    expect(context.configure).toHaveBeenLastCalledWith(expect.objectContaining({ device: second }));
+    expect(engine.diagnostics.map(record => record.code)).toEqual(['device-lost', 'device-restored']);
+    expect(engine.objects).toHaveLength(1);
+    engine.dispose();
+    expect(second.destroy).toHaveBeenCalledOnce();
+  });
+
+  it('reports a lost borrowed device without replacing it', async () => {
+    const { canvas, device } = fixture();
+    let lose!: (info: GPUDeviceLostInfo) => void;
+    Object.assign(device, { lost: new Promise<GPUDeviceLostInfo>(resolve => { lose = resolve; }) });
+    const engine = await MaterialXEngine.create(canvas, { device });
+    lose({ reason: 'unknown', message: 'reset' } as GPUDeviceLostInfo);
+    await vi.waitFor(() => expect(engine.diagnostics.map(record => record.code)).toEqual(['device-lost', 'device-recovery-failed']));
+    await expect(engine.loadUsd('scene.usda')).rejects.toThrow('could not recover');
+    expect(viewer.restoreState).not.toHaveBeenCalled();
+    engine.dispose();
+  });
+
   it('captures tightly packed top-down RGBA pixels without a canvas', async () => {
     const { device } = fixture();
     const data = new Uint8Array(512).fill(99);
@@ -94,7 +162,10 @@ describe('MaterialXEngine', () => {
     const { canvas, context, device } = fixture();
     const onStatus = vi.fn();
     const engine = await MaterialXEngine.create(canvas, { device, onStatus });
-    expect(viewer.initialize).toHaveBeenCalledWith(expect.objectContaining({ canvas, orbitControls: false, onStatus }));
+    expect(viewer.initialize).toHaveBeenCalledWith(expect.objectContaining({ canvas, orbitControls: false, streaming: false }));
+    const status = { backend: 'raster', samples: 0 };
+    (viewer.initialize.mock.calls[0]![0] as { onStatus(status: unknown): void }).onStatus(status);
+    expect(onStatus).toHaveBeenCalledWith(status);
     await engine.loadUsd(new URL('https://example.test/scene.usda'));
     expect(viewer.load).toHaveBeenCalledWith('https://example.test/scene.usda');
     await engine.render({ backend: 'pathtracing', targetNoise: 0.02 });

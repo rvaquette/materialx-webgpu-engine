@@ -43,32 +43,56 @@ export async function withGpuValidation(device: GPUDevice, operation: () => void
   }
 }
 
+/** A scene or backend needs more than a GPU limit allows; callers may fall back to another backend. */
+export class GpuLimitError extends Error {
+  override readonly name = 'GpuLimitError';
+  constructor(message: string, readonly limit: string, readonly required: number, readonly available: number) {
+    super(message);
+  }
+}
+
+/** Optional features the engine uses when present (GPU timings). */
+export const OPTIONAL_DEVICE_FEATURES: readonly GPUFeatureName[] = ['timestamp-query'];
+
 /** Imported scenes negotiate storage and shared material texture capacity. */
 export function sceneDeviceDescriptor(adapter: GPUAdapter): GPUDeviceDescriptor {
   return {
+    requiredFeatures: OPTIONAL_DEVICE_FEATURES.filter(feature => adapter.features?.has(feature)),
     requiredLimits: {
       maxStorageBufferBindingSize: adapter.limits.maxStorageBufferBindingSize,
       maxBufferSize: adapter.limits.maxBufferSize,
       maxStorageBuffersPerShaderStage: adapter.limits.maxStorageBuffersPerShaderStage,
       maxSampledTexturesPerShaderStage: adapter.limits.maxSampledTexturesPerShaderStage,
       maxSamplersPerShaderStage: adapter.limits.maxSamplersPerShaderStage,
+      maxTextureDimension2D: adapter.limits.maxTextureDimension2D,
+      maxTextureArrayLayers: adapter.limits.maxTextureArrayLayers,
     },
   };
 }
 
 export function assertSceneTextureBindings(device: GPUDevice, textures: number, samplers: number): void {
-  if (textures > device.limits.maxSampledTexturesPerShaderStage || samplers > device.limits.maxSamplersPerShaderStage) {
-    throw new Error(
-      `Scene requires ${textures} sampled textures and ${samplers} samplers; ` +
-      `device limits are ${device.limits.maxSampledTexturesPerShaderStage} textures and ${device.limits.maxSamplersPerShaderStage} samplers.`,
-    );
+  const message = `Scene requires ${textures} sampled textures and ${samplers} samplers; ` +
+    `device limits are ${device.limits.maxSampledTexturesPerShaderStage} textures and ${device.limits.maxSamplersPerShaderStage} samplers.`;
+  if (textures > device.limits.maxSampledTexturesPerShaderStage) {
+    throw new GpuLimitError(message, 'maxSampledTexturesPerShaderStage', textures, device.limits.maxSampledTexturesPerShaderStage);
+  }
+  if (samplers > device.limits.maxSamplersPerShaderStage) {
+    throw new GpuLimitError(message, 'maxSamplersPerShaderStage', samplers, device.limits.maxSamplersPerShaderStage);
   }
 }
 
 export function assertSceneStorageSize(device: GPUDevice, bytes: number, role?: string): void {
   const limit = Math.min(device.limits.maxStorageBufferBindingSize, device.limits.maxBufferSize);
   if (bytes > limit) {
-    throw new Error(`Scene storage buffer${role ? ` "${role}"` : ''} requires ${bytes} bytes, exceeding the GPU device limit of ${limit} bytes.`);
+    throw new GpuLimitError(`Scene storage buffer${role ? ` "${role}"` : ''} requires ${bytes} bytes, exceeding the GPU device limit of ${limit} bytes.`,
+      device.limits.maxStorageBufferBindingSize <= device.limits.maxBufferSize ? 'maxStorageBufferBindingSize' : 'maxBufferSize', bytes, limit);
+  }
+}
+
+export function assertStorageBufferCount(device: GPUDevice, count: number, backend: string): void {
+  if (count > device.limits.maxStorageBuffersPerShaderStage) {
+    throw new GpuLimitError(`${backend} requires ${count} storage buffers; this GPU supports ${device.limits.maxStorageBuffersPerShaderStage}.`,
+      'maxStorageBuffersPerShaderStage', count, device.limits.maxStorageBuffersPerShaderStage);
   }
 }
 

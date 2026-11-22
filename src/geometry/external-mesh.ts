@@ -158,7 +158,6 @@ export async function loadExternalMeshSource(
 ): Promise<MeshSource> {
   interface GeometryFile {
     bytes: Promise<ArrayBuffer>;
-    digest?: string;
     parsed?: Promise<{ root: Object3D; flipV: boolean }>;
     diagnostics: Diagnostic[];
   }
@@ -189,18 +188,19 @@ export async function loadExternalMeshSource(
       fail(path, cause);
     }
   }
+  // Files download in parallel; each digest (the prepared-geometry cache key) is taken when its mesh is first needed.
   const subtle = globalThis.crypto?.subtle;
-  for (const [path, entry] of entries) {
-    const file = files.get(entry.uri)!;
-    try {
-      const bytes = await file.bytes;
-      if (subtle && file.digest === undefined) {
-        file.digest = Array.from(new Uint8Array(await subtle.digest('SHA-256', bytes)), b => b.toString(16).padStart(2, '0')).join('');
-      }
-    } catch (cause) {
-      fail(path, cause);
+  const digests = new Map<GeometryFile, Promise<string | undefined>>();
+  const digestOf = (path: string, file: GeometryFile): Promise<string | undefined> => {
+    let digest = digests.get(file);
+    if (!digest) {
+      digest = file.bytes.then(async bytes => subtle
+        ? Array.from(new Uint8Array(await subtle.digest('SHA-256', bytes)), b => b.toString(16).padStart(2, '0')).join('')
+        : undefined, cause => fail(path, cause));
+      digests.set(file, digest);
     }
-  }
+    return digest;
+  };
   const loadMesh = async (path: string): Promise<RawMesh | undefined> => {
     const entry = entries.get(path);
     if (!entry) return inline.meshFor(path);
@@ -227,10 +227,10 @@ export async function loadExternalMeshSource(
   return {
     meshFor: (path) => meshes.get(path) ?? (entries.has(path) ? undefined : inline.meshFor(path)),
     loadMesh,
-    contentKey: (path) => {
+    contentKey: async (path) => {
       const entry = entries.get(path);
       if (!entry) return undefined;
-      const digest = files.get(entry.uri)!.digest;
+      const digest = await digestOf(path, files.get(entry.uri)!);
       return digest === undefined ? undefined : `engine-geometry:${digest}:${entry.objectName ?? ''}`;
     },
     diagnosticsFor: (path) => {

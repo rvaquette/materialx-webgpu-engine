@@ -35,7 +35,7 @@ export interface MeshSource {
   meshFor(prototypePrimPath: string): RawMesh | undefined;
   /** Identity of the source content (e.g. file digest and object name). A prepared
    *  geometry cache hit on it skips loading and parsing the mesh altogether. */
-  contentKey?(prototypePrimPath: string): string | undefined;
+  contentKey?(prototypePrimPath: string): string | undefined | Promise<string | undefined>;
   /** Lazily parses the mesh; preferred over meshFor when present. */
   loadMesh?(prototypePrimPath: string): Promise<RawMesh | undefined>;
   /** Warnings raised while parsing this mesh, replayed on a content-keyed cache hit. */
@@ -159,9 +159,20 @@ export interface SceneResources {
   volumes?: ReadonlyMap<string, import('./scene-volumes.ts').SceneVolume>;
 }
 
+export interface SceneResourcesProgress {
+  /** Asked before each prototype is prepared; return true to receive a partial scene now. */
+  wanted(readyGeometries: number): boolean;
+  /** A self-contained scene with the geometry prepared so far (and the materials once compiled). */
+  partial(resources: SceneResources, pendingGeometries: number): void;
+  /** Awaited before each prototype: lets a partial scene finish building before geometry work resumes. */
+  pause?(): Promise<void> | undefined;
+}
+
 export interface BuildSceneResourcesOptions {
   meshSource: MeshSource;
-  materialCompiler: MaterialCompiler;
+  /** A pending compiler lets geometry preparation start before MaterialX is loaded. */
+  materialCompiler: MaterialCompiler | Promise<MaterialCompiler>;
+  progress?: SceneResourcesProgress;
   sink?: DiagnosticSink;
   prepareOptions?: PrepareMeshOptions;
   isRenderable?: (prim: ScenePrim) => boolean;
@@ -317,10 +328,92 @@ export async function buildSceneResources(
       emit({ level: 'warning', message: 'Prepared geometry cache unavailable; preparing meshes without persistent caching.', detail: String(error) });
     }
   }
+  // Materials per unique unit via the injected MaterialX chain.
+  const materials = new Map<string, MaterialResource>();
+  const pendingMaterials: string[] = [];
+  let materialsCompiled = false;
+  const compileMaterials = async (compiler: MaterialCompiler): Promise<void> => {
+    materialsCompiled = true;
+    for (const unit of sceneMaterials.units) {
+      const key = materialUnitKey(unit);
+      const build = await compiler.compile(unit);
+      if (!build) {
+        pendingMaterials.push(key);
+        emit({ level: 'warning', message: `Material pending: compiler produced no build for ${unit.materialName}`, detail: { material: key } });
+        continue;
+      }
+      const features = extractFeatures(build.ir);
+      const sceneShader = build.layered
+        ? assembleIrForwardShader(build.layered, { displacement: build.displacement !== undefined })
+        : undefined;
+      const variant = createMaterialVariant(build.module, pipelineKeyFor(features, build.module, options, sceneShader?.code));
+      materials.set(key, {
+        unitKey: key,
+        materialName: unit.materialName,
+        features,
+        variant,
+        boundPrims: unit.boundPrims,
+        ...(build.volume ? {
+          volumeIr: build.ir, volumeBoundary: !build.surface,
+          ...(!isSpatialVolumeIr(build.ir) ? { volumeMedium: evaluateVolumeIr(build.ir) } : {}),
+        } : {}),
+        ...(sceneShader ? { sceneShader } : {}),
+        ...(build.layered ? { surfaceModule: build.layered } : {}),
+        ...(build.graph ? { surfaceGraph: build.graph } : {}),
+        ...(build.surface ? { resolvedSurface: build.surface } : {}),
+        ...(build.displacement ? { displacement: build.displacement } : {}),
+      });
+    }
+  };
+
+  // Instances + TLAS over the geometry and materials available so far.
+  const assemble = (): SceneResources => {
+    const instances: InstanceResource[] = [];
+    const tlasBounds: Aabb[] = [];
+    for (const inst of sceneInstances.instances) {
+      const geometry = geometries.get(inst.prototypeId);
+      const binding = sceneMaterials.bindings.get(inst.primPath) ?? sceneMaterials.bindings.get(inst.prototypeId);
+      const materialKey = binding?.materialX
+        ? materialUnitKey(binding.materialX)
+        : undefined;
+      instances.push({
+        id: inst.id,
+        prototypeId: inst.prototypeId,
+        primPath: inst.primPath,
+        transform: inst.transform,
+        hasGeometry: geometry !== undefined,
+        ...(materialKey !== undefined && materials.has(materialKey) ? { materialKey } : {}),
+        ...(inst.materialPath !== undefined ? { materialPath: inst.materialPath } : {}),
+        ...(inst.instancer ? { instancer: inst.instancer } : {}),
+      });
+      tlasBounds.push(geometry ? transformBounds(geometry.bounds, inst.transform) : pointBounds(inst.transform));
+    }
+    return {
+      geometries: new Map(geometries),
+      materials: new Map(materials),
+      instances,
+      tlas: buildTlas(tlasBounds),
+      pendingGeometry: [...pendingGeometry],
+      pendingMaterials: [...pendingMaterials],
+      unboundGprims: sceneMaterials.unbound,
+    };
+  };
+
+  // A ready compiler compiles first; a pending one joins as soon as it resolves.
+  let readyCompiler: MaterialCompiler | undefined;
+  const compilerPromise = Promise.resolve(options.materialCompiler);
+  void compilerPromise.then(compiler => { readyCompiler = compiler; }, () => undefined);
+  if (!(options.materialCompiler instanceof Promise)) await compileMaterials(options.materialCompiler);
+
   const replayed = new Set<string>();
+  let remainingPrototypes = sceneInstances.prototypes.length;
   for (const proto of sceneInstances.prototypes) {
+    if (!materialsCompiled && readyCompiler) await compileMaterials(readyCompiler);
+    if (options.progress?.wanted(geometries.size)) options.progress.partial(assemble(), remainingPrototypes);
+    await options.progress?.pause?.();
+    remainingPrototypes--;
     const source = options.meshSource;
-    const contentKey = cacheable && geometryCache ? source.contentKey?.(proto.primPath) : undefined;
+    const contentKey = cacheable && geometryCache ? await source.contentKey?.(proto.primPath) : undefined;
     let key = contentKey ? await preparedGeometryCacheKey({ contentKey }, prepareOptions) : undefined;
     let prepared: PreparedMesh | undefined;
     if (key && geometryCache) {
@@ -397,72 +490,9 @@ export async function buildSceneResources(
     },
   });
 
-  // Materials per unique unit via the injected MaterialX chain.
-  const materials = new Map<string, MaterialResource>();
-  const pendingMaterials: string[] = [];
-  for (const unit of sceneMaterials.units) {
-    const key = materialUnitKey(unit);
-    const build = await options.materialCompiler.compile(unit);
-    if (!build) {
-      pendingMaterials.push(key);
-      emit({ level: 'warning', message: `Material pending: compiler produced no build for ${unit.materialName}`, detail: { material: key } });
-      continue;
-    }
-    const features = extractFeatures(build.ir);
-    const sceneShader = build.layered
-      ? assembleIrForwardShader(build.layered, { displacement: build.displacement !== undefined })
-      : undefined;
-    const variant = createMaterialVariant(build.module, pipelineKeyFor(features, build.module, options, sceneShader?.code));
-    materials.set(key, {
-      unitKey: key,
-      materialName: unit.materialName,
-      features,
-      variant,
-      boundPrims: unit.boundPrims,
-      ...(build.volume ? {
-        volumeIr: build.ir, volumeBoundary: !build.surface,
-        ...(!isSpatialVolumeIr(build.ir) ? { volumeMedium: evaluateVolumeIr(build.ir) } : {}),
-      } : {}),
-      ...(sceneShader ? { sceneShader } : {}),
-      ...(build.layered ? { surfaceModule: build.layered } : {}),
-      ...(build.graph ? { surfaceGraph: build.graph } : {}),
-      ...(build.surface ? { resolvedSurface: build.surface } : {}),
-      ...(build.displacement ? { displacement: build.displacement } : {}),
-    });
-  }
-
-  // Instances + TLAS.
-  const instances: InstanceResource[] = [];
-  const tlasBounds: Aabb[] = [];
-  for (const inst of sceneInstances.instances) {
-    const geometry = geometries.get(inst.prototypeId);
-    const binding = sceneMaterials.bindings.get(inst.primPath) ?? sceneMaterials.bindings.get(inst.prototypeId);
-    const materialKey = binding?.materialX
-      ? materialUnitKey(binding.materialX)
-      : undefined;
-    instances.push({
-      id: inst.id,
-      prototypeId: inst.prototypeId,
-      primPath: inst.primPath,
-      transform: inst.transform,
-      hasGeometry: geometry !== undefined,
-      ...(materialKey !== undefined && materials.has(materialKey) ? { materialKey } : {}),
-      ...(inst.materialPath !== undefined ? { materialPath: inst.materialPath } : {}),
-      ...(inst.instancer ? { instancer: inst.instancer } : {}),
-    });
-    tlasBounds.push(geometry ? transformBounds(geometry.bounds, inst.transform) : pointBounds(inst.transform));
-  }
-
-  const tlas = buildTlas(tlasBounds);
-  return {
-    geometries,
-    materials,
-    instances,
-    tlas,
-    pendingGeometry,
-    pendingMaterials,
-    unboundGprims: sceneMaterials.unbound,
-  };
+  if (!materialsCompiled) await compileMaterials(await compilerPromise);
+  const resources = assemble();
+  return { ...resources, geometries, materials };
 }
 
 export interface GeometryGpuBuffers {

@@ -1,3 +1,4 @@
+import { GpuLimitError } from '../../gpu/device.ts';
 import type { BvhNode } from '../../geometry/bvh.ts';
 import { inverse4 } from '../../scene/transforms.ts';
 import type { DisneyAcceleration } from './disney-acceleration.ts';
@@ -200,7 +201,7 @@ export function uploadDisneyGeometryTextures(
     const max = device.limits.maxTextureDimension2D;
     const width = Math.min(texels, max);
     const height = Math.ceil(texels / width);
-    if (height > max) throw new Error(`Disney ${label} texture exceeds the GPU 2D texture limit.`);
+    if (height > max) throw new GpuLimitError(`Disney ${label} texture exceeds the GPU 2D texture limit.`, 'maxTextureDimension2D', height, max);
     const size = width * height * 4;
     let data: Float32Array | Int32Array = values;
     if (size !== values.length) {

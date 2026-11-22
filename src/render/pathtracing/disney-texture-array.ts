@@ -1,3 +1,4 @@
+import { GpuLimitError } from '../../gpu/device.ts';
 import type { DecodedPixelImage } from '../../assets/images.ts';
 import { uploadMaterialImageArray } from '../../gpu/material-texture.ts';
 import type { PtImageProvider } from './device-bindings.ts';
@@ -81,7 +82,7 @@ export async function uploadDisneyTextureArray(
   if (!files.length) return undefined;
   if (width > device.limits.maxTextureDimension2D || height > device.limits.maxTextureDimension2D ||
       files.length > device.limits.maxTextureArrayLayers) {
-    throw new Error(`Disney texture array exceeds device limits: ${width} x ${height} x ${files.length}.`);
+    throw new GpuLimitError(`Disney texture array exceeds device limits: ${width} x ${height} x ${files.length}.`, files.length > device.limits.maxTextureArrayLayers ? 'maxTextureArrayLayers' : 'maxTextureDimension2D', files.length > device.limits.maxTextureArrayLayers ? files.length : Math.max(width, height), files.length > device.limits.maxTextureArrayLayers ? device.limits.maxTextureArrayLayers : device.limits.maxTextureDimension2D);
   }
   const images: DecodedPixelImage[] = [];
   for (const file of files) {

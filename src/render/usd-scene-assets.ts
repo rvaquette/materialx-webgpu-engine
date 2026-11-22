@@ -211,7 +211,12 @@ export async function loadMtlxSceneContext(
   const surfaces = new Map<string, RasterSurface>();
   const texts = new Map<string, string>();
   const materialDirs: string[] = [];
-  for (const ref of scene.materials) {
+  // Lowered UsdPreviewSurface materials join the scene synchronously, before the first await,
+  // so callers can resolve bindings while the MaterialX runtime is still loading.
+  const authored = [...scene.materials];
+  const lowered = lowerPreviewSurfaceMaterials(scene, sink);
+  for (const material of lowered) (scene.materials as MaterialXReference[]).push(material.reference);
+  for (const ref of authored) {
     const url = new URL(ref.assetPath, new URL(ref.authoringLayer ?? entry, document.baseURI)).href;
     const dir = dirOf(url);
     if (!materialDirs.includes(dir)) materialDirs.push(dir);
@@ -230,11 +235,9 @@ export async function loadMtlxSceneContext(
       throw error;
     }
   }
-  const lowered = lowerPreviewSurfaceMaterials(scene, sink);
   if (lowered.length > 0 && !materialDirs.includes(baseDir)) materialDirs.push(baseDir);
   for (const material of lowered) {
     texts.set(material.reference.assetPath, resolveMaterialImageUrls(material.xml, baseDir));
-    (scene.materials as MaterialXReference[]).push(material.reference);
     surfaces.set(material.reference.materialName, surfaceFromMtlx(material.xml));
   }
   const coreRoot = runtimeAssets?.materialxCore ?? appAssetUrl(MATERIALX_ROOT);
@@ -433,6 +436,8 @@ export interface LoadedUsdScene {
   environment?: LoadedEnvironment;
   /** Composed stage with its time samples, when animated; `scene` is resolved at `time`. */
   animation?: { source: SceneAsset; time: number };
+  /** A partial scene shown while a streaming load continues. */
+  preview?: boolean;
 }
 
 /** Fetch + import a USD stage and compile its materials into GPU-neutral resources. */
@@ -469,6 +474,12 @@ export interface SceneLoadOptions {
   /** Time code at which an animated stage is loaded (default: its start time code). */
   time?: number;
   loadCrateModule?: () => Promise<OpenUsdModule>;
+  /** Streaming: partial scenes (geometry so far, materials once compiled) while the scene loads. */
+  progress?: {
+    wanted(readyGeometries: number): boolean;
+    partial(scene: LoadedUsdScene, pendingGeometries: number): void;
+    pause?(): Promise<void> | undefined;
+  };
   /** In-memory scene import, sharing the USD material compiler and GPU resource path. */
   imported?: {
     scene: SceneAsset;
@@ -523,23 +534,47 @@ export async function loadUsdScene(
   const cameras = importCameras(scene, { sink });
   const materialTexts = defaults.texts.size
     ? new Map([...options.imported?.materialTexts ?? [], ...defaults.texts]) : options.imported?.materialTexts;
-  const mtlx = await loadMtlxSceneContext(scene, entry, sink, line, options.textureRoot, materialTexts, options.runtimeAssets);
-  const materialsAt = performance.now();
-  performance.measure('usd:materials', { start: composedAt, end: materialsAt, detail: { entry, documents: scene.materials.length } });
+  // MaterialX, the environment and geometry load concurrently; geometry does not wait for the runtime.
+  const mtlxLoad = loadMtlxSceneContext(scene, entry, sink, line, options.textureRoot, materialTexts, options.runtimeAssets);
+  let mtlxReady: Awaited<typeof mtlxLoad> | undefined;
+  const materialsLoaded = mtlxLoad.then(mtlx => {
+    mtlxReady = mtlx;
+    performance.measure('usd:materials', { start: composedAt, end: performance.now(), detail: { entry, documents: scene.materials.length } });
+    return mtlx;
+  });
+  materialsLoaded.catch(() => undefined);
+  let environmentReady: LoadedEnvironment | undefined;
+  const environmentLoad = loadEnvironment(lights, entry, sink).then(environment => (environmentReady = environment));
+  environmentLoad.catch(() => undefined);
+  const progress = options.progress;
+  // Partial scenes use the final material form, so their pipelines are reused by the complete scene.
+  const partialScene = (built: SceneResources): LoadedUsdScene => ({
+    entry, scene, lights,
+    resources: built.materials.size === 0 ? built : options.editableParameters ? editableSceneMaterials(built)
+      : options.parameterMode === 'uniform' ? uniformSceneMaterials(built) : built, cameras, mtlx: mtlxReady ?? previewMtlxContext(), preview: true,
+    ...(environmentReady ? { environment: environmentReady } : {}),
+  });
   try {
     const built = await buildSceneResources(scene, {
       meshSource: options.imported?.meshSource ?? await loadExternalMeshSource(scene, meshSourceFromScene(scene, volumes), sink, undefined,
         // With a persistent prepared-geometry cache, parse files only on cache misses.
         { lazy: globalThis.indexedDB !== undefined }),
-      materialCompiler: createGraphMaterialCompiler({ documents: mtlx.documents, sink }),
+      materialCompiler: materialsLoaded.then(mtlx => createGraphMaterialCompiler({ documents: mtlx.documents, sink })),
       sink,
+      ...(progress ? { progress: {
+        wanted: (ready: number) => progress.wanted(ready),
+        partial: (resources: SceneResources, pending: number) => progress.partial(partialScene(resources), pending),
+        pause: () => progress.pause?.(),
+      } } : {}),
     });
+    const mtlx = await materialsLoaded;
+    const materialsAt = performance.now();
     requireCompiledMaterials(built);
     if (volumes.size) Object.assign(built, { volumes });
     const parameterResources = options.editableParameters ? editableSceneMaterials(built) : undefined;
     const baseResources = parameterResources ?? (options.parameterMode === 'uniform' ? uniformSceneMaterials(built) : built);
     const resources = await applySceneDisplacement(baseResources, mtlx.imageProvider);
-    const environment = await loadEnvironment(lights, entry, sink);
+    const environment = await environmentLoad;
     performance.measure('usd:resources', { start: materialsAt, end: performance.now(), detail: {
       entry, geometries: resources.geometries.size, materials: resources.materials.size,
       pendingMaterials: resources.pendingMaterials.length,
@@ -551,9 +586,19 @@ export async function loadUsdScene(
       ...(timeline.animated ? { animation: { source, time } } : {}),
     };
   } catch (error) {
-    mtlx.documents.delete();
+    void materialsLoaded.then(mtlx => mtlx.documents.delete(), () => undefined);
     throw error;
   }
+}
+
+/** Material context of a partial scene loaded before the MaterialX runtime: neutral surfaces, no images. */
+function previewMtlxContext(): LoadedUsdScene['mtlx'] {
+  return {
+    documents: { delete() {} } as unknown as NonNullable<LoadedUsdScene['mtlx']['documents']>,
+    nodeDefinitions: [],
+    imageProvider: { decode: () => undefined },
+    surfaceFor: () => NEUTRAL_SURFACE,
+  };
 }
 
 export type { Diagnostic };

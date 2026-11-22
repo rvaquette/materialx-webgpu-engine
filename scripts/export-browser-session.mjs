@@ -189,6 +189,8 @@ export async function openExportSession({
       /** App URL of a project-relative path (forward slashes). */
       url: path => `${origin}/${path.split('/').map(encodeURIComponent).join('/')}`,
       call,
+      /** Raw DevTools protocol command on the page target. */
+      cdp: (method, params = {}, timeout) => browser.connection.send(method, params, timeout),
       get alive() { return !browser.connection.closed; },
       async restart() {
         await browser.close();

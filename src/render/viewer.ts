@@ -8,6 +8,7 @@ import {
   buildSceneFrameUniform,
   buildSceneMaterialUniform,
   directionalLightFrom,
+  NEUTRAL_SURFACE,
   type FrameCamera,
   type SceneFramePlan,
 } from './raster/scene-frame.ts';
@@ -36,7 +37,10 @@ import { maxRecordLobes, PT_MAX_LOBES } from './pathtracing/material-record.ts';
 import type { DecodedPixelImage } from '../assets/images.ts';
 import { tonemapIndex, type Tonemap } from './output.ts';
 import { loadUsdScene, meshSourceFromScene, uploadMaterialTextures, type LoadedUsdScene, type ObjectMaterialOverride, type SceneLoadOptions } from './usd-scene-assets.ts';
-import { assertSceneStorageSize, assertSceneTextureBindings, withGpuValidation } from '../gpu/device.ts';
+import { assertSceneStorageSize, assertSceneTextureBindings, assertStorageBufferCount, GpuLimitError, withGpuValidation } from '../gpu/device.ts';
+import { GpuMemoryTracker, type GpuMemoryUsage } from '../gpu/memory.ts';
+import { limitImageProvider } from '../assets/image-limits.ts';
+import { StreamingImages } from '../assets/streaming-images.ts';
 import { captureRgba, type RgbaCapture } from '../gpu/capture.ts';
 import { uploadMaterialImage, uploadMaterialImageArray } from '../gpu/material-texture.ts';
 import { packPtTextureArrays } from './pathtracing/texture-arrays.ts';
@@ -225,7 +229,84 @@ export interface ViewerStatus {
   warnings: number;
   convergence?: PathTraceConvergence;
   convergenceError?: string;
+  /** The selected backend exceeds a GPU limit for this scene; frames are rendered with raster instead. */
+  fallback?: BackendFallback;
+  /** Present while a streaming load shows a partial scene. */
+  loading?: SceneLoadingProgress;
 }
+
+export interface BackendFallback {
+  readonly from: 'pathtracing' | 'disney';
+  readonly to: 'raster';
+  readonly reason: string;
+}
+
+export interface SceneLoadingProgress {
+  /** `preview`: geometry so far with placeholder materials; `textures`: final geometry and materials, textures arriving. */
+  readonly stage: 'preview' | 'geometry' | 'textures';
+  readonly pendingGeometry: number;
+  readonly pendingTextures: number;
+}
+
+/** Opaque viewer state for InteractiveViewer.restoreState (CPU objects only, no GPU resources). */
+export interface ViewerSnapshot {
+  readonly scene?: {
+    readonly entry: string;
+    readonly overrides: ReadonlyMap<string, ObjectMaterialOverride>;
+    readonly options: SceneLoadOptions;
+    readonly compiledOverrides: ReadonlyMap<string, { assetPath: string; material: CompiledMaterial }>;
+    readonly time: number;
+    readonly orbit: OrbitCamera;
+    readonly transforms: ReadonlyMap<string, Mat4>;
+    readonly visibility: ReadonlyMap<string, boolean>;
+    readonly lights: ReadonlyMap<string, LightChanges>;
+    readonly parameters: ReadonlyMap<string, ReadonlyMap<string, readonly number[]>>;
+  };
+  readonly settings: {
+    readonly backend: BackendKind;
+    readonly rasterQuality: RasterQuality;
+    readonly depth: number | undefined;
+    readonly denoise: boolean;
+    readonly adaptive: boolean;
+    readonly view: PathTraceView;
+    readonly limits: PathTraceRenderLimits;
+    readonly environmentEnabled: boolean;
+    readonly paused: boolean;
+    readonly exposure: number | undefined;
+    readonly tonemap: Tonemap;
+    readonly temporalHistory: number;
+  };
+}
+
+/** Streaming previews: at most one rebuild per interval, and never more than 1/factor of the load time. */
+const PREVIEW_MIN_INTERVAL_MS = 1000;
+const PREVIEW_COST_FACTOR = 10;
+
+interface PreviewState {
+  cancelled: boolean;
+  building: Promise<void> | undefined;
+  shown: boolean;
+  lastEnd: number;
+  lastCost: number;
+  /** Decodes through the scene's image provider once its materials are compiled. */
+  images: StreamingImages | undefined;
+  preserveCamera: boolean;
+  options: SceneLoadOptions;
+  sink: DiagnosticSink;
+  loadStarted: number;
+}
+
+function sceneTextureFiles(resources: SceneResources): Set<string> {
+  const files = new Set<string>();
+  for (const material of resources.materials.values()) {
+    for (const texture of material.surfaceModule?.textures ?? []) if (texture.fileRef) files.add(texture.fileRef);
+    if (material.displacement?.file) files.add(material.displacement.file);
+  }
+  return files;
+}
+
+/** The memory budget never reduces material textures below this side. */
+const MIN_BUDGET_TEXTURE_SIZE = 256;
 
 const sceneCameraKey = (camera: SceneCamera): string => JSON.stringify([camera.transform, camera.fovY, camera.pathtracerFov]);
 
@@ -282,6 +363,9 @@ interface SceneRender {
   applyCamera: (viewProj: readonly number[], eye: Vec3, backgroundInvViewProj: readonly number[]) => void;
   frameCount: () => number;
   pathTracerState: () => PathTracerState;
+  fallback: () => BackendFallback | undefined;
+  /** Releases a path tracer and draws its frames with raster (memory budget). */
+  forceFallback: (from: BackendFallback['from'], reason: string) => void;
   dispose: () => void;
 }
 
@@ -333,6 +417,18 @@ export class InteractiveViewer {
   #exposure: number | undefined;
   #tonemap: Tonemap = 'acesFilmic';
   #pathTracingTemporalHistory = 0;
+  #loadingProgress: SceneLoadingProgress | undefined;
+  #firstPreviewStart: number | undefined;
+  readonly #memory: GpuMemoryTracker;
+  #memoryBudget: number | undefined;
+  #budgetTextureLimit = Infinity;
+  #largestTexture = 0;
+  #budgetCheckScheduled = false;
+  #enforcingBudget = false;
+  #budgetExceededReported = false;
+  #loading = 0;
+  #capturing = 0;
+  #streaming: boolean;
   // Dynamic scene state: the USD-driven state at #time, then the API overrides.
   #time = 0;
   #baseTransforms = new Map<string, Mat4>();
@@ -348,6 +444,10 @@ export class InteractiveViewer {
     onStatus?: (s: ViewerStatus) => void;
     onShaderErrors?: (errors: readonly ShaderCompilationError[]) => void;
     onDiagnostic?: DiagnosticSink;
+    /** GPU memory budget in bytes: textures are reduced, then path tracing falls back to raster (docs/INTEGRATION.md). */
+    memoryBudget?: number;
+    /** Show partial scenes (placeholder materials, geometry and textures as they arrive) while loading. */
+    streaming?: boolean;
   } & (
     { canvas: HTMLCanvasElement; context: GPUCanvasContext; orbitControls?: boolean }
     | { width: number; height: number }
@@ -362,6 +462,12 @@ export class InteractiveViewer {
     this.#onStatus = opts.onStatus;
     this.#onShaderErrors = opts.onShaderErrors;
     this.#onDiagnostic = opts.onDiagnostic;
+    this.#memory = new GpuMemoryTracker(opts.device);
+    this.#memoryBudget = opts.memoryBudget;
+    this.#streaming = opts.streaming ?? false;
+    this.#memory.onChange(usage => {
+      if (this.#memoryBudget !== undefined && usage.total > this.#memoryBudget) this.#scheduleBudgetCheck();
+    });
     this.#orbitControls = 'canvas' in opts && opts.orbitControls !== false;
     this.#orbit = OrbitCamera.fromEyeTarget([0, 0.3 + 0.438 * 7, 0], [0, 0.3, 0], this.#width / this.#height);
     this.#detachControls = this.#bindOrbitControls();
@@ -370,6 +476,93 @@ export class InteractiveViewer {
 
   get backend(): BackendKind {
     return this.#backend;
+  }
+
+  /** Live GPU buffer and texture bytes allocated through this viewer's device. */
+  get gpuMemory(): GpuMemoryUsage & { budget?: number; textureLimit: number } {
+    return { ...this.#memory.usage, ...(this.#memoryBudget !== undefined ? { budget: this.#memoryBudget } : {}), textureLimit: this.textureLimit };
+  }
+
+  /** Largest material texture side: the GPU limit, lowered by the memory budget policy. */
+  get textureLimit(): number {
+    return Math.min(this.#device.limits.maxTextureDimension2D, this.#budgetTextureLimit);
+  }
+
+  #withTextureLimits(loaded: LoadedUsdScene, report = true): LoadedUsdScene {
+    const sink = this.#diagnosticSink();
+    const imageProvider = limitImageProvider(loaded.mtlx.imageProvider, () => this.textureLimit, reduction => {
+      if (!report) return;
+      const budget = this.#budgetTextureLimit < this.#device.limits.maxTextureDimension2D;
+      // Budget reductions are summarized by memory-budget-reduced; each texture is informational.
+      sink({
+        level: budget ? 'info' : 'warning', code: 'texture-downscaled',
+        message: `Texture ${reduction.file} reduced from ${reduction.from.join('x')} to ${reduction.to.join('x')} ` +
+          (budget ? `by the GPU memory budget (${this.textureLimit} px).` : `to fit maxTextureDimension2D (${this.textureLimit}).`),
+        detail: { ...reduction, limit: this.textureLimit, cause: budget ? 'memory-budget' : 'gpu-limit' },
+      });
+    }, image => {
+      this.#largestTexture = Math.max(this.#largestTexture, image.width, image.height,
+        ...(image.udim ?? []).map(layer => Math.max(layer.image.width, layer.image.height)));
+    });
+    // Mutated in place: material edits keep updating the same scene object.
+    loaded.mtlx = { ...loaded.mtlx, imageProvider };
+    return loaded;
+  }
+
+  #scheduleBudgetCheck(): void {
+    if (this.#budgetCheckScheduled || this.#disposed) return;
+    this.#budgetCheckScheduled = true;
+    setTimeout(() => {
+      this.#budgetCheckScheduled = false;
+      void this.#enforceMemoryBudget().catch((error: unknown) => this.#diagnosticSink()({
+        level: 'error', code: 'memory-budget-exceeded', message: `GPU memory budget enforcement failed: ${error instanceof Error ? error.message : String(error)}`,
+      }));
+    }, 0);
+  }
+
+  /**
+   * Budget policy, in order: halve the material texture limit (down to 256 px) and rebuild the
+   * render set; then render path tracing or Disney with raster; then report the excess.
+   */
+  async #enforceMemoryBudget(): Promise<void> {
+    const budget = this.#memoryBudget;
+    const over = () => budget !== undefined && this.#memory.usage.total > budget;
+    if (!over() || this.#enforcingBudget || this.#disposed || this.#loading > 0 || !this.#loaded || !this.#current) return;
+    this.#enforcingBudget = true;
+    const sink = this.#diagnosticSink();
+    const megabytes = (bytes: number) => `${(bytes / 2 ** 20).toFixed(1)} MiB`;
+    try {
+      while (over() && this.#capturing === 0 && this.#loading === 0) {
+        const limit = Math.max(MIN_BUDGET_TEXTURE_SIZE, Math.min(this.textureLimit, this.#largestTexture) >> 1);
+        if (limit >= Math.min(this.textureLimit, this.#largestTexture)) break;
+        const before = this.#memory.usage.total;
+        this.#budgetTextureLimit = limit;
+        sink({ level: 'warning', code: 'memory-budget-reduced',
+          message: `GPU memory ${megabytes(before)} exceeds the budget of ${megabytes(budget!)}; material textures limited to ${limit} px.`,
+          detail: { bytes: before, budget, textureLimit: limit } });
+        const loaded = this.#loaded;
+        await this.#replaceLoaded(loaded, { ...loaded }, 'Scene changed during memory budget reduction.');
+      }
+      const current = this.#current;
+      if (over() && this.#capturing === 0 && current && (this.#backend === 'pathtracing' || this.#backend === 'disney')
+          && current.fallback()?.from !== this.#backend) {
+        const from = this.#backend;
+        const reason = `GPU memory ${megabytes(this.#memory.usage.total)} exceeds the budget of ${megabytes(budget!)}.`;
+        current.forceFallback(from, reason);
+        sink({ level: 'warning', code: 'backend-fallback', message: `${reason} Rendering with raster instead of ${from}.`,
+          detail: { backend: from, bytes: this.#memory.usage.total, budget } });
+        this.#rasterDirty = true;
+        this.#emitStatus();
+      }
+      if (over() && !this.#budgetExceededReported) {
+        this.#budgetExceededReported = true;
+        sink({ level: 'error', code: 'memory-budget-exceeded',
+          message: `GPU memory ${megabytes(this.#memory.usage.total)} still exceeds the budget of ${megabytes(budget!)} after every reduction.`,
+          detail: { bytes: this.#memory.usage.total, budget } });
+      }
+    } finally {
+      this.#enforcingBudget = false;
+    }
   }
 
   get rasterQuality(): RasterQuality {
@@ -388,6 +581,80 @@ export class InteractiveViewer {
     this.#clearDenoiserComparison();
     this.#pathTracingDepthOverride = depth;
     this.#current?.setPathTracingDepth(depth);
+    this.#ptDisplayDirty = true;
+    this.#emitStatus();
+  }
+
+  /**
+   * CPU-side state needed to rebuild this viewer on a new GPU device: scene entry, material
+   * overrides and parameter edits, dynamic overrides, time, camera and render settings.
+   * Material graph edits made in the editor are not included.
+   */
+  snapshotState(): ViewerSnapshot {
+    const parameters = new Map<string, Map<string, readonly number[]>>();
+    if (this.#loaded) {
+      for (const { path } of this.#objects) {
+        const changed = this.objectParameters(path).filter(parameter => parameter.value.some((value, i) => value !== parameter.initial[i]));
+        if (changed.length) parameters.set(path, new Map(changed.map(parameter => [parameter.id, [...parameter.value]])));
+      }
+    }
+    return {
+      ...(this.#sceneEntry && this.#loaded ? { scene: {
+        entry: this.#sceneEntry, overrides: new Map(this.#materialOverrides), options: this.#loadOptions,
+        compiledOverrides: new Map(this.#compiledOverrides), time: this.#time, orbit: this.#orbit,
+        transforms: new Map(this.#transformOverrides), visibility: new Map(this.#visibilityOverrides),
+        lights: new Map(this.#lightOverrides), parameters,
+      } } : {}),
+      settings: {
+        backend: this.#backend, rasterQuality: this.#rasterQuality, depth: this.#pathTracingDepthOverride,
+        denoise: this.#pathTracingDenoise, adaptive: this.#pathTracingAdaptive, view: this.#pathTracingView,
+        limits: this.#pathTracingLimits, environmentEnabled: this.#environmentEnabled, paused: this.#pathTracingPaused,
+        exposure: this.#exposure, tonemap: this.#tonemap, temporalHistory: this.#pathTracingTemporalHistory,
+      },
+    };
+  }
+
+  /** Reloads a snapshot taken on another viewer (typically after a device loss). */
+  async restoreState(snapshot: ViewerSnapshot): Promise<void> {
+    const settings = snapshot.settings;
+    this.#backend = settings.backend;
+    this.#rasterQuality = settings.rasterQuality;
+    this.#pathTracingDenoise = settings.denoise;
+    this.#pathTracingAdaptive = settings.adaptive;
+    this.#pathTracingView = settings.view;
+    this.#pathTracingLimits = settings.limits;
+    this.#environmentEnabled = settings.environmentEnabled;
+    this.#pathTracingPaused = settings.paused;
+    this.#exposure = settings.exposure;
+    this.#tonemap = settings.tonemap;
+    this.#pathTracingTemporalHistory = settings.temporalHistory;
+    const scene = snapshot.scene;
+    if (scene) {
+      this.#transformOverrides = new Map(scene.transforms);
+      this.#visibilityOverrides = new Map(scene.visibility);
+      this.#lightOverrides = new Map(scene.lights);
+      this.#keepDynamicOverrides = true;
+      try {
+        await this.load(scene.entry, scene.overrides, true, { ...scene.options, time: scene.time });
+      } finally {
+        this.#keepDynamicOverrides = false;
+      }
+      if (scene.compiledOverrides.size && this.#compiledBase) {
+        const candidate = await applyCompiledMaterials(this.#compiledBase,
+          new Map([...scene.compiledOverrides].map(([path, value]) => [path, value.material])));
+        await this.#replaceLoaded(this.#loaded!, candidate, 'Scene changed during state restoration.');
+        this.#compiledOverrides = new Map(scene.compiledOverrides);
+        this.#objects = describeObjects(candidate, new Map([...scene.compiledOverrides].map(([key, value]) => [key, value.assetPath])));
+      }
+      for (const [path, changes] of scene.parameters) await this.setObjectParameters(path, changes);
+      this.#orbit = scene.orbit;
+      this.#orbit.aspect = this.#width / this.#height;
+      this.#detachControls();
+      this.#detachControls = this.#bindOrbitControls();
+      this.#onCameraChanged();
+    }
+    if (settings.depth !== undefined) this.setPathTracingDepth(settings.depth);
+    this.#rasterDirty = true;
     this.#ptDisplayDirty = true;
     this.#emitStatus();
   }
@@ -1170,6 +1437,7 @@ export class InteractiveViewer {
     this.#detachControls();
     this.#current?.dispose();
     this.#current = null;
+    this.#memory.dispose();
     this.#jsDenoiser.dispose();
     this.#loaded?.mtlx.documents?.delete();
     this.#loaded = undefined;
@@ -1209,7 +1477,48 @@ export class InteractiveViewer {
       else if (d.level === 'error') console.error(d.message, d.detail ?? '');
       else if (d.level === 'warning') console.warn(d.message, d.detail ?? '');
     };
-    const loaded = await this.#loadEntry(entry, overrides, options, sink);
+    this.#loading++;
+    try {
+      await this.#loadScene(entry, overrides, preserveCamera, options, sink, loadStarted);
+    } finally {
+      this.#loading--;
+    }
+    this.#budgetExceededReported = false;
+    this.#scheduleBudgetCheck();
+  }
+
+  async #loadScene(
+    entry: string, overrides: ReadonlyMap<string, ObjectMaterialOverride>, preserveCamera: boolean,
+    options: SceneLoadOptions, sink: DiagnosticSink, loadStarted: number,
+  ): Promise<void> {
+    const preview: PreviewState | undefined = this.#streaming && this.#context && !/(?:^|\/)scene\.json(?:[?#]|$)/i.test(entry)
+      ? {
+        cancelled: false, building: undefined, shown: false, lastEnd: 0, lastCost: 0,
+        images: undefined, preserveCamera, options, sink, loadStarted,
+      }
+      : undefined;
+    const loadOptions: SceneLoadOptions = preview ? { ...options, progress: {
+      wanted: ready => this.#previewWanted(preview, ready),
+      partial: (scene, pending) => this.#showPreview(preview, scene, pending),
+      // Geometry waits for a preview being built: its pipelines then serve the final scene.
+      pause: () => (preview.shown ? undefined : preview.building),
+    } } : options;
+    let loaded: LoadedUsdScene;
+    try {
+      loaded = this.#withTextureLimits(await this.#loadEntry(entry, overrides, loadOptions, sink));
+      if (preview) await this.#finishPreview(preview, loaded);
+    } catch (error) {
+      if (preview) {
+        preview.cancelled = true;
+        await preview.building;
+        this.#loadingProgress = undefined;
+        if (preview.shown) {
+          this.#current?.dispose();
+          this.#current = null;
+        }
+      }
+      throw error;
+    }
     const exposure = loaded.cameras[0]?.exposure ?? 0;
     let frame: SceneFramePlan;
     let render: SceneRender;
@@ -1218,20 +1527,13 @@ export class InteractiveViewer {
       if (overrides.size > 0 && loaded.resources.pendingMaterials.length > 0) {
         throw new Error('MaterialX compilation failed.');
       }
-      const env = loaded.environment;
-      const environment = env
-        ? { radiance: env.averageRadiance, tint: env.tint, intensity: env.intensity, hasTexture: true, sh: env.sh }
-        : { radiance: pathTraceSettings(loaded.scene).converted ? [0, 0, 0] as Vec3 : PREVIEW_ENV };
-      Object.assign(environment, { enabled: this.#environmentEnabled });
-      frame = buildSceneFrame(loaded.resources, {
-        lights: loaded.lights,
-        frameCamera: previewCamera(this.#width / this.#height, exposure),
-        environment,
-        surfaceFor: loaded.mtlx.surfaceFor,
-      });
-      // Pipelines are only reclaimed by GC: drop the old set before compiling the new one.
-      this.#current?.dispose();
-      this.#current = null;
+      frame = this.#planFrame(loaded, exposure);
+      // Pipelines are only reclaimed by GC: drop the old set before compiling the new one
+      // (a streaming preview stays on screen until the final set replaces it).
+      if (!preview?.shown) {
+        this.#current?.dispose();
+        this.#current = null;
+      }
       await new Promise((resolve) => setTimeout(resolve, 0));
       if (this.#disposed) throw new Error('Viewer disposed during load.');
       const gpuBuildStarted = performance.now();
@@ -1239,6 +1541,11 @@ export class InteractiveViewer {
       performance.measure('viewer:raster-build', { start: gpuBuildStarted, end: performance.now(), detail: { entry } });
     } catch (error) {
       loaded.mtlx.documents?.delete();
+      if (preview?.shown) {
+        this.#current?.dispose();
+        this.#current = null;
+      }
+      this.#loadingProgress = undefined;
       throw error;
     }
     if (this.#disposed) {
@@ -1246,7 +1553,9 @@ export class InteractiveViewer {
       loaded.mtlx.documents?.delete();
       throw new Error('Viewer disposed during load.');
     }
+    this.#current?.dispose();
     this.#current = render;
+    this.#loadingProgress = undefined;
     this.#firstFrameStart = loadStarted;
     this.#loaded?.mtlx.documents?.delete();
     this.#loaded = loaded;
@@ -1260,31 +1569,7 @@ export class InteractiveViewer {
 
     // Seed the orbit from the scene bounds so the first frame is framed, then push
     // the camera into both backends and restart accumulation.
-    const bounds = loaded.resources.tlas.bounds;
-    const center: Vec3 = [
-      (bounds.min[0] + bounds.max[0]) / 2,
-      (bounds.min[1] + bounds.max[1]) / 2,
-      (bounds.min[2] + bounds.max[2]) / 2,
-    ];
-    if (!preserveCamera) {
-      const camera = loaded.cameras[0];
-      if (camera) {
-        this.#orbitFromSceneCamera(camera, loaded, center);
-      } else {
-        if (options.imported) {
-          const radius = Math.max(1e-6, Math.hypot(
-            bounds.max[0] - bounds.min[0], bounds.max[1] - bounds.min[1], bounds.max[2] - bounds.min[2],
-          ) / 2);
-          const fovY = Math.PI / 3;
-          const distance = 1.2 * radius / Math.sin(fovY / 2);
-          const eye: Vec3 = [center[0] + 0.657 * distance, center[1] + 0.438 * distance, center[2] + 0.613 * distance];
-          this.#orbit = OrbitCamera.fromEyeTarget(eye, center, this.#width / this.#height, fovY, radius / 1000, distance + radius * 100);
-          this.#orbit.projection = 'perspective';
-        } else {
-          this.#orbit = OrbitCamera.fromEyeTarget(frame.camera.eye, center, this.#width / this.#height);
-        }
-      }
-    }
+    if (!preserveCamera) this.#placeCamera(loaded, frame, options);
     this.#detachControls();
     this.#detachControls = this.#bindOrbitControls();
     this.#baseTransforms = new Map(loaded.resources.instances.map(instance => [instance.id, instance.transform]));
@@ -1300,6 +1585,121 @@ export class InteractiveViewer {
     this.#emitStatus();
     if (await this.#applyMaterialAnimation()) this.#applyDynamicState(false, true);
     await this.#applyTopologyChanges();
+  }
+
+  #previewWanted(state: PreviewState, readyGeometries: number): boolean {
+    if (state.cancelled || state.building || this.#disposed || this.#backend === 'disney') return false;
+    if (!state.shown) return readyGeometries >= 1;
+    return performance.now() - state.lastEnd >= Math.max(PREVIEW_MIN_INTERVAL_MS, PREVIEW_COST_FACTOR * state.lastCost);
+  }
+
+  /** Builds and shows a partial scene; superseded or failed previews are dropped. */
+  #showPreview(state: PreviewState, partial: LoadedUsdScene, pendingGeometry: number): void {
+    state.building = (async () => {
+      const started = performance.now();
+      // The first preview uses neutral surfaces only: one pipeline, shown as early as possible.
+      const neutral = !state.shown && partial.resources.materials.size > 0;
+      if (partial.resources.materials.size > 0) state.images ??= new StreamingImages(partial.mtlx.imageProvider);
+      state.images?.prefetch(sceneTextureFiles(partial.resources));
+      const snapshot = (state.images ?? new StreamingImages({ decode: () => undefined })).snapshot();
+      const candidate = this.#withTextureLimits({
+        ...partial,
+        ...(neutral ? { resources: {
+          ...partial.resources, materials: new Map(),
+          instances: partial.resources.instances.map(({ materialKey: _materialKey, ...instance }) => instance),
+        } } : {}),
+        mtlx: { ...partial.mtlx, imageProvider: snapshot, ...(neutral ? { surfaceFor: () => NEUTRAL_SURFACE } : {}) },
+      }, false);
+      const exposure = candidate.cameras[0]?.exposure ?? 0;
+      const frame = this.#planFrame(candidate, exposure);
+      if (!state.shown) {
+        this.#current?.dispose();
+        this.#current = null;
+      }
+      const render = await this.#buildSceneRender(candidate, frame, exposure, state.sink, true);
+      if (state.cancelled || this.#disposed) {
+        render.dispose();
+        return;
+      }
+      this.#current?.dispose();
+      this.#current = render;
+      if (!state.shown) {
+        state.shown = true;
+        if (!state.preserveCamera) this.#placeCamera(candidate, frame, state.options);
+        this.#firstPreviewStart = state.loadStarted;
+      }
+      this.#loadingProgress = {
+        stage: candidate.resources.materials.size === 0 && partial.preview ? 'preview' : pendingGeometry > 0 ? 'geometry' : 'textures',
+        pendingGeometry, pendingTextures: state.images?.progress.pending ?? 0,
+      };
+      this.#onCameraChanged();
+      this.#emitStatus();
+      state.lastCost = performance.now() - started;
+      state.lastEnd = performance.now();
+      performance.measure('viewer:preview-build', { start: started, end: state.lastEnd,
+        detail: { stage: this.#loadingProgress.stage, pendingGeometry, sinceLoad: started - state.loadStarted } });
+    })().catch((error: unknown) => {
+      if (!state.cancelled && !this.#disposed) {
+        state.sink({ level: 'warning', code: 'streaming-preview-failed',
+          message: `Streaming preview failed: ${error instanceof Error ? error.message : String(error)}` });
+      }
+    }).finally(() => { state.building = undefined; });
+  }
+
+  /** Final geometry and materials are known: show them with the textures decoded so far until all arrive. */
+  async #finishPreview(state: PreviewState, loaded: LoadedUsdScene): Promise<void> {
+    await state.building;
+    const images = state.images ??= new StreamingImages(loaded.mtlx.imageProvider);
+    images.prefetch(sceneTextureFiles(loaded.resources));
+    while (images.progress.pending > 0 && !this.#disposed) {
+      if (this.#previewWanted(state, Infinity)) {
+        this.#showPreview(state, loaded, 0);
+        await state.building;
+      }
+      await Promise.race([images.settled(), new Promise(resolve => setTimeout(resolve, 250))]);
+    }
+    state.cancelled = true;
+    await state.building;
+  }
+
+  #planFrame(loaded: LoadedUsdScene, exposure: number): SceneFramePlan {
+    const env = loaded.environment;
+    const environment = env
+      ? { radiance: env.averageRadiance, tint: env.tint, intensity: env.intensity, hasTexture: true, sh: env.sh }
+      : { radiance: pathTraceSettings(loaded.scene).converted ? [0, 0, 0] as Vec3 : PREVIEW_ENV };
+    Object.assign(environment, { enabled: this.#environmentEnabled });
+    return buildSceneFrame(loaded.resources, {
+      lights: loaded.lights,
+      frameCamera: previewCamera(this.#width / this.#height, exposure),
+      environment,
+      surfaceFor: loaded.mtlx.surfaceFor,
+    });
+  }
+
+  #placeCamera(loaded: LoadedUsdScene, frame: SceneFramePlan, options: SceneLoadOptions): void {
+    const bounds = loaded.resources.tlas.bounds;
+    const center: Vec3 = [
+      (bounds.min[0] + bounds.max[0]) / 2,
+      (bounds.min[1] + bounds.max[1]) / 2,
+      (bounds.min[2] + bounds.max[2]) / 2,
+    ];
+    const camera = loaded.cameras[0];
+    if (camera) {
+      this.#orbitFromSceneCamera(camera, loaded, center);
+    } else {
+      if (options.imported) {
+        const radius = Math.max(1e-6, Math.hypot(
+          bounds.max[0] - bounds.min[0], bounds.max[1] - bounds.min[1], bounds.max[2] - bounds.min[2],
+        ) / 2);
+        const fovY = Math.PI / 3;
+        const distance = 1.2 * radius / Math.sin(fovY / 2);
+        const eye: Vec3 = [center[0] + 0.657 * distance, center[1] + 0.438 * distance, center[2] + 0.613 * distance];
+        this.#orbit = OrbitCamera.fromEyeTarget(eye, center, this.#width / this.#height, fovY, radius / 1000, distance + radius * 100);
+        this.#orbit.projection = 'perspective';
+      } else {
+        this.#orbit = OrbitCamera.fromEyeTarget(frame.camera.eye, center, this.#width / this.#height);
+      }
+    }
   }
 
   #orbitFromSceneCamera(camera: SceneCamera, loaded: LoadedUsdScene, center: Vec3): void {
@@ -1579,6 +1979,7 @@ export class InteractiveViewer {
     const convergence = this.#current.pathTraceConvergence();
     const convergenceError = this.#current.pathTraceConvergenceError();
     const progress = this.#current.pathTraceProgress();
+    const fallback = this.#current.fallback();
     this.#onStatus({
       environmentEnabled: this.#environmentEnabled,
       backend: this.#backend,
@@ -1602,6 +2003,8 @@ export class InteractiveViewer {
       warnings: this.#warnings,
       ...(convergence ? { convergence } : {}),
       ...(convergenceError ? { convergenceError } : {}),
+      ...(fallback && fallback.from === this.#backend ? { fallback } : {}),
+      ...(this.#loadingProgress ? { loading: this.#loadingProgress } : {}),
     });
   }
 
@@ -1638,6 +2041,17 @@ export class InteractiveViewer {
   ): Promise<void> {
     const current = this.#current;
     if (!current || this.#context) throw new Error('A loaded headless scene is required.');
+    this.#capturing++;
+    try {
+      await this.#capturePathTrace(current, targetView, samples, shutter);
+    } finally {
+      this.#capturing--;
+    }
+  }
+
+  async #capturePathTrace(
+    current: SceneRender, targetView: GPUTextureView, samples: number, shutter?: { open: number; close: number; steps?: number },
+  ): Promise<void> {
     if (!shutter) {
       await current.capturePathTrace(targetView, samples);
       return;
@@ -1670,22 +2084,24 @@ export class InteractiveViewer {
     if (current && !this.#framePending) {
       let submitted = false;
       const started = performance.now();
-      const pathTracingFrame = this.#backend === 'pathtracing' || this.#backend === 'disney';
+      // A backend that exceeds a GPU limit is drawn by raster (status.fallback).
+      const backend = current.fallback()?.from === this.#backend ? 'raster' : this.#backend;
+      const pathTracingFrame = backend === 'pathtracing' || backend === 'disney';
       const denoising = current.denoiserStatus().state === 'running';
       const stopped = current.pathTraceProgress()?.stopReason !== undefined;
-        if (this.#backend === 'pathtracing' && ((!this.#pathTracingPaused && !denoising && !stopped) || this.#ptDisplayDirty)) {
+        if (backend === 'pathtracing' && ((!this.#pathTracingPaused && !denoising && !stopped) || this.#ptDisplayDirty)) {
         const tiled = performance.now() - this.#lastCameraChange >= 200;
         current.renderPathTrace(context.getCurrentTexture().createView(), tiled, !this.#pathTracingPaused && !denoising && !stopped);
         this.#ptDisplayDirty = false;
         submitted = true;
         this.#emitStatus();
-        } else if (this.#backend === 'disney' && (this.#ptDisplayDirty ||
+        } else if (backend === 'disney' && (this.#ptDisplayDirty ||
           (!this.#pathTracingPaused && (current.pathTracerState() === 'idle' || current.pathTracerState() === 'ready')))) {
           current.renderDisney(context.getCurrentTexture().createView(), !this.#pathTracingPaused);
           this.#ptDisplayDirty = false;
           submitted = true;
           this.#emitStatus();
-      } else if (this.#backend === 'raster' && this.#rasterDirty) {
+      } else if (backend === 'raster' && this.#rasterDirty) {
         this.#rasterDirty = false;
         current.renderRaster(context.getCurrentTexture().createView());
         submitted = true;
@@ -1694,8 +2110,14 @@ export class InteractiveViewer {
       if (submitted) {
         const firstFrameStart = this.#firstFrameStart;
         this.#firstFrameStart = undefined;
+        const firstPreviewStart = this.#firstPreviewStart;
+        this.#firstPreviewStart = undefined;
         this.#framePending = true;
         void this.#device.queue.onSubmittedWorkDone().then(() => {
+          if (firstPreviewStart !== undefined) {
+            performance.measure('viewer:first-preview', { start: firstPreviewStart, end: performance.now(),
+              detail: { entry: this.#sceneEntry, backend: this.#backend } });
+          }
           if (firstFrameStart !== undefined) {
             performance.measure('viewer:first-frame', { start: firstFrameStart, end: performance.now(),
               detail: { entry: this.#sceneEntry, backend: this.#backend } });
@@ -1729,10 +2151,11 @@ export class InteractiveViewer {
     frame: SceneFramePlan,
     exposure: number,
     sink: DiagnosticSink,
+    preview = false,
   ): Promise<SceneRender> {
     const trash: Array<{ destroy(): void }> = [];
     try {
-      return await this.#createSceneRender(loaded, frame, exposure, sink, trash);
+      return await this.#createSceneRender(loaded, frame, exposure, sink, trash, preview);
     } catch (error) {
       for (const resource of trash) resource.destroy();
       throw error;
@@ -1745,6 +2168,7 @@ export class InteractiveViewer {
     exposure: number,
     sink: DiagnosticSink,
     trash: Array<{ destroy(): void }>,
+    preview: boolean,
   ): Promise<SceneRender> {
     const device = this.#device;
     let width = this.#width;
@@ -2450,6 +2874,34 @@ export class InteractiveViewer {
       device.queue.submit([encoder.finish()]);
     };
 
+    let fallback: BackendFallback | undefined;
+    const fallBack = (from: BackendFallback['from'], error: GpuLimitError): void => {
+      fallback = { from, to: 'raster', reason: error.message };
+      this.#rasterDirty = true;
+      this.#diagnosticSink()({
+        level: 'warning', code: 'backend-fallback',
+        message: `${from === 'disney' ? 'Disney path tracing' : 'Path tracing'} exceeds a GPU limit for this scene; rendering with raster instead. ${error.message}`,
+        detail: { backend: from, limit: error.limit, required: error.required, available: error.available },
+      });
+    };
+    const drawRaster = (targetView: GPUTextureView): void => {
+      if (raster) raster.render(targetView);
+      else {
+        clearOutput(targetView);
+        if (!rasterBuild) {
+          void ensureRaster().catch((error: unknown) => {
+            if (disposed) return;
+            const message = error instanceof Error ? error.message : String(error);
+            if (!rasterErrors.length) {
+              rasterErrors = [{ shader: 'Raster - preparation / pipeline', message, line: 0, column: 0, source: '' }];
+            }
+            this.#onShaderErrors?.([...rasterErrors, ...pathTraceErrors]);
+            console.error(`Raster: ${message}`);
+          });
+        }
+      }
+    };
+
     let pathTraceBuildRevision = 0;
     let preparedPathTraceScene: PathTraceScene | undefined;
     const ptVariantCache: PtMaterialVariantCache = new Map();
@@ -2480,7 +2932,8 @@ export class InteractiveViewer {
         }
         : preparedPathTraceScene
           ? buildPathTraceScene(resources, ptOptions, undefined, undefined, preparedPathTraceScene)
-          : await buildCachedPathTraceScene(resources, ptOptions);
+          // Partial streaming scenes stay out of the persistent BVH cache.
+          : preview ? buildPathTraceScene(resources, ptOptions) : await buildCachedPathTraceScene(resources, ptOptions);
       checkBuild();
       performance.measure('pathtracing:scene-build', {
         start: pathTraceBuildStarted,
@@ -2494,9 +2947,8 @@ export class InteractiveViewer {
       checkBuild();
       const { dispatch, bindings } = packPtTextureArrays(sourceDispatch, sourceBindings, device.limits.maxTextureArrayLayers);
       const storageSlots = bindings.group0.filter(slot => slot.usage === 'storage').length;
-      if (storageSlots > device.limits.maxStorageBuffersPerShaderStage) {
-        throw new Error(`Path tracing requires ${storageSlots} storage buffers; this GPU supports ${device.limits.maxStorageBuffersPerShaderStage}.`);
-      }
+      // The environment CDF (group 3) is one more storage buffer in the same stage.
+      assertStorageBufferCount(device, storageSlots + (envAsset ? 1 : 0), 'Path tracing');
       for (const slot of bindings.group0) {
         if (slot.usage === 'storage' && slot.data) {
           assertSceneStorageSize(device, Math.max(slot.data.byteLength, 4), slot.role);
@@ -3372,6 +3824,7 @@ export class InteractiveViewer {
       disneySceneData = undefined;
       disneyErrorReadback = false;
       disneyState = 'idle';
+      if (fallback?.from === 'disney') fallback = undefined;
       resetDisneyPathTrace();
       if (disneyErrors.length) {
         disneyErrors = [];
@@ -3440,7 +3893,9 @@ export class InteractiveViewer {
         this.#ptDisplayDirty = true;
         this.#emitStatus();
       })().catch(error => {
-        if (revision === disneyBuildRevision) setDisneyError(error, 'Disney path tracing - preparation / pipeline');
+        if (revision !== disneyBuildRevision) return;
+        if (error instanceof GpuLimitError && !disposed) fallBack('disney', error);
+        setDisneyError(error, 'Disney path tracing - preparation / pipeline');
       });
     };
 
@@ -3448,7 +3903,8 @@ export class InteractiveViewer {
       if (disneyState === 'idle') startDisneyTracer();
       const backend = disneyBackend;
       if (!backend || disneyState !== 'ready') {
-        clearOutput(targetView);
+        if (fallback?.from === 'disney') drawRaster(targetView);
+        else clearOutput(targetView);
         return;
       }
       if (!accumulate) {
@@ -3540,6 +3996,7 @@ export class InteractiveViewer {
         uploadPtParameters = undefined;
         ptState = 'error';
         pathTraceBuildError = error;
+        if (error instanceof GpuLimitError) fallBack('pathtracing', error);
         const message = error instanceof Error ? error.message : String(error);
         if (!pathTraceErrors.length) {
           pathTraceErrors = [{ shader: 'Path tracing - preparation / pipeline', message, line: 0, column: 0, source: '' }];
@@ -3562,6 +4019,7 @@ export class InteractiveViewer {
       uploadPtParameters = undefined;
       pathTraceBuild = undefined;
       pathTraceBuildError = undefined;
+      if (fallback?.from === 'pathtracing') fallback = undefined;
       ptState = 'idle';
       const hadErrors = pathTraceErrors.length > 0;
       pathTraceErrors = [];
@@ -3789,29 +4247,20 @@ export class InteractiveViewer {
         pathTracer?.resetPathTrace();
         resetDisneyPathTrace();
       },
-      renderRaster: targetView => {
-        if (raster) raster.render(targetView);
-        else {
-          clearOutput(targetView);
-          if (!rasterBuild) {
-            void ensureRaster().catch((error: unknown) => {
-              if (disposed) return;
-              const message = error instanceof Error ? error.message : String(error);
-              if (!rasterErrors.length) {
-                rasterErrors = [{ shader: 'Raster - preparation / pipeline', message, line: 0, column: 0, source: '' }];
-              }
-              this.#onShaderErrors?.([...rasterErrors, ...pathTraceErrors]);
-              console.error(`Raster: ${message}`);
-            });
-          }
-        }
-      },
+      renderRaster: drawRaster,
       renderPathTrace: (targetView, tiled, accumulate) => {
         if (pathTracer) pathTracer.renderPathTrace(targetView, tiled, accumulate);
+        else if (fallback?.from === 'pathtracing') drawRaster(targetView);
         else {
           void startPathTracer();
           clearOutput(targetView);
         }
+      },
+      fallback: () => fallback,
+      forceFallback: (from, reason) => {
+        if (from === 'pathtracing') invalidatePathTracer();
+        else invalidateDisneyTracer();
+        fallback = { from, to: 'raster', reason };
       },
       capturePathTrace,
       applyDynamics,

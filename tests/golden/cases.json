@@ -1,0 +1,41 @@
+{
+  "description": "Golden renders (scripts/golden.mjs). Raster references come from SwiftShader so GitHub-hosted runners reproduce them; path-traced references are compared through 8x8 block means.",
+  "cases": [
+    {
+      "name": "triangle-raster",
+      "scene": "examples/engine/triangle.usda",
+      "width": 96, "height": 96,
+      "tolerance": { "meanAbsoluteError": 1.5, "outlierFraction": 0.01 }
+    },
+    {
+      "name": "animated-raster-t0",
+      "scene": "scenes/bench/animated.usda",
+      "width": 128, "height": 128,
+      "tolerance": { "meanAbsoluteError": 1.5, "outlierFraction": 0.01 }
+    },
+    {
+      "name": "animated-raster-t30",
+      "scene": "scenes/bench/animated.usda",
+      "width": 128, "height": 128, "time": 30,
+      "tolerance": { "meanAbsoluteError": 1.5, "outlierFraction": 0.01 }
+    },
+    {
+      "name": "optics-raster",
+      "scene": "scenes/bench/optics.usda",
+      "width": 128, "height": 128,
+      "tolerance": { "meanAbsoluteError": 1.5, "outlierFraction": 0.01 }
+    },
+    {
+      "name": "triangle-pathtracing",
+      "scene": "examples/engine/triangle.usda",
+      "width": 96, "height": 96, "backend": "pathtracing", "samples": 256,
+      "tolerance": { "blockRmse": 0.01 }
+    },
+    {
+      "name": "animated-pathtracing-t30",
+      "scene": "scenes/bench/animated.usda",
+      "width": 128, "height": 128, "time": 30, "backend": "pathtracing", "samples": 256,
+      "tolerance": { "blockRmse": 0.015 }
+    }
+  ]
+}

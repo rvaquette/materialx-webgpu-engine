@@ -1,12 +1,12 @@
 import { expect, it } from 'vitest';
-import { sceneDeviceDescriptor, assertSceneStorageSize, assertSceneTextureBindings } from '../../src/gpu/device.ts';
+import { sceneDeviceDescriptor, assertSceneStorageSize, assertSceneTextureBindings, GpuLimitError } from '../../src/gpu/device.ts';
 
 it('requests actual adapter storage and allocation limits for large scenes', () => {
   const adapter = { limits: {
     maxStorageBufferBindingSize: 2147483644, maxBufferSize: 2147483648, maxStorageBuffersPerShaderStage: 10,
-    maxSampledTexturesPerShaderStage: 48, maxSamplersPerShaderStage: 16,
-  } };
-  expect(sceneDeviceDescriptor(adapter as GPUAdapter)).toEqual({ requiredLimits: adapter.limits });
+    maxSampledTexturesPerShaderStage: 48, maxSamplersPerShaderStage: 16, maxTextureDimension2D: 16384, maxTextureArrayLayers: 2048,
+  }, features: new Set(['timestamp-query', 'shader-f16']) };
+  expect(sceneDeviceDescriptor(adapter as unknown as GPUAdapter)).toEqual({ requiredFeatures: ['timestamp-query'], requiredLimits: adapter.limits });
   const device = { limits: adapter.limits } as GPUDevice;
   expect(() => assertSceneStorageSize(device, 143208384)).not.toThrow();
 });
@@ -26,5 +26,7 @@ it('rejects scenes beyond either device limit instead of producing black images'
     const device = { limits } as GPUDevice;
     expect(() => assertSceneStorageSize(device, 134217728)).not.toThrow();
     expect(() => assertSceneStorageSize(device, 143208384)).toThrow(/143208384.*134217728/);
+    expect(() => assertSceneStorageSize(device, 143208384)).toThrow(GpuLimitError);
+    expect(() => assertSceneStorageSize(device, 143208384)).toThrow(GpuLimitError);
   }
 });

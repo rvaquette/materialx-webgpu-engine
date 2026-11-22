@@ -8,6 +8,8 @@ export interface Diagnostic {
   level: DiagnosticLevel;
   message: string;
   detail?: unknown;
+  /** Stable machine-readable identifier (see docs/INTEGRATION.md); absent for free-form messages. */
+  code?: string;
 }
 
 export type DiagnosticSink = (diagnostic: Diagnostic) => void;

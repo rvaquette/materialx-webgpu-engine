@@ -1,3 +1,4 @@
+import { GpuLimitError } from '../../gpu/device.ts';
 import type { HdrImage } from '../../assets/hdr.ts';
 import type { PtImageProvider } from './device-bindings.ts';
 import { buildDisneyEnvironmentCdf } from './disney-environment.ts';
@@ -111,11 +112,11 @@ function validateOptions(device: GPUDevice, scene: DisneySceneData, options: Dis
   }
   const pixelBytes = options.width * options.height * DISNEY_RENDER_PIXEL_BYTES;
   if (pixelBytes > device.limits.maxStorageBufferBindingSize || pixelBytes > device.limits.maxBufferSize) {
-    throw new Error(`Disney accumulation buffer exceeds GPU limits: ${pixelBytes} bytes.`);
+    throw new GpuLimitError(`Disney accumulation buffer exceeds GPU limits: ${pixelBytes} bytes.`, 'maxStorageBufferBindingSize', pixelBytes, Math.min(device.limits.maxStorageBufferBindingSize, device.limits.maxBufferSize));
   }
   if (options.lights.byteLength > device.limits.maxStorageBufferBindingSize ||
       options.lights.byteLength > device.limits.maxBufferSize) {
-    throw new Error('Disney light buffer exceeds GPU limits.');
+    throw new GpuLimitError('Disney light buffer exceeds GPU limits.', 'maxStorageBufferBindingSize', options.lights.byteLength, Math.min(device.limits.maxStorageBufferBindingSize, device.limits.maxBufferSize));
   }
   if (scene.materials.length === 0) throw new Error('Disney scene has no materials.');
   return pixelBytes;
@@ -215,7 +216,7 @@ export class DisneyGpuBackend {
         const packed = buildDisneyEnvironmentCdf(options.environment);
         if (packed.width > device.limits.maxTextureDimension2D || packed.height > device.limits.maxTextureDimension2D ||
             packed.cdf.byteLength > device.limits.maxBufferSize) {
-          throw new Error('Disney environment exceeds GPU texture or buffer limits.');
+          throw new GpuLimitError('Disney environment exceeds GPU texture or buffer limits.', 'maxTextureDimension2D', Math.max(packed.width, packed.height), device.limits.maxTextureDimension2D);
         }
         cdf = packed.cdf;
         const rgba = new Float32Array(packed.width * packed.height * 4);
@@ -236,7 +237,7 @@ export class DisneyGpuBackend {
         }));
         device.queue.writeTexture({ texture: environment }, new Float32Array([0, 0, 0, 1]), { bytesPerRow: 16 }, [1, 1]);
       }
-      if (cdf.byteLength > device.limits.maxStorageBufferBindingSize) throw new Error('Disney environment CDF exceeds GPU limits.');
+      if (cdf.byteLength > device.limits.maxStorageBufferBindingSize) throw new GpuLimitError('Disney environment CDF exceeds GPU limits.', 'maxStorageBufferBindingSize', cdf.byteLength, device.limits.maxStorageBufferBindingSize);
       environmentCdf = own(device.createBuffer({
         label: 'Disney environment CDF', size: Math.max(4, cdf.byteLength),
         usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
@@ -386,7 +387,7 @@ export class DisneyGpuBackend {
     const workgroupsY = Math.ceil(settings.tileSize[1] / 8);
     if (workgroupsX > this.#device.limits.maxComputeWorkgroupsPerDimension ||
         workgroupsY > this.#device.limits.maxComputeWorkgroupsPerDimension) {
-      throw new Error('Disney render tile exceeds the GPU dispatch limit.');
+      throw new GpuLimitError('Disney render tile exceeds the GPU dispatch limit.', 'maxComputeWorkgroupsPerDimension', Math.max(workgroupsX, workgroupsY), this.#device.limits.maxComputeWorkgroupsPerDimension);
     }
     this.#device.queue.writeBuffer(this.#parameters, 0, packDisneyRenderSettings(settings));
     if (targetView) {

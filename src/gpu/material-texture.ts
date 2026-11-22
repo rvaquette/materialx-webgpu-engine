@@ -1,6 +1,8 @@
+import { GpuLimitError } from './device.ts';
 import type { DecodedPixelImage } from '../assets/images.ts';
 import { UDIM_COLUMNS, UDIM_ROWS, udimLayerIndex } from '../assets/udim.ts';
 import type { WgslBinding } from '../compiler/wgsl.ts';
+import { isPlaceholderImage, placeholderPixels } from '../assets/streaming-images.ts';
 
 type MaterialTextureDevice = Pick<GPUDevice, 'createTexture'> & {
   limits: Pick<GPUSupportedLimits, 'maxTextureDimension2D' | 'maxTextureArrayLayers'>;
@@ -18,7 +20,7 @@ export function uploadMaterialImageArray(
   const height = index ? UDIM_ROWS : first.height;
   if (width > device.limits.maxTextureDimension2D || height > device.limits.maxTextureDimension2D
     || images.length > device.limits.maxTextureArrayLayers) {
-    throw new Error(`Material texture array exceeds device limits: ${width} x ${height} x ${images.length}.`);
+    throw new GpuLimitError(`Material texture array exceeds device limits: ${width} x ${height} x ${images.length}.`, images.length > device.limits.maxTextureArrayLayers ? 'maxTextureArrayLayers' : 'maxTextureDimension2D', images.length > device.limits.maxTextureArrayLayers ? images.length : Math.max(width, height), images.length > device.limits.maxTextureArrayLayers ? device.limits.maxTextureArrayLayers : device.limits.maxTextureDimension2D);
   }
   for (const image of images) {
     if (index ? !image!.udim?.length
@@ -32,7 +34,8 @@ export function uploadMaterialImageArray(
   });
   try {
     images.forEach((image, layer) => {
-      device.queue.writeTexture({ texture, origin: [0, 0, layer] }, index ? udimLayerIndex(image!) : image!.data,
+      device.queue.writeTexture({ texture, origin: [0, 0, layer] }, index ? udimLayerIndex(image!)
+        : isPlaceholderImage(image) ? placeholderPixels(image!, format) : image!.data,
         { bytesPerRow: width * 4, rowsPerImage: height }, [width, height, 1]);
     });
     return texture;
@@ -62,7 +65,7 @@ export function uploadMaterialImage(
   }
   if (width > device.limits.maxTextureDimension2D || height > device.limits.maxTextureDimension2D ||
       layers > device.limits.maxTextureArrayLayers) {
-    throw new Error(`Material texture exceeds device limits: ${width} x ${height} x ${layers}.`);
+    throw new GpuLimitError(`Material texture exceeds device limits: ${width} x ${height} x ${layers}.`, layers > device.limits.maxTextureArrayLayers ? 'maxTextureArrayLayers' : 'maxTextureDimension2D', layers > device.limits.maxTextureArrayLayers ? layers : Math.max(width, height), layers > device.limits.maxTextureArrayLayers ? device.limits.maxTextureArrayLayers : device.limits.maxTextureDimension2D);
   }
   const texture = device.createTexture({
     size: [width, height, layers],
@@ -75,7 +78,7 @@ export function uploadMaterialImage(
     } else {
       images.forEach((pixels, layer) => {
         if (pixels?.componentType === 'uint8' && pixels.channels === 4) {
-          device.queue.writeTexture({ texture, origin: [0, 0, layer] }, pixels.data,
+          device.queue.writeTexture({ texture, origin: [0, 0, layer] }, isPlaceholderImage(pixels) ? placeholderPixels(pixels, format) : pixels.data,
             { bytesPerRow: width * 4, rowsPerImage: height }, [width, height, 1]);
         }
       });
