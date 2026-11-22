@@ -231,7 +231,10 @@ describe('buildPtDeviceBindings (T057m2)', () => {
     scene.analyticLights = new Float32Array(17 * 20);
     const bindings = await buildPtDeviceBindings(buildMaterialDispatch([]), scene, countingProvider(fakeImage()).provider);
     expect(bindings.group0.map(slot => slot.binding)).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 9]);
-    expect(bindings.group0[8]).toEqual({ binding: 9, role: 'analyticLights', usage: 'storage', access: 'read', data: scene.analyticLights });
+    expect(bindings.group0[8]).toMatchObject({ binding: 9, role: 'analyticLights', usage: 'storage', access: 'read' });
+    // Packed lights first, then the observed-visibility guide (light-guide.ts).
+    expect(bindings.group0[8]!.data!.subarray(0, scene.analyticLights.length)).toEqual(scene.analyticLights);
+    expect(bindings.group0[8]!.data!.length).toBeGreaterThan(scene.analyticLights.length);
   });
   it('orders the group-0 scene buffers in megakernel binding order', async () => {
     const dispatch = buildMaterialDispatch([source(0, surfaceGraph('standard_surface', [value('base_color', 'color3', '0.2, 0.4, 0.6')]))]);

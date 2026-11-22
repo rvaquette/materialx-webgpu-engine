@@ -30,6 +30,7 @@ import {
   type PtMaterialDispatch,
 } from './material-variant.ts';
 import { ANALYTIC_LIGHTS_WGSL } from './analytic-lights.ts';
+import { lightGuideWgsl } from './light-guide.ts';
 import { environmentSamplingWgsl } from '../../assets/environment-cdf.ts';
 import { pruneWgslFunctions } from '../../compiler/wgsl-reachability.ts';
 import { MAX_SSS_WALK_EVENTS, sssCoefficientsWgsl } from './subsurface.ts';
@@ -824,6 +825,7 @@ fn mx_alpha_visibility(origin: vec3f, direction: vec3f) -> f32 {
 }
 
 ${displayAovs ? 'struct MxSurfaceAov { value: vec4f };' : ''}
+${displayAovs && analyticLights ? 'var<private> mx_guide_pending: bool;\nvar<private> mx_guide_record: f32;' : ''}
 fn integrate(ro0 : vec3<f32>, rd0 : vec3<f32>, backgroundDirection : vec3<f32>, state : ptr<function, u32>${displayAovs ? ', coverage: ptr<function, f32>, surfaceAov: ptr<function, MxSurfaceAov>' : ''}) -> vec3<f32> {
   var radiance = vec3<f32>(0.0);
   var beta = vec3<f32>(1.0);
@@ -1119,6 +1121,7 @@ ${displayAovs ? `    let aovMode = u32(U.envTexture.w);
       var neeDelta = false;
       var neeSpecularOnly = false;
       var neeMisPdf = 1.0;
+${analyticLights ? '      var neeGuideCell = 0xffffffffu;\n      var neeLightIndex = 0u;' : ''}
       var neeBsdf = false;
       var neeFromBase = true;
       if (strategy == 0u) {
@@ -1129,6 +1132,8 @@ ${analyticLights ? `        if (allowDirectLighting && !specular && mx_light_cou
           // and one shadow ray is traced for the chosen candidate. MIS against BSDF
           // sampling uses the candidate's source pdf, like emitter hits.
           let candidates = min(mx_light_count(), ${PT_LIGHT_CANDIDATES}u);
+          let guideCell = mx_guide_cell(pos);
+          var chosenIndex = 0u;
           var weightSum = 0.0;
           var chosenTarget = 0.0;
           var chosenPdf = 0.0;
@@ -1140,7 +1145,7 @@ ${analyticLights ? `        if (allowDirectLighting && !specular && mx_light_cou
             let sourcePdf = light.pdf * mx_light_selection_pmf(index);
             if (!(sourcePdf > 0.0) || sourcePdf > 3.0e38) { continue; }
             let lightTarget = dot(light.radiance, vec3f(0.2126, 0.7152, 0.0722))
-              * (max(dot(shadingNormal, light.direction), 0.0) + 0.05);
+              * (max(dot(shadingNormal, light.direction), 0.0) + 0.05) * mx_guide_visibility(guideCell, index);
             let weight = lightTarget / sourcePdf;
             if (!(weight > 0.0)) { continue; }
             weightSum += weight;
@@ -1148,6 +1153,7 @@ ${analyticLights ? `        if (allowDirectLighting && !specular && mx_light_cou
               chosen = light;
               chosenTarget = lightTarget;
               chosenPdf = sourcePdf;
+              chosenIndex = index;
             }
           }
           if (chosenTarget > 0.0) {
@@ -1160,6 +1166,8 @@ ${analyticLights ? `        if (allowDirectLighting && !specular && mx_light_cou
             neeMisPdf = chosenPdf;
             neeCosine = abs(neeLocal.z);
             neeDelta = chosen.delta;
+            neeGuideCell = guideCell;
+            neeLightIndex = chosenIndex;
           }
         }` : `        if (allowDirectLighting && !specular && dot(lightRadiance, lightRadiance) > 0.0) {
           neeValid = true;
@@ -1241,6 +1249,10 @@ ${
       var visibility = 1.0;
       if (!neeBsdf) {
         visibility = mx_visibility(pos + neeDirection * RAY_EPS, neeDirection, neeDistance);
+${displayAovs && analyticLights ? `        if (strategy == 0u && mx_guide_pending) {
+          mx_guide_record = mx_guide_observation(neeGuideCell, neeLightIndex, visibility > 0.0);
+          mx_guide_pending = false;
+        }` : ''}
         if (visibility <= 0.0) { continue; }
       }
       var ev: MxBsdfEval;
@@ -1366,7 +1378,8 @@ ${analyticLights ? '    analyticNee = allowDirectLighting && !specular && mx_lig
 `;
 }
 
-function wgslEntry(displayAovs: boolean): string {
+function wgslEntry(displayAovs: boolean, analyticLights: boolean): string {
+  const guide = displayAovs && analyticLights;
   return /* wgsl */ `
 struct MxCameraRay {
   origin: vec3<f32>,
@@ -1444,6 +1457,7 @@ ${displayAovs ? '  var batchMeanLuminance = 0.0;\n  var batchM2 = 0.0;' : ''}
 ${displayAovs ? '  var surfaceSum: MxSurfaceAov;' : ''}
   for (var i = 0u; i < spp; i = i + 1u) {
     mx_begin_sample(pixel, ${displayAovs ? 'sampleIndex' : 'frameIndex * spp'} + i);
+${guide ? '    mx_guide_pending = true;' : ''}
     let jitter = ${displayAovs ? 'camera_jitter(sampleIndex + i, pixel)' : 'vec2<f32>(rng_next(&state), rng_next(&state))'};
     let ray = camera_ray(vec2<f32>(pixelCoord), dims, jitter);
 ${displayAovs ? '    var hitCoverage = 0.0;' : ''}
@@ -1476,7 +1490,8 @@ ${displayAovs ? `  let oldCoverage = accum[outputPixel + 1u].x;
   let oldMeanLuminance = dot(prev.xyz, vec3f(0.2126, 0.7152, 0.0722));
   let delta = batchMeanLuminance - oldMeanLuminance;
   let totalM2 = oldM2 + batchM2 + delta * delta * count * sampleCount / totalCount;
-  accum[outputPixel + 1u] = vec4f((oldCoverage * count + hits * sampleCount) / totalCount, totalM2, 0.0, 0.0);
+  // z: the last sample's light-guide observation (light-guide.ts gathers and clears it).
+  accum[outputPixel + 1u] = vec4f((oldCoverage * count + hits * sampleCount) / totalCount, totalM2, ${guide ? 'mx_guide_record' : '0.0'}, 0.0);
   // Only the explicitly selected guide is stored after the radiance/moments prefix.
   let aovMode = u32(U.envTexture.w);
   if (aovMode != 0u && aovMode != 4u) {
@@ -1529,12 +1544,12 @@ export function pathTraceComputeWgsl(options: PathTraceComputeOptions = {}): str
     wgslClosureSurface(textures, maxLobes, options.closureDispatch),
     volumeFieldWgsl(options.volumeGrid ?? false),
     VOLUME_TRANSPORT_WGSL,
-    ...(options.analyticLights ? [ANALYTIC_LIGHTS_WGSL] : []),
+    ...(options.analyticLights ? [ANALYTIC_LIGHTS_WGSL, lightGuideWgsl()] : []),
     ...(varyings !== undefined ? [wgslVaryings(varyings)] : []),
     ...(dispatch !== undefined ? [wgslDispatch(dispatch)] : []),
     wgslIntegrator(textures, dispatch, environment, options.displayAovs ?? false, options.opaque ?? false,
       options.analyticLights ?? false, options.rouletteDepth),
-    wgslEntry(options.displayAovs ?? false),
+    wgslEntry(options.displayAovs ?? false, options.analyticLights ?? false),
   ].join('\n');
   return options.pruneUnusedFunctions ? pruneWgslFunctions(code, [PT_COMPUTE_ENTRY]) : code;
 }

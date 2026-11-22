@@ -76,6 +76,9 @@ import { materialBackendApproximations } from './material-approximations.ts';
 import { DisneyTextureRegistry } from './pathtracing/disney-texture-array.ts';
 import { DisneyGpuBackend } from './pathtracing/disney-gpu-backend.ts';
 import { packDisneyLights } from './pathtracing/disney-lights.ts';
+import {
+  lightGuideEnabled, lightGuideUpdateWgsl, lightGuideValuesOffset, PT_LIGHT_GUIDE_CELLS, PT_LIGHT_GUIDE_SETTINGS_BYTES,
+} from './pathtracing/light-guide.ts';
 import type { DisneyShaderSpecialization } from './pathtracing/disney-shader-specialization.ts';
 import { buildDisneyEnvironmentCdf } from './pathtracing/disney-environment.ts';
 import { disneyTileForIndex, type DisneyRenderSettings } from './pathtracing/disney-render.ts';
@@ -2260,6 +2263,60 @@ export class InteractiveViewer {
         }));
       let ptComputeGroups = computeGroups(accumBuffer);
 
+      // Observed-visibility light guide (light-guide.ts): gathered and rebuilt after each batch.
+      const guideLightCount = ptScene.analyticLights && lightGuideEnabled(ptScene.analyticLightCount ?? 0)
+        ? ptScene.analyticLightCount! : 0;
+      const guideLightsEntry = group0Entries.find(entry => bindings.group0.find(slot => slot.binding === entry.binding)?.role === 'analyticLights');
+      const guideLightsBuffer = guideLightsEntry ? (guideLightsEntry.resource as GPUBufferBinding).buffer : undefined;
+      let lightGuide: {
+        gather: GPUComputePipeline; build: GPUComputePipeline; counts: GPUBuffer; values: GPUBuffer;
+        settings: GPUBuffer; accum?: GPUBuffer; group?: GPUBindGroup;
+      } | undefined;
+      if (guideLightCount > 0 && guideLightsBuffer) {
+        const module = device.createShaderModule({ label: 'Path tracing light guide', code: lightGuideUpdateWgsl() });
+        const storage = (binding: number): GPUBindGroupLayoutEntry => ({ binding, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } });
+        const layout = device.createPipelineLayout({ bindGroupLayouts: [device.createBindGroupLayout({ entries: [
+          storage(0), storage(1), storage(2), { binding: 3, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'uniform' } },
+        ] })] });
+        const [gather, build] = await Promise.all(['mx_light_guide_gather', 'mx_light_guide_build'].map(entryPoint =>
+          device.createComputePipelineAsync({ layout, compute: { module, entryPoint } })));
+        checkBuild();
+        const values = PT_LIGHT_GUIDE_CELLS * guideLightCount;
+        lightGuide = {
+          gather: gather!, build: build!,
+          counts: track(device.createBuffer({ size: values * 8, usage: GPUBufferUsage.STORAGE })),
+          values: track(device.createBuffer({ size: values * 4, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC })),
+          settings: track(device.createBuffer({ size: PT_LIGHT_GUIDE_SETTINGS_BYTES, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST })),
+        };
+      }
+      const updateLightGuide = (encoder: GPUCommandEncoder): void => {
+        if (!lightGuide || !guideLightsBuffer) return;
+        if (lightGuide.accum !== accumBuffer) {
+          // One explicit layout serves both entry points.
+          lightGuide.accum = accumBuffer;
+          lightGuide.group = device.createBindGroup({
+            layout: lightGuide.gather.getBindGroupLayout(0),
+            entries: [
+              { binding: 0, resource: { buffer: accumBuffer } },
+              { binding: 1, resource: { buffer: lightGuide.counts } },
+              { binding: 2, resource: { buffer: lightGuide.values } },
+              { binding: 3, resource: { buffer: lightGuide.settings } },
+            ],
+          });
+        }
+        const pixels = ptWidth * ptHeight;
+        const values = PT_LIGHT_GUIDE_CELLS * guideLightCount;
+        device.queue.writeBuffer(lightGuide.settings, 0, new Uint32Array([pixels, guideLightCount, PT_LIGHT_GUIDE_CELLS, 0]));
+        const pass = encoder.beginComputePass();
+        pass.setBindGroup(0, lightGuide.group!);
+        pass.setPipeline(lightGuide.gather);
+        pass.dispatchWorkgroups(Math.ceil(pixels / 64));
+        pass.setPipeline(lightGuide.build);
+        pass.dispatchWorkgroups(Math.ceil(values / 64));
+        pass.end();
+        encoder.copyBufferToBuffer(lightGuide.values, 0, guideLightsBuffer, lightGuideValuesOffset(guideLightCount), values * 4);
+      };
+
       const textureViews = new Map<number, GPUTextureView>();
       for (const tex of bindings.textures) {
         const image = bindings.images[tex.imageIndex];
@@ -2526,6 +2583,7 @@ export class InteractiveViewer {
             compute.dispatchWorkgroups(wgX, wgY, 1);
             compute.end();
           }
+          updateLightGuide(encoder);
         }
         let convergenceRequest: { revision: number; samples: number; columns: number; rows: number } | undefined;
         const samples = ptBackend.frameIndex;

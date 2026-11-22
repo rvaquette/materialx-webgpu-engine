@@ -15,6 +15,7 @@ import { inverse4 } from '../../scene/transforms.ts';
 import { OBJECT_TO_WORLD_INPUT, WORLD_TO_OBJECT_INPUT, OBJECT_GEOMETRY_INPUTS } from '../../compiler/ir.ts';
 import { imageSamplerDescriptor, type ImageSamplerDescriptor } from '../../assets/samplers.ts';
 import type { WgslBinding } from '../../compiler/wgsl.ts';
+import { packLightGuide } from './light-guide.ts';
 
 /** Decodes a texture file reference to pixels; injected so the resolver/decoder
  *  (and its colorspace policy) stay out of this pure planner. Called once per
@@ -103,7 +104,15 @@ function group0Slots(scene: PathTraceScene, dispatch: PtMaterialDispatch): PtBuf
   if (dispatch.uniforms.length > 0) {
     slots.push({ binding: 8, role: 'mxUniforms', usage: 'uniform', access: 'read' });
   }
-  if (scene.analyticLights) slots.push({ binding: 9, role: 'analyticLights', usage: 'storage', access: 'read', data: scene.analyticLights });
+  if (scene.analyticLights) {
+    // The light guide follows the packed lights (light-guide.ts reads it at count * 7 vec4).
+    const lights = scene.analyticLights;
+    const guide = packLightGuide(scene.bounds, scene.analyticLightCount ?? 0);
+    const data = new Float32Array(lights.length + guide.length);
+    data.set(lights);
+    data.set(guide, lights.length);
+    slots.push({ binding: 9, role: 'analyticLights', usage: 'storage', access: 'read', data });
+  }
   if (scene.volumeData) slots.push({ binding: 10, role: 'volumeData', usage: 'storage', access: 'read', data: scene.volumeData });
   return slots;
 }

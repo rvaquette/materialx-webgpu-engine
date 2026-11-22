@@ -1,0 +1,174 @@
+#usda 1.0
+(
+    defaultPrim = "World"
+    metersPerUnit = 1
+    upAxis = "Y"
+    doc = "Light-guide control scene: twelve strong lights hidden behind a wall, one weaker visible light."
+)
+
+def Xform "World"
+{
+    custom string pathtracer:sourceScene = "light_guide_occlusion"
+    custom int pathtracer:maxDepth = 4
+
+    def Camera "Camera"
+    {
+        matrix4d xformOp:transform = ((1, 0, 0, 0), (0, 0.9701425, 0.2425356, 0), (0, -0.2425356, 0.9701425, 0), (0, 4, 12, 1))
+        uniform token[] xformOpOrder = ["xformOp:transform"]
+        token projection = "perspective"
+        float focalLength = 35
+        float horizontalAperture = 36
+        float verticalAperture = 36
+        float2 clippingRange = (0.01, 1000)
+    }
+
+    def Scope "Looks"
+    {
+        def Material "white" (
+            prepend references = @./test_veach.mtlx@</MaterialX/Materials/white>
+        )
+        {
+        }
+    }
+
+    def Scope "Geometry"
+    {
+        def Mesh "Floor"
+        {
+            int[] faceVertexCounts = [4]
+            int[] faceVertexIndices = [0, 1, 2, 3]
+            point3f[] points = [(-20, 0, 20), (20, 0, 20), (20, 0, -20), (-20, 0, -20)]
+            normal3f[] normals = [(0, 1, 0), (0, 1, 0), (0, 1, 0), (0, 1, 0)] (interpolation = "vertex")
+            rel material:binding = </World/Looks/white>
+        }
+        def Mesh "Wall"
+        {
+            int[] faceVertexCounts = [4, 4]
+            int[] faceVertexIndices = [0, 1, 2, 3, 4, 7, 6, 5]
+            point3f[] points = [(-20, 0, -2), (20, 0, -2), (20, 12, -2), (-20, 12, -2), (-20, 0, -2.2), (20, 0, -2.2), (20, 12, -2.2), (-20, 12, -2.2)]
+            normal3f[] normals = [(0, 0, 1), (0, 0, 1), (0, 0, 1), (0, 0, 1), (0, 0, -1), (0, 0, -1), (0, 0, -1), (0, 0, -1)] (interpolation = "vertex")
+            rel material:binding = </World/Looks/white>
+        }
+    }
+
+    def Scope "Lights"
+    {
+        def SphereLight "Visible"
+        {
+            matrix4d xformOp:transform = ((1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (0, 5, 4, 1))
+            uniform token[] xformOpOrder = ["xformOp:transform"]
+            color3f inputs:color = (1, 1, 1)
+            float inputs:intensity = 20
+            bool inputs:normalize = false
+            float inputs:radius = 0.5
+        }
+        def SphereLight "Hidden_1"
+        {
+            matrix4d xformOp:transform = ((1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (-6, 1, -4, 1))
+            uniform token[] xformOpOrder = ["xformOp:transform"]
+            color3f inputs:color = (1, 0.9, 0.8)
+            float inputs:intensity = 40
+            bool inputs:normalize = false
+            float inputs:radius = 0.4
+        }
+        def SphereLight "Hidden_2"
+        {
+            matrix4d xformOp:transform = ((1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (-6, 3, -4, 1))
+            uniform token[] xformOpOrder = ["xformOp:transform"]
+            color3f inputs:color = (1, 0.9, 0.8)
+            float inputs:intensity = 40
+            bool inputs:normalize = false
+            float inputs:radius = 0.4
+        }
+        def SphereLight "Hidden_3"
+        {
+            matrix4d xformOp:transform = ((1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (-6, 5, -4, 1))
+            uniform token[] xformOpOrder = ["xformOp:transform"]
+            color3f inputs:color = (1, 0.9, 0.8)
+            float inputs:intensity = 40
+            bool inputs:normalize = false
+            float inputs:radius = 0.4
+        }
+        def SphereLight "Hidden_4"
+        {
+            matrix4d xformOp:transform = ((1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (-2, 1, -4, 1))
+            uniform token[] xformOpOrder = ["xformOp:transform"]
+            color3f inputs:color = (1, 0.9, 0.8)
+            float inputs:intensity = 40
+            bool inputs:normalize = false
+            float inputs:radius = 0.4
+        }
+        def SphereLight "Hidden_5"
+        {
+            matrix4d xformOp:transform = ((1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (-2, 3, -4, 1))
+            uniform token[] xformOpOrder = ["xformOp:transform"]
+            color3f inputs:color = (1, 0.9, 0.8)
+            float inputs:intensity = 40
+            bool inputs:normalize = false
+            float inputs:radius = 0.4
+        }
+        def SphereLight "Hidden_6"
+        {
+            matrix4d xformOp:transform = ((1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (-2, 5, -4, 1))
+            uniform token[] xformOpOrder = ["xformOp:transform"]
+            color3f inputs:color = (1, 0.9, 0.8)
+            float inputs:intensity = 40
+            bool inputs:normalize = false
+            float inputs:radius = 0.4
+        }
+        def SphereLight "Hidden_7"
+        {
+            matrix4d xformOp:transform = ((1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (2, 1, -4, 1))
+            uniform token[] xformOpOrder = ["xformOp:transform"]
+            color3f inputs:color = (1, 0.9, 0.8)
+            float inputs:intensity = 40
+            bool inputs:normalize = false
+            float inputs:radius = 0.4
+        }
+        def SphereLight "Hidden_8"
+        {
+            matrix4d xformOp:transform = ((1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (2, 3, -4, 1))
+            uniform token[] xformOpOrder = ["xformOp:transform"]
+            color3f inputs:color = (1, 0.9, 0.8)
+            float inputs:intensity = 40
+            bool inputs:normalize = false
+            float inputs:radius = 0.4
+        }
+        def SphereLight "Hidden_9"
+        {
+            matrix4d xformOp:transform = ((1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (2, 5, -4, 1))
+            uniform token[] xformOpOrder = ["xformOp:transform"]
+            color3f inputs:color = (1, 0.9, 0.8)
+            float inputs:intensity = 40
+            bool inputs:normalize = false
+            float inputs:radius = 0.4
+        }
+        def SphereLight "Hidden_10"
+        {
+            matrix4d xformOp:transform = ((1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (6, 1, -4, 1))
+            uniform token[] xformOpOrder = ["xformOp:transform"]
+            color3f inputs:color = (1, 0.9, 0.8)
+            float inputs:intensity = 40
+            bool inputs:normalize = false
+            float inputs:radius = 0.4
+        }
+        def SphereLight "Hidden_11"
+        {
+            matrix4d xformOp:transform = ((1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (6, 3, -4, 1))
+            uniform token[] xformOpOrder = ["xformOp:transform"]
+            color3f inputs:color = (1, 0.9, 0.8)
+            float inputs:intensity = 40
+            bool inputs:normalize = false
+            float inputs:radius = 0.4
+        }
+        def SphereLight "Hidden_12"
+        {
+            matrix4d xformOp:transform = ((1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (6, 5, -4, 1))
+            uniform token[] xformOpOrder = ["xformOp:transform"]
+            color3f inputs:color = (1, 0.9, 0.8)
+            float inputs:intensity = 40
+            bool inputs:normalize = false
+            float inputs:radius = 0.4
+        }
+    }
+}
