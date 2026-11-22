@@ -338,6 +338,27 @@ function familyOpacity(family: SurfaceFamily, c: Ctx): OpacityWgsl {
 
 // --- standard_surface --------------------------------------------------------
 
+/**
+ * Path-traced subsurface for standard_surface / OpenPBR: the lobe carries the
+ * authored per-channel mean free path (radius × scale, scene units) so the PT
+ * interior random walk matches the parametric material record
+ * (material-record.ts, mx_subsurface_medium). IOR 0 keeps the record's
+ * boundary-only interface.
+ */
+function diffusionProfile(radius: string, anisotropy: string): Partial<LobeWgsl> {
+  return { hairTintTRT: `max(${radius}, vec3f(0.0))`, dispersion: '0.0', ior: '0.0', anisotropy };
+}
+
+const FAMILY_SSS_PRELUDE = `struct MxFamilyInterior { sigmaA: vec3f, sigmaS: vec3f, g: f32 };
+fn mx_family_sss_medium(albedo: vec3f, mfp: vec3f, g: f32) -> MxFamilyInterior {
+  let c = clamp(albedo, vec3f(0.0), vec3f(1.0));
+  let alpha = vec3f(1.0) - exp(-5.09406 * c + 2.61188 * c * c - 4.31805 * c * c * c);
+  let d = albedo - vec3f(0.8);
+  let dd = mfp * (vec3f(1.9) - albedo + 3.5 * d * d);
+  let sigmaT = select(vec3f(0.0), vec3f(1.0) / dd, dd > vec3f(0.0));
+  return MxFamilyInterior((vec3f(1.0) - alpha) * sigmaT, alpha * sigmaT, g);
+}`;
+
 function standardSurface(c: Ctx): FamilyWgsl {
   const specRough = c.s('specular_roughness', 0.2);
   const diffRough = c.s('diffuse_roughness', 0);
@@ -363,7 +384,8 @@ function standardSurface(c: Ctx): FamilyWgsl {
       active: mayWeigh(c, 'transmission', 0) },
     { kind: 'dielectric_reflection', weight: '(mx_diel * mx_spec)', color: specColor, roughness: specRough, ior, anisotropy: aniso, rotation: rot, active: mayWeigh(c, 'specular', 1) },
     { kind: 'burley_diffuse', weight: '(mx_diel * mx_base)', color: baseColor, roughness: diffRough, active: mayWeigh(c, 'base', 1) },
-    { kind: 'subsurface', weight: '(mx_diel * mx_sss)', color: sssColor, active: mayWeigh(c, 'subsurface', 0) },
+    { kind: 'subsurface', weight: '(mx_diel * mx_sss)', color: sssColor, active: mayWeigh(c, 'subsurface', 0),
+      ...diffusionProfile(`(${c.col('subsurface_radius', [1, 1, 1])} * ${c.s('subsurface_scale', 1)})`, c.s('subsurface_anisotropy', 0)) },
   ];
   const out: FamilyWgsl = { locals, lobes, opacity: familyOpacity('standard_surface', c).expr,
     transmission: presentWeighted(c, 'transmission'), dispersion: presentWeighted(c, 'transmission_dispersion') };
@@ -406,7 +428,8 @@ function openPbrSurface(c: Ctx): FamilyWgsl {
     transLobe,
     { kind: 'dielectric_reflection', weight: reflW, color: specColor, roughness: specRough, ior, anisotropy: aniso, active: mayWeigh(c, 'specular_weight', 1) },
     { kind: 'burley_diffuse', weight: '(mx_diel * mx_baseW)', color: baseColor, roughness: diffRough, active: mayWeigh(c, 'base_weight', 1) },
-    { kind: 'subsurface', weight: '(mx_diel * mx_sss)', color: sssColor, active: mayWeigh(c, 'subsurface_weight', 0) },
+    { kind: 'subsurface', weight: '(mx_diel * mx_sss)', color: sssColor, active: mayWeigh(c, 'subsurface_weight', 0),
+      ...diffusionProfile(`(${c.col('subsurface_radius_scale', [1, 0.5, 0.25])} * ${c.s('subsurface_radius', 1)})`, c.s('subsurface_scatter_anisotropy', 0)) },
   ];
   const out: FamilyWgsl = { locals, lobes, opacity: familyOpacity('open_pbr_surface', c).expr,
     transmission: presentWeighted(c, 'transmission_weight'),
@@ -1259,6 +1282,14 @@ function buildSurfaceFn(
   if (fam.fuzz) assigns.push(`  c.hasFuzz = 1u;`, `  c.fuzz = MxFuzzLayer(${fam.fuzz.weight}, ${fam.fuzz.color}, ${fam.fuzz.roughness});`);
   if (fam.thinFilm) assigns.push(`  c.hasThinFilm = 1u;`, `  c.thinFilm = MxThinFilmLayer(${fam.thinFilm.weight}, ${fam.thinFilm.thickness}, ${fam.thinFilm.ior}, ${fam.thinFilm.targetHue ?? 'vec3f(1.0)'}, ${fam.thinFilm.incidentAngleScale ?? '1.0'}, ${fam.thinFilm.incidentAngleOffset ?? '0.0'});`);
   if (fam.emission) assigns.push(`  c.hasEmission = 1u;`, `  c.emission = ${fam.emission};`);
+  // PT only: raster evaluates the subsurface lobe without an interior medium.
+  const sssLobe = computeStage && (surface.family === 'standard_surface' || surface.family === 'open_pbr_surface')
+    ? lobes.find((lobe) => lobe.kind === 'subsurface' && lobe.active !== false && lobe.hairTintTRT !== undefined) : undefined;
+  if (sssLobe) {
+    assigns.push(`  let mx_sss_medium = mx_family_sss_medium(${sssLobe.color}, ${sssLobe.hairTintTRT}, ${sssLobe.anisotropy ?? '0.0'});`,
+      `  c.hasInterior = select(0u, 1u, ${sssLobe.weight} > 0.0 && any(${sssLobe.hairTintTRT} > vec3f(0.0)));`,
+      '  c.interiorSigmaA = mx_sss_medium.sigmaA;', '  c.interiorSigmaS = mx_sss_medium.sigmaS;', '  c.interiorG = mx_sss_medium.g;');
+  }
   assigns.push(`  c.opacity = ${fam.opacity};`);
 
   const fnCode = `fn ${entryName}(vary: MxVaryings) -> ${SURFACE_RETURN} {\n${exprs.body.join('\n')}\n${fam.locals.join('\n')}\n  var c: ${SURFACE_RETURN};\n${assigns.join('\n')}\n  return c;\n}`;
@@ -1268,7 +1299,7 @@ function buildSurfaceFn(
     fuzz: fam.fuzz !== undefined,
     coat: fam.coat !== undefined,
     transmission,
-    dispersion: transmission && (fam.dispersion ?? lobes.some((lobe) => lobe.dispersion !== undefined)),
+    dispersion: transmission && (fam.dispersion ?? lobes.some((lobe) => lobe.kind === 'dielectric_transmission' && lobe.dispersion !== undefined)),
     thinFilm: fam.thinFilm !== undefined,
     lobeKinds: [...new Set(lobes.filter((lobe) => lobe.active !== false).map((lobe) => LOBE_KIND_NUM[lobe.kind]))],
   };
@@ -1282,7 +1313,7 @@ function buildSurfaceFn(
     fnName: entryName,
     fnCode,
     family: surface.family,
-    preludes: [...exprs.preludes],
+    preludes: [...exprs.preludes, ...(sssLobe ? [FAMILY_SSS_PRELUDE] : [])],
     uniforms: exprs.uniforms,
     textures: exprs.textures,
     samplers: exprs.samplers,

@@ -23,6 +23,7 @@ import {
 } from '../../compiler/ir.ts';
 import { materialClosureReaderWgsl, PT_MAX_LOBES, PT_MATERIAL_RECORD_FLOATS, PT_MATERIAL_HEADER_FLOATS, PT_LOBE_FLOATS } from './material-record.ts';
 import { volumeFieldWgsl, VOLUME_TRANSPORT_WGSL } from '../volume-field.ts';
+import { dispersionWgsl } from './spectrum.ts';
 import {
   PT_MATERIAL_DISPATCH_ENTRY,
   PT_MATERIAL_OPACITY_ENTRY,
@@ -590,7 +591,7 @@ ${assigns.join('\n')}
 
 function wgslIntegrator(
   textures: boolean, dispatch: PtMaterialDispatch | undefined, environment: boolean,
-  displayAovs: boolean, opaque: boolean, analyticLights: boolean, rouletteDepth?: number,
+  displayAovs: boolean, opaque: boolean, analyticLights: boolean, rouletteDepth?: number, media = false,
 ): string {
   const envMiss = environment ? 'env_radiance(rd)' : 'U.env.xyz';
   const envNee = environment ? 'env_radiance(wiW)' : 'U.env.xyz';
@@ -823,6 +824,38 @@ ${opaque ? '  return select(1.0, 0.0, traverse(origin, direction, distance, true
 fn mx_alpha_visibility(origin: vec3f, direction: vec3f) -> f32 {
   return mx_visibility(origin, direction, 1.0e30);
 }
+${media ? `
+// Shadow-ray transmittance through volume boundaries (entered or left by the
+// geometric normal) and alpha coverage; startVolume is the medium at the origin.
+fn mx_transmittance(origin: vec3f, direction: vec3f, distance: f32, startVolume: u32, state: ptr<function, u32>) -> vec3f {
+${analyticLights ? '  if (mx_intersect_lights(origin, direction).distance < distance) { return vec3f(0.0); }' : ''}
+  var transmittance = vec3f(1.0);
+  var volume = startVolume;
+  var ro = origin;
+  var travelled = 0.0;
+  for (var layer = 0u; layer < 128u; layer++) {
+    let remaining = distance - travelled;
+    if (remaining <= 0.0) { return transmittance; }
+    let hit = traverse(ro, direction, remaining, false);
+    let segment = select(remaining, hit.t, hit.hitAny);
+    if (volume != 0xffffffffu) {
+      transmittance *= volume_transmittance(volume, ro, direction, segment, state);
+      if (all(transmittance <= vec3f(0.0))) { return vec3f(0.0); }
+    }
+    if (!hit.hitAny) { return transmittance; }
+    let pos = ro + direction * hit.t;
+    let material = tri_material(hit.tri);
+    if (mx_material_volume_boundary(material)) {
+      volume = select(0xffffffffu, material, dot(direction, surface_hit_geometric_normal(hit)) < 0.0);
+    } else {
+      transmittance *= 1.0 - mx_hit_opacity(hit, pos, direction);
+      if (all(transmittance <= vec3f(0.0))) { return vec3f(0.0); }
+    }
+    travelled += hit.t + RAY_EPS;
+    ro = pos + direction * RAY_EPS;
+  }
+  return vec3f(0.0);
+}` : ''}
 
 ${displayAovs ? 'struct MxSurfaceAov { value: vec4f };' : ''}
 ${displayAovs && analyticLights ? 'var<private> mx_guide_pending: bool;\nvar<private> mx_guide_record: f32;' : ''}
@@ -855,8 +888,12 @@ fn integrate(ro0 : vec3<f32>, rd0 : vec3<f32>, backgroundDirection : vec3<f32>, 
   var bounce = 0;
   var medium : MxMedium;
   var volumeIndex = 0xffffffffu;
-  // Select once, at the first dispersive interface, and reuse at every bounce.
+  // The last bounce sampled a volume phase function (MIS against volume NEE).
+  var phaseBounce = false;
+  // Select once (subsurface media) and reuse at every bounce.
   var spectralChannel = 3u;
+  // Hero wavelength (nm), drawn at the first dispersive interface (spectrum.ts).
+  var wavelength = 0.0;
   var cameraSegment = true;
 ${analyticLights ? '  var analyticNee = false;' : ''}
 
@@ -885,8 +922,10 @@ ${analyticLights ? `    let emitter = mx_intersect_lights(ro, rd);
     // scatters off the Henyey-Greenstein phase (importance-sampled, f/pdf = 1);
     // otherwise beta carries the surface-reaching transmittance (media.ts).
     let tMax = select(${analyticLights ? 'emitter.distance' : '1.0e30'}, hit.t, hit.hitAny);
+    // A camera inside a volume (fog around the scene) starts in its medium: the first
+    // boundary hit from inside is the one the ray leaves through (geometric normal).
     if (pathStep == 0u && hit.hitAny && mx_material_volume_boundary(tri_material(hit.tri)) &&
-        dot(rd,surface_hit_normal(hit)) > 0.0) {
+        dot(rd,surface_hit_geometric_normal(hit)) > 0.0) {
       inMedium = true;
       volumeIndex = tri_material(hit.tri);
 ${displayAovs ? '      *coverage = 1.0; cameraSegment = false;' : ''}
@@ -909,12 +948,61 @@ ${displayAovs ? '      *coverage = 1.0; cameraSegment = false;' : ''}
       if (ms.scattered) {
         if (!subsurfaceWalk && bounce >= i32(U.transport.x)) { break; }
         let sp = ro + rd * ms.t;
+${media ? `        // Volume next-event estimation: one light and the environment, MIS against
+        // the phase function, attenuated by the transmittance to the emitter.
+        let volumeNee = !subsurfaceWalk && volumeIndex != 0xffffffffu;
+        if (volumeNee) {
+          let woM = -rd;
+${analyticLights ? `          if (mx_light_count() > 0u) {
+            let lightU = vec3f(rng_next(state), rng_next(state), rng_next(state));
+            let index = mx_select_light(lightU.x);
+            let light = mx_sample_light_at(index, sp, lightU.yz);
+            let sourcePdf = light.pdf * mx_light_selection_pmf(index);
+            if (sourcePdf > 0.0 && sourcePdf < 3.0e38) {
+              let phase = volume_phase(dot(woM, light.direction), g);
+              let tr = mx_transmittance(sp, light.direction, light.distance - 2.0 * RAY_EPS, volumeIndex, state);
+              let w = select(power_heuristic(1.0, sourcePdf, 1.0, phase), 1.0, light.delta);
+              radiance += beta * light.radiance * tr * (phase * w / sourcePdf);
+            }
+          }` : `          if (dot(lightRadiance, lightRadiance) > 0.0) {
+            let tr = mx_transmittance(sp, toLight, 1.0e30, volumeIndex, state);
+            radiance += beta * lightRadiance * tr * volume_phase(dot(woM, toLight), g);
+          }`}
+          if (hasEnv) {
+            var envDirection = vec3f(0.0, 1.0, 0.0);
+            var envPdf = 1.0 / (4.0 * PI);
+            var envColor = vec3f(0.0);
+${environment ? `            if (U.envExtra.w > 0.5) {
+              let sampled = env_map_sample_uv(vec2f(rng_next(state), rng_next(state)));
+              envDirection = normalize(env_map_uv_to_dir(sampled.xy));
+              envPdf = env_map_pdf(sampled.xy, sampled.z);
+              envColor = textureSampleLevel(envTex, envSampler, sampled.xy, 0.0).xyz * U.envTexture.x * U.env.xyz * U.env.w;
+            } else {
+              let z = 1.0 - 2.0 * rng_next(state);
+              let r = sqrt(max(0.0, 1.0 - z * z));
+              let phi = 2.0 * PI * rng_next(state);
+              envDirection = vec3f(r * cos(phi), r * sin(phi), z);
+              envColor = env_radiance(envDirection);
+            }` : `            let z = 1.0 - 2.0 * rng_next(state);
+            let r = sqrt(max(0.0, 1.0 - z * z));
+            let phi = 2.0 * PI * rng_next(state);
+            envDirection = vec3f(r * cos(phi), r * sin(phi), z);
+            envColor = U.env.xyz;`}
+            if (envPdf > 0.0) {
+              let phase = volume_phase(dot(woM, envDirection), g);
+              let tr = mx_transmittance(sp, envDirection, 1.0e30, volumeIndex, state);
+              radiance += beta * envColor * tr * (phase * power_heuristic(1.0, envPdf, 1.0, phase) / envPdf);
+            }
+          }
+        }` : ''}
         let wiM = mx_sample_hg(-rd, g, rng_next(state), rng_next(state));
         specularBounce = false;
         diffuseBounce = false;
         splitFuzzEnvironment = false;
-        bsdfPdf = 0.0;
-${analyticLights ? '        analyticNee = false; // No analytic-light NEE is performed at a volume collision.' : ''}
+${media ? `        // HG sampling is exact, so the phase value is the sampling pdf.
+        phaseBounce = volumeNee;
+        bsdfPdf = select(0.0, volume_phase(dot(-rd, wiM), g), volumeNee);` : '        bsdfPdf = 0.0;'}
+${analyticLights ? (media ? '        analyticNee = volumeNee && mx_light_count() > 0u;' : '        analyticNee = false; // No analytic-light NEE is performed at a volume collision.') : ''}
         ro = sp;
         rd = wiM;
         let rouletteDepth = select(bounce, subsurfaceEvents, subsurfaceWalk);
@@ -955,6 +1043,7 @@ ${
           // the preceding surface used the separate fuzz/SH integration.
           var envPdf = max(dot(lastN, rd), 0.0) / PI;
           if (U.envExtra.w > 0.5) { envPdf = sky_pdf(rd); }
+          else if (phaseBounce) { envPdf = 1.0 / (4.0 * PI); }
           let w = power_heuristic(1.0, bsdfPdf, 1.0, envPdf);
           let missBeta = select(beta, environmentBeta, splitFuzzEnvironment);
           radiance = radiance + missBeta * ${envMiss} * w;
@@ -962,7 +1051,7 @@ ${
           : /* wgsl */ `        if (specularBounce) {
           radiance = radiance + beta * ${envMiss};
         } else {
-          let envPdf = max(dot(lastN, rd), 0.0) / PI;
+          let envPdf = select(max(dot(lastN, rd), 0.0) / PI, 1.0 / (4.0 * PI), phaseBounce);
           let w = power_heuristic(1.0, bsdfPdf, 1.0, envPdf);
           radiance = radiance + beta * ${envMiss} * w;
         }`
@@ -1080,14 +1169,13 @@ ${displayAovs ? `    let aovMode = u32(U.envTexture.w);
         c = remaining;
       }
     }
-    if (mx_closure_has_dispersion(c) && spectralChannel == 3u) {
-      spectralChannel = min(u32(rng_next(state) * 3.0), 2u);
-      var channelWeight = vec3f(0.0);
-      channelWeight[spectralChannel] = 3.0;
-      beta = beta * channelWeight;
-      environmentBeta = environmentBeta * channelWeight;
+    if (mx_closure_has_dispersion(c) && wavelength == 0.0) {
+      let spectral = mx_sample_dispersion_wavelength(rng_next(state));
+      wavelength = spectral.w;
+      beta = beta * spectral.xyz;
+      environmentBeta = environmentBeta * spectral.xyz;
     }
-    if (spectralChannel < 3u) { c = mx_closure_spectral_channel(c, spectralChannel); }
+    if (wavelength > 0.0) { c = mx_closure_spectral_wavelength(c, wavelength); }
     let authoredNormal = mx_closure_shading_normal(c, n);
     let shadingNormal = mx_closure_oriented_normal(c, authoredNormal, -rd);
     let frame = mx_closure_frame(c, shadingNormal, basis(shadingNormal));
@@ -1247,8 +1335,11 @@ ${
       }
       if (!neeValid) { continue; }
       var visibility = 1.0;
+      var neeTransmittance = vec3f(1.0);
       if (!neeBsdf) {
-        visibility = mx_visibility(pos + neeDirection * RAY_EPS, neeDirection, neeDistance);
+${media ? `        neeTransmittance = mx_transmittance(pos + neeDirection * RAY_EPS, neeDirection, neeDistance, volumeIndex, state);
+        visibility = select(0.0, 1.0, any(neeTransmittance > vec3f(0.0)));`
+    : '        visibility = mx_visibility(pos + neeDirection * RAY_EPS, neeDirection, neeDistance);'}
 ${displayAovs && analyticLights ? `        if (strategy == 0u && mx_guide_pending) {
           mx_guide_record = mx_guide_observation(neeGuideCell, neeLightIndex, visibility > 0.0);
           mx_guide_pending = false;
@@ -1281,7 +1372,7 @@ ${environment ? '          bsGlossy = glossy;' : ''}
         break;
       }
       let weight = select(power_heuristic(1.0, neeMisPdf, 1.0, ev.pdf), 1.0, neeDelta);
-      radiance += beta * ev.value * attenuation * neeRadiance * (neeCosine * visibility * weight / neePdf);
+      radiance += beta * ev.value * attenuation * neeRadiance * neeTransmittance * (neeCosine * visibility * weight / neePdf);
     }
     if (!bs.valid || bs.pdf <= 0.0) { break; }
     let wiWorld = frame * bs.wi;
@@ -1299,6 +1390,7 @@ ${
     }
     beta = beta * bs.value * bsAttenuation * cosS / bs.pdf;
     bsdfPdf = bs.pdf;
+    phaseBounce = false;
 ${analyticLights ? '    analyticNee = allowDirectLighting && !specular && mx_light_count() > 0u;' : ''}
   specularBounce = specular || !allowDirectLighting;
     diffuseBounce = splitFuzzEnvironment && mx_closure_sampled_is_diffuse(c, wo, u.z);
@@ -1520,6 +1612,17 @@ export interface PathTraceComputeOptions {
     pruneUnusedFunctions?: boolean;
     /** Compile-time roulette threshold; omit to keep reading it from the frame uniform. */
     rouletteDepth?: number;
+    /**
+     * The scene has volume boundaries: shadow rays accumulate their transmittance and
+     * volume scattering events sample lights and the environment (pathTraceHasMedia).
+     */
+    media?: boolean;
+}
+
+/** True when a material record is a volume boundary (participating medium inside). */
+export function pathTraceHasMedia(materials: Float32Array): boolean {
+  for (let base = 0; base < materials.length; base += PT_MATERIAL_RECORD_FLOATS) if (materials[base + 37] !== 0) return true;
+  return false;
 }
 
 /** Full WGSL source of the compute path tracer. */
@@ -1544,11 +1647,22 @@ export function pathTraceComputeWgsl(options: PathTraceComputeOptions = {}): str
     wgslClosureSurface(textures, maxLobes, options.closureDispatch),
     volumeFieldWgsl(options.volumeGrid ?? false),
     VOLUME_TRANSPORT_WGSL,
+    dispersionWgsl(),
+    `fn mx_closure_spectral_wavelength(c: LayeredClosure, wavelength: f32) -> LayeredClosure {
+  var result = c;
+  for (var i = 0u; i < c.lobeCount; i++) {
+    let l = c.lobes[i];
+    if (l.kind == MX_LOBE_DIELECTRIC_TRANSMISSION && l.thin <= 0.0 && l.dispersion > 0.0) {
+      result.lobes[i].ior = mx_dispersion_ior_at(l.ior, l.dispersion, wavelength);
+    }
+  }
+  return result;
+}`,
     ...(options.analyticLights ? [ANALYTIC_LIGHTS_WGSL, lightGuideWgsl()] : []),
     ...(varyings !== undefined ? [wgslVaryings(varyings)] : []),
     ...(dispatch !== undefined ? [wgslDispatch(dispatch)] : []),
     wgslIntegrator(textures, dispatch, environment, options.displayAovs ?? false, options.opaque ?? false,
-      options.analyticLights ?? false, options.rouletteDepth),
+      options.analyticLights ?? false, options.rouletteDepth, (options.media ?? false) && !(options.opaque ?? false)),
     wgslEntry(options.displayAovs ?? false, options.analyticLights ?? false),
   ].join('\n');
   return options.pruneUnusedFunctions ? pruneWgslFunctions(code, [PT_COMPUTE_ENTRY]) : code;

@@ -1,0 +1,14 @@
+<?xml version="1.0"?>
+<materialx version="1.39" colorspace="lin_rec709">
+  <anisotropic_vdf name="vdf" type="VDF">
+    <input name="absorption" type="vector3" value="0.01, 0.01, 0.01" />
+    <input name="scattering" type="vector3" value="0.06, 0.06, 0.06" />
+    <input name="anisotropy" type="float" value="0.4" />
+  </anisotropic_vdf>
+  <volume name="volume_shader" type="volumeshader">
+    <input name="vdf" type="VDF" nodename="vdf" />
+  </volume>
+  <surfacematerial name="fog" type="material">
+    <input name="volumeshader" type="volumeshader" nodename="volume_shader" />
+  </surfacematerial>
+</materialx>

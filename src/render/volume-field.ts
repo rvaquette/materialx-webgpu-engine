@@ -45,8 +45,17 @@ export function sampleVolumeTransport(
   }
 }
 
-/** World-space, trilinear grid: the majorant bounds the reconstructed field. */
-export function bakeVolumeGrid(ir: ShaderIr, bounds: Aabb, size = VOLUME_GRID_SIZE) {
+/** Grid resolution for volumes reading sampled fields (NanoVDB). */
+export const VOLUME_FIELD_GRID_SIZE = 64;
+
+/**
+ * World-space, trilinear grid: the majorant bounds the reconstructed field.
+ * `fields` gives the named scalar fields read by `geompropvalue` at a world position.
+ */
+export function bakeVolumeGrid(
+  ir: ShaderIr, bounds: Aabb, size = VOLUME_GRID_SIZE,
+  fields?: (position: readonly number[]) => Readonly<Record<string, number>>,
+) {
   if (!Number.isInteger(size) || size < 2) throw new Error('Volume grid resolution must be at least two.');
   const extent = bounds.max.map((v, i) => v - bounds.min[i]!);
   if (extent.some(v => !(v > 0) || !Number.isFinite(v))) throw new Error('Volume bounds must have positive finite extent.');
@@ -54,14 +63,18 @@ export function bakeVolumeGrid(ir: ShaderIr, bounds: Aabb, size = VOLUME_GRID_SI
   if (expressions.some(expr => expr.kind === 'texture')) {
     throw new Error('Volume image inputs require a 3D image sampler; only procedural spatial fields are currently supported.');
   }
-  if (expressions.some(expr => expr.kind === 'primvar' || (expr.kind === 'input' && expr.name !== 'position'))) {
-    throw new Error('Volume fields require world position, not per-instance geometry attributes.');
+  if (expressions.some(expr => (expr.kind === 'primvar' && !fields) || (expr.kind === 'input' && expr.name !== 'position'))) {
+    throw new Error('Volume fields require world position or the fields of a USD Volume, not per-instance geometry attributes.');
   }
+  const fieldNames = [...new Set([...expressions.values()].flatMap(expr => expr.kind === 'primvar' ? [expr.name] : []))];
   const data = new Float32Array(size ** 3 * VOLUME_VOXEL_FLOATS);
   let majorant = 0;
   for (let z = 0; z < size; z++) for (let y = 0; y < size; y++) for (let x = 0; x < size; x++) {
     const position = [x, y, z].map((v, i) => bounds.min[i]! + extent[i]! * v / (size - 1));
-    const medium = evaluateVolumeIr(ir, { position });
+    const values = fields?.(position);
+    const medium = evaluateVolumeIr(ir, {
+      position, ...(values ? { primvars: Object.fromEntries(fieldNames.map(name => [name, [values[name] ?? 0]])) } : {}),
+    });
     const offset = ((z * size + y) * size + x) * VOLUME_VOXEL_FLOATS;
     data.set([...medium.absorption, ...medium.scattering, medium.anisotropy, ...medium.emission ?? [0, 0, 0]], offset);
     if (Math.abs(data[offset+6]!) >= 1) throw new Error('Volume anisotropy exceeds the float32 phase-function range.');
@@ -145,6 +158,31 @@ fn volume_phase(cosine: f32, g: f32) -> f32 {
 }
 
 export const VOLUME_TRANSPORT_WGSL = `
+// Transmittance along a segment inside a volume: exact for homogeneous media,
+// ratio tracking against the majorant (with Russian roulette) for grids.
+fn volume_transmittance(index: u32, ro: vec3f, rd: vec3f, tMax: f32, state: ptr<function,u32>) -> vec3f {
+  let majorant = volume_majorant(index);
+  let segment = volume_segment_distance(index,ro,rd,tMax);
+  if (majorant == 0.0 || segment <= 0.0) { return vec3f(1.0); }
+  if (materials[index * ${PT_MATERIAL_RECORD_FLOATS}u + 41u] <= 0.0) {
+    let m = volume_field(index,ro);
+    return exp(-(m.absorption+m.scattering)*segment);
+  }
+  var transmittance = vec3f(1.0);
+  var t = 0.0;
+  for (var step = 0u; step < 4096u; step++) {
+    t += -log(1.0-rng_next(state))/majorant;
+    if (t >= segment) { return transmittance; }
+    let m = volume_field(index,ro+rd*t);
+    transmittance *= max(vec3f(0.0),vec3f(1.0)-(m.absorption+m.scattering)/majorant);
+    let peak = max(transmittance.x,max(transmittance.y,transmittance.z));
+    if (peak < 0.1) {
+      if (rng_next(state) >= peak) { return vec3f(0.0); }
+      transmittance /= peak;
+    }
+  }
+  return transmittance;
+}
 struct VolumePathSample { scattered: bool, t: f32, weight: vec3f, emission: vec3f, g: f32 };
 fn volume_sample(index: u32, ro: vec3f, rd: vec3f, tMax: f32, state: ptr<function,u32>) -> VolumePathSample {
   let majorant = volume_majorant(index);

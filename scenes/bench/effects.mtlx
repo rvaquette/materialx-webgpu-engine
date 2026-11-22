@@ -1,0 +1,51 @@
+<?xml version="1.0"?>
+<materialx version="1.39" colorspace="lin_rec709">
+  <!-- Priority-6 control materials: dispersive glass (Abbe 12) and one skin-like
+       subsurface material at three scales (millimetres to decimetres). -->
+  <standard_surface name="SR_prism" type="surfaceshader">
+    <input name="base" type="float" value="0" />
+    <input name="specular_IOR" type="float" value="1.6" />
+    <input name="specular_roughness" type="float" value="0" />
+    <input name="transmission" type="float" value="1" />
+    <input name="transmission_dispersion" type="float" value="12" />
+  </standard_surface>
+  <surfacematerial name="prism" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="SR_prism" />
+  </surfacematerial>
+
+  <standard_surface name="SR_sss_fine" type="surfaceshader">
+    <input name="base" type="float" value="0" />
+    <input name="subsurface" type="float" value="1" />
+    <input name="subsurface_color" type="color3" value="0.9, 0.55, 0.4" />
+    <input name="subsurface_radius" type="color3" value="1, 0.35, 0.2" />
+    <input name="subsurface_scale" type="float" value="0.01" />
+    <input name="specular_roughness" type="float" value="0.35" />
+  </standard_surface>
+  <surfacematerial name="sss_fine" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="SR_sss_fine" />
+  </surfacematerial>
+
+  <standard_surface name="SR_sss_medium" type="surfaceshader">
+    <input name="base" type="float" value="0" />
+    <input name="subsurface" type="float" value="1" />
+    <input name="subsurface_color" type="color3" value="0.9, 0.55, 0.4" />
+    <input name="subsurface_radius" type="color3" value="1, 0.35, 0.2" />
+    <input name="subsurface_scale" type="float" value="0.1" />
+    <input name="specular_roughness" type="float" value="0.35" />
+  </standard_surface>
+  <surfacematerial name="sss_medium" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="SR_sss_medium" />
+  </surfacematerial>
+
+  <standard_surface name="SR_sss_coarse" type="surfaceshader">
+    <input name="base" type="float" value="0" />
+    <input name="subsurface" type="float" value="1" />
+    <input name="subsurface_color" type="color3" value="0.9, 0.55, 0.4" />
+    <input name="subsurface_radius" type="color3" value="1, 0.35, 0.2" />
+    <input name="subsurface_scale" type="float" value="1" />
+    <input name="specular_roughness" type="float" value="0.35" />
+  </standard_surface>
+  <surfacematerial name="sss_coarse" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="SR_sss_coarse" />
+  </surfacematerial>
+</materialx>

@@ -1,3 +1,6 @@
+import { applyDefaultVolumeMaterials, loadSceneVolumes, volumeBoxMesh, type SceneVolume } from './scene-volumes.ts';
+import { curvesToMesh, pointsToMesh } from '../scene/procedural-geometry.ts';
+import { isMeshPrim } from '../scene/types.ts';
 // Shared USD -> GPU asset loading used by both the offscreen capture harness
 // (tests/render/usd-scene.harness.ts) and the interactive viewer (src/render/
 // viewer.ts). It fetches a .usda stage plus its referenced .mtlx layers over HTTP,
@@ -103,11 +106,17 @@ function numArray(prim: ScenePrim, name: string): number[] {
 }
 
 /** Supplies inline USDA mesh geometry per prototype prim path. */
-export function meshSourceFromScene(scene: SceneAsset): MeshSource {
+export function meshSourceFromScene(scene: SceneAsset, volumes?: ReadonlyMap<string, SceneVolume>): MeshSource {
   return {
     meshFor(primPath: string): RawMesh | undefined {
       const prim = scene.prims.get(primPath);
       if (!prim) return undefined;
+      if (prim.typeName === 'Volume') {
+        const volume = volumes?.get(primPath);
+        return volume ? volumeBoxMesh(volume) : undefined;
+      }
+      if (prim.typeName === 'BasisCurves') return curvesToMesh(prim);
+      if (prim.typeName === 'Points') return pointsToMesh(prim);
       const points = numArray(prim, 'points');
       const faceVertexCounts = numArray(prim, 'faceVertexCounts');
       const faceVertexIndices = numArray(prim, 'faceVertexIndices');
@@ -440,7 +449,7 @@ export function applyObjectMaterialOverrides(
   const materials = [...scene.materials];
   for (const [path, material] of overrides) {
     const prim = prims.get(path);
-    if (!prim || (prim.typeName !== 'Mesh' && !prim.mesh)) throw new Error(`Unknown mesh: ${path}`);
+    if (!prim || !isMeshPrim(prim)) throw new Error(`Unknown mesh: ${path}`);
     const materialPath = `${path}/__MaterialOverride`;
     prims.set(path, { ...prim, materialBinding: { target: materialPath } });
     materials.push({ primPath: materialPath, ...material, referencedPrimPath: `/${material.materialName}` });
@@ -504,25 +513,29 @@ export async function loadUsdScene(
   const source = applyObjectMaterialOverrides(composed, overrides);
   const timeline = sceneTimeline(source);
   const time = options.time ?? timeline.start;
-  const scene = timeline.animated ? evaluateSceneAt(source, time) : source;
+  const evaluated = timeline.animated ? evaluateSceneAt(source, time) : source;
+  const volumes = await loadSceneVolumes(evaluated, sink);
+  const defaults = applyDefaultVolumeMaterials(evaluated, volumes);
+  const scene = defaults.scene;
   const composedAt = performance.now();
   performance.measure('usd:composition', { start: started, end: composedAt, detail: { entry, prims: scene.prims.size } });
   const lights = importLights(scene, { sink });
   const cameras = importCameras(scene, { sink });
-  const mtlx = await loadMtlxSceneContext(
-    scene, entry, sink, line, options.textureRoot, options.imported?.materialTexts, options.runtimeAssets,
-  );
+  const materialTexts = defaults.texts.size
+    ? new Map([...options.imported?.materialTexts ?? [], ...defaults.texts]) : options.imported?.materialTexts;
+  const mtlx = await loadMtlxSceneContext(scene, entry, sink, line, options.textureRoot, materialTexts, options.runtimeAssets);
   const materialsAt = performance.now();
   performance.measure('usd:materials', { start: composedAt, end: materialsAt, detail: { entry, documents: scene.materials.length } });
   try {
     const built = await buildSceneResources(scene, {
-      meshSource: options.imported?.meshSource ?? await loadExternalMeshSource(scene, meshSourceFromScene(scene), sink, undefined,
+      meshSource: options.imported?.meshSource ?? await loadExternalMeshSource(scene, meshSourceFromScene(scene, volumes), sink, undefined,
         // With a persistent prepared-geometry cache, parse files only on cache misses.
         { lazy: globalThis.indexedDB !== undefined }),
       materialCompiler: createGraphMaterialCompiler({ documents: mtlx.documents, sink }),
       sink,
     });
     requireCompiledMaterials(built);
+    if (volumes.size) Object.assign(built, { volumes });
     const parameterResources = options.editableParameters ? editableSceneMaterials(built) : undefined;
     const baseResources = parameterResources ?? (options.parameterMode === 'uniform' ? uniformSceneMaterials(built) : built);
     const resources = await applySceneDisplacement(baseResources, mtlx.imageProvider);

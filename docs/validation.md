@@ -920,16 +920,21 @@ et n'est pas une correction conforme a cet oracle.
 
 ## Dispersion et aspect rugueux
 
-La dispersion utilise une approximation RGB de `KHR_materials_dispersion` :
+Le raster utilise une approximation RGB de `KHR_materials_dispersion` :
 `halfSpread = (ior - 1) * 0.025 * dispersion`. Les trois IOR sont
 `ior - halfSpread`, `ior`, `ior + halfSpread`, bornes a 1 au minimum.
 Le parametre Abbe de standard_surface est converti en `20 / Abbe` lorsqu'il
 est positif ; OpenPBR applique aussi son facteur de dispersion.
 Le raster evalue trois fermetures et conserve le canal correspondant de chacune.
-Le path tracer choisit un canal au premier verre dispersif, compense son poids
-par 3 et conserve ce canal aux interfaces suivantes. Les trajets sans dispersion,
-les feuilles minces et les conducteurs sans transmission active ne passent pas
-par cette selection. Ce modele n'est pas un transport spectral continu.
+Le path tracer fait un transport spectral : au premier verre dispersif, il tire
+une longueur d'onde entre 380 et 720 nm proportionnellement a la reponse sRGB
+lineaire des fonctions colorimetriques CIE 1931 (table de 34 intervalles), le
+poids RGB du trajet etant `rgb(lambda) / pdf(lambda)` (moyenne blanche). L'IOR
+suit une loi de Cauchy `n(lambda) = ior + B (1/lambda^2 - 1/lambda_d^2)` avec
+`B` tel que `n_F - n_C = (ior - 1) / Abbe` (`src/render/pathtracing/spectrum.ts`).
+La longueur d'onde est conservee aux interfaces suivantes. Les trajets sans
+dispersion, les feuilles minces et les conducteurs sans transmission active ne
+passent pas par cette selection.
 
 Ne pas confondre les deux materiaux suivants lors de la comparaison :
 

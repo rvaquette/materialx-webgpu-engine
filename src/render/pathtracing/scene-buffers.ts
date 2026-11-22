@@ -19,7 +19,7 @@ import { preparedGeometryMemory, sceneBufferCacheKey } from './scene-buffer-cach
 import { inverse4, transformDirection, transformPoint, type Mat4, type Vec3 } from '../../scene/transforms.ts';
 import type { SceneResources } from '../scene-resources.ts';
 import type { VolumeMedium } from '../../compiler/volume-ir.ts';
-import { bakeVolumeGrid, sampleVolumeGrid, type VolumeField } from '../volume-field.ts';
+import { bakeVolumeGrid, sampleVolumeGrid, VOLUME_FIELD_GRID_SIZE, type VolumeField } from '../volume-field.ts';
 import {
   buildSceneFrame,
   NEUTRAL_SURFACE,
@@ -174,10 +174,14 @@ export function buildPathTraceScene(
   const media: (VolumeMedium | undefined)[] = [];
   const volumeBoundaries: boolean[] = [];
   const volumeBounds = new Map<string, Aabb>();
+  // USD Volume fields per volume material: each instance contributes its fields at T^-1 p.
+  const volumeFields = new Map<string, Array<{ volume: NonNullable<ReturnType<NonNullable<SceneResources['volumes']>['get']>>; inverse: Mat4 }>>();
   for (const draw of frame.draws) {
     if (!draw.materialKey || !resources.materials.get(draw.materialKey)?.volumeIr) continue;
     const geom = resources.geometries.get(draw.prototypeId);
     if (!geom) continue;
+    const volume = resources.volumes?.get(draw.prototypeId);
+    if (volume) volumeFields.set(draw.materialKey, [...volumeFields.get(draw.materialKey) ?? [], { volume, inverse: inverse4(draw.model) }]);
     const bounds = volumeBounds.get(draw.materialKey) ?? { min: [Infinity, Infinity, Infinity], max: [-Infinity, -Infinity, -Infinity] };
     for (let corner = 0; corner < 8; corner++) {
       const p = transformPoint(draw.model, [0, 1, 2].map(i => (corner & (1 << i)) ? geom.bounds.max[i]! : geom.bounds.min[i]!) as V3);
@@ -391,7 +395,15 @@ export function buildPathTraceScene(
     materials.set(bounds.min, base + 43);
     materials.set(bounds.max.map((v, a) => 1 / (v - bounds.min[a]!)), base + 46);
     if (material.volumeMedium) continue;
-    const grid = bakeVolumeGrid(material.volumeIr, bounds);
+    const sources = volumeFields.get(materialKeys[i]!);
+    const grid = bakeVolumeGrid(material.volumeIr, bounds, sources ? VOLUME_FIELD_GRID_SIZE : undefined, sources && (position => {
+      const values: Record<string, number> = {};
+      for (const { volume, inverse } of sources) {
+        const local = transformPoint(inverse, position as V3);
+        for (const [name, sample] of volume.fields) values[name] = (values[name] ?? 0) + sample(local);
+      }
+      return values;
+    }));
     materials[base + 29] = 1;
     materials[base + 37] = material.volumeBoundary ? 1 : 0;
     materials[base + 1] = material.volumeBoundary ? 0 : materials[base + 1]!;

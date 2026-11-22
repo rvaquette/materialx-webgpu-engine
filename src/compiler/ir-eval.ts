@@ -869,6 +869,8 @@ function evalCall(op: string, args: IrValue[], env: IrEvalVaryings, type: IrType
       return [...input('value', 0)];
     case 'frame':
       return [input('mx_frame', 99, [1])[0]!];
+    case 'blackbody':
+      return blackbody(input('temperature', 0, [5000])[0]!);
     case 'time':
       return [input('mx_frame', 99, [0])[0]! / input('fps', 0, [24])[0]!];
     case 'ifequal':
@@ -1347,4 +1349,20 @@ export function evaluateShaderIr(ir: ShaderIr, env: IrEvalVaryings = {}): Map<st
   const out = new Map<string, IrValue>();
   for (const o of ir.outputs) out.set(o.name, evaluateIrRef(ir, o.ref, env, cache));
   return out;
+}
+
+/** Same CIE fit and clamps as the WGSL mx_blackbody (compiler/nodes.ts). */
+function blackbody(temperature: number): number[] {
+  const k = Math.min(25000, Math.max(800, temperature));
+  const t = 1000 / k, t2 = t * t, t3 = t2 * t;
+  const xc = k < 4000 ? -0.2661239 * t3 - 0.2343580 * t2 + 0.8776956 * t + 0.179910
+    : -3.0258469 * t3 + 2.1070379 * t2 + 0.2226347 * t + 0.240390;
+  const xc2 = xc * xc, xc3 = xc2 * xc;
+  const yc = k < 2222 ? -1.1063814 * xc3 - 1.34811020 * xc2 + 2.18555832 * xc - 0.20219683
+    : k < 4000 ? -0.9549476 * xc3 - 1.37418593 * xc2 + 2.09137015 * xc - 0.16748867
+      : 3.0817580 * xc3 - 5.87338670 * xc2 + 3.75112997 * xc - 0.37001483;
+  if (yc <= 0) return [1, 1, 1];
+  const [x, y, z] = [xc / yc, 1, (1 - xc - yc) / yc];
+  return [3.2406 * x - 1.5372 * y - 0.4986 * z, -0.9689 * x + 1.8758 * y + 0.0415 * z, 0.0557 * x - 0.2040 * y + 1.0570 * z]
+    .map(v => Math.max(0, v));
 }

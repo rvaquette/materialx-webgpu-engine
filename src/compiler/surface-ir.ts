@@ -142,6 +142,8 @@ export function lowerValueInputsToIr(
   declaredInputs: ReadonlyMap<string, NormalizedSurfaceInput>,
   builder: IrModuleBuilder,
   sink: DiagnosticSink = defaultDiagnosticSink,
+  /** Volume coefficients: scalar `geompropvalue` nodes read the volume's named fields. */
+  options: { volumeFields?: boolean } = {},
 ): ReadonlyMap<string, IrRef> {
   const nodeMemo = new Map<string, IrRef>();
   const geomMemo = new Map<string, IrRef>();
@@ -880,6 +882,8 @@ export function lowerValueInputsToIr(
       const name = property?.source.kind === 'value' ? property.source.value : undefined;
       if (node.type === 'vector2' && (name === 'st' || name === 'UV0')) {
         ref = ensureUv();
+      } else if (options.volumeFields && node.type === 'float' && name) {
+        ref = builder.add({ kind: 'primvar', type: FLOAT, name });
       } else {
         sink({
           level: 'warning',

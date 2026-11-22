@@ -1,0 +1,85 @@
+#usda 1.0
+(
+    defaultPrim = "World"
+    metersPerUnit = 1
+    upAxis = "Y"
+    doc = "Priority-6 control: homogeneous fog enclosing the camera, lit by a lamp behind two pillars (light shafts)."
+)
+
+def Xform "World"
+{
+    custom string pathtracer:sourceScene = "effects"
+    custom int pathtracer:maxDepth = 12
+
+    def Camera "Camera"
+    {
+        double3 xformOp:translate = (0, 1.6, 6)
+        float xformOp:rotateX = -4
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateX"]
+        float focalLength = 35
+        float horizontalAperture = 36
+        float verticalAperture = 36
+        float2 clippingRange = (0.01, 1000)
+    }
+
+    def Scope "Looks"
+    {
+        def Material "white" (
+            prepend references = @../pathtracer/test_veach.mtlx@</MaterialX/Materials/white>
+        )
+        {
+        }
+        def Material "hair" (
+            prepend references = @../mtlx-library/Examples/SimpleHair/simple_hair_default.mtlx@</MaterialX/Materials/simple_hair_default>
+        )
+        {
+        }
+        def Material "metal" (
+            prepend references = @../pathtracer/test_veach.mtlx@</MaterialX/Materials/metal_2>
+        )
+        {
+        }
+        def Material "fog" (
+            prepend references = @./volumes/fog.mtlx@</MaterialX/Materials/fog>
+        )
+        {
+        }
+    }
+
+    def Mesh "Floor"
+    {
+        int[] faceVertexCounts = [4]
+        int[] faceVertexIndices = [0, 1, 2, 3]
+        point3f[] points = [(-10, 0, 10), (10, 0, 10), (10, 0, -10), (-10, 0, -10)]
+        rel material:binding = </World/Looks/white>
+    }
+
+    def Mesh "FogBox"
+    {
+        int[] faceVertexCounts = [4, 4, 4, 4, 4, 4]
+        int[] faceVertexIndices = [0, 2, 3, 1, 4, 5, 7, 6, 0, 1, 5, 4, 2, 6, 7, 3, 0, 4, 6, 2, 1, 3, 7, 5]
+        point3f[] points = [(-8, 0.01, -8), (8, 0.01, -8), (-8, 6, -8), (8, 6, -8), (-8, 0.01, 10), (8, 0.01, 10), (-8, 6, 10), (8, 6, 10)]
+        rel material:binding = </World/Looks/fog>
+    }
+
+    def Mesh "Pillars"
+    {
+        int[] faceVertexCounts = [4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4]
+        int[] faceVertexIndices = [0, 2, 3, 1, 4, 5, 7, 6, 0, 1, 5, 4, 2, 6, 7, 3, 0, 4, 6, 2, 1, 3, 7, 5, 8, 10, 11, 9, 12, 13, 15, 14, 8, 9, 13, 12, 10, 14, 15, 11, 8, 12, 14, 10, 9, 11, 15, 13]
+        point3f[] points = [(-1.6, 0, -1.4), (-1.0, 0, -1.4), (-1.6, 3.5, -1.4), (-1.0, 3.5, -1.4), (-1.6, 0, -0.8), (-1.0, 0, -0.8), (-1.6, 3.5, -0.8), (-1.0, 3.5, -0.8), (1.0, 0, -1.4), (1.6, 0, -1.4), (1.0, 3.5, -1.4), (1.6, 3.5, -1.4), (1.0, 0, -0.8), (1.6, 0, -0.8), (1.0, 3.5, -0.8), (1.6, 3.5, -0.8)]
+        rel material:binding = </World/Looks/white>
+    }
+
+    def Scope "Lights"
+    {
+        def SphereLight "Lamp"
+        {
+            double3 xformOp:translate = (0, 3.2, -3.5)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+            color3f inputs:color = (1, 0.85, 0.6)
+            float inputs:intensity = 60
+            bool inputs:normalize = false
+            float inputs:radius = 0.25
+        }
+    }
+}

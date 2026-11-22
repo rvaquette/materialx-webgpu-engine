@@ -300,12 +300,12 @@ describe('pathTraceComputeWgsl', () => {
     expect(visibility.trim()).toMatch(/return 0\.0;\s*}$/);
   });
 
-  it('selects a compensated RGB channel once per path and reuses it across interfaces', () => {
-    expect(src).toContain('var spectralChannel = 3u;');
-    expect(src).toContain('if (mx_closure_has_dispersion(c) && spectralChannel == 3u)');
-    expect(src).toContain('channelWeight[spectralChannel] = 3.0;');
-    expect(src).toContain('beta = beta * channelWeight;');
-    expect(src).toContain('if (spectralChannel < 3u) { c = mx_closure_spectral_channel(c, spectralChannel); }');
+  it('samples one hero wavelength per path for dispersion and reuses it across interfaces', () => {
+    expect(src).toContain('var wavelength = 0.0;');
+    expect(src).toContain('if (mx_closure_has_dispersion(c) && wavelength == 0.0)');
+    expect(src).toContain('let spectral = mx_sample_dispersion_wavelength(rng_next(state));');
+    expect(src).toContain('beta = beta * spectral.xyz;');
+    expect(src).toContain('if (wavelength > 0.0) { c = mx_closure_spectral_wavelength(c, wavelength); }');
   });
 
   it('uses the graph normal for shading while retaining geometric normals for hit varyings', () => {

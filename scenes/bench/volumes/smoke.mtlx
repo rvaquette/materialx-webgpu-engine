@@ -1,0 +1,25 @@
+<?xml version="1.0"?>
+<materialx version="1.39" colorspace="lin_rec709">
+  <geompropvalue name="density" type="float">
+    <input name="geomprop" type="string" value="density" />
+  </geompropvalue>
+  <multiply name="scattering" type="vector3">
+    <input name="in1" type="vector3" value="0.35, 0.33, 0.3" />
+    <input name="in2" type="float" nodename="density" />
+  </multiply>
+  <multiply name="absorption" type="vector3">
+    <input name="in1" type="vector3" value="0.9, 0.9, 0.9" />
+    <input name="in2" type="float" nodename="density" />
+  </multiply>
+  <anisotropic_vdf name="vdf" type="VDF">
+    <input name="absorption" type="vector3" nodename="absorption" />
+    <input name="scattering" type="vector3" nodename="scattering" />
+    <input name="anisotropy" type="float" value="0.3" />
+  </anisotropic_vdf>
+  <volume name="volume_shader" type="volumeshader">
+    <input name="vdf" type="VDF" nodename="vdf" />
+  </volume>
+  <surfacematerial name="smoke" type="material">
+    <input name="volumeshader" type="volumeshader" nodename="volume_shader" />
+  </surfacematerial>
+</materialx>

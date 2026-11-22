@@ -27,7 +27,7 @@ export function lowerVolumeInputsToIr(volume: ResolvedVolume, builder: IrModuleB
       const existing = new Set(builder.build().exprs.keys());
       const lowered = lowerValueInputsToIr(graph, declared, builder, diagnostic => {
         if (diagnostic.level === 'warning' || diagnostic.level === 'error') throw new Error(diagnostic.message);
-      });
+      }, { volumeFields: true });
       for (const [ref, expr] of builder.build().exprs) {
         if (!existing.has(ref) && expr.kind === 'input' &&
             (OBJECT_GEOMETRY_INPUTS.has(expr.name) || expr.name === OBJECT_TO_WORLD_INPUT ||
@@ -50,7 +50,8 @@ export function lowerVolumeInputsToIr(volume: ResolvedVolume, builder: IrModuleB
         visited.add(id);
         const node = graph.nodes.get(id);
         if (!node) throw new Error(`Missing volume node '${id}'.`);
-        if (['normal','tangent','bitangent','texcoord','geompropvalue'].includes(node.category)) {
+        if (['normal','tangent','bitangent','texcoord'].includes(node.category)
+            || (node.category === 'geompropvalue' && node.type !== 'float')) {
           throw new Error(`Volume node '${node.category}' needs per-instance geometric data; only world-space fields are supported.`);
         }
         if (node.category === 'position') {

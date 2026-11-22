@@ -1,0 +1,160 @@
+#usda 1.0
+(
+    defaultPrim = "World"
+    metersPerUnit = 1
+    upAxis = "Y"
+    doc = "Priority-6 control: dispersive prism caustic through a slit (spectral dispersion) and backlit subsurface slabs from millimetre to decimetre scale."
+)
+
+def Xform "World"
+{
+    custom string pathtracer:sourceScene = "effects"
+    custom int pathtracer:maxDepth = 12
+
+    def Camera "Camera"
+    {
+        double3 xformOp:translate = (0.2, 3.6, 6.5)
+        float xformOp:rotateX = -28
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateX"]
+        float focalLength = 35
+        float horizontalAperture = 36
+        float verticalAperture = 36
+        float2 clippingRange = (0.01, 1000)
+    }
+
+    def Scope "Looks"
+    {
+        def Material "white" (
+            prepend references = @../pathtracer/test_veach.mtlx@</MaterialX/Materials/white>
+        )
+        {
+        }
+        def Material "hair" (
+            prepend references = @../mtlx-library/Examples/SimpleHair/simple_hair_default.mtlx@</MaterialX/Materials/simple_hair_default>
+        )
+        {
+        }
+        def Material "metal" (
+            prepend references = @../pathtracer/test_veach.mtlx@</MaterialX/Materials/metal_2>
+        )
+        {
+        }
+        def Material "prism" (
+            prepend references = @./effects.mtlx@</MaterialX/Materials/prism>
+        )
+        {
+        }
+        def Material "sss_fine" (
+            prepend references = @./effects.mtlx@</MaterialX/Materials/sss_fine>
+        )
+        {
+        }
+        def Material "sss_medium" (
+            prepend references = @./effects.mtlx@</MaterialX/Materials/sss_medium>
+        )
+        {
+        }
+        def Material "sss_coarse" (
+            prepend references = @./effects.mtlx@</MaterialX/Materials/sss_coarse>
+        )
+        {
+        }
+    }
+
+    def Mesh "Floor"
+    {
+        int[] faceVertexCounts = [4]
+        int[] faceVertexIndices = [0, 1, 2, 3]
+        point3f[] points = [(-10, 0, 10), (10, 0, 10), (10, 0, -10), (-10, 0, -10)]
+        rel material:binding = </World/Looks/white>
+    }
+
+    def Mesh "Prism"
+    {
+        int[] faceVertexCounts = [3, 3, 4, 4, 4]
+        int[] faceVertexIndices = [0, 2, 1, 3, 4, 5, 0, 1, 4, 3, 1, 2, 5, 4, 2, 0, 3, 5]
+        point3f[] points = [(-2, 0.02, -0.8), (-0.8, 0.02, -0.8), (-1.4, 1.0592, -0.8), (-2, 0.02, 0.8), (-0.8, 0.02, 0.8), (-1.4, 1.0592, 0.8)]
+        rel material:binding = </World/Looks/prism>
+    }
+
+    def Mesh "Mask"
+    {
+        int[] faceVertexCounts = [4, 4, 4, 4]
+        int[] faceVertexIndices = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+        point3f[] points = [(-3.2, 0, -3), (-3.2, 0, 3), (-3.2, 0.45, 3), (-3.2, 0.45, -3), (-3.2, 0.6, -3), (-3.2, 0.6, 3), (-3.2, 3, 3), (-3.2, 3, -3), (-3.2, 0.45, -3), (-3.2, 0.45, -0.6), (-3.2, 0.6, -0.6), (-3.2, 0.6, -3), (-3.2, 0.45, 0.6), (-3.2, 0.45, 3), (-3.2, 0.6, 3), (-3.2, 0.6, 0.6)]
+        rel material:binding = </World/Looks/white>
+    }
+
+    def Mesh "SubsurfaceFine"
+    {
+        int[] faceVertexCounts = [4, 4, 4, 4, 4, 4]
+        int[] faceVertexIndices = [0, 2, 3, 1, 4, 5, 7, 6, 0, 1, 5, 4, 2, 6, 7, 3, 0, 4, 6, 2, 1, 3, 7, 5]
+        point3f[] points = [(0.55, 0, 0.84), (1.25, 0, 0.84), (0.55, 0.8, 0.84), (1.25, 0.8, 0.84), (0.55, 0, 0.96), (1.25, 0, 0.96), (0.55, 0.8, 0.96), (1.25, 0.8, 0.96)]
+        rel material:binding = </World/Looks/sss_fine>
+    }
+
+    def Mesh "SubsurfaceMedium"
+    {
+        int[] faceVertexCounts = [4, 4, 4, 4, 4, 4]
+        int[] faceVertexIndices = [0, 2, 3, 1, 4, 5, 7, 6, 0, 1, 5, 4, 2, 6, 7, 3, 0, 4, 6, 2, 1, 3, 7, 5]
+        point3f[] points = [(1.55, 0, 0.84), (2.25, 0, 0.84), (1.55, 0.8, 0.84), (2.25, 0.8, 0.84), (1.55, 0, 0.96), (2.25, 0, 0.96), (1.55, 0.8, 0.96), (2.25, 0.8, 0.96)]
+        rel material:binding = </World/Looks/sss_medium>
+    }
+
+    def Mesh "SubsurfaceCoarse"
+    {
+        int[] faceVertexCounts = [4, 4, 4, 4, 4, 4]
+        int[] faceVertexIndices = [0, 2, 3, 1, 4, 5, 7, 6, 0, 1, 5, 4, 2, 6, 7, 3, 0, 4, 6, 2, 1, 3, 7, 5]
+        point3f[] points = [(2.55, 0, 0.84), (3.25, 0, 0.84), (2.55, 0.8, 0.84), (3.25, 0.8, 0.84), (2.55, 0, 0.96), (3.25, 0, 0.96), (2.55, 0.8, 0.96), (3.25, 0.8, 0.96)]
+        rel material:binding = </World/Looks/sss_coarse>
+    }
+
+    def Scope "Lights"
+    {
+        def SphereLight "Beam"
+        {
+            double3 xformOp:translate = (-5.5, 0.75, 0)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+            color3f inputs:color = (1, 1, 1)
+            float inputs:intensity = 60
+            bool inputs:normalize = false
+            float inputs:radius = 0.25
+        }
+        def SphereLight "Back0"
+        {
+            double3 xformOp:translate = (0.9, 0.2, 0.2)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+            color3f inputs:color = (1, 0.95, 0.9)
+            float inputs:intensity = 200
+            bool inputs:normalize = false
+            float inputs:radius = 0.12
+        }
+        def SphereLight "Back1"
+        {
+            double3 xformOp:translate = (1.9, 0.2, 0.2)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+            color3f inputs:color = (1, 0.95, 0.9)
+            float inputs:intensity = 200
+            bool inputs:normalize = false
+            float inputs:radius = 0.12
+        }
+        def SphereLight "Back2"
+        {
+            double3 xformOp:translate = (2.9, 0.2, 0.2)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+            color3f inputs:color = (1, 0.95, 0.9)
+            float inputs:intensity = 200
+            bool inputs:normalize = false
+            float inputs:radius = 0.12
+        }
+        def SphereLight "Fill"
+        {
+            double3 xformOp:translate = (2, 4, 5)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+            color3f inputs:color = (0.9, 0.95, 1)
+            float inputs:intensity = 2
+            bool inputs:normalize = false
+            float inputs:radius = 1
+        }
+    }
+}

@@ -10,7 +10,8 @@
 import type { DiagnosticSink } from '../core/diagnostics.ts';
 import { prepareMesh, type PrepareMeshOptions, type PreparedMesh, type RawMesh } from '../geometry/prepare.ts';
 import { evaluateSceneAt } from '../scene/time.ts';
-import { computeWorldTransforms, type Mat4 } from '../scene/transforms.ts';
+import { computeWorldTransforms, IDENTITY4, multiply4, type Mat4 } from '../scene/transforms.ts';
+import { pointInstancerMatrices } from '../scene/instances.ts';
 import type { SceneAsset } from '../scene/types.ts';
 import { importCameras, type SceneCamera } from '../usd/cameras.ts';
 import { importLights, type SceneLight } from '../usd/lights.ts';
@@ -47,7 +48,7 @@ export interface AnimateSceneOptions {
 
 /** Mesh attributes whose time samples can change the triangulation or vertex layout. */
 const TOPOLOGY_ATTRIBUTES = ['faceVertexCounts', 'faceVertexIndices', 'holeIndices', 'normals', 'normals:indices',
-  'primvars:st', 'primvars:st:indices', 'orientation', 'subdivisionScheme'];
+  'primvars:st', 'primvars:st:indices', 'orientation', 'subdivisionScheme', 'curveVertexCounts', 'widths'];
 
 function sameArray(a: ArrayLike<number>, b: ArrayLike<number>): boolean {
   if (a.length !== b.length) return false;
@@ -98,8 +99,18 @@ export function animateScene(
   const world = computeWorldTransforms(at, sink);
   const transforms = new Map<string, Mat4>();
   const hidden = new Set<string>();
+  const instancerMatrices = new Map<string, Mat4[]>();
   for (const instance of resources.instances) {
-    transforms.set(instance.id, world.get(instance.primPath) ?? instance.transform);
+    if (instance.instancer) {
+      let matrices = instancerMatrices.get(instance.primPath);
+      if (!matrices) instancerMatrices.set(instance.primPath, matrices = pointInstancerMatrices(at.prims.get(instance.primPath)!));
+      const matrix = matrices[instance.instancer.index];
+      transforms.set(instance.id, matrix
+        ? multiply4(world.get(instance.primPath) ?? IDENTITY4, multiply4(matrix, instance.instancer.relative))
+        : instance.transform);
+    } else {
+      transforms.set(instance.id, world.get(instance.primPath) ?? instance.transform);
+    }
     if (isInvisible(at, instance.primPath)) hidden.add(instance.id);
   }
   const deformed = new Map<string, DeformedGeometry>();
@@ -109,7 +120,8 @@ export function animateScene(
     const pointsSampled = (prim?.attributes.get('points')?.timeSamples?.length ?? 0) > 0;
     const topologySampled = TOPOLOGY_ATTRIBUTES.some(name => (prim?.attributes.get(name)?.timeSamples?.length ?? 0) > 0);
     if (!pointsSampled && !topologySampled) continue;
-    if (!topologySampled) {
+    // Swept curves and points have no point-to-vertex mapping: always prepared again.
+    if (!topologySampled && (prim?.typeName ?? 'Mesh') === 'Mesh') {
       const value = at.prims.get(geometry.primPath)?.attributes.get('points')?.value;
       const streams = Array.isArray(value) && value.every(v => typeof v === 'number') ? deformGeometry(geometry, value as number[]) : undefined;
       if (streams) {

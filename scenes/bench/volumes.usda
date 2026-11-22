@@ -1,0 +1,140 @@
+#usda 1.0
+(
+    defaultPrim = "World"
+    metersPerUnit = 1
+    upAxis = "Y"
+    doc = "Priority-6 control: NanoVDB volumes - cloud (default material), smoke (MaterialX field material), fire (density and temperature), instanced puffs."
+)
+
+def Xform "World"
+{
+    custom string pathtracer:sourceScene = "effects"
+    custom int pathtracer:maxDepth = 12
+
+    def Camera "Camera"
+    {
+        double3 xformOp:translate = (0, 1.8, 7.5)
+        float xformOp:rotateX = -8
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateX"]
+        float focalLength = 35
+        float horizontalAperture = 36
+        float verticalAperture = 36
+        float2 clippingRange = (0.01, 1000)
+    }
+
+    def Scope "Looks"
+    {
+        def Material "white" (
+            prepend references = @../pathtracer/test_veach.mtlx@</MaterialX/Materials/white>
+        )
+        {
+        }
+        def Material "hair" (
+            prepend references = @../mtlx-library/Examples/SimpleHair/simple_hair_default.mtlx@</MaterialX/Materials/simple_hair_default>
+        )
+        {
+        }
+        def Material "metal" (
+            prepend references = @../pathtracer/test_veach.mtlx@</MaterialX/Materials/metal_2>
+        )
+        {
+        }
+        def Material "smoke" (
+            prepend references = @./volumes/smoke.mtlx@</MaterialX/Materials/smoke>
+        )
+        {
+        }
+    }
+
+    def Mesh "Floor"
+    {
+        int[] faceVertexCounts = [4]
+        int[] faceVertexIndices = [0, 1, 2, 3]
+        point3f[] points = [(-10, 0, 10), (10, 0, 10), (10, 0, -10), (-10, 0, -10)]
+        rel material:binding = </World/Looks/white>
+    }
+
+    def Volume "Cloud"
+    {
+        rel field:density = </World/Cloud/density>
+        double3 xformOp:translate = (-0.4, 1.2, -1.2)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def OpenVDBAsset "density"
+        {
+            asset filePath = @./volumes/cloud.nvdb@
+            token fieldName = "density"
+        }
+    }
+
+    def Volume "Smoke"
+    {
+        rel field:density = </World/Smoke/density>
+        rel material:binding = </World/Looks/smoke>
+        double3 xformOp:translate = (2.2, 0, -0.2)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def OpenVDBAsset "density"
+        {
+            asset filePath = @./volumes/smoke.nvdb@
+            token fieldName = "density"
+        }
+    }
+
+    def Volume "Fire"
+    {
+        rel field:density = </World/Fire/density>
+        rel field:temperature = </World/Fire/temperature>
+        double3 xformOp:translate = (0.9, 0, 1.4)
+        float3 xformOp:scale = (1.8, 1.8, 1.8)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+        def OpenVDBAsset "density"
+        {
+            asset filePath = @./volumes/fire_density.nvdb@
+            token fieldName = "density"
+        }
+        def OpenVDBAsset "temperature"
+        {
+            asset filePath = @./volumes/fire_temperature.nvdb@
+            token fieldName = "temperature"
+        }
+    }
+
+    def PointInstancer "Puffs"
+    {
+        rel prototypes = [</World/Puffs/Prototypes/Puff>]
+        int[] protoIndices = [0, 0, 0, 0, 0]
+        point3f[] positions = [(-2.6, 0.5, 1.4), (-1.9, 0.9, 1.9), (-1.2, 0.45, 1.6), (-2.2, 1.4, 1.1), (-1.5, 1.2, 1.2)]
+        def Scope "Prototypes"
+        {
+            def Volume "Puff"
+            {
+                rel field:density = </World/Puffs/Prototypes/Puff/density>
+                def OpenVDBAsset "density"
+                {
+                    asset filePath = @./volumes/puff.nvdb@
+                    token fieldName = "density"
+                }
+            }
+        }
+    }
+
+    def Scope "Lights"
+    {
+        def SphereLight "Key"
+        {
+            double3 xformOp:translate = (-3, 6, 4)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+            color3f inputs:color = (1, 0.95, 0.9)
+            float inputs:intensity = 40
+            bool inputs:normalize = false
+            float inputs:radius = 0.6
+        }
+        def DistantLight "Sun"
+        {
+            float xformOp:rotateX = -50
+            float xformOp:rotateY = 30
+            uniform token[] xformOpOrder = ["xformOp:rotateY", "xformOp:rotateX"]
+            float inputs:intensity = 0.6
+            float inputs:angle = 1
+        }
+    }
+}

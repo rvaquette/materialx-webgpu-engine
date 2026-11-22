@@ -27,7 +27,7 @@ import {
 } from './pathtracing/scene-buffers.ts';
 import { PathTraceDynamics, type DynamicInstanceSource, type DynamicUpload } from './pathtracing/dynamic-geometry.ts';
 import { rebuildBvhInBackground } from './pathtracing/bvh-rebuild.ts';
-import { buildPathTraceUniform, pathTraceComputeWgsl, pathTraceClosureDispatch, pathTraceOpaqueScene, PathTraceBackend, pathTraceTileCount, PT_UNIFORM_SIZE } from './pathtracing/compute.ts';
+import { buildPathTraceUniform, pathTraceComputeWgsl, pathTraceHasMedia, pathTraceClosureDispatch, pathTraceOpaqueScene, PathTraceBackend, pathTraceTileCount, PT_UNIFORM_SIZE } from './pathtracing/compute.ts';
 import { pathTraceSettings } from './pathtracing/scene-settings.ts';
 import { cameraFovY } from '../usd/cameras.ts';
 import { buildMaterialDispatch, type PtMaterialVariantCache } from './pathtracing/material-variant.ts';
@@ -2524,6 +2524,7 @@ export class InteractiveViewer {
             closureDispatch: pathTraceClosureDispatch(dispatch, ptScene.materials),
             opaque: pathTraceOpaqueScene(dispatch, ptScene.materials),
             analyticLights: ptScene.analyticLights !== undefined,
+            media: pathTraceHasMedia(ptScene.materials),
             pruneUnusedFunctions: true,
             rouletteDepth: ptOptions.settings.rouletteDepth,
           }),

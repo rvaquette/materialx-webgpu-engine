@@ -8,7 +8,8 @@ import type { RawMesh } from './prepare.ts';
 
 export type GeometryReader = (uri: string) => Promise<ArrayBuffer>;
 
-function resolveAsset(layer: string, asset: string): string {
+/** Resolves a USD asset path against the layer that authored it. */
+export function resolveAsset(layer: string, asset: string): string {
   if (/^[a-z]+:\/\//i.test(layer)) return new URL(asset, layer).href;
   if (/^[a-z]+:\/\//i.test(asset)) return asset;
   const base = new URL(layer, 'http://scene.local/');

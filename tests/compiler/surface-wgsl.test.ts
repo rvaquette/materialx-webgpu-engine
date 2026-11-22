@@ -75,6 +75,23 @@ describe('emitLayeredSurface (T055d)', () => {
     }
   });
 
+  it('gives standard_surface and OpenPBR subsurface a PT interior medium scaled by the radius', () => {
+    for (const [category, inputs, radius] of [
+      ['standard_surface', [value('subsurface', 'float', '1'), value('subsurface_radius', 'color3', '1,0.5,0.25'), value('subsurface_scale', 'float', '0.1')], '0.1'],
+      ['open_pbr_surface', [value('subsurface_weight', 'float', '1'), value('subsurface_radius_scale', 'color3', '1,0.5,0.25'), value('subsurface_radius', 'float', '0.1')], '0.1'],
+    ] as const) {
+      const graph = surfaceGraph(category, [...inputs]);
+      const surface = resolveSurface(graph, {})!;
+      const compute = emitSurfaceVariant(graph, surface, 0);
+      const raster = emitLayeredSurface(graph, surface);
+      expect(compute.fnCode).toContain('mx_family_sss_medium(');
+      expect(compute.fnCode).toContain('c.hasInterior = select(0u, 1u,');
+      expect(compute.fnCode).toContain(radius);
+      expect(compute.preludes.join('\n')).toContain('fn mx_family_sss_medium');
+      expect(raster.code).not.toContain('hasInterior =');
+    }
+  });
+
   it('emits connected range and clamp nodes for both surface stages', () => {
     const graph = surfaceGraph('standard_surface', [conn('base_color', 'color3', 'clip')], [
       upstream('clip', 'clamp', 'color3', [

@@ -1,9 +1,7 @@
-// Volume decoder adapter. The target corpus contains no OpenVDB field (0 `.vdb`;
-// transmission is BSDF surface transmission, not a volumetric grid), so no
-// OpenVDB/NanoVDB dependency is added now (docs/dependencies.md T004, plan
-// section 3). This module provides the structural hook: a pluggable decoder
-// registry that fails with a clear diagnostic rather than silently succeeding
-// when a volume asset appears without a configured reader (REQ-008/013).
+// Volume decoder adapter: a pluggable decoder registry that fails with a clear
+// diagnostic rather than silently succeeding when a volume asset appears without
+// a configured reader (REQ-008/013). USD Volume prims read NanoVDB fields
+// directly through src/assets/nanovdb.ts (src/render/scene-volumes.ts).
 
 import { throwIfAborted, defaultDiagnosticSink, type DiagnosticSink } from '../core/diagnostics.ts';
 

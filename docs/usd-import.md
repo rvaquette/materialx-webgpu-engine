@@ -584,6 +584,40 @@ color, a `time`-driven MaterialX material and a mesh whose topology changes,
 and has a `finish` variant set. The viewer UI shows its timeline, playback, the
 path-tracing temporal history and the variant selectors under **Animation**.
 
+## Curves, points, instancers and volumes
+
+- **`BasisCurves`** (linear, cubic bezier, B-spline and Catmull-Rom, periodic
+  or not) are tessellated into tubes (`src/scene/procedural-geometry.ts`):
+  rings follow the curve by parallel transport, their radius is
+  `widths / 2` (constant or per vertex, default width 0.01), with 6 sides,
+  4 above 20 000 control vertices and 3 above 200 000. `st.u` runs along the fiber, so the
+  generated tangents follow it and `simple_hair` / Chiang hair BSDFs get the
+  fiber direction. Fibers are real geometry in both backends: inter-fiber
+  shadowing and multiple scattering come from the path tracer's ordinary
+  transport; raster sees direct lighting and shadow maps only.
+- **`Points`** become icospheres (42 vertices) of diameter `widths`.
+- **`PointInstancer`** places each prototype subtree at `positions`, rotated by
+  `orientations` and scaled by `scales`, honouring `protoIndices`,
+  `invisibleIds` and animated instancer attributes (`velocities` are
+  ignored); prototypes are not rendered on their own. Instance ids are
+  `<instancer>[i]<prototype prim>`.
+- **`Volume`** prims with `field:<name>` relationships to `OpenVDBAsset` prims
+  read **NanoVDB** files (`.nvdb`, uncompressed or ZIP; float, half and double
+  grids; `src/assets/nanovdb.ts`). OpenVDB `.vdb` files must be converted with
+  `nanovdb_convert` first. Each field is resampled with a box filter to at most
+  96 voxels on its longest axis, and the volume is bounded by the box of its
+  fields. A MaterialX volume material reads a field through a float
+  `geompropvalue` whose `geomprop` is the field name. A Volume without a
+  material gets a default one: scattering = `density`, absorption =
+  `0.05 · density`, Henyey-Greenstein `g = 0.2`, and, with a `temperature`
+  field, blackbody emission at `800 + 2500 · T` K scaled by `8 · T⁴`. The
+  path tracer and the raster volume pass bake the material into a 64³ grid per
+  volume material (all its instances), sampled with delta tracking.
+
+The control scenes `scenes/bench/hair_particles.usda`, `volumes.usda`,
+`fog.usda` and `optics.usda` are written by
+`node scripts/generate-effect-scenes.mjs`.
+
 Evidence-based comparison of USD import strategies for the target scene, focused
 on the six blocking criteria: **sublayers, references, inherits, payloads,
 bindings, and `.mtlx` references**. Conclusion: no off-the-shelf JS loader covers

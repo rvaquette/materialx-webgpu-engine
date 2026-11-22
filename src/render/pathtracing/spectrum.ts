@@ -16,6 +16,107 @@ export function dispersionIor(ior: number, dispersion: number, channel: 0 | 1 | 
   return Math.max(1, ior + (channel - 1) * (ior - 1) * 0.025 * Math.max(dispersion, 0));
 }
 
+// Spectral dispersion (path tracer): one wavelength per path, drawn from a
+// piecewise-constant distribution proportional to |r| + |g| + |b| of the
+// monochromatic sRGB response, and an IOR following Cauchy's law fitted to the
+// Abbe number (V = 20 / dispersion, as KHR_materials_dispersion): n(587.6 nm) is
+// the authored IOR and n(486.1) - n(656.3) = (n - 1) / V.
+export const DISPERSION_LAMBDA_MIN = 380;
+export const DISPERSION_LAMBDA_MAX = 720;
+export const DISPERSION_BINS = 34;
+const LAMBDA_D = 0.5876, LAMBDA_F = 0.4861, LAMBDA_C = 0.6563;
+
+/** IOR at a wavelength (nm) for the authored IOR and KHR dispersion (20 / Abbe number). */
+export function dispersionIorAt(ior: number, dispersion: number, wavelengthNm: number): number {
+  if (!(dispersion > 0)) return ior;
+  const abbe = 20 / dispersion;
+  const b = (ior - 1) / (abbe * (1 / (LAMBDA_F * LAMBDA_F) - 1 / (LAMBDA_C * LAMBDA_C)));
+  const um = wavelengthNm / 1000;
+  return Math.max(1, ior + b * (1 / (um * um) - 1 / (LAMBDA_D * LAMBDA_D)));
+}
+
+/** Linear sRGB response of a unit monochromatic stimulus. */
+export function wavelengthRgb(wavelengthNm: number): Vec3 {
+  return xyzToLinearSrgb([cieX(wavelengthNm), cieY(wavelengthNm), cieZ(wavelengthNm)]);
+}
+
+interface DispersionTable { cdf: number[]; normalization: Vec3 }
+let dispersionTable: DispersionTable | undefined;
+
+/** Bin CDF of the sampling distribution and per-channel integrals of the response. */
+export function dispersionSamplingTable(): DispersionTable {
+  if (dispersionTable) return dispersionTable;
+  const width = (DISPERSION_LAMBDA_MAX - DISPERSION_LAMBDA_MIN) / DISPERSION_BINS;
+  const steps = 16;
+  const masses: number[] = [];
+  const normalization: [number, number, number] = [0, 0, 0];
+  for (let bin = 0; bin < DISPERSION_BINS; bin++) {
+    let mass = 0;
+    for (let k = 0; k < steps; k++) {
+      const rgb = wavelengthRgb(DISPERSION_LAMBDA_MIN + (bin + (k + 0.5) / steps) * width);
+      mass += (Math.abs(rgb[0]) + Math.abs(rgb[1]) + Math.abs(rgb[2])) * width / steps;
+      for (let c = 0; c < 3; c++) normalization[c] = normalization[c]! + rgb[c]! * width / steps;
+    }
+    masses.push(mass);
+  }
+  const total = masses.reduce((a, b) => a + b, 0);
+  const cdf: number[] = [];
+  let sum = 0;
+  for (const mass of masses) cdf.push(sum += mass / total);
+  cdf[cdf.length - 1] = 1;
+  return dispersionTable = { cdf, normalization };
+}
+
+/** Wavelength and the RGB path weight (unit mean per channel) for a uniform sample u. */
+export function sampleDispersionWavelength(u: number): { wavelength: number; weight: Vec3 } {
+  const { cdf, normalization } = dispersionSamplingTable();
+  let bin = 0;
+  while (bin < DISPERSION_BINS - 1 && u >= cdf[bin]!) bin++;
+  const lower = bin === 0 ? 0 : cdf[bin - 1]!;
+  const probability = cdf[bin]! - lower;
+  const width = (DISPERSION_LAMBDA_MAX - DISPERSION_LAMBDA_MIN) / DISPERSION_BINS;
+  const wavelength = DISPERSION_LAMBDA_MIN + (bin + (u - lower) / probability) * width;
+  const pdf = probability / width;
+  const rgb = wavelengthRgb(wavelength);
+  return { wavelength, weight: [rgb[0] / (normalization[0] * pdf), rgb[1] / (normalization[1] * pdf), rgb[2] / (normalization[2] * pdf)] };
+}
+
+/** WGSL twin of sampleDispersionWavelength and dispersionIorAt (constants baked from the same table). */
+export function dispersionWgsl(): string {
+  const { cdf, normalization } = dispersionSamplingTable();
+  const f = (v: number) => v.toPrecision(9);
+  return `
+const MX_DISPERSION_CDF = array<f32, ${DISPERSION_BINS}>(${cdf.map(f).join(', ')});
+fn mx_cie_lobe(x: f32, alpha: f32, mu: f32, s1: f32, s2: f32) -> f32 {
+  let t = (x - mu) / select(s2, s1, x < mu);
+  return alpha * exp(-0.5 * t * t);
+}
+fn mx_wavelength_rgb(l: f32) -> vec3f {
+  let x = mx_cie_lobe(l, 1.056, 599.8, 37.9, 31.0) + mx_cie_lobe(l, 0.362, 442.0, 16.0, 26.7) + mx_cie_lobe(l, -0.065, 501.1, 20.4, 26.2);
+  let y = mx_cie_lobe(l, 0.821, 568.8, 46.9, 40.5) + mx_cie_lobe(l, 0.286, 530.9, 16.3, 31.1);
+  let z = mx_cie_lobe(l, 1.217, 437.0, 11.8, 36.0) + mx_cie_lobe(l, 0.681, 459.0, 26.0, 13.8);
+  return vec3f(3.2406 * x - 1.5372 * y - 0.4986 * z, -0.9689 * x + 1.8758 * y + 0.0415 * z, 0.0557 * x - 0.204 * y + 1.057 * z);
+}
+// xyz: wavelength (nm), then the path weight (unit mean per channel) in w of a vec4 pair.
+fn mx_sample_dispersion_wavelength(u: f32) -> vec4f {
+  var cdf = MX_DISPERSION_CDF;
+  var bin = 0u;
+  for (; bin < ${DISPERSION_BINS - 1}u; bin++) { if (u < cdf[bin]) { break; } }
+  let lower = select(cdf[max(bin, 1u) - 1u], 0.0, bin == 0u);
+  let probability = cdf[bin] - lower;
+  let width = ${f((DISPERSION_LAMBDA_MAX - DISPERSION_LAMBDA_MIN) / DISPERSION_BINS)};
+  let wavelength = ${f(DISPERSION_LAMBDA_MIN)} + (f32(bin) + (u - lower) / probability) * width;
+  return vec4f(mx_wavelength_rgb(wavelength) * width / (probability * vec3f(${normalization.map(f).join(', ')})), wavelength);
+}
+fn mx_dispersion_ior_at(ior: f32, dispersion: f32, wavelength: f32) -> f32 {
+  if (dispersion <= 0.0) { return ior; }
+  let b = (ior - 1.0) * dispersion / (20.0 * (1.0 / (${LAMBDA_F} * ${LAMBDA_F}) - 1.0 / (${LAMBDA_C} * ${LAMBDA_C})));
+  let um = wavelength / 1000.0;
+  return max(1.0, ior + b * (1.0 / (um * um) - 1.0 / (${LAMBDA_D} * ${LAMBDA_D})));
+}
+`;
+}
+
 function lobe(x: number, alpha: number, mu: number, sigma1: number, sigma2: number): number {
   const t = (x - mu) * (x < mu ? 1 / sigma1 : 1 / sigma2);
   return alpha * Math.exp(-0.5 * t * t);

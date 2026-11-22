@@ -138,6 +138,8 @@ export interface InstanceResource {
   /** Compiled material unit key, when a material is bound and compiled. */
   materialKey?: string;
   materialPath?: string;
+  /** Placed by the PointInstancer at `primPath` (see scene/instances.ts). */
+  instancer?: { index: number; relative: Mat4 };
 }
 
 export interface SceneResources {
@@ -153,6 +155,8 @@ export interface SceneResources {
   pendingMaterials: readonly string[];
   /** Gprims with no effective material binding. */
   unboundGprims: readonly string[];
+  /** Fields of USD Volume prims, by prototype id (scene-volumes.ts). */
+  volumes?: ReadonlyMap<string, import('./scene-volumes.ts').SceneVolume>;
 }
 
 export interface BuildSceneResourcesOptions {
@@ -444,6 +448,7 @@ export async function buildSceneResources(
       hasGeometry: geometry !== undefined,
       ...(materialKey !== undefined && materials.has(materialKey) ? { materialKey } : {}),
       ...(inst.materialPath !== undefined ? { materialPath: inst.materialPath } : {}),
+      ...(inst.instancer ? { instancer: inst.instancer } : {}),
     });
     tlasBounds.push(geometry ? transformBounds(geometry.bounds, inst.transform) : pointBounds(inst.transform));
   }

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { LayeredClosure } from '../../../src/compiler/ir.ts';
 import { layeredSurfaceBsdf } from '../../../src/render/pathtracing/bsdf.ts';
-import { dispersionIor } from '../../../src/render/pathtracing/spectrum.ts';
+import { dispersionIor, dispersionIorAt, dispersionWgsl, sampleDispersionWavelength } from '../../../src/render/pathtracing/spectrum.ts';
 
 function glass(dispersion: number, thinWalled = false): LayeredClosure {
   return { opacity: 1, lobes: [
@@ -45,5 +45,36 @@ describe('RGB glass dispersion', () => {
     layeredSurfaceBsdf(closure, 0);
     layeredSurfaceBsdf(closure, 2);
     expect(closure.lobes[0]!.ior).toBe(1.52);
+  });
+});
+
+describe('spectral glass dispersion', () => {
+  it('follows the Abbe number with the authored IOR at the d line', () => {
+    const ior = 1.52, abbe = 40;
+    expect(dispersionIorAt(ior, 20 / abbe, 587.6)).toBeCloseTo(ior, 6);
+    expect(dispersionIorAt(ior, 20 / abbe, 486.1) - dispersionIorAt(ior, 20 / abbe, 656.3)).toBeCloseTo((ior - 1) / abbe, 6);
+    expect(dispersionIorAt(ior, 0, 400)).toBe(ior);
+    // Same red-to-blue spread as the raster RGB approximation.
+    expect(dispersionIorAt(ior, 0.5, 486.1) - dispersionIorAt(ior, 0.5, 656.3)).toBeCloseTo(dispersionIor(ior, 0.5, 2) - dispersionIor(ior, 0.5, 0), 6);
+  });
+
+  it('draws wavelengths whose weights average to white', () => {
+    const n = 20000;
+    const mean: [number, number, number] = [0, 0, 0];
+    for (let i = 0; i < n; i++) {
+      const { wavelength, weight } = sampleDispersionWavelength((i + 0.5) / n);
+      expect(wavelength).toBeGreaterThanOrEqual(380);
+      expect(wavelength).toBeLessThanOrEqual(720);
+      weight.forEach((w, c) => { mean[c] = (mean[c] ?? 0) + w / n; });
+    }
+    for (const value of mean) expect(value).toBeCloseTo(1, 2);
+    // Bounded weights: importance sampling follows the response.
+    expect(Math.max(...[0.01, 0.3, 0.6, 0.99].flatMap(u => sampleDispersionWavelength(u).weight.map(Math.abs)))).toBeLessThan(4);
+  });
+
+  it('bakes the same sampling table into WGSL', () => {
+    const wgsl = dispersionWgsl();
+    expect(wgsl).toContain('fn mx_sample_dispersion_wavelength(u: f32) -> vec4f');
+    expect(wgsl.match(/MX_DISPERSION_CDF = array<f32, (\d+)>/)?.[1]).toBe('34');
   });
 });

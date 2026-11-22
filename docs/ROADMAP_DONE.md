@@ -1293,3 +1293,85 @@ objets en mouvement.
 - Avec `--force_high_performance_gpu`, la création du pipeline Disney échoue
   sur la machine de mesure (`E_OUTOFMEMORY` D3D12, déjà le cas avant ces
   travaux) ; les mesures Disney utilisent le GPU par défaut.
+
+## Priorité 6 : volumes et effets avancés
+
+Dépasser le rendu de matériaux : volumes hétérogènes, brouillard, fumée et
+flammes, caustiques, dispersion, subsurface multi-échelle, cheveux et
+instanciation. Les scènes de contrôle sont produites de façon déterministe par
+`node scripts/generate-effect-scenes.mjs` :
+
+| Scène | Contenu |
+|---|---|
+| `scenes/bench/hair_particles.usda` | patch de 900 mèches B-spline bouclées (Chiang), boule de fourrure, nuage de `Points`, foule d'objets par `PointInstancer` |
+| `scenes/bench/volumes.usda` | nuage, fumée et flamme NanoVDB (`scenes/bench/volumes/*.nvdb`), bouffées instanciées par `PointInstancer` |
+| `scenes/bench/fog.usda` | brouillard homogène englobant la caméra, lampe derrière deux piliers (rais de lumière) |
+| `scenes/bench/optics.usda` | prisme dispersif (Abbe 12) éclairé à travers une fente, trois plaques subsurface rétroéclairées à 1 cm, 10 cm et 1 m de libre parcours |
+
+### Modèles et couverture par backend
+
+| Effet | Modèle | Path tracing | Raster |
+|---|---|---|---|
+| Volumes NanoVDB | lecteur NanoVDB (`src/assets/nanovdb.ts`, grilles float/half/double, fichiers bruts ou ZIP), rééchantillonnage en boîte à 96 voxels max, `geompropvalue` float = champ | delta tracking dans une grille 64³ par matériau de volume, NEE lumières et environnement avec MIS contre la phase HG, transmittance des rayons d'ombre par ratio tracking | passe de volumes : diffusion simple, mêmes grilles |
+| Brouillard, fumée, nuages, flammes | matériau de volume par défaut (diffusion = densité, absorption = 0,05·densité, g = 0,2) ; émission corps noir à `800 + 2500·T` K, intensité `8·T⁴` | diffusion multiple, caméra dans le milieu détectée par la normale géométrique | diffusion simple (le brouillard multiple est perdu, voir tolérances) |
+| Caustiques | transport unidirectionnel avec NEE et MIS | convergent, bruitées pour des émetteurs petits vus à travers un dioptre | absentes |
+| Dispersion | spectrale en path tracing : longueur d'onde héros 380–720 nm tirée selon la réponse sRGB des CMF CIE 1931, IOR de Cauchy avec `n_F − n_C = (n − 1)/Abbe` | spectrale | approximation RGB à trois IOR (`validation.md`) |
+| Subsurface multi-échelle | standard_surface (`subsurface_radius × subsurface_scale`) et OpenPBR (`subsurface_radius_scale × subsurface_radius`) donnent au lobe un milieu intérieur (`mx_family_sss_medium`, même albédo et extinction que l'enregistrement paramétrique) | marche aléatoire volumique qui suit l'échelle | réponse diffuse locale, indépendante de l'échelle |
+| Cheveux géométriques | `BasisCurves` tessellées en tubes (transport parallèle, `st.u` le long de la fibre → tangente pour le BSDF de Chiang) | ombrage et diffusion multiple entre fibres par le transport ordinaire | éclairage direct et ombres portées, sans diffusion entre fibres |
+| Fourrure, particules, instanciation volumétrique | `Points` en icosphères, `PointInstancer` (positions, orientations, échelles, `protoIndices`, `invisibleIds`, animation) y compris de `Volume` | oui | oui |
+
+### Tolérances et mesures
+
+Les tests unitaires fixent les tolérances des modèles :
+
+- NanoVDB : grilles produites par les en-têtes officiels NanoVDB (fixtures
+  `tests/fixtures/nanovdb/*.nvdb.gz`), valeurs relues à `1e-6` près (float et
+  double), fond et tuiles compris ; l'écriture relit ses propres grilles à
+  l'identique.
+- Dispersion : IOR de Cauchy à la raie d et `n_F − n_C` à `1e-6` près, poids
+  spectraux de moyenne blanche à `1e-2` près sur 20 000 tirages, poids bornés
+  par 4, table WGSL identique à la table CPU.
+- Courbes : bases linéaire, Bézier et B-spline (extrémités), tubes orientés
+  vers l'extérieur de rayon `widths / 2` à `1e-5` près, tangente le long de la
+  fibre ; sphères des `Points` à la taille de `widths` ; instances de
+  `PointInstancer` et leur animation.
+- Subsurface : le code path tracing de standard_surface et d'OpenPBR porte le
+  milieu intérieur à l'échelle du rayon ; le raster n'en a pas.
+
+Mesures sur les scènes de contrôle (Chrome headless, GPU par défaut ;
+luminance linéaire moyenne, raster/path tracing) :
+
+| Scène | spp PT | Raster / PT | Écart attendu |
+|---|---:|---:|---|
+| `hair_particles` 256² | 256 | 1,04 | ±10 % (diffusion entre fibres absente en raster) |
+| `volumes` 256² | 256 | 0,94 | ±10 % (diffusion simple en raster) |
+| `fog` 256² | 512 | 0,50 | raster ≥ 0,4 : la diffusion multiple du brouillard double la luminance |
+| `optics` 512² | 512 | 0,93 | ±15 % ; caustique, dispersion et translucidité absentes en raster |
+
+- **Brouillard.** La NEE dans les milieux et la transmittance des rayons
+  d'ombre divisent le bruit par 3,7 à 512 spp par rapport à l'intégrateur
+  précédent (métrique de bruit haute fréquence 29,3 → 7,9 ; 15,1 à 64 spp).
+- **Subsurface.** Sur les plaques rétroéclairées de `optics` (512 spp), la
+  composante verte transmise croît avec l'échelle : 58, 130 et 165 (sRGB
+  8 bits) pour 1 cm, 10 cm et 1 m ; avant ces travaux, le path tracer
+  ignorait le rayon et l'échelle de standard_surface dans le chemin compilé.
+- **Coûts.** `optics` 512² à 512 spp : 186 s (marches subsurface comprises) ;
+  chargement de `volumes` (5 fichiers NanoVDB, cuisson des grilles) : environ
+  13 s.
+
+### Décisions
+
+- **Caustiques.** Pas de photon mapping, de NEE de variété (manifold) ni de
+  transport bidirectionnel : ils supposent un intégrateur à plusieurs passes,
+  écarté avec l'abandon du wavefront, et alourdiraient le mégakernel. Les
+  caustiques restent celles du transport unidirectionnel : correctes mais
+  bruitées ; la scène de contrôle élargit l'émetteur (rayon 0,25) pour
+  rester exploitable.
+- **OpenVDB.** Seul NanoVDB est lu ; les fichiers `.vdb` se convertissent
+  avec `nanovdb_convert`. Les champs sont rééchantillonnés à 96 voxels puis
+  cuits en 64³ par matériau : les détails plus fins sont filtrés.
+- **Dispersion raster.** Le raster conserve l'approximation RGB à trois IOR,
+  le transport spectral n'ayant de sens qu'avec l'intégration Monte-Carlo.
+- **Cheveux.** Les fibres sont de la vraie géométrie (tubes), sans primitive
+  de courbe dans le BVH : coûteux pour les chevelures denses (le nombre de
+  côtés descend à 4 puis 3 au-delà de 20 000 et 200 000 sommets de contrôle).
