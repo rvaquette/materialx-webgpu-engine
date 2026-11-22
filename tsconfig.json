@@ -23,5 +23,5 @@
     "noEmit": true,
     "forceConsistentCasingInFileNames": true
   },
-  "include": ["src", "tests", "examples/engine", "vite.config.ts", "scripts/export-scene-browser.ts", "scripts/capture-engine-browser.ts"]
+  "include": ["src", "tests", "examples/engine", "vite.config.ts", "scripts/export-scene-browser.ts", "scripts/capture-engine-browser.ts", "scripts/bench-engine-browser.ts"]
 }

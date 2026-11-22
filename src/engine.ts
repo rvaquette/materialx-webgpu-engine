@@ -56,7 +56,8 @@ export interface EngineMaterial {
 async function requestSceneDevice(): Promise<GPUDevice> {
   const gpu = globalThis.navigator?.gpu;
   if (!gpu) throw new Error('WebGPU is not available in this browser.');
-  const adapter = await gpu.requestAdapter();
+  // Like the viewer, prefer the discrete GPU: path tracing is compute- and compile-bound.
+  const adapter = await gpu.requestAdapter({ powerPreference: 'high-performance' });
   if (!adapter) throw new Error('No WebGPU adapter found.');
   return adapter.requestDevice(sceneDeviceDescriptor(adapter));
 }

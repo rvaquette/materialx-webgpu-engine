@@ -49,3 +49,6 @@ renders/
 # Playwright output
 playwright-report/
 test-results/
+
+# Engine benchmark results and references (GPU-specific)
+bench-results/

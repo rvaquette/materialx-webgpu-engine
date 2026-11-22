@@ -15,6 +15,7 @@
     "test:engine-package": "npm run build:engine-package && node --test scripts/test-engine-package.mjs",
     "api:engine": "node scripts/engine-api.mjs",
     "render:engine": "node scripts/render-engine.mjs",
+    "bench:engine": "node scripts/bench-engine.mjs",
     "preview": "vite preview",
     "script": "node scripts/run-material-script.mjs",
     "typecheck": "tsc --noEmit",

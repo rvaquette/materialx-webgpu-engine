@@ -12,19 +12,6 @@ matériaux MaterialX) et 3bis (scripting) sont traitées ; leur historique est d
 
 ## Reliquats des priorités traitées
 
-### Rendu progressif (priorité 1)
-
-- débruitage guidé et temporel, différé afin de ne pas augmenter les buffers
-  GPU persistants sans décision explicite sur le compromis mémoire et temps de
-  calcul.
-
-### API de bibliothèque (priorité 2)
-
-- enregistrer un runner auto-hébergé `webgpu` et activer `WEBGPU_RUNNER` pour
-  exécuter le path tracing en CI (le workflow est prêt) ;
-- publication du paquet dans un registre, si elle devient souhaitée ;
-- adaptateurs React ou Three.js, si un besoin apparaît.
-
 ## Priorité 4 : accélération du path tracer
 
 Optimiser principalement les cas où le moteur est aujourd'hui limité par le
@@ -34,7 +21,6 @@ nombre de sources, de matériaux ou de triangles :
 - échantillonnage adaptatif de l'environnement ;
 - importance sampling basée sur les distributions observées ;
 - blue-noise temporel et reconstruction adaptative ;
-- Wavefront plus spécialisé et compaction plus efficace ;
 - cache BVH partagé avec le viewer, y compris entre chargements ;
 - streaming progressif des textures, tuiles UDIM et géométries ;
 - réduction des variantes de shaders pour les matériaux structurellement proches.
