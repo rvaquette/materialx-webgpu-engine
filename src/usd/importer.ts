@@ -20,6 +20,8 @@ import type {
   PrimvarInfo,
   SceneAsset,
   StageInfo,
+  TimeSample,
+  VariantSetInfo,
   XformOp,
 } from '../scene/types.ts';
 
@@ -43,6 +45,8 @@ export interface UsdImportOptions {
    * (default) these arcs are only recorded and reported as deferred.
    */
   resolveArcs?: boolean;
+  /** Variant selections by authored prim path, stronger than the authored `variants` metadata. */
+  variantSelections?: ReadonlyMap<string, ReadonlyMap<string, string>>;
 }
 
 // --- Scanner -----------------------------------------------------------------
@@ -142,6 +146,10 @@ interface LayerMetadata {
   upAxis?: string;
   metersPerUnit?: number;
   subLayers: string[];
+  startTimeCode?: number;
+  endTimeCode?: number;
+  timeCodesPerSecond?: number;
+  framesPerSecond?: number;
 }
 
 interface PrimSpec {
@@ -158,7 +166,9 @@ interface PrimSpec {
   relationships: Map<string, RawRelationship>;
   children: PrimSpec[];
   xformOpOrder?: string[];
-  xformValues: Map<string, { typeName: string; value?: AttributeValue }>;
+  xformValues: Map<string, { typeName: string; value?: AttributeValue; timeSamples?: TimeSample[] }>;
+  /** variantSet name -> variant name -> body (attributes, children, xform values). */
+  variantSets: Map<string, Map<string, PrimSpec>>;
 }
 
 interface RawRelationship {
@@ -232,6 +242,9 @@ class Parser {
       else if (key === 'metersPerUnit') {
         const m = asNumber(value);
         if (m !== undefined) meta.metersPerUnit = m;
+      } else if (key === 'startTimeCode' || key === 'endTimeCode' || key === 'timeCodesPerSecond' || key === 'framesPerSecond') {
+        const m = asNumber(value);
+        if (m !== undefined) meta[key] = m;
       } else if (key === 'subLayers') {
         for (const r of toReferences(value)) {
           if (r.assetPath !== undefined) meta.subLayers.push(r.assetPath);
@@ -282,6 +295,7 @@ class Parser {
       relationships: new Map(),
       children: [],
       xformValues: new Map(),
+      variantSets: new Map(),
     };
 
     const afterName = this.peek();
@@ -331,6 +345,10 @@ class Parser {
         prim.children.push(this.parsePrim());
         continue;
       }
+      if (t.kind === 'word' && t.value === 'variantSet') {
+        this.parseVariantSet(prim);
+        continue;
+      }
       this.parseMember(prim);
     }
   }
@@ -357,6 +375,47 @@ class Parser {
       break;
     }
     this.parseAttribute(prim, words);
+  }
+
+  /** `variantSet "name" = { "variant" (metadata)? { body } ... }` */
+  private parseVariantSet(prim: PrimSpec): void {
+    this.next();
+    const setName = this.next();
+    if (setName.kind !== 'string') throw new UsdImportError(`Expected variant set name in ${this.uri}, got '${setName.value}'.`);
+    this.expectPunct('=');
+    this.expectPunct('{');
+    const variants = prim.variantSets.get(setName.value) ?? new Map<string, PrimSpec>();
+    prim.variantSets.set(setName.value, variants);
+    while (this.peek()?.value !== '}') {
+      const variantName = this.next();
+      if (variantName.kind !== 'string') throw new UsdImportError(`Expected variant name in ${this.uri}, got '${variantName.value}'.`);
+      const body: PrimSpec = {
+        specifier: 'over', name: prim.name, metadata: new Map(), references: [], payloads: [], inherits: [],
+        apiSchemas: [], attributes: new Map(), relationships: new Map(), children: [], xformValues: new Map(), variantSets: new Map(),
+      };
+      if (this.peek()?.value === '(') this.parsePrimMetadata(body);
+      this.expectPunct('{');
+      this.parsePrimBody(body);
+      variants.set(variantName.value, body);
+    }
+    this.expectPunct('}');
+  }
+
+  /** `{ time: value, ... }`; the tokenizer keeps the colon on the time word. */
+  private parseTimeSamples(): TimeSample[] {
+    this.expectPunct('{');
+    const samples: TimeSample[] = [];
+    while (this.peek()?.value !== '}') {
+      let text = this.next().value;
+      if (text.endsWith(':')) text = text.slice(0, -1);
+      else if (this.next().value !== ':') throw new UsdImportError(`Malformed time sample in ${this.uri}.`);
+      const time = Number(text);
+      if (!Number.isFinite(time)) throw new UsdImportError(`Invalid time code '${text}' in ${this.uri}.`);
+      const raw = this.parseValue();
+      samples.push({ time, value: raw.k === 'ident' && raw.v === 'None' ? null : toAttributeValue(raw) });
+    }
+    this.expectPunct('}');
+    return samples.sort((a, b) => a.time - b.time);
   }
 
   private parseRelationship(prim: PrimSpec): void {
@@ -401,8 +460,22 @@ class Parser {
         this.tokens.slice(Math.max(0, this.pos - 8), this.pos + 8).map(token => token.value).join(' ')
       }`);
     }
-    const name = words[words.length - 1]!;
+    const declared = words[words.length - 1]!;
+    const timeSampled = declared.endsWith('.timeSamples');
+    const name = timeSampled ? declared.slice(0, -'.timeSamples'.length) : declared;
     const typeName = words[words.length - 2]!;
+    if (timeSampled) {
+      this.expectPunct('=');
+      const timeSamples = this.parseTimeSamples();
+      if (name.startsWith('xformOp:')) {
+        const existing = prim.xformValues.get(name);
+        prim.xformValues.set(name, { ...existing, typeName, timeSamples });
+      } else {
+        const existing = prim.attributes.get(name);
+        prim.attributes.set(name, { ...existing, name, typeName, timeSamples });
+      }
+      return;
+    }
     let interpolation: string | undefined;
     const readMeta = () => {
       const attrMeta = this.parseInlineMetadata();
@@ -432,10 +505,13 @@ class Parser {
       return;
     }
     if (name.startsWith('xformOp:')) {
-      prim.xformValues.set(name, { typeName, ...(value !== undefined ? { value } : {}) });
+      const samples = prim.xformValues.get(name)?.timeSamples;
+      prim.xformValues.set(name, { typeName, ...(value !== undefined ? { value } : {}), ...(samples ? { timeSamples: samples } : {}) });
       return;
     }
+    const samples = prim.attributes.get(name)?.timeSamples;
     prim.attributes.set(name, {
+      ...(samples ? { timeSamples: samples } : {}),
       name,
       typeName,
       ...(typeName === 'asset' ? { sourceLayer: this.uri } : {}),
@@ -623,6 +699,7 @@ interface MutablePrim {
   children: string[];
   materialBinding?: MaterialBinding;
   mesh?: MeshInfo;
+  variantSets?: Map<string, VariantSetInfo>;
 }
 
 /** A payload/reference arc recorded for optional T049 graft resolution. */
@@ -655,6 +732,7 @@ function buildXformOps(spec: PrimSpec): XformOp[] {
       op,
       typeName: found?.typeName ?? 'token',
       ...(found?.value !== undefined ? { value: found.value } : {}),
+      ...(found?.timeSamples ? { timeSamples: found.timeSamples } : {}),
       invert,
     });
   }
@@ -705,6 +783,7 @@ class Composer {
   constructor(
     private readonly emit: (d: Diagnostic) => void,
     private readonly resolveArcsFlag: boolean,
+    private readonly variantSelections?: ReadonlyMap<string, ReadonlyMap<string, string>>,
   ) {}
 
   mergeLayer(layer: LayerSpec): void {
@@ -767,6 +846,38 @@ class Composer {
     }
 
     for (const child of spec.children) this.mergePrim(child, path, layerUri);
+    this.mergeVariants(prim, spec, parentPath, layerUri);
+  }
+
+  /** Selected variant bodies are weaker than the prim's local opinions. */
+  private mergeVariants(prim: MutablePrim, spec: PrimSpec, parentPath: string, layerUri: string): void {
+    const authored = spec.metadata.get('variants');
+    // A stronger layer may only select a variant whose set a weaker layer defines.
+    if (authored?.k === 'dict') {
+      for (const [setName, value] of authored.entries) {
+        const current = prim.variantSets?.get(setName);
+        if (current?.selection !== undefined) continue;
+        prim.variantSets ??= new Map();
+        prim.variantSets.set(setName, { variants: current?.variants ?? [], selection: asString(value) });
+      }
+    }
+    for (const [setName, variants] of spec.variantSets) {
+      const authoredSelection = authored?.k === 'dict' ? authored.entries.get(setName) : undefined;
+      const selection = this.variantSelections?.get(prim.path)?.get(setName)
+        ?? prim.variantSets?.get(setName)?.selection
+        ?? (authoredSelection ? asString(authoredSelection) : undefined);
+      prim.variantSets ??= new Map();
+      const known = prim.variantSets.get(setName)?.variants ?? [];
+      prim.variantSets.set(setName, {
+        variants: [...new Set([...known, ...variants.keys()])],
+        ...(selection !== undefined ? { selection } : {}),
+      });
+      const body = selection !== undefined ? variants.get(selection) : undefined;
+      if (selection !== undefined && !body) {
+        this.emit({ level: 'warning', message: `Unknown variant '${selection}' in set '${setName}'`, detail: { prim: prim.path } });
+      }
+      if (body) this.mergePrim({ ...body, name: spec.name, specifier: 'over' }, parentPath, layerUri);
+    }
   }
 
   private attachChild(parentPath: string, childPath: string): void {
@@ -857,8 +968,9 @@ async function composeLayerTree(
   maxDepth: number,
   visited: Set<string>,
   resolveArcsFlag: boolean,
+  variantSelections?: ReadonlyMap<string, ReadonlyMap<string, string>>,
 ): Promise<ComposedTree> {
-  const composer = new Composer(emit, resolveArcsFlag);
+  const composer = new Composer(emit, resolveArcsFlag, variantSelections);
 
   // Depth-first over subLayers yields strongest-first order; merge accordingly.
   const visit = async (uri: string, depth: number): Promise<void> => {
@@ -930,6 +1042,7 @@ function mergeWeakPrim(dst: MutablePrim, src: MutablePrim): void {
   if (dst.xformOps.length === 0 && src.xformOps.length > 0) dst.xformOps = [...src.xformOps];
   if (dst.materialBinding === undefined && src.materialBinding !== undefined) dst.materialBinding = src.materialBinding;
   if (dst.mesh === undefined && src.mesh !== undefined) dst.mesh = src.mesh;
+  if (dst.variantSets === undefined && src.variantSets !== undefined) dst.variantSets = new Map(src.variantSets);
 }
 
 /** Clone `src` at `newPath`; children are re-attached by the graft traversal. */
@@ -950,6 +1063,7 @@ function cloneRebasedPrim(src: MutablePrim, newPath: string): MutablePrim {
     children: [],
     ...(src.materialBinding !== undefined ? { materialBinding: src.materialBinding } : {}),
     ...(src.mesh !== undefined ? { mesh: src.mesh } : {}),
+    ...(src.variantSets !== undefined ? { variantSets: new Map(src.variantSets) } : {}),
   };
 }
 
@@ -1053,7 +1167,7 @@ export async function importUsdStage(entryUri: string, options: UsdImportOptions
   const resolveArcsFlag = options.resolveArcs ?? false;
   const visited = new Set<string>();
 
-  const tree = await composeLayerTree(entryUri, options.reader, emit, maxDepth, visited, resolveArcsFlag);
+  const tree = await composeLayerTree(entryUri, options.reader, emit, maxDepth, visited, resolveArcsFlag, options.variantSelections);
 
   if (resolveArcsFlag) {
     await resolveArcGraph(tree.composition, options.reader, emit, maxDepth, new Set([entryUri]));
@@ -1063,6 +1177,8 @@ export async function importUsdStage(entryUri: string, options: UsdImportOptions
     ...(tree.metadata.defaultPrim !== undefined ? { defaultPrim: tree.metadata.defaultPrim } : {}),
     ...(tree.metadata.upAxis !== undefined ? { upAxis: tree.metadata.upAxis } : {}),
     ...(tree.metadata.metersPerUnit !== undefined ? { metersPerUnit: tree.metadata.metersPerUnit } : {}),
+    ...(['startTimeCode', 'endTimeCode', 'timeCodesPerSecond', 'framesPerSecond'] as const)
+      .reduce((out, key) => tree.metadata[key] !== undefined ? { ...out, [key]: tree.metadata[key] } : out, {}),
     subLayers: tree.resolvedSubLayers,
   };
 

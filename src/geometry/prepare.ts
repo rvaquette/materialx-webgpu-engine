@@ -91,6 +91,8 @@ export interface PreparedMesh {
   subsets: readonly PreparedSubset[];
   subdivision: SubdivisionPlan;
   displacement: DisplacementPlan;
+  /** Source point of each prepared vertex (lets time-sampled points deform the mesh). */
+  sourcePoints?: Uint32Array;
 }
 
 const SMOOTH_SCHEMES = new Set(['catmullClark', 'loop', 'bilinear']);
@@ -145,6 +147,7 @@ export function prepareMesh(input: RawMesh, options: PrepareMeshOptions = {}): P
   // (weldKey), so NaN welds with NaN and -0 with 0.
   const pointHeads = new Map<number, number>();
   const nextWelded: number[] = [];
+  const sourcePoints: number[] = [];
   const stride = 3 + (uvPrimvar?.elementSize ?? 0) + otherPrimvars.reduce((sum, p) => sum + p.elementSize, 0);
   const quantized: number[] = [];
   const scratch = new Float64Array(stride);
@@ -175,6 +178,7 @@ export function prepareMesh(input: RawMesh, options: PrepareMeshOptions = {}): P
 
     const index = positions.length / 3;
     nextWelded.push(pointHeads.get(corner.pointIndex) ?? -1);
+    sourcePoints.push(corner.pointIndex);
     pointHeads.set(corner.pointIndex, index);
     for (let i = 0; i < stride; i++) quantized.push(scratch[i]!);
     positions.push(pos[0]!, pos[1]!, pos[2]!);
@@ -217,6 +221,7 @@ export function prepareMesh(input: RawMesh, options: PrepareMeshOptions = {}): P
   const subsets = buildSubsets(mesh.subsets ?? [], triangleFace, emit);
 
   return {
+    sourcePoints: Uint32Array.from(sourcePoints),
     positions: prepared.positions,
     normals: prepared.normals,
     ...(prepared.uvs ? { uvs: prepared.uvs } : {}),

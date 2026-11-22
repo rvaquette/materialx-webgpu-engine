@@ -33,13 +33,68 @@ export interface EngineCapture {
   readonly rgba: Uint8Array;
 }
 
+/** Shutter interval in time codes; samples are spread over `steps` jittered sub-frames (default 16). */
+export interface EngineShutter {
+  open: number;
+  close: number;
+  steps?: number;
+}
+
 export type EngineCaptureOptions =
-  | { backend?: 'raster'; samples?: never }
-  | { backend: 'pathtracing'; samples: number };
+  | { backend?: 'raster'; samples?: never; shutter?: never }
+  | { backend: 'pathtracing'; samples: number; shutter?: EngineShutter };
 
 export type EngineRenderOptions =
-  | { backend?: 'raster' | 'disney'; targetNoise?: never }
-  | { backend: 'pathtracing'; targetNoise?: number };
+  | { backend?: 'raster' | 'disney'; targetNoise?: never; temporalHistory?: never }
+  | {
+    backend: 'pathtracing'; targetNoise?: number;
+    /** After a scene change, keep up to this many samples per pixel instead of restarting (0 restarts). */
+    temporalHistory?: number;
+  };
+
+/** Time range of an animated stage, in USD time codes. */
+export interface EngineTimeline {
+  readonly start: number;
+  readonly end: number;
+  readonly timeCodesPerSecond: number;
+}
+
+export interface EngineLight {
+  readonly path: string;
+  readonly type: string;
+}
+
+/** Light values that can change without reloading. */
+export interface EngineLightChanges {
+  intensity?: number;
+  exposure?: number;
+  color?: readonly [number, number, number];
+  /** Column-major 4x4 world transform. */
+  transform?: readonly number[];
+}
+
+export interface EngineCamera {
+  eye: readonly [number, number, number];
+  target: readonly [number, number, number];
+  /** Vertical field of view in radians. */
+  fovY?: number;
+}
+
+export interface EngineVariantSet {
+  readonly path: string;
+  readonly set: string;
+  readonly variants: readonly string[];
+  readonly selection?: string;
+}
+
+export interface EngineMaterialParameter {
+  readonly id: string;
+  readonly label: string;
+  readonly type: 'float' | 'integer' | 'boolean' | 'color3' | 'vector2' | 'vector3' | 'vector4';
+  readonly value: readonly number[];
+  readonly min?: readonly number[];
+  readonly max?: readonly number[];
+}
 
 export interface EngineObject {
   readonly path: string;
@@ -159,6 +214,90 @@ export class MaterialXEngine {
     return this.#loaded && !this.#disposed && this.viewer.isCompiledScene;
   }
 
+  /** Present when the stage is animated (time-sampled transforms, visibility, lights, cameras or points). */
+  get timeline(): EngineTimeline | undefined {
+    const timeline = this.#loaded && !this.#disposed ? this.viewer.timeline : undefined;
+    return timeline?.animated ? { start: timeline.start, end: timeline.end, timeCodesPerSecond: timeline.timeCodesPerSecond } : undefined;
+  }
+
+  get time(): number {
+    return this.viewer.time;
+  }
+
+  /** Resolves the animated stage at a time code without reloading. */
+  async setTime(time: number): Promise<void> {
+    this.#assertLoaded();
+    await this.viewer.setTime(time);
+  }
+
+  /** Overrides an object's world transform (column-major 4x4); omit it to restore the scene's. */
+  setTransform(path: string, matrix?: readonly number[]): void {
+    this.#assertLoaded();
+    this.viewer.setObjectTransform(path, matrix);
+  }
+
+  /** Shows or hides an object; omit the flag to restore the scene's visibility. */
+  setVisibility(path: string, visible?: boolean): void {
+    this.#assertLoaded();
+    this.viewer.setObjectVisible(path, visible);
+  }
+
+  get lights(): readonly EngineLight[] {
+    return this.#loaded && !this.#disposed ? this.viewer.lights.map(light => ({ ...light })) : [];
+  }
+
+  /** Changes a light; omit the changes to restore the scene's values. */
+  setLight(path: string, changes?: EngineLightChanges): void {
+    this.#assertLoaded();
+    this.viewer.setLight(path, changes && {
+      ...(changes.intensity !== undefined ? { intensity: changes.intensity } : {}),
+      ...(changes.exposure !== undefined ? { exposure: changes.exposure } : {}),
+      ...(changes.color !== undefined ? { color: [...changes.color] as [number, number, number] } : {}),
+      ...(changes.transform !== undefined ? { transform: [...changes.transform] } : {}),
+    });
+  }
+
+  setCamera(camera: EngineCamera): void {
+    this.#assertLoaded();
+    this.viewer.setCamera(camera);
+  }
+
+  get variantSets(): readonly EngineVariantSet[] {
+    return this.#loaded && !this.#disposed ? this.viewer.variantSets.map(set => ({ ...set, variants: [...set.variants] })) : [];
+  }
+
+  /** Selects a variant; the stage is recomposed and reloaded with the same camera, time and overrides. */
+  async setVariant(path: string, set: string, variant: string): Promise<void> {
+    this.#assertLoaded();
+    this.#busy = true;
+    try {
+      await this.viewer.setVariant(path, set, variant);
+      if (this.#disposed) throw new Error('MaterialXEngine was disposed during variant selection.');
+    } finally {
+      this.#busy = false;
+    }
+  }
+
+  materialParameters(path: string): readonly EngineMaterialParameter[] {
+    this.#assertLoaded();
+    return this.viewer.objectParameters(path).map(parameter => ({
+      id: parameter.id, label: parameter.label, type: parameter.type, value: [...parameter.value],
+      ...(parameter.min ? { min: [...parameter.min] } : {}), ...(parameter.max ? { max: [...parameter.max] } : {}),
+    }));
+  }
+
+  /** Sets material parameter values by id; value-only parameters update without recompiling. */
+  async setMaterialParameters(path: string, values: Readonly<Record<string, readonly number[]>>): Promise<void> {
+    this.#assertLoaded();
+    this.#busy = true;
+    try {
+      await this.viewer.setObjectParameters(path, new Map(Object.entries(values)));
+      if (this.#disposed) throw new Error('MaterialXEngine was disposed during a material update.');
+    } finally {
+      this.#busy = false;
+    }
+  }
+
   /** Omit the material to restore the object's original USD binding. */
   async setMaterial(path: string, material?: EngineMaterial): Promise<void> {
     this.#assertAvailable();
@@ -186,6 +325,7 @@ export class MaterialXEngine {
     this.#busy = true;
     try {
       if (backend === 'pathtracing') {
+        if (options.temporalHistory !== undefined) this.viewer.setPathTracingTemporalHistory(options.temporalHistory);
         const limits = this.viewer.pathTracingLimits;
         this.viewer.setPathTracingLimits({
           ...limits,
@@ -216,7 +356,7 @@ export class MaterialXEngine {
     this.#busy = true;
     try {
       return await captureRgba(device, width, height, backend === 'pathtracing'
-        ? { pathTrace: target => this.viewer.renderPathTraceTo(target, samples) }
+        ? { pathTrace: target => (options.shutter ? this.viewer.renderPathTraceTo(target, samples, options.shutter) : this.viewer.renderPathTraceTo(target, samples)) }
         : { raster: target => this.viewer.renderRasterTo(target) }, () => {
         if (this.#disposed) throw new Error('MaterialXEngine was disposed during capture.');
       });
@@ -237,6 +377,11 @@ export class MaterialXEngine {
         this.ownedDevice?.destroy();
       }
     }
+  }
+
+  #assertLoaded(): void {
+    this.#assertAvailable();
+    if (!this.#loaded) throw new Error('Load a USD scene first.');
   }
 
   #assertAvailable(): void {

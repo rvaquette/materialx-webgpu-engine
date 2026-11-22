@@ -19,6 +19,13 @@ interface Diagnostic {
 type DiagnosticSink = (diagnostic: Diagnostic) => void;
 
 // src/engine.ts
+interface EngineCamera {
+  eye: readonly [number, number, number];
+  target: readonly [number, number, number];
+  fovY?: number;
+}
+
+// src/engine.ts
 interface EngineCapture {
   readonly width: number;
   readonly height: number;
@@ -26,13 +33,37 @@ interface EngineCapture {
 }
 
 // src/engine.ts
-type EngineCaptureOptions = | { backend?: 'raster'; samples?: never }
-  | { backend: 'pathtracing'; samples: number };
+type EngineCaptureOptions = | { backend?: 'raster'; samples?: never; shutter?: never }
+  | { backend: 'pathtracing'; samples: number; shutter?: EngineShutter };
+
+// src/engine.ts
+interface EngineLight {
+  readonly path: string;
+  readonly type: string;
+}
+
+// src/engine.ts
+interface EngineLightChanges {
+  intensity?: number;
+  exposure?: number;
+  color?: readonly [number, number, number];
+  transform?: readonly number[];
+}
 
 // src/engine.ts
 interface EngineMaterial {
   url: string | URL;
   compiledUrl?: string | URL;
+}
+
+// src/engine.ts
+interface EngineMaterialParameter {
+  readonly id: string;
+  readonly label: string;
+  readonly type: "boolean" | "float" | "integer" | "color3" | "vector2" | "vector3" | "vector4";
+  readonly value: readonly number[];
+  readonly min?: readonly number[];
+  readonly max?: readonly number[];
 }
 
 // src/engine.ts
@@ -53,14 +84,25 @@ interface EngineOptions {
 }
 
 // src/engine.ts
-type EngineRenderOptions = | { backend?: 'raster' | 'disney'; targetNoise?: never }
-  | { backend: 'pathtracing'; targetNoise?: number };
+type EngineRenderOptions = | { backend?: 'raster' | 'disney'; targetNoise?: never; temporalHistory?: never }
+  | {
+    backend: 'pathtracing'; targetNoise?: number;
+    /** After a scene change, keep up to this many samples per pixel instead of restarting (0 restarts). */
+    temporalHistory?: number;
+  };
 
 // src/assets/runtime.ts
 interface EngineRuntimeAssets {
   readonly materialxCore?: string | URL;
   readonly materialxLibraries?: string | URL;
   readonly openUsd?: string | URL;
+}
+
+// src/engine.ts
+interface EngineShutter {
+  open: number;
+  close: number;
+  steps?: number;
 }
 
 // src/render/viewer.ts
@@ -87,6 +129,21 @@ interface EngineStatus {
 }
 
 // src/engine.ts
+interface EngineTimeline {
+  readonly start: number;
+  readonly end: number;
+  readonly timeCodesPerSecond: number;
+}
+
+// src/engine.ts
+interface EngineVariantSet {
+  readonly path: string;
+  readonly set: string;
+  readonly variants: readonly string[];
+  readonly selection?: string;
+}
+
+// src/engine.ts
 interface HeadlessEngineOptions extends Omit<EngineOptions, 'orbitControls'> {
   width: number;
   height: number;
@@ -99,6 +156,18 @@ class MaterialXEngine {
   loadUsd(entry: string | URL): Promise<void>;
   readonly objects: readonly EngineObject[];
   readonly isCompiledScene: boolean;
+  readonly timeline: EngineTimeline | undefined;
+  readonly time: number;
+  setTime(time: number): Promise<void>;
+  setTransform(path: string, matrix?: readonly number[]): void;
+  setVisibility(path: string, visible?: boolean): void;
+  readonly lights: readonly EngineLight[];
+  setLight(path: string, changes?: EngineLightChanges): void;
+  setCamera(camera: EngineCamera): void;
+  readonly variantSets: readonly EngineVariantSet[];
+  setVariant(path: string, set: string, variant: string): Promise<void>;
+  materialParameters(path: string): readonly EngineMaterialParameter[];
+  setMaterialParameters(path: string, values: Readonly<Record<string, readonly number[]>>): Promise<void>;
   setMaterial(path: string, material?: EngineMaterial): Promise<void>;
   render(options?: EngineRenderOptions): Promise<void>;
   capture(options?: EngineCaptureOptions): Promise<EngineCapture>;

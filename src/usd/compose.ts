@@ -28,6 +28,8 @@ export interface ComposeStageOptions {
   loadCrateModule?: () => Promise<OpenUsdModule>;
   sink?: DiagnosticSink;
   maxDepth?: number;
+  /** Variant selections by authored prim path (importer.ts). */
+  variantSelections?: ReadonlyMap<string, ReadonlyMap<string, string>>;
 }
 
 export class StageComposeError extends Error {
@@ -82,5 +84,6 @@ export async function composeStage(entryUri: string, options: ComposeStageOption
     resolveArcs: true,
     ...(options.sink ? { sink: options.sink } : {}),
     ...(options.maxDepth !== undefined ? { maxDepth: options.maxDepth } : {}),
+    ...(options.variantSelections ? { variantSelections: options.variantSelections } : {}),
   });
 }

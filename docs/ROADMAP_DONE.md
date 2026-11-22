@@ -1160,3 +1160,90 @@ la référence à 1024 spp et ne permet pas de conclure sur l'efficacité.
 - **Reconstruction adaptative :** l'échantillonnage adaptatif par pixel existe
   depuis la priorité 1 ; le débruitage guidé et temporel reste écarté.
 - **Wavefront spécialisé :** abandonné.
+
+## Priorité 5 : scènes dynamiques
+
+Rendre le moteur capable d'animer une scène chargée sans la recharger, en raster
+comme en path tracing. Scène de contrôle : `scenes/bench/animated.usda` (caméra
+animée, hiérarchie de transformations, grille déformée, objet qui disparaît à
+mi-parcours, lumière sphérique qui se déplace et varie, variant set `finish`).
+
+### Résultats
+
+Mesures sur NVIDIA Turing, Chrome headless, par l'API publique :
+
+| Opération | Temps par image |
+|---|---:|
+| `animated.usda` 256², `setTime` + image raster | 3,2 ms |
+| `animated.usda` 256², `setTime` + 1 spp path tracing | 9,3 ms |
+| idem + `setMaterialParameters` (couleur, sans recompilation) | 9,6 ms |
+| `bedroom` 128², déplacer un objet + 1 spp (statique : 27 ms) | 41 ms |
+| `diningroom` 128², déplacer un objet de 44 864 triangles + 1 spp (statique : 26 ms) | 65 ms |
+
+Sur `diningroom`, la mise à jour coûte 35 ms, dont 30 ms pour réécrire les
+triangles path tracing et refitter 27 088 nœuds du BVH. Dans le viewer
+interactif (canvas 256²), la lecture de l'animation tourne à 43 images/s en
+path tracing ; avec 16 spp d'historique temporel, 55 images/s et un bruit
+haute fréquence divisé par 4,8 (16,2 → 3,4), au prix de traînées sur les
+objets en mouvement.
+
+### Travaux réalisés
+
+- **Pistes temporelles et variants USD.** L'importeur lit les `.timeSamples`
+  des attributs et des xformOps, les métadonnées de temps du stage et les
+  `variantSet`. Les opinions d'un variant sont plus faibles que les opinions
+  locales ; la sélection vient, par force décroissante, de l'option de
+  chargement `variantSelections`, d'une couche plus forte, puis des
+  métadonnées `variants`. `src/scene/time.ts` évalue le stage composé à un
+  instant : interpolation linéaire (sphérique pour les quaternions), valeurs
+  tenues pour les types discrets, bornage hors de l'intervalle, `None` bloquant.
+- **Transformations, visibilité, lumières et caméra sans rechargement.**
+  `src/render/scene-animation.ts` donne l'état animé : transformations,
+  visibilité héritée, lumières, caméra et points déformés. Le viewer n'envoie que
+  ce qui change : uniformes par objet et filtrage des objets cachés en raster,
+  triangles monde et buffer de lumières en path tracing. Les modifications
+  explicites (`setTransform`, `setVisibility`, `setLight`) restent
+  prioritaires sur l'animation. La visibilité USD statique, auparavant ignorée,
+  est appliquée au chargement.
+- **Refit incrémental du BVH** (`dynamic-geometry.ts`). Les triangles d'un
+  objet sont réécrits avec les mêmes opérations flottantes que la construction
+  (résultat identique au bit près à une reconstruction, vérifié par les tests),
+  puis seules les feuilles touchées et leurs ancêtres sont refittés ; au-delà de
+  25 % des triangles, tout l'arbre est refitté. Les objets cachés sont réduits à
+  des triangles dégénérés. Les tableaux partagés avec le cache de géométrie sont
+  copiés à la première écriture, et seules les plages modifiées sont envoyées au
+  GPU.
+- **Géométrie déformable.** Les `points` animés sont retriangulés avec la
+  topologie d'origine (gardée dans la géométrie préparée, cache de géométrie en
+  version 4) et leurs normales recalculées.
+- **Matériaux animés.** `materialParameters` et `setMaterialParameters`
+  exposent les paramètres de l'éditeur dans l'API ; les valeurs en uniformes ne
+  recompilent pas.
+- **Motion blur et accumulation temporelle.** `capture({ shutter })` répartit
+  les échantillons sur des sous-images à des instants tirés dans des strates de
+  l'intervalle d'obturation, en gardant l'accumulation entre sous-images.
+  `render({ temporalHistory })` garde au plus N échantillons par pixel après un
+  changement au lieu de repartir de zéro (passe GPU qui borne le compteur
+  d'accumulation et met les moments à l'échelle).
+- **API et interface.** API publique 0.1.1 (`timeline`, `setTime`,
+  `setTransform`, `setVisibility`, `setLight`, `setCamera`, `setVariant`…,
+  voir [ENGINE_API.md](ENGINE_API.md)). Le viewer a une section **Animation** :
+  curseur de temps, lecture, historique temporel du path tracing et choix des
+  variants.
+
+### Limites et décisions
+
+- Un changement de variant recompose et recharge la scène (rapide grâce aux
+  caches de géométrie, de BVH et de shaders).
+- Le refit dégrade la qualité du BVH lors de grands déplacements ; aucune
+  reconstruction automatique n'est déclenchée.
+- Le backend Disney est reconstruit à chaque changement de scène ; la passe de
+  volumes raster utilise la géométrie initiale.
+- La déformation garde la topologie et ne s'applique pas aux maillages
+  subdivisés ; le nombre de lumières (hors dôme) doit rester constant. Les
+  scènes précompilées n'embarquent pas la géométrie nécessaire et refusent les
+  changements dynamiques.
+- Les nœuds MaterialX `time` et `frame` restent constants (seuls deux
+  matériaux de test de la bibliothèque les utilisent) ; les paramètres animés
+  passent par `setMaterialParameters`. Les entrées de matériaux USD
+  échantillonnées dans le temps ne sont pas évaluées.

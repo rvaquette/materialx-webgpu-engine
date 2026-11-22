@@ -7,6 +7,7 @@ import {
   buildSceneFrame,
   buildSceneFrameUniform,
   buildSceneMaterialUniform,
+  directionalLightFrom,
   type FrameCamera,
   type SceneFramePlan,
 } from './raster/scene-frame.ts';
@@ -20,7 +21,10 @@ import {
 } from './raster/backend.ts';
 import { createSceneBindGroups, uploadGeometry, type SceneDrawBuffers } from './scene-resources.ts';
 import { buildEnvCdf } from '../assets/environment-cdf.ts';
-import { buildCachedPathTraceScene, buildPathTraceScene, type PathTraceScene } from './pathtracing/scene-buffers.ts';
+import {
+  buildCachedPathTraceScene, buildPathTraceScene, PT_NODE_FLOATS, PT_TRIANGLE_FLOATS, type PathTraceScene, type PathTraceTransformRange,
+} from './pathtracing/scene-buffers.ts';
+import { PathTraceDynamics, type DynamicInstanceSource } from './pathtracing/dynamic-geometry.ts';
 import { buildPathTraceUniform, pathTraceComputeWgsl, pathTraceClosureDispatch, pathTraceOpaqueScene, PathTraceBackend, pathTraceTileCount, PT_UNIFORM_SIZE } from './pathtracing/compute.ts';
 import { pathTraceSettings } from './pathtracing/scene-settings.ts';
 import { cameraFovY } from '../usd/cameras.ts';
@@ -35,7 +39,7 @@ import { captureRgba, type RgbaCapture } from '../gpu/capture.ts';
 import { uploadMaterialImage, uploadMaterialImageArray } from '../gpu/material-texture.ts';
 import { packPtTextureArrays } from './pathtracing/texture-arrays.ts';
 import { OrbitCamera, attachOrbitControls } from '../scene/orbit-camera.ts';
-import { inverse4, lookAt4, multiply4, perspective4, transformDirection, type Vec3 } from '../scene/transforms.ts';
+import { inverse4, lookAt4, multiply4, perspective4, transformDirection, type Mat4, type Vec3 } from '../scene/transforms.ts';
 import type { DiagnosticSink } from '../core/diagnostics.ts';
 import {
   compileShaderBatch, SHADER_COMPILATION_CONCURRENCY, type ShaderCompilationError,
@@ -67,7 +71,11 @@ import type { ResolvedGraph, ResolvedNode, ResolvedNodeDefRef } from '../materia
 import type { NormalizedSurfaceInput, ResolvedSurface } from '../materialx/surface-graph.ts';
 import { applySceneDisplacement } from './displacement.ts';
 import { extractDisplacement } from './graph-material-compiler.ts';
-import type { GeometryResource, MaterialResource, SceneResources } from './scene-resources.ts';
+import type { GeometryResource, InstanceResource, MaterialResource, SceneResources } from './scene-resources.ts';
+import { animateScene, isInvisible, type DeformedGeometry, type LightChanges } from './scene-animation.ts';
+import { sceneTimeline, type SceneTimeline } from '../scene/time.ts';
+import type { SceneCamera } from '../usd/cameras.ts';
+import { packAnalyticLights } from './pathtracing/analytic-lights.ts';
 import {
   loadMaterialPreviewShaderBall, materialPreviewCamera, materialPreviewResources, type MaterialPreviewOptions,
 } from './material-preview.ts';
@@ -215,6 +223,24 @@ export interface ViewerStatus {
   convergenceError?: string;
 }
 
+const sceneCameraKey = (camera: SceneCamera): string => JSON.stringify([camera.transform, camera.fovY, camera.pathtracerFov]);
+
+/** Dynamic scene changes; omitted fields are unchanged. */
+interface SceneDynamicUpdate {
+  /** World transforms by instance id. */
+  transforms?: ReadonlyMap<string, Mat4>;
+  /** The complete set of hidden instance ids. */
+  hidden?: ReadonlySet<string>;
+  /** Deformed vertex streams by prototype id (same vertex count). */
+  geometry?: ReadonlyMap<string, DeformedGeometry>;
+  /** All scene lights; the number of non-dome lights must not change. */
+  lights?: readonly SceneLight[];
+  /** Keep accumulating (motion-blur sub-frames) instead of restarting or aging. */
+  keepAccumulation?: boolean;
+  /** The camera also moved: age or restart the accumulation even if nothing else changed. */
+  cameraChanged?: boolean;
+}
+
 /** A disposable per-scene GPU render set (raster + lazily built path tracer) for one loaded USD. */
 interface SceneRender {
   setEnvironmentEnabled: (enabled: boolean) => void;
@@ -232,7 +258,11 @@ interface SceneRender {
   renderRaster: (targetView: GPUTextureView) => void;
   /** Starts the path tracer build on first call; renders nothing until it is ready. */
   renderPathTrace: (targetView: GPUTextureView, tiled: boolean, accumulate: boolean) => void;
-  capturePathTrace: (targetView: GPUTextureView, samples: number, check?: () => void) => Promise<void>;
+  capturePathTrace: (
+    targetView: GPUTextureView | undefined, samples: number, check?: () => void, options?: { reset?: boolean },
+  ) => Promise<void>;
+  /** Moves, hides, deforms or relights the scene without reloading it. */
+  applyDynamics: (update: SceneDynamicUpdate) => void;
   renderDisney: (targetView: GPUTextureView, accumulate: boolean) => void;
   reportFrameTime: (milliseconds: number) => void;
   invalidateDenoise: () => void;
@@ -296,6 +326,15 @@ export class InteractiveViewer {
   #onDiagnostic: DiagnosticSink | undefined;
   #exposure: number | undefined;
   #tonemap: Tonemap = 'acesFilmic';
+  #pathTracingTemporalHistory = 0;
+  // Dynamic scene state: the USD-driven state at #time, then the API overrides.
+  #time = 0;
+  #baseTransforms = new Map<string, Mat4>();
+  #transformOverrides = new Map<string, Mat4>();
+  #visibilityOverrides = new Map<string, boolean>();
+  #lightOverrides = new Map<string, LightChanges>();
+  #sceneCameraKey: string | undefined;
+  #keepDynamicOverrides = false;
 
   constructor(opts: {
     device: GPUDevice;
@@ -871,6 +910,7 @@ export class InteractiveViewer {
     this.#current = render;
     if (this.#pathTracingDepthOverride !== undefined) render.setPathTracingDepth(this.#pathTracingDepthOverride);
     this.#loaded = candidate;
+    this.#applyDynamicState(false);
     this.#onCameraChanged();
     this.#emitStatus();
   }
@@ -1218,17 +1258,7 @@ export class InteractiveViewer {
     if (!preserveCamera) {
       const camera = loaded.cameras[0];
       if (camera) {
-        const transform = camera.transform;
-        const eye: Vec3 = [transform[12]!, transform[13]!, transform[14]!];
-        const distance = Math.hypot(eye[0] - center[0], eye[1] - center[1], eye[2] - center[2]);
-        const axisLength = Math.hypot(transform[8]!, transform[9]!, transform[10]!) || 1;
-        const target: Vec3 = [
-          eye[0] - transform[8]! * distance / axisLength,
-          eye[1] - transform[9]! * distance / axisLength,
-          eye[2] - transform[10]! * distance / axisLength,
-        ];
-        this.#orbit = OrbitCamera.fromEyeTarget(eye, target, this.#width / this.#height, cameraFovY(camera, this.#width / this.#height) || 0.62);
-        if (pathTraceSettings(loaded.scene).converted) this.#orbit.projection = camera.projection;
+        this.#orbitFromSceneCamera(camera, loaded, center);
       } else {
         if (options.imported) {
           const radius = Math.max(1e-6, Math.hypot(
@@ -1246,18 +1276,183 @@ export class InteractiveViewer {
     }
     this.#detachControls();
     this.#detachControls = this.#bindOrbitControls();
+    this.#baseTransforms = new Map(loaded.resources.instances.map(instance => [instance.id, instance.transform]));
+    if (!this.#keepDynamicOverrides) {
+      this.#transformOverrides.clear();
+      this.#visibilityOverrides.clear();
+      this.#lightOverrides.clear();
+    }
+    this.#time = loaded.animation?.time ?? 0;
+    this.#sceneCameraKey = loaded.cameras[0] ? sceneCameraKey(loaded.cameras[0]) : undefined;
+    this.#applyDynamicState(false);
     this.#onCameraChanged();
     this.#emitStatus();
   }
 
-  #onCameraChanged(): void {
+  #orbitFromSceneCamera(camera: SceneCamera, loaded: LoadedUsdScene, center: Vec3): void {
+    const transform = camera.transform;
+    const eye: Vec3 = [transform[12]!, transform[13]!, transform[14]!];
+    const distance = Math.hypot(eye[0] - center[0], eye[1] - center[1], eye[2] - center[2]) || 1;
+    const axisLength = Math.hypot(transform[8]!, transform[9]!, transform[10]!) || 1;
+    const target: Vec3 = [
+      eye[0] - transform[8]! * distance / axisLength,
+      eye[1] - transform[9]! * distance / axisLength,
+      eye[2] - transform[10]! * distance / axisLength,
+    ];
+    const near = this.#orbit.near, far = this.#orbit.far;
+    this.#orbit = OrbitCamera.fromEyeTarget(eye, target, this.#width / this.#height, cameraFovY(camera, this.#width / this.#height) || 0.62);
+    if (pathTraceSettings(loaded.scene).converted) this.#orbit.projection = camera.projection;
+    if (this.#loaded === loaded) { this.#orbit.near = near; this.#orbit.far = far; }
+  }
+
+  #onCameraChanged(resetAccumulation = true): void {
     if (!this.#current) return;
     this.#clearDenoiserComparison();
-    this.#lastCameraChange = performance.now();
+    if (resetAccumulation) this.#lastCameraChange = performance.now();
     this.#current.applyCamera(this.#orbit.viewProj(), this.#orbit.eye, inverse4(this.#orbit.backgroundViewProj()));
     this.#rasterDirty = true;
     this.#ptDisplayDirty = true;
-    if (this.#backend === 'pathtracing' || this.#backend === 'disney') this.#current.resetPathTrace();
+    if (resetAccumulation && (this.#backend === 'pathtracing' || this.#backend === 'disney')) this.#current.resetPathTrace();
+  }
+
+  // --- Dynamic scenes -------------------------------------------------------
+
+  /** Time range of an animated stage (time-sampled attributes or transforms). */
+  get timeline(): SceneTimeline | undefined {
+    const source = this.#loaded?.animation?.source;
+    return source ? sceneTimeline(source) : undefined;
+  }
+
+  get time(): number { return this.#time; }
+
+  /** Resolves every time-sampled transform, visibility, light, camera and point at `time`. */
+  async setTime(time: number, options: { keepAccumulation?: boolean } = {}): Promise<void> {
+    if (!Number.isFinite(time)) throw new RangeError('The time code must be finite.');
+    if (!this.#loaded) throw new Error('No scene loaded.');
+    this.#time = time;
+    this.#applyDynamicState(options.keepAccumulation ?? false);
+  }
+
+  /** Overrides an object's world transform (column-major 4x4); omit it to restore the scene's. */
+  setObjectTransform(path: string, matrix?: readonly number[]): void {
+    this.#requireInstance(path);
+    if (matrix === undefined) this.#transformOverrides.delete(path);
+    else {
+      if (matrix.length !== 16 || !matrix.every(Number.isFinite)) throw new RangeError('A transform is 16 finite numbers.');
+      this.#transformOverrides.set(path, [...matrix]);
+    }
+    this.#applyDynamicState(false);
+  }
+
+  /** Shows or hides an object; omit the flag to restore the scene's visibility. */
+  setObjectVisible(path: string, visible?: boolean): void {
+    this.#requireInstance(path);
+    if (visible === undefined) this.#visibilityOverrides.delete(path);
+    else this.#visibilityOverrides.set(path, visible);
+    this.#applyDynamicState(false);
+  }
+
+  get lights(): ReadonlyArray<{ path: string; type: string }> {
+    return (this.#loaded?.lights ?? []).map(light => ({ path: light.path, type: light.type }));
+  }
+
+  /** Changes a light; omit the changes to restore the scene's values. */
+  setLight(path: string, changes?: LightChanges): void {
+    if (!this.#loaded?.lights.some(light => light.path === path)) throw new Error(`Unknown light: ${path}`);
+    if (changes?.transform && (changes.transform.length !== 16 || !changes.transform.every(Number.isFinite))) {
+      throw new RangeError('A transform is 16 finite numbers.');
+    }
+    if (changes === undefined) this.#lightOverrides.delete(path);
+    else this.#lightOverrides.set(path, { ...this.#lightOverrides.get(path), ...changes });
+    this.#applyDynamicState(false);
+  }
+
+  /** Places the camera; field of view in radians (vertical). */
+  setCamera(camera: { eye: readonly number[]; target: readonly number[]; fovY?: number }): void {
+    const eye = camera.eye, target = camera.target;
+    if (eye.length !== 3 || target.length !== 3 || ![...eye, ...target].every(Number.isFinite)
+      || (camera.fovY !== undefined && !(camera.fovY > 0 && camera.fovY < Math.PI))) {
+      throw new RangeError('The camera needs a finite eye, target and a field of view in (0, pi).');
+    }
+    const near = this.#orbit.near, far = this.#orbit.far, projection = this.#orbit.projection;
+    this.#orbit = OrbitCamera.fromEyeTarget([eye[0]!, eye[1]!, eye[2]!], [target[0]!, target[1]!, target[2]!],
+      this.#width / this.#height, camera.fovY ?? this.#orbit.fovY, near, far);
+    this.#orbit.projection = projection;
+    this.#detachControls();
+    this.#detachControls = this.#bindOrbitControls();
+    this.#onCameraChanged();
+  }
+
+  /** Variant sets authored in the scene, by prim path. */
+  get variantSets(): ReadonlyArray<{ path: string; set: string; variants: readonly string[]; selection?: string }> {
+    const scene = this.#loaded?.scene;
+    if (!scene) return [];
+    return [...scene.prims.values()].flatMap(prim => [...prim.variantSets ?? []].map(([set, info]) => ({
+      path: prim.path, set, variants: info.variants, ...(info.selection !== undefined ? { selection: info.selection } : {}),
+    })));
+  }
+
+  /** Selects a variant: the stage is recomposed and reloaded, keeping the camera, time and overrides. */
+  async setVariant(path: string, set: string, variant: string): Promise<void> {
+    const entry = this.#sceneEntry;
+    const info = this.variantSets.find(candidate => candidate.path === path && candidate.set === set);
+    if (!entry || !info) throw new Error(`Unknown variant set '${set}' on ${path}.`);
+    if (!info.variants.includes(variant)) throw new Error(`Unknown variant '${variant}' in set '${set}'.`);
+    const selections = new Map([...this.#loadOptions.variantSelections ?? []].map(([prim, map]) => [prim, new Map(map)]));
+    selections.set(path, new Map([...selections.get(path) ?? [], [set, variant]]));
+    const time = this.#time;
+    this.#keepDynamicOverrides = true;
+    try {
+      await this.load(entry, this.#materialOverrides, true, { ...this.#loadOptions, variantSelections: selections, time });
+    } finally {
+      this.#keepDynamicOverrides = false;
+    }
+  }
+
+  get pathTracingTemporalHistory(): number { return this.#pathTracingTemporalHistory; }
+
+  /** After a dynamic change, keep up to `samples` accumulated samples per pixel (0 restarts). */
+  setPathTracingTemporalHistory(samples: number): void {
+    if (!Number.isInteger(samples) || samples < 0) throw new RangeError('The temporal history is a non-negative integer.');
+    this.#pathTracingTemporalHistory = samples;
+  }
+
+  #requireInstance(path: string): void {
+    if (!this.#baseTransforms.has(path)) throw new Error(`Unknown object: ${path}`);
+  }
+
+  #applyDynamicState(keepAccumulation: boolean): void {
+    const loaded = this.#loaded;
+    const render = this.#current;
+    if (!loaded || !render) return;
+    const sink = this.#diagnosticSink();
+    const state = loaded.animation
+      ? animateScene(loaded.animation.source, this.#time, loaded.resources, sink)
+      : undefined;
+    const transforms = new Map(state?.transforms ?? this.#baseTransforms);
+    for (const [path, matrix] of this.#transformOverrides) transforms.set(path, matrix);
+    const hidden = new Set(state?.hidden ?? loaded.resources.instances
+      .filter(instance => isInvisible(loaded.scene, instance.primPath)).map(instance => instance.id));
+    for (const [path, visible] of this.#visibilityOverrides) {
+      if (visible) hidden.delete(path);
+      else hidden.add(path);
+    }
+    const lights = (state?.lights ?? loaded.lights).map(light => {
+      const changes = this.#lightOverrides.get(light.path);
+      return changes ? { ...light, ...changes } : light;
+    });
+    const camera = state?.camera;
+    const cameraKey = camera ? sceneCameraKey(camera) : undefined;
+    const cameraChanged = camera !== undefined && cameraKey !== this.#sceneCameraKey;
+    render.applyDynamics({ transforms, hidden, lights, geometry: state?.deformed ?? new Map(), keepAccumulation, cameraChanged });
+    if (!keepAccumulation) this.#lastCameraChange = performance.now();
+    if (cameraChanged) {
+      this.#sceneCameraKey = cameraKey;
+      const bounds = loaded.resources.tlas.bounds;
+      this.#orbitFromSceneCamera(camera, loaded, [(bounds.min[0] + bounds.max[0]) / 2, (bounds.min[1] + bounds.max[1]) / 2, (bounds.min[2] + bounds.max[2]) / 2]);
+      // applyDynamics already aged or restarted the path tracer; Disney still restarts on camera moves.
+      this.#onCameraChanged(!keepAccumulation && this.#backend === 'disney');
+    }
   }
 
   #emitStatus(): void {
@@ -1314,9 +1509,36 @@ export class InteractiveViewer {
     this.#current.renderRaster(targetView);
   }
 
-  async renderPathTraceTo(targetView: GPUTextureView, samples: number): Promise<void> {
-    if (!this.#current || this.#context) throw new Error('A loaded headless scene is required.');
-    await this.#current.capturePathTrace(targetView, samples);
+  /**
+   * With a shutter interval, samples are spread over `steps` stratified, jittered
+   * time codes (Monte Carlo motion blur of transforms, cameras, lights and points),
+   * accumulated together; the scene is then restored to its current time.
+   */
+  async renderPathTraceTo(
+    targetView: GPUTextureView, samples: number, shutter?: { open: number; close: number; steps?: number },
+  ): Promise<void> {
+    const current = this.#current;
+    if (!current || this.#context) throw new Error('A loaded headless scene is required.');
+    if (!shutter) {
+      await current.capturePathTrace(targetView, samples);
+      return;
+    }
+    if (!Number.isFinite(shutter.open) || !Number.isFinite(shutter.close) || shutter.close < shutter.open) {
+      throw new RangeError('The shutter needs finite open <= close time codes.');
+    }
+    const steps = Math.max(1, Math.min(samples, Math.floor(shutter.steps ?? 16)));
+    const time = this.#time;
+    try {
+      for (let step = 0; step < steps; step++) {
+        const share = Math.floor(samples * (step + 1) / steps) - Math.floor(samples * step / steps);
+        this.#time = shutter.open + (step + Math.random()) / steps * (shutter.close - shutter.open);
+        this.#applyDynamicState(step > 0);
+        if (share > 0) await current.capturePathTrace(step === steps - 1 ? targetView : undefined, share, undefined, { reset: step === 0 });
+      }
+    } finally {
+      this.#time = time;
+      this.#applyDynamicState(true);
+    }
   }
 
   #renderNextFrame = (): void => {
@@ -1416,6 +1638,10 @@ export class InteractiveViewer {
     let currentTonemap = this.#tonemap;
     const outputFormat = this.#outputFormat;
     const resources = { ...loaded.resources, materials: new Map(loaded.resources.materials) };
+    // Dynamic scene state (setTime, transforms, visibility, lights): see applyDynamics.
+    const hiddenInstances = new Set<string>();
+    const callInstance = new WeakMap<SceneDrawCall, string>();
+    let currentLights: readonly SceneLight[] = loaded.lights;
     const parameterBuffers = new Map<string, GPUBuffer[]>();
     const frameUniforms: Array<{ buffer: GPUBuffer; draw: SceneFramePlan['draws'][number] }> = [];
     let envBgUniform: GPUBuffer | undefined;
@@ -1693,6 +1919,7 @@ export class InteractiveViewer {
             pipelineKey: material.variant.pipelineKey,
             ...(textureBindGroups.size > 0 ? { textureBindGroups } : {}),
           };
+          callInstance.set(call, draw.instanceId);
           list.push(call);
           entries.push({ draw, call, frameUniform: frameEntry, materialUniform });
           nextDraws.set(draw.pass, list);
@@ -1994,7 +2221,8 @@ export class InteractiveViewer {
         for (let y = 0;y < height;y += bandRows) {
           const scissor = { x: 0, y, width, height: Math.min(bandRows, height - y) };
           for (const pass of frame.passes) {
-            const draws = drawsByPass.get(pass) ?? [];
+            const all = drawsByPass.get(pass) ?? [];
+            const draws = hiddenInstances.size === 0 ? all : all.filter(call => !hiddenInstances.has(callInstance.get(call) ?? ''));
             if (draws.length === 0) continue;
             backend.recordScenePass(encoder, { pass, hdrView, depthView, draws, clear: first, clearColor: rasterBackground(), scissor });
             first = false;
@@ -2031,6 +2259,16 @@ export class InteractiveViewer {
         },
         setQuality: (quality: RasterQuality) => serializeRaster(() => buildRasterQuality(quality)),
         updateTopology: updateRasterTopology,
+        updateGeometry: (prototypeId: string, positions: Float32Array, normals: Float32Array): void => {
+          const buffers = uploaded.get(prototypeId);
+          const position = buffers?.vertexBuffers.get('position');
+          const normal = buffers?.vertexBuffers.get('normal');
+          if (position) device.queue.writeBuffer(position, 0, positions);
+          if (normal) device.queue.writeBuffer(normal, 0, normals);
+        },
+        updateLights: (data: Float32Array): void => {
+          if (rasterLights && rasterLights.size === data.byteLength) device.queue.writeBuffer(rasterLights, 0, data);
+        },
       };
     };
     let raster: Awaited<ReturnType<typeof buildRaster>> | undefined;
@@ -2315,6 +2553,82 @@ export class InteractiveViewer {
         pass.dispatchWorkgroups(Math.ceil(values / 64));
         pass.end();
         encoder.copyBufferToBuffer(lightGuide.values, 0, guideLightsBuffer, lightGuideValuesOffset(guideLightCount), values * 4);
+      };
+
+      // Dynamic updates (dynamic-geometry.ts): CPU records are rewritten and refitted,
+      // then only the changed spans are uploaded into the bound storage buffers.
+      const bufferFor = (role: PtBufferRole): GPUBuffer | undefined => {
+        const slot = bindings.group0.find(candidate => candidate.role === role);
+        const entry = slot && group0Entries.find(candidate => candidate.binding === slot.binding);
+        return entry ? (entry.resource as GPUBufferBinding).buffer : undefined;
+      };
+      const objectTransforms = bindings.group0.find(slot => slot.role === 'triangleUv')?.data !== ptScene.triangleUv;
+      let dynamics: PathTraceDynamics | undefined;
+      const applyGeometry = (updates: ReadonlyArray<{ range: PathTraceTransformRange; source: DynamicInstanceSource }>): void => {
+        if (updates.length === 0) return;
+        const started = performance.now();
+        dynamics ??= new PathTraceDynamics(ptScene);
+        const upload = dynamics.update(updates);
+        performance.measure('pathtracing:dynamic-update', { start: started, end: performance.now(),
+          detail: { nodes: upload.nodes.reduce((sum, [first, end]) => sum + end - first, 0) } });
+        const write = (role: PtBufferRole, data: Float32Array, stride: number, [first, end]: [number, number]): void => {
+          const buffer = bufferFor(role);
+          if (buffer && end > first) device.queue.writeBuffer(buffer, first * stride * 4, data, first * stride, (end - first) * stride);
+        };
+        if (upload.triangles) write('triangles', ptScene.triangles, PT_TRIANGLE_FLOATS, upload.triangles);
+        if (upload.tangents) write('triangleTangent', ptScene.triangleTangent, 12, upload.tangents);
+        const runs = upload.nodes.length > 256 ? [[upload.nodes[0]![0], upload.nodes[upload.nodes.length - 1]![1]] as [number, number]] : upload.nodes;
+        for (const run of runs) write('nodes', ptScene.nodes, PT_NODE_FLOATS, run);
+        const uvBuffer = bufferFor('triangleUv');
+        if (objectTransforms && uvBuffer && ptScene.transformRanges) {
+          // Instance matrices follow the UVs and range indices (device-bindings.ts packUvAndTransforms).
+          for (const { range } of updates) {
+            const index = ptScene.transformRanges.indexOf(range);
+            const matrices = new Float32Array(32);
+            matrices.set(range.model);
+            matrices.set(inverse4(range.model), 16);
+            device.queue.writeBuffer(uvBuffer, (ptScene.triangleCount * 7 + index * 32) * 4, matrices);
+          }
+        }
+      };
+      const writeLights = (data: Float32Array): void => {
+        const buffer = bufferFor('analyticLights');
+        if (buffer && ptScene.analyticLights && data.length === ptScene.analyticLights.length) {
+          ptScene.analyticLights = data;
+          device.queue.writeBuffer(buffer, 0, data);
+        }
+      };
+      // Temporal accumulation: keep at most `history` samples per pixel so newer
+      // frames dominate after a change, instead of restarting from zero.
+      let ageModule: GPUComputePipeline | undefined;
+      const ageUniform = track(device.createBuffer({ size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST }));
+      const ageAccumulation = (history: number): void => {
+        ageModule ??= device.createComputePipeline({ layout: 'auto', compute: { entryPoint: 'main', module: device.createShaderModule({
+          label: 'Path tracing temporal history', code: /* wgsl */ `
+@group(0) @binding(0) var<storage, read_write> accum: array<vec4f>;
+@group(0) @binding(1) var<uniform> settings: vec4u;
+@compute @workgroup_size(64) fn main(@builtin(global_invocation_id) id: vec3u) {
+  if (id.x >= settings.x) { return; }
+  let count = accum[id.x * 2u].w;
+  let history = f32(settings.y);
+  if (count <= history) { return; }
+  accum[id.x * 2u].w = history;
+  accum[id.x * 2u + 1u].y *= history / count;
+}` }) } });
+        const pixels = ptWidth * ptHeight;
+        device.queue.writeBuffer(ageUniform, 0, new Uint32Array([pixels, Math.max(1, Math.floor(history)), 0, 0]));
+        const encoder = device.createCommandEncoder();
+        const pass = encoder.beginComputePass();
+        pass.setPipeline(ageModule);
+        pass.setBindGroup(0, device.createBindGroup({ layout: ageModule.getBindGroupLayout(0), entries: [
+          { binding: 0, resource: { buffer: accumBuffer } }, { binding: 1, resource: { buffer: ageUniform } },
+        ] }));
+        pass.dispatchWorkgroups(Math.ceil(pixels / 64));
+        pass.end();
+        device.queue.submit([encoder.finish()]);
+        stopping.reset();
+        invalidateDenoise();
+        invalidateConvergence();
       };
 
       const textureViews = new Map<number, GPUTextureView>();
@@ -2778,6 +3092,7 @@ export class InteractiveViewer {
       };
       return {
         scene: ptScene, uploadParameters, renderPathTrace, reportFrameTime, resetPathTrace, invalidateDenoise,
+        applyGeometry, writeLights, ageAccumulation,
         denoiserStatus: (): DenoiserStatus => this.#pathTracingDenoise ? denoiserStatus : { state: 'off' },
         pathTraceConvergence: (): PathTraceConvergence | undefined => convergenceStatus,
         pathTraceConvergenceError: (): string | undefined => convergenceError,
@@ -2975,6 +3290,7 @@ export class InteractiveViewer {
         pathTraceOwned = ptTrash;
         pathTracer = built;
         pathTraceScene = built.scene;
+        if (hiddenInstances.size > 0) built.applyGeometry(ptUpdatesFor(hiddenInstances));
         uploadPtParameters = built.uploadParameters;
         applyCamera(cameraViewProj, cameraEye, backgroundInvViewProj);
         uploadPtParameters?.();
@@ -3018,7 +3334,9 @@ export class InteractiveViewer {
       if (hadErrors && !disposed) this.#onShaderErrors?.([...rasterErrors]);
     };
 
-    const capturePathTrace = async (targetView: GPUTextureView, samples: number, check?: () => void): Promise<void> => {
+    const capturePathTrace = async (
+      targetView: GPUTextureView | undefined, samples: number, check?: () => void, options: { reset?: boolean } = {},
+    ): Promise<void> => {
       const build = startPathTracer();
       const revision = pathTraceBuildRevision;
       const checkCapture = (): void => {
@@ -3029,7 +3347,7 @@ export class InteractiveViewer {
       checkCapture();
       if (!pathTracer) throw pathTraceBuildError ?? new Error('Path tracer preparation failed.');
       const { renderPathTrace, resetPathTrace } = pathTracer;
-      resetPathTrace();
+      if (options.reset !== false) resetPathTrace();
       let remaining = samples * pathTraceTileCount(width, height);
       while (remaining > 0) {
         checkCapture();
@@ -3039,8 +3357,101 @@ export class InteractiveViewer {
         checkCapture();
         remaining -= tiles;
       }
-      await withGpuValidation(device, () => renderPathTrace(targetView, true, false, 0));
+      if (targetView) await withGpuValidation(device, () => renderPathTrace(targetView, true, false, 0));
       checkCapture();
+    };
+
+    const instanceIndex = new Map(resources.instances.map((instance, index) => [instance.id, index]));
+    const instanceOf = (id: string): InstanceResource => resources.instances[instanceIndex.get(id)!]!;
+    const ptUpdatesFor = (ids: ReadonlySet<string>) => (pathTraceScene?.transformRanges ?? [])
+      .filter(range => ids.has(range.instanceId))
+      .map(range => {
+        const geometry = resources.geometries.get(range.prototypeId ?? '');
+        const position = geometry?.streams.find(stream => stream.name === 'position');
+        if (!geometry || !position) throw new Error(`Dynamic geometry unavailable for '${range.instanceId}' (precompiled scene?).`);
+        const normal = geometry.streams.find(stream => stream.name === 'normal');
+        const tangent = geometry.streams.find(stream => stream.name === 'tangent');
+        const source: DynamicInstanceSource = {
+          model: instanceOf(range.instanceId).transform, indices: geometry.indices, positions: position.data,
+          ...(normal ? { normals: normal.data } : {}),
+          ...(tangent ? { tangents: { data: tangent.data, components: tangent.components } } : {}),
+          ...(hiddenInstances.has(range.instanceId) ? { hidden: true } : {}),
+        };
+        return { range, source };
+      });
+    const applyDynamics = (update: SceneDynamicUpdate): void => {
+      const started = performance.now();
+      const changed = new Set<string>();
+      for (const [id, model] of update.transforms ?? []) {
+        const index = instanceIndex.get(id);
+        if (index === undefined) continue;
+        const instance = resources.instances[index]!;
+        if (instance.transform.length === model.length && instance.transform.every((v, i) => v === model[i])) continue;
+        (resources.instances as InstanceResource[])[index] = { ...instance, transform: model };
+        changed.add(id);
+      }
+      if (update.hidden) {
+        for (const id of new Set([...hiddenInstances, ...update.hidden])) {
+          if (hiddenInstances.has(id) !== update.hidden.has(id)) changed.add(id);
+        }
+        hiddenInstances.clear();
+        for (const id of update.hidden) hiddenInstances.add(id);
+      }
+      for (const [prototypeId, deformed] of update.geometry ?? []) {
+        const geometry = resources.geometries.get(prototypeId);
+        if (!geometry || deformed.positions.length !== geometry.vertexCount * 3) continue;
+        (geometry as { streams: GeometryResource['streams'] }).streams = geometry.streams.map(stream =>
+          stream.name === 'position' ? { ...stream, data: deformed.positions }
+            : stream.name === 'normal' ? { ...stream, data: deformed.normals } : stream);
+        raster?.updateGeometry(prototypeId, deformed.positions, deformed.normals);
+        for (const instance of resources.instances) if (instance.prototypeId === prototypeId) changed.add(instance.id);
+      }
+      for (const draw of frame.draws) {
+        if (changed.has(draw.instanceId)) (draw as { model: Mat4 }).model = instanceOf(draw.instanceId).transform;
+      }
+      for (const { buffer, draw } of frameUniforms) {
+        if (!changed.has(draw.instanceId)) continue;
+        device.queue.writeBuffer(buffer, 0, new Float32Array(draw.model));
+        if (draw.needsInverse) device.queue.writeBuffer(buffer, 92 * 4, new Float32Array(inverse4(draw.model, true)));
+      }
+      let lightsChanged = false;
+      if (update.lights && JSON.stringify(update.lights) !== JSON.stringify(currentLights)) {
+        const emitters = (lights: readonly SceneLight[]) => lights.filter(light => light.type !== 'dome').length;
+        if (emitters(update.lights) !== emitters(currentLights)) throw new Error('Adding or removing lights requires reloading the scene.');
+        currentLights = update.lights;
+        frame.light = directionalLightFrom(update.lights);
+        if (frame.analyticLights) {
+          frame.analyticLights = packAnalyticLights(update.lights);
+          raster?.updateLights(frame.analyticLights!);
+        }
+        const light = new Float32Array([...frame.light.direction, 0, ...frame.light.color, frame.light.intensity]);
+        for (const { buffer } of frameUniforms) device.queue.writeBuffer(buffer, 36 * 4, light);
+        if (pathTraceScene) {
+          pathTraceScene.light = frame.light;
+          if (pathTraceScene.analyticLights) pathTracer?.writeLights(packAnalyticLights(update.lights));
+        }
+        applyCamera(cameraViewProj, cameraEye, backgroundInvViewProj);
+        lightsChanged = true;
+      }
+      let triangles = 0;
+      if (changed.size > 0 && pathTracer) {
+        const updates = ptUpdatesFor(changed);
+        triangles = updates.reduce((sum, { range }) => sum + range.triangleCount, 0);
+        pathTracer.applyGeometry(updates);
+      }
+      const sceneChanged = changed.size > 0 || lightsChanged;
+      if (!sceneChanged && !update.cameraChanged) return;
+      if (sceneChanged) {
+        performance.measure('viewer:dynamic-update', { start: started, end: performance.now(),
+          detail: { instances: changed.size, triangles, lights: lightsChanged } });
+        if (disneyState !== 'idle') invalidateDisneyTracer();
+      }
+      if (pathTracer && !update.keepAccumulation) {
+        if (this.#pathTracingTemporalHistory > 0) pathTracer.ageAccumulation(this.#pathTracingTemporalHistory);
+        else pathTracer.resetPathTrace();
+      }
+      this.#rasterDirty = true;
+      this.#ptDisplayDirty = true;
     };
 
     const applyCamera = (viewProj: readonly number[], eye: Vec3, backgroundInverse: readonly number[]): void => {
@@ -3165,6 +3576,7 @@ export class InteractiveViewer {
         }
       },
       capturePathTrace,
+      applyDynamics,
       renderDisney,
       reportFrameTime: (milliseconds) => pathTracer?.reportFrameTime(milliseconds),
       invalidateDenoise: () => pathTracer?.invalidateDenoise(),

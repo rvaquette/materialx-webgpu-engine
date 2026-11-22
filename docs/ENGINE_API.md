@@ -26,7 +26,21 @@ En plus des signatures, le contrat comprend les comportements suivants :
   rapport à `document.baseURI` ;
 - `capture()` renvoie des pixels RGBA8 après tonemapping, de haut en bas, sans
   octets de remplissage. En path tracing, chaque capture repart de zéro et
-  calcule exactement le nombre d'échantillons demandé ;
+  calcule exactement le nombre d'échantillons demandé ; avec `shutter`, ces
+  échantillons sont répartis sur `steps` sous-images (16 par défaut) à des
+  instants tirés dans des strates de l'intervalle, puis le temps courant est
+  rétabli ;
+- `setTime()`, `setTransform()`, `setVisibility()`, `setLight()`,
+  `setCamera()` et `setMaterialParameters()` (pour les valeurs envoyées en
+  uniformes) modifient la scène chargée sans la recharger. Les transformations,
+  visibilités et lumières modifiées restent prioritaires sur l'animation ; les
+  appeler sans valeur rétablit celles de la scène. Une caméra animée remplace
+  celle de `setCamera()` à son prochain changement. `setVariant()` recompose et recharge la scène
+  en conservant caméra, temps et modifications ; comme `loadUsd()`, il bloque
+  les autres opérations ;
+- après un changement de scène, le path tracing interactif repart de zéro, ou
+  garde au plus `temporalHistory` échantillons par pixel si cette option de
+  `render()` est non nulle ;
 - `render()` applique une configuration sans attendre d'image ni la convergence ;
 - les fichiers d'exécution MaterialX/OpenUSD ne sont pas inclus dans le paquet ;
   l'hôte les sert et peut indiquer leurs URL avec `runtimeAssets`.
@@ -123,6 +137,17 @@ l'exécutable). Elle rend la scène avec ses matériaux USD, puis avec chaque
 `<scène>-original.png` et `<scène>-<matériau>.png`.
 
 ## Journal
+
+### 0.1.1
+
+- Scènes dynamiques : `timeline`, `time`, `setTime`, `setTransform`,
+  `setVisibility`, `lights`, `setLight`, `setCamera`, `variantSets`,
+  `setVariant`, `materialParameters` et `setMaterialParameters`.
+- Options `shutter` de `capture()` (motion blur) et `temporalHistory` de
+  `render()` (accumulation temporelle).
+- Nouveaux types `EngineShutter`, `EngineTimeline`, `EngineLight`,
+  `EngineLightChanges`, `EngineCamera`, `EngineVariantSet` et
+  `EngineMaterialParameter`.
 
 ### 0.1.0
 

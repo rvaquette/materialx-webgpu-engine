@@ -2,7 +2,7 @@ import { openIndexedDbStore, type KeyValueStore } from '../compiler/cache.ts';
 import type { Bvh } from './bvh.ts';
 import type { PreparedMesh } from './prepare.ts';
 
-const CACHE_VERSION = 3;
+const CACHE_VERSION = 4;
 const DATABASE_NAME = 'materialx-webgpu-engine';
 const STORE_NAME = 'prepared-geometry';
 const CACHE_PREFIX = 'geometry:v1:';

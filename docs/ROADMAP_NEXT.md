@@ -7,26 +7,20 @@ prioriser la transformation de ce socle technique en outil de rendu complet,
 mesurable, réutilisable et extensible.
 
 Les priorités 1 (rendu progressif), 2 (API de bibliothèque), 3 (éditeur de
-matériaux MaterialX), 3bis (scripting) et 4 (accélération du path tracer) sont
-traitées ; leur historique est dans [ROADMAP_DONE.md](ROADMAP_DONE.md). Il en
+matériaux MaterialX), 3bis (scripting), 4 (accélération du path tracer) et 5
+(scènes dynamiques) sont traitées ; leur historique est dans [ROADMAP_DONE.md](ROADMAP_DONE.md). Il en
 reste les travaux suivants.
 
 ## Reliquats des priorités traitées
 
-## Priorité 5 : scènes dynamiques
+Scènes dynamiques (priorité 5) :
 
-Le moteur est actuellement orienté vers les scènes statiques. La dynamique peut
-être introduite par étapes :
-
-1. transformations d'instances et de caméras modifiables sans rechargement ;
-2. lumières, visibilité et paramètres de matériaux animés ;
-3. refit incrémental du BVH ;
-4. variants et pistes temporelles USD ;
-5. géométrie déformable ;
-6. motion blur Monte Carlo et accumulation temporelle.
-
-**Critère d'aboutissement :** une animation simple peut changer les transforms,
-la caméra, les lumières et les matériaux en conservant une interaction fluide.
+- relier les nœuds MaterialX `time` et `frame` et les entrées de matériaux USD
+  échantillonnées dans le temps à l'horloge de la scène ;
+- reconstruire le BVH quand le refit l'a trop dégradé ;
+- mises à jour incrémentales pour le backend Disney et la passe de volumes
+  raster ;
+- déformation des maillages subdivisés et changements de topologie.
 
 ## Priorité 6 : volumes et effets avancés
 
@@ -66,6 +60,5 @@ et non convertis silencieusement en rendu incomplet.
 
 ## Ordre recommandé
 
-1. Dynamisme des scènes.
-2. Volumes et effets avancés.
-3. Portabilité et exploitation continue.
+1. Volumes et effets avancés.
+2. Portabilité et exploitation continue.

@@ -544,6 +544,36 @@ path tracer's importance-sampling PDF. This prevents bright HDR texels above
 the luminance CDF remain in original radiance units. Image tests reject
 non-finite path-tracing accumulation rather than saving a misleading black PNG.
 
+## Animation, time samples and variants
+
+The USDA importer keeps `.timeSamples` on attributes and xformOps, the stage
+`startTimeCode`, `endTimeCode` and `timeCodesPerSecond`, and `variantSet`
+bodies. Variant opinions are weaker than the prim's local opinions. The
+selection comes, by decreasing strength, from the `variantSelections` load
+option, from a selection authored in a stronger layer, then from the prim's
+`variants` metadata. Binary crate layers are flattened by OpenUSD before import:
+their time samples are kept and their variant sets are resolved to the authored
+selection.
+
+`src/scene/time.ts` evaluates the composed stage at a time code: linear
+interpolation between samples (spherical for quaternions), values held for
+discrete types (bool, int, token, string, asset), clamping outside the sampled
+range, and `None` blocking a sample. A scene loads at `startTimeCode`. The
+viewer then resolves, without reloading, time-sampled xformOps (objects, lights
+and cameras), `visibility` (inherited by descendants), light and camera
+attributes, and mesh `points`. The number of non-dome lights must stay
+constant. Deformed meshes keep their topology;
+their normals are recomputed as area-weighted smooth point normals. Changing a
+variant recomposes the stage and reloads it through the geometry, BVH and shader
+caches, keeping the camera, time and runtime overrides. Material inputs are not
+animated from USD: use `setMaterialParameters` on the engine, which updates
+uniform values without recompiling.
+
+The control scene `scenes/bench/animated.usda` animates a camera, a transform
+hierarchy, a deforming grid, visibility and a moving light, and has a
+`finish` variant set. The viewer UI shows its timeline, playback, the
+path-tracing temporal history and the variant selectors under **Animation**.
+
 Evidence-based comparison of USD import strategies for the target scene, focused
 on the six blocking criteria: **sublayers, references, inherits, payloads,
 bindings, and `.mtlx` references**. Conclusion: no off-the-shelf JS loader covers

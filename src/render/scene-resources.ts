@@ -91,6 +91,8 @@ export interface GeometryResource {
   subsets: readonly PreparedSubset[];
   subdivision: SubdivisionPlan;
   displacement: DisplacementPlan;
+  /** Source USD point of each vertex, for time-sampled point deformation. */
+  sourcePoints?: Uint32Array;
 }
 
 export interface MaterialDisplacement {
@@ -266,6 +268,7 @@ export function buildGeometry(prototypeId: string, primPath: string, mesh: Prepa
     subsets: mesh.subsets,
     subdivision: mesh.subdivision,
     displacement: mesh.displacement,
+    ...(mesh.sourcePoints ? { sourcePoints: mesh.sourcePoints } : {}),
   };
 }
 

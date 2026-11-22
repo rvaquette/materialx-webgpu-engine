@@ -10,12 +10,22 @@ export type PrimSpecifier = 'def' | 'over' | 'class';
 
 export type AttributeValue = number | boolean | string | readonly number[] | readonly string[];
 
+/** One authored time sample; `null` is a USD `None` (blocked) sample. */
+export interface TimeSample {
+  time: number;
+  value: AttributeValue | null;
+}
+
 export interface StageInfo {
   defaultPrim?: string;
   upAxis?: string;
   metersPerUnit?: number;
   /** Resolved subLayer URIs in strength order (strongest first). */
   subLayers: readonly string[];
+  startTimeCode?: number;
+  endTimeCode?: number;
+  timeCodesPerSecond?: number;
+  framesPerSecond?: number;
 }
 
 export interface PrimReference {
@@ -33,6 +43,8 @@ export interface PrimAttribute {
   interpolation?: string;
   /** Authoring layer for engine geometry asset paths (before USD composition). */
   sourceLayer?: string;
+  /** Authored time samples in increasing time order (scene/time.ts evaluates them). */
+  timeSamples?: readonly TimeSample[];
 }
 
 export interface PrimRelationship {
@@ -47,6 +59,7 @@ export interface XformOp {
   value?: AttributeValue;
   /** True for `!invert!` entries in xformOpOrder. */
   invert: boolean;
+  timeSamples?: readonly TimeSample[];
 }
 
 export type BindingStrength = 'weakerThanDescendants' | 'strongerThanDescendants';
@@ -98,6 +111,13 @@ export interface ScenePrim {
   children: readonly string[];
   materialBinding?: MaterialBinding;
   mesh?: MeshInfo;
+  /** Variant sets authored on this prim, with their variants and the composed selection. */
+  variantSets?: ReadonlyMap<string, VariantSetInfo>;
+}
+
+export interface VariantSetInfo {
+  variants: readonly string[];
+  selection?: string;
 }
 
 export interface SceneAsset {

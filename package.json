@@ -1,6 +1,6 @@
 {
   "name": "materialx-webgpu-engine",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "type": "module",
   "description": "WebGPU rendering engine for OpenUSD scenes with a TypeScript MaterialX compiler.",

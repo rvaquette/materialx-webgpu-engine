@@ -53,6 +53,7 @@ import type { OpenUsdModule } from '../usd/crate.ts';
 import { FloatType } from 'three';
 import { applySceneDisplacement } from './displacement.ts';
 import { editableSceneMaterials, uniformSceneMaterials } from './material-parameters.ts';
+import { evaluateSceneAt, sceneTimeline } from '../scene/time.ts';
 import type { CompiledSceneRuntime } from '../scene/compiled-scene.ts';
 import type { RuntimeAssetUrls } from '../assets/runtime.ts';
 
@@ -421,6 +422,8 @@ export interface LoadedUsdScene {
   mtlx: MtlxSceneContext;
   /** Dome environment when the stage declares a textured UsdLuxDomeLight. */
   environment?: LoadedEnvironment;
+  /** Composed stage with its time samples, when animated; `scene` is resolved at `time`. */
+  animation?: { source: SceneAsset; time: number };
 }
 
 /** Fetch + import a USD stage and compile its materials into GPU-neutral resources. */
@@ -452,6 +455,10 @@ export interface SceneLoadOptions {
   parameterMode?: 'literal' | 'uniform';
   /** Explicit root for scene-authored MaterialX texture paths, not runtime overrides. */
   textureRoot?: string;
+  /** Variant selections by authored prim path, stronger than the stage's own selections. */
+  variantSelections?: ReadonlyMap<string, ReadonlyMap<string, string>>;
+  /** Time code at which an animated stage is loaded (default: its start time code). */
+  time?: number;
   loadCrateModule?: () => Promise<OpenUsdModule>;
   /** In-memory scene import, sharing the USD material compiler and GPU resource path. */
   imported?: {
@@ -488,12 +495,16 @@ export async function loadUsdScene(
     } },
     loadCrateModule: options.loadCrateModule ?? (() => loadBrowserOpenUsd(options.runtimeAssets?.openUsd)),
     sink: sceneSink,
+    ...(options.variantSelections ? { variantSelections: options.variantSelections } : {}),
   });
   if (failedComposition) {
     if (compositionCause instanceof Error) throw compositionCause;
     throw new Error('USD composition failed. See scene diagnostics.');
   }
-  const scene = applyObjectMaterialOverrides(composed, overrides);
+  const source = applyObjectMaterialOverrides(composed, overrides);
+  const timeline = sceneTimeline(source);
+  const time = options.time ?? timeline.start;
+  const scene = timeline.animated ? evaluateSceneAt(source, time) : source;
   const composedAt = performance.now();
   performance.measure('usd:composition', { start: started, end: composedAt, detail: { entry, prims: scene.prims.size } });
   const lights = importLights(scene, { sink });
@@ -522,7 +533,10 @@ export async function loadUsdScene(
       triangles: [...resources.geometries.values()].reduce((sum, mesh) => sum + mesh.indices.length / 3, 0),
       lights: lights.length, cameras: cameras.length, environment: environment !== undefined,
     } });
-    return { entry, scene, resources, lights, cameras, mtlx, ...(parameterResources ? { parameterResources } : {}), ...(environment ? { environment } : {}) };
+    return {
+      entry, scene, resources, lights, cameras, mtlx, ...(parameterResources ? { parameterResources } : {}), ...(environment ? { environment } : {}),
+      ...(timeline.animated ? { animation: { source, time } } : {}),
+    };
   } catch (error) {
     mtlx.documents.delete();
     throw error;

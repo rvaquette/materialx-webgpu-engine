@@ -284,6 +284,35 @@ async function main(): Promise<void> {
     parameterEditor.refresh();
   }
 
+  let playbackFrame = 0;
+  function refreshAnimation(): void {
+    cancelAnimationFrame(playbackFrame);
+    const timeline = viewer.timeline;
+    const variantSets = viewer.variantSets;
+    state.animation = timeline?.animated || variantSets.length ? {
+      ...(timeline?.animated ? { timeline: { start: timeline.start, end: timeline.end, timeCodesPerSecond: timeline.timeCodesPerSecond } } : {}),
+      time: viewer.time, playing: false, temporalHistory: viewer.pathTracingTemporalHistory, variantSets,
+    } : undefined;
+  }
+
+  function play(previous: number, target: InteractiveViewer): void {
+    playbackFrame = requestAnimationFrame(now => {
+      const animation = state.animation;
+      const timeline = animation?.timeline;
+      if (!animation?.playing || !timeline || viewer !== target || deviceLost) return;
+      if (!operationBusy) {
+        let time = animation.time + Math.min(0.25, (now - previous) / 1000) * timeline.timeCodesPerSecond;
+        if (time > timeline.end) time = timeline.start;
+        animation.time = time;
+        void target.setTime(time).catch((error: unknown) => {
+          animation.playing = false;
+          setStatus(`Echec de l'animation : ${error instanceof Error ? error.message : String(error)}`);
+        });
+      }
+      play(now, target);
+    });
+  }
+
   function refreshObjects(): void {
     state.objects = viewer.objects;
     if (!state.objects.some(object => object.path === state.objectPath)) state.objectPath = state.objects[0]?.path ?? '';
@@ -335,6 +364,7 @@ async function main(): Promise<void> {
       state.entry = entry;
       state.pathTracingDepth = viewer.pathTracingDepth;
       refreshObjects();
+      refreshAnimation();
       if (localScene && (imported || localScene.entry !== entry)) {
         state.scenes = state.scenes.filter(scene => scene.entry !== localScene?.entry || !scene.label.startsWith('Local - '));
         localScene.dispose();
@@ -443,6 +473,30 @@ async function main(): Promise<void> {
     pause: () => viewer.setPathTracingPaused(!viewer.pathTracingPaused),
     openFiles: folder => (folder ? localFolder : localFiles)?.click(),
     object: path => { state.objectPath = path; refreshMaterialSelection(); },
+    time: time => {
+      if (!state.animation) return;
+      state.animation.time = time;
+      void viewer.setTime(time).catch((error: unknown) => setStatus(`Echec de l'animation : ${error instanceof Error ? error.message : String(error)}`));
+    },
+    play: playing => {
+      if (!state.animation?.timeline) return;
+      state.animation.playing = playing;
+      cancelAnimationFrame(playbackFrame);
+      if (playing) play(performance.now(), viewer);
+    },
+    temporalHistory: samples => {
+      viewer.setPathTracingTemporalHistory(samples);
+      if (state.animation) state.animation.temporalHistory = samples;
+    },
+    variant: (path, set, variant) => { void operation('Changement de variante...', async () => {
+      const playing = state.animation?.playing ?? false;
+      try { await viewer.setVariant(path, set, variant); }
+      finally {
+        refreshObjects();
+        refreshAnimation();
+        if (playing) actions.play?.(true);
+      }
+    }); },
     material: path => { void operation('Application du matériau...', async () => {
       const compiled = MATERIAL_CATALOG.find(item => item.path === path)?.compiled;
       try {

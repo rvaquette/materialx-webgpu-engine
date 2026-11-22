@@ -13,6 +13,10 @@ const viewer = vi.hoisted(() => ({
   renderPathTraceTo: vi.fn(async (_view: unknown, _samples: number) => {}),
   objects: [{ path: '/World/Triangle', material: 'Matte' }],
   isCompiledScene: false,
+  timeline: { animated: true, start: 0, end: 48, timeCodesPerSecond: 24 },
+  setTime: vi.fn(async (_time: number) => {}),
+  setVariant: vi.fn(async (_path: string, _set: string, _variant: string) => {}),
+  setPathTracingTemporalHistory: vi.fn(),
   pathTracingLimits: { targetRelativeError: 0.05, stopOnConvergence: false, timeBudgetSeconds: 0 },
 }));
 
@@ -79,6 +83,8 @@ describe('MaterialXEngine', () => {
     await expect(engine.capture({ backend: 'pathtracing', samples: 1.5 })).rejects.toThrow('samples must be an integer');
     await engine.capture({ backend: 'pathtracing', samples: 7 });
     expect(viewer.renderPathTraceTo).toHaveBeenCalledExactlyOnceWith(view, 7);
+    await engine.capture({ backend: 'pathtracing', samples: 4, shutter: { open: 0, close: 1 } });
+    expect(viewer.renderPathTraceTo).toHaveBeenLastCalledWith(view, 4, { open: 0, close: 1 });
     expect(viewer.renderRasterTo).toHaveBeenCalledTimes(2);
     engine.dispose();
     expect(device.destroy).not.toHaveBeenCalled();
@@ -194,6 +200,27 @@ describe('MaterialXEngine', () => {
     reject(new Error('Invalid MaterialX XML.'));
     await expect(pending).rejects.toThrow('Invalid MaterialX XML.');
     await engine.setMaterial('/World/Triangle');
+    engine.dispose();
+  });
+
+  it('animates a loaded scene and locks other operations during a variant reload', async () => {
+    const { canvas, device } = fixture();
+    const engine = await MaterialXEngine.create(canvas, { device });
+    expect(engine.timeline).toBeUndefined();
+    await expect(engine.setTime(12)).rejects.toThrow('Load a USD scene');
+    await engine.loadUsd('scene.usda');
+    expect(engine.timeline).toEqual({ start: 0, end: 48, timeCodesPerSecond: 24 });
+    await engine.setTime(12);
+    expect(viewer.setTime).toHaveBeenCalledWith(12);
+    await engine.render({ backend: 'pathtracing', temporalHistory: 8 });
+    expect(viewer.setPathTracingTemporalHistory).toHaveBeenCalledWith(8);
+    let finish!: () => void;
+    viewer.setVariant.mockImplementationOnce(() => new Promise<void>(resolve => { finish = resolve; }));
+    const pending = engine.setVariant('/World/Rig', 'finish', 'metal');
+    await expect(engine.setTime(0)).rejects.toThrow('in progress');
+    finish();
+    await pending;
+    expect(viewer.setVariant).toHaveBeenCalledWith('/World/Rig', 'finish', 'metal');
     engine.dispose();
   });
 });

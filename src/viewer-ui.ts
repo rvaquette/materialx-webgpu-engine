@@ -27,6 +27,16 @@ export interface ViewerUiState {
   materialFolderPath: string[];
   materialTree: MaterialFolder;
   materialPath: string;
+  /** Present when the scene has a time range or variant sets. */
+  animation?: ViewerUiAnimation | undefined;
+}
+
+export interface ViewerUiAnimation {
+  timeline?: { start: number; end: number; timeCodesPerSecond: number };
+  time: number;
+  playing: boolean;
+  temporalHistory: number;
+  variantSets: ReadonlyArray<{ path: string; set: string; variants: readonly string[]; selection?: string }>;
 }
 
 export interface ViewerUiActions {
@@ -50,6 +60,10 @@ export interface ViewerUiActions {
   openFiles: (folder: boolean) => void;
   object: (path: string) => void;
   material: (path: string) => void;
+  time?: (time: number) => void;
+  play?: (playing: boolean) => void;
+  temporalHistory?: (samples: number) => void;
+  variant?: (path: string, set: string, variant: string) => void;
 }
 
 function combo(label: string, value: string, options: readonly { label: string; value: string }[], change: (value: string) => void, largePopup = false): void {
@@ -319,6 +333,30 @@ export async function startViewerUi(
             }
             ImGui.Text(`Légende : . < ${(targetValuePercent * 0.25).toFixed(2)}%, : < ${(targetValuePercent * 0.5).toFixed(2)}%, `
               + `+ < ${targetPercent}, # >= ${targetPercent}, ? échantillons insuffisants`);
+          }
+        }
+        const animation = state.animation;
+        if (animation && ImGui.CollapsingHeader('Animation')) {
+          const timeline = animation.timeline;
+          if (timeline) {
+            if (ImGui.Button(animation.playing ? 'Arrêter' : 'Lire')) actions.play?.(!animation.playing);
+            ImGui.SameLine();
+            ImGui.Text(`${timeline.timeCodesPerSecond} images/s`);
+            ImGui.SetNextItemWidth(-1);
+            const time: [number] = [animation.time];
+            if (ImGui.SliderFloat('##time', time, timeline.start, timeline.end, `Temps : %.1f / ${timeline.end}`)) actions.time?.(time[0]);
+            combo('##temporal-history', String(animation.temporalHistory), [
+              { label: 'Path tracing : redémarrer à chaque image', value: '0' },
+              ...[4, 16, 64].map(samples => ({ label: `Path tracing : garder ${samples} spp d'historique`, value: String(samples) })),
+            ], value => actions.temporalHistory?.(Number(value)));
+            ImGui.SetItemTooltip('Accumulation temporelle : réutilise une partie des échantillons après un changement (traînées possibles).');
+          }
+          for (const variantSet of animation.variantSets) {
+            ImGui.Text(`${variantSet.path.split('/').at(-1)} : ${variantSet.set}`);
+            combo(`##variant-${variantSet.path}-${variantSet.set}`, variantSet.selection ?? '', [
+              ...(variantSet.selection === undefined ? [{ label: 'Aucune variante', value: '' }] : []),
+              ...variantSet.variants.map(variant => ({ label: variant, value: variant })),
+            ], value => { if (value && value !== variantSet.selection) actions.variant?.(variantSet.path, variantSet.set, value); });
           }
         }
         if (ImGui.CollapsingHeader('Materiaux')) {
