@@ -88,10 +88,10 @@ export function compareRuns(baseline, current) {
 const fmt = (value, digits = 1) => value === undefined || value === null ? '—' : Number(value).toFixed(digits);
 
 function table(run, comparison) {
-  const lines = ['| Scène | Charg. ms | 1er raster ms | 1er PT ms | Capture ms | RMSE | Efficacité | Biais |', '|---|---:|---:|---:|---:|---:|---:|---:|'];
+  const lines = ['| Scène | Charg. ms | 1er raster ms | 1er PT ms | Capture ms | RMSE | RMSE 8×8 | Efficacité | Biais |', '|---|---:|---:|---:|---:|---:|---:|---:|---:|'];
   for (const s of run.scenes) {
-    if (s.error) { lines.push(`| ${basename(s.scene)} | erreur : ${s.error} |||||||`); continue; }
-    lines.push(`| ${basename(s.scene)} | ${fmt(s.loadMs, 0)} | ${fmt(s.firstRasterMs, 0)} | ${fmt(s.firstPathTraceMs, 0)} | ${fmt(s.captureMs)} | ${fmt(s.rmse, 4)} | ${fmt(s.efficiency, 2)} | ${fmt(s.bias, 4)} |`);
+    if (s.error) { lines.push(`| ${basename(s.scene)} | erreur : ${s.error} ||||||||`); continue; }
+    lines.push(`| ${basename(s.scene)} | ${fmt(s.loadMs, 0)} | ${fmt(s.firstRasterMs, 0)} | ${fmt(s.firstPathTraceMs, 0)} | ${fmt(s.captureMs)} | ${fmt(s.rmse, 4)} | ${fmt(s.blockRmse, 4)} | ${fmt(s.efficiency, 2)} | ${fmt(s.bias, 4)} |`);
   }
   if (comparison?.length) {
     lines.push('', '| Scène | Charg. × | 1er PT × | Capture × | RMSE ratio | Gain d’efficacité | Biais ≤ tolérance |', '|---|---:|---:|---:|---:|---:|---|');
@@ -149,12 +149,12 @@ async function main() {
         if (needsReference) await writeFile(referenceFile, JSON.stringify(result.reference));
         const reference = decode(JSON.parse(await readFile(referenceFile, 'utf8')));
         const captureMs = median(result.captureMs);
-        const { rmse } = imageError(decode(result.image), reference);
+        const { rmse, blockRmse } = imageError(decode(result.image), reference);
         const bias = values['bias-check'] && !needsReference ? imageError(decode(result.reference), reference).blockRmse : undefined;
         run.scenes.push({
           scene, loadMs: result.loadMs, firstRasterMs: result.firstRasterMs, firstPathTraceMs: result.firstPathTraceMs,
           reloadToPathTraceMs: result.reloadToPathTraceMs, reloadPhases: result.reloadPhases, gpu: result.gpu,
-          captureMs, captureMsAll: result.captureMs, rmse, efficiency: efficiency(rmse, captureMs),
+          captureMs, captureMsAll: result.captureMs, rmse, blockRmse, efficiency: efficiency(rmse, captureMs),
           ...(bias !== undefined ? { bias } : {}), objects: result.objects, jsHeapBytes: result.jsHeapBytes,
           phases: result.phases, shaders: result.shaders, diagnostics: result.diagnostics,
         });
