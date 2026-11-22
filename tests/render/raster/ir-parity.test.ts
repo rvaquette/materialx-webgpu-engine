@@ -119,7 +119,8 @@ describe('raster-on-IR vs path tracer direct-term parity (T058f1)', () => {
     const pt = pathTraceComputeWgsl();
     // Same delta-light next-event call shape in both shaders.
     expect(raster).toContain('let ev = mx_closure_eval(c, wo, wiLight);');
-    expect(pt).toContain('let ev = mx_closure_eval(c, wo, wiLight);');
+    expect(pt).toContain('neeLocal = transpose(frame) * toLight;');
+    expect(pt).toContain('let parts = mx_closure_eval_parts(c, wo, neeLocal);');
     // Both transform into the Duff orthonormal frame to get a local wo.
     expect(raster).toContain('let wo = transpose(sframe) * vary.viewDir;');
     expect(pt).toContain('let wo = transpose(frame) * (-rd);');

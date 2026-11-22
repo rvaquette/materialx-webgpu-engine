@@ -30,6 +30,7 @@ import {
   type PtMaterialDispatch,
 } from './material-variant.ts';
 import { ANALYTIC_LIGHTS_WGSL } from './analytic-lights.ts';
+import { environmentSamplingWgsl } from '../../assets/environment-cdf.ts';
 import { pruneWgslFunctions } from '../../compiler/wgsl-reachability.ts';
 import { MAX_SSS_WALK_EVENTS, sssCoefficientsWgsl } from './subsurface.ts';
 import { pathTraceAdaptiveSamplingWgsl, PT_CONVERGENCE_TARGET_RELATIVE_ERROR } from './convergence.ts';
@@ -37,6 +38,8 @@ import { pathTraceViewIndex, type PathTraceView } from './display.ts';
 
 /** Compute workgroup tile edge (threads per dimension). */
 export const PT_WORKGROUP_SIZE = 8;
+/** Reservoir candidates per light next-event estimate (capped by the light count). */
+export const PT_LIGHT_CANDIDATES = 8;
 /** Entry point name of the generated compute shader. */
 export const PT_COMPUTE_ENTRY = 'mx_path_trace';
 /** Floats in the path-trace uniform (PT_UNIFORM_SIZE / 4). Slots 0..39 hold the
@@ -211,45 +214,11 @@ fn env_map_uv_to_dir(uv : vec2<f32>) -> vec3<f32> {
 fn env_map_luminance(c : vec3<f32>) -> f32 {
   return dot(c, vec3<f32>(0.212671, 0.715160, 0.072169));
 }
-fn env_cdf_at(x : i32, y : i32) -> f32 {
-  return envCdf[y * i32(U.envExtra.x) + x];
-}
-// Two-stage binary search over the single monotonic flat CDF (GLSL-PathTracer-JS
-// style): first the row-end checkpoints (column W-1) for the row, then within it.
-fn env_map_binary_search(value : f32) -> vec2<f32> {
-  let resX = i32(U.envExtra.x);
-  let resY = i32(U.envExtra.y);
-  var lower = 0;
-  var upper = resY - 1;
-  loop {
-    if (lower >= upper) { break; }
-    let mid = (lower + upper) / 2;
-    if (value < env_cdf_at(resX - 1, mid)) { upper = mid; } else { lower = mid + 1; }
-  }
-  let y = clamp(lower, 0, resY - 1);
-  lower = 0;
-  upper = resX - 1;
-  loop {
-    if (lower >= upper) { break; }
-    let mid = (lower + upper) / 2;
-    if (value < env_cdf_at(mid, y)) { upper = mid; } else { lower = mid + 1; }
-  }
-  let x = clamp(lower, 0, resX - 1);
-  return vec2<f32>(f32(x), f32(y)) / vec2<f32>(U.envExtra.x, U.envExtra.y);
-}
-// Solid-angle PDF of an env sample at uv with pixel radiance 'color'.
-fn env_map_pdf_from_uv(uv : vec2<f32>, color : vec3<f32>) -> f32 {
-  let theta = uv.y * PI;
-  let s = sin(theta);
-  if (s <= 0.0) { return 0.0; }
-  let p = env_map_luminance(color) / max(U.envExtra.z, 1.0e-6);
-  return (p * U.envExtra.x * U.envExtra.y) / (2.0 * PI * PI * s);
-}
+${environmentSamplingWgsl({ cdf: 'envCdf', width: 'U.envExtra.x', height: 'U.envExtra.y', pi: 'PI', prefix: 'env_map' })}
 // Solid-angle PDF the env-importance strategy would assign to direction d (for MIS).
 fn sky_pdf(d : vec3<f32>) -> f32 {
   let uv = env_dir_to_uv(normalize(d));
-  let color = textureSampleLevel(envTex, envSampler, uv, 0.0).xyz * U.envTexture.x;
-  return env_map_pdf_from_uv(uv, color);
+  return env_map_pdf(uv, env_map_uv_probability(uv));
 }
 // Diffuse irradiance E(n) from the uploaded SH9 radiance coefficients (cosine-lobe
 // convolution A_l; basis matches projectIrradianceSH / evalIrradianceSH on the CPU).
@@ -282,10 +251,55 @@ fn pcg_hash(v : u32) -> u32 {
   return (word >> 22u) ^ word;
 }
 
+// Per-pixel Owen-scrambled, padded 2D Sobol sampling (Burley 2020, "Practical
+// Hash-based Owen Scrambling"): consecutive dimensions pair up into (0,2)-sequences
+// whose sample order is shuffled per pair, so each pixel's samples are stratified
+// over time in every dimension while staying independent across pixels and pairs.
+// The state argument is still advanced for callers that hash it.
+var<private> mx_sample_index: u32;
+var<private> mx_sample_dimension: u32;
+var<private> mx_pixel_seed: u32;
+fn mx_begin_sample(pixel: u32, index: u32) {
+  mx_pixel_seed = pcg_hash(pixel * 0x9e3779b9u + 0x85ebca6bu);
+  mx_sample_index = index;
+  mx_sample_dimension = 0u;
+}
+fn mx_nested_uniform_scramble(value: u32, seed: u32) -> u32 {
+  var x = reverseBits(value);
+  x += seed;
+  x ^= x * 0x6c50b47cu;
+  x ^= x * 0xb82f1e52u;
+  x ^= x * 0xc7afe638u;
+  x ^= x * 0x8d22f6e6u;
+  return reverseBits(x);
+}
+// Second Sobol dimension: its generator is Pascal's matrix mod 2, so by Lucas' theorem
+// output bit j is the parity of the index bits k that are supersets of j -- a GF(2)
+// superset transform in five masked steps, without a per-bit loop.
+fn mx_sobol_second(index: u32) -> u32 {
+  var f = index;
+  f ^= (f >> 1u) & 0x55555555u;
+  f ^= (f >> 2u) & 0x33333333u;
+  f ^= (f >> 4u) & 0x0f0f0f0fu;
+  f ^= (f >> 8u) & 0x00ff00ffu;
+  f ^= (f >> 16u) & 0x0000ffffu;
+  return reverseBits(f);
+}
 fn rng_next(state : ptr<function, u32>) -> f32 {
   *state = pcg_hash(*state);
-  // f32(u32) rounds values near 2^32 up to 1.0; keep the documented [0, 1) range.
-  return min(f32(*state) * (1.0 / 4294967296.0), 0.99999994);
+  let dimension = mx_sample_dimension;
+  mx_sample_dimension += 1u;
+  let pairSeed = pcg_hash(mx_pixel_seed ^ ((dimension >> 1u) * 0x632be5abu));
+  let index = mx_nested_uniform_scramble(mx_sample_index, pairSeed);
+  var value = select(mx_sobol_second(index), reverseBits(index), (dimension & 1u) == 0u);
+  value = mx_nested_uniform_scramble(value, pairSeed ^ (0x68bc21ebu * (1u + (dimension & 1u))));
+  // 24-bit mantissa: f32(u32) could round up to 1.0; keep the documented [0, 1) range.
+  return f32(value >> 8u) * (1.0 / 16777216.0);
+}
+// Independent (white) numbers for decisions that need no stratification (reservoir picks).
+fn rng_white(state : ptr<function, u32>) -> f32 {
+  *state = pcg_hash(*state);
+  return f32(*state >> 8u) * (1.0 / 16777216.0);
 }
 `;
 }
@@ -761,9 +775,14 @@ fn mx_spatial_base_attenuation(layers: LayeredClosure, outgoingCosine: f32, inco
   white.kind = MX_LOBE_SUBSURFACE; white.weight = 1.0; white.color = vec3f(1.0);
   base.lobes[0] = white;
   let outgoing = vec3f(sqrt(max(0.0, 1.0 - outgoingCosine * outgoingCosine)), 0.0, outgoingCosine);
-  let combined = mx_closure_eval(base, outgoing, incoming).value;
-  base.lobeCount = 0u;
-  let top = mx_closure_eval(base, outgoing, incoming).value;
+  // One evaluation site for both passes (with, then without the white base) keeps
+  // this inlined closure evaluation from being duplicated by the shader compiler.
+  var combined = vec3f(0.0);
+  var top = vec3f(0.0);
+  for (var evaluation = 0u; evaluation < 2u; evaluation++) {
+    let value = mx_closure_eval(base, outgoing, incoming).value;
+    if (evaluation == 0u) { combined = value; base.lobeCount = 0u; } else { top = value; }
+  }
   return max((combined - top) * PI, vec3f(0.0)) * interfaceTransmission;
 }
 ${texHelpers}
@@ -1079,98 +1098,172 @@ ${displayAovs ? `    let aovMode = u32(U.envTexture.w);
     // bounce as specular (environment seen directly, at full weight).
     let specular = mx_closure_is_specular(c);
 
-    // Next-event estimation for the distant (delta) light: a delta direction has
-    // no BSDF-sampling counterpart, so its MIS weight is 1 (no power heuristic).
-${analyticLights ? `    if (allowDirectLighting && !specular && mx_light_count() > 0u) {
-      let light = mx_sample_light(pos, vec3f(rng_next(state), rng_next(state), rng_next(state)));
-      if (light.pdf > 0.0) {
-        let origin = pos + light.direction * RAY_EPS;
-        let visibility = mx_visibility(origin, light.direction, light.distance - 2.0 * RAY_EPS);
-        if (visibility > 0.0) {
-          let wi = transpose(frame) * light.direction;
-          let ev = mx_closure_eval(c, wo, wi);
-          let weight = select(power_heuristic(1.0, light.pdf, 1.0, ev.pdf), 1.0, light.delta);
-          radiance += beta * ev.value * mx_spatial_base_attenuation(spatialLayers, spatialOutgoingCosine, wi)
-            * light.radiance * (abs(wi.z) * visibility * weight / light.pdf);
-        }
-      }
-    }` : `    if (allowDirectLighting && !specular && dot(lightRadiance, lightRadiance) > 0.0) {
-      let visibility = mx_alpha_visibility(pos + toLight * RAY_EPS, toLight);
-      if (visibility > 0.0) {
-        let wiLight = transpose(frame) * toLight;
-        let ev = mx_closure_eval(c, wo, wiLight);
-        let cosL = abs(dot(shadingNormal, toLight));
-        radiance = radiance + beta * ev.value * mx_spatial_base_attenuation(spatialLayers, spatialOutgoingCosine, wiLight)
-          * lightRadiance * (cosL * visibility);
-      }
-    }
-`}
-
-    // Diffuse illumination must test visibility too. Retain the separate SH/LTC
-    // integration only for the existing fuzz path.
-    if (allowDirectLighting && hasEnv && !specular) {
-${
-      environment
-        ? /* wgsl */ `      let shFuzz = c.hasFuzz != 0u && c.fuzz.weight > 0.0;
-      if (shFuzz) {
-        let diffE = mx_sh_irradiance(shadingNormal) * U.env.xyz * U.env.w;
-        radiance = radiance + beta * mx_closure_diffuse_albedo(c, wo) * (diffE / PI);
-      }
-      if (U.envExtra.w > 0.5) {
-        // Importance-sample the HDR by its luminance CDF (unbiased, low variance).
-        let uvS = env_map_binary_search(rng_next(state) * max(U.envExtra.z, 1.0e-6));
-        let wiW = normalize(env_map_uv_to_dir(uvS));
-        let wiLocal = transpose(frame) * wiW;
-        if (wiLocal.z > 0.0 || mx_closure_has_hair(c)) {
-          let colS = textureSampleLevel(envTex, envSampler, uvS, 0.0).xyz * U.envTexture.x;
-          let envPdf = env_map_pdf_from_uv(uvS, colS);
-          if (envPdf > 0.0) {
-            let visibility = mx_alpha_visibility(pos + wiW * RAY_EPS, wiW);
-            if (visibility > 0.0) {
-              var ev: MxBsdfEval;
-              if (shFuzz) { ev = mx_closure_specular_eval(c, wo, wiLocal); }
-              else { ev = mx_closure_eval(c, wo, wiLocal); }
-              let w = power_heuristic(1.0, envPdf, 1.0, ev.pdf);
-              radiance = radiance + beta * ev.value * mx_spatial_base_attenuation(spatialLayers, spatialOutgoingCosine, wiLocal)
-                * (colS * U.env.xyz * U.env.w) * (w * abs(wiLocal.z) * visibility / envPdf);
+    // Light and environment next-event estimation, then BSDF sampling. Each
+    // strategy only proposes a direction (and radiance/pdf); the shared
+    // visibility, BSDF evaluation and layering attenuation below are emitted once
+    // so the shader compiler does not inline them per strategy. Random numbers are
+    // drawn in the same order as separate blocks would. A delta light has no
+    // BSDF-sampling counterpart, so its MIS weight is 1.
+    var bs = MxBsdfSample(vec3f(0.0), vec3f(0.0), 0.0, false);
+    var bsAttenuation = vec3f(1.0);
+    var u = vec3f(0.0);
+    for (var strategy = 0u; strategy < 3u; strategy++) {
+      var neeValid = false;
+      var neeDirection = vec3f(0.0, 0.0, 1.0);
+      var neeLocal = vec3f(0.0, 0.0, 1.0);
+      var neeDistance = 1.0e30;
+      var neeRadiance = vec3f(0.0);
+      var neePdf = 1.0;
+      var neeCosine = 0.0;
+      var neeDelta = false;
+      var neeSpecularOnly = false;
+      var neeMisPdf = 1.0;
+      var neeBsdf = false;
+      var neeFromBase = true;
+      if (strategy == 0u) {
+${analyticLights ? `        if (allowDirectLighting && !specular && mx_light_count() > 0u) {
+          // Resampled importance sampling with a streaming reservoir: candidates follow
+          // the power-based selection, the unshadowed target adds distance, emitter
+          // orientation and the receiver cosine (floored to keep transmissive support),
+          // and one shadow ray is traced for the chosen candidate. MIS against BSDF
+          // sampling uses the candidate's source pdf, like emitter hits.
+          let candidates = min(mx_light_count(), ${PT_LIGHT_CANDIDATES}u);
+          var weightSum = 0.0;
+          var chosenTarget = 0.0;
+          var chosenPdf = 0.0;
+          var chosen: MxLightSample;
+          for (var candidate = 0u; candidate < candidates; candidate++) {
+            let lightU = vec3f(rng_next(state), rng_next(state), rng_next(state));
+            let index = mx_select_light(lightU.x);
+            let light = mx_sample_light_at(index, pos, lightU.yz);
+            let sourcePdf = light.pdf * mx_light_selection_pmf(index);
+            if (!(sourcePdf > 0.0) || sourcePdf > 3.0e38) { continue; }
+            let lightTarget = dot(light.radiance, vec3f(0.2126, 0.7152, 0.0722))
+              * (max(dot(shadingNormal, light.direction), 0.0) + 0.05);
+            let weight = lightTarget / sourcePdf;
+            if (!(weight > 0.0)) { continue; }
+            weightSum += weight;
+            if (rng_white(state) * weightSum < weight) {
+              chosen = light;
+              chosenTarget = lightTarget;
+              chosenPdf = sourcePdf;
             }
           }
+          if (chosenTarget > 0.0) {
+            neeValid = true;
+            neeDirection = chosen.direction;
+            neeLocal = transpose(frame) * chosen.direction;
+            neeDistance = chosen.distance - 2.0 * RAY_EPS;
+            neeRadiance = chosen.radiance;
+            neePdf = chosenTarget * f32(candidates) / weightSum;
+            neeMisPdf = chosenPdf;
+            neeCosine = abs(neeLocal.z);
+            neeDelta = chosen.delta;
+          }
+        }` : `        if (allowDirectLighting && !specular && dot(lightRadiance, lightRadiance) > 0.0) {
+          neeValid = true;
+          neeDirection = toLight;
+          neeLocal = transpose(frame) * toLight;
+          neeRadiance = lightRadiance;
+          neeCosine = abs(dot(shadingNormal, toLight));
+          neeDelta = true;
+        }`}
+      } else if (strategy == 2u) {
+        u = vec3<f32>(rng_next(state), rng_next(state), rng_next(state));
+        let pick = mx_closure_sample_pick(c, wo, u);
+        if (!pick.valid) { break; }
+        neeValid = true;
+        neeBsdf = true;
+        neeFromBase = pick.fromBase;
+        neeLocal = pick.wi;
+      } else if (allowDirectLighting && hasEnv && !specular) {
+        // Diffuse illumination must test visibility too. Retain the separate SH/LTC
+        // integration only for the existing fuzz path.
+${
+      environment
+        ? /* wgsl */ `        let shFuzz = c.hasFuzz != 0u && c.fuzz.weight > 0.0;
+        neeSpecularOnly = shFuzz;
+        if (shFuzz) {
+          let diffE = mx_sh_irradiance(shadingNormal) * U.env.xyz * U.env.w;
+          radiance = radiance + beta * mx_closure_diffuse_albedo(c, wo) * (diffE / PI);
         }
-      } else {
-        let eu = vec2<f32>(rng_next(state), rng_next(state));
+        if (U.envExtra.w > 0.5) {
+          // Importance-sample the HDR by its MIS-compensated luminance (environment-cdf.ts).
+          let sampled = env_map_sample_uv(vec2f(rng_next(state), rng_next(state)));
+          let uvS = sampled.xy;
+          let wiW = normalize(env_map_uv_to_dir(uvS));
+          let wiLocal = transpose(frame) * wiW;
+          if (wiLocal.z > 0.0 || mx_closure_has_hair(c)) {
+            let colS = textureSampleLevel(envTex, envSampler, uvS, 0.0).xyz * U.envTexture.x;
+            let envPdf = env_map_pdf(uvS, sampled.z);
+            if (envPdf > 0.0) {
+              neeValid = true;
+              neeDirection = wiW;
+              neeLocal = wiLocal;
+              neeRadiance = colS * U.env.xyz * U.env.w;
+              neePdf = envPdf;
+              neeMisPdf = envPdf;
+              neeCosine = abs(wiLocal.z);
+            }
+          }
+        } else {
+          let eu = vec2<f32>(rng_next(state), rng_next(state));
+          let wiLocal = mx_cosine_hemisphere(eu);
+          let envPdf = wiLocal.z / PI;
+          if (envPdf > 0.0) {
+            let wiW = frame * wiLocal;
+            neeValid = true;
+            neeDirection = wiW;
+            neeLocal = wiLocal;
+            neeRadiance = ${envNee};
+            neePdf = envPdf;
+            neeMisPdf = envPdf;
+            neeCosine = wiLocal.z;
+          }
+        }`
+        : /* wgsl */ `        let eu = vec2<f32>(rng_next(state), rng_next(state));
         let wiLocal = mx_cosine_hemisphere(eu);
         let envPdf = wiLocal.z / PI;
         if (envPdf > 0.0) {
           let wiW = frame * wiLocal;
-          let visibility = mx_alpha_visibility(pos + wiW * RAY_EPS, wiW);
-          if (visibility > 0.0) {
-            var ev: MxBsdfEval;
-            if (shFuzz) { ev = mx_closure_specular_eval(c, wo, wiLocal); }
-            else { ev = mx_closure_eval(c, wo, wiLocal); }
-            let w = power_heuristic(1.0, envPdf, 1.0, ev.pdf);
-            radiance = radiance + beta * ev.value * mx_spatial_base_attenuation(spatialLayers, spatialOutgoingCosine, wiLocal)
-              * ${envNee} * (w * wiLocal.z * visibility / envPdf);
-          }
-        }
-      }`
-        : /* wgsl */ `      let eu = vec2<f32>(rng_next(state), rng_next(state));
-      let wiLocal = mx_cosine_hemisphere(eu);
-      let envPdf = wiLocal.z / PI;
-      if (envPdf > 0.0) {
-        let wiW = frame * wiLocal;
-        let visibility = mx_alpha_visibility(pos + wiW * RAY_EPS, wiW);
-        if (visibility > 0.0) {
-          let ev = mx_closure_eval(c, wo, wiLocal);
-          let w = power_heuristic(1.0, envPdf, 1.0, ev.pdf);
-          radiance = radiance + beta * ev.value * mx_spatial_base_attenuation(spatialLayers, spatialOutgoingCosine, wiLocal)
-            * ${envNee} * (w * wiLocal.z * visibility / envPdf);
-        }
-      }`
+          neeValid = true;
+          neeDirection = wiW;
+          neeLocal = wiLocal;
+          neeRadiance = ${envNee};
+          neePdf = envPdf;
+          neeMisPdf = envPdf;
+          neeCosine = wiLocal.z;
+        }`
     }
+      }
+      if (!neeValid) { continue; }
+      var visibility = 1.0;
+      if (!neeBsdf) {
+        visibility = mx_visibility(pos + neeDirection * RAY_EPS, neeDirection, neeDistance);
+        if (visibility <= 0.0) { continue; }
+      }
+      var ev: MxBsdfEval;
+      var basePdf = 1.0;
+${environment ? `      if (neeSpecularOnly) { ev = mx_closure_specular_eval(c, wo, neeLocal); }
+      else {
+        let parts = mx_closure_eval_parts(c, wo, neeLocal);
+        ev = parts.full;
+        basePdf = parts.base.pdf;
+      }` : `      let parts = mx_closure_eval_parts(c, wo, neeLocal);
+      ev = parts.full;
+      basePdf = parts.base.pdf;`}
+      let attenuation = mx_spatial_base_attenuation(spatialLayers, spatialOutgoingCosine, neeLocal);
+      if (neeBsdf) {
+        // Same validity as mx_closure_sample: a base-lobe direction needs a positive base pdf.
+        if (!(neeFromBase && basePdf <= 0.0) && ev.pdf > 0.0) {
+          bs = MxBsdfSample(neeLocal, ev.value, ev.pdf, true);
+          bsAttenuation = attenuation;
+        }
+        break;
+      }
+      let weight = select(power_heuristic(1.0, neeMisPdf, 1.0, ev.pdf), 1.0, neeDelta);
+      radiance += beta * ev.value * attenuation * neeRadiance * (neeCosine * visibility * weight / neePdf);
     }
-
-    let u = vec3<f32>(rng_next(state), rng_next(state), rng_next(state));
-    let bs = mx_closure_sample(c, wo, u);
     if (!bs.valid || bs.pdf <= 0.0) { break; }
     let wiWorld = frame * bs.wi;
     let cosS = abs(dot(shadingNormal, wiWorld));
@@ -1186,7 +1279,7 @@ ${
     }`
         : ''
     }
-    beta = beta * bs.value * mx_spatial_base_attenuation(spatialLayers, spatialOutgoingCosine, bs.wi) * cosS / bs.pdf;
+    beta = beta * bs.value * bsAttenuation * cosS / bs.pdf;
     bsdfPdf = bs.pdf;
 ${analyticLights ? '    analyticNee = allowDirectLighting && !specular && mx_light_count() > 0u;' : ''}
   specularBounce = specular || !allowDirectLighting;
@@ -1344,6 +1437,7 @@ ${displayAovs ? '  var coverage = 0.0;' : ''}
 ${displayAovs ? '  var batchMeanLuminance = 0.0;\n  var batchM2 = 0.0;' : ''}
 ${displayAovs ? '  var surfaceSum: MxSurfaceAov;' : ''}
   for (var i = 0u; i < spp; i = i + 1u) {
+    mx_begin_sample(pixel, ${displayAovs ? 'sampleIndex' : 'frameIndex * spp'} + i);
     let jitter = ${displayAovs ? 'camera_jitter(sampleIndex + i, pixel)' : 'vec2<f32>(rng_next(&state), rng_next(&state))'};
     let ray = camera_ray(vec2<f32>(pixelCoord), dims, jitter);
 ${displayAovs ? '    var hitCoverage = 0.0;' : ''}

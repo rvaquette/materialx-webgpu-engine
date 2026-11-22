@@ -106,7 +106,7 @@ async function main() {
     scenes: { type: 'string' }, res: { type: 'string', default: '128' }, spp: { type: 'string', default: '16' },
     repeats: { type: 'string', default: '5' }, 'reference-spp': { type: 'string', default: '1024' },
     label: { type: 'string', default: 'run' }, baseline: { type: 'string' }, 'update-references': { type: 'boolean' },
-    'bias-check': { type: 'boolean' }, 'default-gpu': { type: 'boolean' },
+    'bias-check': { type: 'boolean' }, 'default-gpu': { type: 'boolean' }, 'browser-args': { type: 'string' },
     out: { type: 'string', default: 'bench-results' }, help: { type: 'boolean', short: 'h' },
   } });
   if (values.help) {
@@ -114,7 +114,8 @@ async function main() {
       '  [--reference-spp 1024] [--label name] [--baseline bench-results/base.json] [--bias-check] [--update-references]\n' +
       'References are rendered once per scene and resolution into <out>/references; --bias-check also renders\n' +
       `--reference-spp samples with the current code and reports the block-mean RMSE (tolerance ${BIAS_TOLERANCE}).\n` +
-      'Chrome is started with --force_high_performance_gpu (discrete GPU); --default-gpu keeps its own choice.');
+      'Chrome is started with --force_high_performance_gpu (discrete GPU); --default-gpu keeps its own choice.\n' +
+      '--browser-args "..." appends Chrome switches (for example --enable-dawn-features=use_dxc).');
     return;
   }
   const root = fileURLToPath(new URL('../', import.meta.url));
@@ -127,7 +128,8 @@ async function main() {
   const { openExportSession } = await import('./export-browser-session.mjs');
   const session = await openExportSession({
     label: 'bench', browserModule: '/scripts/bench-engine-browser.ts', quiet: true,
-    browserArgs: values['default-gpu'] ? [] : ['--force_high_performance_gpu'],
+    browserArgs: [...values['default-gpu'] ? [] : ['--force_high_performance_gpu'],
+      ...(values['browser-args'] ?? '').split(' ').filter(Boolean)],
   });
   const run = { label: values.label, date: new Date().toISOString(), res: size, spp: samples, repeats, referenceSamples, scenes: [] };
   try {

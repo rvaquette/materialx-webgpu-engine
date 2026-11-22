@@ -106,7 +106,7 @@ describe('assembleIrForwardShader (T058b)', () => {
     const { shader } = forward('standard_surface', []);
     expect(shader.rasterQuality).toBe('reference');
     expect(shader.code).toContain('i < 64u');
-    expect(shader.code).toContain('forwardEnvCdf[mid]');
+    expect(shader.code).toContain('let uv = mx_forward_env_map_sample_center(u);');
     expect(shader.code).not.toContain('mx_forward_filtered_environment');
   });
   it('integrates coated diffuse against the actual HDR without an uncoated SH term', () => {

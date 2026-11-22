@@ -1,7 +1,7 @@
 import { InstancedMesh, Matrix3, Mesh, MeshBasicMaterial, SkinnedMesh, Vector3, type Object3D } from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { OBJLoader } from 'three/examples/jsm/loaders/OBJLoader.js';
-import type { DiagnosticSink } from '../core/diagnostics.ts';
+import type { Diagnostic, DiagnosticSink } from '../core/diagnostics.ts';
 import type { SceneAsset } from '../scene/types.ts';
 import type { MeshSource } from '../render/scene-resources.ts';
 import type { RawMesh } from './prepare.ts';
@@ -142,15 +142,33 @@ export async function loadExternalMesh(
   return extractMesh(root, objectName, sink, flipV);
 }
 
-/** Preload engine geometry assets once per URI; inline USDA remains the fallback. */
+/**
+ * Engine geometry assets referenced by `engine:geometry:file`. Every file is fetched and
+ * digested up front (so each prim gets a content key), but parsed only when a mesh is
+ * actually needed: a prepared-geometry cache hit skips parsing. Inline USDA remains the
+ * fallback. Without lazy, every mesh is parsed before returning (errors surface here).
+ */
 export async function loadExternalMeshSource(
   scene: SceneAsset,
   inline: MeshSource,
   sink: DiagnosticSink,
   read: GeometryReader = fetchGeometry,
+  options: { lazy?: boolean } = {},
 ): Promise<MeshSource> {
-  const files = new Map<string, ReturnType<typeof parseGeometry>>();
+  interface GeometryFile {
+    bytes: Promise<ArrayBuffer>;
+    digest?: string;
+    parsed?: Promise<{ root: Object3D; flipV: boolean }>;
+    diagnostics: Diagnostic[];
+  }
+  const files = new Map<string, GeometryFile>();
+  const entries = new Map<string, { uri: string; objectName: string | undefined; diagnostics: Diagnostic[] }>();
   const meshes = new Map<string, RawMesh>();
+  const fail = (path: string, cause: unknown): never => {
+    const message = `Failed to load geometry for ${path}: ${String(cause)}`;
+    sink({ level: 'error', message });
+    throw new Error(message, { cause });
+  };
   for (const [path, prim] of scene.prims) {
     const attribute = prim.attributes.get('engine:geometry:file');
     if (!attribute) continue;
@@ -160,18 +178,63 @@ export async function loadExternalMeshSource(
       const objectName = prim.attributes.get('engine:geometry:object')?.value;
       if (objectName !== undefined && (typeof objectName !== 'string' || !objectName)) throw new Error('Invalid geometry object name');
       const uri = resolveAsset(attribute.sourceLayer ?? scene.entry, attribute.value);
-      let file = files.get(uri);
-      if (!file) {
-        file = read(uri).then((bytes) => parseGeometry(bytes, uri, read, sink));
-        files.set(uri, file);
+      if (!files.has(uri)) {
+        const bytes = read(uri);
+        bytes.catch(() => undefined);
+        files.set(uri, { bytes, diagnostics: [] });
       }
-      const { root, flipV } = await file;
-      meshes.set(path, extractMesh(root, objectName, sink, flipV));
+      entries.set(path, { uri, objectName, diagnostics: [] });
     } catch (cause) {
-      const message = `Failed to load geometry for ${path}: ${String(cause)}`;
-      sink({ level: 'error', message });
-      throw new Error(message, { cause });
+      fail(path, cause);
     }
   }
-  return { meshFor: (path) => meshes.get(path) ?? inline.meshFor(path) };
+  const subtle = globalThis.crypto?.subtle;
+  for (const [path, entry] of entries) {
+    const file = files.get(entry.uri)!;
+    try {
+      const bytes = await file.bytes;
+      if (subtle && file.digest === undefined) {
+        file.digest = Array.from(new Uint8Array(await subtle.digest('SHA-256', bytes)), b => b.toString(16).padStart(2, '0')).join('');
+      }
+    } catch (cause) {
+      fail(path, cause);
+    }
+  }
+  const loadMesh = async (path: string): Promise<RawMesh | undefined> => {
+    const entry = entries.get(path);
+    if (!entry) return inline.meshFor(path);
+    const loaded = meshes.get(path);
+    if (loaded) return loaded;
+    const file = files.get(entry.uri)!;
+    try {
+      file.parsed ??= file.bytes.then(bytes => parseGeometry(bytes, entry.uri, read, diagnostic => {
+        file.diagnostics.push(diagnostic);
+        sink(diagnostic);
+      }));
+      const { root, flipV } = await file.parsed;
+      const mesh = extractMesh(root, entry.objectName, diagnostic => {
+        entry.diagnostics.push(diagnostic);
+        sink(diagnostic);
+      }, flipV);
+      meshes.set(path, mesh);
+      return mesh;
+    } catch (cause) {
+      return fail(path, cause);
+    }
+  };
+  if (!options.lazy) for (const path of entries.keys()) await loadMesh(path);
+  return {
+    meshFor: (path) => meshes.get(path) ?? (entries.has(path) ? undefined : inline.meshFor(path)),
+    loadMesh,
+    contentKey: (path) => {
+      const entry = entries.get(path);
+      if (!entry) return undefined;
+      const digest = files.get(entry.uri)!.digest;
+      return digest === undefined ? undefined : `engine-geometry:${digest}:${entry.objectName ?? ''}`;
+    },
+    diagnosticsFor: (path) => {
+      const entry = entries.get(path);
+      return entry ? [...files.get(entry.uri)!.diagnostics, ...entry.diagnostics] : [];
+    },
+  };
 }

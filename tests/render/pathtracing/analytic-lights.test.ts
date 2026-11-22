@@ -38,6 +38,18 @@ describe('analytic converted lights', () => {
     expect([...data.slice(16, 19)]).toEqual([-0, -0, -1]);
     expect(packAnalyticLights([{ ...rect, normalize: true }])[4]).toBeCloseTo(1.25);
   });
+  it('selects lights proportionally to power with a uniform floor and a closed cdf', () => {
+    const dim = { ...rect, intensity: 1 };
+    const data = packAnalyticLights([rect, dim, { ...rect, type: 'distant' }]);
+    const pmf = [0, 1, 2].map(i => data[i * PT_LIGHT_FLOATS + 26]!);
+    const cdf = [0, 1, 2].map(i => data[i * PT_LIGHT_FLOATS + 27]!);
+    expect(pmf.reduce((a, b) => a + b, 0)).toBeCloseTo(1, 6);
+    expect(pmf[0]! / pmf[1]!).toBeGreaterThan(2);
+    expect(Math.min(...pmf)).toBeGreaterThanOrEqual(0.2 / 3 - 1e-7);
+    expect(pmf[2]).toBeCloseTo((pmf[0]! + pmf[1]!) / 2, 6);
+    expect(cdf[0]).toBeCloseTo(pmf[0]!, 6);
+    expect(cdf[2]).toBe(1);
+  });
   it('packs sphere and distant shapes, rejecting unsupported interpretations', () => {
     expect(packAnalyticLights([{ ...rect, type: 'sphere', radius: 2 }])[7]).toBeCloseTo(16 * Math.PI);
     expect(packAnalyticLights([{ ...rect, type: 'distant' }])[3]).toBe(2);
@@ -54,10 +66,15 @@ describe('analytic converted lights', () => {
   it('emits bounded shadow rays and consistent light-selection MIS', () => {
     const shader = pathTraceComputeWgsl({ analyticLights: true, opaque: true });
     expect(shader).toContain('@binding(9)');
-    expect(shader).toContain('analyticLights[b + 1u].w * cosine * f32(mx_light_count())');
+    expect(shader).toContain('return distance2 / (analyticLights[b + 1u].w * cosine);');
+    // Emitter hits and the reservoir weight MIS by the same power-based source pdf.
+    expect(shader).toContain('* mx_light_selection_pmf(index);\n    result.hit = true;');
+    expect(shader).toContain('let sourcePdf = light.pdf * mx_light_selection_pmf(index);');
+    expect(shader).toContain('neeMisPdf = chosenPdf;');
+    expect(shader).toContain('power_heuristic(1.0, neeMisPdf, 1.0, ev.pdf)');
     expect(shader).toContain('let traceLimit = min(emitter.distance, flight);');
     expect(shader).toContain('traverse_min(ro, rd, traceLimit, false,');
-    expect(shader).toContain('light.distance - 2.0 * RAY_EPS');
+    expect(shader).toContain('neeDistance = chosen.distance - 2.0 * RAY_EPS;');
     expect(shader).toContain('if (bounce >= i32(U.transport.x)) { break; }');
     expect(shader).not.toContain('mx_closure_eval(c, wo, wiLight)');
     expect(shader).toContain('if (mx_intersect_lights(origin, direction).distance < distance)');

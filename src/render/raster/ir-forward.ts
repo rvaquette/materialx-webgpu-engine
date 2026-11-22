@@ -15,6 +15,7 @@ import {
   OBJECT_NORMAL_INPUT, OBJECT_TANGENT_INPUT, OBJECT_BITANGENT_INPUT,
 } from '../../compiler/ir.ts';
 import { analyticLightsWgsl } from '../pathtracing/analytic-lights.ts';
+import { environmentSamplingWgsl } from '../../assets/environment-cdf.ts';
 
 const ALL_FEATURES: SurfaceFeatures = { coat: true, transmission: true, dispersion: true, thinFilm: true, lobeKinds: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9] };
 
@@ -75,24 +76,15 @@ fn mx_forward_uv(d: vec3f) -> vec2f {
   return vec2f(atan2(n.z, n.x) * (0.5 / MX_PI) + 0.5, acos(clamp(n.y, -1.0, 1.0)) / MX_PI);
 }
 
-${reference ? `fn mx_forward_env_pdf(d: vec3f) -> f32 {
+${reference ? `${environmentSamplingWgsl({ cdf: 'forwardEnvCdf', width: 'fu.envInfo.x', height: 'fu.envInfo.y', pi: 'MX_PI', prefix: 'mx_forward_env_map' })}
+fn mx_forward_env_pdf(d: vec3f) -> f32 {
   if (fu.envMap.w == 0.0 || fu.envInfo.z <= 0.0) { return 0.0; }
   let uv = mx_forward_uv(d);
-  let color = textureSampleLevel(forwardEnv, forwardEnvSampler, uv, 0.0).rgb * fu.envInfo.w;
-  let lum = dot(color, vec3f(0.212671, 0.715160, 0.072169));
-  return lum * fu.envInfo.x * fu.envInfo.y / (fu.envInfo.z * 2.0 * MX_PI * MX_PI * max(sin(uv.y * MX_PI), 1e-6));
+  return mx_forward_env_map_pdf(uv, mx_forward_env_map_uv_probability(uv));
 }
 
 fn mx_forward_env_direction(u: f32) -> vec3f {
-  let width = u32(fu.envInfo.x);
-  var low = 0u;
-  var high = width * u32(fu.envInfo.y) - 1u;
-  loop {
-    if (low >= high) { break; }
-    let mid = (low + high) / 2u;
-    if (u * fu.envInfo.z < forwardEnvCdf[mid]) { high = mid; } else { low = mid + 1u; }
-  }
-  let uv = vec2f(f32(low % width), f32(low / width)) / fu.envInfo.xy;
+  let uv = mx_forward_env_map_sample_center(u);
   let phi = uv.x * (2.0 * MX_PI);
   let theta = uv.y * MX_PI;
   return vec3f(-sin(theta) * cos(phi), cos(theta), -sin(theta) * sin(phi));

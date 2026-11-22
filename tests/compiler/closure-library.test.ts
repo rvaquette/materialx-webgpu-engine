@@ -41,27 +41,32 @@ describe('closure library prelude (T056a)', () => {
     const spec = { kinds: new Set([1, 3, 4, 8]), thinFilm: false };
     const generic = closureLibraryPrelude(spec);
     const specialized = closureLibraryPrelude({ ...spec, fuzz: false });
-    const evalFn = specialized.match(/fn mx_closure_eval\([^]*?\n}/)?.[0];
-    const sampleFn = specialized.match(/fn mx_closure_sample\([^]*?\n}/)?.[0];
-    expect(evalFn).toContain('return mx_closure_eval_base(c, wo, wi);');
-    expect(sampleFn).toContain('return mx_closure_sample_base(c, wo, u);');
+    const evalFn = specialized.match(/fn mx_closure_eval_parts\([^]*?\n}/)?.[0];
+    const sampleFn = specialized.match(/fn mx_closure_sample_pick\([^]*?\n}/)?.[0];
+    expect(evalFn).toContain('return MxClosureEvalParts(base, base);');
+    expect(sampleFn).toContain('mx_closure_sample_direction(c, wo, baseU)');
     expect(evalFn).not.toContain('fuzz');
     expect(sampleFn).not.toContain('fuzz');
-    for (const name of ['mx_closure_base_eval', 'mx_closure_eval_base', 'mx_closure_sample_base', 'mx_dielectric_transmission_sample', 'mx_conductor_sample']) {
+    for (const name of ['mx_closure_base_eval', 'mx_closure_eval_base', 'mx_closure_sample_direction', 'mx_closure_eval', 'mx_dielectric_transmission_sample', 'mx_conductor_sample']) {
       const body = generic.match(new RegExp(`fn ${name}\\([^]*?\\n}`))?.[0];
       expect(body).toBeDefined();
       expect(specialized).toContain(body!);
     }
     expect(closureLibraryPrelude({ ...spec, fuzz: true })).toBe(generic);
   });
-  it('evaluates the mixture once when sampling the base below a coat', () => {
+  it('emits one base evaluation and one lobe-direction site per closure sample (inlining budget)', () => {
     const direction = CLOSURE_LIBRARY_PRELUDE.match(/fn mx_closure_base_direction[\s\S]*?\n}/)?.[0];
-    const coated = CLOSURE_LIBRARY_PRELUDE.match(/fn mx_closure_sample_base[\s\S]*?\n}/)?.[0];
+    const coated = CLOSURE_LIBRARY_PRELUDE.match(/fn mx_closure_sample_direction[\s\S]*?\n}/)?.[0];
+    const evalBase = CLOSURE_LIBRARY_PRELUDE.match(/fn mx_closure_eval_base[\s\S]*?\n}/)?.[0];
+    const sample = CLOSURE_LIBRARY_PRELUDE.match(/fn mx_closure_sample\([\s\S]*?\n}/)?.[0];
     expect(direction).toContain('mx_closure_lobe_sample');
     expect(direction).not.toContain('mx_closure_base_eval');
-    expect(coated).toContain('mx_closure_base_direction(base, baseWo, ru)');
-    expect(coated).not.toContain('mx_closure_base_sample(c, wo, ru)');
-    expect(coated?.match(/let e = mx_closure_eval_base/g)).toHaveLength(1);
+    expect(coated?.match(/mx_closure_base_direction\(/g)).toHaveLength(1);
+    expect(coated).not.toContain('eval');
+    expect(evalBase?.match(/mx_closure_base_eval\(/g)).toHaveLength(1);
+    expect(sample?.match(/mx_closure_eval_parts\(/g)).toHaveLength(1);
+    expect(sample?.match(/mx_closure_sample_pick\(/g)).toHaveLength(1);
+    expect(CLOSURE_LIBRARY_PRELUDE.match(/fn mx_closure_sample_pick[\s\S]*?\n}/)?.[0].match(/mx_closure_sample_direction\(/g)).toHaveLength(1);
   });
   it('faces the reflective half-vector toward the incident ray inside and outside glass', () => {
     const reflection = CLOSURE_LIBRARY_PRELUDE.match(/\/\/ Reflection branch([\s\S]*?)\/\/ Refraction branch/)?.[1];

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { MemoryKeyValueStore } from '../../src/compiler/cache.ts';
-import { PersistentPreparedGeometryCache, preparedGeometryCacheKey } from '../../src/geometry/cache.ts';
+import { GEOMETRY_KEY_BLOCK_BYTES, PersistentPreparedGeometryCache, preparedGeometryCacheKey } from '../../src/geometry/cache.ts';
 import { prepareMesh } from '../../src/geometry/prepare.ts';
 
 const mesh = {
@@ -16,16 +16,18 @@ describe('prepared geometry cache', () => {
     expect(await preparedGeometryCacheKey({ ...mesh, points: [...mesh.points] }, {})).toBe(base);
     expect(await preparedGeometryCacheKey({ ...mesh, points: [2, ...mesh.points.slice(1)] }, {})).not.toBe(base);
     expect(await preparedGeometryCacheKey(mesh, { computeTangents: true })).not.toBe(base);
+    expect(await preparedGeometryCacheKey({ ...mesh, points: [-0, ...mesh.points.slice(1)] }, {})).not.toBe(base);
+    expect(await preparedGeometryCacheKey({ ...mesh, points: new Float32Array(mesh.points) }, {})).not.toBe(base);
   });
 
   it('hashes large geometry in bounded blocks and includes values beyond the first block', async () => {
     const digest = vi.spyOn(globalThis.crypto.subtle, 'digest');
     try {
-      const points = Array.from({ length: 100000 }, (_, index) => index * 0.125);
+      const points = Array.from({ length: 3 * GEOMETRY_KEY_BLOCK_BYTES / 8 }, (_, index) => index * 0.125);
       const key = await preparedGeometryCacheKey({ ...mesh, points }, {});
       expect(key).toMatch(/^[a-f0-9]{64}$/);
       expect(digest.mock.calls.length).toBeGreaterThan(1);
-      expect(digest.mock.calls.every(([, data]) => data.byteLength <= 64 * 1024 + 32)).toBe(true);
+      expect(digest.mock.calls.every(([, data]) => data.byteLength <= GEOMETRY_KEY_BLOCK_BYTES + 32)).toBe(true);
       expect(await preparedGeometryCacheKey({ faceVertexIndices: [0, 1, 2], points: [...points], faceVertexCounts: [3] }, {})).toBe(key);
       points[points.length - 1] = -1;
       expect(await preparedGeometryCacheKey({ ...mesh, points }, {})).not.toBe(key);

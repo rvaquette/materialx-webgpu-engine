@@ -2,7 +2,7 @@ import { openIndexedDbStore, type KeyValueStore } from '../compiler/cache.ts';
 import type { Bvh } from './bvh.ts';
 import type { PreparedMesh } from './prepare.ts';
 
-const CACHE_VERSION = 2;
+const CACHE_VERSION = 3;
 const DATABASE_NAME = 'materialx-webgpu-engine';
 const STORE_NAME = 'prepared-geometry';
 const CACHE_PREFIX = 'geometry:v1:';
@@ -66,39 +66,105 @@ export function openPathTraceBvhCache(): Promise<PathTraceBvhCache> {
   return defaultBvhCache;
 }
 
-function* stableParts(value: unknown): Generator<string> {
-  if (typeof value === 'number') {
-    if (Number.isNaN(value)) yield '"__NaN__"';
-    else if (value === Infinity) yield '"__Infinity__"';
-    else if (value === -Infinity) yield '"__-Infinity__"';
-    else if (Object.is(value, -0)) yield '"__-0__"';
-    else yield JSON.stringify(value);
-    return;
+/** Bytes hashed per SHA-256 call; each call chains the previous digest. */
+export const GEOMETRY_KEY_BLOCK_BYTES = 1 << 20;
+
+/**
+ * Typed, length-prefixed binary encoding hashed in bounded blocks. Numbers are hashed
+ * as their float64 bits (so -0 and NaN stay distinct from 0), which is orders of
+ * magnitude faster than stringifying every coordinate of a large mesh.
+ */
+class ChainedDigest {
+  readonly #block = new Uint8Array(GEOMETRY_KEY_BLOCK_BYTES + 32);
+  readonly #view = new DataView(this.#block.buffer);
+  readonly #encoder = new TextEncoder();
+  #length = 32;
+
+  constructor(private readonly subtle: SubtleCrypto) {}
+
+  async #flush(): Promise<void> {
+    const digest = new Uint8Array(await this.subtle.digest('SHA-256', this.#block.subarray(0, this.#length)));
+    this.#block.set(digest);
+    this.#length = 32;
   }
-  if (value === null || typeof value !== 'object') {
-    yield JSON.stringify(value) ?? 'null';
-    return;
+
+  async #reserve(bytes: number): Promise<void> {
+    if (this.#length + bytes > this.#block.length) await this.#flush();
   }
-  if (Array.isArray(value)) {
-    yield '[';
-    for (let index = 0; index < value.length; index++) {
-      if (index) yield ',';
-      yield* stableParts(value[index]);
+
+  async tag(code: string, count = 0): Promise<void> {
+    await this.#reserve(5);
+    this.#view.setUint8(this.#length, code.charCodeAt(0));
+    this.#view.setUint32(this.#length + 1, count, true);
+    this.#length += 5;
+  }
+
+  async number(value: number): Promise<void> {
+    await this.#reserve(8);
+    this.#view.setFloat64(this.#length, value, true);
+    this.#length += 8;
+  }
+
+  async bytes(bytes: Uint8Array): Promise<void> {
+    for (let offset = 0; offset < bytes.length;) {
+      if (this.#length === this.#block.length) await this.#flush();
+      const count = Math.min(bytes.length - offset, this.#block.length - this.#length);
+      this.#block.set(bytes.subarray(offset, offset + count), this.#length);
+      this.#length += count;
+      offset += count;
     }
-    yield ']';
-    return;
   }
-  const entries = Object.entries(value as Record<string, unknown>)
-    .filter(([, entry]) => entry !== undefined)
-    .sort(([a], [b]) => a.localeCompare(b));
-  yield '{';
-  for (let index = 0; index < entries.length; index++) {
-    const [key, entry] = entries[index]!;
-    if (index) yield ',';
-    yield `${JSON.stringify(key)}:`;
-    yield* stableParts(entry);
+
+  async text(value: string): Promise<void> {
+    const bytes = this.#encoder.encode(value);
+    await this.tag('s', bytes.length);
+    await this.bytes(bytes);
   }
-  yield '}';
+
+  async numbers(values: readonly number[]): Promise<void> {
+    await this.tag('F', values.length);
+    for (let index = 0; index < values.length;) {
+      if (this.#block.length - this.#length < 8) await this.#flush();
+      const end = Math.min(values.length, index + Math.floor((this.#block.length - this.#length) / 8));
+      for (; index < end; index++, this.#length += 8) this.#view.setFloat64(this.#length, values[index]!, true);
+    }
+  }
+
+  async value(value: unknown): Promise<void> {
+    if (typeof value === 'number') {
+      await this.tag('n');
+      await this.number(value);
+    } else if (typeof value === 'string') {
+      await this.text(value);
+    } else if (value === null || typeof value !== 'object') {
+      await this.tag(value === null ? 'z' : value === true ? 't' : value === false ? 'f' : 'u');
+    } else if (ArrayBuffer.isView(value)) {
+      await this.text(value.constructor.name);
+      await this.tag('b', value.byteLength);
+      await this.bytes(new Uint8Array(value.buffer, value.byteOffset, value.byteLength));
+    } else if (Array.isArray(value)) {
+      if (value.every(entry => typeof entry === 'number')) {
+        await this.numbers(value as number[]);
+      } else {
+        await this.tag('[', value.length);
+        for (const entry of value) await this.value(entry);
+      }
+    } else {
+      const entries = Object.entries(value as Record<string, unknown>)
+        .filter(([, entry]) => entry !== undefined)
+        .sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0);
+      await this.tag('{', entries.length);
+      for (const [key, entry] of entries) {
+        await this.text(key);
+        await this.value(entry);
+      }
+    }
+  }
+
+  async hex(): Promise<string> {
+    await this.#flush();
+    return Array.from(this.#block.subarray(0, 32), (byte) => byte.toString(16).padStart(2, '0')).join('');
+  }
 }
 
 export async function preparedGeometryCacheKey(
@@ -107,29 +173,9 @@ export async function preparedGeometryCacheKey(
 ): Promise<string | undefined> {
   const cryptoApi = globalThis.crypto?.subtle;
   if (!cryptoApi) return undefined;
-  const chunkSize = 64 * 1024;
-  const encoder = new TextEncoder();
-  let digest = new Uint8Array(32);
-  let pending = '';
-  const hashChunk = async (text: string): Promise<void> => {
-    const bytes = encoder.encode(text);
-    const chained = new Uint8Array(digest.length + bytes.length);
-    chained.set(digest);
-    chained.set(bytes, digest.length);
-    digest = new Uint8Array(await cryptoApi.digest('SHA-256', chained));
-  };
-  for (const part of stableParts({ cacheVersion: CACHE_VERSION, mesh, options })) {
-    pending += part;
-    while (pending.length >= chunkSize) {
-      let end = chunkSize;
-      const last = pending.charCodeAt(end - 1);
-      if (last >= 0xd800 && last <= 0xdbff) end--;
-      await hashChunk(pending.slice(0, end));
-      pending = pending.slice(end);
-    }
-  }
-  if (pending) await hashChunk(pending);
-  return Array.from(digest, (byte) => byte.toString(16).padStart(2, '0')).join('');
+  const digest = new ChainedDigest(cryptoApi);
+  await digest.value({ cacheVersion: CACHE_VERSION, mesh, options });
+  return digest.hex();
 }
 
 export async function pathTraceBvhCacheKey(positions: Float32Array): Promise<string | undefined> {

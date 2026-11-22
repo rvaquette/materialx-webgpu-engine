@@ -205,6 +205,55 @@ export async function decodeSceneBufferCache(
   return g;
 }
 
+export const PREPARED_GEOMETRY_MEMORY_BYTES = 256 * 1024 * 1024;
+
+/**
+ * Least-recently-used, byte-bounded cache of packed path-tracing geometry for the page.
+ * Entries are immutable once built and keyed by sceneBufferCacheKey, so viewers and
+ * engines sharing the page reuse the BVH and packing when a scene is loaded again.
+ */
+export class PreparedGeometryMemoryCache {
+  readonly #entries = new Map<string, { geometry: PreparedPathTraceGeometry; bytes: number }>();
+  #bytes = 0;
+
+  constructor(readonly maxBytes = PREPARED_GEOMETRY_MEMORY_BYTES) {}
+
+  get bytes(): number { return this.#bytes; }
+
+  get(key: string): PreparedPathTraceGeometry | undefined {
+    const entry = this.#entries.get(key);
+    if (!entry) return undefined;
+    this.#entries.delete(key);
+    this.#entries.set(key, entry);
+    return entry.geometry;
+  }
+
+  set(key: string, scene: PreparedPathTraceGeometry): void {
+    const geometry: PreparedPathTraceGeometry = {
+      nodes: scene.nodes, nodeCount: scene.nodeCount, triangles: scene.triangles, triangleOrder: scene.triangleOrder,
+      triangleCount: scene.triangleCount, triangleUv: scene.triangleUv, triangleTangent: scene.triangleTangent, bounds: scene.bounds,
+    };
+    const bytes = fields.reduce((sum, name) => sum + geometry[name].byteLength, 0);
+    const previous = this.#entries.get(key);
+    if (previous) { this.#entries.delete(key); this.#bytes -= previous.bytes; }
+    if (bytes > this.maxBytes) return;
+    this.#entries.set(key, { geometry, bytes });
+    this.#bytes += bytes;
+    for (const [oldest, entry] of this.#entries) {
+      if (this.#bytes <= this.maxBytes) break;
+      this.#entries.delete(oldest);
+      this.#bytes -= entry.bytes;
+    }
+  }
+
+  clear(): void {
+    this.#entries.clear();
+    this.#bytes = 0;
+  }
+}
+
+export const preparedGeometryMemory = new PreparedGeometryMemoryCache();
+
 export function equalPreparedGeometry(a: PreparedPathTraceGeometry, b: PreparedPathTraceGeometry): boolean {
   return a.nodeCount === b.nodeCount && a.triangleCount === b.triangleCount &&
     a.bounds.min.every((v, i) => v === b.bounds.min[i]) && a.bounds.max.every((v, i) => v === b.bounds.max[i]) &&

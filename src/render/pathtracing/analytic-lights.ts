@@ -89,7 +89,37 @@ export function packAnalyticLights(lights: readonly SceneLight[]): Float32Array 
       throw new Error(`Analytic light exceeds GPU numeric range at ${light.path}`);
     }
   });
+  writeLightSelection(data, selected.length);
   return data;
+}
+
+/** Share of light selections drawn uniformly, so a poorly estimated power never starves a light. */
+export const PT_LIGHT_UNIFORM_SELECTION = 0.2;
+
+/**
+ * Power-proportional selection probabilities, stored per light at floats 26 (pmf) and
+ * 27 (cdf). Area emitters weigh luminance × area (flux up to π); delta lights have no
+ * comparable flux and receive the mean area-light weight (or equal weights).
+ */
+function writeLightSelection(data: Float32Array, count: number): void {
+  if (count === 0) return;
+  const luminance = (base: number) => Math.max(0, 0.2126 * data[base + 4]! + 0.7152 * data[base + 5]! + 0.0722 * data[base + 6]!);
+  const weights = Array.from({ length: count }, (_, i) => {
+    const base = i * PT_LIGHT_FLOATS;
+    return data[base + 3] === 0 || data[base + 3] === 1 ? luminance(base) * data[base + 7]! : NaN;
+  });
+  const area = weights.filter(Number.isFinite);
+  const fallback = area.length ? area.reduce((a, b) => a + b, 0) / area.length : 1;
+  const filled = weights.map(weight => Number.isFinite(weight) ? weight : fallback);
+  const total = filled.reduce((a, b) => a + b, 0);
+  let cdf = 0;
+  filled.forEach((weight, i) => {
+    const pmf = total > 0 && Number.isFinite(total)
+      ? (1 - PT_LIGHT_UNIFORM_SELECTION) * weight / total + PT_LIGHT_UNIFORM_SELECTION / count : 1 / count;
+    cdf += pmf;
+    data[i * PT_LIGHT_FLOATS + 26] = pmf;
+    data[i * PT_LIGHT_FLOATS + 27] = i === count - 1 ? 1 : cdf;
+  });
 }
 
 export function analyticLightsWgsl(group = 0, binding = 9, count = 'u32(U.transport.z)', pi = 'PI', epsilon = 'RAY_EPS'): string {
@@ -98,17 +128,42 @@ export function analyticLightsWgsl(group = 0, binding = 9, count = 'u32(U.transp
 struct MxLightSample { direction: vec3f, distance: f32, radiance: vec3f, pdf: f32, delta: bool };
 struct MxLightHit { distance: f32, radiance: vec3f, pdf: f32, hit: bool };
 fn mx_light_count() -> u32 { return ${count}; }
-fn mx_light_pdf(index: u32, origin: vec3f, point: vec3f, normal: vec3f) -> f32 {
+// Solid-angle pdf of a point on the indexed light, excluding the light selection.
+fn mx_light_area_pdf(index: u32, origin: vec3f, point: vec3f, normal: vec3f) -> f32 {
   let b = index * 7u;
   let offset = point - origin;
   let distance2 = dot(offset, offset);
   let cosine = dot(normal, -normalize(offset));
   if (cosine <= 0.0 || distance2 <= 0.0) { return 0.0; }
-  return distance2 / (analyticLights[b + 1u].w * cosine * f32(mx_light_count()));
+  return distance2 / (analyticLights[b + 1u].w * cosine);
 }
+fn mx_light_pdf(index: u32, origin: vec3f, point: vec3f, normal: vec3f) -> f32 {
+  return mx_light_area_pdf(index, origin, point, normal) / f32(mx_light_count());
+}
+// Power-proportional selection (packAnalyticLights stores pmf and cdf in the last slot).
+fn mx_light_selection_pmf(index: u32) -> f32 {
+  return analyticLights[index * 7u + 6u].z;
+}
+fn mx_select_light(u: f32) -> u32 {
+  var lower = 0u;
+  var upper = mx_light_count() - 1u;
+  loop {
+    if (lower >= upper) { break; }
+    let middle = (lower + upper) / 2u;
+    if (u < analyticLights[middle * 7u + 6u].w) { upper = middle; } else { lower = middle + 1u; }
+  }
+  return lower;
+}
+// Uniform light selection, as the raster and volume passes enumerate lights by index.
 fn mx_sample_light(origin: vec3f, u: vec3f) -> MxLightSample {
-  var result: MxLightSample;
   let index = min(u32(u.z * f32(mx_light_count())), mx_light_count() - 1u);
+  var result = mx_sample_light_at(index, origin, u.xy);
+  result.pdf = result.pdf / f32(mx_light_count());
+  return result;
+}
+// A point on the indexed light; the pdf excludes the selection (1 for a delta light).
+fn mx_sample_light_at(index: u32, origin: vec3f, u: vec2f) -> MxLightSample {
+  var result: MxLightSample;
   let b = index * 7u;
   let posType = analyticLights[b];
   result.radiance = analyticLights[b + 1u].xyz;
@@ -117,7 +172,7 @@ fn mx_sample_light(origin: vec3f, u: vec3f) -> MxLightSample {
   if (lightType == 2u) {
     result.direction = -normalize(posType.xyz);
     result.distance = 1e30;
-    result.pdf = 1.0 / f32(mx_light_count());
+    result.pdf = 1.0;
     result.delta = true;
     return result;
   }
@@ -153,7 +208,7 @@ fn mx_sample_light(origin: vec3f, u: vec3f) -> MxLightSample {
   
   result.distance = length(point - origin);
   result.direction = normalize(point - origin);
-  result.pdf = mx_light_pdf(index, origin, point, normal);
+  result.pdf = mx_light_area_pdf(index, origin, point, normal);
   return result;
 }
 fn mx_intersect_lights(origin: vec3f, direction: vec3f) -> MxLightHit {
@@ -197,7 +252,8 @@ fn mx_intersect_lights(origin: vec3f, direction: vec3f) -> MxLightHit {
     if (distance <= ${epsilon} || distance >= result.distance) { continue; }
     result.distance = distance;
     result.radiance = analyticLights[b + 1u].xyz;
-    result.pdf = mx_light_pdf(index, origin, origin + direction * distance, normal);
+    // Source pdf of the path tracer's power-based selection, for MIS with BSDF sampling.
+    result.pdf = mx_light_area_pdf(index, origin, origin + direction * distance, normal) * mx_light_selection_pmf(index);
     result.hit = true;
   }
   return result;

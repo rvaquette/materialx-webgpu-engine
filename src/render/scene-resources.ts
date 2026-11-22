@@ -33,6 +33,13 @@ import { materialUnitKey, resolveSceneMaterials, type MaterialCompileUnit } from
 /** Supplies the geometry cage for a prototype prim (crate payload bridge). */
 export interface MeshSource {
   meshFor(prototypePrimPath: string): RawMesh | undefined;
+  /** Identity of the source content (e.g. file digest and object name). A prepared
+   *  geometry cache hit on it skips loading and parsing the mesh altogether. */
+  contentKey?(prototypePrimPath: string): string | undefined;
+  /** Lazily parses the mesh; preferred over meshFor when present. */
+  loadMesh?(prototypePrimPath: string): Promise<RawMesh | undefined>;
+  /** Warnings raised while parsing this mesh, replayed on a content-keyed cache hit. */
+  diagnosticsFor?(prototypePrimPath: string): readonly Diagnostic[];
 }
 
 /** Output of the MaterialX graph -> IR -> WGSL chain for one material unit. */
@@ -303,21 +310,45 @@ export async function buildSceneResources(
       emit({ level: 'warning', message: 'Prepared geometry cache unavailable; preparing meshes without persistent caching.', detail: String(error) });
     }
   }
+  const replayed = new Set<string>();
   for (const proto of sceneInstances.prototypes) {
-    const raw = options.meshSource.meshFor(proto.primPath);
+    const source = options.meshSource;
+    const contentKey = cacheable && geometryCache ? source.contentKey?.(proto.primPath) : undefined;
+    let key = contentKey ? await preparedGeometryCacheKey({ contentKey }, prepareOptions) : undefined;
+    let prepared: PreparedMesh | undefined;
+    if (key && geometryCache) {
+      try {
+        prepared = await geometryCache.get(key);
+      } catch (error) {
+        geometryCacheUnavailable = true;
+        geometryCache = undefined;
+        emit({ level: 'warning', message: 'Failed to read prepared geometry cache; preparing meshes without persistent caching.', detail: String(error) });
+      }
+      for (const diagnostic of (prepared as { sourceDiagnostics?: Diagnostic[] } | undefined)?.sourceDiagnostics ?? []) {
+        if (replayed.has(diagnostic.message)) continue;
+        replayed.add(diagnostic.message);
+        emit(diagnostic);
+      }
+    }
+    if (prepared) {
+      geometryCacheHits++;
+      geometries.set(proto.id, buildGeometry(proto.id, proto.primPath, prepared));
+      continue;
+    }
+    const raw = source.loadMesh ? await source.loadMesh(proto.primPath) : source.meshFor(proto.primPath);
     if (!raw) {
       pendingGeometry.push(proto.id);
       emit({ level: 'warning', message: `Geometry pending: no mesh source for prototype ${proto.primPath}`, detail: { prim: proto.primPath } });
       continue;
     }
     const canCache = cacheable && !hasPendingSubdivision(raw);
-    const key = canCache && geometryCache ? await preparedGeometryCacheKey(raw, prepareOptions) : undefined;
+    if (!canCache) key = undefined;
+    else if (!key && geometryCache) key = await preparedGeometryCacheKey(raw, prepareOptions);
     if (canCache && geometryCache && !key && !geometryCacheUnavailable) {
       geometryCacheUnavailable = true;
       emit({ level: 'warning', message: 'Web Crypto unavailable; prepared geometry will not be cached.' });
     }
-    let prepared: PreparedMesh | undefined;
-    if (key && geometryCache) {
+    if (key && geometryCache && !contentKey) {
       try {
         prepared = await geometryCache.get(key);
       } catch (error) {
@@ -334,7 +365,8 @@ export async function buildSceneResources(
       prepared = prepareMesh(raw, prepareOptions);
       if (key && geometryCache) {
         try {
-          await geometryCache.set(key, prepared);
+          const diagnostics = contentKey ? source.diagnosticsFor?.(proto.primPath) ?? [] : [];
+          await geometryCache.set(key, diagnostics.length ? { ...prepared, sourceDiagnostics: [...diagnostics] } as PreparedMesh : prepared);
         } catch (error) {
           geometryCacheUnavailable = true;
           geometryCache = undefined;

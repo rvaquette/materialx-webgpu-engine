@@ -2386,7 +2386,7 @@ describe('interactive viewer resource lifecycle', () => {
     await new Promise(r => setTimeout(r, 20));
     const expected = buildEnvCdf(loaded.environment!.image);
     const upload = device.queue.writeBuffer.mock.calls.find(call =>
-      call[2] instanceof Float32Array && call[2].length === 8 && call[2][7] === expected.cdf[7]);
+      call[2] instanceof Float32Array && call[2].length === expected.cdf.length && call[2][7] === expected.cdf[7]);
     expect(upload).toBeDefined();
     const cdfBuffer = upload![0];
     expect(device.createBindGroup.mock.calls.some(([desc]) =>

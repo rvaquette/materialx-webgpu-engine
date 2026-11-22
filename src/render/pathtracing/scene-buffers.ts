@@ -14,6 +14,7 @@
 import { buildBvh, type Aabb, type Bvh } from '../../geometry/bvh.ts';
 import { BVH_TRI_STRIDE } from './bvh-wgsl.ts';
 import { openPathTraceBvhCache, pathTraceBvhCacheKey, type PathTraceBvhCache } from '../../geometry/cache.ts';
+import { preparedGeometryMemory, sceneBufferCacheKey } from './scene-buffer-cache.ts';
 import { inverse4, transformDirection, transformPoint, type Mat4, type Vec3 } from '../../scene/transforms.ts';
 import type { SceneResources } from '../scene-resources.ts';
 import type { VolumeMedium } from '../../compiler/volume-ir.ts';
@@ -463,6 +464,27 @@ export function isLightProxy(resources: SceneResources, instanceId: string, opti
 export async function buildCachedPathTraceScene(
   resources: SceneResources,
   options: BuildPathTraceSceneOptions = {},
+  suppliedCache?: PathTraceBvhCache,
+): Promise<PathTraceScene> {
+  if (suppliedCache || !globalThis.crypto?.subtle) return buildPersistentPathTraceScene(resources, options, suppliedCache);
+  const started = performance.now();
+  const key = await sceneBufferCacheKey(resources, options);
+  const prepared = preparedGeometryMemory.get(key);
+  if (prepared) {
+    const scene = buildPathTraceScene(resources, options, undefined, undefined, prepared);
+    performance.measure('pathtracing:geometry-memory', {
+      start: started, end: performance.now(), detail: { hit: true, triangles: prepared.triangleCount },
+    });
+    return scene;
+  }
+  const scene = await buildPersistentPathTraceScene(resources, options);
+  preparedGeometryMemory.set(key, scene);
+  return scene;
+}
+
+async function buildPersistentPathTraceScene(
+  resources: SceneResources,
+  options: BuildPathTraceSceneOptions,
   suppliedCache?: PathTraceBvhCache,
 ): Promise<PathTraceScene> {
   const cacheStarted = performance.now();

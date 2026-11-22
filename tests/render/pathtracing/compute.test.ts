@@ -209,8 +209,9 @@ describe('pathTraceComputeWgsl', () => {
     const shader = pathTraceComputeWgsl({ environment: true });
     expect(shader).toContain('let shFuzz = c.hasFuzz != 0u && c.fuzz.weight > 0.0;');
     expect(shader).toMatch(/if \(shFuzz\) \{\s+let diffE = mx_sh_irradiance/);
-    expect(shader).toContain('else { ev = mx_closure_eval(c, wo, wiLocal); }');
-    expect(shader).toContain('let visibility = mx_alpha_visibility(pos + wiW * RAY_EPS, wiW);');
+    expect(shader).toContain('let parts = mx_closure_eval_parts(c, wo, neeLocal);');
+    expect(shader).toContain('neeDirection = wiW;');
+    expect(shader).toContain('visibility = mx_visibility(pos + neeDirection * RAY_EPS, neeDirection, neeDistance);');
     expect(shader).toContain('diffuseBounce = splitFuzzEnvironment && mx_closure_sampled_is_diffuse(c, wo, u.z);');
   });
 
@@ -225,7 +226,19 @@ describe('pathTraceComputeWgsl', () => {
     expect(nullEvent).not.toContain('specularBounce =');
     expect(start).toBeLessThan(src.indexOf('if (c.hasEmission != 0u)'));
     expect(src).toContain('visibility = visibility * (1.0 - mx_hit_opacity(hit, pos, direction));');
-    expect(src).toContain('mx_alpha_visibility(pos + toLight * RAY_EPS, toLight)');
+    expect(src).toContain('neeDirection = toLight;');
+  });
+
+  it('emits one visibility, BSDF evaluation and layering attenuation site for all strategies', () => {
+    for (const shader of [src, pathTraceComputeWgsl({ environment: true, analyticLights: true })]) {
+      const integrate = shader.slice(shader.indexOf('fn integrate('));
+      expect(integrate.match(/mx_visibility\(/g)).toHaveLength(1);
+      expect(integrate.match(/mx_closure_eval_parts\(/g)).toHaveLength(1);
+      expect(integrate.match(/mx_spatial_base_attenuation\(/g)).toHaveLength(1);
+      expect(integrate.match(/mx_closure_sample_pick\(/g)).toHaveLength(1);
+      expect(integrate).not.toContain('mx_closure_sample(');
+      expect(integrate).toContain('for (var strategy = 0u; strategy < 3u; strategy++)');
+    }
   });
 
   it('evaluates alpha visibility from opacity only, never rebuilding the hit closure', () => {
@@ -382,8 +395,18 @@ describe('pathTraceComputeWgsl', () => {
     expect(src).toContain('var bsdfPdf');
     expect(src).toContain('mx_cosine_hemisphere(');
     // Both strategies feed the power heuristic (NEE direction and BSDF continuation).
-    expect(src).toContain('power_heuristic(1.0, envPdf, 1.0, ev.pdf)');
+    expect(src).toContain('neePdf = envPdf;');
+    expect(src).toContain('power_heuristic(1.0, neeMisPdf, 1.0, ev.pdf)');
     expect(src).toContain('power_heuristic(1.0, bsdfPdf, 1.0, envPdf)');
+  });
+
+  it('restarts the per-pixel sample sequence for every sample index', () => {
+    for (const shader of [src, pathTraceComputeWgsl({ displayAovs: true })]) {
+      const entry = shader.slice(shader.indexOf('fn mx_path_trace('));
+      expect(entry.indexOf('mx_begin_sample(pixel,')).toBeGreaterThan(entry.indexOf('for (var i = 0u; i < spp;'));
+      expect(entry.indexOf('mx_begin_sample(pixel,')).toBeLessThan(entry.indexOf('integrate('));
+    }
+    expect(pathTraceComputeWgsl({ displayAovs: true })).toContain('mx_begin_sample(pixel, sampleIndex + i);');
   });
 
   it('binds the scene storage buffers and the accumulation buffer', () => {
@@ -724,7 +747,8 @@ describe('buildPathTraceUniform layout', () => {
     expect(u[80]).toBe(2);
     const shader = pathTraceComputeWgsl({ environment: true });
     expect(shader).toContain('return c * U.envTexture.x * U.env.xyz * U.env.w;');
-    expect(shader).toContain('uv, 0.0).xyz * U.envTexture.x');
+    // Sampling and MIS read the texel probability of the original-unit CDF, not the scaled texture.
+    expect(shader).toContain('return env_map_pdf(uv, env_map_uv_probability(uv));');
     expect(shader).toContain('uvS, 0.0).xyz * U.envTexture.x');
   });
 });

@@ -505,7 +505,9 @@ export async function loadUsdScene(
   performance.measure('usd:materials', { start: composedAt, end: materialsAt, detail: { entry, documents: scene.materials.length } });
   try {
     const built = await buildSceneResources(scene, {
-      meshSource: options.imported?.meshSource ?? await loadExternalMeshSource(scene, meshSourceFromScene(scene), sink),
+      meshSource: options.imported?.meshSource ?? await loadExternalMeshSource(scene, meshSourceFromScene(scene), sink, undefined,
+        // With a persistent prepared-geometry cache, parse files only on cache misses.
+        { lazy: globalThis.indexedDB !== undefined }),
       materialCompiler: createGraphMaterialCompiler({ documents: mtlx.documents, sink }),
       sink,
     });

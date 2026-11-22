@@ -224,47 +224,68 @@ export function closureLibraryPrelude(spec: ClosureDispatchSpec = ALL_DISPATCH):
   if (spec === ALL_DISPATCH) return CLOSURE_LIBRARY_PRELUDE;
   let code = CLOSURE_LIBRARY_PRELUDE.replace(lobeDispatch(ALL_DISPATCH), lobeDispatch(spec));
   if (spec.fuzz === false) {
-    code = code.replace(CLOSURE_FUZZ_EVAL, `fn mx_closure_eval(c: LayeredClosure, wo: vec3f, wi: vec3f) -> MxBsdfEval {
-  return mx_closure_eval_base(c, wo, wi);
-}`).replace(CLOSURE_FUZZ_SAMPLE, `fn mx_closure_sample(c: LayeredClosure, wo: vec3f, u: vec3f) -> MxBsdfSample {
-  return mx_closure_sample_base(c, wo, u);
-}`);
+    code = code.replace(CLOSURE_FUZZ_EVAL, closureEvalWgsl(false)).replace(CLOSURE_FUZZ_SAMPLE, closureSampleWgsl(false));
   }
   code = spec.kinds.has(9) ? code : code.replace(HAIR_WGSL, '');
   return code;
 }
 
-const CLOSURE_FUZZ_EVAL = `fn mx_closure_eval(c: LayeredClosure, wo: vec3f, wi: vec3f) -> MxBsdfEval {
+// The base/full split lets mx_closure_sample keep its validity rule (a base-lobe
+// direction also needs a positive base pdf) with a single evaluation call.
+function closureEvalWgsl(fuzz: boolean): string {
+  return `struct MxClosureEvalParts {
+  base: MxBsdfEval,
+  full: MxBsdfEval,
+};
+fn mx_closure_eval_parts(c: LayeredClosure, wo: vec3f, wi: vec3f) -> MxClosureEvalParts {
   let base = mx_closure_eval_base(c, wo, wi);
-  if (c.hasFuzz == 0u || c.fuzz.weight <= 0.0) { return base; }
+${fuzz ? `  if (c.hasFuzz == 0u || c.fuzz.weight <= 0.0) { return MxClosureEvalParts(base, base); }
   let fuzzW = clamp(c.fuzz.weight, 0.0, 1.0);
   let fuzzCtx = MxLobeCtx(wo, c.fuzz.color, c.fuzz.roughness, 1.5, 0.0, 0.0, 0.0);
   let fuzz = mx_fuzz_eval(fuzzCtx, wi);
   let coverage = mx_closure_fuzz_coverage(c, wo);
-  return MxBsdfEval(fuzz.value * fuzzW + base.value * (1.0 - coverage), fuzz.pdf * coverage + base.pdf * (1.0 - coverage));
+  return MxClosureEvalParts(base,
+    MxBsdfEval(fuzz.value * fuzzW + base.value * (1.0 - coverage), fuzz.pdf * coverage + base.pdf * (1.0 - coverage)));` : '  return MxClosureEvalParts(base, base);'}
+}
+fn mx_closure_eval(c: LayeredClosure, wo: vec3f, wi: vec3f) -> MxBsdfEval {
+  return mx_closure_eval_parts(c, wo, wi).full;
 }`;
+}
 
-const CLOSURE_FUZZ_SAMPLE = `fn mx_closure_sample(c: LayeredClosure, wo: vec3f, u: vec3f) -> MxBsdfSample {
-  if (c.hasFuzz == 0u || c.fuzz.weight <= 0.0) { return mx_closure_sample_base(c, wo, u); }
-  if (wo.z == 0.0) { return MxBsdfSample(vec3f(0.0), vec3f(0.0), 0.0, false); }
-  let coverage = mx_closure_fuzz_coverage(c, wo);
-  var wi: vec3f;
-  if (u.z < coverage) {
-    let fuzzCtx = MxLobeCtx(wo, c.fuzz.color, c.fuzz.roughness, 1.5, 0.0, 0.0, 0.0);
-    let s = mx_fuzz_sample(fuzzCtx, u.xy);
-    if (!s.valid) { return MxBsdfSample(vec3f(0.0), vec3f(0.0), 0.0, false); }
-    wi = s.wi;
-  } else {
-    var baseU = u;
+function closureSampleWgsl(fuzz: boolean): string {
+  return `struct MxClosurePick {
+  wi: vec3f,
+  valid: bool,
+  fromBase: bool,
+};
+// Direction of mx_closure_sample only; the caller evaluates it with mx_closure_eval_parts.
+fn mx_closure_sample_pick(c: LayeredClosure, wo: vec3f, u: vec3f) -> MxClosurePick {
+  if (wo.z == 0.0) { return MxClosurePick(vec3f(0.0), false, true); }
+  var baseU = u;
+${fuzz ? `  if (c.hasFuzz != 0u && c.fuzz.weight > 0.0) {
+    let coverage = mx_closure_fuzz_coverage(c, wo);
+    if (u.z < coverage) {
+      let fuzzCtx = MxLobeCtx(wo, c.fuzz.color, c.fuzz.roughness, 1.5, 0.0, 0.0, 0.0);
+      let s = mx_fuzz_sample(fuzzCtx, u.xy);
+      return MxClosurePick(s.wi, s.valid, false);
+    }
     baseU.z = (u.z - coverage) / max(1.0 - coverage, 1.0e-6);
-    let s = mx_closure_sample_base(c, wo, baseU);
-    if (!s.valid) { return MxBsdfSample(vec3f(0.0), vec3f(0.0), 0.0, false); }
-    wi = s.wi;
   }
-  let e = mx_closure_eval(c, wo, wi);
-  if (e.pdf <= 0.0) { return MxBsdfSample(vec3f(0.0), vec3f(0.0), 0.0, false); }
-  return MxBsdfSample(wi, e.value, e.pdf, true);
+` : ''}  let s = mx_closure_sample_direction(c, wo, baseU);
+  return MxClosurePick(s.wi, s.valid, true);
+}
+fn mx_closure_sample(c: LayeredClosure, wo: vec3f, u: vec3f) -> MxBsdfSample {
+  let pick = mx_closure_sample_pick(c, wo, u);
+  if (!pick.valid) { return MxBsdfSample(vec3f(0.0), vec3f(0.0), 0.0, false); }
+  let e = mx_closure_eval_parts(c, wo, pick.wi);
+  if ((pick.fromBase && e.base.pdf <= 0.0) || e.full.pdf <= 0.0) { return MxBsdfSample(vec3f(0.0), vec3f(0.0), 0.0, false); }
+  return MxBsdfSample(pick.wi, e.full.value, e.full.pdf, true);
 }`;
+}
+
+const CLOSURE_FUZZ_EVAL = closureEvalWgsl(true);
+
+const CLOSURE_FUZZ_SAMPLE = closureSampleWgsl(true);
 
 /** WGSL prelude: shared BSDF types, math helpers and the lobe triplets, plus the
  *  T056h full-stack assembler. The lobe library is self-contained (defines MX_PI,
@@ -1292,17 +1313,23 @@ fn mx_closure_coat_ctx(c: LayeredClosure, wo: vec3f) -> MxLobeCtx {
   return MxLobeCtx(wo, vec3f(0.0), c.coat.roughness, c.coat.ior, 0.0, 0.0, 0.0);
 }
 fn mx_closure_eval_base(c: LayeredClosure, wo: vec3f, wi: vec3f) -> MxBsdfEval {
-  if (c.hasCoat == 0u || c.coat.weight <= 0.0) { return mx_closure_base_eval(c, wo, wi); }
-  let coatW = clamp(c.coat.weight, 0.0, 1.0);
-  let cc = mx_dielectric_reflection_eval(mx_closure_coat_ctx(c, wo), wi);
+  // A single mx_closure_base_eval site for coated and uncoated closures: shader
+  // compilers inline every call site, and this one dominates the closure size.
+  let coated = c.hasCoat != 0u && c.coat.weight > 0.0;
+  var base = c;
   var baseWo = wo;
   var baseWi = wi;
-  var base = mx_coat_base_closure(c);
-  if (c.coat.mode != 0u) {
-    baseWo = mx_coat_enter(wo, c.coat.ior);
-    baseWi = mx_coat_enter(wi, c.coat.ior);
+  if (coated) {
+    base = mx_coat_base_closure(c);
+    if (c.coat.mode != 0u) {
+      baseWo = mx_coat_enter(wo, c.coat.ior);
+      baseWi = mx_coat_enter(wi, c.coat.ior);
+    }
   }
   let baseEval = mx_closure_base_eval(base, baseWo, baseWi);
+  if (!coated) { return baseEval; }
+  let coatW = clamp(c.coat.weight, 0.0, 1.0);
+  let cc = mx_dielectric_reflection_eval(mx_closure_coat_ctx(c, wo), wi);
   let jacobian = select(1.0, abs(wi.z) / max(abs(baseWi.z), 1.0e-6), c.coat.mode != 0u);
   let att = mx_coat_attenuation(coatW, c.coat.ior, c.coat.color, wo, wi) * mx_coat_absorption(c, baseWo, baseWi);
   let pCoat = min(coatW * mx_coat_fresnel(c.coat.ior, wo.z), 0.95);
@@ -1337,12 +1364,28 @@ fn mx_closure_base_direction(c: LayeredClosure, wo: vec3f, u: vec3f) -> MxBsdfSa
   }
   return mx_closure_lobe_sample(c.lobes[chosen], c, wo, sampleU);
 }
-fn mx_closure_base_sample(c: LayeredClosure, wo: vec3f, u: vec3f) -> MxBsdfSample {
-  let s = mx_closure_base_direction(c, wo, u);
-  if (!s.valid) { return MxBsdfSample(vec3f(0.0), vec3f(0.0), 0.0, false); }
-  let e = mx_closure_base_eval(c, wo, s.wi);
-  if (e.pdf <= 0.0) { return MxBsdfSample(vec3f(0.0), vec3f(0.0), 0.0, false); }
-  return MxBsdfSample(s.wi, e.value, e.pdf, true);
+// Direction only (value/pdf are left empty): mx_closure_sample evaluates the
+// chosen direction once, through the same evaluation as next-event estimation.
+fn mx_closure_sample_direction(c: LayeredClosure, wo: vec3f, u: vec3f) -> MxBsdfSample {
+  let coated = c.hasCoat != 0u && c.coat.weight > 0.0;
+  var base = c;
+  var baseWo = wo;
+  var ru = u;
+  if (coated) {
+    let coatW = clamp(c.coat.weight, 0.0, 1.0);
+    let pCoat = min(coatW * mx_coat_fresnel(c.coat.ior, wo.z), 0.95);
+    if (u.z < pCoat) {
+      let s = mx_dielectric_reflection_sample(mx_closure_coat_ctx(c, wo), u.xy);
+      return MxBsdfSample(s.wi, vec3f(0.0), 0.0, s.valid);
+    }
+    ru = vec3f(u.x, u.y, (u.z - pCoat) / max(1.0 - pCoat, 1.0e-6));
+    base = mx_coat_base_closure(c);
+    baseWo = select(wo, mx_coat_enter(wo, c.coat.ior), c.coat.mode != 0u);
+  }
+  let s = mx_closure_base_direction(base, baseWo, ru);
+  if (!s.valid || !coated) { return MxBsdfSample(s.wi, vec3f(0.0), 0.0, s.valid); }
+  let wi = select(s.wi, mx_coat_exit(s.wi, c.coat.ior), c.coat.mode != 0u);
+  return MxBsdfSample(wi, vec3f(0.0), 0.0, !(c.coat.mode != 0u && dot(wi, wi) < 0.5));
 }
 // A closure whose energy is carried entirely by smooth dielectric lobes (clear
 // glass / mirror) behaves like a delta BSDF: next-event estimation can never
@@ -1489,28 +1532,5 @@ fn mx_closure_specular_eval(c: LayeredClosure, wo: vec3f, wi: vec3f) -> MxBsdfEv
   if (c.hasFuzz == 0u || c.fuzz.weight <= 0.0) { return base; }
   let coverage = mx_closure_fuzz_coverage(c, wo);
   return MxBsdfEval(base.value * (1.0 - coverage), mx_closure_pdf(c, wo, wi));
-}
-fn mx_closure_sample_base(c: LayeredClosure, wo: vec3f, u: vec3f) -> MxBsdfSample {
-  if (wo.z == 0.0) { return MxBsdfSample(vec3f(0.0), vec3f(0.0), 0.0, false); }
-  if (c.hasCoat == 0u || c.coat.weight <= 0.0) { return mx_closure_base_sample(c, wo, u); }
-  let coatW = clamp(c.coat.weight, 0.0, 1.0);
-  let pCoat = min(coatW * mx_coat_fresnel(c.coat.ior, wo.z), 0.95);
-  var wi: vec3f;
-  if (u.z < pCoat) {
-    let s = mx_dielectric_reflection_sample(mx_closure_coat_ctx(c, wo), u.xy);
-    if (!s.valid) { return MxBsdfSample(vec3f(0.0), vec3f(0.0), 0.0, false); }
-    wi = s.wi;
-  } else {
-    let ru = vec3f(u.x, u.y, (u.z - pCoat) / max(1.0 - pCoat, 1.0e-6));
-    let base = mx_coat_base_closure(c);
-    let baseWo = select(wo, mx_coat_enter(wo, c.coat.ior), c.coat.mode != 0u);
-    let s = mx_closure_base_direction(base, baseWo, ru);
-    if (!s.valid) { return MxBsdfSample(vec3f(0.0), vec3f(0.0), 0.0, false); }
-    wi = select(s.wi, mx_coat_exit(s.wi, c.coat.ior), c.coat.mode != 0u);
-    if (c.coat.mode != 0u && dot(wi, wi) < 0.5) { return MxBsdfSample(vec3f(0.0), vec3f(0.0), 0.0, false); }
-  }
-  let e = mx_closure_eval_base(c, wo, wi);
-  if (e.pdf <= 0.0) { return MxBsdfSample(vec3f(0.0), vec3f(0.0), 0.0, false); }
-  return MxBsdfSample(wi, e.value, e.pdf, true);
 }
 ${CLOSURE_FUZZ_SAMPLE}`;

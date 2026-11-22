@@ -8,9 +8,10 @@ import {
   PT_TRIANGLE_FLOATS,
   PT_MATERIAL_FLOATS,
   type PathTraceScene,
+  type PreparedPathTraceGeometry,
 } from '../../../src/render/pathtracing/scene-buffers.ts';
 import type { PathTraceBvhCache } from '../../../src/geometry/cache.ts';
-import { validatePreparedGeometry } from '../../../src/render/pathtracing/scene-buffer-cache.ts';
+import { PreparedGeometryMemoryCache, preparedGeometryMemory, validatePreparedGeometry } from '../../../src/render/pathtracing/scene-buffer-cache.ts';
 import type { Bvh } from '../../../src/geometry/bvh.ts';
 import type { GeometryResource, MaterialResource, SceneResources } from '../../../src/render/scene-resources.ts';
 import type { RasterSurface } from '../../../src/render/raster/scene-frame.ts';
@@ -241,6 +242,37 @@ describe('buildPathTraceScene packing', () => {
     expect(second.triangles).toEqual(first.triangles);
     expect(second.triangleOrder).toEqual(first.triangleOrder);
     expect(entries.size).toBe(1);
+  });
+
+  it('reuses packed geometry across loads in memory and rebuilds when a transform changes', async () => {
+    const { resources, lights } = sceneWith();
+    preparedGeometryMemory.clear();
+    const first = await buildCachedPathTraceScene(resources, { lights });
+    const second = await buildCachedPathTraceScene({ ...resources, instances: resources.instances.map(i => ({ ...i })) }, { lights });
+    expect(second.nodes).toBe(first.nodes);
+    expect(second.triangles).toBe(first.triangles);
+    const moved = resources.instances.map(i => ({ ...i, transform: translation4(1, 0, 0) }));
+    const third = await buildCachedPathTraceScene({ ...resources, instances: moved }, { lights });
+    expect(third.triangles).not.toBe(first.triangles);
+    expect(third.triangles[0]).toBe(first.triangles[0]! + 1);
+    preparedGeometryMemory.clear();
+  });
+
+  it('evicts least recently used packed geometry beyond its byte budget', () => {
+    const geometry = (floats: number): PreparedPathTraceGeometry => ({
+      nodes: new Float32Array(floats), nodeCount: 0, triangles: new Float32Array(0), triangleOrder: new Uint32Array(0),
+      triangleCount: 0, triangleUv: new Float32Array(0), triangleTangent: new Float32Array(0), bounds: { min: [0, 0, 0], max: [0, 0, 0] },
+    });
+    const cache = new PreparedGeometryMemoryCache(40);
+    cache.set('a', geometry(4));
+    cache.set('b', geometry(4));
+    expect(cache.get('a')).toBeDefined();
+    cache.set('c', geometry(4));
+    expect(cache.get('b')).toBeUndefined();
+    expect(cache.get('a')).toBeDefined();
+    expect(cache.bytes).toBe(32);
+    cache.set('huge', geometry(20));
+    expect(cache.get('huge')).toBeUndefined();
   });
 
   it('packs the quad into two world triangles with a BVH and one material', () => {

@@ -221,6 +221,28 @@ describe('buildSceneResources (T050)', () => {
     expect(resources.geometries.get('/World/floor')?.triangleCount).toBe(2);
   });
 
+  it('skips loading content-keyed meshes on a cache hit and replays their parse warnings', async () => {
+    const entries = new Map<string, unknown>();
+    const geometryCache = {
+      get: vi.fn(async (key: string) => entries.get(key) as ReturnType<typeof prepareMesh> | undefined),
+      set: vi.fn(async (key: string, mesh: unknown) => { entries.set(key, mesh); }),
+    };
+    const warning: Diagnostic = { level: 'warning', message: 'Ignoring OBJ line primitives' };
+    const loadMesh = vi.fn(async () => quad());
+    const source = { meshFor: () => undefined, loadMesh, contentKey: () => 'file-digest:floor', diagnosticsFor: () => [warning] };
+    await buildSceneResources(demoScene(), { meshSource: source, materialCompiler: surfaceCompiler(), geometryCache });
+    const diagnostics: Diagnostic[] = [];
+    const resources = await buildSceneResources(demoScene(), {
+      meshSource: source, materialCompiler: surfaceCompiler(), geometryCache, sink: d => diagnostics.push(d),
+    });
+    expect(loadMesh).toHaveBeenCalledTimes(1);
+    expect(resources.geometries.get('/World/floor')?.triangleCount).toBe(2);
+    expect(diagnostics).toContainEqual(warning);
+    const changed = { ...source, contentKey: () => 'file-digest:changed' };
+    await buildSceneResources(demoScene(), { meshSource: changed, materialCompiler: surfaceCompiler(), geometryCache });
+    expect(loadMesh).toHaveBeenCalledTimes(2);
+  });
+
   it('keeps finite bounds for geometry without triangles', async () => {
     const resources = await buildSceneResources(demoScene(), {
       meshSource: meshSource({ '/World/floor': { points: [], faceVertexCounts: [], faceVertexIndices: [] } }),
