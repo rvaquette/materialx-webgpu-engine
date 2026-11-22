@@ -1041,3 +1041,122 @@ surface.base_color = img.out;
   (`scripts/run-material-script.mjs`, Chrome/Edge WebGPU headless).
 
 Tous les objectifs de la priorité 3bis sont atteints.
+
+## Priorité 4 : accélération du path tracer
+
+Optimiser principalement les cas où le moteur est limité par le nombre de
+sources, de matériaux ou de triangles, avec des gains mesurés séparément (temps
+CPU, temps GPU, mémoire, convergence, latence) et sans modifier la sortie de
+référence au-delà des tolérances déclarées. Le point « wavefront plus spécialisé »
+a été abandonné.
+
+### Banc de mesure
+
+`npm run bench:engine` mesure chaque scène par l'API publique (`createHeadless`,
+`loadUsd`, `capture`) dans un Chrome headless à profil vierge (shaders compilés
+à froid) : chargement, premier raster, premier rendu path tracing, capture
+chaude de 16 spp (médiane de 5), rechargement, phases internes
+(`performance.measure`) et chaque pipeline créé avec la taille de son WGSL.
+L'erreur est mesurée contre une image de référence à 1024 spp (`RMSE` par pixel,
+`RMSE 8×8` sur des moyennes de blocs) et l'efficacité vaut 1 / (RMSE² × temps).
+`--bias-check` rend aussi 1024 spp avec le code courant et compare les moyennes
+de blocs 8×8 à la référence : la tolérance déclarée est 0,01.
+
+```sh
+npm run bench:engine -- --label avant
+npm run bench:engine -- --label apres --baseline bench-results/avant.json --bias-check
+```
+
+Options : `--scenes`, `--res` (128), `--spp` (16), `--repeats`, `--reference-spp`,
+`--update-references`, `--default-gpu`, `--browser-args "..."`. Les résultats et
+les références (propres au GPU) vont dans `bench-results/`, ignoré par Git. Les
+références des scènes ajoutées ont été rendues par le code d'avant la priorité 4.
+
+### Résultats
+
+Mesures sur NVIDIA Turing, 128 × 128, références rendues avant les changements :
+
+| Scène | Chargement | 1er rendu PT | Rechargement → PT | Efficacité | Biais 8×8 |
+|---|---:|---:|---:|---:|---:|
+| hyperion_rect_lights (17 lumières) | 28,9 → 12,6 s | 70,3 → 21,3 s | 8,7 → 3,8 s | ×1,98 | 0,0011 |
+| diningroom | 72,9 → 13,0 s | 87,5 → 34,6 s | 33,0 → 3,3 s | ×1,50 | 0,0015 |
+| renderman_teapot_tiles | 29,1 → 8,5 s | 49,3 → 21,7 s | 15,0 → 1,2 s | ×1,49 | 0,0010 |
+| test_material_disney_gold | 0,8 → 0,6 s | 42,0 → 16,5 s | 0,9 → 0,7 s | ×2,71 | 0,0016 |
+| bedroom | 96,4 → 25,0 s | 100,7 → 50,7 s | 83,0 → 11,0 s | ×1,40 | 0,0028 |
+| test_veach | 11,4 → 0,9 s | 35,8 → 16,4 s | 2,1 → 1,1 s | ×1,87 | 0,0009 |
+| tungsten-material-testball (HDR) | 13,4 → 4,7 s | 39,8 → 18,0 s | 5,0 → 1,0 s | ×2,32 | 0,0027 |
+| light_guide_occlusion | 5,2 → 0,2 s | 19,6 → 12,3 s | 0,4 → 0,3 s | ×4,33 | 0,0056 |
+
+Le temps de capture à nombre d'échantillons égal varie de −5 % à +12 % ; le gain
+d'efficacité vient de la réduction de l'erreur. Sur `mustang_red` (HDR 4k), le
+biais reste dans la tolérance (0,0023) mais le RMSE est dominé par le bruit de
+la référence à 1024 spp et ne permet pas de conclure sur l'efficacité.
+
+### Travaux réalisés
+
+- **Compilation des shaders** (WGSL → DXC prenait 35 à 68 s par noyau path
+  tracing). Le compilateur inline chaque site d'appel ; l'intégrateur n'a plus
+  qu'un site de visibilité, d'évaluation BSDF, d'atténuation des couches et
+  d'évaluation glossy du fuzz, partagés par les stratégies lumière,
+  environnement et tirage BSDF (boucle à trois stratégies, même ordre des
+  nombres aléatoires). La bibliothèque de closures sépare le tirage de direction
+  de l'évaluation et n'a plus qu'un site `mx_closure_base_eval` et
+  `mx_closure_base_direction`. Code inliné estimé : 1,12 → 0,32 Mo ; compilation
+  du noyau ÷1,6 à ÷3,4. Cette étape seule donnait des images identiques (RMSE
+  inchangé à 4 décimales).
+- **Variantes de shaders.** Les handles de textures et samplers raster sont nommés
+  par emplacement de binding : les matériaux structurellement identiques (les
+  livres de `diningroom`, par exemple) produisent le même WGSL et partagent un
+  pipeline. `viewer:raster-build` : 35,5 → 4,3 s sur `diningroom`, 12,6 → 0,9 s
+  sur `bedroom`.
+- **Lumières nombreuses.** Sélection proportionnelle à la puissance (20 % de
+  sélection uniforme en garde-fou), puis échantillonnage par ré-échantillonnage
+  (RIS) avec un réservoir de 8 candidats et un seul rayon d'ombre. La cible tient
+  compte de la distance, de l'orientation de l'émetteur et du cosinus récepteur ;
+  la MIS avec le tirage BSDF utilise la pdf source, comme les impacts directs
+  sur les émetteurs, ce qui garde l'estimateur sans biais. Une ReSTIR
+  spatio-temporelle n'a pas été retenue : elle réutilise des échantillons entre
+  pixels et images au prix de biais ou de rayons de visibilité supplémentaires,
+  incompatible avec l'accumulation progressive de référence.
+- **Distributions observées.** Chaque pixel enregistre le résultat de son premier
+  rayon d'ombre vers une lumière ; une passe de réduction compte succès et essais
+  par lumière et par cellule d'une grille monde 8³, et la visibilité lissée
+  (Laplace, plancher 0,05) pondère la cible du réservoir aux images suivantes
+  (`light-guide.ts`). Sans buffer supplémentaire dans le noyau (observation dans
+  la composante libre des moments, visibilités ajoutées au buffer des lumières).
+  Sur la scène de contrôle `scenes/bench/light_guide_occlusion.usda` (douze lumières
+  puissantes derrière un mur) : efficacité ×4,22 au lieu de ×3,27 sans guidage.
+  Neutre sur les scènes peu occultées.
+- **Environnement.** La distribution est construite par CDF marginale et
+  conditionnelles normalisées, avec jitter dans le texel, pdf lue dans les mêmes
+  tableaux que le tirage (au lieu d'une couleur filtrée au coin du texel), poids
+  sin θ et compensation MIS (Karlík et al. 2019) : les zones sous la luminance
+  moyenne sont laissées au tirage BSDF. Partagée avec le mode raster de référence
+  (`environment-cdf.ts`).
+- **Échantillonnage temporel.** Le flux PCG est remplacé par une suite de Sobol
+  2D « paddée » brouillée par Owen (Burley 2020) : chaque pixel est stratifié
+  dans le temps dans toutes les dimensions. La 2ᵉ dimension de Sobol est
+  calculée sans boucle (matrice de Pascal mod 2, théorème de Lucas). Gain
+  d'efficacité jusqu'à ×1,8 sur l'HDR. Une répartition spatiale en bruit bleu
+  (ordre de Morton d'Ahmed et Wonka 2020, adapté au progressif par blocs de
+  16 échantillons) a été mesurée neutre sur le RMSE et le RMSE 8×8, et n'a pas
+  été retenue.
+- **Caches de géométrie et de BVH, y compris entre chargements.** La clé du cache
+  IndexedDB de géométrie préparée hache les nombres en binaire (9,2 → 0,56 s
+  pour 8,7 M de nombres) ; les fichiers OBJ/glTF sont identifiés par le SHA-256
+  de leurs octets, si bien qu'un succès de cache évite le parsing (avertissements
+  de parsing rejoués). La géométrie path tracing empaquetée (BVH compris) est
+  gardée dans un cache mémoire LRU de 256 Mo partagé par les viewers et moteurs
+  de la page. Le constructeur de BVH travaille sur des tableaux typés (même
+  hiérarchie au bit près, ×2,2 à ×2,4) et la soudure des sommets compare des
+  valeurs quantifiées au lieu de chaînes (même sortie, ×2,2).
+
+### Points non réalisés, par décision
+
+- **Streaming progressif des textures et tuiles UDIM :** le décodage et l'envoi
+  des textures représentent moins de 1,5 s, soit moins de 5 % du chargement
+  des scènes du banc ; le coût est dans la géométrie et la compilation, traitées
+  ci-dessus. Le streaming avec placeholders reste suivi en priorité 7.
+- **Reconstruction adaptative :** l'échantillonnage adaptatif par pixel existe
+  depuis la priorité 1 ; le débruitage guidé et temporel reste écarté.
+- **Wavefront spécialisé :** abandonné.

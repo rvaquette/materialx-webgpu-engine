@@ -17,7 +17,7 @@ export const DEFAULT_SCENES = [
   'scenes/pathtracer/bedroom.usda',
   'scenes/pathtracer/test_veach.usda',
   'scenes/pathtracer/tungsten-material-testball.usda',
-  'scenes/pathtracer/light_guide_occlusion.usda',
+  'scenes/bench/light_guide_occlusion.usda',
 ];
 /** Declared tolerance on the 8×8 block-mean RMSE of a high-sample render against the reference. */
 export const BIAS_TOLERANCE = 0.01;

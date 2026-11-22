@@ -7,29 +7,11 @@ prioriser la transformation de ce socle technique en outil de rendu complet,
 mesurable, réutilisable et extensible.
 
 Les priorités 1 (rendu progressif), 2 (API de bibliothèque), 3 (éditeur de
-matériaux MaterialX) et 3bis (scripting) sont traitées ; leur historique est dans
-[ROADMAP_DONE.md](ROADMAP_DONE.md). Il en reste les travaux suivants.
+matériaux MaterialX), 3bis (scripting) et 4 (accélération du path tracer) sont
+traitées ; leur historique est dans [ROADMAP_DONE.md](ROADMAP_DONE.md). Il en
+reste les travaux suivants.
 
 ## Reliquats des priorités traitées
-
-## Priorité 4 : accélération du path tracer
-
-Optimiser principalement les cas où le moteur est aujourd'hui limité par le
-nombre de sources, de matériaux ou de triangles :
-
-- ReSTIR ou reservoirs pour les lumières nombreuses ;
-- échantillonnage adaptatif de l'environnement ;
-- importance sampling basée sur les distributions observées ;
-- blue-noise temporel et reconstruction adaptative ;
-- cache BVH partagé avec le viewer, y compris entre chargements ;
-- streaming progressif des textures, tuiles UDIM et géométries ;
-- réduction des variantes de shaders pour les matériaux structurellement proches.
-
-Ces optimisations doivent être mesurées séparément : temps CPU, temps GPU,
-occupation mémoire, convergence et latence d'interaction.
-
-**Critère d'aboutissement :** un gain de performance est démontré sur les bancs
-existants sans modifier la sortie de référence au-delà des tolérances déclarées.
 
 ## Priorité 5 : scènes dynamiques
 
@@ -69,7 +51,8 @@ de contrôle, des tolérances et une couverture raster/path tracing explicite.
 Préparer les usages de production :
 
 - budget mémoire GPU explicite et politiques de réduction ;
-- streaming avec placeholders de qualité progressive ;
+- streaming avec placeholders de qualité progressive (textures, tuiles UDIM et
+  géométries ; mesuré à moins de 5 % du chargement des scènes actuelles) ;
 - récupération après perte du device ;
 - stratégie de fallback fondée sur les limites du GPU ;
 - tests sur plusieurs navigateurs et familles de GPU ;
@@ -83,7 +66,6 @@ et non convertis silencieusement en rendu incomplet.
 
 ## Ordre recommandé
 
-1. ReSTIR, streaming et optimisations mesurées.
-2. Dynamisme des scènes.
-3. Volumes et effets avancés.
-4. Portabilité et exploitation continue.
+1. Dynamisme des scènes.
+2. Volumes et effets avancés.
+3. Portabilité et exploitation continue.

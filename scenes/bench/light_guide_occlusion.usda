@@ -25,7 +25,7 @@ def Xform "World"
     def Scope "Looks"
     {
         def Material "white" (
-            prepend references = @./test_veach.mtlx@</MaterialX/Materials/white>
+            prepend references = @../pathtracer/test_veach.mtlx@</MaterialX/Materials/white>
         )
         {
         }
