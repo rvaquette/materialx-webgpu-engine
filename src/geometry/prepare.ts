@@ -140,7 +140,18 @@ export function prepareMesh(input: RawMesh, options: PrepareMeshOptions = {}): P
   const otherValues = otherPrimvars.map(() => [] as number[]);
   const indices: number[] = [];
   const triangleFace: number[] = [];
-  const weldMap = new Map<string, number>();
+  // Weld corners sharing a point and equal quantized attributes. Candidates are
+  // chained per point; quantized values compare like their decimal text would
+  // (weldKey), so NaN welds with NaN and -0 with 0.
+  const pointHeads = new Map<number, number>();
+  const nextWelded: number[] = [];
+  const stride = 3 + (uvPrimvar?.elementSize ?? 0) + otherPrimvars.reduce((sum, p) => sum + p.elementSize, 0);
+  const quantized: number[] = [];
+  const scratch = new Float64Array(stride);
+  const quantize = (v: readonly number[], offset: number): number => {
+    for (let i = 0; i < v.length; i++) scratch[offset + i] = Math.round(v[i]! * WELD_SCALE);
+    return offset + v.length;
+  };
 
   const addVertex = (corner: Corner): number => {
     const pos = sliceVec(mesh.points, corner.pointIndex, 3);
@@ -150,16 +161,26 @@ export function prepareMesh(input: RawMesh, options: PrepareMeshOptions = {}): P
     const uv = uvPrimvar ? readPrimvar(uvPrimvar, corner, uvPrimvar.elementSize) : undefined;
     const extra = otherPrimvars.map((p) => readPrimvar(p, corner, p.elementSize));
 
-    const key = weldKey(corner.pointIndex, nrm, uv, extra);
-    const existing = weldMap.get(key);
-    if (existing !== undefined) return existing;
+    let filled = quantize(nrm, 0);
+    if (uv) filled = quantize(uv, filled);
+    for (const e of extra) filled = quantize(e, filled);
+    for (let candidate = pointHeads.get(corner.pointIndex) ?? -1; candidate >= 0; candidate = nextWelded[candidate]!) {
+      let equal = true;
+      for (let i = 0, o = candidate * stride; i < stride && equal; i++, o++) {
+        const a = quantized[o]!, b = scratch[i]!;
+        equal = a === b || (a !== a && b !== b);
+      }
+      if (equal) return candidate;
+    }
 
     const index = positions.length / 3;
+    nextWelded.push(pointHeads.get(corner.pointIndex) ?? -1);
+    pointHeads.set(corner.pointIndex, index);
+    for (let i = 0; i < stride; i++) quantized.push(scratch[i]!);
     positions.push(pos[0]!, pos[1]!, pos[2]!);
     normals.push(nrm[0]!, nrm[1]!, nrm[2]!);
     if (uv) uvs.push(...uv);
     extra.forEach((vals, i) => otherValues[i]!.push(...vals));
-    weldMap.set(key, index);
     return index;
   };
 
@@ -394,23 +415,6 @@ function readPrimvar(primvar: Primvar, corner: Corner, size: number): number[] {
   const out: number[] = [];
   for (let i = 0; i < size; i++) out.push(primvar.values[element * primvar.elementSize + i] ?? 0);
   return out;
-}
-
-function weldKey(
-  pointIndex: number,
-  normal: readonly number[],
-  uv: readonly number[] | undefined,
-  extra: readonly number[][],
-): string {
-  const parts: string[] = [String(pointIndex)];
-  parts.push(quantize(normal));
-  if (uv) parts.push(quantize(uv));
-  for (const e of extra) parts.push(quantize(e));
-  return parts.join('|');
-}
-
-function quantize(v: readonly number[]): string {
-  return v.map((x) => Math.round(x * WELD_SCALE)).join(',');
 }
 
 function sliceVec(flat: readonly number[], index: number, size: number): number[] {
