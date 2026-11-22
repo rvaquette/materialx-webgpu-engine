@@ -42,11 +42,25 @@ export interface BuildBvhOptions {
   splitStrategy?: 'median' | 'sah';
 }
 
-interface Primitive {
-  index: number;
-  min: [number, number, number];
-  max: [number, number, number];
-  centroid: [number, number, number];
+/** Primitive bounds and centroids in flat float64 arrays (3 per primitive). */
+class Primitives {
+  readonly min: Float64Array;
+  readonly max: Float64Array;
+  readonly centroid: Float64Array;
+
+  constructor(readonly count: number) {
+    this.min = new Float64Array(count * 3);
+    this.max = new Float64Array(count * 3);
+    this.centroid = new Float64Array(count * 3);
+  }
+
+  set(index: number, min: readonly number[], max: readonly number[]): void {
+    for (let a = 0; a < 3; a++) {
+      this.min[index * 3 + a] = min[a]!;
+      this.max[index * 3 + a] = max[a]!;
+      this.centroid[index * 3 + a] = (min[a]! + max[a]!) * 0.5;
+    }
+  }
 }
 
 function emptyBounds(): { min: [number, number, number]; max: [number, number, number] } {
@@ -70,89 +84,119 @@ function unionInto(target: { min: number[]; max: number[] }, other: Aabb): void 
   }
 }
 
-function area(b: Aabb): number {
-  const x = b.max[0] - b.min[0], y = b.max[1] - b.min[1], z = b.max[2] - b.min[2];
+const SAH_BINS = 16;
+
+function boxArea(b: Float64Array, offset: number): number {
+  const x = b[offset + 3]! - b[offset]!, y = b[offset + 4]! - b[offset + 1]!, z = b[offset + 5]! - b[offset + 2]!;
   return 2 * (x * y + x * z + y * z);
 }
 
-function sahPartition(items: Primitive[], centroids: Aabb): [Primitive[], Primitive[]] | undefined {
-  const bins = 16;
-  let bestCost = Infinity;
-  let bestAxis = -1;
-  let bestBin = -1;
-  for (let axis = 0; axis < 3; axis++) {
-    const extent = centroids.max[axis]! - centroids.min[axis]!;
-    if (extent <= 0) continue;
-    const buckets = Array.from({ length: bins }, () => ({ ...emptyBounds(), count: 0 }));
-    for (const item of items) {
-      const bin = Math.min(bins - 1, Math.floor((item.centroid[axis]! - centroids.min[axis]!) / extent * bins));
-      const bucket = buckets[bin]!;
-      expand(bucket, item.min);
-      expand(bucket, item.max);
-      bucket.count++;
-    }
-    const rightCosts = new Float64Array(bins);
-    const rightCounts = new Uint32Array(bins);
-    const right = emptyBounds();
-    let count = 0;
-    for (let i = bins - 1; i >= 0; i--) {
-      const bucket = buckets[i]!;
-      if (bucket.count) unionInto(right, bucket);
-      count += bucket.count;
-      rightCounts[i] = count;
-      rightCosts[i] = count ? area(right) * count : 0;
-    }
-    const left = emptyBounds();
-    count = 0;
-    for (let i = 0; i < bins - 1; i++) {
-      const bucket = buckets[i]!;
-      if (bucket.count) unionInto(left, bucket);
-      count += bucket.count;
-      if (!count || !rightCounts[i + 1]) continue;
-      const cost = area(left) * count + rightCosts[i + 1]!;
-      if (cost < bestCost) { bestCost = cost; bestAxis = axis; bestBin = i; }
-    }
-  }
-  if (bestAxis < 0) return undefined;
-  const extent = centroids.max[bestAxis]! - centroids.min[bestAxis]!;
-  const left: Primitive[] = [], right: Primitive[] = [];
-  for (const item of items) {
-    const bin = Math.min(bins - 1, Math.floor((item.centroid[bestAxis]! - centroids.min[bestAxis]!) / extent * bins));
-    (bin <= bestBin ? left : right).push(item);
-  }
-  return left.length && right.length ? [left, right] : undefined;
-}
-
-function buildCore(primitives: Primitive[], maxLeaf: number, strategy: 'median' | 'sah' = 'median'): { nodes: BvhNode[]; order: Uint32Array } {
+/**
+ * Top-down build over flat arrays: binned SAH (16 bins per axis) with a stable
+ * partition, falling back to a stable median split on the widest centroid axis.
+ * Nodes are emitted in pre-order so the root is node 0.
+ */
+function buildCore(primitives: Primitives, maxLeaf: number, strategy: 'median' | 'sah' = 'median'): { nodes: BvhNode[]; order: Uint32Array } {
+  const { min, max, centroid, count } = primitives;
   const nodes: BvhNode[] = [];
-  const order: number[] = [];
+  const order = new Uint32Array(count);
+  let orderLength = 0;
+  const items = new Uint32Array(count);
+  for (let i = 0; i < count; i++) items[i] = i;
+  const scratch = new Uint32Array(count);
+  // Per bin: min xyz, max xyz.
+  const buckets = new Float64Array(SAH_BINS * 6);
+  const bucketCounts = new Uint32Array(SAH_BINS);
+  const rightCosts = new Float64Array(SAH_BINS);
+  const rightCounts = new Uint32Array(SAH_BINS);
+  const sweep = new Float64Array(6);
+  const centroidMin = [0, 0, 0], centroidMax = [0, 0, 0];
 
-  const recurse = (items: Primitive[], depth = 0): number => {
+  const resetBox = (box: Float64Array, offset: number): void => {
+    box[offset] = box[offset + 1] = box[offset + 2] = Infinity;
+    box[offset + 3] = box[offset + 4] = box[offset + 5] = -Infinity;
+  };
+  const unionBucket = (box: Float64Array, bin: number): void => {
+    for (let a = 0; a < 3; a++) {
+      if (buckets[bin * 6 + a]! < box[a]!) box[a] = buckets[bin * 6 + a]!;
+      if (buckets[bin * 6 + 3 + a]! > box[3 + a]!) box[3 + a] = buckets[bin * 6 + 3 + a]!;
+    }
+  };
+  const binOf = (item: number, axis: number, extent: number): number =>
+    Math.min(SAH_BINS - 1, Math.floor((centroid[item * 3 + axis]! - centroidMin[axis]!) / extent * SAH_BINS));
+
+  /** Returns the split point of a stable SAH partition of items[start, end), or -1. */
+  const sahPartition = (start: number, end: number): number => {
+    let bestCost = Infinity, bestAxis = -1, bestBin = -1;
+    for (let axis = 0; axis < 3; axis++) {
+      const extent = centroidMax[axis]! - centroidMin[axis]!;
+      if (extent <= 0) continue;
+      for (let bin = 0; bin < SAH_BINS; bin++) { resetBox(buckets, bin * 6); bucketCounts[bin] = 0; }
+      for (let k = start; k < end; k++) {
+        const item = items[k]!;
+        const o = binOf(item, axis, extent) * 6;
+        for (let a = 0; a < 3; a++) {
+          const lo = min[item * 3 + a]!, hi = max[item * 3 + a]!;
+          if (lo < buckets[o + a]!) buckets[o + a] = lo;
+          if (hi > buckets[o + 3 + a]!) buckets[o + 3 + a] = hi;
+        }
+        bucketCounts[o / 6]!++;
+      }
+      resetBox(sweep, 0);
+      let sum = 0;
+      for (let i = SAH_BINS - 1; i >= 0; i--) {
+        if (bucketCounts[i]) unionBucket(sweep, i);
+        sum += bucketCounts[i]!;
+        rightCounts[i] = sum;
+        rightCosts[i] = sum ? boxArea(sweep, 0) * sum : 0;
+      }
+      resetBox(sweep, 0);
+      sum = 0;
+      for (let i = 0; i < SAH_BINS - 1; i++) {
+        if (bucketCounts[i]) unionBucket(sweep, i);
+        sum += bucketCounts[i]!;
+        if (!sum || !rightCounts[i + 1]) continue;
+        const cost = boxArea(sweep, 0) * sum + rightCosts[i + 1]!;
+        if (cost < bestCost) { bestCost = cost; bestAxis = axis; bestBin = i; }
+      }
+    }
+    if (bestAxis < 0) return -1;
+    const extent = centroidMax[bestAxis]! - centroidMin[bestAxis]!;
+    let left = start, right = 0;
+    for (let k = start; k < end; k++) {
+      const item = items[k]!;
+      if (binOf(item, bestAxis, extent) <= bestBin) items[left++] = item;
+      else scratch[right++] = item;
+    }
+    items.set(scratch.subarray(0, right), left);
+    return left > start && right > 0 ? left : -1;
+  };
+
+  const recurse = (start: number, end: number, depth: number): number => {
     const bounds = emptyBounds();
     const centroidBounds = emptyBounds();
-    for (const it of items) {
-      expand(bounds, it.min);
-      expand(bounds, it.max);
-      expand(centroidBounds, it.centroid);
+    for (let k = start; k < end; k++) {
+      const o = items[k]! * 3;
+      for (let a = 0; a < 3; a++) {
+        if (min[o + a]! < bounds.min[a]!) bounds.min[a] = min[o + a]!;
+        if (min[o + a]! > bounds.max[a]!) bounds.max[a] = min[o + a]!;
+        if (max[o + a]! < bounds.min[a]!) bounds.min[a] = max[o + a]!;
+        if (max[o + a]! > bounds.max[a]!) bounds.max[a] = max[o + a]!;
+        if (centroid[o + a]! < centroidBounds.min[a]!) centroidBounds.min[a] = centroid[o + a]!;
+        if (centroid[o + a]! > centroidBounds.max[a]!) centroidBounds.max[a] = centroid[o + a]!;
+      }
     }
 
     // Reserve this node's slot before recursing so the root lands at index 0;
     // both path-tracer traversals (CPU and WGSL) start from node 0.
     const self = nodes.length;
-    const node: BvhNode = {
-      min: bounds.min as [number, number, number],
-      max: bounds.max as [number, number, number],
-      left: -1,
-      right: -1,
-      start: 0,
-      count: 0,
-    };
+    const node: BvhNode = { min: bounds.min, max: bounds.max, left: -1, right: -1, start: 0, count: 0 };
     nodes.push(node);
 
-    if (items.length <= maxLeaf) {
-      node.start = order.length;
-      node.count = items.length;
-      for (const it of items) order.push(it.index);
+    if (end - start <= maxLeaf) {
+      node.start = orderLength;
+      node.count = end - start;
+      for (let k = start; k < end; k++) order[orderLength++] = items[k]!;
       return self;
     }
 
@@ -166,18 +210,21 @@ function buildCore(primitives: Primitive[], maxLeaf: number, strategy: 'median' 
         axis = a;
       }
     }
+    for (let a = 0; a < 3; a++) { centroidMin[a] = centroidBounds.min[a]!; centroidMax[a] = centroidBounds.max[a]!; }
     // Switch to balanced splits before the shader's 64-entry traversal stack is exhausted.
-    const partition = strategy === 'sah' && depth < 40 ? sahPartition(items, centroidBounds) : undefined;
-    if (!partition) items.sort((p, q) => p.centroid[axis]! - q.centroid[axis]!);
-    const mid = items.length >> 1;
-    const [left, right] = partition ?? [items.slice(0, mid), items.slice(mid)];
-    node.left = recurse(left, depth + 1);
-    node.right = recurse(right, depth + 1);
+    let mid = strategy === 'sah' && depth < 40 ? sahPartition(start, end) : -1;
+    if (mid < 0) {
+      const sorted = Array.from(items.subarray(start, end)).sort((p, q) => centroid[p * 3 + axis]! - centroid[q * 3 + axis]!);
+      items.set(sorted, start);
+      mid = start + ((end - start) >> 1);
+    }
+    node.left = recurse(start, mid, depth + 1);
+    node.right = recurse(mid, end, depth + 1);
     return self;
   };
 
-  if (primitives.length > 0) recurse(primitives);
-  return { nodes, order: Uint32Array.from(order) };
+  if (count > 0) recurse(0, count, 0);
+  return { nodes, order };
 }
 
 function triangleBounds(
@@ -204,16 +251,24 @@ function triangleBounds(
 export function buildBvh(positions: Float32Array, indices: Uint32Array, options: BuildBvhOptions = {}): Bvh {
   const maxLeaf = Math.max(1, options.maxLeafTriangles ?? 4);
   const triangleCount = Math.floor(indices.length / 3);
-  const primitives: Primitive[] = [];
+  const primitives = new Primitives(triangleCount);
+  const lo = [0, 0, 0], hi = [0, 0, 0];
   for (let tri = 0; tri < triangleCount; tri++) {
-    const tb = triangleBounds(positions, indices, tri);
-    primitives.push({ index: tri, min: tb.min, max: tb.max, centroid: tb.centroid });
+    for (let a = 0; a < 3; a++) { lo[a] = Infinity; hi[a] = -Infinity; }
+    for (let k = 0; k < 3; k++) {
+      const v = indices[tri * 3 + k]! * 3;
+      for (let a = 0; a < 3; a++) {
+        const p = positions[v + a]!;
+        if (p < lo[a]!) lo[a] = p;
+        if (p > hi[a]!) hi[a] = p;
+      }
+    }
+    primitives.set(tri, lo, hi);
   }
   const { nodes, order } = buildCore(primitives, maxLeaf, options.splitStrategy);
   const rootBounds: Aabb = nodes.length > 0 ? { min: nodes[0]!.min, max: nodes[0]!.max } : { min: [0, 0, 0], max: [0, 0, 0] };
   return { nodes, triangleOrder: order, bounds: rootBounds };
 }
-
 /** Recompute node bounds in place after vertices move; topology is unchanged. */
 export function refitBvh(bvh: Bvh, positions: Float32Array, indices: Uint32Array): void {
   // Parents precede their children, so a descending pass refits children first.
@@ -242,16 +297,8 @@ export function refitBvh(bvh: Bvh, positions: Float32Array, indices: Uint32Array
 
 export function buildTlas(instanceBounds: readonly Aabb[], options: BuildBvhOptions = {}): Tlas {
   const maxLeaf = Math.max(1, options.maxLeafTriangles ?? 2);
-  const primitives: Primitive[] = instanceBounds.map((bounds, index) => ({
-    index,
-    min: [bounds.min[0]!, bounds.min[1]!, bounds.min[2]!],
-    max: [bounds.max[0]!, bounds.max[1]!, bounds.max[2]!],
-    centroid: [
-      (bounds.min[0]! + bounds.max[0]!) * 0.5,
-      (bounds.min[1]! + bounds.max[1]!) * 0.5,
-      (bounds.min[2]! + bounds.max[2]!) * 0.5,
-    ],
-  }));
+  const primitives = new Primitives(instanceBounds.length);
+  instanceBounds.forEach((bounds, index) => primitives.set(index, bounds.min, bounds.max));
   const { nodes, order } = buildCore(primitives, maxLeaf, options.splitStrategy);
   const rootBounds: Aabb = nodes.length > 0 ? { min: nodes[0]!.min, max: nodes[0]!.max } : { min: [0, 0, 0], max: [0, 0, 0] };
   return { nodes, instanceOrder: order, bounds: rootBounds };
