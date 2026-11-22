@@ -13,6 +13,7 @@
 
 import { buildBvh, type Aabb, type Bvh } from '../../geometry/bvh.ts';
 import { BVH_TRI_STRIDE } from './bvh-wgsl.ts';
+import { packBvhNodes } from './bvh-pack.ts';
 import { openPathTraceBvhCache, pathTraceBvhCacheKey, type PathTraceBvhCache } from '../../geometry/cache.ts';
 import { preparedGeometryMemory, sceneBufferCacheKey } from './scene-buffer-cache.ts';
 import { inverse4, transformDirection, transformPoint, type Mat4, type Vec3 } from '../../scene/transforms.ts';
@@ -377,7 +378,7 @@ export function buildPathTraceScene(
     });
   }
 
-  const nodes = preparedGeometry?.nodes ?? packNodes(bvh!, hasDisplacement ? maxDisp : 0);
+  const nodes = preparedGeometry?.nodes ?? packBvhNodes(bvh!, hasDisplacement ? maxDisp : 0);
   const materials = packMaterials(surfaces, media, volumeBoundaries);
   const grids: Float32Array[] = [];
   let gridLength = 0;
@@ -564,22 +565,6 @@ function readVec2(data: Float32Array, vertex: number): [number, number] {
   return [data[o]!, data[o + 1]!];
 }
 
-function packNodes(bvh: Bvh, inflate = 0): Float32Array {
-  const out = new Float32Array(bvh.nodes.length * PT_NODE_FLOATS);
-  for (let i = 0; i < bvh.nodes.length; i++) {
-    const n = bvh.nodes[i]!;
-    const b = i * PT_NODE_FLOATS;
-    out[b + 0] = n.min[0] - inflate; out[b + 1] = n.min[1] - inflate; out[b + 2] = n.min[2] - inflate;
-    out[b + 3] = n.left;
-    out[b + 4] = n.max[0] + inflate; out[b + 5] = n.max[1] + inflate; out[b + 6] = n.max[2] + inflate;
-    out[b + 7] = n.right;
-    out[b + 8] = n.start;
-    out[b + 9] = n.count;
-    out[b + 10] = 0;
-    out[b + 11] = 0;
-  }
-  return out;
-}
 
 function packMaterials(
   surfaces: readonly RasterSurface[],

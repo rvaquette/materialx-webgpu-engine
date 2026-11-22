@@ -2,8 +2,13 @@
 // moved, hidden or deformed instances exactly as buildPathTraceScene packs them,
 // then refits the BVH bounds of the affected leaves and their ancestors. The
 // topology (triangle order, leaves) is kept: large motions degrade traversal
-// quality but never correctness. Arrays shared with geometry caches are copied
-// on the first update so cached scenes stay intact.
+// quality but never correctness. Refits track the inner-node area relative to
+// the leaves' (area x triangle count): rigid or uniform scene motion keeps it,
+// while subtrees drifting apart inflate it. Once it exceeds REBUILD_COST_RATIO
+// times its value after the last build, the caller rebuilds the topology
+// (rebuildPackedBvh) and hands it to adopt().
+// Arrays shared with geometry caches are copied on the first update so cached
+// scenes stay intact.
 import type { Mat4 } from '../../scene/transforms.ts';
 import { PT_NODE_FLOATS, PT_TRIANGLE_FLOATS, type PathTraceScene, type PathTraceTransformRange } from './scene-buffers.ts';
 
@@ -25,10 +30,14 @@ export interface DynamicUpload {
   tangents?: [number, number];
   /** Contiguous dirty node runs [first, end). */
   nodes: Array<[number, number]>;
+  /** The node array was replaced (adopt): its size and the triangle order may have changed. */
+  topology?: boolean;
 }
 
 const TANGENT_STRIDE = 12;
 const FULL_REFIT_FRACTION = 0.25;
+/** Rebuild once the inner/leaf area ratio grows by this factor. */
+export const REBUILD_COST_RATIO = 1.5;
 
 
 export class PathTraceDynamics {
@@ -36,11 +45,78 @@ export class PathTraceDynamics {
   #parents: Int32Array | undefined;
   #leafOfTriangle: Int32Array | undefined;
   readonly #inflation: number;
+  /** Area sums: inner nodes, and leaves weighted by their triangle count. */
+  #inner = 0;
+  #leaves = 0;
+  #builtCost = 1;
 
   constructor(readonly scene: PathTraceScene) {
     let inflation = 0;
     for (const scale of scene.displacement?.scale ?? []) inflation = Math.max(inflation, 0.5 * Math.abs(scale));
     this.#inflation = inflation;
+    this.#totalCost();
+    this.#builtCost = this.#normalizedCost();
+  }
+
+  get inflation(): number { return this.#inflation; }
+
+  /** Current SAH cost relative to the last build (1 right after a build). */
+  get costRatio(): number {
+    return this.#builtCost > 0 ? this.#normalizedCost() / this.#builtCost : 1;
+  }
+
+  get needsRebuild(): boolean { return this.costRatio > REBUILD_COST_RATIO; }
+
+  /**
+   * Replace the BVH topology with a rebuilt one. It may have been built from
+   * older triangle positions, so it is fully refitted to the current ones.
+   */
+  adopt(nodes: Float32Array, nodeCount: number, triangleOrder: Uint32Array): DynamicUpload {
+    if (triangleOrder.length !== this.scene.triangleCount || nodes.length < nodeCount * PT_NODE_FLOATS) {
+      throw new Error('The rebuilt BVH does not match the path tracing scene.');
+    }
+    this.#own();
+    this.scene.nodes = nodes;
+    this.scene.nodeCount = nodeCount;
+    this.scene.triangleOrder = triangleOrder;
+    this.#parents = undefined;
+    this.#leafOfTriangle = undefined;
+    // Reference cost: the tree as built (tight around its snapshot); the refit to
+    // newer positions may already be degraded and then asks for another rebuild.
+    this.#totalCost();
+    this.#builtCost = this.#normalizedCost();
+    for (let node = nodeCount - 1; node >= 0; node--) this.#refitNode(node);
+    this.#totalCost();
+    this.#updateBounds();
+    return { nodes: [[0, nodeCount]], topology: true };
+  }
+
+  #area(node: number): number {
+    const n = this.scene.nodes, b = node * PT_NODE_FLOATS;
+    const x = n[b + 4]! - n[b]!, y = n[b + 5]! - n[b + 1]!, z = n[b + 6]! - n[b + 2]!;
+    return x >= 0 && y >= 0 && z >= 0 ? 2 * (x * y + x * z + y * z) : 0;
+  }
+
+  /** Adds (sign 1) or removes (sign -1) a node's contribution to the area sums. */
+  #account(node: number, sign: number): void {
+    const count = this.scene.nodes[node * PT_NODE_FLOATS + 9]!;
+    if (count > 0) this.#leaves += sign * this.#area(node) * count;
+    else this.#inner += sign * this.#area(node);
+  }
+
+  #totalCost(): void {
+    this.#inner = 0;
+    this.#leaves = 0;
+    for (let node = 0; node < this.scene.nodeCount; node++) this.#account(node, 1);
+  }
+
+  #normalizedCost(): number {
+    return this.#leaves > 0 ? this.#inner / this.#leaves : 0;
+  }
+
+  #updateBounds(): void {
+    const nodes = this.scene.nodes;
+    this.scene.bounds = { min: [nodes[0]!, nodes[1]!, nodes[2]!], max: [nodes[4]!, nodes[5]!, nodes[6]!] };
   }
 
   /** Rewrite the triangles of the given ranges, then refit the BVH. */
@@ -60,10 +136,7 @@ export class PathTraceDynamics {
       end = Math.max(end, range.firstTriangle + range.triangleCount);
     }
     const nodes = this.#refit(updates.map(({ range }) => range));
-    scene.bounds = {
-      min: [scene.nodes[0]!, scene.nodes[1]!, scene.nodes[2]!],
-      max: [scene.nodes[4]!, scene.nodes[5]!, scene.nodes[6]!],
-    };
+    this.#updateBounds();
     return { triangles: [first, end], ...(hasTangents ? { tangents: [first, end] as [number, number] } : {}), nodes };
   }
 
@@ -105,6 +178,7 @@ export class PathTraceDynamics {
     const changed = ranges.reduce((sum, range) => sum + range.triangleCount, 0);
     if (changed > FULL_REFIT_FRACTION * this.scene.triangleCount) {
       for (let node = nodeCount - 1; node >= 0; node--) this.#refitNode(node);
+      this.#totalCost();
       return [[0, nodeCount]];
     }
     for (const range of ranges) {
@@ -117,7 +191,11 @@ export class PathTraceDynamics {
     }
     // Pre-order layout: children always follow their parent, so descending order refits bottom-up.
     list.sort((a, b) => b - a);
-    for (const node of list) this.#refitNode(node);
+    for (const node of list) {
+      this.#account(node, -1);
+      this.#refitNode(node);
+      this.#account(node, 1);
+    }
     const runs: Array<[number, number]> = [];
     for (let i = list.length - 1; i >= 0; i--) {
       const node = list[i]!;

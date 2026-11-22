@@ -35,7 +35,13 @@ export interface MaterialParameter {
   linkedSource?: string;
   /** Literal graph-node input exposed by the generic graph editor. */
   graphInput?: boolean;
+  /** Hidden scene clock (current time code) read by a `time` or `frame` node. */
+  clock?: boolean;
 }
+
+/** Hidden input carrying the scene clock into `time` / `frame` nodes (compiler/nodes.ts). */
+export const CLOCK_INPUT = 'mx_frame';
+const CLOCK_CATEGORIES = new Set(['time', 'frame']);
 
 export interface MaterialGraphOutput {
   nodeId: string;
@@ -981,6 +987,21 @@ function parameterizeMaterial(material: MaterialResource, policy: ParameterPolic
           });
         }
       }
+    }
+    // Scene clock: a uniform per time/frame node reaching the surface, updated by setTime.
+    const surfaceNodes = reachableNodes(material);
+    for (const [nodeId, node] of graphNodes) {
+      if (!CLOCK_CATEGORIES.has(node.category) || !surfaceNodes.has(nodeId)
+        || node.inputs.some(input => input.name === CLOCK_INPUT)) continue;
+      const uniform = `parameter_${parameters.length}`;
+      parameters.push({
+        id: `clock:${nodeId}`, label: `${nodeId} / time code`, type: 'float', value: [0], initial: [0],
+        update: 'uniform', uniform, nodeId, input: CLOCK_INPUT, clock: true,
+      });
+      graphNodes.set(nodeId, { ...node, inputs: [...node.inputs, {
+        name: CLOCK_INPUT, type: 'float', source: { kind: 'value', type: 'float', value: '0' }, parameter: uniform,
+        defaulted: true, provenance: { namePath: `${nodeId}/${CLOCK_INPUT}` },
+      }] });
     }
     const surface = applyFeatureStates({ ...material.resolvedSurface, inputs }, parameters);
     const surfaceGraph: ResolvedGraph = { ...material.surfaceGraph, nodes: graphNodes };

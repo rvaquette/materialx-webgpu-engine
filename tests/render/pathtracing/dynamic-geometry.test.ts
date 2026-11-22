@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { buildPathTraceScene, PT_NODE_FLOATS, PT_TRIANGLE_FLOATS, type PathTraceScene } from '../../../src/render/pathtracing/scene-buffers.ts';
-import { PathTraceDynamics, type DynamicInstanceSource } from '../../../src/render/pathtracing/dynamic-geometry.ts';
+import { PathTraceDynamics, REBUILD_COST_RATIO, type DynamicInstanceSource } from '../../../src/render/pathtracing/dynamic-geometry.ts';
+import { rebuildPackedBvh } from '../../../src/render/pathtracing/bvh-pack.ts';
 import type { GeometryResource, MaterialResource, SceneResources } from '../../../src/render/scene-resources.ts';
 import { multiply4, rotationAxis4, translation4, type Mat4 } from '../../../src/scene/transforms.ts';
 
@@ -107,5 +108,31 @@ describe('dynamic path-tracing geometry', () => {
     expect(upload.nodes).toEqual([[0, scene.nodeCount]]);
     expectTightBounds(scene);
     expect(scene.bounds.min[1]).toBe(5);
+    expect(dynamics.needsRebuild).toBe(false);
+  });
+
+  it('detects a degraded refit and adopts a rebuilt topology refitted to the current triangles', () => {
+    const resources = resourcesWith(start);
+    const scene = buildPathTraceScene(resources);
+    const dynamics = new PathTraceDynamics(scene);
+    expect(dynamics.costRatio).toBeCloseTo(1, 6);
+    // Scattering neighbours of the row apart makes their shared subtrees huge.
+    const moved = [translation4(20, 60, 0), translation4(10, -60, 0), translation4(20, 0, 0), translation4(30, 0, 60), translation4(40, 0, -60)];
+    scene.transformRanges!.forEach((range, i) => dynamics.update([{ range, source: sourceFor(resources, moved[i]!) }]));
+    const first = scene.transformRanges![0]!;
+    expect(dynamics.costRatio).toBeGreaterThan(REBUILD_COST_RATIO);
+    expect(dynamics.needsRebuild).toBe(true);
+    // The rebuild was computed from a stale snapshot: adopt() refits it to the moved triangles.
+    const stale = rebuildPackedBvh(scene.triangles.slice(), scene.triangleCount, 0);
+    dynamics.update([{ range: first, source: sourceFor(resources, translation4(20, 61, 0)) }]);
+    const upload = dynamics.adopt(stale.nodes, stale.nodeCount, stale.triangleOrder);
+    expect(upload).toEqual({ nodes: [[0, stale.nodeCount]], topology: true });
+    expect(scene.nodeCount).toBe(stale.nodeCount);
+    expectTightBounds(scene);
+    // The reference is the tree as built; the small later motion barely changes it.
+    expect(dynamics.costRatio).toBeGreaterThan(0.9);
+    expect(dynamics.needsRebuild).toBe(false);
+    expect(scene.bounds.max[1]).toBe(67);
+    expect(() => dynamics.adopt(stale.nodes, stale.nodeCount, new Uint32Array(1))).toThrow('does not match');
   });
 });

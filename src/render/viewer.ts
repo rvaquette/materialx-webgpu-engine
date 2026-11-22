@@ -24,7 +24,8 @@ import { buildEnvCdf } from '../assets/environment-cdf.ts';
 import {
   buildCachedPathTraceScene, buildPathTraceScene, PT_NODE_FLOATS, PT_TRIANGLE_FLOATS, type PathTraceScene, type PathTraceTransformRange,
 } from './pathtracing/scene-buffers.ts';
-import { PathTraceDynamics, type DynamicInstanceSource } from './pathtracing/dynamic-geometry.ts';
+import { PathTraceDynamics, type DynamicInstanceSource, type DynamicUpload } from './pathtracing/dynamic-geometry.ts';
+import { rebuildBvhInBackground } from './pathtracing/bvh-rebuild.ts';
 import { buildPathTraceUniform, pathTraceComputeWgsl, pathTraceClosureDispatch, pathTraceOpaqueScene, PathTraceBackend, pathTraceTileCount, PT_UNIFORM_SIZE } from './pathtracing/compute.ts';
 import { pathTraceSettings } from './pathtracing/scene-settings.ts';
 import { cameraFovY } from '../usd/cameras.ts';
@@ -73,7 +74,8 @@ import { applySceneDisplacement } from './displacement.ts';
 import { extractDisplacement } from './graph-material-compiler.ts';
 import type { GeometryResource, InstanceResource, MaterialResource, SceneResources } from './scene-resources.ts';
 import { animateScene, isInvisible, type DeformedGeometry, type LightChanges } from './scene-animation.ts';
-import { sceneTimeline, type SceneTimeline } from '../scene/time.ts';
+import { sampleAt, sceneTimeline, type SceneTimeline } from '../scene/time.ts';
+import type { PrimAttribute, SceneAsset } from '../scene/types.ts';
 import type { SceneCamera } from '../usd/cameras.ts';
 import { packAnalyticLights } from './pathtracing/analytic-lights.ts';
 import {
@@ -84,6 +86,7 @@ import { materialBackendApproximations } from './material-approximations.ts';
 import { DisneyTextureRegistry } from './pathtracing/disney-texture-array.ts';
 import { DisneyGpuBackend } from './pathtracing/disney-gpu-backend.ts';
 import { packDisneyLights } from './pathtracing/disney-lights.ts';
+import { disneyGeometryWrites, disneyInstanceWrites } from './pathtracing/disney-dynamics.ts';
 import {
   lightGuideEnabled, lightGuideUpdateWgsl, lightGuideValuesOffset, PT_LIGHT_GUIDE_CELLS, PT_LIGHT_GUIDE_SETTINGS_BYTES,
 } from './pathtracing/light-guide.ts';
@@ -239,6 +242,8 @@ interface SceneDynamicUpdate {
   keepAccumulation?: boolean;
   /** The camera also moved: age or restart the accumulation even if nothing else changed. */
   cameraChanged?: boolean;
+  /** Material uniforms changed (already uploaded): age or restart the accumulation. */
+  materialsChanged?: boolean;
 }
 
 /** A disposable per-scene GPU render set (raster + lazily built path tracer) for one loaded USD. */
@@ -822,6 +827,10 @@ export class InteractiveViewer {
   }
 
   async setObjectParameters(path: string, changes: ReadonlyMap<string, readonly number[]>): Promise<void> {
+    await this.#setObjectParameters(path, changes, true);
+  }
+
+  async #setObjectParameters(path: string, changes: ReadonlyMap<string, readonly number[]>, resetAccumulation: boolean): Promise<void> {
     const loaded = this.#loaded;
     const source = loaded?.parameterResources;
     const key = source?.instances.find(instance => instance.primPath === path)?.materialKey;
@@ -862,8 +871,10 @@ export class InteractiveViewer {
       loaded.parameterResources = parameterResources;
       this.#rasterDirty = true;
       this.#ptDisplayDirty = true;
-      this.#current.resetPathTrace();
-      this.#emitStatus();
+      if (resetAccumulation) {
+        this.#current.resetPathTrace();
+        this.#emitStatus();
+      }
       return;
     }
     await this.#rebuildMaterialResources(loaded, parameterResources);
@@ -1287,6 +1298,7 @@ export class InteractiveViewer {
     this.#applyDynamicState(false);
     this.#onCameraChanged();
     this.#emitStatus();
+    if (await this.#applyMaterialAnimation()) this.#applyDynamicState(false, true);
   }
 
   #orbitFromSceneCamera(camera: SceneCamera, loaded: LoadedUsdScene, center: Vec3): void {
@@ -1330,7 +1342,69 @@ export class InteractiveViewer {
     if (!Number.isFinite(time)) throw new RangeError('The time code must be finite.');
     if (!this.#loaded) throw new Error('No scene loaded.');
     this.#time = time;
-    this.#applyDynamicState(options.keepAccumulation ?? false);
+    const materialsChanged = await this.#applyMaterialAnimation();
+    if (this.#time !== time) return;
+    this.#applyDynamicState(options.keepAccumulation ?? false, materialsChanged);
+  }
+
+  /**
+   * Material values driven by the time code: the hidden clock of `time`/`frame`
+   * nodes and time-sampled UsdPreviewSurface inputs, by object path.
+   */
+  #animatedMaterialChanges(): Map<string, Map<string, readonly number[]>> {
+    const loaded = this.#loaded;
+    const resources = loaded?.parameterResources;
+    const result = new Map<string, Map<string, readonly number[]>>();
+    if (!loaded || !resources) return result;
+    const time = this.#time;
+    const sampled = new Map<string, Map<string, readonly number[]>>();
+    const source = loaded.animation?.source;
+    for (const { material, id, attribute } of source ? sampledShaderInputs(source) : []) {
+      const value = sampleAt(attribute.typeName, attribute.timeSamples!, time);
+      const numbers = typeof value === 'number' ? [value] : Array.isArray(value) ? value.map(Number) : undefined;
+      if (!numbers?.every(Number.isFinite)) continue;
+      const inputs = sampled.get(material) ?? new Map<string, readonly number[]>();
+      inputs.set(id, numbers);
+      sampled.set(material, inputs);
+    }
+    for (const instance of resources.instances) {
+      const material = instance.materialKey ? resources.materials.get(instance.materialKey) : undefined;
+      if (!material?.parameters) continue;
+      const changes = new Map<string, readonly number[]>();
+      const inputs = instance.materialPath ? sampled.get(instance.materialPath) : undefined;
+      for (const parameter of material.parameters) {
+        const value = parameter.clock ? [time] : inputs?.get(parameter.id);
+        if (!value || value.length !== parameter.value.length) continue;
+        if (value.some((component, i) => component !== parameter.value[i])) changes.set(parameter.id, value);
+      }
+      if (changes.size > 0) result.set(instance.primPath, changes);
+    }
+    return result;
+  }
+
+  #materialAnimationBusy = false;
+  #materialAnimationPending = false;
+
+  /** Applies #animatedMaterialChanges (uniform updates, or rebuilds when a lobe appears/disappears). */
+  async #applyMaterialAnimation(): Promise<boolean> {
+    if (this.#materialAnimationBusy) {
+      this.#materialAnimationPending = true;
+      return false;
+    }
+    this.#materialAnimationBusy = true;
+    let changed = false;
+    try {
+      do {
+        this.#materialAnimationPending = false;
+        for (const [path, changes] of this.#animatedMaterialChanges()) {
+          changed = true;
+          await this.#setObjectParameters(path, changes, false);
+        }
+      } while (this.#materialAnimationPending && !this.#disposed);
+    } finally {
+      this.#materialAnimationBusy = false;
+    }
+    return changed;
   }
 
   /** Overrides an object's world transform (column-major 4x4); omit it to restore the scene's. */
@@ -1421,7 +1495,7 @@ export class InteractiveViewer {
     if (!this.#baseTransforms.has(path)) throw new Error(`Unknown object: ${path}`);
   }
 
-  #applyDynamicState(keepAccumulation: boolean): void {
+  #applyDynamicState(keepAccumulation: boolean, materialsChanged = false): void {
     const loaded = this.#loaded;
     const render = this.#current;
     if (!loaded || !render) return;
@@ -1444,7 +1518,7 @@ export class InteractiveViewer {
     const camera = state?.camera;
     const cameraKey = camera ? sceneCameraKey(camera) : undefined;
     const cameraChanged = camera !== undefined && cameraKey !== this.#sceneCameraKey;
-    render.applyDynamics({ transforms, hidden, lights, geometry: state?.deformed ?? new Map(), keepAccumulation, cameraChanged });
+    render.applyDynamics({ transforms, hidden, lights, geometry: state?.deformed ?? new Map(), keepAccumulation, cameraChanged, materialsChanged });
     if (!keepAccumulation) this.#lastCameraChange = performance.now();
     if (cameraChanged) {
       this.#sceneCameraKey = cameraKey;
@@ -1532,11 +1606,13 @@ export class InteractiveViewer {
       for (let step = 0; step < steps; step++) {
         const share = Math.floor(samples * (step + 1) / steps) - Math.floor(samples * step / steps);
         this.#time = shutter.open + (step + Math.random()) / steps * (shutter.close - shutter.open);
+        await this.#applyMaterialAnimation();
         this.#applyDynamicState(step > 0);
         if (share > 0) await current.capturePathTrace(step === steps - 1 ? targetView : undefined, share, undefined, { reset: step === 0 });
       }
     } finally {
       this.#time = time;
+      await this.#applyMaterialAnimation();
       this.#applyDynamicState(true);
     }
   }
@@ -2564,21 +2640,59 @@ export class InteractiveViewer {
       };
       const objectTransforms = bindings.group0.find(slot => slot.role === 'triangleUv')?.data !== ptScene.triangleUv;
       let dynamics: PathTraceDynamics | undefined;
+      let bvhRebuild: Promise<void> | undefined;
+      const write = (role: PtBufferRole, data: Float32Array, stride: number, [first, end]: [number, number]): void => {
+        const buffer = bufferFor(role);
+        if (buffer && end > first) device.queue.writeBuffer(buffer, first * stride * 4, data, first * stride, (end - first) * stride);
+      };
+      const uploadNodes = (upload: DynamicUpload): void => {
+        if (upload.topology) {
+          // A rebuilt BVH may need a larger node buffer: rebind it (the old one is released).
+          const nodesBuffer = bufferFor('nodes');
+          if (!nodesBuffer || nodesBuffer.size < ptScene.nodes.byteLength) {
+            const slot = bindings.group0.find(candidate => candidate.role === 'nodes');
+            const entry = slot && group0Entries.find(candidate => candidate.binding === slot.binding);
+            if (entry) entry.resource = { buffer: storageData(ptScene.nodes, 'nodes') };
+            ptComputeGroups = computeGroups(accumBuffer);
+          } else write('nodes', ptScene.nodes, PT_NODE_FLOATS, [0, ptScene.nodeCount]);
+          const order = bufferFor('triangleOrder');
+          if (order) device.queue.writeBuffer(order, 0, ptScene.triangleOrder);
+          return;
+        }
+        const runs = upload.nodes.length > 256 ? [[upload.nodes[0]![0], upload.nodes[upload.nodes.length - 1]![1]] as [number, number]] : upload.nodes;
+        for (const run of runs) write('nodes', ptScene.nodes, PT_NODE_FLOATS, run);
+      };
+      // Large motions degrade the refitted BVH; rebuild it in the background. The
+      // geometry is unchanged, so the accumulation is kept.
+      const scheduleBvhRebuild = (): void => {
+        const current = dynamics;
+        if (!current || bvhRebuild || !current.needsRebuild) return;
+        const started = performance.now();
+        const ratio = current.costRatio;
+        bvhRebuild = rebuildBvhInBackground(ptScene.triangles, ptScene.triangleCount, current.inflation).then(result => {
+          if (disposed || dynamics !== current || pathTracer?.scene !== ptScene) return;
+          uploadNodes(current.adopt(result.nodes, result.nodeCount, result.triangleOrder));
+          performance.measure('pathtracing:bvh-rebuild', { start: started, end: performance.now(),
+            detail: { costRatio: ratio, nodes: result.nodeCount } });
+          this.#ptDisplayDirty = true;
+        }, (error: unknown) => {
+          sink({ level: 'warning', message: `Path tracing BVH rebuild failed: ${error instanceof Error ? error.message : String(error)}` });
+        }).finally(() => {
+          bvhRebuild = undefined;
+          if (!disposed && dynamics === current) scheduleBvhRebuild();
+        });
+      };
       const applyGeometry = (updates: ReadonlyArray<{ range: PathTraceTransformRange; source: DynamicInstanceSource }>): void => {
         if (updates.length === 0) return;
         const started = performance.now();
         dynamics ??= new PathTraceDynamics(ptScene);
         const upload = dynamics.update(updates);
         performance.measure('pathtracing:dynamic-update', { start: started, end: performance.now(),
-          detail: { nodes: upload.nodes.reduce((sum, [first, end]) => sum + end - first, 0) } });
-        const write = (role: PtBufferRole, data: Float32Array, stride: number, [first, end]: [number, number]): void => {
-          const buffer = bufferFor(role);
-          if (buffer && end > first) device.queue.writeBuffer(buffer, first * stride * 4, data, first * stride, (end - first) * stride);
-        };
+          detail: { nodes: upload.nodes.reduce((sum, [first, end]) => sum + end - first, 0), costRatio: dynamics.costRatio } });
         if (upload.triangles) write('triangles', ptScene.triangles, PT_TRIANGLE_FLOATS, upload.triangles);
         if (upload.tangents) write('triangleTangent', ptScene.triangleTangent, 12, upload.tangents);
-        const runs = upload.nodes.length > 256 ? [[upload.nodes[0]![0], upload.nodes[upload.nodes.length - 1]![1]] as [number, number]] : upload.nodes;
-        for (const run of runs) write('nodes', ptScene.nodes, PT_NODE_FLOATS, run);
+        uploadNodes(upload);
+        scheduleBvhRebuild();
         const uvBuffer = bufferFor('triangleUv');
         if (objectTransforms && uvBuffer && ptScene.transformRanges) {
           // Instance matrices follow the UVs and range indices (device-bindings.ts packUvAndTransforms).
@@ -3124,6 +3238,41 @@ export class InteractiveViewer {
     let disneyEnvironmentRotationValue = 0;
     let disneyHasEnvironment = false;
 
+    // Dynamic changes are written in place (disney-dynamics.ts); a build in progress
+    // catches up once ready. Deformed prototypes wait here until the next sync.
+    const disneyProxyPaths = new Set(loaded.lights.map(light => `${light.path}_Geometry`));
+    const disneyInstances = (): InstanceResource[] => resources.instances.filter(instance =>
+      instance.hasGeometry && !disneyProxyPaths.has(instance.primPath));
+    let disneyDirtyPrototypes = new Set<string>();
+    let disneyMaterialsDirty = false;
+    const syncDisney = (): void => {
+      const backend = disneyBackend, data = disneySceneData;
+      if (!backend || !data || disneyState !== 'ready') return;
+      try {
+        backend.writeTexels([
+          ...disneyGeometryWrites(data, disneyDirtyPrototypes),
+          ...disneyInstanceWrites(data, disneyInstances(), hiddenInstances),
+        ]);
+        backend.writeLights(packDisneyLights(currentLights).data);
+        if (disneyMaterialsDirty) {
+          const materials = [...data.materials];
+          for (const [key, index] of data.materialIndices ?? []) {
+            materials[index] = convertDisneySceneMaterial(key, resources.materials.get(key)!, data.textures).material;
+          }
+          backend.writeMaterials(materials);
+          Object.assign(data, { materials });
+        }
+        disneyDirtyPrototypes = new Set();
+        disneyMaterialsDirty = false;
+        resetDisneyPathTrace();
+      } catch (error) {
+        // Changes the layout cannot absorb (new texture layers...) rebuild the backend.
+        console.warn(`Disney path tracer rebuilt: ${error instanceof Error ? error.message : String(error)}`);
+        invalidateDisneyTracer();
+        if (this.#backend === 'disney') startDisneyTracer();
+      }
+    };
+
     const resetDisneyPathTrace = (): void => {
       disneyFrameIndex = 0;
       disneySeedFrame = 1;
@@ -3164,17 +3313,14 @@ export class InteractiveViewer {
       void (async () => {
         await new Promise(resolve => setTimeout(resolve, 0));
         if (disposed || revision !== disneyBuildRevision) return;
-        const proxyPaths = new Set(loaded.lights.map(light => `${light.path}_Geometry`));
-        const disneyResources = {
-          ...resources,
-          instances: resources.instances.filter(instance =>
-            instance.hasGeometry && !proxyPaths.has(instance.primPath)),
-        };
+        const disneyResources = { ...resources, instances: disneyInstances() };
+        disneyDirtyPrototypes = new Set();
+        disneyMaterialsDirty = false;
         const scene = prepareDisneyScene(loaded.scene, disneyResources);
         for (const warning of scene.warnings) {
           sink({ level: 'warning', message: warning.message, detail: warning.materialKey });
         }
-        const lightData = packDisneyLights(loaded.lights);
+        const lightData = packDisneyLights(currentLights);
         let environment: { width: number; height: number; data: Float32Array } | undefined;
         if (envAsset) {
           const data = new Float32Array(envAsset.image.data.length);
@@ -3203,6 +3349,8 @@ export class InteractiveViewer {
         disneyEnvironmentRotationValue = environmentRotation;
         disneyHasEnvironment = environment !== undefined;
         disneyState = 'ready';
+        // Visibility and changes made while the backend was being built.
+        syncDisney();
         this.#ptDisplayDirty = true;
         this.#emitStatus();
       })().catch(error => {
@@ -3404,6 +3552,7 @@ export class InteractiveViewer {
           stream.name === 'position' ? { ...stream, data: deformed.positions }
             : stream.name === 'normal' ? { ...stream, data: deformed.normals } : stream);
         raster?.updateGeometry(prototypeId, deformed.positions, deformed.normals);
+        disneyDirtyPrototypes.add(prototypeId);
         for (const instance of resources.instances) if (instance.prototypeId === prototypeId) changed.add(instance.id);
       }
       for (const draw of frame.draws) {
@@ -3439,12 +3588,13 @@ export class InteractiveViewer {
         triangles = updates.reduce((sum, { range }) => sum + range.triangleCount, 0);
         pathTracer.applyGeometry(updates);
       }
-      const sceneChanged = changed.size > 0 || lightsChanged;
+      const sceneChanged = changed.size > 0 || lightsChanged || update.materialsChanged === true;
       if (!sceneChanged && !update.cameraChanged) return;
       if (sceneChanged) {
         performance.measure('viewer:dynamic-update', { start: started, end: performance.now(),
           detail: { instances: changed.size, triangles, lights: lightsChanged } });
-        if (disneyState !== 'idle') invalidateDisneyTracer();
+        if (update.materialsChanged) disneyMaterialsDirty = true;
+        syncDisney();
       }
       if (pathTracer && !update.keepAccumulation) {
         if (this.#pathTracingTemporalHistory > 0) pathTracer.ageAccumulation(this.#pathTracingTemporalHistory);
@@ -3496,12 +3646,13 @@ export class InteractiveViewer {
         }
         resetDisneyPathTrace();
       },
-      updateMaterial: (key, material, refreshDisney) => {
+      updateMaterial: (key, material) => {
         resources.materials.set(key, material);
         const data = materialUniformData(material);
         for (const buffer of parameterBuffers.get(key) ?? []) device.queue.writeBuffer(buffer, 0, data);
         uploadPtParameters?.();
-        if (refreshDisney && disneyState !== 'idle') invalidateDisneyTracer();
+        disneyMaterialsDirty = true;
+        syncDisney();
       },
       updateTopology: async (key, material, nextFrame, check, commit) => {
         if (rasterBuild) await rasterBuild;
@@ -3615,4 +3766,26 @@ export class InteractiveViewer {
       },
     };
   }
+}
+
+const shaderInputCache = new WeakMap<SceneAsset, ReadonlyArray<{ material: string; id: string; attribute: PrimAttribute }>>();
+
+/** Time-sampled UsdPreviewSurface inputs, keyed by their material prim (the shader's parent). */
+function sampledShaderInputs(scene: SceneAsset): ReadonlyArray<{ material: string; id: string; attribute: PrimAttribute }> {
+  let inputs = shaderInputCache.get(scene);
+  if (!inputs) {
+    const found: Array<{ material: string; id: string; attribute: PrimAttribute }> = [];
+    for (const shader of scene.prims.values()) {
+      if (shader.attributes.get('info:id')?.value !== 'UsdPreviewSurface') continue;
+      const material = shader.path.slice(0, shader.path.lastIndexOf('/'));
+      for (const [name, attribute] of shader.attributes) {
+        if (name.startsWith('inputs:') && !name.includes('.') && attribute.timeSamples?.length) {
+          found.push({ material, id: `surface:${name.slice('inputs:'.length)}`, attribute });
+        }
+      }
+    }
+    inputs = found;
+    shaderInputCache.set(scene, inputs);
+  }
+  return inputs;
 }

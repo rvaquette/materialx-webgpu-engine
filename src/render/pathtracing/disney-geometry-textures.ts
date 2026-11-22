@@ -18,6 +18,19 @@ export interface DisneyGeometryTextures {
   transforms: Float32Array;
   inverseTransforms: Float32Array;
   topLevelIndex: number;
+  /** Placement of each prototype, for in-place dynamic updates (disney-dynamics.ts). */
+  layout?: DisneyGeometryLayout;
+}
+
+export interface DisneyGeometryLayout {
+  /** First node texel triple of each prototype's BLAS. */
+  blasRoots: ReadonlyMap<string, number>;
+  /** First vertex of each prototype. */
+  vertexOffsets: ReadonlyMap<string, number>;
+  /** Value stored in a TLAS leaf's right slot (material index or subset table reference) per instance. */
+  instanceMaterialValues: readonly number[];
+  /** Node slots reserved for the TLAS (2n - 1 for n instances). */
+  tlasCapacity: number;
 }
 
 const MAX_EXACT_FLOAT_INDEX = 0xffffff;
@@ -153,8 +166,15 @@ export function packDisneyGeometryTextures(
       writeNode(topLevelIndex + index, node, topLevelIndex + node.left, topLevelIndex + node.right, 0);
     }
   });
+  const vertexOffsets = new Map<string, number>();
+  let vertexBase = 0;
+  for (const [key, { geometry }] of entries) {
+    vertexOffsets.set(key, vertexBase);
+    vertexBase += geometry.vertexCount;
+  }
   return { nodes, triangleIndices, subsetMaterials: new Int32Array(materialTable.length ? materialTable : [0, 0, 0, 0]),
-    vertices, normals, transforms, inverseTransforms, topLevelIndex };
+    vertices, normals, transforms, inverseTransforms, topLevelIndex,
+    layout: { blasRoots: roots, vertexOffsets, instanceMaterialValues, tlasCapacity: acceleration.tlas.nodes.length } };
 }
 
 export interface DisneyGpuGeometryTextures {

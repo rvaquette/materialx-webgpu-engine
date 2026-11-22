@@ -2,11 +2,12 @@ import type { HdrImage } from '../../assets/hdr.ts';
 import type { PtImageProvider } from './device-bindings.ts';
 import { buildDisneyEnvironmentCdf } from './disney-environment.ts';
 import { DISNEY_ENVIRONMENT_WGSL } from './disney-environment-wgsl.ts';
-import { uploadDisneyGeometryTextures } from './disney-geometry-textures.ts';
+import { uploadDisneyGeometryTextures, type DisneyGpuGeometryTextures } from './disney-geometry-textures.ts';
+import type { DisneyTexelWrite } from './disney-dynamics.ts';
 import { DISNEY_INTEGRATOR_WGSL } from './disney-integrator-wgsl.ts';
 import { DISNEY_LIGHTS_WGSL } from './disney-lights-wgsl.ts';
 import { DISNEY_MATERIAL_WGSL } from './disney-material-wgsl.ts';
-import { uploadDisneyMaterials } from './disney-material.ts';
+import { packDisneyMaterials, uploadDisneyMaterials, type DisneyMaterial } from './disney-material.ts';
 import { DISNEY_ALPHA_WGSL } from './disney-alpha-wgsl.ts';
 import { DISNEY_BSDF_WGSL } from './disney-bsdf-wgsl.ts';
 import { DISNEY_CAMERA_WGSL } from './disney-camera-wgsl.ts';
@@ -139,6 +140,7 @@ export class DisneyGpuBackend {
   readonly #pixelCount: number;
   readonly #owned: Array<{ destroy(): void }>;
   readonly #specialization: DisneyShaderSpecialization | undefined;
+  readonly #scene: { geometry: DisneyGpuGeometryTextures; materials: GPUBuffer; lights: GPUBuffer; textureCount: number };
   #disposed = false;
 
   private constructor(
@@ -147,7 +149,9 @@ export class DisneyGpuBackend {
     parameters: GPUBuffer, displayParameters: GPUBuffer, pixels: GPUBuffer, error: GPUBuffer, errorReadback: GPUBuffer,
     pixelReadback: GPUBuffer, width: number, height: number, owned: Array<{ destroy(): void }>,
     specialization: DisneyShaderSpecialization | undefined,
+    scene: { geometry: DisneyGpuGeometryTextures; materials: GPUBuffer; lights: GPUBuffer; textureCount: number },
   ) {
+    this.#scene = scene;
     this.#device = device;
     this.#pipeline = pipeline;
     this.#displayPipeline = displayPipeline;
@@ -307,11 +311,55 @@ export class DisneyGpuBackend {
       });
       return new DisneyGpuBackend(device, pipeline, displayPipeline, sceneGroup, renderGroup, displayGroup,
         parameters, displayParameters, pixels, error, errorReadback, pixelReadback, options.width, options.height,
-        created, specialization);
+        created, specialization,
+        { geometry, materials, lights: lightBuffer, textureCount: scene.textures.references().length });
     } catch (error) {
       for (const resource of created.reverse()) resource.destroy();
       throw error;
     }
+  }
+
+  /** Overwrite texels of the packed geometry textures (rows are split as uploaded). */
+  writeTexels(writes: readonly DisneyTexelWrite[]): void {
+    this.#assertLive();
+    for (const { target, firstTexel, data } of writes) {
+      const texture = this.#scene.geometry[target];
+      const width = texture.width;
+      const count = data.length / 4;
+      if (!Number.isInteger(count) || firstTexel < 0 || firstTexel + count > width * texture.height) {
+        throw new Error(`Disney ${target} write exceeds its texture.`);
+      }
+      let texel = 0;
+      while (texel < count) {
+        const index = firstTexel + texel;
+        const x = index % width, y = Math.floor(index / width);
+        // A partial first row, then whole rows, then a partial last row.
+        const rows = x === 0 ? Math.max(1, Math.floor((count - texel) / width)) : 1;
+        const columns = rows > 1 ? width : Math.min(width - x, count - texel);
+        this.#device.queue.writeTexture({ texture, origin: [x, y] }, data, {
+          offset: texel * 16, bytesPerRow: columns * 16, rowsPerImage: rows,
+        }, [columns, rows]);
+        texel += columns * rows;
+      }
+    }
+  }
+
+  /** Replace the light records; their count is compiled into the shader. */
+  writeLights(lights: Float32Array): void {
+    this.#assertLive();
+    if (lights.byteLength !== this.#scene.lights.size) throw new Error('The Disney light count changed.');
+    this.#device.queue.writeBuffer(this.#scene.lights, 0, lights);
+  }
+
+  /** Replace the material records; texture layers cannot be added in place. */
+  writeMaterials(materials: readonly DisneyMaterial[]): void {
+    this.#assertLive();
+    if (materials.some(material => material.textures.some(id => id >= this.#scene.textureCount))) {
+      throw new Error('The Disney material references a new texture layer.');
+    }
+    const data = packDisneyMaterials(materials);
+    if (data.byteLength !== this.#scene.materials.size) throw new Error('The Disney material count changed.');
+    this.#device.queue.writeBuffer(this.#scene.materials, 0, data);
   }
 
   reset(): void {

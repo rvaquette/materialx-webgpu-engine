@@ -1,7 +1,7 @@
 import type { SceneAsset } from '../../scene/types.ts';
 import { materialUnitKey } from '../../usd/materials.ts';
 import type { MaterialResource, SceneResources } from '../scene-resources.ts';
-import { buildDisneyAcceleration } from './disney-acceleration.ts';
+import { buildDisneyAcceleration, type DisneyAcceleration } from './disney-acceleration.ts';
 import { packDisneyGeometryTextures, type DisneyGeometryTextures } from './disney-geometry-textures.ts';
 import { disneyMaterialFromPrincipled, packDisneyMaterials, type DisneyMaterial } from './disney-material.ts';
 import { disneyMaterialFromStandard } from './disney-standard-material.ts';
@@ -12,6 +12,9 @@ export interface DisneySceneData {
   materials: readonly DisneyMaterial[];
   textures: DisneyTextureRegistry;
   warnings: readonly { materialKey: string; message: string }[];
+  /** Two-level acceleration and material slots, kept for in-place dynamic updates. */
+  acceleration?: DisneyAcceleration;
+  materialIndices?: ReadonlyMap<string, number>;
 }
 
 export function convertDisneySceneMaterial(key: string, resource: MaterialResource, textures: DisneyTextureRegistry) {
@@ -77,6 +80,6 @@ export function prepareDisneyScene(scene: SceneAsset, resources: SceneResources)
   packDisneyMaterials(materials);
   return {
     geometry: packDisneyGeometryTextures(acceleration, instanceMaterials, subsetMaterials),
-    materials, textures, warnings,
+    materials, textures, warnings, acceleration, materialIndices,
   };
 }

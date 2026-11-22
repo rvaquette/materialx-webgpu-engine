@@ -6,7 +6,7 @@
     startTimeCode = 0
     endTimeCode = 48
     timeCodesPerSecond = 24
-    doc = "Dynamic-scene control: animated hierarchy, deforming mesh, light, visibility, camera and a material variant."
+    doc = "Dynamic-scene control: animated hierarchy, deforming mesh, light, visibility, camera, animated materials and a material variant."
 )
 
 def Xform "World"
@@ -37,6 +37,22 @@ def Xform "World"
             prepend references = @../pathtracer/test_veach.mtlx@</MaterialX/Materials/metal_2>
         )
         {
+        }
+        def Material "clock" (
+            prepend references = @../mtlx-library/nodes/time/time.mtlx@</MaterialX/Materials/M_time>
+        )
+        {
+        }
+        def Material "pulse"
+        {
+            token outputs:surface.connect = </World/Looks/pulse/Surface.outputs:surface>
+            def Shader "Surface"
+            {
+                uniform token info:id = "UsdPreviewSurface"
+                color3f inputs:diffuseColor.timeSamples = { 0: (0.9, 0.1, 0.1), 48: (0.1, 0.2, 0.9) }
+                float inputs:roughness = 0.5
+                token outputs:surface
+            }
         }
     }
 
@@ -97,6 +113,25 @@ def Xform "World"
         point3f[] points = [(4, 0.5, -3), (6, 0.5, -3), (6, 2.5, -3), (4, 2.5, -3)]
         token visibility.timeSamples = { 0: "inherited", 24: "invisible" }
         rel material:binding = </World/Looks/white>
+    }
+
+    def Mesh "Panel"
+    {
+        int[] faceVertexCounts = [4]
+        int[] faceVertexIndices = [0, 1, 2, 3]
+        point3f[] points = [(-6, 0.5, -3), (-4, 0.5, -3), (-4, 2.5, -3), (-6, 2.5, -3)]
+        rel material:binding = </World/Looks/pulse>
+    }
+
+    def Mesh "Clock"
+    {
+        int[] faceVertexCounts = [4]
+        int[] faceVertexIndices = [0, 1, 2, 3]
+        point3f[] points = [(-1, 3, -4), (1, 3, -4), (1, 5, -4), (-1, 5, -4)]
+        float2[] primvars:st = [(0, 0), (1, 0), (1, 1), (0, 1)] (
+            interpolation = "vertex"
+        )
+        rel material:binding = </World/Looks/clock>
     }
 
     def Scope "Lights"

@@ -867,6 +867,10 @@ function evalCall(op: string, args: IrValue[], env: IrEvalVaryings, type: IrType
       return [input('in1', 0, [0])[0]!, input('in2', 1, [0])[0]!, input('in3', 2, [0])[0]!, input('in4', 3, [0])[0]!];
     case 'constant':
       return [...input('value', 0)];
+    case 'frame':
+      return [input('mx_frame', 99, [1])[0]!];
+    case 'time':
+      return [input('mx_frame', 99, [0])[0]! / input('fps', 0, [24])[0]!];
     case 'ifequal':
     case 'ifgreater':
     case 'ifgreatereq': {

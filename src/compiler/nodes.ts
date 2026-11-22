@@ -1278,9 +1278,10 @@ const LOWERINGS: readonly NodeLowering[] = [
   // MaterialX view direction points from the camera towards the surface.
   expr('viewdirection', (_inp, _type, ctx) => `normalize(-${ctx.varyings.viewDir})`),
   expr('geomcolor', (_inp, type, ctx) => `${ctx.wgslType(type)}(1.0)`),
-  // Static scenes: no animation clock is bound, time/frame are constants.
-  expr('time', () => '0.0'),
-  expr('frame', () => '1.0'),
+  // The scene clock (time code) arrives through the hidden 'mx_frame' input bound by
+  // material-parameters.ts; without it (precompiled or standalone shaders) time is 0, frame 1.
+  expr('time', (inp) => `(${inp.named('mx_frame', '0.0')} / ${inp.named('fps', '24.0', 0)})`),
+  expr('frame', (inp) => inp.named('mx_frame', '1.0')),
   expr(
     'normalmap',
     (inp, _type, ctx) => `mx_normalmap(${inp.named('in', undefined, 0)}, vec2f(${inp.named('scale', '1.0', 1)}), ${inp.named('normal', ctx.varyings.normal)}, ${inp.named('tangent', ctx.varyings.tangent)}, ${inp.named('bitangent', ctx.varyings.bitangent)})`,

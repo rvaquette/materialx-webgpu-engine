@@ -768,6 +768,49 @@ def Mesh "Teapot" { rel material:binding = </Mat> }` } });
     }
   }, 30000);
 
+  it('drives time and frame nodes from a hidden clock uniform without recompiling', async () => {
+    const module = await import(/* @vite-ignore */ pathToFileURL(coreFile).href) as { default: MaterialXModuleFactory };
+    const core = new MaterialXCore(await module.default());
+    const libraries = new MaterialXLibraries(core);
+    await libraries.load({ sources: defaultLibrarySources(libraryRoot), fetchText: async path => readFileSync(path, 'utf8') });
+    const diagnostics: Diagnostic[] = [];
+    const files = [['frame', 'M_frame'], ['time', 'M_time']] as const;
+    const documents = await loadMaterialXDocuments({
+      core, libraries, sink: d => diagnostics.push(d),
+      texts: new Map(files.map(([name]) => [`${name}.mtlx`, readFileSync(join('scenes', 'mtlx-library', 'nodes', name, `${name}.mtlx`), 'utf8')])),
+    });
+    try {
+      const compiler = createGraphMaterialCompiler({ documents, sink: d => diagnostics.push(d) });
+      for (const [name, materialName] of files) {
+        const build = await compiler.compile({ assetPath: `${name}.mtlx`, materialName, referencedPrimPath: `/M/${materialName}`, boundPrims: [] });
+        const scene = await importUsdStage('test.usda', { reader: { read: async () => `#usda 1.0
+def Material "Mat" (prepend references = @${name}.mtlx@</M/${materialName}>) {}
+def Mesh "Plane" { rel material:binding = </Mat> }` } });
+        const resources = editableSceneMaterials(await buildSceneResources(scene, {
+          meshSource: { meshFor: () => ({ points: [0, 0, 0, 1, 0, 0, 0, 1, 0], faceVertexCounts: [3], faceVertexIndices: [0, 1, 2] }) },
+          materialCompiler: { compile: () => build },
+        }));
+        const material = [...resources.materials.values()][0]!;
+        const clock = material.parameters!.filter(parameter => parameter.clock);
+        expect(clock.map(parameter => [parameter.id, parameter.update]), name).toEqual([[`clock:NG_${name}/node_under_test`, 'uniform']]);
+        expect(visibleMaterialParameters(material).some(parameter => parameter.clock), name).toBe(false);
+        expect(material.sceneShader!.code, name).toContain(clock[0]!.uniform!);
+        const updated = changeMaterialParameters(material, new Map([[clock[0]!.id, [12.25]]]));
+        expect(compileEditableMaterial(updated).sceneShader!.code, name).toBe(material.sceneShader!.code);
+        if (name === 'frame') {
+          // base_color = mix(cool, hot, fract(|frame|)) at uv (0, 0): fract(12.25) = 0.25.
+          const lobes = evaluateSurfaceToLayered(updated.surfaceGraph!, updated.resolvedSurface!, { texcoord: [0, 0] } as never).lobes;
+          const color = lobes.find(lobe => lobe.kind === 'burley_diffuse')?.color;
+          expect(color?.map(value => Number(value.toFixed(4)))).toEqual([0.3125, 0, 0.65]);
+        }
+      }
+      expect(diagnostics.filter(d => d.level !== 'info')).toEqual([]);
+    } finally {
+      documents.delete();
+      libraries.delete();
+    }
+  }, 30000);
+
   it.skipIf(!existsSync(join(playgroundRoot, 'materials')))('compiles all playground documents without material warnings', async () => {
     const module = await import(/* @vite-ignore */ pathToFileURL(coreFile).href) as { default: MaterialXModuleFactory };
     const core = new MaterialXCore(await module.default());
