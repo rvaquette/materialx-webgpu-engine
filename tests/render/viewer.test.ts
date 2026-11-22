@@ -1754,6 +1754,27 @@ describe('interactive viewer resource lifecycle', () => {
     } finally { create.mockRestore(); }
   });
 
+  it('moves objects and edits Disney materials in place once the backend is ready', async () => {
+    const backend = { dispose: vi.fn(), reset: vi.fn(), writeTexels: vi.fn(), writeLights: vi.fn(), writeMaterials: vi.fn() };
+    const create = vi.spyOn(DisneyGpuBackend, 'create').mockResolvedValue(backend as unknown as DisneyGpuBackend);
+    try {
+      const { viewer, statuses } = await setup(false, true);
+      const path = '/World/Ball';
+      await viewer.setObjectConstant(path, 's', 'base_color', true, 'multiply');
+      const factor = viewer.objectParameters(path, 'base_color_multiply')[0]!;
+      viewer.setBackend('disney');
+      tick(0);
+      await vi.waitFor(() => expect(statuses.at(-1)?.pathTracer).toBe('ready'));
+      viewer.setObjectTransform(path, translation4(0, 2, 0));
+      const transforms = backend.writeTexels.mock.calls.at(-1)![0].find((write: { target: string }) => write.target === 'transforms');
+      expect([...transforms.data.slice(12, 15)]).toEqual([0, 2, 0]);
+      await viewer.setObjectParameters(path, new Map([[factor.id, [0.5]]]));
+      expect(backend.writeMaterials.mock.calls.at(-1)![0][0].baseColor).toEqual([0.4, 0.4, 0.4]);
+      expect(create).toHaveBeenCalledOnce();
+      expect(backend.dispose).not.toHaveBeenCalled();
+    } finally { create.mockRestore(); }
+  });
+
   it('connects an editable Constant and restores the literal with its updated value without reloading USD', async () => {
     const { viewer } = await setup(false, true);
     const path = '/World/Ball';

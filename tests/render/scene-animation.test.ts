@@ -3,6 +3,8 @@ import { animateScene, deformGeometry, isInvisible } from '../../src/render/scen
 import { buildGeometry, type SceneResources } from '../../src/render/scene-resources.ts';
 import { prepareMesh } from '../../src/geometry/prepare.ts';
 import { importUsdStage } from '../../src/usd/importer.ts';
+import { meshSourceFromScene } from '../../src/render/usd-scene-assets.ts';
+import { evaluateSceneAt } from '../../src/scene/time.ts';
 
 const SCENE = `#usda 1.0
 def Xform "World"
@@ -60,5 +62,36 @@ describe('scene animation', () => {
   it('reads visibility from ancestors', async () => {
     const { scene } = await setup();
     expect(isInvisible(scene, '/World/Quad')).toBe(false);
+  });
+
+  it('prepares meshes with sampled topology again and reports a new triangulation', async () => {
+    const scene = await importUsdStage('b.usda', { reader: { read: async () => `#usda 1.0
+def Mesh "Morph"
+{
+    int[] faceVertexCounts.timeSamples = { 0: [4], 5: [3, 3], 8: [4] }
+    int[] faceVertexIndices.timeSamples = { 0: [0, 1, 2, 3], 5: [0, 1, 3, 1, 2, 3], 8: [0, 1, 2, 3] }
+    point3f[] points.timeSamples = { 0: [(0, 0, 0), (1, 0, 0), (1, 1, 0), (0, 1, 0)], 8: [(0, 0, 0), (2, 0, 0), (2, 2, 0), (0, 2, 0)] }
+}
+` } });
+    const meshFor = (at: typeof scene, path: string) => meshSourceFromScene(at).meshFor(path);
+    const geometry = buildGeometry('/Morph', '/Morph', prepareMesh(meshFor(evaluateSceneAt(scene, 0), '/Morph')!));
+    const resources = {
+      geometries: new Map([['/Morph', geometry]]),
+      instances: [{ id: '/Morph', prototypeId: '/Morph', primPath: '/Morph', transform: [], hasGeometry: true }],
+    } as unknown as SceneResources;
+    // The other diagonal: a new triangulation.
+    const split = animateScene(scene, 6, resources, { meshFor });
+    expect(split.deformed.size).toBe(0);
+    expect([...split.retopologized.get('/Morph')!.indices]).toEqual([0, 1, 2, 1, 3, 2]);
+    expect(split.retopologized.get('/Morph')!.indices).not.toEqual(geometry.indices);
+    // Same triangulation with moved points: a plain deformation.
+    const grown = animateScene(scene, 8, resources, { meshFor });
+    expect(grown.retopologized.size).toBe(0);
+    expect(Math.max(...grown.deformed.get('/Morph')!.positions)).toBe(2);
+    // Without a way to read the mesh, the change is reported and skipped.
+    const warnings: string[] = [];
+    const skipped = animateScene(scene, 6, resources, { sink: d => warnings.push(d.message) });
+    expect(skipped.retopologized.size + skipped.deformed.size).toBe(0);
+    expect(warnings).toEqual(['Time-sampled mesh ignored: /Morph (no inline geometry)']);
   });
 });

@@ -63,8 +63,10 @@ export function disneyInstanceWrites(
   const nodes = new Float32Array(layout.tlasCapacity * 12);
   const base = scene.geometry.topLevelIndex;
   if (visible.length === 0) {
-    // An inverted root box is never entered.
-    packNode(nodes, 0, { min: [1, 1, 1], max: [-1, -1, -1], left: -1, right: -1, start: 0, count: 0 }, base, base, 0);
+    // A box collapsed onto one far point: the slab test would only pass for a ray
+    // through that exact point (an inverted box is not empty for this test).
+    const far: [number, number, number] = [1.1e19, 1.3e19, 1.7e19];
+    packNode(nodes, 0, { min: far, max: far, left: -1, right: -1, start: 0, count: 0 }, base, base, 0);
   } else {
     const tlas = buildTlas(bounds, { maxLeafTriangles: 1 });
     if (tlas.nodes.length > layout.tlasCapacity) throw new Error('The Disney TLAS outgrew its reserved slots.');

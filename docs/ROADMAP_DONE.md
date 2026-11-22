@@ -1166,7 +1166,9 @@ la référence à 1024 spp et ne permet pas de conclure sur l'efficacité.
 Rendre le moteur capable d'animer une scène chargée sans la recharger, en raster
 comme en path tracing. Scène de contrôle : `scenes/bench/animated.usda` (caméra
 animée, hiérarchie de transformations, grille déformée, objet qui disparaît à
-mi-parcours, lumière sphérique qui se déplace et varie, variant set `finish`).
+mi-parcours, lumière sphérique qui se déplace et varie, matériau UsdPreviewSurface
+à couleur animée, matériau MaterialX à nœud `time`, maillage qui change de
+topologie à mi-parcours, variant set `finish`).
 
 ### Résultats
 
@@ -1179,6 +1181,9 @@ Mesures sur NVIDIA Turing, Chrome headless, par l'API publique :
 | idem + `setMaterialParameters` (couleur, sans recompilation) | 9,6 ms |
 | `bedroom` 128², déplacer un objet + 1 spp (statique : 27 ms) | 41 ms |
 | `diningroom` 128², déplacer un objet de 44 864 triangles + 1 spp (statique : 26 ms) | 65 ms |
+| `animated.usda` 256², `setTime` + 1 spp, matériaux animés par l'horloge et l'USD | 12 ms |
+| idem, image qui franchit un changement de topologie | 80 à 95 ms |
+| `test_veach` 256², Disney : déplacement, masquage ou lumière → 16 spp (GPU par défaut) | 0,8 s (reconstruction : 13,7 s) |
 
 Sur `diningroom`, la mise à jour coûte 35 ms, dont 30 ms pour réécrire les
 triangles path tracing et refitter 27 088 nœuds du BVH. Dans le viewer
@@ -1231,19 +1236,60 @@ objets en mouvement.
   curseur de temps, lecture, historique temporel du path tracing et choix des
   variants.
 
+### Reliquats traités
+
+- **Reconstruction du BVH.** Le refit suit l'aire des nœuds internes rapportée
+  à celle des feuilles (pondérée par leur nombre de triangles) : un mouvement
+  rigide ou une mise à l'échelle de toute la scène la conserve, des
+  sous-arbres qui s'écartent la gonflent. Au-delà de 1,5 fois sa valeur après
+  construction, un Web Worker reconstruit le BVH par SAH à partir d'une copie
+  des triangles (sur le thread principal si les workers sont indisponibles).
+  Le résultat est refitté aux positions courantes et adopté sans réinitialiser
+  l'accumulation (l'image est inchangée) ; s'il est déjà dégradé, une nouvelle
+  reconstruction suit. Sur `diningroom`, après avoir éloigné un objet (rapport
+  8,4), 4 spp coûtent 92,5 ms sans reconstruction et 82,9 ms après (85 à 87 ms
+  avant le déplacement) ; la reconstruction de 451 000 nœuds prend 5,3 s dans
+  le worker sans bloquer le rendu.
+- **Horloge des matériaux.** Les nœuds MaterialX `time` et `frame` lisent un
+  uniforme caché (`mx_frame`, le code temporel) ajouté à chaque nœud atteint
+  par la surface ; `time` vaut `frame / fps`. `setTime` le met à jour comme
+  un paramètre de l'éditeur, sans recompilation, en raster, path tracing et
+  évaluation CPU. Les entrées UsdPreviewSurface échantillonnées dans le temps
+  sont appliquées de la même façon ; une valeur qui active ou désactive un lobe
+  reconstruit le matériau.
+- **Backend Disney incrémental.** Sa structure à deux niveaux (BLAS locaux, TLAS
+  sur les instances) est mise à jour en place : transformations, TLAS
+  reconstruit sur les instances visibles dans ses emplacements réservés, refit
+  et sommets des BLAS déformés, lumières et matériaux
+  (`disney-dynamics.ts`). Une reconstruction complète n'a lieu que si les
+  changements ne tiennent pas dans les textures (nouvelle texture de
+  matériau). Les objets cachés et les lumières modifiées, auparavant ignorés
+  par ce backend, sont pris en compte.
+- **Passe de volumes raster.** Sa copie de la scène reçoit les mêmes
+  déplacements, masquages et déformations que le path tracer, avec la même
+  reconstruction en arrière-plan quand elle tient dans le buffer existant.
+- **Maillages subdivisés et changements de topologie.** Un maillage dont les
+  attributs de topologie (`faceVertexCounts`, `faceVertexIndices`, trous,
+  normales, UV, orientation) sont échantillonnés, dont le nombre de points
+  change ou dont la subdivision a été appliquée est préparé à nouveau à
+  l'instant voulu. Une triangulation inchangée devient une déformation ; une
+  nouvelle remplace la géométrie et reconstruit l'ensemble de rendu, rapide
+  grâce aux caches. Dans le viewer, aucun subdiviseur n'est fourni : les
+  maillages subdivisés sont rendus par leur cage, déformée par le chemin
+  ordinaire.
+
 ### Limites et décisions
 
 - Un changement de variant recompose et recharge la scène (rapide grâce aux
   caches de géométrie, de BVH et de shaders).
-- Le refit dégrade la qualité du BVH lors de grands déplacements ; aucune
-  reconstruction automatique n'est déclenchée.
-- Le backend Disney est reconstruit à chaque changement de scène ; la passe de
-  volumes raster utilise la géométrie initiale.
-- La déformation garde la topologie et ne s'applique pas aux maillages
-  subdivisés ; le nombre de lumières (hors dôme) doit rester constant. Les
-  scènes précompilées n'embarquent pas la géométrie nécessaire et refusent les
+- Le nombre de lumières (hors dôme) doit rester constant. Les scènes
+  précompilées n'embarquent pas la géométrie nécessaire et refusent les
   changements dynamiques.
-- Les nœuds MaterialX `time` et `frame` restent constants (seuls deux
-  matériaux de test de la bibliothèque les utilisent) ; les paramètres animés
-  passent par `setMaterialParameters`. Les entrées de matériaux USD
-  échantillonnées dans le temps ne sont pas évaluées.
+- Les domaines des volumes (boîte et grille précalculée) restent ceux du
+  chargement ; l'horloge des matériaux ne pilote pas le déplacement par
+  displacement ni les matériaux de volume.
+- Un changement de topologie n'est pas flouté par le motion blur : il est
+  appliqué aux instants des images.
+- Avec `--force_high_performance_gpu`, la création du pipeline Disney échoue
+  sur la machine de mesure (`E_OUTOFMEMORY` D3D12, déjà le cas avant ces
+  travaux) ; les mesures Disney utilisent le GPU par défaut.

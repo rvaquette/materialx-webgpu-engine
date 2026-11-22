@@ -121,6 +121,21 @@ function validateOptions(device: GPUDevice, scene: DisneySceneData, options: Dis
   return pixelBytes;
 }
 
+/** Rectangles covering `count` texels from linear index `first`: a partial first row, whole rows, a partial last row. */
+export function texelRows(width: number, first: number, count: number): Array<{ texel: number; x: number; y: number; columns: number; rows: number }> {
+  const rects = [];
+  let texel = 0;
+  while (texel < count) {
+    const index = first + texel;
+    const x = index % width, y = Math.floor(index / width);
+    const rows = x === 0 ? Math.max(1, Math.floor((count - texel) / width)) : 1;
+    const columns = rows > 1 ? width : Math.min(width - x, count - texel);
+    rects.push({ texel, x, y, columns, rows });
+    texel += columns * rows;
+  }
+  return rects;
+}
+
 /** Owns uploaded scene resources, the compute pipeline and progressive pixel accumulation. */
 export class DisneyGpuBackend {
   readonly #device: GPUDevice;
@@ -329,17 +344,10 @@ export class DisneyGpuBackend {
       if (!Number.isInteger(count) || firstTexel < 0 || firstTexel + count > width * texture.height) {
         throw new Error(`Disney ${target} write exceeds its texture.`);
       }
-      let texel = 0;
-      while (texel < count) {
-        const index = firstTexel + texel;
-        const x = index % width, y = Math.floor(index / width);
-        // A partial first row, then whole rows, then a partial last row.
-        const rows = x === 0 ? Math.max(1, Math.floor((count - texel) / width)) : 1;
-        const columns = rows > 1 ? width : Math.min(width - x, count - texel);
+      for (const { texel, x, y, columns, rows } of texelRows(width, firstTexel, count)) {
         this.#device.queue.writeTexture({ texture, origin: [x, y] }, data, {
           offset: texel * 16, bytesPerRow: columns * 16, rowsPerImage: rows,
         }, [columns, rows]);
-        texel += columns * rows;
       }
     }
   }

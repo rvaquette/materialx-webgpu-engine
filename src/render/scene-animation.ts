@@ -3,8 +3,12 @@
 // GPU, so only instances, lights, cameras and meshes that actually change are
 // updated. Point deformation keeps the prepared topology: positions come from the
 // sampled USD points through each vertex's source point, and normals are
-// recomputed as area-weighted point normals.
+// recomputed as area-weighted point normals. Meshes whose topology attributes are
+// time-sampled (or that were subdivided) are prepared again at the time code:
+// an unchanged triangulation becomes a deformation, a new one is reported in
+// `retopologized` so the caller rebuilds the affected render resources.
 import type { DiagnosticSink } from '../core/diagnostics.ts';
+import { prepareMesh, type PrepareMeshOptions, type PreparedMesh, type RawMesh } from '../geometry/prepare.ts';
 import { evaluateSceneAt } from '../scene/time.ts';
 import { computeWorldTransforms, type Mat4 } from '../scene/transforms.ts';
 import type { SceneAsset } from '../scene/types.ts';
@@ -29,6 +33,26 @@ export interface SceneAnimationState {
   camera?: SceneCamera;
   /** Meshes whose points are time-sampled, by prototype id. */
   deformed: Map<string, DeformedGeometry>;
+  /** Meshes prepared again with a different triangulation, by prototype id. */
+  retopologized: Map<string, PreparedMesh>;
+}
+
+export interface AnimateSceneOptions {
+  sink?: DiagnosticSink;
+  /** Raw mesh of a prim in the evaluated stage (inline USD geometry). */
+  meshFor?: (scene: SceneAsset, primPath: string) => RawMesh | undefined;
+  /** Same preparation options as at load (subdivider...). */
+  prepare?: PrepareMeshOptions;
+}
+
+/** Mesh attributes whose time samples can change the triangulation or vertex layout. */
+const TOPOLOGY_ATTRIBUTES = ['faceVertexCounts', 'faceVertexIndices', 'holeIndices', 'normals', 'normals:indices',
+  'primvars:st', 'primvars:st:indices', 'orientation', 'subdivisionScheme'];
+
+function sameArray(a: ArrayLike<number>, b: ArrayLike<number>): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+  return true;
 }
 
 /** True when any ancestor-or-self prim is `invisible`. */
@@ -66,7 +90,10 @@ export function deformGeometry(geometry: GeometryResource, points: readonly numb
 }
 
 /** The animation state of `scene` (composed, with time samples) at `time`. */
-export function animateScene(scene: SceneAsset, time: number, resources: SceneResources, sink?: DiagnosticSink): SceneAnimationState {
+export function animateScene(
+  scene: SceneAsset, time: number, resources: SceneResources, options: AnimateSceneOptions = {},
+): SceneAnimationState {
+  const { sink } = options;
   const at = evaluateSceneAt(scene, time);
   const world = computeWorldTransforms(at, sink);
   const transforms = new Map<string, Mat4>();
@@ -76,15 +103,36 @@ export function animateScene(scene: SceneAsset, time: number, resources: SceneRe
     if (isInvisible(at, instance.primPath)) hidden.add(instance.id);
   }
   const deformed = new Map<string, DeformedGeometry>();
+  const retopologized = new Map<string, PreparedMesh>();
   for (const [id, geometry] of resources.geometries) {
-    const points = scene.prims.get(geometry.primPath)?.attributes.get('points');
-    if (!points?.timeSamples?.length) continue;
-    const value = at.prims.get(geometry.primPath)?.attributes.get('points')?.value;
-    const streams = Array.isArray(value) && value.every(v => typeof v === 'number') ? deformGeometry(geometry, value as number[]) : undefined;
-    if (streams) deformed.set(id, streams);
-    else sink?.({ level: 'warning', message: `Time-sampled points ignored: ${geometry.primPath} (subdivided or topology mismatch)` });
+    const prim = scene.prims.get(geometry.primPath);
+    const pointsSampled = (prim?.attributes.get('points')?.timeSamples?.length ?? 0) > 0;
+    const topologySampled = TOPOLOGY_ATTRIBUTES.some(name => (prim?.attributes.get(name)?.timeSamples?.length ?? 0) > 0);
+    if (!pointsSampled && !topologySampled) continue;
+    if (!topologySampled) {
+      const value = at.prims.get(geometry.primPath)?.attributes.get('points')?.value;
+      const streams = Array.isArray(value) && value.every(v => typeof v === 'number') ? deformGeometry(geometry, value as number[]) : undefined;
+      if (streams) {
+        deformed.set(id, streams);
+        continue;
+      }
+    }
+    // Subdivided cages, changed point counts and sampled topology: prepare the mesh again.
+    const raw = options.meshFor?.(at, geometry.primPath);
+    if (!raw) {
+      sink?.({ level: 'warning', message: `Time-sampled mesh ignored: ${geometry.primPath} (no inline geometry)` });
+      continue;
+    }
+    const prepared = prepareMesh(raw, { ...options.prepare, ...(sink ? { sink } : {}) });
+    const uv = geometry.streams.find(stream => stream.name === 'uv')?.data;
+    if (prepared.positions.length === geometry.vertexCount * 3 && sameArray(prepared.indices, geometry.indices)
+        && (uv === undefined) === (prepared.uvs === undefined) && (!uv || sameArray(uv, prepared.uvs!))) {
+      deformed.set(id, { positions: prepared.positions, normals: prepared.normals });
+    } else {
+      retopologized.set(id, prepared);
+    }
   }
-  const options = { ...(sink ? { sink } : {}), transforms: world };
-  const camera = importCameras(at, options)[0];
-  return { transforms, hidden, lights: importLights(at, options), ...(camera ? { camera } : {}), deformed };
+  const importOptions = { ...(sink ? { sink } : {}), transforms: world };
+  const camera = importCameras(at, importOptions)[0];
+  return { transforms, hidden, lights: importLights(at, importOptions), ...(camera ? { camera } : {}), deformed, retopologized };
 }

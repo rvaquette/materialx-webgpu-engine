@@ -562,16 +562,26 @@ range, and `None` blocking a sample. A scene loads at `startTimeCode`. The
 viewer then resolves, without reloading, time-sampled xformOps (objects, lights
 and cameras), `visibility` (inherited by descendants), light and camera
 attributes, and mesh `points`. The number of non-dome lights must stay
-constant. Deformed meshes keep their topology;
-their normals are recomputed as area-weighted smooth point normals. Changing a
-variant recomposes the stage and reloads it through the geometry, BVH and shader
-caches, keeping the camera, time and runtime overrides. Material inputs are not
-animated from USD: use `setMaterialParameters` on the engine, which updates
-uniform values without recompiling.
+constant. Deformed meshes keep their topology; their normals are recomputed as
+area-weighted smooth point normals. Meshes with time-sampled topology
+attributes (`faceVertexCounts`, `faceVertexIndices`, holes, normals, UVs,
+orientation) or a changing point count are prepared again at the time code: an
+unchanged triangulation is a deformation, a new one replaces the geometry and
+rebuilds the render set. Changing a variant recomposes the stage and reloads it
+through the geometry, BVH and shader caches, keeping the camera, time and
+runtime overrides.
+
+Time-sampled UsdPreviewSurface inputs and the MaterialX `time` and `frame`
+nodes follow the time code (`frame` is the time code, `time` is
+`frame / fps`) through material uniforms, without recompiling; a value that
+enables or disables a lobe rebuilds that material. Other material inputs are
+animated with `setMaterialParameters` on the engine. Precompiled scenes keep
+`time = 0` and `frame = 1`.
 
 The control scene `scenes/bench/animated.usda` animates a camera, a transform
-hierarchy, a deforming grid, visibility and a moving light, and has a
-`finish` variant set. The viewer UI shows its timeline, playback, the
+hierarchy, a deforming grid, visibility, a moving light, a UsdPreviewSurface
+color, a `time`-driven MaterialX material and a mesh whose topology changes,
+and has a `finish` variant set. The viewer UI shows its timeline, playback, the
 path-tracing temporal history and the variant selectors under **Animation**.
 
 Evidence-based comparison of USD import strategies for the target scene, focused

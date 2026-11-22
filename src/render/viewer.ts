@@ -19,7 +19,8 @@ import {
   type ScenePassKind,
   type SceneDrawCall,
 } from './raster/backend.ts';
-import { createSceneBindGroups, uploadGeometry, type SceneDrawBuffers } from './scene-resources.ts';
+import { buildGeometry, createSceneBindGroups, uploadGeometry, type SceneDrawBuffers } from './scene-resources.ts';
+import type { PreparedMesh } from '../geometry/prepare.ts';
 import { buildEnvCdf } from '../assets/environment-cdf.ts';
 import {
   buildCachedPathTraceScene, buildPathTraceScene, PT_NODE_FLOATS, PT_TRIANGLE_FLOATS, type PathTraceScene, type PathTraceTransformRange,
@@ -34,7 +35,7 @@ import { buildPtDeviceBindings, type PtBufferRole } from './pathtracing/device-b
 import { maxRecordLobes, PT_MAX_LOBES } from './pathtracing/material-record.ts';
 import type { DecodedPixelImage } from '../assets/images.ts';
 import { tonemapIndex, type Tonemap } from './output.ts';
-import { loadUsdScene, uploadMaterialTextures, type LoadedUsdScene, type ObjectMaterialOverride, type SceneLoadOptions } from './usd-scene-assets.ts';
+import { loadUsdScene, meshSourceFromScene, uploadMaterialTextures, type LoadedUsdScene, type ObjectMaterialOverride, type SceneLoadOptions } from './usd-scene-assets.ts';
 import { assertSceneStorageSize, assertSceneTextureBindings, withGpuValidation } from '../gpu/device.ts';
 import { captureRgba, type RgbaCapture } from '../gpu/capture.ts';
 import { uploadMaterialImage, uploadMaterialImageArray } from '../gpu/material-texture.ts';
@@ -249,7 +250,7 @@ interface SceneDynamicUpdate {
 /** A disposable per-scene GPU render set (raster + lazily built path tracer) for one loaded USD. */
 interface SceneRender {
   setEnvironmentEnabled: (enabled: boolean) => void;
-  updateMaterial: (key: string, material: MaterialResource, refreshDisney: boolean) => void;
+  updateMaterial: (key: string, material: MaterialResource) => void;
   updateTopology: (
     key: string, material: MaterialResource, frame: SceneFramePlan, check: () => void, commit: () => void,
   ) => Promise<void>;
@@ -863,8 +864,7 @@ export class InteractiveViewer {
       // Keep baked geometry metadata; source materials retain displacement for future rebuilds.
       const baked = { ...loaded.resources.materials.get(key)!, parameters: updated.parameters!,
         surfaceGraph: updated.surfaceGraph!, resolvedSurface: updated.resolvedSurface! };
-      const refreshDisney = updated.parameters!.some(parameter => parameter.arithmeticFor && changes.has(parameter.id));
-      this.#current.updateMaterial(key, baked, refreshDisney);
+      this.#current.updateMaterial(key, baked);
       const bakedMaterials = new Map(loaded.resources.materials);
       bakedMaterials.set(key, baked);
       loaded.resources = { ...loaded.resources, materials: bakedMaterials };
@@ -1299,6 +1299,7 @@ export class InteractiveViewer {
     this.#onCameraChanged();
     this.#emitStatus();
     if (await this.#applyMaterialAnimation()) this.#applyDynamicState(false, true);
+    await this.#applyTopologyChanges();
   }
 
   #orbitFromSceneCamera(camera: SceneCamera, loaded: LoadedUsdScene, center: Vec3): void {
@@ -1345,6 +1346,7 @@ export class InteractiveViewer {
     const materialsChanged = await this.#applyMaterialAnimation();
     if (this.#time !== time) return;
     this.#applyDynamicState(options.keepAccumulation ?? false, materialsChanged);
+    await this.#applyTopologyChanges();
   }
 
   /**
@@ -1380,6 +1382,46 @@ export class InteractiveViewer {
       if (changes.size > 0) result.set(instance.primPath, changes);
     }
     return result;
+  }
+
+  #pendingTopology: Map<string, PreparedMesh> | undefined;
+  #topologyBusy = false;
+
+  /**
+   * Meshes whose triangulation changed at the current time code: their geometry is
+   * replaced and the render set rebuilt (shader and geometry caches keep it short).
+   */
+  async #applyTopologyChanges(): Promise<boolean> {
+    if (this.#topologyBusy || !this.#pendingTopology) return false;
+    this.#topologyBusy = true;
+    try {
+      while (this.#pendingTopology && !this.#disposed) {
+        const pending = this.#pendingTopology;
+        this.#pendingTopology = undefined;
+        const loaded = this.#loaded;
+        if (!loaded) break;
+        const replace = (geometries: ReadonlyMap<string, GeometryResource>): Map<string, GeometryResource> => {
+          const next = new Map(geometries);
+          for (const [id, prepared] of pending) {
+            const current = next.get(id);
+            if (current) next.set(id, buildGeometry(id, current.primPath, prepared));
+          }
+          return next;
+        };
+        const candidate: LoadedUsdScene = {
+          ...loaded, resources: { ...loaded.resources, geometries: replace(loaded.resources.geometries) },
+          ...(loaded.parameterResources ? {
+            parameterResources: { ...loaded.parameterResources, geometries: replace(loaded.parameterResources.geometries) },
+          } : {}),
+        };
+        delete candidate.compiled;
+        // Re-applies the dynamic state, which queues another change if the time moved on.
+        await this.#replaceLoaded(loaded, candidate, 'Scene changed during a topology update.');
+      }
+    } finally {
+      this.#topologyBusy = false;
+    }
+    return true;
   }
 
   #materialAnimationBusy = false;
@@ -1501,8 +1543,11 @@ export class InteractiveViewer {
     if (!loaded || !render) return;
     const sink = this.#diagnosticSink();
     const state = loaded.animation
-      ? animateScene(loaded.animation.source, this.#time, loaded.resources, sink)
+      ? animateScene(loaded.animation.source, this.#time, loaded.resources, {
+        sink, meshFor: (scene, primPath) => meshSourceFromScene(scene).meshFor(primPath),
+      })
       : undefined;
+    this.#pendingTopology = state?.retopologized.size ? state.retopologized : undefined;
     const transforms = new Map(state?.transforms ?? this.#baseTransforms);
     for (const [path, matrix] of this.#transformOverrides) transforms.set(path, matrix);
     const hidden = new Set(state?.hidden ?? loaded.resources.instances
@@ -1614,6 +1659,7 @@ export class InteractiveViewer {
       this.#time = time;
       await this.#applyMaterialAnimation();
       this.#applyDynamicState(true);
+      await this.#applyTopologyChanges();
     }
   }
 
@@ -2145,15 +2191,18 @@ export class InteractiveViewer {
       const sampler = device.createSampler({ magFilter: 'linear', minFilter: 'linear' });
       let volumePipeline: GPURenderPipeline | undefined;
       const volumeEntries: GPUBindGroupEntry[] = [];
+      let volumeScene: PathTraceScene | undefined;
+      const volumeBuffers = new Map<number, GPUBuffer>();
       if ([...resources.materials.values()].some(material => material.volumeIr)) {
-        const volumeScene = loaded.compiled?.pathTrace ?? await buildCachedPathTraceScene(resources, {
+        volumeScene = loaded.compiled?.pathTrace ?? await buildCachedPathTraceScene(resources, {
           lights: loaded.lights, surfaceFor: loaded.mtlx.surfaceFor,
           frameCamera: { viewProj: cameraViewProj, eye: cameraEye, exposure },
           environment: frame.environment, settings: pathTraceSettings(loaded.scene),
         });
+        const hasVolumeGrid = volumeScene.volumeData !== undefined;
         const [compiled] = await compileShaderBatch(device, [{
           label: 'Raster volume',
-          code: () => rasterVolumeWgsl(volumeScene.volumeData !== undefined, rasterLights !== undefined),
+          code: () => rasterVolumeWgsl(hasVolumeGrid, rasterLights !== undefined),
         }]);
         if (!compiled) throw new Error('Raster volume shader compilation produced no result.');
         rasterErrors = compiled.errors;
@@ -2173,11 +2222,41 @@ export class InteractiveViewer {
           const buffer = track(device.createBuffer({ size: Math.max(data.byteLength,4),usage: GPUBufferUsage.STORAGE|GPUBufferUsage.COPY_DST }));
           device.queue.writeBuffer(buffer,0,data);
           volumeEntries.push({ binding,resource: { buffer } });
+          volumeBuffers.set(binding, buffer);
         }
         volumeUniform = track(device.createBuffer({ size: RASTER_VOLUME_UNIFORM_BYTES,usage: GPUBufferUsage.UNIFORM|GPUBufferUsage.COPY_DST }));
         volumeEntries.push({ binding: 5,resource: { buffer: volumeUniform } });
         if (rasterLights) volumeEntries.push({ binding: 9,resource: { buffer: rasterLights } });
       }
+      // The volume pass traces its own copy of the scene: moves, hidden objects and
+      // deformations are refitted into it like the path tracer's (volume domains stay as loaded).
+      let volumeDynamics: PathTraceDynamics | undefined;
+      let volumeRebuild: Promise<void> | undefined;
+      const writeVolume = (binding: number, data: Float32Array | Uint32Array, stride: number, [first, end]: [number, number]): void => {
+        const buffer = volumeBuffers.get(binding);
+        if (buffer && end > first) device.queue.writeBuffer(buffer, first * stride * 4, data, first * stride, (end - first) * stride);
+      };
+      const updateVolume = (ids: ReadonlySet<string>): void => {
+        const scene = volumeScene;
+        if (!scene || ids.size === 0) return;
+        const updates = ptUpdatesFor(ids, scene);
+        if (updates.length === 0) return;
+        const dynamics = volumeDynamics ??= new PathTraceDynamics(scene);
+        const upload = dynamics.update(updates);
+        if (upload.triangles) writeVolume(2, scene.triangles, PT_TRIANGLE_FLOATS, upload.triangles);
+        const runs = upload.nodes.length > 256 ? [[upload.nodes[0]![0], upload.nodes[upload.nodes.length - 1]![1]] as [number, number]] : upload.nodes;
+        for (const run of runs) writeVolume(1, scene.nodes, PT_NODE_FLOATS, run);
+        if (volumeRebuild || !dynamics.needsRebuild) return;
+        volumeRebuild = rebuildBvhInBackground(scene.triangles, scene.triangleCount, dynamics.inflation).then(result => {
+          // Adopted only when it fits the bound node buffer (the bind group is not rebuilt).
+          if (disposed || volumeDynamics !== dynamics || result.nodes.byteLength > (volumeBuffers.get(1)?.size ?? 0)) return;
+          dynamics.adopt(result.nodes, result.nodeCount, result.triangleOrder);
+          writeVolume(1, scene.nodes, PT_NODE_FLOATS, [0, scene.nodeCount]);
+          writeVolume(3, scene.triangleOrder, 1, [0, scene.triangleCount]);
+          this.#rasterDirty = true;
+        }, () => undefined).finally(() => { volumeRebuild = undefined; });
+      };
+      updateVolume(hiddenInstances);
       const createRasterTargets = (w: number, h: number) => {
         const hdr = device.createTexture({
           size: [w, h], format: backend.hdrFormat,
@@ -2345,6 +2424,7 @@ export class InteractiveViewer {
         updateLights: (data: Float32Array): void => {
           if (rasterLights && rasterLights.size === data.byteLength) device.queue.writeBuffer(rasterLights, 0, data);
         },
+        updateVolume,
       };
     };
     let raster: Awaited<ReturnType<typeof buildRaster>> | undefined;
@@ -3245,9 +3325,13 @@ export class InteractiveViewer {
       instance.hasGeometry && !disneyProxyPaths.has(instance.primPath));
     let disneyDirtyPrototypes = new Set<string>();
     let disneyMaterialsDirty = false;
+    /** A dynamic change arrived while the backend was being built from an older snapshot. */
+    let disneyStale = false;
     const syncDisney = (): void => {
       const backend = disneyBackend, data = disneySceneData;
+      if (disneyState === 'compiling') disneyStale = true;
       if (!backend || !data || disneyState !== 'ready') return;
+      disneyStale = false;
       try {
         backend.writeTexels([
           ...disneyGeometryWrites(data, disneyDirtyPrototypes),
@@ -3316,6 +3400,7 @@ export class InteractiveViewer {
         const disneyResources = { ...resources, instances: disneyInstances() };
         disneyDirtyPrototypes = new Set();
         disneyMaterialsDirty = false;
+        disneyStale = hiddenInstances.size > 0;
         const scene = prepareDisneyScene(loaded.scene, disneyResources);
         for (const warning of scene.warnings) {
           sink({ level: 'warning', message: warning.message, detail: warning.materialKey });
@@ -3350,7 +3435,7 @@ export class InteractiveViewer {
         disneyHasEnvironment = environment !== undefined;
         disneyState = 'ready';
         // Visibility and changes made while the backend was being built.
-        syncDisney();
+        if (disneyStale) syncDisney();
         this.#ptDisplayDirty = true;
         this.#emitStatus();
       })().catch(error => {
@@ -3511,7 +3596,7 @@ export class InteractiveViewer {
 
     const instanceIndex = new Map(resources.instances.map((instance, index) => [instance.id, index]));
     const instanceOf = (id: string): InstanceResource => resources.instances[instanceIndex.get(id)!]!;
-    const ptUpdatesFor = (ids: ReadonlySet<string>) => (pathTraceScene?.transformRanges ?? [])
+    const ptUpdatesFor = (ids: ReadonlySet<string>, scene = pathTraceScene) => (scene?.transformRanges ?? [])
       .filter(range => ids.has(range.instanceId))
       .map(range => {
         const geometry = resources.geometries.get(range.prototypeId ?? '');
@@ -3582,6 +3667,7 @@ export class InteractiveViewer {
         applyCamera(cameraViewProj, cameraEye, backgroundInvViewProj);
         lightsChanged = true;
       }
+      if (changed.size > 0) raster?.updateVolume(changed);
       let triangles = 0;
       if (changed.size > 0 && pathTracer) {
         const updates = ptUpdatesFor(changed);

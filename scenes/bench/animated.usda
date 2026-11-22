@@ -6,7 +6,7 @@
     startTimeCode = 0
     endTimeCode = 48
     timeCodesPerSecond = 24
-    doc = "Dynamic-scene control: animated hierarchy, deforming mesh, light, visibility, camera, animated materials and a material variant."
+    doc = "Dynamic-scene control: animated hierarchy, deforming mesh, light, visibility, camera, animated materials, a topology change and a material variant."
 )
 
 def Xform "World"
@@ -132,6 +132,14 @@ def Xform "World"
             interpolation = "vertex"
         )
         rel material:binding = </World/Looks/clock>
+    }
+
+    def Mesh "Morph"
+    {
+        int[] faceVertexCounts.timeSamples = { 0: [4], 24: [3] }
+        int[] faceVertexIndices.timeSamples = { 0: [0, 1, 2, 3], 24: [0, 1, 2] }
+        point3f[] points = [(2, 3, -4), (3.5, 3, -4), (3.5, 4.5, -4), (2, 4.5, -4)]
+        rel material:binding = </World/Looks/white>
     }
 
     def Scope "Lights"

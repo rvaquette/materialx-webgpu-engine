@@ -13,14 +13,7 @@ reste les travaux suivants.
 
 ## Reliquats des priorités traitées
 
-Scènes dynamiques (priorité 5) :
-
-- relier les nœuds MaterialX `time` et `frame` et les entrées de matériaux USD
-  échantillonnées dans le temps à l'horloge de la scène ;
-- reconstruire le BVH quand le refit l'a trop dégradé ;
-- mises à jour incrémentales pour le backend Disney et la passe de volumes
-  raster ;
-- déformation des maillages subdivisés et changements de topologie.
+Aucun.
 
 ## Priorité 6 : volumes et effets avancés
 
