@@ -321,12 +321,15 @@ describe('pathTraceComputeWgsl', () => {
   it('excludes SH-lit fuzz from the throughput of environment misses for mixed BSDF samples', () => {
     const shader = pathTraceComputeWgsl({ environment: true });
     expect(shader).toContain('mx_closure_diffuse_albedo(c, wo)');
-    expect(shader).toContain('environmentBeta = beta * glossy.value * cosS / bs.pdf;');
+    expect(shader).toContain('environmentBeta = beta * bsGlossy * cosS / bs.pdf;');
+    expect(shader).toContain('bsGlossy = glossy;');
     expect(shader).toContain('let missBeta = select(beta, environmentBeta, splitFuzzEnvironment);');
     expect(shader).toContain('radiance = radiance + missBeta *');
     expect(shader).toContain('environmentBeta = environmentBeta * ms.weight;');
     expect(shader).toContain('environmentBeta = environmentBeta / q;');
-    expect(src).not.toContain('environmentBeta = beta * glossy.value');
+    expect(src).not.toContain('environmentBeta = beta * bsGlossy');
+    const integrate = shader.slice(shader.indexOf('fn integrate('));
+    expect(integrate.match(/mx_closure_specular_eval\(/g)).toHaveLength(1);
   });
 
   it('declares the compute entry point and workgroup tile', () => {

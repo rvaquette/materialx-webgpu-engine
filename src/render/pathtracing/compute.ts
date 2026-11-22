@@ -1106,6 +1106,7 @@ ${displayAovs ? `    let aovMode = u32(U.envTexture.w);
     // BSDF-sampling counterpart, so its MIS weight is 1.
     var bs = MxBsdfSample(vec3f(0.0), vec3f(0.0), 0.0, false);
     var bsAttenuation = vec3f(1.0);
+    var bsGlossy = vec3f(0.0);
     var u = vec3f(0.0);
     for (var strategy = 0u; strategy < 3u; strategy++) {
       var neeValid = false;
@@ -1244,8 +1245,13 @@ ${
       }
       var ev: MxBsdfEval;
       var basePdf = 1.0;
-${environment ? `      if (neeSpecularOnly) { ev = mx_closure_specular_eval(c, wo, neeLocal); }
-      else {
+${environment ? `      // A fuzz BSDF sample also needs its glossy-only response (split SH environment).
+      var glossy = vec3f(0.0);
+      if (neeSpecularOnly || (neeBsdf && c.hasFuzz != 0u && c.fuzz.weight > 0.0)) {
+        ev = mx_closure_specular_eval(c, wo, neeLocal);
+        glossy = ev.value;
+      }
+      if (!neeSpecularOnly) {
         let parts = mx_closure_eval_parts(c, wo, neeLocal);
         ev = parts.full;
         basePdf = parts.base.pdf;
@@ -1258,6 +1264,7 @@ ${environment ? `      if (neeSpecularOnly) { ev = mx_closure_specular_eval(c, w
         if (!(neeFromBase && basePdf <= 0.0) && ev.pdf > 0.0) {
           bs = MxBsdfSample(neeLocal, ev.value, ev.pdf, true);
           bsAttenuation = attenuation;
+${environment ? '          bsGlossy = glossy;' : ''}
         }
         break;
       }
@@ -1274,8 +1281,7 @@ ${
       // SH already integrated fuzz and diffuse. A mixture sample reaching the
       // dome must carry only the remaining glossy response, regardless of pick.
       splitFuzzEnvironment = true;
-      let glossy = mx_closure_specular_eval(c, wo, bs.wi);
-      environmentBeta = beta * glossy.value * cosS / bs.pdf;
+      environmentBeta = beta * bsGlossy * cosS / bs.pdf;
     }`
         : ''
     }
