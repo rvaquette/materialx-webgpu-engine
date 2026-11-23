@@ -5,12 +5,16 @@
 // paramètres de matériaux sans recompilation, historique temporel et flou de mouvement.
 // npm run script -- examples/scripts/p5-dynamic-scenes.js --out renders/validation/p5 --timeout 3600000
 
+// GPU mobile (≈ 13 fois plus lent que la T500) : 256² et 4 fois moins d'échantillons.
+const mobile = capabilities()?.mobile === true;
+const spp = count => mobile ? Math.max(4, count / 4) : count;
+
 const pad = value => String(value).padStart(2, "0");
 
 await scene("./scenes/bench/animated.usda");
 const range = timeline() ?? { start: 0, end: 48, fps: 24 };
 check(range.end > range.start, `timeline ${range.start}–${range.end} à ${range.fps} images/s`);
-render.resolution = 512;
+render.resolution = mobile ? 256 : 512;
 
 // 1. Séquence raster complète : chaque image est évaluée sans rechargement.
 render.backend = "raster";
@@ -27,7 +31,7 @@ render.depth = 4;
 for (const t of [0, 12, 23, 24, 25, 36, 48]) {
   await setTime(t);
   check(stats().time === t, `instant ${t} appliqué`);
-  await render(64);
+  await render(spp(64));
   await save(`02-pathtracing/frame-${pad(t)}.png`);
 }
 
@@ -36,7 +40,7 @@ const finish = variants().find(set => set.set === "finish");
 check(finish?.variants.includes("metal"), "variant set finish exposé");
 await setVariant("/World/Rig/Cube", "finish", "metal");
 check(stats().time === 48, "le changement de variante conserve l'instant");
-await render(64);
+await render(spp(64));
 await save("03-variante-metal.png");
 
 // 4. Modifications explicites : prioritaires sur l'animation.
@@ -45,10 +49,10 @@ setVisibility("/World/Wave", false);
 setLight("/World/Lights/Key", { intensity: 120, color: [0.3, 0.6, 1] });
 setLight("/World/Lights/Fill", { transform: transform({ translate: [-6, 3, 6] }) });
 setCamera({ eye: [7, 5, 10], target: [0, 1, 0], fov: 40 });
-await render(128);
+await render(spp(128));
 await save("04-modifications-api.png");
 await setTime(0);
-await render(64);
+await render(spp(64));
 await save("04-modifications-api-t0.png");
 
 // 5. Paramètres de matériaux en uniformes (UsdPreviewSurface du panneau) : sans recompilation.
@@ -57,7 +61,7 @@ const color = panel.find(p => p.id.endsWith("diffuseColor")) ?? { id: "surface:d
 check(panel.some(p => p.id === color.id), "couleur diffuse du panneau éditable");
 for (const [label, rgb] of [["vert", [0.1, 0.9, 0.2]], ["jaune", [1, 0.85, 0.1]]]) {
   await setMaterialParameters("/World/Panel", { [color.id]: rgb });
-  await render(64);
+  await render(spp(64));
   await save(`05-panneau-${label}.png`);
 }
 
@@ -81,7 +85,7 @@ await save("06-sans-historique-4spp.png");
 
 // 7. Flou de mouvement : échantillons répartis sur l'intervalle d'obturation.
 for (const [label, shutter] of [["court", [20, 22]], ["long", [12, 36]]]) {
-  await capture(`07-flou-${label}.png`, { samples: 256, shutter, steps: 32 });
+  await capture(`07-flou-${label}.png`, { samples: spp(256), shutter, steps: 32 });
 }
 await setTime(24);
-await capture("07-net-t24.png", { samples: 256 });
+await capture("07-net-t24.png", { samples: spp(256) });

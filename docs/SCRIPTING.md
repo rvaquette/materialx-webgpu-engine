@@ -162,7 +162,7 @@ Rendu progressif, scènes dynamiques et exploitation :
 | `setCamera({ eye, target, fov })` | Place la caméra (champ vertical en degrés) |
 | `variants()`, `await setVariant(prim, set, variante)` | Variant sets ; sélection (recomposition) |
 | `materialParameters(objet)`, `await setMaterialParameters(objet, { id: valeur })` | Paramètres en uniformes, modifiés sans recompilation |
-| `capabilities()`, `diagnostics()` | Adaptateur, limites et support par backend ; journal `{ level, code, message }` |
+| `capabilities()`, `diagnostics()` | Adaptateur, limites, support par backend et `mobile` (GPU mobile détecté) ; journal `{ level, code, message }` |
 
 Les actions (`setTime`, `setTransform`, `setLight`...) s'exécutent dans l'ordre du script :
 `await` est facultatif, mais une erreur non attendue arrête le script à la prochaine

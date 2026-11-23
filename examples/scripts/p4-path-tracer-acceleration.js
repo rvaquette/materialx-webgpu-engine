@@ -5,6 +5,10 @@
 // un mur). Les temps sont mesurés dans le navigateur ; comparer avec npm run bench:engine.
 // npm run script -- examples/scripts/p4-path-tracer-acceleration.js --out renders/validation/p4 --timeout 3600000
 
+// GPU mobile (≈ 13 fois plus lent que la T500) : 128², 4 fois moins d'échantillons, sans les deux
+// intérieurs lourds (diningroom, bedroom) qui dépassent la mémoire et le temps raisonnables.
+const mobile = capabilities()?.mobile === true;
+const spp = count => mobile ? Math.max(4, count / 4) : count;
 const seconds = since => ((performance.now() - since) / 1000).toFixed(1);
 const scenes = [
   ["hyperion_rect_lights", "./scenes/pathtracer/hyperion_rect_lights.usda"],
@@ -16,12 +20,12 @@ const scenes = [
   ["bedroom", "./scenes/pathtracer/bedroom.usda"],
 ];
 
-render.resolution = 256;
+render.resolution = mobile ? 128 : 256;
 render.denoise = false;
 render.adaptive = false;
 render.stopOnConvergence = false;
 render.timeBudget = 0;
-for (const [name, entry] of scenes) {
+for (const [name, entry] of mobile ? scenes.filter(([name]) => name !== "diningroom" && name !== "bedroom") : scenes) {
   render.backend = "raster";
   let started = performance.now();
   await scene(entry);
@@ -31,7 +35,7 @@ for (const [name, entry] of scenes) {
   await render(1);
   const firstFrame = seconds(started);
   started = performance.now();
-  await render(64);
+  await render(spp(64));
   const rendering = seconds(started);
   const rate = stats().samplesPerSecond;
   await save(`${name}-64spp.png`);
@@ -54,17 +58,17 @@ for (const [name, entry] of scenes) {
 // Guidage des lumières : seule la lumière visible doit éclairer, sans bruit des 12 lumières cachées.
 await scene("./scenes/bench/light_guide_occlusion.usda");
 render.backend = "pathtracing";
-render.resolution = 512;
-await render(256);
+render.resolution = mobile ? 256 : 512;
+await render(spp(256));
 await save("light_guide_occlusion-256spp-512.png");
 // Masquer la lumière visible : il ne reste que les fuites autour du mur.
 setLight("/World/Lights/Visible", { intensity: 0 });
-await render(256);
+await render(spp(256));
 await save("light_guide_occlusion-lumiere-visible-eteinte.png");
 setLight("/World/Lights/Visible");
 
 // Environnement HDR (distribution CDF et MIS) à profondeur élevée.
 await scene("./scenes/pathtracer/tungsten-material-testball.usda");
 render.depth = 16;
-await render(512);
+await render(spp(512));
 await save("tungsten-hdr-512spp-profondeur16.png");

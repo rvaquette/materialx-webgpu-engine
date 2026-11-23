@@ -121,9 +121,8 @@ const RASTER_BAND_PIXELS = 256 * 256;
 const RASTER_UNUSED_VARIANT_LIMIT = 16;
 const PATH_TRACE_TILES_PER_REFRESH = 4;
 const PATH_TRACE_MAX_TILES_PER_REFRESH = 16;
-/** A full-resolution batch faster than this doubles the tiles per submission; slower than the second halves them. */
-const PATH_TRACE_BATCH_FAST_MS = 15;
-const PATH_TRACE_BATCH_SLOW_MS = 40;
+/** GPU time aimed at per path-tracing submission on mobile GPUs (adaptive tile batches). */
+const PATH_TRACE_BATCH_TARGET_MS = 50;
 function previewCamera(aspect: number, exposure: number): FrameCamera {
   const target: Vec3 = [0, 0.3, 0];
   const dir: Vec3 = [0.657, 0.438, 0.613];
@@ -3427,15 +3426,17 @@ export class InteractiveViewer {
       let convergenceError: string | undefined;
       const stopping = new PathTraceStopping(this.#pathTracingLimits);
       let timedBatch = false;
-      // Tiles per submission, adapted to the measured GPU time of full-resolution batches.
-      // Mobile drivers lose the device when one submission runs too long (Adreno at 4 tiles
-      // of 64x64 with the current kernel): they start at one tile and grow while batches are fast.
-      let tileBudget = isMobileGpu(device as { adapterInfo?: GPUAdapterInfo }) ? 1 : PATH_TRACE_MAX_TILES_PER_REFRESH;
+      // Tiles per submission on mobile GPUs, whose drivers lose the device when one submission
+      // runs too long (Adreno at 4 tiles of 64x64 with the current kernel): they start at one
+      // tile, then aim at PATH_TRACE_BATCH_TARGET_MS per batch from the measured time per tile,
+      // which includes each submission's fixed fence overhead. Desktop batches stay at the maximum.
+      const adaptiveTiles = isMobileGpu(device as { adapterInfo?: GPUAdapterInfo });
+      let tileBudget = adaptiveTiles ? 1 : PATH_TRACE_MAX_TILES_PER_REFRESH;
       let tiledBatch = 0;
       const adaptTileBudget = (milliseconds: number, tiles: number): void => {
-        if (tiles < tileBudget) return;
-        if (milliseconds < PATH_TRACE_BATCH_FAST_MS) tileBudget = Math.min(PATH_TRACE_MAX_TILES_PER_REFRESH, tileBudget * 2);
-        else if (milliseconds > PATH_TRACE_BATCH_SLOW_MS) tileBudget = Math.max(1, Math.floor(tileBudget / 2));
+        if (!adaptiveTiles || tiles < tileBudget || !(milliseconds > 0)) return;
+        const wanted = Math.floor(PATH_TRACE_BATCH_TARGET_MS * tiles / milliseconds);
+        tileBudget = Math.max(1, Math.min(PATH_TRACE_MAX_TILES_PER_REFRESH, tileBudget * 2, wanted));
       };
       const invalidateConvergence = (): void => {
         convergenceRevision++;

@@ -15,7 +15,7 @@ import { downloadBlob } from './assets/download.ts';
 import { DiagnosticJournal } from './diagnostics/journal.ts';
 import type { ResolvedGraph } from './materialx/graph.ts';
 import { captureRgba } from './gpu/capture.ts';
-import { describeGpuCapabilities } from './gpu/capabilities.ts';
+import { describeGpuCapabilities, isMobileGpu } from './gpu/capabilities.ts';
 import type { PathTraceView } from './render/pathtracing/display.ts';
 
 let ui: ViewerUiState | undefined;
@@ -745,7 +745,7 @@ async function main(): Promise<void> {
     },
     saveDiagnostics: name => saveScriptFile(name, new Blob([diagnosticsJson()], { type: 'application/json' })),
     diagnostics: () => journal.records.map(record => ({ level: record.level, message: record.message, ...(record.code ? { code: record.code } : {}) })),
-    capabilities: () => describeGpuCapabilities(currentGpu.device, currentGpu.adapter.info),
+    capabilities: () => ({ ...describeGpuCapabilities(currentGpu.device, currentGpu.adapter.info), mobile: isMobileGpu({ adapterInfo: currentGpu.adapter.info }) }),
     timeline() {
       const timeline = viewer.timeline;
       return timeline?.animated ? { start: timeline.start, end: timeline.end, fps: timeline.timeCodesPerSecond } : undefined;
@@ -826,6 +826,8 @@ async function main(): Promise<void> {
   // page's initial scene is loaded: otherwise that load would replace the scene a script loads.
   let initialSceneLoaded!: () => void;
   const initialScene = new Promise<void>(resolve => { initialSceneLoaded = resolve; });
+  // Polled by the runner to show the progress of long renders.
+  (globalThis as { __mxProgress?: unknown }).__mxProgress = () => ({ ...viewerHost?.stats(), entry: state.entry });
   (globalThis as { __mxRunScript?: unknown }).__mxRunScript = async (code: string) => {
     try {
       await initialScene;

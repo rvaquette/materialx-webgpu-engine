@@ -128,7 +128,10 @@ async function openAndroid(port, serial) {
         if (Date.now() > end) throw new Error('The viewer did not start on the device.');
       }
       step('viewer ready');
-      const result = await tab.evaluate(`globalThis.__mxRunScript(${JSON.stringify(code)})`, timeout);
+      const stop = watchProgress(expression => tab.evaluate(expression));
+      let result;
+      try { result = await tab.evaluate(`globalThis.__mxRunScript(${JSON.stringify(code)})`, timeout); }
+      finally { stop(); }
       await Promise.all(state.writes);
       if (!result.ok) throw new Error(`${result.message}${result.line === undefined ? '' : ` (line ${result.line})`}`);
       if (xml) await saveFile(out, xml, Buffer.from(result.xml).toString('base64'));
@@ -136,6 +139,24 @@ async function openAndroid(port, serial) {
     },
     close: () => tab.close(),
   };
+}
+
+/** Prints the page's render progress (__mxProgress, main.ts) every 20 s while a script runs. */
+function watchProgress(evaluate) {
+  let last = '';
+  const timer = setInterval(async () => {
+    const s = await evaluate('globalThis.__mxProgress?.()').catch(() => undefined);
+    if (!s || !s.backend) return;
+    const scene = String(s.entry ?? '').split('/').at(-1);
+    const percent = value => value === undefined ? '-' : `${(value * 100).toFixed(1)} %`;
+    const line = s.backend === 'raster' || s.pathTracer !== 'ready'
+      ? `${scene} : ${s.backend} ${s.backend === 'raster' ? '' : s.pathTracer}`
+      : `${scene} : ${s.backend} ${s.samples} ${s.adaptive ? 'balayages' : 'spp'}, ${s.samplesPerSecond?.toFixed(1) ?? '-'}/s, ` +
+        `bruit ${percent(s.noise)} (max ${percent(s.maxNoise)})${s.remaining !== undefined ? `, cible dans ~${Math.round(s.remaining)} s` : ''}`;
+    if (line !== last) console.log(`  [progression] ${line}`);
+    last = line;
+  }, 20_000);
+  return () => clearInterval(timer);
 }
 
 /** Scripts can only write below the output directory. */
@@ -179,7 +200,10 @@ async function runOne(target, code, out, timeout, xml) {
     if (!webgpu) throw new Error('WebGPU is unavailable in this browser. Set MX_CHROME or use --headed.');
     await page.waitForFunction(() => typeof globalThis.__mxRunScript === 'function');
     step(`viewer ready (adapter check: ${webgpu})`);
-    const result = await page.evaluate(source => globalThis.__mxRunScript(source), code);
+    const stop = watchProgress(expression => page.evaluate(expression));
+    let result;
+    try { result = await page.evaluate(source => globalThis.__mxRunScript(source), code); }
+    finally { stop(); }
     if (!result.ok) throw new Error(`${result.message}${result.line === undefined ? '' : ` (line ${result.line})`}`);
     if (xml) {
       const file = resolve(out, xml);

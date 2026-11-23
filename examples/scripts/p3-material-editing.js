@@ -5,11 +5,14 @@
 // npm run script -- examples/scripts/p3-material-editing.js --out renders/validation/p3
 
 const library = "./scenes/mtlx-library/Examples/StandardSurface";
+// GPU mobile (≈ 13 fois plus lent que la T500) : 256² et 4 fois moins d'échantillons.
+const mobile = capabilities()?.mobile === true;
+const spp = count => mobile ? Math.max(4, count / 4) : count;
 
 await scene("./scenes/standard-shader-ball/standard-shader-ball.usda");
 const ball = "/World/Geometry/OpenPBRShaderBall";
 const neutral = "/World/Geometry/NeutralObjects";
-render.resolution = 512;
+render.resolution = mobile ? 256 : 512;
 
 // 1. Marbre veiné : domaine déformé par un bruit vectoriel, veines par sinus et seuil.
 pos = new Position();
@@ -60,7 +63,7 @@ await assign("/World/Ground", floor);
 
 for (const backend of ["raster", "pathtracing"]) {
   render.backend = backend;
-  await render(backend === "raster" ? undefined : 128);
+  await render(backend === "raster" ? undefined : spp(128));
   await save(`01-scripts-${backend}.png`);
 }
 
@@ -73,7 +76,7 @@ surface.base_color = [0.05, 0.2, 0.08];
 surface.coat_color = [0.8, 1, 0.85];
 await assign(ball, surface);
 render.backend = "pathtracing";
-await render(128);
+await render(spp(128));
 await save("02-materiau-courant-retouche.png");
 
 // 5. Paramètres en uniformes : modifiés sans recompilation, comme dans l'éditeur.
@@ -83,7 +86,7 @@ const coat = parameters.find(p => p.id.endsWith("coat_roughness"));
 if (coat) {
   for (const value of [0, 0.25, 0.6]) {
     await setMaterialParameters(ball, { [coat.id]: value });
-    await render(64);
+    await render(spp(64));
     await save(`03-coat-roughness-${value}.png`);
   }
 }
