@@ -770,22 +770,28 @@ fn mx_spatial_base_attenuation(layers: LayeredClosure, outgoingCosine: f32, inco
   if (layers.hasCoat == 0u && layers.hasSheen == 0u && layers.hasFuzz == 0u) {
     return vec3f(interfaceTransmission);
   }
-  var base = layers;
-  base.lobeCount = 1u;
-  base.hasInterior = 0u;
-  var white: MxBsdfLobe;
-  white.kind = MX_LOBE_SUBSURFACE; white.weight = 1.0; white.color = vec3f(1.0);
-  base.lobes[0] = white;
+  // Response of a white subsurface base under the closure's coat and fuzz. The layer
+  // composition is linear in the base value, so this equals the closure evaluated with
+  // that base minus without it, but needs no second inlined mx_closure_eval site
+  // (mobile drivers reject the kernel past a size threshold).
   let outgoing = vec3f(sqrt(max(0.0, 1.0 - outgoingCosine * outgoingCosine)), 0.0, outgoingCosine);
-  // One evaluation site for both passes (with, then without the white base) keeps
-  // this inlined closure evaluation from being duplicated by the shader compiler.
-  var combined = vec3f(0.0);
-  var top = vec3f(0.0);
-  for (var evaluation = 0u; evaluation < 2u; evaluation++) {
-    let value = mx_closure_eval(base, outgoing, incoming).value;
-    if (evaluation == 0u) { combined = value; base.lobeCount = 0u; } else { top = value; }
+  var baseOutgoing = outgoing;
+  var baseIncoming = incoming;
+  var factor = vec3f(1.0);
+  if (layers.hasCoat != 0u && layers.coat.weight > 0.0) {
+    let coatW = clamp(layers.coat.weight, 0.0, 1.0);
+    if (layers.coat.mode != 0u) {
+      baseOutgoing = mx_coat_enter(outgoing, layers.coat.ior);
+      baseIncoming = mx_coat_enter(incoming, layers.coat.ior);
+    }
+    factor = mx_coat_attenuation(coatW, layers.coat.ior, layers.coat.color, outgoing, incoming)
+      * mx_coat_absorption(layers, baseOutgoing, baseIncoming);
   }
-  return max((combined - top) * PI, vec3f(0.0)) * interfaceTransmission;
+  if (layers.hasFuzz != 0u && layers.fuzz.weight > 0.0) {
+    factor = factor * (1.0 - mx_closure_fuzz_coverage(layers, outgoing));
+  }
+  let white = mx_subsurface_eval(MxLobeCtx(baseOutgoing, vec3f(1.0), 0.0, 0.0, 0.0, 0.0, 0.0), baseIncoming).value;
+  return max(white * factor * PI, vec3f(0.0)) * interfaceTransmission;
 }
 ${texHelpers}
 
@@ -1348,18 +1354,19 @@ ${displayAovs && analyticLights ? `        if (strategy == 0u && mx_guide_pendin
       }
       var ev: MxBsdfEval;
       var basePdf = 1.0;
+      // One evaluation gives the full, base and glossy-only responses (a single inlined site).
+      let parts = mx_closure_eval_parts(c, wo, neeLocal);
 ${environment ? `      // A fuzz BSDF sample also needs its glossy-only response (split SH environment).
       var glossy = vec3f(0.0);
       if (neeSpecularOnly || (neeBsdf && c.hasFuzz != 0u && c.fuzz.weight > 0.0)) {
-        ev = mx_closure_specular_eval(c, wo, neeLocal);
-        glossy = ev.value;
+        glossy = parts.glossy.value;
       }
-      if (!neeSpecularOnly) {
-        let parts = mx_closure_eval_parts(c, wo, neeLocal);
+      if (neeSpecularOnly) {
+        ev = parts.glossy;
+      } else {
         ev = parts.full;
         basePdf = parts.base.pdf;
-      }` : `      let parts = mx_closure_eval_parts(c, wo, neeLocal);
-      ev = parts.full;
+      }` : `      ev = parts.full;
       basePdf = parts.base.pdf;`}
       let attenuation = mx_spatial_base_attenuation(spatialLayers, spatialOutgoingCosine, neeLocal);
       if (neeBsdf) {

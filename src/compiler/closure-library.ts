@@ -231,21 +231,25 @@ export function closureLibraryPrelude(spec: ClosureDispatchSpec = ALL_DISPATCH):
 }
 
 // The base/full split lets mx_closure_sample keep its validity rule (a base-lobe
-// direction also needs a positive base pdf) with a single evaluation call.
+// direction also needs a positive base pdf) with a single evaluation call; `glossy`
+// is the glossy-only response of the same evaluation (no diffuse or fuzz lobes).
 function closureEvalWgsl(fuzz: boolean): string {
   return `struct MxClosureEvalParts {
   base: MxBsdfEval,
   full: MxBsdfEval,
+  glossy: MxBsdfEval,
 };
 fn mx_closure_eval_parts(c: LayeredClosure, wo: vec3f, wi: vec3f) -> MxClosureEvalParts {
-  let base = mx_closure_eval_base(c, wo, wi);
-${fuzz ? `  if (c.hasFuzz == 0u || c.fuzz.weight <= 0.0) { return MxClosureEvalParts(base, base); }
+  let pair = mx_closure_eval_base(c, wo, wi);
+  let base = pair.all;
+${fuzz ? `  if (c.hasFuzz == 0u || c.fuzz.weight <= 0.0) { return MxClosureEvalParts(base, base, pair.glossy); }
   let fuzzW = clamp(c.fuzz.weight, 0.0, 1.0);
   let fuzzCtx = MxLobeCtx(wo, c.fuzz.color, c.fuzz.roughness, 1.5, 0.0, 0.0, 0.0);
   let fuzz = mx_fuzz_eval(fuzzCtx, wi);
   let coverage = mx_closure_fuzz_coverage(c, wo);
-  return MxClosureEvalParts(base,
-    MxBsdfEval(fuzz.value * fuzzW + base.value * (1.0 - coverage), fuzz.pdf * coverage + base.pdf * (1.0 - coverage)));` : '  return MxClosureEvalParts(base, base);'}
+  let full = MxBsdfEval(fuzz.value * fuzzW + base.value * (1.0 - coverage), fuzz.pdf * coverage + base.pdf * (1.0 - coverage));
+  // The glossy response sits under the fuzz; MIS uses the full closure pdf.
+  return MxClosureEvalParts(base, full, MxBsdfEval(pair.glossy.value * (1.0 - coverage), full.pdf));` : '  return MxClosureEvalParts(base, base, pair.glossy);'}
 }
 fn mx_closure_eval(c: LayeredClosure, wo: vec3f, wi: vec3f) -> MxBsdfEval {
   return mx_closure_eval_parts(c, wo, wi).full;
@@ -706,11 +710,13 @@ fn mx_conductor_exact_sample(lobe: MxBsdfLobe, c: LayeredClosure, wo: vec3f, u: 
     sampleInput.x = (u.x - multipleProbability) / max(1.0 - multipleProbability, 1e-6);
     let wm = mx_sample_ggx_normal(mx_alpha_of(lobe.roughness), sampleInput);
     wi = reflect(-wo, wm);
-    if (wi.z <= 0.0) { return MxBsdfSample(vec3f(0.0), vec3f(0.0), 0.0, false); }
   }
-  let e = mx_conductor_exact_eval(lobe, c, wo, wi);
-  if (e.pdf <= 0.0) { return MxBsdfSample(vec3f(0.0), vec3f(0.0), 0.0, false); }
-  return MxBsdfSample(wi, e.value, e.pdf, true);
+  // Direction only: callers evaluate value and pdf at the shared evaluation site
+  // (mx_closure_sample). With wo and wi above the surface that pdf is positive, so
+  // no second inlined copy of the exact conductor evaluation is needed here (mobile
+  // drivers reject the kernel past a size threshold).
+  if (wi.z <= 0.0) { return MxBsdfSample(vec3f(0.0), vec3f(0.0), 0.0, false); }
+  return MxBsdfSample(wi, vec3f(0.0), 0.0, true);
 }
 
 fn mx_generalized_schlick_eval(lobe: MxBsdfLobe, c: LayeredClosure, wo: vec3f, wi: vec3f) -> MxBsdfEval {
@@ -1295,24 +1301,52 @@ fn mx_closure_selection_total(c: LayeredClosure, wo: vec3f) -> f32 {
   }
   return total;
 }
-fn mx_closure_base_eval(c: LayeredClosure, wo: vec3f, wi: vec3f) -> MxBsdfEval {
+// Lobes of the glossy-only response (environment NEE of fuzz closures, lit separately by
+// the SH probe): dielectric/conductor/schlick reflections, glass transmission, hair and
+// thin translucency.
+fn mx_closure_lobe_is_glossy(lobe: MxBsdfLobe) -> bool {
+  return lobe.kind == MX_LOBE_DIELECTRIC_REFLECTION || lobe.kind == MX_LOBE_CONDUCTOR
+    || lobe.kind == MX_LOBE_GENERALIZED_SCHLICK || lobe.kind == MX_LOBE_DIELECTRIC_TRANSMISSION
+    || lobe.kind == MX_LOBE_CHIANG_HAIR || (lobe.kind == MX_LOBE_TRANSLUCENT && lobe.thin > 0.0);
+}
+struct MxClosureEvalPair {
+  all: MxBsdfEval,
+  glossy: MxBsdfEval,
+};
+// Each lobe is evaluated once for both the full and the glossy-only response: shader
+// compilers inline every mx_closure_lobe_eval call site, and mobile drivers (Adreno)
+// reject the path-tracing kernel past a size threshold.
+fn mx_closure_base_eval(c: LayeredClosure, wo: vec3f, wi: vec3f) -> MxClosureEvalPair {
   let total = mx_closure_selection_total(c, wo);
+  var glossyTotal = 0.0;
+  for (var index = 0u; index < c.lobeCount; index++) {
+    if (c.lobes[index].weight > 0.0 && mx_closure_lobe_is_glossy(c.lobes[index])) {
+      glossyTotal += mx_closure_selection_weight(c.lobes[index], wo);
+    }
+  }
   var value = vec3f(0.0);
   var pdf = 0.0;
-  if (total <= 0.0) { return MxBsdfEval(value, pdf); }
+  var glossyValue = vec3f(0.0);
+  var glossyPdf = 0.0;
+  if (total <= 0.0) { return MxClosureEvalPair(MxBsdfEval(value, pdf), MxBsdfEval(value, pdf)); }
   for (var i = 0u; i < c.lobeCount; i = i + 1u) {
     let lobe = c.lobes[i];
     if (lobe.weight <= 0.0) { continue; }
     let r = mx_closure_lobe_eval(lobe, c, wo, wi);
+    let selection = mx_closure_selection_weight(lobe, wo);
     value = value + r.value * lobe.weight;
-    pdf = pdf + (mx_closure_selection_weight(lobe, wo) / total) * r.pdf;
+    pdf = pdf + (selection / total) * r.pdf;
+    if (glossyTotal > 0.0 && mx_closure_lobe_is_glossy(lobe)) {
+      glossyValue = glossyValue + r.value * lobe.weight;
+      glossyPdf = glossyPdf + (selection / glossyTotal) * r.pdf;
+    }
   }
-  return MxBsdfEval(value, pdf);
+  return MxClosureEvalPair(MxBsdfEval(value, pdf), MxBsdfEval(glossyValue, glossyPdf));
 }
 fn mx_closure_coat_ctx(c: LayeredClosure, wo: vec3f) -> MxLobeCtx {
   return MxLobeCtx(wo, vec3f(0.0), c.coat.roughness, c.coat.ior, 0.0, 0.0, 0.0);
 }
-fn mx_closure_eval_base(c: LayeredClosure, wo: vec3f, wi: vec3f) -> MxBsdfEval {
+fn mx_closure_eval_base(c: LayeredClosure, wo: vec3f, wi: vec3f) -> MxClosureEvalPair {
   // A single mx_closure_base_eval site for coated and uncoated closures: shader
   // compilers inline every call site, and this one dominates the closure size.
   let coated = c.hasCoat != 0u && c.coat.weight > 0.0;
@@ -1333,9 +1367,10 @@ fn mx_closure_eval_base(c: LayeredClosure, wo: vec3f, wi: vec3f) -> MxBsdfEval {
   let jacobian = select(1.0, abs(wi.z) / max(abs(baseWi.z), 1.0e-6), c.coat.mode != 0u);
   let att = mx_coat_attenuation(coatW, c.coat.ior, c.coat.color, wo, wi) * mx_coat_absorption(c, baseWo, baseWi);
   let pCoat = min(coatW * mx_coat_fresnel(c.coat.ior, wo.z), 0.95);
-  let value = coatW * cc.value + att * baseEval.value;
-  let pdf = pCoat * cc.pdf + (1.0 - pCoat) * baseEval.pdf * jacobian;
-  return MxBsdfEval(value, pdf);
+  return MxClosureEvalPair(
+    MxBsdfEval(coatW * cc.value + att * baseEval.all.value, pCoat * cc.pdf + (1.0 - pCoat) * baseEval.all.pdf * jacobian),
+    MxBsdfEval(coatW * cc.value + att * baseEval.glossy.value, pCoat * cc.pdf + (1.0 - pCoat) * baseEval.glossy.pdf * jacobian),
+  );
 }
 ${CLOSURE_FUZZ_EVAL}
 fn mx_closure_fuzz_coverage(c: LayeredClosure, wo: vec3f) -> f32 {
@@ -1481,56 +1516,5 @@ fn mx_closure_sampled_is_diffuse(c: LayeredClosure, wo: vec3f, uz: f32) -> bool 
   return k == MX_LOBE_OREN_NAYAR_DIFFUSE || k == MX_LOBE_BURLEY_DIFFUSE
       || (k == MX_LOBE_TRANSLUCENT && c.lobes[chosen].thin <= 0.0) || k == MX_LOBE_SHEEN || k == MX_LOBE_SUBSURFACE;
 }
-// Specular-only closure response: the dielectric/conductor/schlick reflection
-// lobes, the glass transmission lobe and the dielectric coat. The diffuse lobes
-// are excluded (lit by the SH probe) so the environment NEE keeps importance
-// sampling only the glossy/coat reflections (reflets du vernis).
-fn mx_closure_specular_eval(c: LayeredClosure, wo: vec3f, wi: vec3f) -> MxBsdfEval {
-  var baseWo = wo;
-  var baseWi = wi;
-  let baseClosure = mx_coat_base_closure(c);
-  if (c.hasCoat != 0u && c.coat.mode != 0u) {
-    baseWo = mx_coat_enter(wo, c.coat.ior);
-    baseWi = mx_coat_enter(wi, c.coat.ior);
-  }
-  var specTotal = 0.0;
-  for (var i = 0u; i < c.lobeCount; i = i + 1u) {
-    let l = baseClosure.lobes[i];
-    if (l.weight <= 0.0) { continue; }
-    if (l.kind == MX_LOBE_DIELECTRIC_REFLECTION || l.kind == MX_LOBE_CONDUCTOR
-        || l.kind == MX_LOBE_GENERALIZED_SCHLICK || l.kind == MX_LOBE_DIELECTRIC_TRANSMISSION
-        || l.kind == MX_LOBE_CHIANG_HAIR || (l.kind == MX_LOBE_TRANSLUCENT && l.thin > 0.0)) {
-      specTotal = specTotal + mx_closure_selection_weight(l, baseWo);
-    }
-  }
-  var value = vec3f(0.0);
-  var pdf = 0.0;
-  if (specTotal > 0.0) {
-    for (var i = 0u; i < c.lobeCount; i = i + 1u) {
-      let lobe = baseClosure.lobes[i];
-      if (lobe.weight <= 0.0) { continue; }
-      if (!(lobe.kind == MX_LOBE_DIELECTRIC_REFLECTION || lobe.kind == MX_LOBE_CONDUCTOR
-          || lobe.kind == MX_LOBE_GENERALIZED_SCHLICK || lobe.kind == MX_LOBE_DIELECTRIC_TRANSMISSION
-          || lobe.kind == MX_LOBE_CHIANG_HAIR || (lobe.kind == MX_LOBE_TRANSLUCENT && lobe.thin > 0.0))) { continue; }
-      let r = mx_closure_lobe_eval(lobe, baseClosure, baseWo, baseWi);
-      value = value + r.value * lobe.weight;
-      pdf = pdf + (mx_closure_selection_weight(lobe, baseWo) / specTotal) * r.pdf;
-    }
-  }
-  let jacobian = select(1.0, abs(wi.z) / max(abs(baseWi.z), 1.0e-6), c.hasCoat != 0u && c.coat.mode != 0u);
-  var base = MxBsdfEval(value, pdf * jacobian);
-  if (c.hasCoat != 0u && c.coat.weight > 0.0) {
-    let coatW = clamp(c.coat.weight, 0.0, 1.0);
-    let cc = mx_dielectric_reflection_eval(mx_closure_coat_ctx(c, wo), wi);
-    let att = mx_coat_attenuation(coatW, c.coat.ior, c.coat.color, wo, wi) * mx_coat_absorption(c, baseWo, baseWi);
-    let pCoat = min(coatW * mx_coat_fresnel(c.coat.ior, wo.z), 0.95);
-    base = MxBsdfEval(
-      coatW * cc.value + att * base.value,
-      pCoat * cc.pdf + (1.0 - pCoat) * base.pdf,
-    );
-  }
-  if (c.hasFuzz == 0u || c.fuzz.weight <= 0.0) { return base; }
-  let coverage = mx_closure_fuzz_coverage(c, wo);
-  return MxBsdfEval(base.value * (1.0 - coverage), mx_closure_pdf(c, wo, wi));
-}
+
 ${CLOSURE_FUZZ_SAMPLE}`;

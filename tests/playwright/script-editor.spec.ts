@@ -234,6 +234,23 @@ test('convertit le matériau courant (avec nodegraph) en script sans changer le 
   expect(difference.mean).toBeLessThan(0.5);
 });
 
+test('le menu charge chaque script de validation, accepté par la validation en direct', async ({ page }, info) => {
+  const e = await openEditor(page);
+  const menu = e.panel.getByTestId('script-examples');
+  const options = menu.locator('option:not([value=""])');
+  await expect(options).toHaveCount(7);
+  const labels = await options.allTextContents();
+  expect(labels[0]).toBe('Priorité 1 : rendu progressif intelligent');
+  for (const [index, label] of labels.entries()) {
+    await menu.selectOption(String(index));
+    await expectCode(e, `// ${label}`);
+    // The scenes are not loaded while validating: checks are skipped and scene queries answer empty.
+    await expect(e.status).toContainText('Script valide', { timeout: 60_000 });
+    await expect(e.status).not.toHaveClass(/error/);
+    await pause(page, info);
+  }
+});
+
 test('pilote le viewer depuis un script : scène, rendu, matériau conditionnel', async ({ page }, info) => {
   test.setTimeout(300_000);
   await page.goto('/');

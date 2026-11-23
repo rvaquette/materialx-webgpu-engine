@@ -822,9 +822,13 @@ async function main(): Promise<void> {
     for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
     await sink(name, btoa(binary));
   }
-  // Entry point of `npm run script` (scripts/run-material-script.mjs).
+  // Entry point of `npm run script` (scripts/run-material-script.mjs). Scripts start once the
+  // page's initial scene is loaded: otherwise that load would replace the scene a script loads.
+  let initialSceneLoaded!: () => void;
+  const initialScene = new Promise<void>(resolve => { initialSceneLoaded = resolve; });
   (globalThis as { __mxRunScript?: unknown }).__mxRunScript = async (code: string) => {
     try {
+      await initialScene;
       const library = await scriptLibrary;
       const run = await runScript(code, library, { host: scriptHost, filePrefix: scriptFilePrefix });
       return { ok: true, nodes: run.nodes.length, viewerCommands: run.viewerCommands, logs: run.logs, xml: toXml(run, library) };
@@ -845,6 +849,7 @@ async function main(): Promise<void> {
   document.getElementById('app')?.classList.add('ui-ready');
 
   let recoveries = 0;
+  let lastLoss = -Infinity;
   function watchDevice(watched: GPUDevice): void {
     void watched.lost.then(async info => {
       if (info.reason === 'destroyed') return;
@@ -852,13 +857,26 @@ async function main(): Promise<void> {
       journal.record({ level: 'warning', code: 'device-lost', message: `GPU device lost (${info.reason}): ${info.message}` });
       deviceLost = true;
       setBusy(true, 'Réinitialisation du moteur WebGPU...');
+      // Losses less than a minute apart count as one episode: restoring the same state again
+      // would lose the device again (e.g. a path-tracing kernel the driver cannot run).
+      const now = performance.now();
+      if (now - lastLoss > 60_000) recoveries = 0;
+      lastLoss = now;
       if (++recoveries > 3) {
         journal.record({ level: 'error', code: 'device-recovery-failed', message: 'GPU device lost more than three times in a row.' });
         setStatus(`GPU perdu (${info.message || info.reason}). Recharger la page.`);
         return;
       }
       // Scene, camera, material overrides and edits, time and settings survive the new device.
-      const snapshot = viewer.snapshotState();
+      let snapshot = viewer.snapshotState();
+      const tracer = snapshot.settings.backend;
+      let fallbackMessage = '';
+      if (recoveries > 1 && tracer !== 'raster') {
+        snapshot = { ...snapshot, settings: { ...snapshot.settings, backend: 'raster' } };
+        const reason = `le GPU a été perdu ${recoveries} fois pendant le rendu ${tracer === 'disney' ? 'Disney' : 'path tracing'}`;
+        journal.record({ level: 'warning', code: 'backend-fallback', message: `Restored with raster: ${reason}.`, detail: { backend: tracer } });
+        fallbackMessage = `Rendu raster à la place du ${tracer === 'disney' ? 'path tracer Disney' : 'path tracer'} : ${reason}.`;
+      }
       viewer.dispose();
       try {
         const next = await requestGpu();
@@ -880,7 +898,7 @@ async function main(): Promise<void> {
         refreshObjects();
         refreshAnimation();
         journal.record({ level: 'info', code: 'device-restored', message: 'GPU device recreated; scene and settings restored.' });
-        recoveries = 0;
+        if (fallbackMessage) setStatus(fallbackMessage);
       } catch (error) {
         journal.record({ level: 'error', code: 'device-recovery-failed', message: `GPU device recovery failed: ${String(error)}` });
         setStatus(`GPU perdu : ${String(error)}. Recharger la page.`);
@@ -913,6 +931,7 @@ async function main(): Promise<void> {
       refreshObjects();
     });
   }
+  initialSceneLoaded();
 }
 
 void main().catch((error: unknown) => {

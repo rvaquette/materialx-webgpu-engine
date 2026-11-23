@@ -15,7 +15,7 @@ export default defineConfig({
     screenshot: 'only-on-failure',
   },
   projects: [
-    { name: 'chromium', use: { ...devices['Desktop Chrome'] } },
+    { name: 'chromium', testIgnore: /mobile-/, use: { ...devices['Desktop Chrome'] } },
     // Installed Chrome: Playwright's bundled headless shell has no WebGPU adapter.
     { name: 'chrome', testMatch: /engine-smoke/, use: { ...devices['Desktop Chrome'], channel: 'chrome' } },
     {
@@ -23,8 +23,11 @@ export default defineConfig({
       use: { ...devices['Desktop Firefox'], launchOptions: { firefoxUserPrefs: { 'dom.webgpu.enabled': true } } },
     },
     { name: 'webkit', testMatch: /engine-smoke/, use: { ...devices['Desktop Safari'] } },
+    // Chrome on the Android device connected through adb (no desktop browser is launched).
+    { name: 'android', testMatch: /mobile-/ },
     {
       name: 'demo',
+      testIgnore: /mobile-/,
       use: {
         ...devices['Desktop Chrome'],
         headless: false,

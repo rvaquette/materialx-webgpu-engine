@@ -43,7 +43,7 @@ describe('closure library prelude (T056a)', () => {
     const specialized = closureLibraryPrelude({ ...spec, fuzz: false });
     const evalFn = specialized.match(/fn mx_closure_eval_parts\([^]*?\n}/)?.[0];
     const sampleFn = specialized.match(/fn mx_closure_sample_pick\([^]*?\n}/)?.[0];
-    expect(evalFn).toContain('return MxClosureEvalParts(base, base);');
+    expect(evalFn).toContain('return MxClosureEvalParts(base, base, pair.glossy);');
     expect(sampleFn).toContain('mx_closure_sample_direction(c, wo, baseU)');
     expect(evalFn).not.toContain('fuzz');
     expect(sampleFn).not.toContain('fuzz');
@@ -65,6 +65,10 @@ describe('closure library prelude (T056a)', () => {
     expect(coated).not.toContain('eval');
     expect(evalBase?.match(/mx_closure_base_eval\(/g)).toHaveLength(1);
     expect(sample?.match(/mx_closure_eval_parts\(/g)).toHaveLength(1);
+    // Full and glossy-only responses share one lobe evaluation; samplers return directions only.
+    expect(CLOSURE_LIBRARY_PRELUDE.match(/mx_closure_lobe_eval\(lobe, /g)).toHaveLength(1);
+    expect(CLOSURE_LIBRARY_PRELUDE).not.toContain('fn mx_closure_specular_eval');
+    expect(CLOSURE_LIBRARY_PRELUDE.match(/fn mx_conductor_exact_sample[\s\S]*?\n}/)?.[0]).not.toContain('mx_conductor_exact_eval');
     expect(sample?.match(/mx_closure_sample_pick\(/g)).toHaveLength(1);
     expect(CLOSURE_LIBRARY_PRELUDE.match(/fn mx_closure_sample_pick[\s\S]*?\n}/)?.[0].match(/mx_closure_sample_direction\(/g)).toHaveLength(1);
   });
@@ -94,11 +98,13 @@ describe('closure library prelude (T056a)', () => {
   it('lights Zeltner fuzz with directional albedo in SH without duplicating its environment energy', () => {
     const diffuse = CLOSURE_LIBRARY_PRELUDE.match(/fn mx_closure_diffuse_albedo[\s\S]*?\n}/)?.[0];
     const sampledDiffuse = CLOSURE_LIBRARY_PRELUDE.match(/fn mx_closure_sampled_is_diffuse[\s\S]*?\n}/)?.[0];
-    const specular = CLOSURE_LIBRARY_PRELUDE.match(/fn mx_closure_specular_eval[\s\S]*?\n}/)?.[0];
+    const evalParts = CLOSURE_LIBRARY_PRELUDE.match(/fn mx_closure_eval_parts[\s\S]*?\n}/)?.[0];
+    const baseEval = CLOSURE_LIBRARY_PRELUDE.match(/fn mx_closure_base_eval[\s\S]*?\n}/)?.[0];
     expect(diffuse).toContain('a = a * (1.0 - coverage) + c.fuzz.color * coverage;');
     expect(sampledDiffuse).toContain('if (uz < coverage) { return true; }');
-    expect(specular).toContain('base.value * (1.0 - coverage)');
-    expect(specular).not.toContain('mx_fuzz_eval');
+    // The glossy response leaves the fuzz out and uses the full closure pdf for MIS.
+    expect(evalParts).toContain('MxBsdfEval(pair.glossy.value * (1.0 - coverage), full.pdf)');
+    expect(baseEval).toContain('if (glossyTotal > 0.0 && mx_closure_lobe_is_glossy(lobe))');
   });
 
   it('declares every shared math helper', () => {
@@ -151,8 +157,8 @@ describe('closure library prelude (T056a)', () => {
     expect(CLOSURE_LIBRARY_PRELUDE).toContain('fn mx_closure_eval(c: LayeredClosure, wo: vec3f, wi: vec3f) -> MxBsdfEval');
     expect(CLOSURE_LIBRARY_PRELUDE).toContain('fn mx_closure_pdf(c: LayeredClosure, wo: vec3f, wi: vec3f) -> f32');
     expect(CLOSURE_LIBRARY_PRELUDE).toContain('fn mx_closure_sample(c: LayeredClosure, wo: vec3f, u: vec3f) -> MxBsdfSample');
-    expect(CLOSURE_LIBRARY_PRELUDE).toContain('pdf = pdf + (mx_closure_selection_weight(lobe, wo) / total) * r.pdf;');
-    expect(CLOSURE_LIBRARY_PRELUDE).toContain('let value = coatW * cc.value + att * baseEval.value;');
+    expect(CLOSURE_LIBRARY_PRELUDE).toContain('pdf = pdf + (selection / total) * r.pdf;');
+    expect(CLOSURE_LIBRARY_PRELUDE).toContain('MxBsdfEval(coatW * cc.value + att * baseEval.all.value,');
     expect(CLOSURE_LIBRARY_PRELUDE).toContain('mx_thin_film_fresnel(mx_fresnel_schlick(f0, cosVH), f0, cosVH, film)');
   });
 });

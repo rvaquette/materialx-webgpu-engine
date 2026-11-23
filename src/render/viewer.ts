@@ -38,6 +38,7 @@ import type { DecodedPixelImage } from '../assets/images.ts';
 import { tonemapIndex, type Tonemap } from './output.ts';
 import { loadUsdScene, meshSourceFromScene, uploadMaterialTextures, type LoadedUsdScene, type ObjectMaterialOverride, type SceneLoadOptions } from './usd-scene-assets.ts';
 import { assertSceneStorageSize, assertSceneTextureBindings, assertStorageBufferCount, GpuLimitError, withGpuValidation } from '../gpu/device.ts';
+import { isMobileGpu } from '../gpu/capabilities.ts';
 import { GpuMemoryTracker, type GpuMemoryUsage } from '../gpu/memory.ts';
 import { limitImageProvider } from '../assets/image-limits.ts';
 import { StreamingImages } from '../assets/streaming-images.ts';
@@ -120,6 +121,9 @@ const RASTER_BAND_PIXELS = 256 * 256;
 const RASTER_UNUSED_VARIANT_LIMIT = 16;
 const PATH_TRACE_TILES_PER_REFRESH = 4;
 const PATH_TRACE_MAX_TILES_PER_REFRESH = 16;
+/** A full-resolution batch faster than this doubles the tiles per submission; slower than the second halves them. */
+const PATH_TRACE_BATCH_FAST_MS = 15;
+const PATH_TRACE_BATCH_SLOW_MS = 40;
 function previewCamera(aspect: number, exposure: number): FrameCamera {
   const target: Vec3 = [0, 0.3, 0];
   const dir: Vec3 = [0.657, 0.438, 0.613];
@@ -3423,6 +3427,16 @@ export class InteractiveViewer {
       let convergenceError: string | undefined;
       const stopping = new PathTraceStopping(this.#pathTracingLimits);
       let timedBatch = false;
+      // Tiles per submission, adapted to the measured GPU time of full-resolution batches.
+      // Mobile drivers lose the device when one submission runs too long (Adreno at 4 tiles
+      // of 64x64 with the current kernel): they start at one tile and grow while batches are fast.
+      let tileBudget = isMobileGpu(device as { adapterInfo?: GPUAdapterInfo }) ? 1 : PATH_TRACE_MAX_TILES_PER_REFRESH;
+      let tiledBatch = 0;
+      const adaptTileBudget = (milliseconds: number, tiles: number): void => {
+        if (tiles < tileBudget) return;
+        if (milliseconds < PATH_TRACE_BATCH_FAST_MS) tileBudget = Math.min(PATH_TRACE_MAX_TILES_PER_REFRESH, tileBudget * 2);
+        else if (milliseconds > PATH_TRACE_BATCH_SLOW_MS) tileBudget = Math.max(1, Math.floor(tileBudget / 2));
+      };
       const invalidateConvergence = (): void => {
         convergenceRevision++;
         lastConvergenceSample = 0;
@@ -3591,10 +3605,11 @@ export class InteractiveViewer {
         timedBatch = accumulate && pixelScale === 1;
         if (accumulate) {
           needsPreview = false;
-          const tileCount = captureTiles ?? (tiled ? Math.min(PATH_TRACE_MAX_TILES_PER_REFRESH, Math.max(
+          const tileCount = captureTiles ?? (tiled ? Math.min(tileBudget, PATH_TRACE_MAX_TILES_PER_REFRESH, Math.max(
             PATH_TRACE_TILES_PER_REFRESH,
             Math.ceil(pathTraceTileCount(ptWidth, ptHeight) / PATH_TRACE_TILES_PER_REFRESH),
           )) : 1);
+          tiledBatch = tiled && !capturing ? tileCount : 0;
           for (let i = 0; i < tileCount; i++) {
             const { tile, frameIndex } = tiled
               ? ptBackend.advanceTile(ptWidth, ptHeight)
@@ -3798,6 +3813,10 @@ export class InteractiveViewer {
           stopping.recordBatch(milliseconds);
           timedBatch = false;
         }
+        if (tiledBatch > 0) {
+          adaptTileBudget(milliseconds, tiledBatch);
+          tiledBatch = 0;
+        }
         if (!lastPreview) return;
         measuredFrames++;
         measuredTime += milliseconds;
@@ -3809,6 +3828,7 @@ export class InteractiveViewer {
       };
       return {
         scene: ptScene, uploadParameters, renderPathTrace, reportFrameTime, resetPathTrace, invalidateDenoise,
+        tileBudget: (): number => tileBudget, adaptTileBudget,
         applyGeometry, writeLights, ageAccumulation,
         denoiserStatus: (): DenoiserStatus => this.#pathTracingDenoise ? denoiserStatus : { state: 'off' },
         pathTraceConvergence: (): PathTraceConvergence | undefined => convergenceStatus,
@@ -4108,14 +4128,16 @@ export class InteractiveViewer {
       await build;
       checkCapture();
       if (!pathTracer) throw pathTraceBuildError ?? new Error('Path tracer preparation failed.');
-      const { renderPathTrace, resetPathTrace } = pathTracer;
+      const { renderPathTrace, resetPathTrace, tileBudget, adaptTileBudget } = pathTracer;
       if (options.reset !== false) resetPathTrace();
       let remaining = samples * pathTraceTileCount(width, height);
       while (remaining > 0) {
         checkCapture();
-        const tiles = Math.min(remaining, PATH_TRACE_MAX_TILES_PER_REFRESH);
+        const tiles = Math.min(remaining, tileBudget());
+        const started = performance.now();
         await withGpuValidation(device, () => renderPathTrace(undefined, true, true, tiles));
         await device.queue.onSubmittedWorkDone();
+        adaptTileBudget(performance.now() - started, tiles);
         checkCapture();
         remaining -= tiles;
       }

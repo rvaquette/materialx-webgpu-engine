@@ -23,6 +23,7 @@
     "test:watch": "vitest",
     "test:playwright": "playwright test --project=chromium",
     "test:playwright:demo": "playwright test --project=demo",
+    "test:playwright:android": "playwright test --project=android",
     "test:playwright:browsers": "playwright test engine-smoke --project=chromium --project=chrome --project=firefox --project=webkit",
     "test:golden": "node scripts/golden.mjs",
     "test:gpu-matrix": "node scripts/test-gpu-matrix.mjs",

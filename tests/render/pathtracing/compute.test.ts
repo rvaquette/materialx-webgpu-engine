@@ -329,7 +329,9 @@ describe('pathTraceComputeWgsl', () => {
     expect(shader).toContain('environmentBeta = environmentBeta / q;');
     expect(src).not.toContain('environmentBeta = beta * bsGlossy');
     const integrate = shader.slice(shader.indexOf('fn integrate('));
-    expect(integrate.match(/mx_closure_specular_eval\(/g)).toHaveLength(1);
+    expect(integrate).not.toContain('mx_closure_specular_eval(');
+    expect(integrate).toContain('glossy = parts.glossy.value;');
+    expect(integrate.match(/mx_closure_eval_parts\(/g)).toHaveLength(1);
   });
 
   it('declares the compute entry point and workgroup tile', () => {

@@ -477,6 +477,8 @@ export function transformScript(code: string): string {
   };
   const emit = (node: AstNode): string => {
     if (statementTests.delete(node)) return `__mx.test(${emit(node)})`;
+    // `{ name }`: key and value share one source span, which must be emitted once.
+    if (node.type === 'Property' && node['shorthand']) return code.slice(node.start, node.end);
     const operator = node['operator'] as string | undefined;
     if (node.type === 'BinaryExpression' && ARITHMETIC.has(operator!)) {
       return `__mx.op(${JSON.stringify(operator)}, ${emit(node['left'] as AstNode)}, ${emit(node['right'] as AstNode)})`;
@@ -1128,6 +1130,15 @@ export async function runScript(code: string, library: ScriptLibrary, options: R
     },
     material: (object: unknown): object => {
       if (typeof object !== 'string' || !object) throw new ScriptError('material(object) expects an object path.');
+      if (options.dryRun && sceneRequested) {
+        // The scene requested by scene() is not loaded while validating: stand in with a default material.
+        const shader = createNode(library.resolve('standard_surface'));
+        nameNode(shader, 'surface');
+        const stand = createNode(library.resolve('surfacematerial'));
+        nameNode(stand, 'material');
+        assign(stand, 'surfaceshader', outputRef(shader, shader.def.outputs[0]!));
+        return handleFor(stand);
+      }
       if (!queries) throw new ScriptError('material(object) needs the viewer.');
       const current = queries.objectMaterial(object);
       if (!current) throw new ScriptError(`${object} has no MaterialX material.`);

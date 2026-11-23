@@ -25,7 +25,7 @@ for (const [name, entry] of scenes) {
   render.backend = "raster";
   let started = performance.now();
   await scene(entry);
-  const load = seconds(started);
+  const loadTime = seconds(started);
   render.backend = "pathtracing";
   started = performance.now();
   await render(1);
@@ -45,9 +45,9 @@ for (const [name, entry] of scenes) {
   started = performance.now();
   await render(1);
   const reloadFirstFrame = seconds(started);
-  log(`${name} : chargement ${load} s, 1re image PT ${firstFrame} s, 64 spp en ${rendering} s ` +
+  log(`${name} : chargement ${loadTime} s, 1re image PT ${firstFrame} s, 64 spp en ${rendering} s ` +
     `(${rate?.toFixed(1)} spp/s), rechargement ${reload} s, 1re image PT ${reloadFirstFrame} s`);
-  check(Number(reload) <= Number(load) * 1.1 + 0.5, `${name} : le rechargement profite des caches`);
+  check(Number(reload) <= Number(loadTime) * 1.1 + 0.5, `${name} : le rechargement profite des caches`);
   check(Number(reloadFirstFrame) <= Number(firstFrame) * 1.1 + 0.5, `${name} : pipelines path tracing réutilisés au rechargement`);
 }
 

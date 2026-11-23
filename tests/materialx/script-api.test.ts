@@ -510,6 +510,7 @@ lazy = new Noise3d("float");
       'x = ok ? await f() : 1;\ny = __mx.cond(a, () => (b), () => (c));');
     expect(transformScript('for (let i = 0; i < 3; i++) { const k = i; }\nlet unset;')).toBe(
       'for (let i = 0; __mx.test(__mx.cmp("<", i, 3)); i++) { k = i; }\nlet unset;');
+    expect(transformScript('o = { shutter, samples: 2 * n };')).toBe('o = { shutter, samples: __mx.op("*", 2, n) };');
   });
 
   it('drives the viewer through the host, in order, and only validates without one', async () => {
@@ -599,9 +600,10 @@ await capture("blur.png", { samples: 32, shutter: [0, 4], steps: 8 });`, EXPRESS
     const rotated = await runScript('m = transform({ rotate: [0, 90, 0] }); log(m.map(v => Math.round(v)).join(","));', EXPRESSIONS);
     expect(rotated.logs).toEqual(['0,0,-1,0,0,1,0,0,1,0,0,0,0,0,0,1']);
     // After scene() a dry run does not know the new scene: scene queries answer as for an empty scene.
-    const dry = await runScript('await scene("./other.usda"); log(objects().length, lights().length, timeline() === undefined);',
+    const dry = await runScript('await scene("./other.usda"); log(objects().length, lights().length, timeline() === undefined);' +
+      ' m = material("/A"); log(String(m.surfaceshader));',
       EXPRESSIONS, { host: { ...idleHost(), objects: () => ['/A'], lights: () => [{ path: '/L', type: 'SphereLight' }] }, dryRun: true });
-    expect(dry.logs).toEqual(['0 0 true']);
+    expect(dry.logs).toEqual(['0 0 true', 'surface.out']);
     await expect(runScript('render.noiseTarget = 0.5;', EXPRESSIONS)).rejects.toThrow(/noiseTarget expects a number from 0.005 to 0.25/);
     await expect(runScript('render.view = "uv";', EXPRESSIONS)).rejects.toThrow(/render.view expects "beauty"/);
     await expect(runScript('await capture("x.png", { samples: 8, steps: 4 });', EXPRESSIONS)).rejects.toThrow(/steps needs a shutter/);

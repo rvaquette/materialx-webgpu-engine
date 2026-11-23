@@ -74,3 +74,12 @@ export function describeGpuCapabilities(
     maxTextureSize: limits.maxTextureDimension2D ?? 0,
   };
 }
+
+/**
+ * Mobile GPU drivers (Adreno, Mali, PowerVR, Apple) lose the device when one submission
+ * runs too long: path tracing starts them with small batches (viewer.ts tile budget).
+ */
+export function isMobileGpu(device: Pick<GPUDevice, never> & { adapterInfo?: Partial<GPUAdapterInfo> }): boolean {
+  const info = device.adapterInfo;
+  return /qualcomm|adreno|arm|mali|imagination|powervr|apple|samsung/i.test(`${info?.vendor ?? ''} ${info?.architecture ?? ''}`);
+}

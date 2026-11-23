@@ -929,7 +929,7 @@ describe('emitLayeredSurface (T055d)', () => {
     expect(mod.code).toContain('c.hasFuzz = 1u;');
     expect(mod.code).toContain('c.fuzz = MxFuzzLayer(');
     expect(mod.code).toContain('c.lobeCount = 2u;');
-    expect(mod.code).toContain('fn mx_closure_eval_base(c: LayeredClosure, wo: vec3f, wi: vec3f) -> MxBsdfEval');
+    expect(mod.code).toContain('fn mx_closure_eval_base(c: LayeredClosure, wo: vec3f, wi: vec3f) -> MxClosureEvalPair');
     expect(mod.code).toContain('let fuzz = mx_fuzz_eval(fuzzCtx, wi);');
     expect(mod.code).toContain('fuzz.value * fuzzW + base.value * (1.0 - coverage)');
     expect(mod.code).toContain('fuzz.pdf * coverage + base.pdf * (1.0 - coverage)');
