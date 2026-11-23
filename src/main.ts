@@ -8,12 +8,15 @@ import { bindMaterialLibrary } from './material-library.ts';
 import { sceneDeviceDescriptor } from './gpu/device.ts';
 import { startViewerUi, type ViewerUiState, type ViewerUiActions } from './viewer-ui.ts';
 import type { LocalGltfScene } from './scene/local-gltf.ts';
-import { downloadDisplayedAovPng, downloadPathTraceAovPfm } from './render/aov-export.ts';
+import { downloadDisplayedAovPng, downloadPathTraceAovPfm, encodePathTraceAovPfm } from './render/aov-export.ts';
 import { attachScriptEditor } from './materialx/script-editor.ts';
-import { loadScriptLibrary, runScript, ScriptError, toXml, type ScriptHost } from './materialx/script-api.ts';
+import { loadScriptLibrary, runScript, ScriptError, toXml, type ScriptHost, type ScriptStats } from './materialx/script-api.ts';
 import { downloadBlob } from './assets/download.ts';
 import { DiagnosticJournal } from './diagnostics/journal.ts';
 import type { ResolvedGraph } from './materialx/graph.ts';
+import { captureRgba } from './gpu/capture.ts';
+import { describeGpuCapabilities } from './gpu/capabilities.ts';
+import type { PathTraceView } from './render/pathtracing/display.ts';
 
 let ui: ViewerUiState | undefined;
 let statusIsError = false;
@@ -66,13 +69,37 @@ async function main(): Promise<void> {
     saveImage: name => readyHost().saveImage(name),
     saveText: (name, text) => readyHost().saveText(name, text),
     objectMaterial: object => viewerHost?.objectMaterial(object),
+    stats: () => viewerHost?.stats(),
+    waitForStop: timeout => readyHost().waitForStop(timeout),
+    capture: (name, options) => readyHost().capture(name, options),
+    saveAov: name => readyHost().saveAov(name),
+    saveDiagnostics: name => readyHost().saveDiagnostics(name),
+    diagnostics: () => viewerHost?.diagnostics() ?? [],
+    capabilities: () => viewerHost?.capabilities(),
+    timeline: () => viewerHost?.timeline(),
+    time: () => viewerHost?.time() ?? 0,
+    setTime: time => readyHost().setTime(time),
+    setTransform: (object, matrix) => readyHost().setTransform(object, matrix),
+    setVisibility: (object, visible) => readyHost().setVisibility(object, visible),
+    lights: () => viewerHost?.lights() ?? [],
+    setLight: (light, changes) => readyHost().setLight(light, changes),
+    setCamera: camera => readyHost().setCamera(camera),
+    variants: () => viewerHost?.variants() ?? [],
+    setVariant: (path, set, variant) => readyHost().setVariant(path, set, variant),
+    materialParameters: object => viewerHost?.materialParameters(object) ?? [],
+    setMaterialParameters: (object, values) => readyHost().setMaterialParameters(object, values),
     log: message => console.info(`[script] ${message}`),
   };
   const scriptLibrary = loadScriptLibrary(new URL(`${import.meta.env.BASE_URL}materialx/libraries`, document.baseURI).href);
   const scriptFilePrefix = new URL('.', document.baseURI).href;
+  // Validation scripts of docs/SCRIPTING.md; the label is the first comment line.
+  const validationScripts = Object.entries(import.meta.glob<string>('../examples/scripts/*.js', { query: '?raw', import: 'default', eager: true }))
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([path, code]) => ({ label: /^\/\/\s*(.+?)\s*(?:\(|$)/m.exec(code)?.[1] ?? path.split('/').at(-1)!, code }));
   attachScriptEditor(document.getElementById('material-tools'), {
     library: scriptLibrary,
     filePrefix: scriptFilePrefix,
+    examples: validationScripts,
     onApply: (xml) => {
       if (!applyScriptMaterial) throw new Error('Le viewer WebGPU n’est pas prêt.');
       return applyScriptMaterial(xml);
@@ -110,6 +137,8 @@ async function main(): Promise<void> {
   const gpu = await requestGpu();
   if (!gpu) { setStatus('No WebGPU adapter found.'); return; }
   const { device } = gpu;
+  // Replaced after a device loss; script operations use the current one.
+  let currentGpu = gpu;
   (globalThis as { __mxGpu?: unknown }).__mxGpu = gpu;
   let deviceLost = false;
   const journal = new DiagnosticJournal();
@@ -200,11 +229,12 @@ async function main(): Promise<void> {
   };
   let viewer = new InteractiveViewer({ device, context, outputFormat, canvas, streaming: true, ...viewerCallbacks });
   const exportDiagnostics = document.querySelector<HTMLButtonElement>('#export-diagnostics');
+  const diagnosticsJson = (): string =>
+    journal.export({ scene: state.entry, backend: viewer.backend, gpuMemory: viewer.gpuMemory, status: state.status });
   if (exportDiagnostics) {
     exportDiagnostics.hidden = false;
     exportDiagnostics.onclick = () => {
-      const json = journal.export({ scene: state.entry, backend: viewer.backend, gpuMemory: viewer.gpuMemory, status: state.status });
-      downloadBlob(new Blob([json], { type: 'application/json' }), `materialx-diagnostics-${new Date().toISOString().replace(/[:.]/g, '-')}.json`);
+      downloadBlob(new Blob([diagnosticsJson()], { type: 'application/json' }), `materialx-diagnostics-${new Date().toISOString().replace(/[:.]/g, '-')}.json`);
     };
   }
   viewer.setBackend(initialBackend);
@@ -535,6 +565,21 @@ async function main(): Promise<void> {
       finally { refreshObjects(); }
     }); },
   };
+  /** Polls `done` every 100 ms; fails after `seconds` or when the device is lost. */
+  async function waitFor(done: () => boolean, seconds: number, what: string): Promise<void> {
+    const end = performance.now() + seconds * 1000;
+    while (!done()) {
+      if (deviceLost) throw new Error(`Périphérique WebGPU perdu pendant l’attente : ${what}.`);
+      if (performance.now() > end) throw new Error(`Délai dépassé (${seconds} s) : ${what}.`);
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
+  }
+  /** Lets the viewer draw the current state before an image is saved. */
+  async function nextFrame(): Promise<void> {
+    await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
+    await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
+    await currentGpu.device.queue.onSubmittedWorkDone();
+  }
   viewerHost = {
     async loadScene(entry) {
       if (operationBusy || deviceLost) throw new Error('Une opération du viewer est en cours.');
@@ -543,10 +588,18 @@ async function main(): Promise<void> {
       if (!await loadEntry(entry)) throw new Error(state.error || `Échec du chargement de ${entry}.`);
     },
     objects: () => viewer.objects.map(object => object.path),
-    renderSettings: () => ({
-      backend: state.backend, resolution: state.resolution, depth: state.pathTracingDepth, quality: state.rasterQuality,
-      environment: state.environmentEnabled, denoise: state.denoise, exposure: state.exposure, tonemap: state.tonemap,
-    }),
+    renderSettings: () => {
+      const limits = viewer.pathTracingLimits;
+      const budget = viewer.gpuMemory.budget;
+      return {
+        backend: state.backend, resolution: state.resolution, depth: state.pathTracingDepth, quality: state.rasterQuality,
+        environment: state.environmentEnabled, denoise: state.denoise, exposure: state.exposure, tonemap: state.tonemap,
+        view: viewer.pathTracingView, adaptive: viewer.pathTracingAdaptive, noiseTarget: limits.targetRelativeError,
+        stopOnConvergence: limits.stopOnConvergence, timeBudget: limits.timeBudgetSeconds, paused: viewer.pathTracingPaused,
+        compare: state.status?.denoiserComparison ?? false, temporalHistory: viewer.pathTracingTemporalHistory,
+        memoryBudget: budget === undefined ? 0 : budget / 2 ** 20,
+      };
+    },
     // Values are validated by the script runtime (RENDER_SETTINGS) before reaching the viewer.
     async setRenderSetting(name, value) {
       if (name === 'backend') { viewer.setBackend(value as ViewerUiState['backend']); state.backend = value as ViewerUiState['backend']; }
@@ -560,6 +613,32 @@ async function main(): Promise<void> {
       else if (name === 'denoise') { viewer.setPathTracingDenoise(value as boolean); state.denoise = value as boolean; }
       else if (name === 'exposure') { viewer.setExposure(value as number); state.exposure = value as number; }
       else if (name === 'tonemap') { await viewer.setTonemap(value as ViewerUiState['tonemap']); state.tonemap = value as ViewerUiState['tonemap']; }
+      else if (name === 'view') viewer.setPathTracingView(value as PathTraceView);
+      else if (name === 'adaptive') viewer.setPathTracingAdaptive(value as boolean);
+      else if (name === 'noiseTarget') viewer.setPathTracingLimits({ ...viewer.pathTracingLimits, targetRelativeError: value as number });
+      else if (name === 'stopOnConvergence') viewer.setPathTracingLimits({ ...viewer.pathTracingLimits, stopOnConvergence: value as boolean });
+      else if (name === 'timeBudget') viewer.setPathTracingLimits({ ...viewer.pathTracingLimits, timeBudgetSeconds: value as number });
+      else if (name === 'paused') viewer.setPathTracingPaused(value as boolean);
+      else if (name === 'compare') {
+        // The comparison needs a paused render: wait for the frame drawn by the pause first.
+        await currentGpu.device.queue.onSubmittedWorkDone();
+        viewer.setPathTracingDenoiserComparison(value as boolean);
+        if (value) {
+          await waitFor(() => state.status?.denoiser.state === 'ready' || state.status?.denoiser.state === 'error', 120, 'débruitage de la comparaison');
+          if (state.status?.denoiser.state === 'error') throw new Error(`Échec du débruitage : ${state.status.denoiser.error}`);
+          await nextFrame();
+        }
+      } else if (name === 'temporalHistory') {
+        viewer.setPathTracingTemporalHistory(value as number);
+        if (state.animation) state.animation.temporalHistory = value as number;
+      } else if (name === 'memoryBudget') {
+        setBusy(true, 'Application du budget mémoire GPU...');
+        try { await viewer.setMemoryBudget(value as number > 0 ? value as number * 2 ** 20 : undefined); }
+        finally {
+          refreshObjects();
+          setBusy(false);
+        }
+      }
       else throw new Error(`Paramètre de rendu inconnu : ${name}.`);
     },
     async assignMaterial(object, material) {
@@ -585,7 +664,10 @@ async function main(): Promise<void> {
       }
       if (viewer.pathTracingPaused) viewer.setPathTracingPaused(false);
       viewer.restartPathTracing();
-      if (!samples) return 0;
+      if (!samples) {
+        await nextFrame();
+        return state.status?.samples ?? 0;
+      }
       let last = -1;
       let lastProgress = performance.now();
       for (;;) {
@@ -593,13 +675,128 @@ async function main(): Promise<void> {
         if (deviceLost) throw new Error('Périphérique WebGPU perdu pendant le rendu.');
         const status = state.status;
         if (status?.pathTracer === 'error') throw new Error('Échec de préparation du path tracer.');
+        if (status?.fallback) throw new Error(`Rendu raster à la place du path tracer : ${status.fallback.reason}`);
         if (status?.pathTracer === 'ready' && status.samples >= samples) return status.samples;
-        if (status && status.samples !== last) { last = status.samples; lastProgress = performance.now(); }
+        // Convergence or the time budget can stop the accumulation before the requested count.
+        if (status?.pathTracer === 'ready' && status.pathTracingProgress?.stopReason) return status.samples;
+        if (status && (status.samples !== last || status.pathTracer !== 'ready')) { last = status.samples; lastProgress = performance.now(); }
         if (performance.now() - lastProgress > 60_000) throw new Error(`Rendu bloqué à ${last} échantillons sur ${samples}.`);
       }
     },
+    stats() {
+      const status = state.status;
+      const memory = viewer.gpuMemory;
+      const progress = status?.pathTracingProgress;
+      const metrics = status?.pathTracingMetrics;
+      const stats = {
+        backend: viewer.backend, drawnBy: status?.fallback ? 'raster' : viewer.backend, fallback: status?.fallback?.reason,
+        pathTracer: status?.pathTracer ?? 'idle', samples: status?.samples ?? 0,
+        adaptive: viewer.pathTracingAdaptive, paused: viewer.pathTracingPaused,
+        elapsed: progress?.elapsedSeconds, stopReason: progress?.stopReason,
+        samplesPerSecond: metrics?.sweepsPerSecond, noise: metrics?.relativeNoise, maxNoise: metrics?.maximumRelativeNoise,
+        variance: metrics?.relativeVariance, remaining: metrics?.convergenceRemainingSeconds, budgetRemaining: metrics?.budgetRemainingSeconds,
+        time: viewer.time, warnings: status?.warnings ?? 0,
+        gpuMemory: {
+          total: memory.total, peak: memory.peak, textures: memory.textures, buffers: memory.buffers,
+          ...(memory.budget !== undefined ? { budget: memory.budget } : {}), textureLimit: memory.textureLimit,
+        },
+      };
+      return Object.fromEntries(Object.entries(stats).filter(([, value]) => value !== undefined)) as unknown as ScriptStats;
+    },
+    async waitForStop(timeout) {
+      const limits = viewer.pathTracingLimits;
+      if (viewer.backend !== 'pathtracing') throw new Error('converge() demande render.backend = "pathtracing".');
+      if (!limits.stopOnConvergence && limits.timeBudgetSeconds === 0) {
+        throw new Error('converge() demande render.stopOnConvergence = true ou un render.timeBudget.');
+      }
+      if (viewer.pathTracingPaused) viewer.setPathTracingPaused(false);
+      await waitFor(() => {
+        const status = state.status;
+        if (status?.pathTracer === 'error') throw new Error('Échec de préparation du path tracer.');
+        if (status?.fallback) throw new Error(`Rendu raster à la place du path tracer : ${status.fallback.reason}`);
+        return status?.pathTracer === 'ready' && status.pathTracingProgress?.stopReason !== undefined;
+      }, timeout, 'arrêt du path tracer');
+      await nextFrame();
+    },
+    async capture(name, options) {
+      if (viewer.backend !== 'pathtracing') throw new Error('capture() demande render.backend = "pathtracing".');
+      if (outputFormat !== 'rgba8unorm' && outputFormat !== 'bgra8unorm') throw new Error(`Format de sortie non pris en charge : ${outputFormat}.`);
+      if (operationBusy || deviceLost) throw new Error('Une opération du viewer est en cours.');
+      const target = viewer;
+      setBusy(true, `Capture de ${options.samples} échantillons${options.shutter ? ' avec flou de mouvement' : ''}...`);
+      try {
+        const image = await captureRgba(currentGpu.device, canvas!.width, canvas!.height, {
+          pathTrace: view => target.renderPathTraceTo(view, options.samples, options.shutter),
+        }, () => { if (deviceLost || viewer !== target) throw new Error('Périphérique WebGPU perdu pendant la capture.'); }, outputFormat);
+        const offscreen = new OffscreenCanvas(image.width, image.height);
+        offscreen.getContext('2d')!.putImageData(new ImageData(new Uint8ClampedArray(image.rgba), image.width, image.height), 0, 0);
+        await saveScriptFile(name, await offscreen.convertToBlob({ type: 'image/png' }));
+      } finally {
+        setBusy(false);
+      }
+    },
+    async saveAov(name) {
+      const view = viewer.pathTracingView;
+      if (viewer.backend !== 'pathtracing' || view === 'beauty' || !state.status?.samples) {
+        throw new Error('save(".pfm") demande render.view = un AOV du path tracer et des échantillons.');
+      }
+      const image = await viewer.readPathTracingAov();
+      await saveScriptFile(name, new Blob([encodePathTraceAovPfm(image)], { type: 'application/octet-stream' }));
+    },
+    saveDiagnostics: name => saveScriptFile(name, new Blob([diagnosticsJson()], { type: 'application/json' })),
+    diagnostics: () => journal.records.map(record => ({ level: record.level, message: record.message, ...(record.code ? { code: record.code } : {}) })),
+    capabilities: () => describeGpuCapabilities(currentGpu.device, currentGpu.adapter.info),
+    timeline() {
+      const timeline = viewer.timeline;
+      return timeline?.animated ? { start: timeline.start, end: timeline.end, fps: timeline.timeCodesPerSecond } : undefined;
+    },
+    time: () => viewer.time,
+    async setTime(time) {
+      await viewer.setTime(time);
+      if (state.animation) state.animation.time = time;
+    },
+    async setTransform(object, matrix) { viewer.setObjectTransform(object, matrix); },
+    async setVisibility(object, visible) { viewer.setObjectVisible(object, visible); },
+    lights: () => viewer.lights,
+    async setLight(light, changes) {
+      viewer.setLight(light, changes && {
+        ...(changes.intensity !== undefined ? { intensity: changes.intensity } : {}),
+        ...(changes.exposure !== undefined ? { exposure: changes.exposure } : {}),
+        ...(changes.color !== undefined ? { color: [changes.color[0]!, changes.color[1]!, changes.color[2]!] as [number, number, number] } : {}),
+        ...(changes.transform !== undefined ? { transform: [...changes.transform] } : {}),
+      });
+    },
+    async setCamera(camera) {
+      viewer.setCamera({ eye: camera.eye, target: camera.target, ...(camera.fov !== undefined ? { fovY: camera.fov * Math.PI / 180 } : {}) });
+    },
+    variants: () => viewer.variantSets,
+    async setVariant(path, set, variant) {
+      if (operationBusy || deviceLost) throw new Error('Une opération du viewer est en cours.');
+      setBusy(true, 'Changement de variante...');
+      try { await viewer.setVariant(path, set, variant); }
+      finally {
+        refreshObjects();
+        refreshAnimation();
+        setBusy(false);
+      }
+    },
+    materialParameters(object) {
+      if (!viewer.objects.some(candidate => candidate.path === object)) throw new Error(`Objet inconnu : ${object}.`);
+      return viewer.objectParameters(object);
+    },
+    async setMaterialParameters(object, values) {
+      if (operationBusy || deviceLost) throw new Error('Une opération du viewer est en cours.');
+      const known = new Set(viewer.objectParameters(object).map(parameter => parameter.id));
+      const unknown = [...values.keys()].filter(id => !known.has(id));
+      if (unknown.length) throw new Error(`Paramètres inconnus sur ${object} : ${unknown.join(', ')}. Voir materialParameters("${object}").`);
+      setBusy(true, 'Application des paramètres du matériau...');
+      try { await viewer.setObjectParameters(object, values); }
+      finally { setBusy(false); }
+    },
     async saveImage(name) {
-      await device.queue.onSubmittedWorkDone();
+      // Settings applied just before (exposure, view...) are drawn by the next frame.
+      await nextFrame();
+      await currentGpu.device.queue.onSubmittedWorkDone();
       const blob = await new Promise<Blob>((resolve, reject) => {
         canvas.toBlob(value => value ? resolve(value) : reject(new Error('Le navigateur n’a pas pu encoder le rendu en PNG.')), 'image/png');
       });
@@ -667,6 +864,7 @@ async function main(): Promise<void> {
         const next = await requestGpu();
         if (!next) throw new Error('Aucun adaptateur WebGPU disponible.');
         (globalThis as { __mxGpu?: unknown }).__mxGpu = next;
+        currentGpu = next;
         next.device.addEventListener('uncapturederror', reportGpuError);
         context!.configure({ device: next.device, format: outputFormat, alphaMode: 'opaque' });
         viewer = new InteractiveViewer({ device: next.device, context: context!, outputFormat, canvas: canvas!, streaming: true, ...viewerCallbacks });

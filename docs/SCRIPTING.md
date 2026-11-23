@@ -122,27 +122,95 @@ await render(64);                                          // attend 64 échanti
 |---|---|
 | `await scene(chemin)` | Charge une scène (USD, glTF) |
 | `objects()` | Chemins des objets de la scène |
-| `render.<paramètre> = valeur` | Paramètres de l'UI : `backend` (`"raster"`, `"pathtracing"`, `"disney"`), `resolution` (128, 256, 512, 1024, `"1024x768"`), `depth` (0–64), `quality` (`"interactive"`, `"reference"`), `environment`, `denoise` (booléens), `exposure` (EV), `tonemap` (`"none"`, `"reinhard"`, `"acesFilmic"`) |
+| `render.<paramètre> = valeur` | Paramètres de rendu (tableau suivant) |
 | `await assign(objet, matériau)` | Affecte un shader de surface ou un `surfacematerial` du script (avec les nœuds en amont), ou un fichier `.mtlx` |
 | `await load(chemin)` | Ajoute au script les nœuds d'un document `.mtlx` et retourne son matériau |
-| `await render(n)` | Relance le rendu ; avec `n`, attend `n` échantillons du path tracer |
-
+| `await render(n)` | Relance le rendu ; avec `n`, attend `n` échantillons du path tracer (ou son arrêt sur convergence ou budget de temps) |
 | `await save("rendu.png")` | Enregistre le rendu affiché en PNG |
+| `await save("aov.pfm")` | Enregistre l'AOV path tracing sélectionné (`render.view`) en PFM 32 bits |
+| `await save("diagnostics.json")` | Enregistre le journal des diagnostics |
 | `await save("materiau.mtlx", matériau)` | Enregistre le document MaterialX d'un matériau du script |
+| `log(…)`, `check(condition, "message")` | Message ; vérification qui arrête le script si la condition est fausse |
+
+| Paramètre `render.` | Valeurs |
+|---|---|
+| `backend` | `"raster"`, `"pathtracing"`, `"disney"` |
+| `resolution` | 128, 256, 512, 1024, `"1024x768"` |
+| `depth` | profondeur du path tracing, 0–64 |
+| `quality` | qualité raster : `"interactive"`, `"reference"` |
+| `environment`, `denoise` | booléens |
+| `exposure`, `tonemap` | EV ; `"none"`, `"reinhard"`, `"acesFilmic"` (sans perte d'échantillons) |
+| `view` | `"beauty"`, `"albedo"`, `"normal"`, `"depth"`, `"variance"`, `"emission"`, `"transmission"` |
+| `adaptive` | échantillonnage adaptatif |
+| `noiseTarget` | cible de bruit relative, 0,005–0,25 |
+| `stopOnConvergence`, `timeBudget` | arrêt automatique à la cible ; budget de temps actif en secondes (0 : illimité) |
+| `paused`, `compare` | pause ; comparaison brut/débruité (en pause, débruitage actif) |
+| `temporalHistory` | échantillons gardés après un changement dynamique (0 : relance) |
+| `memoryBudget` | budget mémoire GPU en Mio (0 : sans budget, textures et path tracer rétablis) |
+
+Rendu progressif, scènes dynamiques et exploitation :
+
+| Fonction | Effet |
+|---|---|
+| `stats()` | `{ backend, drawnBy, fallback, pathTracer, samples, adaptive, paused, elapsed, stopReason, samplesPerSecond, noise, maxNoise, variance, remaining, budgetRemaining, time, warnings, gpuMemory }` |
+| `await converge(secondes)` | Attend l'arrêt du path tracer (`stopOnConvergence` ou `timeBudget` requis) |
+| `await capture("x.png", { samples, shutter: [ouverture, fermeture], steps })` | Rendu path tracing de `samples` échantillons enregistré ; avec `shutter`, flou de mouvement sur l'intervalle |
+| `timeline()`, `time()`, `await setTime(t)` | Intervalle `{ start, end, fps }` d'une scène animée ; instant courant ; évaluation à un instant |
+| `transform({ translate, rotate, scale })` | Matrice 4×4 (rotations X, Y puis Z en degrés) |
+| `setTransform(objet, matrice)`, `setVisibility(objet, visible)` | Déplace, masque ou affiche un objet ; sans valeur, rétablit celle de la scène |
+| `lights()`, `setLight(lumière, { intensity, exposure, color, transform })` | Lumières ; modification (sans valeur : rétablie) |
+| `setCamera({ eye, target, fov })` | Place la caméra (champ vertical en degrés) |
+| `variants()`, `await setVariant(prim, set, variante)` | Variant sets ; sélection (recomposition) |
+| `materialParameters(objet)`, `await setMaterialParameters(objet, { id: valeur })` | Paramètres en uniformes, modifiés sans recompilation |
+| `capabilities()`, `diagnostics()` | Adaptateur, limites et support par backend ; journal `{ level, code, message }` |
+
+Les actions (`setTime`, `setTransform`, `setLight`...) s'exécutent dans l'ordre du script :
+`await` est facultatif, mais une erreur non attendue arrête le script à la prochaine
+synchronisation. `check` est ignorée par la validation en direct de l'éditeur, qui ne charge
+pas les scènes ; les requêtes de scène (`objects()`, `lights()`...) y répondent comme pour une
+scène vide après un `scene()`.
 
 Dans le viewer, `save` télécharge le fichier. En ligne de commande, il l'écrit
 dans le dossier `--out` :
 
 ```bash
-npm run script -- mon-script.js --out sortie [--xml materiau.mtlx] [--timeout ms] [--headed]
+npm run script -- mon-script.js|dossier [autre.js ...] --out sortie [--xml materiau.mtlx] [--timeout ms] [--gpu high-performance|low-power|default] [--headed]
 ```
 
 Le script s'exécute dans Chrome/Edge avec WebGPU (`MX_CHROME` désigne
 l'exécutable) devant un serveur Vite local ; `--xml` écrit aussi le matériau du
-script.
+script. Avec plusieurs scripts, chacun s'exécute dans une page neuve et écrit
+dans `sortie/<nom du script>` ; la commande échoue si l'un d'eux échoue. `--gpu`
+choisit l'adaptateur : le GPU dédié par défaut, comme `npm run bench:engine`. Sur la
+machine de mesure, le path tracing y est 4,5 à 8 fois plus rapide que sur l'iGPU Intel.
 
 Un script qui n'utilise aucune de ces fonctions garde le comportement simple :
 **Appliquer** affecte son matériau à l'objet sélectionné.
+
+## Scripts de validation des priorités
+
+[examples/scripts](../examples/scripts) contient un script par priorité de
+[ROADMAP_DONE.md](ROADMAP_DONE.md), sur des scènes exigeantes. Chacun enregistre
+ses images et vérifie par `check` les comportements mesurables (arrêt sur
+convergence, réduction des textures, repli raster...) :
+
+| Script | Contenu |
+|---|---|
+| `p1-progressive-rendering.js` | 17 lumières rectangulaires : convergence uniforme et adaptative à 8 %, budget de temps, six AOV en PNG et PFM, comparaison brut/débruité, exposition et tonemapping |
+| `p2-library-api.js` | Shader ball : six matériaux de la bibliothèque × trois backends × deux résolutions, captures déterministes |
+| `p3-material-editing.js` | Marbre procédural profond (bruits imbriqués, conditions par pixel), nodegraph importé et retouché, matériau courant → script, paramètres en uniformes |
+| `p4-path-tracer-acceleration.js` | Sept scènes du banc : chargement, première image, débit, rechargement par les caches ; guidage des lumières ; HDR |
+| `p5-dynamic-scenes.js` | Scène animée : séquences raster et path tracing, variant, overrides, paramètres, historique temporel, flou de mouvement |
+| `p6-volumes-effects.js` | Volumes NanoVDB, brouillard, prisme dispersif, subsurface multi-échelle, cheveux, foule instanciée |
+| `p7-robustness.js` | Capacités, erreurs prévisibles, scène précompilée figée, budget mémoire jusqu'au repli raster puis retour, journal |
+
+```bash
+npm run script -- examples/scripts --out renders/validation --timeout 7200000
+```
+
+Dans le viewer, le menu **Scripts de validation** de l'éditeur charge un script
+(pour le lire ou le modifier) et **Lancer** l'exécute ; ses messages s'affichent
+pendant l'exécution et les fichiers enregistrés sont téléchargés.
 
 ## Éditeur
 

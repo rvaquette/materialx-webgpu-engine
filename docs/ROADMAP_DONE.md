@@ -1038,7 +1038,15 @@ surface.base_color = img.out;
 - `save("rendu.png")` enregistre le rendu en PNG et `save("materiau.mtlx", m)`
   un document MaterialX ;
 - un script se lance en ligne de commande : `npm run script -- mon-script.js --out sortie`
-  (`scripts/run-material-script.mjs`, Chrome/Edge WebGPU headless).
+  (`scripts/run-material-script.mjs`, Chrome/Edge WebGPU headless) ;
+- l'API couvre aussi les priorités suivantes : rendu progressif (`render.adaptive`,
+  `noiseTarget`, `stopOnConvergence`, `timeBudget`, `view`, `compare`, `stats()`,
+  `converge()`, AOV en PFM), scènes dynamiques (`setTime`, `setTransform`,
+  `setVisibility`, `setLight`, `setCamera`, `setVariant`, `setMaterialParameters`,
+  `temporalHistory`, `capture` avec flou de mouvement) et exploitation
+  (`render.memoryBudget`, `capabilities()`, `diagnostics()`, journal JSON) ;
+- `examples/scripts/p1…p7` valident visuellement chaque priorité, depuis la ligne de
+  commande ou le menu **Scripts de validation** de l'éditeur.
 
 Tous les objectifs de la priorité 3bis sont atteints.
 

@@ -7,6 +7,18 @@ import {
 } from '../../src/materialx/script-api.ts';
 import type { ResolvedGraph, ResolvedNode } from '../../src/materialx/graph.ts';
 
+/** A host whose operations do nothing; tests override what they observe. */
+function idleHost(): ScriptHost {
+  const idle = async (): Promise<void> => {};
+  return {
+    loadScene: idle, objects: () => [], renderSettings: () => ({}), setRenderSetting: idle, assignMaterial: idle,
+    render: async () => 0, saveImage: idle, saveText: idle, objectMaterial: () => undefined, stats: () => undefined,
+    waitForStop: idle, capture: idle, saveAov: idle, saveDiagnostics: idle, diagnostics: () => [], capabilities: () => undefined,
+    timeline: () => undefined, time: () => 0, setTime: idle, setTransform: idle, setVisibility: idle, lights: () => [],
+    setLight: idle, setCamera: idle, variants: () => [], setVariant: idle, materialParameters: () => [], setMaterialParameters: idle,
+  };
+}
+
 const LIBRARY = ScriptLibrary.fromXml([`<?xml version="1.0"?>
 <materialx version="1.39">
   <nodedef name="ND_image_color3" node="image">
@@ -503,15 +515,13 @@ lazy = new Noise3d("float");
   it('drives the viewer through the host, in order, and only validates without one', async () => {
     const calls: unknown[][] = [];
     const host: ScriptHost = {
+      ...idleHost(),
       loadScene: async (entry) => { calls.push(['scene', entry]); },
       objects: () => ['/World/Ball', '/World/Ground'],
       renderSettings: () => ({ backend: 'raster' }),
       setRenderSetting: async (name, value) => { calls.push(['set', name, value]); },
       assignMaterial: async (object, material) => { calls.push(['assign', object, material]); },
       render: async (samples) => { calls.push(['render', samples]); return samples ?? 1; },
-      saveImage: async () => {},
-      saveText: async () => {},
-      objectMaterial: () => undefined,
     };
     const code = `await scene("./scenes/ball.usda");
     before = render.backend;
@@ -542,6 +552,85 @@ samples = await render(16);`;
     await expect(runScript('await render(0);', EXPRESSIONS)).rejects.toThrow(/positive integer/);
     await expect(runScript('await assign("/x", 3);', EXPRESSIONS)).rejects.toThrow(/surface shader, a material node or a .mtlx path/);
     await expect(runScript('scene = 1;', EXPRESSIONS)).rejects.toThrow(/reserved/);
+  });
+
+  it('queues dynamic-scene, capture and progressive-rendering commands in script order', async () => {
+    const calls: unknown[][] = [];
+    const record = (name: string) => async (...args: unknown[]): Promise<void> => { calls.push([name, ...args]); };
+    const host: ScriptHost = {
+      ...idleHost(),
+      setRenderSetting: record('set'), setTime: record('time'), setTransform: record('transform'), setVisibility: record('visible'),
+      setLight: record('light'), setCamera: record('camera'), setVariant: record('variant'), waitForStop: record('stop'),
+      setMaterialParameters: async (object, values) => { calls.push(['parameters', object, Object.fromEntries(values)]); },
+      capture: record('capture'), saveAov: record('aov'), saveDiagnostics: record('diagnostics'),
+      timeline: () => ({ start: 0, end: 48, fps: 24 }),
+      stats: () => ({ backend: 'pathtracing', drawnBy: 'pathtracing', pathTracer: 'ready', samples: 70, adaptive: true, paused: false,
+        stopReason: 'convergence', time: 0, warnings: 0, gpuMemory: { total: 1, peak: 1, textures: 0, buffers: 1, textureLimit: 8192 } }),
+    };
+    const run = await runScript(`render.adaptive = true;
+render.noiseTarget = 0.02;
+render.stopOnConvergence = true;
+stopped = await converge(30);
+log(stopped.stopReason, stopped.samples);
+render.view = "albedo";
+await save("albedo.pfm");
+await save("journal.json");
+for (let t = timeline().start; t <= timeline().end; t += 24) await setTime(t);
+setTransform("/World/Cube", transform({ translate: [1, 2, 3], scale: 2 }));
+setVisibility("/World/Cube", false);
+setLight("/World/Key", { intensity: 5, color: [1, 0.5, 0] });
+setCamera({ eye: [0, 1, 5], target: [0, 1, 0], fov: 40 });
+await setVariant("/World/Cube", "finish", "metal");
+await setMaterialParameters("/World/Cube", { base: 0.5, thin_walled: true, base_color: [1, 0, 0] });
+await capture("blur.png", { samples: 32, shutter: [0, 4], steps: 8 });`, EXPRESSIONS, { host });
+    expect(run.logs).toEqual(['convergence 70']);
+    expect(calls).toEqual([
+      ['set', 'adaptive', true], ['set', 'noiseTarget', 0.02], ['set', 'stopOnConvergence', true], ['stop', 30],
+      ['set', 'view', 'albedo'], ['aov', 'albedo.pfm'], ['diagnostics', 'journal.json'],
+      ['time', 0], ['time', 24], ['time', 48],
+      ['transform', '/World/Cube', [2, 0, 0, 0, 0, 2, 0, 0, 0, 0, 2, 0, 1, 2, 3, 1]], ['visible', '/World/Cube', false],
+      ['light', '/World/Key', { intensity: 5, color: [1, 0.5, 0] }],
+      ['camera', { eye: [0, 1, 5], target: [0, 1, 0], fov: 40 }], ['variant', '/World/Cube', 'finish', 'metal'],
+      ['parameters', '/World/Cube', { base: [0.5], thin_walled: [1], base_color: [1, 0, 0] }],
+      ['capture', 'blur.png', { samples: 32, shutter: { open: 0, close: 4, steps: 8 } }],
+    ]);
+
+    // A 90° rotation about Y maps +X to -Z (column-major).
+    const rotated = await runScript('m = transform({ rotate: [0, 90, 0] }); log(m.map(v => Math.round(v)).join(","));', EXPRESSIONS);
+    expect(rotated.logs).toEqual(['0,0,-1,0,0,1,0,0,1,0,0,0,0,0,0,1']);
+    // After scene() a dry run does not know the new scene: scene queries answer as for an empty scene.
+    const dry = await runScript('await scene("./other.usda"); log(objects().length, lights().length, timeline() === undefined);',
+      EXPRESSIONS, { host: { ...idleHost(), objects: () => ['/A'], lights: () => [{ path: '/L', type: 'SphereLight' }] }, dryRun: true });
+    expect(dry.logs).toEqual(['0 0 true']);
+    await expect(runScript('render.noiseTarget = 0.5;', EXPRESSIONS)).rejects.toThrow(/noiseTarget expects a number from 0.005 to 0.25/);
+    await expect(runScript('render.view = "uv";', EXPRESSIONS)).rejects.toThrow(/render.view expects "beauty"/);
+    await expect(runScript('await capture("x.png", { samples: 8, steps: 4 });', EXPRESSIONS)).rejects.toThrow(/steps needs a shutter/);
+    await expect(runScript('await capture("x.png", { samples: 8, shutter: [4, 0] });', EXPRESSIONS)).rejects.toThrow(/open <= close/);
+    await expect(runScript('setLight("/L", { power: 3 });', EXPRESSIONS)).rejects.toThrow(/unknown fields power/);
+    await expect(runScript('setTransform("/A", [1, 2]);', EXPRESSIONS)).rejects.toThrow(/16 finite numbers/);
+    await expect(runScript('await save("x.exr");', EXPRESSIONS)).rejects.toThrow(/\.png.*\.pfm.*\.json/);
+    await expect(runScript('stats = 1;', EXPRESSIONS)).rejects.toThrow(/reserved/);
+  });
+
+  it('checks conditions outside validation runs and keeps the queue going after a handled failure', async () => {
+    await expect(runScript('check(1 > 2, "math");', EXPRESSIONS)).rejects.toThrow(/Check failed: math/);
+    expect((await runScript('check(1 > 2, "math");', EXPRESSIONS, { host: idleHost(), dryRun: true })).logs).toEqual([]);
+    expect((await runScript('check(2 > 1, "math");', EXPRESSIONS)).logs).toEqual(['OK  math']);
+
+    const calls: string[] = [];
+    const host: ScriptHost = {
+      ...idleHost(),
+      setVisibility: async (object) => {
+        if (object === '/bad') throw new Error('Unknown object: /bad');
+        calls.push(object);
+      },
+    };
+    const handled = await runScript(`try { await setVisibility("/bad", false); } catch (error) { log(error.message); }
+setVisibility("/good", false);`, EXPRESSIONS, { host });
+    expect(handled.logs).toEqual(['Unknown object: /bad']);
+    expect(calls).toEqual(['/good']);
+    // Not awaited: the failure stops the script at its end.
+    await expect(runScript('setVisibility("/bad", false);', EXPRESSIONS, { host })).rejects.toThrow(/Unknown object/);
   });
 
   it('loads MaterialX documents as editable script nodes with absolute texture paths', async () => {

@@ -497,6 +497,28 @@ export class InteractiveViewer {
     return { ...this.#memory.usage, ...(this.#memoryBudget !== undefined ? { budget: this.#memoryBudget } : {}), textureLimit: this.textureLimit };
   }
 
+  /**
+   * Changes the GPU memory budget and applies its policy at once. Removing the budget restores
+   * full-size textures and the path tracer by rebuilding the render set.
+   */
+  async setMemoryBudget(bytes?: number): Promise<void> {
+    if (bytes !== undefined && !(Number.isFinite(bytes) && bytes > 0)) {
+      throw new RangeError('The GPU memory budget must be a positive number of bytes.');
+    }
+    this.#memoryBudget = bytes;
+    this.#budgetExceededReported = false;
+    if (bytes !== undefined) {
+      await this.#enforceMemoryBudget();
+      return;
+    }
+    const restore = this.#budgetTextureLimit !== Infinity || this.#current?.fallback() !== undefined;
+    this.#budgetTextureLimit = Infinity;
+    const loaded = this.#loaded;
+    if (restore && loaded && this.#current) {
+      await this.#replaceLoaded(loaded, { ...loaded }, 'Scene changed while removing the GPU memory budget.');
+    }
+  }
+
   /** Largest material texture side: the GPU limit, lowered by the memory budget policy. */
   get textureLimit(): number {
     return Math.min(this.#device.limits.maxTextureDimension2D, this.#budgetTextureLimit);
@@ -2080,12 +2102,18 @@ export class InteractiveViewer {
     targetView: GPUTextureView, samples: number, shutter?: { open: number; close: number; steps?: number },
   ): Promise<void> {
     const current = this.#current;
-    if (!current || this.#context) throw new Error('A loaded headless scene is required.');
+    if (!current) throw new Error('A loaded scene is required.');
+    // On a canvas, the interactive loop is suspended and its accumulation restarts afterwards.
     this.#capturing++;
     try {
       await this.#capturePathTrace(current, targetView, samples, shutter);
     } finally {
       this.#capturing--;
+      if (this.#context && current === this.#current) {
+        current.resetPathTrace();
+        this.#ptDisplayDirty = true;
+        this.#emitStatus();
+      }
     }
   }
 
@@ -2121,7 +2149,7 @@ export class InteractiveViewer {
     const context = this.#context;
     if (this.#disposed || !context) return;
     const current = this.#current;
-    if (current && !this.#framePending) {
+    if (current && !this.#framePending && this.#capturing === 0) {
       let submitted = false;
       const started = performance.now();
       // A backend that exceeds a GPU limit is drawn by raster (status.fallback).

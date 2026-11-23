@@ -12,6 +12,7 @@ export async function captureRgba(
   device: GPUDevice, width: number, height: number,
   render: { raster(target: GPUTextureView): void } | { pathTrace(target: GPUTextureView): Promise<void> },
   check: () => void,
+  format: 'rgba8unorm' | 'bgra8unorm' = 'rgba8unorm',
 ): Promise<RgbaCapture> {
   const bytesPerRow = rgbaCaptureStride(width);
   let texture: GPUTexture | undefined;
@@ -20,7 +21,7 @@ export async function captureRgba(
   try {
     await withGpuValidation(device, () => {
       texture = device.createTexture({
-        size: [width, height], format: 'rgba8unorm',
+        size: [width, height], format,
         usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC,
       });
       buffer = device.createBuffer({ size: bytesPerRow * height, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
@@ -46,6 +47,13 @@ export async function captureRgba(
     for (let y = 0; y < height; y++) {
       const offset = y * bytesPerRow;
       rgba.set(padded.subarray(offset, offset + rowBytes), y * rowBytes);
+    }
+    if (format === 'bgra8unorm') {
+      for (let i = 0; i < rgba.length; i += 4) {
+        const blue = rgba[i]!;
+        rgba[i] = rgba[i + 2]!;
+        rgba[i + 2] = blue;
+      }
     }
     return { width, height, rgba };
   } finally {

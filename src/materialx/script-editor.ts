@@ -19,6 +19,8 @@ export interface ScriptEditorOptions {
   /** `fileprefix` used for relative texture paths in applied documents. */
   filePrefix?: string;
   initialScript?: string;
+  /** Ready-made scripts offered in the « Scripts » menu, e.g. examples/scripts/*.js. */
+  examples?: readonly { label: string; code: string }[];
 }
 
 export const DEFAULT_SCRIPT = `// Matériau procédural : un bruit fractal mélange deux couleurs.
@@ -171,8 +173,27 @@ export const SCRIPT_FUNCTIONS: Readonly<Record<string, { detail: string; insert:
   load: { detail: 'await load("….mtlx") : charge un matériau dans le script', insert: 'await load("' },
   material: { detail: 'material("/objet") : matériau courant d’un objet, modifiable', insert: 'material("' },
   node: { detail: 'node("nom") : nœud du script par son nom', insert: 'node("' },
-  save: { detail: 'await save("rendu.png") ou save("mat.mtlx", surface) : enregistre', insert: 'await save("' },
+  save: { detail: 'await save("rendu.png" | "aov.pfm" | "diagnostics.json") ou save("mat.mtlx", surface) : enregistre', insert: 'await save("' },
   log: { detail: 'log(…) : affiche un message', insert: 'log(' },
+  check: { detail: 'check(condition, "message") : vérification (ignorée pendant la validation)', insert: 'check(' },
+  stats: { detail: 'stats() : échantillons, bruit, débit, arrêt, repli, mémoire GPU', insert: 'stats()' },
+  converge: { detail: 'await converge(600) : attend l’arrêt (convergence ou budget de temps)', insert: 'await converge(' },
+  capture: { detail: 'await capture("flou.png", { samples: 64, shutter: [0, 4] }) : rendu path tracing enregistré', insert: 'await capture("' },
+  diagnostics: { detail: 'diagnostics() : journal des diagnostics { level, code, message }', insert: 'diagnostics()' },
+  capabilities: { detail: 'capabilities() : adaptateur, limites et backends pris en charge', insert: 'capabilities()' },
+  timeline: { detail: 'timeline() : { start, end, fps } d’une scène animée', insert: 'timeline()' },
+  time: { detail: 'time() : code temporel courant', insert: 'time()' },
+  setTime: { detail: 'await setTime(t) : évalue la scène animée à t', insert: 'await setTime(' },
+  transform: { detail: 'transform({ translate, rotate, scale }) : matrice 4×4 (degrés)', insert: 'transform({ ' },
+  setTransform: { detail: 'setTransform("/objet", matrice) : déplace un objet (sans matrice : restaure)', insert: 'setTransform("' },
+  setVisibility: { detail: 'setVisibility("/objet", false) : masque ou affiche un objet', insert: 'setVisibility("' },
+  lights: { detail: 'lights() : lumières { path, type }', insert: 'lights()' },
+  setLight: { detail: 'setLight("/lumière", { intensity, exposure, color, transform })', insert: 'setLight("' },
+  setCamera: { detail: 'setCamera({ eye, target, fov }) : place la caméra (fov en degrés)', insert: 'setCamera({ eye: [' },
+  variants: { detail: 'variants() : variant sets { path, set, variants, selection }', insert: 'variants()' },
+  setVariant: { detail: 'await setVariant("/prim", "set", "variante")', insert: 'await setVariant("' },
+  materialParameters: { detail: 'materialParameters("/objet") : paramètres { id, label, type, value }', insert: 'materialParameters("' },
+  setMaterialParameters: { detail: 'await setMaterialParameters("/objet", { id: valeur })', insert: 'await setMaterialParameters("' },
 };
 
 function formatNumber(value: number): string {
@@ -203,6 +224,9 @@ const STYLE = `
 #script-editor-panel[hidden] { display: none; }
 #script-editor-panel header { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
 #script-editor-panel header strong { flex: 1; }
+.mx-examples { display: flex; gap: 6px; }
+.mx-examples[hidden] { display: none; }
+.mx-examples select { flex: 1; min-width: 0; background: #252526; color: #eee; border: 1px solid #555; border-radius: 4px; padding: 3px; }
 #script-editor-panel button { background: #333; color: #eee; border: 1px solid #555; border-radius: 4px; padding: 4px 8px; cursor: pointer; }
 #script-editor-panel button:hover { background: #444; }
 #script-editor-panel button.primary { background: #0e639c; border-color: #1177bb; }
@@ -226,7 +250,7 @@ const STYLE = `
 .mx-helper code { color: #dcdcaa; }
 .mx-helper input[type="number"] { width: 72px; }
 .mx-helper input[type="range"] { flex: 1; }
-.mx-status { min-height: 18px; max-height: 4.5em; overflow: auto; flex-shrink: 0; color: #89d185; white-space: pre-wrap; }
+.mx-status { min-height: 18px; max-height: 9em; overflow: auto; flex-shrink: 0; color: #89d185; white-space: pre-wrap; }
 .mx-status.error { color: #f48771; }
 .mx-xml { flex: 2; min-height: 100px; resize: none; padding: 8px; border: 1px solid #444; border-radius: 4px;
   background: #1a1a1a; color: #ce9178; font: 12px/16px Consolas, monospace; white-space: pre; }
@@ -242,6 +266,7 @@ export class MaterialXScriptEditor {
   readonly #helper: HTMLElement;
   readonly #status: HTMLElement;
   readonly #xml: HTMLTextAreaElement;
+  readonly #examples: HTMLSelectElement;
   #items: Completion[] = [];
   #from = 0;
   #selected = 0;
@@ -272,6 +297,13 @@ export class MaterialXScriptEditor {
         <button type="button" data-action="export" data-testid="script-export">Exporter .mtlx</button>
         <button type="button" data-action="close" data-testid="script-close" aria-label="Fermer" title="Échap">✕</button>
       </header>
+      <div class="mx-examples" data-testid="script-examples-bar" hidden>
+        <select aria-label="Scripts de validation" data-testid="script-examples">
+          <option value="">Scripts de validation…</option>
+        </select>
+        <button type="button" data-action="run-example" data-testid="script-run-example"
+          title="Charger le script choisi puis l’exécuter sur le viewer">Lancer</button>
+      </div>
       <div class="mx-code">
         <pre aria-hidden="true" data-testid="script-highlight"></pre>
         <textarea spellcheck="false" autocomplete="off" autocapitalize="off" aria-label="Script" data-testid="script-code"></textarea>
@@ -288,6 +320,11 @@ export class MaterialXScriptEditor {
     this.#status = this.element.querySelector('[data-testid="script-status"]')!;
     this.#xml = this.element.querySelector('[data-testid="script-xml"]')!;
     this.#code.value = options.initialScript ?? DEFAULT_SCRIPT;
+    this.#examples = this.element.querySelector('[data-testid="script-examples"]')!;
+    for (const [index, example] of (options.examples ?? []).entries()) {
+      this.#examples.append(Object.assign(document.createElement('option'), { value: String(index), textContent: example.label }));
+    }
+    this.element.querySelector<HTMLElement>('[data-testid="script-examples-bar"]')!.hidden = !options.examples?.length;
     this.#bind();
     this.#render();
     this.#setStatus('Chargement des NodeDefs MaterialX...');
@@ -339,17 +376,36 @@ export class MaterialXScriptEditor {
    * `render`, settings) applies its material to the selected object.
    */
   async apply(): Promise<void> {
+    this.#setStatus('Exécution du script…');
     await this.#guard('Matériau appliqué.', async () => {
       const library = this.#library ?? await this.#options.library;
       const prefix = this.#options.filePrefix;
-      const run = await runScript(this.#code.value, library, {
-        ...(this.#options.host ? { host: this.#options.host } : {}), ...(prefix ? { filePrefix: prefix } : {}),
-      });
+      const host = this.#options.host;
+      // Messages of long scripts appear while they run.
+      const logs: string[] = [];
+      const live: ScriptHost | undefined = host && {
+        ...host,
+        log: (message) => {
+          host.log?.(message);
+          logs.push(message);
+          this.#setStatus(`Exécution du script…\n${logs.slice(-12).join('\n')}`);
+        },
+      };
+      let run: ScriptRun;
+      try {
+        run = await runScript(this.#code.value, library, {
+          ...(live ? { host: live } : {}), ...(prefix ? { filePrefix: prefix } : {}),
+        });
+      } catch (error) {
+        // Keep the messages logged before the failure visible.
+        if (error instanceof Error && logs.length) error.message += `\n${logs.slice(-12).join('\n')}`;
+        throw error;
+      }
       this.#xml.value = toXml(run, library);
-      const logs = run.logs.length ? `\n${run.logs.join('\n')}` : '';
-      if (run.viewerCommands) return `Script exécuté.${logs}`;
+      const output = run.logs.length ? `\n${run.logs.join('\n')}` : '';
+      if (run.viewerCommands) return `Script exécuté.${output}`;
       await this.#options.onApply?.(toXml(run, library, prefix ? { filePrefix: prefix } : {}));
-      return `Matériau appliqué.${logs}`;
+      return `Matériau appliqué.${output}`;
     });
   }
 
@@ -390,6 +446,23 @@ export class MaterialXScriptEditor {
     });
   }
 
+  /** Load the script chosen in the « Scripts de validation » menu into the editor. */
+  loadExample(): boolean {
+    const example = this.#options.examples?.[Number(this.#examples.value)];
+    if (!this.#examples.value || !example) return false;
+    this.script = example.code;
+    return true;
+  }
+
+  /** Load the chosen validation script and run it on the viewer. */
+  async runExample(): Promise<void> {
+    if (!this.loadExample()) {
+      this.#setStatus('Choisir d’abord un script de validation.', true);
+      return;
+    }
+    await this.apply();
+  }
+
   /** Run an editor action; it may return a status message replacing `success`. */
   async #guard(success: string, action: () => Promise<string | void | undefined>): Promise<void> {
     clearTimeout(this.#validateTimer);
@@ -420,10 +493,12 @@ export class MaterialXScriptEditor {
       else if (action === 'from-xml') void this.xmlToScript();
       else if (action === 'from-material') void this.materialToScript();
       else if (action === 'export') void this.export();
+      else if (action === 'run-example') void this.runExample();
       else if (action === 'close') this.element.dispatchEvent(new CustomEvent('script-editor-close', { bubbles: true }));
     });
     // Keep viewer shortcuts from reacting to typing in the editor.
     this.element.addEventListener('keydown', event => event.stopPropagation());
+    this.#examples.addEventListener('change', () => this.loadExample());
     this.#code.addEventListener('input', (event) => {
       this.#changed();
       const typed = (event as InputEvent).data ?? '';

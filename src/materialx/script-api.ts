@@ -523,30 +523,135 @@ export const MATH_NODES: Readonly<Record<string, string>> = {
   ceil: 'ceil', round: 'round', sqrt: 'sqrt', exp: 'exp', log: 'ln', pow: 'power', min: 'min', max: 'max', sign: 'sign',
 };
 
+/** Path-tracing views selectable with `render.view` (src/render/pathtracing/display.ts). */
+export const RENDER_VIEWS = ['beauty', 'albedo', 'normal', 'depth', 'variance', 'emission', 'transmission'] as const;
+
+export interface RenderSetting {
+  doc: string;
+  values?: readonly (string | number)[];
+  kind?: 'boolean' | 'number' | 'integer';
+  min?: number;
+  max?: number;
+}
+
 /** Render settings scripts can read and write through `render.<name>`, with their allowed values. */
-export const RENDER_SETTINGS: Readonly<Record<string, { doc: string; values?: readonly (string | number)[]; kind?: 'boolean' | 'number' | 'depth' }>> = {
+export const RENDER_SETTINGS: Readonly<Record<string, RenderSetting>> = {
   backend: { doc: 'Moteur de rendu', values: ['raster', 'pathtracing', 'disney'] },
   resolution: { doc: 'Résolution du rendu', values: [128, 256, 512, 1024, '1024x768'] },
-  depth: { doc: 'Profondeur du path tracing (0 à 64)', kind: 'depth' },
+  depth: { doc: 'Profondeur du path tracing (0 à 64)', kind: 'integer', min: 0, max: 64 },
   quality: { doc: 'Qualité raster', values: ['interactive', 'reference'] },
   environment: { doc: 'Éclairage par l’environnement', kind: 'boolean' },
   denoise: { doc: 'Débruitage du path tracing', kind: 'boolean' },
   exposure: { doc: 'Exposition (EV)', kind: 'number' },
   tonemap: { doc: 'Tonemapping', values: ['none', 'reinhard', 'acesFilmic'] },
+  view: { doc: 'Affichage du path tracing (rendu final ou AOV)', values: RENDER_VIEWS },
+  adaptive: { doc: 'Échantillonnage adaptatif', kind: 'boolean' },
+  noiseTarget: { doc: 'Cible de bruit relative (0,005 à 0,25)', kind: 'number', min: 0.005, max: 0.25 },
+  stopOnConvergence: { doc: 'Arrêt automatique à la cible de bruit', kind: 'boolean' },
+  timeBudget: { doc: 'Budget de temps actif en secondes (0 : illimité)', kind: 'number', min: 0 },
+  paused: { doc: 'Pause de l’accumulation', kind: 'boolean' },
+  compare: { doc: 'Comparaison brut/débruité (en pause, débruitage actif)', kind: 'boolean' },
+  temporalHistory: { doc: 'Échantillons gardés après un changement dynamique (0 : relance)', kind: 'integer', min: 0 },
+  memoryBudget: { doc: 'Budget mémoire GPU en Mio (0 : sans budget)', kind: 'number', min: 0 },
 };
 
 function checkRenderSetting(name: string, value: unknown): void {
   const setting = RENDER_SETTINGS[name];
   if (!setting) throw new ScriptError(`Unknown render setting "${name}". Settings: ${Object.keys(RENDER_SETTINGS).join(', ')}.`);
+  const numeric = setting.kind === 'number' || setting.kind === 'integer';
   const valid = setting.values ? setting.values.includes(value as string | number)
     : setting.kind === 'boolean' ? typeof value === 'boolean'
-      : setting.kind === 'depth' ? Number.isInteger(value) && (value as number) >= 0 && (value as number) <= 64
-        : typeof value === 'number' && Number.isFinite(value);
+      : typeof value === 'number' && Number.isFinite(value) && (setting.kind !== 'integer' || Number.isInteger(value)) &&
+        (setting.min === undefined || value >= setting.min) && (setting.max === undefined || value <= setting.max);
   if (!valid) {
+    const range = setting.min !== undefined && setting.max !== undefined ? ` from ${setting.min} to ${setting.max}`
+      : setting.min !== undefined ? ` >= ${setting.min}` : '';
     const expected = setting.values ? setting.values.map(option => JSON.stringify(option)).join(', ')
-      : setting.kind === 'depth' ? 'an integer from 0 to 64' : `a ${setting.kind}`;
+      : numeric ? `${setting.kind === 'integer' ? 'an integer' : 'a number'}${range}` : `a ${setting.kind}`;
     throw new ScriptError(`render.${name} expects ${expected}.`);
   }
+}
+
+function finiteNumbers(value: unknown, length: number | undefined, label: string): number[] {
+  if (!Array.isArray(value) || value.length === 0 || (length !== undefined && value.length !== length) ||
+      !value.every(component => typeof component === 'number' && Number.isFinite(component))) {
+    throw new ScriptError(`${label} expects ${length === undefined ? 'an array of' : length} finite numbers.`);
+  }
+  return [...value as number[]];
+}
+
+function objectPath(signature: string, value: unknown): string {
+  if (typeof value !== 'string' || !value) throw new ScriptError(`${signature} expects a scene path.`);
+  return value;
+}
+
+function lightChanges(value: unknown): ScriptLightChanges {
+  if (typeof value !== 'object' || value === null) throw new ScriptError('setLight(light, changes) expects { intensity, exposure, color, transform }.');
+  const { intensity, exposure, color, transform, ...extra } = value as Record<string, unknown>;
+  if (Object.keys(extra).length) throw new ScriptError(`setLight: unknown fields ${Object.keys(extra).join(', ')}. Fields: intensity, exposure, color, transform.`);
+  const scalar = (name: string, number: unknown): number => {
+    if (typeof number !== 'number' || !Number.isFinite(number)) throw new ScriptError(`setLight ${name} expects a finite number.`);
+    return number;
+  };
+  return {
+    ...(intensity !== undefined ? { intensity: scalar('intensity', intensity) } : {}),
+    ...(exposure !== undefined ? { exposure: scalar('exposure', exposure) } : {}),
+    ...(color !== undefined ? { color: finiteNumbers(color, 3, 'setLight color') } : {}),
+    ...(transform !== undefined ? { transform: finiteNumbers(transform, 16, 'setLight transform') } : {}),
+  };
+}
+
+/**
+ * Column-major 4x4 matrix of `{ translate, rotate, scale }`: scale, then rotations about X, Y
+ * and Z in degrees, then translation.
+ */
+export function transformMatrix(spec: unknown): number[] {
+  if (typeof spec !== 'object' || spec === null) throw new ScriptError('transform({ translate, rotate, scale }) expects an object.');
+  const { translate, rotate, scale, ...extra } = spec as Record<string, unknown>;
+  if (Object.keys(extra).length) throw new ScriptError(`transform: unknown fields ${Object.keys(extra).join(', ')}. Fields: translate, rotate, scale.`);
+  const [tx, ty, tz] = translate === undefined ? [0, 0, 0] : finiteNumbers(translate, 3, 'transform translate');
+  const [ax, ay, az] = (rotate === undefined ? [0, 0, 0] : finiteNumbers(rotate, 3, 'transform rotate')).map(degrees => degrees * Math.PI / 180);
+  const [sx, sy, sz] = scale === undefined ? [1, 1, 1]
+    : typeof scale === 'number' ? finiteNumbers([scale, scale, scale], 3, 'transform scale') : finiteNumbers(scale, 3, 'transform scale');
+  const [cx, cy, cz] = [Math.cos(ax!), Math.cos(ay!), Math.cos(az!)];
+  const [nx, ny, nz] = [Math.sin(ax!), Math.sin(ay!), Math.sin(az!)];
+  // R = Rz * Ry * Rx, columns scaled by S.
+  return [
+    cy * cz * sx!, cy * nz * sx!, 0 - ny * sx!, 0,
+    (nx * ny * cz - cx * nz) * sy!, (nx * ny * nz + cx * cz) * sy!, nx * cy * sy!, 0,
+    (cx * ny * cz + nx * nz) * sz!, (cx * ny * nz - nx * cz) * sz!, cx * cy * sz!, 0,
+    tx!, ty!, tz!, 1,
+  ];
+}
+
+/** Path-tracing progress and resources reported by `stats()`. */
+export interface ScriptStats {
+  backend: string;
+  /** Backend actually drawing the frames (raster after a fallback). */
+  drawnBy: string;
+  fallback?: string;
+  pathTracer: string;
+  samples: number;
+  adaptive: boolean;
+  paused: boolean;
+  elapsed?: number;
+  stopReason?: string;
+  samplesPerSecond?: number;
+  noise?: number;
+  maxNoise?: number;
+  variance?: number;
+  remaining?: number;
+  budgetRemaining?: number;
+  time: number;
+  warnings: number;
+  gpuMemory: { total: number; peak: number; textures: number; buffers: number; budget?: number; textureLimit: number };
+}
+
+export interface ScriptLightChanges {
+  intensity?: number;
+  exposure?: number;
+  color?: readonly number[];
+  transform?: readonly number[];
 }
 
 /** Viewer operations available to scripts; without a host, `runScript` only validates them. */
@@ -565,6 +670,31 @@ export interface ScriptHost {
   saveText(name: string, text: string): Promise<void>;
   /** Material of an object as resolved by the engine. */
   objectMaterial(objectPath: string): { graph: ResolvedGraph; name: string } | undefined;
+  /** Progress of the current render (queries answer during validation too); undefined before the viewer is ready. */
+  stats(): ScriptStats | undefined;
+  /** Resolve once the path tracer stops on convergence or on its time budget. */
+  waitForStop(timeoutSeconds: number): Promise<void>;
+  /** Render `samples` path-traced samples, spread over a shutter interval when given, and save them as a PNG. */
+  capture(name: string, options: { samples: number; shutter?: { open: number; close: number; steps?: number } }): Promise<void>;
+  /** Save the selected path-tracing AOV as a 32-bit float PFM. */
+  saveAov(name: string): Promise<void>;
+  /** Save the diagnostics journal as JSON. */
+  saveDiagnostics(name: string): Promise<void>;
+  diagnostics(): readonly { level: string; code?: string; message: string }[];
+  capabilities(): unknown;
+  timeline(): { start: number; end: number; fps: number } | undefined;
+  time(): number;
+  setTime(time: number): Promise<void>;
+  setTransform(objectPath: string, matrix?: readonly number[]): Promise<void>;
+  setVisibility(objectPath: string, visible?: boolean): Promise<void>;
+  lights(): readonly { path: string; type: string }[];
+  setLight(lightPath: string, changes?: ScriptLightChanges): Promise<void>;
+  /** Field of view in degrees (vertical). */
+  setCamera(camera: { eye: readonly number[]; target: readonly number[]; fov?: number }): Promise<void>;
+  variants(): readonly { path: string; set: string; variants: readonly string[]; selection?: string }[];
+  setVariant(path: string, set: string, variant: string): Promise<void>;
+  materialParameters(objectPath: string): readonly { id: string; label: string; type: string; value: readonly number[]; min?: readonly number[]; max?: readonly number[] }[];
+  setMaterialParameters(objectPath: string, values: ReadonlyMap<string, readonly number[]>): Promise<void>;
   log?(message: string): void;
 }
 
@@ -586,7 +716,11 @@ export interface ScriptRun extends ScriptGraph {
   logs: string[];
 }
 
-const SCRIPT_GLOBALS = new Set(['__mx', 'Math', 'scene', 'objects', 'render', 'assign', 'load', 'save', 'log', 'node', 'material']);
+const SCRIPT_GLOBALS = new Set(['__mx', 'Math', 'scene', 'objects', 'render', 'assign', 'load', 'save', 'log', 'check', 'node', 'material',
+  'stats', 'converge', 'capture', 'diagnostics', 'capabilities', 'timeline', 'time', 'setTime', 'transform', 'setTransform',
+  'setVisibility', 'lights', 'setLight', 'setCamera', 'variants', 'setVariant', 'materialParameters', 'setMaterialParameters']);
+/** Globals that are also natural node names: assigning them shadows the function. */
+const SHADOWABLE_GLOBALS = new Set(['material', 'node', 'time', 'transform', 'capture']);
 // eslint-disable-next-line @typescript-eslint/no-empty-function
 const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor as new (...args: string[]) => (scope: object) => Promise<void>;
 
@@ -887,6 +1021,27 @@ export async function runScript(code: string, library: ScriptLibrary, options: R
   let queue: Promise<void> = Promise.resolve();
   const settings = new Map<string, unknown>();
   const command = (): void => { graph.viewerCommands++; };
+  // A dry run does not load the scene requested by `scene()`: scene queries then answer as for an empty scene.
+  let sceneRequested = false;
+  const sceneQueries = (): ScriptHost | undefined => (host || !sceneRequested ? queries : undefined);
+  let scriptedTime: number | undefined;
+  /**
+   * Queue a viewer action after the previous ones; awaiting it is optional. A failure the script
+   * does not await stops the following viewer commands; an awaited one is the script's to handle.
+   */
+  const action = (run: (target: ScriptHost) => Promise<void>): PromiseLike<void> => {
+    command();
+    let observed = false;
+    const next = queue.then(() => (host ? run(host) : undefined));
+    queue = next.catch((error: unknown) => { if (!observed) throw error; });
+    // A plain thenable: `await` calls its `then`, which tells whether the script observes the result.
+    return {
+      then: (onFulfilled, onRejected) => {
+        observed = true;
+        return next.then(onFulfilled, onRejected);
+      },
+    };
+  };
   const upstream = (root: ScriptNode): ScriptNode[] => {
     const seen = new Set<ScriptNode>();
     const visit = (node: ScriptNode): void => {
@@ -943,10 +1098,12 @@ export async function runScript(code: string, library: ScriptLibrary, options: R
     scene: async (entry: unknown): Promise<void> => {
       if (typeof entry !== 'string' || !entry) throw new ScriptError('scene(entry) expects a scene path.');
       command();
+      sceneRequested = true;
+      scriptedTime = undefined;
       await queue;
       await host?.loadScene(entry);
     },
-    objects: (): string[] => [...queries?.objects() ?? []],
+    objects: (): string[] => [...sceneQueries()?.objects() ?? []],
     render: renderFunction,
     assign: async (object: unknown, material: unknown): Promise<void> => {
       if (typeof object !== 'string' || !object) throw new ScriptError('assign(object, material) expects an object path.');
@@ -990,17 +1147,122 @@ export async function runScript(code: string, library: ScriptLibrary, options: R
       }
       const document = material === undefined ? undefined : materialDocument(material);
       if (document && !('xml' in document)) throw new ScriptError('save(name, material) expects a material of the script.');
-      if (!document && !/\.png$/i.test(name)) throw new ScriptError('save(name) writes PNG images: use a .png name.');
+      if (!document && !/\.(png|pfm|json)$/i.test(name)) {
+        throw new ScriptError('save(name) writes the render (.png), the selected AOV (.pfm) or the diagnostics (.json).');
+      }
       command();
       await queue;
       if (document) await host?.saveText(name, document.xml);
+      else if (/\.pfm$/i.test(name)) await host?.saveAov(name);
+      else if (/\.json$/i.test(name)) await host?.saveDiagnostics(name);
       else await host?.saveImage(name);
+    },
+    stats: (): ScriptStats => {
+      const stats = queries?.stats();
+      const backend = String(settings.get('backend') ?? 'raster');
+      return stats ? { ...stats, gpuMemory: { ...stats.gpuMemory } } : {
+        backend, drawnBy: backend, pathTracer: 'idle',
+        samples: 0, adaptive: false, paused: false, time: scriptedTime ?? 0, warnings: 0,
+        gpuMemory: { total: 0, peak: 0, textures: 0, buffers: 0, textureLimit: 0 },
+      };
+    },
+    converge: async (timeout: unknown = 600): Promise<ScriptStats> => {
+      if (typeof timeout !== 'number' || !(timeout > 0)) throw new ScriptError('converge(seconds) expects a positive time limit.');
+      command();
+      await queue;
+      await host?.waitForStop(timeout);
+      return (viewer['stats'] as () => ScriptStats)();
+    },
+    capture: async (name: unknown, options: unknown): Promise<void> => {
+      if (typeof name !== 'string' || !/\.png$/i.test(name) || /(^|[\\/])\.\.([\\/]|$)/.test(name)) {
+        throw new ScriptError('capture(name, { samples }) expects a .png file name.');
+      }
+      const { samples, shutter, steps, ...extra } = (options ?? {}) as Record<string, unknown>;
+      if (Object.keys(extra).length) throw new ScriptError(`capture: unknown options ${Object.keys(extra).join(', ')}. Options: samples, shutter, steps.`);
+      if (!(Number.isInteger(samples) && (samples as number) > 0)) throw new ScriptError('capture(name, { samples }) expects a positive integer of samples.');
+      let interval: { open: number; close: number; steps?: number } | undefined;
+      if (shutter !== undefined) {
+        const [open, close] = finiteNumbers(shutter, 2, 'capture shutter');
+        if (close! < open!) throw new ScriptError('capture shutter expects [open, close] with open <= close.');
+        if (steps !== undefined && !(Number.isInteger(steps) && (steps as number) > 0)) throw new ScriptError('capture steps expects a positive integer.');
+        interval = { open: open!, close: close!, ...(steps !== undefined ? { steps: steps as number } : {}) };
+      } else if (steps !== undefined) throw new ScriptError('capture steps needs a shutter.');
+      command();
+      await queue;
+      await host?.capture(name, { samples: samples as number, ...(interval ? { shutter: interval } : {}) });
+    },
+    diagnostics: (): { level: string; code?: string; message: string }[] =>
+      (queries?.diagnostics() ?? []).map(record => ({ ...record })),
+    capabilities: (): unknown => queries?.capabilities(),
+    timeline: (): { start: number; end: number; fps: number } | undefined => {
+      const timeline = sceneQueries()?.timeline();
+      return timeline ? { ...timeline } : undefined;
+    },
+    time: (): number => scriptedTime ?? sceneQueries()?.time() ?? 0,
+    setTime: (time: unknown): PromiseLike<void> => {
+      if (typeof time !== 'number' || !Number.isFinite(time)) throw new ScriptError('setTime(time) expects a finite time code.');
+      scriptedTime = time;
+      return action(target => target.setTime(time));
+    },
+    transform: (spec: unknown): number[] => transformMatrix(spec),
+    setTransform: (object: unknown, matrix?: unknown): PromiseLike<void> => {
+      const path = objectPath('setTransform(object, matrix)', object);
+      const values = matrix === undefined ? undefined : finiteNumbers(matrix, 16, 'setTransform matrix');
+      return action(target => target.setTransform(path, values));
+    },
+    setVisibility: (object: unknown, visible?: unknown): PromiseLike<void> => {
+      const path = objectPath('setVisibility(object, visible)', object);
+      if (visible !== undefined && typeof visible !== 'boolean') throw new ScriptError('setVisibility(object, visible) expects a boolean.');
+      return action(target => target.setVisibility(path, visible));
+    },
+    lights: (): { path: string; type: string }[] => (sceneQueries()?.lights() ?? []).map(light => ({ ...light })),
+    setLight: (light: unknown, changes?: unknown): PromiseLike<void> => {
+      const path = objectPath('setLight(light, changes)', light);
+      const parsed = changes === undefined ? undefined : lightChanges(changes);
+      return action(target => target.setLight(path, parsed));
+    },
+    setCamera: (camera: unknown): PromiseLike<void> => {
+      const { eye, target: aim, fov, ...extra } = (camera ?? {}) as Record<string, unknown>;
+      if (Object.keys(extra).length) throw new ScriptError(`setCamera: unknown fields ${Object.keys(extra).join(', ')}. Fields: eye, target, fov.`);
+      if (fov !== undefined && !(typeof fov === 'number' && fov > 0 && fov < 180)) throw new ScriptError('setCamera fov expects degrees in (0, 180).');
+      const placed = { eye: finiteNumbers(eye, 3, 'setCamera eye'), target: finiteNumbers(aim, 3, 'setCamera target'),
+        ...(fov !== undefined ? { fov: fov as number } : {}) };
+      return action(target => target.setCamera(placed));
+    },
+    variants: (): { path: string; set: string; variants: string[]; selection?: string }[] =>
+      (sceneQueries()?.variants() ?? []).map(set => ({ ...set, variants: [...set.variants] })),
+    setVariant: (path: unknown, set: unknown, variant: unknown): PromiseLike<void> => {
+      if (typeof path !== 'string' || typeof set !== 'string' || typeof variant !== 'string' || !path || !set || !variant) {
+        throw new ScriptError('setVariant(path, set, variant) expects three names.');
+      }
+      return action(target => target.setVariant(path, set, variant));
+    },
+    materialParameters: (object: unknown) => {
+      const path = objectPath('materialParameters(object)', object);
+      return (sceneQueries()?.materialParameters(path) ?? []).map(parameter => ({ ...parameter, value: [...parameter.value] }));
+    },
+    setMaterialParameters: (object: unknown, values: unknown): PromiseLike<void> => {
+      const path = objectPath('setMaterialParameters(object, values)', object);
+      if (typeof values !== 'object' || values === null || Array.isArray(values)) {
+        throw new ScriptError('setMaterialParameters(object, values) expects { id: value }.');
+      }
+      const changes = new Map(Object.entries(values).map(([id, value]): [string, number[]] => [id,
+        typeof value === 'boolean' ? [value ? 1 : 0] : typeof value === 'number' ? finiteNumbers([value], 1, `parameter ${id}`)
+          : finiteNumbers(value, undefined, `parameter ${id}`)]));
+      return action(target => target.setMaterialParameters(path, changes));
     },
     log: (...values: unknown[]): void => {
       const message = values.map(value => typeof value === 'string' ? value
         : (value as Partial<OutputRef> | null)?.[OUTPUT] || nodeOf(value) ? String(value) : JSON.stringify(value)).join(' ');
       graph.logs.push(message);
       queries?.log?.(message);
+    },
+    // Validation runs (dry runs) do not load scenes: their checks would be meaningless.
+    check: (condition: unknown, message: unknown): void => {
+      if (typeof message !== 'string' || !message) throw new ScriptError('check(condition, message) expects a message.');
+      if (options.dryRun) return;
+      if (!condition) throw new ScriptError(`Check failed: ${message}`);
+      (viewer['log'] as (text: string) => void)(`OK  ${message}`);
     },
   };
 
@@ -1035,8 +1297,8 @@ export async function runScript(code: string, library: ScriptLibrary, options: R
     },
     set: (_target, key, value) => {
       if (typeof key !== 'string') return false;
-      // `material` and `node` are also the natural names of nodes; assigning them shadows the functions.
-      if (SCRIPT_GLOBALS.has(key) && key !== 'material' && key !== 'node') throw new ScriptError(`${key} is reserved by material scripts.`);
+      // `material`, `node`... are also the natural names of nodes; assigning them shadows the functions.
+      if (SCRIPT_GLOBALS.has(key) && !SHADOWABLE_GLOBALS.has(key)) throw new ScriptError(`${key} is reserved by material scripts.`);
       if (classFor(key)) throw new ScriptError(`${key} is a node type and cannot be reassigned.`);
       variables.set(key, value);
       const node = nodeOf(value) ?? (value as Partial<OutputRef> | null)?.[OUTPUT]?.node;
@@ -1429,7 +1691,8 @@ export function toScript(graph: ScriptGraph, library: ScriptLibrary): string {
   const used = new Set<string>();
   for (const node of graph.nodes) {
     let name = node.name.replace(/[^\w$]/g, '_').replace(/^(?=\d)/, '_');
-    if (RESERVED.has(name) || library.categoryOf(name) !== undefined) name = `${name}_`;
+    if (RESERVED.has(name) || (SCRIPT_GLOBALS.has(name) && !SHADOWABLE_GLOBALS.has(name)) ||
+        library.categoryOf(name) !== undefined) name = `${name}_`;
     const base = name;
     for (let i = 2; used.has(name); i++) name = `${base}_${i}`;
     used.add(name);
