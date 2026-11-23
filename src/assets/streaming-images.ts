@@ -6,6 +6,7 @@
 import { AssetResolver } from './resolver.ts';
 import type { DecodedPixelImage } from './images.ts';
 import type { PtImageProvider } from '../render/pathtracing/device-bindings.ts';
+import { downscaleImage } from './image-limits.ts';
 
 const placeholders = new WeakSet<DecodedPixelImage>();
 
@@ -87,9 +88,9 @@ export class StreamingImages {
     while (this.#jobs.length) await Promise.all(this.#jobs.splice(0));
   }
 
-  /** A provider frozen on the images decoded so far. */
-  snapshot(): PtImageProvider {
-    const images = new Map(this.#images);
+  /** A provider frozen on the images decoded so far, at most `maxSize` pixels per side. */
+  snapshot(maxSize = Infinity): PtImageProvider {
+    const images = new Map([...this.#images].map(([file, image]) => [file, image && this.#fit(image, maxSize)]));
     const resolve = (file: string): DecodedPixelImage | undefined => {
       if (!AssetResolver.hasUdim(file)) return images.has(file) ? images.get(file) : placeholderImage();
       const tiles = this.#tiles.get(file) ?? this.#source.exportSource?.(file)?.tiles ?? [];
@@ -105,5 +106,16 @@ export class StreamingImages {
       return { ...layers[0]!.image, udim: layers };
     };
     return { decode: resolve, ...(this.#source.exportSource ? { exportSource: this.#source.exportSource.bind(this.#source) } : {}) };
+  }
+
+  readonly #fitted = new WeakMap<DecodedPixelImage, Map<number, DecodedPixelImage>>();
+
+  #fit(image: DecodedPixelImage, maxSize: number): DecodedPixelImage {
+    if (image.width <= maxSize && image.height <= maxSize) return image;
+    let sizes = this.#fitted.get(image);
+    if (!sizes) this.#fitted.set(image, sizes = new Map());
+    let fitted = sizes.get(maxSize);
+    if (!fitted) sizes.set(maxSize, fitted = downscaleImage(image, maxSize));
+    return fitted;
   }
 }

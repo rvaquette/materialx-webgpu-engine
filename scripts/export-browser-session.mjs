@@ -10,6 +10,9 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import { createServer } from 'vite';
 
 export const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+/** Chrome flags selecting the SwiftShader (CPU) WebGPU adapter; Windows needs Dawn's Vulkan backend. */
+export const SWIFTSHADER_ARGS = ['--enable-unsafe-webgpu', '--enable-unsafe-swiftshader', '--use-webgpu-adapter=swiftshader',
+  ...(process.platform === 'win32' ? ['--enable-features=Vulkan'] : ['--use-angle=swiftshader'])];
 export const PAYLOAD_FILES = ['buffers.bin.zst', 'shaders.wgsl.zst', 'metadata.json.zst'];
 const harnessPath = '/__export_scene.html';
 

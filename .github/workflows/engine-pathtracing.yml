@@ -46,6 +46,9 @@ jobs:
       - name: Raster and path-traced headless captures
         run: npm run test:headless-capture
 
+      - name: Golden path-traced renders
+        run: npm run test:golden -- --gpu
+
       - name: Installed package, raster and path tracing
         run: npm run test:engine-package
         env:
@@ -55,6 +58,8 @@ jobs:
         run: npm run render:engine -- --backend pathtracing --samples 16 --material examples/engine/orange.mtlx --out renders
 
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: engine-pathtracing-renders
           path: renders/
+          if-no-files-found: ignore

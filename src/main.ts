@@ -168,6 +168,12 @@ async function main(): Promise<void> {
         const unit = status.backend === 'pathtracing' && status.pathTracingAdaptive ? 'balayages' : 'spp';
         spp.textContent = `${status.samples} ${unit}${status.pathTracingPaused ? ' (pause)' : ''}`;
       }
+      if (status.loading && operationBusy) {
+        const { stage, pendingGeometry, pendingTextures } = status.loading;
+        setBusyMessage(stage === 'geometry' ? `Aperçu : ${pendingGeometry} géométries à charger...`
+          : `Matériaux : ${pendingTextures} textures à charger...`);
+      }
+      if (status.fallback && !sceneChanging) setStatus(`Rendu raster à la place du ${status.fallback.from === 'disney' ? 'path tracer Disney' : 'path tracer'} : ${status.fallback.reason}`);
       shaderBusy = pathTracerBackend && (status.pathTracer === 'idle' || status.pathTracer === 'compiling');
       if (shaderBusy) {
         const tracerName = status.backend === 'disney' ? 'path tracer Disney' : 'path tracer';

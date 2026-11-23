@@ -520,6 +520,9 @@ export class MaterialXEngine {
           (category, milliseconds) => this.#telemetry?.recordGpu(category, milliseconds));
       }
     }
+    device.addEventListener?.('uncapturederror', event => {
+      if (device === this.#device) this.#record({ level: 'error', code: 'uncaptured-gpu-error', message: `Uncaptured WebGPU error: ${(event as GPUUncapturedErrorEvent).error.message}` });
+    });
     void device.lost?.then(info => {
       if (this.#disposed || info.reason === 'destroyed' || device !== this.#device) return;
       this.#deviceLost(info);

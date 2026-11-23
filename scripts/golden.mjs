@@ -1,10 +1,9 @@
 // Golden renders: each case in tests/golden/cases.json is rendered through the public
 // engine API in headless Chrome and compared with tests/golden/<name>.png.
 //
-//   node scripts/golden.mjs                 raster cases, WebGPU adapter of the host
-//   node scripts/golden.mjs --swiftshader   raster cases on SwiftShader (CI, no GPU)
-//   node scripts/golden.mjs --gpu           also the path-traced cases (GPU runner)
-//   node scripts/golden.mjs --update        rewrite the references from this machine
+//   node scripts/golden.mjs                 raster cases (SwiftShader: the references' adapter)
+//   node scripts/golden.mjs --gpu           path-traced cases on the host GPU (GPU runner)
+//   node scripts/golden.mjs --update        rewrite the selected references from this machine
 //
 // Failing cases write <name>-actual.png and <name>-diff.png to renders/golden/.
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
@@ -55,17 +54,17 @@ async function main() {
   const { values } = parseArgs({ options: {
     update: { type: 'boolean', default: false },
     gpu: { type: 'boolean', default: false },
-    swiftshader: { type: 'boolean', default: false },
     case: { type: 'string', multiple: true },
   } });
-  const { openExportSession } = await import('./export-browser-session.mjs');
+  const { openExportSession, SWIFTSHADER_ARGS } = await import('./export-browser-session.mjs');
   const cases = JSON.parse(await readFile(join(GOLDEN_DIR, 'cases.json'), 'utf8')).cases
-    .filter(golden => (values.gpu || golden.backend !== 'pathtracing') && (!values.case || values.case.includes(golden.name)));
-  const swiftshader = values.swiftshader || (process.platform === 'linux' && !values.gpu);
+    .filter(golden => (golden.backend === 'pathtracing') === values.gpu && (!values.case || values.case.includes(golden.name)));
+  // Raster references are SwiftShader images, reproducible on GitHub-hosted runners without a GPU.
+  const swiftshader = !values.gpu;
   const session = await openExportSession({
     label: 'golden', browserModule: '/scripts/golden-browser.ts', quiet: true,
     browserArgs: swiftshader
-      ? ['--enable-unsafe-webgpu', '--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--use-webgpu-adapter=swiftshader']
+      ? SWIFTSHADER_ARGS
       : process.env.MX_DEFAULT_GPU ? [] : ['--force_high_performance_gpu'],
   });
   const out = join(root, 'renders', 'golden');

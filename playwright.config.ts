@@ -1,7 +1,8 @@
 import { defineConfig, devices } from '@playwright/test';
 
 // `chromium` runs the end-to-end tests quickly; `demo` opens a visible browser
-// and slows every action down so the script editor can be watched.
+// and slows every action down so the script editor can be watched. `firefox` and
+// `webkit` run the cross-browser engine smoke test (npm run test:playwright:browsers).
 export default defineConfig({
   testDir: './tests/playwright',
   workers: 1,
@@ -15,6 +16,13 @@ export default defineConfig({
   },
   projects: [
     { name: 'chromium', use: { ...devices['Desktop Chrome'] } },
+    // Installed Chrome: Playwright's bundled headless shell has no WebGPU adapter.
+    { name: 'chrome', testMatch: /engine-smoke/, use: { ...devices['Desktop Chrome'], channel: 'chrome' } },
+    {
+      name: 'firefox', testMatch: /engine-smoke/,
+      use: { ...devices['Desktop Firefox'], launchOptions: { firefoxUserPrefs: { 'dom.webgpu.enabled': true } } },
+    },
+    { name: 'webkit', testMatch: /engine-smoke/, use: { ...devices['Desktop Safari'] } },
     {
       name: 'demo',
       use: {

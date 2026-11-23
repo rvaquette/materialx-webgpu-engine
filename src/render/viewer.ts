@@ -242,8 +242,8 @@ export interface BackendFallback {
 }
 
 export interface SceneLoadingProgress {
-  /** `preview`: geometry so far with placeholder materials; `textures`: final geometry and materials, textures arriving. */
-  readonly stage: 'preview' | 'geometry' | 'textures';
+  /** `geometry`: meshes so far with neutral surfaces; `textures`: final geometry and materials, textures arriving. */
+  readonly stage: 'geometry' | 'textures';
   readonly pendingGeometry: number;
   readonly pendingTextures: number;
 }
@@ -278,9 +278,19 @@ export interface ViewerSnapshot {
   };
 }
 
-/** Streaming previews: at most one rebuild per interval, and never more than 1/factor of the load time. */
 const PREVIEW_MIN_INTERVAL_MS = 1000;
-const PREVIEW_COST_FACTOR = 10;
+/** Previews cost at most 1/PREVIEW_COST_FACTOR of the loading time. */
+/** Texture side in previews (placeholders and decoded images); the final scene uses full resolution. */
+const PREVIEW_TEXTURE_SIZE = 512;
+/** Textures decoded within this delay after the geometry skip the textures-stage preview. */
+const PREVIEW_TEXTURE_WAIT_MS = 300;
+/** Longest wait for the first preview frame before geometry work resumes. */
+const PREVIEW_FRAME_TIMEOUT_MS = 500;
+/** The MaterialX runtime starts at the latest this long after the load when no preview is shown first. */
+const PREVIEW_MATERIALS_DELAY_MS = 1000;
+/** Loads shorter than this show no preview. */
+const PREVIEW_FIRST_DELAY_MS = 200;
+const PREVIEW_COST_FACTOR = 20;
 
 interface PreviewState {
   cancelled: boolean;
@@ -288,8 +298,11 @@ interface PreviewState {
   shown: boolean;
   lastEnd: number;
   lastCost: number;
-  /** Decodes through the scene's image provider once its materials are compiled. */
+  /** Decodes through the scene's image provider once its geometry is complete. */
   images: StreamingImages | undefined;
+  /** Resolves when the first preview frame is presented (or after a short timeout); then undefined. */
+  firstFrame: Promise<void> | undefined;
+  releaseMaterials?: () => void;
   preserveCamera: boolean;
   options: SceneLoadOptions;
   sink: DiagnosticSink;
@@ -419,6 +432,7 @@ export class InteractiveViewer {
   #pathTracingTemporalHistory = 0;
   #loadingProgress: SceneLoadingProgress | undefined;
   #firstPreviewStart: number | undefined;
+  #firstPreviewPresented: (() => void) | undefined;
   readonly #memory: GpuMemoryTracker;
   #memoryBudget: number | undefined;
   #budgetTextureLimit = Infinity;
@@ -1494,14 +1508,23 @@ export class InteractiveViewer {
     const preview: PreviewState | undefined = this.#streaming && this.#context && !/(?:^|\/)scene\.json(?:[?#]|$)/i.test(entry)
       ? {
         cancelled: false, building: undefined, shown: false, lastEnd: 0, lastCost: 0,
-        images: undefined, preserveCamera, options, sink, loadStarted,
+        images: undefined, firstFrame: undefined, preserveCamera, options, sink, loadStarted,
       }
       : undefined;
     const loadOptions: SceneLoadOptions = preview ? { ...options, progress: {
       wanted: ready => this.#previewWanted(preview, ready),
       partial: (scene, pending) => this.#showPreview(preview, scene, pending),
-      // Geometry waits for a preview being built: its pipelines then serve the final scene.
-      pause: () => (preview.shown ? undefined : preview.building),
+      // Geometry work blocks the thread: it waits until the first preview is on screen.
+      pause: () => (preview.shown ? preview.firstFrame : preview.building),
+      // So does the MaterialX runtime: it starts after the first preview, once the geometry is
+      // complete (then it is the critical path), or after a short delay.
+      // Cached geometry is fast: the MaterialX runtime becomes the critical path.
+      geometryCached: () => preview.releaseMaterials?.(),
+
+      materialsGate: () => (this.#backend === 'disney' ? Promise.resolve() : new Promise<void>(resolve => {
+        preview.releaseMaterials = resolve;
+        setTimeout(resolve, PREVIEW_MATERIALS_DELAY_MS);
+      })),
     } } : options;
     let loaded: LoadedUsdScene;
     try {
@@ -1589,7 +1612,7 @@ export class InteractiveViewer {
 
   #previewWanted(state: PreviewState, readyGeometries: number): boolean {
     if (state.cancelled || state.building || this.#disposed || this.#backend === 'disney') return false;
-    if (!state.shown) return readyGeometries >= 1;
+    if (!state.shown) return readyGeometries >= 1 && performance.now() - state.loadStarted >= PREVIEW_FIRST_DELAY_MS;
     return performance.now() - state.lastEnd >= Math.max(PREVIEW_MIN_INTERVAL_MS, PREVIEW_COST_FACTOR * state.lastCost);
   }
 
@@ -1597,11 +1620,11 @@ export class InteractiveViewer {
   #showPreview(state: PreviewState, partial: LoadedUsdScene, pendingGeometry: number): void {
     state.building = (async () => {
       const started = performance.now();
-      // The first preview uses neutral surfaces only: one pipeline, shown as early as possible.
-      const neutral = !state.shown && partial.resources.materials.size > 0;
-      if (partial.resources.materials.size > 0) state.images ??= new StreamingImages(partial.mtlx.imageProvider);
-      state.images?.prefetch(sceneTextureFiles(partial.resources));
-      const snapshot = (state.images ?? new StreamingImages({ decode: () => undefined })).snapshot();
+      // While geometry arrives, previews use neutral surfaces: one pipeline, cheap to rebuild.
+      // Material pipelines depend on each draw's vertex layout, so they are compiled once the
+      // geometry is complete, by the textures-stage preview or the final scene.
+      const neutral = pendingGeometry > 0 && partial.resources.materials.size > 0;
+      const snapshot = (state.images ?? new StreamingImages({ decode: () => undefined })).snapshot(PREVIEW_TEXTURE_SIZE);
       const candidate = this.#withTextureLimits({
         ...partial,
         ...(neutral ? { resources: {
@@ -1627,9 +1650,17 @@ export class InteractiveViewer {
         state.shown = true;
         if (!state.preserveCamera) this.#placeCamera(candidate, frame, state.options);
         this.#firstPreviewStart = state.loadStarted;
+        // A hidden page never presents: do not hold the load longer than the timeout.
+        state.firstFrame = Promise.race([
+          new Promise<void>(resolve => { this.#firstPreviewPresented = resolve; }),
+          new Promise<void>(resolve => setTimeout(resolve, PREVIEW_FRAME_TIMEOUT_MS)),
+        ]).then(() => {
+          state.firstFrame = undefined;
+          state.releaseMaterials?.();
+        });
       }
       this.#loadingProgress = {
-        stage: candidate.resources.materials.size === 0 && partial.preview ? 'preview' : pendingGeometry > 0 ? 'geometry' : 'textures',
+        stage: candidate.resources.materials.size === 0 ? 'geometry' : 'textures',
         pendingGeometry, pendingTextures: state.images?.progress.pending ?? 0,
       };
       this.#onCameraChanged();
@@ -1646,13 +1677,22 @@ export class InteractiveViewer {
     }).finally(() => { state.building = undefined; });
   }
 
-  /** Final geometry and materials are known: show them with the textures decoded so far until all arrive. */
+  /**
+   * Geometry and materials are complete: textures start decoding (not earlier, so they do not
+   * compete with geometry downloads). If some are still missing once a preview is built, the
+   * complete scene is shown with the textures decoded so far (UDIM tiles one by one), then
+   * refreshed as they arrive. The preview's pipelines are the final scene's.
+   */
   async #finishPreview(state: PreviewState, loaded: LoadedUsdScene): Promise<void> {
     await state.building;
-    const images = state.images ??= new StreamingImages(loaded.mtlx.imageProvider);
+    const images = state.images = new StreamingImages(loaded.mtlx.imageProvider);
     images.prefetch(sceneTextureFiles(loaded.resources));
+    await Promise.race([images.settled(), new Promise(resolve => setTimeout(resolve, PREVIEW_TEXTURE_WAIT_MS))]);
+    // Disney has no previews.
+    let first = this.#backend !== 'disney';
     while (images.progress.pending > 0 && !this.#disposed) {
-      if (this.#previewWanted(state, Infinity)) {
+      if (first || (this.#backend !== 'disney' && this.#previewWanted(state, Infinity))) {
+        first = false;
         this.#showPreview(state, loaded, 0);
         await state.building;
       }
@@ -2117,6 +2157,8 @@ export class InteractiveViewer {
           if (firstPreviewStart !== undefined) {
             performance.measure('viewer:first-preview', { start: firstPreviewStart, end: performance.now(),
               detail: { entry: this.#sceneEntry, backend: this.#backend } });
+            this.#firstPreviewPresented?.();
+            this.#firstPreviewPresented = undefined;
           }
           if (firstFrameStart !== undefined) {
             performance.measure('viewer:first-frame', { start: firstFrameStart, end: performance.now(),

@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { importUsdStage } from '../../src/usd/importer.ts';
-import { loadExternalMeshSource } from '../../src/geometry/external-mesh.ts';
+import { loadExternalMeshSource, scanObjBounds } from '../../src/geometry/external-mesh.ts';
 import { prepareMesh } from '../../src/geometry/prepare.ts';
 import type { Diagnostic } from '../../src/core/diagnostics.ts';
 import { importCameras } from '../../src/usd/cameras.ts';
@@ -262,5 +262,15 @@ describe('Three.js external geometry bridge', () => {
     };
     await expect(loadExternalMeshSource(scene, empty, (d) => diagnostics.push(d), read)).rejects.toThrow(reason);
     expect(diagnostics).toMatchObject([{ level: 'error', message: expect.stringContaining('/mesh') }]);
+  });
+});
+
+describe('scanObjBounds', () => {
+  it('bounds OBJ vertices per object section and for the whole file', () => {
+    const obj = 'o first\nv 0 0 0\nv 1 2 3\nf 1 2 1\ng second\nv -1 5 0.5\nvn 0 1 0\n';
+    const bounds = scanObjBounds(new TextEncoder().encode(obj).buffer as ArrayBuffer);
+    expect(bounds.get('')).toEqual({ min: [-1, 0, 0], max: [1, 5, 3] });
+    expect(bounds.get('first')).toEqual({ min: [0, 0, 0], max: [1, 2, 3] });
+    expect(bounds.get('second')).toEqual({ min: [-1, 5, 0.5], max: [-1, 5, 0.5] });
   });
 });

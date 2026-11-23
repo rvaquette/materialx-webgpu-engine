@@ -36,6 +36,8 @@ export interface MeshSource {
   /** Identity of the source content (e.g. file digest and object name). A prepared
    *  geometry cache hit on it skips loading and parsing the mesh altogether. */
   contentKey?(prototypePrimPath: string): string | undefined | Promise<string | undefined>;
+  /** Cheap bounds (no mesh preparation) for streaming placeholders. */
+  quickBounds?(prototypePrimPath: string): Aabb | undefined | Promise<Aabb | undefined>;
   /** Lazily parses the mesh; preferred over meshFor when present. */
   loadMesh?(prototypePrimPath: string): Promise<RawMesh | undefined>;
   /** Warnings raised while parsing this mesh, replayed on a content-keyed cache hit. */
@@ -166,6 +168,8 @@ export interface SceneResourcesProgress {
   partial(resources: SceneResources, pendingGeometries: number): void;
   /** Awaited before each prototype: lets a partial scene finish building before geometry work resumes. */
   pause?(): Promise<void> | undefined;
+  /** The first prototype came from the prepared-geometry cache: geometry will be fast. */
+  geometryCached?(): void;
 }
 
 export interface BuildSceneResourcesOptions {
@@ -244,6 +248,18 @@ export function transformBounds(bounds: Aabb, transform: Mat4): Aabb {
 function pointBounds(transform: Mat4): Aabb {
   const p = transformPoint(transform, [0, 0, 0]);
   return { min: [p[0], p[1], p[2]], max: [p[0], p[1], p[2]] };
+}
+
+/** Closed box with outward faces. */
+function boxMesh({ min, max }: Aabb): RawMesh {
+  const points: number[] = [];
+  for (let corner = 0; corner < 8; corner++) {
+    points.push(corner & 1 ? max[0] : min[0], corner & 2 ? max[1] : min[1], corner & 4 ? max[2] : min[2]);
+  }
+  return {
+    points, faceVertexCounts: [4, 4, 4, 4, 4, 4],
+    faceVertexIndices: [0, 2, 3, 1, 4, 5, 7, 6, 0, 1, 5, 4, 2, 6, 7, 3, 0, 4, 6, 2, 1, 3, 7, 5],
+  };
 }
 
 export function buildGeometry(prototypeId: string, primPath: string, mesh: PreparedMesh): GeometryResource {
@@ -367,11 +383,18 @@ export async function buildSceneResources(
   };
 
   // Instances + TLAS over the geometry and materials available so far.
-  const assemble = (): SceneResources => {
+  const assemble = (placeholders = false): SceneResources => {
     const instances: InstanceResource[] = [];
     const tlasBounds: Aabb[] = [];
+    const partialGeometries = new Map(geometries);
+    if (placeholders) {
+      for (const proto of sceneInstances.prototypes) {
+        const bounds = placeholderBounds.get(proto.id);
+        if (!partialGeometries.has(proto.id) && bounds) partialGeometries.set(proto.id, buildGeometry(proto.id, proto.primPath, prepareMesh(boxMesh(bounds))));
+      }
+    }
     for (const inst of sceneInstances.instances) {
-      const geometry = geometries.get(inst.prototypeId);
+      const geometry = partialGeometries.get(inst.prototypeId);
       const binding = sceneMaterials.bindings.get(inst.primPath) ?? sceneMaterials.bindings.get(inst.prototypeId);
       const materialKey = binding?.materialX
         ? materialUnitKey(binding.materialX)
@@ -389,7 +412,7 @@ export async function buildSceneResources(
       tlasBounds.push(geometry ? transformBounds(geometry.bounds, inst.transform) : pointBounds(inst.transform));
     }
     return {
-      geometries: new Map(geometries),
+      geometries: partialGeometries,
       materials: new Map(materials),
       instances,
       tlas: buildTlas(tlasBounds),
@@ -399,17 +422,33 @@ export async function buildSceneResources(
     };
   };
 
+  // Streaming placeholders: boxes for prototypes whose bounds are known before they are prepared.
+  const placeholderBounds = new Map<string, Aabb>();
+  const placeholderJobs = new Map<string, Promise<void>>();
+  if (options.progress) {
+    for (const proto of sceneInstances.prototypes) {
+      placeholderJobs.set(proto.id, Promise.resolve(options.meshSource.quickBounds?.(proto.primPath)).then(bounds => {
+        if (!bounds || !bounds.min.every((value, axis) => Number.isFinite(value) && value <= bounds.max[axis]!)) return;
+        placeholderBounds.set(proto.id, bounds);
+        if (options.progress?.wanted(geometries.size + placeholderBounds.size)) {
+          options.progress.partial(assemble(true), sceneInstances.prototypes.length - geometries.size);
+        }
+      }, () => undefined));
+    }
+  }
+
   // A ready compiler compiles first; a pending one joins as soon as it resolves.
   let readyCompiler: MaterialCompiler | undefined;
+  let compilerSettled = false;
   const compilerPromise = Promise.resolve(options.materialCompiler);
-  void compilerPromise.then(compiler => { readyCompiler = compiler; }, () => undefined);
+  void compilerPromise.then(compiler => { readyCompiler = compiler; }, () => undefined).finally(() => { compilerSettled = true; });
   if (!(options.materialCompiler instanceof Promise)) await compileMaterials(options.materialCompiler);
 
   const replayed = new Set<string>();
   let remainingPrototypes = sceneInstances.prototypes.length;
   for (const proto of sceneInstances.prototypes) {
     if (!materialsCompiled && readyCompiler) await compileMaterials(readyCompiler);
-    if (options.progress?.wanted(geometries.size)) options.progress.partial(assemble(), remainingPrototypes);
+    if (options.progress?.wanted(geometries.size + placeholderBounds.size)) options.progress.partial(assemble(true), remainingPrototypes);
     await options.progress?.pause?.();
     remainingPrototypes--;
     const source = options.meshSource;
@@ -431,10 +470,15 @@ export async function buildSceneResources(
       }
     }
     if (prepared) {
+      if (geometryCacheHits + geometryCacheMisses + geometryCacheBypasses === 0) options.progress?.geometryCached?.();
       geometryCacheHits++;
       geometries.set(proto.id, buildGeometry(proto.id, proto.primPath, prepared));
       continue;
     }
+    // Parsing and preparation block the thread: let this mesh's placeholder and a pending
+    // first preview reach the screen first.
+    await placeholderJobs.get(proto.id);
+    await options.progress?.pause?.();
     const raw = source.loadMesh ? await source.loadMesh(proto.primPath) : source.meshFor(proto.primPath);
     if (!raw) {
       pendingGeometry.push(proto.id);
@@ -490,6 +534,11 @@ export async function buildSceneResources(
     },
   });
 
+  // Geometry is complete but MaterialX is still loading: keep offering partial scenes meanwhile.
+  while (options.progress && !materialsCompiled && !compilerSettled) {
+    if (options.progress.wanted(geometries.size)) options.progress.partial(assemble(), 0);
+    await Promise.race([compilerPromise.catch(() => undefined), new Promise(resolve => setTimeout(resolve, 100))]);
+  }
   if (!materialsCompiled) await compileMaterials(await compilerPromise);
   const resources = assemble();
   return { ...resources, geometries, materials };

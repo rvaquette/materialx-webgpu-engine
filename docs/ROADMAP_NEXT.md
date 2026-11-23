@@ -8,31 +8,15 @@ mesurable, réutilisable et extensible.
 
 Les priorités 1 (rendu progressif), 2 (API de bibliothèque), 3 (éditeur de
 matériaux MaterialX), 3bis (scripting), 4 (accélération du path tracer), 5
-(scènes dynamiques) et 6 (volumes et effets avancés) sont traitées ; leur historique est dans [ROADMAP_DONE.md](ROADMAP_DONE.md). Il en
-reste les travaux suivants.
+(scènes dynamiques), 6 (volumes et effets avancés) et 7 (robustesse,
+portabilité et exploitation) sont traitées ; leur historique est dans
+[ROADMAP_DONE.md](ROADMAP_DONE.md).
 
 ## Reliquats des priorités traitées
 
 Aucun.
 
-## Priorité 7 : robustesse, portabilité et exploitation
+## Pistes ouvertes
 
-Préparer les usages de production :
-
-- budget mémoire GPU explicite et politiques de réduction ;
-- streaming avec placeholders de qualité progressive (textures, tuiles UDIM et
-  géométries ; mesuré à moins de 5 % du chargement des scènes actuelles) ;
-- récupération après perte du device ;
-- stratégie de fallback fondée sur les limites du GPU ;
-- tests sur plusieurs navigateurs et familles de GPU ;
-- rendu golden automatisé en CI ;
-- sauvegarde des diagnostics de compilation sous forme structurée ;
-- télémétrie locale optionnelle sur compilation, upload, GPU et convergence ;
-- documentation de l'intégration, des limites connues et des capacités supportées.
-
-**Critère d'aboutissement :** les limites et échecs prévisibles sont diagnostiqués,
-et non convertis silencieusement en rendu incomplet.
-
-## Ordre recommandé
-
-1. Portabilité et exploitation continue.
+Aucune priorité n'est planifiée. Les limites connues sont recensées dans
+[INTEGRATION.md](INTEGRATION.md#limites-connues).

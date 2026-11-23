@@ -43,7 +43,27 @@ En plus des signatures, le contrat comprend les comportements suivants :
   `render()` est non nulle ;
 - `render()` applique une configuration sans attendre d'image ni la convergence ;
 - les fichiers d'exécution MaterialX/OpenUSD ne sont pas inclus dans le paquet ;
-  l'hôte les sert et peut indiquer leurs URL avec `runtimeAssets`.
+  l'hôte les sert et peut indiquer leurs URL avec `runtimeAssets` ;
+- un échec prévisible n'est jamais converti silencieusement en image incomplète :
+  il rejette la promesse de l'opération ou produit un diagnostic (avec `code`
+  stable, voir [INTEGRATION.md](INTEGRATION.md)), conservé dans
+  `diagnostics` et exporté par `exportDiagnostics()` ;
+- si le path tracing ou Disney dépasse une limite du GPU pour la scène, les
+  images interactives sont rendues en raster et `EngineStatus.fallback` en
+  donne la raison ; `capture({ backend: 'pathtracing' })` rejette alors sa
+  promesse ;
+- avec `memoryBudget`, le moteur réduit d'abord la résolution des textures,
+  puis rend en raster au lieu du path tracing, et signale enfin le dépassement ;
+- avec `streaming` (moteur sur canvas), des scènes partielles s'affichent
+  pendant le chargement ; `loadUsd()` ne se résout qu'avec la scène complète et
+  les opérations restent refusées jusque-là ;
+- après une perte du périphérique créé par le moteur, un nouveau périphérique
+  est demandé et la scène, la caméra, le temps, les matériaux remplacés, les
+  paramètres modifiés et les réglages sont restaurés ; pendant la restauration,
+  les opérations sont refusées. Un périphérique fourni par l'appelant n'est pas
+  remplacé : la perte est signalée et l'instance devient inutilisable ;
+- `telemetry()` ne renvoie des données que si `telemetry: true`, et rien
+  n'est transmis hors de la page.
 
 Les champs de diagnostic de `EngineStatus` (`pathTracingMetrics`,
 `convergence`, `denoiser`, `warnings`, `passes`) sont informatifs : leurs
@@ -137,6 +157,19 @@ l'exécutable). Elle rend la scène avec ses matériaux USD, puis avec chaque
 `<scène>-original.png` et `<scène>-<matériau>.png`.
 
 ## Journal
+
+### 0.1.2
+
+- Exploitation : `capabilities`, `diagnostics`, `exportDiagnostics()`,
+  `gpuMemory` et `telemetry()` ; options `memoryBudget`, `streaming`,
+  `telemetry` et `onDeviceLost`.
+- Récupération automatique après une perte du périphérique créé par le moteur.
+- Champ `code` optionnel de `Diagnostic` ; champs `fallback` et `loading`
+  de `EngineStatus`.
+- Nouveaux types `EngineCapabilities`, `EngineBackendSupport`,
+  `EngineDiagnosticRecord`, `EngineGpuMemory`, `EngineTelemetry`,
+  `EngineTelemetryStat`, `EngineDeviceLoss`, `BackendFallback`,
+  `SceneLoadingProgress` et `DiagnosticLevel`.
 
 ### 0.1.1
 

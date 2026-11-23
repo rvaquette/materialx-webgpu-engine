@@ -243,6 +243,36 @@ describe('buildSceneResources (T050)', () => {
     expect(loadMesh).toHaveBeenCalledTimes(2);
   });
 
+  it('streams partial scenes while geometry loads and joins a pending material compiler', async () => {
+    let resolveCompiler!: (compiler: ReturnType<typeof distinctLayeredCompiler>) => void;
+    const compiler = new Promise<ReturnType<typeof distinctLayeredCompiler>>(resolve => { resolveCompiler = resolve; });
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const partials: Array<{ geometries: string[]; materials: number; pending: number }> = [];
+    const loadMesh = vi.fn(async (path: string) => {
+      if (path === '/World/ground') await gate;
+      return quad();
+    });
+    const built = buildSceneResources(twoMaterialScene(), {
+      meshSource: { meshFor: () => undefined, loadMesh },
+      materialCompiler: compiler,
+      progress: {
+        wanted: ready => ready > 0,
+        partial: (resources, pending) => partials.push({
+          geometries: [...resources.geometries.keys()], materials: resources.materials.size, pending,
+        }),
+      },
+    });
+    await vi.waitFor(() => expect(loadMesh).toHaveBeenCalledWith('/World/ground'));
+    expect(partials).toEqual([{ geometries: ['/World/cube'], materials: 0, pending: 1 }]);
+    resolveCompiler(distinctLayeredCompiler({ brick: '0.8, 0.2, 0.1', ground: '0.5, 0.5, 0.5' }));
+    release();
+    const resources = await built;
+    expect([...resources.geometries.keys()]).toEqual(['/World/cube', '/World/ground']);
+    expect(resources.materials.size).toBe(2);
+    expect(resources.instances.every(instance => instance.hasGeometry && instance.materialKey)).toBe(true);
+  });
+
   it('keeps finite bounds for geometry without triangles', async () => {
     const resources = await buildSceneResources(demoScene(), {
       meshSource: meshSource({ '/World/floor': { points: [], faceVertexCounts: [], faceVertexIndices: [] } }),

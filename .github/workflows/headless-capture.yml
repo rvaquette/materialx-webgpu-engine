@@ -47,3 +47,17 @@ jobs:
           MX_CAPTURE_RASTER_ONLY: '1'
           MX_CORE_DIR: ${{ github.workspace }}/materialx/javascript/build/bin
           MX_LIB_ROOT: ${{ github.workspace }}/materialx/libraries
+
+      - name: Golden raster renders (SwiftShader)
+        run: npm run test:golden
+        env:
+          MX_CORE_DIR: ${{ github.workspace }}/materialx/javascript/build/bin
+          MX_LIB_ROOT: ${{ github.workspace }}/materialx/libraries
+
+      - name: Keep golden differences
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: golden-differences
+          path: renders/golden/
+          if-no-files-found: ignore

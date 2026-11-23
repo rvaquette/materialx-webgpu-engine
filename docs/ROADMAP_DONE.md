@@ -1375,3 +1375,121 @@ luminance linéaire moyenne, raster/path tracing) :
 - **Cheveux.** Les fibres sont de la vraie géométrie (tubes), sans primitive
   de courbe dans le BVH : coûteux pour les chevelures denses (le nombre de
   côtés descend à 4 puis 3 au-delà de 20 000 et 200 000 sommets de contrôle).
+
+## Priorité 7 : robustesse, portabilité et exploitation
+
+Préparer les usages de production : les limites et échecs prévisibles sont
+diagnostiqués (codes stables, journal exportable) au lieu d'être convertis en
+rendu incomplet. La référence est [INTEGRATION.md](INTEGRATION.md) ; l'API
+passe en 0.1.2 ([ENGINE_API.md](ENGINE_API.md)).
+
+### Travaux réalisés
+
+- **Budget mémoire GPU** (`src/gpu/memory.ts`). Les octets des tampons et
+  textures vivants sont comptés en interceptant `createBuffer`,
+  `createTexture` et `destroy` sur le périphérique (mips, couches et
+  échantillons compris). Option `memoryBudget` et `engine.gpuMemory`.
+  Politique : taille maximale des textures de matériaux divisée par deux
+  jusqu'à 256 px avec reconstruction du jeu de rendu, puis repli raster du path
+  tracer, puis diagnostic `memory-budget-exceeded`. Sur `diningroom` avec
+  40 Mio : textures 93,2 → 6,0 Mio, total 201 → 114 Mio, dépassement restant
+  signalé, image complète.
+- **Repli selon les limites du GPU.** `engine.capabilities` (adaptateur,
+  limites, fonctionnalités, support et raison par backend). Les dépassements
+  de limites deviennent des `GpuLimitError` typées ; à la construction du
+  path tracer ou du backend Disney, les images sont rendues en raster
+  (`EngineStatus.fallback`, `backend-fallback`), la capture rejette. Les
+  textures plus grandes que `maxTextureDimension2D` sont réduites au lieu
+  d'échouer. Le décompte des tampons de stockage inclut désormais le CDF de
+  l'environnement (groupe 3), qui faisait échouer la validation du pipeline au
+  lieu d'être diagnostiqué. Vérifié sur un périphérique aux limites par défaut
+  (8 tampons de stockage) : une scène qui en demande 9 est rendue en raster
+  avec la raison affichée.
+- **Récupération après perte du périphérique.** Le moteur recrée son
+  périphérique et restaure la scène via `InteractiveViewer.snapshotState()` /
+  `restoreState()` (entrée, variants, temps, caméra, matériaux remplacés,
+  paramètres modifiés, transformations, visibilités, lumières, réglages) ;
+  option `onDeviceLost`. Un périphérique fourni par l'appelant est signalé
+  perdu. L'application utilise la même restauration (elle rechargeait la
+  scène en perdant caméra et modifications). Vérifié en tuant le processus GPU
+  de Chrome : `device-lost` puis `device-restored`, rendu repris.
+- **Streaming progressif** (option `streaming`, activée dans l'application).
+  Aperçus de surfaces neutres pendant l'arrivée de la géométrie, boîtes
+  englobantes pour les maillages pas encore préparés (lignes `v` des OBJ,
+  points USD), puis scène complète avec textures substituts (512 px,
+  tuiles UDIM une à une). Le chargement lui-même a été restructuré : MaterialX,
+  environnement et géométrie en parallèle, matériaux compilés dès que le
+  runtime est prêt, empreintes des fichiers de géométrie calculées à la
+  demande, ordonnancement qui laisse le premier aperçu atteindre l'écran
+  avant le travail synchrone (détails dans INTEGRATION.md).
+- **Diagnostics structurés** (`src/diagnostics/journal.ts`). Champ `code`
+  de `Diagnostic` ; journal horodaté des 1000 derniers diagnostics avec
+  détails convertis en JSON et emplacement WGSL ; `exportDiagnostics()` et
+  bouton **Exporter les diagnostics** de l'application. Les erreurs WebGPU non
+  capturées sont désormais journalisées par le moteur.
+- **Télémétrie locale** (`telemetry: true`, `engine.telemetry()`) : phases
+  du chargement, temps GPU par catégorie via `timestamp-query` injecté dans
+  les passes (`src/gpu/timing.ts`), octets envoyés au GPU, mémoire,
+  convergence.
+- **Tests navigateurs et GPU.** `npm run test:gpu-matrix` (Chrome et Edge sur
+  GPU haute performance, basse consommation et SwiftShader : 6 configurations
+  sur 6 passent les captures raster et path tracing) ;
+  `npm run test:playwright:browsers` (Chrome rend l'exemple, vérifié au
+  pixel ; Chromium Playwright, Firefox et WebKit affichent la raison de
+  l'absence de WebGPU).
+- **Rendu golden en CI** (`npm run test:golden`, `tests/golden/`). Quatre
+  cas raster sur SwiftShader, exécutés par le workflow GitHub à chaque push,
+  et deux cas path tracing (moyennes 8×8) sur l'exécuteur GPU auto-hébergé ;
+  différences publiées en artefact. Les références path tracing NVIDIA passent
+  sur Intel (écart 0,0002 pour 0,01 toléré).
+- **Documentation** : [INTEGRATION.md](INTEGRATION.md) (intégration, exigences
+  par backend, politiques de repli et de budget, streaming, perte du
+  périphérique, codes de diagnostic, télémétrie, matrice de tests, limites
+  connues).
+
+### Mesures du streaming
+
+`npm run bench:streaming -- --repeat 3` : médianes de 3 chargements à froid
+(profil Chrome neuf : aucun cache de géométrie, de BVH ni de shaders), canvas
+512², GPU NVIDIA T500. « Avant » est le chargement complet du commit
+précédent ; « 1er aperçu » est la première image affichée en streaming.
+
+| Scène | Avant (s) | Streaming : 1er aperçu (s) | Part du chargement d'avant | Streaming : chargement complet (s) |
+|---|---:|---:|---:|---:|
+| bedroom | 33,9 | 0,76 | 2,2 % | 39,2 |
+| diningroom | 21,5 | 0,52 | 2,4 % | 24,6 |
+| hyperion_rect_lights | 14,1 | 0,77 | 5,5 % | 18,5 |
+| renderman_teapot_tiles | 11,7 | 0,76 | 6,5 % | 13,0 |
+| test_material_disney_gold | 8,1 | 0,42 | 5,2 % | 6,6 |
+| test_veach | 7,4 | 0,43 | 5,8 % | 7,2 |
+| tungsten-material-testball | 6,6 | 1,18 | 17,9 % | 7,2 |
+| light_guide_occlusion | 3,9 | 0,41 | 10,5 % | 4,1 |
+| **Total** | **107,1** | **5,25** | **4,9 %** | |
+
+Ces mesures sont bruitées (jusqu'à ±15 % entre passages non entrelacés). Une
+comparaison entrelacée avant / après sur trois scènes (médianes de 3) donne
+pour le chargement complet à froid : hyperion 14,1 → 13,7 s, teapot
+11,5 → 11,5 s, diningroom 22,4 → 22,8 s ; à chaud (caches remplis), le
+streaming ajoute 0,1 à 0,4 s.
+
+### Décisions
+
+- **Critère des 5 %.** Interprété comme le délai de la première image
+  affichée rapporté au chargement complet actuel : 4,9 % sur l'ensemble des
+  scènes de référence. Deux petites scènes restent au-dessus : un seul gros
+  OBJ à télécharger avant toute boîte (tungsten), et une scène de 3,9 s dont
+  le premier aperçu est retardé à 200 ms par conception.
+- **Aperçus neutres pendant la géométrie.** Les pipelines des matériaux sont
+  créés par appel de dessin (matériau × format de sommets) : un aperçu avec les
+  vrais matériaux à mi-chargement n'en compilait qu'une partie et retardait le
+  rendu final de plusieurs secondes.
+- **Textures après la géométrie.** Décodées plus tôt, elles concurrençaient les
+  téléchargements de géométrie (jusqu'à ×4 sur `renderman_teapot_tiles`).
+- **Streaming optionnel.** Désactivé par défaut dans l'API (le chargement
+  complet garde son coût à chaud), activé dans l'application ; jamais en rendu
+  hors écran ni avec Disney.
+- **Mémoire estimée par interception.** WebGPU n'expose pas la mémoire ; les
+  surcoûts du pilote ne sont pas comptés, et seules les textures de matériaux
+  sont réduites.
+- **Firefox, WebKit, SwiftShader.** Pas de contournement : le moteur signale
+  l'absence de WebGPU ; SwiftShader sert au raster en CI, pas au path tracing.

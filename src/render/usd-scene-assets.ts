@@ -206,16 +206,13 @@ export async function loadMtlxSceneContext(
   textureRoot?: string,
   materialTexts?: ReadonlyMap<string, string>,
   runtimeAssets?: RuntimeAssetUrls,
+  prelowered?: PreviewSurfaceLowering,
 ): Promise<MtlxSceneContext & { documents: Awaited<ReturnType<typeof loadMaterialXDocuments>> }> {
   const baseDir = dirOf(entry);
   const surfaces = new Map<string, RasterSurface>();
   const texts = new Map<string, string>();
   const materialDirs: string[] = [];
-  // Lowered UsdPreviewSurface materials join the scene synchronously, before the first await,
-  // so callers can resolve bindings while the MaterialX runtime is still loading.
-  const authored = [...scene.materials];
-  const lowered = lowerPreviewSurfaceMaterials(scene, sink);
-  for (const material of lowered) (scene.materials as MaterialXReference[]).push(material.reference);
+  const { authored, lowered } = prelowered ?? lowerScenePreviewSurfaces(scene, sink);
   for (const ref of authored) {
     const url = new URL(ref.assetPath, new URL(ref.authoringLayer ?? entry, document.baseURI)).href;
     const dir = dirOf(url);
@@ -440,6 +437,22 @@ export interface LoadedUsdScene {
   preview?: boolean;
 }
 
+export interface PreviewSurfaceLowering {
+  authored: readonly MaterialXReference[];
+  lowered: ReturnType<typeof lowerPreviewSurfaceMaterials>;
+}
+
+/**
+ * Lowers UsdPreviewSurface materials to MaterialX and adds them to the scene, so material
+ * bindings resolve before (and independently of) the MaterialX runtime.
+ */
+export function lowerScenePreviewSurfaces(scene: SceneAsset, sink: DiagnosticSink): PreviewSurfaceLowering {
+  const authored = [...scene.materials];
+  const lowered = lowerPreviewSurfaceMaterials(scene, sink);
+  for (const material of lowered) (scene.materials as MaterialXReference[]).push(material.reference);
+  return { authored, lowered };
+}
+
 /** Fetch + import a USD stage and compile its materials into GPU-neutral resources. */
 export interface ObjectMaterialOverride {
   assetPath: string;
@@ -479,6 +492,9 @@ export interface SceneLoadOptions {
     wanted(readyGeometries: number): boolean;
     partial(scene: LoadedUsdScene, pendingGeometries: number): void;
     pause?(): Promise<void> | undefined;
+    /** The MaterialX runtime starts loading when this resolves (its synchronous work would delay the first preview). */
+    materialsGate?(): Promise<void>;
+    geometryCached?(): void;
   };
   /** In-memory scene import, sharing the USD material compiler and GPU resource path. */
   imported?: {
@@ -535,7 +551,10 @@ export async function loadUsdScene(
   const materialTexts = defaults.texts.size
     ? new Map([...options.imported?.materialTexts ?? [], ...defaults.texts]) : options.imported?.materialTexts;
   // MaterialX, the environment and geometry load concurrently; geometry does not wait for the runtime.
-  const mtlxLoad = loadMtlxSceneContext(scene, entry, sink, line, options.textureRoot, materialTexts, options.runtimeAssets);
+  const lowering = lowerScenePreviewSurfaces(scene, sink);
+  const gate = options.progress?.materialsGate?.();
+  const loadMtlx = () => loadMtlxSceneContext(scene, entry, sink, line, options.textureRoot, materialTexts, options.runtimeAssets, lowering);
+  const mtlxLoad = gate ? gate.then(loadMtlx) : loadMtlx();
   let mtlxReady: Awaited<typeof mtlxLoad> | undefined;
   const materialsLoaded = mtlxLoad.then(mtlx => {
     mtlxReady = mtlx;
@@ -565,6 +584,7 @@ export async function loadUsdScene(
         wanted: (ready: number) => progress.wanted(ready),
         partial: (resources: SceneResources, pending: number) => progress.partial(partialScene(resources), pending),
         pause: () => progress.pause?.(),
+        geometryCached: () => progress.geometryCached?.(),
       } } : {}),
     });
     const mtlx = await materialsLoaded;

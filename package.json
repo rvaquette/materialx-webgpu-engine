@@ -1,6 +1,6 @@
 {
   "name": "materialx-webgpu-engine",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "private": true,
   "type": "module",
   "description": "WebGPU rendering engine for OpenUSD scenes with a TypeScript MaterialX compiler.",
@@ -23,6 +23,10 @@
     "test:watch": "vitest",
     "test:playwright": "playwright test --project=chromium",
     "test:playwright:demo": "playwright test --project=demo",
+    "test:playwright:browsers": "playwright test engine-smoke --project=chromium --project=chrome --project=firefox --project=webkit",
+    "test:golden": "node scripts/golden.mjs",
+    "test:gpu-matrix": "node scripts/test-gpu-matrix.mjs",
+    "bench:streaming": "node scripts/bench-streaming.mjs",
     "test:headless-capture": "node --test scripts/test-headless-capture.mjs",
     "test:local-gpu": "node scripts/run-local-corpus.mjs",
     "test:local-scene": "node scripts/run-local-scene.mjs",

@@ -149,6 +149,46 @@ export async function loadExternalMesh(
  * actually needed: a prepared-geometry cache hit skips parsing. Inline USDA remains the
  * fallback. Without lazy, every mesh is parsed before returning (errors surface here).
  */
+type Aabb = { min: [number, number, number]; max: [number, number, number] };
+
+function pointBounds(points: ArrayLike<number>): Aabb | undefined {
+  if (points.length < 3) return undefined;
+  const min: Aabb['min'] = [Infinity, Infinity, Infinity], max: Aabb['max'] = [-Infinity, -Infinity, -Infinity];
+  for (let i = 0; i + 2 < points.length; i += 3) {
+    for (let axis = 0; axis < 3; axis++) {
+      const value = points[i + axis]!;
+      if (value < min[axis]!) min[axis] = value;
+      if (value > max[axis]!) max[axis] = value;
+    }
+  }
+  return { min, max };
+}
+
+/**
+ * Bounds of an OBJ file's vertices without parsing faces: per `o`/`g` section name and for
+ * the whole file (key ''). Used only for streaming placeholders.
+ */
+export function scanObjBounds(bytes: ArrayBuffer): Map<string, Aabb> {
+  const text = new TextDecoder().decode(bytes);
+  const result = new Map<string, Aabb>();
+  const grow = (key: string, x: number, y: number, z: number): void => {
+    let box = result.get(key);
+    if (!box) result.set(key, box = { min: [x, y, z], max: [x, y, z] });
+    if (x < box.min[0]) box.min[0] = x; else if (x > box.max[0]) box.max[0] = x;
+    if (y < box.min[1]) box.min[1] = y; else if (y > box.max[1]) box.max[1] = y;
+    if (z < box.min[2]) box.min[2] = z; else if (z > box.max[2]) box.max[2] = z;
+  };
+  let section = '';
+  for (const match of text.matchAll(/^(v|o|g)[ \t]+([^\r\n]*)/gm)) {
+    if (match[1] !== 'v') { section = match[2]!.trim(); continue; }
+    const [x, y, z] = match[2]!.trim().split(/\s+/).map(Number);
+    if (![x, y, z].every(Number.isFinite)) continue;
+    grow('', x!, y!, z!);
+    if (section) grow(section, x!, y!, z!);
+  }
+  return result;
+}
+
 export async function loadExternalMeshSource(
   scene: SceneAsset,
   inline: MeshSource,
@@ -224,7 +264,20 @@ export async function loadExternalMeshSource(
     }
   };
   if (!options.lazy) for (const path of entries.keys()) await loadMesh(path);
+  const objBounds = new Map<GeometryFile, Promise<Map<string, Aabb>>>();
   return {
+    quickBounds: async (path) => {
+      const entry = entries.get(path);
+      if (!entry) {
+        const mesh = inline.meshFor(path);
+        return mesh ? pointBounds(mesh.points) : undefined;
+      }
+      if (!/\.obj(?:[?#]|$)/i.test(entry.uri)) return undefined;
+      const file = files.get(entry.uri)!;
+      let bounds = objBounds.get(file);
+      if (!bounds) objBounds.set(file, bounds = file.bytes.then(scanObjBounds));
+      return (await bounds).get(entry.objectName ?? '');
+    },
     meshFor: (path) => meshes.get(path) ?? (entries.has(path) ? undefined : inline.meshFor(path)),
     loadMesh,
     contentKey: async (path) => {
