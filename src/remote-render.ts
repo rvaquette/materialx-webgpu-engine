@@ -1,6 +1,7 @@
 // Remote rendering client: sends a material script to the render server
 // (scripts/remote-render-server.mjs, docs/REMOTE_RENDER.md) and receives its progress,
 // intermediate frames, log messages and saved files as server-sent events.
+import { ICON_BUTTON_STYLE, iconButton, setIconButton } from './ui/icons.ts';
 
 export interface RemoteRenderSettings {
   /** Server base URL, e.g. https://render.example.com/ (HTTPS except on localhost). */
@@ -30,11 +31,25 @@ export interface RemoteRenderProgress {
 }
 
 export type RemoteRenderEvent =
-  | { type: 'status'; stage: 'queued' | 'loading' | 'running'; position?: number }
+  | { type: 'job'; id: string }
+  | { type: 'status'; stage: 'queued' | 'loading' | 'running' | 'paused'; position?: number }
   | { type: 'progress'; progress: RemoteRenderProgress }
   | { type: 'frame'; image: string }
   | { type: 'log'; message: string; level?: 'error' }
   | { type: 'file'; name: string; data: string };
+
+export type RemoteJobAction = 'pause' | 'resume' | 'cancel';
+
+/** Pauses (rendering and script), resumes or cancels a job of `runRemoteScript`. */
+export async function controlRemoteJob(settings: RemoteRenderSettings, id: string, action: RemoteJobAction): Promise<void> {
+  const response = await fetch(new URL(`jobs/${encodeURIComponent(id)}/${action}`, remoteServerUrl(settings.url)), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...(settings.token ? { Authorization: `Bearer ${settings.token}` } : {}) },
+    body: '{}',
+    credentials: 'include',
+  });
+  if (!response.ok) throw new Error(`Serveur de rendu : HTTP ${response.status} ${(await response.text().catch(() => '')).slice(0, 200)}`);
+}
 
 const STORAGE_KEY = 'mx-remote-render';
 
@@ -131,7 +146,7 @@ export async function runRemoteScript(
         return payload as unknown as RemoteRenderResult;
       }
       if (event === 'progress') onEvent({ type: 'progress', progress: payload as RemoteRenderProgress });
-      else if (event === 'status' || event === 'frame' || event === 'log' || event === 'file') {
+      else if (event === 'job' || event === 'status' || event === 'frame' || event === 'log' || event === 'file') {
         onEvent({ type: event, ...payload } as RemoteRenderEvent);
       }
     }
@@ -156,17 +171,20 @@ const VIEW_STYLE = `
   align-items: center; justify-content: center; background: #101014; }
 #remote-render-view[hidden] { display: none; }
 #remote-render-view img { flex: 1; min-height: 0; max-width: 100%; object-fit: contain; }
-#remote-render-view figcaption { display: flex; gap: 8px; align-items: center; padding: 6px; font-size: 0.9em; }
-#remote-render-view figcaption span { white-space: pre-wrap; }
-`;
+#remote-render-view figcaption { display: flex; gap: 8px; align-items: center; padding: 6px; font-size: 0.9em; align-self: flex-start; }
+#remote-render-view figcaption span { white-space: pre-wrap; order: 1; }
+${ICON_BUTTON_STYLE}`;
 
 /** Shows the remote frames above the local viewer canvas, until closed. */
 export class RemoteRenderView {
   readonly element: HTMLElement;
   readonly #image: HTMLImageElement;
   readonly #caption: HTMLElement;
-  readonly #cancel: HTMLButtonElement;
-  onCancel: (() => void) | undefined;
+  readonly #pause: HTMLButtonElement;
+  readonly #stop: HTMLButtonElement;
+  #paused = false;
+  /** Pause, resume or stop requested with the view's buttons. */
+  onAction: ((action: RemoteJobAction) => void) | undefined;
 
   constructor(container: HTMLElement) {
     if (!document.getElementById('mx-remote-style')) {
@@ -177,14 +195,17 @@ export class RemoteRenderView {
     this.element.hidden = true;
     this.element.innerHTML = `<img alt="Rendu distant" data-testid="remote-frame">
       <figcaption><span role="status" data-testid="remote-progress"></span>
-      <button type="button" data-action="cancel">Annuler</button>
-      <button type="button" data-action="close">Fermer</button></figcaption>`;
+      ${iconButton('pause', 'Mettre en pause le rendu distant', { 'data-action': 'pause', 'data-testid': 'remote-pause' })}
+      ${iconButton('stop', 'Arrêter le rendu distant', { 'data-action': 'stop', 'data-testid': 'remote-stop', class: 'danger' })}
+      ${iconButton('close', 'Fermer la vue distante (arrête le rendu en cours)', { 'data-action': 'close', 'data-testid': 'remote-close' })}</figcaption>`;
     this.#image = this.element.querySelector('img')!;
     this.#caption = this.element.querySelector('[data-testid="remote-progress"]')!;
-    this.#cancel = this.element.querySelector('[data-action="cancel"]')!;
-    this.#cancel.addEventListener('click', () => this.onCancel?.());
+    this.#pause = this.element.querySelector('[data-action="pause"]')!;
+    this.#stop = this.element.querySelector('[data-action="stop"]')!;
+    this.#pause.addEventListener('click', () => this.onAction?.(this.#paused ? 'resume' : 'pause'));
+    this.#stop.addEventListener('click', () => this.onAction?.('cancel'));
     this.element.querySelector('[data-action="close"]')!.addEventListener('click', () => {
-      this.onCancel?.();
+      if (!this.#stop.hidden) this.onAction?.('cancel');
       this.element.hidden = true;
     });
     container.append(this.element);
@@ -192,9 +213,21 @@ export class RemoteRenderView {
 
   start(): void {
     this.#image.removeAttribute('src');
-    this.#cancel.hidden = false;
+    this.#pause.hidden = this.#stop.hidden = false;
+    this.#pause.disabled = true;
+    this.paused(false);
     this.element.hidden = false;
     this.status('Envoi du script…');
+  }
+
+  /** Pause/resume is offered once the job runs on the server. */
+  controllable(enabled: boolean): void {
+    this.#pause.disabled = !enabled;
+  }
+
+  paused(paused: boolean): void {
+    this.#paused = paused;
+    setIconButton(this.#pause, paused ? 'play' : 'pause', paused ? 'Reprendre le rendu distant' : 'Mettre en pause le rendu distant');
   }
 
   frame(dataUrl: string): void {
@@ -207,7 +240,7 @@ export class RemoteRenderView {
   }
 
   finish(text: string): void {
-    this.#cancel.hidden = true;
+    this.#pause.hidden = this.#stop.hidden = true;
     this.status(text);
   }
 }

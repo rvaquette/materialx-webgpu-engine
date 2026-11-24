@@ -1,16 +1,25 @@
-// Material script editor: syntax highlighting, NodeDef-driven completions, value
-// helpers for the input under the caret, and script ⇄ MaterialX XML conversion.
+// Material script language support (highlighting, NodeDef-driven completions, hover
+// documentation, value formatting) and the « Script » toolbar button. The CodeMirror editor
+// itself (script-editor-view.ts) is loaded the first time the editor opens.
 
 import {
-  acceptsValue, fromResolvedGraph, fromXml, inlineIncludes, isColorspaceAttribute, MATERIALX_COLORSPACES, MATH_NODES, nodeType,
-  RENDER_SETTINGS, runScript, ScriptError, toScript, toXml, type ScriptHost, type ScriptLibrary, type ScriptNodeDef,
-  type ScriptPortDef, type ScriptRun, type ScriptValue,
+  isColorspaceAttribute, MATERIALX_COLORSPACES, MATH_NODES, nodeType, RENDER_SETTINGS,
+  type ScriptHost, type ScriptLibrary, type ScriptNodeDef, type ScriptPortDef, type ScriptValue,
 } from './script-api.ts';
 import type { ResolvedGraph } from './graph.ts';
-import { downloadBlob } from '../assets/download.ts';
-import {
-  describeRemoteProgress, loadRemoteSettings, RemoteRenderView, runRemoteScript, saveRemoteSettings,
-} from '../remote-render.ts';
+import type { MaterialXScriptEditor } from './script-editor-view.ts';
+import { sharedScriptOf } from './script-store.ts';
+import { activityButton, panelVisible, rememberPanel } from '../ui/layout.ts';
+
+/**
+ * Pause and resume of running scripts shared with the viewer: pausing also stops the path
+ * tracer's accumulation; `wait()` is the promise a paused script waits for.
+ */
+export interface ScriptRunControl {
+  pause(): boolean;
+  resume(): boolean;
+  wait(): Promise<void> | undefined;
+}
 
 export interface ScriptEditorOptions {
   library: Promise<ScriptLibrary>;
@@ -22,11 +31,16 @@ export interface ScriptEditorOptions {
   host?: ScriptHost;
   /** `fileprefix` used for relative texture paths in applied documents. */
   filePrefix?: string;
+  /** Initial script; by default the saved draft, else DEFAULT_SCRIPT. */
   initialScript?: string;
   /** Ready-made scripts offered in the « Scripts » menu, e.g. examples/scripts/*.js. */
   examples?: readonly { label: string; code: string }[];
   /** Where frames of « Rendu distant » are shown (docs/REMOTE_RENDER.md); without it the section is hidden. */
   remoteView?: HTMLElement | null;
+  /** Pause/resume shared with the viewer; without it, pausing only holds the script. */
+  runControl?: ScriptRunControl;
+  /** Layout element the panel is docked in (as its last child); without it the panel floats over the page. */
+  dock?: HTMLElement | null;
 }
 
 export const DEFAULT_SCRIPT = `// Matériau procédural : un bruit fractal mélange deux couleurs.
@@ -55,7 +69,7 @@ const TOKEN = new RegExp([
   `(${IDENT})`,
 ].join('|'), 'g');
 
-const escapeHtml = (text: string): string => text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+export const escapeHtml = (text: string): string => text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
 /** Variables bound to `new Node(...)` in `code`, resolved against the library. */
 export function scriptVariables(code: string, library: ScriptLibrary): Map<string, ScriptNodeDef> {
@@ -68,36 +82,126 @@ export function scriptVariables(code: string, library: ScriptLibrary): Map<strin
   return variables;
 }
 
-/** Highlighted HTML for `code`; known nodes, inputs and outputs get their own classes. */
-export function highlightScript(code: string, library: ScriptLibrary | undefined): string {
+/** A colored span of a script: comment, string, number, keyword, node, var, builtin, input, output, member or error. */
+export interface ScriptToken {
+  from: number;
+  to: number;
+  kind: string;
+}
+
+/** Tokens of `code`; known nodes, inputs and outputs get their own kinds. */
+export function scriptTokens(code: string, library: ScriptLibrary | undefined): ScriptToken[] {
   const variables = library ? scriptVariables(code, library) : new Map<string, ScriptNodeDef>();
-  const span = (kind: string, text: string): string => `<span class="tok-${kind}">${escapeHtml(text)}</span>`;
-  const identifier = (name: string): string => {
-    if (variables.has(name)) return span('var', name);
-    if (library?.categoryOf(name) !== undefined) return span('node', name);
-    if (SCRIPT_FUNCTIONS[name]) return span('builtin', name);
-    return escapeHtml(name);
+  const tokens: ScriptToken[] = [];
+  const push = (from: number, text: string, kind: string | undefined): void => {
+    if (kind) tokens.push({ from, to: from + text.length, kind });
   };
-  let html = '';
-  let last = 0;
+  const identifierKind = (name: string): string | undefined => {
+    if (variables.has(name)) return 'var';
+    if (library?.categoryOf(name) !== undefined) return 'node';
+    if (SCRIPT_FUNCTIONS[name]) return 'builtin';
+    return undefined;
+  };
   for (const match of code.matchAll(TOKEN)) {
-    html += escapeHtml(code.slice(last, match.index));
-    last = match.index + match[0].length;
+    const start = match.index;
     const [text, comment, string, number, keyword, owner, member, name] = match;
-    if (comment) html += span('comment', text);
-    else if (string) html += span('string', text);
-    else if (number) html += span('number', text);
-    else if (keyword) html += span('keyword', text);
+    if (comment) push(start, text, 'comment');
+    else if (string) push(start, text, 'string');
+    else if (number) push(start, text, 'number');
+    else if (keyword) push(start, text, 'keyword');
     else if (owner && member) {
       const def = variables.get(owner);
       const kind = owner === 'render' && !def ? (member in RENDER_SETTINGS ? 'input' : 'error')
         : !def ? 'member'
           : def.inputs.some(port => port.name === member) || isColorspaceAttribute(def, member) ? 'input'
             : def.outputs.some(port => port.name === member) ? 'output' : 'error';
-      html += `${identifier(owner)}.${span(kind, member)}`;
-    } else html += identifier(name!);
+      push(start, owner, identifierKind(owner));
+      push(start + owner.length + 1, member, kind);
+    } else push(start, name!, identifierKind(name!));
+  }
+  return tokens;
+}
+
+/** Highlighted HTML for `code`; known nodes, inputs and outputs get their own classes. */
+export function highlightScript(code: string, library: ScriptLibrary | undefined): string {
+  let html = '';
+  let last = 0;
+  for (const token of scriptTokens(code, library)) {
+    html += `${escapeHtml(code.slice(last, token.from))}<span class="tok-${token.kind}">${escapeHtml(code.slice(token.from, token.to))}</span>`;
+    last = token.to;
   }
   return `${html}${escapeHtml(code.slice(last))}\n`;
+}
+
+export interface ScriptHover {
+  from: number;
+  to: number;
+  title: string;
+  lines: string[];
+}
+
+function portLines(port: ScriptPortDef): string[] {
+  return [
+    ...(port.doc ? [port.doc] : []),
+    ...(port.default !== undefined ? [`Défaut : ${formatValue(port.default)}`] : []),
+    ...(port.min !== undefined || port.max !== undefined ? [`Plage : ${port.min ?? '−∞'} … ${port.max ?? '+∞'}`] : []),
+    ...(port.enum?.length ? [`Valeurs : ${port.enum.join(', ')}`] : []),
+  ];
+}
+
+/** Documentation of the word at `position`: node classes, node inputs/outputs, viewer functions, render settings, Math. */
+export function scriptHover(code: string, position: number, library: ScriptLibrary): ScriptHover | undefined {
+  let from = position;
+  let to = position;
+  while (from > 0 && /[\w$]/.test(code[from - 1]!)) from--;
+  while (to < code.length && /[\w$]/.test(code[to]!)) to++;
+  const word = code.slice(from, to);
+  if (!word || /^\d/.test(word)) return undefined;
+  const owner = code[from - 1] === '.' ? /([A-Za-z_$][\w$]*)$/.exec(code.slice(0, from - 1))?.[1] : undefined;
+  const variables = scriptVariables(code, library);
+  if (owner) {
+    const def = variables.get(owner);
+    if (!def && owner === 'render') {
+      const setting = RENDER_SETTINGS[word];
+      return setting && { from, to, title: `render.${word}`, lines: [setting.doc,
+        ...(setting.values ? [`Valeurs : ${setting.values.map(value => JSON.stringify(value)).join(', ')}`] : []),
+        ...(setting.min !== undefined || setting.max !== undefined ? [`Plage : ${setting.min ?? '−∞'} … ${setting.max ?? '+∞'}`] : [])] };
+    }
+    if (!def && owner === 'Math') {
+      const category = MATH_NODES[word];
+      if (!category) return undefined;
+      return { from, to, title: `Math.${word}`, lines: [`Sur une sortie de nœud : nœud MaterialX ${category}.`, 'Sur des nombres : calcul JavaScript.'] };
+    }
+    if (!def) return undefined;
+    if (isColorspaceAttribute(def, word)) {
+      return { from, to, title: `${owner}.colorspace : attribut`, lines: [`Espace colorimétrique : ${MATERIALX_COLORSPACES.join(', ')}`] };
+    }
+    const input = def.inputs.find(port => port.name === word);
+    if (input) return { from, to, title: `${owner}.${word} : entrée ${input.type}`, lines: [...portLines(input), `NodeDef : ${def.name}`] };
+    const output = def.outputs.find(port => port.name === word);
+    if (output) return { from, to, title: `${owner}.${word} : sortie ${output.type}`, lines: [`NodeDef : ${def.name}`] };
+    return { from, to, title: `${owner}.${word}`, lines: [`${def.name} n’a ni entrée ni sortie « ${word} ».`] };
+  }
+  const def = variables.get(word);
+  if (def) {
+    return { from, to, title: `${word} : ${def.className} → ${nodeType(def)}`, lines: [
+      ...(def.doc ? [def.doc] : []), `NodeDef : ${def.name}`,
+      `Entrées : ${def.inputs.map(port => port.name).join(', ') || 'aucune'}`,
+      `Sorties : ${def.outputs.map(port => `${port.name} (${port.type})`).join(', ')}`,
+    ] };
+  }
+  const category = library.categoryOf(word);
+  if (category !== undefined) {
+    const variants = library.variants(category);
+    const types = [...new Set(variants.map(nodeType))];
+    return { from, to, title: `new ${word}() : nœud ${category}`, lines: [
+      ...(variants[0]?.doc ? [variants[0].doc] : []),
+      `Sorties : ${types.join(' | ')} (défaut : ${nodeType(library.resolve(category))})`,
+      `Variantes : ${variants.slice(0, 8).map(variant => variant.name).join(', ')}${variants.length > 8 ? ` … (${variants.length})` : ''}`,
+    ] };
+  }
+  const builtin = SCRIPT_FUNCTIONS[word];
+  return builtin && { from, to, title: word, lines: [builtin.detail] };
 }
 
 export interface Completion {
@@ -206,655 +310,116 @@ function formatNumber(value: number): string {
   return String(Number(value.toFixed(4)));
 }
 
-function formatValue(value: ScriptValue): string {
+export function formatValue(value: ScriptValue): string {
   if (Array.isArray(value)) return `[${value.map(formatNumber).join(', ')}]`;
   if (typeof value === 'number') return formatNumber(value);
   return typeof value === 'string' ? JSON.stringify(value) : String(value);
 }
 
-function parseLiteral(text: string): unknown {
+export function parseLiteral(text: string): unknown {
   try { return JSON.parse(text.trim().replace(/^'(.*)'$/, '"$1"')); } catch { return undefined; }
 }
 
-const toHex = (rgb: readonly number[]): string =>
+export const toHex = (rgb: readonly number[]): string =>
   `#${rgb.slice(0, 3).map(c => Math.round(Math.min(1, Math.max(0, c)) * 255).toString(16).padStart(2, '0')).join('')}`;
-const fromHex = (hex: string): number[] =>
+export const fromHex = (hex: string): number[] =>
   [1, 3, 5].map(i => Number((parseInt(hex.slice(i, i + 2), 16) / 255).toFixed(3)));
 
-const ASSIGNMENT = new RegExp(`^(\\s*(?:(?:const|let|var)\\s+)?)?\\s*(${IDENT})\\.(${IDENT})(\\s*=\\s*)([^;\\n]*?)(\\s*;?\\s*(?:\\/\\/.*)?)$`);
+/** `node.input = value` line: indent/declaration, node, input, ` = `, value, trailing ; and comment. */
+export const ASSIGNMENT = new RegExp(`^(\\s*(?:(?:const|let|var)\\s+)?)?\\s*(${IDENT})\\.(${IDENT})(\\s*=\\s*)([^;\\n]*?)(\\s*;?\\s*(?:\\/\\/.*)?)$`);
 
-const STYLE = `
-#script-editor-panel { position: fixed; top: 0; right: 0; bottom: 0; width: min(560px, 100vw); z-index: 1000;
-  display: flex; flex-direction: column; gap: 6px; padding: 8px; box-sizing: border-box; background: #1e1e1e; color: #ddd;
-  font: 13px system-ui, sans-serif; box-shadow: -4px 0 16px rgba(0, 0, 0, 0.5); }
-#script-editor-panel[hidden] { display: none; }
-#script-editor-panel header { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
-#script-editor-panel header strong { flex: 1; }
-.mx-examples { display: flex; gap: 6px; }
-.mx-examples[hidden] { display: none; }
-.mx-remote[hidden] { display: none; }
-.mx-remote div { display: flex; gap: 6px; margin-top: 4px; }
-.mx-remote input { flex: 1; min-width: 0; background: #252526; color: #eee; border: 1px solid #555; border-radius: 4px; padding: 3px; }
-.mx-examples select { flex: 1; min-width: 0; background: #252526; color: #eee; border: 1px solid #555; border-radius: 4px; padding: 3px; }
-#script-editor-panel button { background: #333; color: #eee; border: 1px solid #555; border-radius: 4px; padding: 4px 8px; cursor: pointer; }
-#script-editor-panel button:hover { background: #444; }
-#script-editor-panel button.primary { background: #0e639c; border-color: #1177bb; }
-.mx-code { position: relative; flex: 3; min-height: 160px; border: 1px solid #444; border-radius: 4px; overflow: hidden; }
-.mx-code pre, .mx-code textarea { position: absolute; inset: 0; margin: 0; padding: 8px; box-sizing: border-box; border: 0;
-  font: 13px/18px Consolas, 'Courier New', monospace; tab-size: 2; white-space: pre; overflow: auto; }
-.mx-code pre { pointer-events: none; color: #d4d4d4; background: #1e1e1e; }
-.mx-code textarea { resize: none; color: transparent; background: transparent; caret-color: #fff; outline: none; }
-.mx-code textarea::selection { background: rgba(38, 79, 120, 0.8); color: transparent; }
-.tok-comment { color: #6a9955; } .tok-string { color: #ce9178; } .tok-number { color: #b5cea8; }
-.tok-keyword { color: #569cd6; } .tok-node { color: #4ec9b0; } .tok-var { color: #9cdcfe; } .tok-builtin { color: #4fc1ff; font-weight: 600; }
-.tok-input { color: #dcdcaa; } .tok-output { color: #c586c0; } .tok-member { color: #d4d4d4; }
-.tok-error { color: #f48771; text-decoration: wavy underline; }
-.mx-completions { position: absolute; z-index: 2; margin: 0; padding: 2px 0; list-style: none; max-height: 220px; min-width: 260px;
-  overflow: auto; background: #252526; border: 1px solid #454545; font: 12px Consolas, monospace; }
-.mx-completions li { display: flex; gap: 12px; justify-content: space-between; padding: 2px 8px; cursor: pointer; white-space: nowrap; }
-.mx-completions li span { color: #888; overflow: hidden; text-overflow: ellipsis; max-width: 320px; }
-.mx-completions li[aria-selected="true"] { background: #04395e; }
-.mx-helper { display: flex; gap: 8px; align-items: center; min-height: 28px; padding: 2px 6px; border-radius: 4px; background: #252526; }
-.mx-helper[hidden] { display: none; }
-.mx-helper code { color: #dcdcaa; }
-.mx-helper input[type="number"] { width: 72px; }
-.mx-helper input[type="range"] { flex: 1; }
-.mx-status { min-height: 18px; max-height: 9em; overflow: auto; flex-shrink: 0; color: #89d185; white-space: pre-wrap; }
-.mx-status.error { color: #f48771; }
-.mx-xml { flex: 2; min-height: 100px; resize: none; padding: 8px; border: 1px solid #444; border-radius: 4px;
-  background: #1a1a1a; color: #ce9178; font: 12px/16px Consolas, monospace; white-space: pre; }
-`;
-
-export class MaterialXScriptEditor {
-  readonly element: HTMLElement;
-  #library: ScriptLibrary | undefined;
-  readonly #options: ScriptEditorOptions;
-  readonly #code: HTMLTextAreaElement;
-  readonly #highlight: HTMLPreElement;
-  readonly #completions: HTMLUListElement;
-  readonly #helper: HTMLElement;
-  readonly #status: HTMLElement;
-  readonly #xml: HTMLTextAreaElement;
-  readonly #examples: HTMLSelectElement;
-  readonly #remoteUrl: HTMLInputElement;
-  readonly #remoteToken: HTMLInputElement;
-  readonly #remoteRun: HTMLButtonElement;
-  #remoteFrames: RemoteRenderView | undefined;
-  #items: Completion[] = [];
-  #from = 0;
-  #selected = 0;
-  #validateTimer: ReturnType<typeof setTimeout> | undefined;
-  #validation = 0;
-  readonly #documents = new Map<string, Promise<string>>();
-  #helperLine = -1;
-
-  constructor(options: ScriptEditorOptions) {
-    this.#options = options;
-    if (!document.getElementById('mx-script-style')) {
-      const style = document.createElement('style');
-      style.id = 'mx-script-style';
-      style.textContent = STYLE;
-      document.head.append(style);
-    }
-    this.element = document.createElement('aside');
-    this.element.id = 'script-editor-panel';
-    this.element.setAttribute('aria-label', 'Éditeur de script MaterialX');
-    this.element.innerHTML = `
-      <header>
-        <strong>Script MaterialX</strong>
-        <button type="button" class="primary" data-action="apply" data-testid="script-apply" title="Ctrl+Entrée">Appliquer</button>
-        <button type="button" data-action="from-material" data-testid="script-from-material"
-          title="Convertir le matériau de l’objet sélectionné en script">Matériau → Script</button>
-        <button type="button" data-action="to-xml" data-testid="script-to-xml">Script → XML</button>
-        <button type="button" data-action="from-xml" data-testid="script-from-xml">XML → Script</button>
-        <button type="button" data-action="export" data-testid="script-export">Exporter .mtlx</button>
-        <button type="button" data-action="close" data-testid="script-close" aria-label="Fermer" title="Échap">✕</button>
-      </header>
-      <div class="mx-examples" data-testid="script-examples-bar" hidden>
-        <select aria-label="Scripts de validation" data-testid="script-examples">
-          <option value="">Scripts de validation…</option>
-        </select>
-        <button type="button" data-action="run-example" data-testid="script-run-example"
-          title="Charger le script choisi puis l’exécuter sur le viewer">Lancer</button>
-      </div>
-      <details class="mx-remote" data-testid="script-remote" hidden>
-        <summary>Rendu distant</summary>
-        <div>
-          <input type="url" placeholder="https://serveur-de-rendu.example/" aria-label="URL du serveur de rendu" data-testid="script-remote-url">
-          <input type="password" placeholder="Jeton" autocomplete="off" aria-label="Jeton du serveur de rendu" data-testid="script-remote-token">
-          <button type="button" data-action="remote" data-testid="script-remote-run"
-            title="Exécuter le script sur le serveur de rendu et afficher le rendu au fil de sa progression">Rendu distant</button>
-        </div>
-      </details>
-      <div class="mx-code">
-        <pre aria-hidden="true" data-testid="script-highlight"></pre>
-        <textarea spellcheck="false" autocomplete="off" autocapitalize="off" aria-label="Script" data-testid="script-code"></textarea>
-        <ul class="mx-completions" role="listbox" data-testid="script-completions" hidden></ul>
-      </div>
-      <div class="mx-helper" data-testid="script-value-helper" hidden></div>
-      <div class="mx-status" role="status" data-testid="script-status"></div>
-      <textarea class="mx-xml" spellcheck="false" aria-label="Document MaterialX" data-testid="script-xml"
-        placeholder="Document MaterialX : « Script → XML » pour le générer, ou collez un document puis « XML → Script »."></textarea>`;
-    this.#code = this.element.querySelector('[data-testid="script-code"]')!;
-    this.#highlight = this.element.querySelector('[data-testid="script-highlight"]')!;
-    this.#completions = this.element.querySelector('[data-testid="script-completions"]')!;
-    this.#helper = this.element.querySelector('[data-testid="script-value-helper"]')!;
-    this.#status = this.element.querySelector('[data-testid="script-status"]')!;
-    this.#xml = this.element.querySelector('[data-testid="script-xml"]')!;
-    this.#code.value = options.initialScript ?? DEFAULT_SCRIPT;
-    this.#examples = this.element.querySelector('[data-testid="script-examples"]')!;
-    for (const [index, example] of (options.examples ?? []).entries()) {
-      this.#examples.append(Object.assign(document.createElement('option'), { value: String(index), textContent: example.label }));
-    }
-    this.element.querySelector<HTMLElement>('[data-testid="script-examples-bar"]')!.hidden = !options.examples?.length;
-    this.#remoteUrl = this.element.querySelector('[data-testid="script-remote-url"]')!;
-    this.#remoteToken = this.element.querySelector('[data-testid="script-remote-token"]')!;
-    this.#remoteRun = this.element.querySelector('[data-testid="script-remote-run"]')!;
-    this.element.querySelector<HTMLElement>('[data-testid="script-remote"]')!.hidden = !options.remoteView;
-    if (options.remoteView) {
-      const settings = loadRemoteSettings();
-      this.#remoteUrl.value = settings.url;
-      this.#remoteToken.value = settings.token;
-      // Kept as typed, so a page reload does not lose them before a first remote render.
-      const save = () => saveRemoteSettings({ url: this.#remoteUrl.value.trim(), token: this.#remoteToken.value.trim() });
-      this.#remoteUrl.addEventListener('input', save);
-      this.#remoteToken.addEventListener('input', save);
-    }
-    this.#bind();
-    this.#render();
-    this.#setStatus('Chargement des NodeDefs MaterialX...');
-    options.library.then((library) => {
-      this.#library = library;
-      this.#render();
-      void this.#validate();
-    }, (error: unknown) => this.#setStatus(`Bibliothèque MaterialX indisponible : ${error instanceof Error ? error.message : String(error)}`, true));
-  }
-
-  get script(): string {
-    return this.#code.value;
-  }
-
-  set script(code: string) {
-    this.#code.value = code;
-    this.#changed();
-  }
-
-  focus(): void {
-    this.#code.focus();
-  }
-
-  /** Run the script without viewer side effects and return its MaterialX document. */
-  async generateXml(options: { filePrefix?: string } = {}): Promise<string> {
-    const library = this.#library ?? await this.#options.library;
-    return toXml(await this.#dryRun(library), library, options);
-  }
-
-  /** Dry run: viewer operations are only validated; loaded documents are cached between runs. */
-  #dryRun(library: ScriptLibrary): Promise<ScriptRun> {
-    const fetchText = (url: string): Promise<string> => {
-      let text = this.#documents.get(url);
-      if (!text) {
-        text = fetch(url).then(async (response) => {
-          if (!response.ok) throw new Error(`HTTP ${response.status}: ${url}`);
-          return response.text();
-        });
-        text.catch(() => this.#documents.delete(url));
-        this.#documents.set(url, text);
-      }
-      return text;
-    };
-    return runScript(this.#code.value, library, { fetchText, ...(this.#options.host ? { host: this.#options.host, dryRun: true } : {}) });
-  }
-
-  /**
-   * Execute the script on the viewer. A script that does not drive the viewer (`scene`, `assign`,
-   * `render`, settings) applies its material to the selected object.
-   */
-  async apply(): Promise<void> {
-    this.#setStatus('Exécution du script…');
-    await this.#guard('Matériau appliqué.', async () => {
-      const library = this.#library ?? await this.#options.library;
-      const prefix = this.#options.filePrefix;
-      const host = this.#options.host;
-      // Messages of long scripts appear while they run.
-      const logs: string[] = [];
-      const live: ScriptHost | undefined = host && {
-        ...host,
-        log: (message) => {
-          host.log?.(message);
-          logs.push(message);
-          this.#setStatus(`Exécution du script…\n${logs.slice(-12).join('\n')}`);
-        },
-      };
-      let run: ScriptRun;
-      try {
-        run = await runScript(this.#code.value, library, {
-          ...(live ? { host: live } : {}), ...(prefix ? { filePrefix: prefix } : {}),
-        });
-      } catch (error) {
-        // Keep the messages logged before the failure visible.
-        if (error instanceof Error && logs.length) error.message += `\n${logs.slice(-12).join('\n')}`;
-        throw error;
-      }
-      this.#xml.value = toXml(run, library);
-      const output = run.logs.length ? `\n${run.logs.join('\n')}` : '';
-      if (run.viewerCommands) return `Script exécuté.${output}`;
-      await this.#options.onApply?.(toXml(run, library, prefix ? { filePrefix: prefix } : {}));
-      return `Matériau appliqué.${output}`;
-    });
-  }
-
-  async scriptToXml(): Promise<void> {
-    await this.#guard('Document MaterialX généré.', async () => { this.#xml.value = await this.generateXml(); });
-  }
-
-  async xmlToScript(): Promise<void> {
-    await this.#guard('Script généré depuis le document MaterialX.', async () => {
-      const library = this.#library ?? await this.#options.library;
-      const xml = await inlineIncludes(this.#xml.value, document.baseURI);
-      this.#code.value = toScript(fromXml(xml, library), library);
-      // The generated script is valid; a pending validation must not replace the status.
-      this.#changed(false);
-    });
-  }
-
-  async materialToScript(): Promise<void> {
-    await this.#guard('Script généré depuis le matériau de l’objet sélectionné.', async () => {
-      const current = await this.#options.currentMaterial?.();
-      if (!current) throw new Error('Aucun matériau disponible pour l’objet sélectionné.');
-      const library = this.#library ?? await this.#options.library;
-      const graph = fromResolvedGraph(current.graph, library, current.name);
-      this.#code.value = toScript(graph, library);
-      this.#xml.value = toXml(graph, library);
-      this.#changed(false);
-    });
-  }
-
-  async export(): Promise<void> {
-    await this.#guard('Document exporté.', async () => {
-      const xml = await this.generateXml();
-      this.#xml.value = xml;
-      const url = URL.createObjectURL(new Blob([xml], { type: 'application/xml' }));
-      const link = Object.assign(document.createElement('a'), { href: url, download: 'material.mtlx' });
-      link.click();
-      setTimeout(() => URL.revokeObjectURL(url), 0);
-    });
-  }
-
-  /** Load the script chosen in the « Scripts de validation » menu into the editor. */
-  loadExample(): boolean {
-    const example = this.#options.examples?.[Number(this.#examples.value)];
-    if (!this.#examples.value || !example) return false;
-    this.script = example.code;
-    return true;
-  }
-
-  /** Load the chosen validation script and run it on the viewer. */
-  async runExample(): Promise<void> {
-    if (!this.loadExample()) {
-      this.#setStatus('Choisir d’abord un script de validation.', true);
-      return;
-    }
-    await this.apply();
-  }
-
-  /**
-   * Run the script on the remote render server: its frames replace the viewer image while it
-   * renders, `log` messages appear in the status and `save(...)` files are downloaded.
-   */
-  async renderRemote(): Promise<void> {
-    const container = this.#options.remoteView;
-    if (!container || this.#remoteRun.disabled) return;
-    const settings = { url: this.#remoteUrl.value.trim(), token: this.#remoteToken.value.trim() };
-    const view = this.#remoteFrames ??= new RemoteRenderView(container);
-    const controller = new AbortController();
-    view.onCancel = () => controller.abort();
-    this.#remoteRun.disabled = true;
-    view.start();
-    const logs: string[] = [];
-    let files = 0;
-    let progress = '';
-    const show = (text: string) => {
-      progress = text;
-      view.status(text);
-      this.#setStatus(`Rendu distant : ${text}${logs.length ? `\n${logs.slice(-12).join('\n')}` : ''}`);
-    };
-    await this.#guard('Rendu distant terminé.', async () => {
-      try {
-        saveRemoteSettings(settings);
-        const result = await runRemoteScript(settings, this.#code.value, (event) => {
-          if (event.type === 'status') {
-            show(event.stage === 'queued' ? `en file d’attente (${event.position ?? 1} avant)`
-              : event.stage === 'loading' ? 'chargement du viewer distant…' : 'exécution du script…');
-          } else if (event.type === 'progress') show(describeRemoteProgress(event.progress) || progress);
-          else if (event.type === 'frame') view.frame(event.image);
-          else if (event.type === 'log') {
-            logs.push(event.level === 'error' ? `Erreur : ${event.message}` : event.message);
-            show(progress);
-          } else {
-            const bytes = Uint8Array.from(atob(event.data), char => char.charCodeAt(0));
-            downloadBlob(new Blob([bytes]), event.name);
-            files++;
-          }
-        }, controller.signal);
-        if (!result.ok) throw new ScriptError(result.message ?? 'Échec du script distant.', result.line);
-        const output = [...(result.logs ?? []), ...(files ? [`${files} fichier(s) téléchargé(s).`] : [])];
-        view.finish(`Terminé. ${progress}`);
-        return `Rendu distant terminé.${output.length ? `\n${output.join('\n')}` : ''}`;
-      } catch (error) {
-        if (controller.signal.aborted) {
-          view.finish('Rendu distant annulé.');
-          return 'Rendu distant annulé.';
-        }
-        view.finish(`Échec : ${error instanceof Error ? error.message : String(error)}`);
-        throw error;
-      } finally {
-        this.#remoteRun.disabled = false;
-      }
-    });
-  }
-
-  /** Run an editor action; it may return a status message replacing `success`. */
-  async #guard(success: string, action: () => Promise<string | void | undefined>): Promise<void> {
-    clearTimeout(this.#validateTimer);
-    // Results of validations started before this action are obsolete.
-    this.#validation++;
-    try {
-      this.#setStatus((await action()) ?? success);
-    } catch (error) {
-      this.#setStatus(this.#describe(error), true);
-    }
-  }
-
-  #describe(error: unknown): string {
-    const message = error instanceof Error ? error.message : String(error);
-    return error instanceof ScriptError && error.line !== undefined ? `Ligne ${error.line} : ${message}` : message;
-  }
-
-  #setStatus(text: string, error = false): void {
-    this.#status.textContent = text;
-    this.#status.classList.toggle('error', error);
-  }
-
-  #bind(): void {
-    this.element.addEventListener('click', (event) => {
-      const action = (event.target as HTMLElement).closest<HTMLButtonElement>('button[data-action]')?.dataset['action'];
-      if (action === 'apply') void this.apply();
-      else if (action === 'to-xml') void this.scriptToXml();
-      else if (action === 'from-xml') void this.xmlToScript();
-      else if (action === 'from-material') void this.materialToScript();
-      else if (action === 'export') void this.export();
-      else if (action === 'run-example') void this.runExample();
-      else if (action === 'remote') void this.renderRemote();
-      else if (action === 'close') this.element.dispatchEvent(new CustomEvent('script-editor-close', { bubbles: true }));
-    });
-    // Keep viewer shortcuts from reacting to typing in the editor.
-    this.element.addEventListener('keydown', event => event.stopPropagation());
-    this.#examples.addEventListener('change', () => this.loadExample());
-    this.#code.addEventListener('input', (event) => {
-      this.#changed();
-      const typed = (event as InputEvent).data ?? '';
-      if (/[\w.$"' ]/.test(typed.slice(-1))) this.#complete(false);
-      else this.#closeCompletions();
-    });
-    this.#code.addEventListener('scroll', () => {
-      this.#highlight.scrollTop = this.#code.scrollTop;
-      this.#highlight.scrollLeft = this.#code.scrollLeft;
-      this.#closeCompletions();
-    });
-    this.#code.addEventListener('keydown', event => this.#keydown(event));
-    this.#code.addEventListener('blur', () => setTimeout(() => this.#closeCompletions(), 150));
-    for (const type of ['click', 'keyup', 'focus'] as const) this.#code.addEventListener(type, () => this.#updateHelper());
-    this.#completions.addEventListener('mousedown', (event) => {
-      const item = (event.target as HTMLElement).closest('li');
-      if (!item) return;
-      event.preventDefault();
-      this.#accept(Number(item.dataset['index']));
-    });
-  }
-
-  #keydown(event: KeyboardEvent): void {
-    const open = !this.#completions.hidden;
-    if (open && (event.key === 'ArrowDown' || event.key === 'ArrowUp')) {
-      event.preventDefault();
-      this.#select(this.#selected + (event.key === 'ArrowDown' ? 1 : -1));
-    } else if (open && (event.key === 'Enter' || event.key === 'Tab')) {
-      event.preventDefault();
-      this.#accept(this.#selected);
-    } else if (open && event.key === 'Escape') {
-      event.preventDefault();
-      this.#closeCompletions();
-    } else if (event.key === ' ' && event.ctrlKey) {
-      event.preventDefault();
-      this.#complete(true);
-    } else if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
-      event.preventDefault();
-      void this.apply();
-    } else if (event.key === 'Tab' && !event.shiftKey) {
-      event.preventDefault();
-      this.#insert(this.#code.selectionStart, this.#code.selectionEnd, '  ');
-    } else if (event.key === 'Escape') {
-      this.element.dispatchEvent(new CustomEvent('script-editor-close', { bubbles: true }));
-    }
-  }
-
-  #insert(from: number, to: number, text: string): void {
-    this.#code.focus();
-    this.#code.setSelectionRange(from, to);
-    // execCommand keeps the native undo stack; fall back to a direct edit.
-    if (!document.execCommand('insertText', false, text)) {
-      this.#code.setRangeText(text, from, to, 'end');
-      this.#changed();
-    }
-  }
-
-  #changed(validate = true): void {
-    this.#render();
-    this.#updateHelper();
-    clearTimeout(this.#validateTimer);
-    if (validate) this.#validateTimer = setTimeout(() => void this.#validate(), 250);
-  }
-
-  #render(): void {
-    this.#highlight.innerHTML = highlightScript(this.#code.value, this.#library);
-    this.#highlight.scrollTop = this.#code.scrollTop;
-  }
-
-  async #validate(): Promise<void> {
-    if (!this.#library) return;
-    const validation = ++this.#validation;
-    try {
-      const run = await this.#dryRun(this.#library);
-      if (validation !== this.#validation) return;
-      const count = run.nodes.length;
-      const commands = run.viewerCommands ? `, ${run.viewerCommands} commande${run.viewerCommands > 1 ? 's' : ''} viewer` : '';
-      this.#setStatus(`✓ Script valide : ${count} nœud${count > 1 ? 's' : ''}${commands}.`);
-    } catch (error) {
-      if (validation === this.#validation) this.#setStatus(this.#describe(error), true);
-    }
-  }
-
-  #complete(explicit: boolean): void {
-    if (!this.#library) return;
-    const caret = this.#code.selectionStart;
-    const prefix = this.#code.value.slice(0, caret);
-    const result = scriptCompletions(prefix, this.#code.value, this.#library);
-    if (!result || !result.items.length || (!explicit && result.from === caret && !/(?:\bnew\s+|\.|\(\s*["'])$/.test(prefix))) {
-      this.#closeCompletions();
-      return;
-    }
-    this.#items = result.items;
-    this.#from = result.from;
-    this.#completions.innerHTML = result.items.map((item, index) =>
-      `<li role="option" data-index="${index}" data-testid="script-completion"><b>${escapeHtml(item.label)}</b><span>${escapeHtml(item.detail)}</span></li>`).join('');
-    const lines = prefix.split('\n');
-    const style = getComputedStyle(this.#code);
-    const lineHeight = parseFloat(style.lineHeight) || 18;
-    const context = document.createElement('canvas').getContext('2d');
-    if (context) context.font = `${style.fontSize} ${style.fontFamily}`;
-    const charWidth = context?.measureText('M').width || 7.8;
-    const column = lines.at(-1)!.replace(/\t/g, '  ').length;
-    this.#completions.style.top = `${8 + lines.length * lineHeight - this.#code.scrollTop + 2}px`;
-    this.#completions.style.left = `${Math.max(0, 8 + column * charWidth - this.#code.scrollLeft)}px`;
-    this.#completions.hidden = false;
-    this.#select(0);
-  }
-
-  #select(index: number): void {
-    this.#selected = (index + this.#items.length) % this.#items.length;
-    this.#completions.querySelectorAll('li').forEach((item, i) => item.setAttribute('aria-selected', String(i === this.#selected)));
-    this.#completions.children[this.#selected]?.scrollIntoView({ block: 'nearest' });
-  }
-
-  #accept(index: number): void {
-    const item = this.#items[index];
-    if (!item) return;
-    this.#closeCompletions();
-    const caret = this.#code.selectionStart;
-    let end = caret;
-    while (/[\w$]/.test(this.#code.value[end] ?? '')) end++;
-    this.#insert(this.#from, end, item.insert);
-    if (item.insert.endsWith('()')) {
-      const position = this.#code.selectionStart - 1;
-      this.#code.setSelectionRange(position, position);
-    }
-    this.#updateHelper();
-  }
-
-  #closeCompletions(): void {
-    this.#completions.hidden = true;
-    this.#items = [];
-  }
-
-  /** Show a value editor for the `node.input = value` line under the caret. */
-  #updateHelper(): void {
-    const library = this.#library;
-    const text = this.#code.value;
-    const lineIndex = text.slice(0, this.#code.selectionStart).split('\n').length - 1;
-    const match = ASSIGNMENT.exec(text.split('\n')[lineIndex] ?? '');
-    const def = library && match ? scriptVariables(text, library).get(match[2]!) : undefined;
-    const port = def && isColorspaceAttribute(def, match![3]!)
-      ? { name: 'colorspace', type: 'string', default: '', enum: MATERIALX_COLORSPACES }
-      : def?.inputs.find(input => input.name === match![3]);
-    if (!port || !acceptsValue(port.type)) {
-      this.#helper.hidden = true;
-      this.#helperLine = -1;
-      return;
-    }
-    const literal = parseLiteral(match![5]!);
-    if (lineIndex === this.#helperLine && this.#helper.contains(document.activeElement)) return;
-    this.#helperLine = lineIndex;
-    const value = literal ?? port.default;
-    this.#helper.replaceChildren();
-    const label = document.createElement('code');
-    label.textContent = `${match![2]}.${port.name} : ${port.type}`;
-    this.#helper.append(label);
-    if (literal === undefined && match![5]!.trim()) {
-      const info = document.createElement('span');
-      info.textContent = `expression : ${match![5]!.trim()}`;
-      this.#helper.append(info);
-      this.#helper.hidden = false;
-      return;
-    }
-    const write = (next: ScriptValue): void => this.#writeValue(lineIndex, next);
-    const input = (type: string, attributes: Record<string, string>, testId: string): HTMLInputElement => {
-      const element = Object.assign(document.createElement('input'), { type });
-      for (const [key, attribute] of Object.entries(attributes)) element.setAttribute(key, attribute);
-      element.dataset['testid'] = testId;
-      this.#helper.append(element);
-      return element;
-    };
-    const vector = Array.isArray(value) ? value as readonly number[] : undefined;
-    if ((port.type === 'color3' || port.type === 'color4') && vector) {
-      const picker = input('color', { value: toHex(vector), title: 'Choisir la couleur' }, 'helper-color');
-      picker.addEventListener('input', () => write([...fromHex(picker.value), ...vector.slice(3)]));
-    } else if (port.type === 'boolean') {
-      const box = input('checkbox', {}, 'helper-boolean');
-      box.checked = value === true;
-      box.addEventListener('change', () => write(box.checked));
-    } else if (port.type === 'float' || port.type === 'integer') {
-      const current = typeof value === 'number' ? value : 0;
-      const min = port.min ?? (port.type === 'integer' ? 0 : Math.min(0, current));
-      const max = port.max ?? Math.max(port.type === 'integer' ? 10 : 1, current);
-      const step = port.type === 'integer' ? '1' : String((max - min) / 1000);
-      const range = input('range', { min: String(min), max: String(max), step, value: String(current) }, 'helper-range');
-      const number = input('number', { step: port.type === 'integer' ? '1' : 'any', value: String(current) }, 'helper-number');
-      const update = (source: HTMLInputElement): void => {
-        const next = port.type === 'integer' ? Math.round(Number(source.value)) : Number(source.value);
-        if (!Number.isFinite(next)) return;
-        range.value = number.value = String(next);
-        write(next);
-      };
-      range.addEventListener('input', () => update(range));
-      number.addEventListener('input', () => update(number));
-    } else if (port.enum && typeof value === 'string') {
-      const select = document.createElement('select');
-      select.dataset['testid'] = 'helper-enum';
-      for (const option of port.enum) select.append(new Option(option, option, false, option === value));
-      select.addEventListener('change', () => write(select.value));
-      this.#helper.append(select);
-    } else if (vector) {
-      const fields = vector.map((component, i) => input('number', { step: 'any', value: String(component), 'aria-label': `composante ${i}` }, 'helper-vector'));
-      for (const field of fields) field.addEventListener('input', () => write(fields.map(f => Number(f.value) || 0)));
-    } else {
-      const field = input('text', { value: String(value ?? '') }, 'helper-text');
-      field.addEventListener('change', () => write(field.value));
-    }
-    this.#helper.hidden = false;
-  }
-
-  #writeValue(lineIndex: number, value: ScriptValue): void {
-    const lines = this.#code.value.split('\n');
-    const match = ASSIGNMENT.exec(lines[lineIndex] ?? '');
-    if (!match) return;
-    lines[lineIndex] = `${match[1] ?? ''}${match[2]}.${match[3]}${match[4]}${formatValue(value)}${match[6] || ';'}`;
-    const { scrollTop } = this.#code;
-    this.#code.value = lines.join('\n');
-    const caret = lines.slice(0, lineIndex + 1).join('\n').length;
-    this.#code.setSelectionRange(caret, caret);
-    this.#code.scrollTop = scrollTop;
-    this.#changed();
-  }
-}
 
 export interface ScriptEditorAttachment {
-  editor: MaterialXScriptEditor;
-  toggle(visible?: boolean): void;
+  /** The editor, created (and its CodeMirror code loaded) on first use. */
+  readonly editor: Promise<MaterialXScriptEditor>;
+  toggle(visible?: boolean): Promise<void>;
 }
 
-/** Add the script editor panel, its toolbar button and the F2 shortcut to the page. */
+/**
+ * Add the « Script » button to the activity bar (`toolbar`) and the F2 shortcut. The panel docks in
+ * `options.dock` and reopens if it was open on the last visit. A `#script=…` page address (share
+ * link) opens the editor with that script, which is never run automatically.
+ */
 export function attachScriptEditor(toolbar: HTMLElement | null, options: ScriptEditorOptions): ScriptEditorAttachment {
-  let editor: MaterialXScriptEditor | undefined;
-  const button = document.createElement('button');
+  let editor: Promise<MaterialXScriptEditor> | undefined;
+  const button = activityButton(document.createElement('button'), 'code', 'Éditeur de script MaterialX (F2)');
   button.type = 'button';
   button.id = 'open-script-editor';
-  button.textContent = 'Script';
-  button.title = 'Éditeur de script MaterialX (F2)';
   button.setAttribute('aria-expanded', 'false');
   const attachment: ScriptEditorAttachment = {
     get editor() {
-      if (!editor) {
-        editor = new MaterialXScriptEditor(options);
-        editor.element.hidden = true;
-        editor.element.addEventListener('script-editor-close', () => attachment.toggle(false));
-        document.body.append(editor.element);
-      }
+      editor ??= import('./script-editor-view.ts').then(({ MaterialXScriptEditor: Editor }) => {
+        const created = new Editor(options);
+        created.element.hidden = true;
+        created.element.addEventListener('script-editor-close', () => void attachment.toggle(false));
+        (options.dock ?? document.body).append(created.element);
+        return created;
+      });
       return editor;
     },
-    toggle(visible) {
-      const panel = attachment.editor.element;
+    async toggle(visible) {
+      const panel = (await attachment.editor).element;
       panel.hidden = !(visible ?? panel.hidden);
       button.setAttribute('aria-expanded', String(!panel.hidden));
-      if (!panel.hidden) attachment.editor.focus();
+      rememberPanel('script', !panel.hidden);
+      if (!panel.hidden) (await attachment.editor).focus();
     },
   };
-  button.addEventListener('click', () => attachment.toggle());
+  button.addEventListener('click', () => void attachment.toggle());
   toolbar?.append(button);
   document.addEventListener('keydown', (event) => {
     if (event.key === 'F2') {
       event.preventDefault();
-      attachment.toggle();
+      void attachment.toggle();
     }
   });
+  void sharedScriptOf().then(async (code) => {
+    if (code === undefined) {
+      if (panelVisible('script', false)) await attachment.toggle(true);
+      return;
+    }
+    // The link is consumed: a reload keeps the editor's draft instead of reopening the link.
+    history.replaceState(history.state, '', location.pathname + location.search);
+    const opened = await attachment.editor;
+    opened.loadShared(code);
+    await attachment.toggle(true);
+  }, async (error: unknown) => {
+    const opened = await attachment.editor;
+    opened.report(error);
+    await attachment.toggle(true);
+  });
   return attachment;
+}
+const escapeRegExp = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/**
+ * `code` with `node.input = expression;`: the input's last assignment is rewritten (keeping its
+ * indentation and comment), or a line is added after the node's last assignment (else after
+ * `nodeLine`, the line creating it, else at the end). Without `expression`, its assignments are removed.
+ */
+export function setScriptInput(code: string, node: string, input: string, expression: string | undefined, nodeLine?: number): string {
+  const lines = code.split('\n');
+  const assignment = new RegExp(`^(\\s*)${escapeRegExp(node)}\\.${escapeRegExp(input)}\\s*=(?!=).*?(?:;\\s*(\\/\\/.*))?\\s*;?\\s*$`);
+  const indices = lines.flatMap((line, index) => assignment.test(line) ? [index] : []);
+  if (expression === undefined) return lines.filter((_, index) => !indices.includes(index)).join('\n');
+  const last = indices.at(-1);
+  if (last !== undefined) {
+    const match = assignment.exec(lines[last]!)!;
+    lines[last] = `${match[1]}${node}.${input} = ${expression};${match[2] ? ` ${match[2]}` : ''}`;
+    return lines.join('\n');
+  }
+  const member = new RegExp(`^\\s*${escapeRegExp(node)}\\.[\\w$]+\\s*=(?!=)`);
+  let after = nodeLine !== undefined && nodeLine >= 1 && nodeLine <= lines.length ? nodeLine - 1 : -1;
+  lines.forEach((line, index) => { if (member.test(line)) after = Math.max(after, index); });
+  const statement = `${after >= 0 ? /^\s*/.exec(lines[after]!)![0] : ''}${node}.${input} = ${expression};`;
+  if (after < 0) {
+    if (lines.at(-1) === '') lines.splice(lines.length - 1, 0, statement);
+    else lines.push(statement);
+  } else lines.splice(after + 1, 0, statement);
+  return lines.join('\n');
+}
+
+/** Script expression of a literal value (`[0.8, 0.2, 0.1]`, `0.5`, `true`, `"text"`). */
+export function scriptLiteral(value: ScriptValue): string {
+  return formatValue(value);
 }

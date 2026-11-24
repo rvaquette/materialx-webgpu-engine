@@ -1,7 +1,8 @@
 # Scripts de matériaux MaterialX
 
 Le viewer permet de créer un matériau MaterialX avec un script JavaScript
-minimal. Ouvrir l'éditeur avec le bouton **Script** ou la touche **F2**.
+minimal. Ouvrir l'éditeur avec l'icône **Script** de la barre latérale ou la
+touche **F2** ; il s'ancre à droite du rendu (F3 masque les contrôles de rendu).
 
 ## Syntaxe
 
@@ -242,6 +243,35 @@ pendant l'exécution et les fichiers enregistrés sont téléchargés.
   page du viewer.
 - **Exporter .mtlx** télécharge le document ; Échap ferme l'éditeur.
 
+L'éditeur est construit sur CodeMirror 6 (chargé à la première ouverture) : historique
+d'annulation, recherche (Ctrl+F), repliage, appariement des parenthèses. Les boutons de
+sa barre d'outils sont des icônes ; leur nom et leur raccourci s'affichent au survol.
+
+- **Info-bulles** : au survol d'une classe, d'une entrée ou d'une sortie, type, valeur
+  par défaut, plage, `enum` et NodeDef ; au survol d'une fonction du viewer, de
+  `render.<paramètre>` ou de `Math.<fonction>`, leur documentation.
+- **Erreurs** soulignées à la ligne fautive, avec un marqueur dans la marge.
+- **Exécution** : ▶ (Ctrl+Entrée) exécute ; **Pause / Reprendre** (F6) suspend le script
+  avant sa prochaine instruction **et** l'accumulation du path tracer, y compris pendant un
+  `await render(n)` ; **Arrêter** (Maj+F5) interrompt le script, même pendant une opération du
+  viewer. La ligne en cours d'exécution est surlignée.
+- **Débogueur** (F5) : un clic dans la marge gauche pose un point d'arrêt. Le script s'y arrête,
+  l'onglet **Variables** montre les variables du script, puis **Pas à pas** (F10) ou
+  **Continuer** (F8). Les fonctions non `async` du script s'exécutent sans pause.
+- **Onglets** : **Console** (messages `log` horodatés, erreurs avec lien vers la ligne),
+  **Variables**, **Graphe**, **XML**.
+- **Graphe** (litegraph) : le graphe du script, mis à jour à chaque validation. Les valeurs
+  se modifient dans les nœuds, et un lien tiré d'une sortie vers une entrée (ou détaché)
+  **réécrit le script** (`noeud.entree = …`, Ctrl+Z pour annuler) ; clic droit : ajouter
+  une entrée ; double-clic : ligne qui crée le nœud. Seuls les nœuds affectés à une variable
+  (`x = new …()`) sont modifiables ainsi.
+- **Mes scripts** : scripts nommés enregistrés dans le navigateur (IndexedDB, Ctrl+S),
+  import et export de fichiers `.js`. Le script en cours est conservé d'une visite à l'autre.
+- **Partage** : l'icône lien copie une adresse `#script=…` (script compressé). Elle ouvre
+  l'éditeur avec ce script **sans l'exécuter**.
+- **Modèles** : scripts types à insérer (rendu d'une scène, comparaison de matériaux,
+  convergence et AOV, séquence animée…).
+
 ## Import des documents MaterialX
 
 Un script n'a pas de `nodegraph` : l'import les **aplatit**. Les nœuds des
@@ -277,9 +307,19 @@ identiques au pixel près.
 ## Code
 
 - [src/materialx/script-api.ts](../src/materialx/script-api.ts) : bibliothèque de
-  NodeDefs, exécution des scripts, conversions XML ⇄ script.
-- [src/materialx/script-editor.ts](../src/materialx/script-editor.ts) : éditeur
-  et attachement au viewer.
+  NodeDefs, exécution des scripts (instrumentation des lignes, arrêt, pauses du
+  débogueur), conversions XML ⇄ script.
+- [src/materialx/script-editor.ts](../src/materialx/script-editor.ts) : langage
+  (colorisation, complétions, info-bulles, réécriture des entrées depuis le graphe)
+  et bouton de la barre latérale.
+- [src/materialx/script-editor-view.ts](../src/materialx/script-editor-view.ts) :
+  éditeur CodeMirror, exécution, débogueur, onglets, rendu distant.
+- [src/materialx/script-store.ts](../src/materialx/script-store.ts) : brouillon,
+  Mes scripts (IndexedDB), liens de partage ;
+  [script-templates.ts](../src/materialx/script-templates.ts) : modèles.
+- [src/ui/node-graph-view.ts](../src/ui/node-graph-view.ts) : vue litegraph
+  (`@comfyorg/litegraph` 0.17.2, version figée : le paquet n'est plus publié),
+  partagée avec la boîte de dialogue « Graphe du matériau ».
 
 ## Tests
 

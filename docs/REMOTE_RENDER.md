@@ -16,7 +16,7 @@ Viewer (https://rvaquette.github.io/...)  ── script, HTTPS ──▶  tunnel
 
 ```bash
 npm run build          # dist/ : le viewer exécuté par le serveur
-npm run render:remote -- [--port 8787] [--origin https://rvaquette.github.io] [--timeout 1800]
+npm run render:remote -- [--port 8787] [--origin https://rvaquette.github.io] [--timeout 1800] [--max-pause 1800]
                          [--frame-interval 1000] [--max-queue 4] [--gpu high-performance|low-power|default]
 ```
 
@@ -38,9 +38,11 @@ node -e "console.log(require('crypto').randomBytes(32).toString('base64url'))"
 API (`127.0.0.1` uniquement) :
 
 - `POST /jobs` (`application/json`, `{ "script": "..." }`, 512 Kio maximum) répond un flux
-  `text/event-stream` : `status` (`queued`, `loading`, `running`), `progress` (même contenu que
-  `stats()`), `frame` (canvas du viewer en WebP), `log`, `file` (`save(...)`, en base64), puis
-  `done` (`{ ok, message, line, logs }`). Fermer la connexion annule le script.
+  `text/event-stream` : `job` (`{ id }`), `status` (`queued`, `loading`, `running`, `paused`),
+  `progress` (même contenu que `stats()`), `frame` (canvas du viewer en WebP), `log`, `file`
+  (`save(...)`, en base64), puis `done` (`{ ok, message, line, logs }`). Fermer la connexion annule le script.
+- `POST /jobs/<id>/pause`, `/resume`, `/cancel` (`application/json`, réservé à l'auteur du job) :
+  la pause gèle le script avant sa prochaine instruction et l'accumulation du path tracer.
 - `GET /status` : `{ busy, queued, maxQueue }`. `GET /` : page de connexion pour Cloudflare Access.
 
 Un script à la fois ; les suivants attendent dans une file (`--max-queue`, sinon HTTP 429).
@@ -57,7 +59,8 @@ Un script est du JavaScript exécuté par le serveur. Les protections sont :
    ne peut joindre que le serveur statique local de `dist/`. Les autres requêtes, WebSockets,
    WebRTC et service workers sont bloqués : pas d'accès au réseau local ni d'exfiltration. Le serveur
    ne sert que `dist/` (pas les sources) et `save()` n'écrit rien sur le disque du serveur.
-4. **Limites** : délai par script (`--timeout`), 256 Mio de fichiers par script, file bornée.
+4. **Limites** : temps de rendu par script (`--timeout`, pauses exclues), pause annulée au-delà de
+   `--max-pause`, 256 Mio de fichiers par script, file bornée.
 5. **Exposition** : le serveur n'écoute que sur `127.0.0.1` ; seul un tunnel ou un proxy HTTPS
    l'expose. Le jeton n'est jamais dans le site publié : il est saisi dans le viewer et gardé
    dans le `localStorage` du navigateur.
@@ -68,11 +71,13 @@ les USD binaires s'y chargent, contrairement à GitHub Pages.
 
 ## Viewer
 
-Éditeur de script (**Script** ou F2) → **Rendu distant** : URL du serveur (HTTPS, ou HTTP sur
-`localhost`) et jeton, puis **Rendu distant**. Les images du serveur remplacent celles du viewer
-pendant le rendu, avec le nombre d'échantillons, le débit et le bruit ; **Annuler** arrête le script,
-**Fermer** revient au viewer local. Les messages `log` s'affichent dans l'éditeur et les fichiers
-`save(...)` sont téléchargés. Code : [src/remote-render.ts](../src/remote-render.ts).
+Éditeur de script (icône **Script** ou F2) → **Rendu distant** : URL du serveur (HTTPS, ou HTTP sur
+`localhost`) et jeton, enregistrés dès la saisie, puis l'icône nuage. Les images du serveur remplacent
+celles du viewer pendant le rendu, avec le nombre d'échantillons, le débit et le bruit. **Pause /
+Reprendre** (dans la vue ou la barre d'outils de l'éditeur, F6) gèle le script au début de sa
+prochaine instruction et l'accumulation du path tracer sur le serveur ; **Arrêter** annule le job ;
+**Fermer** revient au viewer local. Les messages `log` s'affichent dans la console de l'éditeur et
+les fichiers `save(...)` sont téléchargés. Code : [src/remote-render.ts](../src/remote-render.ts).
 
 ## Exposer le serveur avec Cloudflare Tunnel
 

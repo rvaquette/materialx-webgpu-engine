@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { ScriptLibrary } from '../../src/materialx/script-api.ts';
-import { highlightScript, scriptCompletions, scriptVariables } from '../../src/materialx/script-editor.ts';
+import { ScriptLibrary, runScript } from '../../src/materialx/script-api.ts';
+import { highlightScript, scriptCompletions, scriptHover, scriptLiteral, scriptVariables, setScriptInput } from '../../src/materialx/script-editor.ts';
+import { layoutScriptGraph } from '../../src/materialx/script-graph-layout.ts';
+import { decodeSharedScript, encodeSharedScript, sharedScriptOf } from '../../src/materialx/script-store.ts';
 
 const LIBRARY = ScriptLibrary.fromXml([`<materialx version="1.39">
   <nodedef name="ND_image_color3" node="image">
@@ -64,5 +66,51 @@ describe('script editor language support', () => {
     ]);
     expect(scriptCompletions(`${CODE}m.fg = img.`, CODE, LIBRARY)?.items[0]?.label).toBe('out');
     expect(scriptCompletions(`${CODE}unknown.`, CODE, LIBRARY)).toBeUndefined();
+  });
+
+  it('rewrites node inputs edited in the graph', () => {
+    const code = 'img = new Image();\nimg.file = "https://a/b.png";\nm = new Mix();\nm.fg = [1, 0, 0]; // rouge\nm.mix = 0.5;\nsurface = 1;\n';
+    expect(setScriptInput(code, 'm', 'fg', scriptLiteral([0, 1, 0]))).toContain('m.fg = [0, 1, 0]; // rouge');
+    expect(setScriptInput(code, 'img', 'file', '"c.png"')).toContain('img.file = "c.png";\nm = new Mix();');
+    expect(setScriptInput(code, 'm', 'bg', 'img.out', 3)).toContain('m.mix = 0.5;\nm.bg = img.out;\nsurface');
+    expect(setScriptInput('x = 1;', 'n', 'octaves', '4')).toBe('x = 1;\nn.octaves = 4;');
+    expect(setScriptInput(code, 'm', 'fg', undefined)).not.toContain('m.fg');
+    expect(setScriptInput(code, 'm', 'fgx', undefined)).toBe(code);
+  });
+
+  it('documents the word under the pointer', () => {
+    const code = `${CODE}m.fg = img.out;\nrender.backend = "raster";\nx = Math.sin(1);\nawait scene("a.usda");`;
+    const at = (text: string, offset = 1) => scriptHover(code, code.indexOf(text) + offset, LIBRARY);
+    expect(at('Image')).toMatchObject({ title: 'new Image() : nœud image', lines: [expect.stringContaining('color3'), 'Variantes : ND_image_color3'] });
+    expect(at('fg')).toMatchObject({ title: 'm.fg : entrée float', lines: ['Défaut : 0', 'NodeDef : ND_mix_float'] });
+    expect(at('out;')).toMatchObject({ title: 'img.out : sortie color3' });
+    expect(at('backend')).toMatchObject({ title: 'render.backend', lines: ['Moteur de rendu', 'Valeurs : "raster", "pathtracing", "disney"'] });
+    expect(at('sin')).toMatchObject({ title: 'Math.sin' });
+    expect(at('scene(')?.lines[0]).toMatch(/charge une scène/);
+    expect(at('img =', 0)).toMatchObject({ from: code.indexOf('img ='), title: 'img : Image → color3' });
+    expect(at('"a.usda"', 3)).toBeUndefined();
+  });
+});
+
+describe('script editor panels and sharing', () => {
+  it('lays the graph out from sources to the material', async () => {
+    const run = await runScript('img = new Image();\nf = new Mix("float");\nm = new Mix();\nm.fg = img.out;\nm.mix = f.out;', LIBRARY);
+    const layout = layoutScriptGraph(run.nodes);
+    expect(layout.boxes.map(box => [box.node.name, box.level, box.node.line])).toEqual([['img', 0, 1], ['f', 0, 2], ['m', 1, 3]]);
+    expect(layout.boxes[1]!.y).toBeGreaterThan(layout.boxes[0]!.y);
+    expect(layout.links.map(link => `${link.from.node.name}.${link.output}->${link.to.node.name}.${link.input} ${link.slot}/${link.slots}`))
+      .toEqual(['img.out->m.fg 0/2', 'f.out->m.mix 1/2']);
+    expect(layout.width).toBeGreaterThan(layout.boxes[2]!.x);
+  });
+
+  it('round-trips scripts through share links and rejects corrupt ones', async () => {
+    const code = `// accents é ✓\n${'surface.base_color = [0.8, 0.2, 0.1];\n'.repeat(50)}`;
+    const value = await encodeSharedScript(code);
+    expect(value).toMatch(/^[\w-]+$/);
+    expect(value.length).toBeLessThan(code.length / 4);
+    expect(await decodeSharedScript(value)).toBe(code);
+    expect(await sharedScriptOf(`#other=1&script=${value}`)).toBe(code);
+    expect(await sharedScriptOf('#other=1')).toBeUndefined();
+    await expect(decodeSharedScript('not-a-deflate-stream')).rejects.toThrow('Lien de script invalide.');
   });
 });

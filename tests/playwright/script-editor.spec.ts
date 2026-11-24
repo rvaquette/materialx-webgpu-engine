@@ -6,7 +6,9 @@ const SOURCE_SCENE = '/?entry=./scenes/standard-shader-ball/standard-shader-ball
 
 interface Editor {
   panel: Locator;
+  /** CodeMirror's editable content (typing, shortcuts). */
   code: Locator;
+  /** Colored tokens (`.tok-*`) live in the editor content. */
   highlight: Locator;
   completions: Locator;
   helper: Locator;
@@ -18,13 +20,20 @@ function editor(page: Page): Editor {
   const panel = page.locator('#script-editor-panel');
   return {
     panel,
-    code: panel.getByTestId('script-code'),
-    highlight: panel.getByTestId('script-highlight'),
-    completions: panel.getByTestId('script-completions'),
+    code: panel.locator('.cm-content'),
+    highlight: panel.getByTestId('script-code'),
+    completions: page.locator('.cm-tooltip-autocomplete'),
     helper: panel.getByTestId('script-value-helper'),
     status: panel.getByTestId('script-status'),
     xml: panel.getByTestId('script-xml'),
   };
+}
+
+/** Script text of the editor (the panel's `script` property). */
+const scriptOf = (e: Editor): Promise<string> => e.panel.evaluate(element => (element as HTMLElement & { script: string }).script);
+
+async function setScript(e: Editor, code: string): Promise<void> {
+  await e.panel.evaluate((element, text) => { (element as HTMLElement & { script: string }).script = text; }, code);
 }
 
 const demo = (info: TestInfo): boolean => info.project.name === 'demo';
@@ -48,7 +57,7 @@ async function openEditor(page: Page, url = '/'): Promise<Editor> {
 }
 
 async function expectCode(e: Editor, text: string): Promise<void> {
-  await expect(e.code).toHaveValue(new RegExp(text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+  await expect.poll(() => scriptOf(e)).toContain(text);
 }
 
 type Screenshot = Awaited<ReturnType<Locator['screenshot']>>;
@@ -77,13 +86,11 @@ async function imageDifference(page: Page, a: Screenshot, b: Screenshot): Promis
 
 /** Put the caret at the end of the first line containing `text`. */
 async function caretOn(e: Editor, text: string): Promise<void> {
-  await e.code.evaluate((element, needle) => {
-    const area = element as HTMLTextAreaElement;
-    const start = area.value.indexOf(needle);
-    const end = area.value.indexOf('\n', start);
-    area.focus();
-    area.setSelectionRange(end, end);
-  }, text);
+  const line = (await scriptOf(e)).split('\n').findIndex(candidate => candidate.includes(text));
+  expect(line).toBeGreaterThanOrEqual(0);
+  await e.code.click();
+  await e.code.press('Control+Home');
+  for (let i = 0; i < line; i++) await e.code.press('ArrowDown');
   await e.code.press('End');
 }
 
@@ -110,38 +117,98 @@ test('colorise le script et signale les entrées inconnues', async ({ page }, in
   await expect(e.panel).toBeVisible();
 });
 
+test('débogue un script : point d’arrêt, variables, pas à pas, arrêt', async ({ page }, info) => {
+  const e = await openEditor(page);
+  await setScript(e, 'a = 1;\nb = a + 1;\nfor (let i = 0; i < 3; i++) {\n  c = i * 2;\n}\nlog("fin " + c);');
+  await expect(e.status).toContainText('Script valide');
+  await e.panel.locator('.cm-breakpoint-gutter .cm-gutterElement').nth(4).click();
+  await e.panel.getByTestId('script-debug').click();
+  await expect(e.status).toContainText('Pause ligne 4');
+  await expect(e.panel.locator('.cm-paused-line')).toHaveCount(1);
+  const variables = e.panel.getByTestId('script-variables');
+  const cells = variables.locator('td');
+  await expect(cells).toHaveText(['a', '1', 'b', '2']);
+  await pause(page, info, 2500);
+  await e.panel.getByTestId('script-step').click();
+  await expect(cells).toHaveText(['a', '1', 'b', '2', 'c', '0']);
+  await e.panel.getByTestId('script-pause').click();
+  await expect(cells).toHaveText(['a', '1', 'b', '2', 'c', '2']);
+  await pause(page, info);
+  await e.panel.getByTestId('script-stop').click();
+  await expect(e.status).toHaveText('Script arrêté à la ligne 4.');
+  await expect(e.panel.getByTestId('script-apply')).toBeEnabled();
+  await expect(e.panel.locator('.cm-paused-line')).toHaveCount(0);
+});
+
+test('documente au survol, enregistre, partage et insère des modèles', async ({ page, context }, info) => {
+  await context.grantPermissions(['clipboard-read', 'clipboard-write']);
+  const e = await openEditor(page);
+  await e.panel.locator('.tok-input', { hasText: 'octaves' }).hover();
+  await expect(page.getByTestId('script-hover')).toContainText('noise.octaves : entrée integer');
+  await e.panel.getByTestId('script-tab-graph').click();
+  await expect(e.panel.getByTestId('script-graph-summary')).toHaveText('Graphe : 3 nœuds, 2 liens.');
+  // Editing in the litegraph canvas rewrites the script: the octaves widget's right arrow adds 1.
+  const graph = e.panel.locator('.mx-node-graph');
+  const arrow = await graph.evaluate(element => (element as HTMLElement & {
+    mxGraph: { point(id: string, kind: string, name: string): { x: number; y: number } | undefined };
+  }).mxGraph.point('noise', 'widget', 'octaves'));
+  await page.mouse.click(arrow!.x, arrow!.y);
+  await expectCode(e, 'noise.octaves = 5;');
+  await pause(page, info);
+
+  await e.panel.getByTestId('script-name').fill('essai');
+  await e.panel.getByTestId('script-save').click();
+  await expect(e.panel.getByTestId('script-console')).toContainText('Script « essai » enregistré dans Mes scripts.');
+  await setScript(e, '');
+  await e.panel.getByTestId('script-templates').selectOption({ label: 'Rendu path tracing d’une scène' });
+  await expectCode(e, 'await render(256);');
+  await e.panel.getByTestId('script-library').selectOption('essai');
+  await expectCode(e, 'noise.octaves = 5;');
+
+  await e.panel.getByTestId('script-share').click();
+  await expect(e.panel.getByTestId('script-console')).toContainText('Lien de partage copié');
+  const link = await page.evaluate(() => navigator.clipboard.readText());
+  const shared = await context.newPage();
+  await shared.goto(link);
+  const opened = editor(shared);
+  await expect(opened.status).toContainText('lien de partage', { timeout: 30_000 });
+  await expectCode(opened, 'noise.octaves = 5;');
+  expect(shared.url()).not.toContain('#script=');
+});
+
 test('IntelliSense propose les nœuds et leurs entrées/sorties issues des NodeDefs', async ({ page }, info) => {
   const e = await openEditor(page);
+  await e.code.click();
   await e.code.press('Control+A');
   await e.code.press('Delete');
 
   await type(page, info, 'img = new Ima');
   await expect(e.completions).toBeVisible();
-  await expect(e.completions.getByTestId('script-completion').first()).toContainText('Image');
+  await expect(e.completions.getByRole('option').first()).toContainText('Image');
   await pause(page, info);
   await page.keyboard.press('Enter');
-  await expect(e.code).toHaveValue('img = new Image()');
+  await expect.poll(() => scriptOf(e)).toBe('img = new Image()');
   await page.keyboard.press('End');
 
   await type(page, info, ';\nimg.');
-  await expect(e.completions.getByTestId('script-completion').first()).toContainText('file');
+  await expect(e.completions.getByRole('option').first()).toContainText('file');
   await expect(e.completions).toContainText('entrée filename');
   await pause(page, info);
   await type(page, info, 'fi');
   await page.keyboard.press('Enter');
   await type(page, info, ' = "wood.jpg";\nsurface = new StandardSurface();\nsurface.base_c');
-  await expect(e.completions.getByTestId('script-completion').first()).toContainText('base_color');
+  await expect(e.completions.getByRole('option').first()).toContainText('base_color');
   await pause(page, info);
   await page.keyboard.press('Enter');
 
   await type(page, info, ' = img.');
-  await expect(e.completions.getByTestId('script-completion').first()).toContainText('out');
-  await expect(e.completions.getByTestId('script-completion').first()).toContainText('sortie color3');
+  await expect(e.completions.getByRole('option').first()).toContainText('out');
+  await expect(e.completions.getByRole('option').first()).toContainText('sortie color3');
   await pause(page, info);
   await page.keyboard.press('Enter');
   await type(page, info, ';');
 
-  await expect(e.code).toHaveValue('img = new Image();\nimg.file = "wood.jpg";\nsurface = new StandardSurface();\nsurface.base_color = img.out;');
+  await expect.poll(() => scriptOf(e)).toBe('img = new Image();\nimg.file = "wood.jpg";\nsurface = new StandardSurface();\nsurface.base_color = img.out;');
   await expect(e.status).toContainText('Script valide : 2 nœuds');
   await pause(page, info, 2500);
 });
@@ -261,7 +328,7 @@ test('pilote le viewer depuis un script : scène, rendu, matériau conditionnel'
   await page.locator('#open-script-editor').click();
   const e = editor(page);
   await expect(e.status).toContainText('Script valide', { timeout: 30_000 });
-  await e.code.fill(`await scene("${SOURCE_SCENE.replace('/?entry=', '')}");
+  await setScript(e, `await scene("${SOURCE_SCENE.replace('/?entry=', '')}");
 render.backend = "pathtracing";
 render.depth = 4;
 n = new Fractal3d("float");

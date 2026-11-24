@@ -377,6 +377,8 @@ export interface ScriptNode {
   inputs: Map<string, ScriptInput>;
   /** MaterialX `colorspace` attribute, e.g. `srgb_texture` for color textures. */
   colorspace?: string;
+  /** Script line that created the node, when it comes from `runScript`. */
+  line?: number;
 }
 
 export type ScriptInput = { value: ScriptValue } | { node: ScriptNode; output: string };
@@ -446,8 +448,11 @@ const COMPARISONS = new Set(['>', '>=', '<', '<=', '==', '===', '!=', '!==']);
  * Rewrite a script for `runScript`: arithmetic operators become `__mx.op(...)` calls (which build
  * math nodes when an operand is a node output) and `const`/`let`/`var` are dropped so assignments
  * name their nodes. Lines are preserved, so error lines still match the source.
+ *
+ * `instrument` prefixes each statement of a statement list with `__mx.line(n);` (current line,
+ * stop requests), or with `await __mx.step(n);` where `await` is allowed, so a debugger can pause.
  */
-export function transformScript(code: string): string {
+export function transformScript(code: string, instrument?: 'line' | 'step'): string {
   let program: AstNode;
   try {
     program = parseJavaScript(code, {
@@ -475,7 +480,28 @@ export function transformScript(code: string): string {
     }
     return text + code.slice(position, node.end);
   };
+  const statements = new Set<unknown>();
+  // Whether the innermost function may `await` (the script body runs as an async function).
+  const asyncContext: boolean[] = [true];
   const emit = (node: AstNode): string => {
+    let prefix = '';
+    if (statements.delete(node)) {
+      const line = (node['loc'] as { start: { line: number } }).start.line;
+      prefix = instrument === 'step' && asyncContext.at(-1) ? `await __mx.step(${line});` : `__mx.line(${line});`;
+    }
+    if (instrument) {
+      const list = node.type === 'SwitchCase' ? node['consequent'] : ['Program', 'BlockStatement', 'StaticBlock'].includes(node.type) ? node['body'] : undefined;
+      if (Array.isArray(list)) for (const statement of list) statements.add(statement);
+    }
+    const isFunction = /Function/.test(node.type);
+    if (isFunction) asyncContext.push(node['async'] === true);
+    try {
+      return prefix + emitNode(node);
+    } finally {
+      if (isFunction) asyncContext.pop();
+    }
+  };
+  const emitNode = (node: AstNode): string => {
     if (statementTests.delete(node)) return `__mx.test(${emit(node)})`;
     // `{ name }`: key and value share one source span, which must be emitted once.
     if (node.type === 'Property' && node['shorthand']) return code.slice(node.start, node.end);
@@ -709,7 +735,29 @@ export interface RunScriptOptions {
   /** `fileprefix` of documents generated for `assign`. */
   filePrefix?: string;
   fetchText?: (url: string) => Promise<string>;
+  /** Aborting stops the script before its next statement and rejects pending viewer operations. */
+  signal?: AbortSignal;
+  /** Execution observer: current line, and pauses for a debugger. */
+  hooks?: ScriptRunHooks;
 }
+
+/** A script variable as shown by a debugger. */
+export interface ScriptVariable {
+  name: string;
+  value: string;
+}
+
+export interface ScriptRunHooks {
+  /**
+   * Called before each statement. With `pausable`, the statements of the script body and of its
+   * async functions wait for a returned promise, which is how a debugger pauses.
+   */
+  beforeLine(line: number, variables: () => ScriptVariable[]): void | Promise<void>;
+  pausable?: boolean;
+}
+
+/** Running time after which a validation (dry run) is considered an infinite loop. */
+export const DRY_RUN_TIME_LIMIT_MS = 2000;
 
 export interface ScriptRun extends ScriptGraph {
   /** Number of viewer operations (`scene`, `assign`, `render`, `save`, settings) the script requested. */
@@ -733,9 +781,35 @@ const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor as
  */
 export async function runScript(code: string, library: ScriptLibrary, options: RunScriptOptions = {}): Promise<ScriptRun> {
   const graph: ScriptRun = { nodes: [], viewerCommands: 0, logs: [] };
+  const { signal, hooks } = options;
+  let currentLine = 0;
+  let steps = 0;
+  const started = performance.now();
+  const stopped = (): ScriptError => new ScriptError('Script stopped.', currentLine || undefined);
+  let abortion: Promise<never> | undefined;
+  /** `promise`, rejected as soon as the script is stopped. */
+  const abortable = <T>(promise: PromiseLike<T>): Promise<T> => {
+    if (!signal) return Promise.resolve(promise);
+    abortion ??= new Promise<never>((_, reject) => {
+      if (signal.aborted) reject(stopped());
+      else signal.addEventListener('abort', () => reject(stopped()), { once: true });
+    });
+    abortion.catch(() => {});
+    return Promise.race([promise, abortion]);
+  };
   // Queries (objects, renderSettings, objectMaterial) use the host even in dry runs; actions do not.
   const queries = options.host;
-  const host = options.dryRun ? undefined : options.host;
+  const host = options.dryRun || !options.host ? undefined : !signal ? options.host : new Proxy(options.host, {
+    get: (target, key) => {
+      const value = Reflect.get(target, key) as unknown;
+      if (typeof value !== 'function') return value;
+      return (...args: unknown[]) => {
+        if (signal.aborted) throw stopped();
+        const result = (value as (...values: unknown[]) => unknown).apply(target, args);
+        return result && typeof (result as PromiseLike<unknown>).then === 'function' ? abortable(result as PromiseLike<unknown>) : result;
+      };
+    },
+  });
   const baseUrl = options.baseUrl ?? (typeof document === 'undefined' ? 'http://localhost/' : document.baseURI);
   const fetchText = options.fetchText ?? fetchTextOrThrow;
   const handles = new WeakMap<object, ScriptNode>();
@@ -811,7 +885,7 @@ export async function runScript(code: string, library: ScriptLibrary, options: R
   };
 
   const createNode = (def: ScriptNodeDef): ScriptNode => {
-    const node: ScriptNode = { name: def.category, def, inputs: new Map() };
+    const node: ScriptNode = { name: def.category, def, inputs: new Map(), ...(currentLine ? { line: currentLine } : {}) };
     graph.nodes.push(node);
     pending.add(node);
     return node;
@@ -953,7 +1027,42 @@ export async function runScript(code: string, library: ScriptLibrary, options: R
   const arithmetic: Record<string, (x: number, y: number) => number> = {
     '+': (x, y) => x + y, '-': (x, y) => x - y, '*': (x, y) => x * y, '/': (x, y) => x / y, '%': (x, y) => x % y, '**': (x, y) => x ** y,
   };
+  const describeValue = (value: unknown): string => {
+    const node = nodeOf(value);
+    if (node) return `${node.name} : ${node.def.category} → ${nodeType(node.def)}`;
+    const ref = (value as Partial<OutputRef> | null)?.[OUTPUT];
+    if (ref) return `${ref.node.name}.${ref.output.name} : ${ref.output.type}`;
+    if (comparisonOf(value)) return 'per-pixel condition';
+    if (typeof value === 'function') return 'function';
+    if (typeof value === 'string') return JSON.stringify(value);
+    if (value === undefined || typeof value !== 'object') return String(value);
+    try {
+      const text = JSON.stringify(value);
+      return text.length > 200 ? `${text.slice(0, 199)}…` : text;
+    } catch {
+      return Object.prototype.toString.call(value);
+    }
+  };
+  const inspect = (): ScriptVariable[] => [...variables].map(([name, value]) => ({ name, value: describeValue(value) }));
+  const enter = (line: number): void | Promise<void> => {
+    currentLine = line;
+    if (options.dryRun && (++steps & 1023) === 0 && performance.now() - started > DRY_RUN_TIME_LIMIT_MS) {
+      throw new ScriptError(`Validation stopped after ${DRY_RUN_TIME_LIMIT_MS / 1000} s: infinite loop?`, line);
+    }
+    if (signal?.aborted) throw stopped();
+    return hooks?.beforeLine(line, inspect);
+  };
   const mx = {
+    line: (line: number): void => {
+      const pause = enter(line);
+      if (pause) pause.catch(() => {});
+    },
+    step: async (line: number): Promise<void> => {
+      const pause = enter(line);
+      if (!pause) return;
+      await abortable(pause);
+      if (signal?.aborted) throw stopped();
+    },
     op: (operator: string, a: unknown, b: unknown): unknown => {
       if (isNodeValue(a) || isNodeValue(b)) return mathNode(OPERATOR_NODES[operator]!, [a, b]);
       if (operator === '+' && (typeof a === 'string' || typeof b === 'string')) return String(a) + String(b);
@@ -1089,6 +1198,7 @@ export async function runScript(code: string, library: ScriptLibrary, options: R
   const importNodes = (nodes: readonly ScriptNode[], label: string): object => {
     for (const node of nodes) {
       nameNode(node, node.name);
+      if (currentLine) node.line = currentLine;
       graph.nodes.push(node);
     }
     const material = nodes.find(node => nodeType(node.def) === 'material') ??
@@ -1318,7 +1428,7 @@ export async function runScript(code: string, library: ScriptLibrary, options: R
     },
   });
 
-  const body = transformScript(code);
+  const body = transformScript(code, hooks?.pausable ? 'step' : 'line');
   let run: (scope: object) => Promise<void>;
   try {
     run = new AsyncFunction('scope', `with (scope) {\n${body}\n}`);
@@ -1326,11 +1436,15 @@ export async function runScript(code: string, library: ScriptLibrary, options: R
     throw new ScriptError(`Syntax error: ${error instanceof Error ? error.message : String(error)}`);
   }
   try {
-    await run(scope);
-    await queue;
+    if (signal?.aborted) throw stopped();
+    const running = run(scope);
+    // A stopped script may still reject later; that rejection is already reported.
+    running.catch(() => {});
+    await abortable(running);
+    await abortable(queue);
   } catch (error) {
     if (error instanceof ScriptError && error.line !== undefined) throw error;
-    throw new ScriptError(error instanceof Error ? error.message : String(error), errorLine(error));
+    throw new ScriptError(error instanceof Error ? error.message : String(error), errorLine(error) ?? (currentLine || undefined));
   }
   for (const node of [...pending]) nameNode(node, node.def.category);
   return graph;

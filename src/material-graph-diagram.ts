@@ -8,14 +8,17 @@ import type { BackendKind, InteractiveViewer, MaterialVariantSlot } from './rend
 import type { MaterialPreviewOptions } from './render/material-preview.ts';
 import type { RgbaCapture } from './gpu/capture.ts';
 import { compatibleNodeOutputChoices, type MaterialGraphOutput, type MaterialParameter } from './render/material-parameters.ts';
+import type { GraphInput, GraphLink, GraphNode, GraphValue, GraphWidget, NodeGraphView } from './ui/node-graph-view.ts';
 
-const NODE_WIDTH = 174;
+// litegraph is loaded when a graph is first shown.
+let nodeGraphModule: Promise<typeof import('./ui/node-graph-view.ts')> | undefined;
+const loadNodeGraphView = () => nodeGraphModule ??= import('./ui/node-graph-view.ts');
+
 const NODE_HEIGHT = 54;
 const COLUMN = 232;
 const ROW = 80;
 const PADDING = 16;
 const MAX_SAVED_POSITION = 100_000;
-const SVG = 'http://www.w3.org/2000/svg';
 type NodePosition = { x: number; y: number };
 const savedPositions = new WeakMap<ResolvedGraph, Map<string, NodePosition>>();
 const positionStoragePrefix = 'material-graph-layout:v1:';
@@ -528,72 +531,138 @@ export function showMaterialGraph(
     }
   };
   for (const [id, position] of overrides) layout.positions.set(id, position);
-  let width = Math.max(layout.width + COLUMN, 640);
-  let height = Math.max(layout.height + ROW, 260);
-  for (const { x, y } of overrides.values()) {
-    width = Math.max(width, x + NODE_WIDTH + 48);
-    height = Math.max(height, y + NODE_HEIGHT + PADDING);
-  }
   let { nodes } = graph;
   const { terminals } = graph;
-  const surface = document.createElement('div');
-  surface.className = 'material-graph-surface';
-  surface.style.cssText = `width:${width}px;height:${height}px;--node-width:${NODE_WIDTH}px;--node-height:${NODE_HEIGHT}px`;
-  const links = document.createElementNS(SVG, 'svg');
-  links.setAttribute('width', String(width));
-  links.setAttribute('height', String(height));
-  links.setAttribute('aria-hidden', 'true');
-  function drawLink(edge: typeof layout.edges[number], path: SVGPathElement): void {
-    const a = layout.positions.get(edge.from)!;
-    const b = layout.positions.get(edge.to)!;
-    const x1 = a.x + NODE_WIDTH;
-    const y1 = a.y + NODE_HEIGHT / 2;
-    const y2 = b.y + NODE_HEIGHT / 2;
-    const bend = Math.max(24, (b.x - x1) / 2);
-    path.setAttribute('d', b.x > x1
-      ? `M ${x1} ${y1} C ${x1 + bend} ${y1}, ${b.x - bend} ${y2}, ${b.x} ${y2}`
-      : `M ${x1} ${y1} C ${x1 + 38} ${y1}, ${x1 + 38} ${y2 - 30}, ${b.x + NODE_WIDTH} ${y2 - 12}`);
+  const terminalNames = (id: string) => terminals.filter(terminal => terminal.nodeId === id).map(terminal => terminal.name);
+  // Keyboard and screen readers pick nodes here; the litegraph canvas is pointer-only.
+  const nodeChooser = document.createElement('select');
+  nodeChooser.setAttribute('aria-label', 'Nœud sélectionné');
+  nodeChooser.setAttribute('aria-describedby', 'material-graph-help');
+  for (const node of nodes.values()) {
+    const terminalsOfNode = terminalNames(node.id);
+    nodeChooser.add(new Option(`${node.id} · ${node.category}${terminalsOfNode.length ? ` (sortie : ${terminalsOfNode.join(', ')})` : ''}`, node.id));
   }
-  const paths = layout.edges.map(edge => {
-    const path = document.createElementNS(SVG, 'path');
-    drawLink(edge, path);
-    links.append(path);
-    return path;
-  });
-  surface.append(links);
-
-  const buttons = new Map<string, HTMLButtonElement>();
-  function setPosition(button: HTMLButtonElement, { x, y }: NodePosition): void {
-    button.style.left = `${x}px`;
-    button.style.top = `${y}px`;
-  }
-  function move(id: string, button: HTMLButtonElement, x: number, y: number): void {
-    const position = {
-      x: Math.max(PADDING, Math.min(width - NODE_WIDTH - 48, x)),
-      y: Math.max(PADDING, Math.min(height - NODE_HEIGHT - PADDING, y)),
-    };
-    layout.positions.set(id, position);
-    overrides.set(id, position);
-    setPosition(button, position);
-    layout.edges.forEach((edge, index) => {
-      if (edge.from === id || edge.to === id) drawLink(edge, paths[index]!);
-    });
-  }
+  nodeChooser.onchange = () => {
+    select(nodeChooser.value);
+    graphView?.select(nodeChooser.value, true);
+  };
+  const canvasHost = document.createElement('div');
+  canvasHost.className = 'material-graph-canvas';
+  diagram.append(nodeChooser, canvasHost);
+  let graphView: NodeGraphView | undefined;
+  const surface = canvasHost;
   reset.onclick = () => {
     overrides.clear();
-    for (const [id, position] of original) {
-      layout.positions.set(id, position);
-      setPosition(buttons.get(id)!, position);
-    }
-    layout.edges.forEach((edge, index) => drawLink(edge, paths[index]!));
+    for (const [id, position] of original) layout.positions.set(id, position);
     persistPositions();
+    showGraphView(true);
   };
   let applying = false;
+  /** In-graph edits (links, parameter widgets) rebuild the dialog like the details form does. */
+  async function graphEdit(edit: () => Promise<ResolvedGraph | void>, selectId: (graph: ResolvedGraph) => string, message: string): Promise<void> {
+    if (applying || !editing) return;
+    applying = true;
+    exportButton.disabled = true;
+    exportStatus.textContent = 'Modification du graphe…';
+    preview?.pause();
+    try {
+      const updated = await edit();
+      if (updated) {
+        if (!savedPositions.has(updated)) {
+          savedPositions.set(updated, new Map([...overrides].filter(([key]) => updated.nodes.has(key))));
+        }
+        applying = false;
+        if (dialog.open && surface.isConnected) {
+          showMaterialGraph(dialog, updated, material, editing, { id: selectId(updated), message }, positionScope);
+        }
+      }
+      exportStatus.textContent = '';
+    } catch (error) {
+      exportStatus.textContent = `Échec : ${error instanceof Error ? error.message : String(error)}`;
+      showGraphView(false);
+      preview?.refresh();
+    } finally {
+      applying = false;
+      if (surface.isConnected) exportButton.disabled = exporting;
+    }
+  }
+  function graphModel(): { models: GraphNode[]; links: GraphLink[] } {
+    const models: GraphNode[] = [];
+    const links: GraphLink[] = [];
+    for (const node of nodes.values()) {
+      const outputs = node.nodeDef?.outputs?.length ? node.nodeDef.outputs.map(output => ({ name: output.name, type: output.type }))
+        : [{ name: 'out', type: node.type }];
+      const parameters = new Map(editing?.parameters(node.id).map(parameter => [parameter.input, parameter]));
+      const inputs: GraphInput[] = node.inputs.map((input) => {
+        const parameter = input.source.kind === 'value' ? parameters.get(input.name) : undefined;
+        if (!parameter) return { name: input.name, type: input.type };
+        const scalar = parameter.value.length === 1;
+        const value: GraphValue = parameter.type === 'boolean' ? parameter.value[0] === 1 : scalar ? parameter.value[0]! : parameter.value;
+        const widget: GraphWidget = parameter.type === 'boolean' ? { kind: 'toggle' }
+          : scalar ? { kind: 'number', integer: parameter.type === 'integer',
+            ...(parameter.min?.[0] !== undefined ? { min: parameter.min[0] } : {}), ...(parameter.max?.[0] !== undefined ? { max: parameter.max[0] } : {}) }
+            : { kind: 'text' };
+        return { name: input.name, type: input.type, value, widget };
+      });
+      for (const input of node.inputs) {
+        if (input.source.kind !== 'connection' || !nodes.has(input.source.nodeId)) continue;
+        const source = nodes.get(input.source.nodeId)!;
+        const output = input.source.output ?? source.nodeDef?.outputs?.[0]?.name ?? 'out';
+        links.push({ from: source.id, output, to: node.id, input: input.name });
+      }
+      const terminalsOfNode = terminalNames(node.id);
+      // Nodegraph paths are in the list above the canvas; nodes show their own name.
+      const name = node.id.split('/').at(-1)!;
+      models.push({
+        id: node.id,
+        title: terminalsOfNode.length ? `${name} → ${terminalsOfNode.join(', ')}` : `${name} : ${node.category}`,
+        inputs, outputs, editable: !!editing, warning: unsupportedNodes.has(node.id),
+      });
+    }
+    return { models, links };
+  }
+  function showGraphView(useLayout: boolean): void {
+    if (!graphView) return;
+    const { models, links } = graphModel();
+    if (useLayout) graphView.resetPositions();
+    graphView.set(models, links, new Map([...layout.positions].map(([id, { x, y }]) => [id, [x, y] as const])));
+  }
+  void loadNodeGraphView().then(({ NodeGraphView: View }) => {
+    if (!surface.isConnected) return;
+    graphView = new View(canvasHost, {
+      onSelect: id => { if (id && id !== nodeChooser.value) select(id); },
+      onMove: (id, [x, y]) => {
+        const position = { x: Math.max(PADDING, Math.min(MAX_SAVED_POSITION, x)), y: Math.max(PADDING, Math.min(MAX_SAVED_POSITION, y)) };
+        layout.positions.set(id, position);
+        overrides.set(id, position);
+        persistPositions();
+      },
+      onValue: (id, input, value) => {
+        const parameter = editing?.parameters(id).find(candidate => candidate.input === input);
+        if (!parameter) return;
+        const values = typeof value === 'boolean' ? [Number(value)] : typeof value === 'number' ? [value] : Array.isArray(value) ? [...value] : undefined;
+        if (!values || values.length !== parameter.value.length) return;
+        void graphEdit(() => editing!.apply(new Map([[parameter.id, values]])).then(updated => updated ?? undefined),
+          () => id, `${input} modifié.`).then(() => { if (dialog.open) select(id, `${input} modifié.`); });
+      },
+      onLink: link => void graphEdit(() => editing!.setInputLink(link.to, link.input, link.from, link.output), () => link.to, 'Sortie connectée.'),
+      onUnlink: (id, input) => {
+        if (editing?.canUnlinkInput(id, input)) {
+          void graphEdit(() => editing.setInputLink(id, input, null), () => id, 'Connexion précédente restaurée.');
+        } else {
+          exportStatus.textContent = `${input} : pas de connexion précédente à restaurer ; connecte une autre sortie à la place.`;
+          showGraphView(false);
+        }
+      },
+    });
+    showGraphView(false);
+    graphView.select(nodeChooser.value, true);
+  });
   function select(id: string, message = ''): void {
     if (applying) return;
     const node = nodes.get(id)!;
-    for (const [key, button] of buttons) button.setAttribute('aria-pressed', String(key === id));
-    layout.edges.forEach((edge, index) => paths[index]!.classList.toggle('active', edge.from === id || edge.to === id));
+    nodeChooser.value = id;
+    graphView?.select(id);
     const heading = document.createElement('h3');
     heading.textContent = `${node.id} · ${node.category} (${node.type})`;
     details.replaceChildren(heading);
@@ -678,7 +747,7 @@ export function showMaterialGraph(
             persistPositions(slot);
             comparison?.invalidate();
             select(id, `Variante ${slot} enregistrée.`);
-            buttons.get(id)?.focus({ preventScroll: true });
+            nodeChooser.focus({ preventScroll: true });
           } catch (error) {
             status.textContent = `Échec : ${error instanceof Error ? error.message : String(error)}`;
           }
@@ -730,13 +799,12 @@ export function showMaterialGraph(
         row.append(...controls);
         editors.push({ parameter, controls });
       } else if (source.kind === 'connection') {
-        const upstream = buttons.get(source.nodeId);
         const label = `${source.nodeId}${source.output ? `.${source.output}` : ''}`;
-        if (upstream) {
+        if (nodes.has(source.nodeId)) {
           const link = document.createElement('button');
           link.type = 'button';
           link.textContent = label;
-          link.onclick = () => { select(source.nodeId); upstream.focus(); };
+          link.onclick = () => { select(source.nodeId); nodeChooser.focus(); };
           row.append(link);
         } else row.append(`${label} (indisponible)`);
       } else {
@@ -876,69 +944,16 @@ export function showMaterialGraph(
         refreshBackendDiagnostics();
         preview?.refresh();
         select(id, 'Valeurs appliquées.');
-        buttons.get(id)?.focus({ preventScroll: true });
+        showGraphView(false);
+        nodeChooser.focus({ preventScroll: true });
       }
     };
   }
 
-  for (const node of nodes.values()) {
-    const button = document.createElement('button');
-    button.type = 'button';
-    button.className = 'material-graph-node';
-    setPosition(button, layout.positions.get(node.id)!);
-    const unsupported = unsupportedNodes.has(node.id);
-    button.title = `${node.id} · ${node.category}${unsupported ? ' · Rendu WGSL incomplet' : ''}`;
-    button.setAttribute('aria-describedby', 'material-graph-help');
-    const label = document.createElement('strong');
-    label.textContent = node.id;
-    const terminalNames = terminals.filter(terminal => terminal.nodeId === node.id).map(terminal => terminal.name);
-    const category = document.createElement('span');
-    category.textContent = unsupported ? 'Rendu WGSL incomplet'
-      : terminalNames.length ? `Sortie : ${terminalNames.join(', ')}` : node.category;
-    if (unsupported) category.className = 'material-graph-warning';
-    button.append(label, category);
-    button.onclick = () => select(node.id);
-    let drag: { pointerId: number; offset: NodePosition; client: NodePosition; moved: boolean } | undefined;
-    button.onpointerdown = event => {
-      if (event.button !== 0 || !event.isPrimary) return;
-      const bounds = button.getBoundingClientRect();
-      drag = {
-        pointerId: event.pointerId, moved: false,
-        offset: { x: event.clientX - bounds.left, y: event.clientY - bounds.top },
-        client: { x: event.clientX, y: event.clientY },
-      };
-      button.setPointerCapture(event.pointerId);
-    };
-    button.onpointermove = event => {
-      if (!drag || drag.pointerId !== event.pointerId) return;
-      if (!drag.moved && Math.hypot(event.clientX - drag.client.x, event.clientY - drag.client.y) < 4) return;
-      drag.moved = true;
-      const bounds = surface.getBoundingClientRect();
-      move(node.id, button, event.clientX - bounds.left - drag.offset.x, event.clientY - bounds.top - drag.offset.y);
-    };
-    button.onlostpointercapture = event => {
-      if (drag?.pointerId === event.pointerId) {
-        if (drag.moved) persistPositions();
-        drag = undefined;
-      }
-    };
-    button.onkeydown = event => {
-      const delta = ({ ArrowLeft: [-10, 0], ArrowRight: [10, 0], ArrowUp: [0, -10], ArrowDown: [0, 10] } as const);
-      if (!(event.key === 'ArrowLeft' || event.key === 'ArrowRight' || event.key === 'ArrowUp' || event.key === 'ArrowDown')) return;
-      event.preventDefault();
-      const [dx, dy] = delta[event.key];
-      const { x, y } = layout.positions.get(node.id)!;
-      move(node.id, button, x + dx, y + dy);
-      persistPositions();
-    };
-    buttons.set(node.id, button);
-    surface.append(button);
-  }
-  diagram.append(surface);
-  const selected = selection && buttons.has(selection.id) ? selection.id
-    : terminals.find(terminal => terminal.nodeId && buttons.has(terminal.nodeId))?.nodeId ?? buttons.keys().next().value!;
+  const selected = selection && nodes.has(selection.id) ? selection.id
+    : terminals.find(terminal => terminal.nodeId && nodes.has(terminal.nodeId))?.nodeId ?? nodes.keys().next().value!;
   select(selected, selection?.message);
   if (!dialog.open) dialog.showModal();
-  else buttons.get(selected)?.focus();
+  else nodeChooser.focus();
   preview?.refresh();
 }

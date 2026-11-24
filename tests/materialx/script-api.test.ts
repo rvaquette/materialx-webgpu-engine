@@ -513,6 +513,54 @@ lazy = new Noise3d("float");
     expect(transformScript('o = { shutter, samples: 2 * n };')).toBe('o = { shutter, samples: __mx.op("*", 2, n) };');
   });
 
+  it('instruments statements for line tracking and debugger pauses', () => {
+    const code = 'x = 1;\nfor (const o of [1]) {\n  y = o;\n}\nfunction f() { z = 2; }\nasync function g() { w = 3; }';
+    expect(transformScript(code, 'line')).toBe('__mx.line(1);x = 1;\n__mx.line(2);for (const o of [1]) {\n  __mx.line(3);y = o;\n}\n' +
+      '__mx.line(5);function f() { __mx.line(5);z = 2; }\n__mx.line(6);async function g() { __mx.line(6);w = 3; }');
+    // Plain functions cannot await: they report their line without pausing.
+    expect(transformScript(code, 'step')).toContain('await __mx.step(3);y = o;');
+    expect(transformScript(code, 'step')).toContain('function f() { __mx.line(5);z = 2; }');
+    expect(transformScript(code, 'step')).toContain('async function g() { await __mx.step(6);w = 3; }');
+    expect(transformScript('if (a) b();', 'line')).toBe('__mx.line(1);if (__mx.test(a)) b();');
+  });
+
+  it('pauses before statements, shows variables and records node lines', async () => {
+    const paused: { line: number; variables: string[] }[] = [];
+    const run = await runScript('n = new Noise3d("float");\ncount = 2;\nlabel = "x";\nm = n.out * count;', EXPRESSIONS, {
+      hooks: {
+        pausable: true,
+        beforeLine: async (line, variables) => { paused.push({ line, variables: variables().map(v => `${v.name}=${v.value}`) }); },
+      },
+    });
+    expect(paused.map(pause => pause.line)).toEqual([1, 2, 3, 4]);
+    expect(paused[3]!.variables).toEqual(['n=n : noise3d → float', 'count=2', 'label="x"']);
+    expect(run.nodes.map(node => [node.name, node.line])).toEqual([['n', 1], ['m', 4]]);
+  });
+
+  it('stops between statements and during viewer operations', async () => {
+    const controller = new AbortController();
+    let lines = 0;
+    await expect(runScript('a = 1;\nlog("stop");\nb = 2;', EXPRESSIONS, {
+      signal: controller.signal,
+      hooks: { beforeLine: (line) => { lines++; if (line === 2) controller.abort(); } },
+    })).rejects.toMatchObject({ message: 'Script stopped.', line: 3 });
+    expect(lines).toBe(2);
+
+    const rendering = new AbortController();
+    let resolveRender!: () => void;
+    const host: ScriptHost = { ...idleHost(), render: () => new Promise<number>(resolve => { resolveRender = () => resolve(1); }) };
+    const result = runScript('await render(1000);\nlog("after");', EXPRESSIONS, { host, signal: rendering.signal });
+    await new Promise(resolve => setTimeout(resolve, 0));
+    rendering.abort();
+    await expect(result).rejects.toMatchObject({ message: 'Script stopped.', line: 1 });
+    resolveRender();
+  });
+
+  it('stops validating a script that never ends', async () => {
+    await expect(runScript('i = 0;\nwhile (true) { i++; }', EXPRESSIONS, { dryRun: true }))
+      .rejects.toMatchObject({ line: 2, message: expect.stringMatching(/infinite loop/) });
+  });
+
   it('drives the viewer through the host, in order, and only validates without one', async () => {
     const calls: unknown[][] = [];
     const host: ScriptHost = {

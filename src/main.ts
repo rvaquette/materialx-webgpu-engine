@@ -9,7 +9,8 @@ import { sceneDeviceDescriptor } from './gpu/device.ts';
 import { startViewerUi, type ViewerUiState, type ViewerUiActions } from './viewer-ui.ts';
 import type { LocalGltfScene } from './scene/local-gltf.ts';
 import { downloadDisplayedAovPng, downloadPathTraceAovPfm, encodePathTraceAovPfm } from './render/aov-export.ts';
-import { attachScriptEditor } from './materialx/script-editor.ts';
+import { attachScriptEditor, type ScriptRunControl } from './materialx/script-editor.ts';
+import { activityButton, bindPanelToggle } from './ui/layout.ts';
 import { loadScriptLibrary, runScript, ScriptError, toXml, type ScriptHost, type ScriptStats } from './materialx/script-api.ts';
 import { downloadBlob } from './assets/download.ts';
 import { DiagnosticJournal } from './diagnostics/journal.ts';
@@ -59,6 +60,8 @@ async function main(): Promise<void> {
     return viewerHost;
   };
   // Queries answer before the viewer is ready so live validation keeps working.
+  // Pause/resume of running scripts (editor toolbar, remote render server); wired once the viewer exists.
+  const scriptControl: ScriptRunControl = { pause: () => false, resume: () => false, wait: () => undefined };
   const scriptHost: ScriptHost = {
     loadScene: entry => readyHost().loadScene(entry),
     objects: () => viewerHost?.objects() ?? [],
@@ -96,10 +99,27 @@ async function main(): Promise<void> {
   const validationScripts = Object.entries(import.meta.glob<string>('../examples/scripts/*.js', { query: '?raw', import: 'default', eager: true }))
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([path, code]) => ({ label: /^\/\/\s*(.+?)\s*(?:\(|$)/m.exec(code)?.[1] ?? path.split('/').at(-1)!, code }));
-  attachScriptEditor(document.getElementById('material-tools'), {
+  // Activity bar: side panels (interactive render controls F3, script F2) and material tools.
+  const renderToggle = document.querySelector<HTMLButtonElement>('#toggle-render-panel');
+  const renderPanel = document.getElementById('ui');
+  if (renderToggle && renderPanel) {
+    bindPanelToggle(activityButton(renderToggle, 'sliders', 'Rendu interactif : scène, rendu, matériaux (F3)'), renderPanel, 'render',
+      { defaultVisible: true, shortcut: 'F3' });
+  }
+  for (const [id, name, label] of [
+    ['open-material-library', 'book', 'Bibliothèque de matériaux de l’objet sélectionné'],
+    ['open-material-graph', 'graph', 'Graphe du matériau de l’objet sélectionné'],
+    ['export-diagnostics', 'pulse', 'Exporter les diagnostics : journal, capacités et mémoire GPU (JSON)'],
+  ] as const) {
+    const button = document.getElementById(id);
+    if (button instanceof HTMLButtonElement) activityButton(button, name, label);
+  }
+  attachScriptEditor(document.getElementById('activity-panels'), {
+    dock: document.getElementById('app'),
     library: scriptLibrary,
     filePrefix: scriptFilePrefix,
     examples: validationScripts,
+    runControl: scriptControl,
     remoteView: document.getElementById('canvas-container'),
     onApply: (xml) => {
       if (!applyScriptMaterial) throw new Error('Le viewer WebGPU n’est pas prêt.');
@@ -566,13 +586,38 @@ async function main(): Promise<void> {
       finally { refreshObjects(); }
     }); },
   };
-  /** Polls `done` every 100 ms; fails after `seconds` or when the device is lost. */
+  /**
+   * Pause requested by the remote render server (__mxControl): the path tracer stops accumulating
+   * and the running script waits before its next statement. Waits do not time out meanwhile.
+   */
+  let held: { resume: Promise<void>; release: () => void; tracer: boolean } | undefined;
+  scriptControl.pause = () => {
+    if (!held) {
+      let release!: () => void;
+      const resume = new Promise<void>(resolve => { release = resolve; });
+      const tracer = viewer.backend !== 'raster' && !viewer.pathTracingPaused;
+      if (tracer) viewer.setPathTracingPaused(true);
+      held = { resume, release, tracer };
+    }
+    return true;
+  };
+  scriptControl.resume = () => {
+    if (held) {
+      if (held.tracer) viewer.setPathTracingPaused(false);
+      held.release();
+      held = undefined;
+    }
+    return false;
+  };
+  scriptControl.wait = () => held?.resume;
+  /** Polls `done` every 100 ms; fails after `seconds` (paused time excluded) or when the device is lost. */
   async function waitFor(done: () => boolean, seconds: number, what: string): Promise<void> {
-    const end = performance.now() + seconds * 1000;
+    let end = performance.now() + seconds * 1000;
     while (!done()) {
       if (deviceLost) throw new Error(`Périphérique WebGPU perdu pendant l’attente : ${what}.`);
       if (performance.now() > end) throw new Error(`Délai dépassé (${seconds} s) : ${what}.`);
       await new Promise(resolve => setTimeout(resolve, 100));
+      if (held) end += 100;
     }
   }
   /** Lets the viewer draw the current state before an image is saved. */
@@ -680,6 +725,7 @@ async function main(): Promise<void> {
         if (status?.pathTracer === 'ready' && status.samples >= samples) return status.samples;
         // Convergence or the time budget can stop the accumulation before the requested count.
         if (status?.pathTracer === 'ready' && status.pathTracingProgress?.stopReason) return status.samples;
+        if (held) { lastProgress = performance.now(); continue; }
         if (status && (status.samples !== last || status.pathTracer !== 'ready')) { last = status.samples; lastProgress = performance.now(); }
         if (performance.now() - lastProgress > 60_000) throw new Error(`Rendu bloqué à ${last} échantillons sur ${samples}.`);
       }
@@ -828,12 +874,16 @@ async function main(): Promise<void> {
   let initialSceneLoaded!: () => void;
   const initialScene = new Promise<void>(resolve => { initialSceneLoaded = resolve; });
   // Polled by the runner to show the progress of long renders.
-  (globalThis as { __mxProgress?: unknown }).__mxProgress = () => ({ ...viewerHost?.stats(), entry: state.entry });
+  (globalThis as { __mxProgress?: unknown }).__mxProgress = () => ({ ...viewerHost?.stats(), entry: state.entry, held: Boolean(held) });
+  (globalThis as { __mxControl?: unknown }).__mxControl = (action: 'pause' | 'resume'): boolean =>
+    action === 'pause' ? scriptControl.pause() : scriptControl.resume();
   (globalThis as { __mxRunScript?: unknown }).__mxRunScript = async (code: string) => {
     try {
       await initialScene;
       const library = await scriptLibrary;
-      const run = await runScript(code, library, { host: scriptHost, filePrefix: scriptFilePrefix });
+      const run = await runScript(code, library, {
+        host: scriptHost, filePrefix: scriptFilePrefix, hooks: { pausable: true, beforeLine: () => scriptControl.wait() },
+      });
       return { ok: true, nodes: run.nodes.length, viewerCommands: run.viewerCommands, logs: run.logs, xml: toXml(run, library) };
     } catch (error) {
       return {

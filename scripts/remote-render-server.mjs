@@ -3,6 +3,7 @@
 // progress, intermediate frames, `log` messages and `save(...)` files back as server-sent events.
 // It only listens on 127.0.0.1: expose it through a tunnel (docs/REMOTE_RENDER.md).
 import { createServer } from 'node:http';
+import { randomUUID } from 'node:crypto';
 import { createReadStream, existsSync } from 'node:fs';
 import { stat } from 'node:fs/promises';
 import { basename, extname, isAbsolute, join, relative, resolve } from 'node:path';
@@ -13,7 +14,9 @@ import { corsHeaders, createAuthenticator } from './remote-render-auth.mjs';
 import { root } from './export-browser-session.mjs';
 
 const HELP = `Usage: npm run render:remote -- [--port 8787] [--origin https://rvaquette.github.io ...] [--dist dist]
-  [--timeout 1800] [--frame-interval 1000] [--max-queue 4] [--gpu high-performance|low-power|default] [--headed]
+  [--timeout 1800] [--max-pause 1800] [--frame-interval 1000] [--max-queue 4] [--gpu high-performance|low-power|default] [--headed]
+
+--timeout counts rendering time only; a job paused longer than --max-pause seconds is cancelled.
 
 Authentication (at least one; both are checked when set):
   MX_REMOTE_TOKEN            shared bearer token, 32+ characters, entered once in the viewer
@@ -89,8 +92,11 @@ async function readJson(request, limit) {
   catch { throw Object.assign(new Error('Invalid JSON body.'), { status: 400 }); }
 }
 
-/** Runs one script in a fresh browser context restricted to the local static server. */
-async function runJob({ browser, appOrigin, script, stream, signal, timeoutMs, frameIntervalMs }) {
+/**
+ * Runs one script in a fresh browser context restricted to the local static server. `job.control`
+ * becomes available once the viewer runs: it pauses or resumes the script and its rendering.
+ */
+async function runJob({ browser, appOrigin, script, stream, signal, timeoutMs, maxPauseMs, frameIntervalMs, job }) {
   const context = await browser.newContext({ viewport: { width: 1280, height: 900 }, serviceWorkers: 'block', acceptDownloads: false });
   const abort = () => { void context.close().catch(() => {}); };
   signal.addEventListener('abort', abort, { once: true });
@@ -123,6 +129,7 @@ async function runJob({ browser, appOrigin, script, stream, signal, timeoutMs, f
     stream.send('status', { stage: 'loading' });
     await page.goto(`${appOrigin}/`);
     await page.waitForFunction(() => typeof globalThis.__mxRunScript === 'function', undefined, { timeout: 120_000 });
+    job.control = action => page.evaluate(name => globalThis.__mxControl?.(name), action);
     stream.send('status', { stage: 'running' });
 
     let finished = false;
@@ -141,12 +148,24 @@ async function runJob({ browser, appOrigin, script, stream, signal, timeoutMs, f
         } catch { /* the page is busy loading or closing; try again at the next tick */ }
       }
     })();
+    // Only active time counts against --timeout; a pause longer than --max-pause cancels the job.
     let timer;
-    const timeout = new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(`Script timed out after ${timeoutMs / 1000} s.`)), timeoutMs); });
+    const timeout = new Promise((_, reject) => {
+      let active = 0;
+      let last = performance.now();
+      timer = setInterval(() => {
+        const now = performance.now();
+        if (!job.paused) active += now - last;
+        last = now;
+        if (active > timeoutMs) reject(new Error(`Script timed out after ${timeoutMs / 1000} s of rendering.`));
+        else if (job.paused && now - job.pausedSince > maxPauseMs) reject(new Error(`Paused for more than ${maxPauseMs / 1000} s: cancelled.`));
+      }, 1000);
+    });
     let result;
     try { result = await Promise.race([page.evaluate(code => globalThis.__mxRunScript(code), script), timeout]); }
     finally {
-      clearTimeout(timer);
+      clearInterval(timer);
+      job.control = undefined;
       finished = true;
       await frames;
     }
@@ -179,7 +198,7 @@ async function captureView() {
 async function main() {
   const { values } = parseArgs({ options: {
     port: { type: 'string', default: '8787' }, origin: { type: 'string', multiple: true, default: [] },
-    dist: { type: 'string', default: 'dist' }, timeout: { type: 'string', default: '1800' },
+    dist: { type: 'string', default: 'dist' }, timeout: { type: 'string', default: '1800' }, 'max-pause': { type: 'string', default: '1800' },
     'frame-interval': { type: 'string', default: '1000' }, 'max-queue': { type: 'string', default: '4' },
     gpu: { type: 'string', default: 'high-performance' }, headed: { type: 'boolean' }, help: { type: 'boolean', short: 'h' },
   } });
@@ -191,6 +210,7 @@ async function main() {
   };
   const port = integer('port', 1);
   const timeoutMs = integer('timeout', 1) * 1000;
+  const maxPauseMs = integer('max-pause', 1) * 1000;
   const frameIntervalMs = Math.max(250, integer('frame-interval', 1));
   const maxQueue = integer('max-queue', 0);
   const gpuArgs = GPU_ARGS[values.gpu];
@@ -220,6 +240,8 @@ async function main() {
   let running;
   let queued = 0;
   let tail = Promise.resolve();
+  /** Submitted jobs (queued or running) by id. */
+  const jobs = new Map();
 
   const server = createServer(async (request, response) => {
     const cors = corsHeaders(request.headers.origin, origins);
@@ -246,6 +268,32 @@ async function main() {
         .end(JSON.stringify({ busy: Boolean(running), queued, maxQueue }));
       return;
     }
+    const control = /^\/jobs\/([0-9a-f-]{36})\/(pause|resume|cancel)$/.exec(path);
+    if (request.method === 'POST' && control) {
+      // Like POST /jobs, application/json forces a CORS preflight for browser callers.
+      if (!/^application\/json\b/i.test(request.headers['content-type'] ?? '')) { response.writeHead(415).end(); return; }
+      const job = jobs.get(control[1]);
+      // Only the user who submitted a job controls it.
+      if (!job || job.user !== user.email) { response.writeHead(404).end('Unknown job.'); return; }
+      const action = control[2];
+      try {
+        if (action === 'cancel') job.cancel();
+        else {
+          if (!job.control) { response.writeHead(409).end('The job is not running yet.'); return; }
+          const held = await job.control(action);
+          if (held !== job.paused) {
+            job.paused = held;
+            job.pausedSince = performance.now();
+            job.stream.send('status', { stage: held ? 'paused' : 'running' });
+            log(`job ${control[1]} by ${user.email}: ${held ? 'paused' : 'resumed'}`);
+          }
+        }
+        response.writeHead(204).end();
+      } catch (error) {
+        response.writeHead(409).end(error.message);
+      }
+      return;
+    }
     if (request.method !== 'POST' || path !== '/jobs') { response.writeHead(404).end(); return; }
     // application/json forces a CORS preflight: plain forms from other sites cannot post jobs.
     if (!/^application\/json\b/i.test(request.headers['content-type'] ?? '')) { response.writeHead(415).end(); return; }
@@ -260,26 +308,33 @@ async function main() {
     const stream = eventStream(response);
     const controller = new AbortController();
     response.on('close', () => controller.abort());
+    const id = randomUUID();
+    const entry = { user: user.email, stream, paused: false, pausedSince: 0, control: undefined, cancel: () => controller.abort() };
+    jobs.set(id, entry);
+    stream.send('job', { id });
     const position = queued + (running ? 1 : 0);
     queued++;
     if (position) stream.send('status', { stage: 'queued', position });
     const job = tail.then(async () => {
       queued--;
-      if (controller.signal.aborted) return;
+      if (controller.signal.aborted) { jobs.delete(id); return; }
       const started = performance.now();
       running = { user: user.email };
-      log(`job by ${user.email}: ${body.script.length} bytes`);
+      log(`job ${id} by ${user.email}: ${body.script.length} bytes`);
       try {
         if (!browser.isConnected()) browser = await launch();
-        const result = await runJob({ browser, appOrigin: app.origin, script: body.script, stream, signal: controller.signal, timeoutMs, frameIntervalMs });
+        const result = await runJob({
+          browser, appOrigin: app.origin, script: body.script, stream, signal: controller.signal, timeoutMs, maxPauseMs, frameIntervalMs, job: entry,
+        });
         stream.send('done', result);
-        log(`job by ${user.email}: ${result.ok ? 'ok' : `failed (${result.message})`} in ${((performance.now() - started) / 1000).toFixed(1)} s`);
+        log(`job ${id} by ${user.email}: ${result.ok ? 'ok' : `failed (${result.message})`} in ${((performance.now() - started) / 1000).toFixed(1)} s`);
       } catch (error) {
         const message = controller.signal.aborted ? 'Cancelled by the client.' : error.message;
         stream.send('done', { ok: false, message });
-        log(`job by ${user.email}: ${message}`);
+        log(`job ${id} by ${user.email}: ${message}`);
       } finally {
         running = undefined;
+        jobs.delete(id);
         stream.end();
       }
     });
