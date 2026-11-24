@@ -8,6 +8,9 @@ panneau), on le redimensionne avec les séparateurs, et les boutons de son en-t�
 réduisent (il se rouvre depuis la barre latérale), le détachent en fenêtre flottante ou
 l'agrandissent. La disposition est conservée d'une visite à l'autre.
 
+La liste complète des commandes, avec leurs arguments et valeurs de retour, est dans
+[SCRIPT_REFERENCE.md](SCRIPT_REFERENCE.md).
+
 ## Syntaxe
 
 ```js
