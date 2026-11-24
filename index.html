@@ -31,6 +31,8 @@
       #messages summary { cursor: pointer; font-weight: bold; }
       #messages pre { margin: 8px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }
       #material-graph, #material-library { box-sizing: border-box; width: min(94vw, 1100px); max-height: 90dvh; color: inherit; background: #171721; border: 1px solid #596278; border-radius: 8px; }
+      /* Anchored at the top: a centered dialog would move the graph whenever its content height changes. */
+      #material-graph { margin: 3dvh auto auto; max-height: 94dvh; }
       #material-library { width: min(94vw, 760px); }
       #material-graph::backdrop, #material-library::backdrop { background: #000a; }
       #material-graph header, #material-library header { display: flex; justify-content: space-between; align-items: start; gap: 12px; }
@@ -47,7 +49,7 @@
       .material-graph-variants { display: inline-flex; flex-wrap: wrap; gap: 4px; margin-left: auto; }
       .material-graph-bar button { border-radius: 8px; }
       .material-graph-canvas { flex: 1; min-height: 0; }
-      #material-graph-details { max-height: 14dvh; overflow: auto; overflow-wrap: anywhere; }
+      #material-graph-details { height: 14dvh; min-height: 4.5em; overflow: auto; overflow-wrap: anywhere; }
       #material-graph-details h3 { margin: 0.5em 0 0.2em; font-size: 1em; }
       #material-graph-details p { margin: 0.35em 0; }
       .material-graph-warning { display: block; color: #ffce91; }

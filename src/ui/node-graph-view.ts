@@ -146,6 +146,17 @@ export class NodeGraphView {
     this.#canvas.style.cssText = 'display:block;width:100%;height:100%;outline:none';
     this.element.append(this.#canvas);
     Object.defineProperty(this.element, 'mxGraph', { value: this });
+    // litegraph's own shortcuts would change the graph behind the model's back (deleting, pasting,
+    // undoing): they are stopped before its canvas listener, which runs in the capture phase.
+    this.element.addEventListener('keydown', (event) => {
+      if (event.target !== this.#canvas) return;
+      const key = event.key.toLowerCase();
+      const command = event.ctrlKey || event.metaKey;
+      if (key === 'delete' || key === 'backspace' || (command && ['v', 'z', 'y', 'x', 'd'].includes(key))) {
+        event.stopPropagation();
+        event.preventDefault();
+      }
+    }, true);
     container.append(this.element);
     if (!document.getElementById('mx-graph-picker-style')) {
       document.head.append(Object.assign(document.createElement('style'), { id: 'mx-graph-picker-style', textContent: PICKER_STYLE }));
@@ -182,6 +193,8 @@ export class NodeGraphView {
 
   /** Replaces the shown graph; nodes keep the position they had (or `layout`'s for new ones). */
   set(nodes: readonly GraphNode[], links: readonly GraphLink[], layout?: ReadonlyMap<string, readonly [number, number]>): void {
+    // Keep nodes where they are drawn now (litegraph may have adjusted them since the last set()).
+    for (const [id, node] of this.#nodes) this.#positions.set(id, [node.pos[0], node.pos[1]]);
     this.#model = { nodes, links };
     this.#updating = true;
     try {
@@ -430,7 +443,9 @@ export class NodeGraphView {
     const node = new LGraphNode(model.title);
     node.color = model.warning ? NODE_COLORS.warning : NODE_COLORS.color;
     node.bgcolor = NODE_COLORS.bgcolor;
+    // The model owns nodes: litegraph's Delete/Backspace (deleteSelected) only honours block_delete.
     node.removable = false;
+    node.block_delete = true;
     node.resizable = true;
     for (const output of model.outputs) node.addOutput(output.name, output.type);
     for (const input of model.inputs) {
