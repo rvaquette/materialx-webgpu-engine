@@ -81,7 +81,10 @@ Prérequis : un domaine géré par Cloudflare (le plan gratuit suffit, Zero Trus
 1. **Tunnel** (Zero Trust → *Networks* → *Tunnels* → *Create a tunnel*, type *Cloudflared*) :
    installer `cloudflared` (`winget install --id Cloudflare.cloudflared`) puis lancer la commande
    affichée, `cloudflared service install <jeton>` (service Windows, connexion sortante seule).
-   *Public hostname* : `render.example.com` → service `HTTP` `127.0.0.1:8787`.
+   À l'étape *Route tunnel* de l'assistant, ou plus tard dans *Tunnels* → le tunnel → *Configure* →
+   onglet *Public Hostname* (*Published application routes* dans l'interface récente) → *Add* :
+   sous-domaine `render`, domaine `example.com`, service `HTTP` et URL `127.0.0.1:8787`.
+   Cloudflare crée l'enregistrement DNS ; le HTTPS public est assuré par Cloudflare.
 2. **Identité** (*Settings* → *Authentication* → *Login methods*) : ajouter GitHub (application
    OAuth GitHub dont l'URL de callback est `https://<équipe>.cloudflareaccess.com/cdn-cgi/access/callback`).
 3. **Application Access** (*Access* → *Applications* → *Self-hosted*) sur `render.example.com` :
@@ -106,6 +109,17 @@ Prérequis : un domaine géré par Cloudflare (le plan gratuit suffit, Zero Trus
 Si le navigateur bloque les cookies tiers (Safari, navigation privée), l'appel échoue faute de
 session Access : utiliser Chrome/Edge, ou une politique Access *Bypass* et le jeton seul (moins sûr :
 seul le jeton protège alors le serveur).
+
+### Sans domaine
+
+Sans domaine géré par Cloudflare, pas de *Public Hostname* ni d'Access ; le serveur est alors
+protégé par `MX_REMOTE_TOKEN` seul (ne pas définir `MX_REMOTE_ACCESS_*`) :
+
+- **Quick Tunnel** (tests, sans compte) : `cloudflared tunnel --url http://127.0.0.1:8787` affiche
+  une URL `https://….trycloudflare.com`, différente à chaque lancement et sans garantie de service.
+- **Tailscale Funnel** (gratuit, URL fixe) : `tailscale funnel --bg 8787` publie
+  `https://<machine>.<tailnet>.ts.net`.
+- Pour garder Access, enregistrer un domaine chez Cloudflare (*Domain Registration*, au prix coûtant).
 
 ## Alternative : VM Azure GPU Spot
 

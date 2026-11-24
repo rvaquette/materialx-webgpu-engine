@@ -48,7 +48,7 @@ export function loadRemoteSettings(): RemoteRenderSettings {
 }
 
 export function saveRemoteSettings(settings: RemoteRenderSettings): void {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(settings));
+  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(settings)); } catch { /* storage disabled: settings last for the page only */ }
 }
 
 /** The server URL; the token would leak over plain HTTP, which is only accepted on this machine. */

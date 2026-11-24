@@ -355,6 +355,10 @@ export class MaterialXScriptEditor {
       const settings = loadRemoteSettings();
       this.#remoteUrl.value = settings.url;
       this.#remoteToken.value = settings.token;
+      // Kept as typed, so a page reload does not lose them before a first remote render.
+      const save = () => saveRemoteSettings({ url: this.#remoteUrl.value.trim(), token: this.#remoteToken.value.trim() });
+      this.#remoteUrl.addEventListener('input', save);
+      this.#remoteToken.addEventListener('input', save);
     }
     this.#bind();
     this.#render();
