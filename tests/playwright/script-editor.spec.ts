@@ -47,6 +47,12 @@ async function type(page: Page, info: TestInfo, text: string): Promise<void> {
   await page.keyboard.type(text, { delay: demo(info) ? 70 : 0 });
 }
 
+/** CodeMirror ignores Enter for 75 ms after the completion list opens; a test types faster than that. */
+async function acceptCompletion(page: Page): Promise<void> {
+  await page.waitForTimeout(100);
+  await page.keyboard.press('Enter');
+}
+
 async function openEditor(page: Page, url = '/'): Promise<Editor> {
   await page.goto(url);
   await page.locator('#open-script-editor').click();
@@ -154,6 +160,17 @@ test('documente au survol, enregistre, partage et insère des modèles', async (
   }).mxGraph.point('noise', 'widget', 'octaves'));
   await page.mouse.click(arrow!.x, arrow!.y);
   await expectCode(e, 'noise.octaves = 5;');
+  // « Ajouter un nœud en amont » lists nodes whose output has the input's type (color3 here).
+  await graph.evaluate((element) => {
+    void (element as HTMLElement & { mxGraph: { openUpstream(id: string, input: string): Promise<void> } })
+      .mxGraph.openUpstream('surface', 'specular_color');
+  });
+  const picker = e.panel.locator('.mx-graph-picker');
+  await expect(picker.locator('strong')).toHaveText('En amont de specular_color (color3)');
+  await expect(picker.getByRole('option', { name: /^blend\.out/ })).toBeVisible();
+  await picker.getByRole('searchbox').fill('ND_image_color3');
+  await page.keyboard.press('Enter');
+  await expectCode(e, 'image = new Image("ND_image_color3");\nsurface.specular_color = image.out;');
   await pause(page, info);
 
   await e.panel.getByTestId('script-name').fill('essai');
@@ -186,7 +203,7 @@ test('IntelliSense propose les nœuds et leurs entrées/sorties issues des NodeD
   await expect(e.completions).toBeVisible();
   await expect(e.completions.getByRole('option').first()).toContainText('Image');
   await pause(page, info);
-  await page.keyboard.press('Enter');
+  await acceptCompletion(page);
   await expect.poll(() => scriptOf(e)).toBe('img = new Image()');
   await page.keyboard.press('End');
 
@@ -195,17 +212,17 @@ test('IntelliSense propose les nœuds et leurs entrées/sorties issues des NodeD
   await expect(e.completions).toContainText('entrée filename');
   await pause(page, info);
   await type(page, info, 'fi');
-  await page.keyboard.press('Enter');
+  await acceptCompletion(page);
   await type(page, info, ' = "wood.jpg";\nsurface = new StandardSurface();\nsurface.base_c');
   await expect(e.completions.getByRole('option').first()).toContainText('base_color');
   await pause(page, info);
-  await page.keyboard.press('Enter');
+  await acceptCompletion(page);
 
   await type(page, info, ' = img.');
   await expect(e.completions.getByRole('option').first()).toContainText('out');
   await expect(e.completions.getByRole('option').first()).toContainText('sortie color3');
   await pause(page, info);
-  await page.keyboard.press('Enter');
+  await acceptCompletion(page);
   await type(page, info, ';');
 
   await expect.poll(() => scriptOf(e)).toBe('img = new Image();\nimg.file = "wood.jpg";\nsurface = new StandardSurface();\nsurface.base_color = img.out;');

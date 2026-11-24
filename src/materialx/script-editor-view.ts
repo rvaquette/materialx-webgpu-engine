@@ -22,7 +22,7 @@ import {
 } from './script-api.ts';
 import {
   ASSIGNMENT, DEFAULT_SCRIPT, escapeHtml, formatValue, fromHex, parseLiteral, scriptCompletions, scriptHover, scriptLiteral, scriptTokens,
-  scriptVariables, setScriptInput, toHex, type ScriptEditorOptions,
+  scriptVariables, setScriptInput, addScriptUpstream, toHex, type ScriptEditorOptions,
 } from './script-editor.ts';
 import { layoutScriptGraph } from './script-graph-layout.ts';
 import { loadDraft, saveDraft, ScriptStore, shareLink } from './script-store.ts';
@@ -33,7 +33,7 @@ import {
   type RemoteJobAction, type RemoteRenderSettings,
 } from '../remote-render.ts';
 import { ICON_BUTTON_STYLE, iconButton, setIconButton } from '../ui/icons.ts';
-import { NodeGraphView, type GraphInput, type GraphLink, type GraphNode, type GraphWidget } from '../ui/node-graph-view.ts';
+import { NodeGraphView, type GraphInput, type GraphLink, type GraphNode, type GraphWidget, type PickerGroup } from '../ui/node-graph-view.ts';
 
 const STYLE = `
 #script-editor-panel { position: fixed; top: 0; right: 0; bottom: 0; width: min(600px, 100vw); z-index: 1000;
@@ -1035,6 +1035,8 @@ export class MaterialXScriptEditor {
           const port = this.#graphNodes.find(node => node.name === id)?.def.inputs.find(candidate => candidate.name === input);
           if (port?.default !== undefined) this.#editInput(id, input, scriptLiteral(port.default));
         },
+        upstreamChoices: (id, input) => this.#upstreamChoices(id, input),
+        onPickUpstream: (id, input, value) => this.#pickUpstream(id, input, value),
       });
     }
     this.#graphView.set(graphNodes, links, positions);
@@ -1043,6 +1045,45 @@ export class MaterialXScriptEditor {
 
   #isVariable(name: string): boolean {
     return !!this.#library && scriptVariables(this.script, this.#library).has(name);
+  }
+
+  /** Script variables and library NodeDefs whose output has the type of `id.input`. */
+  #upstreamChoices(id: string, input: string): PickerGroup[] {
+    const library = this.#library;
+    const type = this.#graphNodes.find(node => node.name === id)?.def.inputs.find(port => port.name === input)?.type;
+    if (!library || !type) return [];
+    const variables = scriptVariables(this.script, library);
+    const existing = this.#graphNodes.filter(node => node.name !== id && variables.has(node.name)).flatMap(node =>
+      node.def.outputs.filter(port => port.type === type).map(port => ({
+        label: `${node.name}.${port.name}`, detail: node.def.name, value: JSON.stringify({ existing: node.name, output: port.name }),
+      })));
+    const created = library.classNames.flatMap(className => library.variants(library.categoryOf(className)!).flatMap(def =>
+      def.outputs.filter(port => port.type === type).map(port => ({
+        label: `${className}${port.name !== 'out' ? `.${port.name}` : ''}`, detail: def.name,
+        value: JSON.stringify({ def: def.name, category: def.category, className, output: port.name }),
+      }))));
+    return [{ label: 'Nœuds du script', items: existing }, { label: `Nouveau nœud (sortie ${type})`, items: created }];
+  }
+
+  #pickUpstream(id: string, input: string, value: string): void {
+    const choice = JSON.parse(value) as { existing: string; output: string } | { def: string; category: string; className: string; output: string };
+    if ('existing' in choice) {
+      this.#editInput(id, input, `${choice.existing}.${choice.output}`);
+      return;
+    }
+    if (this.#state() !== 'idle' || !this.#isVariable(id)) {
+      this.#setStatus(`${id} : ajout impossible ${this.#state() !== 'idle' ? 'pendant une exécution' : 'sans variable dans le script'}.`, true);
+      return;
+    }
+    const before = this.script;
+    const line = this.#graphNodes.find(node => node.name === id)?.line;
+    const { code, variable } = addScriptUpstream(before, id, input, { name: choice.def, category: choice.category, className: choice.className }, choice.output, line);
+    let start = 0;
+    while (start < before.length && start < code.length && before[start] === code[start]) start++;
+    let end = 0;
+    while (end < before.length - start && end < code.length - start && before[before.length - 1 - end] === code[code.length - 1 - end]) end++;
+    this.#view.dispatch({ changes: { from: start, to: before.length - end, insert: code.slice(start, code.length - end) } });
+    this.#log('info', `Graphe : ${variable} = new ${choice.className}() ajouté en amont de ${id}.${input}.`);
   }
 
   #goToNode(id: string): void {

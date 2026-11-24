@@ -423,3 +423,21 @@ export function setScriptInput(code: string, node: string, input: string, expres
 export function scriptLiteral(value: ScriptValue): string {
   return formatValue(value);
 }
+/**
+ * `code` with a new `variable = new ClassName("nodedef");` feeding `node.input` from its `output`,
+ * inserted just before the assignment. Returns the new code and the variable.
+ */
+export function addScriptUpstream(
+  code: string, node: string, input: string, def: Pick<ScriptNodeDef, 'name' | 'category' | 'className'>, output: string, nodeLine?: number,
+): { code: string; variable: string } {
+  const base = def.category.replace(/[^\w$]/g, '_').replace(/^(\d)/, '_$1');
+  let variable = base;
+  for (let i = 2; new RegExp(`(^|[^\\w$.])${escapeRegExp(variable)}(?![\\w$])`).test(code); i++) variable = `${base}${i}`;
+  const linked = setScriptInput(code, node, input, `${variable}.${output}`, nodeLine);
+  const lines = linked.split('\n');
+  const assignment = new RegExp(`^(\\s*)${escapeRegExp(node)}\\.${escapeRegExp(input)}\\s*=\\s*${escapeRegExp(variable)}\\.`);
+  const index = lines.findIndex(line => assignment.test(line));
+  const indent = index >= 0 ? assignment.exec(lines[index]!)![1] : '';
+  lines.splice(index >= 0 ? index : lines.length, 0, `${indent}${variable} = new ${def.className}(${JSON.stringify(def.name)});`);
+  return { code: lines.join('\n'), variable };
+}

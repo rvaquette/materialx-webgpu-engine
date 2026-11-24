@@ -8,7 +8,9 @@ import type { BackendKind, InteractiveViewer, MaterialVariantSlot } from './rend
 import type { MaterialPreviewOptions } from './render/material-preview.ts';
 import type { RgbaCapture } from './gpu/capture.ts';
 import { compatibleNodeOutputChoices, type MaterialGraphOutput, type MaterialParameter } from './render/material-parameters.ts';
-import type { GraphInput, GraphLink, GraphNode, GraphValue, GraphWidget, NodeGraphView } from './ui/node-graph-view.ts';
+import type {
+  GraphInput, GraphLink, GraphNode, GraphValue, GraphViewport, GraphWidget, NodeGraphView, PickerGroup,
+} from './ui/node-graph-view.ts';
 
 // litegraph is loaded when a graph is first shown.
 let nodeGraphModule: Promise<typeof import('./ui/node-graph-view.ts')> | undefined;
@@ -22,6 +24,9 @@ const MAX_SAVED_POSITION = 100_000;
 type NodePosition = { x: number; y: number };
 const savedPositions = new WeakMap<ResolvedGraph, Map<string, NodePosition>>();
 const positionStoragePrefix = 'material-graph-layout:v1:';
+const INPUT_MODE_KEY = 'material-graph-inputs:v1';
+/** Pan and zoom of the last graph shown in a dialog, kept while editing the same material. */
+const viewports = new WeakMap<HTMLDialogElement, { material: string; viewport: GraphViewport }>();
 const BACKEND_LABELS: Readonly<Record<BackendKind, string>> = { raster: 'raster', pathtracing: 'path tracing MaterialX', disney: 'Disney' };
 
 interface GraphParameterEditing {
@@ -489,7 +494,7 @@ export function showMaterialGraph(
   function setExporting(value: boolean): void {
     exporting = value;
     exportButton.disabled = value || applying;
-    for (const button of details.querySelectorAll<HTMLButtonElement>('[data-export-variant]')) button.disabled = value;
+    for (const button of dialog.querySelectorAll<HTMLButtonElement>('[data-export-variant]')) button.disabled = value;
   }
   async function exportGraph(snapshot: ResolvedGraph, name: string): Promise<void> {
     if (exporting || applying) return;
@@ -548,7 +553,10 @@ export function showMaterialGraph(
   };
   const canvasHost = document.createElement('div');
   canvasHost.className = 'material-graph-canvas';
-  diagram.append(nodeChooser, canvasHost);
+  const graphBar = document.createElement('div');
+  graphBar.className = 'material-graph-bar';
+  graphBar.append(nodeChooser);
+  diagram.append(graphBar, canvasHost);
   let graphView: NodeGraphView | undefined;
   const surface = canvasHost;
   reset.onclick = () => {
@@ -558,8 +566,30 @@ export function showMaterialGraph(
     showGraphView(true);
   };
   let applying = false;
-  /** In-graph edits (links, parameter widgets) rebuild the dialog like the details form does. */
-  async function graphEdit(edit: () => Promise<ResolvedGraph | void>, selectId: (graph: ResolvedGraph) => string, message: string): Promise<void> {
+  // Inputs shown on nodes: those the document publishes (engine:editable when it selects inputs
+  // explicitly, else the authored ones), or every input of the NodeDef.
+  let inputMode: 'published' | 'all' = (() => {
+    try { return localStorage.getItem(INPUT_MODE_KEY) === 'all' ? 'all' : 'published'; } catch { return 'published'; }
+  })();
+  const modeChooser = document.createElement('select');
+  modeChooser.setAttribute('aria-label', 'Entrées affichées sur les nœuds');
+  modeChooser.add(new Option('Entrées publiées par le .mtlx', 'published'));
+  modeChooser.add(new Option('Toutes les entrées (NodeDef)', 'all'));
+  modeChooser.value = inputMode;
+  modeChooser.onchange = () => {
+    inputMode = modeChooser.value === 'all' ? 'all' : 'published';
+    try { localStorage.setItem(INPUT_MODE_KEY, inputMode); } catch { /* not remembered */ }
+    showGraphView(false);
+    // Node heights change with the number of inputs: frame the graph again.
+    graphView?.fit();
+  };
+  graphBar.append(modeChooser);
+  const explicitSelection = [...nodes.values()].some(node => node.inputs.some(input => input.editable !== undefined));
+  function rememberViewport(): void {
+    if (graphView) viewports.set(dialog, { material, viewport: graphView.viewport });
+  }
+  /** In-graph edits rebuild the dialog on the edited graph, keeping the view's pan and zoom. */
+  async function graphEdit(edit: () => Promise<ResolvedGraph | undefined>, selectId: (graph: ResolvedGraph) => string, message: string): Promise<void> {
     if (applying || !editing) return;
     applying = true;
     exportButton.disabled = true;
@@ -567,16 +597,21 @@ export function showMaterialGraph(
     preview?.pause();
     try {
       const updated = await edit();
-      if (updated) {
-        if (!savedPositions.has(updated)) {
-          savedPositions.set(updated, new Map([...overrides].filter(([key]) => updated.nodes.has(key))));
-        }
-        applying = false;
-        if (dialog.open && surface.isConnected) {
-          showMaterialGraph(dialog, updated, material, editing, { id: selectId(updated), message }, positionScope);
-        }
-      }
       exportStatus.textContent = '';
+      applying = false;
+      if (!dialog.open || !surface.isConnected) return;
+      if (!updated) {
+        refreshBackendDiagnostics();
+        preview?.refresh();
+        showGraphView(false);
+        select(nodeChooser.value, message);
+        return;
+      }
+      if (!savedPositions.has(updated)) {
+        savedPositions.set(updated, new Map([...overrides].filter(([key]) => updated.nodes.has(key))));
+      }
+      rememberViewport();
+      showMaterialGraph(dialog, updated, material, editing, { id: selectId(updated), message }, positionScope);
     } catch (error) {
       exportStatus.textContent = `Échec : ${error instanceof Error ? error.message : String(error)}`;
       showGraphView(false);
@@ -586,6 +621,24 @@ export function showMaterialGraph(
       if (surface.isConnected) exportButton.disabled = exporting;
     }
   }
+  /** Graph value of a MaterialX literal, or undefined when it has no inline editor. */
+  function literalValue(type: string, text: string | undefined): GraphValue | undefined {
+    if (text === undefined) return undefined;
+    if (type === 'float' || type === 'integer') return Number.isFinite(Number(text)) && text.trim() !== '' ? Number(text) : undefined;
+    if (type === 'boolean') return text.trim() === 'true';
+    if (/^(color|vector)[234]$/.test(type)) {
+      const values = text.split(/[,\s]+/).filter(Boolean).map(Number);
+      return values.length && values.every(Number.isFinite) ? values : undefined;
+    }
+    return type === 'string' ? text : undefined;
+  }
+  function widgetFor(type: string, min?: number, max?: number): GraphWidget {
+    if (type === 'boolean') return { kind: 'toggle' };
+    if (type === 'float' || type === 'integer') {
+      return { kind: 'number', integer: type === 'integer', ...(min !== undefined ? { min } : {}), ...(max !== undefined ? { max } : {}) };
+    }
+    return { kind: 'text' };
+  }
   function graphModel(): { models: GraphNode[]; links: GraphLink[] } {
     const models: GraphNode[] = [];
     const links: GraphLink[] = [];
@@ -593,16 +646,25 @@ export function showMaterialGraph(
       const outputs = node.nodeDef?.outputs?.length ? node.nodeDef.outputs.map(output => ({ name: output.name, type: output.type }))
         : [{ name: 'out', type: node.type }];
       const parameters = new Map(editing?.parameters(node.id).map(parameter => [parameter.input, parameter]));
-      const inputs: GraphInput[] = node.inputs.map((input) => {
-        const parameter = input.source.kind === 'value' ? parameters.get(input.name) : undefined;
-        if (!parameter) return { name: input.name, type: input.type };
-        const scalar = parameter.value.length === 1;
-        const value: GraphValue = parameter.type === 'boolean' ? parameter.value[0] === 1 : scalar ? parameter.value[0]! : parameter.value;
-        const widget: GraphWidget = parameter.type === 'boolean' ? { kind: 'toggle' }
-          : scalar ? { kind: 'number', integer: parameter.type === 'integer',
-            ...(parameter.min?.[0] !== undefined ? { min: parameter.min[0] } : {}), ...(parameter.max?.[0] !== undefined ? { max: parameter.max[0] } : {}) }
-            : { kind: 'text' };
-        return { name: input.name, type: input.type, value, widget };
+      const definitions = node.nodeDef?.inputs ?? [];
+      const authored = new Map(node.inputs.map(input => [input.name, input]));
+      const shown = inputMode === 'all'
+        ? [...definitions.map(definition => definition.name), ...node.inputs.map(input => input.name).filter(name => !definitions.some(definition => definition.name === name))]
+        : node.inputs.filter(input => !explicitSelection || input.editable === true || input.source.kind === 'connection').map(input => input.name);
+      const inputs: GraphInput[] = shown.map((name) => {
+        const input = authored.get(name);
+        const definition = definitions.find(candidate => candidate.name === name);
+        const type = input?.type ?? definition!.type;
+        if (input?.source.kind === 'connection' || input?.source.kind === 'interface' || type === 'filename') return { name, type };
+        const parameter = input?.source.kind === 'value' ? parameters.get(name) : undefined;
+        if (parameter) {
+          const scalar = parameter.value.length === 1;
+          const value: GraphValue = parameter.type === 'boolean' ? parameter.value[0] === 1 : scalar ? parameter.value[0]! : parameter.value;
+          return { name, type, value, widget: scalar ? widgetFor(parameter.type, parameter.min?.[0], parameter.max?.[0]) : { kind: 'text' } };
+        }
+        const text = input?.source.kind === 'value' ? input.source.value : definition?.geomprop === undefined ? definition?.value : undefined;
+        const value = literalValue(type, text);
+        return value === undefined ? { name, type } : { name, type, value, widget: widgetFor(type, definition?.uiMin, definition?.uiMax) };
       });
       for (const input of node.inputs) {
         if (input.source.kind !== 'connection' || !nodes.has(input.source.nodeId)) continue;
@@ -627,6 +689,37 @@ export function showMaterialGraph(
     if (useLayout) graphView.resetPositions();
     graphView.set(models, links, new Map([...layout.positions].map(([id, { x, y }]) => [id, [x, y] as const])));
   }
+  function inputType(id: string, input: string): string | undefined {
+    const node = nodes.get(id);
+    return node?.inputs.find(candidate => candidate.name === input)?.type ?? node?.nodeDef?.inputs?.find(candidate => candidate.name === input)?.type;
+  }
+  type UpstreamChoice = { kind: 'existing'; nodeId: string; output: string } | { kind: 'new'; nodeDef: string; output: string };
+  function upstreamChoices(id: string, input: string): PickerGroup[] {
+    const type = inputType(id, input);
+    if (!editing || !type) return [];
+    const existing = editing.outputs(id, input).filter(output => output.nodeId !== id).map(output => ({
+      label: `${output.nodeId.split('/').at(-1)}.${output.output}`, detail: output.nodeId,
+      value: JSON.stringify({ kind: 'existing', nodeId: output.nodeId, output: output.output } satisfies UpstreamChoice),
+    }));
+    const created = compatibleNodeOutputChoices(editing.nodeDefinitions(), type).map(choice => ({
+      label: `${choice.nodeDef.nodeString}${choice.output.name !== 'out' ? `.${choice.output.name}` : ''}`,
+      detail: `${choice.nodeDef.name}${SURFACE_IR_UPSTREAM.has(choice.nodeDef.nodeString) ? '' : ' — rendu WGSL non pris en charge'}`,
+      value: JSON.stringify({ kind: 'new', nodeDef: choice.nodeDef.name, output: choice.output.name } satisfies UpstreamChoice),
+    }));
+    return [{ label: 'Nœuds du graphe', items: existing }, { label: `Nouveau nœud MaterialX (sortie ${type})`, items: created }];
+  }
+  function pickUpstream(id: string, input: string, value: string): void {
+    const choice = JSON.parse(value) as UpstreamChoice;
+    void graphEdit(
+      () => choice.kind === 'existing' ? editing!.setInputLink(id, input, choice.nodeId, choice.output)
+        : editing!.addNode(id, input, choice.nodeDef, choice.output),
+      (updated) => {
+        const binding = updated.nodes.get(id)?.inputs.find(candidate => candidate.name === input)?.source;
+        return binding?.kind === 'connection' ? binding.nodeId : id;
+      },
+      choice.kind === 'new' ? `Nœud MaterialX ajouté en amont de ${input}.` : `Sortie connectée à ${input}.`,
+    );
+  }
   void loadNodeGraphView().then(({ NodeGraphView: View }) => {
     if (!surface.isConnected) return;
     graphView = new View(canvasHost, {
@@ -639,11 +732,19 @@ export function showMaterialGraph(
       },
       onValue: (id, input, value) => {
         const parameter = editing?.parameters(id).find(candidate => candidate.input === input);
-        if (!parameter) return;
-        const values = typeof value === 'boolean' ? [Number(value)] : typeof value === 'number' ? [value] : Array.isArray(value) ? [...value] : undefined;
-        if (!values || values.length !== parameter.value.length) return;
-        void graphEdit(() => editing!.apply(new Map([[parameter.id, values]])).then(updated => updated ?? undefined),
-          () => id, `${input} modifié.`).then(() => { if (dialog.open) select(id, `${input} modifié.`); });
+        const node = nodes.get(id);
+        if (parameter && node?.inputs.find(candidate => candidate.name === input)?.source.kind === 'value') {
+          const values = typeof value === 'boolean' ? [Number(value)] : typeof value === 'number' ? [value] : Array.isArray(value) ? [...value] : undefined;
+          if (!values || values.length !== parameter.value.length) return;
+          void graphEdit(async () => {
+            const updated = await editing!.apply(new Map([[parameter.id, values]]));
+            if (updated) { currentGraph = updated; nodes = updated.nodes; savedPositions.set(updated, overrides); }
+            return undefined;
+          }, () => id, `${input} modifié.`);
+          return;
+        }
+        const text = Array.isArray(value) ? value.join(', ') : String(value);
+        void graphEdit(() => editing!.setInputValue(id, input, text), () => id, `${input} modifié.`);
       },
       onLink: link => void graphEdit(() => editing!.setInputLink(link.to, link.input, link.from, link.output), () => link.to, 'Sortie connectée.'),
       onUnlink: (id, input) => {
@@ -654,302 +755,101 @@ export function showMaterialGraph(
           showGraphView(false);
         }
       },
+      ...(editing ? { upstreamChoices, onPickUpstream: pickUpstream } : {}),
     });
+    const kept = viewports.get(dialog);
     showGraphView(false);
-    graphView.select(nodeChooser.value, true);
+    if (kept?.material === material) graphView.viewport = kept.viewport;
+    graphView.select(nodeChooser.value, kept?.material !== material);
   });
+  dialog.addEventListener('close', rememberViewport, { once: true });
+
+  // A/B variants: saved, shown and exported from the bar above the graph.
+  const variants = editing?.variants();
+  if (comparison) comparison.section.hidden = !variants || variants.A === 'empty' || variants.B === 'empty';
+  let variantComparisonTable: HTMLElement | undefined;
+  if (editing && variants) {
+    const tools = document.createElement('span');
+    tools.className = 'material-graph-variants';
+    tools.setAttribute('role', 'group');
+    tools.setAttribute('aria-label', 'Variantes A/B');
+    const a = editing.variantGraph('A');
+    const b = editing.variantGraph('B');
+    for (const slot of ['A', 'B'] as const) {
+      const save = document.createElement('button');
+      save.type = 'button';
+      save.textContent = variants[slot] === 'empty' ? `Enregistrer ${slot}` : `Remplacer ${slot}`;
+      save.disabled = variants[slot] === 'active';
+      save.onclick = () => {
+        try {
+          editing.saveVariant(slot);
+          persistPositions(slot);
+          comparison?.invalidate();
+          rememberViewport();
+          showMaterialGraph(dialog, currentGraph, material, editing, { id: nodeChooser.value, message: `Variante ${slot} enregistrée.` }, positionScope);
+        } catch (error) {
+          exportStatus.textContent = `Échec : ${error instanceof Error ? error.message : String(error)}`;
+        }
+      };
+      const apply = document.createElement('button');
+      apply.type = 'button';
+      apply.textContent = variants[slot] === 'active' ? `${slot} active` : `Afficher ${slot}`;
+      apply.disabled = variants[slot] !== 'saved';
+      apply.onclick = () => {
+        const id = nodeChooser.value;
+        void graphEdit(() => editing.applyVariant(slot), updated =>
+          updated.nodes.has(id) ? id : updated.terminals.find(terminal => terminal.name === 'surfaceshader')?.nodeId ?? id,
+        `Variante ${slot} affichée.`);
+      };
+      tools.append(save, apply);
+      const snapshot = slot === 'A' ? a : b;
+      if (snapshot) {
+        const download = document.createElement('button');
+        download.type = 'button';
+        download.textContent = `Exporter ${slot}`;
+        download.dataset.exportVariant = slot;
+        download.disabled = exporting;
+        download.onclick = () => exportGraph(snapshot, `${material || 'Material'}_${slot}`);
+        tools.append(download);
+      }
+    }
+    graphBar.append(tools);
+    if (a && b) variantComparisonTable = variantComparison([a, b]);
+  }
+
+  /** Information on the selected node; its inputs are edited in the graph itself. */
   function select(id: string, message = ''): void {
     if (applying) return;
-    const node = nodes.get(id)!;
+    const node = nodes.get(id);
+    if (!node) return;
     nodeChooser.value = id;
     graphView?.select(id);
     const heading = document.createElement('h3');
     heading.textContent = `${node.id} · ${node.category} (${node.type})`;
-    details.replaceChildren(heading);
+    const status = document.createElement('p');
+    status.role = 'status';
+    status.textContent = message;
+    details.replaceChildren(heading, status);
     if (unsupportedNodes.has(id)) {
       const warning = document.createElement('p');
       warning.className = 'material-graph-warning';
       warning.textContent = 'Aucun lowering WGSL : la contribution peut être remplacée par une valeur neutre.';
       details.append(warning);
     }
-    if (!node.inputs.length) details.append('Aucune entrée.');
-    const parameters = new Map(editing?.parameters(id).map(parameter => [parameter.input, parameter]));
-    const diagnostics = new Map(editing?.diagnostics(id).map(diagnostic => [diagnostic.input, diagnostic]));
-    const form = document.createElement('form');
-    const fields = document.createElement('fieldset');
-    const editors: { parameter: MaterialParameter; controls: HTMLInputElement[] }[] = [];
-    const literalEditors: { control: HTMLInputElement; initial: string }[] = [];
-    const status = document.createElement('p');
-    status.role = 'status';
-    status.textContent = message;
-    form.append(fields, status);
-    details.append(form);
-    const changesFromForm = () => {
-      const changes = new Map<string, readonly number[]>();
-      for (const { parameter, controls } of editors) {
-        const values = controls.map(control => control.type === 'checkbox' ? Number(control.checked) : control.valueAsNumber);
-        if (values.some((value, index) => value !== parameter.value[index])) changes.set(parameter.id, values);
-      }
-      return changes;
-    };
-    async function changeTopology(
-      edit: () => Promise<ResolvedGraph>, next: (graph: ResolvedGraph) => string, message: string,
-      committingLiteral?: HTMLInputElement,
-    ): Promise<void> {
-      if (applying) return;
-      if (changesFromForm().size || literalEditors.some(editor =>
-        editor.control !== committingLiteral && editor.control.value !== editor.initial)) {
-        status.textContent = 'Applique les valeurs modifiées avant de modifier le graphe.';
-        return;
-      }
-      applying = true;
-      fields.disabled = true;
-      exportButton.disabled = true;
-      status.textContent = 'Modification du graphe…';
-      preview?.pause();
-      try {
-        const updated = await edit();
-        if (!savedPositions.has(updated)) {
-          savedPositions.set(updated, new Map([...overrides].filter(([key]) => updated.nodes.has(key))));
-        }
-        if (dialog.open && surface.isConnected) showMaterialGraph(dialog, updated, material, editing, {
-          id: next(updated), message,
-        }, positionScope);
-      } catch (error) {
-        status.textContent = `Échec : ${error instanceof Error ? error.message : String(error)}`;
-        preview?.refresh();
-      } finally {
-        applying = false;
-        fields.disabled = false;
-        if (surface.isConnected) exportButton.disabled = exporting;
-      }
+    for (const diagnostic of editing?.diagnostics(id) ?? []) {
+      const warning = document.createElement('p');
+      warning.className = 'material-graph-warning';
+      warning.textContent = `${diagnostic.input} : ${diagnosticText(diagnostic)}`;
+      details.append(warning);
     }
-    const variants = editing?.variants();
-    if (comparison) comparison.section.hidden = !variants || variants.A === 'empty' || variants.B === 'empty';
-    if (editing && variants) {
-      const tools = document.createElement('div');
-      tools.setAttribute('role', 'group');
-      tools.setAttribute('aria-label', 'Variantes A/B');
-      const a = editing.variantGraph('A');
-      const b = editing.variantGraph('B');
-      for (const slot of ['A', 'B'] as const) {
-        const save = document.createElement('button');
-        save.type = 'button';
-        save.textContent = variants[slot] === 'empty' ? `Enregistrer ${slot}` : `Remplacer ${slot}`;
-        save.disabled = variants[slot] === 'active';
-        save.onclick = () => {
-          if (changesFromForm().size || literalEditors.some(editor => editor.control.value !== editor.initial)) {
-            status.textContent = 'Applique les valeurs modifiées avant d’enregistrer la variante.';
-            return;
-          }
-          try {
-            editing.saveVariant(slot);
-            persistPositions(slot);
-            comparison?.invalidate();
-            select(id, `Variante ${slot} enregistrée.`);
-            nodeChooser.focus({ preventScroll: true });
-          } catch (error) {
-            status.textContent = `Échec : ${error instanceof Error ? error.message : String(error)}`;
-          }
-        };
-        const apply = document.createElement('button');
-        apply.type = 'button';
-        apply.textContent = variants[slot] === 'active' ? `${slot} active` : `Afficher ${slot}`;
-        apply.disabled = variants[slot] !== 'saved';
-        apply.onclick = () => changeTopology(() => editing.applyVariant(slot), updated =>
-          updated.nodes.has(id) ? id : updated.terminals.find(terminal => terminal.name === 'surfaceshader')?.nodeId ?? id,
-        `Variante ${slot} affichée.`);
-        tools.append(save, ' ', apply, ' ');
-        const snapshot = slot === 'A' ? a : b;
-        if (snapshot) {
-          const download = document.createElement('button');
-          download.type = 'button';
-          download.textContent = `Exporter ${slot}`;
-          download.dataset.exportVariant = slot;
-          download.disabled = exporting;
-          download.onclick = () => exportGraph(snapshot, `${material || 'Material'}_${slot}`);
-          tools.append(download, ' ');
-        }
-      }
-      if (a && b) tools.append(variantComparison([a, b]));
-      fields.prepend(tools);
+    const files = node.inputs.filter(input => input.type === 'filename' && input.source.kind === 'value');
+    if (files.length) {
+      const note = document.createElement('p');
+      note.textContent = `Fichiers (lecture seule) : ${files.map(input => `${input.name} = ${input.source.kind === 'value' ? input.source.value : ''}`).join(' ; ')}`;
+      details.append(note);
     }
-    for (const input of node.inputs) {
-      const row = document.createElement('p');
-      const { source } = input;
-      row.textContent = `${input.name} (${input.type}) : `;
-      const parameter = parameters.get(input.name);
-      if (parameter && source.kind === 'value') {
-        const controls = parameter.value.map((value, index) => {
-          const control = document.createElement('input');
-          control.setAttribute('aria-label', parameter.value.length === 1 ? input.name : `${input.name}, composante ${index + 1}`);
-          if (parameter.type === 'boolean') {
-            control.type = 'checkbox';
-            control.checked = value === 1;
-          } else {
-            control.type = 'number';
-            control.required = true;
-            control.step = parameter.type === 'integer' ? '1' : 'any';
-            control.value = String(value);
-            if (parameter.min?.[index] !== undefined) control.min = String(parameter.min[index]);
-            if (parameter.max?.[index] !== undefined) control.max = String(parameter.max[index]);
-          }
-          return control;
-        });
-        row.append(...controls);
-        editors.push({ parameter, controls });
-      } else if (source.kind === 'connection') {
-        const label = `${source.nodeId}${source.output ? `.${source.output}` : ''}`;
-        if (nodes.has(source.nodeId)) {
-          const link = document.createElement('button');
-          link.type = 'button';
-          link.textContent = label;
-          link.onclick = () => { select(source.nodeId); nodeChooser.focus(); };
-          row.append(link);
-        } else row.append(`${label} (indisponible)`);
-      } else {
-        row.append(source.kind === 'value' ? source.value
-          : source.kind === 'interface' ? `interface ${source.name}` : 'valeur par défaut');
-      }
-      if (editing && (source.kind === 'value' || source.kind === 'default')
-        && !parameter && input.parameter === undefined && input.type === 'filename') {
-        const warning = document.createElement('span');
-        warning.className = 'material-graph-warning';
-        warning.textContent = 'Fichier en lecture seule : sa modification nécessite de recharger les textures.';
-        row.append(' ', warning);
-      } else if (editing && (source.kind === 'value' || source.kind === 'default')
-        && !parameter && input.parameter === undefined) {
-        const literal = document.createElement('input');
-        literal.type = 'text';
-        literal.value = source.kind === 'value' ? source.value : '';
-        const initial = literal.value;
-        literal.setAttribute('aria-label', `${input.name} (${input.type})`);
-        const applyLiteral = document.createElement('button');
-        applyLiteral.type = 'button';
-        applyLiteral.textContent = 'Appliquer la valeur littérale';
-        applyLiteral.onclick = () => changeTopology(
-          () => editing.setInputValue(id, input.name, literal.value), () => id,
-          'Valeur littérale modifiée.', literal,
-        );
-        literalEditors.push({ control: literal, initial });
-        row.append(' ', literal, ' ', applyLiteral);
-      }
-        if (editing) {
-          const existingOutputs = editing.outputs(id, input.name);
-          const nodeChoices = compatibleNodeOutputChoices(editing.nodeDefinitions(), input.type);
-          if (existingOutputs.length || nodeChoices.length) {
-            type SourceChoice = { kind: 'existing'; nodeId: string; output: string }
-              | { kind: 'new'; nodeDef: string; output: string };
-            const sources = document.createElement('select');
-            sources.setAttribute('aria-label', `Sortie MaterialX compatible : ${input.name}`);
-            sources.add(new Option('Choisir une sortie compatible…', ''));
-            if (existingOutputs.length) {
-              const group = document.createElement('optgroup');
-              group.label = 'Nœuds du graphe';
-              for (const output of existingOutputs) {
-                const choice: SourceChoice = { kind: 'existing', nodeId: output.nodeId, output: output.output };
-                group.append(new Option(output.label, JSON.stringify(choice)));
-              }
-              sources.append(group);
-            }
-            if (nodeChoices.length) {
-              const group = document.createElement('optgroup');
-              group.label = 'Ajouter un NodeDef MaterialX';
-              for (const choice of nodeChoices) {
-                const value: SourceChoice = { kind: 'new', nodeDef: choice.nodeDef.name, output: choice.output.name };
-                const label = SURFACE_IR_UPSTREAM.has(choice.nodeDef.nodeString)
-                  ? choice.label : `${choice.label} — rendu WGSL non pris en charge (valeur neutre possible)`;
-                group.append(new Option(label, JSON.stringify(value)));
-              }
-              sources.append(group);
-            }
-            const connect = document.createElement('button');
-            connect.type = 'button';
-            connect.textContent = 'Connecter au port';
-            connect.setAttribute('aria-label', `Connecter au port : ${input.name}`);
-            connect.disabled = true;
-            sources.onchange = () => { connect.disabled = !sources.value; };
-            connect.onclick = () => {
-              const choice = JSON.parse(sources.value) as SourceChoice;
-              const operation = choice.kind === 'existing'
-                ? editing.setInputLink(id, input.name, choice.nodeId, choice.output)
-                : editing.addNode(id, input.name, choice.nodeDef, choice.output);
-              void changeTopology(() => operation, updated => {
-                const binding = updated.nodes.get(id)?.inputs.find(candidate => candidate.name === input.name)?.source;
-                return binding?.kind === 'connection' ? binding.nodeId
-                  : updated.terminals.find(terminal => terminal.name === 'surfaceshader')?.nodeId ?? id;
-              }, choice.kind === 'new' ? 'Nœud MaterialX ajouté et connecté.' : 'Sortie connectée.');
-            };
-            row.append(' ', sources, ' ', connect);
-          }
-          if (editing.canUnlinkInput(id, input.name)) {
-            const unlink = document.createElement('button');
-            unlink.type = 'button';
-            unlink.textContent = 'Restaurer la connexion précédente';
-            unlink.setAttribute('aria-label', `Restaurer la connexion précédente : ${input.name}`);
-            unlink.onclick = () => changeTopology(
-              () => editing.setInputLink(id, input.name, null), () => id, 'Connexion précédente restaurée.',
-            );
-            row.append(' ', unlink);
-          }
-      }
-      const diagnostic = diagnostics.get(input.name);
-      if (diagnostic) {
-        const warning = document.createElement('span');
-        warning.className = 'material-graph-warning';
-        warning.textContent = diagnosticText(diagnostic);
-        row.append(warning);
-      }
-      fields.append(row);
-    }
-    if (!editing || !editors.length) return;
-    const apply = document.createElement('button');
-    apply.type = 'submit';
-    apply.textContent = 'Appliquer les valeurs';
-    fields.append(apply);
-    form.onsubmit = async event => {
-      event.preventDefault();
-      if (literalEditors.some(editor => editor.control.value !== editor.initial)) {
-        status.textContent = 'Applique les valeurs littérales avant les paramètres numériques.';
-        return;
-      }
-      if (applying) return;
-      const changes = changesFromForm();
-      if (!changes.size) {
-        status.textContent = 'Aucune valeur modifiée.';
-        return;
-      }
-      applying = true;
-      fields.disabled = true;
-      exportButton.disabled = true;
-      status.textContent = 'Application en cours…';
-      preview?.pause();
-      try {
-        const updated = await editing.apply(changes);
-        if (updated) {
-          currentGraph = updated;
-          nodes = updated.nodes;
-          savedPositions.set(updated, overrides);
-        }
-      } catch (error) {
-        status.textContent = `Échec : ${error instanceof Error ? error.message : String(error)}`;
-        preview?.refresh();
-        return;
-      } finally {
-        applying = false;
-        fields.disabled = false;
-        if (surface.isConnected) exportButton.disabled = exporting;
-      }
-      if (dialog.open && surface.isConnected) {
-        refreshBackendDiagnostics();
-        preview?.refresh();
-        select(id, 'Valeurs appliquées.');
-        showGraphView(false);
-        nodeChooser.focus({ preventScroll: true });
-      }
-    };
+    if (variantComparisonTable) details.append(variantComparisonTable);
   }
-
   const selected = selection && nodes.has(selection.id) ? selection.id
     : terminals.find(terminal => terminal.nodeId && nodes.has(terminal.nodeId))?.nodeId ?? nodes.keys().next().value!;
   select(selected, selection?.message);

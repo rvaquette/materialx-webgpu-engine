@@ -55,6 +55,55 @@ export interface NodeGraphHandlers {
   onUnlink?(id: string, input: string): void;
   onAddInput?(id: string, input: string): void;
   onMove?(id: string, position: readonly [number, number]): void;
+  /** Nodes that can feed `id.input` (already filtered by its type), offered by « Ajouter un nœud en amont ». */
+  upstreamChoices?(id: string, input: string): readonly PickerGroup[];
+  onPickUpstream?(id: string, input: string, value: string): void;
+}
+
+export interface PickerItem {
+  label: string;
+  detail?: string;
+  value: string;
+}
+
+export interface PickerGroup {
+  label: string;
+  items: readonly PickerItem[];
+}
+
+/** Pan and zoom of a view, to restore it when the graph is rebuilt. */
+export interface GraphViewport {
+  scale: number;
+  offset: readonly [number, number];
+}
+
+const PICKER_STYLE = `
+.mx-graph-picker { position: absolute; z-index: 5; width: min(360px, calc(100% - 16px)); max-height: min(360px, calc(100% - 16px));
+  display: flex; flex-direction: column; gap: 4px; padding: 6px; box-sizing: border-box; background: #20212b; color: #ddd;
+  border: 1px solid #596278; border-radius: 10px; box-shadow: 0 6px 24px #000a; font: 12px system-ui, sans-serif; }
+.mx-graph-picker strong { font-size: 12px; }
+.mx-graph-picker input { padding: 4px 8px; background: #15161d; color: #eee; border: 1px solid #555; border-radius: 8px; }
+.mx-graph-picker ul { margin: 0; padding: 0; list-style: none; overflow: auto; }
+.mx-graph-picker li { padding: 3px 8px; border-radius: 6px; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mx-graph-picker li[role="presentation"] { color: #8a93a8; cursor: default; font-weight: 600; padding-top: 6px; }
+.mx-graph-picker li[aria-selected="true"] { background: #04395e; color: #fff; }
+.mx-graph-picker li small { color: #8a93a8; margin-left: 6px; }
+.mx-graph-picker p { margin: 4px 8px; color: #8a93a8; }
+`;
+
+// litegraph appends its context menus to <body>, under a modal <dialog> (top layer): move them into it.
+let menuObserver: MutationObserver | undefined;
+function keepContextMenusVisible(): void {
+  menuObserver ??= new MutationObserver((records) => {
+    const dialog = [...document.querySelectorAll('dialog[open]')].filter(candidate => candidate.matches(':modal')).at(-1);
+    if (!dialog) return;
+    for (const record of records) {
+      for (const node of record.addedNodes) {
+        if (node instanceof HTMLElement && node.classList.contains('litecontextmenu')) dialog.append(node);
+      }
+    }
+  });
+  menuObserver.observe(document.body, { childList: true });
 }
 
 const NODE_COLORS = { color: '#2c3a52', bgcolor: '#1f2633', warning: '#5a3a1f' };
@@ -98,11 +147,17 @@ export class NodeGraphView {
     this.element.append(this.#canvas);
     Object.defineProperty(this.element, 'mxGraph', { value: this });
     container.append(this.element);
+    if (!document.getElementById('mx-graph-picker-style')) {
+      document.head.append(Object.assign(document.createElement('style'), { id: 'mx-graph-picker-style', textContent: PICKER_STYLE }));
+    }
+    keepContextMenusVisible();
     LiteGraph.release_link_on_empty_shows_menu = false;
     this.#view = new LGraphCanvas(this.#canvas, this.#graph);
     this.#view.allow_searchbox = false;
     this.#view.render_canvas_border = false;
     this.#view.show_info = false;
+    // litegraph drops all text below 0.6: keep labels readable down to the minimum fit zoom.
+    this.#view.low_quality_zoom_threshold = 0.3;
     this.#view.onNodeSelected = node => this.#handlers.onSelect?.(this.#ids.get(node));
     this.#view.onNodeDblClicked = (node) => {
       const id = this.#ids.get(node);
@@ -221,6 +276,100 @@ export class NodeGraphView {
     this.#fitted = false;
   }
 
+  get viewport(): GraphViewport {
+    return { scale: this.#view.ds.scale, offset: [this.#view.ds.offset[0], this.#view.ds.offset[1]] };
+  }
+
+  /** Restores a pan and zoom (instead of fitting the graph on the first `set()`). */
+  set viewport(viewport: GraphViewport) {
+    this.#view.ds.scale = viewport.scale;
+    this.#view.ds.offset[0] = viewport.offset[0];
+    this.#view.ds.offset[1] = viewport.offset[1];
+    this.#fitted = true;
+    this.#view.setDirty(true, true);
+  }
+
+  /**
+   * Opens a filterable list at the pointer position (page coordinates); resolves with the picked
+   * value, or undefined when dismissed (Échap, click outside).
+   */
+  pick(at: { x: number; y: number }, title: string, groups: readonly PickerGroup[]): Promise<string | undefined> {
+    this.element.querySelector('.mx-graph-picker')?.remove();
+    const bounds = this.element.getBoundingClientRect();
+    const popup = document.createElement('div');
+    popup.className = 'mx-graph-picker';
+    popup.setAttribute('role', 'dialog');
+    popup.setAttribute('aria-label', title);
+    const heading = Object.assign(document.createElement('strong'), { textContent: title });
+    const search = Object.assign(document.createElement('input'), { type: 'search', placeholder: 'Filtrer…' });
+    search.setAttribute('aria-label', 'Filtrer');
+    const list = document.createElement('ul');
+    list.setAttribute('role', 'listbox');
+    list.setAttribute('aria-label', title);
+    popup.append(heading, search, list);
+    this.element.append(popup);
+    const width = popup.offsetWidth;
+    const height = popup.offsetHeight;
+    popup.style.left = `${Math.max(8, Math.min(at.x - bounds.left, bounds.width - width - 8))}px`;
+    popup.style.top = `${Math.max(8, Math.min(at.y - bounds.top, bounds.height - height - 8))}px`;
+    return new Promise((resolve) => {
+      let items: { element: HTMLLIElement; value: string }[] = [];
+      let active = 0;
+      const close = (value?: string): void => {
+        document.removeEventListener('pointerdown', outside, true);
+        popup.remove();
+        this.#canvas.focus();
+        resolve(value);
+      };
+      const outside = (event: PointerEvent): void => { if (!popup.contains(event.target as Node)) close(); };
+      const highlight = (index: number): void => {
+        if (!items.length) return;
+        active = (index + items.length) % items.length;
+        items.forEach((item, i) => item.element.setAttribute('aria-selected', String(i === active)));
+        items[active]!.element.scrollIntoView({ block: 'nearest' });
+      };
+      const render = (): void => {
+        const words = search.value.toLowerCase().split(/\s+/).filter(Boolean);
+        list.replaceChildren();
+        items = [];
+        for (const group of groups) {
+          const matches = group.items.filter(item => words.every(word => `${item.label} ${item.detail ?? ''}`.toLowerCase().includes(word)));
+          if (!matches.length) continue;
+          list.append(Object.assign(document.createElement('li'), { role: 'presentation', textContent: group.label }));
+          for (const item of matches.slice(0, 300)) {
+            const element = document.createElement('li');
+            element.setAttribute('role', 'option');
+            element.textContent = item.label;
+            if (item.detail) element.append(Object.assign(document.createElement('small'), { textContent: item.detail }));
+            element.addEventListener('pointerdown', event => event.preventDefault());
+            element.addEventListener('click', () => close(item.value));
+            list.append(element);
+            items.push({ element, value: item.value });
+          }
+        }
+        if (!items.length) list.append(Object.assign(document.createElement('p'), { textContent: 'Aucun nœud compatible.' }));
+        highlight(0);
+      };
+      search.addEventListener('input', render);
+      search.addEventListener('keydown', (event) => {
+        event.stopPropagation();
+        if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+          event.preventDefault();
+          highlight(active + (event.key === 'ArrowDown' ? 1 : -1));
+        } else if (event.key === 'Enter') {
+          event.preventDefault();
+          close(items[active]?.value);
+        } else if (event.key === 'Escape') {
+          event.preventDefault();
+          close();
+        }
+      });
+      document.addEventListener('pointerdown', outside, true);
+      render();
+      search.focus();
+    });
+  }
+
   /** Selects a node; `center` also scrolls it into view (e.g. when chosen from a list). */
   select(id: string, center = false): void {
     const node = this.#nodes.get(id);
@@ -293,6 +442,19 @@ export class NodeGraphView {
       const input = node.inputs[index];
       if (input) this.#inputChanged(model.id, input.name);
     };
+    // Right click on an input: feed it from a new or existing node of its type.
+    node.getSlotMenuOptions = (slot) => {
+      const input = slot.input;
+      const items: IContextMenuValue[] = [];
+      if (input && model.editable && this.#handlers.upstreamChoices) {
+        items.push({
+          content: 'Ajouter un nœud en amont…',
+          callback: (_value, _options, event) => { void this.#openUpstream(model.id, input.name, event); },
+        });
+      }
+      if (input?.link != null || slot.output?.links?.length) items.push({ content: 'Disconnect Links', slot } as IContextMenuValue);
+      return items;
+    };
     const size = node.computeSize();
     node.size = [Math.max(size[0], 180), size[1]];
     return node;
@@ -357,7 +519,32 @@ export class NodeGraphView {
         submenu: { options: model.optionalInputs.map(input => ({ content: `${input.name} (${input.type})`, callback: () => { this.#handlers.onAddInput!(id, input.name); } })) },
       } as IContextMenuValue<string>);
     }
+    if (model.editable && (model.inputs.length || model.optionalInputs?.length) && this.#handlers.upstreamChoices) {
+      items.push({
+        content: 'Ajouter un nœud en amont de', has_submenu: true,
+        submenu: {
+          options: [...model.inputs, ...model.optionalInputs ?? []].map(input => ({
+            content: `${input.name} (${input.type})`,
+            callback: (_value: unknown, _options: unknown, event?: MouseEvent) => { void this.#openUpstream(id, input.name, event); },
+          })),
+        },
+      } as IContextMenuValue<string>);
+    }
     items.push({ content: 'Ajuster la vue', callback: () => { this.fit(); } });
     return items;
+  }
+
+  /** « Ajouter un nœud en amont » of `id.input`: lists the caller's choices, then reports the pick. */
+  async openUpstream(id: string, input: string, at?: { x: number; y: number }): Promise<void> {
+    const choices = this.#handlers.upstreamChoices?.(id, input) ?? [];
+    const model = this.#model.nodes.find(node => node.id === id);
+    const type = [...model?.inputs ?? [], ...model?.optionalInputs ?? []].find(candidate => candidate.name === input)?.type ?? '';
+    const bounds = this.element.getBoundingClientRect();
+    const value = await this.pick(at ?? { x: bounds.left + 24, y: bounds.top + 24 }, `En amont de ${input}${type ? ` (${type})` : ''}`, choices);
+    if (value !== undefined) this.#handlers.onPickUpstream?.(id, input, value);
+  }
+
+  #openUpstream(id: string, input: string, event?: MouseEvent): Promise<void> {
+    return this.openUpstream(id, input, event ? { x: event.clientX, y: event.clientY } : undefined);
   }
 }

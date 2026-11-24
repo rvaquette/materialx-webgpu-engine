@@ -142,6 +142,36 @@ describe('dynamic MaterialX parameters', () => {
       .toEqual({ kind: 'value', type: 'color3', value: '0.8, 0.8, 0.8' });
   });
 
+  it('edits and feeds NodeDef inputs the document does not author', async () => {
+    const resources = await fixture(false, graph => {
+      const surface = graph.nodes.get('surface')!;
+      surface.nodeDef = {
+        name: 'ND_standard_surface_surfaceshader', nodeString: 'standard_surface', type: 'surfaceshader',
+        implementation: { kind: 'unresolved' },
+        inputs: [{ name: 'base_color', type: 'color3', value: '0.8, 0.8, 0.8' }, { name: 'specular_roughness', type: 'float', value: '0.2' }],
+      };
+      surface.inputs = [{
+        name: 'base_color', type: 'color3', source: { kind: 'value', type: 'color3', value: '0.8, 0.8, 0.8' },
+        provenance: { namePath: '/surface/base_color' },
+      }];
+    });
+    const material = [...resources.materials.values()][0]!;
+    const roughness = (graph: typeof material) => graph.surfaceGraph!.nodes.get('surface')!.inputs.find(input => input.name === 'specular_roughness');
+    expect(roughness(material)).toBeUndefined();
+    expect(roughness(changeMaterialGraphInputValue(material, 'surface', 'specular_roughness', '0.6'))?.source)
+      .toEqual({ kind: 'value', type: 'float', value: '0.6' });
+    const scalar: ResolvedNodeDefRef = {
+      name: 'ND_constant_float', nodeString: 'constant', type: 'float', implementation: { kind: 'unresolved' },
+      inputs: [{ name: 'value', type: 'float', value: '0' }], outputs: [{ name: 'out', type: 'float' }],
+    };
+    const fed = addMaterialNodeFromDefinition(material, 'surface', 'specular_roughness', scalar.name, 'out', [scalar]);
+    expect(roughness(fed)?.source).toEqual({ kind: 'connection', nodeId: 'editor_node_1' });
+    // The NodeDef default seeds the new node, as an authored value would.
+    expect(fed.surfaceGraph!.nodes.get('editor_node_1')!.inputs[0]!.source).toMatchObject({ kind: 'value', value: '0.2' });
+    expect(compatibleMaterialGraphOutputs(material, 'surface', 'specular_roughness'))
+      .toEqual([expect.objectContaining({ nodeId: 'custom_node', type: 'float' })]);
+  });
+
   it('shares one shader across value-only variants in uniform parameter mode', async () => {
     const schlick = (roughness: string, reflectivity: string) => (graph: ResolvedGraph) => {
       const surface = graph.nodes.get('surface')!;

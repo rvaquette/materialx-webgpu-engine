@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { ScriptLibrary, runScript } from '../../src/materialx/script-api.ts';
-import { highlightScript, scriptCompletions, scriptHover, scriptLiteral, scriptVariables, setScriptInput } from '../../src/materialx/script-editor.ts';
+import { addScriptUpstream, highlightScript, scriptCompletions, scriptHover, scriptLiteral, scriptVariables, setScriptInput } from '../../src/materialx/script-editor.ts';
 import { layoutScriptGraph } from '../../src/materialx/script-graph-layout.ts';
 import { decodeSharedScript, encodeSharedScript, sharedScriptOf } from '../../src/materialx/script-store.ts';
 
@@ -76,6 +76,12 @@ describe('script editor language support', () => {
     expect(setScriptInput('x = 1;', 'n', 'octaves', '4')).toBe('x = 1;\nn.octaves = 4;');
     expect(setScriptInput(code, 'm', 'fg', undefined)).not.toContain('m.fg');
     expect(setScriptInput(code, 'm', 'fgx', undefined)).toBe(code);
+    const upstream = addScriptUpstream(code, 'm', 'mix', { name: 'ND_mix_float', category: 'mix', className: 'Mix' }, 'out', 3);
+    expect(upstream.variable).toBe('mix');
+    expect(upstream.code).toContain('m.fg = [1, 0, 0]; // rouge\nmix = new Mix("ND_mix_float");\nm.mix = mix.out;');
+    expect(addScriptUpstream(upstream.code, 'm', 'bg', { name: 'ND_image_color3', category: 'image', className: 'Image' }, 'out', 3).variable).toBe('image');
+    expect(addScriptUpstream('img = new Image();', 'img', 'default', { name: 'ND_image_color3', category: 'image', className: 'Image' }, 'out', 1))
+      .toEqual({ variable: 'image', code: 'img = new Image();\nimage = new Image("ND_image_color3");\nimg.default = image.out;' });
   });
 
   it('documents the word under the pointer', () => {

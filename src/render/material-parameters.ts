@@ -365,7 +365,8 @@ export function compatibleMaterialGraphOutputs(
   material: MaterialResource, targetId: string, inputName: string,
 ): MaterialGraphOutput[] {
   const graph = material.surfaceGraph;
-  const target = graph?.nodes.get(targetId)?.inputs.find(input => input.name === inputName);
+  const node = graph?.nodes.get(targetId);
+  const target = node?.inputs.find(input => input.name === inputName) ?? node?.nodeDef?.inputs?.find(input => input.name === inputName);
   if (!graph || !target) return [];
   return [...graph.nodes.values()].flatMap(node => {
     if (createsGraphCycle(graph, targetId, node.id)) return [];
@@ -398,10 +399,31 @@ function surfaceFromEditedGraph(graph: ResolvedGraph): ResolvedSurface {
   return surface;
 }
 
+/**
+ * `material` whose node `nodeId` has `inputName`: an input of its NodeDef that the document does not
+ * author is added with the NodeDef default, so the editor can set, link or feed any NodeDef input.
+ */
+function withDefinitionInput(material: MaterialResource, nodeId: string, inputName: string): MaterialResource {
+  const graph = material.surfaceGraph;
+  const node = graph?.nodes.get(nodeId);
+  if (!graph || !node || node.inputs.some(input => input.name === inputName)) return material;
+  const definition = node.nodeDef?.inputs?.find(input => input.name === inputName);
+  if (!definition) return material;
+  const value = definition.geomprop === undefined ? definition.value ?? literalForType(definition.type) : undefined;
+  const input: ResolvedInput = {
+    name: definition.name, type: definition.type,
+    source: value !== undefined ? { kind: 'value', type: definition.type, value } : { kind: 'default', type: definition.type },
+    provenance: { namePath: `${node.provenance.namePath}/${definition.name}` },
+  };
+  const nodes = new Map(graph.nodes).set(nodeId, { ...node, inputs: [...node.inputs, input] });
+  return { ...material, surfaceGraph: { ...graph, nodes } };
+}
+
 /** Connect a typed graph output to an input; a null source restores the prior binding. */
 export function changeMaterialGraphInputLink(
   material: MaterialResource, targetId: string, inputName: string, sourceId: string | null, outputName = 'out',
 ): MaterialResource {
+  if (sourceId !== null) material = withDefinitionInput(material, targetId, inputName);
   const graph = material.surfaceGraph;
   const parameters = material.parameters ?? [];
   const target = graph?.nodes.get(targetId);
@@ -463,6 +485,7 @@ export function changeMaterialGraphInputLink(
 export function changeMaterialGraphInputValue(
   material: MaterialResource, targetId: string, inputName: string, value: string,
 ): MaterialResource {
+  material = withDefinitionInput(material, targetId, inputName);
   const graph = material.surfaceGraph;
   const node = graph?.nodes.get(targetId);
   const input = node?.inputs.find(candidate => candidate.name === inputName);
@@ -491,6 +514,7 @@ export function addMaterialNodeFromDefinition(
 ): MaterialResource {
   const definition = definitions.find(candidate => candidate.name === definitionName);
   if (!definition) throw new Error(`NodeDef MaterialX introuvable : ${definitionName}.`);
+  material = withDefinitionInput(material, targetId, inputName);
   const targetInput = material.surfaceGraph?.nodes.get(targetId)?.inputs.find(input => input.name === inputName);
   if (!targetInput || !outputsOfDefinition(definition).some(output =>
     output.name === outputName && output.type === targetInput.type)) {
