@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { ScriptLibrary, runScript } from '../../src/materialx/script-api.ts';
-import { addScriptUpstream, highlightScript, scriptCompletions, scriptHover, scriptLiteral, scriptVariables, setScriptInput } from '../../src/materialx/script-editor.ts';
+import { addScriptDownstream, addScriptUpstream, highlightScript, scriptCompletions, scriptHover, scriptLiteral, scriptVariables, setScriptInput } from '../../src/materialx/script-editor.ts';
 import { layoutScriptGraph } from '../../src/materialx/script-graph-layout.ts';
 import { decodeSharedScript, encodeSharedScript, sharedScriptOf } from '../../src/materialx/script-store.ts';
 
@@ -82,6 +82,8 @@ describe('script editor language support', () => {
     expect(addScriptUpstream(upstream.code, 'm', 'bg', { name: 'ND_image_color3', category: 'image', className: 'Image' }, 'out', 3).variable).toBe('image');
     expect(addScriptUpstream('img = new Image();', 'img', 'default', { name: 'ND_image_color3', category: 'image', className: 'Image' }, 'out', 1))
       .toEqual({ variable: 'image', code: 'img = new Image();\nimage = new Image("ND_image_color3");\nimg.default = image.out;' });
+    expect(addScriptDownstream('img = new Image();\nimg.file = "a.png";\nx = 1;', 'img', 'out', { name: 'ND_mix_color3', category: 'mix', className: 'Mix' }, 'fg', 1))
+      .toEqual({ variable: 'mix', code: 'img = new Image();\nimg.file = "a.png";\nmix = new Mix("ND_mix_color3");\nmix.fg = img.out;\nx = 1;' });
   });
 
   it('documents the word under the pointer', () => {

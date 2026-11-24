@@ -520,16 +520,55 @@ export function addMaterialNodeFromDefinition(
     output.name === outputName && output.type === targetInput.type)) {
     throw new Error('Le type de sortie du NodeDef ne correspond pas au port sélectionné.');
   }
-  const graph = material.surfaceGraph!;
-  let suffix = 1;
-  while (graph.nodes.has(`editor_node_${suffix}`)) suffix++;
-  const nodeId = `editor_node_${suffix}`;
-  const parameters = [...(material.parameters ?? [])];
   const sourceToPreserve = targetInput.source.kind === 'value' || targetInput.source.kind === 'connection'
     ? targetInput.source : undefined;
   const seedInput = sourceToPreserve
     ? definition.inputs?.find(input => input.type === targetInput.type && input.geomprop === undefined)
     : undefined;
+  const { material: withNode, nodeId } = insertDefinitionNode(material, definition,
+    seedInput && sourceToPreserve ? { input: seedInput.name, source: sourceToPreserve } : undefined);
+  return changeMaterialGraphInputLink(withNode, targetId, inputName, nodeId, outputName);
+}
+
+/**
+ * Add a NodeDef whose input `inputName` is fed by `sourceId.outputName` (a node downstream of an
+ * output). Until it is connected further, the new node does not change the surface.
+ */
+export function addMaterialNodeDownstream(
+  material: MaterialResource, sourceId: string, outputName: string,
+  definitionName: string, inputName: string, definitions: readonly ResolvedNodeDefRef[],
+): MaterialResource {
+  const definition = definitions.find(candidate => candidate.name === definitionName);
+  if (!definition) throw new Error(`NodeDef MaterialX introuvable : ${definitionName}.`);
+  const source = material.surfaceGraph?.nodes.get(sourceId);
+  const output = source && outputsOf(source).find(candidate => candidate.name === outputName);
+  if (!output || !definition.inputs?.some(input => input.name === inputName && input.type === output.type)) {
+    throw new Error('Le type d’entrée du NodeDef ne correspond pas à la sortie sélectionnée.');
+  }
+  const { material: withNode, nodeId } = insertDefinitionNode(material, definition);
+  return changeMaterialGraphInputLink(withNode, nodeId, inputName, sourceId, outputName);
+}
+
+/** NodeDef inputs whose type matches `type`, to feed them from an output of that type. */
+export function compatibleNodeInputChoices(
+  definitions: readonly ResolvedNodeDefRef[], type: string,
+): { nodeDef: ResolvedNodeDefRef; input: string; label: string }[] {
+  return definitions.flatMap(nodeDef => (nodeDef.inputs ?? [])
+    .filter(input => input.type === type && input.geomprop === undefined)
+    .map(input => ({ nodeDef, input: input.name, label: `${nodeDef.nodeString} · ${input.name} (${input.type})` })));
+}
+
+/** Adds a node of `definition` with its default inputs (one may be `seed`ed); returns its id. */
+function insertDefinitionNode(
+  material: MaterialResource, definition: ResolvedNodeDefRef, seed?: { input: string; source: ResolvedValueSource },
+): { material: MaterialResource; nodeId: string } {
+  const graph = material.surfaceGraph!;
+  let suffix = 1;
+  while (graph.nodes.has(`editor_node_${suffix}`)) suffix++;
+  const nodeId = `editor_node_${suffix}`;
+  const parameters = [...(material.parameters ?? [])];
+  const seedInput = seed && { name: seed.input };
+  const sourceToPreserve = seed?.source;
   const inputs = (definition.inputs ?? []).map(input => {
     const seeded = input.name === seedInput?.name ? sourceToPreserve : undefined;
     const value = seeded?.kind === 'value' ? seeded.value : input.value ?? literalForType(input.type);
@@ -566,8 +605,7 @@ export function addMaterialNodeFromDefinition(
     nodeDef: definition, inputs, provenance: { namePath: nodeId },
   };
   const nodes = new Map(graph.nodes).set(nodeId, node);
-  const withNode = { ...material, surfaceGraph: { ...graph, nodes }, parameters };
-  return changeMaterialGraphInputLink(withNode, targetId, inputName, nodeId, outputName);
+  return { material: { ...material, surfaceGraph: { ...graph, nodes }, parameters }, nodeId };
 }
 
 function surfaceInputRange(

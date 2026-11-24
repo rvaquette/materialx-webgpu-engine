@@ -58,6 +58,9 @@ export interface NodeGraphHandlers {
   /** Nodes that can feed `id.input` (already filtered by its type), offered by « Ajouter un nœud en amont ». */
   upstreamChoices?(id: string, input: string): readonly PickerGroup[];
   onPickUpstream?(id: string, input: string, value: string): void;
+  /** Nodes with an input of the type of `id.output`, offered when a link from it is dropped on the background. */
+  downstreamChoices?(id: string, output: string): readonly PickerGroup[];
+  onPickDownstream?(id: string, output: string, value: string): void;
 }
 
 export interface PickerItem {
@@ -186,6 +189,22 @@ export class NodeGraphView {
       { content: 'Ajuster la vue', callback: () => { this.fit(); } },
     ];
     this.#view.getNodeMenuOptions = node => this.#nodeMenu(node);
+    // A new link dropped on the background creates the node at its other end, chosen by type:
+    // from an output, a node fed by it; from an input, a node feeding it. Dragging an existing link
+    // away (a moving link) keeps litegraph's meaning: disconnect.
+    this.#view.linkConnector.events.addEventListener('dropped-on-canvas', (event) => {
+      const link = this.#view.linkConnector.renderLinks[0];
+      if (!link || 'link' in link || !(link.node instanceof LGraphNode)) return;
+      const id = this.#ids.get(link.node);
+      const model = id ? this.#model.nodes.find(candidate => candidate.id === id) : undefined;
+      if (!id || !model?.editable) return;
+      const pointer = event.detail as unknown as PointerEvent;
+      const at = { x: pointer.clientX, y: pointer.clientY };
+      const slot = link.fromSlot.name;
+      if (link.toType === 'input') {
+        if (this.#handlers.downstreamChoices) void this.openDownstream(id, slot, at);
+      } else if (this.#handlers.upstreamChoices) void this.openUpstream(id, slot, at);
+    });
     this.#resize = new ResizeObserver(() => this.#fitCanvas());
     this.#resize.observe(this.element);
     this.#fitCanvas();
@@ -561,5 +580,14 @@ export class NodeGraphView {
 
   #openUpstream(id: string, input: string, event?: MouseEvent): Promise<void> {
     return this.openUpstream(id, input, event ? { x: event.clientX, y: event.clientY } : undefined);
+  }
+
+  /** Lists nodes accepting `id.output` (by type), then reports the pick. */
+  async openDownstream(id: string, output: string, at?: { x: number; y: number }): Promise<void> {
+    const choices = this.#handlers.downstreamChoices?.(id, output) ?? [];
+    const type = this.#model.nodes.find(node => node.id === id)?.outputs.find(candidate => candidate.name === output)?.type ?? '';
+    const bounds = this.element.getBoundingClientRect();
+    const value = await this.pick(at ?? { x: bounds.left + 24, y: bounds.top + 24 }, `En aval de ${output}${type ? ` (${type})` : ''}`, choices);
+    if (value !== undefined) this.#handlers.onPickDownstream?.(id, output, value);
   }
 }

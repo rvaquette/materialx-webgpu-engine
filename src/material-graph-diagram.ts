@@ -7,7 +7,7 @@ import type { SurfaceInputDiagnostic } from './materialx/surface-graph.ts';
 import type { BackendKind, InteractiveViewer, MaterialVariantSlot } from './render/viewer.ts';
 import type { MaterialPreviewOptions } from './render/material-preview.ts';
 import type { RgbaCapture } from './gpu/capture.ts';
-import { compatibleNodeOutputChoices, type MaterialGraphOutput, type MaterialParameter } from './render/material-parameters.ts';
+import { compatibleNodeInputChoices, compatibleNodeOutputChoices, type MaterialGraphOutput, type MaterialParameter } from './render/material-parameters.ts';
 import type {
   GraphInput, GraphLink, GraphNode, GraphValue, GraphViewport, GraphWidget, NodeGraphView, PickerGroup,
 } from './ui/node-graph-view.ts';
@@ -25,6 +25,11 @@ type NodePosition = { x: number; y: number };
 const savedPositions = new WeakMap<ResolvedGraph, Map<string, NodePosition>>();
 const positionStoragePrefix = 'material-graph-layout:v1:';
 const INPUT_MODE_KEY = 'material-graph-inputs:v1';
+/** How the graph dialog is shown: modal by default; the viewer docks it in a workbench panel. */
+let present = (dialog: HTMLDialogElement): void => { if (!dialog.open) dialog.showModal(); };
+export function setMaterialGraphPresenter(presenter: (dialog: HTMLDialogElement) => void): void {
+  present = presenter;
+}
 /** Pan and zoom of the last graph shown in a dialog, kept while editing the same material. */
 const viewports = new WeakMap<HTMLDialogElement, { material: string; viewport: GraphViewport }>();
 const BACKEND_LABELS: Readonly<Record<BackendKind, string>> = { raster: 'raster', pathtracing: 'path tracing MaterialX', disney: 'Disney' };
@@ -40,6 +45,8 @@ interface GraphParameterEditing {
   setInputLink(nodeId: string, input: string, sourceId: string | null, output?: string): Promise<ResolvedGraph>;
   setInputValue(nodeId: string, input: string, value: string): Promise<ResolvedGraph>;
   addNode(nodeId: string, input: string, nodeDef: string, output: string): Promise<ResolvedGraph>;
+  /** Adds a node whose `input` is fed by `sourceId.output`. */
+  addNodeDownstream(sourceId: string, output: string, nodeDef: string, input: string): Promise<ResolvedGraph>;
   variants(): Readonly<Record<MaterialVariantSlot, 'empty' | 'active' | 'saved'>> | undefined;
   variantGraph(slot: MaterialVariantSlot): ResolvedGraph | undefined;
   saveVariant(slot: MaterialVariantSlot): void;
@@ -484,7 +491,7 @@ export function showMaterialGraph(
   refreshBackendDiagnostics();
   if (!graph?.nodes.size) {
     diagram.textContent = 'Aucun graphe de surface disponible. Essaie avec une scène USD source.';
-    if (!dialog.open) dialog.showModal();
+    present(dialog);
     return;
   }
 
@@ -584,7 +591,10 @@ export function showMaterialGraph(
     graphView?.fit();
   };
   graphBar.append(modeChooser);
-  const explicitSelection = [...nodes.values()].some(node => node.inputs.some(input => input.editable !== undefined));
+  // Nodes added by the editor mark their own inputs editable: only the document's nodes tell
+  // whether it selects its published inputs explicitly (engine:editable).
+  const explicitSelection = [...nodes.values()].some(node => !node.id.startsWith('editor_node_')
+    && node.inputs.some(input => input.editable !== undefined));
   function rememberViewport(): void {
     if (graphView) viewports.set(dialog, { material, viewport: graphView.viewport });
   }
@@ -650,7 +660,8 @@ export function showMaterialGraph(
       const authored = new Map(node.inputs.map(input => [input.name, input]));
       const shown = inputMode === 'all'
         ? [...definitions.map(definition => definition.name), ...node.inputs.map(input => input.name).filter(name => !definitions.some(definition => definition.name === name))]
-        : node.inputs.filter(input => !explicitSelection || input.editable === true || input.source.kind === 'connection').map(input => input.name);
+        : node.inputs.filter(input => !explicitSelection || node.id.startsWith('editor_node_') || input.editable === true
+          || input.source.kind === 'connection').map(input => input.name);
       const inputs: GraphInput[] = shown.map((name) => {
         const input = authored.get(name);
         const definition = definitions.find(candidate => candidate.name === name);
@@ -708,6 +719,25 @@ export function showMaterialGraph(
     }));
     return [{ label: 'Nœuds du graphe', items: existing }, { label: `Nouveau nœud MaterialX (sortie ${type})`, items: created }];
   }
+  function downstreamChoices(id: string, output: string): PickerGroup[] {
+    const node = nodes.get(id);
+    const type = (node?.nodeDef?.outputs?.length ? node.nodeDef.outputs : [{ name: 'out', type: node?.type ?? '' }])
+      .find(candidate => candidate.name === output)?.type;
+    if (!editing || !type) return [];
+    const items = compatibleNodeInputChoices(editing.nodeDefinitions(), type).map(choice => ({
+      label: `${choice.nodeDef.nodeString}.${choice.input}`,
+      detail: `${choice.nodeDef.name}${SURFACE_IR_UPSTREAM.has(choice.nodeDef.nodeString) ? '' : ' — rendu WGSL non pris en charge'}`,
+      value: JSON.stringify({ nodeDef: choice.nodeDef.name, input: choice.input }),
+    }));
+    return [{ label: `Nouveau nœud MaterialX (entrée ${type})`, items }];
+  }
+  function pickDownstream(id: string, output: string, value: string): void {
+    const choice = JSON.parse(value) as { nodeDef: string; input: string };
+    const before = new Set(nodes.keys());
+    void graphEdit(() => editing!.addNodeDownstream(id, output, choice.nodeDef, choice.input),
+      updated => [...updated.nodes.keys()].find(key => !before.has(key)) ?? id,
+      `Nœud MaterialX ajouté en aval de ${output} (il n’agit sur le rendu qu’une fois relié à la surface).`);
+  }
   function pickUpstream(id: string, input: string, value: string): void {
     const choice = JSON.parse(value) as UpstreamChoice;
     void graphEdit(
@@ -755,7 +785,7 @@ export function showMaterialGraph(
           showGraphView(false);
         }
       },
-      ...(editing ? { upstreamChoices, onPickUpstream: pickUpstream } : {}),
+      ...(editing ? { upstreamChoices, onPickUpstream: pickUpstream, downstreamChoices, onPickDownstream: pickDownstream } : {}),
     });
     const kept = viewports.get(dialog);
     showGraphView(false);
@@ -853,7 +883,8 @@ export function showMaterialGraph(
   const selected = selection && nodes.has(selection.id) ? selection.id
     : terminals.find(terminal => terminal.nodeId && nodes.has(terminal.nodeId))?.nodeId ?? nodes.keys().next().value!;
   select(selected, selection?.message);
-  if (!dialog.open) dialog.showModal();
-  else nodeChooser.focus();
+  const wasOpen = dialog.open;
+  present(dialog);
+  if (wasOpen) nodeChooser.focus();
   preview?.refresh();
 }

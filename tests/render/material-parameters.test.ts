@@ -9,8 +9,8 @@ import { importUsdStage } from '../../src/usd/importer.ts';
 import { buildSceneResources } from '../../src/render/scene-resources.ts';
 import { buildMaterialDispatch } from '../../src/render/pathtracing/material-variant.ts';
 import {
-  addMaterialNodeFromDefinition, changeMaterialGraphInputLink, changeMaterialParameters, compileEditableMaterial,
-  changeMaterialGraphInputValue, compatibleMaterialGraphOutputs, compatibleNodeOutputChoices,
+  addMaterialNodeDownstream, addMaterialNodeFromDefinition, changeMaterialGraphInputLink, changeMaterialParameters, compileEditableMaterial,
+  changeMaterialGraphInputValue, compatibleMaterialGraphOutputs, compatibleNodeInputChoices, compatibleNodeOutputChoices,
   editableSceneMaterials, materialUniformData, packParameterUniforms, parameterValues,
   uniformSceneMaterials, visibleMaterialParameters,
 } from '../../src/render/material-parameters.ts';
@@ -170,6 +170,18 @@ describe('dynamic MaterialX parameters', () => {
     expect(fed.surfaceGraph!.nodes.get('editor_node_1')!.inputs[0]!.source).toMatchObject({ kind: 'value', value: '0.2' });
     expect(compatibleMaterialGraphOutputs(material, 'surface', 'specular_roughness'))
       .toEqual([expect.objectContaining({ nodeId: 'custom_node', type: 'float' })]);
+    // Downstream: a new node fed by an output stays off the surface until connected further.
+    const mix: ResolvedNodeDefRef = {
+      name: 'ND_mix_float', nodeString: 'mix', type: 'float', implementation: { kind: 'unresolved' },
+      inputs: [{ name: 'fg', type: 'float', value: '0' }, { name: 'bg', type: 'float', value: '0' }, { name: 'mix', type: 'float', value: '0.5' }],
+      outputs: [{ name: 'out', type: 'float' }],
+    };
+    expect(compatibleNodeInputChoices([mix], 'float').map(choice => choice.input)).toEqual(['fg', 'bg', 'mix']);
+    const downstream = addMaterialNodeDownstream(fed, 'editor_node_1', 'out', mix.name, 'bg', [mix]);
+    expect(downstream.surfaceGraph!.nodes.get('editor_node_2')!.inputs.find(input => input.name === 'bg')?.source)
+      .toEqual({ kind: 'connection', nodeId: 'editor_node_1' });
+    expect(downstream.resolvedSurface?.nodeId).toBe(fed.resolvedSurface?.nodeId);
+    expect(() => addMaterialNodeDownstream(fed, 'editor_node_1', 'out', mix.name, 'missing', [mix])).toThrow('type d’entrée');
   });
 
   it('shares one shader across value-only variants in uniform parameter mode', async () => {

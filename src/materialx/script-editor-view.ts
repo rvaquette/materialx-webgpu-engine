@@ -22,7 +22,7 @@ import {
 } from './script-api.ts';
 import {
   ASSIGNMENT, DEFAULT_SCRIPT, escapeHtml, formatValue, fromHex, parseLiteral, scriptCompletions, scriptHover, scriptLiteral, scriptTokens,
-  scriptVariables, setScriptInput, addScriptUpstream, toHex, type ScriptEditorOptions,
+  scriptVariables, setScriptInput, addScriptDownstream, addScriptUpstream, toHex, type ScriptEditorOptions,
 } from './script-editor.ts';
 import { layoutScriptGraph } from './script-graph-layout.ts';
 import { loadDraft, saveDraft, ScriptStore, shareLink } from './script-store.ts';
@@ -1037,6 +1037,8 @@ export class MaterialXScriptEditor {
         },
         upstreamChoices: (id, input) => this.#upstreamChoices(id, input),
         onPickUpstream: (id, input, value) => this.#pickUpstream(id, input, value),
+        downstreamChoices: (id, output) => this.#downstreamChoices(id, output),
+        onPickDownstream: (id, output, value) => this.#pickDownstream(id, output, value),
       });
     }
     this.#graphView.set(graphNodes, links, positions);
@@ -1063,6 +1065,42 @@ export class MaterialXScriptEditor {
         value: JSON.stringify({ def: def.name, category: def.category, className, output: port.name }),
       }))));
     return [{ label: 'Nœuds du script', items: existing }, { label: `Nouveau nœud (sortie ${type})`, items: created }];
+  }
+
+  /** Library NodeDefs with an input of the type of `id.output`. */
+  #downstreamChoices(id: string, output: string): PickerGroup[] {
+    const library = this.#library;
+    const type = this.#graphNodes.find(node => node.name === id)?.def.outputs.find(port => port.name === output)?.type;
+    if (!library || !type) return [];
+    const items = library.classNames.flatMap(className => library.variants(library.categoryOf(className)!).flatMap(def =>
+      def.inputs.filter(port => port.type === type).map(port => ({
+        label: `${className}.${port.name}`, detail: def.name,
+        value: JSON.stringify({ def: def.name, category: def.category, className, input: port.name }),
+      }))));
+    return [{ label: `Nouveau nœud (entrée ${type})`, items }];
+  }
+
+  #pickDownstream(id: string, output: string, value: string): void {
+    const choice = JSON.parse(value) as { def: string; category: string; className: string; input: string };
+    if (this.#state() !== 'idle' || !this.#isVariable(id)) {
+      this.#setStatus(`${id} : ajout impossible ${this.#state() !== 'idle' ? 'pendant une exécution' : 'sans variable dans le script'}.`, true);
+      return;
+    }
+    const line = this.#graphNodes.find(node => node.name === id)?.line;
+    const { code, variable } = addScriptDownstream(this.script, id, output,
+      { name: choice.def, category: choice.category, className: choice.className }, choice.input, line);
+    this.#replaceScript(code);
+    this.#log('info', `Graphe : ${variable} = new ${choice.className}() ajouté en aval de ${id}.${output}.`);
+  }
+
+  /** Replaces the script by `code` changing only the differing span (undo with Ctrl+Z). */
+  #replaceScript(code: string): void {
+    const before = this.script;
+    let start = 0;
+    while (start < before.length && start < code.length && before[start] === code[start]) start++;
+    let end = 0;
+    while (end < before.length - start && end < code.length - start && before[before.length - 1 - end] === code[code.length - 1 - end]) end++;
+    this.#view.dispatch({ changes: { from: start, to: before.length - end, insert: code.slice(start, code.length - end) } });
   }
 
   #pickUpstream(id: string, input: string, value: string): void {

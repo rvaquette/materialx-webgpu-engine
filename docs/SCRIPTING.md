@@ -2,7 +2,11 @@
 
 Le viewer permet de créer un matériau MaterialX avec un script JavaScript
 minimal. Ouvrir l'éditeur avec l'icône **Script** de la barre latérale ou la
-touche **F2** ; il s'ancre à droite du rendu (F3 masque les contrôles de rendu).
+touche **F2**. Comme la vue, les contrôles de rendu (F3) et le graphe du matériau,
+c'est un panneau ancrable : on le déplace par son onglet (bords, onglets d'un autre
+panneau), on le redimensionne avec les séparateurs, et les boutons de son en-tête le
+réduisent (il se rouvre depuis la barre latérale), le détachent en fenêtre flottante ou
+l'agrandissent. La disposition est conservée d'une visite à l'autre.
 
 ## Syntaxe
 
@@ -262,9 +266,11 @@ sa barre d'outils sont des icônes ; leur nom et leur raccourci s'affichent au s
   **Variables**, **Graphe**, **XML**.
 - **Graphe** (litegraph) : le graphe du script, mis à jour à chaque validation. Les valeurs
   se modifient dans les nœuds, et un lien tiré d'une sortie vers une entrée (ou détaché)
-  **réécrit le script** (`noeud.entree = …`, Ctrl+Z pour annuler) ; clic droit : ajouter
-  une entrée ; double-clic : ligne qui crée le nœud. Seuls les nœuds affectés à une variable
-  (`x = new …()`) sont modifiables ainsi.
+  **réécrit le script** (`noeud.entree = …`, Ctrl+Z pour annuler) ; un lien **lâché dans le
+  vide** crée le nœud à son autre extrémité, choisi dans une liste filtrée par type (depuis une
+  sortie : un nœud qu'elle alimente ; depuis une entrée : un nœud qui l'alimente) ; clic droit :
+  ajouter une entrée ou un nœud en amont ; double-clic : ligne qui crée le nœud. Seuls les nœuds
+  affectés à une variable (`x = new …()`) sont modifiables ainsi.
 - **Mes scripts** : scripts nommés enregistrés dans le navigateur (IndexedDB, Ctrl+S),
   import et export de fichiers `.js`. Le script en cours est conservé d'une visite à l'autre.
 - **Partage** : l'icône lien copie une adresse `#script=…` (script compressé). Elle ouvre

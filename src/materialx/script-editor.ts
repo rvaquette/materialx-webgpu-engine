@@ -10,6 +10,7 @@ import type { ResolvedGraph } from './graph.ts';
 import type { MaterialXScriptEditor } from './script-editor-view.ts';
 import { sharedScriptOf } from './script-store.ts';
 import { activityButton, panelVisible, rememberPanel } from '../ui/layout.ts';
+import type { Workbench } from '../ui/workbench.ts';
 
 /**
  * Pause and resume of running scripts shared with the viewer: pausing also stops the path
@@ -41,6 +42,8 @@ export interface ScriptEditorOptions {
   runControl?: ScriptRunControl;
   /** Layout element the panel is docked in (as its last child); without it the panel floats over the page. */
   dock?: HTMLElement | null;
+  /** Dockable workbench hosting the editor as its « script » panel (instead of `dock`). */
+  workbench?: Pick<Workbench, 'register' | 'show' | 'hide' | 'isVisible' | 'onVisibilityChange'>;
 }
 
 export const DEFAULT_SCRIPT = `// Matériau procédural : un bruit fractal mélange deux couleurs.
@@ -346,18 +349,29 @@ export function attachScriptEditor(toolbar: HTMLElement | null, options: ScriptE
   button.type = 'button';
   button.id = 'open-script-editor';
   button.setAttribute('aria-expanded', 'false');
+  const workbench = options.workbench;
   const attachment: ScriptEditorAttachment = {
     get editor() {
       editor ??= import('./script-editor-view.ts').then(({ MaterialXScriptEditor: Editor }) => {
         const created = new Editor(options);
-        created.element.hidden = true;
         created.element.addEventListener('script-editor-close', () => void attachment.toggle(false));
-        (options.dock ?? document.body).append(created.element);
+        if (!workbench) {
+          created.element.hidden = true;
+          (options.dock ?? document.body).append(created.element);
+        }
         return created;
       });
       return editor;
     },
     async toggle(visible) {
+      if (workbench) {
+        const show = visible ?? !workbench.isVisible('script');
+        if (show) {
+          workbench.show('script');
+          (await attachment.editor).focus();
+        } else workbench.hide('script');
+        return;
+      }
       const panel = (await attachment.editor).element;
       panel.hidden = !(visible ?? panel.hidden);
       button.setAttribute('aria-expanded', String(!panel.hidden));
@@ -365,6 +379,14 @@ export function attachScriptEditor(toolbar: HTMLElement | null, options: ScriptE
       if (!panel.hidden) (await attachment.editor).focus();
     },
   };
+  if (workbench) {
+    workbench.register({
+      id: 'script', title: 'Script', create: async () => (await attachment.editor).element,
+      placement: { direction: 'right', size: 560 },
+    });
+    button.setAttribute('aria-expanded', String(workbench.isVisible('script')));
+    workbench.onVisibilityChange((id, visible) => { if (id === 'script') button.setAttribute('aria-expanded', String(visible)); });
+  }
   button.addEventListener('click', () => void attachment.toggle());
   toolbar?.append(button);
   document.addEventListener('keydown', (event) => {
@@ -375,7 +397,7 @@ export function attachScriptEditor(toolbar: HTMLElement | null, options: ScriptE
   });
   void sharedScriptOf().then(async (code) => {
     if (code === undefined) {
-      if (panelVisible('script', false)) await attachment.toggle(true);
+      if (!workbench && panelVisible('script', false)) await attachment.toggle(true);
       return;
     }
     // The link is consumed: a reload keeps the editor's draft instead of reopening the link.
@@ -439,5 +461,26 @@ export function addScriptUpstream(
   const index = lines.findIndex(line => assignment.test(line));
   const indent = index >= 0 ? assignment.exec(lines[index]!)![1] : '';
   lines.splice(index >= 0 ? index : lines.length, 0, `${indent}${variable} = new ${def.className}(${JSON.stringify(def.name)});`);
+  return { code: lines.join('\n'), variable };
+}
+/**
+ * `code` with a new `variable = new ClassName("nodedef");` whose `input` is fed by `source.output`,
+ * inserted after the source node's last assignment (else after `sourceLine`, else at the end).
+ */
+export function addScriptDownstream(
+  code: string, source: string, output: string, def: Pick<ScriptNodeDef, 'name' | 'category' | 'className'>, input: string, sourceLine?: number,
+): { code: string; variable: string } {
+  const base = def.category.replace(/[^\w$]/g, '_').replace(/^(\d)/, '_$1');
+  let variable = base;
+  for (let i = 2; new RegExp(`(^|[^\\w$.])${escapeRegExp(variable)}(?![\\w$])`).test(code); i++) variable = `${base}${i}`;
+  const lines = code.split('\n');
+  const member = new RegExp(`^\\s*${escapeRegExp(source)}\\.[\\w$]+\\s*=(?!=)`);
+  let after = sourceLine !== undefined && sourceLine >= 1 && sourceLine <= lines.length ? sourceLine - 1 : -1;
+  lines.forEach((line, index) => { if (member.test(line)) after = Math.max(after, index); });
+  const indent = after >= 0 ? /^\s*/.exec(lines[after]!)![0] : '';
+  const statements = [`${indent}${variable} = new ${def.className}(${JSON.stringify(def.name)});`, `${indent}${variable}.${input} = ${source}.${output};`];
+  if (after >= 0) lines.splice(after + 1, 0, ...statements);
+  else if (lines.at(-1) === '') lines.splice(lines.length - 1, 0, ...statements);
+  else lines.push(...statements);
   return { code: lines.join('\n'), variable };
 }

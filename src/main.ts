@@ -3,14 +3,15 @@ import { SCENE_CATALOG, SOURCE_SCENE_CATALOG } from './scene/scene-catalog.ts';
 import { MATERIAL_CATALOG } from './scene/material-catalog.ts';
 import { buildMaterialTree } from './scene/material-tree.ts';
 import { MaterialParameterEditor } from './material-parameter-editor.ts';
-import { showMaterialGraph } from './material-graph-diagram.ts';
+import { setMaterialGraphPresenter, showMaterialGraph } from './material-graph-diagram.ts';
 import { bindMaterialLibrary } from './material-library.ts';
 import { sceneDeviceDescriptor } from './gpu/device.ts';
 import { startViewerUi, type ViewerUiState, type ViewerUiActions } from './viewer-ui.ts';
 import type { LocalGltfScene } from './scene/local-gltf.ts';
 import { downloadDisplayedAovPng, downloadPathTraceAovPfm, encodePathTraceAovPfm } from './render/aov-export.ts';
 import { attachScriptEditor, type ScriptRunControl } from './materialx/script-editor.ts';
-import { activityButton, bindPanelToggle } from './ui/layout.ts';
+import { activityButton } from './ui/layout.ts';
+import { Workbench } from './ui/workbench.ts';
 import { loadScriptLibrary, runScript, ScriptError, toXml, type ScriptHost, type ScriptStats } from './materialx/script-api.ts';
 import { downloadBlob } from './assets/download.ts';
 import { DiagnosticJournal } from './diagnostics/journal.ts';
@@ -99,12 +100,45 @@ async function main(): Promise<void> {
   const validationScripts = Object.entries(import.meta.glob<string>('../examples/scripts/*.js', { query: '?raw', import: 'default', eager: true }))
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([path, code]) => ({ label: /^\/\/\s*(.+?)\s*(?:\(|$)/m.exec(code)?.[1] ?? path.split('/').at(-1)!, code }));
-  // Activity bar: side panels (interactive render controls F3, script F2) and material tools.
-  const renderToggle = document.querySelector<HTMLButtonElement>('#toggle-render-panel');
-  const renderPanel = document.getElementById('ui');
-  if (renderToggle && renderPanel) {
-    bindPanelToggle(activityButton(renderToggle, 'sliders', 'Rendu interactif : scène, rendu, matériaux (F3)', 'Rendu'), renderPanel, 'render',
-      { defaultVisible: true, shortcut: 'F3' });
+  // Dockable workbench: render view, interactive controls (F3), material graph and script editor (F2).
+  const panelContent = (id: string): HTMLElement => {
+    const element = document.getElementById(id);
+    if (!element) throw new Error(`Élément #${id} introuvable.`);
+    return element;
+  };
+  const workbench = new Workbench(document.getElementById('workbench')!, [
+    { id: 'view', title: 'Vue', create: () => panelContent('canvas-container'), placement: { direction: 'within' }, visible: true },
+    { id: 'render', title: 'Rendu interactif', create: () => panelContent('ui'), placement: { direction: 'left', size: 380 }, visible: true },
+    { id: 'graph', title: 'Graphe du matériau', create: () => panelContent('material-graph'), placement: { direction: 'below', size: 440 } },
+  ]);
+  // The material graph shows in its panel (non-modal); closing either closes the other.
+  const materialGraph = panelContent('material-graph') as HTMLDialogElement;
+  setMaterialGraphPresenter((dialog) => {
+    workbench.show('graph');
+    if (!dialog.open) dialog.show();
+  });
+  materialGraph.addEventListener('close', () => workbench.hide('graph'));
+  workbench.onVisibilityChange((id, visible) => {
+    if (id === 'graph' && !visible && materialGraph.open) materialGraph.close();
+  });
+  // Activity bar: panel toggles and material tools.
+  for (const [id, panel, name, label, caption, shortcut] of [
+    ['toggle-view-panel', 'view', 'monitor', 'Vue de rendu', 'Vue', undefined],
+    ['toggle-render-panel', 'render', 'sliders', 'Rendu interactif : scène, rendu, matériaux (F3)', 'Rendu', 'F3'],
+  ] as const) {
+    const button = document.getElementById(id);
+    if (!(button instanceof HTMLButtonElement)) continue;
+    activityButton(button, name, label, caption);
+    button.setAttribute('aria-pressed', String(workbench.isVisible(panel)));
+    button.addEventListener('click', () => workbench.toggle(panel));
+    workbench.onVisibilityChange((changed, visible) => { if (changed === panel) button.setAttribute('aria-pressed', String(visible)); });
+    if (shortcut) {
+      document.addEventListener('keydown', (event) => {
+        if (event.key !== shortcut) return;
+        event.preventDefault();
+        workbench.toggle(panel);
+      });
+    }
   }
   for (const [id, name, label, caption] of [
     ['open-material-library', 'book', 'Bibliothèque de matériaux de l’objet sélectionné', 'Matériaux'],
@@ -115,7 +149,7 @@ async function main(): Promise<void> {
     if (button instanceof HTMLButtonElement) activityButton(button, name, label, caption);
   }
   attachScriptEditor(document.getElementById('activity-panels'), {
-    dock: document.getElementById('app'),
+    workbench,
     library: scriptLibrary,
     filePrefix: scriptFilePrefix,
     examples: validationScripts,
@@ -303,6 +337,8 @@ async function main(): Promise<void> {
           editGraph(() => target.setObjectGraphInputValue(path, nodeId, input, value)),
         addNode: (nodeId, input, nodeDef, output) =>
           editGraph(() => target.addObjectNode(path, nodeId, input, nodeDef, output)),
+        addNodeDownstream: (sourceId, output, nodeDef, input) =>
+          editGraph(() => target.addObjectNodeDownstream(path, sourceId, output, nodeDef, input)),
         variants: () => target.objectMaterialVariants(path),
         variantGraph: slot => target.objectMaterialVariantGraph(path, slot),
         textureSource: file => target.objectTextureExportSource(path, file),

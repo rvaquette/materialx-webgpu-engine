@@ -19,12 +19,18 @@
       #activity-bar button.activity[hidden] { display: none; }
       #activity-bar button.activity[aria-pressed="true"], #activity-bar button.activity[aria-expanded="true"] { color: #fff; }
       #activity-bar button.activity[aria-pressed="true"]::before, #activity-bar button.activity[aria-expanded="true"]::before { content: ''; position: absolute; left: -4px; top: 6px; bottom: 6px; width: 2px; background: #4fc1ff; border-radius: 1px; }
-      #ui { width: clamp(320px, 35vw, 480px); height: 100%; flex: none; display: block; touch-action: none; }
-      #ui[hidden] { display: none; }
-      #app > #script-editor-panel { position: static; flex: none; width: clamp(360px, 36vw, 640px); height: 100%; box-shadow: none; border-left: 1px solid #2c2c36; }
-      #app > #script-editor-panel[hidden] { display: none; }
+      #ui { width: 100%; height: 100%; display: block; touch-action: none; }
+      /* Panels of the dockable workbench (src/ui/workbench.ts). */
+      #panel-store { display: none; }
+      .mx-workbench-content > #script-editor-panel { position: static; width: auto; height: auto; box-shadow: none; }
+      .mx-workbench-content > #material-graph { position: static; display: block; margin: 0; width: auto; height: auto; max-width: none; max-height: none; overflow: auto; border: 0; border-radius: 0; box-sizing: border-box; }
+      .mx-workbench-content > #material-graph[open] { display: flex; flex-direction: column; }
+      .mx-workbench-content > #material-graph:not([open]) { display: none; }
+      .mx-workbench-content > #material-graph > * { flex: none; }
+      /* Docked, the graph takes the panel's remaining height. */
+      .mx-workbench-content > #material-graph #material-graph-diagram { flex: 1 1 320px; height: auto; }
       #canvas-container { position: relative; flex: 1; min-width: 0; min-height: 0; display: flex; align-items: center; justify-content: center; overflow: hidden; }
-      #view { width: min(100%, 100vh); max-height: 100%; aspect-ratio: auto; object-fit: contain; touch-action: none; user-select: none; }
+      #view { width: min(100%, 100%); max-height: 100%; aspect-ratio: auto; object-fit: contain; touch-action: none; user-select: none; }
       #messages { position: absolute; top: 8px; left: 8px; right: 8px; z-index: 1; max-height: calc(100% - 16px); overflow: auto; pointer-events: none; }
       #messages > :not([hidden]) { display: block; margin: 0 0 6px; padding: 8px; background: #17171fed; border-radius: 4px; white-space: pre-wrap; overflow-wrap: anywhere; pointer-events: auto; }
       #messages #status, #messages #shader-diagnostics { background: #331818ed; }
@@ -48,6 +54,8 @@
       .material-graph-bar select { max-width: 100%; background: #171721; color: inherit; border: 1px solid #596278; border-radius: 8px; padding: 2px 6px; }
       .material-graph-variants { display: inline-flex; flex-wrap: wrap; gap: 4px; margin-left: auto; }
       .material-graph-bar button { border-radius: 8px; }
+      .material-graph-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+      .material-graph-toolbar button[hidden] { display: none; }
       .material-graph-canvas { flex: 1; min-height: 0; }
       #material-graph-details { height: 14dvh; min-height: 4.5em; overflow: auto; overflow-wrap: anywhere; }
       #material-graph-details h3 { margin: 0.5em 0 0.2em; font-size: 1em; }
@@ -78,8 +86,7 @@
         #activity-bar { width: 100%; height: 56px; flex-direction: row; justify-content: flex-start; padding: 0 6px; border-right: 0; border-bottom: 1px solid #2c2c36; }
         #activity-bar .activity-separator { width: 1px; height: 28px; margin: 0 4px; }
         #activity-bar button.activity[aria-pressed="true"]::before, #activity-bar button.activity[aria-expanded="true"]::before { left: 6px; right: 6px; top: auto; bottom: -4px; width: auto; height: 2px; }
-        #ui { width: 100%; height: 45%; }
-        #app > #script-editor-panel { width: 100%; height: 50%; border-left: 0; border-top: 1px solid #2c2c36; }
+        #ui { width: 100%; height: 100%; }
         #view { width: auto; height: 100%; max-width: 100%; }
       }
     </style>
@@ -88,13 +95,18 @@
     <div id="app">
       <nav id="activity-bar" role="toolbar" aria-orientation="vertical" aria-label="Panneaux et outils">
         <div id="activity-panels">
+          <button id="toggle-view-panel" type="button" aria-pressed="true">Vue</button>
           <button id="toggle-render-panel" type="button" aria-controls="ui" aria-pressed="true">Rendu interactif</button>
         </div>
         <span class="activity-separator" aria-hidden="true"></span>
         <button id="open-material-library" type="button" aria-haspopup="dialog" hidden>Bibliothèque de matériaux</button>
-        <button id="open-material-graph" type="button" aria-haspopup="dialog" hidden>Voir le graphe</button>
+        <button id="open-material-graph" type="button" hidden>Voir le graphe</button>
         <button id="export-diagnostics" type="button" hidden>Exporter les diagnostics</button>
       </nav>
+      <!-- Dockable panels (src/ui/workbench.ts); their content waits in #panel-store until shown. -->
+      <div id="workbench"></div>
+    </div>
+    <div id="panel-store">
       <canvas id="ui" aria-label="Contrôles Dear ImGui" tabindex="0"></canvas>
       <div id="canvas-container">
         <canvas id="view" width="512" height="512" aria-label="Rendu de la scène" aria-busy="true"></canvas>
@@ -110,24 +122,6 @@
             <pre id="import-messages"></pre>
           </details>
         </div>
-        <dialog id="material-graph" aria-labelledby="material-graph-title">
-          <header>
-            <h2 id="material-graph-title">Graphe du matériau</h2>
-            <form method="dialog"><button autofocus>Fermer</button></form>
-          </header>
-          <p id="material-graph-help">Clique un nœud (ou choisis-le dans la liste) ; glisse pour le déplacer, la molette zoome. Les valeurs se modifient dans les nœuds ; glisse d’une sortie vers une entrée pour connecter. Clic droit sur une entrée : ajouter un nœud en amont.</p>
-          <button id="reset-material-graph" type="button" hidden>Réinitialiser la disposition</button>
-          <button id="export-material-graph" type="button" title="Télécharge le .mtlx ou un ZIP si le matériau utilise des textures" hidden>Exporter .mtlx</button>
-          <span id="material-graph-export-status" role="status"></span>
-          <details id="material-graph-backend" hidden>
-            <summary>Compatibilité du matériau avec le moteur de rendu</summary>
-            <ul class="material-graph-warning"></ul>
-          </details>
-          <div id="material-preview"></div>
-          <div id="material-variant-renders"></div>
-          <div id="material-graph-diagram" role="region" aria-label="Diagramme des nœuds"></div>
-          <section id="material-graph-details" aria-label="Nœud sélectionné" aria-live="polite"></section>
-        </dialog>
         <dialog id="material-library" aria-labelledby="material-library-title">
           <header>
             <h2 id="material-library-title">Bibliothèque de matériaux</h2>
@@ -143,10 +137,30 @@
           <ul id="material-library-results" aria-label="Matériaux"></ul>
         </dialog>
       </div>
-      <input id="local-scene-files" type="file" multiple hidden />
-      <input id="local-scene-folder" type="file" webkitdirectory multiple hidden />
-      <span id="pathtracing-spp" class="sr-only" aria-live="polite" hidden></span>
+      <dialog id="material-graph" aria-labelledby="material-graph-title">
+        <header>
+          <h2 id="material-graph-title">Graphe du matériau</h2>
+          <form method="dialog"><button autofocus>Fermer</button></form>
+        </header>
+        <p id="material-graph-help">Clique un nœud (ou choisis-le dans la liste) ; glisse pour le déplacer, la molette zoome. Les valeurs se modifient dans les nœuds ; glisse d’une sortie vers une entrée pour connecter. Lâche un lien dans le vide (ou clic droit sur une entrée) pour créer le nœud à son autre extrémité.</p>
+        <div class="material-graph-toolbar">
+          <button id="reset-material-graph" type="button" hidden>Réinitialiser la disposition</button>
+          <button id="export-material-graph" type="button" title="Télécharge le .mtlx ou un ZIP si le matériau utilise des textures" hidden>Exporter .mtlx</button>
+          <span id="material-graph-export-status" role="status"></span>
+        </div>
+        <details id="material-graph-backend" hidden>
+          <summary>Compatibilité du matériau avec le moteur de rendu</summary>
+          <ul class="material-graph-warning"></ul>
+        </details>
+        <div id="material-preview"></div>
+        <div id="material-variant-renders"></div>
+        <div id="material-graph-diagram" role="region" aria-label="Diagramme des nœuds"></div>
+        <section id="material-graph-details" aria-label="Nœud sélectionné" aria-live="polite"></section>
+      </dialog>
     </div>
+    <input id="local-scene-files" type="file" multiple hidden />
+    <input id="local-scene-folder" type="file" webkitdirectory multiple hidden />
+    <span id="pathtracing-spp" class="sr-only" aria-live="polite" hidden></span>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

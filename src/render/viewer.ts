@@ -68,7 +68,7 @@ import {
 import { JsDenoiser } from './pathtracing/js-denoiser.ts';
 import { PathTraceStopping, pathTraceMetrics, type PathTraceRenderLimits, type PathTraceProgress, type PathTraceMetrics } from './pathtracing/render-limits.ts';
 import {
-  addMaterialNodeFromDefinition, canInsertMaterialInputNode, changeMaterialConstant, changeMaterialConstantLink,
+  addMaterialNodeDownstream, addMaterialNodeFromDefinition, canInsertMaterialInputNode, changeMaterialConstant, changeMaterialConstantLink,
   changeMaterialGraphInputLink, changeMaterialGraphInputValue, changeMaterialParameters, compileEditableMaterial,
   compatibleMaterialGraphOutputs,
   materialConstantSources, materialUniformData, packParameterUniforms, visibleMaterialParameters,
@@ -1064,6 +1064,15 @@ export class InteractiveViewer {
     const definitions = this.objectNodeDefinitions(path);
     await this.#editObjectGraph(path, material =>
       addMaterialNodeFromDefinition(material, targetId, inputName, definitionName, outputName, definitions));
+  }
+
+  /** Adds a node fed by `sourceId.outputName` through its input `inputName`. */
+  async addObjectNodeDownstream(
+    path: string, sourceId: string, outputName: string, definitionName: string, inputName: string,
+  ): Promise<void> {
+    const definitions = this.objectNodeDefinitions(path);
+    await this.#editObjectGraph(path, material =>
+      addMaterialNodeDownstream(material, sourceId, outputName, definitionName, inputName, definitions));
   }
 
   async setObjectGraphInputLink(

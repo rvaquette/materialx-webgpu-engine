@@ -25,6 +25,12 @@ const PATHS = {
   code: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="m8 10-2 2 2 2M16 10l2 2-2 2M13 9l-2 6"/>',
   book: '<path d="M5 4h10a3 3 0 0 1 3 3v13H8a3 3 0 0 1-3-3z"/><path d="M5 17a3 3 0 0 1 3-3h10"/><circle cx="11" cy="8.5" r="2" fill="currentColor"/>',
   pulse: '<path d="M3 12h4l2-6 4 12 2-6h6"/>',
+  monitor: '<rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8M12 17v4"/>',
+  minimize: '<path d="M5 18h14"/>',
+  maximize: '<rect x="4" y="4" width="16" height="16" rx="2"/>',
+  restore: '<rect x="4" y="8" width="12" height="12" rx="2"/><path d="M8 8V5a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1h-3"/>',
+  float: '<rect x="3" y="9" width="12" height="11" rx="2"/><path d="M9 9V5a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1h-5"/>',
+  dock: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M14 4v16"/>',
 } as const;
 
 export type IconName = keyof typeof PATHS;

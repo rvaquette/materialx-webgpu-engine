@@ -61,6 +61,7 @@
     "acorn": "^8.19.0",
     "codemirror": "^6.0.2",
     "comlink": "4.4.2",
+    "dockview-core": "^8.9.1",
     "idb": "8.0.1",
     "three": "^0.186.1",
     "wgpu-matrix": "3.4.0"
