@@ -103,16 +103,16 @@ async function main(): Promise<void> {
   const renderToggle = document.querySelector<HTMLButtonElement>('#toggle-render-panel');
   const renderPanel = document.getElementById('ui');
   if (renderToggle && renderPanel) {
-    bindPanelToggle(activityButton(renderToggle, 'sliders', 'Rendu interactif : scène, rendu, matériaux (F3)'), renderPanel, 'render',
+    bindPanelToggle(activityButton(renderToggle, 'sliders', 'Rendu interactif : scène, rendu, matériaux (F3)', 'Rendu'), renderPanel, 'render',
       { defaultVisible: true, shortcut: 'F3' });
   }
-  for (const [id, name, label] of [
-    ['open-material-library', 'book', 'Bibliothèque de matériaux de l’objet sélectionné'],
-    ['open-material-graph', 'graph', 'Graphe du matériau de l’objet sélectionné'],
-    ['export-diagnostics', 'pulse', 'Exporter les diagnostics : journal, capacités et mémoire GPU (JSON)'],
+  for (const [id, name, label, caption] of [
+    ['open-material-library', 'book', 'Bibliothèque de matériaux de l’objet sélectionné', 'Matériaux'],
+    ['open-material-graph', 'graph', 'Graphe du matériau de l’objet sélectionné', 'Graphe'],
+    ['export-diagnostics', 'pulse', 'Exporter les diagnostics : journal, capacités et mémoire GPU (JSON)', 'Diagnostics'],
   ] as const) {
     const button = document.getElementById(id);
-    if (button instanceof HTMLButtonElement) activityButton(button, name, label);
+    if (button instanceof HTMLButtonElement) activityButton(button, name, label, caption);
   }
   attachScriptEditor(document.getElementById('activity-panels'), {
     dock: document.getElementById('app'),

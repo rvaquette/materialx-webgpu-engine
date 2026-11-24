@@ -195,9 +195,9 @@ export class RemoteRenderView {
     this.element.hidden = true;
     this.element.innerHTML = `<img alt="Rendu distant" data-testid="remote-frame">
       <figcaption><span role="status" data-testid="remote-progress"></span>
-      ${iconButton('pause', 'Mettre en pause le rendu distant', { 'data-action': 'pause', 'data-testid': 'remote-pause' })}
-      ${iconButton('stop', 'Arrêter le rendu distant', { 'data-action': 'stop', 'data-testid': 'remote-stop', class: 'danger' })}
-      ${iconButton('close', 'Fermer la vue distante (arrête le rendu en cours)', { 'data-action': 'close', 'data-testid': 'remote-close' })}</figcaption>`;
+      ${iconButton('pause', 'Mettre en pause le rendu distant', { 'data-action': 'pause', 'data-testid': 'remote-pause' }, 'Pause')}
+      ${iconButton('stop', 'Arrêter le rendu distant', { 'data-action': 'stop', 'data-testid': 'remote-stop', class: 'danger' }, 'Arrêter')}
+      ${iconButton('close', 'Fermer la vue distante (arrête le rendu en cours)', { 'data-action': 'close', 'data-testid': 'remote-close' }, 'Fermer')}</figcaption>`;
     this.#image = this.element.querySelector('img')!;
     this.#caption = this.element.querySelector('[data-testid="remote-progress"]')!;
     this.#pause = this.element.querySelector('[data-action="pause"]')!;
@@ -227,7 +227,7 @@ export class RemoteRenderView {
 
   paused(paused: boolean): void {
     this.#paused = paused;
-    setIconButton(this.#pause, paused ? 'play' : 'pause', paused ? 'Reprendre le rendu distant' : 'Mettre en pause le rendu distant');
+    setIconButton(this.#pause, paused ? 'play' : 'pause', paused ? 'Reprendre le rendu distant' : 'Mettre en pause le rendu distant', paused ? 'Reprendre' : 'Pause');
   }
 
   frame(dataUrl: string): void {

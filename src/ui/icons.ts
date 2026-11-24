@@ -34,26 +34,41 @@ export function icon(name: IconName): string {
     `stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">${PATHS[name]}</svg>`;
 }
 
-/** HTML of an icon button; `label` is its accessible name and tooltip. */
-export function iconButton(name: IconName, label: string, attributes: Record<string, string> = {}): string {
+/**
+ * HTML of an icon button; `label` is its accessible name and tooltip, `caption` the short text
+ * shown under the icon.
+ */
+export function iconButton(name: IconName, label: string, attributes: Record<string, string> = {}, caption?: string): string {
   const escape = (text: string): string => text.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
   const { class: extraClass, ...rest } = attributes;
   const extra = Object.entries(rest).map(([key, value]) => ` ${key}="${escape(value)}"`).join('');
-  return `<button type="button" class="mx-icon-button${extraClass ? ` ${escape(extraClass)}` : ''}" title="${escape(label)}" ` +
-    `aria-label="${escape(label)}"${extra}>${icon(name)}</button>`;
+  const classes = `mx-icon-button${caption ? ' with-caption' : ''}${extraClass ? ` ${escape(extraClass)}` : ''}`;
+  return `<button type="button" class="${classes}" title="${escape(label)}" aria-label="${escape(label)}"${extra}>${icon(name)}` +
+    `${caption ? `<span class="mx-icon-caption" aria-hidden="true">${escape(caption)}</span>` : ''}</button>`;
 }
 
-/** Changes the icon and label of an icon button (e.g. pause ↔ resume). */
-export function setIconButton(button: HTMLButtonElement, name: IconName, label: string): void {
+/** Changes the icon, label and caption of an icon button (e.g. pause ↔ resume). */
+export function setIconButton(button: HTMLButtonElement, name: IconName, label: string, caption?: string): void {
+  const current = button.querySelector('.mx-icon-caption')?.textContent ?? undefined;
+  const text = caption ?? current;
   button.innerHTML = icon(name);
+  if (text !== undefined) {
+    button.classList.add('with-caption');
+    button.append(Object.assign(document.createElement('span'), { className: 'mx-icon-caption', textContent: text }));
+    button.lastElementChild!.setAttribute('aria-hidden', 'true');
+  }
   button.title = label;
   button.setAttribute('aria-label', label);
 }
 
 export const ICON_BUTTON_STYLE = `
 .mx-icon-button { display: inline-flex; align-items: center; justify-content: center; width: 30px; height: 28px; padding: 0;
-  background: #333; color: #eee; border: 1px solid #555; border-radius: 4px; cursor: pointer; }
-.mx-icon-button:hover:not(:disabled) { background: #444; }
+  background: #333; color: #eee; border: 1px solid #555; border-radius: 8px; cursor: pointer;
+  transition: background-color 0.12s, border-color 0.12s, transform 0.06s; }
+.mx-icon-button:active:not(:disabled) { transform: translateY(1px); }
+.mx-icon-button.with-caption { flex-direction: column; gap: 1px; width: auto; min-width: 42px; height: auto; padding: 4px 6px; border-radius: 10px; }
+.mx-icon-caption { font: 10px/1.15 system-ui, sans-serif; white-space: nowrap; }
+.mx-icon-button:hover:not(:disabled) { background: #444; border-color: #6a6a78; }
 .mx-icon-button:disabled { opacity: 0.4; cursor: default; }
 .mx-icon-button:focus-visible { outline: 2px solid #4fc1ff; outline-offset: 1px; }
 .mx-icon-button.primary { background: #0e639c; border-color: #1177bb; }

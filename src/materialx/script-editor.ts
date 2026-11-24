@@ -342,7 +342,7 @@ export interface ScriptEditorAttachment {
  */
 export function attachScriptEditor(toolbar: HTMLElement | null, options: ScriptEditorOptions): ScriptEditorAttachment {
   let editor: Promise<MaterialXScriptEditor> | undefined;
-  const button = activityButton(document.createElement('button'), 'code', 'Éditeur de script MaterialX (F2)');
+  const button = activityButton(document.createElement('button'), 'code', 'Éditeur de script MaterialX (F2)', 'Script');
   button.type = 'button';
   button.id = 'open-script-editor';
   button.setAttribute('aria-expanded', 'false');

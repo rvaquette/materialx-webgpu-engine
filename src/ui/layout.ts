@@ -24,10 +24,11 @@ export function rememberPanel(panel: PanelId, visible: boolean): void {
   try { localStorage.setItem(LAYOUT_KEY, JSON.stringify({ ...readLayout(), [panel]: visible })); } catch { /* not remembered */ }
 }
 
-/** Turns a button of the activity bar into an icon button labelled `label`. */
-export function activityButton(button: HTMLButtonElement, name: IconName, label: string): HTMLButtonElement {
+/** Turns a button of the activity bar into an icon button labelled `label`, with `caption` under the icon. */
+export function activityButton(button: HTMLButtonElement, name: IconName, label: string, caption: string): HTMLButtonElement {
   button.classList.add('activity');
-  button.innerHTML = icon(name);
+  button.innerHTML = `${icon(name)}<span class="activity-caption" aria-hidden="true"></span>`;
+  button.lastElementChild!.textContent = caption;
   button.title = label;
   button.setAttribute('aria-label', label);
   return button;

@@ -47,11 +47,11 @@ const STYLE = `
 #script-editor-panel .mx-bar[hidden] { display: none; }
 #script-editor-panel select, #script-editor-panel input[type="text"], #script-editor-panel input[type="url"],
 #script-editor-panel input[type="password"] { flex: 1; min-width: 0; background: #252526; color: #eee; border: 1px solid #555;
-  border-radius: 4px; padding: 3px; }
+  border-radius: 8px; padding: 4px 6px; }
 #script-editor-panel .mx-remote[hidden] { display: none; }
 #script-editor-panel .mx-remote div { display: flex; gap: 6px; margin-top: 4px; }
 ${ICON_BUTTON_STYLE}
-.mx-code { flex: 3; min-height: 160px; border: 1px solid #444; border-radius: 4px; overflow: hidden; display: flex; }
+.mx-code { flex: 3; min-height: 160px; border: 1px solid #444; border-radius: 8px; overflow: hidden; display: flex; }
 .mx-code .cm-editor { flex: 1; min-width: 0; height: 100%; }
 .mx-code .cm-scroller { font: 13px/18px Consolas, 'Courier New', monospace; }
 .tok-comment { color: #6a9955; } .tok-string { color: #ce9178; } .tok-number { color: #b5cea8; }
@@ -65,7 +65,7 @@ ${ICON_BUTTON_STYLE}
 .cm-paused-line { background: rgba(255, 210, 0, 0.32) !important; outline: 1px solid #c8a400; }
 .mx-hover { max-width: 420px; padding: 4px 8px; font: 12px system-ui, sans-serif; }
 .mx-hover b { display: block; font-family: Consolas, monospace; color: #4ec9b0; margin-bottom: 2px; }
-.mx-helper { display: flex; gap: 8px; align-items: center; min-height: 28px; padding: 2px 6px; border-radius: 4px; background: #252526; }
+.mx-helper { display: flex; gap: 8px; align-items: center; min-height: 28px; padding: 2px 8px; border-radius: 8px; background: #252526; }
 .mx-helper[hidden] { display: none; }
 .mx-helper code { color: #dcdcaa; }
 .mx-helper input[type="number"] { width: 72px; }
@@ -74,7 +74,7 @@ ${ICON_BUTTON_STYLE}
 .mx-tabs { display: flex; gap: 2px; border-bottom: 1px solid #444; }
 .mx-tabs button { background: none; color: #aaa; border: 0; border-bottom: 2px solid transparent; padding: 4px 10px; cursor: pointer; }
 .mx-tabs button[aria-selected="true"] { color: #fff; border-bottom-color: #0e639c; }
-.mx-tab-panel { flex: 2; min-height: 100px; overflow: auto; border: 1px solid #444; border-radius: 4px; background: #1a1a1a; }
+.mx-tab-panel { flex: 2; min-height: 100px; overflow: auto; border: 1px solid #444; border-radius: 8px; background: #1a1a1a; }
 .mx-tab-panel[hidden] { display: none; }
 .mx-console { margin: 0; padding: 4px; list-style: none; font: 12px/16px Consolas, monospace; }
 .mx-console li { display: flex; gap: 8px; white-space: pre-wrap; overflow-wrap: anywhere; }
@@ -240,41 +240,41 @@ export class MaterialXScriptEditor {
     const separator = '<span class="mx-separator" aria-hidden="true"></span>';
     this.element.innerHTML = `
       <div class="mx-toolbar" role="toolbar" aria-label="Script MaterialX">
-        ${iconButton('play', 'Appliquer / exécuter (Ctrl+Entrée)', { class: 'primary', 'data-action': 'apply', 'data-testid': 'script-apply' })}
-        ${iconButton('bug', 'Déboguer : s’arrête aux points d’arrêt (F5)', { 'data-action': 'debug', 'data-testid': 'script-debug' })}
-        ${iconButton('pause', 'Mettre en pause le script et le rendu (F6)', { 'data-action': 'pause', 'data-testid': 'script-pause', disabled: '' })}
-        ${iconButton('stepOver', 'Pas à pas : instruction suivante (F10)', { 'data-action': 'step', 'data-testid': 'script-step', disabled: '' })}
-        ${iconButton('stop', 'Arrêter le script (Maj+F5)', { class: 'danger', 'data-action': 'stop', 'data-testid': 'script-stop', disabled: '' })}
+        ${iconButton('play', 'Appliquer / exécuter (Ctrl+Entrée)', { class: 'primary', 'data-action': 'apply', 'data-testid': 'script-apply' }, 'Exécuter')}
+        ${iconButton('bug', 'Déboguer : s’arrête aux points d’arrêt (F5)', { 'data-action': 'debug', 'data-testid': 'script-debug' }, 'Déboguer')}
+        ${iconButton('pause', 'Mettre en pause le script et le rendu (F6)', { 'data-action': 'pause', 'data-testid': 'script-pause', disabled: '' }, 'Pause')}
+        ${iconButton('stepOver', 'Pas à pas : instruction suivante (F10)', { 'data-action': 'step', 'data-testid': 'script-step', disabled: '' }, 'Pas à pas')}
+        ${iconButton('stop', 'Arrêter le script (Maj+F5)', { class: 'danger', 'data-action': 'stop', 'data-testid': 'script-stop', disabled: '' }, 'Arrêter')}
         ${separator}
-        ${iconButton('wand', 'Matériau de l’objet sélectionné → script', { 'data-action': 'from-material', 'data-testid': 'script-from-material' })}
-        ${iconButton('toXml', 'Script → XML MaterialX', { 'data-action': 'to-xml', 'data-testid': 'script-to-xml' })}
-        ${iconButton('fromXml', 'XML MaterialX → script', { 'data-action': 'from-xml', 'data-testid': 'script-from-xml' })}
-        ${iconButton('download', 'Exporter le matériau (.mtlx)', { 'data-action': 'export', 'data-testid': 'script-export' })}
+        ${iconButton('wand', 'Matériau de l’objet sélectionné → script', { 'data-action': 'from-material', 'data-testid': 'script-from-material' }, 'Matériau')}
+        ${iconButton('toXml', 'Script → XML MaterialX', { 'data-action': 'to-xml', 'data-testid': 'script-to-xml' }, '→ XML')}
+        ${iconButton('fromXml', 'XML MaterialX → script', { 'data-action': 'from-xml', 'data-testid': 'script-from-xml' }, 'XML →')}
+        ${iconButton('download', 'Exporter le matériau (.mtlx)', { 'data-action': 'export', 'data-testid': 'script-export' }, '.mtlx')}
         ${separator}
-        ${iconButton('save', 'Enregistrer dans Mes scripts (Ctrl+S)', { 'data-action': 'save', 'data-testid': 'script-save' })}
-        ${iconButton('upload', 'Importer un script (.js)', { 'data-action': 'import', 'data-testid': 'script-import' })}
-        ${iconButton('file', 'Exporter le script (.js)', { 'data-action': 'export-js', 'data-testid': 'script-export-js' })}
-        ${iconButton('link', 'Copier un lien de partage du script', { 'data-action': 'share', 'data-testid': 'script-share' })}
-        ${iconButton('close', 'Fermer (Échap)', { 'data-action': 'close', 'data-testid': 'script-close', style: 'margin-left:auto' })}
+        ${iconButton('save', 'Enregistrer dans Mes scripts (Ctrl+S)', { 'data-action': 'save', 'data-testid': 'script-save' }, 'Enregistrer')}
+        ${iconButton('upload', 'Importer un script (.js)', { 'data-action': 'import', 'data-testid': 'script-import' }, 'Importer')}
+        ${iconButton('file', 'Exporter le script (.js)', { 'data-action': 'export-js', 'data-testid': 'script-export-js' }, 'Exporter')}
+        ${iconButton('link', 'Copier un lien de partage du script', { 'data-action': 'share', 'data-testid': 'script-share' }, 'Partager')}
+        ${iconButton('close', 'Fermer (Échap)', { 'data-action': 'close', 'data-testid': 'script-close', style: 'margin-left:auto' }, 'Fermer')}
       </div>
       <div class="mx-bar">
         <select aria-label="Mes scripts" data-testid="script-library"><option value="">Mes scripts…</option></select>
         <input type="text" placeholder="Nom du script" aria-label="Nom du script" data-testid="script-name">
-        ${iconButton('trash', 'Supprimer de Mes scripts', { class: 'danger', 'data-action': 'delete', 'data-testid': 'script-delete' })}
+        ${iconButton('trash', 'Supprimer de Mes scripts', { class: 'danger', 'data-action': 'delete', 'data-testid': 'script-delete' }, 'Supprimer')}
       </div>
       <div class="mx-bar">
         <select aria-label="Insérer un modèle" data-testid="script-templates"><option value="">Insérer un modèle…</option></select>
       </div>
       <div class="mx-bar" data-testid="script-examples-bar" hidden>
         <select aria-label="Scripts de validation" data-testid="script-examples"><option value="">Scripts de validation…</option></select>
-        ${iconButton('play', 'Charger le script choisi puis l’exécuter sur le viewer', { 'data-action': 'run-example', 'data-testid': 'script-run-example' })}
+        ${iconButton('play', 'Charger le script choisi puis l’exécuter sur le viewer', { 'data-action': 'run-example', 'data-testid': 'script-run-example' }, 'Lancer')}
       </div>
       <details class="mx-remote" data-testid="script-remote" hidden>
         <summary>Rendu distant</summary>
         <div>
           <input type="url" placeholder="https://serveur-de-rendu.example/" aria-label="URL du serveur de rendu" data-testid="script-remote-url">
           <input type="password" placeholder="Jeton" autocomplete="off" aria-label="Jeton du serveur de rendu" data-testid="script-remote-token">
-          ${iconButton('cloud', 'Rendu distant : exécuter le script sur le serveur et afficher le rendu au fil de sa progression', { 'data-action': 'remote', 'data-testid': 'script-remote-run' })}
+          ${iconButton('cloud', 'Rendu distant : exécuter le script sur le serveur et afficher le rendu au fil de sa progression', { 'data-action': 'remote', 'data-testid': 'script-remote-run' }, 'Distant')}
         </div>
       </details>
       <div class="mx-code" data-testid="script-code"></div>
@@ -545,7 +545,7 @@ export class MaterialXScriptEditor {
     const pause = this.#buttons['pause']!;
     pause.disabled = !busy || (this.#remote !== undefined && this.#remote.id === undefined);
     const paused = state === 'paused';
-    setIconButton(pause, paused ? 'play' : 'pause', paused ? 'Reprendre (F6, F8)' : 'Mettre en pause le script et le rendu (F6)');
+    setIconButton(pause, paused ? 'play' : 'pause', paused ? 'Reprendre (F6, F8)' : 'Mettre en pause le script et le rendu (F6)', paused ? 'Reprendre' : 'Pause');
     pause.dataset['testid'] = 'script-pause';
     this.#buttons['step']!.disabled = !(this.#local?.debug && paused);
     this.#buttons['stop']!.disabled = !busy;
