@@ -7,6 +7,10 @@ import {
   type ScriptPortDef, type ScriptRun, type ScriptValue,
 } from './script-api.ts';
 import type { ResolvedGraph } from './graph.ts';
+import { downloadBlob } from '../assets/download.ts';
+import {
+  describeRemoteProgress, loadRemoteSettings, RemoteRenderView, runRemoteScript, saveRemoteSettings,
+} from '../remote-render.ts';
 
 export interface ScriptEditorOptions {
   library: Promise<ScriptLibrary>;
@@ -21,6 +25,8 @@ export interface ScriptEditorOptions {
   initialScript?: string;
   /** Ready-made scripts offered in the « Scripts » menu, e.g. examples/scripts/*.js. */
   examples?: readonly { label: string; code: string }[];
+  /** Where frames of « Rendu distant » are shown (docs/REMOTE_RENDER.md); without it the section is hidden. */
+  remoteView?: HTMLElement | null;
 }
 
 export const DEFAULT_SCRIPT = `// Matériau procédural : un bruit fractal mélange deux couleurs.
@@ -226,6 +232,9 @@ const STYLE = `
 #script-editor-panel header strong { flex: 1; }
 .mx-examples { display: flex; gap: 6px; }
 .mx-examples[hidden] { display: none; }
+.mx-remote[hidden] { display: none; }
+.mx-remote div { display: flex; gap: 6px; margin-top: 4px; }
+.mx-remote input { flex: 1; min-width: 0; background: #252526; color: #eee; border: 1px solid #555; border-radius: 4px; padding: 3px; }
 .mx-examples select { flex: 1; min-width: 0; background: #252526; color: #eee; border: 1px solid #555; border-radius: 4px; padding: 3px; }
 #script-editor-panel button { background: #333; color: #eee; border: 1px solid #555; border-radius: 4px; padding: 4px 8px; cursor: pointer; }
 #script-editor-panel button:hover { background: #444; }
@@ -267,6 +276,10 @@ export class MaterialXScriptEditor {
   readonly #status: HTMLElement;
   readonly #xml: HTMLTextAreaElement;
   readonly #examples: HTMLSelectElement;
+  readonly #remoteUrl: HTMLInputElement;
+  readonly #remoteToken: HTMLInputElement;
+  readonly #remoteRun: HTMLButtonElement;
+  #remoteFrames: RemoteRenderView | undefined;
   #items: Completion[] = [];
   #from = 0;
   #selected = 0;
@@ -304,6 +317,15 @@ export class MaterialXScriptEditor {
         <button type="button" data-action="run-example" data-testid="script-run-example"
           title="Charger le script choisi puis l’exécuter sur le viewer">Lancer</button>
       </div>
+      <details class="mx-remote" data-testid="script-remote" hidden>
+        <summary>Rendu distant</summary>
+        <div>
+          <input type="url" placeholder="https://serveur-de-rendu.example/" aria-label="URL du serveur de rendu" data-testid="script-remote-url">
+          <input type="password" placeholder="Jeton" autocomplete="off" aria-label="Jeton du serveur de rendu" data-testid="script-remote-token">
+          <button type="button" data-action="remote" data-testid="script-remote-run"
+            title="Exécuter le script sur le serveur de rendu et afficher le rendu au fil de sa progression">Rendu distant</button>
+        </div>
+      </details>
       <div class="mx-code">
         <pre aria-hidden="true" data-testid="script-highlight"></pre>
         <textarea spellcheck="false" autocomplete="off" autocapitalize="off" aria-label="Script" data-testid="script-code"></textarea>
@@ -325,6 +347,15 @@ export class MaterialXScriptEditor {
       this.#examples.append(Object.assign(document.createElement('option'), { value: String(index), textContent: example.label }));
     }
     this.element.querySelector<HTMLElement>('[data-testid="script-examples-bar"]')!.hidden = !options.examples?.length;
+    this.#remoteUrl = this.element.querySelector('[data-testid="script-remote-url"]')!;
+    this.#remoteToken = this.element.querySelector('[data-testid="script-remote-token"]')!;
+    this.#remoteRun = this.element.querySelector('[data-testid="script-remote-run"]')!;
+    this.element.querySelector<HTMLElement>('[data-testid="script-remote"]')!.hidden = !options.remoteView;
+    if (options.remoteView) {
+      const settings = loadRemoteSettings();
+      this.#remoteUrl.value = settings.url;
+      this.#remoteToken.value = settings.token;
+    }
     this.#bind();
     this.#render();
     this.#setStatus('Chargement des NodeDefs MaterialX...');
@@ -463,6 +494,62 @@ export class MaterialXScriptEditor {
     await this.apply();
   }
 
+  /**
+   * Run the script on the remote render server: its frames replace the viewer image while it
+   * renders, `log` messages appear in the status and `save(...)` files are downloaded.
+   */
+  async renderRemote(): Promise<void> {
+    const container = this.#options.remoteView;
+    if (!container || this.#remoteRun.disabled) return;
+    const settings = { url: this.#remoteUrl.value.trim(), token: this.#remoteToken.value.trim() };
+    const view = this.#remoteFrames ??= new RemoteRenderView(container);
+    const controller = new AbortController();
+    view.onCancel = () => controller.abort();
+    this.#remoteRun.disabled = true;
+    view.start();
+    const logs: string[] = [];
+    let files = 0;
+    let progress = '';
+    const show = (text: string) => {
+      progress = text;
+      view.status(text);
+      this.#setStatus(`Rendu distant : ${text}${logs.length ? `\n${logs.slice(-12).join('\n')}` : ''}`);
+    };
+    await this.#guard('Rendu distant terminé.', async () => {
+      try {
+        saveRemoteSettings(settings);
+        const result = await runRemoteScript(settings, this.#code.value, (event) => {
+          if (event.type === 'status') {
+            show(event.stage === 'queued' ? `en file d’attente (${event.position ?? 1} avant)`
+              : event.stage === 'loading' ? 'chargement du viewer distant…' : 'exécution du script…');
+          } else if (event.type === 'progress') show(describeRemoteProgress(event.progress) || progress);
+          else if (event.type === 'frame') view.frame(event.image);
+          else if (event.type === 'log') {
+            logs.push(event.level === 'error' ? `Erreur : ${event.message}` : event.message);
+            show(progress);
+          } else {
+            const bytes = Uint8Array.from(atob(event.data), char => char.charCodeAt(0));
+            downloadBlob(new Blob([bytes]), event.name);
+            files++;
+          }
+        }, controller.signal);
+        if (!result.ok) throw new ScriptError(result.message ?? 'Échec du script distant.', result.line);
+        const output = [...(result.logs ?? []), ...(files ? [`${files} fichier(s) téléchargé(s).`] : [])];
+        view.finish(`Terminé. ${progress}`);
+        return `Rendu distant terminé.${output.length ? `\n${output.join('\n')}` : ''}`;
+      } catch (error) {
+        if (controller.signal.aborted) {
+          view.finish('Rendu distant annulé.');
+          return 'Rendu distant annulé.';
+        }
+        view.finish(`Échec : ${error instanceof Error ? error.message : String(error)}`);
+        throw error;
+      } finally {
+        this.#remoteRun.disabled = false;
+      }
+    });
+  }
+
   /** Run an editor action; it may return a status message replacing `success`. */
   async #guard(success: string, action: () => Promise<string | void | undefined>): Promise<void> {
     clearTimeout(this.#validateTimer);
@@ -494,6 +581,7 @@ export class MaterialXScriptEditor {
       else if (action === 'from-material') void this.materialToScript();
       else if (action === 'export') void this.export();
       else if (action === 'run-example') void this.runExample();
+      else if (action === 'remote') void this.renderRemote();
       else if (action === 'close') this.element.dispatchEvent(new CustomEvent('script-editor-close', { bubbles: true }));
     });
     // Keep viewer shortcuts from reacting to typing in the editor.

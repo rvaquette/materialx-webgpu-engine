@@ -187,6 +187,9 @@ machine de mesure, le path tracing y est 4,5 à 8 fois plus rapide que sur l'iGP
 Un script qui n'utilise aucune de ces fonctions garde le comportement simple :
 **Appliquer** affecte son matériau à l'objet sélectionné.
 
+Le volet **Rendu distant** de l'éditeur exécute le script sur un serveur GPU et
+affiche son rendu au fil de la progression : voir [REMOTE_RENDER.md](REMOTE_RENDER.md).
+
 ## Scripts de validation des priorités
 
 [examples/scripts](../examples/scripts) contient un script par priorité de
