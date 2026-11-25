@@ -145,7 +145,7 @@ Autres types de shaders, sur le même principe que la priorité 12 :
 **Critère d'aboutissement :** chaque type est utilisable par script et dans le
 graphe, avec son statut de support par backend documenté.
 
-## Priorité 17 : surfaces complexes (eau, lave, …)
+## Priorité 17 : surfaces complexes (eau, lave, feu, fumée, nuages, …)
 
 Des surfaces « vivantes » prêtes à l'emploi, construites uniquement avec les
 briques précédentes (primitives 2D, displacement procédural animé, volumes,
@@ -157,9 +157,31 @@ briques précédentes (primitives 2D, displacement procédural animé, volumes,
 - **lave** : croûte sombre fissurée (Worley/Voronoi), émission par température
   (corps noir) dans les fissures, écoulement animé par advection de bruit,
   displacement de la croûte ;
+- **feu** : flammes en volume émissif borné par une primitive (cône ou
+  capsule), densité et température tirées d'un bruit 3D advecté vers le haut et
+  atténué avec la hauteur, émission par corps noir (cœur bleu-blanc, pointes
+  orangées), surmontées de fumée (ci-dessous) ; éclairage de la scène par
+  le feu en path tracing (volume émissif échantillonné, scintillement animé) et
+  repli raster en lumière ponctuelle teintée ; braises en particules (`Points`)
+  émissives optionnelles ;
+- **fumée** : volume diffusant et absorbant (albédo élevé, fumée claire de bois ;
+  albédo faible, fumée noire d'incendie) borné par une primitive ou un panache ;
+  densité tirée d'un bruit fractal 3D advecté vers le haut, qui s'élargit, se
+  dilue et se disperse avec la hauteur et le vent ; anisotropie de diffusion
+  (Henyey-Greenstein) pour le contre-jour ; variante colorée (fumigène) ;
+  ombres portées et diffusion multiple en path tracing, passe volume en raster ;
+  source libre ou attachée à un feu, à une cheminée ou à de la lave ;
+- **nuages** : volumes à très forte diffusion (albédo proche de 1) en couche
+  d'altitude ou en nuages isolés bornés par des primitives ; forme par bruit de
+  Perlin-Worley à plusieurs échelles érodé sur les bords, profil vertical par
+  type (cumulus à base plate et sommet bourgeonnant, stratus en nappe, cirrus
+  fibreux), couverture et densité réglables ; diffusion multiple
+  approchée (lobes avant/arrière, assombrissement « powder » sur les bords) et
+  liseré argenté en contre-jour ; ombres portées sur le sol, éclairage par le
+  ciel de la priorité 12 ; dérive animée par le vent ; repli raster par
+  marche de rayons à pas réduit ;
 - autres préréglages : glace (diffusion sous-surfacique, inclusions), boue ou
-  sable mouillé (mélange selon un masque d'humidité), nuages et fumée de surface
-  (volume borné par une primitive) ;
+  sable mouillé (mélange selon un masque d'humidité) ;
 - chaque surface expose quelques paramètres de haut niveau (vitesse, échelle,
   couleur, intensité) plutôt que tout le graphe, en `nodegraph` réutilisable ;
 - script : `water = new Water(); water.speed = 0.5; pool.material = water;` ;
@@ -167,9 +189,43 @@ briques précédentes (primitives 2D, displacement procédural animé, volumes,
   échantillonnée), l'eau réfracte et caustiques au path tracer ;
 - vérification raster/path tracing et rendus golden pour chaque préréglage.
 
-**Critère d'aboutissement :** une scène « plan d'eau » et une scène « coulée de
-lave » s'obtiennent en quelques lignes de script, animées et sans texture
-externe.
+**Critère d'aboutissement :** une scène « plan d'eau », une scène « coulée de
+lave », un « feu de camp », un panache de fumée et un ciel de cumulus
+s'obtiennent en quelques lignes de script, animés et sans texture externe ; le
+feu éclaire la scène, sa fumée et les nuages projettent des ombres en path
+tracing.
+
+## Priorité 18 : déformation volumique de surfaces complexes
+
+Déformer une surface (primitive, maillage importé, surface complexe de la
+priorité 17) par un champ défini dans l'espace plutôt que sommet par sommet,
+pour plier, tordre ou faire onduler des objets entiers et les animer :
+
+- **déformeurs paramétriques** : courbure (bend), torsion (twist), effilement
+  (taper), cisaillement, vague, sphérisation, chacun avec son axe, sa zone
+  d'influence et une atténuation ;
+- **déformation par treillis (FFD)** : une grille de points de contrôle
+  englobe l'objet ; déplacer ces points déforme tout ce qui est à l'intérieur
+  (interpolation de Bézier ou B-spline) ;
+- **champs volumiques** : déplacement lu dans un bruit 3D, un graphe MaterialX
+  évalué en 3D (`vector3` en fonction de la position) ou une grille NanoVDB de
+  vitesses, avec intégration sur plusieurs pas pour suivre un écoulement ;
+- **pile de déformeurs** non destructive, appliquée dans l'ordre, partagée par
+  plusieurs objets (un même champ de vent courbe tous les brins d'herbe) ;
+- évaluation sur GPU (passe compute, comme le displacement procédural de la
+  priorité 9), normales et tangentes recalculées, BVH reconstruit ou réajusté
+  à chaque image ;
+- animation par l'entrée `time` et par les paramètres des déformeurs, avec flou
+  de mouvement (positions aux bornes de l'obturateur) ;
+- script dans le style objet :
+  `bend = new Bend(); bend.angle = 90; bend.axis = "Y"; flag.deformers = [bend, wind];` ;
+- export USD : géométrie déformée écrite en `Mesh` (avec échantillons
+  temporels si animée), paramètres des déformeurs en attributs `engine:`.
+
+**Critère d'aboutissement :** un drapeau ondulant au vent (champ de bruit), un
+ruban tordu (twist) et un objet importé déformé par treillis sont animés en
+temps réel en raster, rendus avec flou de mouvement en path tracing, et
+exportés en USD.
 
 ## Pistes exploratoires
 
@@ -183,7 +239,8 @@ externe.
 ## Ordre recommandé
 
 1. Displacement procédural (9), puis surfaces complexes (17) qui en sont la
-   première application visible.
+   première application visible, puis déformation volumique (18), qui
+   réutilise la passe compute du displacement.
 2. Documentation des nœuds (10), qui profite des primitives (8) pour ses vignettes.
 3. Environnement et post-traitement (12), à faible risque d'architecture.
 4. Baking (13), qui alimente les aperçus et la bibliothèque (11).
