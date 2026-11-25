@@ -98,6 +98,20 @@ describe('script editor language support', () => {
     expect(at('img =', 0)).toMatchObject({ from: code.indexOf('img ='), title: 'img : Image → color3' });
     expect(at('"a.usda"', 3)).toBeUndefined();
   });
+
+  it('knows primitives: completions, properties and documentation', () => {
+    const code = 'ball = new Sphere({ radius: 1 });\nball.radius = 0.5;\n';
+    expect(scriptCompletions('x = new Sph', code, LIBRARY)?.items[0]).toMatchObject({ label: 'Sphere', insert: 'Sphere()' });
+    expect(scriptVariables(code, LIBRARY).get('ball')?.inputs.map(port => port.name)).toEqual([
+      'radius', 'resolution', 'translate', 'rotate', 'scale', 'visible', 'material', 'deform',
+    ]);
+    expect(scriptCompletions(`${code}ball.re`, code, LIBRARY)?.items.map(item => item.label)).toEqual(['resolution']);
+    const at = (text: string, offset = 1) => scriptHover(code, code.indexOf(text) + offset, LIBRARY);
+    expect(at('Sphere')).toMatchObject({ title: 'new Sphere() : primitive' });
+    expect(at('radius =')).toMatchObject({ title: 'ball.radius : propriété float', lines: ['Rayon', 'Défaut : 0.5', 'Plage : 0 … +∞', 'Primitive : Sphere'] });
+    expect(at('ball =', 0)).toMatchObject({ title: 'ball : Sphere' });
+    expect(highlightScript(code, LIBRARY)).toContain('<span class="tok-node">Sphere</span>');
+  });
 });
 
 describe('script editor panels and sharing', () => {

@@ -10,7 +10,7 @@ l'erreur `xxx is not defined.`
 
 **Sommaire** — [Nœuds](#nœuds-materialx) · [Valeurs et types](#valeurs-et-types) ·
 [Opérateurs et Math](#opérateurs-et-fonctions-math) · [Conditions](#conditions-par-pixel) ·
-[Matériaux](#matériaux-et-documents) · [Scène](#scène-et-objets) · [Rendu](#rendu) ·
+[Matériaux](#matériaux-et-documents) · [Scène](#scène-et-objets) · [Primitives](#primitives-scène-par-script) · [Rendu](#rendu) ·
 [Paramètres `render.*`](#paramètres-de-rendu-render) · [Enregistrement](#enregistrement-de-fichiers) ·
 [Animation et transformations](#animation-et-transformations) · [Lumières et caméra](#lumières-et-caméra) ·
 [Variantes et paramètres](#variantes-usd-et-paramètres-de-matériau) · [Diagnostic](#messages-vérifications-et-diagnostic) ·
@@ -118,6 +118,61 @@ s'exécutent à la construction du graphe : une condition sur une sortie de nœu
 | `setTransform("/objet", matrice)` | — | Matrice 4×4 en colonnes (16 nombres) ; sans matrice : transformation de la scène. |
 | `setVisibility("/objet", visible)` | — | Masque (`false`) ou affiche ; sans valeur : visibilité de la scène. |
 
+## Primitives (scène par script)
+
+| Écriture | Effet |
+|---|---|
+| `x = new Sphere()` | Crée une primitive ; la variable donne son nom à l'objet (`/World/x`). |
+| `new Cube({ size: 2, material: m })` | Propriétés données à la création (mêmes noms que ci-dessous). |
+| `x.radius = 0.5` | Modifie une propriété ; la lecture retourne la valeur courante (ou la valeur par défaut). |
+| `x.material = m` | Matériau : shader de surface ou `surfacematerial` du script (avec ses nœuds en amont), ou chemin `.mtlx` ; `undefined` le retire. |
+| `x.deform = (p, uv, n) => [x, y, z]` | Déplace chaque sommet (position, coordonnées de texture, normale) ; les normales sont recalculées. |
+| `x.path` | Chemin de l'objet dans la scène. |
+| `x.remove()` | Supprime l'objet ; le modifier ensuite est une erreur. |
+
+| Classe | Propriétés (valeurs par défaut) |
+|---|---|
+| `Sphere` | `radius` (0,5), `resolution` (48) |
+| `Cube` | `size` (1), `resolution` (1) |
+| `Cylinder`, `Cone` | `radius` (0,5), `height` (1), `axis` (`"Y"`), `resolution` (48) ; sommet du cône vers +`axis` |
+| `Capsule` | `radius` (0,25), `height` (0,5 : partie cylindrique), `axis`, `resolution` (48) |
+| `Torus` | `radius` (0,5), `minorRadius` (0,15), `axis`, `resolution` (48) |
+| `Plane` | `width` (1), `length` (1), `axis` (normale), `resolution` (1 ; une grille `n × n` pour le displacement ou `deform`) |
+| `Disk` | `radius` (0,5), `axis` (normale), `resolution` (48) |
+
+Propriétés communes : `translate` (`[0, 0, 0]`), `rotate` (degrés autour de X, puis Y, puis Z),
+`scale` (nombre ou `[x, y, z]`), `visible` (`true`), `material`, `deform`.
+
+- `resolution` : segments autour de l'axe (minimum 3) pour les formes rondes, subdivisions par
+  côté (minimum 1) pour `Cube` et `Plane` ; au plus 1024. Les longueurs sont strictement positives
+  et `axis` vaut `"X"`, `"Y"` ou `"Z"`.
+- **Scène** : les primitives forment une scène USD en mémoire (`/World/<nom>`, matériaux sous
+  `/World/Looks`) qui remplace la scène chargée ; un `scene(...)` ultérieur la remplace à son tour
+  (ses primitives ne sont alors plus modifiables). Les primitives ne s'ajoutent pas à une scène
+  chargée par `scene()`.
+- **Mise à jour** : les modifications sont envoyées au viewer avant la commande suivante
+  (`render`, `save`, `setCamera`, réglage `render.*`…) et à la fin du script. Si seuls
+  `translate`, `rotate`, `scale` ou `visible` ont changé, les objets sont déplacés sans
+  rechargement ; sinon (forme, résolution, matériau, valeurs de ses nœuds, `deform`, ajout ou
+  suppression) la scène est reconstruite en gardant la caméra.
+- **Matériau par défaut** : sans `material`, l'objet reçoit un `standard_surface` par défaut.
+- **Noms** : `Plane` couvre les grilles ; aucun nom de primitive ne masque de nœud de la
+  bibliothèque standard. Si une bibliothèque chargée définit un nœud de même nom de classe, la
+  primitive l'emporte et `log` le signale.
+- `objects()` retourne les chemins des primitives tant que la scène scriptée est affichée ;
+  `setTransform`, `assign`… acceptent ces chemins (un `assign` est perdu à la reconstruction
+  suivante : préférer `x.material`).
+
+```js
+surface = new StandardSurface();
+surface.base_color = [0.8, 0.2, 0.1];
+floor = new Plane({ width: 6, length: 6 });
+ball = new Sphere({ radius: 0.5, translate: [0, 0.5, 0], material: surface });
+setCamera({ eye: [3, 2, 4], target: [0, 0.3, 0], fov: 40 });
+await render(64);
+await save("primitives.usda");   // scène USD + ses documents MaterialX
+```
+
 ## Rendu
 
 | Fonction | Retour | Effet |
@@ -175,6 +230,7 @@ s'exécutent à la construction du graphe : une condition sur une sortie de nœu
 | `await save("aov.pfm")` | AOV sélectionnée par `render.view` (PFM 32 bits ; path tracing, `view` ≠ `"beauty"`) |
 | `await save("diagnostics.json")` | journal des diagnostics |
 | `await save("materiau.mtlx", m)` | document MaterialX du matériau `m` du script |
+| `await save("scene.usda")` | scène des primitives du script : couche USD (gprims `Sphere`, `Cube`, `Cylinder`, `Cone`, `Capsule`, `Plane` ; tore, disque et objets déformés en `Mesh`) et un `<matériau>.mtlx` par matériau, écrits dans le même dossier |
 | `await capture("x.png", { … })` | voir [Rendu](#rendu) |
 
 Les noms peuvent contenir des sous-dossiers (`"seq/frame-01.png"`), pas `..`. Destination :
@@ -211,7 +267,7 @@ pour un [rendu distant](REMOTE_RENDER.md).
 
 | Fonction | Retour | Effet |
 |---|---|---|
-| `log(a, b, …)` | — | Message dans la console de l'éditeur (`npm run script` : sortie standard) ; nœuds affichés par leur nom, objets en JSON. |
+| `log(a, b, …)` | — | Message dans la console de l'éditeur (`npm run script` : sortie standard) ; nœuds affichés par leur nom, primitives par leur chemin, objets en JSON. |
 | `check(condition, "message")` | — | Arrête le script si `condition` est fausse, sinon journalise `OK  message`. Ignorée pendant la validation en direct. |
 | `capabilities()` | objet | Adaptateur GPU, limites, `features`, support par backend, `mobile`. |
 | `diagnostics()` | `{ level, code, message }[]` | Journal des diagnostics. |
@@ -235,9 +291,11 @@ pour un [rendu distant](REMOTE_RENDER.md).
 - **Noms réservés** : `scene`, `objects`, `render`, `assign`, `load`, `save`, `log`, `check`,
   `stats`, `converge`, `diagnostics`, `capabilities`, `timeline`, `setTime`, `setTransform`,
   `setVisibility`, `lights`, `setLight`, `setCamera`, `variants`, `setVariant`,
-  `materialParameters`, `setMaterialParameters`, `Math`, et les classes de nœuds, ne peuvent pas
-  être réaffectés. `material`, `node`, `time`, `transform` et `capture` peuvent servir de noms de
-  nœuds (la variable masque alors la fonction).
+  `materialParameters`, `setMaterialParameters`, `Math`, les classes de nœuds et les classes de
+  primitives (`Sphere`, `Cube`, `Cylinder`, `Cone`, `Capsule`, `Torus`, `Plane`, `Disk`) ne
+  peuvent pas être réaffectés. `material`, `node`, `time`, `transform` et `capture` peuvent servir
+  de noms de nœuds (la variable masque alors la fonction). `window`, `document`… restent ceux du
+  navigateur : ne pas les utiliser comme noms de variables.
 - **Rendu distant** : le script part seul (sans l'état du viewer local) ; il doit charger sa scène,
   et ne peut lire que les fichiers servis par le serveur (`./scenes/…`) — voir
   [REMOTE_RENDER.md](REMOTE_RENDER.md).

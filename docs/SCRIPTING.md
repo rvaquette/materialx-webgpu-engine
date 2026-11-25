@@ -138,6 +138,7 @@ await render(64);                                          // attend 64 échanti
 | `await save("aov.pfm")` | Enregistre l'AOV path tracing sélectionné (`render.view`) en PFM 32 bits |
 | `await save("diagnostics.json")` | Enregistre le journal des diagnostics |
 | `await save("materiau.mtlx", matériau)` | Enregistre le document MaterialX d'un matériau du script |
+| `await save("scene.usda")` | Enregistre la scène des primitives du script et ses documents MaterialX |
 | `log(…)`, `check(condition, "message")` | Message ; vérification qui arrête le script si la condition est fausse |
 
 | Paramètre `render.` | Valeurs |
@@ -198,6 +199,37 @@ Un script qui n'utilise aucune de ces fonctions garde le comportement simple :
 Le volet **Rendu distant** de l'éditeur exécute le script sur un serveur GPU et
 affiche son rendu au fil de la progression : voir [REMOTE_RENDER.md](REMOTE_RENDER.md).
 
+## Créer une scène de primitives
+
+Sans fichier USD, un script construit sa scène avec des primitives (`Sphere`, `Cube`,
+`Cylinder`, `Cone`, `Capsule`, `Torus`, `Plane`, `Disk`) qu'il modifie comme des nœuds :
+
+```js
+paper = new StandardSurface();
+paper.base_color = [0.87, 0.76, 0.55];
+
+sheet = new Plane({ width: 2.4, length: 1.5, resolution: 240, material: paper });
+// Enroule les extrémités : chaque sommet est déplacé, les normales sont recalculées.
+sheet.deform = (p, uv, n) => Math.abs(p[0]) < 0.72 ? p : [Math.sign(p[0]) * 0.72, 0.1, p[2]];
+ball = new Sphere();
+ball.radius = 0.3;
+ball.translate = [0, 0.3, 0];
+
+await render(64);
+ball.translate = [0, 0.8, 0];      // déplacé sans recharger la scène
+await render(64);
+await save("scene.usda");          // couche USD et documents MaterialX
+```
+
+Les primitives forment une scène USD en mémoire qui remplace la scène chargée. Elle est
+reconstruite quand une forme, un matériau ou une déformation change, et seulement déplacée
+quand `translate`, `rotate`, `scale` ou `visible` changent. `save("….usda")` l'écrit avec un
+document `.mtlx` par matériau ; le fichier se recharge ensuite avec `scene(...)` comme une scène
+ordinaire. La [référence](SCRIPT_REFERENCE.md#primitives-scène-par-script) liste les classes et
+leurs propriétés.
+
+![Parchemin : feuille déformée et matériau procédural](images/p8/parchemin.png)
+
 ## Scripts de validation des priorités
 
 [examples/scripts](../examples/scripts) contient un script par priorité de
@@ -214,6 +246,8 @@ convergence, réduction des textures, repli raster...) :
 | `p5-dynamic-scenes.js` | Scène animée : séquences raster et path tracing, variant, overrides, paramètres, historique temporel, flou de mouvement |
 | `p6-volumes-effects.js` | Volumes NanoVDB, brouillard, prisme dispersif, subsurface multi-échelle, cheveux, foule instanciée |
 | `p7-robustness.js` | Capacités, erreurs prévisibles, scène précompilée figée, budget mémoire jusqu'au repli raster puis retour, journal |
+| `p8-primitives.js` | Scène de primitives matérialisées sans fichier USD : raster et path tracing, déplacement sans rechargement, forme et matériau modifiés, export USD, suppression |
+| `p8-parchemin.js` | Feuille enroulée par `deform` et matériau procédural de vieux parchemin aux bords abîmés |
 
 ```bash
 npm run script -- examples/scripts --out renders/validation --timeout 7200000

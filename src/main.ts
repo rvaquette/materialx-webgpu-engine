@@ -19,6 +19,10 @@ import type { ResolvedGraph } from './materialx/graph.ts';
 import { captureRgba } from './gpu/capture.ts';
 import { describeGpuCapabilities, isMobileGpu } from './gpu/capabilities.ts';
 import type { PathTraceView } from './render/pathtracing/display.ts';
+import type { SceneLoadOptions } from './render/usd-scene-assets.ts';
+
+/** In-memory entry of the scene built by a script's primitives (never fetched). */
+const scriptStageEntry = (): string => new URL('./__script_stage__/scene.usda', document.baseURI).href;
 
 let ui: ViewerUiState | undefined;
 let statusIsError = false;
@@ -65,6 +69,7 @@ async function main(): Promise<void> {
   const scriptControl: ScriptRunControl = { pause: () => false, resume: () => false, wait: () => undefined };
   const scriptHost: ScriptHost = {
     loadScene: entry => readyHost().loadScene(entry),
+    loadStage: stage => readyHost().loadStage(stage),
     objects: () => viewerHost?.objects() ?? [],
     renderSettings: () => viewerHost?.renderSettings() ?? {},
     setRenderSetting: (name, value) => readyHost().setRenderSetting(name, value),
@@ -220,6 +225,8 @@ async function main(): Promise<void> {
   const localFiles = document.getElementById('local-scene-files') as HTMLInputElement | null;
   const localFolder = document.getElementById('local-scene-folder') as HTMLInputElement | null;
   let localScene: LocalGltfScene | undefined;
+  /** Scene of the last script's primitives, reloadable from the scene list. */
+  let scriptStage: SceneLoadOptions | undefined;
   const state: ViewerUiState = {
     entry: initialEntry, scenes: [...SCENE_CATALOG], resolution: initialResolution, pathTracingDepth: 12,
     rasterQuality: 'interactive', backend: initialBackend, environmentEnabled: true, denoise: false,
@@ -452,7 +459,7 @@ async function main(): Promise<void> {
     }
   };
 
-  async function loadEntry(entry: string): Promise<boolean> {
+  async function loadEntry(entry: string, preserveCamera = false): Promise<boolean> {
     sceneChanging = hasLoadedScene;
     if (sceneChanging) {
       state.shaderErrors = '';
@@ -469,9 +476,10 @@ async function main(): Promise<void> {
         const { importLocalGltf } = await import('./scene/local-gltf.ts');
         imported = await importLocalGltf([], undefined, url);
       }
-      await viewer.load(url, new Map(), false, {
+      await viewer.load(url, new Map(), preserveCamera, {
         ...(imported ? imported.options : {}),
         ...(!imported && localScene?.entry === entry ? localScene.options : {}),
+        ...(scriptStage && entry === scriptStageEntry() ? scriptStage : {}),
         ...(config?.textureRoot ? { textureRoot: new URL(config.textureRoot, document.baseURI).href } : {}),
       });
       state.entry = entry;
@@ -668,6 +676,18 @@ async function main(): Promise<void> {
       parameterEditor.refresh();
       if (!state.scenes.some(scene => scene.entry === entry)) state.scenes.push({ entry, label: entry });
       if (!await loadEntry(entry)) throw new Error(state.error || `Échec du chargement de ${entry}.`);
+    },
+    async loadStage(stage) {
+      if (operationBusy || deviceLost) throw new Error('Une opération du viewer est en cours.');
+      parameterEditor.refresh();
+      const entry = scriptStageEntry();
+      const { importUsdaLayer } = await import('./render/usd-scene-assets.ts');
+      const options = { imported: await importUsdaLayer(entry, stage.usda, stage.materials) };
+      // Reloading the scripted scene (a primitive changed) keeps the camera.
+      const reload = state.entry === entry;
+      scriptStage = options;
+      if (!state.scenes.some(scene => scene.entry === entry)) state.scenes.push({ entry, label: 'Script - primitives' });
+      if (!await loadEntry(entry, reload)) throw new Error(state.error || 'Échec du chargement de la scène du script.');
     },
     objects: () => viewer.objects.map(object => object.path),
     renderSettings: () => {

@@ -7,6 +7,7 @@ import {
   type ScriptHost, type ScriptLibrary, type ScriptNodeDef, type ScriptPortDef, type ScriptValue,
 } from './script-api.ts';
 import type { ResolvedGraph } from './graph.ts';
+import { primitiveScriptDef, SCRIPT_PRIMITIVES } from './script-scene.ts';
 import type { MaterialXScriptEditor } from './script-editor-view.ts';
 import { sharedScriptOf } from './script-store.ts';
 import { activityButton, panelVisible, rememberPanel } from '../ui/layout.ts';
@@ -78,6 +79,11 @@ export const escapeHtml = (text: string): string => text.replace(/&/g, '&amp;').
 export function scriptVariables(code: string, library: ScriptLibrary): Map<string, ScriptNodeDef> {
   const variables = new Map<string, ScriptNodeDef>();
   for (const match of code.matchAll(DECLARED_NODE)) {
+    const primitive = primitiveScriptDef(match[2]!);
+    if (primitive) {
+      variables.set(match[1]!, primitive);
+      continue;
+    }
     const category = library.categoryOf(match[2]!);
     if (category === undefined) continue;
     try { variables.set(match[1]!, library.resolve(category, match[4] || undefined)); } catch { /* invalid variant */ }
@@ -101,7 +107,7 @@ export function scriptTokens(code: string, library: ScriptLibrary | undefined): 
   };
   const identifierKind = (name: string): string | undefined => {
     if (variables.has(name)) return 'var';
-    if (library?.categoryOf(name) !== undefined) return 'node';
+    if (library?.categoryOf(name) !== undefined || Object.hasOwn(SCRIPT_PRIMITIVES, name)) return 'node';
     if (SCRIPT_FUNCTIONS[name]) return 'builtin';
     return undefined;
   };
@@ -180,17 +186,32 @@ export function scriptHover(code: string, position: number, library: ScriptLibra
       return { from, to, title: `${owner}.colorspace : attribut`, lines: [`Espace colorimétrique : ${MATERIALX_COLORSPACES.join(', ')}`] };
     }
     const input = def.inputs.find(port => port.name === word);
-    if (input) return { from, to, title: `${owner}.${word} : entrée ${input.type}`, lines: [...portLines(input), `NodeDef : ${def.name}`] };
+    if (input) {
+      const kind = def.outputs.length ? 'entrée' : 'propriété';
+      return { from, to, title: `${owner}.${word} : ${kind} ${input.type}`, lines: [...portLines(input), def.outputs.length ? `NodeDef : ${def.name}` : `Primitive : ${def.className}`] };
+    }
     const output = def.outputs.find(port => port.name === word);
     if (output) return { from, to, title: `${owner}.${word} : sortie ${output.type}`, lines: [`NodeDef : ${def.name}`] };
     return { from, to, title: `${owner}.${word}`, lines: [`${def.name} n’a ni entrée ni sortie « ${word} ».`] };
   }
   const def = variables.get(word);
+  if (def && !def.outputs.length) {
+    return { from, to, title: `${word} : ${def.className}`, lines: [
+      ...(def.doc ? [def.doc] : []), `Propriétés : ${def.inputs.map(port => port.name).join(', ')}`, 'path : chemin dans la scène ; remove() : supprime',
+    ] };
+  }
   if (def) {
     return { from, to, title: `${word} : ${def.className} → ${nodeType(def)}`, lines: [
       ...(def.doc ? [def.doc] : []), `NodeDef : ${def.name}`,
       `Entrées : ${def.inputs.map(port => port.name).join(', ') || 'aucune'}`,
       `Sorties : ${def.outputs.map(port => `${port.name} (${port.type})`).join(', ')}`,
+    ] };
+  }
+  const primitive = primitiveScriptDef(word);
+  if (primitive) {
+    return { from, to, title: `new ${word}() : primitive`, lines: [
+      ...(primitive.doc ? [primitive.doc] : []),
+      `Propriétés : ${primitive.inputs.map(port => `${port.name}${port.default !== undefined ? ` = ${formatValue(port.default)}` : ''}`).join(', ')}`,
     ] };
   }
   const category = library.categoryOf(word);
@@ -238,7 +259,10 @@ export function scriptCompletions(prefix: string, code: string, library: ScriptL
       const types = [...new Set(variants.map(nodeType))];
       return { label: className, detail: `${variants[0]!.category} → ${types.join(' | ')}`, insert: `${className}()` };
     });
-    return { from: prefix.length - word.length, items: rank(items, word).slice(0, 200) };
+    const primitives = Object.entries(SCRIPT_PRIMITIVES).map(([className, primitive]) => ({
+      label: className, detail: `primitive : ${primitive.doc}`, insert: `${className}()`,
+    }));
+    return { from: prefix.length - word.length, items: rank([...primitives, ...items], word).slice(0, 200) };
   }
   const member = new RegExp(`(${IDENT})\\.([\\w$]*)$`).exec(prefix);
   if (member?.[1] === 'render' && !scriptVariables(code, library).has('render')) {
@@ -286,7 +310,7 @@ export const SCRIPT_FUNCTIONS: Readonly<Record<string, { detail: string; insert:
   load: { detail: 'await load("….mtlx") : charge un matériau dans le script', insert: 'await load("' },
   material: { detail: 'material("/objet") : matériau courant d’un objet, modifiable', insert: 'material("' },
   node: { detail: 'node("nom") : nœud du script par son nom', insert: 'node("' },
-  save: { detail: 'await save("rendu.png" | "aov.pfm" | "diagnostics.json") ou save("mat.mtlx", surface) : enregistre', insert: 'await save("' },
+  save: { detail: 'await save("rendu.png" | "aov.pfm" | "diagnostics.json" | "scene.usda") ou save("mat.mtlx", surface) : enregistre', insert: 'await save("' },
   log: { detail: 'log(…) : affiche un message', insert: 'log(' },
   check: { detail: 'check(condition, "message") : vérification (ignorée pendant la validation)', insert: 'check(' },
   stats: { detail: 'stats() : échantillons, bruit, débit, arrêt, repli, mémoire GPU', insert: 'stats()' },

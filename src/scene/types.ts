@@ -131,10 +131,14 @@ export interface SceneAsset {
   materials: readonly MaterialXReference[];
 }
 
+/** Implicit UsdGeom gprims (src/scene/primitives.ts tessellates them). */
+export const IMPLICIT_GPRIMS: ReadonlySet<string> = new Set(['Sphere', 'Cube', 'Cylinder', 'Cone', 'Capsule', 'Plane']);
+
 export function isMeshPrim(prim: ScenePrim): boolean {
   // Non-mesh USD schemas also carry primvars; those do not make them geometry.
-  // Curves and points are swept into meshes (procedural-geometry.ts); volumes render as
-  // a box around their fields (render/scene-volumes.ts).
+  // Curves and points are swept into meshes (procedural-geometry.ts); implicit gprims are
+  // tessellated (primitives.ts); volumes render as a box around their fields (render/scene-volumes.ts).
   return prim.typeName === 'Mesh' || prim.typeName === 'BasisCurves' || prim.typeName === 'Points' || prim.typeName === 'Volume'
+    || IMPLICIT_GPRIMS.has(prim.typeName ?? '')
     || (prim.typeName === undefined && prim.mesh !== undefined);
 }

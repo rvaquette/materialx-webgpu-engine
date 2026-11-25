@@ -584,7 +584,7 @@ color, a `time`-driven MaterialX material and a mesh whose topology changes,
 and has a `finish` variant set. The viewer UI shows its timeline, playback, the
 path-tracing temporal history and the variant selectors under **Animation**.
 
-## Curves, points, instancers and volumes
+## Curves, points, implicit gprims, instancers and volumes
 
 - **`BasisCurves`** (linear, cubic bezier, B-spline and Catmull-Rom, periodic
   or not) are tessellated into tubes (`src/scene/procedural-geometry.ts`):
@@ -596,6 +596,21 @@ path-tracing temporal history and the variant selectors under **Animation**.
   shadowing and multiple scattering come from the path tracer's ordinary
   transport; raster sees direct lighting and shadow maps only.
 - **`Points`** become icospheres (42 vertices) of diameter `widths`.
+- **Implicit gprims** `Sphere` (`radius`), `Cube` (`size`), `Cylinder`, `Cone`
+  (`radius`, `height`, `axis`), `Capsule` (`radius`, `height` of the
+  cylindrical part, `axis`) and `Plane` (`width`, `length`, `axis` = normal)
+  are tessellated with smooth normals and `st` (`src/scene/primitives.ts`),
+  using the UsdGeom fallbacks for unauthored attributes (radius 1, size 2,
+  height 2, capsule 0.5 × 1, plane 2 × 2, axis `Z`). The custom
+  `int engine:resolution` sets the tessellation: segments around the axis
+  (default 48) or subdivisions per side for `Cube` and `Plane` (default 1).
+  A non-positive size is an error naming the prim. Without a bound material,
+  a gprim gets a default `standard_surface` whose `base_color` is
+  `primvars:displayColor` when authored (also for meshes written for script
+  primitives, which carry `engine:primitive`); other unbound meshes keep the
+  previous behaviour and are not drawn. `Cylinder_1`, `Capsule_1`, `extent`
+  and `doubleSided` are not read. Material scripts write such layers with
+  `save("scene.usda")` (see [SCRIPTING.md](SCRIPTING.md#créer-une-scène-de-primitives)).
 - **`PointInstancer`** places each prototype subtree at `positions`, rotated by
   `orientations` and scaled by `scales`, honouring `protoIndices`,
   `invisibleIds` and animated instancer attributes (`velocities` are

@@ -1501,3 +1501,84 @@ streaming ajoute 0,1 à 0,4 s.
   sont réduites.
 - **Firefox, WebKit, SwiftShader.** Pas de contournement : le moteur signale
   l'absence de WebGPU ; SwiftShader sert au raster en CI, pas au path tracing.
+
+## Priorité 8 : primitives et scènes par script
+
+Construire une scène de lookdev sans fichier USD. Le script de démonstration est
+[p8-primitives.js](../examples/scripts/p8-primitives.js) (menu **Scripts de
+validation** de l'éditeur) ; [p8-parchemin.js](../examples/scripts/p8-parchemin.js)
+illustre la déformation.
+
+```js
+surface = new StandardSurface();
+surface.base_color = [0.8, 0.2, 0.1];
+ball = new Sphere();
+ball.radius = 0.5;
+ball.translate = [0, 0.5, 0];
+ball.material = surface;
+```
+
+| Raster | Path tracing (256 spp) |
+|---|---|
+| ![Primitives en raster](images/p8/01-raster.png) | ![Primitives en path tracing](images/p8/02-pathtracing.png) |
+
+| Déplacement et masquage (sans rechargement) | Rayon, résolution et matériau modifiés |
+|---|---|
+| ![Sphère déplacée, cylindre masqué](images/p8/03-deplacement.png) | ![Sphère de verre, cube et cône retessellés](images/p8/04-modifications.png) |
+
+![Parchemin : feuille enroulée par deform, matériau procédural aux bords abîmés](images/p8/parchemin.png)
+
+### Travaux réalisés
+
+- **Primitives** (`src/scene/primitives.ts`) : `Sphere`, `Cube`, `Cylinder`,
+  `Cone`, `Capsule`, `Torus`, `Plane`, `Disk`, triangulées avec normales lisses
+  et coordonnées `st` (les tangentes en découlent dans `prepareMesh`), orientées
+  selon `axis`. Les formes de révolution partagent un tour (profil tourné autour
+  de l'axe) ; les triangles dégénérés des pôles et du sommet du cône sont omis et
+  chaque triangle est orienté selon ses normales. `resolution` règle les
+  segments (3 à 1024) ou les subdivisions par côté : un `Plane` subdivisé sert de
+  grille pour le displacement.
+- **Scripts** (`src/materialx/script-api.ts`, `script-scene.ts`) :
+  `x = new Sphere()`, propriétés lues et écrites comme des entrées de nœud
+  (dimensions, `resolution`, `axis`, `translate`, `rotate`, `scale`, `visible`,
+  `material`), initialisation `new Cube({ … })`, `x.path`, `x.remove()`. Les
+  primitives forment une couche USD en mémoire chargée par le chemin d'import
+  en mémoire du viewer (`ScriptHost.loadStage`, `importUsdaLayer`). Les
+  changements sont envoyés avant la commande suivante et en fin de script : un
+  déplacement ou un masquage passe par `setTransform` / `setVisibility` sans
+  rechargement ; toute autre modification reconstruit la scène en gardant la
+  caméra.
+- **Déformation** : `x.deform = (position, uv, normale) => [x, y, z]` déplace
+  chaque sommet ; les normales sont recalculées (soudées par position).
+  L'objet est alors écrit en `Mesh`. Ce déplacement en JavaScript précède le
+  displacement procédural sur GPU de la priorité 9.
+- **Export USD** : `save("scene.usda")` écrit la couche (gprims implicites ;
+  tore, disque et objets déformés en `Mesh` avec `engine:primitive`) et un
+  `<matériau>.mtlx` par matériau à côté. Le fichier se recharge avec `scene()`
+  et donne les mêmes objets et matériaux.
+- **Import des gprims implicites USD** (`Sphere`, `Cube`, `Cylinder`, `Cone`,
+  `Capsule`, `Plane`) avec les valeurs par défaut UsdGeom et
+  `engine:resolution` ([usd-import.md](usd-import.md)). Sans matériau, ils
+  reçoivent un `standard_surface` coloré par `primvars:displayColor` : un
+  maillage non lié n'était dessiné par aucun backend.
+- **Éditeur** : complétion des classes après `new`, propriétés après `x.`,
+  aide au survol, aides de valeur (curseurs, axe) sur les lignes
+  `x.radius = …` ; `objects()` liste les primitives.
+
+### Décisions
+
+- **Une scène scriptée remplace la scène chargée.** Ajouter des primitives à
+  une scène USD chargée par URL demanderait de composer une couche en mémoire
+  avec des couches distantes soumises à la politique de racine d'assets ; ce
+  n'est pas fait.
+- **Pas de classe `Grid`** : la bibliothèque standard a un nœud `grid` (motif)
+  qu'elle masquerait. Une grille est un `Plane` avec `resolution`.
+- **Rotations écrites en `rotateZ`, `rotateY`, `rotateX` séparés** plutôt
+  qu'en `rotateXYZ` : l'ordre est explicite dans tous les outils USD et la
+  matrice est celle de `transform()`.
+- **Matériau par défaut limité aux gprims et aux primitives écrites en
+  `Mesh`** : les autres maillages non liés gardent leur comportement, pour ne
+  pas modifier les scènes existantes.
+- **Intersection analytique des sphères** dans le path tracer : non faite. La
+  tessellation (48 segments) suffit en lookdev et garde un seul chemin de
+  géométrie pour les deux backends.

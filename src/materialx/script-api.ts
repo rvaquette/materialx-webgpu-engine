@@ -15,6 +15,9 @@
 import { parse as parseJavaScript, type Node as AcornNode } from 'acorn';
 import { MATERIALX_DEFAULT_LIBRARY_FILES } from './libraries.ts';
 import type { ResolvedGraph } from './graph.ts';
+import { OBJECT_PROPERTIES, SCRIPT_PRIMITIVES, stageObjectShape, writeStageUsda, type PrimitiveParameter, type StageMaterial, type StageObject } from './script-scene.ts';
+import { checkPrimitiveShape, deformMesh, primitiveMesh, type PrimitiveAxis, type PrimitiveShape, type VertexDeformer } from '../scene/primitives.ts';
+import type { RawMesh } from '../geometry/prepare.ts';
 
 export type ScriptValue = number | boolean | string | readonly number[];
 
@@ -682,9 +685,20 @@ export interface ScriptLightChanges {
   transform?: readonly number[];
 }
 
+/** Scene of the script's primitives (see `ScriptHost.loadStage`). */
+export interface ScriptStage {
+  usda: string;
+  materials: ReadonlyMap<string, string>;
+}
+
 /** Viewer operations available to scripts; without a host, `runScript` only validates them. */
 export interface ScriptHost {
   loadScene(entry: string): Promise<void>;
+  /**
+   * Show the scene built by the script's primitives: a USDA layer and the MaterialX documents it
+   * references, by asset path (documents referenced by URL may be absent and are then fetched).
+   */
+  loadStage(stage: ScriptStage): Promise<void>;
   objects(): readonly string[];
   renderSettings(): Readonly<Record<string, unknown>>;
   setRenderSetting(name: string, value: unknown): Promise<void>;
@@ -1030,6 +1044,8 @@ export async function runScript(code: string, library: ScriptLibrary, options: R
   const describeValue = (value: unknown): string => {
     const node = nodeOf(value);
     if (node) return `${node.name} : ${node.def.category} → ${nodeType(node.def)}`;
+    const object = objectOf(value);
+    if (object) return `${pathOf(object)} : ${object.className}${object.removed ? ' (removed)' : ''}`;
     const ref = (value as Partial<OutputRef> | null)?.[OUTPUT];
     if (ref) return `${ref.node.name}.${ref.output.name} : ${ref.output.type}`;
     if (comparisonOf(value)) return 'per-pixel condition';
@@ -1131,7 +1147,10 @@ export async function runScript(code: string, library: ScriptLibrary, options: R
   // --- Viewer -----------------------------------------------------------------
   let queue: Promise<void> = Promise.resolve();
   const settings = new Map<string, unknown>();
-  const command = (): void => { graph.viewerCommands++; };
+  const command = (): void => {
+    flushStage();
+    graph.viewerCommands++;
+  };
   // A dry run does not load the scene requested by `scene()`: scene queries then answer as for an empty scene.
   let sceneRequested = false;
   const sceneQueries = (): ScriptHost | undefined => (host || !sceneRequested ? queries : undefined);
@@ -1173,6 +1192,279 @@ export async function runScript(code: string, library: ScriptLibrary, options: R
     for (const node of nodes) if (pending.has(node)) nameNode(node, node.def.category);
     return { xml: toXml({ nodes }, library, options.filePrefix ? { filePrefix: options.filePrefix } : {}) };
   };
+
+  // --- Scripted stage: primitives -----------------------------------------------
+  interface ScriptObject {
+    className: string;
+    name?: string;
+    parameters: Partial<Record<PrimitiveParameter, number | PrimitiveAxis>>;
+    translate: number[];
+    rotate: number[];
+    scale: number[];
+    visible: boolean;
+    material?: unknown;
+    deform?: VertexDeformer;
+    removed: boolean;
+  }
+  interface StageSnapshot {
+    objects: StageObject[];
+    /** Documents written with the layer, by material prim name. */
+    documents: Map<string, { name: string; xml: string }>;
+    /** Documents referenced by URL, by material prim name. */
+    urls: Map<string, string>;
+  }
+  interface BuiltStage extends ScriptStage {
+    structure: string;
+    placements: Map<string, string>;
+  }
+  const stageObjects: ScriptObject[] = [];
+  const objectHandles = new WeakMap<object, ScriptObject>();
+  const objectNames = new Set<string>(['Looks']);
+  /** `surfacematerial` names given to surface shaders bound to primitives (stable across syncs). */
+  const shaderMaterials = new Map<ScriptNode, string>();
+  const urlDocuments = new Map<string, Promise<{ name: string; text: string }>>();
+  let stageDirty = false;
+  let synced: BuiltStage | undefined;
+  const objectOf = (value: unknown): ScriptObject | undefined =>
+    typeof value === 'object' && value !== null ? objectHandles.get(value) : undefined;
+  const liveObjects = (): ScriptObject[] => stageObjects.filter(object => !object.removed);
+  const nameObject = (object: ScriptObject, name: string): void => {
+    const base = name.replace(/[^A-Za-z0-9_]/g, '_').replace(/^(?=\d|$)/, '_');
+    let unique = base;
+    for (let i = 2; objectNames.has(unique); i++) unique = `${base}_${i}`;
+    objectNames.add(unique);
+    object.name = unique;
+  };
+  const pathOf = (object: ScriptObject): string => {
+    if (object.name === undefined) nameObject(object, object.className.toLowerCase());
+    return `/World/${object.name!}`;
+  };
+  const urlDocument = (url: string): Promise<{ name: string; text: string }> => {
+    let document = urlDocuments.get(url);
+    if (!document) {
+      document = fetchText(url).then(text => {
+        const name = /<surfacematerial\b[^>]*\bname="([^"]+)"/.exec(text)?.[1];
+        if (!name) throw new ScriptError(`${url} has no surfacematerial.`);
+        return { name, text };
+      });
+      document.catch(() => {});
+      urlDocuments.set(url, document);
+    }
+    return document;
+  };
+  /** The stage as it is now: materials are generated from their current node values. */
+  const snapshotStage = (): StageSnapshot => {
+    const documents = new Map<string, { name: string; xml: string }>();
+    const urls = new Map<string, string>();
+    const prims = new Map<unknown, string>();
+    const primNames = new Set<string>();
+    const primFor = (key: unknown, name: string): string => {
+      let prim = prims.get(key);
+      if (prim) return prim;
+      const base = name.replace(/[^A-Za-z0-9_]/g, '_').replace(/^(?=\d|$)/, '_');
+      prim = base;
+      for (let i = 2; primNames.has(prim); i++) prim = `${base}_${i}`;
+      primNames.add(prim);
+      prims.set(key, prim);
+      return prim;
+    };
+    const materialOf = (material: unknown): string | undefined => {
+      if (material === undefined) return undefined;
+      if (typeof material === 'string') {
+        const prim = prims.get(material);
+        if (prim) return prim;
+        const created = primFor(material, material.split(/[\\/]/).at(-1)!.replace(/\.mtlx$/i, '') || 'material');
+        urls.set(created, material);
+        return created;
+      }
+      const source = sourceOf(material)!;
+      const existing = prims.get(source.node);
+      if (existing) return existing;
+      const nodes = upstream(source.node);
+      for (const node of nodes) if (pending.has(node)) nameNode(node, node.def.category);
+      let materialNode = source.node;
+      if (nodeType(source.node.def) === 'surfaceshader') {
+        let name = shaderMaterials.get(source.node);
+        if (!name) {
+          name = `${source.node.name}_material`;
+          for (let i = 2; used.has(name); i++) name = `${source.node.name}_material_${i}`;
+          used.add(name);
+          shaderMaterials.set(source.node, name);
+        }
+        materialNode = { name, def: library.resolve('surfacematerial'), inputs: new Map() };
+        connect(materialNode, 'surfaceshader', source.node, source.output);
+        nodes.push(materialNode);
+      }
+      const prim = primFor(source.node, materialNode.name);
+      documents.set(prim, { name: materialNode.name, xml: toXml({ nodes }, library, options.filePrefix ? { filePrefix: options.filePrefix } : {}) });
+      return prim;
+    };
+    const objects = liveObjects().map((object): StageObject => {
+      pathOf(object);
+      const material = materialOf(object.material);
+      let mesh: RawMesh | undefined;
+      if (object.deform) {
+        try {
+          mesh = deformMesh(primitiveMesh(stageObjectShape({ name: object.name!, className: object.className, parameters: object.parameters,
+            translate: [], rotate: [], scale: [], visible: true })), object.deform);
+        } catch (error) {
+          throw new ScriptError(`${object.name!}.deform: ${error instanceof Error ? error.message : String(error)}`);
+        }
+      }
+      return {
+        name: object.name!, className: object.className, parameters: { ...object.parameters },
+        translate: [...object.translate], rotate: [...object.rotate], scale: [...object.scale], visible: object.visible,
+        ...(material ? { material } : {}), ...(mesh ? { mesh } : {}),
+      };
+    });
+    return { objects, documents, urls };
+  };
+  /** USDA layer, documents and the facts that tell a reload from a placement change. */
+  const buildStage = async (snapshot: StageSnapshot): Promise<BuiltStage & { written: Map<string, string> }> => {
+    const materials: StageMaterial[] = [];
+    const texts = new Map<string, string>();
+    const written = new Map<string, string>();
+    for (const [prim, { name, xml }] of snapshot.documents) {
+      const assetPath = `./${prim}.mtlx`;
+      materials.push({ prim, name, assetPath });
+      texts.set(assetPath, xml);
+      written.set(`${prim}.mtlx`, xml);
+    }
+    for (const [prim, url] of snapshot.urls) {
+      const { name, text } = await urlDocument(url);
+      materials.push({ prim, name, assetPath: url });
+      texts.set(url, text);
+    }
+    const usda = writeStageUsda(snapshot.objects, materials);
+    const structure = `${writeStageUsda(snapshot.objects, materials, { transforms: false })}\n${[...texts].map(([path, text]) => `${path}\n${text}`).join('\n')}`;
+    const placements = new Map(snapshot.objects.map(object => [`/World/${object.name}`,
+      JSON.stringify([object.translate, object.rotate, object.scale, object.visible])]));
+    return { usda, materials: texts, structure, placements, written };
+  };
+  /** Sends pending primitive changes to the viewer: placements only when nothing else changed. */
+  const flushStage = (): void => {
+    if (!stageDirty) return;
+    stageDirty = false;
+    if (!liveObjects().length) {
+      if (synced) throw new ScriptError('Every primitive of the scene was removed: a scripted scene needs at least one.');
+      return;
+    }
+    graph.viewerCommands++;
+    // Validation runs skip the snapshot: it would run deform functions on every vertex.
+    if (!host) return;
+    const snapshot = snapshotStage();
+    const target = host;
+    queue = queue.then(async () => {
+      const built = await buildStage(snapshot);
+      if (synced?.structure === built.structure) {
+        for (const object of snapshot.objects) {
+          const path = `/World/${object.name}`;
+          if (synced.placements.get(path) === built.placements.get(path)) continue;
+          await target.setTransform(path, transformMatrix({ translate: object.translate, rotate: object.rotate, scale: object.scale }));
+          await target.setVisibility(path, object.visible);
+        }
+      } else {
+        await target.loadStage({ usda: built.usda, materials: built.materials });
+      }
+      synced = built;
+    });
+  };
+  /** `scene()` replaces the scripted scene: its primitives can no longer be changed. */
+  const discardStage = (): void => {
+    for (const object of stageObjects) object.removed = true;
+    stageObjects.length = 0;
+    stageDirty = false;
+    synced = undefined;
+  };
+  const checkMaterial = (value: unknown, label: string): unknown => {
+    if (value === undefined || value === null) return undefined;
+    if (typeof value === 'string' && value) return new URL(value, baseUrl).href;
+    const source = sourceOf(value);
+    if (!source || (source.output.type !== 'surfaceshader' && source.output.type !== 'material')) {
+      throw new ScriptError(`${label} expects a surface shader, a material node or a .mtlx path.`);
+    }
+    return value;
+  };
+  const objectHandle = (object: ScriptObject): object => {
+    const primitive = SCRIPT_PRIMITIVES[object.className]!;
+    const parameters = Object.keys(primitive.defaults) as PrimitiveParameter[];
+    const properties = [...parameters, ...OBJECT_PROPERTIES.map(property => property.name)];
+    const label = (key: string): string => `${object.name ?? object.className}.${key}`;
+    const unknown = (key: string): ScriptError =>
+      new ScriptError(`${object.className} has no property "${key}". Properties: ${properties.join(', ')}, path; method: remove().`);
+    const handle: object = new Proxy(Object.create(null) as object, {
+      get: (_target, key) => {
+        if (typeof key !== 'string' || key === 'then') return undefined;
+        if (key === 'toString') return () => pathOf(object);
+        if (key === 'path') return pathOf(object);
+        if (key === 'remove') {
+          return (): void => {
+            if (object.removed) return;
+            object.removed = true;
+            stageObjects.splice(stageObjects.indexOf(object), 1);
+            stageDirty = true;
+          };
+        }
+        if ((parameters as string[]).includes(key)) return object.parameters[key as PrimitiveParameter] ?? primitive.defaults[key as PrimitiveParameter];
+        if (key === 'translate' || key === 'rotate' || key === 'scale') return [...object[key]];
+        if (key === 'visible') return object.visible;
+        if (key === 'material') return object.material;
+        if (key === 'deform') return object.deform;
+        throw unknown(key);
+      },
+      set: (_target, key, value) => {
+        if (typeof key !== 'string') return false;
+        if (object.removed) throw new ScriptError(`${label(key)}: the primitive was removed.`);
+        if ((parameters as string[]).includes(key)) {
+          const parameter = key as PrimitiveParameter;
+          const shape = { kind: primitive.kind, ...primitive.defaults, ...object.parameters, [parameter]: value } as PrimitiveShape;
+          try { checkPrimitiveShape(shape); } catch (error) {
+            throw new ScriptError(`${label(key)}: ${error instanceof Error ? error.message : String(error)}`);
+          }
+          object.parameters[parameter] = value as number | PrimitiveAxis;
+        } else if (key === 'translate' || key === 'rotate') {
+          object[key] = finiteNumbers(value, 3, label(key));
+        } else if (key === 'scale') {
+          object.scale = typeof value === 'number' ? finiteNumbers([value, value, value], 3, label(key)) : finiteNumbers(value, 3, label(key));
+        } else if (key === 'visible') {
+          if (typeof value !== 'boolean') throw new ScriptError(`${label(key)} expects a boolean.`);
+          object.visible = value;
+        } else if (key === 'material') {
+          object.material = checkMaterial(value, label(key));
+        } else if (key === 'deform') {
+          if (value !== undefined && value !== null && typeof value !== 'function') {
+            throw new ScriptError(`${label(key)} expects a function (position, uv, normal) => [x, y, z].`);
+          }
+          if (typeof value === 'function') object.deform = value as VertexDeformer;
+          else delete object.deform;
+        } else if (key === 'path' || key === 'remove') {
+          throw new ScriptError(`${label(key)} cannot be assigned.`);
+        } else {
+          throw unknown(key);
+        }
+        stageDirty = true;
+        return true;
+      },
+    });
+    objectHandles.set(handle, object);
+    return handle;
+  };
+  const shadowed = new Set<string>();
+  const createPrimitive = (className: string, init: unknown): object => {
+    if (library.categoryOf(className) !== undefined && !shadowed.has(className)) {
+      shadowed.add(className);
+      (viewer['log'] as (text: string) => void)(`Warning: the ${className} primitive hides the MaterialX node of the same class name.`);
+    }
+    const object: ScriptObject = { className, parameters: {}, translate: [0, 0, 0], rotate: [0, 0, 0], scale: [1, 1, 1], visible: true, removed: false };
+    stageObjects.push(object);
+    stageDirty = true;
+    const handle = objectHandle(object);
+    if (init !== undefined) {
+      if (typeof init !== 'object' || init === null || Array.isArray(init)) throw new ScriptError(`new ${className}(properties) expects an object.`);
+      for (const [key, value] of Object.entries(init)) (handle as Record<string, unknown>)[key] = value;
+    }
+    return handle;
+  };
   const renderFunction = new Proxy(async function render(samples?: unknown): Promise<number> {
     if (samples !== undefined && !(Number.isInteger(samples) && (samples as number) > 0)) {
       throw new ScriptError('render(samples) expects a positive integer.');
@@ -1209,13 +1501,17 @@ export async function runScript(code: string, library: ScriptLibrary, options: R
   const viewer: Record<string, unknown> = {
     scene: async (entry: unknown): Promise<void> => {
       if (typeof entry !== 'string' || !entry) throw new ScriptError('scene(entry) expects a scene path.');
+      discardStage();
       command();
       sceneRequested = true;
       scriptedTime = undefined;
       await queue;
       await host?.loadScene(entry);
     },
-    objects: (): string[] => [...sceneQueries()?.objects() ?? []],
+    objects: (): string[] => {
+      const live = liveObjects();
+      return live.length ? live.map(pathOf) : [...sceneQueries()?.objects() ?? []];
+    },
     render: renderFunction,
     assign: async (object: unknown, material: unknown): Promise<void> => {
       if (typeof object !== 'string' || !object) throw new ScriptError('assign(object, material) expects an object path.');
@@ -1266,10 +1562,23 @@ export async function runScript(code: string, library: ScriptLibrary, options: R
       if (typeof name !== 'string' || !name || /(^|[\\/])\.\.([\\/]|$)/.test(name)) {
         throw new ScriptError('save(name) expects a file name, e.g. save("render.png") or save("material.mtlx", surface).');
       }
+      if (/\.usda$/i.test(name) && material === undefined) {
+        if (!liveObjects().length) throw new ScriptError('save(".usda") writes the scene of the script\'s primitives: create one first.');
+        command();
+        const snapshot = snapshotStage();
+        await queue;
+        if (!host) return;
+        // Documents are written next to the layer, which references them as ./<material>.mtlx.
+        const directory = /^(.*[\\/])/.exec(name)?.[1] ?? '';
+        const built = await buildStage(snapshot);
+        await host.saveText(name, built.usda);
+        for (const [file, xml] of built.written) await host.saveText(directory + file, xml);
+        return;
+      }
       const document = material === undefined ? undefined : materialDocument(material);
       if (document && !('xml' in document)) throw new ScriptError('save(name, material) expects a material of the script.');
       if (!document && !/\.(png|pfm|json)$/i.test(name)) {
-        throw new ScriptError('save(name) writes the render (.png), the selected AOV (.pfm) or the diagnostics (.json).');
+        throw new ScriptError('save(name) writes the render (.png), the selected AOV (.pfm), the diagnostics (.json) or the scripted scene (.usda).');
       }
       command();
       await queue;
@@ -1374,7 +1683,7 @@ export async function runScript(code: string, library: ScriptLibrary, options: R
     },
     log: (...values: unknown[]): void => {
       const message = values.map(value => typeof value === 'string' ? value
-        : (value as Partial<OutputRef> | null)?.[OUTPUT] || nodeOf(value) ? String(value) : JSON.stringify(value)).join(' ');
+        : (value as Partial<OutputRef> | null)?.[OUTPUT] || nodeOf(value) || objectOf(value) ? String(value) : JSON.stringify(value)).join(' ');
       graph.logs.push(message);
       queries?.log?.(message);
     },
@@ -1391,6 +1700,14 @@ export async function runScript(code: string, library: ScriptLibrary, options: R
   const classes = new Map<string, unknown>();
   const classFor = (identifier: string): unknown => {
     if (classes.has(identifier)) return classes.get(identifier);
+    if (Object.hasOwn(SCRIPT_PRIMITIVES, identifier)) {
+      const primitive = function (this: unknown, properties?: unknown): object {
+        if (!new.target) throw new ScriptError(`Use "new ${identifier}()".`);
+        return createPrimitive(identifier, properties);
+      };
+      classes.set(identifier, primitive);
+      return primitive;
+    }
     const category = library.categoryOf(identifier);
     const create = category === undefined ? undefined : function (this: unknown, variant?: unknown): object {
       if (!new.target) throw new ScriptError(`Use "new ${identifier}()".`);
@@ -1420,10 +1737,12 @@ export async function runScript(code: string, library: ScriptLibrary, options: R
       if (typeof key !== 'string') return false;
       // `material`, `node`... are also the natural names of nodes; assigning them shadows the functions.
       if (SCRIPT_GLOBALS.has(key) && !SHADOWABLE_GLOBALS.has(key)) throw new ScriptError(`${key} is reserved by material scripts.`);
-      if (classFor(key)) throw new ScriptError(`${key} is a node type and cannot be reassigned.`);
+      if (classFor(key)) throw new ScriptError(`${key} is a ${Object.hasOwn(SCRIPT_PRIMITIVES, key) ? 'primitive' : 'node'} type and cannot be reassigned.`);
       variables.set(key, value);
       const node = nodeOf(value) ?? (value as Partial<OutputRef> | null)?.[OUTPUT]?.node;
       if (node && pending.has(node)) nameNode(node, key);
+      const object = objectOf(value);
+      if (object && object.name === undefined) nameObject(object, key);
       return true;
     },
   });
@@ -1441,6 +1760,8 @@ export async function runScript(code: string, library: ScriptLibrary, options: R
     // A stopped script may still reject later; that rejection is already reported.
     running.catch(() => {});
     await abortable(running);
+    // Primitive changes after the last viewer command are shown once the script ends.
+    flushStage();
     await abortable(queue);
   } catch (error) {
     if (error instanceof ScriptError && error.line !== undefined) throw error;
@@ -1817,7 +2138,7 @@ export function toScript(graph: ScriptGraph, library: ScriptLibrary): string {
   for (const node of graph.nodes) {
     let name = node.name.replace(/[^\w$]/g, '_').replace(/^(?=\d)/, '_');
     if (RESERVED.has(name) || (SCRIPT_GLOBALS.has(name) && !SHADOWABLE_GLOBALS.has(name)) ||
-        library.categoryOf(name) !== undefined) name = `${name}_`;
+        library.categoryOf(name) !== undefined || Object.hasOwn(SCRIPT_PRIMITIVES, name)) name = `${name}_`;
     const base = name;
     for (let i = 2; used.has(name); i++) name = `${base}_${i}`;
     used.add(name);

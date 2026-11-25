@@ -1,6 +1,7 @@
 import { applyDefaultVolumeMaterials, loadSceneVolumes, volumeBoxMesh, type SceneVolume } from './scene-volumes.ts';
 import { curvesToMesh, pointsToMesh } from '../scene/procedural-geometry.ts';
-import { isMeshPrim } from '../scene/types.ts';
+import { IMPLICIT_GPRIMS, isMeshPrim } from '../scene/types.ts';
+import { applyDefaultGprimMaterials, gprimToMesh } from '../scene/primitives.ts';
 // Shared USD -> GPU asset loading used by both the offscreen capture harness
 // (tests/render/usd-scene.harness.ts) and the interactive viewer (src/render/
 // viewer.ts). It fetches a .usda stage plus its referenced .mtlx layers over HTTP,
@@ -41,6 +42,7 @@ import type { PtImageProvider } from './pathtracing/device-bindings.ts';
 import { importCameras, type SceneCamera } from '../usd/cameras.ts';
 import { importLights, type SceneLight } from '../usd/lights.ts';
 import type { UsdLayerReader } from '../usd/importer.ts';
+import { importUsdStage } from '../usd/importer.ts';
 import { lowerPreviewSurfaceMaterials } from '../usd/preview-surface.ts';
 import type { RawMesh, Primvar, PrimvarInterpolation } from '../geometry/prepare.ts';
 import type { MaterialXReference, SceneAsset, ScenePrim } from '../scene/types.ts';
@@ -117,6 +119,7 @@ export function meshSourceFromScene(scene: SceneAsset, volumes?: ReadonlyMap<str
       }
       if (prim.typeName === 'BasisCurves') return curvesToMesh(prim);
       if (prim.typeName === 'Points') return pointsToMesh(prim);
+      if (IMPLICIT_GPRIMS.has(prim.typeName ?? '')) return gprimToMesh(prim);
       const points = numArray(prim, 'points');
       const faceVertexCounts = numArray(prim, 'faceVertexCounts');
       const faceVertexIndices = numArray(prim, 'faceVertexIndices');
@@ -504,6 +507,23 @@ export interface SceneLoadOptions {
   };
 }
 
+/**
+ * In-memory scene import of a single USDA layer (e.g. the scene of a script's primitives) and of
+ * the MaterialX documents it references, keyed by their authored asset path.
+ */
+export async function importUsdaLayer(
+  entry: string, usda: string, materialTexts: ReadonlyMap<string, string>, sink?: DiagnosticSink,
+): Promise<NonNullable<SceneLoadOptions['imported']>> {
+  const scene = await importUsdStage(entry, {
+    reader: { read: async uri => {
+      if (uri !== entry) throw new Error(`Layer not available in memory: ${uri}`);
+      return usda;
+    } },
+    ...(sink ? { sink } : {}),
+  });
+  return { scene, meshSource: meshSourceFromScene(scene), materialTexts };
+}
+
 export async function loadUsdScene(
   entry: string,
   sink: DiagnosticSink,
@@ -543,13 +563,15 @@ export async function loadUsdScene(
   const evaluated = timeline.animated ? evaluateSceneAt(source, time) : source;
   const volumes = await loadSceneVolumes(evaluated, sink);
   const defaults = applyDefaultVolumeMaterials(evaluated, volumes);
-  const scene = defaults.scene;
+  const gprimDefaults = applyDefaultGprimMaterials(defaults.scene);
+  const scene = gprimDefaults.scene;
+  const defaultTexts = new Map([...defaults.texts, ...gprimDefaults.texts]);
   const composedAt = performance.now();
   performance.measure('usd:composition', { start: started, end: composedAt, detail: { entry, prims: scene.prims.size } });
   const lights = importLights(scene, { sink });
   const cameras = importCameras(scene, { sink });
-  const materialTexts = defaults.texts.size
-    ? new Map([...options.imported?.materialTexts ?? [], ...defaults.texts]) : options.imported?.materialTexts;
+  const materialTexts = defaultTexts.size
+    ? new Map([...options.imported?.materialTexts ?? [], ...defaultTexts]) : options.imported?.materialTexts;
   // MaterialX, the environment and geometry load concurrently; geometry does not wait for the runtime.
   const lowering = lowerScenePreviewSurfaces(scene, sink);
   const gate = options.progress?.materialsGate?.();

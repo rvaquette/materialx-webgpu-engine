@@ -11,7 +11,7 @@ import type { ResolvedGraph, ResolvedNode } from '../../src/materialx/graph.ts';
 function idleHost(): ScriptHost {
   const idle = async (): Promise<void> => {};
   return {
-    loadScene: idle, objects: () => [], renderSettings: () => ({}), setRenderSetting: idle, assignMaterial: idle,
+    loadScene: idle, loadStage: idle, objects: () => [], renderSettings: () => ({}), setRenderSetting: idle, assignMaterial: idle,
     render: async () => 0, saveImage: idle, saveText: idle, objectMaterial: () => undefined, stats: () => undefined,
     waitForStop: idle, capture: idle, saveAov: idle, saveDiagnostics: idle, diagnostics: () => [], capabilities: () => undefined,
     timeline: () => undefined, time: () => 0, setTime: idle, setTransform: idle, setVisibility: idle, lights: () => [],
@@ -775,5 +775,136 @@ describe.skipIf(!existsSync(join(LIBRARY_ROOT, 'stdlib', 'stdlib_defs.mtlx')))('
     expect(fromXml(toXml(graph, library), library).nodes.map(node => node.def.name)).toEqual([
       'ND_fractal3d_float', 'ND_mix_color3', 'ND_standard_surface_surfaceshader', 'ND_surfacematerial',
     ]);
+  });
+});
+
+describe('scripted primitives', () => {
+  type Call = [string, ...unknown[]];
+  const recorder = (calls: Call[], saved = new Map<string, string>()): ScriptHost => ({
+    ...idleHost(),
+    loadStage: async stage => { calls.push(['stage', stage.usda, new Map(stage.materials)]); },
+    setTransform: async (path, matrix) => { calls.push(['transform', path, matrix]); },
+    setVisibility: async (path, visible) => { calls.push(['visible', path, visible]); },
+    render: async () => { calls.push(['render']); return 1; },
+    saveText: async (name, text) => { saved.set(name, text); },
+  });
+
+  it('builds a USD stage from primitives, bound to generated MaterialX documents', async () => {
+    let calls: Call[] = [];
+    const run = await runScript(`
+      surface = new StandardSurface();
+      surface.base_color = [0.8, 0.2, 0.1];
+      ball = new Sphere();
+      ball.radius = 0.25;
+      ball.translate = [0, 0.25, 0];
+      ball.material = surface;
+      floor = new Plane({ width: 4, length: 4, resolution: 8 });
+      floor.material = surface;
+      ring = new Torus({ axis: "Z" });
+      log(ball.path, floor, ball.radius, objects().join(","));
+      await render();
+    `, LIBRARY, { host: recorder(calls), filePrefix: 'https://host/app/' });
+    expect(run.logs).toEqual(['/World/ball /World/floor 0.25 /World/ball,/World/floor,/World/ring']);
+    expect(calls.map(call => call[0])).toEqual(['stage', 'render']);
+    const [, usda, materials] = calls[0] as [string, string, Map<string, string>];
+    expect(usda).toContain('def Sphere "ball" (\n        prepend apiSchemas = ["MaterialBindingAPI"]');
+    expect(usda).toContain('double radius = 0.25');
+    expect(usda).toContain('double3 xformOp:translate = (0, 0.25, 0)');
+    expect(usda).toContain('def Plane "floor"');
+    expect(usda).toContain('custom int engine:resolution = 8');
+    expect(usda).toContain('def Mesh "ring"');
+    expect(usda).toContain('custom token engine:primitive:axis = "Z"');
+    // One document for the shared shader.
+    expect(usda.match(/def Material/g)).toHaveLength(1);
+    expect(usda).toContain('prepend references = @./surface_material.mtlx@</MaterialX/Materials/surface_material>');
+    expect(usda).toContain('rel material:binding = </World/Looks/surface_material>');
+    expect([...materials.keys()]).toEqual(['./surface_material.mtlx']);
+    expect(materials.get('./surface_material.mtlx')).toContain('<surfacematerial name="surface_material" type="material">');
+
+    // The stage imports back with the scene's transforms (same matrix as transform()).
+    const { importUsdaLayer } = await import('../../src/render/usd-scene-assets.ts');
+    const { computeWorldTransforms } = await import('../../src/scene/transforms.ts');
+    const imported = await importUsdaLayer('mem:/scene.usda', usda, materials);
+    expect(imported.scene.materials.map(material => material.materialName)).toEqual(['surface_material']);
+    expect(imported.meshSource.meshFor('/World/ring')?.points.length).toBeGreaterThan(0);
+    const rotated = await runScript('s = new Cube({ translate: [1, 2, 3], rotate: [10, 20, 30], scale: [1, 2, 3] });', LIBRARY,
+      { host: recorder(calls = []) });
+    expect(rotated.viewerCommands).toBe(1);
+    const cube = await importUsdaLayer('mem:/scene.usda', calls[0]![1] as string, new Map());
+    const expected = await runScript('log(transform({ translate: [1, 2, 3], rotate: [10, 20, 30], scale: [1, 2, 3] }).join(","));', LIBRARY);
+    const world = computeWorldTransforms(cube.scene).get('/World/s')!;
+    expected.logs[0]!.split(',').map(Number).forEach((value, i) => expect(world[i]).toBeCloseTo(value, 5));
+  });
+
+  it('moves primitives without reloading and reloads when their shape or material changes', async () => {
+    const calls: Call[] = [];
+    await runScript(`
+      ball = new Sphere();
+      await render();
+      ball.translate = [1, 0, 0];
+      ball.visible = false;
+      await render();
+      ball.radius = 2;
+      await render();
+      s = new StandardSurface();
+      ball.material = s;
+      await render();
+      s.base = 0.5;
+      box = new Cube();
+      ball.remove();
+    `, LIBRARY, { host: recorder(calls) });
+    expect(calls.map(call => call[0])).toEqual([
+      'stage', 'render', 'transform', 'visible', 'render', 'stage', 'render', 'stage', 'render', 'stage',
+    ]);
+    expect(calls[2]).toEqual(['transform', '/World/ball', [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 1, 0, 0, 1]]);
+    expect(calls[3]).toEqual(['visible', '/World/ball', false]);
+    const last = calls.at(-1)![1] as string;
+    expect(last).toContain('def Cube "box"');
+    expect(last).not.toContain('"ball"');
+  });
+
+  it('saves the scene and its documents as a USD layer', async () => {
+    const saved = new Map<string, string>();
+    await runScript('s = new StandardSurface(); c = new Cone({ material: s }); await save("out/scene.usda");', LIBRARY,
+      { host: recorder([], saved) });
+    expect([...saved.keys()]).toEqual(['out/scene.usda', 'out/s_material.mtlx']);
+    expect(saved.get('out/scene.usda')).toContain('def Cone "c"');
+  });
+
+  it('validates primitive properties', async () => {
+    await expect(runScript('b = new Sphere(); b.radius = -1;', LIBRARY)).rejects.toThrow(/b\.radius: sphere radius must be a positive number/);
+    await expect(runScript('b = new Sphere(); b.resolution = 2.5;', LIBRARY)).rejects.toThrow(/resolution must be an integer from 3 to 1024/);
+    await expect(runScript('b = new Cylinder(); b.axis = "W";', LIBRARY)).rejects.toThrow(/axis must be "X", "Y" or "Z"/);
+    await expect(runScript('b = new Sphere(); b.size = 1;', LIBRARY)).rejects.toThrow(/Sphere has no property "size"\. Properties: radius, resolution, translate/);
+    await expect(runScript('b = new Sphere(); b.material = 3;', LIBRARY)).rejects.toThrow(/b\.material expects a surface shader/);
+    await expect(runScript('b = Sphere();', LIBRARY)).rejects.toThrow(/Use "new Sphere\(\)"/);
+    await expect(runScript('Sphere = 1;', LIBRARY)).rejects.toThrow(/Sphere is a primitive type/);
+    await expect(runScript('b = new Sphere(); b.remove(); b.radius = 1;', LIBRARY)).rejects.toThrow(/removed/);
+    await expect(runScript('b = new Sphere(); await render(); b.remove(); await render();', LIBRARY, { host: idleHost() }))
+      .rejects.toThrow(/at least one/);
+    await expect(runScript('await save("x.usda");', LIBRARY)).rejects.toThrow(/create one first/);
+    // scene() replaces the scripted scene.
+    await expect(runScript('b = new Sphere(); await scene("./a.usda"); b.radius = 1;', LIBRARY)).rejects.toThrow(/removed/);
+  });
+
+  it('warns when a primitive hides a NodeDef of the same class name', async () => {
+    const library = ScriptLibrary.fromXml(['<materialx><nodedef name="ND_sphere" node="sphere"><output name="out" type="float" /></nodedef></materialx>']);
+    expect((await runScript('a = new Sphere(); b = new Sphere();', library)).logs).toEqual([
+      'Warning: the Sphere primitive hides the MaterialX node of the same class name.',
+    ]);
+  });
+
+  it('deforms primitives with a vertex function and writes them as meshes', async () => {
+    const calls: Call[] = [];
+    await runScript(`
+      sheet = new Plane({ resolution: 2 });
+      sheet.deform = (p, uv, n) => [p[0], uv[0] * 0.5, p[2]];
+    `, LIBRARY, { host: recorder(calls) });
+    const usda = calls[0]![1] as string;
+    expect(usda).toContain('def Mesh "sheet"');
+    expect(usda).toContain('point3f[] points = [(-0.5, 0, 0.5), (0, 0.25, 0.5), (0.5, 0.5, 0.5)');
+    await expect(runScript('s = new Plane(); s.deform = 3;', LIBRARY)).rejects.toThrow(/deform expects a function/);
+    await expect(runScript('s = new Plane(); s.deform = p => [0, 0]; await render();', LIBRARY, { host: idleHost() }))
+      .rejects.toThrow(/s\.deform: deform\(position, uv, normal\) must return \[x, y, z\]/);
   });
 });
