@@ -1815,3 +1815,21 @@ automatiquement dans le menu Scripts.
 | Comparaison de matériaux en raster | Comparaison de matériaux en path tracing |
 |---|---|
 | ![Matériaux de lookdev en raster](images/p14/p14-lookdev-project-raster.png) | ![Matériaux de lookdev en path tracing](images/p14/p14-lookdev-project-pathtracing.png) |
+
+## Priorité 15 : opérations booléennes
+
+`Union`, `Difference` et `Intersection` construisent des maillages à partir
+d'opérandes fermés, avec `manifold-3d` chargé en WASM. Les arbres booléens sont
+créés et imbriqués dans les scripts avec les propriétés `base` et `tool` ; les
+opérandes sont masqués dans la scène et leurs transformations sont prises en
+compte. Les maillages produits conservent leurs UV et leurs normales, y compris
+sur les surfaces issues d'une soustraction. Les entrées ouvertes, les
+références invalides et les cycles déclenchent des diagnostics explicites.
+
+Le script d'illustration
+[p15-boolean-operations.js](../examples/scripts/p15-boolean-operations.js)
+présente les trois opérations et apparaît automatiquement dans le menu Scripts.
+
+| Union, différence et intersection en raster | Opérations booléennes en path tracing |
+|---|---|
+| ![Union, différence et intersection en raster](images/p15/p15-boolean-operations-raster.png) | ![Union, différence et intersection en path tracing](images/p15/p15-boolean-operations-pathtracing.png) |

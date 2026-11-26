@@ -114,6 +114,24 @@ describe('script editor language support', () => {
     expect(at('ball =', 0)).toMatchObject({ title: 'ball : Sphere' });
     expect(highlightScript(code, LIBRARY)).toContain('<span class="tok-node">Sphere</span>');
   });
+
+  it('knows boolean operators: completions, operand properties and documentation', () => {
+    const code = 'base = new Cube();\ntool = new Sphere();\ncut = new Difference();\ncut.base = base;\ncut.tool = tool;\n';
+    expect(scriptCompletions('x = new Dif', code, LIBRARY)?.items[0]).toMatchObject({ label: 'Difference', insert: 'Difference()' });
+    expect(scriptVariables(code, LIBRARY).get('cut')?.inputs.map(port => port.name)).toEqual([
+      'base', 'tool', 'translate', 'rotate', 'scale', 'visible', 'material',
+    ]);
+    expect(scriptCompletions(`${code}cut.`, code, LIBRARY)?.items.map(item => item.label)).toEqual([
+      'base', 'tool', 'translate', 'rotate', 'scale', 'visible', 'material',
+    ]);
+    const at = (text: string, offset = 1) => scriptHover(code, code.indexOf(text) + offset, LIBRARY);
+    expect(at('Difference')).toMatchObject({ title: 'new Difference() : opération booléenne' });
+    expect(scriptHover(code, code.indexOf('cut.base') + 'cut.'.length, LIBRARY)).toMatchObject({
+      title: 'cut.base : propriété object',
+      lines: ['Opérande de base', 'Opération booléenne : Difference'],
+    });
+    expect(highlightScript(code, LIBRARY)).toContain('<span class="tok-node">Difference</span>');
+  });
 });
 
 describe('script editor panels and sharing', () => {

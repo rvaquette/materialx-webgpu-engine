@@ -12,8 +12,8 @@ matériaux MaterialX), 3bis (scripting), 4 (accélération du path tracer), 5
 portabilité et exploitation), 8 (primitives et scènes par script), 9
 (displacement procédural), 10 (documentation intégrée des nœuds), 11
 (aperçus par nœud et bibliothèque de matériaux), 12 (environnement et
-post-traitement), 13 (baking et export de scènes), ainsi que
-l'étude urgente de la priorité 21
+post-traitement), 13 (baking et export de scènes), 14 (lookdev et projets) et
+15 (opérations booléennes), ainsi que l'étude urgente de la priorité 21
 (chargement des bibliothèques MaterialX sans WASM) et la priorité 22 (build
 minimal du Core WASM) sont traitées ; leur historique est dans
 [ROADMAP_DONE.md](ROADMAP_DONE.md). Les limites connues sont recensées dans
@@ -23,20 +23,6 @@ Les priorités suivantes visent à passer d'un moteur de rendu MaterialX à un
 outil de création : construire des scènes, explorer et documenter les nœuds,
 étendre MaterialX à de nouveaux types de shaders, exporter le résultat et
 continuer à optimiser le runtime livré au navigateur.
-
-## Priorité 15 : opérations booléennes
-
-- Union, différence et intersection de maillages fermés via `manifold-3d`
-  (WASM, Apache-2.0), qui conserve les attributs par sommet (UV, normales).
-- Arbre non destructif décrit par script dans le même style objet
-  (`cut = new Difference(); cut.base = box; cut.tool = ball; cut.material = surface;`),
-  évalué en maillage puis traité comme une géométrie ordinaire par les deux
-  backends ; les opérandes deviennent invisibles.
-- Diagnostic explicite pour les maillages non fermés.
-- Hors périmètre : chanfreins, historique de modélisation, édition interactive.
-
-**Critère d'aboutissement :** une pièce construite par booléens à partir des
-primitives se rend sans défaut de normales ni de UV.
 
 ## Priorité 16 : shaders d'extension
 
@@ -252,6 +238,25 @@ avant de généraliser l'interface ou de remplacer le script.
 minimal montrent le même rendu obtenu par script et par graphe, avec une surface
 et un déplacement partagés entre au moins deux objets.
 
+## Priorité 26 : sélection, édition et mouvements de caméra
+
+- Sélectionner les caméras présentes dans la scène et enregistrer des vues
+  nommées pour passer rapidement d'un cadrage à l'autre.
+- Piloter la vue par orbite, panoramique et déplacement avant/arrière, avec
+  recentrage sur la sélection et commandes de réinitialisation.
+- Modifier les paramètres de caméra (projection, focale ou champ de vision,
+  plans de clipping, cible et profondeur de champ lorsque le backend le permet).
+- Créer des mouvements et transitions reproductibles entre des poses ou vues
+  nommées ; permettre leur lecture, leur arrêt et leur édition sur la timeline.
+- Inclure les modifications de caméra dans l'annuler/rétablir, les projets et
+  l'API de script. Garder la même caméra pour les rendus raster et path tracing.
+- Coordonner l'export des séquences avec la priorité 24, sans redéfinir ici le
+  format vidéo ou la stratégie de rendu hors ligne.
+
+**Critère d'aboutissement :** enregistrer deux vues, passer de l'une à l'autre,
+créer et relire un mouvement de caméra, puis annuler/rétablir et sauvegarder/
+rouvrir le projet sans dérive de cadrage entre les backends.
+
 ## Pistes exploratoires
 
 - **Shaders implicites / SDF** (métaboules, fractales, booléens lisses) :
@@ -280,3 +285,5 @@ et un déplacement partagés entre au moins deux objets.
    (5) et l'export des rendus (13).
 10. Étude du graphe de scène équivalent au script (25), en prolongement du
     scripting (3bis), des primitives (8) et des paramètres de shaders (23).
+11. Sélection, édition et mouvements de caméra (26), après le lookdev et les
+    projets (14), les scènes dynamiques (5) et l'étude d'enregistrement (24).

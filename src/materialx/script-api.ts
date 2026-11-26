@@ -19,9 +19,13 @@ import {
   type EnvironmentShaderSettings, type ImageShaderSettings,
 } from './engine-shaders.ts';
 import type { ResolvedGraph } from './graph.ts';
-import { OBJECT_PROPERTIES, SCRIPT_PRIMITIVES, stageObjectShape, writeStageUsda, type PrimitiveParameter, type StageMaterial, type StageObject } from './script-scene.ts';
+import {
+  OBJECT_PROPERTIES, SCRIPT_BOOLEAN_OPERATIONS, SCRIPT_PRIMITIVES, stageObjectShape, writeStageUsda,
+  type BooleanOperation, type PrimitiveParameter, type StageMaterial, type StageObject,
+} from './script-scene.ts';
 import { checkPrimitiveShape, deformMesh, primitiveMesh, type PrimitiveAxis, type PrimitiveShape, type VertexDeformer } from '../scene/primitives.ts';
 import type { RawMesh } from '../geometry/prepare.ts';
+import { booleanMesh, transformRawMesh } from '../scene/boolean.ts';
 
 export type ScriptValue = number | boolean | string | readonly number[];
 
@@ -1274,6 +1278,9 @@ export async function runScript(code: string, library: ScriptLibrary, options: R
   interface ScriptObject {
     className: string;
     name?: string;
+    operation?: BooleanOperation;
+    base?: ScriptObject;
+    tool?: ScriptObject;
     parameters: Partial<Record<PrimitiveParameter, number | PrimitiveAxis>>;
     translate: number[];
     rotate: number[];
@@ -1296,6 +1303,7 @@ export async function runScript(code: string, library: ScriptLibrary, options: R
   }
   const stageObjects: ScriptObject[] = [];
   const objectHandles = new WeakMap<object, ScriptObject>();
+  const objectReferences = new WeakMap<ScriptObject, object>();
   const objectNames = new Set<string>(['Looks']);
   /** `surfacematerial` names given to surface shaders bound to primitives (stable across syncs). */
   const shaderMaterials = new Map<ScriptNode, string>();
@@ -1376,9 +1384,20 @@ export async function runScript(code: string, library: ScriptLibrary, options: R
       documents.set(prim, { name: materialNode.name, xml: toXml({ nodes }, library, options.filePrefix ? { filePrefix: options.filePrefix } : {}) });
       return prim;
     };
-    const objects = liveObjects().map((object): StageObject => {
+    const activeObjects = liveObjects();
+    const activeSet = new Set(activeObjects);
+    const operands = new Set<ScriptObject>();
+    for (const object of activeObjects) {
+      if (!object.operation) continue;
+      for (const [name, operand] of [['base', object.base], ['tool', object.tool]] as const) {
+        if (!operand) throw new ScriptError(`${object.name ?? object.className}.${name} must reference a scripted scene object.`);
+        if (!activeSet.has(operand)) throw new ScriptError(`${object.name ?? object.className}.${name} references a removed scene object.`);
+        operands.add(operand);
+      }
+    }
+    const objects = activeObjects.map((object): StageObject => {
       pathOf(object);
-      const material = materialOf(object.material);
+      const material = operands.has(object) ? undefined : materialOf(object.material);
       let mesh: RawMesh | undefined;
       if (object.deform) {
         try {
@@ -1390,7 +1409,12 @@ export async function runScript(code: string, library: ScriptLibrary, options: R
       }
       return {
         name: object.name!, className: object.className, parameters: { ...object.parameters },
-        translate: [...object.translate], rotate: [...object.rotate], scale: [...object.scale], visible: object.visible,
+        translate: [...object.translate], rotate: [...object.rotate], scale: [...object.scale], visible: object.visible && !operands.has(object),
+        ...(object.operation ? {
+          booleanOperation: object.operation,
+          base: pathOf(object.base!),
+          tool: pathOf(object.tool!),
+        } : {}),
         ...(material ? { material } : {}), ...(mesh ? { mesh } : {}),
       };
     });
@@ -1398,6 +1422,50 @@ export async function runScript(code: string, library: ScriptLibrary, options: R
   };
   /** USDA layer, documents and the facts that tell a reload from a placement change. */
   const buildStage = async (snapshot: StageSnapshot): Promise<BuiltStage & { written: Map<string, string> }> => {
+    const objectsByPath = new Map(snapshot.objects.map(object => [`/World/${object.name}`, object]));
+    const localMeshes = new Map<string, Promise<RawMesh>>();
+    const worldMeshes = new Map<string, Promise<RawMesh>>();
+    const evaluating = new Set<string>();
+    const localMesh = (object: StageObject): Promise<RawMesh> => {
+      const path = `/World/${object.name}`;
+      if (evaluating.has(path)) throw new ScriptError(`Boolean operation cycle includes ${path}.`);
+      const cached = localMeshes.get(path);
+      if (cached) return cached;
+      evaluating.add(path);
+      const pending = (async (): Promise<RawMesh> => {
+        try {
+          if (!object.booleanOperation) {
+            if (!SCRIPT_PRIMITIVES[object.className]) throw new ScriptError(`Unknown boolean operand "${path}".`);
+            return object.mesh ?? primitiveMesh(stageObjectShape(object));
+          }
+          const base = object.base ? objectsByPath.get(object.base) : undefined;
+          const tool = object.tool ? objectsByPath.get(object.tool) : undefined;
+          if (!base || !tool) throw new ScriptError(`${path} has a missing or removed boolean operand.`);
+          return await booleanMesh(object.booleanOperation, await worldMesh(base), await worldMesh(tool));
+        } finally {
+          evaluating.delete(path);
+        }
+      })();
+      localMeshes.set(path, pending);
+      return pending;
+    };
+    const worldMesh = (object: StageObject): Promise<RawMesh> => {
+      const path = `/World/${object.name}`;
+      const cached = worldMeshes.get(path);
+      if (cached) return cached;
+      const pending = localMesh(object).then(mesh => transformRawMesh(mesh,
+        transformMatrix({ translate: object.translate, rotate: object.rotate, scale: object.scale })));
+      worldMeshes.set(path, pending);
+      return pending;
+    };
+    for (const object of snapshot.objects) {
+      if (!object.booleanOperation) continue;
+      try {
+        object.mesh = await localMesh(object);
+      } catch (error) {
+        throw new ScriptError(`${object.name}: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
     const materials: StageMaterial[] = [];
     const texts = new Map<string, string>();
     const written = new Map<string, string>();
@@ -1418,12 +1486,12 @@ export async function runScript(code: string, library: ScriptLibrary, options: R
       JSON.stringify([object.translate, object.rotate, object.scale, object.visible])]));
     return { usda, materials: texts, structure, placements, written };
   };
-  /** Sends pending primitive changes to the viewer: placements only when nothing else changed. */
+  /** Sends pending scripted scene changes to the viewer: placements only when nothing else changed. */
   const flushStage = (): void => {
     if (!stageDirty) return;
     stageDirty = false;
     if (!liveObjects().length) {
-      if (synced) throw new ScriptError('Every primitive of the scene was removed: a scripted scene needs at least one.');
+      if (synced) throw new ScriptError('Every scripted scene object was removed: the scene needs at least one.');
       return;
     }
     graph.viewerCommands++;
@@ -1446,7 +1514,7 @@ export async function runScript(code: string, library: ScriptLibrary, options: R
       synced = built;
     });
   };
-  /** `scene()` replaces the scripted scene: its primitives can no longer be changed. */
+  /** `scene()` replaces the scripted scene: its objects can no longer be changed. */
   const discardStage = (): void => {
     for (const object of stageObjects) object.removed = true;
     stageObjects.length = 0;
@@ -1463,9 +1531,14 @@ export async function runScript(code: string, library: ScriptLibrary, options: R
     return value;
   };
   const objectHandle = (object: ScriptObject): object => {
-    const primitive = SCRIPT_PRIMITIVES[object.className]!;
-    const parameters = Object.keys(primitive.defaults) as PrimitiveParameter[];
-    const properties = [...parameters, ...OBJECT_PROPERTIES.map(property => property.name)];
+    const primitive = SCRIPT_PRIMITIVES[object.className];
+    const parameters = primitive ? Object.keys(primitive.defaults) as PrimitiveParameter[] : [];
+    const objectProperties = OBJECT_PROPERTIES.filter(property => !object.operation || property.name !== 'deform');
+    const properties = [
+      ...(object.operation ? ['base', 'tool'] : []),
+      ...parameters,
+      ...objectProperties.map(property => property.name),
+    ];
     const label = (key: string): string => `${object.name ?? object.className}.${key}`;
     const unknown = (key: string): ScriptError =>
       new ScriptError(`${object.className} has no property "${key}". Properties: ${properties.join(', ')}, path; method: remove().`);
@@ -1482,17 +1555,25 @@ export async function runScript(code: string, library: ScriptLibrary, options: R
             stageDirty = true;
           };
         }
-        if ((parameters as string[]).includes(key)) return object.parameters[key as PrimitiveParameter] ?? primitive.defaults[key as PrimitiveParameter];
+        if (object.operation && (key === 'base' || key === 'tool')) {
+          const operand = object[key];
+          return operand ? objectReferences.get(operand) : undefined;
+        }
+        if (primitive && (parameters as string[]).includes(key)) return object.parameters[key as PrimitiveParameter] ?? primitive.defaults[key as PrimitiveParameter];
         if (key === 'translate' || key === 'rotate' || key === 'scale') return [...object[key]];
         if (key === 'visible') return object.visible;
         if (key === 'material') return object.material;
-        if (key === 'deform') return object.deform;
+        if (key === 'deform' && !object.operation) return object.deform;
         throw unknown(key);
       },
       set: (_target, key, value) => {
         if (typeof key !== 'string') return false;
-        if (object.removed) throw new ScriptError(`${label(key)}: the primitive was removed.`);
-        if ((parameters as string[]).includes(key)) {
+        if (object.removed) throw new ScriptError(`${label(key)}: the scene object was removed.`);
+        if ((key === 'base' || key === 'tool') && object.operation) {
+          const operand = objectOf(value);
+          if (!operand) throw new ScriptError(`${label(key)} expects a scripted scene object.`);
+          object[key] = operand;
+        } else if (primitive && (parameters as string[]).includes(key)) {
           const parameter = key as PrimitiveParameter;
           const shape = { kind: primitive.kind, ...primitive.defaults, ...object.parameters, [parameter]: value } as PrimitiveShape;
           try { checkPrimitiveShape(shape); } catch (error) {
@@ -1508,7 +1589,7 @@ export async function runScript(code: string, library: ScriptLibrary, options: R
           object.visible = value;
         } else if (key === 'material') {
           object.material = checkMaterial(value, label(key));
-        } else if (key === 'deform') {
+        } else if (key === 'deform' && !object.operation) {
           if (value !== undefined && value !== null && typeof value !== 'function') {
             throw new ScriptError(`${label(key)} expects a function (position, uv, normal) => [x, y, z].`);
           }
@@ -1524,6 +1605,7 @@ export async function runScript(code: string, library: ScriptLibrary, options: R
       },
     });
     objectHandles.set(handle, object);
+    objectReferences.set(object, handle);
     return handle;
   };
   const shadowed = new Set<string>();
@@ -1533,6 +1615,24 @@ export async function runScript(code: string, library: ScriptLibrary, options: R
       (viewer['log'] as (text: string) => void)(`Warning: the ${className} primitive hides the MaterialX node of the same class name.`);
     }
     const object: ScriptObject = { className, parameters: {}, translate: [0, 0, 0], rotate: [0, 0, 0], scale: [1, 1, 1], visible: true, removed: false };
+    stageObjects.push(object);
+    stageDirty = true;
+    const handle = objectHandle(object);
+    if (init !== undefined) {
+      if (typeof init !== 'object' || init === null || Array.isArray(init)) throw new ScriptError(`new ${className}(properties) expects an object.`);
+      for (const [key, value] of Object.entries(init)) (handle as Record<string, unknown>)[key] = value;
+    }
+    return handle;
+  };
+  const createBooleanOperation = (className: string, init: unknown): object => {
+    const operation = SCRIPT_BOOLEAN_OPERATIONS[className]!;
+    if (library.categoryOf(className) !== undefined && !shadowed.has(className)) {
+      shadowed.add(className);
+      (viewer['log'] as (text: string) => void)(`Warning: the ${className} boolean operator hides the MaterialX node of the same class name.`);
+    }
+    const object: ScriptObject = {
+      className, operation, parameters: {}, translate: [0, 0, 0], rotate: [0, 0, 0], scale: [1, 1, 1], visible: true, removed: false,
+    };
     stageObjects.push(object);
     stageDirty = true;
     const handle = objectHandle(object);
@@ -1793,6 +1893,14 @@ export async function runScript(code: string, library: ScriptLibrary, options: R
       classes.set(identifier, primitive);
       return primitive;
     }
+    if (Object.hasOwn(SCRIPT_BOOLEAN_OPERATIONS, identifier)) {
+      const boolean = function (this: unknown, properties?: unknown): object {
+        if (!new.target) throw new ScriptError(`Use "new ${identifier}()".`);
+        return createBooleanOperation(identifier, properties);
+      };
+      classes.set(identifier, boolean);
+      return boolean;
+    }
     const category = library.categoryOf(identifier);
     const create = category === undefined ? undefined : function (this: unknown, variant?: unknown): object {
       if (!new.target) throw new ScriptError(`Use "new ${identifier}()".`);
@@ -1822,7 +1930,11 @@ export async function runScript(code: string, library: ScriptLibrary, options: R
       if (typeof key !== 'string') return false;
       // `material`, `node`... are also the natural names of nodes; assigning them shadows the functions.
       if (SCRIPT_GLOBALS.has(key) && !SHADOWABLE_GLOBALS.has(key)) throw new ScriptError(`${key} is reserved by material scripts.`);
-      if (classFor(key)) throw new ScriptError(`${key} is a ${Object.hasOwn(SCRIPT_PRIMITIVES, key) ? 'primitive' : 'node'} type and cannot be reassigned.`);
+      if (classFor(key)) {
+        const type = Object.hasOwn(SCRIPT_PRIMITIVES, key) ? 'primitive'
+          : Object.hasOwn(SCRIPT_BOOLEAN_OPERATIONS, key) ? 'boolean operator' : 'node';
+        throw new ScriptError(`${key} is a ${type} type and cannot be reassigned.`);
+      }
       variables.set(key, value);
       const node = nodeOf(value) ?? (value as Partial<OutputRef> | null)?.[OUTPUT]?.node;
       if (node && pending.has(node)) nameNode(node, key);
@@ -2225,7 +2337,8 @@ export function toScriptProgram(
   for (const node of graph.nodes) {
     let name = node.name.replace(/[^\w$]/g, '_').replace(/^(?=\d)/, '_');
     if (RESERVED.has(name) || (SCRIPT_GLOBALS.has(name) && !SHADOWABLE_GLOBALS.has(name)) ||
-        library.categoryOf(name) !== undefined || Object.hasOwn(SCRIPT_PRIMITIVES, name)) name = `${name}_`;
+        library.categoryOf(name) !== undefined || Object.hasOwn(SCRIPT_PRIMITIVES, name) ||
+        Object.hasOwn(SCRIPT_BOOLEAN_OPERATIONS, name)) name = `${name}_`;
     const base = name;
     for (let i = 2; used.has(name); i++) name = `${base}_${i}`;
     used.add(name);

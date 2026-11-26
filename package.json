@@ -66,6 +66,7 @@
     "comlink": "4.4.2",
     "dockview-core": "^8.9.1",
     "idb": "8.0.1",
+    "manifold-3d": "^3.5.5",
     "three": "^0.186.1",
     "wgpu-matrix": "3.4.0"
   },

@@ -913,6 +913,49 @@ describe('scripted primitives', () => {
     expected.logs[0]!.split(',').map(Number).forEach((value, i) => expect(world[i]).toBeCloseTo(value, 5));
   });
 
+  it('evaluates union, difference, and intersection with transformed operands and preserved attributes', async () => {
+    for (const className of ['Union', 'Difference', 'Intersection']) {
+      const calls: Call[] = [];
+      await runScript(`
+        base = new Cube({ size: 2, translate: [1, 0, 0] });
+        tool = new Sphere({ radius: 0.75, resolution: 12 });
+        result = new ${className}({ base, tool, translate: [0, 2, 0] });
+        result.material = new StandardSurface();
+        await render();
+      `, LIBRARY, { host: recorder(calls) });
+      const usda = calls.find(call => call[0] === 'stage')![1] as string;
+      const result = /def Mesh "result"[\s\S]*?\n    \}/.exec(usda)?.[0];
+      if (!result) throw new Error('Boolean result mesh was not written to the USD stage.');
+      expect(result).toContain('custom token engine:primitive = "boolean"');
+      expect(result).toContain('normal3f[] normals = [');
+      expect(result).toContain('primvars:st = [');
+      expect(result).toContain('double3 xformOp:translate = (0, 2, 0)');
+      expect(result).toContain('rel material:binding = </World/Looks/');
+      expect(usda.match(/token visibility = "invisible"/g)).toHaveLength(2);
+      if (className === 'Union') {
+        const points = /point3f\[\] points = \[([^\]]*)\]/.exec(result)?.[1] ?? '';
+        const x = [...points.matchAll(/\((-?\d+(?:\.\d+)?),/g)].map(match => Number(match[1]));
+        expect(Math.max(...x)).toBeGreaterThan(1.9);
+      }
+    }
+  });
+
+  it('rejects open boolean operands, missing references, and cyclic operation trees', async () => {
+    await expect(runScript(`
+      base = new Cube();
+      tool = new Plane();
+      cut = new Difference({ base, tool });
+    `, LIBRARY, { host: recorder([]) })).rejects.toThrow(/tool operand is not a closed, consistently oriented manifold/);
+    await expect(runScript('cut = new Difference();', LIBRARY, { host: recorder([]) }))
+      .rejects.toThrow(/cut\.base must reference a scripted scene object/);
+    await expect(runScript(`
+      a = new Difference();
+      b = new Union();
+      a.base = b; a.tool = new Cube();
+      b.base = a; b.tool = new Sphere();
+    `, LIBRARY, { host: recorder([]) })).rejects.toThrow(/Boolean operation cycle/);
+  });
+
   it('moves primitives without reloading and reloads when their shape or material changes', async () => {
     const calls: Call[] = [];
     await runScript(`

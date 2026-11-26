@@ -10,7 +10,7 @@ l'erreur `xxx is not defined.`
 
 **Sommaire** — [Nœuds](#nœuds-materialx) · [Valeurs et types](#valeurs-et-types) ·
 [Opérateurs et Math](#opérateurs-et-fonctions-math) · [Conditions](#conditions-par-pixel) ·
-[Matériaux](#matériaux-et-documents) · [Scène](#scène-et-objets) · [Primitives](#primitives-scène-par-script) ·
+[Matériaux](#matériaux-et-documents) · [Scène](#scène-et-objets) · [Primitives](#primitives-scène-par-script) · [Booléens](#opérations-booléennes) ·
 [Shaders d'environnement et d'image](#shaders-denvironnement-et-dimage) · [Rendu](#rendu) ·
 [Paramètres `render.*`](#paramètres-de-rendu-render) · [Enregistrement](#enregistrement-de-fichiers) ·
 [Animation et transformations](#animation-et-transformations) · [Lumières et caméra](#lumières-et-caméra) ·
@@ -179,6 +179,39 @@ ball = new Sphere({ radius: 0.5, translate: [0, 0.5, 0], material: surface });
 setCamera({ eye: [3, 2, 4], target: [0, 0.3, 0], fov: 40 });
 await render(64);
 await save("primitives.usda");   // scène USD + ses documents MaterialX
+```
+
+## Opérations booléennes
+
+| Écriture | Effet |
+|---|---|
+| `cut = new Difference()` | Crée une différence entre deux objets de la scène scriptée. |
+| `cut.base = body` | Définit l'opérande de base. |
+| `cut.tool = cutter` | Définit l'opérande soustrait (ou combiné/intersecté selon l'opération). |
+| `cut.material = surface` | Matériau de la géométrie résultante ; les matériaux des opérandes ne sont pas repris. |
+
+`Union`, `Difference` et `Intersection` acceptent aussi leurs propriétés dans le constructeur :
+`cut = new Difference({ base: body, tool: cutter, material: surface })`. Les deux opérandes
+doivent être des objets créés par script ; les arbres peuvent être imbriqués. Les opérandes
+deviennent automatiquement invisibles dans la scène, mais restent modifiables par leurs
+variables. Leurs transformations sont appliquées à la géométrie avant l'opération ; celles du
+résultat s'appliquent ensuite.
+
+Les maillages doivent être fermés et orientés de façon cohérente. Les primitives solides
+(`Sphere`, `Cube`, `Cylinder`, `Cone`, `Capsule`, `Torus`) conviennent ; `Plane` et `Disk` sont
+ouverts et déclenchent un diagnostic explicite. Les normales et les coordonnées `st` sont
+conservées sur le résultat, y compris les faces créées par une soustraction. Les cycles, les
+opérandes manquants et les objets supprimés sont refusés. Une opération booléenne n'accepte pas
+`deform` directement ; une primitive déformée peut servir d'opérande si son maillage reste fermé.
+
+```js
+left = new Union({ base: new Sphere({ translate: [-0.25, 0, 0] }), tool: new Sphere({ translate: [0.25, 0, 0] }) });
+body = new Cylinder({ radius: 0.65, height: 1.6 });
+drill = new Sphere({ radius: 0.42, translate: [0.2, 0.3, 0] });
+cut = new Difference({ base: body, tool: drill });
+overlap = new Intersection({ base: new Cube({ translate: [-0.25, 0, 0] }), tool: new Cube({ translate: [0.25, 0, 0] }) });
+left.translate = [-2, 0, 0];
+overlap.translate = [2, 0, 0];
 ```
 
 ## Shaders d'environnement et d'image

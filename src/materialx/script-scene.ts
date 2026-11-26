@@ -40,6 +40,14 @@ export const SCRIPT_PRIMITIVES: Readonly<Record<string, ScriptPrimitive>> = {
   Disk: { kind: 'disk', usdType: 'Mesh', doc: 'Disque de normale axis', defaults: { radius: 0.5, axis: 'Y', resolution: 48 } },
 };
 
+export type BooleanOperation = 'union' | 'difference' | 'intersection';
+
+export const SCRIPT_BOOLEAN_OPERATIONS: Readonly<Record<string, BooleanOperation>> = {
+  Union: 'union',
+  Difference: 'difference',
+  Intersection: 'intersection',
+};
+
 const PARAMETER_DOCS: Readonly<Record<PrimitiveParameter, string>> = {
   radius: 'Rayon', minorRadius: 'Rayon du tube', size: 'Longueur d’arête', height: 'Hauteur', width: 'Largeur', length: 'Longueur',
   axis: 'Axe : "X", "Y" ou "Z"', resolution: 'Segments autour de l’axe, ou subdivisions par côté',
@@ -57,6 +65,8 @@ export const OBJECT_PROPERTIES: readonly ScriptPortDef[] = [
   { name: 'material', type: 'material', doc: 'Matériau : surface shader, nœud material ou chemin .mtlx' },
   { name: 'deform', type: 'function', doc: 'Déformation : (position, uv, normale) => [x, y, z] appliquée à chaque sommet' },
 ];
+
+const BOOLEAN_OBJECT_PROPERTIES = OBJECT_PROPERTIES.filter(property => property.name !== 'deform');
 
 /** Script NodeDef-like description of a primitive class, for the editor (completions, hover, value helpers). */
 export function primitiveScriptDef(className: string): ScriptNodeDef | undefined {
@@ -78,6 +88,23 @@ export function primitiveScriptDef(className: string): ScriptNodeDef | undefined
   return { name: `primitive ${className}`, category: className, className, doc: primitive.doc, inputs: [...parameters, ...OBJECT_PROPERTIES], outputs: [] };
 }
 
+export function booleanScriptDef(className: string): ScriptNodeDef | undefined {
+  const operation = SCRIPT_BOOLEAN_OPERATIONS[className];
+  if (!operation) return undefined;
+  return {
+    name: `boolean ${className}`,
+    category: className,
+    className,
+    doc: `${operation[0]!.toUpperCase()}${operation.slice(1)} de deux maillages fermés.`,
+    inputs: [
+      { name: 'base', type: 'object', doc: 'Opérande de base' },
+      { name: 'tool', type: 'object', doc: 'Opérande outil' },
+      ...BOOLEAN_OBJECT_PROPERTIES,
+    ],
+    outputs: [],
+  };
+}
+
 /** One primitive of the stage, as written to USD. */
 export interface StageObject {
   /** Prim name under /World. */
@@ -92,6 +119,9 @@ export interface StageObject {
   material?: string;
   /** Tessellation replacing the shape (a deformed primitive): written as a Mesh. */
   mesh?: RawMesh;
+  booleanOperation?: BooleanOperation;
+  base?: string;
+  tool?: string;
 }
 
 export interface StageMaterial {
@@ -152,29 +182,33 @@ export function writeStageUsda(objects: readonly StageObject[], materials: reado
     lines.push('    }');
   }
   for (const object of objects) {
-    const primitive = SCRIPT_PRIMITIVES[object.className]!;
-    const shape = stageObjectShape(object);
-    const mesh = object.mesh ?? (primitive.usdType === 'Mesh' ? primitiveMesh(shape) : undefined);
-    lines.push('', `    def ${mesh ? 'Mesh' : primitive.usdType} "${object.name}"${object.material ? ' (' : ''}`);
+    const primitive = SCRIPT_PRIMITIVES[object.className];
+    const shape = primitive ? stageObjectShape(object) : undefined;
+    const mesh = object.mesh ?? (primitive?.usdType === 'Mesh' && shape ? primitiveMesh(shape) : undefined);
+    if (!primitive && !object.booleanOperation) throw new Error(`Unknown scripted stage object "${object.className}".`);
+    if (object.booleanOperation && !mesh) throw new Error(`Boolean object "${object.name}" has not been evaluated.`);
+    const usdType = mesh ? 'Mesh' : primitive!.usdType;
+    lines.push('', `    def ${usdType} "${object.name}"${object.material ? ' (' : ''}`);
     if (object.material) lines.push('        prepend apiSchemas = ["MaterialBindingAPI"]', '    )');
     lines.push('    {');
     const body: string[] = [];
     if (mesh) {
       body.push(
-        `custom token engine:primitive = "${shape.kind}"`,
-        ...Object.entries(shape).filter(([name]) => name !== 'kind')
+        `custom token engine:primitive = "${shape?.kind ?? 'boolean'}"`,
+        ...(shape ? Object.entries(shape).filter(([name]) => name !== 'kind')
           .map(([name, value]) => typeof value === 'number'
             ? `custom ${name === 'resolution' || name === 'vertexBudget' ? 'int' : 'double'} engine:primitive:${name} = ${number(value)}`
-            : `custom token engine:primitive:${name} = "${value}"`),
+            : `custom token engine:primitive:${name} = "${value}"`) : []),
         'uniform token subdivisionScheme = "none"',
         `int[] faceVertexCounts = [${mesh.faceVertexCounts.join(', ')}]`,
         `int[] faceVertexIndices = [${mesh.faceVertexIndices.join(', ')}]`,
         `point3f[] points = ${tuples(mesh.points, 3)}`,
-        `normal3f[] normals = ${tuples(mesh.normals!.values, 3)} (`, '    interpolation = "vertex"', ')',
-        `texCoord2f[] primvars:st = ${tuples(mesh.primvars![0]!.values, 2)} (`, '    interpolation = "vertex"', ')',
       );
+      if (mesh.normals) body.push(`normal3f[] normals = ${tuples(mesh.normals.values, 3)} (`, '    interpolation = "vertex"', ')');
+      const st = mesh.primvars?.find(attribute => attribute.name === 'st');
+      if (st) body.push(`texCoord2f[] primvars:st = ${tuples(st.values, 2)} (`, '    interpolation = "vertex"', ')');
     } else {
-      for (const [name, value] of Object.entries(shape)) {
+      for (const [name, value] of Object.entries(shape ?? {})) {
         if (name === 'kind') continue;
         if (name === 'axis') body.push(`uniform token axis = "${value}"`);
         else if (name === 'resolution') body.push(`custom int engine:resolution = ${value}`);
