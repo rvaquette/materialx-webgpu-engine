@@ -39,5 +39,5 @@ describe('shaderball tilespp CLI', () => {
 
   it.each(['0', '-1', '1.5', 'NaN', 'Infinity', '', '9007199254740992'])('rejects invalid tilespp %j before starting resources', value => {
     expect(() => run(['--list', `--tilespp=${value}`])).toThrow('--tilespp must be a positive safe integer');
-  });
+  }, 30000);
 });

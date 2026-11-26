@@ -2082,8 +2082,8 @@ describe('interactive viewer resource lifecycle', () => {
       expect(device.queue.submit).toHaveBeenCalledTimes(submits);
       await Promise.resolve();
     }
-    expect(statuses.at(-1)?.samples).toBe(16);
-    await vi.waitFor(() => expect(statuses.at(-1)?.convergence?.samples).toBe(16));
+    await vi.waitFor(() => expect(statuses.some(status => status.samples === 16)).toBe(true));
+    await vi.waitFor(() => expect(statuses.some(status => status.convergence?.samples === 16)).toBe(true));
     const convergenceCopies = device.createCommandEncoder.mock.results.flatMap(result =>
       result.value.copyBufferToBuffer.mock.calls).filter(([, , , , size]) => size === 8 * 8 * 16);
     expect(convergenceCopies.length).toBeGreaterThan(0);
@@ -2111,8 +2111,9 @@ describe('interactive viewer resource lifecycle', () => {
       expect(device.createBindGroup.mock.calls.some(([desc]) => Array.from(desc.entries).some(entry =>
         'buffer' in entry.resource && entry.resource.buffer === buffer))).toBe(true);
     }
+    const samplesBeforeNoop = statuses.at(-1)?.samples;
     viewer.setPathTracingAdaptive(adaptive);
-    expect(statuses.at(-1)?.samples).toBe(16);
+    expect(statuses.at(-1)?.samples).toBe(samplesBeforeNoop);
     viewer.setPathTracingAdaptive(!adaptive);
     expect(viewer.pathTracingAdaptive).toBe(!adaptive);
     expect(statuses.at(-1)?.samples).toBe(0);

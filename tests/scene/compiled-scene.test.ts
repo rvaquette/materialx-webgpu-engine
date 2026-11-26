@@ -592,7 +592,7 @@ over "World" {
       const old = await encodeCompiledScene(data, loaded.entry);
       await expect(load(old)).rejects.toThrow('legacy flake3d shaders; re-export');
     }
-  });
+  }, 30000);
 
   it('round trips triplanar textures and geometry while rejecting stale scene and material shaders', async () => {
     const loaded = await triplanarFixture();

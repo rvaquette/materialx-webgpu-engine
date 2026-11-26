@@ -5,7 +5,7 @@ import { join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { platform, release, version } from 'node:os';
-import { sceneBufferCachePlugin } from './pathtracer-cache-server.mjs';
+import { sceneBufferCachePlugin } from '../pathtracer-cache-server.mjs';
 
 const exec = promisify(execFile);
 const ROOT = fileURLToPath(new URL('../', import.meta.url));
