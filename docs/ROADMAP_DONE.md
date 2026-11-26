@@ -1582,3 +1582,46 @@ ball.material = surface;
 - **Intersection analytique des sphères** dans le path tracer : non faite. La
   tessellation (48 segments) suffit en lookdev et garde un seul chemin de
   géométrie pour les deux backends.
+
+## Priorité 21 : étude du chargement des bibliothèques MaterialX sans WASM
+
+L'étude et le prototype d'archive sont documentés dans
+[dependencies.md](dependencies.md#library-archive-and-wasm-decision) ; le
+benchmark reproductible est
+[bench-materialx-library-archive.mjs](../scripts/bench-materialx-library-archive.mjs).
+
+**Décision :** conserver MaterialX Core WASM en production. L'archive ZIP
+préserve exactement les 28 documents standard et réduit leur taille locale de
+881,881 à 86,518 octets, mais ne remplace ni leur parsing XML ni leur import.
+Le Core reste également nécessaire pour résoudre et valider les documents de
+scène MaterialX. Les mesures de parsing en mémoire n'indiquent pas de gain
+significatif ; le bénéfice réseau d'une requête unique reste à mesurer dans le
+navigateur avant d'adopter l'archive.
+
+## Priorité 22 : build minimal de MaterialX Core WASM
+
+Le runtime conserve uniquement les bindings Core et Format utilisés par le
+moteur, tout en préservant la lecture XML avec XIncludes, l'import de
+bibliothèques, la validation, la résolution des NodeDefs et implémentations,
+les graphes, les valeurs typées et la libération déterministe des objets
+Embind. La génération d'IR et de WGSL reste en TypeScript ; GenShader WASM
+n'est pas ajouté.
+
+Le build reproductible
+([`build-materialx-core-minimal.mjs`](../scripts/build-materialx-core-minimal.mjs))
+est épinglé à MaterialX 1.39.6 et utilise les bindings minimaux versionnés.
+`npm run build` lance ce build isolé, suivi du packaging et de l'optimisation
+`wasm-opt --all-features -Oz`. Le benchmark comparable
+([`bench-materialx-core-build.mjs`](../scripts/bench-materialx-core-build.mjs))
+mesure les deux builds après la même optimisation.
+
+Sur l'environnement local, la paire JS/WASM réduite passe de 1,007,253 à
+669,044 octets bruts et de 313,628 à 208,359 octets gzip (−33,6 % dans les
+deux cas). Le WASM seul passe de 872,202 à 543,131 octets. La médiane de
+démarrage Node passe de 56,5 à 16,7 ms (−70,4 %). Les sept suites ciblées
+MaterialX et compilation graphe passent : 77 tests, notamment le chargement
+WASM, les XIncludes, la résolution de graphes, les matériaux USD et la
+compilation.
+
+Les détails de l'inventaire, des tailles et de la méthode de benchmark sont
+dans [dependencies.md](dependencies.md#core-wasm-minimum-build).

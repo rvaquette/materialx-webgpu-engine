@@ -7,6 +7,7 @@
 
 import { throwIfAborted, defaultDiagnosticSink, type DiagnosticSink } from '../core/diagnostics.ts';
 import type { MaterialXCore, MxDocument } from './wasm.ts';
+import defaultLibraryFiles from './default-library-files.json';
 
 export interface LibrarySource {
   /** Logical name for diagnostics/provenance. */
@@ -32,36 +33,7 @@ export interface LoadLibrariesOptions {
  * (`*_ng`), target declarations, and the bxdf surface shaders. Order matters:
  * targets and stdlib precede the libraries that build on them.
  */
-export const MATERIALX_DEFAULT_LIBRARY_FILES: readonly string[] = [
-  'targets/genglsl.mtlx',
-  'targets/genmsl.mtlx',
-  'targets/genosl.mtlx',
-  'targets/genmdl.mtlx',
-  'stdlib/stdlib_defs.mtlx',
-  'stdlib/stdlib_ng.mtlx',
-  'pbrlib/pbrlib_defs.mtlx',
-  'pbrlib/pbrlib_ng.mtlx',
-  'cmlib/cmlib_defs.mtlx',
-  'cmlib/cmlib_ng.mtlx',
-  'bxdf/standard_surface.mtlx',
-  'bxdf/open_pbr_surface.mtlx',
-  'bxdf/gltf_pbr.mtlx',
-  'bxdf/usd_preview_surface.mtlx',
-  'bxdf/disney_principled.mtlx',
-  'bxdf/lama/lama_add.mtlx',
-  'bxdf/lama/lama_conductor.mtlx',
-  'bxdf/lama/lama_dielectric.mtlx',
-  'bxdf/lama/lama_diffuse.mtlx',
-  'bxdf/lama/lama_emission.mtlx',
-  'bxdf/lama/lama_generalized_schlick.mtlx',
-  'bxdf/lama/lama_iridescence.mtlx',
-  'bxdf/lama/lama_layer.mtlx',
-  'bxdf/lama/lama_mix.mtlx',
-  'bxdf/lama/lama_sheen.mtlx',
-  'bxdf/lama/lama_sss.mtlx',
-  'bxdf/lama/lama_surface.mtlx',
-  'bxdf/lama/lama_translucent.mtlx',
-];
+export const MATERIALX_DEFAULT_LIBRARY_FILES: readonly string[] = defaultLibraryFiles;
 
 // Exporter image extensions are declared separately, without altering stdlib.
 const IMAGE_EXTENSION_DEFS = `<materialx version="1.39">

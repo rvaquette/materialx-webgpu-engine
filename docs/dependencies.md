@@ -75,6 +75,90 @@ from the TypeScript IR and WGSL backend.
 - The Core module does not generate WGSL or GLSL. Do not use the GenShader WASM
   as a compilation fallback.
 
+## Library archive and WASM decision
+
+The default library inventory is shared by the loader and the archive prototype
+in `src/materialx/default-library-files.json`. Run
+`node scripts/bench-materialx-library-archive.mjs` with `MX_LIB_ROOT` and
+`MX_CORE_DIR` pointing at a local MaterialX installation to compare ZIP round
+trip, XML parsing/validation, and Core startup. The prototype uses the existing
+`fflate` copy shipped by Three.js and leaves the production loader unchanged.
+
+On the local MaterialX 1.39.6 installation used for this study, the 28 default
+library documents contain 881,881 bytes of XML and compress to an 86,518-byte
+ZIP (9.8%). `JsMaterialXCore.js` is 135,051 bytes and its WASM is 1,131,508
+bytes. In a local Node.js 25 run, ZIP compression took 157 ms, decompression
+and UTF-8 decoding 103 ms, Core initialization 165 ms, and median Core parsing
+plus validation was 935 ms for the in-memory file map versus 1,004 ms for the
+in-memory ZIP. These CPU timings exclude network transfer and are a prototype
+measurement, not browser startup measurements; the benchmark reports fresh
+values for each machine. An archive can reduce the library transfer to one
+request, but cannot remove the WASM parser: the browser still needs to parse
+and import the archived XML.
+More importantly, scene `.mtlx` files also use Core XML parsing,
+`importLibrary`, `getNodeDef()` resolution, XInclude handling, and structural
+validation. An archive alone changes only transport.
+
+**Decision:** do not remove or bypass Core WASM in the production loader. The
+archive prototype proves content-preserving packaging, but no measured
+end-to-end browser latency benefit justifies changing the loader yet. Revisit
+archive delivery only if request overhead is a demonstrated bottleneck. A
+WASM-free implementation requires a separate parser/resolver parity project
+covering both standard libraries and authored scene documents.
+
+## Core WASM minimum build
+
+The application runtime consumes `JsMaterialXCore.js` and its WASM only;
+`scripts/package-static.mjs` packages those artifacts, not GenShader. Disabling
+GenShader backends does not reduce Core, so the minimum build supplies versioned
+Core and Format Embind sources that expose only the APIs used by the engine.
+The call-site inventory is in [Confirmed APIs](#confirmed-apis); TypeScript
+continues to own MaterialX IR construction and WGSL generation.
+
+`npm run build:materialx-core:minimal` (also the standard `npm run build`)
+checks the clean MaterialX source checkout at pinned commit
+`bea1e9251d8f936a73930ad19a6f3b37265d46f5` (1.39.6), configures a separate
+Release/Ninja build for `JsMaterialXCore`, and temporarily applies the
+versioned bindings from
+[materialx-core-minimal.cpp](../scripts/materialx-core-minimal.cpp) and
+[materialx-format-minimal.cpp](../scripts/materialx-format-minimal.cpp).
+The script restores the external checkout even on failure. The existing
+`wasm-opt --all-features -Oz` packaging pass runs afterward; `build:static`
+packages a previously built module without rebuilding MaterialX. The optimizer
+is resolved from `MX_WASM_OPT`, `EMSDK`, the local `D:\emsdk` install, or
+`PATH`.
+
+The minimum binding surface retains XML file/string reads and XIncludes,
+environment/path helpers, library import and structural validation, element
+and graph traversal, typed values, NodeDef/implementation resolution, filename
+token resolution, and deterministic Embind cleanup. It omits unused Format
+bindings and broad Core APIs, not parsing or validation behavior. The build is
+guarded against dirty or wrong-version MaterialX trees and keeps its temporary
+CMake outputs separate from the checkout's existing build directory.
+
+## Measured result
+
+Reproduce the full-versus-minimal comparison with
+`npm run bench:materialx-core`. Both modules receive the same
+`wasm-opt --all-features -Oz` pass; JS, WASM and combined raw/gzip sizes are
+reported separately, along with median Node startup. On the local Windows
+environment (Binaryen 123):
+
+| Build | JS (gzip) | WASM (gzip) | Pair (gzip) | Startup median |
+| --- | ---: | ---: | ---: | ---: |
+| Full Core | 135,051 (34,054) B | 872,202 (279,574) B | 1,007,253 (313,628) B | 56.5 ms |
+| Minimal Core | 125,913 (32,505) B | 543,131 (175,854) B | 669,044 (208,359) B | 16.7 ms |
+
+The reduced build decreases combined raw size by 33.6%, combined gzip size by
+33.6%, and median startup time by 70.4% (about 3.4× faster). The packaged
+minimal WASM is 543,131 bytes after optimization. These are local benchmark
+measurements, not browser/network timings.
+
+The final reduced artifact passed 77 tests across seven targeted suites covering
+WASM loading, XML and XInclude resolution, library loading, graph resolution,
+USD materials, and graph compilation. `git diff --check` passed, and the
+external MaterialX checkout was clean after the build.
+
 ## Local evidence
 
 Paths below are relative to `D:\WebGL2\MaterialX\MaterialX-rva`.

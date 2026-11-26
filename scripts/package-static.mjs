@@ -1,4 +1,5 @@
-import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs';
+import { copyFileSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -16,6 +17,52 @@ const sceneNames = [
 
 function requirePath(path, label) {
   if (!existsSync(path)) throw new Error(`Missing ${label}: ${path}`);
+}
+
+function findWasmOpt() {
+  const executable = process.platform === 'win32' ? 'wasm-opt.exe' : 'wasm-opt';
+  if (process.env.MX_WASM_OPT) {
+    requirePath(process.env.MX_WASM_OPT, 'wasm-opt');
+    return process.env.MX_WASM_OPT;
+  }
+  if (process.env.EMSDK) {
+    const candidate = join(process.env.EMSDK, 'upstream', 'bin', executable);
+    requirePath(candidate, 'wasm-opt from EMSDK');
+    return candidate;
+  }
+  const defaultPath = process.platform === 'win32' ? 'D:/emsdk/upstream/bin/wasm-opt.exe' : undefined;
+  if (defaultPath && existsSync(defaultPath)) return defaultPath;
+  return executable;
+}
+
+function optimizeCoreWasm(wasmPath) {
+  const optimizer = findWasmOpt();
+  const version = spawnSync(optimizer, ['--version'], { encoding: 'utf8' });
+  if (version.error) throw version.error;
+  if (version.status !== 0) throw new Error(`wasm-opt --version failed with exit code ${version.status}.`);
+
+  const optimizedPath = `${wasmPath}.optimized`;
+  try {
+    const result = spawnSync(optimizer, ['--all-features', '-Oz', wasmPath, '-o', optimizedPath], {
+      stdio: 'inherit',
+    });
+    if (result.error) throw result.error;
+    if (result.status !== 0) throw new Error(`wasm-opt failed with exit code ${result.status}.`);
+
+    const originalBytes = statSync(wasmPath).size;
+    const optimizedBytes = statSync(optimizedPath).size;
+    if (optimizedBytes >= originalBytes) {
+      throw new Error(`wasm-opt did not reduce Core WASM (${originalBytes} -> ${optimizedBytes} bytes).`);
+    }
+    new WebAssembly.Module(readFileSync(optimizedPath));
+    copyFileSync(optimizedPath, wasmPath);
+    console.log(
+      `Optimized MaterialX Core WASM: ${originalBytes} -> ${optimizedBytes} bytes ` +
+      `(${((1 - optimizedBytes / originalBytes) * 100).toFixed(1)}%; ${version.stdout.trim()})`,
+    );
+  } finally {
+    rmSync(optimizedPath, { force: true });
+  }
 }
 
 function validateCompiledScenes(directory) {
@@ -64,6 +111,7 @@ for (const file of ['JsMaterialXCore.js', 'JsMaterialXCore.wasm']) {
   requirePath(source, `MaterialX Core ${file}`);
   cpSync(source, join(materialxRoot, file));
 }
+optimizeCoreWasm(join(materialxRoot, 'JsMaterialXCore.wasm'));
 cpSync(libraryRoot, join(materialxRoot, 'libraries'), { recursive: true });
 
 const openUsdRoot = join(projectRoot, 'node_modules', '@needle-tools', 'usd', 'src', 'bindings');

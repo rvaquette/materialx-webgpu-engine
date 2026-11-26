@@ -9,14 +9,16 @@ mesurable, réutilisable et extensible.
 Les priorités 1 (rendu progressif), 2 (API de bibliothèque), 3 (éditeur de
 matériaux MaterialX), 3bis (scripting), 4 (accélération du path tracer), 5
 (scènes dynamiques), 6 (volumes et effets avancés), 7 (robustesse,
-portabilité et exploitation) et 8 (primitives et scènes par script) sont
-traitées ; leur historique est dans
+portabilité et exploitation), 8 (primitives et scènes par script) ainsi que
+l'étude urgente de la priorité 21 (chargement des bibliothèques MaterialX sans
+WASM) et la priorité 22 (build minimal du Core WASM) sont traitées ; leur historique est dans
 [ROADMAP_DONE.md](ROADMAP_DONE.md). Les limites connues sont recensées dans
 [INTEGRATION.md](INTEGRATION.md#limites-connues).
 
 Les priorités suivantes visent à passer d'un moteur de rendu MaterialX à un
 outil de création : construire des scènes, explorer et documenter les nœuds,
-étendre MaterialX à de nouveaux types de shaders et exporter le résultat.
+étendre MaterialX à de nouveaux types de shaders, exporter le résultat et
+continuer à optimiser le runtime livré au navigateur.
 
 ## Reliquats des priorités traitées
 
@@ -227,6 +229,67 @@ ruban tordu (twist) et un objet importé déformé par treillis sont animés en
 temps réel en raster, rendus avec flou de mouvement en path tracing, et
 exportés en USD.
 
+## Priorité 19 : rendu distribué multi-serveur et multi-GPU
+
+WebGPU n'expose qu'un adaptateur par page : le multi-GPU passe par un processus
+par GPU. Le serveur de rendu distant ([REMOTE_RENDER.md](REMOTE_RENDER.md)) lance
+déjà Chrome headless sur un GPU choisi ; un coordinateur répartit le travail
+entre plusieurs de ces nœuds, sur une ou plusieurs machines :
+
+- **coordinateur** : liste de nœuds (URL, jeton, GPU), découverte de leurs
+  capacités (`capabilities()`), mesure de leur débit, retrait d'un nœud
+  défaillant sans perdre le rendu ;
+- **path tracing par échantillons** : chaque nœud accumule la même image avec
+  une graine différente ; le coordinateur somme les accumulations pondérées par
+  leur nombre d'échantillons. Robuste à des GPU de vitesses différentes (une
+  T500 et un iGPU contribuent chacun à leur rythme) et compatible avec la
+  convergence et l'arrêt sur cible de bruit (variance combinée) ;
+- **répartition par tuiles** en option pour les très hautes résolutions
+  (mémoire par nœud), avec rééquilibrage des tuiles selon le débit mesuré ;
+- **animations par images** : chaque nœud rend des images entières de la
+  timeline, le coordinateur assemble la séquence ;
+- **transfert en flottant** : accumulations HDR (somme des radiances, moments
+  pour la variance, nombre d'échantillons) au lieu des images WebP actuelles,
+  compressées ; débruitage et tonemapping faits une seule fois sur l'image
+  combinée ;
+- **même scène partout** : le script et ses ressources sont envoyés à chaque
+  nœud ; empreinte de scène vérifiée pour refuser un nœud qui n'a pas les mêmes
+  assets ou la même version du moteur ;
+- **multi-GPU local** : plusieurs nœuds sur une même machine, chacun forcé sur
+  un adaptateur (`--gpu high-performance|low-power`) ;
+- viewer : progression par nœud (échantillons, débit, état), image combinée
+  affichée au fil de l'eau ; script : `render.nodes = ["https://…", …]` ou
+  configuration du coordinateur ;
+- banc de mesure : accélération obtenue avec 1, 2 et 4 nœuds, et surcoût de
+  transfert.
+
+**Critère d'aboutissement :** une image path tracée converge plus vite avec deux
+nœuds qu'avec un seul (gain mesuré, hétérogénéité des GPU comprise), sans biais
+par rapport au rendu d'un nœud unique (`--bias-check`), et une séquence animée
+est répartie image par image.
+
+## Priorité 20 : systèmes de particules animés
+
+Compléter le scatter shader de la priorité 16, qui répartit des instances sur
+une surface, par des systèmes évoluant dans le temps :
+
+- émission continue ou par impulsion, durée de vie, vitesse, taille et couleur
+  initiales, avec graine déterministe pour des rendus reproductibles ;
+- forces configurables : gravité, vent et turbulence procédurale, avec
+  collisions simples contre le sol et les objets de la scène ;
+- simulation sur GPU, intégrée à la timeline des scènes dynamiques ; historique
+  des positions pour le flou de mouvement en path tracing ;
+- rendu en points, sprites orientés caméra ou instances de géométrie, avec
+  matériau MaterialX par système (émission pour les étincelles, transmission
+  pour les gouttes) ;
+- presets scriptables, notamment chute d'eau (gouttes et embruns), étincelles
+  avec traînées, pluie et neige ; le preset de feu de la priorité 17 peut
+  réutiliser ce système pour ses braises.
+
+**Critère d'aboutissement :** une chute d'eau et une gerbe d'étincelles animées
+s'obtiennent par script, restent reproductibles à graine fixée et se rendent
+en raster comme en path tracing, avec flou de mouvement en path tracing.
+
 ## Pistes exploratoires
 
 - **Shaders implicites / SDF** (métaboules, fractales, booléens lisses) :
@@ -245,3 +308,7 @@ exportés en USD.
 3. Environnement et post-traitement (12), à faible risque d'architecture.
 4. Baking (13), qui alimente les aperçus et la bibliothèque (11).
 5. Lookdev et projets (14), booléens (15), puis shaders d'extension (16).
+6. Surfaces complexes (17), puis systèmes de particules (20) pour les effets
+   animés comme les gouttes et les braises.
+7. Rendu distribué (19), dès que les scènes de la priorité 17 rendent le path
+   tracing trop long sur un seul GPU.

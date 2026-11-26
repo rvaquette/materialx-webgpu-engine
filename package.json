@@ -9,7 +9,10 @@
   },
   "scripts": {
     "dev": "vite",
-    "build": "tsc --noEmit && vite build && node scripts/package-static.mjs",
+    "build": "npm run build:materialx-core:minimal",
+    "build:static": "tsc --noEmit && vite build && node scripts/package-static.mjs",
+    "build:materialx-core:minimal": "node scripts/build-materialx-core-minimal.mjs",
+    "bench:materialx-core": "node scripts/bench-materialx-core-build.mjs",
     "build:shaderball": "tsc --noEmit && node scripts/build-shaderball.mjs",
     "build:engine-package": "node scripts/build-engine-package.mjs",
     "test:engine-package": "npm run build:engine-package && node --test scripts/test-engine-package.mjs",
