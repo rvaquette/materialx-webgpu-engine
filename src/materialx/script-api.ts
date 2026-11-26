@@ -19,7 +19,7 @@ import {
   type EnvironmentShaderSettings, type ImageShaderSettings, type LightFilterSettings,
 } from './engine-shaders.ts';
 import type { ResolvedGraph } from './graph.ts';
-import type { PathTraceView } from '../render/pathtracing/display.ts';
+import { customAovView, type CustomAovKind, type PathTraceView } from '../render/pathtracing/display.ts';
 import {
   OBJECT_PROPERTIES, SCRIPT_BOOLEAN_OPERATIONS, SCRIPT_PRIMITIVES, stageObjectShape, writeStageUsda,
   type BooleanOperation, type PrimitiveParameter, type StageInstancer, type StageMaterial, type StageObject,
@@ -1371,6 +1371,64 @@ export async function runScript(code: string, library: ScriptLibrary, options: R
   };
   const aovView = (value: unknown): PathTraceView => {
     const node = terminalNode(value, 'engine_aov_shader', 'aov(shader)');
+    if (node.def.category === 'custom_aov_shader') {
+      const name = terminalInput(node, 'name');
+      const source = terminalInput(node, 'source');
+      if (typeof name !== 'string' || !/^[A-Za-z_][A-Za-z0-9_-]{0,63}$/.test(name)) {
+        throw new ScriptError(`${node.name}.name must be an identifier of at most 64 ASCII characters.`);
+      }
+      if (source !== 'position' && source !== 'scalar' && source !== 'material_id' && source !== 'material_mask') {
+        throw new ScriptError(`${node.name}.source expects position, scalar, material_id or material_mask.`);
+      }
+      for (const field of ['position', 'scalar', 'materialId']) {
+        if (node.inputs.has(field) && field !== (source === 'material_mask' ? 'materialId' : source)) {
+          throw new ScriptError(`${node.name}.${field} is not used by source ${source}.`);
+        }
+      }
+      const position = (candidate: ScriptNode, output: string): void => {
+        if (candidate.def.category !== 'position' || nodeType(candidate.def) !== 'vector3' || output !== 'out'
+          || terminalInput(candidate, 'space') !== 'world') {
+          throw new ScriptError('Custom AOV position only supports Position("vector3") in world space.');
+        }
+      };
+      let kind: CustomAovKind;
+      let parameter = 0;
+      if (source === 'position') {
+        const input = node.inputs.get('position');
+        if (!input || !('node' in input)) throw new ScriptError(`${node.name}.position must connect a world-space Position output.`);
+        position(input.node, input.output);
+        kind = 'position';
+      } else if (source === 'scalar') {
+        const input = node.inputs.get('scalar');
+        if (!input || !('node' in input)) {
+          parameter = terminalFloat(node, 'scalar');
+          kind = 'constant';
+        } else if (input.node.def.category === 'constant' && nodeType(input.node.def) === 'float' && input.output === 'out') {
+          parameter = terminalFloat(input.node, 'value');
+          kind = 'constant';
+        } else if (input.node.def.category === 'separate3'
+          && input.node.def.inputs.find(port => port.name === 'in')?.type === 'vector3'
+          && ['outx', 'outy', 'outz'].includes(input.output)) {
+          const vector = input.node.inputs.get('in');
+          if (!vector || !('node' in vector)) throw new ScriptError('Custom AOV separate3 must connect a world-space Position.');
+          position(vector.node, vector.output);
+          kind = ({ outx: 'x', outy: 'y', outz: 'z' } as const)[input.output as 'outx' | 'outy' | 'outz'];
+        } else {
+          throw new ScriptError(`Custom AOV does not support ${input.node.def.name}.${input.output}.`);
+        }
+      } else {
+        kind = source;
+        if (source === 'material_mask') {
+          parameter = terminalFloat(node, 'materialId');
+          if (!Number.isInteger(parameter) || parameter < 0 || parameter > 16777215) {
+            throw new ScriptError(`${node.name}.materialId expects an integer from 0 to 16777215.`);
+          }
+        }
+      }
+      if (!Number.isFinite(Math.fround(parameter))) throw new ScriptError('Custom AOV value must fit in float32.');
+      return customAovView({ name, kind, parameter });
+    }
+    if (node.def.category !== 'aov_shader') throw new ScriptError(`Unsupported AOV shader ${node.def.name}.`);
     const view = terminalInput(node, 'view');
     if (typeof view !== 'string' || !['albedo', 'normal', 'depth', 'variance', 'emission', 'transmission'].includes(view)) {
       throw new ScriptError(`${node.name}.view expects albedo, normal, depth, variance, emission or transmission.`);

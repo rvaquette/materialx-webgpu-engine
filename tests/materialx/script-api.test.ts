@@ -104,7 +104,7 @@ const LIBRARY = ScriptLibrary.fromXml([`<?xml version="1.0"?>
 describe('material script library', () => {
   it('resolves nodes and their ports from NodeDefs', async () => {
     expect(LIBRARY.classNames).toEqual([
-      'AovShader', 'Clamp', 'EnvironmentShader', 'Image', 'ImageShader', 'LensShader', 'LightFilterShader', 'Mix', 'Multiply', 'Noise3d', 'Position', 'ScatterShader',
+      'AovShader', 'Clamp', 'CustomAovShader', 'EnvironmentShader', 'Image', 'ImageShader', 'LensShader', 'LightFilterShader', 'Mix', 'Multiply', 'Noise3d', 'Position', 'ScatterShader',
       'Separate3', 'StandardSurface', 'Surfacematerial',
     ]);
     const surface = LIBRARY.resolve('standard_surface');
@@ -234,6 +234,41 @@ describe('runScript', () => {
     expect(toScript(graph, LIBRARY)).toContain('await aov(output.out);');
     await expect(runScript('output = new AovShader(); output.view = "beauty"; await aov(output.out);', LIBRARY, { host }))
       .rejects.toThrow(/expects albedo, normal, depth/);
+  });
+
+  it('selects named custom AOV graph values and round-trips the graph', async () => {
+    const calls: string[] = [];
+    const host: ScriptHost = { ...idleHost(), setPathTracingView: async view => { calls.push(view); } };
+    const graph = await runScript(`
+      p = new Position(); p.space = "world";
+      split = new Separate3("ND_separate3_vector3"); split.in = p.out;
+      output = new CustomAovShader(); output.name = "height"; output.source = "scalar";
+      output.scalar = split.outy; await aov(output.out);
+    `, LIBRARY, { host });
+    expect(calls).toEqual(['custom:height:y:0']);
+    const xml = toXml(graph, LIBRARY);
+    const rebuilt = toScript(fromXml(xml, LIBRARY), LIBRARY);
+    await runScript(rebuilt, LIBRARY, { host });
+    expect(calls).toEqual(['custom:height:y:0', 'custom:height:y:0']);
+    await runScript(`p = new Position(); p.space = "world"; o = new CustomAovShader();
+      o.name = "world"; o.position = p.out; await aov(o.out);`, LIBRARY, { host });
+    await runScript(`o = new CustomAovShader(); o.name = "mask"; o.source = "material_mask";
+      o.materialId = 7; await aov(o.out);`, LIBRARY, { host });
+    await runScript(`o = new CustomAovShader(); o.source = "scalar"; o.scalar = -2; await aov(o.out);`, LIBRARY, { host });
+    expect(calls.slice(2)).toEqual(['custom:world:position:0', 'custom:mask:material_mask:7', 'custom:custom:constant:-2']);
+  });
+
+  it('rejects unsupported custom AOV graphs and inputs before dispatch', async () => {
+    const host = idleHost();
+    for (const script of [
+      'p = new Position(); o = new CustomAovShader(); o.position = p.out; await aov(o.out);',
+      'o = new CustomAovShader(); await aov(o.out);',
+      'n = new Noise3d("float"); o = new CustomAovShader(); o.source = "scalar"; o.scalar = n.out; await aov(o.out);',
+      'o = new CustomAovShader(); o.source = "material_mask"; o.materialId = -1; await aov(o.out);',
+      'o = new CustomAovShader(); o.name = "../bad"; o.source = "scalar"; await aov(o.out);',
+      'o = new CustomAovShader(); o.source = "material_id"; o.scalar = 1; await aov(o.out);',
+      's = new StandardSurface(); await aov(s.out);',
+    ]) await expect(runScript(script, LIBRARY, { host })).rejects.toThrow();
   });
 
   it('applies and serializes procedural light filters', async () => {

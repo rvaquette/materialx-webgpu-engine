@@ -43,13 +43,15 @@ graphe, avec son statut de support par backend documenté.
 Exemples exécutables de la première tranche :
 
 - `npm run script -- examples/scripts/p16-light-filter.js --out docs/images/p16`
-- `npm run script -- examples/scripts/p16-extension-shaders.js --out docs/images/p16`
+- `npm run script -- examples/scripts/p16-extension-shaders.js --out docs/images/p16/p16-extension-shaders`
 
-Le gobo spot est illustré par une scène USD dédiée ; le second script montre le
-scatter déterministe, le post-traitement de lentille et l'AOV albedo.
+`p16-light-filter.js` illustre le gobo sur une scène USD dédiée.
+`p16-extension-shaders.js` couvre la lentille (distorsion, bokeh et projection
+panoramique), le scatter déterministe, l'AOV albedo intégré et un AOV personnalisé
+de hauteur en espace monde.
 Le scatter utilise des prototypes partagés et accepte un sous-ensemble de graphes
-de densité spatiale (voir [SCRIPT_REFERENCE.md](SCRIPT_REFERENCE.md)). Les AOV
-MaterialX arbitraires restent une tranche distincte à réaliser : la priorité 16
+de densité spatiale ; les sources AOV personnalisées acceptées et leurs limites
+sont décrites dans [SCRIPT_REFERENCE.md](SCRIPT_REFERENCE.md). La priorité 16
 n'est pas terminée.
 
 ![Gobo procédural sur une lumière spot](images/p16/p16-light-filter.png)
@@ -61,6 +63,8 @@ n'est pas terminée.
 ![Projection équirectangulaire](images/p16/p16-extension-shaders/p16-extension-shaders-panorama.png)
 
 ![Sortie AOV albedo](images/p16/p16-extension-shaders/p16-extension-shaders-albedo.png)
+
+![AOV personnalisé de hauteur en espace monde](images/p16/p16-extension-shaders/p16-extension-shaders-height.png)
 
 ## Priorité 17 : surfaces complexes (eau, lave, feu, fumée, nuages, …)
 

@@ -90,5 +90,9 @@ describe('floating-point AOV export', () => {
     expect(createObjectURL).toHaveBeenCalledOnce();
     expect(anchor.click).toHaveBeenCalledOnce();
     expect(anchor.remove).toHaveBeenCalledOnce();
+    await downloadPathTraceAovPfm('/scenes/test scene.usda', 'custom:object-mask:material_mask:7', {
+      width: 1, height: 1, channels: 1, values: new Float32Array([0.75]),
+    });
+    expect(anchor.download).toBe('test-scene_object-mask_1x1.pfm');
   });
 });

@@ -67,7 +67,7 @@ import { DisplayImageShader } from './image-shader.ts';
 import { assembleIrForwardShader, type RasterQuality } from './raster/ir-forward.ts';
 import { rasterVolumeWgsl, RASTER_VOLUME_UNIFORM_BYTES } from './raster/volume-pass.ts';
 import {
-  pathTraceDisplayWgsl, pathTraceStorageBytesPerPixel, pathTraceViewIndex, pathTraceViewStoresAov, previewScale,
+  pathTraceDisplayWgsl, pathTraceStorageBytesPerPixel, pathTraceViewIndex, pathTraceViewStoresAov, previewScale, unpackPathTraceAov,
   PT_DISPLAY_INFO_BYTES, PT_DISPLAY_PIXEL_BYTES, PT_SURFACE_AOV_PIXEL_BYTES, type PathTraceAovData, type PathTraceView,
 } from './pathtracing/display.ts';
 import {
@@ -4149,7 +4149,6 @@ export class InteractiveViewer {
         const exportHeight = ptHeight;
         const pixelCount = exportWidth * exportHeight;
         const variance = view === 'variance';
-        const channels = variance ? 1 : 3;
         const source = accumBuffer;
         const sourceOffset = 0;
         const byteLength = variance ? pixelCount * PT_DISPLAY_PIXEL_BYTES
@@ -4168,32 +4167,7 @@ export class InteractiveViewer {
             throw new Error('The selected path-tracing AOV changed during export.');
           }
           const sourceValues = new Float32Array(readback.getMappedRange().slice(0));
-          const values = new Float32Array(pixelCount * channels);
-          for (let pixel = 0; pixel < pixelCount; pixel++) {
-            if (variance) {
-              const index = pixel * 8;
-              const count = sourceValues[index + 3]!;
-              values[pixel] = count < 2 ? Number.NaN : Math.max(0, sourceValues[index + 5]!) / (count - 1);
-            } else {
-              const sampleCount = sourceValues[pixel * 8 + 3]!;
-              const sourceIndex = pixelCount * 8 + pixel * 4;
-              const destinationIndex = pixel * 3;
-              const coverage = sourceValues[sourceIndex + 3]!;
-              if (sampleCount === 0) {
-                values.fill(Number.NaN, destinationIndex, destinationIndex + 3);
-                continue;
-              }
-              const divisor = view === 'emission' ? 1 : coverage;
-              if (coverage === 0 && view !== 'emission') {
-                values.fill(0, destinationIndex, destinationIndex + 3);
-              } else {
-                for (let channel = 0; channel < 3; channel++) {
-                  values[destinationIndex + channel] = sourceValues[sourceIndex + channel]! / divisor;
-                }
-              }
-            }
-          }
-          return { width: exportWidth, height: exportHeight, channels, values };
+          return unpackPathTraceAov(view, exportWidth, exportHeight, sourceValues);
         } finally {
           if (mapped) readback.unmap();
           readback.destroy();

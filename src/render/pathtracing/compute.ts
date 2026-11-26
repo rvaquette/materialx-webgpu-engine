@@ -36,7 +36,7 @@ import { environmentSamplingWgsl } from '../../assets/environment-cdf.ts';
 import { pruneWgslFunctions } from '../../compiler/wgsl-reachability.ts';
 import { MAX_SSS_WALK_EVENTS, sssCoefficientsWgsl } from './subsurface.ts';
 import { pathTraceAdaptiveSamplingWgsl, PT_CONVERGENCE_TARGET_RELATIVE_ERROR } from './convergence.ts';
-import { pathTraceViewIndex, type PathTraceView } from './display.ts';
+import { parseCustomAov, pathTraceViewIndex, type PathTraceView } from './display.ts';
 
 /** Compute workgroup tile edge (threads per dimension). */
 export const PT_WORKGROUP_SIZE = 8;
@@ -168,7 +168,7 @@ struct Uniforms {
   backgroundInvViewProj : mat4x4<f32>,
   transport : vec4<f32>, // depth, roulette depth, analytic light count, converted camera
   lens : vec4<f32>, // projection, aperture radius, focus distance, blade count
-  lensExtra : vec4<f32>, // blade rotation in radians
+  lensExtra : vec4<f32>, // blade rotation in radians, custom AOV parameter
 };
 
 @group(0) @binding(0) var<uniform> U : Uniforms;
@@ -1130,6 +1130,18 @@ ${displayAovs ? `    let aovMode = u32(U.envTexture.w);
           (*surfaceAov).value = vec4f(c.emission, 1.0);
         } else if (aovMode == 6u) {
           (*surfaceAov).value = vec4f(mx_closure_transmission_albedo(c), 1.0);
+        } else if (aovMode == 7u) {
+          (*surfaceAov).value = vec4f(pos, 1.0);
+        } else if (aovMode >= 8u && aovMode <= 11u) {
+          var value = U.lensExtra.y;
+          if (aovMode == 8u) { value = pos.x; }
+          if (aovMode == 9u) { value = pos.y; }
+          if (aovMode == 10u) { value = pos.z; }
+          (*surfaceAov).value = vec4f(vec3f(value), 1.0);
+        } else if (aovMode == 12u) {
+          (*surfaceAov).value = vec4f(vec3f(f32(tri_material(hit.tri))), 1.0);
+        } else if (aovMode == 13u) {
+          (*surfaceAov).value = vec4f(vec3f(select(0.0, 1.0, tri_material(hit.tri) == u32(U.lensExtra.y))), 1.0);
         }
       }
     }` : ''}
@@ -1822,6 +1834,7 @@ export function buildPathTraceUniform(
   d.set([lens?.projection === 'fisheye' ? 1 : lens?.projection === 'equirectangular' ? 2 : 0,
     lens?.apertureRadius ?? 0, lens?.focusDistance ?? 5, lens?.bokehBlades ?? 0], 104);
   d[108] = (lens?.bokehRotation ?? 0) * Math.PI / 180;
+  d[109] = parseCustomAov(pathTracingView)?.parameter ?? 0;
   return d;
 }
 

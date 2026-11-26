@@ -1,5 +1,5 @@
 import { downloadBlob } from '../assets/download.ts';
-import type { PathTraceAovData, PathTraceView } from './pathtracing/display.ts';
+import { parseCustomAov, type PathTraceAovData, type PathTraceView } from './pathtracing/display.ts';
 
 export type ExportablePathTraceView = Exclude<PathTraceView, 'beauty'>;
 
@@ -44,7 +44,7 @@ export async function downloadDisplayedAovPng(
       ? resolve(value)
       : reject(new Error('The browser could not encode the selected AOV as PNG.')), 'image/png');
   });
-  downloadBlob(blob, `${sceneName(sceneEntry)}_${view}_${canvas.width}x${canvas.height}.png`);
+  downloadBlob(blob, `${sceneName(sceneEntry)}_${parseCustomAov(view)?.name ?? view}_${canvas.width}x${canvas.height}.png`);
 }
 
 export async function downloadPathTraceAovPfm(
@@ -52,5 +52,5 @@ export async function downloadPathTraceAovPfm(
 ): Promise<void> {
   const bytes = encodePathTraceAovPfm(image);
   const blob = new Blob([bytes], { type: 'image/x-portable-floatmap' });
-  downloadBlob(blob, `${sceneName(sceneEntry)}_${view}_${image.width}x${image.height}.pfm`);
+  downloadBlob(blob, `${sceneName(sceneEntry)}_${parseCustomAov(view)?.name ?? view}_${image.width}x${image.height}.pfm`);
 }

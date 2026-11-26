@@ -36,7 +36,7 @@ export function parseCustomAov(view: string): CustomAov | undefined {
   return { name: parts[1]!, kind, parameter };
 }
 
-export function customAovView(aov: CustomAov): PathTraceView {
+export function customAovView(aov: CustomAov): `custom:${string}` {
   const view = `custom:${aov.name}:${aov.kind}:${aov.parameter}` as const;
   if (!parseCustomAov(view)) throw new RangeError('Invalid custom AOV.');
   return view;
@@ -47,6 +47,36 @@ export interface PathTraceAovData {
   height: number;
   channels: 1 | 3;
   values: Float32Array;
+}
+
+export function unpackPathTraceAov(view: Exclude<PathTraceView, 'beauty'>, width: number, height: number, source: Float32Array): PathTraceAovData {
+  const pixelCount = width * height;
+  const variance = view === 'variance';
+  const custom = parseCustomAov(view);
+  const channels = variance || (custom !== undefined && custom.kind !== 'position') ? 1 : 3;
+  const values = new Float32Array(pixelCount * channels);
+  for (let pixel = 0; pixel < pixelCount; pixel++) {
+    if (variance) {
+      const count = source[pixel * 8 + 3]!;
+      values[pixel] = count < 2 ? Number.NaN : Math.max(0, source[pixel * 8 + 5]!) / (count - 1);
+      continue;
+    }
+    const sampleCount = source[pixel * 8 + 3]!;
+    const sourceIndex = pixelCount * 8 + pixel * 4;
+    const destinationIndex = pixel * channels;
+    const coverage = source[sourceIndex + 3]!;
+    if (sampleCount === 0) {
+      values.fill(Number.NaN, destinationIndex, destinationIndex + channels);
+    } else if (coverage === 0 && view !== 'emission') {
+      values.fill(0, destinationIndex, destinationIndex + channels);
+    } else {
+      const divisor = view === 'emission' ? 1 : coverage;
+      for (let channel = 0; channel < channels; channel++) {
+        values[destinationIndex + channel] = source[sourceIndex + channel]! / divisor;
+      }
+    }
+  }
+  return { width, height, channels, values };
 }
 
 export function pathTraceViewStoresAov(view: PathTraceView): boolean {

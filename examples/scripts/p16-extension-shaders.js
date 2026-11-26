@@ -1,5 +1,5 @@
 // Priorité 16 : lentille, AOV et scatter scriptables.
-// npm run script -- examples/scripts/p16-extension-shaders.js --out docs/images/p16
+// npm run script -- examples/scripts/p16-extension-shaders.js --out docs/images/p16/p16-extension-shaders
 
 const surfaceMaterial = new StandardSurface();
 surfaceMaterial.base_color = [0.18, 0.42, 0.62];
@@ -70,3 +70,16 @@ aovSettings.view = "albedo";
 await aov(aovSettings.out);
 await render(128);
 await save("p16-extension-shaders-albedo.png");
+
+const position = new Position();
+position.space = "world";
+const components = new Separate3("ND_separate3_vector3");
+components.in = position.out;
+const heightAov = new CustomAovShader();
+heightAov.name = "height";
+heightAov.source = "scalar";
+heightAov.scalar = components.outy;
+await aov(heightAov.out);
+await render(128);
+await save("p16-extension-shaders-height.png");
+await save("p16-extension-shaders-height.pfm");

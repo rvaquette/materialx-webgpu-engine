@@ -3,7 +3,7 @@ import type { ViewerStatus, BackendKind } from './render/viewer.ts';
 import type { RasterQuality } from './render/raster/ir-forward.ts';
 import type { MaterialParameterEditor } from './material-parameter-editor.ts';
 import type { MaterialFolder } from './scene/material-tree.ts';
-import { PATH_TRACE_VIEWS, type PathTraceView } from './render/pathtracing/display.ts';
+import { PATH_TRACE_VIEWS, parseCustomAov, type PathTraceView } from './render/pathtracing/display.ts';
 import type { LightingPreset } from './render/lighting-presets.ts';
 import type { TurntableTarget } from './render/turntable.ts';
 
@@ -275,14 +275,17 @@ export async function startViewerUi(
           ImGui.Text(`${state.status.samples} ${unit}${state.status.pathTracingPaused ? ' (pause)' : ''}`);
         }
         if (state.backend === 'pathtracing' && state.status?.pathTracer === 'ready') {
-          combo('##path-tracing-view', state.status.pathTracingView, PATH_TRACE_VIEWS, value => {
-            const option = PATH_TRACE_VIEWS.find(option => option.value === value);
+          const customAov = parseCustomAov(state.status.pathTracingView);
+          const views: readonly { value: PathTraceView; label: string }[] = customAov
+            ? [...PATH_TRACE_VIEWS, { value: state.status.pathTracingView, label: `AOV : ${customAov.name}` }] : PATH_TRACE_VIEWS;
+          combo('##path-tracing-view', state.status.pathTracingView, views, value => {
+            const option = views.find(option => option.value === value);
             if (option) actions.pathTracingView(option.value);
           });
           ImGui.SetItemTooltip('Un seul AOV est stocké (+16 octets/pixel). Le choisir réinitialise l’accumulation ; si elle était en pause, reprenez-la. Beauté et variance n’ajoutent pas de sidecar.');
           if (state.status.pathTracingView !== 'beauty' && state.status.samples > 0) {
             if (ImGui.Button('Exporter AOV affiché (PNG)')) actions.exportAov();
-            const selectedView = PATH_TRACE_VIEWS.find(option => option.value === state.status?.pathTracingView);
+            const selectedView = views.find(option => option.value === state.status?.pathTracingView);
             ImGui.SetItemTooltip(`Exporte ${selectedView?.label ?? 'l’AOV sélectionné'} tel qu’affiché, en PNG 8 bits.`);
             ImGui.SameLine();
             if (ImGui.Button('Exporter HDR (PFM)')) actions.exportAovHdr();

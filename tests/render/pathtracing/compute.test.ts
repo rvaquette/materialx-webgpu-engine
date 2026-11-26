@@ -647,6 +647,9 @@ describe('buildPathTraceUniform layout', () => {
     const uniform = buildPathTraceUniform(scene, 7, 1, 128, 128);
     const adaptive = buildPathTraceUniform(scene, 7, 1, 128, 128, 0, undefined, undefined, true);
     const transmission = buildPathTraceUniform(scene, 7, 1, 128, 128, 0, undefined, undefined, false, 'transmission');
+      const custom = buildPathTraceUniform(scene, 7, 1, 128, 128, 0, undefined, undefined, false, 'custom:mask:material_mask:7');
+      expect(custom[83]).toBe(13);
+      expect(custom[109]).toBe(7);
     const target = buildPathTraceUniform(scene, 7, 1, 128, 128, 0, undefined, undefined, true, 'beauty', 0.125);
     expect(uniform[82]).toBe(0);
     expect(adaptive[82]).toBe(1);

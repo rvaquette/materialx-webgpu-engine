@@ -223,6 +223,7 @@ overlap.translate = [2, 0, 0];
 | `grade = new ImageShader()` / `lens = new LensShader()` | Définit l'étalonnage écran et les effets optiques de lentille. |
 | `await postprocess(grade.out)` | Applique l'étalonnage après l'affichage raster ou path tracing, y compris les AOV, sans modifier l'accumulation. |
 | `output = new AovShader(); await aov(output.out)` | Sélectionne un AOV path tracing intégré : albedo, normal, profondeur, variance, émission ou transmission. |
+| `output = new CustomAovShader(); await aov(output.out)` | Sélectionne un AOV nommé de données ou de masque, parmi les sources limitées décrites ci-dessous. |
 | `filter = new LightFilterShader(); filter.lightPath = "/World/Spot"; await lightFilter(filter.out)` | Applique un gobo procédural à une lumière spot du path tracer MaterialX. |
 | `settings = new ScatterShader(); await scatter(settings.out)` | Répartit des instances sur une surface scriptée, avec densité scalaire ou graphe spatial et graine reproductible. |
 
@@ -246,9 +247,40 @@ verticalement. Ces options de caméra exigent le path tracer MaterialX : raster 
 refusés, de même qu'un repli raster. Les modifier réinitialise l'accumulation. L'option
 `"perspective"` conserve la projection de la caméra, y compris si elle est orthographique.
 
-`AovShader` pilote les AOV intégrés au path tracer MaterialX et permet de les afficher puis de les
-exporter. Il ne définit pas encore de sortie MaterialX arbitraire ; les backends raster et Disney
-n'exposent pas ces AOV.
+`AovShader` sélectionne les AOV intégrés. `CustomAovShader` définit une sortie nommée pour le path
+tracer MaterialX, par exemple :
+
+```js
+p = new Position(); p.space = "world";
+parts = new Separate3("ND_separate3_vector3"); parts.in = p.out;
+output = new CustomAovShader();
+output.name = "height";
+output.source = "scalar";
+output.scalar = parts.outy;
+await aov(output.out);
+```
+
+Le nom doit commencer par une lettre ASCII ou `_`, puis contenir au plus 63 lettres ASCII,
+chiffres, `_` ou `-`. Les sources admises sont :
+
+- `position` : connecter `position` à `Position` en espace `world` (trois composantes) ;
+- `scalar` : un float littéral, `Constant("float")` littéral, ou `Separate3("ND_separate3_vector3")`
+  connecté directement à `Position` en espace `world` (`outx`, `outy` ou `outz`) ;
+- `material_id` : indice numérique du matériau dans les buffers de la scène ;
+- `material_mask` : 1 si cet indice est égal à `materialId` (entier 0 à 16777215), sinon 0.
+
+Les autres graphes, espaces, connexions et entrées sans effet sont rejetés, sans approximation.
+Les indices de matériau sont locaux à la scène compilée et peuvent changer au rechargement ou après
+modification de la scène ; ce ne sont pas des identifiants persistants d'objet ou d'instance.
+Les valeurs sont prises au premier hit de surface visible après le test d'opacité, puis moyennées
+sur les hits ; les pixels sans hit valent zéro et ceux sans échantillon sont NaN au readback.
+Aux contours, un ID peut donc être fractionnaire et un masque donner une couverture partielle.
+Une seule sortie est accumulée à la fois (+16 octets/pixel), et changer sa définition relance
+l'accumulation. L'affichage est un aperçu linéaire borné à [0, 1], sans tonemapping ni conversion
+sRGB ; le PNG contient cet aperçu, le PFM conserve les valeurs flottantes brutes (1 canal pour les
+scalaires, 3 pour la position), au nom de l'AOV. Les AOV ne sont pas disponibles en raster ou Disney.
+Les expressions MaterialX arbitraires, textures, données d'instance et plusieurs sorties simultanées
+ne sont pas prises en charge.
 
 `LightFilterShader` propose les motifs cercle, rayures et grille, avec échelle, rotation et douceur
 réglables. Il ne prend en charge que les lumières spot du path tracer MaterialX ; le raster, Disney,
