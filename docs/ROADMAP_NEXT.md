@@ -24,20 +24,6 @@ outil de création : construire des scènes, explorer et documenter les nœuds,
 étendre MaterialX à de nouveaux types de shaders, exporter le résultat et
 continuer à optimiser le runtime livré au navigateur.
 
-## Priorité 14 : lookdev et projets
-
-- Comparaison A/B de deux matériaux en écran partagé.
-- Turntable (objet ou lumière) avec capture d'image ou de séquence.
-- Préréglages d'éclairage (HDRI de studio, extérieur, environnements de la
-  priorité 12).
-- Annuler/rétablir global sur la scène et les matériaux, au-delà de l'éditeur de
-  script.
-- Sauvegarde et réouverture d'un projet (scène, matériaux modifiés, réglages,
-  script) dans un seul fichier.
-
-**Critère d'aboutissement :** une session de lookdev se reprend à l'identique
-après fermeture du navigateur.
-
 ## Priorité 15 : opérations booléennes
 
 - Union, différence et intersection de maillages fermés via `manifold-3d`

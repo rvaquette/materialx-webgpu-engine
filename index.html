@@ -85,9 +85,10 @@
       .material-variant-renders { margin-block: 0.4em; }
       .material-variant-renders fieldset { border: 0; padding: 0; margin: 0.4em 0; }
       .material-variant-renders input { width: 4.5em; }
-      .material-variant-images { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
-      .material-variant-images figure { margin: 0; text-align: center; }
-      .material-variant-images canvas { display: block; max-width: 100%; height: auto; margin: auto; }
+      .material-variant-split { position: relative; width: min(100%, 1024px); }
+      .material-variant-split canvas { display: block; width: 100%; height: auto; }
+      .material-variant-split-overlay { position: absolute; inset: 0; }
+      .material-variant-images input[type="range"] { width: min(100%, 1024px); }
       .material-variant-comparison table { width: 100%; border-collapse: collapse; }
       .material-variant-comparison th, .material-variant-comparison td { padding: 4px; text-align: left; vertical-align: top; border-bottom: 1px solid #444d61; }
       #material-graph-details fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }
@@ -114,6 +115,8 @@
         <span class="activity-separator" aria-hidden="true"></span>
         <button id="open-material-library" type="button" aria-haspopup="dialog" hidden>Bibliothèque de matériaux</button>
         <button id="open-material-graph" type="button" hidden>Voir le graphe</button>
+        <button id="save-project" type="button" title="La scène de primitives et ses matériaux sans textures sont incorporés. Les dépendances du script ne sont pas enregistrées pour une réexécution." hidden>Enregistrer projet</button>
+        <button id="open-project" type="button" hidden>Ouvrir projet</button>
         <button id="export-diagnostics" type="button" hidden>Exporter les diagnostics</button>
       </nav>
       <!-- Dockable panels (src/ui/workbench.ts); their content waits in #panel-store until shown. -->
@@ -188,6 +191,7 @@
       </dialog>
     </div>
     <input id="local-scene-files" type="file" multiple hidden />
+    <input id="project-file" type="file" accept=".mxproject,application/json" hidden />
     <input id="local-scene-folder" type="file" webkitdirectory multiple hidden />
     <span id="pathtracing-spp" class="sr-only" aria-live="polite" hidden></span>
     <script type="module" src="/src/main.ts"></script>

@@ -29,6 +29,9 @@ import {
 } from '../../src/render/pathtracing/display.ts';
 import { PT_CONVERGENCE_UNIFORM_BYTES } from '../../src/render/pathtracing/convergence.ts';
 import type { ResolvedGraph } from '../../src/materialx/graph.ts';
+import type { SceneLight } from '../../src/usd/lights.ts';
+import { decodeProject, encodeProject, projectCamera, restoreCamera } from '../../src/project.ts';
+import { History } from '../../src/history.ts';
 
 vi.mock('../../src/render/usd-scene-assets.ts', async (original) => ({
   ...await original<typeof import('../../src/render/usd-scene-assets.ts')>(),
@@ -257,9 +260,10 @@ describe('interactive viewer resource lifecycle', () => {
 
   async function setup(
     environment = false, editable = false, backend: 'raster' | 'pathtracing' = 'raster',
-    orbitControls = true, options: SceneFixtureOptions = {},
+    orbitControls = true, options: SceneFixtureOptions = {}, lights: SceneLight[] = [],
   ) {
     const loaded = await sceneFixture(editable, options);
+    loaded.lights = lights;
     if (environment) {
       const image = { width: 4, height: 2, data: new Float32Array(24).fill(1) };
       loaded.environment = {
@@ -1108,6 +1112,86 @@ describe('interactive viewer resource lifecycle', () => {
     expect(device.createRenderPipeline).toHaveBeenCalledTimes(pipelines);
   });
 
+  it('restores edited graph topology and parameters from a JSON project snapshot', async () => {
+    const { viewer } = await setup(false, true);
+    const path = '/World/Ball';
+    await viewer.setObjectConstant(path, 's', 'specular_roughness', true);
+    await viewer.setObjectParameters(path, new Map([['surface:specular_roughness', [0.42]]]));
+    viewer.setObjectTransform(path, translation4(1, 2, 3));
+    viewer.setObjectVisible(path, false);
+    viewer.setExposure(2);
+    const snapshot = viewer.snapshotState();
+    const project = decodeProject(encodeProject({
+      format: 'materialx-webgpu-project', version: 1, script: 'ball = new Sphere();',
+      stage: { usda: '#usda 1.0', materials: [] }, overrides: [], materials: viewer.projectMaterials(),
+      scene: { time: snapshot.scene!.time, camera: projectCamera(snapshot.scene!.orbit),
+        transforms: [...snapshot.scene!.transforms].map(([key, matrix]) => [key, [...matrix]]),
+        visibility: [...snapshot.scene!.visibility], lights: [...snapshot.scene!.lights] },
+      settings: snapshot.settings, shaders: viewer.projectShaders, resolution: 128,
+      memoryBudget: null, objectPath: path,
+    }));
+    vi.mocked(loadUsdScene).mockImplementation(async () => sceneFixture(true));
+    await viewer.restoreState({ scene: { ...snapshot.scene!, time: project.scene.time,
+      orbit: restoreCamera(project.scene.camera, 1),
+      transforms: new Map(project.scene.transforms), visibility: new Map(project.scene.visibility),
+      lights: new Map(project.scene.lights), parameters: new Map() }, settings: project.settings });
+    expect(viewer.objectSurfaceGraph(path)?.nodes.has('specular_roughness_constant')).toBe(false);
+    await viewer.restoreProjectMaterials(project.materials);
+    expect(viewer.objectSurfaceGraph(path)?.nodes.has('specular_roughness_constant')).toBe(true);
+    expect(viewer.objectParameters(path, 'specular_roughness_constant')[0]?.value).toEqual([0.42]);
+    expect(viewer.snapshotState().scene?.transforms.get(path)).toEqual(translation4(1, 2, 3));
+    expect(viewer.snapshotState().scene?.visibility.get(path)).toBe(false);
+    expect(viewer.snapshotState().settings.exposure).toBe(2);
+  });
+
+  it('undoes and redoes material topology and scene overrides without reloading the scene', async () => {
+    const { viewer } = await setup(false, true);
+    const path = '/World/Ball';
+    const history = new History();
+    const read = () => {
+      const material = viewer.projectMaterial(path);
+      if (!material) throw new Error('Missing material');
+      return material;
+    };
+    await history.record('graph', read, material => viewer.restoreProjectMaterials([[path, material]]),
+      () => viewer.setObjectConstant(path, 's', 'specular_roughness', true));
+    await history.record('transform', () => viewer.snapshotState().scene?.transforms.get(path),
+      matrix => viewer.setObjectTransform(path, matrix), () => viewer.setObjectTransform(path, translation4(1, 2, 3)));
+    await history.undo();
+    expect(viewer.snapshotState().scene?.transforms.has(path)).toBe(false);
+    await history.undo();
+    expect(viewer.objectSurfaceGraph(path)?.nodes.has('specular_roughness_constant')).toBe(false);
+    await history.redo();
+    await history.redo();
+    expect(viewer.objectSurfaceGraph(path)?.nodes.has('specular_roughness_constant')).toBe(true);
+    expect(viewer.snapshotState().scene?.transforms.get(path)).toEqual(translation4(1, 2, 3));
+  });
+
+  it('restores visibility, light override fields, and scene-default exposure', async () => {
+    const light: SceneLight = {
+      path: '/Key', type: 'sphere', usdType: 'SphereLight', color: [1, 1, 1],
+      intensity: 1, exposure: 0, normalize: false, transform: translation4(1, 0, 0),
+    };
+    const { viewer } = await setup(false, true, 'raster', true, {}, [light]);
+    const history = new History();
+    viewer.setLight('/Key', { intensity: 7 });
+    await history.record('light', () => viewer.snapshotState().scene?.lights.get('/Key'),
+      value => { viewer.setLight('/Key'); if (value) viewer.setLight('/Key', value); },
+      () => viewer.setLight('/Key', { exposure: 2 }));
+    await history.record('visibility', () => viewer.snapshotState().scene?.visibility.get('/World/Ball'),
+      value => viewer.setObjectVisible('/World/Ball', value), () => viewer.setObjectVisible('/World/Ball', false));
+    await history.record('exposure', () => viewer.snapshotState().settings.exposure,
+      value => viewer.setExposure(value), () => viewer.setExposure(2));
+    await history.undo();
+    expect(viewer.snapshotState().settings.exposure).toBeUndefined();
+    await history.undo();
+    expect(viewer.snapshotState().scene?.visibility.has('/World/Ball')).toBe(false);
+    await history.undo();
+    expect(viewer.snapshotState().scene?.lights.get('/Key')).toEqual({ intensity: 7 });
+    await history.redo();
+    expect(viewer.snapshotState().scene?.lights.get('/Key')).toEqual({ intensity: 7, exposure: 2 });
+  });
+
   it('restores persisted A/B material snapshots after reloading the scene', async () => {
     const { viewer } = await setup(false, true);
     const path = '/World/Ball';
@@ -1166,6 +1250,57 @@ describe('interactive viewer resource lifecycle', () => {
     expect(viewer.objectMaterialVariants(path)).toEqual({ A: 'saved', B: 'active' });
     expect(loadUsdScene).toHaveBeenCalledTimes(loads);
     expect(loaded.mtlx.documents?.delete).not.toHaveBeenCalled();
+  });
+
+  it('captures A/B at the viewer resolution when requested', async () => {
+    const { viewer, device, loaded } = await setup(false, true);
+    Object.assign(device, { pushErrorScope: vi.fn(), popErrorScope: async () => null });
+    viewer.setObjectTransform('/World/Ball', [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 2, 0, 0, 1]);
+    const instances = [...loaded.resources.instances];
+    viewer.saveObjectMaterialVariant('/World/Ball', 'A');
+    viewer.saveObjectMaterialVariant('/World/Ball', 'B');
+    const pair = await viewer.captureObjectMaterialVariants('/World/Ball',
+      { backend: 'raster', fullResolution: true }, new AbortController().signal);
+    expect([pair.A.width, pair.A.height, pair.B.width, pair.B.height]).toEqual([512, 512, 512, 512]);
+    expect(loaded.resources.instances).toEqual(instances);
+  });
+
+  it('restores a pre-existing object transform after a temporary turntable', async () => {
+    const { viewer, loaded } = await setup(false, true);
+    const path = '/World/Ball';
+    const original = translation4(2, 3, 4);
+    viewer.setObjectTransform(path, original);
+    const turntable = viewer.turntable('object', path);
+    turntable.apply(90);
+    const rotated = loaded.resources.instances.find(instance => instance.id === path)!.transform;
+    expect(rotated[0]).toBeCloseTo(0);
+    expect(rotated.slice(12, 15)).toEqual([2, 3, 4]);
+    turntable.restore();
+    expect(loaded.resources.instances.find(instance => instance.id === path)!.transform).toEqual(original);
+    const next = viewer.turntable('object', path);
+    next.apply(0);
+    expect(loaded.resources.instances.find(instance => instance.id === path)!.transform).toEqual(original);
+    next.restore();
+    expect(() => viewer.turntable('light', '/missing')).toThrow();
+  });
+
+  it('restores the original light override after orbiting', async () => {
+    const light: SceneLight = {
+      path: '/Key', type: 'sphere', usdType: 'SphereLight', color: [1, 1, 1],
+      intensity: 1, exposure: 0, normalize: false, transform: translation4(1, 0, 0),
+    };
+    const { viewer } = await setup(false, true, 'raster', true, {}, [light]);
+    const original = translation4(3, 0, 0);
+    viewer.setLight('/Key', { intensity: 7, transform: original });
+    const setter = vi.spyOn(viewer, 'setLight');
+    const rotation = viewer.turntable('light', '/Key');
+    rotation.apply(90);
+    expect(setter.mock.calls.at(-1)![1]!.transform![14]).toBeCloseTo(-3);
+    rotation.restore();
+    const next = viewer.turntable('light', '/Key');
+    next.apply(0);
+    expect(setter.mock.calls.at(-1)![1]!.transform).toEqual(original);
+    next.restore();
   });
 
   it('isolates the selected material, bakes displacement and frames all transformed bounds', async () => {

@@ -1784,3 +1784,34 @@ automatiquement dans le menu Scripts.
 | Matériau en raster | Matériau en path tracing |
 |---|---|
 | ![Matériau procédural de démonstration en raster](images/p13/p13-baked-material-raster.png) | ![Matériau procédural de démonstration en path tracing](images/p13/p13-baked-material-pathtracing.png) |
+
+## Priorité 14 : lookdev et projets
+
+La comparaison A/B rend les deux variantes du même objet à pleine résolution,
+avec la même caméra et le même éclairage, puis permet de déplacer le séparateur
+sur une vue commune. Les préréglages studio, extérieur et dégradé produisent des
+environnements HDR procéduraux (pas des HDRI photographiques). Le turntable
+capture un PNG ou une séquence ZIP en path tracing, pour un objet tournant sur
+place ou une lumière orbitant autour de l'origine.
+
+L'historique global conserve jusqu'à 100 commandes et couvre les modifications
+éditables de matériaux, transformations, visibilités, lumières et réglages de
+rendu décrits dans [SCRIPTING.md](SCRIPTING.md). Il reste distinct de l'historique
+texte de CodeMirror ; les opérations continues ou non restaurables sont exclues
+et documentées.
+
+Le projet versionné `.mxproject` restaure en un seul fichier une scène de
+primitives produite par script, ses matériaux MaterialX intégrés et modifiés,
+le script éditable, la caméra, le temps et les réglages de rendu. L'import
+valide le contenu avant restauration. Pour éviter une sauvegarde incomplète,
+les scènes USD/glTF externes, textures et dépendances externes de script sont
+explicitement refusées ou signalées ; le détail du périmètre est dans
+[SCRIPTING.md](SCRIPTING.md).
+
+Le script d'illustration est
+[p14-lookdev-project.js](../examples/scripts/p14-lookdev-project.js) ; il apparaît
+automatiquement dans le menu Scripts.
+
+| Comparaison de matériaux en raster | Comparaison de matériaux en path tracing |
+|---|---|
+| ![Matériaux de lookdev en raster](images/p14/p14-lookdev-project-raster.png) | ![Matériaux de lookdev en path tracing](images/p14/p14-lookdev-project-pathtracing.png) |

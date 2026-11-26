@@ -11,6 +11,87 @@ l'agrandissent. La disposition est conservée d'une visite à l'autre.
 La liste complète des commandes, avec leurs arguments et valeurs de retour, est dans
 [SCRIPT_REFERENCE.md](SCRIPT_REFERENCE.md).
 
+## Enregistrer et rouvrir un projet
+
+Après exécution d'un script qui crée des primitives, **Enregistrer projet**
+télécharge un fichier JSON versionné `.mxproject`. **Ouvrir projet** restaure
+sans réexécuter le script son texte éditable, la scène et ses matériaux
+MaterialX incorporés, leurs modifications de graphe et de paramètres, les
+transformations, visibilités et lumières modifiées, le temps, la caméra, la
+résolution et les réglages de rendu, y compris environnement et post-traitement
+procéduraux. Le moteur et ses bibliothèques MaterialX standard restent nécessaires.
+
+La scène courante doit être une scène de primitives créée par script. Les scènes
+externes USD/glTF, les textures, inclusions MaterialX, couches USD externes,
+matériaux compilés et sélections de variantes USD ne sont pas pris en charge :
+la sauvegarde affiche une erreur au lieu de créer un projet incomplet.
+Le texte du script est conservé tel quel : ses éventuelles dépendances externes
+ne sont pas incorporées pour une **réexécution**, qui peut nécessiter ces fichiers.
+Les instantanés A/B, captures turntable, historique et échantillons accumulés ne
+font pas partie du projet. Une erreur d'ouverture est affichée ; si elle se
+produit pendant la reconstruction, recharger la scène précédente manuellement.
+
+## Annuler / rétablir
+
+Les boutons **Annuler** et **Rétablir** du panneau Rendu interactif conservent
+jusqu'à 100 commandes en mémoire. Ils couvrent les modifications des paramètres
+et graphes de matériaux éditables (y compris l'application de A/B), les
+transformations, visibilités et lumières modifiées par script, ainsi que les
+contrôles de rendu : moteur, qualité raster, environnement et préréglages,
+débruitage, échantillonnage adaptatif, AOV, limites, exposition, tonemapping,
+pause et historique temporel. Un nouveau changement après annulation efface
+la branche à rétablir. Une modification de matériau dont le graphe ne peut pas
+être capturé est refusée avec une erreur.
+
+Cet historique ne comprend pas le texte du script (Ctrl+Z reste celui de
+CodeMirror), les déplacements de caméra, la résolution, la profondeur, le
+temps ou la lecture d'animation, les variantes USD, les changements de scène
+ou d'assignation de matériau, ni les captures, comparaisons ou échantillons
+accumulés. Le chargement d'une scène ou d'un projet, une assignation, un
+changement de variante, de résolution, profondeur ou temps, le démarrage de
+l'animation, les réglages de rendu/environnement/post-traitement par script et
+la perte du GPU effacent l'historique pour éviter des restaurations incohérentes.
+Une pause ou reprise du rendu déclenchée par le script efface aussi l'historique.
+Le déplacement interactif de la caméra n'est pas enregistré ; une caméra
+changée par script efface l'historique. Ces commandes ne sont pas sauvegardées
+dans le projet. Si une opération ou une restauration échoue, l'erreur est
+affichée et l'historique est vidé : l'opération peut avoir partiellement modifié
+la scène et doit alors être vérifiée manuellement.
+
+## Éclairage et comparaison A/B
+
+Dans **Rendu interactif**, le menu Éclairage propose des environnements HDR
+procéduraux studio, extérieur et dégradé ; ce ne sont pas des HDRI
+photographiques. « Environnement de la scène » revient à l'environnement
+importé. Le choix d'un préréglage active Envmap et remplace l'environnement
+procédural précédemment activé par script ; les lumières de la scène restent
+actives.
+
+Dans le graphe du matériau d'un objet, enregistrer A et B puis ouvrir
+« Comparer les rendus A/B » produit deux instantanés à la résolution de rendu.
+Le curseur sépare A et B sur la même vue ; relancer la comparaison après une
+modification de scène ou de caméra. Le path tracing accepte de 1 à 64
+échantillons par pixel.
+
+## Turntable et capture
+
+Dans **Rendu interactif**, choisir **Path tracing**, puis ouvrir **Turntable /
+capture**. Sélectionner un objet ou une lumière de la scène, l'angle initial,
+le nombre d'images et les échantillons par image. « Capturer une image »
+télécharge un PNG à l'angle choisi ; « Capturer la séquence » télécharge un ZIP
+de PNG numérotés sur un tour complet, sans répéter la première image. La
+résolution et le cadrage sont ceux du viewer ; la vue path tracing sélectionnée
+est capturée. La rotation s'effectue autour de Y mondial : l'objet tourne autour
+de son origine et la lumière autour de l'origine du monde.
+Les dômes d'environnement ne sont pas proposés comme lumières turntable.
+
+La progression et les erreurs apparaissent dans le panneau. **Annuler la
+capture** interrompt le travail entre lots GPU ; aucune séquence partielle n'est
+téléchargée. Les transformations et les réglages de lumière préexistants sont
+restaurés même en cas d'erreur ou d'annulation. La lecture de l'animation est
+mise en pause ; relancez-la manuellement. La subdivision adaptative reste celle
+de la scène avant la capture ; elle est recalculée après restauration.
+
 ## Syntaxe
 
 ```js

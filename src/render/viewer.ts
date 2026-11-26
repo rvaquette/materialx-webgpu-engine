@@ -49,6 +49,7 @@ import { captureRgba, type RgbaCapture } from '../gpu/capture.ts';
 import { uploadMaterialImage, uploadMaterialImageArray } from '../gpu/material-texture.ts';
 import { packPtTextureArrays } from './pathtracing/texture-arrays.ts';
 import { OrbitCamera, attachOrbitControls } from '../scene/orbit-camera.ts';
+import { isStoredMaterialVariant, type StoredMaterialVariant } from './material-variant-snapshot.ts';
 import { inverse4, lookAt4, multiply4, perspective4, transformDirection, type Mat4, type Vec3 } from '../scene/transforms.ts';
 import { gprimToMesh, primitiveShapeOf } from '../scene/primitives.ts';
 import type { DiagnosticSink } from '../core/diagnostics.ts';
@@ -84,12 +85,13 @@ import {
   materialConstantSources, materialUniformData, packParameterUniforms, visibleMaterialParameters,
   type EditableInputNode, type MaterialGraphOutput, type MaterialParameter,
 } from './material-parameters.ts';
-import type { ResolvedGraph, ResolvedNode, ResolvedNodeDefRef } from '../materialx/graph.ts';
-import type { NormalizedSurfaceInput, ResolvedSurface } from '../materialx/surface-graph.ts';
+import type { ResolvedGraph, ResolvedNodeDefRef } from '../materialx/graph.ts';
+import type { ResolvedSurface } from '../materialx/surface-graph.ts';
 import { applySceneDisplacement } from './displacement.ts';
 import { extractDisplacement } from './graph-material-compiler.ts';
 import type { GeometryResource, InstanceResource, MaterialResource, SceneResources } from './scene-resources.ts';
 import { animateScene, isInvisible, type DeformedGeometry, type LightChanges } from './scene-animation.ts';
+import { turntableTransform, type TurntableTarget } from './turntable.ts';
 import { sampleAt, sceneTimeline, type SceneTimeline } from '../scene/time.ts';
 import type { PrimAttribute, SceneAsset } from '../scene/types.ts';
 import type { SceneCamera } from '../usd/cameras.ts';
@@ -187,31 +189,6 @@ function disneyEnvironmentRotation(lights: readonly SceneLight[]): number {
 
 export type BackendKind = 'raster' | 'pathtracing' | 'disney';
 export type MaterialVariantSlot = 'A' | 'B';
-
-interface StoredMaterialVariant {
-  version: 1;
-  graph: Omit<ResolvedGraph, 'nodes'> & { nodes: ResolvedNode[] };
-  surface: Omit<ResolvedSurface, 'inputs'> & { inputs: [string, NormalizedSurfaceInput][] };
-  parameters: readonly MaterialParameter[];
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null;
-}
-
-function isStoredMaterialVariant(value: unknown): value is StoredMaterialVariant {
-  if (!isRecord(value) || value.version !== 1 || !isRecord(value.graph) || !isRecord(value.surface)) return false;
-  const graph = value.graph;
-  const surface = value.surface;
-  return Array.isArray(graph.terminals)
-    && Array.isArray(graph.nodes)
-    && graph.nodes.every(node => isRecord(node) && typeof node.id === 'string' && Array.isArray(node.inputs))
-    && Array.isArray(surface.inputs)
-    && surface.inputs.every(input => Array.isArray(input) && typeof input[0] === 'string' && isRecord(input[1]))
-    && Array.isArray(value.parameters)
-    && value.parameters.every(parameter => isRecord(parameter) && typeof parameter.id === 'string'
-      && typeof parameter.input === 'string' && Array.isArray(parameter.value) && Array.isArray(parameter.initial));
-}
 
 function materialVariantStorageKey(sceneEntry: string, path: string, unitKey: string, slot: MaterialVariantSlot): string {
   return `materialx-webgpu:variant:v1:${encodeURIComponent(sceneEntry)}:${encodeURIComponent(path)}:${encodeURIComponent(unitKey)}:${slot}`;
@@ -656,6 +633,7 @@ export class InteractiveViewer {
         const changed = this.objectParameters(path).filter(parameter => parameter.value.some((value, i) => value !== parameter.initial[i]));
         if (changed.length) parameters.set(path, new Map(changed.map(parameter => [parameter.id, [...parameter.value]])));
       }
+
     }
     return {
       ...(this.#sceneEntry && this.#loaded ? { scene: {
@@ -673,10 +651,50 @@ export class InteractiveViewer {
     };
   }
 
+  /** Editable, GPU-independent material graphs for project persistence. */
+  projectMaterials(): Array<[string, StoredMaterialVariant]> {
+    return this.#objects.flatMap(({ path }) => {
+      const material = this.projectMaterial(path);
+      return material ? [[path, material]] : [];
+    });
+  }
+
+  projectMaterial(path: string): StoredMaterialVariant | undefined {
+    const material = this.#editableObjectMaterial(path);
+    if (!material?.surfaceGraph) return undefined;
+    if (!material.resolvedSurface || !material.parameters) {
+      throw new Error(`Le graphe de ${path} ne peut pas être enregistré comme matériau éditable.`);
+    }
+    return {
+      version: 1,
+      graph: { ...material.surfaceGraph, nodes: [...material.surfaceGraph.nodes.values()] },
+      surface: { ...material.resolvedSurface, inputs: [...material.resolvedSurface.inputs] },
+      parameters: material.parameters,
+    };
+  }
+
+  async restoreProjectMaterials(materials: ReadonlyArray<[string, StoredMaterialVariant]>): Promise<void> {
+    for (const [path, saved] of materials) {
+      if (!isStoredMaterialVariant(saved)) throw new Error(`Invalid project material: ${path}`);
+      await this.#editObjectGraph(path, material => compileEditableMaterial({
+        ...material,
+        surfaceGraph: { ...saved.graph, nodes: new Map(saved.graph.nodes.map(node => [node.id, node])) },
+        resolvedSurface: { ...saved.surface, inputs: new Map(saved.surface.inputs) },
+        parameters: saved.parameters,
+      }));
+    }
+  }
+
+  get projectShaders(): { environment?: EnvironmentShaderSettings; image?: ImageShaderSettings } {
+    return { ...(this.#environmentShader ? { environment: this.#environmentShader } : {}),
+      ...(this.#imageShader ? { image: this.#imageShader } : {}) };
+  }
+
   /** Reloads a snapshot taken on another viewer (typically after a device loss). */
   async restoreState(snapshot: ViewerSnapshot): Promise<void> {
     const settings = snapshot.settings;
     this.#backend = settings.backend;
+    this.#pathTracingDepthOverride = settings.depth;
     this.#rasterQuality = settings.rasterQuality;
     this.#pathTracingDenoise = settings.denoise;
     this.#pathTracingAdaptive = settings.adaptive;
@@ -918,7 +936,7 @@ export class InteractiveViewer {
   }
 
   async captureObjectMaterialVariants(
-    path: string, options: { backend: 'raster' } | { backend: 'pathtracing'; samples: number }, signal: AbortSignal,
+    path: string, options: ({ backend: 'raster' } | { backend: 'pathtracing'; samples: number }) & { fullResolution?: boolean }, signal: AbortSignal,
   ): Promise<Readonly<Record<MaterialVariantSlot, RgbaCapture>>> {
     const loaded = this.#loaded;
     const current = this.#current;
@@ -938,7 +956,7 @@ export class InteractiveViewer {
         throw new Error('La scène a changé pendant la comparaison.');
       }
     };
-    const scale = Math.min(1, 256 / Math.max(this.#width, this.#height));
+    const scale = options.fullResolution ? 1 : Math.min(1, 256 / Math.max(this.#width, this.#height));
     const width = Math.max(1, Math.round(this.#width * scale));
     const height = Math.max(1, Math.round(this.#height * scale));
     const exposure = this.#exposure ?? loaded.cameras[0]?.exposure ?? 0;
@@ -948,12 +966,36 @@ export class InteractiveViewer {
     const rasterQuality = this.#rasterQuality;
     const tonemap = this.#tonemap;
     const depth = this.#pathTracingDepthOverride;
+    const time = this.#time;
+    const environmentShader = this.#environmentShader;
+    const imageShader = this.#imageShader;
+    const animated = loaded.animation
+      ? animateScene(loaded.animation.source, time, loaded.resources, {
+        sink: this.#diagnosticSink(), meshFor: (scene, primPath) => meshSourceFromScene(scene).meshFor(primPath),
+      }) : undefined;
+    const transforms = new Map(animated?.transforms ?? this.#baseTransforms);
+    for (const [object, matrix] of this.#transformOverrides) transforms.set(object, matrix);
+    const hidden = new Set(animated?.hidden ?? loaded.resources.instances
+      .filter(instance => isInvisible(loaded.scene, instance.primPath)).map(instance => instance.id));
+    for (const [object, visible] of this.#visibilityOverrides) {
+      if (visible) hidden.delete(object);
+      else hidden.add(object);
+    }
+    const lights = (animated?.lights ?? loaded.lights).map(light => {
+      const changes = this.#lightOverrides.get(light.path);
+      return changes ? { ...light, ...changes } : light;
+    });
     const capture = async (material: MaterialResource): Promise<RgbaCapture> => {
       check();
       const materials = new Map(source.materials).set(key, material);
       const resources = await applySceneDisplacement({ ...source, materials }, loaded.mtlx.imageProvider, this.#device);
       check();
-      const candidate = { ...loaded, resources };
+      // applyDynamics replaces instances and geometry streams; the offscreen viewer must not
+      // mutate the source scene shared by the live viewer or the other variant.
+      const candidate = { ...loaded, resources: {
+        ...resources, instances: [...resources.instances],
+        geometries: new Map([...resources.geometries].map(([id, geometry]) => [id, { ...geometry }])),
+      } };
       delete candidate.compiled;
       const frame = buildSceneFrame(resources, {
         lights: candidate.lights, surfaceFor: candidate.mtlx.surfaceFor,
@@ -963,6 +1005,9 @@ export class InteractiveViewer {
       offscreen.#backend = options.backend;
       offscreen.#rasterQuality = rasterQuality;
       offscreen.#tonemap = tonemap;
+      offscreen.#environmentShader = environmentShader;
+      offscreen.#imageShader = imageShader;
+      offscreen.#time = time;
       try {
         // The temporary viewer owns only the GPU render set, not the shared MaterialX documents.
         const render = offscreen.#current = await offscreen.#buildSceneRender(candidate, frame, exposure, diagnostic => {
@@ -970,6 +1015,7 @@ export class InteractiveViewer {
           else if (diagnostic.level === 'warning') console.warn(diagnostic.message, diagnostic.detail ?? '');
         });
         check();
+        render.applyDynamics({ transforms, hidden, lights, geometry: animated?.deformed ?? new Map(), keepAccumulation: false, cameraChanged: false, materialsChanged: false });
         render.applyCamera(frameCamera.viewProj, frameCamera.eye, background);
         if (depth !== undefined) render.setPathTracingDepth(depth);
         return await captureRgba(this.#device, width, height, options.backend === 'pathtracing'
@@ -1565,11 +1611,11 @@ export class InteractiveViewer {
     this.#emitStatus();
   }
 
-  setExposure(value: number): void {
+  setExposure(value: number | undefined): void {
     if (value === this.#exposure) return;
     this.#clearDenoiserComparison();
     this.#exposure = value;
-    this.#current?.setExposure(value);
+    this.#current?.setExposure(value ?? this.#loaded?.cameras[0]?.exposure ?? 0);
     this.#ptDisplayDirty = true;
     this.#rasterDirty = true;
     this.#emitStatus();
@@ -2156,6 +2202,48 @@ export class InteractiveViewer {
     return (this.#loaded?.lights ?? []).map(light => ({ path: light.path, type: light.type }));
   }
 
+  /** Temporary turntable transform, preserving any existing script overrides. */
+  turntable(target: TurntableTarget, path: string): { apply: (degrees: number) => void; restore: () => void } {
+    const loaded = this.#loaded;
+    if (!loaded || !this.#current) throw new Error('Une scène chargée est requise.');
+    const animated = loaded.animation ? animateScene(loaded.animation.source, this.#time, loaded.resources, {
+      sink: this.#diagnosticSink(), meshFor: (scene, primPath) => meshSourceFromScene(scene).meshFor(primPath),
+    }) : undefined;
+    const light = (animated?.lights ?? loaded.lights).find(candidate => candidate.path === path);
+    if (target === 'light' && (light?.type === 'dome' || light?.type === 'unknown')) {
+      throw new Error('Cette lumière ne peut pas être animée par le turntable.');
+    }
+    const previousObject = this.#transformOverrides.get(path);
+    const previousLight = this.#lightOverrides.get(path);
+    const base = target === 'object'
+      ? previousObject ?? (animated?.transforms ?? this.#baseTransforms).get(path)
+      : previousLight?.transform ?? light?.transform;
+    if (!base) throw new Error(`${target === 'object' ? 'Objet' : 'Lumière'} introuvable : ${path}.`);
+    return {
+      apply: degrees => {
+        if (this.#loaded !== loaded || this.#disposed) throw new Error('La scène a changé pendant le turntable.');
+        const transform = turntableTransform(base, target, degrees);
+        if (target === 'object') {
+          this.#transformOverrides.set(path, transform);
+          this.#applyDynamicState(false);
+        }
+        else this.setLight(path, { transform });
+      },
+      restore: () => {
+        if (this.#loaded !== loaded || this.#disposed) return;
+        if (target === 'object') {
+          if (previousObject) this.#transformOverrides.set(path, previousObject);
+          else this.#transformOverrides.delete(path);
+        } else {
+          if (previousLight) this.#lightOverrides.set(path, previousLight);
+          else this.#lightOverrides.delete(path);
+        }
+        this.#applyDynamicState(false);
+        if (target === 'object') this.#scheduleCameraAdaptiveSubdivision();
+      },
+    };
+  }
+
   /** Changes a light; omit the changes to restore the scene's values. */
   setLight(path: string, changes?: LightChanges): void {
     if (!this.#loaded?.lights.some(light => light.path === path)) throw new Error(`Unknown light: ${path}`);
@@ -2326,14 +2414,14 @@ export class InteractiveViewer {
    * accumulated together; the scene is then restored to its current time.
    */
   async renderPathTraceTo(
-    targetView: GPUTextureView, samples: number, shutter?: { open: number; close: number; steps?: number },
+    targetView: GPUTextureView, samples: number, shutter?: { open: number; close: number; steps?: number }, check?: () => void,
   ): Promise<void> {
     const current = this.#current;
     if (!current) throw new Error('A loaded scene is required.');
     // On a canvas, the interactive loop is suspended and its accumulation restarts afterwards.
     this.#capturing++;
     try {
-      await this.#capturePathTrace(current, targetView, samples, shutter);
+      await this.#capturePathTrace(current, targetView, samples, shutter, check);
     } finally {
       this.#capturing--;
       if (this.#context && current === this.#current) {
@@ -2345,10 +2433,10 @@ export class InteractiveViewer {
   }
 
   async #capturePathTrace(
-    current: SceneRender, targetView: GPUTextureView, samples: number, shutter?: { open: number; close: number; steps?: number },
+    current: SceneRender, targetView: GPUTextureView, samples: number, shutter?: { open: number; close: number; steps?: number }, check?: () => void,
   ): Promise<void> {
     if (!shutter) {
-      await current.capturePathTrace(targetView, samples);
+      await current.capturePathTrace(targetView, samples, check);
       return;
     }
     if (!Number.isFinite(shutter.open) || !Number.isFinite(shutter.close) || shutter.close < shutter.open) {

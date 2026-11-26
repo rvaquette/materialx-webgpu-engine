@@ -886,6 +886,20 @@ describe('scripted primitives', () => {
 
     // The stage imports back with the scene's transforms (same matrix as transform()).
     const { importUsdaLayer } = await import('../../src/render/usd-scene-assets.ts');
+    const { encodeProject, decodeProject, projectCamera } = await import('../../src/project.ts');
+    const { OrbitCamera } = await import('../../src/scene/orbit-camera.ts');
+    const project = decodeProject(encodeProject({
+      format: 'materialx-webgpu-project', version: 1, script: 'ball = new Sphere();',
+      stage: { usda, materials: [...materials] }, overrides: [], materials: [],
+      scene: { time: 0, camera: projectCamera(OrbitCamera.fromEyeTarget([0, 0, 2], [0, 0, 0], 1)),
+        transforms: [], visibility: [], lights: [] },
+      settings: { backend: 'raster', rasterQuality: 'interactive', depth: undefined, denoise: false,
+        adaptive: false, view: 'beauty', limits: { stopOnConvergence: false, timeBudgetSeconds: 0, targetRelativeError: 0.1 },
+        environmentEnabled: true, paused: false, exposure: undefined, tonemap: 'acesFilmic', temporalHistory: 0 },
+      shaders: {}, resolution: 128, memoryBudget: null, objectPath: '/World/ball',
+    }));
+    const reopened = await importUsdaLayer('mem:/scene.usda', project.stage.usda, new Map(project.stage.materials));
+    expect(reopened.scene.materials.every(material => reopened.materialTexts.has(material.assetPath))).toBe(true);
     const { computeWorldTransforms } = await import('../../src/scene/transforms.ts');
     const imported = await importUsdaLayer('mem:/scene.usda', usda, materials);
     expect(imported.scene.materials.map(material => material.materialName)).toEqual(['surface_material']);

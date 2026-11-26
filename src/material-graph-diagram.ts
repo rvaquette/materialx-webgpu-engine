@@ -198,6 +198,7 @@ function materialPreview(dialog: HTMLDialogElement) {
 const materialPreviews = new WeakMap<HTMLDialogElement, ReturnType<typeof materialPreview>>();
 
 function variantRenderComparison(dialog: HTMLDialogElement, capture: NonNullable<GraphParameterEditing['captureVariants']>) {
+  let active: AbortController | undefined;
   const section = document.createElement('details');
   section.className = 'material-variant-renders';
   const summary = document.createElement('summary');
@@ -216,7 +217,7 @@ function variantRenderComparison(dialog: HTMLDialogElement, capture: NonNullable
   samplesLabel.hidden = true;
   mode.onchange = () => { samplesLabel.hidden = samples.disabled = mode.value !== 'pathtracing'; };
   const button = document.createElement('button');
-  button.textContent = 'Générer les aperçus';
+  button.textContent = 'Générer la comparaison';
   controls.append(modeLabel, ' ', samplesLabel, ' ', button);
   form.append(controls);
   const status = document.createElement('p');
@@ -227,19 +228,20 @@ function variantRenderComparison(dialog: HTMLDialogElement, capture: NonNullable
   form.onsubmit = async event => {
     event.preventDefault();
     if (controls.disabled) return;
-    const options = samples.disabled ? { backend: 'raster' as const }
-      : { backend: 'pathtracing' as const, samples: samples.valueAsNumber };
+    const options = samples.disabled ? { backend: 'raster' as const, fullResolution: true }
+      : { backend: 'pathtracing' as const, samples: samples.valueAsNumber, fullResolution: true };
     const controller = new AbortController();
+    active = controller;
     const abort = () => controller.abort();
     const isCurrent = () => dialog.open && section.isConnected && !controller.signal.aborted;
     dialog.addEventListener('close', abort, { once: true });
     controls.disabled = true;
     images.replaceChildren();
-    status.textContent = 'Calcul des deux aperçus…';
+    status.textContent = 'Calcul des deux rendus…';
     try {
       const pair = await capture(options, controller.signal);
       if (!isCurrent()) return;
-      const figures = (['A', 'B'] as const).map(slot => {
+      const canvases = (['A', 'B'] as const).map(slot => {
         const { width, height, rgba } = pair[slot];
         const canvas = document.createElement('canvas');
         canvas.width = width;
@@ -251,25 +253,37 @@ function variantRenderComparison(dialog: HTMLDialogElement, capture: NonNullable
         const pixels = context.createImageData(width, height);
         pixels.data.set(rgba);
         context.putImageData(pixels, 0, 0);
-        const figure = document.createElement('figure');
-        const caption = document.createElement('figcaption');
-        caption.textContent = `Variante ${slot}`;
-        figure.append(canvas, caption);
-        return figure;
+        return canvas;
       });
-      images.replaceChildren(...figures);
+      const split = document.createElement('div');
+      split.className = 'material-variant-split';
+      const overlay = document.createElement('div');
+      overlay.className = 'material-variant-split-overlay';
+      overlay.append(canvases[0]!);
+      split.append(canvases[1]!, overlay);
+      const slider = document.createElement('input');
+      Object.assign(slider, { type: 'range', min: '0', max: '100', value: '50' });
+      slider.setAttribute('aria-label', 'Séparation des variantes A et B');
+      const update = () => { overlay.style.clipPath = `inset(0 ${100 - Number(slider.value)}% 0 0)`; };
+      slider.addEventListener('input', update);
+      update();
+      const caption = document.createElement('p');
+      caption.textContent = 'A à gauche · B à droite (instantané)';
+      images.replaceChildren(split, slider, caption);
       const engine = options.backend === 'raster' ? 'Raster' : `Path tracing · ${options.samples} échantillon(s) par pixel`;
       status.textContent = `${engine} · ${pair.A.width} × ${pair.A.height}`;
     } catch (error) {
       if (isCurrent()) status.textContent = `Comparaison impossible : ${error instanceof Error ? error.message : String(error)}`;
     } finally {
       dialog.removeEventListener('close', abort);
+      if (active === controller) active = undefined;
       controls.disabled = false;
     }
   };
   return {
     section,
     invalidate() {
+      active?.abort();
       images.replaceChildren();
       status.textContent = '';
     },

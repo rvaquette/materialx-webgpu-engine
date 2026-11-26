@@ -25,6 +25,7 @@ vi.mock('../src/viewer-ui.ts', () => ({
 vi.mock('../src/render/viewer.ts', () => ({
   InteractiveViewer: class {
     objects = [];
+    lights = [];
     variantSets = [];
     timeline = undefined;
     constructor(options: { onStatus: (status: ViewerStatus) => void; onShaderErrors: (errors: readonly ShaderCompilationError[]) => void }) {
@@ -280,6 +281,7 @@ describe('viewer loading indicator', () => {
     await import('../src/main.ts');
     await settle();
     state.actions!.adaptive(true);
+    await settle();
     expect(state.adaptive).toHaveBeenLastCalledWith(true);
     emit('ready', 'pathtracing', 80, false, true);
     expect(spp.textContent).toBe('80 balayages');
@@ -309,9 +311,11 @@ describe('viewer loading indicator', () => {
     await settle();
     expect(state.ui?.environmentEnabled).toBe(true);
     state.actions!.environment(false);
+    await settle();
     expect(state.environment).toHaveBeenLastCalledWith(false);
     expect(state.ui?.environmentEnabled).toBe(false);
     state.actions!.environment(true);
+    await settle();
     expect(state.environment).toHaveBeenLastCalledWith(true);
     expect(state.ui?.environmentEnabled).toBe(true);
   });

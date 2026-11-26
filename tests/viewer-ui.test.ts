@@ -44,7 +44,7 @@ vi.mock('@mori2003/jsimgui', () => ({
       value[0] = !value[0];
       return true;
     }),
-    CollapsingHeader: () => controls.header, DestroyContext: vi.fn(),
+    CollapsingHeader: vi.fn(() => controls.header), DestroyContext: vi.fn(),
     PushID: vi.fn(), PopID: vi.fn(), SliderFloat: () => false,
     ColorEdit3: vi.fn((_label: string, value: [number, number, number]) => {
       if (!controls.color) return false;
@@ -76,6 +76,25 @@ afterEach(() => {
 });
 
 describe('ImGui material parameter editing', () => {
+  it('exposes history controls with their availability and command labels', async () => {
+    const f = fixture();
+    f.state.history = { undo: 'Paramètres du matériau', busy: false };
+    f.actions.undo = vi.fn();
+    f.actions.redo = vi.fn();
+    vi.mocked(ImGui.Button).mockImplementation(label => label === 'Annuler');
+    const stop = await startViewerUi(f.canvas, f.state, f.actions, f.parameters);
+    try {
+      f.render();
+      expect(f.actions.undo).toHaveBeenCalled();
+      expect(f.actions.redo).not.toHaveBeenCalled();
+      expect(ImGui.SetItemTooltip).toHaveBeenCalledWith('Paramètres du matériau');
+      expect(ImGui.BeginDisabled).toHaveBeenCalledWith(true);
+    } finally {
+      vi.mocked(ImGui.Button).mockImplementation(() => false);
+      stop();
+    }
+  });
+
   it('sends color picker edits as linear uniform values', async () => {
     vi.useFakeTimers();
     const parameter: MaterialParameter = {
@@ -88,6 +107,50 @@ describe('ImGui material parameter editing', () => {
     editor.draw();
     await vi.advanceTimersByTimeAsync(0);
     expect(apply).toHaveBeenCalledWith(new Map([['tint', [expect.closeTo(0.214041), 1, 0]]]));
+  });
+
+  describe('lookdev lighting controls', () => {
+    it('dispatches a preset or restores the scene environment', async () => {
+      const f = fixture();
+      f.actions.lightingPreset = vi.fn();
+      const stop = await startViewerUi(f.canvas, f.state, f.actions, f.parameters);
+      try {
+        controls.selection = 'Studio procédural HDR##studio';
+        f.render();
+        expect(f.actions.lightingPreset).toHaveBeenLastCalledWith('studio');
+        controls.selection = 'Environnement de la scène##scene';
+        f.render();
+        expect(f.actions.lightingPreset).toHaveBeenLastCalledWith('scene');
+      } finally { stop(); }
+    });
+  });
+
+  it('starts a turntable sequence for the chosen light and allows cancellation while busy', async () => {
+    const f = fixture();
+    f.state.backend = 'pathtracing';
+    f.state.turntable = { lights: [{ path: '/Key', type: 'sphere' }], running: false, message: '' };
+    f.actions.turntable = vi.fn();
+    f.actions.cancelTurntable = vi.fn();
+    vi.mocked(ImGui.CollapsingHeader).mockImplementation(label => label === 'Turntable / capture');
+    const stop = await startViewerUi(f.canvas, f.state, f.actions, f.parameters);
+    try {
+      controls.selection = 'Lumière##light';
+      f.render();
+      vi.mocked(ImGui.Button).mockImplementation(label => label === 'Capturer la séquence (ZIP)');
+      f.render();
+      expect(vi.mocked(ImGui.Button).mock.calls.map(call => call[0])).toContain('Capturer la séquence (ZIP)');
+      expect(f.actions.turntable).toHaveBeenCalledWith({ target: 'light', path: '/Key', angle: 0, frames: 12, samples: 16 });
+      f.state.busy = true;
+      f.state.turntable.running = true;
+      f.state.turntable.message = 'Capture turntable : 1 / 12 images.';
+      vi.mocked(ImGui.Button).mockImplementation(label => label === 'Annuler la capture');
+      f.render();
+      expect(ImGui.TextWrapped).toHaveBeenCalledWith('Capture turntable : 1 / 12 images.');
+      expect(f.actions.cancelTurntable).toHaveBeenCalledOnce();
+    } finally {
+      vi.mocked(ImGui.CollapsingHeader).mockImplementation(() => controls.header);
+      stop();
+    }
   });
 
   it('coalesces edits and cancels pending rebuilds when the selected object changes', async () => {

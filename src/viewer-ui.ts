@@ -4,6 +4,8 @@ import type { RasterQuality } from './render/raster/ir-forward.ts';
 import type { MaterialParameterEditor } from './material-parameter-editor.ts';
 import type { MaterialFolder } from './scene/material-tree.ts';
 import { PATH_TRACE_VIEWS, type PathTraceView } from './render/pathtracing/display.ts';
+import type { LightingPreset } from './render/lighting-presets.ts';
+import type { TurntableTarget } from './render/turntable.ts';
 
 export interface ViewerUiState {
   entry: string;
@@ -27,6 +29,8 @@ export interface ViewerUiState {
   materialFolderPath: string[];
   materialTree: MaterialFolder;
   materialPath: string;
+  history?: { undo?: string; redo?: string; notice?: string; busy: boolean };
+  turntable?: { lights: ReadonlyArray<{ path: string; type: string }>; running: boolean; message: string };
   /** Present when the scene has a time range or variant sets. */
   animation?: ViewerUiAnimation | undefined;
 }
@@ -40,12 +44,17 @@ export interface ViewerUiAnimation {
 }
 
 export interface ViewerUiActions {
+  undo?: () => void;
+  redo?: () => void;
   scene: (entry: string) => void;
   resolution: (size: number | '1024x768') => void;
   pathTracingDepth: (depth: number) => void;
   quality: (quality: RasterQuality) => void;
   backend: (backend: BackendKind) => void;
   environment: (enabled: boolean) => void;
+  lightingPreset?: (preset: LightingPreset | 'scene') => void;
+  turntable?: (options: { target: TurntableTarget; path: string; angle: number; frames: number; samples: number }) => void;
+  cancelTurntable?: () => void;
   denoise: (enabled: boolean) => void;
   compareDenoiser: (enabled: boolean) => void;
   adaptive: (enabled: boolean) => void;
@@ -147,6 +156,11 @@ export async function startViewerUi(
   const detachInput = attachPointerInput(canvas, enableTouch);
   let stopped = false;
   let frame = 0;
+  let turntableTarget: TurntableTarget = 'object';
+  let turntablePath = '';
+  let turntableAngle = 0;
+  let turntableFrames = 12;
+  let turntableSamples = 16;
   const render = (): void => {
     if (stopped) return;
     try {
@@ -162,6 +176,18 @@ export async function startViewerUi(
       ImGui.SetNextWindowSize(new ImVec2(canvas.clientWidth, canvas.clientHeight));
       if (ImGui.Begin('MaterialX', undefined, ImGuiWindowFlags.NoMove | ImGuiWindowFlags.NoResize | ImGuiWindowFlags.NoCollapse | ImGuiWindowFlags.NoSavedSettings)) {
         ImGui.BeginDisabled(state.busy);
+        if (state.history) {
+          ImGui.BeginDisabled(state.history.busy || !state.history.undo);
+          if (ImGui.Button('Annuler')) actions.undo?.();
+          ImGui.SetItemTooltip(state.history.undo ?? 'Aucune opération à annuler');
+          ImGui.EndDisabled();
+          ImGui.SameLine();
+          ImGui.BeginDisabled(state.history.busy || !state.history.redo);
+          if (ImGui.Button('Rétablir')) actions.redo?.();
+          ImGui.SetItemTooltip(state.history.redo ?? 'Aucune opération à rétablir');
+          ImGui.EndDisabled();
+          ImGui.TextWrapped(state.history.notice ?? 'Historique limité : voir Scripts de matériaux > Annuler / rétablir.');
+        }
         ImGui.SeparatorText('Scene');
         combo('##scene', state.entry, state.scenes.map(scene => ({ label: scene.label, value: scene.entry })), actions.scene, true);
         ImGui.SeparatorText('Rendu');
@@ -197,6 +223,18 @@ export async function startViewerUi(
         ImGui.BeginDisabled(state.backend === 'disney');
         if (ImGui.Checkbox('Denoiser JS (neural)', denoise)) actions.denoise(denoise[0]);
         ImGui.EndDisabled();
+        if (actions.lightingPreset) {
+          ImGui.Text('Éclairage');
+          combo('##lighting-preset', '', [
+            { label: 'Choisir un éclairage…', value: '' },
+            { label: 'Environnement de la scène', value: 'scene' },
+            { label: 'Studio procédural HDR', value: 'studio' },
+            { label: 'Extérieur procédural HDR', value: 'exterior' },
+            { label: 'Dégradé procédural HDR', value: 'gradient' },
+          ], value => {
+            if (value === 'scene' || value === 'studio' || value === 'exterior' || value === 'gradient') actions.lightingPreset?.(value);
+          });
+        }
         if (state.backend === 'pathtracing' && state.status?.pathTracer === 'ready') {
           const comparing = state.status.denoiserComparison === true;
           const canCompare = comparing || (state.status.pathTracingPaused && state.status.pathTracingDenoise
@@ -359,6 +397,29 @@ export async function startViewerUi(
             ], value => { if (value && value !== variantSet.selection) actions.variant?.(variantSet.path, variantSet.set, value); });
           }
         }
+        if (state.turntable && actions.turntable && ImGui.CollapsingHeader('Turntable / capture')) {
+          combo('##turntable-target', turntableTarget, [
+            { label: 'Objet', value: 'object' }, { label: 'Lumière', value: 'light' },
+          ], value => { turntableTarget = value as TurntableTarget; turntablePath = ''; });
+          const targets = turntableTarget === 'object' ? state.objects : state.turntable.lights;
+          if (!targets.some(item => item.path === turntablePath)) turntablePath = targets[0]?.path ?? '';
+          combo('##turntable-path', turntablePath, targets.map(item => ({ label: item.path, value: item.path })),
+            value => { turntablePath = value; });
+          combo('##turntable-angle', String(turntableAngle), [0, 45, 90, 135, 180, 225, 270, 315]
+            .map(value => ({ label: `Angle initial : ${value}°`, value: String(value) })), value => { turntableAngle = Number(value); });
+          combo('##turntable-frames', String(turntableFrames), [8, 12, 24, 36]
+            .map(value => ({ label: `Séquence : ${value} images`, value: String(value) })), value => { turntableFrames = Number(value); });
+          combo('##turntable-samples', String(turntableSamples), [1, 4, 16, 64, 256]
+            .map(value => ({ label: `${value} échantillons / image`, value: String(value) })), value => { turntableSamples = Number(value); });
+          ImGui.TextWrapped('Capture path tracing ; rotation Y, scène restaurée après capture.');
+          ImGui.BeginDisabled(!turntablePath || state.backend !== 'pathtracing');
+          const start = (frames: number): void => actions.turntable?.({
+            target: turntableTarget, path: turntablePath, angle: turntableAngle, frames, samples: turntableSamples,
+          });
+          if (ImGui.Button('Capturer une image')) start(1);
+          if (ImGui.Button('Capturer la séquence (ZIP)')) start(turntableFrames);
+          ImGui.EndDisabled();
+        }
         if (ImGui.CollapsingHeader('Materiaux')) {
           ImGui.BeginDisabled(!state.objects.length);
           combo('##object', state.objectPath, state.objects.map(object => ({
@@ -384,6 +445,8 @@ export async function startViewerUi(
           ImGui.EndDisabled();
         }
         ImGui.EndDisabled();
+        if (state.turntable?.message) ImGui.TextWrapped(state.turntable.message);
+        if (state.turntable?.running && ImGui.Button('Annuler la capture')) actions.cancelTurntable?.();
       }
       ImGui.End();
       ImGuiImplWeb.EndRender();
