@@ -701,9 +701,11 @@ async function renderUsdRasterOnDevice(
   for (const [key, material] of resources.materials) {
     const group = material.sceneShader?.displacementGroup;
     if (group === undefined || !material.displacement) continue;
-    const map = await imageProvider.decode(material.displacement.file);
+    const file = material.displacement.file;
+    if (!file) throw new Error(`Raster displacement material '${key}' requires a height-map file.`);
+    const map = await imageProvider.decode(file);
     if (!map) {
-      line(`diag displacement map introuvable: ${material.displacement.file}`);
+      line(`diag displacement map introuvable: ${file}`);
       continue;
     }
     const dispTex = device.createTexture({
@@ -720,7 +722,7 @@ async function renderUsdRasterOnDevice(
       textureView: dispTex.createView(),
       sampler: device.createSampler({ addressModeU: 'repeat', addressModeV: 'repeat', magFilter: 'linear', minFilter: 'linear' }),
     });
-    line(`diag displacement raster ${map.width}x${map.height} map=${material.displacement.file} scale=${(material.displacement.scale * dispMul).toFixed(4)}`);
+    line(`diag displacement raster ${map.width}x${map.height} map=${file} scale=${(material.displacement.scale * dispMul).toFixed(4)}`);
   }
 
   const hdrTexture = device.createTexture({

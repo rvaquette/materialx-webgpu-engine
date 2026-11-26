@@ -916,12 +916,32 @@ function reachableNodes(material: MaterialResource): Set<string> {
   const surface = material.resolvedSurface!;
   const pending = [surface.nodeId, ...(surface.backNodeId ? [surface.backNodeId] : [])];
   for (const input of surface.inputs.values()) if (input.source.kind === 'connection') pending.push(input.source.nodeId);
+  for (const terminal of graph.terminals) {
+    if (terminal.name === 'displacementshader' && terminal.nodeId) pending.push(terminal.nodeId);
+  }
   const seen = new Set<string>();
   while (pending.length) {
     const id = pending.pop()!;
     if (seen.has(id)) continue;
     seen.add(id);
     for (const input of graph.nodes.get(id)?.inputs ?? []) if (input.source.kind === 'connection') pending.push(input.source.nodeId);
+  }
+  return seen;
+}
+
+function reachableDisplacementNodes(material: MaterialResource): Set<string> {
+  const graph = material.surfaceGraph!;
+  const pending = graph.terminals
+    .filter(terminal => terminal.name === 'displacementshader' && terminal.nodeId)
+    .map(terminal => terminal.nodeId!);
+  const seen = new Set<string>();
+  while (pending.length) {
+    const id = pending.pop()!;
+    if (seen.has(id)) continue;
+    seen.add(id);
+    for (const input of graph.nodes.get(id)?.inputs ?? []) {
+      if (input.source.kind === 'connection') pending.push(input.source.nodeId);
+    }
   }
   return seen;
 }
@@ -1050,15 +1070,16 @@ function parameterizeMaterial(material: MaterialResource, policy: ParameterPolic
         }
       }
     }
-    // Scene clock: a uniform per time/frame node reaching the surface, updated by setTime.
+    // Scene clock: time/frame nodes drive surface uniforms or displacement rebuilds.
     const surfaceNodes = reachableNodes(material);
+    const displacementNodes = reachableDisplacementNodes(material);
     for (const [nodeId, node] of graphNodes) {
       if (!CLOCK_CATEGORIES.has(node.category) || !surfaceNodes.has(nodeId)
         || node.inputs.some(input => input.name === CLOCK_INPUT)) continue;
       const uniform = `parameter_${parameters.length}`;
       parameters.push({
         id: `clock:${nodeId}`, label: `${nodeId} / time code`, type: 'float', value: [0], initial: [0],
-        update: 'uniform', uniform, nodeId, input: CLOCK_INPUT, clock: true,
+        update: displacementNodes.has(nodeId) ? 'rebuild' : 'uniform', uniform, nodeId, input: CLOCK_INPUT, clock: true,
       });
       graphNodes.set(nodeId, { ...node, inputs: [...node.inputs, {
         name: CLOCK_INPUT, type: 'float', source: { kind: 'value', type: 'float', value: '0' }, parameter: uniform,

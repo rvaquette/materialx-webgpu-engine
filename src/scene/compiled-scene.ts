@@ -87,7 +87,10 @@ export async function exportCompiledScene(
       for (const texture of material.surfaceModule?.textures ?? []) {
         if (texture.fileRef !== undefined) files.add(texture.fileRef);
       }
-      if (material.displacement) files.add(material.displacement.file);
+      if (material.displacement?.file) files.add(material.displacement.file);
+      for (const texture of material.displacement?.program?.ir.textures ?? []) {
+        if (texture.fileRef) files.add(texture.fileRef);
+      }
     }
   }
   if (pathTrace.displacement) files.add(pathTrace.displacement.mapFile);
@@ -191,7 +194,10 @@ async function boundMaterial(
     .filter((file): file is string => file !== undefined));
   for (const candidate of [material, loaded.resources.materials.get(key!)]) {
     for (const texture of candidate?.surfaceModule?.textures ?? []) if (texture.fileRef !== undefined) files.add(texture.fileRef);
-    if (candidate?.displacement) files.add(candidate.displacement.file);
+    if (candidate?.displacement?.file) files.add(candidate.displacement.file);
+    for (const texture of candidate?.displacement?.program?.ir.textures ?? []) {
+      if (texture.fileRef) files.add(texture.fileRef);
+    }
   }
   return { material, files };
 }
@@ -672,7 +678,14 @@ function validateMaterialData(value: unknown): asserts value is CompiledMaterial
     if (!isRecord(texture) || (texture.fileRef !== undefined && (typeof texture.fileRef !== 'string' ||
         !value.images.has(texture.fileRef)))) fail('material texture');
   }
-  if (isRecord(material.displacement) && !value.images.has(String(material.displacement.file))) fail('displacement texture');
+  if (isRecord(material.displacement) && typeof material.displacement.file === 'string'
+      && !value.images.has(material.displacement.file)) fail('displacement texture');
+  const displacementIr = isRecord(material.displacement) && isRecord(material.displacement.program)
+    && isRecord(material.displacement.program.ir) ? material.displacement.program.ir : undefined;
+  for (const texture of displacementIr && Array.isArray(displacementIr.textures) ? displacementIr.textures : []) {
+    if (!isRecord(texture) || (texture.fileRef !== undefined && (typeof texture.fileRef !== 'string'
+        || !value.images.has(texture.fileRef)))) fail('displacement texture');
+  }
 }
 
 function validateExternalImages(images: Map<unknown, unknown>): void {

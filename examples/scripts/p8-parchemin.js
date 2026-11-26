@@ -1,6 +1,4 @@
-// Priorité 8 : parchemin enroulé (primitive déformée, matériau procédural) — docs/ROADMAP_DONE.md.
-// Une feuille plane subdivisée dont les deux extrémités sont enroulées par une
-// déformation des sommets (deform), avec un matériau procédural de vieux parchemin aux bords abîmés.
+// Priorité 8/9 : parchemin enroulé par un displacementshader vectoriel MaterialX.
 // npm run script -- examples/scripts/p8-parchemin.js --out renders/validation/p8-parchemin --timeout 1800000
 
 const mobile = capabilities()?.mobile === true;
@@ -48,27 +46,46 @@ parchment.specular = 0.25;
 parchment.specular_roughness = 0.8;
 parchment.thin_walled = true;
 
+// Reproduire les enroulements comme déplacement vectoriel, pas avec `sheet.deform`.
+// Le vecteur MaterialX est exprimé dans la base tangent/bitangent/normale du maillage.
+position = new Position();
+position.space = "object";
+coordinates = new Separate3("ND_separate3_vector3");
+coordinates.in = position.out;
+x = coordinates.outx;
+y = coordinates.outy;
+z = coordinates.outz;
+const flat = 0.72, r0 = 0.075, shrink = 0.05;
+s = Math.abs(x) - flat;
+side = Math.sign(x);
+theta = (1 - Math.sqrt(Math.max(0, 1 - 2 * shrink * s / r0))) / shrink;
+r = r0 * (1 - shrink * theta);
+sag = 0.004 * (1 + Math.sin(z * 9) * Math.cos(x * 3));
+rolledX = side * (flat + r * Math.sin(theta));
+rolledY = r0 - r * Math.cos(theta) + sag;
+targetX = s > 0 ? rolledX : x;
+targetY = s > 0 ? rolledY : sag;
+offsetX = targetX - x;
+offsetY = targetY - y;
+offset = new Combine3("vector3");
+offset.in1 = offsetX;
+offset.in2 = 0;
+offset.in3 = offsetY;
+displacement = new Displacement("ND_displacement_vector3");
+displacement.displacement = offset.out;
+displacement.scale = 1;
+
+parchmentMaterial = new Surfacematerial();
+parchmentMaterial.surfaceshader = parchment;
+parchmentMaterial.displacementshader = displacement;
+
 table = new StandardSurface();
 table.base_color = [0.16, 0.09, 0.05];
 table.specular_roughness = 0.35;
 
 // --- Géométrie ----------------------------------------------------------------
 const width = 2.4, length = 1.5;
-// Partie plane au centre ; au-delà, la feuille s'enroule vers le haut et vers l'intérieur en
-// spirale (rayon r0 décroissant), ce qui conserve sa longueur.
-const flat = 0.72, r0 = 0.075, shrink = 0.05;
-sheet = new Plane({ width, length, resolution: 240, material: parchment });
-sheet.deform = (p, uv, n) => {
-  const side = Math.sign(p[0]);
-  const s = Math.abs(p[0]) - flat;
-  // Ondulation légère du papier, toujours au-dessus de la table.
-  const sag = 0.004 * (1 + Math.sin(p[2] * 9) * Math.cos(p[0] * 3));
-  if (s <= 0) return [p[0], sag, p[2]];
-  // Angle parcouru pour une longueur s sur une spirale r = r0 (1 - shrink θ).
-  const theta = (1 - Math.sqrt(Math.max(0, 1 - 2 * shrink * s / r0))) / shrink;
-  const r = r0 * (1 - shrink * theta);
-  return [side * (flat + r * Math.sin(theta)), r0 - r * Math.cos(theta) + sag, p[2]];
-};
+sheet = new Plane({ width, length, resolution: 240, material: parchmentMaterial });
 sheet.translate = [0, 0.005, 0];
 
 desk = new Plane({ width: 8, length: 8, material: table });

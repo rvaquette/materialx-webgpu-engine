@@ -526,6 +526,25 @@ describe('dynamic MaterialX parameters', () => {
     materials.set(instance.materialKey!, changeMaterialParameters(updated, new Map([[scale.id, scale.initial]])));
     expect(z(await applySceneDisplacement({ ...resources, materials }, provider))).toBeCloseTo(0.05);
   });
+  it('marks scene-clock nodes driving displacement for geometry rebuilds', async () => {
+    const resources = await fixture(true, graph => {
+      graph.nodes.set('clock', {
+        id: 'clock', category: 'time', type: 'float',
+        inputs: [{ name: 'fps', type: 'float', source: { kind: 'value', type: 'float', value: '24' },
+          provenance: { namePath: '/clock/fps' } }],
+        provenance: { namePath: '/clock' },
+      });
+      const displacement = graph.nodes.get('disp')!;
+      graph.nodes.set('disp', {
+        ...displacement,
+        inputs: displacement.inputs.map(input => input.name === 'displacement'
+          ? { ...input, source: { kind: 'connection' as const, nodeId: 'clock' } } : input),
+      });
+    });
+    const material = [...resources.materials.values()][0]!;
+    const clock = material.parameters?.find(parameter => parameter.clock);
+    expect(clock).toMatchObject({ update: 'rebuild', nodeId: 'clock' });
+  });
   it('refreshes displacement when its height source is rewired or removed', async () => {
     const resources = await fixture(true, graph => {
       const height = graph.nodes.get('height')!;

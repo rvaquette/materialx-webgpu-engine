@@ -776,6 +776,18 @@ describe.skipIf(!existsSync(join(LIBRARY_ROOT, 'stdlib', 'stdlib_defs.mtlx')))('
       'ND_fractal3d_float', 'ND_mix_color3', 'ND_standard_surface_surfaceshader', 'ND_surfacematerial',
     ]);
   });
+
+  it('builds the parchment curl as vector displacementshader nodes', async () => {
+    const library = ScriptLibrary.fromXml(SCRIPT_LIBRARY_FILES.map(file => readFileSync(join(LIBRARY_ROOT, file), 'utf8')));
+    const source = readFileSync(join('examples', 'scripts', 'p8-parchemin.js'), 'utf8');
+    const script = source.slice(0, source.indexOf('// --- Rendu'));
+    const graph = await runScript(script, library, { host: idleHost() });
+    const xml = toXml(graph, library);
+    expect(xml).toContain('<displacement name="displacement" type="displacementshader" nodedef="ND_displacement_vector3">');
+    expect(xml).toContain('<input name="displacement" type="vector3" nodename="offset"');
+    expect(xml).toContain('<input name="displacementshader" type="displacementshader" nodename="displacement"');
+    expect(source).not.toMatch(/sheet\.deform\s*=/);
+  });
 });
 
 describe('scripted primitives', () => {

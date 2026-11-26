@@ -27,15 +27,14 @@ Aucun.
 ## Priorité 9 : displacement procédural
 
 Le displacement actuel (`src/render/displacement.ts`) déplace les sommets sur
-CPU à partir d'une seule texture de hauteur. L'étendre à tout le graphe :
+CPU à partir d'une seule texture de hauteur. L'évaluateur IR CPU couvre maintenant
+les graphes numériques scalaires/vectoriels, y compris les textures et les nœuds
+procéduraux ; les horloges reliées au déplacement reconstruisent la géométrie sur
+`setTime`. Le script parchemin démontre les enroulements avec un
+`displacementshader` vectoriel. Il reste à :
 
 - évaluation complète du `displacementshader` (bruits, fractales, ondes,
-  textures combinées) dans une passe compute WebGPU ; repli sur l'évaluateur IR
-  CPU pour les petits maillages ;
-- displacement vectoriel en plus du displacement scalaire selon la normale ;
-- recalcul des normales et tangentes, puis reconstruction du BVH ;
-- displacement animé via l'entrée `time` (eau, vent, drapeau) en s'appuyant sur
-  les scènes dynamiques de la priorité 5 ;
+- passe compute WebGPU pour les grands maillages, avec repli CPU pour les petits ;
 - subdivision adaptative en option.
 
 **Critère d'aboutissement :** un `Plane` subdivisé (priorité 8) devient un terrain ou une

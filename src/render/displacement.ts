@@ -5,6 +5,9 @@ import { assembleIrForwardShader } from './raster/ir-forward.ts';
 import { buildGeometry, transformBounds, type GeometryResource, type SceneResources, type MaterialDisplacement } from './scene-resources.ts';
 import type { PtImageProvider } from './pathtracing/device-bindings.ts';
 import { udimTileAt } from '../assets/udim.ts';
+import { evaluateIrRef, type IrEvalVaryings } from '../compiler/ir-eval.ts';
+import { OBJECT_BITANGENT_INPUT, OBJECT_NORMAL_INPUT, OBJECT_POSITION_INPUT, OBJECT_TANGENT_INPUT } from '../compiler/ir.ts';
+import { createImageSampler, type ImageSampler } from './pathtracing/texture-sample.ts';
 
 function heightAt(image: DecodedPixelImage, u: number, v: number, clamp = false): number {
   if (image.udim) {
@@ -65,6 +68,13 @@ export function displaceGeometry(
     }
   }
 
+  return rebuildDisplacedGeometry(geometry, normals, displaced, positionKeys, id);
+}
+
+function rebuildDisplacedGeometry(
+  geometry: GeometryResource, normals: Float32Array,
+  displaced: Float32Array, positionKeys: readonly string[], id: string,
+): GeometryResource {
   const normalKeys = positionKeys.map((key, i) =>
     `${key}|${Array.from(normals.subarray(i * 3, i * 3 + 3), x => Math.round(x * 1e5)).join(',')}`);
   const sums = new Map<string, number[]>();
@@ -99,19 +109,118 @@ export function displaceGeometry(
   return buildGeometry(id, geometry.primPath, { ...prepared, subsets: geometry.subsets, subdivision: geometry.subdivision });
 }
 
+/** Evaluate a lowered MaterialX displacement graph at every vertex on the CPU. */
+export function displaceGeometryFromProgram(
+  geometry: GeometryResource,
+  displacement: NonNullable<MaterialDisplacement['program']>,
+  samplers: Readonly<Record<string, ImageSampler>>,
+  parameters: readonly { uniform?: string; value: readonly number[] }[] = [],
+  id = `${geometry.prototypeId}::displacement`,
+): GeometryResource {
+  const positions = geometry.streams.find(stream => stream.name === 'position')?.data;
+  const normals = geometry.streams.find(stream => stream.name === 'normal')?.data;
+  if (!positions || !normals) throw new Error(`Displacement requires positions and normals: ${geometry.primPath}`);
+  const uv = geometry.streams.find(stream => stream.name === 'uv')?.data;
+  const tangentStream = geometry.streams.find(stream => stream.name === 'tangent');
+  if (displacement.mode === 'vector' && !tangentStream) {
+    throw new Error(`Vector displacement requires a tangent stream: ${geometry.primPath}`);
+  }
+  const streams = new Map(geometry.streams.map(stream => [stream.name, stream]));
+  const params = Object.fromEntries(parameters.flatMap(parameter =>
+    parameter.uniform ? [[parameter.uniform, parameter.value] as const] : []));
+  const positionKeys = Array.from({ length: geometry.vertexCount }, (_, i) =>
+    Array.from(positions.subarray(i * 3, i * 3 + 3), x => Math.round(x * 1e5)).join(','));
+  const offsets = Array.from({ length: geometry.vertexCount }, () => [0, 0, 0]);
+
+  for (let i = 0; i < geometry.vertexCount; i++) {
+    const point = Array.from(positions.subarray(i * 3, i * 3 + 3));
+    const normal = Array.from(normals.subarray(i * 3, i * 3 + 3));
+    const tangentData = tangentStream
+      ? Array.from(tangentStream.data.subarray(i * tangentStream.components, (i + 1) * tangentStream.components))
+      : [1, 0, 0, 1];
+    const tangentValue = tangentData.slice(0, 3);
+    const handedness = tangentData[3] ?? 1;
+    const bitangent = [
+      (normal[1]! * tangentValue[2]! - normal[2]! * tangentValue[1]!) * handedness,
+      (normal[2]! * tangentValue[0]! - normal[0]! * tangentValue[2]!) * handedness,
+      (normal[0]! * tangentValue[1]! - normal[1]! * tangentValue[0]!) * handedness,
+    ];
+    const primvars: Record<string, readonly number[]> = {};
+    for (const [name, stream] of streams) {
+      if (['position', 'normal', 'tangent'].includes(name)) continue;
+      const value = Array.from(stream.data.subarray(i * stream.components, (i + 1) * stream.components));
+      primvars[name === 'uv' ? 'st' : name] = value;
+    }
+    const inputs: Record<string, readonly number[]> = {
+      [OBJECT_POSITION_INPUT]: point,
+      [OBJECT_NORMAL_INPUT]: normal,
+      [OBJECT_TANGENT_INPUT]: tangentValue,
+      [OBJECT_BITANGENT_INPUT]: bitangent,
+    };
+    const varyings: IrEvalVaryings = {
+      position: point, normal, geometricNormal: normal, tangent: tangentValue, bitangent,
+      ...(uv ? { texcoord: Array.from(uv.subarray(i * 2, i * 2 + 2)) } : {}),
+      inputs, primvars, params, textures: samplers,
+    };
+    const cache = new Map<string, readonly number[]>();
+    const value = evaluateIrRef(displacement.ir, displacement.displacementRef, varyings, cache);
+    const scale = evaluateIrRef(displacement.ir, displacement.scaleRef, varyings, cache)[0]!;
+    if (!Number.isFinite(scale) || value.some(component => !Number.isFinite(component))) {
+      throw new Error(`Non-finite displacement at ${geometry.primPath} vertex ${i}.`);
+    }
+    for (let axis = 0; axis < 3; axis++) {
+      offsets[i]![axis] = displacement.mode === 'scalar'
+        ? normal[axis]! * value[0]! * scale
+        : (tangentValue[axis]! * value[0]! + bitangent[axis]! * value[1]! + normal[axis]! * value[2]!) * scale;
+    }
+  }
+
+  const groups = new Map<string, number[]>();
+  positionKeys.forEach((key, index) => {
+    const group = groups.get(key);
+    if (group) group.push(index);
+    else groups.set(key, [index]);
+  });
+  const displaced = positions.slice();
+  for (const vertices of groups.values()) {
+    const first = vertices[0]!;
+    for (let axis = 0; axis < 3; axis++) {
+      const offset = vertices.reduce((sum, index) => sum + offsets[index]![axis]!, 0) / vertices.length;
+      for (const index of vertices) displaced[index * 3 + axis] = positions[first * 3 + axis]! + offset;
+    }
+  }
+  return rebuildDisplacedGeometry(geometry, normals, displaced, positionKeys, id);
+}
+
 /** Bake once before either backend builds its buffers/BVH, isolating material instances. */
 export async function applySceneDisplacement(resources: SceneResources, provider: PtImageProvider): Promise<SceneResources> {
   if (![...resources.materials.values()].some(material => material.displacement)) return resources;
   const geometries = new Map(resources.geometries);
   const materials = new Map(resources.materials);
   const images = new Map<string, DecodedPixelImage>();
+  const programSamplers = new Map<string, Readonly<Record<string, ImageSampler>>>();
+  const decode = async (file: string, kind: 'image' | 'map' = 'image'): Promise<DecodedPixelImage> => {
+    let image = images.get(file);
+    if (!image) {
+      image = await provider.decode(file);
+      if (!image) throw new Error(`Invalid displacement ${kind}: ${file}`);
+      images.set(file, image);
+    }
+    return image;
+  };
   for (const [key, material] of materials) {
     if (!material.displacement) continue;
-    const file = material.displacement.file;
-    if (!images.has(file)) {
-      const image = await provider.decode(file);
-      if (!image) throw new Error(`Invalid displacement map: ${file}`);
-      images.set(file, image);
+    if (material.displacement.program) {
+      const samplers: Record<string, ImageSampler> = {};
+      for (const texture of material.displacement.program.ir.textures) {
+        if (!texture.fileRef) throw new Error(`Displacement texture '${texture.name}' has no file.`);
+        const sampler = material.displacement.program.ir.samplers.find(candidate => candidate.name === texture.name);
+        samplers[texture.name] = createImageSampler(await decode(texture.fileRef), sampler);
+      }
+      programSamplers.set(key, samplers);
+    } else {
+      if (!material.displacement.file) throw new Error('Displacement has neither a graph program nor a height map.');
+      await decode(material.displacement.file, 'map');
     }
     const { displacement: _displacement, ...baked } = material;
     materials.set(key, {
@@ -126,7 +235,12 @@ export async function applySceneDisplacement(resources: SceneResources, provider
     if (!displacement || !geometry) return instance;
     replaced.add(instance.prototypeId);
     const id = `${instance.prototypeId}::displacement::${instance.materialKey}`;
-    if (!geometries.has(id)) geometries.set(id, displaceGeometry(geometry, images.get(displacement.file)!, displacement.scale, id, displacement));
+    if (!geometries.has(id)) {
+      geometries.set(id, displacement.program
+        ? displaceGeometryFromProgram(geometry, displacement.program, programSamplers.get(instance.materialKey!) ?? {},
+          resources.materials.get(instance.materialKey!)?.parameters, id)
+        : displaceGeometry(geometry, images.get(displacement.file!)!, displacement.scale, id, displacement));
+    }
     return { ...instance, prototypeId: id };
   });
   const used = new Set(instances.map(instance => instance.prototypeId));

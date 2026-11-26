@@ -13,6 +13,7 @@ import { buildMaterialDispatch } from '../../src/render/pathtracing/material-var
 import { evaluateVolumeMedium } from '../../src/render/pathtracing/volume-material.ts';
 import { evaluateVolumeMaterial } from '../../src/render/raster/volume-material.ts';
 import { evaluateVolumeIr, isSpatialVolumeIr } from '../../src/compiler/volume-ir.ts';
+import { evaluateIrRef } from '../../src/compiler/ir-eval.ts';
 import type {
   MxInput,
   MxInterfaceElement,
@@ -102,13 +103,14 @@ function materialInput(name: string, type: string, node: MxNode | null): MtlxMat
 }
 
 /** A document whose material connects its surfaceshader terminal to `surface`. */
-function fakeDocument(materialName: string, surface: MxNode | null, volume?: MxNode): MtlxDocumentView {
+function fakeDocument(materialName: string, surface: MxNode | null, volume?: MxNode, displacement?: MxNode): MtlxDocumentView {
   const material = {
     getName: () => materialName,
     getNamePath: () => `/mat/${materialName}`,
     getInputs: () => [
       ...(surface ? [materialInput('surfaceshader', 'surfaceshader', surface)] : []),
       ...(volume ? [materialInput('volumeshader', 'volumeshader', volume)] : []),
+      ...(displacement ? [materialInput('displacementshader', 'displacementshader', displacement)] : []),
     ],
     validate: () => true,
     delete: () => {},
@@ -253,6 +255,34 @@ describe('createGraphMaterialCompiler (T057m1)', () => {
     expect(dispatch.samplers).toHaveLength(1);
     expect(dispatch.textureRegistry.images).toHaveLength(1);
     expect(dispatch.textureRegistry.images[0]).toBeDefined();
+  });
+
+  it('lowers connected scalar and vector displacementshader outputs', () => {
+    const scalarSource = fakeNode('add', 'float', fakeImpl('implementation', 'add'), [
+      fakeInput({ name: 'in1', type: 'float', value: '0.2' }),
+      fakeInput({ name: 'in2', type: 'float', value: '0.3' }),
+    ]);
+    const scalarDisplacement = fakeNode('displacement', 'displacementshader', fakeImpl('implementation', 'displacement'), [
+      fakeInput({ name: 'displacement', type: 'float', connected: scalarSource }),
+      fakeInput({ name: 'scale', type: 'float', value: '0.5' }),
+    ]);
+    const vectorDisplacement = fakeNode('displacement', 'displacementshader', fakeImpl('implementation', 'displacement'), [
+      fakeInput({ name: 'displacement', type: 'vector3', value: '0.1, 0.2, 0.3' }),
+      fakeInput({ name: 'scale', type: 'float', value: '2' }),
+    ]);
+    const compiler = createGraphMaterialCompiler({
+      documents: { documentFor: () => fakeDocument('brick', brickSurfaceNode('brick.jpg'), undefined, scalarDisplacement) },
+    });
+    const scalar = (compiler.compile(UNIT) as MaterialBuild).displacement;
+    expect(scalar?.program?.mode).toBe('scalar');
+    expect(evaluateIrRef(scalar!.program!.ir, scalar!.program!.displacementRef)).toEqual([0.5]);
+    expect(evaluateIrRef(scalar!.program!.ir, scalar!.program!.scaleRef)).toEqual([0.5]);
+
+    const vector = (createGraphMaterialCompiler({
+      documents: { documentFor: () => fakeDocument('brick', brickSurfaceNode('brick.jpg'), undefined, vectorDisplacement) },
+    }).compile(UNIT) as MaterialBuild).displacement;
+    expect(vector?.program?.mode).toBe('vector');
+    expect(evaluateIrRef(vector!.program!.ir, vector!.program!.displacementRef)).toEqual([0.1, 0.2, 0.3]);
   });
 
   it('returns no build when the document is missing', () => {

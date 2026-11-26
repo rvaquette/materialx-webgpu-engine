@@ -479,17 +479,22 @@ Bound materials must compile before the viewer or image harness starts rendering
 An unresolved surface now fails loading explicitly instead of producing missing
 raster geometry or a neutral white path-traced fallback.
 
-The interactive scene loader bakes texture-fed MaterialX displacement once into
-material-specific geometry shared by raster and path tracing. Heights are linear,
-bilinearly sampled with repeat addressing and a midpoint of 0.5. Coincident
-vertices (position tolerance 1e-5) share a displacement offset across UV and
-hard-normal seams, avoiding cracks without merging the shading attributes.
-Normals/tangents and acceleration bounds are rebuilt after displacement; changing
-or removing an override starts from the original mesh. This uses the existing
-mesh tessellation, not adaptive subdivision. Missing height maps or UVs fail
-loading explicitly. The path tracer specializes its lobe dispatch to the union
-of graph materials and constant-record fallbacks to reduce driver compilation
-and runtime pressure without removing reachable material features.
+The interactive scene loader bakes MaterialX displacement into material-specific
+geometry shared by raster and path tracing. Direct height maps retain linear,
+bilinear sampling with repeat addressing and a midpoint of 0.5. Other numeric
+`displacementshader` graphs are evaluated by the CPU IR interpreter, including
+procedural and sampled nodes; scalar outputs move along the shading normal and
+vector3 outputs use the MaterialX tangent/bitangent/normal frame. Coincident
+vertices (position tolerance 1e-5) share their averaged offset across UV and
+hard-normal seams, avoiding cracks without merging shading attributes.
+Normals/tangents, bounds and BVH are rebuilt after displacement; changing or
+removing an override starts from the original mesh. Time/frame nodes connected
+to displacement trigger a geometry rebuild from `setTime`. This uses the mesh's
+existing tessellation: GPU compute evaluation for large meshes and adaptive
+subdivision remain future work. Missing maps, unsupported graph operations or
+invalid geometry fail explicitly. The path tracer specializes its lobe dispatch
+to the union of graph materials and constant-record fallbacks to reduce driver
+compilation and runtime pressure without removing reachable material features.
 
 ## Interactive MaterialX parameters
 

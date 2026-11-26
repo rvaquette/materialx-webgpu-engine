@@ -62,9 +62,7 @@ export interface MaterialBuild {
    *  and volumetric parameters for participating media. Absent for non-volumetric
    *  materials. */
   volume?: ResolvedVolume;
-  /** Height-map displacement extracted from the displacementshader terminal: a
-   *  scalar texture sampled along the shading normal, scaled by `scale`. Absent
-   *  when the material has no displacement or only a constant (map-less) one. */
+  /** Displacementshader program or legacy height map, baked before rendering. */
   displacement?: MaterialDisplacement;
 }
 
@@ -98,10 +96,16 @@ export interface GeometryResource {
 }
 
 export interface MaterialDisplacement {
-  file: string;
+  file?: string;
   scale: number;
   uvScale?: readonly [number, number];
   uvOffset?: readonly [number, number];
+  program?: {
+    ir: ShaderIr;
+    displacementRef: import('../compiler/ir.ts').IrRef;
+    scaleRef: import('../compiler/ir.ts').IrRef;
+    mode: 'scalar' | 'vector';
+  };
 }
 
 export interface MaterialResource {

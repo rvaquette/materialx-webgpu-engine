@@ -317,6 +317,9 @@ function sceneTextureFiles(resources: SceneResources): Set<string> {
   for (const material of resources.materials.values()) {
     for (const texture of material.surfaceModule?.textures ?? []) if (texture.fileRef) files.add(texture.fileRef);
     if (material.displacement?.file) files.add(material.displacement.file);
+    for (const texture of material.displacement?.program?.ir.textures ?? []) {
+      if (texture.fileRef) files.add(texture.fileRef);
+    }
   }
   return files;
 }
@@ -2359,6 +2362,7 @@ export class InteractiveViewer {
         const group = material.sceneShader?.displacementGroup;
         if (group === undefined || !material.displacement) continue;
         const file = material.displacement.file;
+        if (!file) throw new Error('Raster height-map displacement requires an image file.');
         if (!imageCache.has(file)) imageCache.set(file, await loaded.mtlx.imageProvider.decode(file));
         const image = imageCache.get(file);
         if (!image || image.componentType !== 'uint8' || image.channels !== 4) {

@@ -1,11 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
-import { displaceGeometry, applySceneDisplacement } from '../../src/render/displacement.ts';
+import { displaceGeometry, displaceGeometryFromProgram, applySceneDisplacement } from '../../src/render/displacement.ts';
 import { buildGeometry, type SceneResources } from '../../src/render/scene-resources.ts';
 import { prepareMesh } from '../../src/geometry/prepare.ts';
 import { buildTlas } from '../../src/geometry/bvh.ts';
 import { IDENTITY4 } from '../../src/scene/transforms.ts';
 import type { DecodedPixelImage } from '../../src/assets/images.ts';
 import { buildPathTraceScene } from '../../src/render/pathtracing/scene-buffers.ts';
+import { FLOAT, IrModuleBuilder, vector } from '../../src/compiler/ir.ts';
 
 const image: DecodedPixelImage = {
   kind: 'pixels', colorSpace: 'raw', width: 2, height: 1, channels: 4, componentType: 'uint8',
@@ -21,7 +22,40 @@ function geometry() {
   }));
 }
 
+function triangleGeometry() {
+  return buildGeometry('triangle', '/triangle', prepareMesh({
+    points: [0, 0, 0, 1, 0, 0, 0, 1, 0],
+    faceVertexCounts: [3], faceVertexIndices: [0, 1, 2],
+    normals: { name: 'normals', interpolation: 'vertex', elementSize: 3, values: [0, 0, 1, 0, 0, 1, 0, 0, 1] },
+    primvars: [{ name: 'st', interpolation: 'vertex', elementSize: 2, values: [0, 0, 1, 0, 0, 1] }],
+  }));
+}
+
 describe('shared displacement geometry', () => {
+  it('bakes scalar normal displacement and vector displacement from IR programs', () => {
+    const source = triangleGeometry();
+    const scalarBuilder = new IrModuleBuilder();
+    const scalarRef = scalarBuilder.constant(FLOAT, 0.25);
+    const scalarScale = scalarBuilder.constant(FLOAT, 2);
+    const scalar = displaceGeometryFromProgram(source, {
+      ir: scalarBuilder.build(), displacementRef: scalarRef, scaleRef: scalarScale, mode: 'scalar',
+    }, {});
+    expect(scalar.streams.find(stream => stream.name === 'position')!.data[2]).toBeCloseTo(0.5);
+    expect(scalar.blas.bounds.max[2]).toBeCloseTo(0.5);
+
+    const vectorBuilder = new IrModuleBuilder();
+    const vectorRef = vectorBuilder.constant(vector(3, 'float', 'vector'), [0.2, 0.3, 0.4]);
+    const vectorScale = vectorBuilder.constant(FLOAT, 0.5);
+    const vectorResult = displaceGeometryFromProgram(source, {
+      ir: vectorBuilder.build(), displacementRef: vectorRef, scaleRef: vectorScale, mode: 'vector',
+    }, {});
+    const vectorPosition = vectorResult.streams.find(stream => stream.name === 'position')!.data;
+    expect(vectorPosition[0]).toBeCloseTo(0.1);
+    expect(vectorPosition[1]).toBeCloseTo(0.15);
+    expect(vectorPosition[2]).toBeCloseTo(0.2);
+    vectorResult.bounds.max.forEach((value, axis) => expect(value).toBeCloseTo([1.1, 1.15, 0.2][axis]!));
+  });
+
   it('selects the authored UDIM tile instead of repeating the first tile', () => {
     const source = geometry();
     const uv = source.streams.find(s => s.name === 'uv')!.data;
