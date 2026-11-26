@@ -12,7 +12,10 @@ permissions:
 jobs:
   capture:
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 30
+    env:
+      MX_CORE_DIR: ${{ github.workspace }}/dist/materialx
+      MX_LIB_ROOT: ${{ github.workspace }}/dist/materialx/libraries
     steps:
       - name: Checkout application
         uses: actions/checkout@v5
@@ -32,7 +35,17 @@ jobs:
           node-version: 22
           cache: npm
 
+      - name: Set up Emscripten
+        uses: mymindstorm/setup-emsdk@v14
+        with:
+          version: 4.0.8
+
       - run: npm ci
+
+      - name: Build minimal MaterialX Core and static site
+        run: npm run build
+        env:
+          MX_SOURCE_DIR: ${{ github.workspace }}/materialx
 
       - name: Check the engine API contract and element adapter
         run: |
@@ -45,14 +58,9 @@ jobs:
           npm run test:headless-capture
         env:
           MX_CAPTURE_RASTER_ONLY: '1'
-          MX_CORE_DIR: ${{ github.workspace }}/materialx/javascript/build/bin
-          MX_LIB_ROOT: ${{ github.workspace }}/materialx/libraries
 
       - name: Golden raster renders (SwiftShader)
         run: npm run test:golden
-        env:
-          MX_CORE_DIR: ${{ github.workspace }}/materialx/javascript/build/bin
-          MX_LIB_ROOT: ${{ github.workspace }}/materialx/libraries
 
       - name: Keep golden differences
         if: failure()
