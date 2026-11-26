@@ -7,7 +7,7 @@ const sky = new EnvironmentShader();
 sky.model = "sky";
 sky.zenithColor = [0.08, 0.22, 0.5];
 sky.horizonColor = [0.38, 0.58, 0.82];
-sky.sunIntensity = 8;
+sky.sunIntensity = 0;
 
 const floor = new StandardSurface();
 floor.base_color = [0.28, 0.34, 0.42];
@@ -43,11 +43,10 @@ cirrus.color = [0.99, 0.99, 1];
 const cirrusLayer = new Volume({ width: 12, height: 3.4, length: 10, material: cirrus });
 cirrusLayer.translate = [0, 12.2, 0];
 
-const sun = new PointLight();
-sun.color = [1, 0.9, 0.72];
-sun.intensity = 10;
-sun.radius = 3;
-sun.translate = [-5, 12, 4];
+const sun = new DistantLight();
+sun.color = [1, 0.98, 0.95];
+sun.intensity = 4;
+sun.rotate = [-60, -60, 0];
 
 await environment(sky.out);
 render.resolution = mobile ? 128 : 256;
@@ -63,7 +62,7 @@ for (const frame of [0, 12, 24]) {
   render.backend = "raster";
   await save(`01-raster/frame-${pad(frame)}.png`);
   render.backend = "pathtracing";
-  render.depth = 8;
-  await render(mobile ? 16 : 96);
+  render.depth = 24;
+  await render(mobile ? 128 : 1024);
   await save(`02-pathtracing/frame-${pad(frame)}.png`);
 }

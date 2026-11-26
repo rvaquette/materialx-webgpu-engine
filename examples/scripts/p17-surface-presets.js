@@ -9,7 +9,7 @@ sky.horizonColor = [0.5, 0.55, 0.6];
 sky.sunIntensity = 4;
 sky.sunAngularDiameter = 12;
 await environment(sky.out);
-const key = new PointLight({ translate: [-4, 5, 4], radius: 0.6, intensity: 45, color: [1, 0.9, 0.8] });
+const key = new PointLight({ translate: [-4, 5, 4], radius: 0.6, intensity: 6, color: [1, 0.9, 0.8] });
 
 const floor = new StandardSurface();
 floor.base_color = [0.12, 0.14, 0.16];
@@ -30,8 +30,8 @@ sand.wetness = 0.65;
 const sandBall = new Sphere({ material: sand, radius: 1.1 });
 sandBall.translate = [3.2, 1.1, 0];
 
-render.resolution = mobile ? 128 : 256;
-setCamera({ eye: [0, 5, 11], target: [0, 1, 0], fov: 40 });
+render.resolution = mobile ? 128 : 512;
+setCamera({ eye: [0, 3.6, 9.5], target: [0, 1, 0], fov: 50 });
 for (const frame of [0, 12, 24]) {
   await setTime(frame);
   ice.depth = 0.8 + frame / 24;
@@ -42,6 +42,6 @@ for (const frame of [0, 12, 24]) {
   await save(`01-raster/frame-${pad(frame)}.png`);
   render.backend = "pathtracing";
   render.depth = 10;
-  await render(mobile ? 32 : 256);
+  await render(mobile ? 32 : 512);
   await save(`02-pathtracing/frame-${pad(frame)}.png`);
 }

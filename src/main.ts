@@ -1263,6 +1263,7 @@ async function main(): Promise<void> {
       finally { setBusy(false); }
     },
     async saveImage(name) {
+      if (viewer.backend === 'raster') await viewer.prepareRaster();
       // Settings applied just before (exposure, view...) are drawn by the next frame.
       await nextFrame();
       await currentGpu.device.queue.onSubmittedWorkDone();

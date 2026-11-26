@@ -60,7 +60,7 @@
     <input name="displacement" type="float" nodename="grains" />
     <input name="scale" type="float" value="0.003" />
   </displacement>
-  <surfacematerial name="material_2" type="material">
+  <surfacematerial name="material" type="material">
     <input name="surfaceshader" type="surfaceshader" nodename="sandSurface" />
     <input name="displacementshader" type="displacementshader" nodename="sandDisplacement" />
   </surfacematerial>

@@ -22,7 +22,7 @@ import {
 import type { ResolvedGraph } from './graph.ts';
 import { customAovView, type CustomAovKind, type PathTraceView } from '../render/pathtracing/display.ts';
 import {
-  OBJECT_PROPERTIES, SCRIPT_BOOLEAN_OPERATIONS, SCRIPT_PRIMITIVES, stageObjectShape, writeStageUsda,
+  OBJECT_PROPERTIES, SCRIPT_BOOLEAN_OPERATIONS, SCRIPT_PRIMITIVES, isScriptLight, stageObjectShape, writeStageUsda,
   type BooleanOperation, type PrimitiveParameter, type StageInstancer, type StageMaterial, type StageObject,
 } from './script-scene.ts';
 import { checkPrimitiveShape, deformMesh, primitiveMesh, type PrimitiveAxis, type PrimitiveShape, type VertexDeformer } from '../scene/primitives.ts';
@@ -1675,7 +1675,7 @@ export async function runScript(code: string, library: ScriptLibrary, options: R
         try {
           if (!object.booleanOperation) {
             if (!SCRIPT_PRIMITIVES[object.className] ||
-                ['Volume', 'PointLight'].includes(SCRIPT_PRIMITIVES[object.className]!.usdType)) {
+                SCRIPT_PRIMITIVES[object.className]!.usdType === 'Volume' || isScriptLight(SCRIPT_PRIMITIVES[object.className])) {
               throw new ScriptError(`Unknown boolean operand "${path}".`);
             }
             return object.mesh ?? primitiveMesh(stageObjectShape(object));
@@ -1782,16 +1782,16 @@ export async function runScript(code: string, library: ScriptLibrary, options: R
   const objectHandle = (object: ScriptObject): object => {
     const primitive = SCRIPT_PRIMITIVES[object.className];
     const volume = primitive?.usdType === 'Volume';
-    const pointLight = primitive?.usdType === 'PointLight';
+    const light = isScriptLight(primitive);
     const parameters = primitive ? Object.keys(primitive.defaults) as PrimitiveParameter[] : [];
-    const objectProperties = pointLight
+    const objectProperties = light
       ? OBJECT_PROPERTIES.filter(property => ['translate', 'rotate', 'visible'].includes(property.name))
       : OBJECT_PROPERTIES.filter(property => (!object.operation && !volume) || property.name !== 'deform');
     const properties = [
       ...(object.operation ? ['base', 'tool'] : []),
       ...parameters,
       ...objectProperties.map(property => property.name),
-      ...(pointLight ? ['color'] : []),
+      ...(light ? ['color'] : []),
     ];
     const label = (key: string): string => `${object.name ?? object.className}.${key}`;
     const unknown = (key: string): ScriptError =>
@@ -1814,11 +1814,11 @@ export async function runScript(code: string, library: ScriptLibrary, options: R
           return operand ? objectReferences.get(operand) : undefined;
         }
         if (primitive && (parameters as string[]).includes(key)) return object.parameters[key as PrimitiveParameter] ?? primitive.defaults[key as PrimitiveParameter];
-        if (pointLight && key === 'color') return [...(object.color ?? [1, 0.72, 0.42])];
+        if (light && key === 'color') return [...(object.color ?? (primitive.usdType === 'DistantLight' ? [1, 1, 1] : [1, 0.72, 0.42]))];
         if (key === 'translate' || key === 'rotate' || key === 'scale') return [...object[key]];
         if (key === 'visible') return object.visible;
         if (key === 'material') return object.material;
-        if (key === 'deform' && !object.operation && !pointLight) return object.deform;
+        if (key === 'deform' && !object.operation && !light) return object.deform;
         throw unknown(key);
       },
       set: (_target, key, value) => {
@@ -1827,8 +1827,8 @@ export async function runScript(code: string, library: ScriptLibrary, options: R
         if ((key === 'base' || key === 'tool') && object.operation) {
           const operand = objectOf(value);
           if (!operand) throw new ScriptError(`${label(key)} expects a scripted scene object.`);
-          if (['Volume', 'PointLight'].includes(SCRIPT_PRIMITIVES[operand.className]?.usdType ?? '')) {
-            throw new ScriptError(`${label(key)} cannot reference a Volume or PointLight.`);
+          if (SCRIPT_PRIMITIVES[operand.className]?.usdType === 'Volume' || isScriptLight(SCRIPT_PRIMITIVES[operand.className])) {
+            throw new ScriptError(`${label(key)} cannot reference a Volume, PointLight or DistantLight.`);
           }
           object[key] = operand;
         } else if (primitive && (parameters as string[]).includes(key)) {
@@ -1841,7 +1841,7 @@ export async function runScript(code: string, library: ScriptLibrary, options: R
             stageDirty = true;
             return true;
           }
-          if (pointLight) {
+          if (light) {
             if (typeof value !== 'number' || !Number.isFinite(value) ||
                 (parameter === 'radius' && value <= 0) ||
                 (parameter === 'intensity' && value < 0)) {
@@ -1865,13 +1865,13 @@ export async function runScript(code: string, library: ScriptLibrary, options: R
         } else if (key === 'visible') {
           if (typeof value !== 'boolean') throw new ScriptError(`${label(key)} expects a boolean.`);
           object.visible = value;
-        } else if (pointLight && key === 'color') {
+        } else if (light && key === 'color') {
           const color = finiteNumbers(value, 3, label(key));
           if (color.some(component => component < 0)) throw new ScriptError(`${label(key)} components must be non-negative.`);
           object.color = color;
         } else if (key === 'material') {
           object.material = checkMaterial(value, label(key));
-        } else if (key === 'deform' && !object.operation && !volume && !pointLight) {
+        } else if (key === 'deform' && !object.operation && !volume && !light) {
           if (value !== undefined && value !== null && typeof value !== 'function') {
             throw new ScriptError(`${label(key)} expects a function (position, uv, normal) => [x, y, z].`);
           }
@@ -1916,8 +1916,8 @@ export async function runScript(code: string, library: ScriptLibrary, options: R
     if (!surface || !prototype) throw new ScriptError('Scatter surfacePath and prototypePath must reference live scripted objects.');
     if (surface === prototype) throw new ScriptError('Scatter requires distinct surface and prototype objects.');
     if (surface.operation || prototype.operation || !SCRIPT_PRIMITIVES[surface.className] || !SCRIPT_PRIMITIVES[prototype.className] ||
-        ['Volume', 'PointLight'].includes(SCRIPT_PRIMITIVES[surface.className]!.usdType) ||
-        ['Volume', 'PointLight'].includes(SCRIPT_PRIMITIVES[prototype.className]!.usdType)) {
+        SCRIPT_PRIMITIVES[surface.className]!.usdType === 'Volume' || isScriptLight(SCRIPT_PRIMITIVES[surface.className]) ||
+        SCRIPT_PRIMITIVES[prototype.className]!.usdType === 'Volume' || isScriptLight(SCRIPT_PRIMITIVES[prototype.className])) {
       throw new ScriptError('Scatter currently accepts scripted primitives, not boolean or imported objects.');
     }
 

@@ -138,7 +138,7 @@
     <input name="transmission_depth" type="float" value="2" />
     <input name="normal" type="vector3" nodename="detailNormal" />
   </standard_surface>
-  <surfacematerial name="material_2" type="material">
+  <surfacematerial name="material" type="material">
     <input name="surfaceshader" type="surfaceshader" nodename="waterSurface" />
     <input name="displacementshader" type="displacementshader" nodename="waveDisplacement" />
   </surfacematerial>

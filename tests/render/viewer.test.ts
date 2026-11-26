@@ -459,6 +459,35 @@ describe('interactive viewer resource lifecycle', () => {
     expect(device.createTexture).not.toHaveBeenCalled();
   });
 
+  it('waits for lazy raster pipelines before saving after a path-tracing backend switch', async () => {
+    const { viewer, device, pass } = await setup(false, false, 'pathtracing');
+    let release!: () => void;
+    let started!: () => void;
+    const blocked = new Promise<void>(resolve => { release = resolve; });
+    const compiling = new Promise<void>(resolve => { started = resolve; });
+    device.createRenderPipelineAsync.mockImplementationOnce(async descriptor => {
+      started();
+      await blocked;
+      return device.createRenderPipeline(descriptor);
+    });
+    viewer.setBackend('raster');
+    let ready = false;
+    const preparation = viewer.prepareRaster().then(() => { ready = true; });
+    await compiling;
+    expect(ready).toBe(false);
+    release();
+    await preparation;
+    tick(1);
+    expect(pass.drawIndexed).toHaveBeenCalled();
+  });
+
+  it('surfaces lazy raster preparation failures instead of saving a background-only frame', async () => {
+    const { viewer, device } = await setup(false, false, 'pathtracing');
+    viewer.setBackend('raster');
+    device.createRenderPipelineAsync.mockRejectedValueOnce(new Error('raster pipeline failed'));
+    await expect(viewer.prepareRaster()).rejects.toThrow('raster pipeline failed');
+  });
+
   it('composites pure volumes in HDR without drawing their boundaries as opaque surfaces', async () => {
     const { loaded, viewer, device, pass } = await setup(false, false, 'pathtracing');
     const { IrModuleBuilder, FLOAT, vector, shaderType } = await import('../../src/compiler/ir.ts');

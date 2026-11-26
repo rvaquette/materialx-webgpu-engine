@@ -37,7 +37,7 @@ const plume = new Volume({ width: 2.8, height: 2.5, length: 2.8, material: smoke
 plume.translate = [0, 4.6, 0];
 
 await environment(sky.out);
-render.resolution = mobile ? 128 : 256;
+render.resolution = mobile ? 128 : 512;
 setCamera({ eye: [4, 3.5, 5], target: [0, 1.7, 0], fov: 35 });
 render.backend = "raster";
 for (const frame of frames) {
@@ -54,6 +54,6 @@ for (const frame of [0, 12, 24]) {
   plume.translate = [0, 4.6 + Math.sin(frame * 0.3) * 0.04, 0];
   await setTime(frame);
   await setLight(fireLight.path, { intensity: 0 });
-  await render(mobile ? 32 : 128);
+  await render(mobile ? 32 : 384);
   await save(`02-pathtracing/frame-${pad(frame)}.png`);
 }

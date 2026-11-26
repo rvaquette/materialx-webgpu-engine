@@ -160,7 +160,7 @@
     <input name="vdf" type="VDF" nodename="vdf" />
     <input name="edf" type="EDF" nodename="edf" />
   </volume>
-  <surfacematerial name="material_2" type="material" nodedef="ND_engine_volume_material">
+  <surfacematerial name="material" type="material" nodedef="ND_engine_volume_material">
     <input name="volumeshader" type="volumeshader" nodename="fireVolume" />
   </surfacematerial>
 </materialx>

@@ -94,6 +94,15 @@ comptent pas une seconde fois. La lumière ponctuelle de l'exemple de feu est
 réservée au raster et désactivée en path tracing. `p17-emissive-volume.js`
 illustre cet éclairage sans lumière de substitution ni environnement lumineux.
 
+Les exemples de nuages utilisent un `DistantLight` solaire, et non une lumière
+ponctuelle proche du panache : cette dernière surexposait la diffusion multiple
+et augmentait fortement sa variance. Le soleil directionnel n'a pas de
+décroissance en distance ; le ciel fournit l'éclairage diffus, sans second
+soleil émissif. Le PT des exemples utilise 1 024 échantillons et une profondeur
+de 24 sur ordinateur (128 échantillons sur mobile), sans changer l'exposition.
+Lors d'un retour du PT au raster, `save()` attend aussi la préparation des
+pipelines raster avant de capturer l'image.
+
 Éviter les volumes superposés : le transport ne maintient actuellement qu'un
 milieu actif. Le rendu physique des caustiques demande encore une validation
 de convergence ; l'exemple d'eau remplace sa projection raster émissive par
@@ -188,6 +197,7 @@ s'exécutent à la construction du graphe : une condition sur une sortie de nœu
 |---|---|
 | `Sphere` | `radius` (0,5), `resolution` (48) |
 | `PointLight` | `color` (ambre), `intensity` (20), `exposure` (0), `radius` (0,1), `translate` |
+| `DistantLight` | `color` (blanc), `intensity` (1), `exposure` (0), `rotate` ; rayons parallèles suivant l'axe local −Z, position sans effet |
 | `Cube` | `size` (1), `resolution` (1) |
 | `Cylinder`, `Cone` | `radius` (0,5), `height` (1), `axis` (`"Y"`), `resolution` (48) ; sommet du cône vers +`axis` |
 | `Capsule` | `radius` (0,25), `height` (0,5 : partie cylindrique), `axis`, `resolution` (48) |

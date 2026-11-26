@@ -84,6 +84,16 @@ importance. Les nuages utilisent la diffusion multiple HG plutôt qu'un
 assombrissement artificiel de leur densité. La flamme actuelle est une flamme
 de suie orange/jaune ; le cœur bleu chimique n'est pas simulé.
 
+La comparaison des nuages a aussi révélé un éclairage inadapté au PT : une
+lumière ponctuelle proche servait de soleil et blanchissait la diffusion
+multiple. Les exemples utilisent maintenant un `DistantLight` à rayons
+parallèles, un ciel diffus sans second soleil, 1 024 échantillons et une
+profondeur de 24 sur ordinateur. L'exposition n'est pas modifiée.
+
+| Raster : diffusion simple | PT : diffusion multiple et ombre volumique sur le sol |
+|---|---|
+| ![Nuages raster](images/p17-clouds/01-raster/frame-000.png) | ![Nuages PT](images/p17-clouds/02-pathtracing/frame-000.png) |
+
 La priorité reste **en cours** : la superposition de milieux, la convergence
 des caustiques physiques de l'eau et l'acceptation visuelle de tous les profils
 de nuages restent à résoudre ou à vérifier. Les captures de documentation ne

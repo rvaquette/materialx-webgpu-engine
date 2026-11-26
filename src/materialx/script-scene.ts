@@ -16,7 +16,7 @@ export type PrimitiveParameter =
 export interface ScriptPrimitive {
   kind: PrimitiveKind;
   /** USD schema written for it; `Mesh` stores the tessellation itself. */
-  usdType: 'Sphere' | 'Cube' | 'Cylinder' | 'Cone' | 'Capsule' | 'Plane' | 'Mesh' | 'Volume' | 'PointLight';
+  usdType: 'Sphere' | 'Cube' | 'Cylinder' | 'Cone' | 'Capsule' | 'Plane' | 'Mesh' | 'Volume' | 'PointLight' | 'DistantLight';
   doc: string;
   /** Shape parameters and their defaults (lengths in scene units). */
   defaults: Readonly<Partial<Record<PrimitiveParameter, number | PrimitiveAxis>>>;
@@ -46,7 +46,15 @@ export const SCRIPT_PRIMITIVES: Readonly<Record<string, ScriptPrimitive>> = {
     kind: 'sphere', usdType: 'PointLight', doc: 'Lumière ponctuelle avec couleur, intensité, exposition et rayon',
     defaults: { radius: 0.1, intensity: 20, exposure: 0 },
   },
+  DistantLight: {
+    kind: 'sphere', usdType: 'DistantLight', doc: 'Lumière directionnelle à rayons parallèles, orientée par rotate',
+    defaults: { intensity: 1, exposure: 0 },
+  },
 };
+
+export function isScriptLight(primitive: ScriptPrimitive | undefined): primitive is ScriptPrimitive & { usdType: 'PointLight' | 'DistantLight' } {
+  return primitive?.usdType === 'PointLight' || primitive?.usdType === 'DistantLight';
+}
 
 export type BooleanOperation = 'union' | 'difference' | 'intersection';
 
@@ -97,9 +105,9 @@ export function primitiveScriptDef(className: string): ScriptNodeDef | undefined
     if (parameter === 'maxScreenEdgeLength') return { name, type: 'float', default: value, min: 0, doc: PARAMETER_DOCS.maxScreenEdgeLength };
     return { name, type: 'float', default: value, min: 0, doc: PARAMETER_DOCS[parameter] };
   });
-  const properties = primitive.usdType === 'PointLight'
+  const properties = isScriptLight(primitive)
     ? [...OBJECT_PROPERTIES.filter(property => ['translate', 'rotate', 'visible'].includes(property.name)),
-      { name: 'color', type: 'color3', default: [1, 0.72, 0.42], doc: 'Couleur émise' }]
+      { name: 'color', type: 'color3', default: primitive.usdType === 'DistantLight' ? [1, 1, 1] : [1, 0.72, 0.42], doc: 'Couleur émise' }]
     : OBJECT_PROPERTIES;
   return { name: `primitive ${className}`, category: className, className, doc: primitive.doc, inputs: [...parameters, ...properties], outputs: [] };
 }
@@ -222,8 +230,8 @@ export function writeStageUsda(objects: readonly StageObject[], materials: reado
   for (const object of objects) {
     const primitive = SCRIPT_PRIMITIVES[object.className];
     const volume = primitive?.usdType === 'Volume';
-    const pointLight = primitive?.usdType === 'PointLight';
-    const shape = primitive && !volume && !pointLight ? stageObjectShape(object) : undefined;
+    const light = isScriptLight(primitive);
+    const shape = primitive && !volume && !light ? stageObjectShape(object) : undefined;
     const mesh = object.mesh ?? (volume
       ? volumePrimitiveMesh(
         Number(object.parameters.width ?? primitive.defaults.width),
@@ -254,12 +262,14 @@ export function writeStageUsda(objects: readonly StageObject[], materials: reado
       const st = mesh.primvars?.find(attribute => attribute.name === 'st');
       if (st) body.push(`texCoord2f[] primvars:st = ${tuples(st.values, 2)} (`, '    interpolation = "vertex"', ')');
     } else {
-      if (pointLight) {
+      if (light) {
         body.push(
-          `color3f inputs:color = ${tuple(object.color ?? [1, 0.72, 0.42])}`,
+          `color3f inputs:color = ${tuple(object.color ?? (primitive.usdType === 'DistantLight' ? [1, 1, 1] : [1, 0.72, 0.42]))}`,
           `float inputs:intensity = ${number(Number(object.parameters.intensity ?? primitive.defaults.intensity))}`,
           `float inputs:exposure = ${number(Number(object.parameters.exposure ?? primitive.defaults.exposure))}`,
-          `float inputs:radius = ${number(Number(object.parameters.radius ?? primitive.defaults.radius))}`,
+          ...(primitive.usdType === 'PointLight'
+            ? [`float inputs:radius = ${number(Number(object.parameters.radius ?? primitive.defaults.radius))}`]
+            : ['float inputs:angle = 0']),
         );
       } else {
         for (const [name, value] of Object.entries(shape ?? {})) {

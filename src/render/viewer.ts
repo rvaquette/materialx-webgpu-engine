@@ -351,6 +351,7 @@ interface SceneRender {
   setExposure: (exposure: number) => void;
   setTonemap: (tonemap: Tonemap) => Promise<void>;
   renderRaster: (targetView: GPUTextureView) => void;
+  prepareRaster: () => Promise<void>;
   /** Starts the path tracer build on first call; renders nothing until it is ready. */
   renderPathTrace: (targetView: GPUTextureView, tiled: boolean, accumulate: boolean) => void;
   capturePathTrace: (
@@ -2431,6 +2432,18 @@ export class InteractiveViewer {
     this.#renderNextFrame();
     requestAnimationFrame(this.#loop);
   };
+
+  async prepareRaster(): Promise<void> {
+    const current = this.#current;
+    if (!current || this.#backend !== 'raster' || this.#disposed) {
+      throw new Error('A loaded raster scene is required.');
+    }
+    await current.prepareRaster();
+    if (this.#current !== current || this.#backend !== 'raster' || this.#disposed) {
+      throw new Error('Scene or backend changed during raster preparation.');
+    }
+    this.#rasterDirty = true;
+  }
 
   renderRasterTo(targetView: GPUTextureView): void {
     if (!this.#current || this.#backend !== 'raster' || this.#context) {
@@ -4791,6 +4804,7 @@ export class InteractiveViewer {
         resetDisneyPathTrace();
       },
       renderRaster: drawRaster,
+      prepareRaster: ensureRaster,
       renderPathTrace: (targetView, tiled, accumulate) => {
         if (pathTracer) pathTracer.renderPathTrace(targetView, tiled, accumulate);
         else if (fallback?.from === 'pathtracing') drawRaster(targetView);

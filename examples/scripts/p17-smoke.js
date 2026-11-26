@@ -27,7 +27,7 @@ key.radius = 2;
 key.translate = [-2, 5, 2];
 
 await environment(sky.out);
-render.resolution = mobile ? 128 : 256;
+render.resolution = mobile ? 128 : 512;
 setCamera({ eye: [6, 5, 8], target: [0, 2, 0], fov: 40 });
 render.backend = "raster";
 for (const frame of frames) {
@@ -44,6 +44,6 @@ for (const frame of [0, 12, 24]) {
   smoke.center = [drift, 0, 0];
   plume.translate = [drift, 2.2, 0];
   await setTime(frame);
-  await render(mobile ? 16 : 48);
+  await render(mobile ? 16 : 256);
   await save(`02-pathtracing/frame-${pad(frame)}.png`);
 }

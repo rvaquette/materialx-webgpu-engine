@@ -19,7 +19,7 @@ for (const preset of ['Water', 'Lava', 'Fire', 'Smoke', 'Clouds', 'Ice', 'Mud', 
   const volume = ['Fire', 'Smoke', 'Clouds'].includes(preset);
   const plane = ['Water', 'Lava'].includes(preset);
   const cloud = preset === 'Clouds';
-  const script = `material = new ${preset}();` + (preset === 'Smoke' ? ' material.density = 1.4; material.scale = 1.2;' : '');
+  const script = `effect = new ${preset}();` + (preset === 'Smoke' ? ' effect.density = 1.4; effect.scale = 1.2;' : '');
   await writeFile(join(out, `${name}.mtlx`), toXml(await runScript(script, library), library));
   const object: StageObject = {
     name: 'Preset', className: volume ? 'Volume' : plane ? 'Plane' : 'Sphere', material: 'Preset',

@@ -1,3 +1,41 @@
+// Five dispersive directional waves (longer waves travel faster). Each crest is sharpened by
+// squaring the raised sine, an inexpensive stand-in for Gerstner trochoids; waveSum spans
+// [-0.75, 1.25] with crests above 0.85.
+const WATER_WAVES: readonly (readonly [angle: number, frequency: number, amplitude: number])[] = [
+  [0, 1, 0.4], [0.6, 1.7, 0.26], [-0.9, 2.9, 0.16], [1.9, 4.7, 0.11], [-2.4, 7.3, 0.07],
+];
+const WATER_WAVES_XML = (() => {
+  const input = (name: string, type: string, source: string) => `<input name="${name}" type="${type}" ${source} />`;
+  const node = (category: string, name: string, ...inputs: string[]) =>
+    `    <${category} name="${name}" type="float">${inputs.join('')}</${category}>`;
+  const lines: string[] = [];
+  const heights: string[] = [];
+  WATER_WAVES.forEach(([angle, frequency, amplitude], index) => {
+    const k = (value: number) => value.toFixed(4);
+    lines.push(
+      node('multiply', `waveX${index}`, input('in1', 'float', 'nodename="xScaled"'), input('in2', 'float', `value="${k(Math.cos(angle) * frequency)}"`)),
+      node('multiply', `waveZ${index}`, input('in1', 'float', 'nodename="zScaled"'), input('in2', 'float', `value="${k(Math.sin(angle) * frequency)}"`)),
+      node('add', `waveSpace${index}`, input('in1', 'float', `nodename="waveX${index}"`), input('in2', 'float', `nodename="waveZ${index}"`)),
+      node('multiply', `waveTime${index}`, input('in1', 'float', 'nodename="phase"'), input('in2', 'float', `value="${k(Math.sqrt(frequency) * 1.4)}"`)),
+      node('add', `wavePhase${index}`, input('in1', 'float', `nodename="waveSpace${index}"`), input('in2', 'float', `nodename="waveTime${index}"`)),
+      node('sin', `waveSine${index}`, input('in', 'float', `nodename="wavePhase${index}"`)),
+      node('add', `waveRaised${index}`, input('in1', 'float', `nodename="waveSine${index}"`), input('in2', 'float', 'value="1"')),
+      node('multiply', `waveHalf${index}`, input('in1', 'float', `nodename="waveRaised${index}"`), input('in2', 'float', 'value="0.5"')),
+      node('multiply', `waveSquare${index}`, input('in1', 'float', `nodename="waveHalf${index}"`), input('in2', 'float', `nodename="waveHalf${index}"`)),
+      node('multiply', `waveHeight${index}`, input('in1', 'float', `nodename="waveSquare${index}"`), input('in2', 'float', `value="${k(amplitude * 2)}"`)),
+    );
+    heights.push(`waveHeight${index}`);
+  });
+  let sum = heights[0];
+  heights.slice(1).forEach((name, index) => {
+    const out = `waveAccumulated${index}`;
+    lines.push(node('add', out, input('in1', 'float', `nodename="${sum}"`), input('in2', 'float', `nodename="${name}"`)));
+    sum = out;
+  });
+  lines.push(node('subtract', 'waveSum', input('in1', 'float', `nodename="${sum}"`), input('in2', 'float', 'value="0.75"')));
+  return lines.join('\n');
+})();
+
 export const ENGINE_PRESET_LIBRARY_XML = `
   <nodedef name="ND_engine_water" node="water" doc="Reusable animated water surface with wave displacement, crest foam, transmission and detail normals.">
     <input name="speed" type="float" value="0.5" uimin="0" uimax="4" />
@@ -19,25 +57,13 @@ export const ENGINE_PRESET_LIBRARY_XML = `
     <multiply name="phase" type="float"><input name="in1" type="float" nodename="clock" /><input name="in2" type="float" interfacename="speed" /></multiply>
     <multiply name="xScaled" type="float"><input name="in1" type="float" nodename="coordinates" output="outx" /><input name="in2" type="float" interfacename="scale" /></multiply>
     <multiply name="zScaled" type="float"><input name="in1" type="float" nodename="coordinates" output="outz" /><input name="in2" type="float" interfacename="scale" /></multiply>
-    <add name="xPhase" type="float"><input name="in1" type="float" nodename="xScaled" /><input name="in2" type="float" nodename="phase" /></add>
-    <multiply name="zFrequency" type="float"><input name="in1" type="float" nodename="zScaled" /><input name="in2" type="float" value="1.7" /></multiply>
-    <multiply name="zTime" type="float"><input name="in1" type="float" nodename="phase" /><input name="in2" type="float" value="1.3" /></multiply>
-    <add name="zPhase" type="float"><input name="in1" type="float" nodename="zFrequency" /><input name="in2" type="float" nodename="zTime" /></add>
-    <sin name="xWave" type="float"><input name="in" type="float" nodename="xPhase" /></sin>
-    <sin name="zWave" type="float"><input name="in" type="float" nodename="zPhase" /></sin>
-    <multiply name="smallWave" type="float"><input name="in1" type="float" nodename="zWave" /><input name="in2" type="float" value="0.45" /></multiply>
-    <add name="largeWaves" type="float"><input name="in1" type="float" nodename="xWave" /><input name="in2" type="float" nodename="smallWave" /></add>
-    <multiply name="crossX" type="float"><input name="in1" type="float" nodename="xScaled" /><input name="in2" type="float" value="2.3" /></multiply>
-    <multiply name="crossZ" type="float"><input name="in1" type="float" nodename="zScaled" /><input name="in2" type="float" value="-1.7" /></multiply>
-    <add name="crossPosition" type="float"><input name="in1" type="float" nodename="crossX" /><input name="in2" type="float" nodename="crossZ" /></add>
     <multiply name="crossTime" type="float"><input name="in1" type="float" nodename="phase" /><input name="in2" type="float" value="1.9" /></multiply>
-    <add name="crossPhase" type="float"><input name="in1" type="float" nodename="crossPosition" /><input name="in2" type="float" nodename="crossTime" /></add>
-    <sin name="crossWave" type="float"><input name="in" type="float" nodename="crossPhase" /></sin>
-    <multiply name="crossAmplitude" type="float"><input name="in1" type="float" nodename="crossWave" /><input name="in2" type="float" value="0.18" /></multiply>
-    <add name="waveSum" type="float"><input name="in1" type="float" nodename="largeWaves" /><input name="in2" type="float" nodename="crossAmplitude" /></add>
+${WATER_WAVES_XML}
     <multiply name="waveHeightValue" type="float"><input name="in1" type="float" nodename="waveSum" /><input name="in2" type="float" interfacename="waveHeight" /></multiply>
     <displacement name="waveDisplacement" type="displacementshader"><input name="displacement" type="float" nodename="waveHeightValue" /></displacement>
-    <smoothstep name="foamMask" type="float"><input name="in" type="float" nodename="waveSum" /><input name="low" type="float" value="0.7" /><input name="high" type="float" value="1.1" /></smoothstep>
+    <multiply name="foamBreakup" type="float"><input name="in1" type="float" nodename="detailNoise" /><input name="in2" type="float" value="0.5" /></multiply>
+    <add name="foamInput" type="float"><input name="in1" type="float" nodename="waveSum" /><input name="in2" type="float" nodename="foamBreakup" /></add>
+    <smoothstep name="foamMask" type="float"><input name="in" type="float" nodename="foamInput" /><input name="low" type="float" value="0.82" /><input name="high" type="float" value="1.1" /></smoothstep>
     <mix name="surfaceColor" type="color3"><input name="fg" type="color3" interfacename="foamColor" /><input name="bg" type="color3" interfacename="color" /><input name="mix" type="float" nodename="foamMask" /></mix>
     <combine3 name="detailOffset" type="vector3"><input name="in1" type="float" nodename="phase" /><input name="in2" type="float" value="0" /><input name="in3" type="float" nodename="crossTime" /></combine3>
     <add name="detailPosition" type="vector3"><input name="in1" type="vector3" nodename="position" /><input name="in2" type="vector3" nodename="detailOffset" /></add>
@@ -111,11 +137,21 @@ export const ENGINE_PRESET_LIBRARY_XML = `
     <worleynoise3d name="distances" type="vector2" nodedef="ND_worleynoise3d_vector2"><input name="position" type="vector3" nodename="scaledPosition" /><input name="style" type="integer" value="0" /><input name="jitter" type="float" value="0.8" /></worleynoise3d>
     <separate2 name="cellDistances" type="multioutput" nodedef="ND_separate2_vector2"><input name="in" type="vector2" nodename="distances" /></separate2>
     <subtract name="cells" type="float"><input name="in1" type="float" nodename="cellDistances" output="outy" /><input name="in2" type="float" nodename="cellDistances" output="outx" /></subtract>
-    <smoothstep name="crackEdge" type="float"><input name="in" type="float" nodename="cells" /><input name="low" type="float" value="0.04" /><input name="high" type="float" value="0.16" /></smoothstep>
+    <smoothstep name="crackEdge" type="float"><input name="in" type="float" nodename="cells" />    <input name="low" type="float" value="0.02" /><input name="high" type="float" value="0.12" /></smoothstep>
     <subtract name="crackMask" type="float"><input name="in1" type="float" value="1" /><input name="in2" type="float" nodename="crackEdge" /></subtract>
-    <blackbody name="hotColor" type="color3" nodedef="ND_blackbody"><input name="temperature" type="float" interfacename="temperature" /></blackbody>
+    <multiply name="heat" type="float"><input name="in1" type="float" nodename="crackMask" /><input name="in2" type="float" nodename="crackMask" /></multiply>
+    <multiply name="heatPosition" type="vector3"><input name="in1" type="vector3" nodename="advectedPosition" /><input name="in2" type="float" value="2.3" /></multiply>
+    <noise3d name="heatNoise" type="float" nodedef="ND_noise3d_float"><input name="position" type="vector3" nodename="heatPosition" /></noise3d>
+    <multiply name="heatVariation" type="float"><input name="in1" type="float" nodename="heatNoise" /><input name="in2" type="float" value="0.9" /></multiply>
+    <add name="heatScale" type="float"><input name="in1" type="float" nodename="heatVariation" /><input name="in2" type="float" value="0.8" /></add>
+    <subtract name="temperatureRange" type="float"><input name="in1" type="float" interfacename="temperature" /><input name="in2" type="float" value="900" /></subtract>
+    <multiply name="heatRange" type="float"><input name="in1" type="float" nodename="heat" /><input name="in2" type="float" nodename="temperatureRange" /></multiply>
+    <add name="kelvin" type="float"><input name="in1" type="float" nodename="heatRange" /><input name="in2" type="float" value="900" /></add>
+    <blackbody name="hotColor" type="color3" nodedef="ND_blackbody"><input name="temperature" type="float" nodename="kelvin" /></blackbody>
     <mix name="surfaceColor" type="color3"><input name="fg" type="color3" nodename="hotColor" /><input name="bg" type="color3" interfacename="crustColor" /><input name="mix" type="float" nodename="crackMask" /></mix>
-    <multiply name="glow" type="float"><input name="in1" type="float" nodename="crackMask" /><input name="in2" type="float" interfacename="emission" /></multiply>
+    <multiply name="liveHeat" type="float"><input name="in1" type="float" nodename="heat" /><input name="in2" type="float" nodename="heatScale" /></multiply>
+    <add name="glowMask" type="float"><input name="in1" type="float" nodename="liveHeat" /><input name="in2" type="float" value="0.03" /></add>
+    <multiply name="glow" type="float"><input name="in1" type="float" nodename="glowMask" /><input name="in2" type="float" interfacename="emission" /></multiply>
     <multiply name="crustRelief" type="float"><input name="in1" type="float" nodename="crackEdge" /><input name="in2" type="float" interfacename="relief" /></multiply>
     <displacement name="crustDisplacement" type="displacementshader"><input name="displacement" type="float" nodename="crustRelief" /></displacement>
     <multiply name="grainPosition" type="vector3"><input name="in1" type="vector3" nodename="scaledPosition" /><input name="in2" type="float" value="5" /></multiply>
@@ -339,17 +375,16 @@ export const ENGINE_PRESET_LIBRARY_XML = `
     <position name="position" type="vector3"><input name="space" type="string" value="object" /></position>
     <multiply name="inclusionPosition" type="vector3"><input name="in1" type="vector3" nodename="position" /><input name="in2" type="float" interfacename="inclusionScale" /></multiply>
     <noise3d name="inclusions" type="float" nodedef="ND_noise3d_float"><input name="position" type="vector3" nodename="inclusionPosition" /><input name="amplitude" type="float" value="1" /><input name="pivot" type="float" value="0" /></noise3d>
-    <range name="inclusionMask" type="float"><input name="in" type="float" nodename="inclusions" /><input name="inlow" type="float" value="-0.35" /><input name="inhigh" type="float" value="0.55" /><input name="outlow" type="float" value="0.15" /><input name="outhigh" type="float" value="0.8" /><input name="doclamp" type="boolean" value="true" /></range>
-    <multiply name="iceColor" type="color3"><input name="in1" type="color3" interfacename="color" /><input name="in2" type="float" nodename="inclusionMask" /></multiply>
-    <bump name="iceNormal" type="vector3" nodedef="ND_bump_vector3"><input name="height" type="float" nodename="inclusions" /><input name="scale" type="float" value="0.025" /></bump>
+    <range name="inclusionMask" type="float"><input name="in" type="float" nodename="inclusions" /><input name="inlow" type="float" value="-0.6" /><input name="inhigh" type="float" value="0.7" /><input name="outlow" type="float" value="0" /><input name="outhigh" type="float" value="0.35" /><input name="doclamp" type="boolean" value="true" /></range>
+    <bump name="iceNormal" type="vector3" nodedef="ND_bump_vector3"><input name="height" type="float" nodename="inclusions" /><input name="scale" type="float" value="0.012" /></bump>
     <standard_surface name="iceSurface" type="surfaceshader">
-      <input name="base_color" type="color3" nodename="iceColor" />
-      <input name="subsurface" type="float" value="0.25" />
-      <input name="subsurface_color" type="color3" interfacename="color" />
-      <input name="transmission" type="float" value="0.72" />
+      <input name="base" type="float" nodename="inclusionMask" />
+      <input name="base_color" type="color3" value="0.9, 0.96, 1" />
+      <input name="transmission" type="float" value="0.92" />
       <input name="transmission_color" type="color3" interfacename="color" />
       <input name="transmission_depth" type="float" interfacename="depth" />
       <input name="specular_roughness" type="float" interfacename="roughness" />
+      <input name="specular_IOR" type="float" value="1.31" />
       <input name="normal" type="vector3" nodename="iceNormal" />
     </standard_surface>
     <output name="out" type="surfaceshader" nodename="iceSurface" />

@@ -204,7 +204,7 @@
   <volume name="smokeVolume" type="volumeshader">
     <input name="vdf" type="VDF" nodename="vdf" />
   </volume>
-  <surfacematerial name="material_2" type="material" nodedef="ND_engine_volume_material">
+  <surfacematerial name="material" type="material" nodedef="ND_engine_volume_material">
     <input name="volumeshader" type="volumeshader" nodename="smokeVolume" />
   </surfacematerial>
 </materialx>

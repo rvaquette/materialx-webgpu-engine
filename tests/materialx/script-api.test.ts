@@ -630,6 +630,23 @@ s.thin_walled = true;
     await expect(runScript('lamp = new PointLight(); lamp.color = [1, -1, 0];', P17_LIBRARY)).rejects.toThrow(/lamp.color/);
   });
 
+  it('exports an oriented distant light without point-light attenuation or geometry', async () => {
+    const stages: string[] = [];
+    await runScript(`
+      sun = new DistantLight({ intensity: 4, rotate: [-60, -60, 0] });
+      await render();
+    `, P17_LIBRARY, { host: { ...idleHost(), loadStage: async stage => { stages.push(stage.usda); } } });
+    const scene = await importUsdStage('sun.usda', { reader: { read: async () => stages[0]! } });
+    const [sun] = importLights(scene);
+    expect(sun).toMatchObject({ type: 'distant', intensity: 4, color: [1, 1, 1], angle: 0 });
+    expect(sun!.transform[10]).toBeCloseTo(0.25);
+    expect(stages[0]).not.toContain('inputs:radius');
+    await expect(runScript('sun = new DistantLight(); sun.intensity = -1;', P17_LIBRARY)).rejects.toThrow(/sun.intensity/);
+    await expect(runScript('sun = new DistantLight(); sun.radius = 1;', P17_LIBRARY)).rejects.toThrow(/no property "radius"/);
+    await expect(runScript('x = new Union({ base: new DistantLight(), tool: new Sphere() });', P17_LIBRARY))
+      .rejects.toThrow(/cannot reference/);
+  });
+
   it('round-trips script → XML → script', async () => {
     const xml = toXml(await runScript(SCRIPT, LIBRARY), LIBRARY);
     const script = toScript(fromXml(xml, LIBRARY), LIBRARY);

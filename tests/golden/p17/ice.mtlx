@@ -41,7 +41,7 @@
   <displacement name="iceDisplacement" type="displacementshader">
     <input name="displacement" type="float" value="0" />
   </displacement>
-  <surfacematerial name="material_2" type="material">
+  <surfacematerial name="material" type="material">
     <input name="surfaceshader" type="surfaceshader" nodename="iceSurface" />
     <input name="displacementshader" type="displacementshader" nodename="iceDisplacement" />
   </surfacematerial>
