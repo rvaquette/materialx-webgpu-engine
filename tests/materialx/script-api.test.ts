@@ -810,7 +810,7 @@ describe('scripted primitives', () => {
       ball.radius = 0.25;
       ball.translate = [0, 0.25, 0];
       ball.material = surface;
-      floor = new Plane({ width: 4, length: 4, resolution: 8 });
+      floor = new Plane({ width: 4, length: 4, resolution: 8, maxEdgeLength: 0.75, vertexBudget: 512 });
       floor.material = surface;
       ring = new Torus({ axis: "Z" });
       log(ball.path, floor, ball.radius, objects().join(","));
@@ -824,6 +824,8 @@ describe('scripted primitives', () => {
     expect(usda).toContain('double3 xformOp:translate = (0, 0.25, 0)');
     expect(usda).toContain('def Plane "floor"');
     expect(usda).toContain('custom int engine:resolution = 8');
+    expect(usda).toContain('custom double engine:maxEdgeLength = 0.75');
+    expect(usda).toContain('custom int engine:vertexBudget = 512');
     expect(usda).toContain('def Mesh "ring"');
     expect(usda).toContain('custom token engine:primitive:axis = "Z"');
     // One document for the shared shader.
@@ -887,6 +889,8 @@ describe('scripted primitives', () => {
     await expect(runScript('b = new Sphere(); b.radius = -1;', LIBRARY)).rejects.toThrow(/b\.radius: sphere radius must be a positive number/);
     await expect(runScript('b = new Sphere(); b.resolution = 2.5;', LIBRARY)).rejects.toThrow(/resolution must be an integer from 3 to 1024/);
     await expect(runScript('b = new Cylinder(); b.axis = "W";', LIBRARY)).rejects.toThrow(/axis must be "X", "Y" or "Z"/);
+    await expect(runScript('p = new Plane(); p.maxEdgeLength = -1;', LIBRARY)).rejects.toThrow(/maxEdgeLength must be zero .* or a positive number/);
+    await expect(runScript('p = new Plane(); p.vertexBudget = 3;', LIBRARY)).rejects.toThrow(/vertexBudget must be an integer from 4/);
     await expect(runScript('b = new Sphere(); b.size = 1;', LIBRARY)).rejects.toThrow(/Sphere has no property "size"\. Properties: radius, resolution, translate/);
     await expect(runScript('b = new Sphere(); b.material = 3;', LIBRARY)).rejects.toThrow(/b\.material expects a surface shader/);
     await expect(runScript('b = Sphere();', LIBRARY)).rejects.toThrow(/Use "new Sphere\(\)"/);

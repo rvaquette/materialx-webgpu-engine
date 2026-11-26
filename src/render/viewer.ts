@@ -21,7 +21,7 @@ import {
   type SceneDrawCall,
 } from './raster/backend.ts';
 import { buildGeometry, createSceneBindGroups, uploadGeometry, type SceneDrawBuffers } from './scene-resources.ts';
-import type { PreparedMesh } from '../geometry/prepare.ts';
+import { prepareMesh, type PreparedMesh } from '../geometry/prepare.ts';
 import { buildEnvCdf } from '../assets/environment-cdf.ts';
 import {
   buildCachedPathTraceScene, buildPathTraceScene, PT_NODE_FLOATS, PT_TRIANGLE_FLOATS, type PathTraceScene, type PathTraceTransformRange,
@@ -47,6 +47,7 @@ import { uploadMaterialImage, uploadMaterialImageArray } from '../gpu/material-t
 import { packPtTextureArrays } from './pathtracing/texture-arrays.ts';
 import { OrbitCamera, attachOrbitControls } from '../scene/orbit-camera.ts';
 import { inverse4, lookAt4, multiply4, perspective4, transformDirection, type Mat4, type Vec3 } from '../scene/transforms.ts';
+import { gprimToMesh, primitiveShapeOf } from '../scene/primitives.ts';
 import type { DiagnosticSink } from '../core/diagnostics.ts';
 import {
   compileShaderBatch, SHADER_COMPILATION_CONCURRENCY, type ShaderCompilationError,
@@ -448,6 +449,9 @@ export class InteractiveViewer {
   #budgetExceededReported = false;
   #loading = 0;
   #capturing = 0;
+  #adaptiveCameraTimer: ReturnType<typeof setTimeout> | undefined;
+  #adaptiveCameraUpdating = false;
+  #adaptiveCameraPending = false;
   #streaming: boolean;
   // Dynamic scene state: the USD-driven state at #time, then the API overrides.
   #time = 0;
@@ -694,6 +698,7 @@ export class InteractiveViewer {
       this.#detachControls();
       this.#detachControls = this.#bindOrbitControls();
       this.#onCameraChanged();
+      await this.#updateCameraAdaptiveSubdivision();
     }
     if (settings.depth !== undefined) this.setPathTracingDepth(settings.depth);
     this.#rasterDirty = true;
@@ -850,7 +855,7 @@ export class InteractiveViewer {
     const capture = async (material: MaterialResource): Promise<RgbaCapture> => {
       check();
       const materials = new Map(source.materials).set(key, material);
-      const resources = await applySceneDisplacement({ ...source, materials }, loaded.mtlx.imageProvider);
+      const resources = await applySceneDisplacement({ ...source, materials }, loaded.mtlx.imageProvider, this.#device);
       check();
       const candidate = { ...loaded, resources };
       delete candidate.compiled;
@@ -929,7 +934,7 @@ export class InteractiveViewer {
     }
     // Render resources already contain baked displacement; only a new shaderball needs it reapplied.
     const resources = parameterResources || shaderBall
-      ? await applySceneDisplacement(isolated, loaded.mtlx.imageProvider) : isolated;
+      ? await applySceneDisplacement(isolated, loaded.mtlx.imageProvider, this.#device) : isolated;
     check();
     const exposure = this.#exposure ?? loaded.cameras[0]?.exposure ?? 0;
     const eye = this.#orbit.eye;
@@ -1206,7 +1211,7 @@ export class InteractiveViewer {
         throw new Error('Scene changed during material update.');
       }
     };
-    const resources = await applySceneDisplacement(parameterResources, loaded.mtlx.imageProvider);
+    const resources = await applySceneDisplacement(parameterResources, loaded.mtlx.imageProvider, this.#device);
     check();
     const candidate = { ...loaded, resources, parameterResources };
     delete candidate.compiled;
@@ -1324,10 +1329,10 @@ export class InteractiveViewer {
     }
     const references = !options.imported && /\.usda(?:[?#]|$)/i.test(entry)
       ? await readCompiledLayerReferences(entry).catch(() => undefined) : undefined;
-    if (!references) return loadUsdScene(entry, sink, () => { }, overrides, sourceOptions);
+    if (!references) return loadUsdScene(entry, sink, () => { }, overrides, sourceOptions, this.#device);
     if (overrides.size) {
       if (!references.source) throw new Error('Compiled scenes cannot import source material overrides.');
-      return loadUsdScene(references.source, sink, () => { }, overrides, sourceOptions);
+      return loadUsdScene(references.source, sink, () => { }, overrides, sourceOptions, this.#device);
     }
     try {
       const { shaders, buffers } = references;
@@ -1338,7 +1343,7 @@ export class InteractiveViewer {
     } catch (error) {
       if (!references.source) throw error;
       sink({ level: 'warning', message: `Compiled binaries unavailable; loading source ${references.source}`, detail: String(error) });
-      return loadUsdScene(references.source, sink, () => { }, overrides, sourceOptions);
+      return loadUsdScene(references.source, sink, () => { }, overrides, sourceOptions, this.#device);
     }
   }
 
@@ -1484,6 +1489,7 @@ export class InteractiveViewer {
 
   dispose(): void {
     if (this.#pathTraceRefill !== undefined) clearTimeout(this.#pathTraceRefill);
+    if (this.#adaptiveCameraTimer !== undefined) clearTimeout(this.#adaptiveCameraTimer);
     this.#disposed = true;
     this.#detachControls();
     this.#current?.dispose();
@@ -1510,6 +1516,7 @@ export class InteractiveViewer {
     const camera = this.#loaded?.cameras[0];
     if (camera?.pathtracerFov !== undefined) this.#orbit.fovY = cameraFovY(camera, width / height);
     this.#onCameraChanged();
+    await this.#updateCameraAdaptiveSubdivision();
     this.#emitStatus();
   }
 
@@ -1645,6 +1652,7 @@ export class InteractiveViewer {
     this.#emitStatus();
     if (await this.#applyMaterialAnimation()) this.#applyDynamicState(false, true);
     await this.#applyTopologyChanges();
+    await this.#updateCameraAdaptiveSubdivision();
   }
 
   #previewWanted(state: PreviewState, readyGeometries: number): boolean {
@@ -1795,6 +1803,102 @@ export class InteractiveViewer {
     if (this.#loaded === loaded) { this.#orbit.near = near; this.#orbit.far = far; }
   }
 
+  #hasCameraAdaptivePlanes(loaded = this.#loaded): boolean {
+    return !!loaded?.parameterResources && [...loaded.scene.prims.values()].some(prim => {
+      const shape = primitiveShapeOf(prim);
+      return shape?.kind === 'plane' && (shape.maxScreenEdgeLength ?? 0) > 0;
+    });
+  }
+
+  #scheduleCameraAdaptiveSubdivision(): void {
+    if (!this.#hasCameraAdaptivePlanes() || this.#disposed) return;
+    if (this.#adaptiveCameraTimer !== undefined) clearTimeout(this.#adaptiveCameraTimer);
+    this.#adaptiveCameraTimer = setTimeout(() => {
+      this.#adaptiveCameraTimer = undefined;
+      void this.#updateCameraAdaptiveSubdivision().catch(error => {
+        this.#diagnosticSink()({
+          level: 'error', code: 'camera-adaptive-subdivision-failed',
+          message: 'Camera-adaptive plane subdivision failed.',
+          detail: error instanceof Error ? error.message : String(error),
+        });
+      });
+    }, 120);
+  }
+
+  async #updateCameraAdaptiveSubdivision(): Promise<void> {
+    if (this.#adaptiveCameraTimer !== undefined) {
+      clearTimeout(this.#adaptiveCameraTimer);
+      this.#adaptiveCameraTimer = undefined;
+    }
+    if (this.#adaptiveCameraUpdating) {
+      this.#adaptiveCameraPending = true;
+      return;
+    }
+    if (!this.#hasCameraAdaptivePlanes()) return;
+
+    this.#adaptiveCameraUpdating = true;
+    try {
+      do {
+        this.#adaptiveCameraPending = false;
+        const loaded = this.#loaded;
+        const current = this.#current;
+        const base = loaded?.parameterResources;
+        if (!loaded || !current || !base) return;
+        const camera = {
+          viewProjection: this.#orbit.viewProj(),
+          viewport: [this.#width, this.#height] as const,
+        };
+        const animatedTransforms = loaded.animation
+          ? animateScene(loaded.animation.source, this.#time, base).transforms : undefined;
+        const geometries = new Map(base.geometries);
+        let changedGeometries = 0;
+        let changedVertices = 0;
+        for (const geometry of base.geometries.values()) {
+          const prim = loaded.scene.prims.get(geometry.primPath);
+          const shape = prim ? primitiveShapeOf(prim) : undefined;
+          if (!prim || shape?.kind !== 'plane' || !(shape.maxScreenEdgeLength && shape.maxScreenEdgeLength > 0)) continue;
+          const instances = base.instances.filter(instance => instance.prototypeId === geometry.prototypeId);
+          if (instances.length === 0) continue;
+          const modelTransforms = instances.map(instance =>
+            this.#transformOverrides.get(instance.primPath) ?? this.#transformOverrides.get(instance.id)
+            ?? animatedTransforms?.get(instance.id) ?? instance.transform);
+          const raw = gprimToMesh(prim, { ...camera, modelTransforms });
+          if (!raw) throw new Error(`Camera-adaptive plane mesh is unavailable: ${prim.path}`);
+          const hasDisplacement = instances.some(instance =>
+            instance.materialKey && base.materials.get(instance.materialKey)?.displacement);
+          const prepared = prepareMesh(raw, { computeTangents: true, hasDisplacement });
+          const oldPositions = geometry.streams.find(stream => stream.name === 'position')?.data;
+          const samePositions = !!oldPositions && oldPositions.length === prepared.positions.length
+            && oldPositions.every((value, index) => value === prepared.positions[index]);
+          const sameIndices = geometry.indices.length === prepared.indices.length
+            && geometry.indices.every((value, index) => value === prepared.indices[index]);
+          if (samePositions && sameIndices) continue;
+          geometries.set(geometry.prototypeId, buildGeometry(geometry.prototypeId, geometry.primPath, prepared));
+          changedGeometries++;
+          changedVertices += prepared.positions.length / 3;
+        }
+        if (changedGeometries === 0) continue;
+
+        const started = performance.now();
+        const parameterResources = { ...base, geometries };
+        const resources = await applySceneDisplacement(parameterResources, loaded.mtlx.imageProvider, this.#device);
+        const candidate = { ...loaded, resources, parameterResources };
+        delete candidate.compiled;
+        await this.#replaceLoaded(loaded, candidate, 'Scene changed during camera-adaptive subdivision.', () => {
+          if (this.#loaded !== loaded || this.#current !== current) {
+            throw new Error('Scene changed during camera-adaptive subdivision.');
+          }
+        });
+        performance.measure('viewer:adaptive-subdivision', {
+          start: started, end: performance.now(),
+          detail: { mode: 'camera', geometries: changedGeometries, vertices: changedVertices },
+        });
+      } while (this.#adaptiveCameraPending && !this.#disposed);
+    } finally {
+      this.#adaptiveCameraUpdating = false;
+    }
+  }
+
   #onCameraChanged(resetAccumulation = true): void {
     if (!this.#current) return;
     this.#clearDenoiserComparison();
@@ -1824,6 +1928,7 @@ export class InteractiveViewer {
     if (this.#time !== time) return;
     this.#applyDynamicState(options.keepAccumulation ?? false, materialsChanged);
     await this.#applyTopologyChanges();
+    await this.#updateCameraAdaptiveSubdivision();
   }
 
   /**
@@ -1935,6 +2040,7 @@ export class InteractiveViewer {
       this.#transformOverrides.set(path, [...matrix]);
     }
     this.#applyDynamicState(false);
+    this.#scheduleCameraAdaptiveSubdivision();
   }
 
   /** Shows or hides an object; omit the flag to restore the scene's visibility. */
@@ -1961,7 +2067,7 @@ export class InteractiveViewer {
   }
 
   /** Places the camera; field of view in radians (vertical). */
-  setCamera(camera: { eye: readonly number[]; target: readonly number[]; fovY?: number }): void {
+  async setCamera(camera: { eye: readonly number[]; target: readonly number[]; fovY?: number }): Promise<void> {
     const eye = camera.eye, target = camera.target;
     if (eye.length !== 3 || target.length !== 3 || ![...eye, ...target].every(Number.isFinite)
       || (camera.fovY !== undefined && !(camera.fovY > 0 && camera.fovY < Math.PI))) {
@@ -1974,6 +2080,7 @@ export class InteractiveViewer {
     this.#detachControls();
     this.#detachControls = this.#bindOrbitControls();
     this.#onCameraChanged();
+    await this.#updateCameraAdaptiveSubdivision();
   }
 
   /** Variant sets authored in the scene, by prim path. */
@@ -2048,6 +2155,7 @@ export class InteractiveViewer {
       this.#orbitFromSceneCamera(camera, loaded, [(bounds.min[0] + bounds.max[0]) / 2, (bounds.min[1] + bounds.max[1]) / 2, (bounds.min[2] + bounds.max[2]) / 2]);
       // applyDynamics already aged or restarted the path tracer; Disney still restarts on camera moves.
       this.#onCameraChanged(!keepAccumulation && this.#backend === 'disney');
+      this.#scheduleCameraAdaptiveSubdivision();
     }
   }
 
@@ -2091,7 +2199,10 @@ export class InteractiveViewer {
 
   #bindOrbitControls(): () => void {
     return this.#orbitControls && this.#canvas
-      ? attachOrbitControls(this.#canvas, this.#orbit, () => this.#onCameraChanged())
+      ? attachOrbitControls(this.#canvas, this.#orbit, () => {
+        this.#onCameraChanged();
+        this.#scheduleCameraAdaptiveSubdivision();
+      })
       : () => {};
   }
 

@@ -2,11 +2,16 @@
 // USD stage they form. The stage is the scene the viewer renders and the file `save("x.usda")`
 // writes: UsdGeom implicit gprims where USD has one (tessellated by src/scene/primitives.ts),
 // meshes otherwise, bound to MaterialX documents written next to the layer.
-import { primitiveMesh, type PrimitiveAxis, type PrimitiveKind, MIN_RESOLUTION, MAX_RESOLUTION } from '../scene/primitives.ts';
+import {
+  primitiveMesh, type PrimitiveAxis, type PrimitiveKind, MIN_RESOLUTION, MAX_RESOLUTION,
+  DEFAULT_ADAPTIVE_VERTEX_BUDGET, MAX_ADAPTIVE_VERTEX_BUDGET,
+} from '../scene/primitives.ts';
 import type { RawMesh } from '../geometry/prepare.ts';
 import type { ScriptNodeDef, ScriptPortDef } from './script-api.ts';
 
-export type PrimitiveParameter = 'radius' | 'minorRadius' | 'size' | 'height' | 'width' | 'length' | 'axis' | 'resolution';
+export type PrimitiveParameter =
+  | 'radius' | 'minorRadius' | 'size' | 'height' | 'width' | 'length' | 'axis' | 'resolution'
+  | 'maxEdgeLength' | 'maxScreenEdgeLength' | 'vertexBudget';
 
 export interface ScriptPrimitive {
   kind: PrimitiveKind;
@@ -25,13 +30,22 @@ export const SCRIPT_PRIMITIVES: Readonly<Record<string, ScriptPrimitive>> = {
   Cone: { kind: 'cone', usdType: 'Cone', doc: 'Cône, sommet vers +axis', defaults: { radius: 0.5, height: 1, axis: 'Y', resolution: 48 } },
   Capsule: { kind: 'capsule', usdType: 'Capsule', doc: 'Capsule : cylindre de hauteur height terminé par deux demi-sphères', defaults: { radius: 0.25, height: 0.5, axis: 'Y', resolution: 48 } },
   Torus: { kind: 'torus', usdType: 'Mesh', doc: 'Tore de rayon radius et d’épaisseur minorRadius', defaults: { radius: 0.5, minorRadius: 0.15, axis: 'Y', resolution: 48 } },
-  Plane: { kind: 'plane', usdType: 'Plane', doc: 'Plan rectangulaire de normale axis ; resolution le subdivise en grille (displacement)', defaults: { width: 1, length: 1, axis: 'Y', resolution: 1 } },
+  Plane: {
+    kind: 'plane', usdType: 'Plane', doc: 'Plan rectangulaire ; maxEdgeLength ou maxScreenEdgeLength adapte la grille au displacement',
+    defaults: {
+      width: 1, length: 1, axis: 'Y', resolution: 1,
+      maxEdgeLength: 0, maxScreenEdgeLength: 0, vertexBudget: DEFAULT_ADAPTIVE_VERTEX_BUDGET,
+    },
+  },
   Disk: { kind: 'disk', usdType: 'Mesh', doc: 'Disque de normale axis', defaults: { radius: 0.5, axis: 'Y', resolution: 48 } },
 };
 
 const PARAMETER_DOCS: Readonly<Record<PrimitiveParameter, string>> = {
   radius: 'Rayon', minorRadius: 'Rayon du tube', size: 'Longueur d’arête', height: 'Hauteur', width: 'Largeur', length: 'Longueur',
   axis: 'Axe : "X", "Y" ou "Z"', resolution: 'Segments autour de l’axe, ou subdivisions par côté',
+  maxEdgeLength: 'Longueur maximale d’arête en espace objet ; 0 désactive la subdivision adaptative',
+  maxScreenEdgeLength: 'Longueur maximale d’arête projetée en pixels ; 0 désactive la subdivision adaptative caméra',
+  vertexBudget: 'Budget maximal de sommets pour la subdivision adaptative',
 };
 
 /** Properties shared by every primitive. */
@@ -54,6 +68,11 @@ export function primitiveScriptDef(className: string): ScriptNodeDef | undefined
     if (parameter === 'resolution') {
       return { name, type: 'integer', default: value, min: MIN_RESOLUTION[primitive.kind], max: MAX_RESOLUTION, doc: PARAMETER_DOCS.resolution };
     }
+    if (parameter === 'vertexBudget') {
+      return { name, type: 'integer', default: value, min: 4, max: MAX_ADAPTIVE_VERTEX_BUDGET, doc: PARAMETER_DOCS.vertexBudget };
+    }
+    if (parameter === 'maxEdgeLength') return { name, type: 'float', default: value, min: 0, doc: PARAMETER_DOCS.maxEdgeLength };
+    if (parameter === 'maxScreenEdgeLength') return { name, type: 'float', default: value, min: 0, doc: PARAMETER_DOCS.maxScreenEdgeLength };
     return { name, type: 'float', default: value, min: 0, doc: PARAMETER_DOCS[parameter] };
   });
   return { name: `primitive ${className}`, category: className, className, doc: primitive.doc, inputs: [...parameters, ...OBJECT_PROPERTIES], outputs: [] };
@@ -145,7 +164,7 @@ export function writeStageUsda(objects: readonly StageObject[], materials: reado
         `custom token engine:primitive = "${shape.kind}"`,
         ...Object.entries(shape).filter(([name]) => name !== 'kind')
           .map(([name, value]) => typeof value === 'number'
-            ? `custom ${name === 'resolution' ? 'int' : 'double'} engine:primitive:${name} = ${number(value)}`
+            ? `custom ${name === 'resolution' || name === 'vertexBudget' ? 'int' : 'double'} engine:primitive:${name} = ${number(value)}`
             : `custom token engine:primitive:${name} = "${value}"`),
         'uniform token subdivisionScheme = "none"',
         `int[] faceVertexCounts = [${mesh.faceVertexCounts.join(', ')}]`,
@@ -159,6 +178,9 @@ export function writeStageUsda(objects: readonly StageObject[], materials: reado
         if (name === 'kind') continue;
         if (name === 'axis') body.push(`uniform token axis = "${value}"`);
         else if (name === 'resolution') body.push(`custom int engine:resolution = ${value}`);
+        else if (name === 'maxEdgeLength') body.push(`custom double engine:maxEdgeLength = ${number(value as number)}`);
+        else if (name === 'maxScreenEdgeLength') body.push(`custom double engine:maxScreenEdgeLength = ${number(value as number)}`);
+        else if (name === 'vertexBudget') body.push(`custom int engine:vertexBudget = ${value}`);
         else body.push(`double ${name} = ${number(value as number)}`);
       }
     }

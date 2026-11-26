@@ -6,8 +6,346 @@ import { buildGeometry, transformBounds, type GeometryResource, type SceneResour
 import type { PtImageProvider } from './pathtracing/device-bindings.ts';
 import { udimTileAt } from '../assets/udim.ts';
 import { evaluateIrRef, type IrEvalVaryings } from '../compiler/ir-eval.ts';
-import { OBJECT_BITANGENT_INPUT, OBJECT_NORMAL_INPUT, OBJECT_POSITION_INPUT, OBJECT_TANGENT_INPUT } from '../compiler/ir.ts';
+import {
+  OBJECT_BITANGENT_INPUT, OBJECT_NORMAL_INPUT, OBJECT_POSITION_INPUT, OBJECT_TANGENT_INPUT,
+  type IrType, type ShaderIr,
+} from '../compiler/ir.ts';
+import { emitWgsl, lowerExprs } from '../compiler/wgsl.ts';
 import { createImageSampler, type ImageSampler } from './pathtracing/texture-sample.ts';
+import { packParameterUniforms } from './material-parameters.ts';
+import { imageSamplerDescriptor } from '../assets/samplers.ts';
+
+const DISPLACEMENT_COMPUTE_MIN_VERTICES = 4096;
+const DISPLACEMENT_COMPUTE_WORKGROUP_SIZE = 64;
+
+function ident(name: string): string {
+  const cleaned = name.replace(/[^A-Za-z0-9_]/g, '_');
+  return /^[0-9]/.test(cleaned) ? `_${cleaned}` : cleaned;
+}
+
+function floatAttribute(type: IrType): boolean {
+  return type.kind === 'scalar' ? type.scalar === 'float'
+    : type.kind === 'vector' && type.scalar === 'float';
+}
+
+function displacementTexturePixels(image: DecodedPixelImage): Uint8Array | undefined {
+  if (image.udim || image.componentType !== 'uint8' || !(image.data instanceof Uint8Array)
+      || image.width < 1 || image.height < 1
+      || image.data.length !== image.width * image.height * image.channels) return undefined;
+  const rgba = new Uint8Array(image.width * image.height * 4);
+  for (let pixel = 0; pixel < image.width * image.height; pixel++) {
+    const source = pixel * image.channels;
+    const target = pixel * 4;
+    for (let channel = 0; channel < image.channels && channel < 4; channel++) {
+      rgba[target + channel] = image.data[source + channel]!;
+    }
+    rgba[target + 3] = image.channels === 4 ? image.data[source + 3]! : 255;
+  }
+  return rgba;
+}
+
+function displacementInputSlots(
+  geometry: GeometryResource, lowered: ReturnType<typeof lowerExprs>,
+): { stride: number; values: Float32Array; wgsl: string } | undefined {
+  const positions = geometry.streams.find(stream => stream.name === 'position')?.data;
+  const normals = geometry.streams.find(stream => stream.name === 'normal')?.data;
+  const tangents = geometry.streams.find(stream => stream.name === 'tangent')?.data;
+  const tangentComponents = geometry.streams.find(stream => stream.name === 'tangent')?.components ?? 3;
+  const uv = geometry.streams.find(stream => stream.name === 'uv')?.data;
+  if (!positions || !normals) return undefined;
+
+  const expressions = [...lowered.extraInputs.keys()];
+  const sourceFor = (name: string): ((vertex: number) => ArrayLike<number>) | undefined => {
+    if (name === 'position' || name === OBJECT_POSITION_INPUT) {
+      return vertex => positions.subarray(vertex * 3, vertex * 3 + 3);
+    }
+    if (name === 'normal' || name === OBJECT_NORMAL_INPUT) {
+      return vertex => normals.subarray(vertex * 3, vertex * 3 + 3);
+    }
+    if (name === 'tangent' || name === OBJECT_TANGENT_INPUT) {
+      return vertex => tangents
+        ? tangents.subarray(vertex * tangentComponents, vertex * tangentComponents + 3)
+        : [1, 0, 0];
+    }
+    if (name === OBJECT_BITANGENT_INPUT) {
+      return vertex => {
+        const n = normals.subarray(vertex * 3, vertex * 3 + 3);
+        const tangent = tangents
+          ? tangents.subarray(vertex * tangentComponents, (vertex + 1) * tangentComponents)
+          : [1, 0, 0, 1];
+        const hand = tangent[3] ?? 1;
+        return [
+          (n[1]! * tangent[2]! - n[2]! * tangent[1]!) * hand,
+          (n[2]! * tangent[0]! - n[0]! * tangent[2]!) * hand,
+          (n[0]! * tangent[1]! - n[1]! * tangent[0]!) * hand,
+        ];
+      };
+    }
+    if (name === 'texcoord') return vertex => uv?.subarray(vertex * 2, vertex * 2 + 2) ?? [0, 0];
+    if (['view', 'viewdir', 'viewdirection'].includes(name.toLowerCase())) return undefined;
+    return undefined;
+  };
+  const primvarSource = (name: string): ((vertex: number) => ArrayLike<number>) => {
+    const streamName = name === 'st' ? 'uv' : name;
+    const stream = geometry.streams.find(candidate => candidate.name === streamName);
+    return stream
+      ? vertex => stream.data.subarray(vertex * stream.components, (vertex + 1) * stream.components)
+      : () => [];
+  };
+
+  const inputTypes = new Map<string, IrType>();
+  for (const [name, type] of lowered.extraInputs) inputTypes.set(name, type);
+  for (const [name, type] of lowered.primvarFields) inputTypes.set(`v_${name}`, type);
+  if ([...inputTypes.values()].some(type => !floatAttribute(type))) return undefined;
+
+  const slotFor = new Map<string, number>();
+  const readers: ((vertex: number) => ArrayLike<number>)[] = [];
+  const add = (key: string, reader: (vertex: number) => ArrayLike<number>): number => {
+    const index = readers.length;
+    slotFor.set(key, index);
+    readers.push(reader);
+    return index;
+  };
+  add('position', sourceFor('position')!);
+  add('normal', sourceFor('normal')!);
+  add('tangent', sourceFor('tangent')!);
+  add('bitangent', sourceFor(OBJECT_BITANGENT_INPUT)!);
+  add('texcoord', sourceFor('texcoord')!);
+  for (const name of expressions) {
+    if (!sourceFor(name)) return undefined;
+    add(`in_${name}`, sourceFor(name)!);
+  }
+  for (const name of lowered.primvarFields.keys()) add(`v_${name}`, primvarSource(name));
+
+  const stride = readers.length;
+  const values = new Float32Array(geometry.vertexCount * stride * 4);
+  for (let vertex = 0; vertex < geometry.vertexCount; vertex++) {
+    for (let slot = 0; slot < stride; slot++) {
+      const value = readers[slot]!(vertex);
+      const offset = (vertex * stride + slot) * 4;
+      for (let component = 0; component < Math.min(value.length, 4); component++) {
+        values[offset + component] = value[component]!;
+      }
+    }
+  }
+  const fieldValue = (type: IrType, slot: number): string => {
+    const value = `mx_displacement_inputs[vertex * ${stride}u + ${slot}u]`;
+    return type.kind === 'scalar' ? `${value}.x`
+      : type.kind === 'vector' ? `${value}.${'xyzw'.slice(0, type.size)}`
+      : '0.0';
+  };
+  const assignments = [
+    `vary.position = mx_displacement_inputs[vertex * ${stride}u + ${slotFor.get('position')}u].xyz;`,
+    `vary.normal = mx_displacement_inputs[vertex * ${stride}u + ${slotFor.get('normal')}u].xyz;`,
+    `vary.tangent = mx_displacement_inputs[vertex * ${stride}u + ${slotFor.get('tangent')}u].xyz;`,
+    `vary.bitangent = mx_displacement_inputs[vertex * ${stride}u + ${slotFor.get('bitangent')}u].xyz;`,
+    `vary.texcoord = mx_displacement_inputs[vertex * ${stride}u + ${slotFor.get('texcoord')}u].xy;`,
+    'vary.viewDir = vec3f(0.0, 0.0, 1.0);',
+    'vary.frontFacing = 1.0;',
+  ];
+  for (const [name, type] of lowered.extraInputs) {
+    const slot = slotFor.get(`in_${name}`)!;
+    assignments.push(`vary.in_${ident(name)} = ${fieldValue(type, slot)};`);
+  }
+  for (const [name, type] of lowered.primvarFields) {
+    const slot = slotFor.get(`v_${name}`)!;
+    assignments.push(`vary.v_${ident(name)} = ${fieldValue(type, slot)};`);
+  }
+  return { stride, values, wgsl: assignments.join('\n') };
+}
+
+async function computeDisplacementOffsets(
+  device: GPUDevice, geometry: GeometryResource,
+  displacement: NonNullable<MaterialDisplacement['program']>,
+  parameters: readonly { uniform?: string; value: readonly number[] }[] = [],
+  images: ReadonlyMap<string, DecodedPixelImage> = new Map(),
+): Promise<Float32Array | undefined> {
+  if (geometry.vertexCount < DISPLACEMENT_COMPUTE_MIN_VERTICES) return undefined;
+  const displacementExpr = displacement.ir.exprs.get(displacement.displacementRef);
+  const scaleExpr = displacement.ir.exprs.get(displacement.scaleRef);
+  if (!displacementExpr || !scaleExpr || !floatAttribute(displacementExpr.type)
+      || scaleExpr.type.kind !== 'scalar' || scaleExpr.type.scalar !== 'float') return undefined;
+  if ((displacement.mode === 'scalar' && displacementExpr.type.kind !== 'scalar')
+      || (displacement.mode === 'vector' && (displacementExpr.type.kind !== 'vector' || displacementExpr.type.size !== 3))) {
+    return undefined;
+  }
+
+  const ir: ShaderIr = {
+    ...displacement.ir,
+    outputs: [
+      { name: 'displacement', type: displacementExpr.type, ref: displacement.displacementRef },
+      { name: 'scale', type: scaleExpr.type, ref: displacement.scaleRef },
+    ],
+  };
+  if (ir.requirements.needsDerivatives || ir.requirements.needsTextureFootprint
+      || [...ir.exprs.values()].some(expression =>
+        expression.kind === 'texture' && (expression.bias !== undefined || expression.gradient !== undefined))) {
+    return undefined;
+  }
+  const lowered = lowerExprs(ir, '', true);
+  const inputs = displacementInputSlots(geometry, lowered);
+  if (!inputs) return undefined;
+  const unsupportedInput = [...ir.exprs.values()].some(expression =>
+    expression.kind === 'input' && ['view', 'viewdir', 'viewdirection'].includes(expression.name.toLowerCase()));
+  if (unsupportedInput) return undefined;
+
+  const module = emitWgsl(ir, true);
+  if (module.uniforms.some(field => !/^(f32|i32|u32|vec[234]f|vec[234]<f32>)$/.test(field.wgslType))) {
+    return undefined;
+  }
+  const textureUploads = module.textures.map(binding => {
+    if (binding.textureKind !== undefined || !binding.fileRef) return undefined;
+    const image = images.get(binding.fileRef);
+    if (!image || image.width > device.limits.maxTextureDimension2D || image.height > device.limits.maxTextureDimension2D) {
+      return undefined;
+    }
+    const pixels = displacementTexturePixels(image);
+    if (!pixels) return undefined;
+    const sampler = module.samplers.find(candidate => candidate.name === binding.name)?.sampler;
+    if (sampler?.addressU === 'constant' || sampler?.addressV === 'constant') return undefined;
+    return {
+      binding, image, pixels,
+      format: (binding.colorSpace ?? image.colorSpace) === 'srgb_texture'
+        ? 'rgba8unorm-srgb' as const : 'rgba8unorm' as const,
+    };
+  });
+  if (textureUploads.some(upload => upload === undefined)) return undefined;
+  const parameterMap = new Map(parameters.flatMap(parameter =>
+    parameter.uniform ? [[parameter.uniform, parameter.value] as const] : []));
+  const uniformData = module.uniforms.length > 0
+    ? packParameterUniforms(module.uniforms, field => {
+      const value = parameterMap.get(field.name);
+      if (!value) throw new Error(`Missing displacement parameter: ${field.name}`);
+      return value;
+    })
+    : undefined;
+  const tangents = geometry.streams.find(stream => stream.name === 'tangent');
+  const vectorMode = displacement.mode === 'vector';
+  if (vectorMode && !tangents) return undefined;
+  const code = `${module.code}
+@group(3) @binding(0) var<storage, read> mx_displacement_inputs: array<vec4f>;
+@group(3) @binding(1) var<storage, read_write> mx_displacement_offsets: array<vec4f>;
+@compute @workgroup_size(${DISPLACEMENT_COMPUTE_WORKGROUP_SIZE})
+fn mx_displacement_main(@builtin(global_invocation_id) global_id: vec3u) {
+  let vertex = global_id.x;
+  if (vertex >= ${geometry.vertexCount}u) { return; }
+  var vary: MxVaryings;
+${inputs.wgsl.split('\n').map(line => `  ${line}`).join('\n')}
+  let result = mx_shade(vary);
+  var offset: vec3f;
+${vectorMode
+    ? `  offset = (vary.tangent * result.displacement.x + vary.bitangent * result.displacement.y
+    + vary.normal * result.displacement.z) * result.scale;`
+    : '  offset = vary.normal * result.displacement * result.scale;'}
+  mx_displacement_offsets[vertex] = vec4f(offset, 0.0);
+}`;
+
+  const inputBytes = inputs.values.byteLength;
+  const outputBytes = geometry.vertexCount * 16;
+  const workgroups = Math.ceil(geometry.vertexCount / DISPLACEMENT_COMPUTE_WORKGROUP_SIZE);
+  if (inputBytes > device.limits.maxStorageBufferBindingSize
+      || outputBytes > device.limits.maxStorageBufferBindingSize
+      || inputBytes > device.limits.maxBufferSize || outputBytes > device.limits.maxBufferSize
+      || workgroups > device.limits.maxComputeWorkgroupsPerDimension
+      || (uniformData?.byteLength ?? 0) > device.limits.maxUniformBufferBindingSize) {
+    return undefined;
+  }
+
+  const computeStarted = performance.now();
+  let inputBuffer: GPUBuffer | undefined;
+  let outputBuffer: GPUBuffer | undefined;
+  let readback: GPUBuffer | undefined;
+  let uniformBuffer: GPUBuffer | undefined;
+  const gpuTextures: GPUTexture[] = [];
+  try {
+    inputBuffer = device.createBuffer({
+      size: inputBytes, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+    });
+    outputBuffer = device.createBuffer({
+      size: outputBytes, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
+    });
+    readback = device.createBuffer({
+      size: outputBytes, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST,
+    });
+    uniformBuffer = uniformData
+      ? device.createBuffer({ size: uniformData.byteLength, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST })
+      : undefined;
+    device.queue.writeBuffer(inputBuffer, 0, inputs.values);
+    if (uniformBuffer && uniformData) device.queue.writeBuffer(uniformBuffer, 0, uniformData);
+    const textureEntries: GPUBindGroupEntry[] = [];
+    for (const upload of textureUploads) {
+      if (!upload) continue;
+      const texture = device.createTexture({
+        size: [upload.image.width, upload.image.height, 1],
+        format: upload.format,
+        usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
+      });
+      gpuTextures.push(texture);
+      device.queue.writeTexture(
+        { texture }, upload.pixels, { bytesPerRow: upload.image.width * 4, rowsPerImage: upload.image.height },
+        [upload.image.width, upload.image.height, 1],
+      );
+      textureEntries.push({ binding: upload.binding.binding, resource: texture.createView() });
+    }
+    const samplerEntries: GPUBindGroupEntry[] = module.samplers.map(binding => ({
+      binding: binding.binding,
+      resource: device.createSampler(imageSamplerDescriptor(binding.sampler ?? {})),
+    }));
+    const shader = device.createShaderModule({ code, label: 'MaterialX displacement compute' });
+    const compilation = await shader.getCompilationInfo();
+    const shaderErrors = compilation.messages.filter(message => message.type === 'error');
+    if (shaderErrors.length > 0) {
+      throw new Error(`Displacement compute WGSL failed to compile: ${shaderErrors.map(message => message.message).join('\n')}`);
+    }
+    device.pushErrorScope('validation');
+    const pipeline = device.createComputePipeline({
+      layout: 'auto', compute: { module: shader, entryPoint: 'mx_displacement_main' },
+    });
+    const pipelineError = await device.popErrorScope();
+    if (pipelineError) throw new Error(`Displacement compute pipeline is invalid: ${pipelineError.message}`);
+    const bindGroup = (index: number, entries: GPUBindGroupEntry[]): GPUBindGroup =>
+      device.createBindGroup({ layout: pipeline.getBindGroupLayout(index), entries });
+    const groups = [
+      bindGroup(0, uniformBuffer ? [{ binding: 0, resource: { buffer: uniformBuffer } }] : []),
+      bindGroup(1, textureEntries),
+      bindGroup(2, samplerEntries),
+      bindGroup(3, [
+        { binding: 0, resource: { buffer: inputBuffer } },
+        { binding: 1, resource: { buffer: outputBuffer } },
+      ]),
+    ];
+    const encoder = device.createCommandEncoder({ label: 'MaterialX displacement compute' });
+    const pass = encoder.beginComputePass();
+    pass.setPipeline(pipeline);
+    groups.forEach((group, index) => pass.setBindGroup(index, group));
+    pass.dispatchWorkgroups(workgroups);
+    pass.end();
+    encoder.copyBufferToBuffer(outputBuffer, 0, readback, 0, outputBytes);
+    device.queue.submit([encoder.finish()]);
+    await readback.mapAsync(GPUMapMode.READ);
+    const result = new Float32Array(readback.getMappedRange().slice(0));
+    readback.unmap();
+    const offsets = new Float32Array(geometry.vertexCount * 3);
+    for (let vertex = 0; vertex < geometry.vertexCount; vertex++) {
+      for (let axis = 0; axis < 3; axis++) {
+        const value = result[vertex * 4 + axis]!;
+        if (!Number.isFinite(value)) throw new Error(`Non-finite displacement at ${geometry.primPath} vertex ${vertex}.`);
+        offsets[vertex * 3 + axis] = value;
+      }
+    }
+    performance.measure('displacement:compute', {
+      start: computeStarted, end: performance.now(),
+      detail: { vertices: geometry.vertexCount, mode: displacement.mode },
+    });
+    return offsets;
+  } finally {
+    inputBuffer?.destroy();
+    outputBuffer?.destroy();
+    readback?.destroy();
+    uniformBuffer?.destroy();
+    for (const texture of gpuTextures) texture.destroy();
+  }
+}
 
 function heightAt(image: DecodedPixelImage, u: number, v: number, clamp = false): number {
   if (image.udim) {
@@ -109,6 +447,33 @@ function rebuildDisplacedGeometry(
   return buildGeometry(id, geometry.primPath, { ...prepared, subsets: geometry.subsets, subdivision: geometry.subdivision });
 }
 
+function applyDisplacementOffsets(
+  geometry: GeometryResource, offsets: Float32Array, id: string,
+): GeometryResource {
+  const positions = geometry.streams.find(stream => stream.name === 'position')?.data;
+  const normals = geometry.streams.find(stream => stream.name === 'normal')?.data;
+  if (!positions || !normals || offsets.length !== geometry.vertexCount * 3) {
+    throw new Error(`Invalid displacement offsets for ${geometry.primPath}.`);
+  }
+  const positionKeys = Array.from({ length: geometry.vertexCount }, (_, i) =>
+    Array.from(positions.subarray(i * 3, i * 3 + 3), x => Math.round(x * 1e5)).join(','));
+  const groups = new Map<string, number[]>();
+  positionKeys.forEach((key, index) => {
+    const group = groups.get(key);
+    if (group) group.push(index);
+    else groups.set(key, [index]);
+  });
+  const displaced = positions.slice();
+  for (const vertices of groups.values()) {
+    const first = vertices[0]!;
+    for (let axis = 0; axis < 3; axis++) {
+      const offset = vertices.reduce((sum, index) => sum + offsets[index * 3 + axis]!, 0) / vertices.length;
+      for (const index of vertices) displaced[index * 3 + axis] = positions[first * 3 + axis]! + offset;
+    }
+  }
+  return rebuildDisplacedGeometry(geometry, normals, displaced, positionKeys, id);
+}
+
 /** Evaluate a lowered MaterialX displacement graph at every vertex on the CPU. */
 export function displaceGeometryFromProgram(
   geometry: GeometryResource,
@@ -128,9 +493,7 @@ export function displaceGeometryFromProgram(
   const streams = new Map(geometry.streams.map(stream => [stream.name, stream]));
   const params = Object.fromEntries(parameters.flatMap(parameter =>
     parameter.uniform ? [[parameter.uniform, parameter.value] as const] : []));
-  const positionKeys = Array.from({ length: geometry.vertexCount }, (_, i) =>
-    Array.from(positions.subarray(i * 3, i * 3 + 3), x => Math.round(x * 1e5)).join(','));
-  const offsets = Array.from({ length: geometry.vertexCount }, () => [0, 0, 0]);
+  const offsets = new Float32Array(geometry.vertexCount * 3);
 
   for (let i = 0; i < geometry.vertexCount; i++) {
     const point = Array.from(positions.subarray(i * 3, i * 3 + 3));
@@ -169,31 +532,19 @@ export function displaceGeometryFromProgram(
       throw new Error(`Non-finite displacement at ${geometry.primPath} vertex ${i}.`);
     }
     for (let axis = 0; axis < 3; axis++) {
-      offsets[i]![axis] = displacement.mode === 'scalar'
+      offsets[i * 3 + axis] = displacement.mode === 'scalar'
         ? normal[axis]! * value[0]! * scale
         : (tangentValue[axis]! * value[0]! + bitangent[axis]! * value[1]! + normal[axis]! * value[2]!) * scale;
     }
   }
 
-  const groups = new Map<string, number[]>();
-  positionKeys.forEach((key, index) => {
-    const group = groups.get(key);
-    if (group) group.push(index);
-    else groups.set(key, [index]);
-  });
-  const displaced = positions.slice();
-  for (const vertices of groups.values()) {
-    const first = vertices[0]!;
-    for (let axis = 0; axis < 3; axis++) {
-      const offset = vertices.reduce((sum, index) => sum + offsets[index]![axis]!, 0) / vertices.length;
-      for (const index of vertices) displaced[index * 3 + axis] = positions[first * 3 + axis]! + offset;
-    }
-  }
-  return rebuildDisplacedGeometry(geometry, normals, displaced, positionKeys, id);
+  return applyDisplacementOffsets(geometry, offsets, id);
 }
 
 /** Bake once before either backend builds its buffers/BVH, isolating material instances. */
-export async function applySceneDisplacement(resources: SceneResources, provider: PtImageProvider): Promise<SceneResources> {
+export async function applySceneDisplacement(
+  resources: SceneResources, provider: PtImageProvider, device?: GPUDevice,
+): Promise<SceneResources> {
   if (![...resources.materials.values()].some(material => material.displacement)) return resources;
   const geometries = new Map(resources.geometries);
   const materials = new Map(resources.materials);
@@ -229,20 +580,32 @@ export async function applySceneDisplacement(resources: SceneResources, provider
     });
   }
   const replaced = new Set<string>();
-  const instances = resources.instances.map(instance => {
+  const instances: SceneResources['instances'][number][] = [];
+  for (const instance of resources.instances) {
     const displacement = instance.materialKey ? resources.materials.get(instance.materialKey)?.displacement : undefined;
     const geometry = geometries.get(instance.prototypeId);
-    if (!displacement || !geometry) return instance;
+    if (!displacement || !geometry) {
+      instances.push(instance);
+      continue;
+    }
     replaced.add(instance.prototypeId);
     const id = `${instance.prototypeId}::displacement::${instance.materialKey}`;
     if (!geometries.has(id)) {
-      geometries.set(id, displacement.program
-        ? displaceGeometryFromProgram(geometry, displacement.program, programSamplers.get(instance.materialKey!) ?? {},
-          resources.materials.get(instance.materialKey!)?.parameters, id)
-        : displaceGeometry(geometry, images.get(displacement.file!)!, displacement.scale, id, displacement));
+      if (displacement.program) {
+        const parameters = resources.materials.get(instance.materialKey!)?.parameters;
+        const offsets = device
+          ? await computeDisplacementOffsets(device, geometry, displacement.program, parameters, images)
+          : undefined;
+        geometries.set(id, offsets
+          ? applyDisplacementOffsets(geometry, offsets, id)
+          : displaceGeometryFromProgram(geometry, displacement.program, programSamplers.get(instance.materialKey!) ?? {},
+            parameters, id));
+      } else {
+        geometries.set(id, displaceGeometry(geometry, images.get(displacement.file!)!, displacement.scale, id, displacement));
+      }
     }
-    return { ...instance, prototypeId: id };
-  });
+    instances.push({ ...instance, prototypeId: id });
+  }
   const used = new Set(instances.map(instance => instance.prototypeId));
   for (const id of replaced) if (!used.has(id)) geometries.delete(id);
   const tlas = buildTlas(instances.map(instance => {

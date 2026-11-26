@@ -68,6 +68,73 @@ describe('parametric primitives', () => {
     // Grid density: (n + 1)² vertices.
     expect(primitiveMesh({ kind: 'plane', width: 1, length: 1, axis: 'Y', resolution: 32 }).points.length / 3).toBe(33 * 33);
   });
+
+  it('adapts plane grid spacing to an object-space edge limit within its vertex budget', () => {
+    const mesh = primitiveMesh({
+      kind: 'plane', width: 4, length: 2, axis: 'Y', resolution: 1, maxEdgeLength: 0.5, vertexBudget: 256,
+    });
+    expect(mesh.points.length / 3).toBeLessThanOrEqual(256);
+    let longestEdge = 0;
+    for (let i = 0; i < mesh.faceVertexIndices.length; i += 3) {
+      const triangle = mesh.faceVertexIndices.slice(i, i + 3);
+      for (let edge = 0; edge < 3; edge++) {
+        const a = triangle[edge]!, b = triangle[(edge + 1) % 3]!;
+        longestEdge = Math.max(longestEdge, Math.hypot(
+          mesh.points[a * 3]! - mesh.points[b * 3]!,
+          mesh.points[a * 3 + 1]! - mesh.points[b * 3 + 1]!,
+          mesh.points[a * 3 + 2]! - mesh.points[b * 3 + 2]!,
+        ));
+      }
+    }
+    expect(longestEdge).toBeLessThanOrEqual(0.5);
+    expect(() => primitiveMesh({
+      kind: 'plane', width: 4, length: 2, axis: 'Y', resolution: 1, maxEdgeLength: 0.01, vertexBudget: 16,
+    })).toThrow(/exceeds the vertex budget/);
+  });
+
+  it('adapts plane grid spacing to projected pixels as viewport density changes', () => {
+    const identity = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
+    const shape = {
+      kind: 'plane', width: 2, length: 2, axis: 'Z', resolution: 1,
+      maxScreenEdgeLength: 16, vertexBudget: 4096,
+    } as const;
+    const meshAt = (width: number) => primitiveMesh(shape, {
+      viewProjection: identity, modelTransforms: [identity], viewport: [width, width],
+    });
+    const baseVertices = primitiveMesh({ ...shape, maxScreenEdgeLength: 0 }).points.length / 3;
+    const lowResolutionVertices = meshAt(128).points.length / 3;
+    const highResolution = meshAt(256);
+    const highResolutionVertices = highResolution.points.length / 3;
+    expect(lowResolutionVertices).toBeGreaterThan(baseVertices);
+    expect(highResolutionVertices).toBeGreaterThan(lowResolutionVertices);
+    expect(highResolutionVertices).toBeLessThanOrEqual(shape.vertexBudget);
+    let longestProjectedEdge = 0;
+    for (let i = 0; i < highResolution.faceVertexIndices.length; i += 3) {
+      const triangle = highResolution.faceVertexIndices.slice(i, i + 3);
+      for (let edge = 0; edge < 3; edge++) {
+        const a = triangle[edge]!, b = triangle[(edge + 1) % 3]!;
+        longestProjectedEdge = Math.max(longestProjectedEdge, Math.hypot(
+          (highResolution.points[a * 3]! - highResolution.points[b * 3]!) * 128,
+          (highResolution.points[a * 3 + 1]! - highResolution.points[b * 3 + 1]!) * 128,
+        ));
+      }
+    }
+    expect(longestProjectedEdge).toBeLessThanOrEqual(shape.maxScreenEdgeLength);
+    expect(() => primitiveMesh({ ...shape, maxEdgeLength: 0.5 })).toThrow(/mutually exclusive/);
+    expect(() => primitiveMesh({ ...shape, vertexBudget: 8 }, {
+      viewProjection: identity, modelTransforms: [identity], viewport: [128, 128],
+    })).toThrow(/exceeds the vertex budget/);
+    const crossingViewProjection = [...identity];
+    crossingViewProjection[9] = 1;
+    crossingViewProjection[10] = 0.5;
+    crossingViewProjection[14] = 0.5;
+    crossingViewProjection[11] = 1;
+    crossingViewProjection[15] = 1;
+    const crossing = primitiveMesh({
+      ...shape, width: 8, length: 8, maxScreenEdgeLength: 8, vertexBudget: 4096,
+    }, { viewProjection: crossingViewProjection, modelTransforms: [identity], viewport: [128, 128] });
+    expect(crossing.points.length / 3).toBeLessThanOrEqual(4096);
+  });
 });
 
 describe('implicit USD gprims', () => {
@@ -81,11 +148,14 @@ def Xform "World"
         custom int engine:resolution = 8 }
     def Capsule "Pill" { uniform token axis = "Y" }
     def Plane "Ground" { double width = 10 }
+    def Plane "Adaptive" { double width = 4 double length = 2
+        custom double engine:maxEdgeLength = 0.5
+        custom int engine:vertexBudget = 256 }
     def Cone "Bad" { double radius = -1 }
 }`;
     const scene = await importUsdStage('mem:/stage.usda', { reader: { read: async () => usda } });
     const source = meshSourceFromScene(scene);
-    for (const path of ['/World/Ball', '/World/Box', '/World/Pipe', '/World/Pill', '/World/Ground']) {
+    for (const path of ['/World/Ball', '/World/Box', '/World/Pipe', '/World/Pill', '/World/Ground', '/World/Adaptive']) {
       expect(isMeshPrim(scene.prims.get(path)!)).toBe(true);
     }
     const extent = (path: string) => bounds(source.meshFor(path) as RawMesh).max.map(v => Number(v.toFixed(6)));
@@ -98,6 +168,19 @@ def Xform "World"
     // 8 segments around: 9 columns per ring.
     const pipe = source.meshFor('/World/Pipe') as RawMesh;
     expect(pipe.points.length / 3 % 9).toBe(0);
+    const adaptive = source.meshFor('/World/Adaptive') as RawMesh;
+    expect(adaptive.points.length / 3).toBeLessThanOrEqual(256);
+    for (let i = 0; i < adaptive.faceVertexIndices.length; i += 3) {
+      const triangle = adaptive.faceVertexIndices.slice(i, i + 3);
+      for (let edge = 0; edge < 3; edge++) {
+        const a = triangle[edge]!, b = triangle[(edge + 1) % 3]!;
+        expect(Math.hypot(
+          adaptive.points[a * 3]! - adaptive.points[b * 3]!,
+          adaptive.points[a * 3 + 1]! - adaptive.points[b * 3 + 1]!,
+          adaptive.points[a * 3 + 2]! - adaptive.points[b * 3 + 2]!,
+        )).toBeLessThanOrEqual(0.5);
+      }
+    }
     expect(() => source.meshFor('/World/Bad')).toThrow(/\/World\/Bad: cone radius must be a positive number/);
   });
 });

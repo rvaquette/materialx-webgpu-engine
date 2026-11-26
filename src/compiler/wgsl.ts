@@ -515,8 +515,8 @@ export function lowerExprs(
   return { order, body, preludes, extraInputs, primvarFields, usesLighting, uniforms, textures, samplers };
 }
 
-export function emitWgsl(ir: ShaderIr): WgslModule {
-  const lowered = lowerExprs(ir);
+export function emitWgsl(ir: ShaderIr, computeStage = false): WgslModule {
+  const lowered = lowerExprs(ir, '', computeStage);
   const { uniforms, textures, samplers, preludes, primvarFields, extraInputs, body, usesLighting } = lowered;
 
   // Check if this shader has volumeshader output

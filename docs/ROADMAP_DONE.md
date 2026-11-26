@@ -1583,6 +1583,35 @@ ball.material = surface;
   tessellation (48 segments) suffit en lookdev et garde un seul chemin de
   géométrie pour les deux backends.
 
+## Priorité 9 : displacement procédural
+
+Le déplacement prend en charge les cartes de hauteur et les graphes IR scalaires
+ou vectoriels. Le bake CPU évalue les graphes, y compris textures et nœuds
+procéduraux ; les horloges reliées au déplacement reconstruisent la géométrie sur
+`setTime`. Une passe compute WebGPU traite les graphes compatibles avec textures 2D
+8 bits au-delà de 4 096 sommets ; les petits maillages, UDIM, images haute précision
+et entrées géométriques avancées restent sur CPU.
+
+Pour `Plane`, `maxEdgeLength` adapte la grille à une longueur d'arête en espace
+objet, et `maxScreenEdgeLength` l'adapte à une longueur projetée en pixels. Les
+modes sont exclusifs et partagent `vertexBudget`. Le viewer recalcule la grille
+après chargement, changement de caméra/projection ou de résolution, animation de
+caméra et transformation d'objet. Le maillage est découpé contre le volume de
+vue avant de mesurer les arêtes projetées, afin qu'une surface traversant le plan
+de caméra n'épuise pas le budget. Les deux modes rejettent explicitement toute
+demande qui dépasse leur budget.
+
+Le critère est validé par un terrain animé uniquement par un graphe MaterialX
+`displacementshader`, rendu en raster et en path tracing. Le script utilise le
+mode caméra adaptatif :
+[p9-terrain.js](../examples/scripts/p9-terrain.js).
+
+| Terrain au temps initial | Terrain animé |
+|---|---|
+| ![Terrain initial en raster](images/p9/p9-terrain-t0-raster.png) | ![Terrain animé en raster](images/p9/p9-terrain-t1-raster.png) |
+
+![Terrain animé en path tracing](images/p9/p9-terrain-pathtracing.png)
+
 ## Priorité 21 : étude du chargement des bibliothèques MaterialX sans WASM
 
 L'étude et le prototype d'archive sont documentés dans

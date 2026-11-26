@@ -530,6 +530,7 @@ export async function loadUsdScene(
   line: (m: string) => void = () => {},
   overrides: ReadonlyMap<string, ObjectMaterialOverride> = new Map(),
   options: SceneLoadOptions = {},
+  displacementDevice?: GPUDevice,
 ): Promise<LoadedUsdScene> {
   const started = performance.now();
   let failedComposition = false;
@@ -615,7 +616,7 @@ export async function loadUsdScene(
     if (volumes.size) Object.assign(built, { volumes });
     const parameterResources = options.editableParameters ? editableSceneMaterials(built) : undefined;
     const baseResources = parameterResources ?? (options.parameterMode === 'uniform' ? uniformSceneMaterials(built) : built);
-    const resources = await applySceneDisplacement(baseResources, mtlx.imageProvider);
+    const resources = await applySceneDisplacement(baseResources, mtlx.imageProvider, displacementDevice);
     const environment = await environmentLoad;
     performance.measure('usd:resources', { start: materialsAt, end: performance.now(), detail: {
       entry, geometries: resources.geometries.size, materials: resources.materials.size,

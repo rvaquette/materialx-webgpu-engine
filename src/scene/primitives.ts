@@ -12,7 +12,10 @@ export type PrimitiveShape =
   | { kind: 'sphere'; radius: number; resolution: number }
   | { kind: 'cube'; size: number; resolution: number }
   | { kind: 'cylinder' | 'cone' | 'capsule'; radius: number; height: number; axis: PrimitiveAxis; resolution: number }
-  | { kind: 'plane'; width: number; length: number; axis: PrimitiveAxis; resolution: number }
+  | {
+      kind: 'plane'; width: number; length: number; axis: PrimitiveAxis; resolution: number;
+      maxEdgeLength?: number; maxScreenEdgeLength?: number; vertexBudget?: number;
+    }
   | { kind: 'disk'; radius: number; axis: PrimitiveAxis; resolution: number }
   | { kind: 'torus'; radius: number; minorRadius: number; axis: PrimitiveAxis; resolution: number };
 
@@ -23,6 +26,14 @@ export const MIN_RESOLUTION: Readonly<Record<PrimitiveKind, number>> = {
   sphere: 3, cube: 1, cylinder: 3, cone: 3, capsule: 3, plane: 1, disk: 3, torus: 3,
 };
 export const MAX_RESOLUTION = 1024;
+export const DEFAULT_ADAPTIVE_VERTEX_BUDGET = 65_536;
+export const MAX_ADAPTIVE_VERTEX_BUDGET = 1_000_000;
+
+export interface PlaneScreenCamera {
+  viewProjection: readonly number[];
+  modelTransforms: readonly (readonly number[])[];
+  viewport: readonly [number, number];
+}
 
 /** Default resolution when a USD gprim does not author `engine:resolution`. */
 const DEFAULT_RESOLUTION: Readonly<Record<PrimitiveKind, number>> = {
@@ -151,7 +162,8 @@ function withLength<T extends { r: number; y: number }>(profile: readonly T[]): 
 
 /** Validates the parameters of a shape; the error names the offending one. */
 export function checkPrimitiveShape(shape: PrimitiveShape): void {
-  const lengths = Object.entries(shape).filter(([name]) => !['kind', 'axis', 'resolution'].includes(name));
+  const lengths = Object.entries(shape).filter(([name]) =>
+    !['kind', 'axis', 'resolution', 'maxEdgeLength', 'maxScreenEdgeLength', 'vertexBudget'].includes(name));
   for (const [name, value] of lengths) {
     if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) throw new RangeError(`${shape.kind} ${name} must be a positive number.`);
   }
@@ -160,10 +172,147 @@ export function checkPrimitiveShape(shape: PrimitiveShape): void {
     throw new RangeError(`${shape.kind} resolution must be an integer from ${min} to ${MAX_RESOLUTION}.`);
   }
   if ('axis' in shape && !['X', 'Y', 'Z'].includes(shape.axis)) throw new RangeError(`${shape.kind} axis must be "X", "Y" or "Z".`);
+  if (shape.kind === 'plane') {
+    if (shape.maxEdgeLength !== undefined &&
+        (typeof shape.maxEdgeLength !== 'number' || !Number.isFinite(shape.maxEdgeLength) || shape.maxEdgeLength < 0)) {
+      throw new RangeError('plane maxEdgeLength must be zero (disabled) or a positive number.');
+    }
+    if (shape.maxScreenEdgeLength !== undefined &&
+        (typeof shape.maxScreenEdgeLength !== 'number' || !Number.isFinite(shape.maxScreenEdgeLength) || shape.maxScreenEdgeLength < 0)) {
+      throw new RangeError('plane maxScreenEdgeLength must be zero (disabled) or a positive number.');
+    }
+    if ((shape.maxEdgeLength ?? 0) > 0 && (shape.maxScreenEdgeLength ?? 0) > 0) {
+      throw new RangeError('plane maxEdgeLength and maxScreenEdgeLength are mutually exclusive.');
+    }
+    const vertexBudget = shape.vertexBudget ?? DEFAULT_ADAPTIVE_VERTEX_BUDGET;
+    if (!Number.isInteger(vertexBudget) || vertexBudget < 4 || vertexBudget > MAX_ADAPTIVE_VERTEX_BUDGET) {
+      throw new RangeError(`plane vertexBudget must be an integer from 4 to ${MAX_ADAPTIVE_VERTEX_BUDGET}.`);
+    }
+  }
+}
+
+type PlaneShape = Extract<PrimitiveShape, { kind: 'plane' }>;
+
+function planeLocalPoint(shape: PlaneShape, row: number, column: number, rows: number, columns: number): V3 {
+  const x = (column / columns - 0.5) * shape.width;
+  const z = (0.5 - row / rows) * shape.length;
+  if (shape.axis === 'Z') return [x, -z, 0];
+  if (shape.axis === 'X') return [0, -x, z];
+  return [x, 0, z];
+}
+
+function projectedEdgeLength(clip: Float64Array, a: number, b: number, width: number, height: number): number {
+  const start = a * 4, end = b * 4;
+  let min = 0, max = 1;
+  const clipPlane = (d0: number, d1: number): boolean => {
+    if (d0 < 0 && d1 < 0) return false;
+    if (d0 < 0) min = Math.max(min, d0 / (d0 - d1));
+    else if (d1 < 0) max = Math.min(max, d0 / (d0 - d1));
+    return min <= max;
+  };
+  if (!clipPlane(clip[start]! + clip[start + 3]!, clip[end]! + clip[end + 3]!)
+      || !clipPlane(clip[start + 3]! - clip[start]!, clip[end + 3]! - clip[end]!)
+      || !clipPlane(clip[start + 1]! + clip[start + 3]!, clip[end + 1]! + clip[end + 3]!)
+      || !clipPlane(clip[start + 3]! - clip[start + 1]!, clip[end + 3]! - clip[end + 1]!)
+      || !clipPlane(clip[start + 2]!, clip[end + 2]!)
+      || !clipPlane(clip[start + 3]! - clip[start + 2]!, clip[end + 3]! - clip[end + 2]!)
+      || !clipPlane(clip[start + 3]! - 1e-10, clip[end + 3]! - 1e-10)) return 0;
+  const x0 = (clip[start]! + (clip[end]! - clip[start]!) * min) / (clip[start + 3]! + (clip[end + 3]! - clip[start + 3]!) * min);
+  const y0 = (clip[start + 1]! + (clip[end + 1]! - clip[start + 1]!) * min) / (clip[start + 3]! + (clip[end + 3]! - clip[start + 3]!) * min);
+  const x1 = (clip[start]! + (clip[end]! - clip[start]!) * max) / (clip[start + 3]! + (clip[end + 3]! - clip[start + 3]!) * max);
+  const y1 = (clip[start + 1]! + (clip[end + 1]! - clip[start + 1]!) * max) / (clip[start + 3]! + (clip[end + 3]! - clip[start + 3]!) * max);
+  return Math.hypot((x0 - x1) * width / 2, (y0 - y1) * height / 2);
+}
+
+function projectedPlaneEdge(
+  shape: PlaneShape, camera: PlaneScreenCamera, rows: number, columns: number,
+): { length: number; axis: 'rows' | 'columns' } {
+  const [width, height] = camera.viewport;
+  if (!Number.isInteger(width) || !Number.isInteger(height) || width <= 0 || height <= 0
+      || camera.viewProjection.length !== 16 || camera.viewProjection.some(value => !Number.isFinite(value))
+      || camera.modelTransforms.length === 0 || camera.modelTransforms.some(transform =>
+        transform.length !== 16 || transform.some(value => !Number.isFinite(value)))) {
+    throw new RangeError('Camera-adaptive plane subdivision requires finite transforms and a positive viewport.');
+  }
+  let longest = 0;
+  let axis: 'rows' | 'columns' = 'columns';
+  for (const model of camera.modelTransforms) {
+    const clip = new Float64Array((rows + 1) * (columns + 1) * 4);
+    for (let row = 0; row <= rows; row++) {
+      for (let column = 0; column <= columns; column++) {
+        const [x, y, z] = planeLocalPoint(shape, row, column, rows, columns);
+        const wx = model[0]! * x + model[4]! * y + model[8]! * z + model[12]!;
+        const wy = model[1]! * x + model[5]! * y + model[9]! * z + model[13]!;
+        const wz = model[2]! * x + model[6]! * y + model[10]! * z + model[14]!;
+        const matrix = camera.viewProjection;
+        const index = (row * (columns + 1) + column) * 4;
+        clip[index] = matrix[0]! * wx + matrix[4]! * wy + matrix[8]! * wz + matrix[12]!;
+        clip[index + 1] = matrix[1]! * wx + matrix[5]! * wy + matrix[9]! * wz + matrix[13]!;
+        clip[index + 2] = matrix[2]! * wx + matrix[6]! * wy + matrix[10]! * wz + matrix[14]!;
+        clip[index + 3] = matrix[3]! * wx + matrix[7]! * wy + matrix[11]! * wz + matrix[15]!;
+      }
+    }
+    const edgeLength = (a: number, b: number): number => projectedEdgeLength(clip, a, b, width, height);
+    const consider = (length: number, splitAxis: 'rows' | 'columns'): void => {
+      if (length > longest) { longest = length; axis = splitAxis; }
+    };
+    for (let row = 0; row < rows; row++) {
+      for (let column = 0; column < columns; column++) {
+        const a = row * (columns + 1) + column;
+        const b = a + 1;
+        const d = a + columns + 1;
+        const c = d + 1;
+        const horizontal = Math.max(edgeLength(a, b), edgeLength(d, c));
+        const vertical = Math.max(edgeLength(a, d), edgeLength(b, c));
+        consider(horizontal, 'columns');
+        consider(vertical, 'rows');
+        consider(edgeLength(a, c), horizontal >= vertical ? 'columns' : 'rows');
+      }
+    }
+  }
+  return { length: longest, axis };
+}
+
+function adaptivePlaneGrid(
+  shape: PlaneShape, camera?: PlaneScreenCamera,
+): { rows: number; columns: number } {
+  let rows = shape.resolution;
+  let columns = shape.resolution;
+  const budget = shape.vertexBudget ?? DEFAULT_ADAPTIVE_VERTEX_BUDGET;
+  const exceedsBudget = (): boolean => (rows + 1) * (columns + 1) > budget;
+  const objectEdgeLimit = shape.maxEdgeLength ?? 0;
+  const screenEdgeLimit = shape.maxScreenEdgeLength ?? 0;
+  if (objectEdgeLimit > 0) {
+    if (exceedsBudget()) throw new RangeError(`plane resolution exceeds the vertex budget of ${budget}.`);
+    while (Math.hypot(shape.width / columns, shape.length / rows) > objectEdgeLimit) {
+      if (shape.width / columns >= shape.length / rows) columns++;
+      else rows++;
+      if (exceedsBudget()) {
+        throw new RangeError(`plane maxEdgeLength ${objectEdgeLimit} exceeds the vertex budget of ${budget}.`);
+      }
+    }
+  } else if (screenEdgeLimit > 0 && camera) {
+    if (exceedsBudget()) throw new RangeError(`plane resolution exceeds the vertex budget of ${budget}.`);
+    while (true) {
+      const edge = projectedPlaneEdge(shape, camera, rows, columns);
+      if (edge.length <= screenEdgeLimit) break;
+      if (!Number.isFinite(edge.length)) {
+        throw new RangeError('Camera-adaptive plane subdivision crosses the camera plane.');
+      }
+      const count = edge.axis === 'columns' ? columns : rows;
+      const next = Math.max(count + 1, Math.ceil(count * edge.length / screenEdgeLimit));
+      if (edge.axis === 'columns') columns = next;
+      else rows = next;
+      if (exceedsBudget()) {
+        throw new RangeError(`plane maxScreenEdgeLength ${screenEdgeLimit} exceeds the vertex budget of ${budget}.`);
+      }
+    }
+  }
+  return { rows, columns };
 }
 
 /** Triangle mesh of a primitive, centered on the origin. */
-export function primitiveMesh(shape: PrimitiveShape): RawMesh {
+export function primitiveMesh(shape: PrimitiveShape, screenCamera?: PlaneScreenCamera): RawMesh {
   checkPrimitiveShape(shape);
   const builder = new MeshBuilder();
   const segments = shape.resolution;
@@ -217,8 +366,11 @@ export function primitiveMesh(shape: PrimitiveShape): RawMesh {
       return builder.mesh(shape.axis);
     }
     case 'plane': {
-      const n = segments;
-      builder.grid(n, n, (i, j) => ({ p: [(j / n - 0.5) * shape.width, 0, (0.5 - i / n) * shape.length], n: [0, 1, 0], uv: [j / n, i / n] }));
+      const { rows, columns } = adaptivePlaneGrid(shape, screenCamera);
+      builder.grid(rows, columns, (i, j) => ({
+        p: [(j / columns - 0.5) * shape.width, 0, (0.5 - i / rows) * shape.length],
+        n: [0, 1, 0], uv: [j / columns, i / rows],
+      }));
       return builder.mesh(shape.axis);
     }
     case 'disk':
@@ -302,17 +454,22 @@ export function primitiveShapeOf(prim: ScenePrim): PrimitiveShape | undefined {
     case 'Cylinder': return { kind: 'cylinder', radius: number('radius', 1), height: number('height', 2), axis: axis(), resolution: resolution('cylinder') };
     case 'Cone': return { kind: 'cone', radius: number('radius', 1), height: number('height', 2), axis: axis(), resolution: resolution('cone') };
     case 'Capsule': return { kind: 'capsule', radius: number('radius', 0.5), height: number('height', 1), axis: axis(), resolution: resolution('capsule') };
-    case 'Plane': return { kind: 'plane', width: number('width', 2), length: number('length', 2), axis: axis(), resolution: resolution('plane') };
+    case 'Plane': return {
+      kind: 'plane', width: number('width', 2), length: number('length', 2), axis: axis(), resolution: resolution('plane'),
+      maxEdgeLength: number('engine:maxEdgeLength', 0),
+      maxScreenEdgeLength: number('engine:maxScreenEdgeLength', 0),
+      vertexBudget: Math.round(number('engine:vertexBudget', DEFAULT_ADAPTIVE_VERTEX_BUDGET)),
+    };
     default: return undefined;
   }
 }
 
 /** Triangle mesh of an implicit gprim; an invalid shape (e.g. a zero radius) throws. */
-export function gprimToMesh(prim: ScenePrim): RawMesh | undefined {
+export function gprimToMesh(prim: ScenePrim, screenCamera?: PlaneScreenCamera): RawMesh | undefined {
   const shape = primitiveShapeOf(prim);
   if (!shape) return undefined;
   try {
-    return primitiveMesh(shape);
+    return primitiveMesh(shape, screenCamera);
   } catch (error) {
     throw new Error(`${prim.path}: ${error instanceof Error ? error.message : String(error)}`);
   }

@@ -40,6 +40,14 @@ describe('wgslType', () => {
 });
 
 describe('emitWgsl', () => {
+  it('uses explicit LOD sampling when lowering textures for a compute stage', () => {
+    const ir = sampleIr();
+    expect(emitWgsl(ir).code).toContain('textureSample(');
+    const compute = emitWgsl(ir, true).code;
+    expect(compute).toContain('textureSampleLevel(');
+    expect(compute).not.toContain('textureSample(');
+  });
+
   it.each([
     { to: FLOAT, expected: 'select(0.0, 1.0, ' },
     { to: INT, expected: 'select(0, 1, ' },

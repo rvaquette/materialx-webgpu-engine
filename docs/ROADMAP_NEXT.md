@@ -9,9 +9,10 @@ mesurable, réutilisable et extensible.
 Les priorités 1 (rendu progressif), 2 (API de bibliothèque), 3 (éditeur de
 matériaux MaterialX), 3bis (scripting), 4 (accélération du path tracer), 5
 (scènes dynamiques), 6 (volumes et effets avancés), 7 (robustesse,
-portabilité et exploitation), 8 (primitives et scènes par script) ainsi que
-l'étude urgente de la priorité 21 (chargement des bibliothèques MaterialX sans
-WASM) et la priorité 22 (build minimal du Core WASM) sont traitées ; leur historique est dans
+portabilité et exploitation), 8 (primitives et scènes par script), 9
+(displacement procédural), ainsi que l'étude urgente de la priorité 21
+(chargement des bibliothèques MaterialX sans WASM) et la priorité 22 (build
+minimal du Core WASM) sont traitées ; leur historique est dans
 [ROADMAP_DONE.md](ROADMAP_DONE.md). Les limites connues sont recensées dans
 [INTEGRATION.md](INTEGRATION.md#limites-connues).
 
@@ -23,22 +24,6 @@ continuer à optimiser le runtime livré au navigateur.
 ## Reliquats des priorités traitées
 
 Aucun.
-
-## Priorité 9 : displacement procédural
-
-Le displacement actuel (`src/render/displacement.ts`) déplace les sommets sur
-CPU à partir d'une seule texture de hauteur. L'évaluateur IR CPU couvre maintenant
-les graphes numériques scalaires/vectoriels, y compris les textures et les nœuds
-procéduraux ; les horloges reliées au déplacement reconstruisent la géométrie sur
-`setTime`. Le script parchemin démontre les enroulements avec un
-`displacementshader` vectoriel. Il reste à :
-
-- évaluation complète du `displacementshader` (bruits, fractales, ondes,
-- passe compute WebGPU pour les grands maillages, avec repli CPU pour les petits ;
-- subdivision adaptative en option.
-
-**Critère d'aboutissement :** un `Plane` subdivisé (priorité 8) devient un terrain ou une
-surface d'eau animée décrits uniquement par un graphe MaterialX.
 
 ## Priorité 10 : documentation intégrée des nœuds MaterialX
 
@@ -289,6 +274,17 @@ une surface, par des systèmes évoluant dans le temps :
 s'obtiennent par script, restent reproductibles à graine fixée et se rendent
 en raster comme en path tracing, avec flou de mouvement en path tracing.
 
+## Priorité 23 : paramètres de shaders déclarés par script
+
+Permettre à un script de marquer explicitement les entrées de n'importe quel
+shader comme modifiables depuis l'UI. L'éditeur expose uniquement les entrées
+déclarées, conserve leurs types et valeurs et applique les modifications au
+matériau sans réexécuter le script entier.
+
+**Critère d'aboutissement :** un même script expose des paramètres d'un shader
+de surface et d'un autre type de shader ; seuls les paramètres marqués apparaissent
+dans l'UI et leurs modifications sont visibles dans le rendu.
+
 ## Pistes exploratoires
 
 - **Shaders implicites / SDF** (métaboules, fractales, booléens lisses) :
@@ -311,3 +307,5 @@ en raster comme en path tracing, avec flou de mouvement en path tracing.
    animés comme les gouttes et les braises.
 7. Rendu distribué (19), dès que les scènes de la priorité 17 rendent le path
    tracing trop long sur un seul GPU.
+8. Paramètres de shaders déclarés par script (23), en prolongement de l'API de
+   scripting (3bis) et de l'édition de paramètres.

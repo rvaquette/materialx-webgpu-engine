@@ -870,7 +870,7 @@ async function main(): Promise<void> {
       });
     },
     async setCamera(camera) {
-      viewer.setCamera({ eye: camera.eye, target: camera.target, ...(camera.fov !== undefined ? { fovY: camera.fov * Math.PI / 180 } : {}) });
+      await viewer.setCamera({ eye: camera.eye, target: camera.target, ...(camera.fov !== undefined ? { fovY: camera.fov * Math.PI / 180 } : {}) });
     },
     variants: () => viewer.variantSets,
     async setVariant(path, set, variant) {

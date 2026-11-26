@@ -137,7 +137,7 @@ s'exécutent à la construction du graphe : une condition sur une sortie de nœu
 | `Cylinder`, `Cone` | `radius` (0,5), `height` (1), `axis` (`"Y"`), `resolution` (48) ; sommet du cône vers +`axis` |
 | `Capsule` | `radius` (0,25), `height` (0,5 : partie cylindrique), `axis`, `resolution` (48) |
 | `Torus` | `radius` (0,5), `minorRadius` (0,15), `axis`, `resolution` (48) |
-| `Plane` | `width` (1), `length` (1), `axis` (normale), `resolution` (1 ; une grille `n × n` pour le displacement ou `deform`) |
+| `Plane` | `width` (1), `length` (1), `axis` (normale), `resolution` (1), `maxEdgeLength` (0 : désactivé), `maxScreenEdgeLength` (0 : désactivé), `vertexBudget` (65 536) |
 | `Disk` | `radius` (0,5), `axis` (normale), `resolution` (48) |
 
 Propriétés communes : `translate` (`[0, 0, 0]`), `rotate` (degrés autour de X, puis Y, puis Z),
@@ -146,6 +146,13 @@ Propriétés communes : `translate` (`[0, 0, 0]`), `rotate` (degrés autour de X
 - `resolution` : segments autour de l'axe (minimum 3) pour les formes rondes, subdivisions par
   côté (minimum 1) pour `Cube` et `Plane` ; au plus 1024. Les longueurs sont strictement positives
   et `axis` vaut `"X"`, `"Y"` ou `"Z"`.
+- Pour `Plane`, `maxEdgeLength` adapte la grille afin qu'aucune arête de triangle ne dépasse cette
+  longueur en espace objet ; `0` conserve la grille déterminée par `resolution`. Quand cette
+  adaptation est active, `vertexBudget` borne le nombre de sommets (4 à 1 000 000) ; une demande
+  qui dépasserait ce budget est rejetée.
+- `maxScreenEdgeLength` choisit le mode caméra : il borne la longueur projetée des arêtes en pixels,
+  puis le viewer recalcule la grille après un changement de caméra, de projection, de transformation
+  d'objet ou de résolution. Les deux modes adaptatifs sont exclusifs et partagent `vertexBudget`.
 - **Scène** : les primitives forment une scène USD en mémoire (`/World/<nom>`, matériaux sous
   `/World/Looks`) qui remplace la scène chargée ; un `scene(...)` ultérieur la remplace à son tour
   (ses primitives ne sont alors plus modifiables). Les primitives ne s'ajoutent pas à une scène
