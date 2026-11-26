@@ -5,13 +5,15 @@ import {
   fromResolvedGraph, fromXml, inlineIncludes, runScript, ScriptError, ScriptLibrary, SCRIPT_LIBRARY_FILES, toScript,
   toXml, transformScript, type ScriptHost,
 } from '../../src/materialx/script-api.ts';
+import { ENGINE_SHADER_LIBRARY_XML } from '../../src/materialx/engine-shaders.ts';
 import type { ResolvedGraph, ResolvedNode } from '../../src/materialx/graph.ts';
 
 /** A host whose operations do nothing; tests override what they observe. */
 function idleHost(): ScriptHost {
   const idle = async (): Promise<void> => {};
   return {
-    loadScene: idle, loadStage: idle, objects: () => [], renderSettings: () => ({}), setRenderSetting: idle, assignMaterial: idle,
+    loadScene: idle, loadStage: idle, objects: () => [], renderSettings: () => ({}), setRenderSetting: idle,
+    setEnvironmentShader: idle, setImageShader: idle, assignMaterial: idle,
     render: async () => 0, saveImage: idle, saveText: idle, objectMaterial: () => undefined, stats: () => undefined,
     waitForStop: idle, capture: idle, saveAov: idle, saveDiagnostics: idle, diagnostics: () => [], capabilities: () => undefined,
     timeline: () => undefined, time: () => 0, setTime: idle, setTransform: idle, setVisibility: idle, lights: () => [],
@@ -71,11 +73,13 @@ const LIBRARY = ScriptLibrary.fromXml([`<?xml version="1.0"?>
     <input name="displacementshader" type="displacementshader" value="" />
     <output name="out" type="material" />
   </nodedef>
-</materialx>`]);
+</materialx>`, ENGINE_SHADER_LIBRARY_XML]);
 
 describe('material script library', () => {
   it('resolves nodes and their ports from NodeDefs', async () => {
-    expect(LIBRARY.classNames).toEqual(['Image', 'Mix', 'Noise3d', 'Separate3', 'StandardSurface', 'Surfacematerial']);
+    expect(LIBRARY.classNames).toEqual([
+      'EnvironmentShader', 'Image', 'ImageShader', 'Mix', 'Noise3d', 'Separate3', 'StandardSurface', 'Surfacematerial',
+    ]);
     const surface = LIBRARY.resolve('standard_surface');
     expect(surface.name).toBe('ND_standard_surface_surfaceshader');
     expect(surface.doc).toBe('Inherited surface documentation.');
@@ -136,6 +140,50 @@ describe('runScript', () => {
       .rejects.toThrow(/s\.base_color expects color3 but n\.out is float/);
     await expect(runScript('s = new StandardSurface(); s.out = 1;', LIBRARY)).rejects.toThrow(/output and cannot be assigned/);
     await expect(runScript('s = new StandardSurface(', LIBRARY)).rejects.toThrow(/Syntax error/);
+  });
+
+  it('sends procedural environment and screen-space image shader settings to the viewer', async () => {
+    const calls: unknown[][] = [];
+    const host: ScriptHost = {
+      ...idleHost(),
+      setEnvironmentShader: async settings => { calls.push(['environment', settings]); },
+      setImageShader: async settings => { calls.push(['postprocess', settings]); },
+    };
+    const graph = await runScript(`
+      env = new EnvironmentShader();
+      env.model = "gradient";
+      env.sunIntensity = 3;
+      await environment(env.out);
+      grade = new ImageShader();
+      grade.contrast = 1.2;
+      grade.vignette = 0.4;
+      await postprocess(grade.out);
+    `, LIBRARY, { host });
+    expect(calls).toEqual([
+      ['environment', expect.objectContaining({ model: 'gradient', sunIntensity: 3 })],
+      ['postprocess', expect.objectContaining({ contrast: 1.2, vignette: 0.4 })],
+    ]);
+    const xml = toXml(graph, LIBRARY);
+    expect(xml).toContain('<environment_shader name="env" type="engine_environment_shader">');
+    expect(xml).toContain('<image_shader name="grade" type="engine_image_shader">');
+    expect(xml).not.toContain('<surfacematerial');
+    expect(toScript(graph, LIBRARY)).toContain('await environment(env.out);\nawait postprocess(grade.out);');
+  });
+
+  it('rejects graph-connected environment inputs until shader graph evaluation is supported', async () => {
+    await expect(runScript(`
+      noise = new Noise3d();
+      env = new EnvironmentShader();
+      env.sunIntensity = noise.out;
+      await environment(env.out);
+    `, LIBRARY, { host: idleHost() })).rejects.toThrow(/connected inputs are not supported/);
+  });
+
+  it('validates the P12 environment and post-processing example', async () => {
+    const source = readFileSync(join('examples', 'scripts', 'p12-environment-postprocess.js'), 'utf8');
+    const graph = await runScript(source, LIBRARY, { host: idleHost() });
+    expect(graph.nodes.some(node => node.def.name === 'ND_engine_environment_shader')).toBe(true);
+    expect(graph.nodes.some(node => node.def.name === 'ND_engine_image_shader')).toBe(true);
   });
 
   it('keeps JavaScript available for computed values', async () => {

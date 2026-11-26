@@ -8,6 +8,7 @@
 import { throwIfAborted, defaultDiagnosticSink, type DiagnosticSink } from '../core/diagnostics.ts';
 import type { MaterialXCore, MxDocument } from './wasm.ts';
 import defaultLibraryFiles from './default-library-files.json';
+import { ENGINE_SHADER_LIBRARY_XML } from './engine-shaders.ts';
 
 export interface LibrarySource {
   /** Logical name for diagnostics/provenance. */
@@ -143,6 +144,7 @@ export class MaterialXLibraries {
       }
       if (options.sources.some(source => source.name === 'stdlib/stdlib_defs.mtlx')) {
         await this.core.readXmlString(doc, IMAGE_EXTENSION_DEFS, { readXIncludes: false });
+        await this.core.readXmlString(doc, ENGINE_SHADER_LIBRARY_XML, { readXIncludes: false });
       }
       if (options.sources.some(source => source.name === 'bxdf/lama/lama_conductor.mtlx')) {
         await this.core.readXmlString(doc, CONDUCTOR_EXTENSION_DEFS, { readXIncludes: false });

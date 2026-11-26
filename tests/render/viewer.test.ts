@@ -8,6 +8,8 @@ import { importUsdStage } from '../../src/usd/importer.ts';
 import { NEUTRAL_SURFACE, SCENE_FRAME_UNIFORM_FLOATS } from '../../src/render/raster/scene-frame.ts';
 import { projectIrradianceSH } from '../../src/render/env/irradiance.ts';
 import { buildEnvCdf } from '../../src/assets/environment-cdf.ts';
+import { bakeEnvironmentShader, DEFAULT_ENVIRONMENT_SHADER, DEFAULT_IMAGE_SHADER } from '../../src/materialx/engine-shaders.ts';
+import { packHdrTexture } from '../../src/assets/hdr-texture.ts';
 import { JsDenoiser } from '../../src/render/pathtracing/js-denoiser.ts';
 import { compileEditableMaterial, editableSceneMaterials, materialUniformData } from '../../src/render/material-parameters.ts';
 import { applySceneDisplacement } from '../../src/render/displacement.ts';
@@ -280,6 +282,95 @@ describe('interactive viewer resource lifecycle', () => {
     await viewer.load('scene.usda');
     return { ...mock, loaded, canvas, statuses, diagnostics, viewer };
   }
+
+  it('updates the procedural panorama and matching CDF at the requested time and restores the original HDR', async () => {
+    const { viewer, device, loaded } = await setup(true);
+    const settings = { ...DEFAULT_ENVIRONMENT_SHADER, model: 'studio' as const, animationSpeed: 90 };
+    await viewer.setEnvironmentShader(settings);
+    const first = bakeEnvironmentShader(settings, 0, 512, 256);
+    const firstPacked = packHdrTexture(first).data;
+    expect((device.queue.writeTexture.mock.calls.at(-1)?.[1] as Uint16Array).every((v, i) => v === firstPacked[i])).toBe(true);
+    const cdf = buildEnvCdf(first);
+    expect(device.queue.writeBuffer.mock.calls.some(call =>
+      call[2] instanceof Float32Array && call[2].length === 512 * 256 + 256 &&
+      call[2].every((v, i) => v === cdf.cdf[i]))).toBe(true);
+
+    device.queue.writeTexture.mockClear();
+    device.queue.writeBuffer.mockClear();
+    await viewer.setTime(1);
+    const second = bakeEnvironmentShader(settings, 1, 512, 256);
+    const secondPacked = packHdrTexture(second).data;
+    expect((device.queue.writeTexture.mock.calls.at(-1)?.[1] as Uint16Array).every((v, i) => v === secondPacked[i])).toBe(true);
+    const updatedCdf = buildEnvCdf(second);
+    expect(device.queue.writeBuffer.mock.calls.some(call =>
+      call[2] instanceof Float32Array && call[2].length === 512 * 256 + 256 &&
+      call[2].every((v, i) => v === updatedCdf.cdf[i]))).toBe(true);
+
+    await viewer.setEnvironmentShader(undefined);
+    const original = packHdrTexture(loaded.environment!.image).data;
+    expect((device.queue.writeTexture.mock.calls.at(-1)?.[1] as Uint16Array).every((v, i) => v === original[i])).toBe(true);
+    expect(device.queue.writeTexture.mock.calls.at(-1)?.[3]).toEqual([4, 2, 1]);
+  });
+
+  it('leaves the active environment intact when invalid settings are rejected and releases it on disable', async () => {
+    const { viewer, device, textures } = await setup();
+    await viewer.setEnvironmentShader(DEFAULT_ENVIRONMENT_SHADER);
+    const panorama = textures.find((_texture, index) => {
+      const desc = device.createTexture.mock.calls[index]?.[0];
+      return desc?.format === 'rgba16float' && desc.mipLevelCount === 10;
+    });
+    expect(panorama).toBeDefined();
+    device.queue.writeTexture.mockClear();
+    await expect(viewer.setEnvironmentShader({ ...DEFAULT_ENVIRONMENT_SHADER, sunIntensity: -1 }))
+      .rejects.toThrow();
+    expect(device.queue.writeTexture).not.toHaveBeenCalled();
+    expect(panorama!.destroy).not.toHaveBeenCalled();
+    await viewer.setEnvironmentShader(undefined);
+    expect(panorama!.destroy).toHaveBeenCalledOnce();
+  });
+
+  it('applies the image shader after raster resolve and releases its intermediate on resize', async () => {
+    const { viewer, device, textures } = await setup();
+    viewer.setImageShader({ ...DEFAULT_IMAGE_SHADER, exposure: 1 });
+    const textureCount = textures.length;
+    tick(1);
+    await Promise.resolve();
+    expect(textures.length).toBe(textureCount + 1);
+    const intermediate = textures.at(-1)!;
+    const encoder = device.createCommandEncoder.mock.results.at(-1)!.value;
+    const passes = encoder.beginRenderPass.mock.calls.map((call: [GPURenderPassDescriptor]) => call[0]);
+    expect(passes.length).toBeGreaterThanOrEqual(2);
+    expect(passes.at(-2)!.colorAttachments[0]!.view).not.toBe(passes.at(-1)!.colorAttachments[0]!.view);
+    await viewer.resize(256);
+    expect(intermediate.destroy).toHaveBeenCalledOnce();
+    viewer.setImageShader(undefined);
+  });
+
+  it('redisplays a paused path-tracing AOV with image grading without clearing accumulation', async () => {
+    const actual = await vi.importActual<typeof import('../../src/render/pathtracing/scene-buffers.ts')>(
+      '../../src/render/pathtracing/scene-buffers.ts');
+    vi.mocked(buildCachedPathTraceScene).mockImplementation(actual.buildCachedPathTraceScene);
+    const { viewer, device, statuses } = await setup(false, false, 'pathtracing');
+    tick(1);
+    await new Promise(resolve => setTimeout(resolve, 20));
+    tick(2);
+    await Promise.resolve();
+    viewer.setPathTracingView('normal');
+    tick(3);
+    await Promise.resolve();
+    viewer.setPathTracingPaused(true);
+    const samples = statuses.at(-1)?.samples;
+    const pipelines = device.createComputePipelineAsync.mock.calls.length;
+    viewer.setImageShader({ ...DEFAULT_IMAGE_SHADER, saturation: 0 });
+    tick(4);
+    await Promise.resolve();
+    expect(statuses.at(-1)?.samples).toBe(samples);
+    expect(device.createComputePipelineAsync).toHaveBeenCalledTimes(pipelines);
+    const encoder = device.createCommandEncoder.mock.results.at(-1)!.value;
+    const passes = encoder.beginRenderPass.mock.calls.map((call: [GPURenderPassDescriptor]) => call[0]);
+    expect(passes).toHaveLength(2);
+    expect(passes[0]!.colorAttachments[0]!.view).not.toBe(passes[1]!.colorAttachments[0]!.view);
+  });
 
   it('keeps canvas orbit listeners disabled after loading a scene', async () => {
     const { canvas, viewer } = await setup(false, false, 'raster', false);

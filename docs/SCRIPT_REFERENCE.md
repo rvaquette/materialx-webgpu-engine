@@ -10,7 +10,8 @@ l'erreur `xxx is not defined.`
 
 **Sommaire** — [Nœuds](#nœuds-materialx) · [Valeurs et types](#valeurs-et-types) ·
 [Opérateurs et Math](#opérateurs-et-fonctions-math) · [Conditions](#conditions-par-pixel) ·
-[Matériaux](#matériaux-et-documents) · [Scène](#scène-et-objets) · [Primitives](#primitives-scène-par-script) · [Rendu](#rendu) ·
+[Matériaux](#matériaux-et-documents) · [Scène](#scène-et-objets) · [Primitives](#primitives-scène-par-script) ·
+[Shaders d'environnement et d'image](#shaders-denvironnement-et-dimage) · [Rendu](#rendu) ·
 [Paramètres `render.*`](#paramètres-de-rendu-render) · [Enregistrement](#enregistrement-de-fichiers) ·
 [Animation et transformations](#animation-et-transformations) · [Lumières et caméra](#lumières-et-caméra) ·
 [Variantes et paramètres](#variantes-usd-et-paramètres-de-matériau) · [Diagnostic](#messages-vérifications-et-diagnostic) ·
@@ -178,6 +179,33 @@ ball = new Sphere({ radius: 0.5, translate: [0, 0.5, 0], material: surface });
 setCamera({ eye: [3, 2, 4], target: [0, 0.3, 0], fov: 40 });
 await render(64);
 await save("primitives.usda");   // scène USD + ses documents MaterialX
+```
+
+## Shaders d'environnement et d'image
+
+| Écriture | Effet |
+|---|---|
+| `env = new EnvironmentShader()` | Ciel, dégradé ou éclairage studio procédural évalué par direction puis converti en carte HDR lat-long ; ses paramètres sont scriptables et animables. |
+| `await environment(env.out)` | Active cet environnement pour le fond et l'éclairage raster/path tracing ; sa carte et sa CDF d'échantillonnage sont mises à jour ensemble au changement de temps. |
+| `grade = new ImageShader()` | Définit l'exposition, le contraste, la saturation et le vignettage de l'image écran. |
+| `await postprocess(grade.out)` | Applique l'étalonnage après l'affichage raster ou path tracing, y compris les AOV, sans modifier l'accumulation. |
+
+`EnvironmentShader.model` accepte `"gradient"`, `"sky"` ou `"studio"`. Les entrées couleur,
+direction du soleil, intensité, diamètre angulaire, exposition, rotation et vitesse d'animation
+sont définies par le NodeDef `ND_engine_environment_shader`. `ImageShader` applique ses réglages
+dans l'espace écran ; le tone mapping intégré reste contrôlé par `render.tonemap`. Ces deux nœuds
+acceptent actuellement des paramètres littéraux, pas des entrées connectées depuis d'autres nœuds.
+
+```js
+sky = new EnvironmentShader();
+sky.model = "sky";
+sky.animationSpeed = 12;
+await environment(sky.out);
+
+grade = new ImageShader();
+grade.contrast = 1.1;
+grade.vignette = 0.25;
+await postprocess(grade.out);
 ```
 
 ## Rendu

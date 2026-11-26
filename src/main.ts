@@ -77,6 +77,8 @@ async function main(): Promise<void> {
     objects: () => viewerHost?.objects() ?? [],
     renderSettings: () => viewerHost?.renderSettings() ?? {},
     setRenderSetting: (name, value) => readyHost().setRenderSetting(name, value),
+    setEnvironmentShader: settings => readyHost().setEnvironmentShader(settings),
+    setImageShader: settings => readyHost().setImageShader(settings),
     assignMaterial: (object, material) => readyHost().assignMaterial(object, material),
     render: samples => readyHost().render(samples),
     saveImage: name => readyHost().saveImage(name),
@@ -828,6 +830,12 @@ async function main(): Promise<void> {
         }
       }
       else throw new Error(`Paramètre de rendu inconnu : ${name}.`);
+    },
+    async setEnvironmentShader(settings) {
+      await viewer.setEnvironmentShader(settings);
+    },
+    async setImageShader(settings) {
+      viewer.setImageShader(settings);
     },
     async assignMaterial(object, material) {
       if (operationBusy || deviceLost) throw new Error('Une opération du viewer est en cours.');

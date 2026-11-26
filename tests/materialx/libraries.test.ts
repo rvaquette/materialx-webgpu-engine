@@ -137,9 +137,11 @@ describe('MaterialXLibraries', () => {
       sources: defaultLibrarySources('/lib', ['stdlib/stdlib_defs.mtlx']),
       fetchText: async () => '<materialx/>',
     });
-    expect(read).toHaveBeenCalledTimes(2);
+    expect(read).toHaveBeenCalledTimes(3);
     expect(read.mock.calls[1]![1]).toContain('inherit="ND_image_vector3"');
     expect(read.mock.calls[1]![1]).toContain('name="uvtiling" type="vector2"');
+    expect(read.mock.calls[2]![1]).toContain('name="engine_environment_shader"');
+    expect(read.mock.calls[2]![1]).toContain('node="image_shader"');
   });
 
   it('throws if importInto is called before load', () => {

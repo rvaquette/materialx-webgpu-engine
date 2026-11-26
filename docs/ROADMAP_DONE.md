@@ -1732,6 +1732,31 @@ compilation.
 Les détails de l'inventaire, des tailles et de la méthode de benchmark sont
 dans [dependencies.md](dependencies.md#core-wasm-minimum-build).
 
+## Priorité 12 : environnement et post-traitement
+
+La bibliothèque d'extension déclare deux types MaterialX sémantiques `shader` :
+`engine_environment_shader` et `engine_image_shader`. `EnvironmentShader`
+génère un ciel directionnel, un dégradé ou un éclairage studio, avec soleil,
+exposition, orientation et vitesse d'animation. Il est cuit en image HDR
+lat-long linéaire ; le raster et le path tracer utilisent la même image, et la
+CDF d'importance sampling est reconstruite avec elle à chaque changement de
+temps. La scène peut donc être éclairée sans fichier HDRI.
+
+`ImageShader` applique exposition, contraste, saturation et vignettage en
+coordonnées écran après la résolution raster ou l'affichage path tracing. La
+passe intervient aussi pour les AOV et ne modifie pas l'accumulation. Le tone
+mapping existant (`render.tonemap`) reste en amont. Les entrées des deux nœuds
+acceptent des valeurs littérales ; les connexions vers d'autres nœuds et les
+effets LUT/bloom ne sont pas encore pris en charge.
+
+Le script d'illustration est
+[p12-environment-postprocess.js](../examples/scripts/p12-environment-postprocess.js) ;
+il apparaît automatiquement dans le menu Scripts.
+
+| Éclairage procédural en raster | Éclairage et étalonnage en path tracing |
+|---|---|
+| ![Ciel procédural et étalonnage en raster](images/p12/p12-environment-postprocess-raster.png) | ![Ciel animé et étalonnage en path tracing](images/p12/p12-environment-postprocess-pathtracing.png) |
+
 ## Priorité 13 : baking et export de scènes
 
 Le baker CPU produit les cartes de base, rugosité, métal, normale et hauteur,

@@ -14,6 +14,10 @@
 
 import { parse as parseJavaScript, type Node as AcornNode } from 'acorn';
 import { MATERIALX_DEFAULT_LIBRARY_FILES } from './libraries.ts';
+import {
+  DEFAULT_ENVIRONMENT_SHADER, ENGINE_SHADER_LIBRARY_XML,
+  type EnvironmentShaderSettings, type ImageShaderSettings,
+} from './engine-shaders.ts';
 import type { ResolvedGraph } from './graph.ts';
 import { OBJECT_PROPERTIES, SCRIPT_PRIMITIVES, stageObjectShape, writeStageUsda, type PrimitiveParameter, type StageMaterial, type StageObject } from './script-scene.ts';
 import { checkPrimitiveShape, deformMesh, primitiveMesh, type PrimitiveAxis, type PrimitiveShape, type VertexDeformer } from '../scene/primitives.ts';
@@ -375,7 +379,10 @@ export async function loadScriptLibrary(
   rootUrl: string, fetchText: (url: string) => Promise<string> = fetchTextOrThrow,
 ): Promise<ScriptLibrary> {
   const base = rootUrl.replace(/\/+$/, '');
-  return ScriptLibrary.fromXml(await Promise.all(SCRIPT_LIBRARY_FILES.map(file => fetchText(`${base}/${file}`))));
+  return ScriptLibrary.fromXml([
+    ...await Promise.all(SCRIPT_LIBRARY_FILES.map(file => fetchText(`${base}/${file}`))),
+    ENGINE_SHADER_LIBRARY_XML,
+  ]);
 }
 
 // ---------------------------------------------------------------------------
@@ -710,6 +717,8 @@ export interface ScriptHost {
   objects(): readonly string[];
   renderSettings(): Readonly<Record<string, unknown>>;
   setRenderSetting(name: string, value: unknown): Promise<void>;
+  setEnvironmentShader(settings: EnvironmentShaderSettings): Promise<void>;
+  setImageShader(settings: ImageShaderSettings): Promise<void>;
   /** Bind a MaterialX document (generated `xml`, or a document `url`) to an object. */
   assignMaterial(objectPath: string, material: { xml: string } | { url: string }): Promise<void>;
   /** Restart rendering; with `samples`, resolve once that many samples are accumulated. Returns the sample count. */
@@ -790,7 +799,8 @@ export interface ScriptRun extends ScriptGraph {
 
 const SCRIPT_GLOBALS = new Set(['__mx', 'Math', 'scene', 'objects', 'render', 'assign', 'load', 'save', 'log', 'check', 'node', 'material',
   'stats', 'converge', 'capture', 'diagnostics', 'capabilities', 'timeline', 'time', 'setTime', 'transform', 'setTransform',
-  'setVisibility', 'lights', 'setLight', 'setCamera', 'variants', 'setVariant', 'materialParameters', 'setMaterialParameters']);
+  'setVisibility', 'lights', 'setLight', 'setCamera', 'variants', 'setVariant', 'materialParameters', 'setMaterialParameters',
+  'environment', 'postprocess']);
 /** Globals that are also natural node names: assigning them shadows the function. */
 const SHADOWABLE_GLOBALS = new Set(['material', 'node', 'time', 'transform', 'capture']);
 // eslint-disable-next-line @typescript-eslint/no-empty-function
@@ -1180,6 +1190,65 @@ export async function runScript(code: string, library: ScriptLibrary, options: R
       },
     };
   };
+  const terminalNode = (value: unknown, type: string, label: string): ScriptNode => {
+    const source = sourceOf(value);
+    if (!source || source.output.type !== type) {
+      throw new ScriptError(`${label} expects an ${type} output.`);
+    }
+    return source.node;
+  };
+  const terminalInput = (node: ScriptNode, name: string): ScriptValue => {
+    const assigned = node.inputs.get(name);
+    if (assigned && 'node' in assigned) {
+      throw new ScriptError(`${node.name}.${name}: connected inputs are not supported by this procedural shader yet; use literal values.`);
+    }
+    const value = assigned?.value ?? inputDef(node, name).default;
+    if (value === undefined) throw new ScriptError(`${node.name}.${name} has no default value.`);
+    return value;
+  };
+  const terminalFloat = (node: ScriptNode, name: string): number => {
+    const value = terminalInput(node, name);
+    if (typeof value !== 'number' || !Number.isFinite(value)) throw new ScriptError(`${node.name}.${name} expects a finite number.`);
+    return value;
+  };
+  const terminalColor = (node: ScriptNode, name: string): [number, number, number] => {
+    const value = terminalInput(node, name);
+    if (!Array.isArray(value) || value.length !== 3 || !value.every(component => typeof component === 'number' && Number.isFinite(component))) {
+      throw new ScriptError(`${node.name}.${name} expects 3 finite numbers.`);
+    }
+    return [value[0]!, value[1]!, value[2]!];
+  };
+  const environmentShaderSettings = (value: unknown): EnvironmentShaderSettings => {
+    const node = terminalNode(value, 'engine_environment_shader', 'environment(shader)');
+    const model = terminalInput(node, 'model');
+    if (model !== 'gradient' && model !== 'sky' && model !== 'studio') {
+      throw new ScriptError(`${node.name}.model expects "gradient", "sky" or "studio".`);
+    }
+    const direction = terminalColor(node, 'sunDirection');
+    return {
+      ...DEFAULT_ENVIRONMENT_SHADER,
+      model,
+      zenithColor: terminalColor(node, 'zenithColor'),
+      horizonColor: terminalColor(node, 'horizonColor'),
+      groundColor: terminalColor(node, 'groundColor'),
+      sunColor: terminalColor(node, 'sunColor'),
+      sunDirection: direction,
+      sunIntensity: terminalFloat(node, 'sunIntensity'),
+      sunAngularDiameter: terminalFloat(node, 'sunAngularDiameter'),
+      exposure: terminalFloat(node, 'exposure'),
+      rotation: terminalFloat(node, 'rotation'),
+      animationSpeed: terminalFloat(node, 'animationSpeed'),
+    };
+  };
+  const imageShaderSettings = (value: unknown): ImageShaderSettings => {
+    const node = terminalNode(value, 'engine_image_shader', 'postprocess(shader)');
+    return {
+      exposure: terminalFloat(node, 'exposure'),
+      contrast: terminalFloat(node, 'contrast'),
+      saturation: terminalFloat(node, 'saturation'),
+      vignette: terminalFloat(node, 'vignette'),
+    };
+  };
   const upstream = (root: ScriptNode): ScriptNode[] => {
     const seen = new Set<ScriptNode>();
     const visit = (node: ScriptNode): void => {
@@ -1507,6 +1576,14 @@ export async function runScript(code: string, library: ScriptLibrary, options: R
     return handleFor(material);
   };
   const viewer: Record<string, unknown> = {
+    environment: (shader: unknown): PromiseLike<void> => {
+      const settings = environmentShaderSettings(shader);
+      return action(target => target.setEnvironmentShader(settings));
+    },
+    postprocess: (shader: unknown): PromiseLike<void> => {
+      const settings = imageShaderSettings(shader);
+      return action(target => target.setImageShader(settings));
+    },
     scene: async (entry: unknown): Promise<void> => {
       if (typeof entry !== 'string' || !entry) throw new ScriptError('scene(entry) expects a scene path.');
       discardStage();
@@ -2165,7 +2242,7 @@ export function toScriptProgram(
     ordered.push(node);
   };
   graph.nodes.forEach(visit);
-  const code = ordered.map((node) => {
+  const declarations = ordered.map((node) => {
     const name = names.get(node)!;
     const variant = library.variantArgument(node.def);
     const lines = [`${name} = new ${node.def.className}(${variant === undefined ? '' : JSON.stringify(variant)});`];
@@ -2175,6 +2252,14 @@ export function toScriptProgram(
     }
     return lines.join('\n');
   }).join('\n\n') + '\n';
+  const terminals = ordered.flatMap(node => {
+    const name = names.get(node)!;
+    const output = node.def.outputs[0]!;
+    if (output.type === 'engine_environment_shader') return [`await environment(${name}.${output.name});`];
+    if (output.type === 'engine_image_shader') return [`await postprocess(${name}.${output.name});`];
+    return [];
+  });
+  const code = terminals.length ? `${declarations}\n${terminals.join('\n')}\n` : declarations;
   return { code, names };
 }
 

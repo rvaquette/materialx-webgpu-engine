@@ -57,6 +57,12 @@ import {
 } from '../gpu/shader-diagnostics.ts';
 import { packHdrTexture } from '../assets/hdr-texture.ts';
 import { generateEnvironmentMipmaps } from './env/mipmaps.ts';
+import { averageRadiance, projectIrradianceSH } from './env/irradiance.ts';
+import {
+  bakeEnvironmentShader, DEFAULT_ENVIRONMENT_SHADER, DEFAULT_IMAGE_SHADER,
+  type EnvironmentShaderSettings, type ImageShaderSettings,
+} from '../materialx/engine-shaders.ts';
+import { DisplayImageShader } from './image-shader.ts';
 import { assembleIrForwardShader, type RasterQuality } from './raster/ir-forward.ts';
 import { rasterVolumeWgsl, RASTER_VOLUME_UNIFORM_BYTES } from './raster/volume-pass.ts';
 import {
@@ -354,6 +360,8 @@ interface SceneDynamicUpdate {
 /** A disposable per-scene GPU render set (raster + lazily built path tracer) for one loaded USD. */
 interface SceneRender {
   setEnvironmentEnabled: (enabled: boolean) => void;
+  setEnvironmentShader: (settings: EnvironmentShaderSettings | undefined, time: number, reset?: boolean) => Promise<void>;
+  setImageShader: (settings: ImageShaderSettings | undefined) => void;
   updateMaterial: (key: string, material: MaterialResource) => void;
   updateTopology: (
     key: string, material: MaterialResource, frame: SceneFramePlan, check: () => void, commit: () => void,
@@ -411,6 +419,8 @@ export class InteractiveViewer {
     stopOnConvergence: false, timeBudgetSeconds: 0, targetRelativeError: PT_CONVERGENCE_TARGET_RELATIVE_ERROR,
   };
   #environmentEnabled = true;
+  #environmentShader: EnvironmentShaderSettings | undefined;
+  #imageShader: ImageShaderSettings | undefined;
   readonly #jsDenoiser: JsDenoiser;
   #ptDisplayDirty = true;
   #orbit: OrbitCamera;
@@ -720,6 +730,46 @@ export class InteractiveViewer {
     this.#rasterDirty = true;
     this.#ptDisplayDirty = true;
     this.#emitStatus();
+  }
+
+  async setEnvironmentShader(settings: EnvironmentShaderSettings | undefined): Promise<void> {
+    const copy = settings ? {
+      ...DEFAULT_ENVIRONMENT_SHADER,
+      ...settings,
+      zenithColor: [...settings.zenithColor] as [number, number, number],
+      horizonColor: [...settings.horizonColor] as [number, number, number],
+      groundColor: [...settings.groundColor] as [number, number, number],
+      sunColor: [...settings.sunColor] as [number, number, number],
+      sunDirection: [...settings.sunDirection] as [number, number, number],
+    } : undefined;
+    const previous = this.#environmentShader;
+    const loaded = this.#loaded;
+    if (copy && !loaded) bakeEnvironmentShader(copy, this.#time, 4, 2);
+    const rebuildForAvailability = Boolean(loaded && Boolean(previous) !== Boolean(copy));
+    if (rebuildForAvailability && loaded) {
+      const time = this.#time;
+      await this.#replaceLoaded(loaded, { ...loaded }, 'Scene changed while creating the procedural environment.', () => {
+        if (this.#time !== time || this.#environmentShader !== previous) {
+          throw new Error('Environment shader update was superseded.');
+        }
+      }, { settings: copy });
+    } else {
+      await this.#current?.setEnvironmentShader(copy, this.#time);
+    }
+    this.#environmentShader = copy;
+    this.#clearDenoiserComparison();
+    this.#current?.resetPathTrace();
+    this.#rasterDirty = true;
+    this.#ptDisplayDirty = true;
+    this.#emitStatus();
+  }
+
+  setImageShader(settings: ImageShaderSettings | undefined): void {
+    const copy = settings ? { ...DEFAULT_IMAGE_SHADER, ...settings } : undefined;
+    this.#imageShader = copy;
+    this.#current?.setImageShader(copy);
+    this.#rasterDirty = true;
+    this.#ptDisplayDirty = true;
   }
 
   async setRasterQuality(quality: RasterQuality): Promise<void> {
@@ -1267,20 +1317,22 @@ export class InteractiveViewer {
   /** Swap the active scene state without reparsing USD (frame + GPU render set rebuilt from resources). */
   async #replaceLoaded(
     loaded: LoadedUsdScene, candidate: LoadedUsdScene, changedMessage: string, check?: () => void,
+    environmentOverride?: { settings: EnvironmentShaderSettings | undefined },
   ): Promise<void> {
     const current = this.#current;
     if (!current) throw new Error('No scene loaded.');
     const exposure = candidate.cameras[0]?.exposure ?? 0;
+    const environment = this.#planFrame(loaded, exposure).environment;
     const frame = buildSceneFrame(candidate.resources, {
       lights: candidate.lights, surfaceFor: candidate.mtlx.surfaceFor,
-      environment: current.frame.environment,
+      environment,
       frameCamera: { viewProj: this.#orbit.viewProj(), eye: this.#orbit.eye, exposure },
     });
     const sink: DiagnosticSink = diagnostic => {
       if (diagnostic.level === 'error') console.error(diagnostic.message, diagnostic.detail ?? '');
       else if (diagnostic.level === 'warning') console.warn(diagnostic.message, diagnostic.detail ?? '');
     };
-    const render = await this.#buildSceneRender(candidate, frame, exposure, sink);
+    const render = await this.#buildSceneRender(candidate, frame, exposure, sink, false, environmentOverride);
     if (this.#loaded !== loaded || this.#current !== current || this.#disposed) {
       render.dispose();
       throw new Error(changedMessage);
@@ -1692,6 +1744,7 @@ export class InteractiveViewer {
       this.#lightOverrides.clear();
     }
     this.#time = loaded.animation?.time ?? 0;
+    await render.setEnvironmentShader(this.#environmentShader, this.#time);
     this.#sceneCameraKey = loaded.cameras[0] ? sceneCameraKey(loaded.cameras[0]) : undefined;
     this.#applyDynamicState(false);
     this.#onCameraChanged();
@@ -1971,6 +2024,8 @@ export class InteractiveViewer {
     if (!this.#loaded) throw new Error('No scene loaded.');
     this.#time = time;
     const materialsChanged = await this.#applyMaterialAnimation();
+    if (this.#time !== time) return;
+    await this.#current?.setEnvironmentShader(this.#environmentShader, time);
     if (this.#time !== time) return;
     this.#applyDynamicState(options.keepAccumulation ?? false, materialsChanged);
     await this.#applyTopologyChanges();
@@ -2306,12 +2361,14 @@ export class InteractiveViewer {
         const share = Math.floor(samples * (step + 1) / steps) - Math.floor(samples * step / steps);
         this.#time = shutter.open + (step + Math.random()) / steps * (shutter.close - shutter.open);
         await this.#applyMaterialAnimation();
+        await current.setEnvironmentShader(this.#environmentShader, this.#time, false);
         this.#applyDynamicState(step > 0);
         if (share > 0) await current.capturePathTrace(step === steps - 1 ? targetView : undefined, share, undefined, { reset: step === 0 });
       }
     } finally {
       this.#time = time;
       await this.#applyMaterialAnimation();
+      await current.setEnvironmentShader(this.#environmentShader, time, false);
       this.#applyDynamicState(true);
       await this.#applyTopologyChanges();
     }
@@ -2394,10 +2451,11 @@ export class InteractiveViewer {
     exposure: number,
     sink: DiagnosticSink,
     preview = false,
+    environmentOverride?: { settings: EnvironmentShaderSettings | undefined },
   ): Promise<SceneRender> {
     const trash: Array<{ destroy(): void }> = [];
     try {
-      return await this.#createSceneRender(loaded, frame, exposure, sink, trash, preview);
+      return await this.#createSceneRender(loaded, frame, exposure, sink, trash, preview, environmentOverride);
     } catch (error) {
       for (const resource of trash) resource.destroy();
       throw error;
@@ -2411,6 +2469,7 @@ export class InteractiveViewer {
     sink: DiagnosticSink,
     trash: Array<{ destroy(): void }>,
     preview: boolean,
+    environmentOverride?: { settings: EnvironmentShaderSettings | undefined },
   ): Promise<SceneRender> {
     const device = this.#device;
     let width = this.#width;
@@ -2456,34 +2515,64 @@ export class InteractiveViewer {
     // filterable rgba16float and consumed by both the raster background pass and
     // the path tracer's group 3. env.w in the PT uniform carries the intensity.
     const envAsset = loaded.environment;
+    let envSettings = environmentOverride ? environmentOverride.settings : this.#environmentShader;
+    let envBakeTime = this.#time;
+    const envWidth = envSettings ? 512 : envAsset?.image.width ?? 512;
+    const envHeight = envSettings ? 256 : envAsset?.image.height ?? 256;
+    const emptyEnvironment = { width: envWidth, height: envHeight, data: new Float32Array(envWidth * envHeight * 3) };
+    let environmentImage = envSettings
+      ? bakeEnvironmentShader(envSettings, this.#time, envWidth, envHeight)
+      : envAsset?.image ?? emptyEnvironment;
+    const baseEnvironmentRadiance: Vec3 = [...frame.environment.radiance];
+    const baseEnvironmentSh = frame.environment.sh;
+    let envTint: [number, number, number] = envSettings ? [1, 1, 1] : envAsset ? [...envAsset.tint] : [1, 1, 1];
+    let envIntensity = envSettings ? 1 : envAsset?.intensity ?? 1;
+    const hasEnvironmentImage = (): boolean => envSettings !== undefined || envAsset !== undefined;
     let envTextureView: GPUTextureView | undefined;
     let envSampler: GPUSampler | undefined;
     let envRadianceScale = 1;
-    let envCdfBuffer: GPUBuffer | undefined;
-    if (envAsset) {
-      const { width: ew, height: eh } = envAsset.image;
-      const packed = packHdrTexture(envAsset.image);
-      envRadianceScale = packed.radianceScale;
-      frame.environment.textureRadianceScale = envRadianceScale;
-      const cdf = loaded.compiled?.environmentCdf ?? buildEnvCdf(envAsset.image);
+    const cdf = hasEnvironmentImage() ? buildEnvCdf(environmentImage) : undefined;
+    frame.environment.hasTexture = hasEnvironmentImage();
+    if (hasEnvironmentImage()) {
+      frame.environment.tint = envTint;
+      frame.environment.intensity = envIntensity;
+    }
+    if (envSettings) {
+      frame.environment.radiance = averageRadiance(environmentImage);
+      frame.environment.sh = projectIrradianceSH(environmentImage);
+    }
+    frame.environment.textureRadianceScale = envRadianceScale;
+    if (cdf) {
       frame.environment.envResX = cdf.width;
       frame.environment.envResY = cdf.height;
       frame.environment.envTotalSum = cdf.totalSum;
-      envCdfBuffer = track(device.createBuffer({ size: Math.max(16, cdf.cdf.byteLength), usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST }));
+    }
+    let envCdfBuffer: GPUBuffer | undefined;
+    let envTexture: GPUTexture | undefined;
+    const uploadEnvironment = (image: typeof environmentImage): void => {
+      if (!envTexture) return;
+      const packed = packHdrTexture(image);
+      envRadianceScale = packed.radianceScale;
+      device.queue.writeTexture(
+        { texture: envTexture }, packed.data,
+        { bytesPerRow: envWidth * 8, rowsPerImage: envHeight },
+        [envWidth, envHeight, 1],
+      );
+      generateEnvironmentMipmaps(device, envTexture);
+      frame.environment.textureRadianceScale = envRadianceScale;
+    };
+    if (cdf) {
+      envCdfBuffer = track(device.createBuffer({
+        size: Math.max(16, cdf.cdf.byteLength), usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+      }));
       device.queue.writeBuffer(envCdfBuffer, 0, cdf.cdf);
-      const envTexture = track(device.createTexture({
-        size: [ew, eh],
-        mipLevelCount: Math.floor(Math.log2(Math.max(ew, eh))) + 1,
+      envTexture = track(device.createTexture({
+        size: [envWidth, envHeight],
+        mipLevelCount: Math.floor(Math.log2(Math.max(envWidth, envHeight))) + 1,
         format: 'rgba16float',
         usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST | GPUTextureUsage.RENDER_ATTACHMENT,
       }));
-      device.queue.writeTexture(
-        { texture: envTexture },
-        packed.data,
-        { bytesPerRow: ew * 8, rowsPerImage: eh },
-        [ew, eh, 1],
-      );
-      generateEnvironmentMipmaps(device, envTexture);
+      uploadEnvironment(environmentImage);
       envTextureView = envTexture.createView();
       envSampler = device.createSampler({
         addressModeU: 'repeat',
@@ -2493,8 +2582,77 @@ export class InteractiveViewer {
         mipmapFilter: 'linear',
       });
     }
-
+    const replaceEnvironment = (settings: EnvironmentShaderSettings | undefined, time: number, reset: boolean): void => {
+      if (!envTexture || !envCdfBuffer) throw new Error('The active scene has no environment resources to update.');
+      const nextImage = settings
+        ? bakeEnvironmentShader(settings, time, envWidth, envHeight)
+        : envAsset?.image ?? emptyEnvironment;
+      const nextCdf = buildEnvCdf(nextImage);
+      const nextPacked = packHdrTexture(nextImage);
+      const environmentSh = settings ? projectIrradianceSH(nextImage) : envAsset?.sh ?? baseEnvironmentSh;
+      const environmentRadiance = settings ? averageRadiance(nextImage) : envAsset?.averageRadiance ?? baseEnvironmentRadiance;
+      if (nextImage.width !== envWidth || nextImage.height !== envHeight ||
+        nextCdf.width !== envWidth || nextCdf.height !== envHeight) {
+        throw new Error('The environment image and sampling CDF dimensions must match.');
+      }
+      // The image and its CDF are queued together before any subsequent render submission.
+      device.queue.writeTexture(
+        { texture: envTexture }, nextPacked.data,
+        { bytesPerRow: envWidth * 8, rowsPerImage: envHeight },
+        [envWidth, envHeight, 1],
+      );
+      device.queue.writeBuffer(envCdfBuffer, 0, nextCdf.cdf);
+      generateEnvironmentMipmaps(device, envTexture);
+      envSettings = settings;
+      envBakeTime = time;
+      environmentImage = nextImage;
+      envTint = settings ? [1, 1, 1] : envAsset ? [...envAsset.tint] : [1, 1, 1];
+      envIntensity = settings ? 1 : envAsset?.intensity ?? 1;
+      envRadianceScale = nextPacked.radianceScale;
+      frame.environment.hasTexture = hasEnvironmentImage();
+      frame.environment.tint = envTint;
+      frame.environment.intensity = envIntensity;
+      frame.environment.radiance = environmentRadiance;
+      if (environmentSh) frame.environment.sh = environmentSh;
+      else delete frame.environment.sh;
+      frame.environment.textureRadianceScale = envRadianceScale;
+      frame.environment.envResX = nextCdf.width;
+      frame.environment.envResY = nextCdf.height;
+      frame.environment.envTotalSum = nextCdf.totalSum;
+      if (pathTraceScene) {
+        pathTraceScene.environment.hasTexture = hasEnvironmentImage();
+        pathTraceScene.environment.tint = envTint;
+        pathTraceScene.environment.intensity = envIntensity;
+        pathTraceScene.environment.radiance = frame.environment.radiance;
+        if (environmentSh) pathTraceScene.environment.sh = environmentSh;
+        else delete pathTraceScene.environment.sh;
+        pathTraceScene.environment.textureRadianceScale = envRadianceScale;
+        pathTraceScene.environment.envResX = nextCdf.width;
+        pathTraceScene.environment.envResY = nextCdf.height;
+        pathTraceScene.environment.envTotalSum = nextCdf.totalSum;
+      }
+      if (envBgUniform) {
+        device.queue.writeBuffer(envBgUniform, 80, new Float32Array([
+          envTint[0] * envIntensity * envRadianceScale,
+          envTint[1] * envIntensity * envRadianceScale,
+          envTint[2] * envIntensity * envRadianceScale,
+          1,
+        ]));
+      }
+      for (const { buffer, draw } of frameUniforms) {
+        device.queue.writeBuffer(buffer, 44 * 4, buildSceneFrameUniform(frame, draw).subarray(44));
+      }
+      invalidateDisneyTracer();
+      if (reset && this.#backend === 'disney') startDisneyTracer();
+      if (reset) {
+        pathTracer?.resetPathTrace();
+        resetDisneyPathTrace();
+      }
+      this.#rasterDirty = true;
+      this.#ptDisplayDirty = true;
+    };
     const rasterBackground = (): Vec3 => frame.environment.enabled === false ? [0, 0, 0] : frame.environment.radiance;
+    const imageShader = track(new DisplayImageShader(device, outputFormat, this.#imageShader));
 
     // Keep material textures, geometry buffers and driver pipelines out of a PT-only load.
     const buildRaster = async () => {
@@ -2971,7 +3129,7 @@ export class InteractiveViewer {
       // equirect dome texture along each pixel's world ray, cleared behind geometry.
       let envBgBindGroup: GPUBindGroup | undefined;
       let envBgPipeline: GPURenderPipeline | undefined;
-      if (envAsset && envTextureView && envSampler) {
+      if (envTextureView && envSampler) {
         const envBgModule = device.createShaderModule({
           code: `
   struct EnvBg { invViewProj: mat4x4<f32>, eye: vec4<f32>, tint: vec4<f32> };
@@ -3010,9 +3168,12 @@ export class InteractiveViewer {
           depthStencil: { format: backend.depthFormat, depthWriteEnabled: false, depthCompare: 'always' },
         });
         envBgUniform = track(device.createBuffer({ size: 96, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST }));
-        const inten = envAsset.intensity * envRadianceScale;
-        const t = envAsset.tint;
-        device.queue.writeBuffer(envBgUniform, 80, new Float32Array([t[0] * inten, t[1] * inten, t[2] * inten, 1]));
+        device.queue.writeBuffer(envBgUniform, 80, new Float32Array([
+          envTint[0] * envIntensity * envRadianceScale,
+          envTint[1] * envIntensity * envRadianceScale,
+          envTint[2] * envIntensity * envRadianceScale,
+          1,
+        ]));
         envBgBindGroup = device.createBindGroup({
           layout: envBgPipeline.getBindGroupLayout(0),
           entries: [
@@ -3029,7 +3190,7 @@ export class InteractiveViewer {
         const bandRows = rasterQuality === 'interactive' ? height : Math.max(1, Math.floor(RASTER_BAND_PIXELS / width));
         let encoder = device.createCommandEncoder();
         let first = true;
-        if (frame.environment.enabled !== false && envBgPipeline && envBgBindGroup) {
+        if (hasEnvironmentImage() && frame.environment.enabled !== false && envBgPipeline && envBgBindGroup) {
           const pass = encoder.beginRenderPass({
             colorAttachments: [{ view: hdrView, clearValue: { r: 0, g: 0, b: 0, a: 1 }, loadOp: 'clear', storeOp: 'store' }],
             depthStencilAttachment: { view: depthView, depthClearValue: 1, depthLoadOp: 'clear', depthStoreOp: 'store' },
@@ -3069,7 +3230,9 @@ export class InteractiveViewer {
           pass.end();
         }
         device.queue.writeBuffer(resolveUniform, 0, new Float32Array([currentExposure, tonemapIndex(currentTonemap)]));
-        resolveBackend.recordResolvePass(encoder, { outputView: targetView, bindGroup: resolveBindGroup });
+        const displayTarget = imageShader.targetView(width, height, targetView);
+        resolveBackend.recordResolvePass(encoder, { outputView: displayTarget, bindGroup: resolveBindGroup });
+        imageShader.record(encoder, targetView);
         device.queue.submit([encoder.finish()]);
       };
       return {
@@ -3110,10 +3273,12 @@ export class InteractiveViewer {
     const clearOutput = (targetView: GPUTextureView): void => {
       const color = rasterBackground();
       const encoder = device.createCommandEncoder();
+      const displayTarget = imageShader.targetView(width, height, targetView);
       const pass = encoder.beginRenderPass({
-        colorAttachments: [{ view: targetView, clearValue: { r: color[0], g: color[1], b: color[2], a: 1 }, loadOp: 'clear', storeOp: 'store' }],
+        colorAttachments: [{ view: displayTarget, clearValue: { r: color[0], g: color[1], b: color[2], a: 1 }, loadOp: 'clear', storeOp: 'store' }],
       });
       pass.end();
+      imageShader.record(encoder, targetView);
       device.queue.submit([encoder.finish()]);
     };
 
@@ -3191,7 +3356,7 @@ export class InteractiveViewer {
       const { dispatch, bindings } = packPtTextureArrays(sourceDispatch, sourceBindings, device.limits.maxTextureArrayLayers);
       const storageSlots = bindings.group0.filter(slot => slot.usage === 'storage').length;
       // The environment CDF (group 3) is one more storage buffer in the same stage.
-      assertStorageBufferCount(device, storageSlots + (envAsset ? 1 : 0), 'Path tracing');
+      assertStorageBufferCount(device, storageSlots + (hasEnvironmentImage() ? 1 : 0), 'Path tracing');
       for (const slot of bindings.group0) {
         if (slot.usage === 'storage' && slot.data) {
           assertSceneStorageSize(device, Math.max(slot.data.byteLength, 4), slot.role);
@@ -3202,7 +3367,11 @@ export class InteractiveViewer {
         return o;
       };
       // Mobile drivers reserve per-thread stack for the by-value lobe array: size it to the scene.
-      assertSceneTextureBindings(device, dispatch.textures.length + (envAsset ? 1 : 0), dispatch.samplers.length + (envAsset ? 1 : 0));
+      assertSceneTextureBindings(
+        device,
+        dispatch.textures.length + (hasEnvironmentImage() ? 1 : 0),
+        dispatch.samplers.length + (hasEnvironmentImage() ? 1 : 0),
+      );
       const maxLobes = Math.min(
         PT_MAX_LOBES,
         Math.max(
@@ -3215,7 +3384,7 @@ export class InteractiveViewer {
           label: 'Path tracing',
           code: () => pathTraceComputeWgsl({
             volumeGrid: ptScene.volumeData !== undefined,
-            dispatch, environment: loaded.environment !== undefined, maxLobes, displayAovs: true,
+            dispatch, environment: hasEnvironmentImage(), maxLobes, displayAovs: true,
             closureDispatch: pathTraceClosureDispatch(dispatch, ptScene.materials),
             opaque: pathTraceOpaqueScene(dispatch, ptScene.materials),
             analyticLights: ptScene.analyticLights !== undefined,
@@ -3226,7 +3395,7 @@ export class InteractiveViewer {
         },
         {
           label: 'Path tracing display',
-          code: () => pathTraceDisplayWgsl(envAsset !== undefined, true, true),
+          code: () => pathTraceDisplayWgsl(hasEnvironmentImage(), true, true),
         },
         {
           label: 'Path tracing convergence',
@@ -3246,7 +3415,7 @@ export class InteractiveViewer {
         if (!parameter) throw new Error(`Missing path-tracing parameter: ${field.field}`);
         return parameter.value;
       });
-      const ptBackend = new PathTraceBackend(device, { dispatch, ...(envAsset ? { environment: true } : {}) });
+      const ptBackend = new PathTraceBackend(device, { dispatch, ...(hasEnvironmentImage() ? { environment: true } : {}) });
       checkBuild();
       const [ptPipelineResult, ptDisplayPipeline, ptConvergencePipeline] = await Promise.all([
         ptBackend.createPipelineAsync(ptCompilation!.module),
@@ -3551,17 +3720,16 @@ export class InteractiveViewer {
             })),
           })
           : undefined;
-      const ptEnvGroup =
-        envAsset && envTextureView && envSampler && envCdfBuffer
-          ? device.createBindGroup({
-            layout: ptPipeline.getBindGroupLayout(3),
-            entries: [
-              { binding: 0, resource: envTextureView },
-              { binding: 1, resource: envSampler },
-              { binding: 2, resource: { buffer: envCdfBuffer } },
-            ],
-          })
-          : undefined;
+      const ptEnvGroup = envTextureView && envSampler && envCdfBuffer
+        ? device.createBindGroup({
+          layout: ptPipeline.getBindGroupLayout(3),
+          entries: [
+            { binding: 0, resource: envTextureView },
+            { binding: 1, resource: envSampler },
+            { binding: 2, resource: { buffer: envCdfBuffer } },
+          ],
+        })
+        : undefined;
 
       const ptInfo = track(device.createBuffer({ size: PT_DISPLAY_INFO_BYTES, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST }));
       const neuralTarget = (w: number, h: number): GPUTexture => device.createTexture({
@@ -3576,7 +3744,7 @@ export class InteractiveViewer {
           { binding: 1, resource: { buffer: uniform } },
           { binding: 2, resource: { buffer: preview } },
           { binding: 5, resource: neural.createView() },
-          ...(envAsset && envTextureView && envSampler ? [
+          ...(envTextureView && envSampler ? [
             { binding: 3, resource: envTextureView }, { binding: 4, resource: envSampler },
           ] : []),
         ],
@@ -3767,8 +3935,7 @@ export class InteractiveViewer {
         ints.set([previewWidth, previewHeight, width, height], 4);
         floats.set(backgroundInvViewProj, 8);
         floats.set([...cameraEye, pathTraceViewIndex(this.#pathTracingView)], 24);
-        const tint = envAsset?.tint ?? [1, 1, 1];
-        floats.set(tint.map((v) => frame.environment.enabled === false ? 0 : v * (envAsset?.intensity ?? 1) * envRadianceScale), 28);
+        floats.set(envTint.map((v) => frame.environment.enabled === false ? 0 : v * envIntensity * envRadianceScale), 28);
         floats[31] = this.#pathTracingDenoiserComparison && neuralReady ? 0.5 : 0;
         floats.set([...rasterBackground(), tonemapIndex(currentTonemap)], 32);
         device.queue.writeBuffer(ptInfo, 0, info);
@@ -3829,13 +3996,15 @@ export class InteractiveViewer {
           convergenceRequest = { revision: convergenceRevision, samples, columns, rows };
         }
         if (targetView) {
+          const displayTarget = imageShader.targetView(width, height, targetView);
           const renderPass = encoder.beginRenderPass({
-            colorAttachments: [{ view: targetView, loadOp: 'clear', storeOp: 'store', clearValue: { r: 0, g: 0, b: 0, a: 1 } }],
+            colorAttachments: [{ view: displayTarget, loadOp: 'clear', storeOp: 'store', clearValue: { r: 0, g: 0, b: 0, a: 1 } }],
           });
           renderPass.setPipeline(ptDisplayPipeline);
           renderPass.setBindGroup(0, ptDisplayBindGroup);
           renderPass.draw(3);
           renderPass.end();
+          imageShader.record(encoder, targetView);
         }
         device.queue.submit([encoder.finish()]);
         if (convergenceRequest) void readConvergence(
@@ -4122,17 +4291,17 @@ export class InteractiveViewer {
         }
         const lightData = packDisneyLights(currentLights);
         let environment: { width: number; height: number; data: Float32Array } | undefined;
-        if (envAsset) {
-          const data = new Float32Array(envAsset.image.data.length);
+        if (hasEnvironmentImage()) {
+          const data = new Float32Array(environmentImage.data.length);
           for (let i = 0; i < data.length; i++) {
-            const value = Math.fround(envAsset.image.data[i]! * envAsset.tint[i % 3]! * envAsset.intensity);
+            const value = Math.fround(environmentImage.data[i]! * envTint[i % 3]! * envIntensity);
             if (!Number.isFinite(value)) throw new Error(`Disney environment exceeds float32 range at pixel ${Math.floor(i / 3)}.`);
             data[i] = value;
           }
-          environment = { width: envAsset.image.width, height: envAsset.image.height, data };
+          environment = { width: environmentImage.width, height: environmentImage.height, data };
         }
         const environmentTotal = environment ? buildDisneyEnvironmentCdf(environment).totalSum : 0;
-        const environmentRotation = environment ? disneyEnvironmentRotation(loaded.lights) : 0;
+        const environmentRotation = environment && !envSettings ? disneyEnvironmentRotation(loaded.lights) : 0;
         const backend = await DisneyGpuBackend.create(device, scene, {
           width, height, textureSize: DISNEY_TEXTURE_SIZE, imageProvider: loaded.mtlx.imageProvider,
           outputFormat, lights: lightData.data, specialization: { ...DISNEY_STATIC_PATH_OPTIONS, lightCount: lightData.count },
@@ -4170,16 +4339,20 @@ export class InteractiveViewer {
       }
       if (!accumulate) {
         try {
-          backend.display(targetView, [width, height], currentExposure, currentTonemap);
+          const displayTarget = imageShader.targetView(width, height, targetView);
+          backend.display(displayTarget, [width, height], currentExposure, currentTonemap);
+          imageShader.apply(targetView, width, height);
         } catch (error) {
           setDisneyError(error, 'Disney path tracing - display');
         }
         return;
       }
       try {
+        const displayTarget = imageShader.targetView(width, height, targetView);
         for (let i = 0; i < DISNEY_TILES_PER_FRAME; i++) {
-          renderDisneyTile(backend, targetView, i === DISNEY_TILES_PER_FRAME - 1);
+          renderDisneyTile(backend, displayTarget, i === DISNEY_TILES_PER_FRAME - 1);
         }
+        imageShader.apply(targetView, width, height);
         if (!disneyErrorReadback) {
           disneyErrorReadback = true;
           void backend.readError().then(error => {
@@ -4240,6 +4413,7 @@ export class InteractiveViewer {
         }
         pathTraceOwned = ptTrash;
         pathTracer = built;
+        Object.assign(built.scene.environment, frame.environment);
         pathTraceScene = built.scene;
         if (hiddenInstances.size > 0) built.applyGeometry(ptUpdatesFor(hiddenInstances));
         uploadPtParameters = built.uploadParameters;
@@ -4454,6 +4628,14 @@ export class InteractiveViewer {
         }
         resetDisneyPathTrace();
       },
+      setEnvironmentShader: async (settings, time, reset = true) => {
+        if (!settings && !envSettings) return;
+        if (settings === envSettings && (time === envBakeTime || settings?.animationSpeed === 0)) return;
+        replaceEnvironment(settings, time, reset);
+      },
+      setImageShader: (settings) => {
+        imageShader.setSettings(settings);
+      },
       updateMaterial: (key, material) => {
         resources.materials.set(key, material);
         const data = materialUniformData(material);
@@ -4483,6 +4665,7 @@ export class InteractiveViewer {
       resize: async (w, h) => {
         pathTracer?.resize(w, h);
         raster?.resize(w, h);
+        imageShader.resize();
         width = w;
         height = h;
         if (disneyBackend || disneyState === 'compiling') {

@@ -11,8 +11,8 @@ matériaux MaterialX), 3bis (scripting), 4 (accélération du path tracer), 5
 (scènes dynamiques), 6 (volumes et effets avancés), 7 (robustesse,
 portabilité et exploitation), 8 (primitives et scènes par script), 9
 (displacement procédural), 10 (documentation intégrée des nœuds), 11
-(aperçus par nœud et bibliothèque de matériaux), 13 (baking et export de
-scènes), ainsi que
+(aperçus par nœud et bibliothèque de matériaux), 12 (environnement et
+post-traitement), 13 (baking et export de scènes), ainsi que
 l'étude urgente de la priorité 21
 (chargement des bibliothèques MaterialX sans WASM) et la priorité 22 (build
 minimal du Core WASM) sont traitées ; leur historique est dans
@@ -23,23 +23,6 @@ Les priorités suivantes visent à passer d'un moteur de rendu MaterialX à un
 outil de création : construire des scènes, explorer et documenter les nœuds,
 étendre MaterialX à de nouveaux types de shaders, exporter le résultat et
 continuer à optimiser le runtime livré au navigateur.
-
-## Priorité 12 : environnement et post-traitement
-
-Deux nouveaux types de shaders, déclarés comme `typedef` de sémantique `shader`
-et `nodedef` dans une bibliothèque d'extension, pour que les documents restent
-du MaterialX valide :
-
-- **environment shader** : ciel ou fond procédural évalué selon la direction
-  (dégradé, ciel physique, studio), animable et échantillonné par le path tracer
-  comme une carte HDR ;
-- **image shader de post-traitement** : graphe appliqué à l'image finale et aux
-  AOV (tone mapping, étalonnage, LUT, vignettage, bloom), `texcoord` désignant
-  les coordonnées écran ; appliqué après l'accumulation, sans toucher au cœur du
-  rendu.
-
-**Critère d'aboutissement :** une scène s'éclaire sans HDRI et son rendu final
-est étalonné par un graphe, en raster comme en path tracing.
 
 ## Priorité 14 : lookdev et projets
 
@@ -254,6 +237,35 @@ reproductible ; les mesures et la recommandation justifient le format retenu,
 les compromis de qualité/performance et les commandes nécessaires à une future
 intégration UI/script.
 
+## Priorité 25 : étude d'un graphe de scène équivalent au script
+
+Étudier un graphe visuel représentant les mêmes opérations que l'API de script,
+sans réduire la scène à un graphe de matériaux :
+
+- **rendu** : nœuds pour le backend, la résolution, la qualité, le rendu, la
+  capture et l'enregistrement, avec des entrées/sorties explicites ;
+- **objets** : nœuds de géométrie et de scène (création ou référence d'objet,
+  transformation, visibilité), comportant des sous-nœuds `surface`,
+  `displacement` et, à terme, les autres terminaux de shader ;
+- **partage** : un même nœud de surface, déplacement ou autre shader peut être
+  connecté à plusieurs objets ; modifier le nœud partagé met à jour tous ses
+  utilisateurs sans dupliquer le graphe ;
+- **équivalence avec les scripts** : comparer la création et l'exécution des
+  graphes avec l'API existante, et étudier la conversion dans les deux sens,
+  les expressions/structures difficiles à représenter, l'animation et le
+  diagnostic des erreurs ;
+- **architecture et UX** : préciser les types de ports, les références aux
+  objets et matériaux, la gestion des cycles et des dépendances, le regroupement
+  des sous-graphes, ainsi que l'intégration aux éditeurs de script et de
+  matériaux existants.
+
+Cette priorité est une étude : choisir un modèle de graphe et un flux de travail
+avant de généraliser l'interface ou de remplacer le script.
+
+**Critère d'aboutissement :** une recommandation argumentée et un prototype
+minimal montrent le même rendu obtenu par script et par graphe, avec une surface
+et un déplacement partagés entre au moins deux objets.
+
 ## Pistes exploratoires
 
 - **Shaders implicites / SDF** (métaboules, fractales, booléens lisses) :
@@ -280,3 +292,5 @@ intégration UI/script.
    scripting (3bis) et de l'édition de paramètres.
 9. Étude de l'enregistrement des animations (24), après les scènes dynamiques
    (5) et l'export des rendus (13).
+10. Étude du graphe de scène équivalent au script (25), en prolongement du
+    scripting (3bis), des primitives (8) et des paramètres de shaders (23).

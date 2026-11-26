@@ -35,6 +35,9 @@ surface.specular_roughness = 0.3;
   l'export l'écrit sur ses entrées `filename`, là où le moteur le lit.
 - Sans `Surfacematerial`, l'export ajoute un `surfacematerial` nommé
   `material` relié au dernier shader de surface.
+- Les NodeDefs `EnvironmentShader` et `ImageShader` sont des terminaux
+  MaterialX dédiés ; ils ne sont pas convertis en matériau de surface. Activez-les
+  avec `await environment(shader.out)` et `await postprocess(shader.out)`.
 - Le reste du langage JavaScript reste disponible (boucles, fonctions, `await`).
 
 ## Nœuds résolus à l'instanciation
@@ -140,6 +143,25 @@ await render(64);                                          // attend 64 échanti
 | `await save("materiau.mtlx", matériau)` | Enregistre le document MaterialX d'un matériau du script |
 | `await save("scene.usda")` | Enregistre la scène des primitives du script et ses documents MaterialX |
 | `log(…)`, `check(condition, "message")` | Message ; vérification qui arrête le script si la condition est fausse |
+
+Les shaders d'extension de la priorité 12 s'emploient dans les deux backends :
+
+```js
+sky = new EnvironmentShader();
+sky.model = "sky";                 // "gradient", "sky" ou "studio"
+sky.animationSpeed = 18;           // rotation en degrés par unité de temps
+await environment(sky.out);        // carte HDR + CDF utilisées par le path tracer
+
+grade = new ImageShader();
+grade.contrast = 1.08;
+grade.saturation = 0.92;
+grade.vignette = 0.28;
+await postprocess(grade.out);      // après le rendu, aussi pour les AOV
+```
+
+Le shader d'image agit après le tone mapping intégré (`render.tonemap`) et ne modifie
+pas l'accumulation path tracing. Les paramètres des deux terminaux sont actuellement
+des valeurs littérales ; les connexions depuis d'autres nœuds ne sont pas encore évaluées.
 
 | Paramètre `render.` | Valeurs |
 |---|---|
