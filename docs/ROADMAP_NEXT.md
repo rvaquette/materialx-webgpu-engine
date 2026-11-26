@@ -13,7 +13,7 @@ portabilité et exploitation), 8 (primitives et scènes par script), 9
 (displacement procédural), 10 (documentation intégrée des nœuds), 11
 (aperçus par nœud et bibliothèque de matériaux), 12 (environnement et
 post-traitement), 13 (baking et export de scènes), 14 (lookdev et projets) et
-15 (opérations booléennes), ainsi que l'étude urgente de la priorité 21
+15 (opérations booléennes) et 16 (shaders d'extension), ainsi que l'étude urgente de la priorité 21
 (chargement des bibliothèques MaterialX sans WASM) et la priorité 22 (build
 minimal du Core WASM) sont traitées ; leur historique est dans
 [ROADMAP_DONE.md](ROADMAP_DONE.md). Les limites connues sont recensées dans
@@ -23,48 +23,6 @@ Les priorités suivantes visent à passer d'un moteur de rendu MaterialX à un
 outil de création : construire des scènes, explorer et documenter les nœuds,
 étendre MaterialX à de nouveaux types de shaders, exporter le résultat et
 continuer à optimiser le runtime livré au navigateur.
-
-## Priorité 16 : shaders d'extension
-
-Autres types de shaders, sur le même principe que la priorité 12 :
-
-- **light filter / gobo** : masque procédural ou profil IES sur une lumière,
-  levant le rejet actuel du light shaping (voir [usd-import.md](usd-import.md)) ;
-- **camera / lens shader** : forme du bokeh, distorsion, aberration chromatique,
-  projections fisheye et panoramiques ;
-- **AOV shader** : sorties personnalisées (masques, identifiants, données) pour
-  le compositing et le débogage de matériaux ;
-- **scatter shader** : densité MaterialX répartissant des instances sur une
-  surface (herbe, cailloux, gouttes), via l'instanciation existante.
-
-**Critère d'aboutissement :** chaque type est utilisable par script et dans le
-graphe, avec son statut de support par backend documenté.
-
-Exemples exécutables de la première tranche :
-
-- `npm run script -- examples/scripts/p16-light-filter.js --out docs/images/p16`
-- `npm run script -- examples/scripts/p16-extension-shaders.js --out docs/images/p16/p16-extension-shaders`
-
-`p16-light-filter.js` illustre le gobo sur une scène USD dédiée.
-`p16-extension-shaders.js` couvre la lentille (distorsion, bokeh et projection
-panoramique), le scatter déterministe, l'AOV albedo intégré et un AOV personnalisé
-de hauteur en espace monde.
-Le scatter utilise des prototypes partagés et accepte un sous-ensemble de graphes
-de densité spatiale ; les sources AOV personnalisées acceptées et leurs limites
-sont décrites dans [SCRIPT_REFERENCE.md](SCRIPT_REFERENCE.md). La priorité 16
-n'est pas terminée.
-
-![Gobo procédural sur une lumière spot](images/p16/p16-light-filter.png)
-
-![Scatter scriptable et AOV albedo](images/p16/p16-extension-shaders/p16-extension-shaders-beauty.png)
-
-![Rendu raster du scatter](images/p16/p16-extension-shaders/p16-extension-shaders-raster.png)
-
-![Projection équirectangulaire](images/p16/p16-extension-shaders/p16-extension-shaders-panorama.png)
-
-![Sortie AOV albedo](images/p16/p16-extension-shaders/p16-extension-shaders-albedo.png)
-
-![AOV personnalisé de hauteur en espace monde](images/p16/p16-extension-shaders/p16-extension-shaders-height.png)
 
 ## Priorité 17 : surfaces complexes (eau, lave, feu, fumée, nuages, …)
 
@@ -357,7 +315,7 @@ démarrage et la fidélité par rapport au rendu sur un seul nœud.
 2. Documentation des nœuds (10), qui profite des primitives (8) pour ses vignettes.
 3. Environnement et post-traitement (12), à faible risque d'architecture.
 4. Baking (13), qui alimente les aperçus et la bibliothèque (11).
-5. Lookdev et projets (14), booléens (15), puis shaders d'extension (16).
+5. Lookdev et projets (14), puis opérations booléennes (15).
 6. Surfaces complexes (17), puis systèmes de particules (20) pour les effets
    animés comme les gouttes et les braises.
 7. Création de poils et cheveux (21), après le scatter et les particules, pour

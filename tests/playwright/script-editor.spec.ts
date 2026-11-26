@@ -193,6 +193,35 @@ test('documente au survol, enregistre, partage et insère des modèles', async (
   expect(shared.url()).not.toContain('#script=');
 });
 
+test('affiche les shaders d’extension P16 dans le graphe', async ({ page }) => {
+  const e = await openEditor(page);
+  await setScript(e, `
+    lens = new LensShader(); lens.projection = "fisheye";
+    filter = new LightFilterShader(); filter.lightPath = "/World/Spot";
+    ground = new Plane(); prototype = new Sphere();
+    scatterSettings = new ScatterShader();
+    scatterSettings.surfacePath = ground.path; scatterSettings.prototypePath = prototype.path;
+    p = new Position(); p.space = "world";
+    split = new Separate3("ND_separate3_vector3"); split.in = p.out;
+    height = new CustomAovShader(); height.source = "scalar"; height.scalar = split.outy;
+  `);
+  await expect(e.status).toContainText('Script valide');
+  await e.panel.getByTestId('script-tab-graph').click();
+  await expect(e.panel.getByTestId('script-graph-summary')).toHaveText('Graphe : 8 nœuds, 2 liens.');
+
+  const graph = e.panel.locator('.mx-node-graph');
+  const widgets = await graph.evaluate(element => {
+    const view = element as HTMLElement & { mxGraph: { point(id: string, kind: string, name: string): { x: number; y: number } | undefined } };
+    return [
+      view.mxGraph.point('lens', 'widget', 'projection'),
+      view.mxGraph.point('filter', 'widget', 'pattern'),
+      view.mxGraph.point('scatterSettings', 'widget', 'density'),
+      view.mxGraph.point('height', 'widget', 'source'),
+    ];
+  });
+  expect(widgets.every(Boolean)).toBe(true);
+});
+
 test('IntelliSense propose les nœuds et leurs entrées/sorties issues des NodeDefs', async ({ page }, info) => {
   const e = await openEditor(page);
   await e.code.click();
