@@ -285,6 +285,21 @@ matériau sans réexécuter le script entier.
 de surface et d'un autre type de shader ; seuls les paramètres marqués apparaissent
 dans l'UI et leurs modifications sont visibles dans le rendu.
 
+## Priorité 24 : étude de l'enregistrement des animations
+
+Étudier l'export d'une animation rendue à partir de la timeline de scène, en
+comparant une séquence d'images et un fichier vidéo. Examiner la capture en temps
+réel et le rendu hors ligne, la cadence et la plage temporelle, la résolution,
+la stabilité du path tracing, ainsi que l'export de la caméra et des changements
+de matériaux/transforms. Recommander un format et un flux d'utilisation adaptés
+au navigateur et au script API ; cette priorité est une étude, sans imposer
+d'avance un format de sortie.
+
+**Critère d'aboutissement :** un prototype capture une courte animation
+reproductible ; les mesures et la recommandation justifient le format retenu,
+les compromis de qualité/performance et les commandes nécessaires à une future
+intégration UI/script.
+
 ## Pistes exploratoires
 
 - **Shaders implicites / SDF** (métaboules, fractales, booléens lisses) :
@@ -309,3 +324,5 @@ dans l'UI et leurs modifications sont visibles dans le rendu.
    tracing trop long sur un seul GPU.
 8. Paramètres de shaders déclarés par script (23), en prolongement de l'API de
    scripting (3bis) et de l'édition de paramètres.
+9. Étude de l'enregistrement des animations (24), après les scènes dynamiques
+   (5) et l'export des rendus (13).

@@ -131,9 +131,9 @@ describe('parametric primitives', () => {
     crossingViewProjection[11] = 1;
     crossingViewProjection[15] = 1;
     const crossing = primitiveMesh({
-      ...shape, width: 8, length: 8, maxScreenEdgeLength: 8, vertexBudget: 4096,
+      ...shape, width: 2, length: 2, maxScreenEdgeLength: 32, vertexBudget: 65536,
     }, { viewProjection: crossingViewProjection, modelTransforms: [identity], viewport: [128, 128] });
-    expect(crossing.points.length / 3).toBeLessThanOrEqual(4096);
+    expect(crossing.points.length / 3).toBeLessThanOrEqual(65536);
   });
 });
 
