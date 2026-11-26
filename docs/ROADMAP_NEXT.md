@@ -40,6 +40,28 @@ Autres types de shaders, sur le même principe que la priorité 12 :
 **Critère d'aboutissement :** chaque type est utilisable par script et dans le
 graphe, avec son statut de support par backend documenté.
 
+Exemples exécutables de la première tranche :
+
+- `npm run script -- examples/scripts/p16-light-filter.js --out docs/images/p16`
+- `npm run script -- examples/scripts/p16-extension-shaders.js --out docs/images/p16`
+
+Le gobo spot est illustré par une scène USD dédiée ; le second script montre le
+scatter déterministe, le post-traitement de lentille et l'AOV albedo.
+Le scatter utilise des prototypes partagés et accepte un sous-ensemble de graphes
+de densité spatiale (voir [SCRIPT_REFERENCE.md](SCRIPT_REFERENCE.md)). Les AOV
+MaterialX arbitraires restent une tranche distincte à réaliser : la priorité 16
+n'est pas terminée.
+
+![Gobo procédural sur une lumière spot](images/p16/p16-light-filter.png)
+
+![Scatter scriptable et AOV albedo](images/p16/p16-extension-shaders/p16-extension-shaders-beauty.png)
+
+![Rendu raster du scatter](images/p16/p16-extension-shaders/p16-extension-shaders-raster.png)
+
+![Projection équirectangulaire](images/p16/p16-extension-shaders/p16-extension-shaders-panorama.png)
+
+![Sortie AOV albedo](images/p16/p16-extension-shaders/p16-extension-shaders-albedo.png)
+
 ## Priorité 17 : surfaces complexes (eau, lave, feu, fumée, nuages, …)
 
 Des surfaces « vivantes » prêtes à l'emploi, construites uniquement avec les
@@ -183,6 +205,24 @@ une surface, par des systèmes évoluant dans le temps :
 s'obtiennent par script, restent reproductibles à graine fixée et se rendent
 en raster comme en path tracing, avec flou de mouvement en path tracing.
 
+## Priorité 21 : création et rendu de poils et de cheveux
+
+Ajouter un système de mèches générées sur une surface, adapté au pelage comme
+aux cheveux :
+
+- création scriptable et par graphe à partir d'une surface émettrice, avec
+  densité, longueur, épaisseur, orientation, graine et matériau MaterialX ;
+- contrôles de peignage, courbure, ondulation et regroupement des mèches, avec
+  limites explicites pour garder une géométrie et un temps de rendu maîtrisés ;
+- représentation partagée et compacte, sans créer un objet indépendant par
+  poil, consommable par les chemins raster et path tracing ;
+- statut documenté pour les courbes, les ombres, la transparence et les
+  backends, ainsi que des scripts d'exemple pour un pelage court et une coiffure.
+
+**Critère d'aboutissement :** un script et un graphe produisent un pelage et une
+coiffure reproductibles à graine fixée ; les deux se rendent avec ombres en
+raster et en path tracing, sans explosion du nombre d'objets de scène.
+
 ## Priorité 23 : paramètres de shaders déclarés par script
 
 Permettre à un script de marquer explicitement les entrées de n'importe quel
@@ -257,6 +297,45 @@ et un déplacement partagés entre au moins deux objets.
 créer et relire un mouvement de caméra, puis annuler/rétablir et sauvegarder/
 rouvrir le projet sans dérive de cadrage entre les backends.
 
+## Priorité 27 : déploiement Azure du rendu distribué
+
+Déployer le rendu multi-serveur de la priorité 19 sur Azure, en distinguant
+l'aperçu interactif des rendus hors ligne :
+
+- **validation GPU** : tester Chrome headless et WebGPU sur une VM GPU Azure,
+  vérifier l'adaptateur effectivement utilisé, les pilotes, la mémoire et le
+  rendu ; comparer Windows et Linux avant de choisir une image de worker ;
+- **prototype interactif** : démarrer avec une puis deux VM GPU Spot et un
+  coordinateur sans GPU, hébergé indépendamment des workers ; mesurer le temps
+  de démarrage, la progression et le gain par rapport à un seul nœud ;
+- **montée en charge** : étudier Azure Virtual Machine Scale Sets pour gérer
+  les workers interactifs et leur disponibilité ; ajouter une capacité à la
+  demande si une progression plus prévisible est nécessaire, sous réserve de
+  disponibilité et de quota ;
+- **rendu hors ligne** : évaluer Azure Batch avec un pool de VM GPU Spot pour
+  les images d'animation et les blocs de rendu indépendants ; prévoir si
+  nécessaire un socle de VM dédiées et le redimensionnement du pool ;
+- **reprise et stockage** : conserver scènes, ressources, résultats et
+  checkpoints dans un stockage durable ; reprendre les tâches interrompues
+  sans compter deux fois leurs contributions. Les VM Spot peuvent être
+  évincées ou indisponibles et le checkpoint reste à la charge de l'application ;
+- **sécurité et exploitation** : authentifier les utilisateurs, isoler les
+  workers et leurs accès réseau, limiter les ressources des scripts, protéger
+  les secrets, superviser les jobs et prévoir l'arrêt des ressources inutilisées ;
+- **coûts et capacité** : comparer le coût par image terminée et les délais
+  avec Spot et à la demande, en incluant démarrage, compilation, stockage et
+  travail perdu ; vérifier les quotas GPU et la capacité par région et SKU.
+
+Le coordinateur, les accumulations HDR, la fusion et la distribution du rendu
+relèvent de la priorité 19 ; ce chantier valide leur déploiement et leur
+exploitation sur Azure, sans supposer que Batch remplace le coordinateur.
+
+**Critère d'aboutissement :** un rendu interactif progresse sur deux workers
+GPU Azure et une courte séquence est distribuée sur Azure Batch ; une
+interruption Spot est reprise sans résultat perdu ni contribution comptée deux
+fois. Les mesures documentent le gain, le coût par image, les délais de
+démarrage et la fidélité par rapport au rendu sur un seul nœud.
+
 ## Pistes exploratoires
 
 - **Shaders implicites / SDF** (métaboules, fractales, booléens lisses) :
@@ -277,13 +356,17 @@ rouvrir le projet sans dérive de cadrage entre les backends.
 5. Lookdev et projets (14), booléens (15), puis shaders d'extension (16).
 6. Surfaces complexes (17), puis systèmes de particules (20) pour les effets
    animés comme les gouttes et les braises.
-7. Rendu distribué (19), dès que les scènes de la priorité 17 rendent le path
+7. Création de poils et cheveux (21), après le scatter et les particules, pour
+   réutiliser leurs surfaces émettrices, graines et instances.
+8. Rendu distribué (19), dès que les scènes de la priorité 17 rendent le path
    tracing trop long sur un seul GPU.
-8. Paramètres de shaders déclarés par script (23), en prolongement de l'API de
+9. Paramètres de shaders déclarés par script (23), en prolongement de l'API de
    scripting (3bis) et de l'édition de paramètres.
-9. Étude de l'enregistrement des animations (24), après les scènes dynamiques
+10. Étude de l'enregistrement des animations (24), après les scènes dynamiques
    (5) et l'export des rendus (13).
-10. Étude du graphe de scène équivalent au script (25), en prolongement du
+11. Étude du graphe de scène équivalent au script (25), en prolongement du
     scripting (3bis), des primitives (8) et des paramètres de shaders (23).
-11. Sélection, édition et mouvements de caméra (26), après le lookdev et les
+12. Sélection, édition et mouvements de caméra (26), après le lookdev et les
     projets (14), les scènes dynamiques (5) et l'étude d'enregistrement (24).
+12. Déploiement Azure du rendu distribué (27), après le socle multi-serveur
+    (19) ; la validation d'une VM GPU peut commencer dès maintenant.

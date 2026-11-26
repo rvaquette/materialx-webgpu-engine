@@ -676,17 +676,30 @@ describe('buildPathTraceUniform layout', () => {
   });
   it('packs converted transport without changing the ordinary USD defaults', () => {
     const scene = fakeScene();
-    expect([...buildPathTraceUniform(scene, 0, 1, 512, 512).slice(100)]).toEqual([64, 3, 0, 0]);
+    expect([...buildPathTraceUniform(scene, 0, 1, 512, 512).slice(100, 104)]).toEqual([64, 3, 0, 0]);
     scene.settings = { converted: true, maxDepth: 3, rouletteDepth: 2 };
     scene.analyticLightCount = 17;
-    expect([...buildPathTraceUniform(scene, 0, 1, 512, 512).slice(100)]).toEqual([3, 2, 17, 1]);
+    expect([...buildPathTraceUniform(scene, 0, 1, 512, 512).slice(100, 104)]).toEqual([3, 2, 17, 1]);
   });
   it('overrides only the path-tracing depth uniform', () => {
     const scene = fakeScene();
     scene.settings = { converted: true, maxDepth: 3, rouletteDepth: 2 };
     const overridden = buildPathTraceUniform(scene, 0, 1, 512, 512, 0, undefined, 16);
-    expect([...overridden.slice(100)]).toEqual([16, 2, 0, 1]);
-    expect([...buildPathTraceUniform(scene, 0, 1, 512, 512).slice(100)]).toEqual([3, 2, 0, 1]);
+    expect([...overridden.slice(100, 104)]).toEqual([16, 2, 0, 1]);
+    expect([...buildPathTraceUniform(scene, 0, 1, 512, 512).slice(100, 104)]).toEqual([3, 2, 0, 1]);
+  });
+  it('packs camera projection and aperture settings without changing transport', () => {
+    const scene = fakeScene();
+    const lens = { exposure: 0, contrast: 1, saturation: 1, vignette: 0, projection: 'fisheye' as const,
+      apertureRadius: 0.25, focusDistance: 8, bokehBlades: 6, bokehRotation: 90 };
+    const normal = buildPathTraceUniform(scene, 0, 1, 512, 256);
+    const changed = buildPathTraceUniform(scene, 0, 1, 512, 256, 0, undefined, undefined, false, 'beauty', 0.05, lens);
+    expect(changed.slice(0, 104)).toEqual(normal.slice(0, 104));
+    expect([...changed.slice(104, 108)]).toEqual([1, 0.25, 8, 6]);
+    expect(changed[108]).toBeCloseTo(Math.PI / 2);
+    const source = pathTraceComputeWgsl({ displayAovs: true });
+    expect(source).toContain('if (U.lens.x < 0.5 && U.lens.y == 0.0) { break; }');
+    expect(source).toContain('else { hitCoverage = 1.0; }');
   });
   it('enables a display-only panorama camera without changing transport rays', () => {
     const scene = fakeScene();
@@ -901,6 +914,6 @@ describe('path-tracing tiles', () => {
     expect(src).toContain('let pixelCoord = gid.xy + vec2<u32>(U.tile.xy);');
     expect(src).toContain('let pixel = pixelCoord.y * width + pixelCoord.x;');
     expect(src).toContain('var state = pcg_hash(pixel + 0x9e3779b9u * (frameIndex + 1u));');
-    expect(src).toContain('camera_ray(vec2<f32>(pixelCoord), dims, jitter)');
+    expect(src).toContain('camera_ray(vec2<f32>(pixelCoord), dims, jitter, apertureSample)');
   });
 });

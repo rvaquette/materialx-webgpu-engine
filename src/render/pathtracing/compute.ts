@@ -49,8 +49,9 @@ export const PT_COMPUTE_ENTRY = 'mx_path_trace';
  *  (one vec4 per coefficient, w unused); 76..79 hold the tile and 80..83 the HDR
  *  texture radiance scale (x), panorama flag (y) and adaptive flag (z); 84..99 hold the optional
  *  display-only inverse background view-projection; 100..103 hold max depth,
- *  roulette depth, analytic light count and converted primary-camera flag. */
-export const PT_UNIFORM_FLOATS = 104;
+ *  roulette depth, analytic light count and converted primary-camera flag;
+ *  104..111 hold lens projection, aperture, focus and bokeh settings. */
+export const PT_UNIFORM_FLOATS = 112;
 /** Bytes in the path-trace uniform buffer. */
 export const PT_UNIFORM_SIZE = PT_UNIFORM_FLOATS * 4;
 
@@ -166,6 +167,8 @@ struct Uniforms {
   envTexture : vec4<f32>, // radiance scale, panorama flag, adaptive flag, selected AOV index
   backgroundInvViewProj : mat4x4<f32>,
   transport : vec4<f32>, // depth, roulette depth, analytic light count, converted camera
+  lens : vec4<f32>, // projection, aperture radius, focus distance, blade count
+  lensExtra : vec4<f32>, // blade rotation in radians
 };
 
 @group(0) @binding(0) var<uniform> U : Uniforms;
@@ -1033,7 +1036,10 @@ ${displayAovs ? '      if (cameraSegment) { *coverage = 1.0; }' : ''}
       break;
     }` : ''}
     if (!hit.hitAny) {
-${displayAovs ? '      if (cameraSegment) { break; } // Visible dome is composited at display resolution.' : ''}
+${displayAovs ? `      if (cameraSegment) {
+        if (U.lens.x < 0.5 && U.lens.y == 0.0) { break; }
+        *coverage = 1.0;
+      }` : ''}
       // Environment reached by BSDF sampling; MIS-weight it against the env
       // next-event strategy unless the previous bounce was specular. Only the
       // separate fuzz/SH path has an analytically integrated environment term.
@@ -1484,9 +1490,10 @@ struct MxCameraRay {
   origin: vec3<f32>,
   direction: vec3<f32>,
   backgroundDirection: vec3<f32>,
+  valid: bool,
 };
 
-fn camera_ray(px : vec2<f32>, dims : vec2<f32>, jitter : vec2<f32>) -> MxCameraRay {
+fn camera_ray(px : vec2<f32>, dims : vec2<f32>, jitter : vec2<f32>, apertureSample: vec2<f32>) -> MxCameraRay {
   let ndc = vec2<f32>(
     ((px.x + jitter.x) / dims.x) * 2.0 - 1.0,
     1.0 - ((px.y + jitter.y) / dims.y) * 2.0,
@@ -1501,8 +1508,60 @@ fn camera_ray(px : vec2<f32>, dims : vec2<f32>, jitter : vec2<f32>) -> MxCameraR
     ray.origin = U.eye.xyz;
     ray.direction = normalize(far.xyz / far.w - ray.origin);
   }
+  ray.valid = true;
+  if (U.lens.x > 0.5 || U.lens.y > 0.0) {
+    let c0 = U.invViewProj * vec4<f32>(0.0, 0.0, 0.0, 1.0);
+    let c1 = U.invViewProj * vec4<f32>(0.0, 0.0, 0.5, 1.0);
+    let cx = U.invViewProj * vec4<f32>(1.0, 0.0, 0.0, 1.0);
+    let cy = U.invViewProj * vec4<f32>(0.0, 1.0, 0.0, 1.0);
+    let forward = normalize(c1.xyz / c1.w - c0.xyz / c0.w);
+    let right = normalize(cx.xyz / cx.w - c0.xyz / c0.w);
+    let up = normalize(cy.xyz / cy.w - c0.xyz / c0.w);
+    if (U.lens.x > 0.5) {
+      ray.origin = U.eye.xyz;
+      if (U.lens.x < 1.5) {
+        let p = ndc * vec2<f32>(dims.x / min(dims.x, dims.y), dims.y / min(dims.x, dims.y));
+        let r = length(p);
+        ray.valid = r <= 1.0;
+        let theta = min(r, 1.0) * (0.5 * PI);
+        let radial = select(vec2<f32>(0.0), p / max(r, 1.0e-8), r > 0.0);
+        ray.direction = normalize(forward * cos(theta) + (right * radial.x + up * radial.y) * sin(theta));
+      } else {
+        let longitude = ndc.x * PI;
+        let latitude = ndc.y * (0.5 * PI);
+        ray.direction = normalize(forward * (cos(latitude) * cos(longitude))
+          + right * (cos(latitude) * sin(longitude)) + up * sin(latitude));
+      }
+    }
+    if (U.lens.y > 0.0) {
+      if (U.lens.x < 0.5 && abs(c1.w - c0.w) > 1.0e-6) {
+        ray.origin = U.eye.xyz;
+        ray.direction = normalize(far.xyz / far.w - ray.origin);
+      }
+      // Uniform area sampling of a disk or a regular polygon.
+      let a = apertureSample.x;
+      let radius = sqrt(apertureSample.y) * U.lens.y;
+      var offset: vec2<f32>;
+      if (U.lens.w < 3.0) {
+        let angle = 2.0 * PI * a + U.lensExtra.x;
+        offset = radius * vec2<f32>(cos(angle), sin(angle));
+      } else {
+        let sector = a * U.lens.w;
+        let angle = floor(sector) * 2.0 * PI / U.lens.w + U.lensExtra.x;
+        let next = angle + 2.0 * PI / U.lens.w;
+        offset = radius * mix(vec2<f32>(cos(angle), sin(angle)), vec2<f32>(cos(next), sin(next)), fract(sector));
+      }
+      var focus = ray.origin + ray.direction * U.lens.z;
+      if (U.lens.x < 0.5) {
+        let distance = (U.lens.z - dot(ray.origin - U.eye.xyz, forward)) / max(dot(ray.direction, forward), 1.0e-6);
+        focus = ray.origin + ray.direction * distance;
+      }
+      ray.origin += right * offset.x + up * offset.y;
+      ray.direction = normalize(focus - ray.origin);
+    }
+  }
   ray.backgroundDirection = ray.direction;
-  if (U.envTexture.y > 0.5) {
+  if (U.envTexture.y > 0.5 && U.lens.x < 0.5 && U.lens.y == 0.0) {
     let backgroundNear = U.backgroundInvViewProj * vec4<f32>(ndc, 0.0, 1.0);
     ray.backgroundDirection = normalize(backgroundNear.xyz / backgroundNear.w - U.eye.xyz);
   }
@@ -1558,10 +1617,13 @@ ${displayAovs ? '  var surfaceSum: MxSurfaceAov;' : ''}
     mx_begin_sample(pixel, ${displayAovs ? 'sampleIndex' : 'frameIndex * spp'} + i);
 ${guide ? '    mx_guide_pending = true;' : ''}
     let jitter = ${displayAovs ? 'camera_jitter(sampleIndex + i, pixel)' : 'vec2<f32>(rng_next(&state), rng_next(&state))'};
-    let ray = camera_ray(vec2<f32>(pixelCoord), dims, jitter);
+    var apertureSample = vec2<f32>(0.0);
+    if (U.lens.y > 0.0) { apertureSample = vec2<f32>(rng_next(&state), rng_next(&state)); }
+    let ray = camera_ray(vec2<f32>(pixelCoord), dims, jitter, apertureSample);
 ${displayAovs ? '    var hitCoverage = 0.0;' : ''}
 ${displayAovs ? '    var surfaceAov: MxSurfaceAov;' : ''}
-    var radiance = integrate(ray.origin, ray.direction, ray.backgroundDirection, &state${displayAovs ? ', &hitCoverage, &surfaceAov' : ''});
+    var radiance = vec3<f32>(0.0);
+    if (ray.valid) { radiance = integrate(ray.origin, ray.direction, ray.backgroundDirection, &state${displayAovs ? ', &hitCoverage, &surfaceAov' : ''}); }${displayAovs ? ' else { hitCoverage = 1.0; }' : ''}
 ${displayAovs ? '    coverage += hitCoverage;' : ''}
 ${displayAovs ? '    surfaceSum.value += surfaceAov.value;' : ''}
     if (fireflyMax > 0.0) {
@@ -1720,6 +1782,7 @@ export function buildPathTraceUniform(
   adaptiveSampling = false,
   pathTracingView: PathTraceView = 'beauty',
   targetRelativeError = PT_CONVERGENCE_TARGET_RELATIVE_ERROR,
+  lens?: import('../../materialx/engine-shaders.ts').ImageShaderSettings,
 ): Float32Array {
   const d = new Float32Array(PT_UNIFORM_FLOATS);
   d.set(scene.camera.invViewProj, 0);
@@ -1756,6 +1819,9 @@ export function buildPathTraceUniform(
   }
   d.set([maxDepthOverride ?? scene.settings?.maxDepth ?? 64, scene.settings?.rouletteDepth ?? 3,
     scene.analyticLightCount ?? 0, scene.settings?.converted ? 1 : 0], 100);
+  d.set([lens?.projection === 'fisheye' ? 1 : lens?.projection === 'equirectangular' ? 2 : 0,
+    lens?.apertureRadius ?? 0, lens?.focusDistance ?? 5, lens?.bokehBlades ?? 0], 104);
+  d[108] = (lens?.bokehRotation ?? 0) * Math.PI / 180;
   return d;
 }
 

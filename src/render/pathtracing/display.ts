@@ -13,7 +13,34 @@ export const PATH_TRACE_VIEWS = [
   { value: 'emission', label: 'Émission primaire' },
   { value: 'transmission', label: 'Transmission matériau' },
 ] as const;
-export type PathTraceView = typeof PATH_TRACE_VIEWS[number]['value'];
+export type PathTraceView = typeof PATH_TRACE_VIEWS[number]['value'] | `custom:${string}`;
+
+export type CustomAovKind = 'position' | 'x' | 'y' | 'z' | 'constant' | 'material_id' | 'material_mask';
+export interface CustomAov {
+  name: string;
+  kind: CustomAovKind;
+  parameter: number;
+}
+
+const CUSTOM_KINDS: readonly CustomAovKind[] = ['position', 'x', 'y', 'z', 'constant', 'material_id', 'material_mask'];
+
+export function parseCustomAov(view: string): CustomAov | undefined {
+  const parts = view.split(':');
+  if (parts.length !== 4 || parts[0] !== 'custom' || !/^[A-Za-z_][A-Za-z0-9_-]{0,63}$/.test(parts[1]!)
+    || !CUSTOM_KINDS.includes(parts[2] as CustomAovKind) || !parts[3]!.trim()) return undefined;
+  const parameter = Number(parts[3]);
+  const kind = parts[2] as CustomAovKind;
+  if (!Number.isFinite(parameter) || !Number.isFinite(Math.fround(parameter))
+    || (kind === 'material_mask' && (!Number.isInteger(parameter) || parameter < 0 || parameter > 16777215))
+    || (kind !== 'material_mask' && kind !== 'constant' && parameter !== 0)) return undefined;
+  return { name: parts[1]!, kind, parameter };
+}
+
+export function customAovView(aov: CustomAov): PathTraceView {
+  const view = `custom:${aov.name}:${aov.kind}:${aov.parameter}` as const;
+  if (!parseCustomAov(view)) throw new RangeError('Invalid custom AOV.');
+  return view;
+}
 
 export interface PathTraceAovData {
   width: number;
@@ -31,7 +58,8 @@ export function pathTraceStorageBytesPerPixel(view: PathTraceView): number {
 }
 
 export function pathTraceViewIndex(view: PathTraceView): number {
-  return PATH_TRACE_VIEWS.findIndex(option => option.value === view);
+  const custom = parseCustomAov(view);
+  return custom ? 7 + CUSTOM_KINDS.indexOf(custom.kind) : PATH_TRACE_VIEWS.findIndex(option => option.value === view);
 }
 
 /** Hysteresis keeps resolution stable while targeting a ~40 ms preview budget. */
@@ -152,6 +180,9 @@ fn aov_color(frag: vec4f) -> vec4f {
     aov = preview[aovIndex];
   }
   if (pixel.w == 0.0 || aov.w == 0.0) { return vec4f(0.0, 0.0, 0.0, 1.0); }
+  if (info.eye.w >= 7.0) {
+    return vec4f(clamp(aov.xyz / aov.w, vec3f(0.0), vec3f(1.0)), 1.0);
+  }
   if (info.eye.w == 6.0) {
     return vec4f(srgb(clamp(aov.xyz, vec3f(0.0), vec3f(1.0))), 1.0);
   }

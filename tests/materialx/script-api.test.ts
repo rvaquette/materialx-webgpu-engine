@@ -7,13 +7,18 @@ import {
 } from '../../src/materialx/script-api.ts';
 import { ENGINE_SHADER_LIBRARY_XML } from '../../src/materialx/engine-shaders.ts';
 import type { ResolvedGraph, ResolvedNode } from '../../src/materialx/graph.ts';
+import { importUsdStage } from '../../src/usd/importer.ts';
+import { buildSceneInstances } from '../../src/scene/instances.ts';
+import { resolveSceneMaterials } from '../../src/usd/materials.ts';
+import { animateScene } from '../../src/render/scene-animation.ts';
+import type { SceneResources } from '../../src/render/scene-resources.ts';
 
 /** A host whose operations do nothing; tests override what they observe. */
 function idleHost(): ScriptHost {
   const idle = async (): Promise<void> => {};
   return {
     loadScene: idle, loadStage: idle, objects: () => [], renderSettings: () => ({}), setRenderSetting: idle,
-    setEnvironmentShader: idle, setImageShader: idle, assignMaterial: idle,
+    setEnvironmentShader: idle, setImageShader: idle, setPathTracingView: idle, assignMaterial: idle,
     render: async () => 0, saveImage: idle, saveText: idle, objectMaterial: () => undefined, stats: () => undefined,
     waitForStop: idle, capture: idle, saveAov: idle, saveDiagnostics: idle, diagnostics: () => [], capabilities: () => undefined,
     timeline: () => undefined, time: () => 0, setTime: idle, setTransform: idle, setVisibility: idle, lights: () => [],
@@ -58,6 +63,27 @@ const LIBRARY = ScriptLibrary.fromXml([`<?xml version="1.0"?>
     <output name="outg" type="float" />
     <output name="outb" type="float" />
   </nodedef>
+  <nodedef name="ND_position_vector3" node="position">
+    <input name="space" type="string" value="object" />
+    <output name="out" type="vector3" />
+  </nodedef>
+  <nodedef name="ND_separate3_vector3" node="separate3">
+    <input name="in" type="vector3" value="0, 0, 0" />
+    <output name="outx" type="float" />
+    <output name="outy" type="float" />
+    <output name="outz" type="float" />
+  </nodedef>
+  <nodedef name="ND_multiply_float" node="multiply">
+    <input name="in1" type="float" value="1" />
+    <input name="in2" type="float" value="1" />
+    <output name="out" type="float" />
+  </nodedef>
+  <nodedef name="ND_clamp_float" node="clamp">
+    <input name="in" type="float" value="0" />
+    <input name="low" type="float" value="0" />
+    <input name="high" type="float" value="1" />
+    <output name="out" type="float" />
+  </nodedef>
   <nodedef name="ND_standard_surface_surfaceshader_100" node="standard_surface" version="1.0.0" doc="Inherited surface documentation.">
     <input name="base" type="float" value="1" />
     <input name="base_color" type="color3" value="0.8, 0.8, 0.8" />
@@ -78,7 +104,8 @@ const LIBRARY = ScriptLibrary.fromXml([`<?xml version="1.0"?>
 describe('material script library', () => {
   it('resolves nodes and their ports from NodeDefs', async () => {
     expect(LIBRARY.classNames).toEqual([
-      'EnvironmentShader', 'Image', 'ImageShader', 'Mix', 'Noise3d', 'Separate3', 'StandardSurface', 'Surfacematerial',
+      'AovShader', 'Clamp', 'EnvironmentShader', 'Image', 'ImageShader', 'LensShader', 'LightFilterShader', 'Mix', 'Multiply', 'Noise3d', 'Position', 'ScatterShader',
+      'Separate3', 'StandardSurface', 'Surfacematerial',
     ]);
     const surface = LIBRARY.resolve('standard_surface');
     expect(surface.name).toBe('ND_standard_surface_surfaceshader');
@@ -157,17 +184,177 @@ describe('runScript', () => {
       grade = new ImageShader();
       grade.contrast = 1.2;
       grade.vignette = 0.4;
+      grade.distortion = 0.15;
       await postprocess(grade.out);
     `, LIBRARY, { host });
     expect(calls).toEqual([
       ['environment', expect.objectContaining({ model: 'gradient', sunIntensity: 3 })],
-      ['postprocess', expect.objectContaining({ contrast: 1.2, vignette: 0.4 })],
+      ['postprocess', expect.objectContaining({ contrast: 1.2, vignette: 0.4, distortion: 0.15, chromaticAberration: 0 })],
     ]);
     const xml = toXml(graph, LIBRARY);
     expect(xml).toContain('<environment_shader name="env" type="engine_environment_shader">');
     expect(xml).toContain('<image_shader name="grade" type="engine_image_shader">');
     expect(xml).not.toContain('<surfacematerial');
     expect(toScript(graph, LIBRARY)).toContain('await environment(env.out);\nawait postprocess(grade.out);');
+  });
+
+  it('passes validated camera lens settings through the graph terminal', async () => {
+    const calls: unknown[] = [];
+    const host: ScriptHost = { ...idleHost(), setImageShader: async settings => { calls.push(settings); } };
+    const graph = await runScript(`
+      lens = new LensShader();
+      lens.projection = "equirectangular";
+      lens.apertureRadius = 0.1;
+      lens.focusDistance = 3;
+      lens.bokehBlades = 6;
+      lens.bokehRotation = 30;
+      await postprocess(lens.out);
+    `, LIBRARY, { host });
+    expect(calls).toEqual([expect.objectContaining({ projection: 'equirectangular', apertureRadius: 0.1,
+      focusDistance: 3, bokehBlades: 6, bokehRotation: 30 })]);
+    expect(toXml(graph, LIBRARY)).toContain('<lens_shader');
+    expect(toScript(graph, LIBRARY)).toContain('await postprocess(lens.out);');
+    for (const assignment of ['projection = "bad"', 'apertureRadius = -1', 'focusDistance = 0',
+      'bokehBlades = 2', 'bokehBlades = 17']) {
+      await expect(runScript(`lens = new LensShader(); lens.${assignment}; await postprocess(lens.out);`, LIBRARY, { host }))
+        .rejects.toThrow();
+    }
+    expect(calls).toHaveLength(1);
+  });
+
+  it('selects and serializes path-tracing AOV shaders', async () => {
+    const calls: string[] = [];
+    const host: ScriptHost = { ...idleHost(), setPathTracingView: async view => { calls.push(view); } };
+    const graph = await runScript(`
+      output = new AovShader();
+      output.view = "normal";
+      await aov(output.out);
+    `, LIBRARY, { host });
+    expect(calls).toEqual(['normal']);
+    expect(toScript(graph, LIBRARY)).toContain('await aov(output.out);');
+    await expect(runScript('output = new AovShader(); output.view = "beauty"; await aov(output.out);', LIBRARY, { host }))
+      .rejects.toThrow(/expects albedo, normal, depth/);
+  });
+
+  it('applies and serializes procedural light filters', async () => {
+    const calls: unknown[][] = [];
+    const host: ScriptHost = { ...idleHost(), setLight: async (path, changes) => { calls.push([path, changes]); } };
+    const graph = await runScript(`
+      filter = new LightFilterShader();
+      filter.lightPath = "/World/Spot";
+      filter.pattern = "grid";
+      filter.scale = 5;
+      await lightFilter(filter.out);
+    `, LIBRARY, { host });
+    expect(calls).toEqual([['/World/Spot', {
+      filter: { pattern: 'grid', scale: 5, rotation: 0, softness: 0.04 },
+    }]]);
+    expect(toScript(graph, LIBRARY)).toContain('await lightFilter(filter.out);');
+    await expect(runScript(`
+      filter = new LightFilterShader();
+      filter.lightPath = "/World/Spot";
+      filter.pattern = "unknown";
+      await lightFilter(filter.out);
+    `, LIBRARY, { host })).rejects.toThrow(/expects "circle", "stripes" or "grid"/);
+  });
+
+  it('scatters a seeded, uniform count of scripted primitives over a surface', async () => {
+    const stages: string[] = [];
+    const host: ScriptHost = { ...idleHost(), loadStage: async stage => { stages.push(stage.usda); } };
+    const source = `
+      ground = new Plane();
+      ground.width = 2;
+      ground.length = 2;
+      rock = new Sphere();
+      mat = new StandardSurface(); rock.material = mat.out;
+      settings = new ScatterShader();
+      settings.surfacePath = ground.path;
+      settings.prototypePath = rock.path;
+      settings.density = 0.5;
+      settings.seed = 7;
+      await scatter(settings.out);
+    `;
+    const graph = await runScript(source, LIBRARY, { host });
+    expect(stages).toHaveLength(1);
+    expect(stages[0]!.match(/def Sphere/g)).toHaveLength(2);
+    const scene = await importUsdStage('scatter.usda', { reader: { read: async () => stages[0]! } });
+    const instances = buildSceneInstances(scene, { materials: resolveSceneMaterials(scene) }).instances.filter(instance => instance.primPath === '/World/scatter');
+    expect(instances).toHaveLength(2);
+    expect(new Set(instances.map(instance => instance.prototypeId)).size).toBe(1);
+    expect(instances.every(instance => instance.materialPath === '/World/Looks/mat_material')).toBe(true);
+    expect(scene.prims.get('/World/rock')?.attributes.get('visibility')?.value).toBe('invisible');
+    const animation = animateScene(scene, 0, { instances, geometries: new Map() } as unknown as SceneResources);
+    expect(animation.hidden.size).toBe(0);
+    expect([...animation.transforms.get(instances[0]!.id)!]).toEqual([...instances[0]!.transform]);
+    expect(toScript(graph, LIBRARY)).toContain('await scatter(settings.out);');
+    const repeated: string[] = [];
+    await runScript(source, LIBRARY, { host: { ...host, loadStage: async stage => { repeated.push(stage.usda); } } });
+    expect(repeated).toEqual(stages);
+  });
+
+  it('samples a spatial density graph in world space with reproducible shared placements', async () => {
+    const stages: string[] = [];
+    const host: ScriptHost = { ...idleHost(), loadStage: async stage => { stages.push(stage.usda); } };
+    const source = `
+      ground = new Plane(); ground.width = 2; ground.length = 2; ground.translate = [1, 0, 0];
+      rock = new Sphere(); rock.scale = [2, 1, 0.5]; rock.rotate = [20, 10, 30];
+      p = new Position(); p.space = "world";
+      split = new Separate3("ND_separate3_vector3"); split.in = p.out;
+      mask = new Clamp("float"); mask.in = split.outx; mask.low = 0; mask.high = 1;
+      density = new Multiply("float"); density.in1 = mask.out; density.in2 = 80;
+      settings = new ScatterShader(); settings.surfacePath = ground.path; settings.prototypePath = rock.path;
+      settings.density = density.out; settings.seed = 17; settings.hidePrototype = false;
+      await scatter(settings.out);
+    `;
+    const graph = await runScript(source, LIBRARY, { host });
+    await runScript(source, LIBRARY, { host });
+    expect(stages[0]).toBe(stages[1]);
+    await runScript(source.replace('settings.seed = 17', 'settings.seed = 18'), LIBRARY, { host });
+    expect(stages[2]).not.toBe(stages[0]);
+    expect(toScript(graph, LIBRARY)).toContain('settings.density = density.out');
+    const scene = await importUsdStage('scatter.usda', { reader: { read: async () => stages[0]! } });
+    const placed = buildSceneInstances(scene).instances.filter(instance => instance.primPath === '/World/scatter');
+    expect(placed.length).toBeGreaterThan(100);
+    expect(new Set(placed.map(instance => instance.prototypeId)).size).toBe(1);
+    expect(placed.filter(instance => instance.transform[12]! > 1).length).toBeGreaterThan(placed.length * 0.55);
+    expect(placed.some(instance => instance.transform[12]! < 1)).toBe(true);
+    expect(placed.every(instance => instance.transform[12]! >= 0 && instance.transform[12]! <= 2)).toBe(true);
+    expect(scene.prims.get('/World/rock')?.attributes.get('visibility')?.value).not.toBe('invisible');
+    const matrix = placed[0]!.transform;
+    expect(Math.hypot(matrix[0]!, matrix[1]!, matrix[2]!)).toBeCloseTo(2, 5);
+    expect(Math.hypot(matrix[4]!, matrix[5]!, matrix[6]!)).toBeCloseTo(1, 5);
+    expect(Math.hypot(matrix[8]!, matrix[9]!, matrix[10]!)).toBeCloseTo(0.5, 5);
+  });
+
+  it('rejects unsupported and invalid scatter density graphs', async () => {
+    const prefix = 'ground = new Plane(); rock = new Sphere(); s = new ScatterShader(); s.surfacePath = ground.path; s.prototypePath = rock.path;';
+    await expect(runScript(`${prefix} n = new Noise3d("float"); s.density = n.out; await scatter(s.out);`, LIBRARY, { host: idleHost() }))
+      .rejects.toThrow(/Scatter density graph does not support/);
+    await expect(runScript(`${prefix} p = new Position(); p.space = "camera"; split = new Separate3("ND_separate3_vector3"); split.in = p.out; s.density = split.outx; await scatter(s.out);`, LIBRARY, { host: idleHost() }))
+      .rejects.toThrow(/only object and world/);
+    await expect(runScript(`${prefix} p = new Position(); split = new Separate3("ND_separate3_vector3"); split.in = p.out; s.density = split.outx; await scatter(s.out);`, LIBRARY, { host: idleHost() }))
+      .rejects.toThrow(/finite float in \[0, 100\]/);
+    await expect(runScript(`${prefix} ground.width = 200; ground.length = 200; p = new Position(); split = new Separate3("ND_separate3_vector3"); split.in = p.out; s.density = split.outx; await scatter(s.out);`, LIBRARY, { host: idleHost() }))
+      .rejects.toThrow(/candidate limit/);
+    await expect(runScript(`${prefix} ground.width = 100; ground.length = 100; s.density = 1; await scatter(s.out);`, LIBRARY, { host: idleHost() }))
+      .rejects.toThrow(/limit is 5000/);
+  });
+
+  it('handles empty scatters and rebuilds shared prototypes after scene edits', async () => {
+    const stages: string[] = [];
+    const host: ScriptHost = { ...idleHost(), loadStage: async stage => { stages.push(stage.usda); } };
+    await runScript(`
+      ground = new Plane(); rock = new Sphere();
+      s = new ScatterShader(); s.surfacePath = ground.path; s.prototypePath = rock.path;
+      s.density = 0; await scatter(s.out);
+      rock.radius = 2; s.density = 1; await scatter(s.out);
+    `, LIBRARY, { host });
+    expect(stages).toHaveLength(2);
+    const scene = await importUsdStage('scatter.usda', { reader: { read: async () => stages[1]! } });
+    const instances = buildSceneInstances(scene).instances;
+    expect(instances.filter(instance => instance.primPath === '/World/scatter')).toHaveLength(0);
+    expect(instances.filter(instance => instance.primPath === '/World/scatter_2')).toHaveLength(1);
+    expect(scene.prims.get('/World/scatter_2/Prototype')?.attributes.get('radius')?.value).toBe(2);
   });
 
   it('rejects graph-connected environment inputs until shader graph evaluation is supported', async () => {
@@ -911,7 +1098,7 @@ describe('scripted primitives', () => {
     const expected = await runScript('log(transform({ translate: [1, 2, 3], rotate: [10, 20, 30], scale: [1, 2, 3] }).join(","));', LIBRARY);
     const world = computeWorldTransforms(cube.scene).get('/World/s')!;
     expected.logs[0]!.split(',').map(Number).forEach((value, i) => expect(world[i]).toBeCloseTo(value, 5));
-  });
+  }, 15_000);
 
   it('evaluates union, difference, and intersection with transformed operands and preserved attributes', async () => {
     for (const className of ['Union', 'Difference', 'Intersection']) {

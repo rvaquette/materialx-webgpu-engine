@@ -22,7 +22,55 @@ export const ENGINE_SHADER_LIBRARY_XML = `<materialx version="1.39">
     <input name="contrast" type="float" value="1" uimin="0" uimax="4" />
     <input name="saturation" type="float" value="1" uimin="0" uimax="4" />
     <input name="vignette" type="float" value="0" uimin="0" uimax="1" />
+    <input name="distortion" type="float" value="0" uimin="-1" uimax="1" doc="Radial lens distortion; positive values produce barrel distortion." />
+    <input name="chromaticAberration" type="float" value="0" uimin="0" uimax="0.1" doc="Radial red/blue channel separation as a fraction of image width." />
     <output name="out" type="engine_image_shader" />
+  </nodedef>
+  <nodedef name="ND_engine_lens_shader" node="lens_shader" doc="Camera lens for the MaterialX path tracer, plus screen-space optical effects.">
+    <input name="exposure" type="float" value="0" uimin="-10" uimax="10" />
+    <input name="contrast" type="float" value="1" uimin="0" uimax="4" />
+    <input name="saturation" type="float" value="1" uimin="0" uimax="4" />
+    <input name="vignette" type="float" value="0" uimin="0" uimax="1" />
+    <input name="distortion" type="float" value="0" uimin="-1" uimax="1" />
+    <input name="chromaticAberration" type="float" value="0" uimin="0" uimax="0.1" />
+    <input name="projection" type="string" value="perspective" enum="perspective,fisheye,equirectangular" />
+    <input name="apertureRadius" type="float" value="0" uimin="0" doc="Aperture radius in scene units; zero disables depth of field." />
+    <input name="focusDistance" type="float" value="5" uimin="0.001" doc="Focus distance in scene units." />
+    <input name="bokehBlades" type="integer" value="0" doc="Zero for a circular aperture, or 3 to 16 polygon blades." />
+    <input name="bokehRotation" type="float" value="0" doc="Aperture rotation in degrees." />
+    <output name="out" type="engine_image_shader" />
+  </nodedef>
+  <typedef name="engine_aov_shader" semantic="shader" context="aov" />
+  <nodedef name="ND_engine_aov_shader" node="aov_shader" doc="Selects one of the MaterialX path tracer's built-in AOVs for display and export.">
+    <input name="view" type="string" value="albedo" enum="albedo,normal,depth,variance,emission,transmission" />
+    <output name="out" type="engine_aov_shader" />
+  </nodedef>
+  <nodedef name="ND_engine_custom_aov_shader" node="custom_aov_shader" doc="Named path-tracing data output with a bounded set of supported value graphs.">
+    <input name="name" type="string" value="custom" />
+    <input name="source" type="string" value="position" enum="position,scalar,material_id,material_mask" />
+    <input name="position" type="vector3" value="0, 0, 0" />
+    <input name="scalar" type="float" value="0" />
+    <input name="materialId" type="integer" value="0" />
+    <output name="out" type="engine_aov_shader" />
+  </nodedef>
+  <typedef name="engine_light_filter_shader" semantic="shader" context="lightfilter" />
+  <nodedef name="ND_engine_light_filter_shader" node="light_filter_shader" doc="Procedural gobo filter for a spot light in the MaterialX path tracer.">
+    <input name="lightPath" type="string" value="" doc="USD prim path of the spot light to filter." />
+    <input name="pattern" type="string" value="circle" enum="circle,stripes,grid" />
+    <input name="scale" type="float" value="4" uimin="0.1" uimax="100" />
+    <input name="rotation" type="float" value="0" uimin="-180" uimax="180" />
+    <input name="softness" type="float" value="0.04" uimin="0.001" uimax="0.5" />
+    <output name="out" type="engine_light_filter_shader" />
+  </nodedef>
+  <typedef name="engine_scatter_shader" semantic="shader" context="scatter" />
+  <nodedef name="ND_engine_scatter_shader" node="scatter_shader" doc="Deterministically scatters shared primitive instances over a scripted surface using a scalar density or supported spatial graph.">
+    <input name="surfacePath" type="string" value="" doc="Path of a scripted primitive to sample." />
+    <input name="prototypePath" type="string" value="" doc="Path of a scripted primitive to instance." />
+    <input name="density" type="float" value="4" uimin="0" uimax="100" doc="Instances per square scene unit." />
+    <input name="seed" type="integer" value="1" />
+    <input name="scale" type="float" value="1" uimin="0.01" uimax="10" />
+    <input name="hidePrototype" type="boolean" value="true" />
+    <output name="out" type="engine_scatter_shader" />
   </nodedef>
 </materialx>`;
 
@@ -48,6 +96,35 @@ export interface ImageShaderSettings {
   contrast: number;
   saturation: number;
   vignette: number;
+  distortion?: number;
+  chromaticAberration?: number;
+  projection?: 'perspective' | 'fisheye' | 'equirectangular';
+  apertureRadius?: number;
+  focusDistance?: number;
+  bokehBlades?: number;
+  bokehRotation?: number;
+}
+
+export function validateLensSettings(settings: ImageShaderSettings): void {
+  if (!['perspective', 'fisheye', 'equirectangular'].includes(settings.projection ?? 'perspective')
+    || !Number.isFinite(settings.apertureRadius ?? 0) || (settings.apertureRadius ?? 0) < 0
+    || !Number.isFinite(settings.focusDistance ?? 5) || (settings.focusDistance ?? 5) <= 0
+    || !Number.isInteger(settings.bokehBlades ?? 0)
+    || ((settings.bokehBlades ?? 0) !== 0 && ((settings.bokehBlades ?? 0) < 3 || (settings.bokehBlades ?? 0) > 16))
+    || !Number.isFinite(settings.bokehRotation ?? 0)) {
+    throw new Error('Invalid lens settings: projection, apertureRadius, focusDistance, bokehBlades or bokehRotation.');
+  }
+}
+
+export function lensRequiresPathTracing(settings: ImageShaderSettings | undefined): boolean {
+  return !!settings && ((settings.projection ?? 'perspective') !== 'perspective' || (settings.apertureRadius ?? 0) > 0);
+}
+
+export interface LightFilterSettings {
+  pattern: 'circle' | 'stripes' | 'grid';
+  scale: number;
+  rotation: number;
+  softness: number;
 }
 
 export const DEFAULT_ENVIRONMENT_SHADER: EnvironmentShaderSettings = {
@@ -69,6 +146,8 @@ export const DEFAULT_IMAGE_SHADER: ImageShaderSettings = {
   contrast: 1,
   saturation: 1,
   vignette: 0,
+  distortion: 0,
+  chromaticAberration: 0,
 };
 
 function smoothstep(edge0: number, edge1: number, value: number): number {

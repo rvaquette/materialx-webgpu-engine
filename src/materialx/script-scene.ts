@@ -133,6 +133,14 @@ export interface StageMaterial {
   assetPath: string;
 }
 
+export interface StageInstancer {
+  name: string;
+  prototype: StageObject;
+  positions: readonly number[];
+  orientations: readonly number[];
+  scales: readonly number[];
+}
+
 const number = (value: number): string => {
   const text = String(Number(value.toPrecision(7)));
   return text === '-0' ? '0' : text;
@@ -154,7 +162,7 @@ export function stageObjectShape(object: StageObject): Parameters<typeof primiti
  * USDA layer of the stage. Without `transforms`, placement and visibility are left out: two
  * stages with the same such text differ only by what the viewer can change without a reload.
  */
-export function writeStageUsda(objects: readonly StageObject[], materials: readonly StageMaterial[], options: { transforms?: boolean } = {}): string {
+export function writeStageUsda(objects: readonly StageObject[], materials: readonly StageMaterial[], options: { transforms?: boolean; instancers?: readonly StageInstancer[] } = {}): string {
   const transforms = options.transforms ?? true;
   const lines = [
     '#usda 1.0',
@@ -239,6 +247,20 @@ export function writeStageUsda(objects: readonly StageObject[], materials: reado
     }
     if (object.material) body.push(`rel material:binding = </World/Looks/${object.material}>`);
     lines.push(...body.map(line => `        ${line}`), '    }');
+  }
+  for (const instancer of options.instancers ?? []) {
+    const prototype = writeStageUsda([instancer.prototype], [], { transforms: false });
+    const body = prototype.slice(prototype.indexOf('def Xform "World"\n{') + 'def Xform "World"\n{'.length, prototype.lastIndexOf('\n}'));
+    lines.push(
+      '', `    def PointInstancer "${instancer.name}"`, '    {',
+      `        rel prototypes = [</World/${instancer.name}/Prototype>]`,
+      `        int[] protoIndices = [${Array(instancer.positions.length / 3).fill(0).join(', ')}]`,
+      `        point3f[] positions = ${tuples(instancer.positions, 3)}`,
+      `        quath[] orientations = ${tuples(instancer.orientations, 4)}`,
+      `        float3[] scales = ${tuples(instancer.scales, 3)}`,
+      ...body.replace(`"${instancer.prototype.name}"`, '"Prototype"').split('\n').filter(Boolean).map(line => `    ${line}`),
+      '    }',
+    );
   }
   lines.push('}', '');
   return lines.join('\n');

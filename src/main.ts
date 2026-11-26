@@ -86,6 +86,7 @@ async function main(): Promise<void> {
     setRenderSetting: (name, value) => readyHost().setRenderSetting(name, value),
     setEnvironmentShader: settings => readyHost().setEnvironmentShader(settings),
     setImageShader: settings => readyHost().setImageShader(settings),
+    setPathTracingView: view => readyHost().setPathTracingView(view),
     assignMaterial: (object, material) => readyHost().assignMaterial(object, material),
     render: samples => readyHost().render(samples),
     saveImage: name => readyHost().saveImage(name),
@@ -1009,7 +1010,7 @@ async function main(): Promise<void> {
             await viewer.resize(size === '1024x768' ? 1024 : size, size === '1024x768' ? 768 : size);
             await viewer.setMemoryBudget(project.memoryBudget ?? undefined);
             await viewer.setEnvironmentShader(project.shaders.environment);
-            viewer.setImageShader(project.shaders.image);
+            viewer.setImageShader(undefined);
             await viewer.restoreState({
               scene: { entry, options, overrides, compiledOverrides: new Map(), time: project.scene.time,
                 orbit: restoreCamera(project.scene.camera, canvas.width / canvas.height),
@@ -1017,6 +1018,7 @@ async function main(): Promise<void> {
                 visibility: new Map(project.scene.visibility), lights: new Map(project.scene.lights), parameters: new Map() },
               settings: project.settings,
             });
+            viewer.setImageShader(project.shaders.image);
             await viewer.restoreProjectMaterials(project.materials);
             scriptStage = options;
             projectStage = stage;
@@ -1089,6 +1091,9 @@ async function main(): Promise<void> {
     async setImageShader(settings) {
       forgetHistory();
       viewer.setImageShader(settings);
+    },
+    async setPathTracingView(view) {
+      viewer.setPathTracingView(view);
     },
     async assignMaterial(object, material) {
       if (operationBusy || deviceLost) throw new Error('Une opération du viewer est en cours.');
@@ -1222,6 +1227,7 @@ async function main(): Promise<void> {
         ...(changes.exposure !== undefined ? { exposure: changes.exposure } : {}),
         ...(changes.color !== undefined ? { color: [changes.color[0]!, changes.color[1]!, changes.color[2]!] as [number, number, number] } : {}),
         ...(changes.transform !== undefined ? { transform: [...changes.transform] } : {}),
+        ...(changes.filter !== undefined ? { filter: { ...changes.filter } } : {}),
       };
       await recordHistory('Lumière', () => viewer.snapshotState().scene?.lights.get(light),
         value => { viewer.setLight(light); if (value) viewer.setLight(light, value); },

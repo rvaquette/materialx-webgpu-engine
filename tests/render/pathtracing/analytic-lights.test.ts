@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { packAnalyticLights, PT_LIGHT_FLOATS } from '../../../src/render/pathtracing/analytic-lights.ts';
+import { analyticLightsWgsl, packAnalyticLights, PT_LIGHT_FLOATS } from '../../../src/render/pathtracing/analytic-lights.ts';
 import { pathTraceComputeWgsl } from '../../../src/render/pathtracing/compute.ts';
 import { IDENTITY4 } from '../../../src/scene/transforms.ts';
 import type { SceneLight } from '../../../src/usd/lights.ts';
@@ -37,6 +37,21 @@ describe('analytic converted lights', () => {
     expect([...data.slice(4, 8)]).toEqual([10, 5, 2.5, 8]);
     expect([...data.slice(16, 19)]).toEqual([-0, -0, -1]);
     expect(packAnalyticLights([{ ...rect, normalize: true }])[4]).toBeCloseTo(1.25);
+  });
+  it('packs a procedural gobo for spot lights and emits the filter evaluation', () => {
+    const spot: SceneLight = {
+      ...rect, type: 'spot', usdType: 'SpotLight', innerAngle: 20, outerAngle: 40,
+      filter: { pattern: 'grid', scale: 5, rotation: 15, softness: 0.03 },
+    };
+    const data = packAnalyticLights([spot]);
+    expect(data).toHaveLength(PT_LIGHT_FLOATS);
+    expect([...data.slice(28, 32)]).toEqual([3, 5, Math.fround(15 * Math.PI / 180), Math.fround(0.03)]);
+    const wgsl = analyticLightsWgsl();
+    expect(wgsl).toContain('result.radiance *= cone * mask;');
+    expect(wgsl).toContain('result.pdf = 1.0;\n    result.delta = true;\n    return result;');
+    expect(wgsl).toContain('let toSurface = normalize(origin - posType.xyz);');
+    expect(() => packAnalyticLights([{ ...spot, type: 'point' }])).toThrow(/require a spot/);
+    expect(() => packAnalyticLights([{ ...spot, innerAngle: 50, outerAngle: 40 }])).toThrow(/Invalid cone angles/);
   });
   it('selects lights proportionally to power with a uniform floor and a closed cdf', () => {
     const dim = { ...rect, intensity: 1 };

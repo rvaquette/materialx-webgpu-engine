@@ -1,7 +1,7 @@
 import { OrbitCamera } from './scene/orbit-camera.ts';
 import type { ViewerSnapshot } from './render/viewer.ts';
 import { isStoredMaterialVariant, type StoredMaterialVariant } from './render/material-variant-snapshot.ts';
-import type { EnvironmentShaderSettings, ImageShaderSettings } from './materialx/engine-shaders.ts';
+import { lensRequiresPathTracing, validateLensSettings, type EnvironmentShaderSettings, type ImageShaderSettings } from './materialx/engine-shaders.ts';
 import { PATH_TRACE_VIEWS } from './render/pathtracing/display.ts';
 
 type SceneSnapshot = NonNullable<ViewerSnapshot['scene']>;
@@ -84,6 +84,10 @@ export function validateProject(project: unknown): asserts project is Project {
     || !pairs(scene.lights, v => record(v) && Object.keys(v).every(key => {
       const x = v[key];
       return key === 'color' ? vector(x, 3) : key === 'transform' ? vector(x, 16)
+        : key === 'filter' ? record(x) && oneOf(x.pattern, ['circle', 'stripes', 'grid'])
+          && finite(x.scale) && x.scale >= 0.1 && x.scale <= 100
+          && finite(x.rotation) && Math.abs(x.rotation) <= 180
+          && finite(x.softness) && x.softness >= 0.001 && x.softness <= 0.5
         : (key === 'intensity' || key === 'exposure') && finite(x);
     }))) fail('modifications de scène invalides.');
   if (!record(project.settings) || !record(project.settings.limits)) fail('réglages invalides.');
@@ -104,7 +108,13 @@ export function validateProject(project: unknown): asserts project is Project {
   if (env !== undefined && (!record(env) || !oneOf(env.model, ['gradient', 'sky', 'studio'])
     || !['zenithColor', 'horizonColor', 'groundColor', 'sunColor', 'sunDirection'].every(key => vector(env[key], 3))
     || !['sunIntensity', 'sunAngularDiameter', 'exposure', 'rotation', 'animationSpeed'].every(key => finite(env[key])))) fail('environnement invalide.');
-  if (image !== undefined && (!record(image) || !['exposure', 'contrast', 'saturation', 'vignette'].every(key => finite(image[key])))) fail('post-traitement invalide.');
+  if (image !== undefined && (!record(image) || !['exposure', 'contrast', 'saturation', 'vignette'].every(key => finite(image[key]))
+    || (image.distortion !== undefined && !finite(image.distortion))
+    || (image.chromaticAberration !== undefined && !finite(image.chromaticAberration)))) fail('post-traitement invalide.');
+  if (image !== undefined) {
+    try { validateLensSettings(image as unknown as ImageShaderSettings); } catch { fail('lentille invalide.'); }
+    if (s.backend !== 'pathtracing' && lensRequiresPathTracing(image as unknown as ImageShaderSettings)) fail('lentille incompatible avec le moteur de rendu.');
+  }
 }
 
 export function encodeProject(project: Project): string {

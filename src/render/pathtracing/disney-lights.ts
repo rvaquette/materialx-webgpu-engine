@@ -21,7 +21,7 @@ export function packDisneyLights(lights: readonly SceneLight[]): DisneyLightData
   const data = new Float32Array(Math.max(1, selected.length) * 20);
   selected.forEach((light, index) => {
     if (!['rect', 'sphere', 'distant'].includes(light.type) || light.textureFile || light.iesFile ||
-        light.colorTemperature !== undefined || light.treatAsPoint || light.coneAngle !== undefined ||
+        light.colorTemperature !== undefined || light.treatAsPoint || light.filter !== undefined || light.coneAngle !== undefined ||
         light.coneSoftness !== undefined || light.innerAngle !== undefined || light.outerAngle !== undefined) {
       throw new Error(`Unsupported Disney light at ${light.path}: ${light.type} or light shaping.`);
     }

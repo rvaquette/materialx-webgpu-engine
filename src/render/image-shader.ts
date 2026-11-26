@@ -1,11 +1,14 @@
 import type { ImageShaderSettings } from '../materialx/engine-shaders.ts';
 
 export function imageShaderUniformData(settings: ImageShaderSettings): Float32Array {
-  return new Float32Array([settings.exposure, settings.contrast, settings.saturation, settings.vignette]);
+  return new Float32Array([
+    settings.exposure, settings.contrast, settings.saturation, settings.vignette,
+    settings.distortion ?? 0, settings.chromaticAberration ?? 0, 0, 0,
+  ]);
 }
 
 export const imageShaderWgsl = /* wgsl */ `
-struct Settings { values: vec4f };
+struct Settings { values: vec4f, lens: vec4f };
 @group(0) @binding(0) var source: texture_2d<f32>;
 @group(0) @binding(1) var<uniform> settings: Settings;
 
@@ -20,15 +23,28 @@ struct VertexOutput {
   return output;
 }
 
+fn sampleColor(uv: vec2f, dimensions: vec2f) -> vec3f {
+  if (any(uv < vec2f(0.0)) || any(uv >= vec2f(1.0))) { return vec3f(0.0); }
+  return textureLoad(source, vec2i(uv * dimensions), 0).rgb;
+}
+
 @fragment fn fs(@builtin(position) position: vec4f) -> @location(0) vec4f {
   let dimensions = vec2f(textureDimensions(source));
   let uv = position.xy / dimensions;
-  var color = textureLoad(source, vec2i(position.xy), 0).rgb * exp2(settings.values.x);
+  let centered = (uv - vec2f(0.5)) * vec2f(dimensions.x / dimensions.y, 1.0);
+  let radiusSquared = dot(centered, centered);
+  let distorted = vec2f(0.5) + centered * vec2f(dimensions.y / dimensions.x, 1.0)
+    * (1.0 + settings.lens.x * radiusSquared);
+  let aberration = centered * vec2f(dimensions.y / dimensions.x, 1.0)
+    * (settings.lens.y * radiusSquared);
+  let red = sampleColor(distorted + aberration, dimensions).r;
+  let green = sampleColor(distorted, dimensions).g;
+  let blue = sampleColor(distorted - aberration, dimensions).b;
+  var color = vec3f(red, green, blue) * exp2(settings.values.x);
   color = (color - vec3f(0.18)) * settings.values.y + vec3f(0.18);
   let luminance = dot(color, vec3f(0.2126, 0.7152, 0.0722));
   color = mix(vec3f(luminance), color, settings.values.z);
-  let aspectUv = (uv - vec2f(0.5)) * vec2f(dimensions.x / dimensions.y, 1.0);
-  let vignette = smoothstep(0.35, 0.75, length(aspectUv) * 1.41421356);
+  let vignette = smoothstep(0.35, 0.75, sqrt(radiusSquared) * 1.41421356);
   color *= 1.0 - settings.values.w * vignette;
   return vec4f(color, 1.0);
 }
@@ -76,7 +92,7 @@ export class DisplayImageShader {
       fragment: { module, entryPoint: 'fs', targets: [{ format: this.#format }] },
       primitive: { topology: 'triangle-list' },
     });
-    this.#uniform = this.#device.createBuffer({ size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+    this.#uniform = this.#device.createBuffer({ size: 32, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
   }
 
   targetView(width: number, height: number, output: GPUTextureView): GPUTextureView {

@@ -18,7 +18,7 @@ import { importLights, type SceneLight } from '../usd/lights.ts';
 import type { GeometryResource, SceneResources } from './scene-resources.ts';
 
 /** Light values that can change without reloading (the light count stays fixed). */
-export type LightChanges = Partial<Pick<SceneLight, 'intensity' | 'exposure' | 'color' | 'transform'>>;
+export type LightChanges = Partial<Pick<SceneLight, 'intensity' | 'exposure' | 'color' | 'transform' | 'filter'>>;
 
 export interface DeformedGeometry {
   positions: Float32Array;

@@ -350,6 +350,20 @@ describe('interactive viewer resource lifecycle', () => {
     viewer.setImageShader(undefined);
   });
 
+  it('rejects camera lenses on unsupported backends and backend changes', async () => {
+    const { viewer } = await setup();
+    const lens = { ...DEFAULT_IMAGE_SHADER, projection: 'fisheye' as const, apertureRadius: 0.1 };
+    expect(() => viewer.setImageShader(lens)).toThrow(/MaterialX path-tracing/);
+    viewer.setBackend('pathtracing');
+    viewer.setImageShader(lens);
+    expect(() => viewer.setBackend('raster')).toThrow(/MaterialX path-tracing/);
+    expect(() => viewer.setBackend('disney')).toThrow(/MaterialX path-tracing/);
+    expect(() => viewer.setImageShader({ ...lens, focusDistance: 0 })).toThrow(/Invalid lens/);
+    expect(viewer.projectShaders.image).toEqual(lens);
+    viewer.setImageShader(undefined);
+    viewer.setBackend('raster');
+  });
+
   it('redisplays a paused path-tracing AOV with image grading without clearing accumulation', async () => {
     const actual = await vi.importActual<typeof import('../../src/render/pathtracing/scene-buffers.ts')>(
       '../../src/render/pathtracing/scene-buffers.ts');
@@ -374,6 +388,11 @@ describe('interactive viewer resource lifecycle', () => {
     const passes = encoder.beginRenderPass.mock.calls.map((call: [GPURenderPassDescriptor]) => call[0]);
     expect(passes).toHaveLength(2);
     expect(passes[0]!.colorAttachments[0]!.view).not.toBe(passes[1]!.colorAttachments[0]!.view);
+    viewer.setImageShader({ ...DEFAULT_IMAGE_SHADER, apertureRadius: 0.1, focusDistance: 3 });
+    tick(5);
+    await Promise.resolve();
+    expect(statuses.at(-1)?.samples).toBe(0);
+    expect(device.createComputePipelineAsync).toHaveBeenCalledTimes(pipelines);
   });
 
   it('keeps canvas orbit listeners disabled after loading a scene', async () => {

@@ -15,17 +15,19 @@
 import { parse as parseJavaScript, type Node as AcornNode } from 'acorn';
 import { MATERIALX_DEFAULT_LIBRARY_FILES } from './libraries.ts';
 import {
-  DEFAULT_ENVIRONMENT_SHADER, ENGINE_SHADER_LIBRARY_XML,
-  type EnvironmentShaderSettings, type ImageShaderSettings,
+  DEFAULT_ENVIRONMENT_SHADER, ENGINE_SHADER_LIBRARY_XML, validateLensSettings,
+  type EnvironmentShaderSettings, type ImageShaderSettings, type LightFilterSettings,
 } from './engine-shaders.ts';
 import type { ResolvedGraph } from './graph.ts';
+import type { PathTraceView } from '../render/pathtracing/display.ts';
 import {
   OBJECT_PROPERTIES, SCRIPT_BOOLEAN_OPERATIONS, SCRIPT_PRIMITIVES, stageObjectShape, writeStageUsda,
-  type BooleanOperation, type PrimitiveParameter, type StageMaterial, type StageObject,
+  type BooleanOperation, type PrimitiveParameter, type StageInstancer, type StageMaterial, type StageObject,
 } from './script-scene.ts';
 import { checkPrimitiveShape, deformMesh, primitiveMesh, type PrimitiveAxis, type PrimitiveShape, type VertexDeformer } from '../scene/primitives.ts';
 import type { RawMesh } from '../geometry/prepare.ts';
 import { booleanMesh, transformRawMesh } from '../scene/boolean.ts';
+import { transformPoint } from '../scene/transforms.ts';
 
 export type ScriptValue = number | boolean | string | readonly number[];
 
@@ -73,6 +75,77 @@ export class ScriptError extends Error {
 
 const VECTOR_SIZE: Readonly<Record<string, number>> = {
   vector2: 2, color3: 3, vector3: 3, color4: 4, vector4: 4, matrix33: 9, matrix44: 16,
+};
+type DensityPoint = { world: readonly number[]; object: readonly number[] };
+type DensityFunction = (point: DensityPoint) => number;
+const compileDensity = (root: ScriptNode, output: string): DensityFunction => {
+  const visiting = new Set<ScriptNode>();
+  type Eval = (point: DensityPoint) => ScriptValue;
+  const compile = (node: ScriptNode, outputName: string): Eval => {
+    if (visiting.has(node)) throw new ScriptError('Scatter density graph contains a cycle.');
+    visiting.add(node);
+    const input = (name: string): Eval => {
+      const assigned = node.inputs.get(name);
+      if (assigned && 'node' in assigned) return compile(assigned.node, assigned.output);
+      const value = assigned?.value ?? inputDef(node, name).default;
+      if (value === undefined) throw new ScriptError(`${node.name}.${name} has no default value.`);
+      return () => value;
+    };
+    const scalar = (name: string): DensityFunction => {
+      const evaluate = input(name);
+      return point => {
+        const value = evaluate(point);
+        if (typeof value !== 'number' || !Number.isFinite(value)) throw new ScriptError(`${node.name}.${name} must evaluate to a finite float.`);
+        return value;
+      };
+    };
+    let evaluate: Eval;
+    const category = node.def.category;
+    if (category === 'position' && nodeType(node.def) === 'vector3' && outputName === 'out') {
+      const space = input('space');
+      const value = space({ world: [0, 0, 0], object: [0, 0, 0] });
+      if (value !== 'world' && value !== 'object') throw new ScriptError('Scatter density position supports only object and world space.');
+      evaluate = point => point[value];
+    } else if (category === 'separate3' && ['outx', 'outy', 'outz'].includes(outputName) &&
+        node.def.inputs.find(port => port.name === 'in')?.type === 'vector3') {
+      const source = input('in'), index = ['outx', 'outy', 'outz'].indexOf(outputName);
+      evaluate = point => {
+        const value = source(point);
+        if (!Array.isArray(value) || value.length !== 3 || !value.every(Number.isFinite)) throw new ScriptError('Scatter density separate3 expects a finite vector3.');
+        return value[index]!;
+      };
+    } else if (nodeType(node.def) === 'float' && outputName === 'out' && category === 'constant') {
+      evaluate = scalar('value');
+    } else if (nodeType(node.def) === 'float' && outputName === 'out' && ['add', 'subtract', 'multiply', 'divide', 'min', 'max'].includes(category)) {
+      const a = scalar('in1'), b = scalar('in2');
+      evaluate = point => {
+        const x = a(point), y = b(point);
+        switch (category) {
+          case 'add': return x + y;
+          case 'subtract': return x - y;
+          case 'multiply': return x * y;
+          case 'divide': return x / y;
+          case 'min': return Math.min(x, y);
+          default: return Math.max(x, y);
+        }
+      };
+    } else if (nodeType(node.def) === 'float' && outputName === 'out' && category === 'clamp') {
+      const value = scalar('in'), low = scalar('low'), high = scalar('high');
+      evaluate = point => Math.min(high(point), Math.max(low(point), value(point)));
+    } else {
+      throw new ScriptError(`Scatter density graph does not support ${node.def.name}.${outputName}.`);
+    }
+    visiting.delete(node);
+    return evaluate;
+  };
+  const evaluate = compile(root, output);
+  return point => {
+    const value = evaluate(point);
+    if (typeof value !== 'number' || !Number.isFinite(value) || value < 0 || value > 100) {
+      throw new ScriptError('Scatter density must evaluate to a finite float in [0, 100].');
+    }
+    return value;
+  };
 };
 
 const VALUE_TYPES = new Set(['float', 'integer', 'boolean', 'string', 'filename', ...Object.keys(VECTOR_SIZE)]);
@@ -636,9 +709,9 @@ function objectPath(signature: string, value: unknown): string {
 }
 
 function lightChanges(value: unknown): ScriptLightChanges {
-  if (typeof value !== 'object' || value === null) throw new ScriptError('setLight(light, changes) expects { intensity, exposure, color, transform }.');
-  const { intensity, exposure, color, transform, ...extra } = value as Record<string, unknown>;
-  if (Object.keys(extra).length) throw new ScriptError(`setLight: unknown fields ${Object.keys(extra).join(', ')}. Fields: intensity, exposure, color, transform.`);
+  if (typeof value !== 'object' || value === null) throw new ScriptError('setLight(light, changes) expects { intensity, exposure, color, transform, filter }.');
+  const { intensity, exposure, color, transform, filter, ...extra } = value as Record<string, unknown>;
+  if (Object.keys(extra).length) throw new ScriptError(`setLight: unknown fields ${Object.keys(extra).join(', ')}. Fields: intensity, exposure, color, transform, filter.`);
   const scalar = (name: string, number: unknown): number => {
     if (typeof number !== 'number' || !Number.isFinite(number)) throw new ScriptError(`setLight ${name} expects a finite number.`);
     return number;
@@ -648,7 +721,33 @@ function lightChanges(value: unknown): ScriptLightChanges {
     ...(exposure !== undefined ? { exposure: scalar('exposure', exposure) } : {}),
     ...(color !== undefined ? { color: finiteNumbers(color, 3, 'setLight color') } : {}),
     ...(transform !== undefined ? { transform: finiteNumbers(transform, 16, 'setLight transform') } : {}),
+    ...(filter !== undefined ? { filter: parseLightFilterSettings(filter, 'setLight filter') } : {}),
   };
+}
+
+function parseLightFilterSettings(value: unknown, label: string): LightFilterSettings {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new ScriptError(`${label} expects { pattern, scale, rotation, softness }.`);
+  }
+  const filter = value as Record<string, unknown>;
+  if (Object.keys(filter).some(key => !['pattern', 'scale', 'rotation', 'softness'].includes(key))) {
+    throw new ScriptError(`${label} accepts only pattern, scale, rotation and softness.`);
+  }
+  if (filter.pattern !== 'circle' && filter.pattern !== 'stripes' && filter.pattern !== 'grid') {
+    throw new ScriptError(`${label}.pattern expects "circle", "stripes" or "grid".`);
+  }
+  const number = (key: 'scale' | 'rotation' | 'softness'): number => {
+    const component = filter[key];
+    if (typeof component !== 'number' || !Number.isFinite(component)) throw new ScriptError(`${label}.${key} expects a finite number.`);
+    return component;
+  };
+  const result: LightFilterSettings = {
+    pattern: filter.pattern, scale: number('scale'), rotation: number('rotation'), softness: number('softness'),
+  };
+  if (result.scale < 0.1 || result.scale > 100 || Math.abs(result.rotation) > 180 || result.softness < 0.001 || result.softness > 0.5) {
+    throw new ScriptError(`${label} values are outside the NodeDef ranges.`);
+  }
+  return result;
 }
 
 /**
@@ -702,6 +801,7 @@ export interface ScriptLightChanges {
   exposure?: number;
   color?: readonly number[];
   transform?: readonly number[];
+  filter?: LightFilterSettings;
 }
 
 /** Scene of the script's primitives (see `ScriptHost.loadStage`). */
@@ -723,6 +823,7 @@ export interface ScriptHost {
   setRenderSetting(name: string, value: unknown): Promise<void>;
   setEnvironmentShader(settings: EnvironmentShaderSettings): Promise<void>;
   setImageShader(settings: ImageShaderSettings): Promise<void>;
+  setPathTracingView(view: PathTraceView): Promise<void>;
   /** Bind a MaterialX document (generated `xml`, or a document `url`) to an object. */
   assignMaterial(objectPath: string, material: { xml: string } | { url: string }): Promise<void>;
   /** Restart rendering; with `samples`, resolve once that many samples are accumulated. Returns the sample count. */
@@ -804,7 +905,7 @@ export interface ScriptRun extends ScriptGraph {
 const SCRIPT_GLOBALS = new Set(['__mx', 'Math', 'scene', 'objects', 'render', 'assign', 'load', 'save', 'log', 'check', 'node', 'material',
   'stats', 'converge', 'capture', 'diagnostics', 'capabilities', 'timeline', 'time', 'setTime', 'transform', 'setTransform',
   'setVisibility', 'lights', 'setLight', 'setCamera', 'variants', 'setVariant', 'materialParameters', 'setMaterialParameters',
-  'environment', 'postprocess']);
+  'environment', 'postprocess', 'aov', 'lightFilter', 'scatter']);
 /** Globals that are also natural node names: assigning them shadows the function. */
 const SHADOWABLE_GLOBALS = new Set(['material', 'node', 'time', 'transform', 'capture']);
 // eslint-disable-next-line @typescript-eslint/no-empty-function
@@ -1246,12 +1347,68 @@ export async function runScript(code: string, library: ScriptLibrary, options: R
   };
   const imageShaderSettings = (value: unknown): ImageShaderSettings => {
     const node = terminalNode(value, 'engine_image_shader', 'postprocess(shader)');
-    return {
+    const settings: ImageShaderSettings = {
       exposure: terminalFloat(node, 'exposure'),
       contrast: terminalFloat(node, 'contrast'),
       saturation: terminalFloat(node, 'saturation'),
       vignette: terminalFloat(node, 'vignette'),
+      distortion: terminalFloat(node, 'distortion'),
+      chromaticAberration: terminalFloat(node, 'chromaticAberration'),
     };
+    if (node.def.category === 'lens_shader') {
+      const projection = terminalInput(node, 'projection');
+      if (projection !== 'perspective' && projection !== 'fisheye' && projection !== 'equirectangular') {
+        throw new ScriptError(`${node.name}.projection expects perspective, fisheye or equirectangular.`);
+      }
+      settings.projection = projection;
+      settings.apertureRadius = terminalFloat(node, 'apertureRadius');
+      settings.focusDistance = terminalFloat(node, 'focusDistance');
+      settings.bokehBlades = terminalFloat(node, 'bokehBlades');
+      settings.bokehRotation = terminalFloat(node, 'bokehRotation');
+      try { validateLensSettings(settings); } catch (error) { throw new ScriptError(String(error)); }
+    }
+    return settings;
+  };
+  const aovView = (value: unknown): PathTraceView => {
+    const node = terminalNode(value, 'engine_aov_shader', 'aov(shader)');
+    const view = terminalInput(node, 'view');
+    if (typeof view !== 'string' || !['albedo', 'normal', 'depth', 'variance', 'emission', 'transmission'].includes(view)) {
+      throw new ScriptError(`${node.name}.view expects albedo, normal, depth, variance, emission or transmission.`);
+    }
+    return view as PathTraceView;
+  };
+  const lightFilterShader = (value: unknown): { lightPath: string; settings: LightFilterSettings } => {
+    const node = terminalNode(value, 'engine_light_filter_shader', 'lightFilter(shader)');
+    const lightPath = terminalInput(node, 'lightPath');
+    if (typeof lightPath !== 'string' || !lightPath) throw new ScriptError(`${node.name}.lightPath expects a scene path.`);
+    const settings = parseLightFilterSettings({
+      pattern: terminalInput(node, 'pattern'),
+      scale: terminalFloat(node, 'scale'),
+      rotation: terminalFloat(node, 'rotation'),
+      softness: terminalFloat(node, 'softness'),
+    }, node.name);
+    return { lightPath, settings };
+  };
+  const scatterShaderSettings = (value: unknown): {
+    surfacePath: string; prototypePath: string; density: number | DensityFunction; seed: number; scale: number; hidePrototype: boolean;
+  } => {
+    const node = terminalNode(value, 'engine_scatter_shader', 'scatter(shader)');
+    const path = (name: string): string => {
+      const input = terminalInput(node, name);
+      if (typeof input !== 'string' || !input) throw new ScriptError(`${node.name}.${name} expects a scene path.`);
+      return input;
+    };
+    const seed = terminalInput(node, 'seed');
+    const hidePrototype = terminalInput(node, 'hidePrototype');
+    if (typeof seed !== 'number' || !Number.isInteger(seed)) throw new ScriptError(`${node.name}.seed expects an integer.`);
+    if (typeof hidePrototype !== 'boolean') throw new ScriptError(`${node.name}.hidePrototype expects a boolean.`);
+    const densityInput = node.inputs.get('density');
+    const density = densityInput && 'node' in densityInput ? compileDensity(densityInput.node, densityInput.output) : terminalFloat(node, 'density');
+    const scale = terminalFloat(node, 'scale');
+    if ((typeof density === 'number' && (density < 0 || density > 100)) || scale < 0.01 || scale > 10) {
+      throw new ScriptError(`${node.name} density or scale is outside its NodeDef range.`);
+    }
+    return { surfacePath: path('surfacePath'), prototypePath: path('prototypePath'), density, seed, scale, hidePrototype };
   };
   const upstream = (root: ScriptNode): ScriptNode[] => {
     const seen = new Set<ScriptNode>();
@@ -1292,6 +1449,7 @@ export async function runScript(code: string, library: ScriptLibrary, options: R
   }
   interface StageSnapshot {
     objects: StageObject[];
+    instancers: StageInstancer[];
     /** Documents written with the layer, by material prim name. */
     documents: Map<string, { name: string; xml: string }>;
     /** Documents referenced by URL, by material prim name. */
@@ -1302,6 +1460,7 @@ export async function runScript(code: string, library: ScriptLibrary, options: R
     placements: Map<string, string>;
   }
   const stageObjects: ScriptObject[] = [];
+  const stageInstancers: Array<{ name: string; prototype: ScriptObject; positions: number[]; orientations: number[]; scales: number[] }> = [];
   const objectHandles = new WeakMap<object, ScriptObject>();
   const objectReferences = new WeakMap<ScriptObject, object>();
   const objectNames = new Set<string>(['Looks']);
@@ -1418,7 +1577,14 @@ export async function runScript(code: string, library: ScriptLibrary, options: R
         ...(material ? { material } : {}), ...(mesh ? { mesh } : {}),
       };
     });
-    return { objects, documents, urls };
+    const byObject = new Map(activeObjects.map((object, index) => [object, objects[index]!]));
+    const instancers = stageInstancers.map(instancer => {
+      const prototype = byObject.get(instancer.prototype);
+      if (!prototype) throw new ScriptError(`Scatter prototype for ${instancer.name} was removed.`);
+      if (operands.has(instancer.prototype)) throw new ScriptError(`Scatter prototype for ${instancer.name} is a boolean operand.`);
+      return { ...instancer, prototype };
+    });
+    return { objects, instancers, documents, urls };
   };
   /** USDA layer, documents and the facts that tell a reload from a placement change. */
   const buildStage = async (snapshot: StageSnapshot): Promise<BuiltStage & { written: Map<string, string> }> => {
@@ -1480,8 +1646,8 @@ export async function runScript(code: string, library: ScriptLibrary, options: R
       materials.push({ prim, name, assetPath: url });
       texts.set(url, text);
     }
-    const usda = writeStageUsda(snapshot.objects, materials);
-    const structure = `${writeStageUsda(snapshot.objects, materials, { transforms: false })}\n${[...texts].map(([path, text]) => `${path}\n${text}`).join('\n')}`;
+    const usda = writeStageUsda(snapshot.objects, materials, { instancers: snapshot.instancers });
+    const structure = `${writeStageUsda(snapshot.objects, materials, { transforms: false, instancers: snapshot.instancers })}\n${[...texts].map(([path, text]) => `${path}\n${text}`).join('\n')}`;
     const placements = new Map(snapshot.objects.map(object => [`/World/${object.name}`,
       JSON.stringify([object.translate, object.rotate, object.scale, object.visible])]));
     return { usda, materials: texts, structure, placements, written };
@@ -1518,6 +1684,7 @@ export async function runScript(code: string, library: ScriptLibrary, options: R
   const discardStage = (): void => {
     for (const object of stageObjects) object.removed = true;
     stageObjects.length = 0;
+    stageInstancers.length = 0;
     stageDirty = false;
     synced = undefined;
   };
@@ -1624,6 +1791,103 @@ export async function runScript(code: string, library: ScriptLibrary, options: R
     }
     return handle;
   };
+  const scatterScriptObjects = (settings: {
+    surfacePath: string; prototypePath: string; density: number | DensityFunction; seed: number; scale: number; hidePrototype: boolean;
+  }): number => {
+    const objectAt = (path: string): ScriptObject | undefined =>
+      liveObjects().find(object => pathOf(object) === path);
+    const surface = objectAt(settings.surfacePath);
+    const prototype = objectAt(settings.prototypePath);
+    if (!surface || !prototype) throw new ScriptError('Scatter surfacePath and prototypePath must reference live scripted objects.');
+    if (surface === prototype) throw new ScriptError('Scatter requires distinct surface and prototype objects.');
+    if (surface.operation || prototype.operation || !SCRIPT_PRIMITIVES[surface.className] || !SCRIPT_PRIMITIVES[prototype.className]) {
+      throw new ScriptError('Scatter currently accepts scripted primitives, not boolean or imported objects.');
+    }
+
+    const surfaceMesh = primitiveMesh(stageObjectShape({
+      name: surface.name ?? surface.className, className: surface.className, parameters: surface.parameters,
+      translate: surface.translate, rotate: surface.rotate, scale: surface.scale, visible: surface.visible,
+    }));
+    const mesh = surface.deform ? deformMesh(surfaceMesh, surface.deform) : surfaceMesh;
+    const matrix = transformMatrix({ translate: surface.translate, rotate: surface.rotate, scale: surface.scale });
+    const vertices = Array.from({ length: mesh.points.length / 3 }, (_, index) =>
+      transformPoint(matrix, [mesh.points[index * 3]!, mesh.points[index * 3 + 1]!, mesh.points[index * 3 + 2]!]));
+    const triangles: Array<{ a: number; b: number; c: number; area: number; cumulative: number }> = [];
+    let totalArea = 0;
+    let offset = 0;
+    for (const count of mesh.faceVertexCounts) {
+      const first = mesh.faceVertexIndices[offset]!;
+      for (let i = 1; i + 1 < count; i++) {
+        const b = mesh.faceVertexIndices[offset + i]!;
+        const c = mesh.faceVertexIndices[offset + i + 1]!;
+        const aPoint = vertices[first]!, bPoint = vertices[b]!, cPoint = vertices[c]!;
+        const ab: [number, number, number] = [bPoint[0] - aPoint[0], bPoint[1] - aPoint[1], bPoint[2] - aPoint[2]];
+        const ac: [number, number, number] = [cPoint[0] - aPoint[0], cPoint[1] - aPoint[1], cPoint[2] - aPoint[2]];
+        const cross: [number, number, number] = [
+          ab[1] * ac[2] - ab[2] * ac[1], ab[2] * ac[0] - ab[0] * ac[2], ab[0] * ac[1] - ab[1] * ac[0],
+        ];
+        const area = Math.hypot(...cross) * 0.5;
+        if (area > 0) {
+          totalArea += area;
+          triangles.push({ a: first, b, c, area, cumulative: totalArea });
+        }
+      }
+      offset += count;
+    }
+    if (!(totalArea > 0) || !Number.isFinite(totalArea)) throw new ScriptError('Scatter surface has no finite area.');
+    const candidates = Math.round(totalArea * (typeof settings.density === 'number' ? settings.density : 100));
+    if (typeof settings.density === 'number' && candidates > 5_000) throw new ScriptError(`Scatter would create ${candidates} instances; the limit is 5000.`);
+    if (candidates > 1_000_000) throw new ScriptError('Scatter density graph exceeds the 1000000 candidate limit.');
+    let state = settings.seed >>> 0;
+    const random = (): number => {
+      state = (state + 0x6D2B79F5) >>> 0;
+      let value = state;
+      value = Math.imul(value ^ (value >>> 15), value | 1);
+      value ^= value + Math.imul(value ^ (value >>> 7), value | 61);
+      return ((value ^ (value >>> 14)) >>> 0) / 4294967296;
+    };
+    const positions: number[] = [], orientations: number[] = [], scales: number[] = [];
+    for (let i = 0; i < candidates; i++) {
+      const choice = random() * totalArea;
+      let low = 0, high = triangles.length - 1;
+      while (low < high) {
+        const middle = (low + high) >>> 1;
+        if (choice < triangles[middle]!.cumulative) high = middle;
+        else low = middle + 1;
+      }
+      const triangle = triangles[low]!;
+      const root = Math.sqrt(random());
+      const second = random();
+      const wa = 1 - root, wb = root * (1 - second), wc = root * second;
+      const a = vertices[triangle.a]!, b = vertices[triangle.b]!, c = vertices[triangle.c]!;
+      const position = [0, 1, 2].map(axis => a[axis]! * wa + b[axis]! * wb + c[axis]! * wc);
+      if (typeof settings.density === 'function') {
+        const object = [0, 1, 2].map(axis => mesh.points[triangle.a * 3 + axis]! * wa +
+          mesh.points[triangle.b * 3 + axis]! * wb + mesh.points[triangle.c * 3 + axis]! * wc);
+        if (random() * 100 >= settings.density({ world: position, object })) continue;
+      }
+      const rotation = [...prototype.rotate];
+      rotation[1] = rotation[1]! + random() * 360;
+      const [x, y, z] = rotation.map(angle => angle * Math.PI / 360);
+      const [cx, cy, cz] = [Math.cos(x!), Math.cos(y!), Math.cos(z!)];
+      const [sx, sy, sz] = [Math.sin(x!), Math.sin(y!), Math.sin(z!)];
+      positions.push(...position);
+      orientations.push(cz * cy * cx + sz * sy * sx, cz * cy * sx - sz * sy * cx,
+        cz * sy * cx + sz * cy * sx, sz * cy * cx - cz * sy * sx);
+      scales.push(...prototype.scale.map(component => component * settings.scale));
+      if (positions.length / 3 > 5_000) throw new ScriptError('Scatter would create more than 5000 instances.');
+    }
+    let name = 'scatter';
+    for (let i = 2; objectNames.has(name); i++) name = `scatter_${i}`;
+    objectNames.add(name);
+    stageInstancers.push({ name, prototype, positions, orientations, scales });
+    stageDirty = true;
+    if (settings.hidePrototype) {
+      prototype.visible = false;
+      stageDirty = true;
+    }
+    return positions.length / 3;
+  };
   const createBooleanOperation = (className: string, init: unknown): object => {
     const operation = SCRIPT_BOOLEAN_OPERATIONS[className]!;
     if (library.categoryOf(className) !== undefined && !shadowed.has(className)) {
@@ -1683,6 +1947,20 @@ export async function runScript(code: string, library: ScriptLibrary, options: R
     postprocess: (shader: unknown): PromiseLike<void> => {
       const settings = imageShaderSettings(shader);
       return action(target => target.setImageShader(settings));
+    },
+    aov: (shader: unknown): PromiseLike<void> => {
+      const view = aovView(shader);
+      return action(target => target.setPathTracingView(view));
+    },
+    lightFilter: (shader: unknown): PromiseLike<void> => {
+      const { lightPath, settings } = lightFilterShader(shader);
+      return action(target => target.setLight(lightPath, { filter: settings }));
+    },
+    scatter: (shader: unknown): number => {
+      const settings = scatterShaderSettings(shader);
+      const count = scatterScriptObjects(settings);
+      command();
+      return count;
     },
     scene: async (entry: unknown): Promise<void> => {
       if (typeof entry !== 'string' || !entry) throw new ScriptError('scene(entry) expects a scene path.');
@@ -2370,6 +2648,9 @@ export function toScriptProgram(
     const output = node.def.outputs[0]!;
     if (output.type === 'engine_environment_shader') return [`await environment(${name}.${output.name});`];
     if (output.type === 'engine_image_shader') return [`await postprocess(${name}.${output.name});`];
+    if (output.type === 'engine_aov_shader') return [`await aov(${name}.${output.name});`];
+    if (output.type === 'engine_light_filter_shader') return [`await lightFilter(${name}.${output.name});`];
+    if (output.type === 'engine_scatter_shader') return [`await scatter(${name}.${output.name});`];
     return [];
   });
   const code = terminals.length ? `${declarations}\n${terminals.join('\n')}\n` : declarations;

@@ -220,14 +220,65 @@ overlap.translate = [2, 0, 0];
 |---|---|
 | `env = new EnvironmentShader()` | Ciel, dégradé ou éclairage studio procédural évalué par direction puis converti en carte HDR lat-long ; ses paramètres sont scriptables et animables. |
 | `await environment(env.out)` | Active cet environnement pour le fond et l'éclairage raster/path tracing ; sa carte et sa CDF d'échantillonnage sont mises à jour ensemble au changement de temps. |
-| `grade = new ImageShader()` | Définit l'exposition, le contraste, la saturation et le vignettage de l'image écran. |
+| `grade = new ImageShader()` / `lens = new LensShader()` | Définit l'étalonnage écran et les effets optiques de lentille. |
 | `await postprocess(grade.out)` | Applique l'étalonnage après l'affichage raster ou path tracing, y compris les AOV, sans modifier l'accumulation. |
+| `output = new AovShader(); await aov(output.out)` | Sélectionne un AOV path tracing intégré : albedo, normal, profondeur, variance, émission ou transmission. |
+| `filter = new LightFilterShader(); filter.lightPath = "/World/Spot"; await lightFilter(filter.out)` | Applique un gobo procédural à une lumière spot du path tracer MaterialX. |
+| `settings = new ScatterShader(); await scatter(settings.out)` | Répartit des instances sur une surface scriptée, avec densité scalaire ou graphe spatial et graine reproductible. |
 
 `EnvironmentShader.model` accepte `"gradient"`, `"sky"` ou `"studio"`. Les entrées couleur,
 direction du soleil, intensité, diamètre angulaire, exposition, rotation et vitesse d'animation
-sont définies par le NodeDef `ND_engine_environment_shader`. `ImageShader` applique ses réglages
-dans l'espace écran ; le tone mapping intégré reste contrôlé par `render.tonemap`. Ces deux nœuds
+sont définies par le NodeDef `ND_engine_environment_shader`. `ImageShader` et `LensShader` appliquent une partie de leurs réglages dans l'espace écran ; `distortion` règle
+la distorsion radiale (-1 à 1) et `chromaticAberration` la séparation rouge/bleu (0 à 0,1).
+Le tone mapping intégré reste contrôlé par `render.tonemap`. Ces nœuds
 acceptent actuellement des paramètres littéraux, pas des entrées connectées depuis d'autres nœuds.
+
+La distorsion et l'aberration chromatique sont des post-traitements disponibles sur raster,
+path tracing MaterialX et Disney. `LensShader` expose aussi `projection` (`"perspective"` par
+défaut, `"fisheye"` ou `"equirectangular"`), `apertureRadius` (rayon de l'ouverture en unités
+de scène, 0 par défaut), `focusDistance` (distance positive en unités de scène, 5 par défaut),
+`bokehBlades` (0 pour une ouverture circulaire, sinon entier de 3 à 16) et `bokehRotation`
+(degrés). Une ouverture non nulle échantillonne physiquement l'objectif et converge vers le plan
+de mise au point de la caméra perspective ou orthographique. Les projections angulaires utilisent
+une sphère de mise au point centrée sur la caméra. Le fisheye équidistant couvre 180° dans le
+cercle inscrit, noir à l'extérieur ; l'équirectangulaire couvre 360° horizontalement et 180°
+verticalement. Ces options de caméra exigent le path tracer MaterialX : raster et Disney sont
+refusés, de même qu'un repli raster. Les modifier réinitialise l'accumulation. L'option
+`"perspective"` conserve la projection de la caméra, y compris si elle est orthographique.
+
+`AovShader` pilote les AOV intégrés au path tracer MaterialX et permet de les afficher puis de les
+exporter. Il ne définit pas encore de sortie MaterialX arbitraire ; les backends raster et Disney
+n'exposent pas ces AOV.
+
+`LightFilterShader` propose les motifs cercle, rayures et grille, avec échelle, rotation et douceur
+réglables. Il ne prend en charge que les lumières spot du path tracer MaterialX ; le raster, Disney,
+les textures de gobo et les profils IES ne sont pas pris en charge.
+
+`ScatterShader` prend `surfacePath`, `prototypePath`, `density`, `seed`, `scale` et `hidePrototype`.
+Il crée un `PointInstancer` et un prototype géométrique partagé par ses placements, compatibles avec
+raster, path tracing MaterialX et Disney. La surface et le prototype doivent être des primitives
+scriptées (éventuellement déformées), pas des objets importés ou booléens. `hidePrototype` masque
+l'objet source sans masquer les instances. La densité littérale est en instances par unité de
+surface : le nombre reste `round(surface × density)`.
+
+La densité peut aussi être connectée à un graphe MaterialX évalué sur CPU lors de `scatter()` :
+`position` en espace `object` ou `world`, `separate3` vector3, et les nœuds float `constant`,
+`add`, `subtract`, `multiply`, `divide`, `min`, `max`, `clamp`. Les autres nœuds (notamment
+textures, bruit et coordonnées UV), espaces et backends d'évaluation GPU ne sont pas pris en charge
+et sont rejetés, sans repli silencieux. Le résultat doit rester fini et dans [0, 100] à chaque
+échantillon. Le graphe est évalué sur des candidats uniformes puis accepté selon la densité locale ;
+le nombre est donc statistique, déterministe pour une graine donnée, et limité à 5000 instances
+et 1 000 000 de candidats. Les changements ultérieurs du graphe ou de la surface ne redistribuent
+pas automatiquement les instances : appeler à nouveau `scatter()` crée un nouvel instancer.
+
+```js
+pos = new Position(); pos.space = "world";
+xyz = new Separate3("ND_separate3_vector3"); xyz.in = pos.out;
+mask = new Clamp("float"); mask.in = xyz.outx; mask.low = 0; mask.high = 1;
+d = new Multiply("float"); d.in1 = mask.out; d.in2 = 20;
+settings.density = d.out;
+await scatter(settings.out);
+```
 
 ```js
 sky = new EnvironmentShader();

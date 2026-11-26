@@ -60,7 +60,7 @@ import { packHdrTexture } from '../assets/hdr-texture.ts';
 import { generateEnvironmentMipmaps } from './env/mipmaps.ts';
 import { averageRadiance, projectIrradianceSH } from './env/irradiance.ts';
 import {
-  bakeEnvironmentShader, DEFAULT_ENVIRONMENT_SHADER, DEFAULT_IMAGE_SHADER,
+  bakeEnvironmentShader, DEFAULT_ENVIRONMENT_SHADER, DEFAULT_IMAGE_SHADER, lensRequiresPathTracing, validateLensSettings,
   type EnvironmentShaderSettings, type ImageShaderSettings,
 } from '../materialx/engine-shaders.ts';
 import { DisplayImageShader } from './image-shader.ts';
@@ -585,7 +585,9 @@ export class InteractiveViewer {
         const from = this.#backend;
         const reason = `GPU memory ${megabytes(this.#memory.usage.total)} exceeds the budget of ${megabytes(budget!)}.`;
         current.forceFallback(from, reason);
-        sink({ level: 'warning', code: 'backend-fallback', message: `${reason} Rendering with raster instead of ${from}.`,
+        sink({ level: 'warning', code: 'backend-fallback', message: lensRequiresPathTracing(this.#imageShader)
+          ? `${reason} Raster fallback cannot render the active lens.`
+          : `${reason} Rendering with raster instead of ${from}.`,
           detail: { backend: from, bytes: this.#memory.usage.total, budget } });
         this.#rasterDirty = true;
         this.#emitStatus();
@@ -693,6 +695,9 @@ export class InteractiveViewer {
   /** Reloads a snapshot taken on another viewer (typically after a device loss). */
   async restoreState(snapshot: ViewerSnapshot): Promise<void> {
     const settings = snapshot.settings;
+    if (settings.backend !== 'pathtracing' && lensRequiresPathTracing(this.#imageShader)) {
+      throw new Error('Depth of field and lens projections require the MaterialX path-tracing backend.');
+    }
     this.#backend = settings.backend;
     this.#pathTracingDepthOverride = settings.depth;
     this.#rasterQuality = settings.rasterQuality;
@@ -784,8 +789,21 @@ export class InteractiveViewer {
 
   setImageShader(settings: ImageShaderSettings | undefined): void {
     const copy = settings ? { ...DEFAULT_IMAGE_SHADER, ...settings } : undefined;
+    if (copy) validateLensSettings(copy);
+    if (lensRequiresPathTracing(copy) && (this.#backend !== 'pathtracing' || this.#current?.fallback())) {
+      throw new Error('Depth of field and lens projections require the MaterialX path-tracing backend without raster fallback.');
+    }
+    const raySettings = (value: ImageShaderSettings | undefined): string => JSON.stringify([
+      value?.projection ?? 'perspective', value?.apertureRadius ?? 0, value?.focusDistance ?? 5,
+      value?.bokehBlades ?? 0, value?.bokehRotation ?? 0,
+    ]);
+    const changed = raySettings(copy) !== raySettings(this.#imageShader);
     this.#imageShader = copy;
     this.#current?.setImageShader(copy);
+    if (changed) {
+      this.#clearDenoiserComparison();
+      this.#current?.resetPathTrace();
+    }
     this.#rasterDirty = true;
     this.#ptDisplayDirty = true;
   }
@@ -938,6 +956,9 @@ export class InteractiveViewer {
   async captureObjectMaterialVariants(
     path: string, options: ({ backend: 'raster' } | { backend: 'pathtracing'; samples: number }) & { fullResolution?: boolean }, signal: AbortSignal,
   ): Promise<Readonly<Record<MaterialVariantSlot, RgbaCapture>>> {
+    if (options.backend !== 'pathtracing' && lensRequiresPathTracing(this.#imageShader)) {
+      throw new Error('Depth of field and lens projections require the MaterialX path-tracing backend.');
+    }
     const loaded = this.#loaded;
     const current = this.#current;
     const source = loaded?.parameterResources;
@@ -1599,6 +1620,12 @@ export class InteractiveViewer {
 
   setBackend(kind: BackendKind): void {
     if (kind === this.#backend) return;
+    if (kind !== 'pathtracing' && lensRequiresPathTracing(this.#imageShader)) {
+      throw new Error('Depth of field and lens projections require the MaterialX path-tracing backend.');
+    }
+    if (kind !== 'pathtracing' && this.#loaded?.lights.some(light => this.#lightOverrides.get(light.path)?.filter)) {
+      throw new Error('Procedural light filters are supported only by the MaterialX path-tracing backend.');
+    }
     this.#clearDenoiserComparison();
     this.#backend = kind;
     if (this.#canvas) this.#canvas.style.imageRendering = 'auto';
@@ -2246,9 +2273,13 @@ export class InteractiveViewer {
 
   /** Changes a light; omit the changes to restore the scene's values. */
   setLight(path: string, changes?: LightChanges): void {
-    if (!this.#loaded?.lights.some(light => light.path === path)) throw new Error(`Unknown light: ${path}`);
+    const light = this.#loaded?.lights.find(candidate => candidate.path === path);
+    if (!light) throw new Error(`Unknown light: ${path}`);
     if (changes?.transform && (changes.transform.length !== 16 || !changes.transform.every(Number.isFinite))) {
       throw new RangeError('A transform is 16 finite numbers.');
+    }
+    if (changes?.filter && (light.type !== 'spot' || this.#backend !== 'pathtracing')) {
+      throw new Error('Procedural gobo filters require a spot light and the MaterialX path-tracing backend.');
     }
     if (changes === undefined) this.#lightOverrides.delete(path);
     else this.#lightOverrides.set(path, { ...this.#lightOverrides.get(path), ...changes });
@@ -2486,7 +2517,7 @@ export class InteractiveViewer {
           this.#ptDisplayDirty = false;
           submitted = true;
           this.#emitStatus();
-      } else if (backend === 'raster' && this.#rasterDirty) {
+      } else if (backend === 'raster' && this.#rasterDirty && !lensRequiresPathTracing(this.#imageShader)) {
         this.#rasterDirty = false;
         current.renderRaster(context.getCurrentTexture().createView());
         submitted = true;
@@ -3376,7 +3407,9 @@ export class InteractiveViewer {
       this.#rasterDirty = true;
       this.#diagnosticSink()({
         level: 'warning', code: 'backend-fallback',
-        message: `${from === 'disney' ? 'Disney path tracing' : 'Path tracing'} exceeds a GPU limit for this scene; rendering with raster instead. ${error.message}`,
+        message: lensRequiresPathTracing(this.#imageShader)
+          ? `Path tracing exceeds a GPU limit; raster fallback cannot render the active lens. ${error.message}`
+          : `${from === 'disney' ? 'Disney path tracing' : 'Path tracing'} exceeds a GPU limit for this scene; rendering with raster instead. ${error.message}`,
         detail: { backend: from, limit: error.limit, required: error.required, available: error.available },
       });
     };
@@ -4045,7 +4078,8 @@ export class InteractiveViewer {
             // Separate uniforms let watchdog-sized tile dispatches share a submission.
             device.queue.writeBuffer(ptUniforms[i]!, 0,
               buildPathTraceUniform(ptScene, frameIndex, 1, ptWidth, ptHeight, 0, tile, pathTracingDepth,
-                !capturing && this.#pathTracingAdaptive && tiled, this.#pathTracingView, this.#pathTracingLimits.targetRelativeError));
+                !capturing && this.#pathTracingAdaptive && tiled, this.#pathTracingView, this.#pathTracingLimits.targetRelativeError,
+                this.#imageShader));
             const compute = encoder.beginComputePass();
             compute.setPipeline(ptPipeline);
             compute.setBindGroup(0, ptComputeGroups[i]!);

@@ -1,7 +1,7 @@
 import type { SceneLight } from '../../usd/lights.ts';
 import { transformDirection, transformPoint, type Vec3 } from '../../scene/transforms.ts';
 
-export const PT_LIGHT_FLOATS = 28;
+export const PT_LIGHT_FLOATS = 32;
 
 export function packAnalyticLights(lights: readonly SceneLight[]): Float32Array {
   const selected = lights.filter(light => light.type !== 'dome');
@@ -10,6 +10,12 @@ export function packAnalyticLights(lights: readonly SceneLight[]): Float32Array 
   selected.forEach((light, i) => {
     if (!['rect', 'sphere', 'distant', 'point', 'spot'].includes(light.type) || light.textureFile || light.iesFile || light.colorTemperature !== undefined) {
       throw new Error(`Unsupported converted path-tracer light at ${light.path}: ${light.type} or light shaping.`);
+    }
+    if (light.filter && (light.type !== 'spot' || !['circle', 'stripes', 'grid'].includes(light.filter.pattern) ||
+        ![light.filter.scale, light.filter.rotation, light.filter.softness].every(Number.isFinite) ||
+        light.filter.scale < 0.1 || light.filter.scale > 100 || Math.abs(light.filter.rotation) > 180 ||
+        light.filter.softness < 0.001 || light.filter.softness > 0.5)) {
+      throw new Error(`Invalid procedural light filter at ${light.path}; filters require a spot and in-range settings.`);
     }
     const base = i * PT_LIGHT_FLOATS;
     if (![...light.transform, ...light.color, light.intensity, light.exposure].every(Number.isFinite)
@@ -71,7 +77,10 @@ export function packAnalyticLights(lights: readonly SceneLight[]): Float32Array 
       innerAngle = light.innerAngle ?? 0;
       outerAngle = light.outerAngle ?? 45;
       if (!Number.isFinite(decayRate) || decayRate < 0) throw new Error(`Invalid decay rate for spot light at ${light.path}`);
-      if (!Number.isFinite(innerAngle) || !Number.isFinite(outerAngle)) throw new Error(`Invalid cone angles for spot light at ${light.path}`);
+      if (!Number.isFinite(innerAngle) || !Number.isFinite(outerAngle) ||
+          innerAngle < 0 || outerAngle < innerAngle || outerAngle > 180) {
+        throw new Error(`Invalid cone angles for spot light at ${light.path}`);
+      }
     } else {
       throw new Error(`Unsupported light type ${light.type} at ${light.path}`);
     }
@@ -84,6 +93,8 @@ export function packAnalyticLights(lights: readonly SceneLight[]): Float32Array 
     data.set([...normal, 0], base + 16);
     data.set([...direction, 0], base + 20);
     data.set([Math.cos(innerAngle * Math.PI / 180), Math.cos(outerAngle * Math.PI / 180), 0, 0], base + 24);
+    const filterMode = light.filter?.pattern === 'circle' ? 1 : light.filter?.pattern === 'stripes' ? 2 : light.filter ? 3 : 0;
+    data.set([filterMode, light.filter?.scale ?? 1, (light.filter?.rotation ?? 0) * Math.PI / 180, light.filter?.softness ?? 0], base + 28);
     
     if (!data.subarray(base, base + PT_LIGHT_FLOATS).every(Number.isFinite)) {
       throw new Error(`Analytic light exceeds GPU numeric range at ${light.path}`);
@@ -130,7 +141,7 @@ struct MxLightHit { distance: f32, radiance: vec3f, pdf: f32, hit: bool };
 fn mx_light_count() -> u32 { return ${count}; }
 // Solid-angle pdf of a point on the indexed light, excluding the light selection.
 fn mx_light_area_pdf(index: u32, origin: vec3f, point: vec3f, normal: vec3f) -> f32 {
-  let b = index * 7u;
+  let b = index * 8u;
   let offset = point - origin;
   let distance2 = dot(offset, offset);
   let cosine = dot(normal, -normalize(offset));
@@ -142,7 +153,7 @@ fn mx_light_pdf(index: u32, origin: vec3f, point: vec3f, normal: vec3f) -> f32 {
 }
 // Power-proportional selection (packAnalyticLights stores pmf and cdf in the last slot).
 fn mx_light_selection_pmf(index: u32) -> f32 {
-  return analyticLights[index * 7u + 6u].z;
+  return analyticLights[index * 8u + 6u].z;
 }
 fn mx_select_light(u: f32) -> u32 {
   var lower = 0u;
@@ -150,7 +161,7 @@ fn mx_select_light(u: f32) -> u32 {
   loop {
     if (lower >= upper) { break; }
     let middle = (lower + upper) / 2u;
-    if (u < analyticLights[middle * 7u + 6u].w) { upper = middle; } else { lower = middle + 1u; }
+    if (u < analyticLights[middle * 8u + 6u].w) { upper = middle; } else { lower = middle + 1u; }
   }
   return lower;
 }
@@ -164,7 +175,7 @@ fn mx_sample_light(origin: vec3f, u: vec3f) -> MxLightSample {
 // A point on the indexed light; the pdf excludes the selection (1 for a delta light).
 fn mx_sample_light_at(index: u32, origin: vec3f, u: vec2f) -> MxLightSample {
   var result: MxLightSample;
-  let b = index * 7u;
+  let b = index * 8u;
   let posType = analyticLights[b];
   result.radiance = analyticLights[b + 1u].xyz;
   let lightType = u32(posType.w);
@@ -195,15 +206,46 @@ fn mx_sample_light_at(index: u32, origin: vec3f, u: vec2f) -> MxLightSample {
     normal = vec3f(sin(phi) * cos(theta), sin(phi) * sin(theta), cos(phi));
     point = posType.xyz + normal * 0.01;
   } else if (lightType == 4u) {
-    let direction = analyticLights[b + 5u].xyz;
+    let spotDirection = analyticLights[b + 5u].xyz;
     let cosInner = analyticLights[b + 6u].x;
     let cosOuter = analyticLights[b + 6u].y;
-    let theta = 2.0 * ${pi} * u.x;
-    let cosAngle = mix(cosOuter, cosInner, u.y);
-    let sinAngle = sqrt(max(0.0, 1.0 - cosAngle * cosAngle));
-    var localDir = vec3f(sinAngle * cos(theta), sinAngle * sin(theta), cosAngle);
-    normal = localDir;
-    point = posType.xyz + localDir * 0.01;
+    let toSurface = normalize(origin - posType.xyz);
+    let cosAngle = dot(spotDirection, toSurface);
+    var cone = 0.0;
+    if (cosAngle >= cosInner) {
+      cone = 1.0;
+    } else if (cosAngle > cosOuter) {
+      cone = smoothstep(cosOuter, cosInner, cosAngle);
+    }
+    let referenceUp = select(vec3f(0.0, 1.0, 0.0), vec3f(1.0, 0.0, 0.0), abs(spotDirection.y) > 0.999);
+    let right = normalize(cross(spotDirection, referenceUp));
+    let up = normalize(cross(right, spotDirection));
+    let slope = vec2f(dot(toSurface, right), dot(toSurface, up)) / max(cosAngle, 1e-4);
+    let gobo = analyticLights[b + 7u];
+    var mask = 1.0;
+    if (gobo.x > 0.5) {
+      let cosine = cos(gobo.z);
+      let sine = sin(gobo.z);
+      let p = vec2f(cosine * slope.x - sine * slope.y, sine * slope.x + cosine * slope.y) * gobo.y;
+      let edge = gobo.w;
+      if (u32(gobo.x) == 1u) {
+        mask = 1.0 - smoothstep(0.8 - edge, 0.8 + edge, length(p));
+      } else if (u32(gobo.x) == 2u) {
+        let band = abs(fract(p.x + 0.5) - 0.5);
+        mask = 1.0 - smoothstep(0.25 - edge, 0.25 + edge, band);
+      } else {
+        let bx = abs(fract(p.x + 0.5) - 0.5);
+        let by = abs(fract(p.y + 0.5) - 0.5);
+        mask = (1.0 - smoothstep(0.25 - edge, 0.25 + edge, bx))
+          * (1.0 - smoothstep(0.25 - edge, 0.25 + edge, by));
+      }
+    }
+    result.radiance *= cone * mask;
+    result.direction = normalize(posType.xyz - origin);
+    result.distance = length(posType.xyz - origin);
+    result.pdf = 1.0;
+    result.delta = true;
+    return result;
   }
   
   result.distance = length(point - origin);
@@ -215,7 +257,7 @@ fn mx_intersect_lights(origin: vec3f, direction: vec3f) -> MxLightHit {
   var result: MxLightHit;
   result.distance = 1e30;
   for (var index = 0u; index < mx_light_count(); index++) {
-    let b = index * 7u;
+    let b = index * 8u;
     let posType = analyticLights[b];
     let lightType = u32(posType.w);
     

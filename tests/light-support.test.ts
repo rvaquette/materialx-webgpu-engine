@@ -140,8 +140,8 @@ describe('MaterialX Light Support', () => {
     
     // Check each light's type
     expect(data[3]).toBe(3);  // First light: point
-    expect(data[31]).toBe(4); // Second light: spot (at offset 28 + 3)
-    expect(data[59]).toBe(2); // Third light: distant (at offset 56 + 3)
+    expect(data[PT_LIGHT_FLOATS + 3]).toBe(4); // Second light: spot
+    expect(data[2 * PT_LIGHT_FLOATS + 3]).toBe(2); // Third light: distant
   });
 
   it('should throw error for invalid point light decay rate', () => {

@@ -6,6 +6,7 @@
 // scene is static, so no time sampling is performed.
 
 import type { DiagnosticSink } from '../core/diagnostics.ts';
+import type { LightFilterSettings } from '../materialx/engine-shaders.ts';
 import type { SceneAsset, ScenePrim } from '../scene/types.ts';
 import { computeWorldTransforms, IDENTITY4, type Mat4 } from '../scene/transforms.ts';
 
@@ -44,6 +45,8 @@ export interface SceneLight {
   innerAngle?: number;
   /** Outer cone angle in degrees for spot lights. */
   outerAngle?: number;
+  /** Procedural gobo, evaluated by the MaterialX path tracer for spot lights. */
+  filter?: LightFilterSettings;
   /** World transform (column-major). */
   transform: Mat4;
 }

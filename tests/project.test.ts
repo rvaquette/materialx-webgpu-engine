@@ -50,6 +50,16 @@ describe('single-file project', () => {
     expect(() => encodeProject(value)).toThrow('dépendances MaterialX');
   });
 
+  it('round-trips lens settings and rejects invalid or unsupported project cameras', () => {
+    const value = project();
+    value.shaders.image = { exposure: 0, contrast: 1, saturation: 1, vignette: 0,
+      projection: 'fisheye', apertureRadius: 0.1, focusDistance: 4, bokehBlades: 6, bokehRotation: 20 };
+    expect(decodeProject(encodeProject(value)).shaders.image).toEqual(value.shaders.image);
+    expect(() => encodeProject({ ...value, settings: { ...value.settings, backend: 'disney' } })).toThrow('lentille incompatible');
+    value.shaders.image.focusDistance = 0;
+    expect(() => encodeProject(value)).toThrow('lentille invalide');
+  });
+
   it('rejects unknown versions, malformed data and runtime objects', () => {
     expect(() => decodeProject('{')).toThrow('JSON invalide');
     expect(() => decodeProject(JSON.stringify({ ...project(), version: 2 }))).toThrow('version');
