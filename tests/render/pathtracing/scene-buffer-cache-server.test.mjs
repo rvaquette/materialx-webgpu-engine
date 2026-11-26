@@ -4,7 +4,7 @@ import { once } from 'node:events';
 import { unlink, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { randomBytes } from 'node:crypto';
-import { sceneBufferCacheMiddleware } from '../../../scripts/pathtracer-cache-server.mjs';
+import { sceneBufferCacheMiddleware } from '../../../pathtracer-cache-server.mjs';
 import { decodeSceneBufferCache, encodeSceneBufferCache, equalPreparedGeometry } from '../../../src/render/pathtracing/scene-buffer-cache.ts';
 
 describe('loopback file-cache server persistence', () => {

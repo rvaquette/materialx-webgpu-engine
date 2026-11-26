@@ -2140,7 +2140,9 @@ function formatScriptValue(value: ScriptValue): string {
 }
 
 /** Generate the script that rebuilds `graph`, ordering nodes after their sources. */
-export function toScript(graph: ScriptGraph, library: ScriptLibrary): string {
+export function toScriptProgram(
+  graph: ScriptGraph, library: ScriptLibrary,
+): { code: string; names: ReadonlyMap<ScriptNode, string> } {
   const names = new Map<ScriptNode, string>();
   const used = new Set<string>();
   for (const node of graph.nodes) {
@@ -2163,7 +2165,7 @@ export function toScript(graph: ScriptGraph, library: ScriptLibrary): string {
     ordered.push(node);
   };
   graph.nodes.forEach(visit);
-  return ordered.map((node) => {
+  const code = ordered.map((node) => {
     const name = names.get(node)!;
     const variant = library.variantArgument(node.def);
     const lines = [`${name} = new ${node.def.className}(${variant === undefined ? '' : JSON.stringify(variant)});`];
@@ -2173,4 +2175,9 @@ export function toScript(graph: ScriptGraph, library: ScriptLibrary): string {
     }
     return lines.join('\n');
   }).join('\n\n') + '\n';
+  return { code, names };
+}
+
+export function toScript(graph: ScriptGraph, library: ScriptLibrary): string {
+  return toScriptProgram(graph, library).code;
 }

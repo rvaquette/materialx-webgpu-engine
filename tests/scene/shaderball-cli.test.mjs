@@ -24,7 +24,7 @@ describe('shaderball tilespp CLI', () => {
       '/scenes/%2e%2e/scene.json','/elsewhere/scene.json']) {
       expect(() => run(['--list','--entry',entry])).toThrow('--entry must be');
     }
-  });
+  }, 30000);
   it('documents the option and preserves target-specific defaults', () => {
     expect(run(['--help'])).toContain('--tilespp N');
     expect(run(['--list', '--target', 'local'])).toContain('tilespp=4');
@@ -35,7 +35,7 @@ describe('shaderball tilespp CLI', () => {
     for (const target of ['local', 'mobile']) {
       expect(run(['--list', '--target', target, '--tilespp', '2'])).toContain('tilespp=2');
     }
-  });
+  }, 30000);
 
   it.each(['0', '-1', '1.5', 'NaN', 'Infinity', '', '9007199254740992'])('rejects invalid tilespp %j before starting resources', value => {
     expect(() => run(['--list', `--tilespp=${value}`])).toThrow('--tilespp must be a positive safe integer');

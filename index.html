@@ -44,10 +44,19 @@
       #material-graph header, #material-library header { display: flex; justify-content: space-between; align-items: start; gap: 12px; }
       #material-graph h2, #material-library h2 { margin: 0; font-size: 1.2rem; }
       #material-library-target { overflow-wrap: anywhere; }
+      #material-library-target { padding: 8px; border: 1px dashed #596278; border-radius: 6px; }
+      #material-library-target.material-library-drop-target { border-color: #4fc1ff; background: #04395e66; }
       #material-library-filters { display: flex; flex-wrap: wrap; gap: 8px 16px; }
+      #material-library-filters select { max-width: 100%; color: inherit; background: #171721; border: 1px solid #596278; border-radius: 6px; padding: 4px; }
+      #material-library-source-status:not(:empty) { color: #b6d7f0; }
       #material-library-results { max-height: 53dvh; overflow: auto; margin: 0; padding: 0; list-style: none; }
       #material-library-results li { display: flex; align-items: center; gap: 8px; padding: 6px; border-bottom: 1px solid #444d61; }
+      #material-library-more[hidden] { display: none; }
       #material-library-results li span { flex: 1; min-width: 0; overflow-wrap: anywhere; font-size: 0.9em; }
+      .material-library-preview { position: relative; flex: none; width: 96px; min-height: 60px; display: grid; align-content: center; justify-items: center; color: #a8a8b8; font-size: 0.7em; }
+      .material-library-preview canvas, .material-library-preview img { display: block; width: 96px; height: 60px; object-fit: cover; background: #101018; }
+      .material-library-preview small { position: absolute; inset: auto 2px 2px; padding: 2px; background: #101018d9; overflow-wrap: anywhere; }
+      #material-library-external { font-size: 0.9em; }
       #material-library-storage:not(:empty) { color: #ffce91; }
       #material-graph-diagram { height: 60dvh; min-height: 260px; margin-top: 12px; display: flex; flex-direction: column; background: #101018; border: 1px solid #444d61; border-radius: 8px; overflow: hidden; }
       .material-graph-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 6px; }
@@ -57,9 +66,12 @@
       .material-graph-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
       .material-graph-toolbar button[hidden] { display: none; }
       .material-graph-canvas { flex: 1; min-height: 0; }
-      #material-graph-details { height: 14dvh; min-height: 4.5em; overflow: auto; overflow-wrap: anywhere; }
+      #material-graph-details { height: 22dvh; min-height: 10em; overflow: auto; overflow-wrap: anywhere; }
       #material-graph-details h3 { margin: 0.5em 0 0.2em; font-size: 1em; }
       #material-graph-details p { margin: 0.35em 0; }
+      .material-node-preview { display: grid; grid-template-columns: minmax(0, 1fr) min(160px, 30vw); align-items: start; gap: 4px 12px; }
+      .material-node-preview h3, .material-node-preview select, .material-node-preview p { grid-column: 1; }
+      .material-node-preview canvas { grid-column: 2; grid-row: 1 / span 3; width: 100%; height: auto; background: #101018; }
       .material-graph-warning { display: block; color: #ffce91; }
       #material-graph-backend ul { max-height: 18dvh; overflow: auto; overflow-wrap: anywhere; margin-block: 0.4em; }
       .material-preview { display: flex; align-items: start; justify-content: space-between; gap: 12px; margin-block: 0.5em; padding: 8px; border: 1px solid #444d61; }
@@ -130,12 +142,25 @@
           </header>
           <p id="material-library-target"></p>
           <div id="material-library-filters">
+            <label>Source
+              <select id="material-library-source">
+                <option value="local">Bibliothèque MaterialX locale</option>
+                <option value="ambientcg">AmbientCG</option>
+                <option value="physicallybased">Physically Based (CC0)</option>
+                <option value="imported">Matériaux importés</option>
+              </select>
+            </label>
             <label>Rechercher <input id="material-library-search" type="search" autofocus></label>
             <label><input id="material-library-favorites" type="checkbox"> Favoris uniquement</label>
+            <button id="material-library-import" type="button">Importer .mtlx / ZIP</button>
+            <a id="material-library-external" href="https://matlib.gpuopen.com/main/materials/all" target="_blank" rel="noopener noreferrer">GPUOpen : télécharger une archive MaterialX</a>
           </div>
           <p id="material-library-count" role="status"></p>
+          <p id="material-library-source-status" role="status"></p>
           <p id="material-library-storage" role="status"></p>
           <ul id="material-library-results" aria-label="Matériaux"></ul>
+          <button id="material-library-more" type="button" hidden>Afficher plus</button>
+          <input id="material-library-files" type="file" multiple accept=".mtlx,.zip,.png,.jpg,.jpeg,.tif,.tiff,.exr,.webp" hidden />
         </dialog>
       </div>
       <dialog id="material-graph" aria-labelledby="material-graph-title">

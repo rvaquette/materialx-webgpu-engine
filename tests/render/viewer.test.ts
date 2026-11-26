@@ -442,8 +442,9 @@ describe('interactive viewer resource lifecycle', () => {
     viewer.setBackend('raster');
     tick(1);
     await vi.waitFor(() => expect(device.createRenderPipeline).toHaveBeenCalled());
-    await expect(viewer.setObjectMaterial('/World/Ball', 'new.mtlx')).rejects.toThrow('no precompiled package');
-    vi.mocked(buildCachedPathTraceScene).mockImplementation(actual.buildCachedPathTraceScene);
+    await viewer.setObjectMaterial('/World/Ball');
+    expect(loadUsdScene).not.toHaveBeenCalled();
+    expect(buildCachedPathTraceScene).not.toHaveBeenCalled();
     await viewer.setObjectParameters('/World/Ball', new Map([['surface:specular_roughness', [0.7]]]));
     expect(viewer.objectParameters('/World/Ball').find(parameter => parameter.id === 'surface:specular_roughness')?.value).toEqual([0.7]);
     expect(viewer.isCompiledScene).toBe(true);

@@ -112,9 +112,11 @@ describe('scene selector catalog', () => {
   it('combines normalized name and folder search with the favorites filter', () => {
     const gold = { label: 'Or poli', group: 'Métaux', path: './scenes/mtlx-library/Métaux/Tests/Or_poli.mtlx', compiled: './or.json' };
     const silver = { label: 'Argent poli', group: 'Métaux', path: './scenes/mtlx-library/Métaux/Presets/Argent_poli.mtlx', compiled: './argent.json' };
-    const catalog = [gold, silver];
-    expect(filterMaterials(catalog, '  POLI metaux  ')).toEqual(catalog);
+    const external = { label: 'Fabric 087', group: 'Fabric', source: 'AmbientCG', path: 'ambientcg:Fabric087' };
+    const catalog = [gold, silver, external];
+    expect(filterMaterials(catalog, '  POLI metaux  ')).toEqual([gold, silver]);
     expect(filterMaterials(catalog, 'tests poli')).toEqual([gold]);
+    expect(filterMaterials(catalog, 'ambient fabric')).toEqual([external]);
     expect(filterMaterials(catalog, 'poli', new Set([silver.path, './obsolete.mtlx']))).toEqual([silver]);
     expect(filterMaterials(catalog, 'tests poli', new Set([silver.path]))).toEqual([]);
   });

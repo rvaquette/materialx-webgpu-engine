@@ -6,7 +6,12 @@ export interface MaterialCatalogEntry {
   group: string;
   label: string;
   /** Precompiled package manifest applied at runtime. */
-  compiled: string;
+  compiled?: string;
+  source?: string;
+  preview?: string;
+  provider?: 'ambientcg' | 'physicallybased';
+  remoteId?: string;
+  downloadUrl?: string;
 }
 
 /** MaterialX library documents that have a precompiled package (`npm run compile:scenes`). */

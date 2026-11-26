@@ -12,6 +12,7 @@ import { downloadDisplayedAovPng, downloadPathTraceAovPfm, encodePathTraceAovPfm
 import { attachScriptEditor, type ScriptEditorAttachment, type ScriptRunControl } from './materialx/script-editor.ts';
 import { NODE_REFERENCE_EVENT, type NodeReferenceRequest } from './materialx/node-reference.ts';
 import { NodeReferencePanel } from './materialx/node-reference-panel.ts';
+import { nodePreviewScript } from './materialx/node-preview.ts';
 import { activityButton } from './ui/layout.ts';
 import { Workbench } from './ui/workbench.ts';
 import { loadScriptLibrary, runScript, ScriptError, toXml, type ScriptHost, type ScriptStats } from './materialx/script-api.ts';
@@ -221,9 +222,11 @@ async function main(): Promise<void> {
   // Replaced after a device loss; script operations use the current one.
   let currentGpu = gpu;
   (globalThis as { __mxGpu?: unknown }).__mxGpu = gpu;
-  nodeReference.setPreviewRenderer(async (code, signal) => {
+  async function captureScriptPreview(
+    code: string, objectPath: string, signal: AbortSignal, material?: { path: string; compiled?: string }, size = 256,
+  ) {
     const previewViewer = new InteractiveViewer({
-      device: currentGpu.device, width: 256, height: 256, outputFormat: 'rgba8unorm',
+      device: currentGpu.device, width: size, height: size, outputFormat: 'rgba8unorm',
     });
     const entry = new URL('./__node_reference__/scene.usda', document.baseURI).href;
     let stageLoad: Promise<void> | undefined;
@@ -243,7 +246,14 @@ async function main(): Promise<void> {
     };
     try {
       await runScript(code, await scriptLibrary, { host: previewHost, signal });
-      return await previewViewer.captureObjectMaterialPreview('/World/previewSphere', {
+      if (stageLoad) await stageLoad;
+      signal.throwIfAborted();
+      if (material) {
+        const path = new URL(material.path, document.baseURI).href;
+        const compiled = material.compiled ? new URL(material.compiled, document.baseURI).href : undefined;
+        await previewViewer.setObjectMaterial(objectPath, path, compiled);
+      }
+      return await previewViewer.captureObjectMaterialPreview(objectPath, {
         target: 'object', backend: 'raster',
       }, signal);
     } catch (error) {
@@ -260,7 +270,8 @@ async function main(): Promise<void> {
         console.warn('Node reference preview stage failed after cancellation.', stageFailure);
       }
     }
-  });
+  }
+  nodeReference.setPreviewRenderer((code, signal) => captureScriptPreview(code, '/World/previewSphere', signal));
   let deviceLost = false;
   const journal = new DiagnosticJournal();
   const reportGpuError = (event: Event): void => {
@@ -418,6 +429,11 @@ async function main(): Promise<void> {
         capturePreview(options, signal) {
           ensureEditable();
           return target.captureObjectMaterialPreview(path, options, signal);
+        },
+        async captureNodePreview(snapshot, nodeId, output, signal) {
+          ensureEditable();
+          const code = nodePreviewScript(snapshot, nodeId, output, await scriptLibrary);
+          return captureScriptPreview(code, '/World/mxPreviewSphere', signal, undefined, 128);
         },
         async captureVariants(options, signal) {
           ensureEditable();
@@ -1010,7 +1026,12 @@ async function main(): Promise<void> {
     }
   };
   if (libraryButton && libraryDialog) {
-    const openLibrary = bindMaterialLibrary(libraryDialog, MATERIAL_CATALOG, actions.material);
+    const openLibrary = bindMaterialLibrary(libraryDialog, MATERIAL_CATALOG, actions.material, {
+      capturePreview: (entry, signal) => captureScriptPreview(
+        'previewSphere = new Sphere();\npreviewSurface = new StandardSurface();\npreviewSphere.material = previewSurface;',
+        '/World/previewSphere', signal, { path: entry.path, ...(entry.compiled ? { compiled: entry.compiled } : {}) }, 128,
+      ),
+    });
     libraryButton.onclick = () => {
       if (!operationBusy && !deviceLost && state.objectPath) openLibrary(state.objectPath, state.materialPath);
     };

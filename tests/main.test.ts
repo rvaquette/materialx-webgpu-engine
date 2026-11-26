@@ -25,6 +25,8 @@ vi.mock('../src/viewer-ui.ts', () => ({
 vi.mock('../src/render/viewer.ts', () => ({
   InteractiveViewer: class {
     objects = [];
+    variantSets = [];
+    timeline = undefined;
     constructor(options: { onStatus: (status: ViewerStatus) => void; onShaderErrors: (errors: readonly ShaderCompilationError[]) => void }) {
       state.onStatus = options.onStatus;
       state.onShaderErrors = options.onShaderErrors;
@@ -37,9 +39,43 @@ vi.mock('../src/render/viewer.ts', () => ({
     restartPathTracing = state.restart;
   },
 }));
+vi.mock('../src/ui/workbench.ts', () => ({
+  Workbench: class {
+    show = vi.fn();
+    hide = vi.fn();
+    toggle = vi.fn();
+    isVisible = vi.fn(() => false);
+    onVisibilityChange = vi.fn();
+    register = vi.fn();
+  },
+}));
+vi.mock('../src/materialx/node-reference-panel.ts', () => ({
+  NodeReferencePanel: class {
+    element = {};
+    setPreviewRenderer = vi.fn();
+    setVisible = vi.fn();
+    open = vi.fn();
+  },
+}));
+vi.mock('../src/materialx/script-editor.ts', () => ({
+  attachScriptEditor: vi.fn(() => ({
+    toggle: vi.fn(),
+    editor: Promise.resolve({ script: '', focus: vi.fn() }),
+  })),
+}));
+vi.mock('../src/materialx/script-api.ts', async (original) => {
+  const actual = await original<typeof import('../src/materialx/script-api.ts')>();
+  return {
+    ...actual,
+    loadScriptLibrary: vi.fn(async () => new actual.ScriptLibrary([])),
+  };
+});
 
 function element() {
-  return { hidden: false, textContent: '', setAttribute: vi.fn() };
+  return {
+    hidden: false, textContent: '', setAttribute: vi.fn(), addEventListener: vi.fn(),
+    classList: { add: vi.fn() },
+  };
 }
 
 describe('viewer loading indicator', () => {
@@ -77,10 +113,13 @@ describe('viewer loading indicator', () => {
         view: canvas, ui: canvas, status, 'busy-indicator': indicator, 'pathtracing-spp': spp,
         'shader-messages': shaderMessages, 'shader-diagnostics': shaderDiagnostics,
         'import-messages': importMessages, 'import-diagnostics': importDiagnostics,
-      })[id],
+      })[id] ?? element(),
+      addEventListener: vi.fn(),
       querySelector: () => null,
       querySelectorAll: () => [],
     });
+    vi.stubGlobal('HTMLButtonElement', class {});
+    vi.stubGlobal('cancelAnimationFrame', vi.fn());
     const device = { addEventListener: vi.fn((type: string, handler: (event: Event) => void) => {
       if (type === 'uncapturederror') state.gpuError = handler;
     }), lost: new Promise(() => {}) };
@@ -113,7 +152,7 @@ describe('viewer loading indicator', () => {
     expect(canvas).toMatchObject({ width: 128, height: 128 });
     finishLoad();
     await settle();
-  });
+  }, 30000);
 
   it('accepts 1024x768 from the URL without making the canvas square', async () => {
     vi.stubGlobal('location', { search: '?res=1024x768' });

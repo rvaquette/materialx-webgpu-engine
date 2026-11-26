@@ -1642,6 +1642,49 @@ il apparaît automatiquement dans le menu Scripts.
 |---|---|
 | ![Matériau procédural de démonstration en raster](images/p10/p10-node-reference-raster.png) | ![Matériau procédural de démonstration en path tracing](images/p10/p10-node-reference-pathtracing.png) |
 
+## Priorité 11 : aperçus par nœud et bibliothèque de matériaux
+
+Chaque graphe de matériau lance en arrière-plan des captures raster basse
+résolution, sérialisées dans un viewer isolé : chaque sortie est reconstruite
+avec ses dépendances et connectée à une surface de présentation. Les vignettes
+apparaissent dans les nœuds et le détail du nœud sélectionné offre un choix de
+sortie pour les NodeDefs multi-sorties. Une édition invalide les captures et
+relance la génération ; les types qu'il est impossible de raccorder à une
+surface affichent une erreur explicite. La scène éditée n'est jamais modifiée
+pour calculer un aperçu.
+
+La bibliothèque conserve le catalogue MaterialX compilé local et fournit une
+recherche, des favoris, des vignettes raster calculées à la demande dans le
+viewer isolé et un glisser-déposer sur la zone de l'objet sélectionné. Les
+sources distantes disponibles sont :
+
+- **AmbientCG** : catalogue de l'API v3, téléchargement des archives 1K JPG et
+  conversion en MaterialX avec les cartes couleur, rugosité et normale
+  disponibles. L'API peut bloquer les requêtes cross-origin par CORS ; dans ce
+  cas, la bibliothèque propose le site du fournisseur et l'import manuel de
+  l'archive ZIP. La carte de déplacement et l'opacité ne sont pas importées.
+- **Physically Based** : données JSON CC0 converties en `standard_surface`
+  (couleur, métallicité, rugosité, couleur spéculaire et IOR).
+- **GPUOpen MaterialX Library** : importer l'archive ZIP téléchargée sur le
+  site, ou un `.mtlx` accompagné de ses textures sélectionnées. Les fichiers
+  et textures sont résolus depuis le paquet et conservés dans le navigateur.
+
+Les téléchargements distants requièrent un accès réseau et les règles CORS de
+leur source ; les erreurs de catalogue, de téléchargement, de paquet et de
+rendu sont affichées dans la bibliothèque. Les archives ZIP sont limitées à
+64 Mio compressés et 128 Mio décompressés ; les formats ZIP64 et multi-disques
+ne sont pas pris en charge. Les imports restent disponibles durant la session
+du navigateur ; après rechargement, il faut les importer à nouveau. Les
+favoris, eux, sont conservés localement.
+
+Le script d'illustration est
+[p11-material-previews.js](../examples/scripts/p11-material-previews.js) ;
+il apparaît automatiquement dans le menu Scripts.
+
+| Matériau en raster | Matériau en path tracing |
+|---|---|
+| ![Matériau procédural de démonstration en raster](images/p11/p11-material-previews-raster.png) | ![Matériau procédural de démonstration en path tracing](images/p11/p11-material-previews-pathtracing.png) |
+
 ## Priorité 21 : étude du chargement des bibliothèques MaterialX sans WASM
 
 L'étude et le prototype d'archive sont documentés dans

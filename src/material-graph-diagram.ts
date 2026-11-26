@@ -56,6 +56,7 @@ interface GraphParameterEditing {
     options: Parameters<InteractiveViewer['captureObjectMaterialVariants']>[1], signal: AbortSignal,
   ): ReturnType<InteractiveViewer['captureObjectMaterialVariants']>;
   capturePreview?(options: MaterialPreviewOptions, signal: AbortSignal): Promise<RgbaCapture>;
+  captureNodePreview?(graph: ResolvedGraph, nodeId: string, output: string, signal: AbortSignal): Promise<RgbaCapture>;
   textureSource?: TextureSourceResolver;
 }
 
@@ -498,6 +499,10 @@ export function showMaterialGraph(
 
   let currentGraph = graph;
   const unsupportedNodes = new Set(unsupportedSurfaceGraphNodes(graph));
+  const nodePreviews = new Map<string, RgbaCapture>();
+  const nodePreviewErrors = new Map<string, string>();
+  let selectedNodePreview: { id: string; output: string; canvas: HTMLCanvasElement; status: HTMLElement } | undefined;
+  let nodePreviewController: AbortController | undefined;
   let exporting = false;
   function setExporting(value: boolean): void {
     exporting = value;
@@ -606,12 +611,15 @@ export function showMaterialGraph(
     exportButton.disabled = true;
     exportStatus.textContent = 'Modification du graphe…';
     preview?.pause();
+    nodePreviewController?.abort();
     try {
       const updated = await edit();
       exportStatus.textContent = '';
       applying = false;
       if (!dialog.open || !surface.isConnected) return;
       if (!updated) {
+        nodePreviews.clear();
+        nodePreviewErrors.clear();
         refreshBackendDiagnostics();
         preview?.refresh();
         showGraphView(false);
@@ -690,7 +698,9 @@ export function showMaterialGraph(
       models.push({
         id: node.id,
         title: terminalsOfNode.length ? `${name} → ${terminalsOfNode.join(', ')}` : `${name} : ${node.category}`,
-        inputs, outputs, editable: !!editing, warning: unsupportedNodes.has(node.id),
+        inputs, outputs,         editable: !!editing, warning: unsupportedNodes.has(node.id),
+        previewArea: !!editing?.captureNodePreview,
+        ...(nodePreviews.has(`${node.id}\u0000${outputs[0]!.name}`) ? { preview: nodePreviews.get(`${node.id}\u0000${outputs[0]!.name}`)! } : {}),
       });
     }
     return { models, links };
@@ -797,7 +807,10 @@ export function showMaterialGraph(
     if (kept?.material === material) graphView.viewport = kept.viewport;
     graphView.select(nodeChooser.value, kept?.material !== material);
   });
-  dialog.addEventListener('close', rememberViewport, { once: true });
+  dialog.addEventListener('close', () => {
+    nodePreviewController?.abort();
+    rememberViewport();
+  }, { once: true });
 
   // A/B variants: saved, shown and exported from the bar above the graph.
   const variants = editing?.variants();
@@ -852,6 +865,56 @@ export function showMaterialGraph(
     if (a && b) variantComparisonTable = variantComparison([a, b]);
   }
 
+  function drawNodePreview(canvas: HTMLCanvasElement, image: RgbaCapture): void {
+    canvas.width = image.width;
+    canvas.height = image.height;
+    canvas.getContext('2d')?.putImageData(
+      new ImageData(new Uint8ClampedArray(image.rgba), image.width, image.height), 0, 0,
+    );
+  }
+
+  function startNodePreviewBatch(firstId: string, firstOutput: string): void {
+    nodePreviewController?.abort();
+    const capture = editing?.captureNodePreview;
+    if (!capture) return;
+    const snapshot = currentGraph;
+    const queue: { id: string; output: string }[] = [{ id: firstId, output: firstOutput }];
+    for (const [id, node] of nodes) {
+      const outputs = node.nodeDef?.outputs?.length ? node.nodeDef.outputs : [{ name: 'out', type: node.type }];
+      for (const output of outputs) {
+        if (id !== firstId || output.name !== firstOutput) queue.push({ id, output: output.name });
+      }
+    }
+    const controller = nodePreviewController = new AbortController();
+    void (async () => {
+      for (const task of queue) {
+        if (controller.signal.aborted || currentGraph !== snapshot) return;
+        const key = `${task.id}\u0000${task.output}`;
+        if (nodePreviews.has(key) || nodePreviewErrors.has(key)) continue;
+        if (selectedNodePreview?.id === task.id && selectedNodePreview.output === task.output) {
+          selectedNodePreview.status.textContent = 'Calcul de l’aperçu raster…';
+        }
+        try {
+          const image = await capture(snapshot, task.id, task.output, controller.signal);
+          if (controller.signal.aborted || currentGraph !== snapshot) return;
+          nodePreviews.set(key, image);
+          if (selectedNodePreview?.id === task.id && selectedNodePreview.output === task.output) {
+            drawNodePreview(selectedNodePreview.canvas, image);
+            selectedNodePreview.status.textContent = '';
+          }
+          showGraphView(false);
+        } catch (error) {
+          if (controller.signal.aborted) return;
+          const message = error instanceof Error ? error.message : String(error);
+          nodePreviewErrors.set(key, message);
+          if (selectedNodePreview?.id === task.id && selectedNodePreview.output === task.output) {
+            selectedNodePreview.status.textContent = `Aperçu impossible : ${message}`;
+          }
+        }
+      }
+    })();
+  }
+
   /** Information on the selected node; its inputs are edited in the graph itself. */
   function select(id: string, message = ''): void {
     if (applying) return;
@@ -865,6 +928,40 @@ export function showMaterialGraph(
     status.role = 'status';
     status.textContent = message;
     details.replaceChildren(heading, status);
+    const outputs = node.nodeDef?.outputs?.length ? node.nodeDef.outputs : [{ name: 'out', type: node.type }];
+    const previewSection = document.createElement('section');
+    previewSection.className = 'material-node-preview';
+    const previewHeading = document.createElement('h3');
+    previewHeading.textContent = 'Aperçu de la sortie';
+    const outputChooser = document.createElement('select');
+    outputChooser.setAttribute('aria-label', 'Sortie à prévisualiser');
+    for (const output of outputs) outputChooser.add(new Option(`${output.name} (${output.type})`, output.name));
+    const canvas = document.createElement('canvas');
+    canvas.width = 160;
+    canvas.height = 120;
+    canvas.setAttribute('aria-label', 'Aperçu raster de la sortie MaterialX');
+    const previewStatus = document.createElement('p');
+    previewStatus.role = 'status';
+    previewSection.append(previewHeading, ...(outputs.length > 1 ? [outputChooser] : []), canvas, previewStatus);
+    details.append(previewSection);
+    const showOutputPreview = (outputName: string): void => {
+      const key = `${id}\u0000${outputName}`;
+      selectedNodePreview = { id, output: outputName, canvas, status: previewStatus };
+      const cached = nodePreviews.get(key);
+      if (cached) {
+        drawNodePreview(canvas, cached);
+        previewStatus.textContent = '';
+      } else {
+        canvas.getContext('2d')?.clearRect(0, 0, canvas.width, canvas.height);
+        previewStatus.textContent = nodePreviewErrors.has(key)
+          ? `Aperçu impossible : ${nodePreviewErrors.get(key)}`
+          : editing?.captureNodePreview ? 'Calcul de l’aperçu raster…' : 'Aperçu de sortie indisponible.';
+      }
+      startNodePreviewBatch(id, outputName);
+    };
+    outputChooser.value = outputs[0]!.name;
+    outputChooser.onchange = () => showOutputPreview(outputChooser.value);
+    showOutputPreview(outputChooser.value);
     if (unsupportedNodes.has(id)) {
       const warning = document.createElement('p');
       warning.className = 'material-graph-warning';

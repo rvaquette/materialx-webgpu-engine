@@ -1,14 +1,37 @@
 import { describe, expect, it } from 'vitest';
-import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { execFileSync } from 'node:child_process';
 import { materialBlocks, standardMaterial, repairMaterials } from '../../scripts/repair-pathtracer-materials.mjs';
 
 const sourceRoot = 'D:\\WebGL2\\GLSL-PathTracer-JS\\scenes\\pathtracer';
 // Hand-tuned in this repository (measured gold) after diverging from the external source scene.
 const handEdited = new Set(['test_material_disney_gold.usda']);
+const cleanExternalSources = existsSync(sourceRoot)
+  && execFileSync('git', ['-C', sourceRoot, 'status', '--porcelain', '--', '.'], { encoding: 'utf8' }).trim() === '';
 
 describe('Pathtracer standard MaterialX conversion', () => {
-  it.skipIf(!existsSync(sourceRoot))('regenerates compact materials and restored bindings without further changes', () => {
+  it('repairs into an isolated output directory and is idempotent', () => {
+    const root = mkdtempSync(join(tmpdir(), 'materialx-pathtracer-repair-'));
+    const sources = join(root, 'sources');
+    const output = join(root, 'output');
+    mkdirSync(sources);
+    mkdirSync(output);
+    writeFileSync(join(sources, 'sample.scene'), 'material Test {\ncolor 1 0 0\n}\n');
+    writeFileSync(join(output, 'sample.usda'), '#usda 1.0\n');
+    writeFileSync(join(output, 'sample.mtlx'), '<?xml version="1.0"?>\n<materialx version="1.39"></materialx>\n');
+    try {
+      const first = repairMaterials(sources, output, true);
+      expect(first).toHaveLength(1);
+      expect(first[0]).toMatchObject({ scene: 'sample.usda', materials: 1, changed: true, stageChanged: false });
+      expect(repairMaterials(sources, output, true)[0]).toMatchObject({ changed: false, stageChanged: false });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it.skipIf(!cleanExternalSources)('keeps generated materials synchronized with clean external sources', () => {
     const reports = repairMaterials(sourceRoot);
     expect(reports).toHaveLength(45);
     expect(reports.filter(report => !handEdited.has(report.scene) && (report.changed || report.stageChanged))).toEqual([]);

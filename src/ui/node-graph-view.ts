@@ -35,6 +35,8 @@ export interface GraphNode {
   editable: boolean;
   /** Highlight, e.g. a node the renderer does not support. */
   warning?: boolean;
+  previewArea?: boolean;
+  preview?: { width: number; height: number; rgba: Uint8Array };
 }
 
 export interface GraphLink {
@@ -112,6 +114,15 @@ function keepContextMenusVisible(): void {
 }
 
 const NODE_COLORS = { color: '#2c3a52', bgcolor: '#1f2633', warning: '#5a3a1f' };
+
+export function fitGraphPreviewImage(
+  imageWidth: number, imageHeight: number, areaWidth: number, areaHeight: number,
+): { x: number; y: number; width: number; height: number } {
+  const scale = Math.min(areaWidth / imageWidth, areaHeight / imageHeight);
+  const width = imageWidth * scale;
+  const height = imageHeight * scale;
+  return { x: (areaWidth - width) / 2, y: (areaHeight - height) / 2, width, height };
+}
 
 /** Text form of a vector for text widgets: "0.8, 0.2, 0.1". */
 export function formatGraphVector(value: readonly number[]): string {
@@ -503,6 +514,31 @@ export class NodeGraphView {
     };
     const size = node.computeSize();
     node.size = [Math.max(size[0], 180), size[1]];
+    if (model.previewArea) {
+      node.size[1] += 84;
+      const image = model.preview && model.preview.rgba.length === model.preview.width * model.preview.height * 4
+        ? document.createElement('canvas') : undefined;
+      if (image && model.preview) {
+        image.width = model.preview.width;
+        image.height = model.preview.height;
+        image.getContext('2d')?.putImageData(
+          new ImageData(new Uint8ClampedArray(model.preview.rgba), image.width, image.height), 0, 0,
+        );
+      }
+      node.onDrawForeground = (context: CanvasRenderingContext2D) => {
+        const x = 8;
+        const y = node.size[1] - 78;
+        const width = node.size[0] - 16;
+        context.save();
+        context.fillStyle = '#101018';
+        context.fillRect(x, y, width, 68);
+        if (image) {
+          const fitted = fitGraphPreviewImage(image.width, image.height, width, 68);
+          context.drawImage(image, x + fitted.x, y + fitted.y, fitted.width, fitted.height);
+        }
+        context.restore();
+      };
+    }
     return node;
   }
 

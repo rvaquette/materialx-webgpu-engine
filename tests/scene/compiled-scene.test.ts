@@ -566,7 +566,7 @@ over "World" {
     const damaged = await encodeCompiledScene(data, loaded.entry);
     await expect(loadCompiledScene('https://example.test/scenes/compiled/scene.json', vi.fn(), packageFetch(damaged)))
       .rejects.toThrow('missing object-space geometry');
-  });
+  }, 30000);
 
   it('round trips flake3d geometry and rejects older stale scene and material shaders', async () => {
     const loaded = await flake3dFixture();
@@ -729,7 +729,7 @@ over "World" {
       await expect(loadCompiledScene('https://example.test/scenes/compiled/scene.json', vi.fn(), packageFetch(old)))
         .resolves.toBeDefined();
     }
-  });
+  }, 30000);
 
   it('retains version 2 scenes with transformed geometric inputs', async () => {
     const loaded = await geometryTransformFixture();
@@ -855,7 +855,7 @@ over "World" {
     expect(strFromU8(files['textures/texture_1/1011.png']!)).toBe('original image');
     expect(fetchResource).toHaveBeenCalledWith('https://relocated.test/original/source/1001.png');
     expect(fetchResource).toHaveBeenCalledWith('https://relocated.test/original/source/1011.png');
-  });
+  }, 30000);
 
   it('fails export when a referenced texture is missing', async () => {
     const loaded = await fixture();

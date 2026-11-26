@@ -10,7 +10,8 @@ Les priorités 1 (rendu progressif), 2 (API de bibliothèque), 3 (éditeur de
 matériaux MaterialX), 3bis (scripting), 4 (accélération du path tracer), 5
 (scènes dynamiques), 6 (volumes et effets avancés), 7 (robustesse,
 portabilité et exploitation), 8 (primitives et scènes par script), 9
-(displacement procédural), 10 (documentation intégrée des nœuds), ainsi que
+(displacement procédural), 10 (documentation intégrée des nœuds), 11
+(aperçus par nœud et bibliothèque de matériaux), ainsi que
 l'étude urgente de la priorité 21
 (chargement des bibliothèques MaterialX sans WASM) et la priorité 22 (build
 minimal du Core WASM) sont traitées ; leur historique est dans
@@ -25,18 +26,6 @@ continuer à optimiser le runtime livré au navigateur.
 ## Reliquats des priorités traitées
 
 Aucun.
-
-## Priorité 11 : aperçus par nœud et bibliothèque de matériaux
-
-- Vignette de la sortie intermédiaire de chaque nœud dans le graphe, mise à jour
-  à l'édition.
-- Bibliothèque de matériaux avec vignettes générées hors écran, recherche et
-  glisser-déposer sur un objet.
-- Import depuis des bibliothèques ouvertes (MaterialX Library de GPUOpen,
-  AmbientCG, Physically Based).
-
-**Critère d'aboutissement :** créer un matériau ne demande plus de lancer un
-rendu complet pour voir l'effet d'un nœud.
 
 ## Priorité 12 : environnement et post-traitement
 
