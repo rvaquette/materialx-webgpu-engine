@@ -1,6 +1,7 @@
 import { AssetResolver } from '../assets/resolver.ts';
 import type { TextureExportSource } from '../assets/images.ts';
 import type { ResolvedGraph, ResolvedInput, ResolvedNode } from './graph.ts';
+import type { BakedMap, BakedMaterialMaps } from './bake.ts';
 
 const namePattern = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const framePattern = /\{(?:frame|0([1-9]\d*)frame)\}/g;
@@ -330,6 +331,7 @@ export async function makeMaterialExport(
     if (plan.sequence && source.urls.some(url => ![...normalizeSubstitutions(url).matchAll(framePattern)].length)) {
       throw new Error(`Référence de séquence originale indisponible : ${plan.location}.`);
     }
+
     const frames: (number | undefined)[] = plan.sequence ? [...plan.frames].sort((a, b) => a - b) : [undefined];
     for (const frame of frames) {
       const expand = (value: string, tokens: Readonly<Record<string, string>>) => {
@@ -453,4 +455,115 @@ export async function makeMaterialExport(
   }
   const zip = zipSync(files, { level: 0 });
   return { filename: filename.replace(/\.mtlx$/, '.zip'), blob: new Blob([zip], { type: 'application/zip' }) };
+}
+
+function pngChunk(type: string, data: Uint8Array): Uint8Array {
+  const out = new Uint8Array(data.length + 12);
+  const view = new DataView(out.buffer);
+  view.setUint32(0, data.length);
+  for (let i = 0; i < 4; i++) out[4 + i] = type.charCodeAt(i);
+  out.set(data, 8);
+  let crc = 0xffffffff;
+  for (let i = 4; i < data.length + 8; i++) {
+    crc ^= out[i]!;
+    for (let bit = 0; bit < 8; bit++) crc = (crc >>> 1) ^ (0xedb88320 & -(crc & 1));
+  }
+  view.setUint32(data.length + 8, (crc ^ 0xffffffff) >>> 0);
+  return out;
+}
+
+function concatBytes(chunks: readonly Uint8Array[]): Uint8Array {
+  const output = new Uint8Array(chunks.reduce((sum, chunk) => sum + chunk.length, 0));
+  let offset = 0;
+  for (const chunk of chunks) {
+    output.set(chunk, offset);
+    offset += chunk.length;
+  }
+  return output;
+}
+
+function encodeBakedPng(
+  map: BakedMap,
+  width: number,
+  height: number,
+  zlibSync: typeof import('three/addons/libs/fflate.module.js').zlibSync,
+  options: { srgb?: boolean; heightRange?: readonly [number, number] } = {},
+): Uint8Array {
+  const colorType = map.channels === 1 ? 0 : map.channels === 3 ? 2 : 6;
+  const rowLength = width * map.channels;
+  const raw = new Uint8Array(height * (rowLength + 1));
+  const [heightMin, heightMax] = options.heightRange ?? [0, 0];
+  for (let y = 0; y < height; y++) {
+    const row = y * (rowLength + 1);
+    raw[row] = 0;
+    for (let x = 0; x < rowLength; x++) {
+      const source = y * rowLength + x;
+      let value = map.data[source] ?? 0;
+      if (options.heightRange && heightMax > heightMin) value = (value - heightMin) / (heightMax - heightMin);
+      if (options.srgb && x % 4 < 3) {
+        value = value <= 0.0031308 ? value * 12.92 : 1.055 * Math.pow(Math.max(0, value), 1 / 2.4) - 0.055;
+      }
+      raw[row + 1 + x] = Math.round(Math.min(1, Math.max(0, value)) * 255);
+    }
+  }
+  const header = new Uint8Array(13);
+  const view = new DataView(header.buffer);
+  view.setUint32(0, width);
+  view.setUint32(4, height);
+  header[8] = 8;
+  header[9] = colorType;
+  return concatBytes([
+    new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]),
+    pngChunk('IHDR', header),
+    pngChunk('IDAT', zlibSync(raw)),
+    pngChunk('IEND', new Uint8Array()),
+  ]);
+}
+
+function safeMaterialName(name: string): string {
+  const normalized = name.replace(/[^A-Za-z0-9_]+/g, '_').replace(/^_+|_+$/g, '') || 'BakedMaterial';
+  return /^[A-Za-z_]/.test(normalized) ? normalized : `M_${normalized}`;
+}
+
+/** Creates a portable ZIP containing a baked MaterialX material and its five maps. */
+export async function makeBakedMaterialExport(
+  baked: BakedMaterialMaps,
+  name: string,
+): Promise<{ filename: string; blob: Blob }> {
+  const { zipSync, strToU8, zlibSync } = await import('three/addons/libs/fflate.module.js');
+  const png = (map: BakedMap, options?: { srgb?: boolean; heightRange?: readonly [number, number] }) =>
+    encodeBakedPng(map, baked.width, baked.height, zlibSync, options);
+  const material = safeMaterialName(name);
+  const heightDelta = baked.heightRange[1] - baked.heightRange[0];
+  const xml = [
+    '<?xml version="1.0" encoding="UTF-8"?>',
+    '<materialx version="1.39" colorspace="lin_rec709">',
+    '  <image name="base_color_map" type="color3" colorspace="srgb_texture"><input name="file" type="filename" value="textures/baseColor.png" /></image>',
+    '  <image name="roughness_map" type="float"><input name="file" type="filename" value="textures/roughness.png" /></image>',
+    '  <image name="metalness_map" type="float"><input name="file" type="filename" value="textures/metalness.png" /></image>',
+    '  <image name="normal_image" type="vector3"><input name="file" type="filename" value="textures/normal.png" /></image>',
+    '  <normalmap name="normal_map" type="vector3"><input name="in" type="vector3" nodename="normal_image" /></normalmap>',
+    '  <image name="height_map" type="float"><input name="file" type="filename" value="textures/height.png" /></image>',
+    `  <multiply name="height_scaled" type="float"><input name="in1" type="float" nodename="height_map" /><input name="in2" type="float" value="${heightDelta}" /></multiply>`,
+    `  <add name="height_offset" type="float"><input name="in1" type="float" nodename="height_scaled" /><input name="in2" type="float" value="${baked.heightRange[0]}" /></add>`,
+    '  <standard_surface name="surface" type="surfaceshader">',
+    '    <input name="base_color" type="color3" nodename="base_color_map" />',
+    '    <input name="specular_roughness" type="float" nodename="roughness_map" />',
+    '    <input name="metalness" type="float" nodename="metalness_map" />',
+    '    <input name="normal" type="vector3" nodename="normal_map" />',
+    '  </standard_surface>',
+    '  <displacement name="displacement_shader" type="displacementshader"><input name="displacement" type="float" nodename="height_offset" /></displacement>',
+    `  <surfacematerial name="${material}" type="material"><input name="surfaceshader" type="surfaceshader" nodename="surface" /><input name="displacementshader" type="displacementshader" nodename="displacement_shader" /></surfacematerial>`,
+    '</materialx>',
+    '',
+  ].join('\n');
+  const files = {
+    [`${material}.mtlx`]: strToU8(xml),
+    'textures/baseColor.png': png(baked.baseColor, { srgb: true }),
+    'textures/roughness.png': png(baked.roughness),
+    'textures/metalness.png': png(baked.metalness),
+    'textures/normal.png': png(baked.normal),
+    'textures/height.png': png(baked.heightMap, { heightRange: baked.heightRange }),
+  };
+  return { filename: `${material}.baked.zip`, blob: new Blob([zipSync(files, { level: 6 })], { type: 'application/zip' }) };
 }

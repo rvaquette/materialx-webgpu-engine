@@ -11,7 +11,8 @@ matériaux MaterialX), 3bis (scripting), 4 (accélération du path tracer), 5
 (scènes dynamiques), 6 (volumes et effets avancés), 7 (robustesse,
 portabilité et exploitation), 8 (primitives et scènes par script), 9
 (displacement procédural), 10 (documentation intégrée des nœuds), 11
-(aperçus par nœud et bibliothèque de matériaux), ainsi que
+(aperçus par nœud et bibliothèque de matériaux), 13 (baking et export de
+scènes), ainsi que
 l'étude urgente de la priorité 21
 (chargement des bibliothèques MaterialX sans WASM) et la priorité 22 (build
 minimal du Core WASM) sont traitées ; leur historique est dans
@@ -22,10 +23,6 @@ Les priorités suivantes visent à passer d'un moteur de rendu MaterialX à un
 outil de création : construire des scènes, explorer et documenter les nœuds,
 étendre MaterialX à de nouveaux types de shaders, exporter le résultat et
 continuer à optimiser le runtime livré au navigateur.
-
-## Reliquats des priorités traitées
-
-Aucun.
 
 ## Priorité 12 : environnement et post-traitement
 
@@ -43,18 +40,6 @@ du MaterialX valide :
 
 **Critère d'aboutissement :** une scène s'éclaire sans HDRI et son rendu final
 est étalonné par un graphe, en raster comme en path tracing.
-
-## Priorité 13 : baking et export
-
-- **Bake shader** : rendu d'un graphe vers une texture, réutilisé par les
-  vignettes (priorités 10 et 11).
-- Cuisson d'un matériau procédural en cartes (couleur de base, rugosité,
-  métal, normales, hauteur).
-- Export de la scène et des matériaux modifiés en USD et `.mtlx`, et en glTF
-  avec textures cuites.
-
-**Critère d'aboutissement :** une scène créée et éditée dans l'application
-s'ouvre dans un autre outil avec un rendu équivalent.
 
 ## Priorité 14 : lookdev et projets
 

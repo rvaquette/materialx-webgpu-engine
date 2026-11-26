@@ -5,6 +5,7 @@ import { resolveSurface } from '../../src/materialx/surface-graph.ts';
 import type { ResolvedGraph, ResolvedNode } from '../../src/materialx/graph.ts';
 import { createImageSampler } from '../../src/render/pathtracing/texture-sample.ts';
 import type { DecodedPixelImage } from '../../src/assets/images.ts';
+import { bakeGraphOutput, bakeMaterialMaps } from '../../src/materialx/bake.ts';
 
 const BRICK: [number, number, number] = [0.661876, 0.19088, 0];
 
@@ -59,6 +60,7 @@ describe('evaluateSurfaceToLayered (T057i3)', () => {
     graph.nodes.set('brick', {
       id: 'brick', category: 'worleynoise2d', type: 'vector3', inputs: [], provenance: { namePath: '/mat/brick' },
     });
+
     expect(() => evaluateSurfaceToLayered(graph, resolveSurface(graph)!, { texcoord: [NaN, 0] }))
       .toThrow('finite 2D coordinates and jitter');
 
@@ -346,5 +348,38 @@ describe('composeSurfaceLayered texture sampling (T057k)', () => {
     expect(diffuse(closure).color[0]).toBeCloseTo(0, 5);
     expect(diffuse(closure).color[1]).toBeCloseTo(0, 5);
     expect(diffuse(closure).color[2]).toBeCloseTo(0, 5);
+  });
+});
+
+describe('bakeMaterialMaps', () => {
+  it('bakes a numeric graph output to an undistorted RGBA preview', async () => {
+    const baked = await bakeGraphOutput(brickGraph(), 'brick', 'out', { decode: () => undefined }, {
+      width: 2, height: 1,
+    });
+
+    expect([baked.width, baked.height]).toEqual([2, 1]);
+    expect(baked.rgba).toEqual(new Uint8Array([169, 49, 0, 255, 169, 49, 0, 255]));
+  });
+
+  it('bakes all material maps at requested dimensions from a resolved surface', async () => {
+    const graph = constantGraph();
+    const baked = await bakeMaterialMaps(graph, resolveSurface(graph)!, { decode: () => undefined }, {
+      width: 2, height: 1,
+    });
+
+    expect([baked.width, baked.height]).toEqual([2, 1]);
+    expect(baked.baseColor.data).toEqual(new Float32Array([
+      0.2, 0.4, 0.6, 1, 0.2, 0.4, 0.6, 1,
+    ]));
+    expect(baked.normal.data).toEqual(new Float32Array([0.5, 0.5, 1, 0.5, 0.5, 1]));
+    expect(baked.heightMap.data).toEqual(new Float32Array([0, 0]));
+    expect(baked.heightRange).toEqual([0, 0]);
+  });
+
+  it('rejects invalid bake dimensions before allocating output maps', async () => {
+    const graph = constantGraph();
+    await expect(bakeMaterialMaps(graph, resolveSurface(graph)!, { decode: () => undefined }, {
+      width: 0, height: 1,
+    })).rejects.toThrow('Bake dimensions');
   });
 });

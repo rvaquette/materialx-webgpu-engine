@@ -1,7 +1,8 @@
 import { downloadBlob } from './assets/download.ts';
 import { SURFACE_IR_UPSTREAM } from './compiler/surface-ir.ts';
 import { compareMaterialGraphs } from './materialx/graph-comparison.ts';
-import { makeMaterialExport, type TextureSourceResolver } from './materialx/graph-export.ts';
+import { makeBakedMaterialExport, makeMaterialExport, type TextureSourceResolver } from './materialx/graph-export.ts';
+import type { BakedMaterialMaps } from './materialx/bake.ts';
 import type { ResolvedGraph, ResolvedNodeDefRef } from './materialx/graph.ts';
 import type { SurfaceInputDiagnostic } from './materialx/surface-graph.ts';
 import { requestNodeReference } from './materialx/node-reference.ts';
@@ -57,6 +58,9 @@ interface GraphParameterEditing {
   ): ReturnType<InteractiveViewer['captureObjectMaterialVariants']>;
   capturePreview?(options: MaterialPreviewOptions, signal: AbortSignal): Promise<RgbaCapture>;
   captureNodePreview?(graph: ResolvedGraph, nodeId: string, output: string, signal: AbortSignal): Promise<RgbaCapture>;
+  bakeMaterial?(width: number, height: number): Promise<BakedMaterialMaps>;
+  exportSceneGlb?(): Promise<Blob>;
+  exportSceneUsd?(): Promise<Blob>;
   textureSource?: TextureSourceResolver;
 }
 
@@ -441,6 +445,9 @@ export function showMaterialGraph(
   const details = dialog.querySelector<HTMLElement>('#material-graph-details')!;
   const reset = dialog.querySelector<HTMLButtonElement>('#reset-material-graph')!;
   const exportButton = dialog.querySelector<HTMLButtonElement>('#export-material-graph')!;
+  const bakeButton = dialog.querySelector<HTMLButtonElement>('#bake-material-graph')!;
+  const gltfButton = dialog.querySelector<HTMLButtonElement>('#export-scene-gltf')!;
+  const usdButton = dialog.querySelector<HTMLButtonElement>('#export-scene-usd')!;
   const exportStatus = dialog.querySelector<HTMLElement>('#material-graph-export-status')!;
   const backend = dialog.querySelector<HTMLDetailsElement>('#material-graph-backend');
   const previewHost = dialog.querySelector<HTMLElement>('#material-preview');
@@ -466,8 +473,17 @@ export function showMaterialGraph(
   reset.hidden = !graph?.nodes.size;
   reset.onclick = null;
   exportButton.hidden = !graph?.nodes.size;
+  bakeButton.hidden = !graph?.nodes.size || !editing?.bakeMaterial;
+  gltfButton.hidden = !graph?.nodes.size || !editing?.exportSceneGlb;
+  usdButton.hidden = !graph?.nodes.size || !editing?.exportSceneUsd;
   exportButton.disabled = false;
+  bakeButton.disabled = false;
+  gltfButton.disabled = false;
+  usdButton.disabled = false;
   exportButton.onclick = null;
+  bakeButton.onclick = null;
+  gltfButton.onclick = null;
+  usdButton.onclick = null;
   exportStatus.textContent = '';
   const variantStatus = editing?.variants();
   const activeVariant = variantStatus?.A === 'active' ? 'A' : variantStatus?.B === 'active' ? 'B' : undefined;
@@ -507,6 +523,9 @@ export function showMaterialGraph(
   function setExporting(value: boolean): void {
     exporting = value;
     exportButton.disabled = value || applying;
+    bakeButton.disabled = value || applying;
+    gltfButton.disabled = value || applying;
+    usdButton.disabled = value || applying;
     for (const button of dialog.querySelectorAll<HTMLButtonElement>('[data-export-variant]')) button.disabled = value;
   }
   async function exportGraph(snapshot: ResolvedGraph, name: string): Promise<void> {
@@ -526,6 +545,55 @@ export function showMaterialGraph(
     }
   }
   exportButton.onclick = () => exportGraph(currentGraph, material);
+  bakeButton.onclick = async () => {
+    if (exporting || applying || !editing?.bakeMaterial) return;
+    setExporting(true);
+    exportStatus.textContent = 'Cuisson des cartes du matériau à 512 × 512…';
+    const handler = bakeButton.onclick;
+    try {
+      const baked = await editing.bakeMaterial(512, 512);
+      const { filename, blob } = await makeBakedMaterialExport(baked, material);
+      if (!dialog.open || bakeButton.onclick !== handler) return;
+      downloadBlob(blob, filename);
+      exportStatus.textContent = `Téléchargement lancé : ${filename}`;
+    } catch (error) {
+      if (bakeButton.onclick === handler) exportStatus.textContent = `Baking impossible : ${error instanceof Error ? error.message : String(error)}`;
+    } finally {
+      if (bakeButton.onclick === handler) setExporting(false);
+    }
+  };
+  gltfButton.onclick = async () => {
+    if (exporting || applying || !editing?.exportSceneGlb) return;
+    setExporting(true);
+    exportStatus.textContent = 'Cuisson des matériaux et préparation du glTF…';
+    const handler = gltfButton.onclick;
+    try {
+      const blob = await editing.exportSceneGlb();
+      if (!dialog.open || gltfButton.onclick !== handler) return;
+      downloadBlob(blob, 'scene.glb');
+      exportStatus.textContent = 'Téléchargement lancé : scene.glb';
+    } catch (error) {
+      if (gltfButton.onclick === handler) exportStatus.textContent = `Export glTF impossible : ${error instanceof Error ? error.message : String(error)}`;
+    } finally {
+      if (gltfButton.onclick === handler) setExporting(false);
+    }
+  };
+  usdButton.onclick = async () => {
+    if (exporting || applying || !editing?.exportSceneUsd) return;
+    setExporting(true);
+    exportStatus.textContent = 'Cuisson des matériaux et préparation du paquet USD…';
+    const handler = usdButton.onclick;
+    try {
+      const blob = await editing.exportSceneUsd();
+      if (!dialog.open || usdButton.onclick !== handler) return;
+      downloadBlob(blob, 'scene.usd.zip');
+      exportStatus.textContent = 'Téléchargement lancé : scene.usd.zip';
+    } catch (error) {
+      if (usdButton.onclick === handler) exportStatus.textContent = `Export USD impossible : ${error instanceof Error ? error.message : String(error)}`;
+    } finally {
+      if (usdButton.onclick === handler) setExporting(false);
+    }
+  };
   const layout = layoutMaterialGraph(graph);
   const original = new Map(layout.positions);
   const overrides = savedPositions.get(graph) ?? (() => {
@@ -609,6 +677,9 @@ export function showMaterialGraph(
     if (applying || !editing) return;
     applying = true;
     exportButton.disabled = true;
+    bakeButton.disabled = true;
+    gltfButton.disabled = true;
+    usdButton.disabled = true;
     exportStatus.textContent = 'Modification du graphe…';
     preview?.pause();
     nodePreviewController?.abort();
@@ -637,7 +708,12 @@ export function showMaterialGraph(
       preview?.refresh();
     } finally {
       applying = false;
-      if (surface.isConnected) exportButton.disabled = exporting;
+      if (surface.isConnected) {
+        exportButton.disabled = exporting;
+        bakeButton.disabled = exporting;
+        gltfButton.disabled = exporting;
+        usdButton.disabled = exporting;
+      }
     }
   }
   /** Graph value of a MaterialX literal, or undefined when it has no inline editor. */

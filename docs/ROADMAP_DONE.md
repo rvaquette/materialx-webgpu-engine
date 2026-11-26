@@ -329,6 +329,10 @@ identiques octet pour octet ; celle à 2 doit différer. Le test du paquet reste
 en raster par défaut. Les deux modes ont été vérifiés dans Chrome sous
 Windows ; le workflow Linux n'exécute pas le path tracing.
 
+Cette première version ne garantit pas encore l'équivalence pour des graphes
+dépendant de la position ou des normales propres à chaque géométrie ; les autres
+reliquats sont listés dans [ROADMAP_NEXT.md](ROADMAP_NEXT.md#priorité-13-baking-et-export--reliquats).
+
 Les travaux restants sont suivis dans [ROADMAP_NEXT.md](ROADMAP_NEXT.md).
 
 **Huitième étape :** le contrat public est stabilisé en version 0.1.0. Les
@@ -1727,3 +1731,31 @@ compilation.
 
 Les détails de l'inventaire, des tailles et de la méthode de benchmark sont
 dans [dependencies.md](dependencies.md#core-wasm-minimum-build).
+
+## Priorité 13 : baking et export de scènes
+
+Le baker CPU produit les cartes de base, rugosité, métal, normale et hauteur,
+réutilisant l'interpréteur IR et le résolveur de textures. Pour les exports de
+scène, les triangles sont rasterisés dans l'espace UV ; position, normale et
+tangente sont interpolées depuis le maillage, et les textures sont cuites par
+instance pour tenir compte des différences de géométrie et d'espace objet.
+Les images non résolues et les valeurs non finies sont signalées explicitement.
+
+Le graphe du matériau exporte un paquet MaterialX autonome. Le GLB embarque les
+cartes PBR et la géométrie visible. L'export USD est un ZIP avec scène USDA
+hiérarchique, attributs de scène, caméras, lumières, géométrie triangulée à la
+pose courante et documents MaterialX référencés par les matériaux USD. Les
+sorties numériques courantes des nœuds (`float`, `integer`, `boolean`, `color3`
+et `vector3`) sont prévisualisées comme des images UV planes non déformées ; les
+autres types gardent le rendu raster existant.
+
+Les limites restantes et l'usage des exports sont détaillés dans
+[BAKING_EXPORT.md](BAKING_EXPORT.md).
+
+Le script d'illustration est
+[p13-baked-material.js](../examples/scripts/p13-baked-material.js) ; il apparaît
+automatiquement dans le menu Scripts.
+
+| Matériau en raster | Matériau en path tracing |
+|---|---|
+| ![Matériau procédural de démonstration en raster](images/p13/p13-baked-material-raster.png) | ![Matériau procédural de démonstration en path tracing](images/p13/p13-baked-material-pathtracing.png) |

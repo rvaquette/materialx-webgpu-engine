@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
-import { unzipSync, strFromU8 } from 'three/addons/libs/fflate.module.js';
-import { exportSurfaceGraph, makeMaterialExport, type TextureSourceResolver } from '../../src/materialx/graph-export.ts';
+import { unzipSync, strFromU8, unzlibSync } from 'three/addons/libs/fflate.module.js';
+import { exportSurfaceGraph, makeBakedMaterialExport, makeMaterialExport, type TextureSourceResolver } from '../../src/materialx/graph-export.ts';
+import type { BakedMap } from '../../src/materialx/bake.ts';
 import type { ResolvedGraph, ResolvedInput, ResolvedNode } from '../../src/materialx/graph.ts';
 
 function value(name: string, type: string, text: string): ResolvedInput {
@@ -37,6 +38,58 @@ async function archive(blob: Blob) {
 }
 
 describe('portable MaterialX texture export', () => {
+  it('packages the baked MaterialX graph and all five PNG maps', async () => {
+    const bakedMap = (channels: number, data: number[]): BakedMap => ({ channels, data: new Float32Array(data) });
+    const result = await makeBakedMaterialExport({
+      width: 1,
+      height: 1,
+      baseColor: bakedMap(4, [0.2, 0.4, 0.6, 1]),
+      roughness: bakedMap(1, [0.5]),
+      metalness: bakedMap(1, [0.25]),
+      normal: bakedMap(3, [0.5, 0.5, 1]),
+      heightMap: bakedMap(1, [-1]),
+      heightRange: [-1, 1],
+    }, 'My Material');
+    const files = await archive(result.blob);
+
+    expect(result.filename).toBe('My_Material.baked.zip');
+    expect(Object.keys(files).sort()).toEqual([
+      'My_Material.mtlx',
+      'textures/baseColor.png',
+      'textures/height.png',
+      'textures/metalness.png',
+      'textures/normal.png',
+      'textures/roughness.png',
+    ]);
+    const xml = strFromU8(files['My_Material.mtlx']!);
+    expect(xml).toContain('name="base_color" type="color3" nodename="base_color_map"');
+    expect(xml).toContain('name="height_offset"');
+    const channelCounts: Record<string, number> = {
+      baseColor: 4, roughness: 1, metalness: 1, normal: 3, height: 1,
+    };
+    for (const [texture, channels] of Object.entries(channelCounts)) {
+      const png = files[`textures/${texture}.png`]!;
+      expect([...png.subarray(0, 8)]).toEqual([137, 80, 78, 71, 13, 10, 26, 10]);
+      expect(new DataView(png.buffer, png.byteOffset, png.byteLength).getUint32(16)).toBe(1);
+      expect(new DataView(png.buffer, png.byteOffset, png.byteLength).getUint32(20)).toBe(1);
+      const idat: Uint8Array[] = [];
+      for (let offset = 8; offset < png.length;) {
+        const view = new DataView(png.buffer, png.byteOffset + offset, png.length - offset);
+        const size = view.getUint32(0);
+        const type = String.fromCharCode(...png.subarray(offset + 4, offset + 8));
+        if (type === 'IDAT') idat.push(png.subarray(offset + 8, offset + 8 + size));
+        offset += size + 12;
+      }
+      const compressed = new Uint8Array(idat.reduce((length, part) => length + part.length, 0));
+      let outputOffset = 0;
+      for (const part of idat) {
+        compressed.set(part, outputOffset);
+        outputOffset += part.length;
+      }
+      expect(unzlibSync(compressed)).toHaveLength(channels + 1);
+    }
+  });
+
   it('exports sparse encoded UDIMs once while preserving shared texture parameters', async () => {
     const url = 'https://assets.test/coat.%3cudim%3e.png';
     const tiling = node('tiling', 'constant', 'vector2', [value('value', 'vector2', '2, 3')]);

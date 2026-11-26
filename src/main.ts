@@ -13,6 +13,7 @@ import { attachScriptEditor, type ScriptEditorAttachment, type ScriptRunControl 
 import { NODE_REFERENCE_EVENT, type NodeReferenceRequest } from './materialx/node-reference.ts';
 import { NodeReferencePanel } from './materialx/node-reference-panel.ts';
 import { nodePreviewScript } from './materialx/node-preview.ts';
+import { isBakeableGraphOutputType } from './materialx/bake.ts';
 import { activityButton } from './ui/layout.ts';
 import { Workbench } from './ui/workbench.ts';
 import { loadScriptLibrary, runScript, ScriptError, toXml, type ScriptHost, type ScriptStats } from './materialx/script-api.ts';
@@ -421,6 +422,9 @@ async function main(): Promise<void> {
         variants: () => target.objectMaterialVariants(path),
         variantGraph: slot => target.objectMaterialVariantGraph(path, slot),
         textureSource: file => target.objectTextureExportSource(path, file),
+        bakeMaterial: (width, height) => target.bakeObjectMaterial(path, width, height),
+        exportSceneGlb: () => target.exportSceneGlb(),
+        exportSceneUsd: () => target.exportSceneUsd(),
         saveVariant(slot) {
           ensureEditable();
           target.saveObjectMaterialVariant(path, slot);
@@ -432,6 +436,11 @@ async function main(): Promise<void> {
         },
         async captureNodePreview(snapshot, nodeId, output, signal) {
           ensureEditable();
+          const node = snapshot.nodes.get(nodeId);
+          const outputType = node?.nodeDef?.outputs?.find(candidate => candidate.name === output)?.type ?? node?.type;
+          if (outputType && isBakeableGraphOutputType(outputType)) {
+            return target.captureNodeOutputPreview(snapshot, nodeId, output, signal);
+          }
           const code = nodePreviewScript(snapshot, nodeId, output, await scriptLibrary);
           return captureScriptPreview(code, '/World/mxPreviewSphere', signal, undefined, 128);
         },

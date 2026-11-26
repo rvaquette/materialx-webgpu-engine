@@ -1306,7 +1306,7 @@ function sampleTexture(
   cache: Map<IrRef, IrValue>,
 ): IrValue {
   const n = typeSize(expr.type);
-  const sampler = env.textures?.[expr.texture];
+  const sampler = env.textures?.[`${expr.texture}:${expr.sampler}`] ?? env.textures?.[expr.texture];
   if (!sampler) return expr.fallback ? evaluateIrRef(ir, expr.fallback, env, cache) : env.textureNeutral ?? zeros(n);
   const uv = evaluateIrRef(ir, expr.uv, env, cache);
   const rgba = sampler(uv[0] ?? 0, uv[1] ?? 0);

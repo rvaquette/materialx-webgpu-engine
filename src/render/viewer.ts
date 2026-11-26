@@ -41,6 +41,9 @@ import { assertSceneStorageSize, assertSceneTextureBindings, assertStorageBuffer
 import { isMobileGpu } from '../gpu/capabilities.ts';
 import { GpuMemoryTracker, type GpuMemoryUsage } from '../gpu/memory.ts';
 import { limitImageProvider } from '../assets/image-limits.ts';
+import { bakeGraphOutput, bakeMaterialMaps, createMeshBakeSampler } from '../materialx/bake.ts';
+import type { BakedMaterialMaps } from '../materialx/bake.ts';
+import { exportSceneGlb, exportSceneUsdZip } from '../materialx/scene-export.ts';
 import { StreamingImages } from '../assets/streaming-images.ts';
 import { captureRgba, type RgbaCapture } from '../gpu/capture.ts';
 import { uploadMaterialImage, uploadMaterialImageArray } from '../gpu/material-texture.ts';
@@ -750,6 +753,49 @@ export class InteractiveViewer {
       throw new Error(`Objet introuvable pour l’export : ${path}.`);
     }
     return this.#loaded.mtlx.imageProvider.exportSource?.(file);
+  }
+
+  async bakeObjectMaterial(path: string, width = 512, height = width): Promise<BakedMaterialMaps> {
+    const material = this.#editableObjectMaterial(path);
+    if (!material?.surfaceGraph || !material.resolvedSurface || !this.#loaded) {
+      throw new Error(`Material indisponible pour le baking : ${path}.`);
+    }
+    const source = this.#loaded.parameterResources ?? this.#loaded.resources;
+    const instance = source.instances.find(candidate => candidate.primPath === path);
+    const geometry = instance ? source.geometries.get(instance.prototypeId) : undefined;
+    const draw = instance ? this.#current?.frame.draws.find(candidate => candidate.instanceId === instance.id) : undefined;
+    if (!geometry || !draw) throw new Error(`Géométrie préparée introuvable pour le baking : ${path}.`);
+    return bakeMaterialMaps(material.surfaceGraph, material.resolvedSurface, this.#loaded.mtlx.imageProvider, {
+      width, height, material, sampleAt: createMeshBakeSampler(geometry, draw.model, width, height),
+    });
+  }
+
+  async exportSceneGlb(): Promise<Blob> {
+    if (!this.#loaded || !this.#current) throw new Error('Aucune scène chargée pour l’export glTF.');
+    return exportSceneGlb(
+      this.#current.frame, this.#loaded.resources, this.#loaded.mtlx.imageProvider,
+      this.#loaded.parameterResources ?? this.#loaded.resources,
+    );
+  }
+
+  async captureNodeOutputPreview(
+    graph: ResolvedGraph, nodeId: string, outputName: string, signal: AbortSignal,
+  ): Promise<RgbaCapture> {
+    const loaded = this.#loaded;
+    if (!loaded) throw new Error('Aucune scène chargée pour l’aperçu du graphe.');
+    const check = () => {
+      signal.throwIfAborted();
+      if (this.#disposed || this.#loaded !== loaded) throw new Error('La scène a changé pendant le calcul de l’aperçu.');
+    };
+    return bakeGraphOutput(graph, nodeId, outputName, loaded.mtlx.imageProvider, { width: 128, check });
+  }
+
+  async exportSceneUsd(): Promise<Blob> {
+    if (!this.#loaded || !this.#current) throw new Error('Aucune scène chargée pour l’export USD.');
+    return exportSceneUsdZip(
+      this.#current.frame, this.#loaded.resources, this.#loaded.mtlx.imageProvider,
+      this.#loaded.parameterResources ?? this.#loaded.resources, this.#loaded.scene,
+    );
   }
 
   objectSurfaceInputDiagnostics(path: string, nodeId: string) {
