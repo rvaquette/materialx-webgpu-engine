@@ -1,0 +1,63 @@
+#usda 1.0
+(
+    defaultPrim = "World"
+    metersPerUnit = 1
+    upAxis = "Y"
+    doc = "Scene created by a MaterialX script"
+)
+
+def Xform "World"
+{
+    def Scope "Looks"
+    {
+        def Material "Preset" (
+            prepend references = @./lava.mtlx@</MaterialX/Materials/material>
+        )
+        {
+        }
+        def Material "Ground" (
+            prepend references = @./ground.mtlx@</MaterialX/Materials/material>
+        )
+        {
+        }
+    }
+
+    def Plane "Preset" (
+        prepend apiSchemas = ["MaterialBindingAPI"]
+    )
+    {
+        double width = 4
+        double length = 4
+        uniform token axis = "Y"
+        custom int engine:resolution = 24
+        custom double engine:maxEdgeLength = 0
+        custom double engine:maxScreenEdgeLength = 0
+        custom int engine:vertexBudget = 65536
+        double3 xformOp:translate = (0, 0.5, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        rel material:binding = </World/Looks/Preset>
+    }
+
+    def Plane "Ground" (
+        prepend apiSchemas = ["MaterialBindingAPI"]
+    )
+    {
+        double width = 8
+        double length = 8
+        uniform token axis = "Y"
+        custom int engine:resolution = 1
+        custom double engine:maxEdgeLength = 0
+        custom double engine:maxScreenEdgeLength = 0
+        custom int engine:vertexBudget = 65536
+        rel material:binding = </World/Looks/Ground>
+    }
+}
+
+def Camera "GoldenCamera" {
+    float focalLength = 25
+    float horizontalAperture = 20.955
+    float verticalAperture = 20.955
+    double3 xformOp:translate = (4, 3, 4)
+    float3 xformOp:rotateXYZ = (-20, 45, 0)
+    uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
+}

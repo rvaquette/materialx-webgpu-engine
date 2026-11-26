@@ -72,6 +72,34 @@ primitive lorsque la scène est déplacée. `Clouds.profile` vaut `0` (cumulus),
 ou `2` (cirrus). `WaterCaustics` projette un motif émissif animé : c'est une approximation,
 pas le calcul physique de caustiques réfractées.
 
+Les horloges `time`/`frame` des volumes sont mises à jour par `setTime()` :
+le champ de coefficients est réévalué et la grille volumique reconstruite,
+même lorsque la primitive reste immobile. Les flammes et les panaches utilisent
+une déformation bruitée de leur enveloppe ; les nuages adaptent aussi l'échelle
+directionnelle du bruit au profil. La lave et le motif de caustiques utilisent
+la différence des deux distances Worley les plus proches, et non une couleur
+aléatoire par cellule. Boue et sable mouillé combinent masque d'humidité,
+normales de détail et couche réfléchissante.
+
+Le raster reste une approximation de diffusion simple : l'éclairage ambiant
+est atténué selon deux directions ciel/sol, sans intégration complète du ciel.
+Le path tracer utilise la diffusion multiple Henyey-Greenstein, sans multiplier
+artificiellement la densité des nuages pour simuler un effet « powder ».
+Les surfaces reçoivent aussi l'émission réelle des volumes : sélection par
+puissance et échantillonnage des cellules proportionnel à la luminance émise,
+avec une composante uniforme conservant le support des cellules peu lumineuses.
+Les chemins caméra, spéculaires et diffusés dans le volume intègrent directement
+l'émission ; les chemins de surface déjà couverts par cet échantillonnage ne la
+comptent pas une seconde fois. La lumière ponctuelle de l'exemple de feu est
+réservée au raster et désactivée en path tracing. `p17-emissive-volume.js`
+illustre cet éclairage sans lumière de substitution ni environnement lumineux.
+
+Éviter les volumes superposés : le transport ne maintient actuellement qu'un
+milieu actif. Le rendu physique des caustiques demande encore une validation
+de convergence ; l'exemple d'eau remplace sa projection raster émissive par
+un fond diffus en path tracing. Le feu représente une flamme lumineuse de suie
+(corps noir orange/jaune), pas une simulation chimique de flamme bleue.
+
 ## Valeurs et types
 
 | Type d'entrée | Valeurs acceptées |

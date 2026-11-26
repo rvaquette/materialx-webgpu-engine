@@ -1,0 +1,99 @@
+<?xml version="1.0"?>
+<materialx version="1.39">
+  <position name="position" type="vector3">
+    <input name="space" type="string" value="object" />
+  </position>
+  <time name="clock" type="float" />
+  <multiply name="flow" type="float" nodedef="ND_multiply_float">
+    <input name="in1" type="float" nodename="clock" />
+    <input name="in2" type="float" value="0.18" />
+  </multiply>
+  <combine3 name="flowOffset" type="vector3" nodedef="ND_combine3_vector3">
+    <input name="in1" type="float" value="0" />
+    <input name="in2" type="float" nodename="flow" />
+    <input name="in3" type="float" value="0" />
+  </combine3>
+  <add name="advectedPosition" type="vector3" nodedef="ND_add_vector3">
+    <input name="in1" type="vector3" nodename="position" />
+    <input name="in2" type="vector3" nodename="flowOffset" />
+  </add>
+  <multiply name="scaledPosition" type="vector3" nodedef="ND_multiply_vector3FA">
+    <input name="in1" type="vector3" nodename="advectedPosition" />
+    <input name="in2" type="float" value="3" />
+  </multiply>
+  <worleynoise3d name="distances" type="vector2" nodedef="ND_worleynoise3d_vector2">
+    <input name="position" type="vector3" nodename="scaledPosition" />
+    <input name="style" type="integer" value="0" />
+    <input name="jitter" type="float" value="0.8" />
+  </worleynoise3d>
+  <separate2 name="cellDistances" type="multioutput" nodedef="ND_separate2_vector2">
+    <input name="in" type="vector2" nodename="distances" />
+  </separate2>
+  <subtract name="cells" type="float" nodedef="ND_subtract_float">
+    <input name="in1" type="float" nodename="cellDistances" output="outy" />
+    <input name="in2" type="float" nodename="cellDistances" output="outx" />
+  </subtract>
+  <smoothstep name="crackEdge" type="float" nodedef="ND_smoothstep_float">
+    <input name="in" type="float" nodename="cells" />
+    <input name="low" type="float" value="0.04" />
+    <input name="high" type="float" value="0.16" />
+  </smoothstep>
+  <subtract name="crackMask" type="float" nodedef="ND_subtract_float">
+    <input name="in1" type="float" value="1" />
+    <input name="in2" type="float" nodename="crackEdge" />
+  </subtract>
+  <blackbody name="hotColor" type="color3">
+    <input name="temperature" type="float" value="1800" />
+  </blackbody>
+  <mix name="surfaceColor" type="color3">
+    <input name="fg" type="color3" nodename="hotColor" />
+    <input name="bg" type="color3" value="0.035, 0.018, 0.012" />
+    <input name="mix" type="float" nodename="crackMask" />
+  </mix>
+  <multiply name="glow" type="float" nodedef="ND_multiply_float">
+    <input name="in1" type="float" nodename="crackMask" />
+    <input name="in2" type="float" value="4" />
+  </multiply>
+  <multiply name="crustRelief" type="float" nodedef="ND_multiply_float">
+    <input name="in1" type="float" nodename="crackEdge" />
+    <input name="in2" type="float" value="0.16" />
+  </multiply>
+  <displacement name="crustDisplacement" type="displacementshader">
+    <input name="displacement" type="float" nodename="crustRelief" />
+  </displacement>
+  <multiply name="grainPosition" type="vector3" nodedef="ND_multiply_vector3FA">
+    <input name="in1" type="vector3" nodename="scaledPosition" />
+    <input name="in2" type="float" value="5" />
+  </multiply>
+  <noise3d name="crustGrain" type="float" nodedef="ND_noise3d_float">
+    <input name="position" type="vector3" nodename="grainPosition" />
+  </noise3d>
+  <multiply name="grainHeight" type="float" nodedef="ND_multiply_float">
+    <input name="in1" type="float" nodename="crustGrain" />
+    <input name="in2" type="float" value="0.15" />
+  </multiply>
+  <add name="crustHeight" type="float" nodedef="ND_add_float">
+    <input name="in1" type="float" nodename="crackEdge" />
+    <input name="in2" type="float" nodename="grainHeight" />
+  </add>
+  <bump name="crustNormal" type="vector3">
+    <input name="height" type="float" nodename="crustHeight" />
+    <input name="scale" type="float" value="0.16" />
+  </bump>
+  <mix name="crustRoughness" type="float" nodedef="ND_mix_float">
+    <input name="fg" type="float" value="0.25" />
+    <input name="bg" type="float" value="0.85" />
+    <input name="mix" type="float" nodename="crackMask" />
+  </mix>
+  <standard_surface name="lavaSurface" type="surfaceshader">
+    <input name="base_color" type="color3" nodename="surfaceColor" />
+    <input name="specular_roughness" type="float" nodename="crustRoughness" />
+    <input name="normal" type="vector3" nodename="crustNormal" />
+    <input name="emission" type="float" nodename="glow" />
+    <input name="emission_color" type="color3" nodename="hotColor" />
+  </standard_surface>
+  <surfacematerial name="material_2" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="lavaSurface" />
+    <input name="displacementshader" type="displacementshader" nodename="crustDisplacement" />
+  </surfacematerial>
+</materialx>

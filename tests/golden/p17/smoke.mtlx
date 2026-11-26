@@ -1,0 +1,210 @@
+<?xml version="1.0"?>
+<materialx version="1.39">
+  <position name="position" type="vector3">
+    <input name="space" type="string" value="world" />
+  </position>
+  <time name="clock" type="float" />
+  <multiply name="windOffset" type="vector3" nodedef="ND_multiply_vector3FA">
+    <input name="in1" type="vector3" value="0.4, 1, 0.1" />
+    <input name="in2" type="float" nodename="clock" />
+  </multiply>
+  <multiply name="advection" type="vector3" nodedef="ND_multiply_vector3FA">
+    <input name="in1" type="vector3" nodename="windOffset" />
+    <input name="in2" type="float" value="0.2" />
+  </multiply>
+  <subtract name="advectedPosition" type="vector3" nodedef="ND_subtract_vector3">
+    <input name="in1" type="vector3" nodename="position" />
+    <input name="in2" type="vector3" nodename="advection" />
+  </subtract>
+  <multiply name="warpPosition" type="vector3" nodedef="ND_multiply_vector3FA">
+    <input name="in1" type="vector3" nodename="advectedPosition" />
+    <input name="in2" type="float" value="0.9" />
+  </multiply>
+  <noise3d name="turbulence" type="vector3" nodedef="ND_noise3d_vector3">
+    <input name="position" type="vector3" nodename="warpPosition" />
+    <input name="amplitude" type="vector3" value="0.9, 0, 0.9" />
+  </noise3d>
+  <add name="shapePosition" type="vector3" nodedef="ND_add_vector3">
+    <input name="in1" type="vector3" nodename="position" />
+    <input name="in2" type="vector3" nodename="turbulence" />
+  </add>
+  <separate3 name="smokeCoordinates" type="multioutput" nodedef="ND_separate3_vector3">
+    <input name="in" type="vector3" nodename="shapePosition" />
+  </separate3>
+  <separate3 name="advectedCoordinates" type="multioutput" nodedef="ND_separate3_vector3">
+    <input name="in" type="vector3" nodename="advectedPosition" />
+  </separate3>
+  <separate3 name="smokeCenter" type="multioutput" nodedef="ND_separate3_vector3">
+    <input name="in" type="vector3" value="0, 0, 0" />
+  </separate3>
+  <max name="positiveHeight" type="float" nodedef="ND_max_float">
+    <input name="in1" type="float" nodename="smokeCoordinates" output="outy" />
+    <input name="in2" type="float" value="0" />
+  </max>
+  <multiply name="spreadGrowth" type="float" nodedef="ND_multiply_float">
+    <input name="in1" type="float" nodename="positiveHeight" />
+    <input name="in2" type="float" value="0.15" />
+  </multiply>
+  <add name="spreadAtHeight" type="float" nodedef="ND_add_float">
+    <input name="in1" type="float" value="1" />
+    <input name="in2" type="float" nodename="spreadGrowth" />
+  </add>
+  <subtract name="relativeX" type="float" nodedef="ND_subtract_float">
+    <input name="in1" type="float" nodename="smokeCoordinates" output="outx" />
+    <input name="in2" type="float" nodename="smokeCenter" output="outx" />
+  </subtract>
+  <subtract name="relativeZ" type="float" nodedef="ND_subtract_float">
+    <input name="in1" type="float" nodename="smokeCoordinates" output="outz" />
+    <input name="in2" type="float" nodename="smokeCenter" output="outz" />
+  </subtract>
+  <multiply name="xSquared" type="float" nodedef="ND_multiply_float">
+    <input name="in1" type="float" nodename="relativeX" />
+    <input name="in2" type="float" nodename="relativeX" />
+  </multiply>
+  <multiply name="zSquared" type="float" nodedef="ND_multiply_float">
+    <input name="in1" type="float" nodename="relativeZ" />
+    <input name="in2" type="float" nodename="relativeZ" />
+  </multiply>
+  <add name="radialSquared" type="float" nodedef="ND_add_float">
+    <input name="in1" type="float" nodename="xSquared" />
+    <input name="in2" type="float" nodename="zSquared" />
+  </add>
+  <sqrt name="radialDistance" type="float">
+    <input name="in" type="float" nodename="radialSquared" />
+  </sqrt>
+  <add name="smokeRadius" type="float" nodedef="ND_add_float">
+    <input name="in1" type="float" value="0.7" />
+    <input name="in2" type="float" nodename="spreadGrowth" />
+  </add>
+  <divide name="normalizedRadius" type="float" nodedef="ND_divide_float">
+    <input name="in1" type="float" nodename="radialDistance" />
+    <input name="in2" type="float" nodename="smokeRadius" />
+  </divide>
+  <subtract name="insideSmoke" type="float" nodedef="ND_subtract_float">
+    <input name="in1" type="float" value="1" />
+    <input name="in2" type="float" nodename="normalizedRadius" />
+  </subtract>
+  <smoothstep name="radialFade" type="float" nodedef="ND_smoothstep_float">
+    <input name="in" type="float" nodename="insideSmoke" />
+    <input name="low" type="float" value="0.05" />
+    <input name="high" type="float" value="0.65" />
+  </smoothstep>
+  <divide name="spreadX" type="float" nodedef="ND_divide_float">
+    <input name="in1" type="float" nodename="advectedCoordinates" output="outx" />
+    <input name="in2" type="float" nodename="spreadAtHeight" />
+  </divide>
+  <divide name="spreadZ" type="float" nodedef="ND_divide_float">
+    <input name="in1" type="float" nodename="advectedCoordinates" output="outz" />
+    <input name="in2" type="float" nodename="spreadAtHeight" />
+  </divide>
+  <combine3 name="spreadPosition" type="vector3" nodedef="ND_combine3_vector3">
+    <input name="in1" type="float" nodename="spreadX" />
+    <input name="in2" type="float" nodename="advectedCoordinates" output="outy" />
+    <input name="in3" type="float" nodename="spreadZ" />
+  </combine3>
+  <multiply name="scaledPosition" type="vector3" nodedef="ND_multiply_vector3FA">
+    <input name="in1" type="vector3" nodename="spreadPosition" />
+    <input name="in2" type="float" value="1.2" />
+  </multiply>
+  <multiply name="detailPosition" type="vector3" nodedef="ND_multiply_vector3FA">
+    <input name="in1" type="vector3" nodename="scaledPosition" />
+    <input name="in2" type="float" value="2.7" />
+  </multiply>
+  <multiply name="finePosition" type="vector3" nodedef="ND_multiply_vector3FA">
+    <input name="in1" type="vector3" nodename="scaledPosition" />
+    <input name="in2" type="float" value="7.1" />
+  </multiply>
+  <noise3d name="smokeNoise" type="float" nodedef="ND_noise3d_float">
+    <input name="position" type="vector3" nodename="scaledPosition" />
+    <input name="amplitude" type="float" value="1" />
+    <input name="pivot" type="float" value="0" />
+  </noise3d>
+  <noise3d name="smokeDetail" type="float" nodedef="ND_noise3d_float">
+    <input name="position" type="vector3" nodename="detailPosition" />
+    <input name="amplitude" type="float" value="1" />
+    <input name="pivot" type="float" value="0" />
+  </noise3d>
+  <noise3d name="smokeFine" type="float" nodedef="ND_noise3d_float">
+    <input name="position" type="vector3" nodename="finePosition" />
+    <input name="amplitude" type="float" value="1" />
+    <input name="pivot" type="float" value="0" />
+  </noise3d>
+  <multiply name="detailWeighted" type="float" nodedef="ND_multiply_float">
+    <input name="in1" type="float" nodename="smokeDetail" />
+    <input name="in2" type="float" value="0.28" />
+  </multiply>
+  <multiply name="fineWeighted" type="float" nodedef="ND_multiply_float">
+    <input name="in1" type="float" nodename="smokeFine" />
+    <input name="in2" type="float" value="0.12" />
+  </multiply>
+  <add name="noiseCoarseDetail" type="float" nodedef="ND_add_float">
+    <input name="in1" type="float" nodename="smokeNoise" />
+    <input name="in2" type="float" nodename="detailWeighted" />
+  </add>
+  <add name="smokeFractal" type="float" nodedef="ND_add_float">
+    <input name="in1" type="float" nodename="noiseCoarseDetail" />
+    <input name="in2" type="float" nodename="fineWeighted" />
+  </add>
+  <range name="noise01" type="float" nodedef="ND_range_float">
+    <input name="in" type="float" nodename="smokeFractal" />
+    <input name="inlow" type="float" value="-0.18" />
+    <input name="inhigh" type="float" value="0.38" />
+    <input name="outlow" type="float" value="0" />
+    <input name="outhigh" type="float" value="1" />
+    <input name="doclamp" type="boolean" value="true" />
+  </range>
+  <range name="heightFade" type="float" nodedef="ND_range_float">
+    <input name="in" type="float" nodename="positiveHeight" />
+    <input name="inlow" type="float" value="0" />
+    <input name="inhigh" type="float" value="4.5" />
+    <input name="outlow" type="float" value="1" />
+    <input name="outhigh" type="float" value="0.25" />
+    <input name="doclamp" type="boolean" value="true" />
+  </range>
+  <multiply name="heightDensity" type="float" nodedef="ND_multiply_float">
+    <input name="in1" type="float" nodename="noise01" />
+    <input name="in2" type="float" nodename="heightFade" />
+  </multiply>
+  <multiply name="profiledDensity" type="float" nodedef="ND_multiply_float">
+    <input name="in1" type="float" nodename="heightDensity" />
+    <input name="in2" type="float" nodename="radialFade" />
+  </multiply>
+  <multiply name="densityValue" type="float" nodedef="ND_multiply_float">
+    <input name="in1" type="float" nodename="profiledDensity" />
+    <input name="in2" type="float" value="1.4" />
+  </multiply>
+  <convert name="colorVector" type="vector3" nodedef="ND_convert_color3_vector3">
+    <input name="in" type="color3" value="0.55, 0.58, 0.62" />
+  </convert>
+  <multiply name="scatteringColor" type="vector3" nodedef="ND_multiply_vector3FA">
+    <input name="in1" type="vector3" nodename="colorVector" />
+    <input name="in2" type="float" nodename="densityValue" />
+  </multiply>
+  <subtract name="oneMinusAlbedo" type="float" nodedef="ND_subtract_float">
+    <input name="in1" type="float" value="1" />
+    <input name="in2" type="float" value="0.92" />
+  </subtract>
+  <max name="safeAlbedo" type="float" nodedef="ND_max_float">
+    <input name="in1" type="float" value="0.92" />
+    <input name="in2" type="float" value="0.01" />
+  </max>
+  <divide name="absorptionRatio" type="float" nodedef="ND_divide_float">
+    <input name="in1" type="float" nodename="oneMinusAlbedo" />
+    <input name="in2" type="float" nodename="safeAlbedo" />
+  </divide>
+  <multiply name="absorptionColor" type="vector3" nodedef="ND_multiply_vector3FA">
+    <input name="in1" type="vector3" nodename="scatteringColor" />
+    <input name="in2" type="float" nodename="absorptionRatio" />
+  </multiply>
+  <anisotropic_vdf name="vdf" type="VDF">
+    <input name="absorption" type="vector3" nodename="absorptionColor" />
+    <input name="scattering" type="vector3" nodename="scatteringColor" />
+    <input name="anisotropy" type="float" value="0.35" />
+  </anisotropic_vdf>
+  <volume name="smokeVolume" type="volumeshader">
+    <input name="vdf" type="VDF" nodename="vdf" />
+  </volume>
+  <surfacematerial name="material_2" type="material" nodedef="ND_engine_volume_material">
+    <input name="volumeshader" type="volumeshader" nodename="smokeVolume" />
+  </surfacematerial>
+</materialx>

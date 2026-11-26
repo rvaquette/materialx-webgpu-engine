@@ -20,24 +20,38 @@ export const ENGINE_PRESET_LIBRARY_XML = `
     <multiply name="xScaled" type="float"><input name="in1" type="float" nodename="coordinates" output="outx" /><input name="in2" type="float" interfacename="scale" /></multiply>
     <multiply name="zScaled" type="float"><input name="in1" type="float" nodename="coordinates" output="outz" /><input name="in2" type="float" interfacename="scale" /></multiply>
     <add name="xPhase" type="float"><input name="in1" type="float" nodename="xScaled" /><input name="in2" type="float" nodename="phase" /></add>
-    <add name="zPhase" type="float"><input name="in1" type="float" nodename="zScaled" /><input name="in2" type="float" nodename="phase" /></add>
+    <multiply name="zFrequency" type="float"><input name="in1" type="float" nodename="zScaled" /><input name="in2" type="float" value="1.7" /></multiply>
+    <multiply name="zTime" type="float"><input name="in1" type="float" nodename="phase" /><input name="in2" type="float" value="1.3" /></multiply>
+    <add name="zPhase" type="float"><input name="in1" type="float" nodename="zFrequency" /><input name="in2" type="float" nodename="zTime" /></add>
     <sin name="xWave" type="float"><input name="in" type="float" nodename="xPhase" /></sin>
     <sin name="zWave" type="float"><input name="in" type="float" nodename="zPhase" /></sin>
     <multiply name="smallWave" type="float"><input name="in1" type="float" nodename="zWave" /><input name="in2" type="float" value="0.45" /></multiply>
-    <add name="waveSum" type="float"><input name="in1" type="float" nodename="xWave" /><input name="in2" type="float" nodename="smallWave" /></add>
+    <add name="largeWaves" type="float"><input name="in1" type="float" nodename="xWave" /><input name="in2" type="float" nodename="smallWave" /></add>
+    <multiply name="crossX" type="float"><input name="in1" type="float" nodename="xScaled" /><input name="in2" type="float" value="2.3" /></multiply>
+    <multiply name="crossZ" type="float"><input name="in1" type="float" nodename="zScaled" /><input name="in2" type="float" value="-1.7" /></multiply>
+    <add name="crossPosition" type="float"><input name="in1" type="float" nodename="crossX" /><input name="in2" type="float" nodename="crossZ" /></add>
+    <multiply name="crossTime" type="float"><input name="in1" type="float" nodename="phase" /><input name="in2" type="float" value="1.9" /></multiply>
+    <add name="crossPhase" type="float"><input name="in1" type="float" nodename="crossPosition" /><input name="in2" type="float" nodename="crossTime" /></add>
+    <sin name="crossWave" type="float"><input name="in" type="float" nodename="crossPhase" /></sin>
+    <multiply name="crossAmplitude" type="float"><input name="in1" type="float" nodename="crossWave" /><input name="in2" type="float" value="0.18" /></multiply>
+    <add name="waveSum" type="float"><input name="in1" type="float" nodename="largeWaves" /><input name="in2" type="float" nodename="crossAmplitude" /></add>
     <multiply name="waveHeightValue" type="float"><input name="in1" type="float" nodename="waveSum" /><input name="in2" type="float" interfacename="waveHeight" /></multiply>
     <displacement name="waveDisplacement" type="displacementshader"><input name="displacement" type="float" nodename="waveHeightValue" /></displacement>
     <smoothstep name="foamMask" type="float"><input name="in" type="float" nodename="waveSum" /><input name="low" type="float" value="0.7" /><input name="high" type="float" value="1.1" /></smoothstep>
     <mix name="surfaceColor" type="color3"><input name="fg" type="color3" interfacename="foamColor" /><input name="bg" type="color3" interfacename="color" /><input name="mix" type="float" nodename="foamMask" /></mix>
-    <multiply name="detailScale" type="vector3"><input name="in1" type="vector3" nodename="position" /><input name="in2" type="vector3" value="8, 8, 8" /></multiply>
+    <combine3 name="detailOffset" type="vector3"><input name="in1" type="float" nodename="phase" /><input name="in2" type="float" value="0" /><input name="in3" type="float" nodename="crossTime" /></combine3>
+    <add name="detailPosition" type="vector3"><input name="in1" type="vector3" nodename="position" /><input name="in2" type="vector3" nodename="detailOffset" /></add>
+    <multiply name="detailScale" type="vector3"><input name="in1" type="vector3" nodename="detailPosition" /><input name="in2" type="vector3" value="8, 8, 8" /></multiply>
     <noise3d name="detailNoise" type="float" nodedef="ND_noise3d_float"><input name="position" type="vector3" nodename="detailScale" /><input name="amplitude" type="float" value="1" /><input name="pivot" type="float" value="0" /></noise3d>
     <bump name="detailNormal" type="vector3" nodedef="ND_bump_vector3"><input name="height" type="float" nodename="detailNoise" /><input name="scale" type="float" value="0.025" /></bump>
+    <subtract name="transmissionWeight" type="float"><input name="in1" type="float" value="1" /><input name="in2" type="float" nodename="foamMask" /></subtract>
+    <mix name="waterRoughness" type="float"><input name="fg" type="float" value="0.4" /><input name="bg" type="float" interfacename="roughness" /><input name="mix" type="float" nodename="foamMask" /></mix>
     <standard_surface name="waterSurface" type="surfaceshader">
-      <input name="base" type="float" value="0.05" />
+      <input name="base" type="float" nodename="foamMask" />
       <input name="base_color" type="color3" nodename="surfaceColor" />
-      <input name="specular_roughness" type="float" interfacename="roughness" />
+      <input name="specular_roughness" type="float" nodename="waterRoughness" />
       <input name="specular_IOR" type="float" interfacename="ior" />
-      <input name="transmission" type="float" value="0.92" />
+      <input name="transmission" type="float" nodename="transmissionWeight" />
       <input name="transmission_color" type="color3" interfacename="absorptionColor" />
       <input name="transmission_depth" type="float" interfacename="depth" />
       <input name="normal" type="vector3" nodename="detailNormal" />
@@ -61,7 +75,9 @@ export const ENGINE_PRESET_LIBRARY_XML = `
     <combine3 name="flowOffset" type="vector3"><input name="in1" type="float" value="0" /><input name="in2" type="float" nodename="flow" /><input name="in3" type="float" nodename="flow" /></combine3>
     <add name="advectedPosition" type="vector3"><input name="in1" type="vector3" nodename="position" /><input name="in2" type="vector3" nodename="flowOffset" /></add>
     <multiply name="scaledPosition" type="vector3"><input name="in1" type="vector3" nodename="advectedPosition" /><input name="in2" type="float" interfacename="scale" /></multiply>
-    <worleynoise3d name="cells" type="float" nodedef="ND_worleynoise3d_float"><input name="position" type="vector3" nodename="scaledPosition" /><input name="style" type="integer" value="1" /><input name="jitter" type="float" value="0.8" /></worleynoise3d>
+    <worleynoise3d name="distances" type="vector2" nodedef="ND_worleynoise3d_vector2"><input name="position" type="vector3" nodename="scaledPosition" /><input name="style" type="integer" value="0" /><input name="jitter" type="float" value="0.8" /></worleynoise3d>
+    <separate2 name="cellDistances" type="multioutput" nodedef="ND_separate2_vector2"><input name="in" type="vector2" nodename="distances" /></separate2>
+    <subtract name="cells" type="float"><input name="in1" type="float" nodename="cellDistances" output="outy" /><input name="in2" type="float" nodename="cellDistances" output="outx" /></subtract>
     <smoothstep name="causticEdge" type="float"><input name="in" type="float" nodename="cells" /><input name="low" type="float" value="0.025" /><input name="high" type="float" value="0.13" /></smoothstep>
     <subtract name="causticMask" type="float"><input name="in1" type="float" value="1" /><input name="in2" type="float" nodename="causticEdge" /></subtract>
     <multiply name="glow" type="float"><input name="in1" type="float" nodename="causticMask" /><input name="in2" type="float" interfacename="intensity" /></multiply>
@@ -92,7 +108,9 @@ export const ENGINE_PRESET_LIBRARY_XML = `
     <combine3 name="flowOffset" type="vector3"><input name="in1" type="float" value="0" /><input name="in2" type="float" nodename="flow" /><input name="in3" type="float" value="0" /></combine3>
     <add name="advectedPosition" type="vector3"><input name="in1" type="vector3" nodename="position" /><input name="in2" type="vector3" nodename="flowOffset" /></add>
     <multiply name="scaledPosition" type="vector3"><input name="in1" type="vector3" nodename="advectedPosition" /><input name="in2" type="float" interfacename="scale" /></multiply>
-    <worleynoise3d name="cells" type="float" nodedef="ND_worleynoise3d_float"><input name="position" type="vector3" nodename="scaledPosition" /><input name="style" type="integer" value="1" /><input name="jitter" type="float" value="0.8" /></worleynoise3d>
+    <worleynoise3d name="distances" type="vector2" nodedef="ND_worleynoise3d_vector2"><input name="position" type="vector3" nodename="scaledPosition" /><input name="style" type="integer" value="0" /><input name="jitter" type="float" value="0.8" /></worleynoise3d>
+    <separate2 name="cellDistances" type="multioutput" nodedef="ND_separate2_vector2"><input name="in" type="vector2" nodename="distances" /></separate2>
+    <subtract name="cells" type="float"><input name="in1" type="float" nodename="cellDistances" output="outy" /><input name="in2" type="float" nodename="cellDistances" output="outx" /></subtract>
     <smoothstep name="crackEdge" type="float"><input name="in" type="float" nodename="cells" /><input name="low" type="float" value="0.04" /><input name="high" type="float" value="0.16" /></smoothstep>
     <subtract name="crackMask" type="float"><input name="in1" type="float" value="1" /><input name="in2" type="float" nodename="crackEdge" /></subtract>
     <blackbody name="hotColor" type="color3" nodedef="ND_blackbody"><input name="temperature" type="float" interfacename="temperature" /></blackbody>
@@ -100,9 +118,16 @@ export const ENGINE_PRESET_LIBRARY_XML = `
     <multiply name="glow" type="float"><input name="in1" type="float" nodename="crackMask" /><input name="in2" type="float" interfacename="emission" /></multiply>
     <multiply name="crustRelief" type="float"><input name="in1" type="float" nodename="crackEdge" /><input name="in2" type="float" interfacename="relief" /></multiply>
     <displacement name="crustDisplacement" type="displacementshader"><input name="displacement" type="float" nodename="crustRelief" /></displacement>
+    <multiply name="grainPosition" type="vector3"><input name="in1" type="vector3" nodename="scaledPosition" /><input name="in2" type="float" value="5" /></multiply>
+    <noise3d name="crustGrain" type="float" nodedef="ND_noise3d_float"><input name="position" type="vector3" nodename="grainPosition" /></noise3d>
+    <multiply name="grainHeight" type="float"><input name="in1" type="float" nodename="crustGrain" /><input name="in2" type="float" value="0.15" /></multiply>
+    <add name="crustHeight" type="float"><input name="in1" type="float" nodename="crackEdge" /><input name="in2" type="float" nodename="grainHeight" /></add>
+    <bump name="crustNormal" type="vector3" nodedef="ND_bump_vector3"><input name="height" type="float" nodename="crustHeight" /><input name="scale" type="float" interfacename="relief" /></bump>
+    <mix name="crustRoughness" type="float"><input name="fg" type="float" value="0.25" /><input name="bg" type="float" value="0.85" /><input name="mix" type="float" nodename="crackMask" /></mix>
     <standard_surface name="lavaSurface" type="surfaceshader">
       <input name="base_color" type="color3" nodename="surfaceColor" />
-      <input name="specular_roughness" type="float" value="0.8" />
+      <input name="specular_roughness" type="float" nodename="crustRoughness" />
+      <input name="normal" type="vector3" nodename="crustNormal" />
       <input name="emission" type="float" nodename="glow" />
       <input name="emission_color" type="color3" nodename="hotColor" />
     </standard_surface>
@@ -114,7 +139,7 @@ export const ENGINE_PRESET_LIBRARY_XML = `
     <input name="density" type="float" value="2" uimin="0" uimax="10" />
     <input name="scale" type="float" value="3" uimin="0.1" uimax="12" />
     <input name="speed" type="float" value="0.7" uimin="0" uimax="4" />
-    <input name="temperature" type="float" value="6200" uimin="1800" uimax="10000" />
+    <input name="temperature" type="float" value="2400" uimin="800" uimax="10000" />
     <input name="emission" type="float" value="12" uimin="0" uimax="50" />
     <input name="radius" type="float" value="0.8" uimin="0.1" uimax="3" />
     <input name="centerHeight" type="float" value="1.7" doc="World-space height of the flame-volume center." />
@@ -123,7 +148,7 @@ export const ENGINE_PRESET_LIBRARY_XML = `
   </nodedef>
   <nodegraph name="NG_engine_fire" nodedef="ND_engine_fire">
     <position name="position" type="vector3"><input name="space" type="string" value="world" /></position>
-    <separate3 name="coordinates" type="multioutput" nodedef="ND_separate3_vector3"><input name="in" type="vector3" nodename="position" /></separate3>
+    <separate3 name="coordinates" type="multioutput" nodedef="ND_separate3_vector3"><input name="in" type="vector3" nodename="shapePosition" /></separate3>
     <separate3 name="flameCenter" type="multioutput" nodedef="ND_separate3_vector3"><input name="in" type="vector3" interfacename="center" /></separate3>
     <subtract name="relativeX" type="float"><input name="in1" type="float" nodename="coordinates" output="outx" /><input name="in2" type="float" nodename="flameCenter" output="outx" /></subtract>
     <subtract name="relativeZ" type="float"><input name="in1" type="float" nodename="coordinates" output="outz" /><input name="in2" type="float" nodename="flameCenter" output="outz" /></subtract>
@@ -135,11 +160,14 @@ export const ENGINE_PRESET_LIBRARY_XML = `
     <time name="clock" type="float" nodedef="ND_time_float" />
     <multiply name="rise" type="float"><input name="in1" type="float" nodename="clock" /><input name="in2" type="float" interfacename="speed" /></multiply>
     <combine3 name="riseOffset" type="vector3"><input name="in1" type="float" value="0" /><input name="in2" type="float" nodename="rise" /><input name="in3" type="float" value="0" /></combine3>
-    <add name="advectedPosition" type="vector3"><input name="in1" type="vector3" nodename="position" /><input name="in2" type="vector3" nodename="riseOffset" /></add>
+    <subtract name="advectedPosition" type="vector3"><input name="in1" type="vector3" nodename="position" /><input name="in2" type="vector3" nodename="riseOffset" /></subtract>
+    <multiply name="warpPosition" type="vector3"><input name="in1" type="vector3" nodename="advectedPosition" /><input name="in2" type="float" value="1.2" /></multiply>
+    <noise3d name="turbulence" type="vector3" nodedef="ND_noise3d_vector3"><input name="position" type="vector3" nodename="warpPosition" /><input name="amplitude" type="vector3" value="0.65, 0, 0.65" /></noise3d>
+    <add name="shapePosition" type="vector3"><input name="in1" type="vector3" nodename="position" /><input name="in2" type="vector3" nodename="turbulence" /></add>
     <multiply name="scaledPosition" type="vector3"><input name="in1" type="vector3" nodename="advectedPosition" /><input name="in2" type="float" interfacename="scale" /></multiply>
     <noise3d name="flameNoise" type="float" nodedef="ND_noise3d_float"><input name="position" type="vector3" nodename="scaledPosition" /><input name="amplitude" type="float" value="1" /><input name="pivot" type="float" value="0" /></noise3d>
-    <range name="noise01" type="float"><input name="in" type="float" nodename="flameNoise" /><input name="inlow" type="float" value="-1" /><input name="inhigh" type="float" value="1" /><input name="outlow" type="float" value="0" /><input name="outhigh" type="float" value="1" /><input name="doclamp" type="boolean" value="true" /></range>
-    <range name="heightFade" type="float"><input name="in" type="float" nodename="relativeHeight" /><input name="inlow" type="float" value="-1.6" /><input name="inhigh" type="float" value="1.6" /><input name="outlow" type="float" value="1" /><input name="outhigh" type="float" value="0.35" /><input name="doclamp" type="boolean" value="true" /></range>
+    <range name="noise01" type="float"><input name="in" type="float" nodename="flameNoise" /><input name="inlow" type="float" value="-0.12" /><input name="inhigh" type="float" value="0.28" /><input name="outlow" type="float" value="0" /><input name="outhigh" type="float" value="1" /><input name="doclamp" type="boolean" value="true" /></range>
+    <range name="heightFade" type="float"><input name="in" type="float" nodename="relativeHeight" /><input name="inlow" type="float" value="-1.6" /><input name="inhigh" type="float" value="1.6" /><input name="outlow" type="float" value="1" /><input name="outhigh" type="float" value="0" /><input name="doclamp" type="boolean" value="true" /></range>
     <range name="radiusByHeight" type="float"><input name="in" type="float" nodename="relativeHeight" /><input name="inlow" type="float" value="-1.6" /><input name="inhigh" type="float" value="1.6" /><input name="outlow" type="float" value="1" /><input name="outhigh" type="float" value="0.12" /><input name="doclamp" type="boolean" value="true" /></range>
     <multiply name="radiusAtHeight" type="float"><input name="in1" type="float" interfacename="radius" /><input name="in2" type="float" nodename="radiusByHeight" /></multiply>
     <divide name="normalizedRadius" type="float"><input name="in1" type="float" nodename="radialDistance" /><input name="in2" type="float" nodename="radiusAtHeight" /></divide>
@@ -149,7 +177,7 @@ export const ENGINE_PRESET_LIBRARY_XML = `
     <multiply name="flameDensity" type="float"><input name="in1" type="float" nodename="heightDensity" /><input name="in2" type="float" nodename="flameShape" /></multiply>
     <multiply name="densityValue" type="float"><input name="in1" type="float" nodename="flameDensity" /><input name="in2" type="float" interfacename="density" /></multiply>
     <combine3 name="scatterRgb" type="vector3"><input name="in1" type="float" nodename="densityValue" /><input name="in2" type="float" nodename="densityValue" /><input name="in3" type="float" nodename="densityValue" /></combine3>
-    <multiply name="hotter" type="float"><input name="in1" type="float" nodename="relativeHeight" /><input name="in2" type="float" value="-1200" /></multiply>
+    <multiply name="hotter" type="float"><input name="in1" type="float" nodename="relativeHeight" /><input name="in2" type="float" value="-450" /></multiply>
     <add name="kelvin" type="float"><input name="in1" type="float" interfacename="temperature" /><input name="in2" type="float" nodename="hotter" /></add>
     <blackbody name="fireColor" type="color3" nodedef="ND_blackbody"><input name="temperature" type="float" nodename="kelvin" /></blackbody>
     <multiply name="emissionValue" type="float"><input name="in1" type="float" nodename="densityValue" /><input name="in2" type="float" interfacename="emission" /></multiply>
@@ -177,8 +205,11 @@ export const ENGINE_PRESET_LIBRARY_XML = `
     <time name="clock" type="float" nodedef="ND_time_float" />
     <multiply name="windOffset" type="vector3"><input name="in1" type="vector3" interfacename="wind" /><input name="in2" type="float" nodename="clock" /></multiply>
     <multiply name="advection" type="vector3"><input name="in1" type="vector3" nodename="windOffset" /><input name="in2" type="float" interfacename="speed" /></multiply>
-    <add name="advectedPosition" type="vector3"><input name="in1" type="vector3" nodename="position" /><input name="in2" type="vector3" nodename="advection" /></add>
-    <separate3 name="smokeCoordinates" type="multioutput" nodedef="ND_separate3_vector3"><input name="in" type="vector3" nodename="position" /></separate3>
+    <subtract name="advectedPosition" type="vector3"><input name="in1" type="vector3" nodename="position" /><input name="in2" type="vector3" nodename="advection" /></subtract>
+    <multiply name="warpPosition" type="vector3"><input name="in1" type="vector3" nodename="advectedPosition" /><input name="in2" type="float" value="0.9" /></multiply>
+    <noise3d name="turbulence" type="vector3" nodedef="ND_noise3d_vector3"><input name="position" type="vector3" nodename="warpPosition" /><input name="amplitude" type="vector3" value="0.9, 0, 0.9" /></noise3d>
+    <add name="shapePosition" type="vector3"><input name="in1" type="vector3" nodename="position" /><input name="in2" type="vector3" nodename="turbulence" /></add>
+    <separate3 name="smokeCoordinates" type="multioutput" nodedef="ND_separate3_vector3"><input name="in" type="vector3" nodename="shapePosition" /></separate3>
     <separate3 name="advectedCoordinates" type="multioutput" nodedef="ND_separate3_vector3"><input name="in" type="vector3" nodename="advectedPosition" /></separate3>
     <separate3 name="smokeCenter" type="multioutput" nodedef="ND_separate3_vector3"><input name="in" type="vector3" interfacename="center" /></separate3>
     <max name="positiveHeight" type="float"><input name="in1" type="float" nodename="smokeCoordinates" output="outy" /><input name="in2" type="float" value="0" /></max>
@@ -207,7 +238,7 @@ export const ENGINE_PRESET_LIBRARY_XML = `
     <multiply name="fineWeighted" type="float"><input name="in1" type="float" nodename="smokeFine" /><input name="in2" type="float" value="0.12" /></multiply>
     <add name="noiseCoarseDetail" type="float"><input name="in1" type="float" nodename="smokeNoise" /><input name="in2" type="float" nodename="detailWeighted" /></add>
     <add name="smokeFractal" type="float"><input name="in1" type="float" nodename="noiseCoarseDetail" /><input name="in2" type="float" nodename="fineWeighted" /></add>
-    <range name="noise01" type="float"><input name="in" type="float" nodename="smokeFractal" /><input name="inlow" type="float" value="-1" /><input name="inhigh" type="float" value="1" /><input name="outlow" type="float" value="0" /><input name="outhigh" type="float" value="1" /><input name="doclamp" type="boolean" value="true" /></range>
+    <range name="noise01" type="float"><input name="in" type="float" nodename="smokeFractal" /><input name="inlow" type="float" value="-0.18" /><input name="inhigh" type="float" value="0.38" /><input name="outlow" type="float" value="0" /><input name="outhigh" type="float" value="1" /><input name="doclamp" type="boolean" value="true" /></range>
     <range name="heightFade" type="float"><input name="in" type="float" nodename="positiveHeight" /><input name="inlow" type="float" value="0" /><input name="inhigh" type="float" value="4.5" /><input name="outlow" type="float" value="1" /><input name="outhigh" type="float" value="0.25" /><input name="doclamp" type="boolean" value="true" /></range>
     <multiply name="heightDensity" type="float"><input name="in1" type="float" nodename="noise01" /><input name="in2" type="float" nodename="heightFade" /></multiply>
     <multiply name="profiledDensity" type="float"><input name="in1" type="float" nodename="heightDensity" /><input name="in2" type="float" nodename="radialFade" /></multiply>
@@ -226,7 +257,7 @@ export const ENGINE_PRESET_LIBRARY_XML = `
   <nodedef name="ND_engine_clouds" node="clouds" doc="Animated procedural high-scattering cloud volume with adjustable coverage, density and wind.">
     <input name="coverage" type="float" value="0.48" uimin="0" uimax="1" />
     <input name="density" type="float" value="1.4" uimin="0" uimax="8" />
-    <input name="scale" type="float" value="2.8" uimin="0.1" uimax="12" />
+    <input name="scale" type="float" value="0.65" uimin="0.1" uimax="12" />
     <input name="speed" type="float" value="0.08" uimin="0" uimax="2" />
     <input name="profile" type="integer" value="0" uimin="0" uimax="2" doc="0 cumulus, 1 stratus, 2 cirrus" />
     <input name="baseHeight" type="float" value="3.5" doc="Altitude of the volume's lower bound in world space." />
@@ -241,8 +272,12 @@ export const ENGINE_PRESET_LIBRARY_XML = `
     <time name="clock" type="float" nodedef="ND_time_float" />
     <multiply name="windOffset" type="vector3"><input name="in1" type="vector3" interfacename="wind" /><input name="in2" type="float" nodename="clock" /></multiply>
     <multiply name="advection" type="vector3"><input name="in1" type="vector3" nodename="windOffset" /><input name="in2" type="float" interfacename="speed" /></multiply>
-    <add name="advectedPosition" type="vector3"><input name="in1" type="vector3" nodename="position" /><input name="in2" type="vector3" nodename="advection" /></add>
-    <multiply name="scaledPosition" type="vector3"><input name="in1" type="vector3" nodename="advectedPosition" /><input name="in2" type="float" interfacename="scale" /></multiply>
+    <subtract name="advectedPosition" type="vector3"><input name="in1" type="vector3" nodename="position" /><input name="in2" type="vector3" nodename="advection" /></subtract>
+    <multiply name="isotropicPosition" type="vector3"><input name="in1" type="vector3" nodename="advectedPosition" /><input name="in2" type="float" interfacename="scale" /></multiply>
+    <multiply name="stratusPosition" type="vector3"><input name="in1" type="vector3" nodename="isotropicPosition" /><input name="in2" type="vector3" value="0.7, 1.8, 0.7" /></multiply>
+    <multiply name="cirrusPosition" type="vector3"><input name="in1" type="vector3" nodename="isotropicPosition" /><input name="in2" type="vector3" value="0.12, 2, 1.4" /></multiply>
+    <ifequal name="layerPosition" type="vector3"><input name="value1" type="integer" interfacename="profile" /><input name="value2" type="integer" value="1" /><input name="in1" type="vector3" nodename="stratusPosition" /><input name="in2" type="vector3" nodename="cirrusPosition" /></ifequal>
+    <ifequal name="scaledPosition" type="vector3"><input name="value1" type="integer" interfacename="profile" /><input name="value2" type="integer" value="0" /><input name="in1" type="vector3" nodename="isotropicPosition" /><input name="in2" type="vector3" nodename="layerPosition" /></ifequal>
     <separate3 name="cloudCoordinates" type="multioutput" nodedef="ND_separate3_vector3"><input name="in" type="vector3" nodename="position" /></separate3>
     <separate3 name="cloudCenter" type="multioutput" nodedef="ND_separate3_vector3"><input name="in" type="vector3" interfacename="center" /></separate3>
     <subtract name="relativeHeight" type="float"><input name="in1" type="float" nodename="cloudCoordinates" output="outy" /><input name="in2" type="float" interfacename="baseHeight" /></subtract>
@@ -260,12 +295,12 @@ export const ENGINE_PRESET_LIBRARY_XML = `
     <noise3d name="cloudDetail" type="float" nodedef="ND_noise3d_float"><input name="position" type="vector3" nodename="detailPosition" /><input name="amplitude" type="float" value="1" /><input name="pivot" type="float" value="0" /></noise3d>
     <multiply name="cloudDetailWeighted" type="float"><input name="in1" type="float" nodename="cloudDetail" /><input name="in2" type="float" value="0.3" /></multiply>
     <add name="perlinWorleyBase" type="float"><input name="in1" type="float" nodename="cloudNoise" /><input name="in2" type="float" nodename="cloudDetailWeighted" /></add>
-    <worleynoise3d name="cloudCells" type="float" nodedef="ND_worleynoise3d_float"><input name="position" type="vector3" nodename="scaledPosition" /><input name="style" type="integer" value="1" /><input name="jitter" type="float" value="0.8" /></worleynoise3d>
+    <worleynoise3d name="cloudCells" type="float" nodedef="ND_worleynoise3d_float"><input name="position" type="vector3" nodename="scaledPosition" /><input name="style" type="integer" value="0" /><input name="jitter" type="float" value="0.8" /></worleynoise3d>
     <subtract name="cellErosion" type="float"><input name="in1" type="float" value="1" /><input name="in2" type="float" nodename="cloudCells" /></subtract>
     <multiply name="perlinWeight" type="float"><input name="in1" type="float" nodename="perlinWorleyBase" /><input name="in2" type="float" value="0.72" /></multiply>
     <multiply name="worleyWeight" type="float"><input name="in1" type="float" nodename="cellErosion" /><input name="in2" type="float" value="0.28" /></multiply>
     <add name="cloudFractal" type="float"><input name="in1" type="float" nodename="perlinWeight" /><input name="in2" type="float" nodename="worleyWeight" /></add>
-    <range name="noise01" type="float"><input name="in" type="float" nodename="cloudFractal" /><input name="inlow" type="float" value="-1" /><input name="inhigh" type="float" value="1" /><input name="outlow" type="float" value="0" /><input name="outhigh" type="float" value="1" /><input name="doclamp" type="boolean" value="true" /></range>
+    <range name="noise01" type="float"><input name="in" type="float" nodename="cloudFractal" /><input name="inlow" type="float" value="-0.5" /><input name="inhigh" type="float" value="0.5" /><input name="outlow" type="float" value="0" /><input name="outhigh" type="float" value="1" /><input name="doclamp" type="boolean" value="true" /></range>
     <subtract name="coverageThreshold" type="float"><input name="in1" type="float" nodename="noise01" /><input name="in2" type="float" interfacename="coverage" /></subtract>
     <smoothstep name="cloudDensity" type="float"><input name="in" type="float" nodename="coverageThreshold" /><input name="low" type="float" value="0" /><input name="high" type="float" value="0.22" /></smoothstep>
     <smoothstep name="cumulusBase" type="float"><input name="in" type="float" nodename="relativeHeight" /><input name="low" type="float" value="0" /><input name="high" type="float" value="0.8" /></smoothstep>
@@ -285,12 +320,8 @@ export const ENGINE_PRESET_LIBRARY_XML = `
     <multiply name="profiledCloudDensity" type="float"><input name="in1" type="float" nodename="cloudDensity" /><input name="in2" type="float" nodename="selectCloudProfile" /></multiply>
     <multiply name="boundedCloudDensity" type="float"><input name="in1" type="float" nodename="profiledCloudDensity" /><input name="in2" type="float" nodename="cloudBoundary" /></multiply>
     <multiply name="densityValue" type="float"><input name="in1" type="float" nodename="boundedCloudDensity" /><input name="in2" type="float" interfacename="density" /></multiply>
-    <subtract name="powderEdge" type="float"><input name="in1" type="float" value="1" /><input name="in2" type="float" nodename="boundedCloudDensity" /></subtract>
-    <multiply name="powderAmount" type="float"><input name="in1" type="float" nodename="powderEdge" /><input name="in2" type="float" value="0.25" /></multiply>
-    <add name="powderFactor" type="float"><input name="in1" type="float" value="1" /><input name="in2" type="float" nodename="powderAmount" /></add>
-    <multiply name="powderedDensity" type="float"><input name="in1" type="float" nodename="densityValue" /><input name="in2" type="float" nodename="powderFactor" /></multiply>
     <convert name="colorVector" type="vector3" nodedef="ND_convert_color3_vector3"><input name="in" type="color3" interfacename="color" /></convert>
-    <multiply name="scatteringColor" type="vector3"><input name="in1" type="vector3" nodename="colorVector" /><input name="in2" type="float" nodename="powderedDensity" /></multiply>
+    <multiply name="scatteringColor" type="vector3"><input name="in1" type="vector3" nodename="colorVector" /><input name="in2" type="float" nodename="densityValue" /></multiply>
     <anisotropic_vdf name="vdf" type="VDF"><input name="absorption" type="vector3" value="0, 0, 0" /><input name="scattering" type="vector3" nodename="scatteringColor" /><input name="anisotropy" type="float" interfacename="anisotropy" /></anisotropic_vdf>
     <volume name="cloudVolume" type="volumeshader"><input name="vdf" type="VDF" nodename="vdf" /></volume>
     <output name="out" type="volumeshader" nodename="cloudVolume" />
@@ -353,9 +384,14 @@ export const ENGINE_PRESET_LIBRARY_XML = `
     <mix name="mudColor" type="color3"><input name="fg" type="color3" interfacename="wetColor" /><input name="bg" type="color3" interfacename="color" /><input name="mix" type="float" nodename="wetMask" /></mix>
     <multiply name="wetRoughness" type="float"><input name="in1" type="float" interfacename="roughness" /><input name="in2" type="float" value="0.25" /></multiply>
     <mix name="mudRoughness" type="float"><input name="fg" type="float" nodename="wetRoughness" /><input name="bg" type="float" interfacename="roughness" /><input name="mix" type="float" nodename="wetMask" /></mix>
-    <standard_surface name="mudSurface" type="surfaceshader"><input name="base_color" type="color3" nodename="mudColor" /><input name="specular_roughness" type="float" nodename="mudRoughness" /></standard_surface>
+    <multiply name="grainPosition" type="vector3"><input name="in1" type="vector3" nodename="scaledPosition" /><input name="in2" type="float" value="6" /></multiply>
+    <noise3d name="grains" type="float" nodedef="ND_noise3d_float"><input name="position" type="vector3" nodename="grainPosition" /></noise3d>
+    <multiply name="grainHeight" type="float"><input name="in1" type="float" nodename="grains" /><input name="in2" type="float" value="0.16" /></multiply>
+    <add name="mudHeight" type="float"><input name="in1" type="float" nodename="moistureNoise" /><input name="in2" type="float" nodename="grainHeight" /></add>
+    <bump name="mudNormal" type="vector3" nodedef="ND_bump_vector3"><input name="height" type="float" nodename="mudHeight" /><input name="scale" type="float" value="0.07" /></bump>
+    <standard_surface name="mudSurface" type="surfaceshader"><input name="base_color" type="color3" nodename="mudColor" /><input name="specular_roughness" type="float" nodename="mudRoughness" /><input name="normal" type="vector3" nodename="mudNormal" /><input name="coat" type="float" nodename="wetMask" /><input name="coat_roughness" type="float" value="0.12" /></standard_surface>
     <output name="out" type="surfaceshader" nodename="mudSurface" />
-    <displacement name="mudDisplacement" type="displacementshader"><input name="displacement" type="float" value="0" /></displacement>
+    <displacement name="mudDisplacement" type="displacementshader"><input name="displacement" type="float" nodename="mudHeight" /><input name="scale" type="float" value="0.04" /></displacement>
     <output name="displacement" type="displacementshader" nodename="mudDisplacement" />
   </nodegraph>
   <nodegraph name="NG_engine_wet_sand" nodedef="ND_engine_wet_sand">
@@ -367,9 +403,12 @@ export const ENGINE_PRESET_LIBRARY_XML = `
     <mix name="sandColor" type="color3"><input name="fg" type="color3" interfacename="wetColor" /><input name="bg" type="color3" interfacename="color" /><input name="mix" type="float" nodename="wetMask" /></mix>
     <multiply name="wetRoughness" type="float"><input name="in1" type="float" interfacename="roughness" /><input name="in2" type="float" value="0.18" /></multiply>
     <mix name="sandRoughness" type="float"><input name="fg" type="float" nodename="wetRoughness" /><input name="bg" type="float" interfacename="roughness" /><input name="mix" type="float" nodename="wetMask" /></mix>
-    <standard_surface name="sandSurface" type="surfaceshader"><input name="base_color" type="color3" nodename="sandColor" /><input name="specular_roughness" type="float" nodename="sandRoughness" /></standard_surface>
+    <multiply name="grainPosition" type="vector3"><input name="in1" type="vector3" nodename="scaledPosition" /><input name="in2" type="float" value="8" /></multiply>
+    <noise3d name="grains" type="float" nodedef="ND_noise3d_float"><input name="position" type="vector3" nodename="grainPosition" /></noise3d>
+    <bump name="sandNormal" type="vector3" nodedef="ND_bump_vector3"><input name="height" type="float" nodename="grains" /><input name="scale" type="float" value="0.012" /></bump>
+    <standard_surface name="sandSurface" type="surfaceshader"><input name="base_color" type="color3" nodename="sandColor" /><input name="specular_roughness" type="float" nodename="sandRoughness" /><input name="normal" type="vector3" nodename="sandNormal" /><input name="coat" type="float" nodename="wetMask" /><input name="coat_roughness" type="float" value="0.08" /></standard_surface>
     <output name="out" type="surfaceshader" nodename="sandSurface" />
-    <displacement name="sandDisplacement" type="displacementshader"><input name="displacement" type="float" value="0" /></displacement>
+    <displacement name="sandDisplacement" type="displacementshader"><input name="displacement" type="float" nodename="grains" /><input name="scale" type="float" value="0.003" /></displacement>
     <output name="displacement" type="displacementshader" nodename="sandDisplacement" />
   </nodegraph>
 `;

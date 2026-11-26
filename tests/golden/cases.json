@@ -36,6 +36,86 @@
       "scene": "scenes/bench/animated.usda",
       "width": 128, "height": 128, "time": 30, "backend": "pathtracing", "samples": 256,
       "tolerance": { "blockRmse": 0.015 }
+    },
+    {
+      "name": "p17-water-raster", "scene": "tests/golden/p17/water.usda",
+      "width": 96, "height": 96,
+      "tolerance": { "meanAbsoluteError": 1.5, "outlierFraction": 0.01 }
+    },
+    {
+      "name": "p17-lava-raster", "scene": "tests/golden/p17/lava.usda",
+      "width": 96, "height": 96,
+      "tolerance": { "meanAbsoluteError": 1.5, "outlierFraction": 0.01 }
+    },
+    {
+      "name": "p17-fire-raster", "scene": "tests/golden/p17/fire.usda",
+      "width": 96, "height": 96,
+      "tolerance": { "meanAbsoluteError": 1.5, "outlierFraction": 0.01 }
+    },
+    {
+      "name": "p17-smoke-raster", "scene": "tests/golden/p17/smoke.usda",
+      "width": 96, "height": 96,
+      "tolerance": { "meanAbsoluteError": 1.5, "outlierFraction": 0.01 }
+    },
+    {
+      "name": "p17-clouds-raster", "scene": "tests/golden/p17/clouds.usda",
+      "width": 96, "height": 96,
+      "tolerance": { "meanAbsoluteError": 1.5, "outlierFraction": 0.01 }
+    },
+    {
+      "name": "p17-ice-raster", "scene": "tests/golden/p17/ice.usda",
+      "width": 96, "height": 96,
+      "tolerance": { "meanAbsoluteError": 1.5, "outlierFraction": 0.01 }
+    },
+    {
+      "name": "p17-mud-raster", "scene": "tests/golden/p17/mud.usda",
+      "width": 96, "height": 96,
+      "tolerance": { "meanAbsoluteError": 1.5, "outlierFraction": 0.01 }
+    },
+    {
+      "name": "p17-wet-sand-raster", "scene": "tests/golden/p17/wet-sand.usda",
+      "width": 96, "height": 96,
+      "tolerance": { "meanAbsoluteError": 1.5, "outlierFraction": 0.01 }
+    },
+    {
+      "name": "p17-water-pathtracing", "scene": "tests/golden/p17/water.usda",
+      "width": 96, "height": 96, "backend": "pathtracing", "samples": 256,
+      "tolerance": { "blockRmse": 0.015 }
+    },
+    {
+      "name": "p17-lava-pathtracing", "scene": "tests/golden/p17/lava.usda",
+      "width": 96, "height": 96, "backend": "pathtracing", "samples": 256,
+      "tolerance": { "blockRmse": 0.015 }
+    },
+    {
+      "name": "p17-fire-pathtracing", "scene": "tests/golden/p17/fire.usda",
+      "width": 96, "height": 96, "backend": "pathtracing", "samples": 512,
+      "tolerance": { "blockRmse": 0.02 }
+    },
+    {
+      "name": "p17-smoke-pathtracing", "scene": "tests/golden/p17/smoke.usda",
+      "width": 96, "height": 96, "backend": "pathtracing", "samples": 512,
+      "tolerance": { "blockRmse": 0.02 }
+    },
+    {
+      "name": "p17-clouds-pathtracing", "scene": "tests/golden/p17/clouds.usda",
+      "width": 96, "height": 96, "backend": "pathtracing", "samples": 512,
+      "tolerance": { "blockRmse": 0.02 }
+    },
+    {
+      "name": "p17-ice-pathtracing", "scene": "tests/golden/p17/ice.usda",
+      "width": 96, "height": 96, "backend": "pathtracing", "samples": 256,
+      "tolerance": { "blockRmse": 0.015 }
+    },
+    {
+      "name": "p17-mud-pathtracing", "scene": "tests/golden/p17/mud.usda",
+      "width": 96, "height": 96, "backend": "pathtracing", "samples": 256,
+      "tolerance": { "blockRmse": 0.015 }
+    },
+    {
+      "name": "p17-wet-sand-pathtracing", "scene": "tests/golden/p17/wet-sand.usda",
+      "width": 96, "height": 96, "backend": "pathtracing", "samples": 256,
+      "tolerance": { "blockRmse": 0.015 }
     }
   ]
 }

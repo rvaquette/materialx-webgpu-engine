@@ -106,6 +106,7 @@ const LIBRARY = ScriptLibrary.fromXml([`<?xml version="1.0"?>
 const P17_LIBRARY = ScriptLibrary.fromXml([`<materialx version="1.39">
   <nodedef name="ND_position_vector3" node="position"><input name="space" type="string" value="object" /><output name="out" type="vector3" /></nodedef>
   <nodedef name="ND_separate3_vector3" node="separate3"><input name="in" type="vector3" value="0, 0, 0" /><output name="outx" type="float" /><output name="outy" type="float" /><output name="outz" type="float" /></nodedef>
+  <nodedef name="ND_separate2_vector2" node="separate2"><input name="in" type="vector2" value="0, 0" /><output name="outx" type="float" /><output name="outy" type="float" /></nodedef>
   <nodedef name="ND_time_float" node="time"><input name="fps" type="float" value="24" /><output name="out" type="float" /></nodedef>
   <nodedef name="ND_multiply_float" node="multiply"><input name="in1" type="float" value="1" /><input name="in2" type="float" value="1" /><output name="out" type="float" /></nodedef>
   <nodedef name="ND_multiply_vector3" node="multiply"><input name="in1" type="vector3" value="0, 0, 0" /><input name="in2" type="vector3" value="1, 1, 1" /><output name="out" type="vector3" /></nodedef>
@@ -114,11 +115,12 @@ const P17_LIBRARY = ScriptLibrary.fromXml([`<materialx version="1.39">
   <nodedef name="ND_add_float" node="add"><input name="in1" type="float" value="0" /><input name="in2" type="float" value="0" /><output name="out" type="float" /></nodedef>
   <nodedef name="ND_add_vector3" node="add"><input name="in1" type="vector3" value="0, 0, 0" /><input name="in2" type="vector3" value="0, 0, 0" /><output name="out" type="vector3" /></nodedef>
   <nodedef name="ND_sin_float" node="sin"><input name="in" type="float" value="0" /><output name="out" type="float" /></nodedef>
-  <nodedef name="ND_displacement_float" node="displacement"><input name="displacement" type="float" value="0" /><output name="out" type="displacementshader" /></nodedef>
+  <nodedef name="ND_displacement_float" node="displacement"><input name="displacement" type="float" value="0" /><input name="scale" type="float" value="1" /><output name="out" type="displacementshader" /></nodedef>
   <nodedef name="ND_smoothstep_float" node="smoothstep"><input name="in" type="float" value="0" /><input name="low" type="float" value="0" /><input name="high" type="float" value="1" /><output name="out" type="float" /></nodedef>
   <nodedef name="ND_mix_color3" node="mix"><input name="fg" type="color3" value="0, 0, 0" /><input name="bg" type="color3" value="0, 0, 0" /><input name="mix" type="float" value="0" /><output name="out" type="color3" /></nodedef>
   <nodedef name="ND_mix_float" node="mix"><input name="fg" type="float" value="0" /><input name="bg" type="float" value="0" /><input name="mix" type="float" value="0" /><output name="out" type="float" /></nodedef>
   <nodedef name="ND_noise3d_float" node="noise3d"><input name="amplitude" type="float" value="1" /><input name="pivot" type="float" value="0" /><input name="position" type="vector3" value="0, 0, 0" /><output name="out" type="float" /></nodedef>
+  <nodedef name="ND_noise3d_vector3" node="noise3d"><input name="amplitude" type="vector3" value="1, 1, 1" /><input name="pivot" type="float" value="0" /><input name="position" type="vector3" value="0, 0, 0" /><output name="out" type="vector3" /></nodedef>
   <nodedef name="ND_bump_vector3" node="bump"><input name="height" type="float" value="0" /><input name="scale" type="float" value="1" /><output name="out" type="vector3" /></nodedef>
   <nodedef name="ND_standard_surface_surfaceshader" node="standard_surface">
     <input name="base" type="float" value="1" /><input name="base_color" type="color3" value="0.8, 0.8, 0.8" />
@@ -126,6 +128,7 @@ const P17_LIBRARY = ScriptLibrary.fromXml([`<materialx version="1.39">
     <input name="transmission" type="float" value="0" /><input name="transmission_color" type="color3" value="1, 1, 1" />
     <input name="transmission_depth" type="float" value="0" /><input name="subsurface" type="float" value="0" />
     <input name="subsurface_color" type="color3" value="1, 1, 1" /><input name="normal" type="vector3" value="0, 0, 1" />
+    <input name="coat" type="float" value="0" /><input name="coat_roughness" type="float" value="0.1" />
     <input name="emission" type="float" value="0" /><input name="emission_color" type="color3" value="0, 0, 0" />
     <input name="thin_walled" type="boolean" value="false" /><output name="out" type="surfaceshader" />
   </nodedef>
@@ -140,13 +143,21 @@ const P17_LIBRARY = ScriptLibrary.fromXml([`<materialx version="1.39">
   <nodedef name="ND_worleynoise3d_float" node="worleynoise3d">
     <input name="position" type="vector3" value="0, 0, 0" /><input name="style" type="integer" value="0" /><input name="jitter" type="float" value="1" /><output name="out" type="float" />
   </nodedef>
+  <nodedef name="ND_worleynoise3d_vector2" node="worleynoise3d">
+    <input name="position" type="vector3" value="0, 0, 0" /><input name="style" type="integer" value="0" /><input name="jitter" type="float" value="1" /><output name="out" type="vector2" />
+  </nodedef>
   <nodedef name="ND_subtract_float" node="subtract"><input name="in1" type="float" value="0" /><input name="in2" type="float" value="0" /><output name="out" type="float" /></nodedef>
+  <nodedef name="ND_subtract_vector3" node="subtract"><input name="in1" type="vector3" value="0, 0, 0" /><input name="in2" type="vector3" value="0, 0, 0" /><output name="out" type="vector3" /></nodedef>
   <nodedef name="ND_divide_float" node="divide"><input name="in1" type="float" value="0" /><input name="in2" type="float" value="1" /><output name="out" type="float" /></nodedef>
   <nodedef name="ND_sqrt_float" node="sqrt"><input name="in" type="float" value="0" /><output name="out" type="float" /></nodedef>
   <nodedef name="ND_max_float" node="max"><input name="in1" type="float" value="0" /><input name="in2" type="float" value="0" /><output name="out" type="float" /></nodedef>
   <nodedef name="ND_ifequal_float" node="ifequal">
     <input name="value1" type="integer" value="0" /><input name="value2" type="integer" value="0" />
     <input name="in1" type="float" value="0" /><input name="in2" type="float" value="0" /><output name="out" type="float" />
+  </nodedef>
+  <nodedef name="ND_ifequal_vector3" node="ifequal">
+    <input name="value1" type="integer" value="0" /><input name="value2" type="integer" value="0" />
+    <input name="in1" type="vector3" value="0, 0, 0" /><input name="in2" type="vector3" value="0, 0, 0" /><output name="out" type="vector3" />
   </nodedef>
   <nodedef name="ND_blackbody" node="blackbody"><input name="temperature" type="float" value="6500" /><output name="out" type="color3" /></nodedef>
   <nodedef name="ND_convert_color3_vector3" node="convert"><input name="in" type="color3" value="0, 0, 0" /><output name="out" type="vector3" /></nodedef>
@@ -558,6 +569,14 @@ s.thin_walled = true;
       const graph = await runScript(`surface = ${source}`, P17_LIBRARY);
       expect(graph.nodes.some(node => node.def.category === category)).toBe(true);
     }
+  });
+  it('expands presets without trying to expand native engine shaders', async () => {
+    const graph = await runScript('sky = new EnvironmentShader(); fire = new Fire();', P17_LIBRARY);
+    const xml = toXml(graph, P17_LIBRARY);
+    expect(xml).toContain('<environment_shader');
+    expect(xml).toContain('<volume');
+    expect(xml).not.toContain('<fire ');
+    expect(fromXml(xml, P17_LIBRARY).nodes.some(node => node.def.category === 'environment_shader')).toBe(true);
   });
 
   it('writes script-created volume bounds and binds a volumetric shader', async () => {

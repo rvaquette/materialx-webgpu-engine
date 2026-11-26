@@ -154,6 +154,8 @@ export interface SceneSampler {
   sampleBsdf(hit: SurfaceHit, wo: Vec3, rng: Rng): BsdfSample | null;
   evalBsdf(hit: SurfaceHit, wo: Vec3, wi: Vec3): { value: Vec3; pdf: number };
   sampleLight(hit: SurfaceHit, rng: Rng): LightSample | null;
+  /** Volume-measure NEE, not a solid-angle MIS strategy. */
+  sampleVolumeLight?(hit: SurfaceHit, rng: Rng): LightSample | null;
   occluded(from: Vec3, direction: Vec3, distance: number): boolean;
   /** Solid-angle pdf of a BSDF ray hitting the light it landed on (for MIS). */
   lightPdf(from: SurfaceHit, wi: Vec3, lightHit: SurfaceHit): number;
@@ -162,7 +164,7 @@ export interface SceneSampler {
   /** Solid-angle pdf of sampling the environment direction (for MIS). */
   environmentPdf?(direction: Vec3): number;
   /** Medium-aware transmittance along a shadow segment; enables volumetric NEE. Defaults to binary occluded(). */
-  transmittance?(from: Vec3, direction: Vec3, distance: number): Vec3;
+  transmittance?(from: Vec3, direction: Vec3, distance: number, rng?: Rng): Vec3;
 }
 
 export interface IntegratorOptions {
@@ -199,6 +201,7 @@ export function integratePath(
   let prevHit: SurfaceHit | null = null;
   let medium: HomogeneousMedium | null = options.initialMedium ?? null;
   let field: VolumeField | undefined;
+  let volumeEmissionNee = false;
   let interiorIor = 1;
   let subsurfaceWalk = false;
   let subsurfaceEvents = 0;
@@ -228,7 +231,7 @@ export function integratePath(
     if (medium || field) {
       const volumeSample = field ? sampleVolumeTransport(field,ray.origin,ray.direction,tMax,rng) : undefined;
       const mi = volumeSample ?? sampleHomogeneous(medium!, tMax, rng);
-      if (volumeSample) radiance = add(radiance, mul(beta,volumeSample.emission));
+      if (volumeSample && !volumeEmissionNee) radiance = add(radiance, mul(beta,volumeSample.emission));
       beta = mul(beta, mi.weight);
       const g = volumeSample?.anisotropy ?? medium!.anisotropy;
       if (mi.scattered) {
@@ -238,7 +241,7 @@ export function integratePath(
         if (scene.transmittance) {
           const ls = scene.sampleLight({ position: point, normal: wo }, rng);
           if (ls && ls.pdf > 0) {
-            const tr = scene.transmittance(point, ls.direction, ls.distance);
+            const tr = scene.transmittance(point, ls.direction, ls.distance, rng);
             if (maxComponent(tr) > 0) {
               const phase = phaseHG(dot(wo, ls.direction), g);
               const contrib = scale(mul(tr, ls.radiance), phase / ls.pdf);
@@ -250,6 +253,7 @@ export function integratePath(
         const ps = sampleHenyeyGreenstein(wo, g, rng(), rng());
         bsdfPdf = ps.pdf;
         specularBounce = false;
+        volumeEmissionNee = false;
         prevHit = null;
         ray = { origin: point, direction: ps.wi, ...(field ? { minDistance:1e-7 } : {}) };
         const rouletteDepth = subsurfaceWalk ? subsurfaceEvents : bounces;
@@ -350,12 +354,23 @@ export function integratePath(
       }
     }
 
+    if (directLighting && scene.sampleVolumeLight) {
+      const emitter = scene.sampleVolumeLight(hit, rng);
+      if (emitter && emitter.pdf > 0) {
+        const tr = scene.transmittance?.(hit.position, emitter.direction, emitter.distance, rng)
+          ?? (scene.occluded(hit.position, emitter.direction, emitter.distance) ? [0, 0, 0] : [1, 1, 1]);
+        const evaluated = scene.evalBsdf(hit, wo, emitter.direction);
+        radiance = add(radiance, scale(mul(beta, mul(evaluated.value, mul(tr, emitter.radiance))),
+          Math.abs(dot(hit.normal, emitter.direction)) / emitter.pdf));
+      }
+    }
     const bs = scene.sampleBsdf(hit, wo, rng);
     if (!bs || bs.pdf <= 0) break;
     const cosScatter = Math.abs(dot(hit.normal, bs.direction));
     beta = mul(beta, scale(bs.value, cosScatter / bs.pdf));
     bsdfPdf = bs.pdf;
     specularBounce = !directLighting || (bs.specular ?? false);
+    volumeEmissionNee = scene.sampleVolumeLight !== undefined && !specularBounce;
     prevHit = hit;
     ray = { origin: hit.position, direction: bs.direction };
 

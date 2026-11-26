@@ -3,11 +3,100 @@ import { FLOAT, IrModuleBuilder, OBJECT_TO_WORLD_INPUT, matrix, shaderType, vect
 import { appendVolumeIr, isSpatialVolumeIr, lowerVolumeInputsToIr } from '../../src/compiler/volume-ir.ts';
 import type { ResolvedGraph, ResolvedNode } from '../../src/materialx/graph.ts';
 import type { ResolvedVolume } from '../../src/materialx/volume-graph.ts';
-import { bakeVolumeGrid, sampleVolumeGrid, sampleVolumeTransport } from '../../src/render/volume-field.ts';
+import { bakeVolumeGrid, sampleVolumeGrid, sampleVolumeTransport, sampleVolumeEmitter, volumeTransmittance } from '../../src/render/volume-field.ts';
 import { createPcg32, integratePath, type SceneSampler } from '../../src/render/pathtracing/integrator.ts';
 import { PT_MATERIAL_RECORD_FLOATS } from '../../src/render/pathtracing/material-record.ts';
 import { pathTraceComputeWgsl } from '../../src/render/pathtracing/compute.ts';
 import { rasterVolumeWgsl } from '../../src/render/raster/volume-pass.ts';
+
+it('estimates inverse-square illumination from two volume emitters regardless of selection weights', () => {
+  const materials = new Float32Array(2 * PT_MATERIAL_RECORD_FLOATS);
+  for (let index = 0; index < 2; index++) {
+    const base = index * PT_MATERIAL_RECORD_FLOATS;
+    materials.set([2, 3, 4].map(value => value * (index + 1)), base + 38);
+    materials.set([-0.5, -0.5, (index + 1) * 10 - 0.5], base + 43);
+    materials.set([1, 1, 1], base + 46);
+    materials[base + 50] = index === 0 ? 2 : 16;
+  }
+  const rng = createPcg32(731);
+  const sum = [0, 0, 0];
+  const samples = 30000;
+  for (let sample = 0; sample < samples; sample++) {
+    const light = sampleVolumeEmitter(materials, undefined, [0, 0, 0], rng)!;
+    for (let axis = 0; axis < 3; axis++) sum[axis] = sum[axis]! + light.emission[axis]! * light.direction[2] / (Math.PI * light.pdf);
+  }
+  for (let axis = 0; axis < 3; axis++) {
+    const expected = (axis + 2) * (1 / 100 + 2 / 400) / Math.PI;
+    expect(Math.abs(sum[axis]! / samples - expected) / expected).toBeLessThan(0.025);
+  }
+});
+
+it('ratio tracking agrees with Beer-Lambert extinction', () => {
+  const field = { majorant: 2, sample: () => ({ absorption: [1, 0.5, 0.25] as const, scattering: [0, 0, 0] as const, anisotropy: 0 }) };
+  const rng = createPcg32(923);
+  const sum = [0, 0, 0];
+  for (let sample = 0; sample < 20000; sample++) {
+    const tr = volumeTransmittance(field, [0, 0, 0], [0, 0, 1], 1, rng);
+    for (let axis = 0; axis < 3; axis++) sum[axis] = sum[axis]! + tr[axis]!;
+  }
+  for (let axis = 0; axis < 3; axis++) expect(sum[axis]! / 20000).toBeCloseTo(Math.exp(-field.sample().absorption[axis]!), 2);
+  expect(() => volumeTransmittance({ ...field, majorant: 0.1 }, [0, 0, 0], [0, 0, 1], 1, () => 0.01)).toThrow('majorant');
+});
+
+it('importance sampling preserves the integrated emission of a nonuniform reconstructed grid', () => {
+  const b = new IrModuleBuilder();
+  const position = b.add({ kind: 'input', name: 'position', type: vector(3) });
+  const x = b.add({ kind: 'swizzle', source: position, pattern: 'x', type: FLOAT });
+  const emission = b.add({ kind: 'convert', source: x, from: FLOAT, type: vector(3) });
+  const ref = b.add({ kind: 'closure', type: shaderType('volume'), closure: 'vdf', op: 'anisotropic_vdf', params: {
+    absorption: b.constant(vector(3), [0, 0, 0]), scattering: b.constant(vector(3), [0, 0, 0]),
+    anisotropy: b.constant(FLOAT, 0), emission,
+  } });
+  b.output({ name: 'volumeshader', type: shaderType('volume'), ref });
+  const grid = bakeVolumeGrid(b.build(), { min: [0, 0, 10], max: [1, 1, 11] }, 8);
+  const data = new Float32Array(grid.data.length + grid.emissionCdf!.length);
+  data.set(grid.data);
+  data.set(grid.emissionCdf!, grid.data.length);
+  const materials = new Float32Array(PT_MATERIAL_RECORD_FLOATS);
+  materials[41] = grid.size;
+  materials.set([0, 0, 10], 43);
+  materials.set([1, 1, 1], 46);
+  materials[50] = grid.emissionWeight;
+  const rng = createPcg32(627);
+  let integral = 0;
+  for (let sample = 0; sample < 10000; sample++) {
+    const light = sampleVolumeEmitter(materials, data, [0, 0, 0], rng)!;
+    integral += light.emission[0] * light.distance ** 2 / light.pdf;
+  }
+  expect(grid.emissionWeight).toBeCloseTo(0.5, 6);
+  expect(integral / 10000).toBeCloseTo(0.5, 2);
+});
+
+it('attenuates surface illumination from an emissive volume without a proxy light', () => {
+  const scene: SceneSampler = {
+    intersect: () => ({ position: [0, 0, 0], normal: [0, 0, 1] }),
+    sampleBsdf: () => null,
+    evalBsdf: () => ({ value: [1 / Math.PI, 1 / Math.PI, 1 / Math.PI], pdf: 1 / Math.PI }),
+    sampleLight: () => null,
+    sampleVolumeLight: () => ({ direction: [0, 0, 1], radiance: [2, 2, 2], pdf: 1, distance: 1 }),
+    transmittance: () => [0.5, 0.25, 0],
+    occluded: () => false,
+    lightPdf: () => 0,
+  };
+  const value = integratePath(scene, { origin: [0, 0, 1], direction: [0, 0, -1] }, createPcg32(1), { maxBounces: 1 });
+  expect(value[0]).toBeCloseTo(1 / Math.PI);
+  expect(value[1]).toBeCloseTo(0.5 / Math.PI);
+  expect(value[2]).toBe(0);
+});
+
+it('samples emissive volume domains without duplicating the BSDF evaluation or double counting direct EDF', () => {
+  const shader = pathTraceComputeWgsl({ volumeGrid: true, media: true, volumeEmission: true });
+  const integrate = shader.slice(shader.indexOf('fn integrate('));
+  expect(integrate.match(/mx_closure_eval_parts\(/g)).toHaveLength(1);
+  expect(integrate).toContain('if (!volumeEmissionNee)');
+  expect(shader).toContain('mx_volume_point_inside(index,position)');
+  expect(() => pathTraceComputeWgsl({ volumeEmission: true })).toThrow('medium-aware visibility');
+});
 
 function spatialIr(): ShaderIr {
   const b = new IrModuleBuilder();

@@ -74,6 +74,23 @@ s'obtiennent en quelques lignes de script, animés et sans texture externe ; le
 feu éclaire la scène, sa fumée et les nuages projettent des ombres en path
 tracing.
 
+**Avancement et choix de précision :** les huit préréglages disposent de graphes
+procéduraux, d'exemples et d'animations ; les horloges des volumes reconstruisent
+effectivement leurs champs. Le feu éclaire maintenant les surfaces par
+échantillonnage de sa véritable émission volumique, sans lumière ponctuelle en
+path tracing. L'estimateur est vérifié contre l'atténuation Beer-Lambert et la
+décroissance géométrique ; les grilles émissives sont échantillonnées par
+importance. Les nuages utilisent la diffusion multiple HG plutôt qu'un
+assombrissement artificiel de leur densité. La flamme actuelle est une flamme
+de suie orange/jaune ; le cœur bleu chimique n'est pas simulé.
+
+La priorité reste **en cours** : la superposition de milieux, la convergence
+des caustiques physiques de l'eau et l'acceptation visuelle de tous les profils
+de nuages restent à résoudre ou à vérifier. Les captures de documentation ne
+remplacent pas les tests golden. Les petites scènes de régression P17 sont
+régénérables avec `npx vite-node scripts/build-p17-golden-fixtures.ts` et
+utilisent uniquement les graphes exportés, sans texture externe.
+
 ## Priorité 18 : déformation volumique de surfaces complexes
 
 Déformer une surface (primitive, maillage importé, surface complexe de la
@@ -298,6 +315,51 @@ interruption Spot est reprise sans résultat perdu ni contribution comptée deux
 fois. Les mesures documentent le gain, le coût par image, les délais de
 démarrage et la fidélité par rapport au rendu sur un seul nœud.
 
+## Priorité 28 : écarts avec l'implémentation officielle de MaterialX
+
+Documenter précisément ce que le moteur conserve, étend, approxime ou ne prend
+pas en charge par rapport à MaterialX officiel, pour éviter de confondre un
+document `.mtlx` valide avec un matériau portable et un rendu fidèle :
+
+- **référence explicite** : préciser la version de la spécification, des
+  bibliothèques standard et des générateurs de shaders officiels utilisés pour
+  la comparaison ; distinguer conformité du document, résolution des
+  `nodedef`/`nodegraph` et équivalence du rendu ;
+- **matrice de compatibilité** : recenser nœuds, types, entrées, valeurs par
+  défaut, espaces géométriques, unités, espaces colorimétriques, textures et
+  closures ; qualifier chaque cas comme conforme, partiel, approximé,
+  non pris en charge ou extension, séparément pour raster, path tracing
+  MaterialX, Disney et évaluation CPU/baking ;
+- **extensions du moteur** : inventorier les nœuds et types ajoutés, notamment
+  les shaders d'environnement, de caméra/lentille, d'image/AOV, les filtres de
+  lumière/gobos, le scatter et les préréglages de surfaces complexes ;
+  distinguer les graphes composés de nœuds standard des catégories ou
+  sémantiques propres au moteur, ainsi que l'API JavaScript et les attributs
+  USD `engine:` qui ne font pas partie de MaterialX ;
+- **interopérabilité et export** : expliquer ce qui reste utilisable dans un
+  outil MaterialX externe, ce qui exige les définitions d'extension, ce qui
+  peut être développé en graphes standard ou baké, et ce qui ne dispose
+  d'aucun équivalent ; ne pas présenter le baking comme une équivalence
+  procédurale ou animée ;
+- **écarts vérifiés** : associer chaque écart à sa source officielle, au code
+  concerné, à son effet visible et aux tests disponibles ; documenter les
+  rejets explicites et les éventuels replis, sans déduire la fidélité d'une
+  simple compilation réussie ;
+- **livrables** : un guide comparatif central relié à
+  [INTEGRATION.md](INTEGRATION.md) et à
+  [SCRIPT_REFERENCE.md](SCRIPT_REFERENCE.md), une matrice consultable et de
+  petits exemples comparant un graphe standard, une extension exportable et
+  une fonctionnalité propre au moteur ;
+- **maintenance** : mettre à jour cette documentation lors d'un ajout
+  d'extension, d'un changement de sémantique ou d'une mise à jour de la
+  bibliothèque officielle ; séparer les limites actuelles des travaux prévus.
+
+**Critère d'aboutissement :** pour un matériau donné, la documentation permet
+de déterminer ses dépendances au moteur, les différences selon le backend et
+la stratégie d'export vers un outil MaterialX officiel. Les écarts sont sourcés
+et illustrés par des cas reproductibles, sans annoncer une conformité globale
+non démontrée.
+
 ## Pistes exploratoires
 
 - **Shaders implicites / SDF** (métaboules, fractales, booléens lisses) :
@@ -332,3 +394,6 @@ démarrage et la fidélité par rapport au rendu sur un seul nœud.
     projets (14), les scènes dynamiques (5) et l'étude d'enregistrement (24).
 12. Déploiement Azure du rendu distribué (27), après le socle multi-serveur
     (19) ; la validation d'une VM GPU peut commencer dès maintenant.
+13. Écarts avec MaterialX officiel (28), à mener en parallèle des shaders
+    d'extension (16) et des surfaces complexes (17), puis à maintenir avec
+    chaque évolution du compilateur et des exports.

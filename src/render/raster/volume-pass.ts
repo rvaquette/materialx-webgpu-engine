@@ -54,18 +54,20 @@ fn shadow_volume(origin: vec3f, direction: vec3f, distance: f32, initial: u32) -
   }
 }
 fn single_scattering(p: vec3f, rd: vec3f, index: u32, g: f32) -> vec3f {
-  var result = V.environment.xyz;
+  // Two-direction ambient visibility approximates sky/ground self-shadowing.
+  var result = V.environment.xyz * 0.5 *
+    (shadow_volume(p,vec3f(0.0,1.0,0.0),1e30,index) + shadow_volume(p,vec3f(0.0,-1.0,0.0),1e30,index));
 ${lights ? `
   let count = u32(V.settings.w);
   for (var i=0u;i<count;i++) {
     let light = mx_sample_light(p,vec3f(0.5,0.5,(f32(i)+0.5)/f32(count)));
     if (light.pdf > 0.0) {
-      result += light.radiance*volume_phase(dot(rd,light.direction),g)*
+      result += light.radiance*volume_phase(dot(-rd,light.direction),g)*
         shadow_volume(p,light.direction,light.distance-2.0*RAY_EPS,index)/(light.pdf*f32(count));
     }
   }` : `
   let wi = normalize(V.lightDirection.xyz);
-  result += V.lightColor.xyz*volume_phase(dot(rd,wi),g)*shadow_volume(p,wi,1e30,index);
+  result += V.lightColor.xyz*volume_phase(dot(-rd,wi),g)*shadow_volume(p,wi,1e30,index);
 `}
   return result;
 }

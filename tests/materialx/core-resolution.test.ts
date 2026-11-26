@@ -13,6 +13,9 @@ import { evaluateSurfaceToLayered } from '../../src/compiler/surface-eval.ts';
 import { buildSceneResources } from '../../src/render/scene-resources.ts';
 import { importUsdStage } from '../../src/usd/importer.ts';
 import type { Diagnostic } from '../../src/core/diagnostics.ts';
+import { runScript, ScriptLibrary, SCRIPT_LIBRARY_FILES, toXml } from '../../src/materialx/script-api.ts';
+import { ENGINE_SHADER_LIBRARY_XML } from '../../src/materialx/engine-shaders.ts';
+import { evaluateVolumeIr } from '../../src/compiler/volume-ir.ts';
 
 const coreRoot = process.env['MX_CORE_DIR']
   ?? 'D:\\WebGL2\\MaterialX\\MaterialX-rva\\javascript\\build\\installed\\JavaScript\\MaterialX';
@@ -22,6 +25,63 @@ const playgroundRoot = process.env['MX_PLAYGROUND_ROOT']
 const coreFile = join(coreRoot, 'JsMaterialXCore.js');
 
 describe.skipIf(!existsSync(coreFile) || !existsSync(libraryRoot))('installed MaterialX Core resolution', () => {
+  it('compiles P17 surface detail and preserves spatial and temporal volume variation with the installed library', async () => {
+    const module = await import(/* @vite-ignore */ pathToFileURL(coreFile).href) as { default: MaterialXModuleFactory };
+    const core = new MaterialXCore(await module.default());
+    const libraries = new MaterialXLibraries(core);
+    await libraries.load({ sources: defaultLibrarySources(libraryRoot), fetchText: async path => readFileSync(path, 'utf8') });
+    const scriptLibrary = ScriptLibrary.fromXml([
+      ...SCRIPT_LIBRARY_FILES.map(file => readFileSync(join(libraryRoot, file), 'utf8')),
+      ENGINE_SHADER_LIBRARY_XML,
+    ]);
+    try {
+      for (const preset of ['Fire', 'Smoke', 'Clouds', 'Water', 'Lava', 'Ice', 'Mud', 'WetSand']) {
+        const script = await runScript(`medium = new ${preset}();`, scriptLibrary);
+        const documents = await loadMaterialXDocuments({ core, libraries, texts: new Map([['preset', toXml(script, scriptLibrary)]]) });
+        try {
+          const build = await createGraphMaterialCompiler({ documents }).compile({
+            assetPath: 'preset', materialName: 'material', referencedPrimPath: '/material', boundPrims: [],
+          });
+          if (!['Fire', 'Smoke', 'Clouds'].includes(preset)) {
+            expect(build?.surface, preset).toBeDefined();
+            continue;
+          }
+          expect(build?.volume, preset).toBeDefined();
+          const positions = Array.from({ length: 512 }, (_, index): [number, number, number] => {
+            const extent = preset === 'Clouds' ? 3 : 0.7;
+            return [
+              ((index % 8) / 7 * 2 - 1) * extent,
+              (preset === 'Clouds' ? 3 : 0.1) + Math.floor(index / 64) / 7 * 3,
+              ((Math.floor(index / 8) % 8) / 7 * 2 - 1) * extent,
+            ];
+          });
+          const values = positions.map(position => evaluateVolumeIr(build!.ir, { position }).scattering[0]);
+          expect(Math.max(...values) - Math.min(...values), preset).toBeGreaterThan(0.01);
+          const scene = await importUsdStage('test.usda', { reader: { read: async () => `#usda 1.0
+def Material "Mat" (prepend references = @preset.mtlx@</material>) {}
+def Mesh "medium" { rel material:binding = </Mat> }` } });
+          const resources = editableSceneMaterials(await buildSceneResources(scene, {
+            meshSource: { meshFor: () => ({
+              points: [0, 0, 0, 1, 0, 0, 0, 1, 0], faceVertexCounts: [3], faceVertexIndices: [0, 1, 2],
+            }) },
+            materialCompiler: { compile: () => build },
+          }));
+          const material = [...resources.materials.values()][0]!;
+          const clocks = material.parameters!.filter(parameter => parameter.clock);
+          expect(clocks.length, preset).toBeGreaterThan(0);
+          const animated = changeMaterialParameters(material, new Map(clocks.map(clock => [clock.id, [24]])));
+          const changedValues = positions.map(position => evaluateVolumeIr(animated.volumeIr!, { position }).scattering[0]);
+          const difference = changedValues.reduce((sum, value, index) => sum + Math.abs(value - values[index]!), 0) / values.length;
+          expect(difference, `${preset} must change its field, not just its bounds`).toBeGreaterThan(0.005);
+        } finally {
+          documents.delete();
+        }
+      }
+    } finally {
+      libraries.delete();
+    }
+  }, 30000);
+
   it('packages texture bytes once and round-trips relative image paths and shared UV transforms', async () => {
     const module = await import(/* @vite-ignore */ pathToFileURL(coreFile).href) as { default: MaterialXModuleFactory };
     const core = new MaterialXCore(await module.default());

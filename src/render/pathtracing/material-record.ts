@@ -25,6 +25,9 @@ export const PT_LOBE_FLOATS = 27;
 /** f32 count of the per-material header that precedes the lobe array. */
 export const PT_MATERIAL_HEADER_FLOATS = 57;
 
+// Header slot 50 holds the volume emitter selection weight (integrated grid luminance or a homogeneous power bound).
+export const PT_VOLUME_EMISSION_WEIGHT = 50;
+
 /** f32 stride of one complete packed material record. */
 export const PT_MATERIAL_RECORD_FLOATS =
   PT_MATERIAL_HEADER_FLOATS + PT_MAX_LOBES * PT_LOBE_FLOATS;

@@ -1,0 +1,61 @@
+#usda 1.0
+(
+    defaultPrim = "World"
+    metersPerUnit = 1
+    upAxis = "Y"
+    doc = "Scene created by a MaterialX script"
+)
+
+def Xform "World"
+{
+    def Scope "Looks"
+    {
+        def Material "Preset" (
+            prepend references = @./clouds.mtlx@</MaterialX/Materials/material>
+        )
+        {
+        }
+        def Material "Ground" (
+            prepend references = @./ground.mtlx@</MaterialX/Materials/material>
+        )
+        {
+        }
+    }
+
+    def Mesh "Preset" (
+        prepend apiSchemas = ["MaterialBindingAPI"]
+    )
+    {
+        custom token engine:primitive = "volume"
+        uniform token subdivisionScheme = "none"
+        int[] faceVertexCounts = [4, 4, 4, 4, 4, 4]
+        int[] faceVertexIndices = [0, 2, 3, 1, 4, 5, 7, 6, 0, 1, 5, 4, 2, 6, 7, 3, 0, 4, 6, 2, 1, 3, 7, 5]
+        point3f[] points = [(-6, -2.25, -5), (6, -2.25, -5), (-6, 2.25, -5), (6, 2.25, -5), (-6, -2.25, 5), (6, -2.25, 5), (-6, 2.25, 5), (6, 2.25, 5)]
+        double3 xformOp:translate = (0, 5.75, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        rel material:binding = </World/Looks/Preset>
+    }
+
+    def Plane "Ground" (
+        prepend apiSchemas = ["MaterialBindingAPI"]
+    )
+    {
+        double width = 20
+        double length = 20
+        uniform token axis = "Y"
+        custom int engine:resolution = 1
+        custom double engine:maxEdgeLength = 0
+        custom double engine:maxScreenEdgeLength = 0
+        custom int engine:vertexBudget = 65536
+        rel material:binding = </World/Looks/Ground>
+    }
+}
+
+def Camera "GoldenCamera" {
+    float focalLength = 25
+    float horizontalAperture = 20.955
+    float verticalAperture = 20.955
+    double3 xformOp:translate = (13, 8, 15)
+    float3 xformOp:rotateXYZ = (-8, 41, 0)
+    uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
+}

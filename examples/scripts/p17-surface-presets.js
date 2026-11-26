@@ -2,6 +2,14 @@
 // npm run script -- examples/scripts/p17-surface-presets.js --out docs/images/p17-surface-presets
 const mobile = capabilities()?.mobile === true;
 const pad = value => String(value).padStart(3, "0");
+const sky = new EnvironmentShader();
+sky.model = "sky";
+sky.zenithColor = [0.12, 0.16, 0.22];
+sky.horizonColor = [0.5, 0.55, 0.6];
+sky.sunIntensity = 4;
+sky.sunAngularDiameter = 12;
+await environment(sky.out);
+const key = new PointLight({ translate: [-4, 5, 4], radius: 0.6, intensity: 45, color: [1, 0.9, 0.8] });
 
 const floor = new StandardSurface();
 floor.base_color = [0.12, 0.14, 0.16];
@@ -26,10 +34,14 @@ render.resolution = mobile ? 128 : 256;
 setCamera({ eye: [0, 5, 11], target: [0, 1, 0], fov: 40 });
 for (const frame of [0, 12, 24]) {
   await setTime(frame);
+  ice.depth = 0.8 + frame / 24;
+  mud.wetness = 0.35 + 0.5 * frame / 24;
+  sand.wetness = 0.3 + 0.5 * frame / 24;
+  key.translate = [-4 + 3 * frame / 24, 5, 4];
   render.backend = "raster";
   await save(`01-raster/frame-${pad(frame)}.png`);
   render.backend = "pathtracing";
-  render.depth = 6;
-  await render(mobile ? 16 : 48);
+  render.depth = 10;
+  await render(mobile ? 32 : 256);
   await save(`02-pathtracing/frame-${pad(frame)}.png`);
 }

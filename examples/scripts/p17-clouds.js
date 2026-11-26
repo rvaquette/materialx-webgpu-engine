@@ -3,18 +3,27 @@
 const mobile = capabilities()?.mobile === true;
 const frames = Array.from({ length: 9 }, (_, index) => index * 3);
 const pad = value => String(value).padStart(3, "0");
+const sky = new EnvironmentShader();
+sky.model = "sky";
+sky.zenithColor = [0.08, 0.22, 0.5];
+sky.horizonColor = [0.38, 0.58, 0.82];
+sky.sunIntensity = 8;
+sky.sunDirection = [-0.45, 0.7, 0.35];
 
 const clouds = new Clouds();
 clouds.coverage = 0.55;
-clouds.density = 0.7;
-clouds.scale = 2.6;
+clouds.density = 2;
+clouds.scale = 0.65;
 clouds.speed = 0.06;
 clouds.wind = [1, 0, 0.25];
-clouds.color = [0.48, 0.55, 0.68];
+clouds.color = [0.99, 0.99, 1];
 clouds.center = [0, 0, 0];
 clouds.baseHeight = 3.5;
-const cloudLayer = new Volume({ width: 12, height: 4, length: 10, material: clouds });
-cloudLayer.translate = [0, 5.5, 0];
+const cloudLayer = new Volume({ width: 12, height: 4.5, length: 10, material: clouds });
+cloudLayer.translate = [0, 5.75, 0];
+const ground = new StandardSurface();
+ground.base_color = [0.2, 0.28, 0.12];
+new Plane({ width: 20, length: 20, material: ground });
 
 const sun = new PointLight();
 sun.color = [1, 0.9, 0.72];
@@ -22,13 +31,14 @@ sun.intensity = 24;
 sun.radius = 3;
 sun.translate = [-5, 10, 4];
 
+await environment(sky.out);
 render.resolution = mobile ? 128 : 256;
 setCamera({ eye: [10, 7, 12], target: [0, 4, 0], fov: 42 });
 render.backend = "raster";
 for (const frame of frames) {
   const drift = frame * 0.02;
   clouds.center = [drift, 0, 0];
-  cloudLayer.translate = [drift, 5.5, 0];
+  cloudLayer.translate = [drift, 5.75, 0];
   await setTime(frame);
   await save(`01-raster/frame-${pad(frame)}.png`);
 }
@@ -37,8 +47,8 @@ render.depth = 8;
 for (const frame of [0, 12, 24]) {
   const drift = frame * 0.02;
   clouds.center = [drift, 0, 0];
-  cloudLayer.translate = [drift, 5.5, 0];
+  cloudLayer.translate = [drift, 5.75, 0];
   await setTime(frame);
-  await render(mobile ? 16 : 48);
+  await render(mobile ? 32 : 128);
   await save(`02-pathtracing/frame-${pad(frame)}.png`);
 }

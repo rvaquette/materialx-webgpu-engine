@@ -19,7 +19,7 @@ import { preparedGeometryMemory, sceneBufferCacheKey } from './scene-buffer-cach
 import { inverse4, transformDirection, transformPoint, type Mat4, type Vec3 } from '../../scene/transforms.ts';
 import type { SceneResources } from '../scene-resources.ts';
 import type { VolumeMedium } from '../../compiler/volume-ir.ts';
-import { bakeVolumeGrid, sampleVolumeGrid, VOLUME_FIELD_GRID_SIZE, type VolumeField } from '../volume-field.ts';
+import { bakeVolumeGrid, sampleVolumeGrid, sampleVolumeEmitter, volumeTransmittance, VOLUME_FIELD_GRID_SIZE, type VolumeField } from '../volume-field.ts';
 import {
   buildSceneFrame,
   NEUTRAL_SURFACE,
@@ -50,6 +50,7 @@ import type {
   SceneSampler,
   SurfaceHit,
 } from './integrator.ts';
+import { createPcg32 } from './integrator.ts';
 
 /** Floats per packed BVH node: min(3), left, max(3), right, start, count, pad, pad. */
 export const PT_NODE_FLOATS = 12;
@@ -136,6 +137,7 @@ export type PreparedPathTraceGeometry = Pick<PathTraceScene,
 
 type V3 = [number, number, number];
 const sub3 = (a: Vec3, b: Vec3): V3 => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+const add3 = (a: Vec3, b: Vec3): V3 => [a[0] + b[0], a[1] + b[1], a[2] + b[2]];
 const cross3 = (a: Vec3, b: Vec3): V3 => [
   a[1] * b[2] - a[2] * b[1],
   a[2] * b[0] - a[0] * b[2],
@@ -394,7 +396,12 @@ export function buildPathTraceScene(
     const base = i * PT_MATERIAL_FLOATS;
     materials.set(bounds.min, base + 43);
     materials.set(bounds.max.map((v, a) => 1 / (v - bounds.min[a]!)), base + 46);
-    if (material.volumeMedium) continue;
+    const domainVolume = bounds.max.reduce((volume, value, axis) => volume * (value - bounds.min[axis]!), 1);
+    if (material.volumeMedium) {
+      materials[base + 50] = Math.max(...material.volumeMedium.emission ?? [0, 0, 0]) * domainVolume;
+      if (!Number.isFinite(materials[base + 50])) throw new Error('Volume emission sampling weight exceeds float32 range.');
+      continue;
+    }
     const sources = volumeFields.get(materialKeys[i]!);
     const grid = bakeVolumeGrid(material.volumeIr, bounds, sources ? VOLUME_FIELD_GRID_SIZE : undefined, sources && (position => {
       const values: Record<string, number> = {};
@@ -410,10 +417,16 @@ export function buildPathTraceScene(
     materials[base + 41] = grid.size;
     materials[base + 42] = gridLength;
     materials[base + 49] = grid.majorant;
+    materials[base + 50] = grid.emissionWeight;
+    if (!Number.isFinite(materials[base + 50])) throw new Error('Volume emission sampling weight exceeds float32 range.');
     grids.push(grid.data);
     gridLength += grid.data.length;
+    if (grid.emissionCdf) { grids.push(grid.emissionCdf); gridLength += grid.emissionCdf.length; }
     if (gridLength > 2 ** 24) throw new Error('Volume atlas offsets exceed the material record float32 precision.');
   }
+  let emissionWeight = 0;
+  for (let base = 0; base < materials.length; base += PT_MATERIAL_FLOATS) emissionWeight += materials[base + 50]!;
+  if (!Number.isFinite(Math.fround(emissionWeight))) throw new Error('Total volume emission sampling weight exceeds float32 range.');
   const volumeData = new Float32Array(gridLength);
   let gridOffset = 0;
   for (const grid of grids) { volumeData.set(grid, gridOffset); gridOffset += grid.length; }
@@ -925,7 +938,7 @@ export function createSceneSampler(scene: PathTraceScene): SceneSampler {
     return null;
   }
 
-  function fieldFor(hit: PtHit): VolumeField | undefined {
+  function fieldFor(hit: Pick<PtHit, 'materialIndex'>): VolumeField | undefined {
       const base = hit.materialIndex * PT_MATERIAL_FLOATS;
       if (!scene.materials[base + 29]) return undefined;
       if (scene.materials[base + 41] && scene.volumeData) {
@@ -1049,6 +1062,66 @@ export function createSceneSampler(scene: PathTraceScene): SceneSampler {
     },
   };
 
+  const insideVolume = (index: number, point: Vec3): boolean => {
+    const direction: Vec3 = normalize3([0.739, 0.521, 0.427]);
+    let origin = point;
+    for (let crossing = 0; crossing <= scene.triangleCount; crossing++) {
+      const hit = traverse(scene, { origin, direction }, Infinity, false);
+      if (!hit) return false;
+      const surface = hitSurface(scene, hit, { origin, direction });
+      if (surface.materialIndex === index) {
+        const base = hit.triangle * PT_TRIANGLE_FLOATS;
+        const vertices = scene.triangles.subarray(base, base + 9);
+        const normal = cross3(sub3(readVec3(vertices, 1), readVec3(vertices, 0)), sub3(readVec3(vertices, 2), readVec3(vertices, 0)));
+        return dot3(direction, normal) > 0;
+      }
+      origin = add3(origin, scale3(direction, hit.t + RAY_EPS));
+    }
+    throw new Error('Volume containment traversal exceeded the scene boundary count.');
+  };
+  const shadowRng = createPcg32(0);
+  sampler.transmittance = (from, direction, distance, rng = shadowRng) => {
+    let origin = add3(from, scale3(direction, RAY_EPS));
+    let remaining = Number.isFinite(distance) ? distance - 2 * RAY_EPS : Infinity;
+    let active: number | undefined;
+    for (let index = 0; index < scene.materialCount; index++) {
+      if (scene.materials[index * PT_MATERIAL_FLOATS + 29] && insideVolume(index, origin)) { active = index; break; }
+    }
+    let tr: V3 = [1, 1, 1];
+    for (let crossing = 0; crossing <= scene.triangleCount; crossing++) {
+      if (remaining <= 0) return tr;
+      const hit = traverse(scene, { origin, direction }, remaining, false);
+      const length = hit?.t ?? remaining;
+      if (active !== undefined) {
+        const field = fieldFor({ materialIndex: active })!;
+        const attenuation = volumeTransmittance(field, origin, direction, length, rng);
+        tr = [tr[0] * attenuation[0], tr[1] * attenuation[1], tr[2] * attenuation[2]];
+      }
+      if (!hit) return tr;
+      const surface = hitSurface(scene, hit, { origin, direction });
+      if (isVolumeBoundary(scene.materials, surface.materialIndex)) {
+        const base = hit.triangle * PT_TRIANGLE_FLOATS;
+        const vertices = scene.triangles.subarray(base, base + 9);
+        const normal = cross3(sub3(readVec3(vertices, 1), readVec3(vertices, 0)), sub3(readVec3(vertices, 2), readVec3(vertices, 0)));
+        active = dot3(direction, normal) < 0 ? surface.materialIndex : undefined;
+      } else {
+        const coverage = 1 - closureFor(surface).opacity;
+        tr = scale3(tr, coverage);
+        if (coverage <= 0) return [0, 0, 0];
+      }
+      const step = hit.t + RAY_EPS;
+      origin = add3(origin, scale3(direction, step));
+      remaining -= step;
+    }
+    throw new Error('Volume transmittance traversal exceeded the scene boundary count.');
+  };
+  if (scene.materials.some((weight, index) => index % PT_MATERIAL_FLOATS === 50 && weight > 0)) {
+    sampler.sampleVolumeLight = (hit, rng) => {
+      const light = sampleVolumeEmitter(scene.materials, scene.volumeData, hit.position, rng);
+      if (!light || !insideVolume(light.index, light.position)) return null;
+      return { direction: light.direction, distance: light.distance, pdf: light.pdf, radiance: light.emission };
+    };
+  }
   if (hasEnv) {
     sampler.environment = (): Vec3 => env;
   }

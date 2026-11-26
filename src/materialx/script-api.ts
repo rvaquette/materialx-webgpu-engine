@@ -14,6 +14,7 @@
 
 import { parse as parseJavaScript, type Node as AcornNode } from 'acorn';
 import { MATERIALX_DEFAULT_LIBRARY_FILES } from './libraries.ts';
+import { ENGINE_PRESET_LIBRARY_XML } from './engine-presets.ts';
 import {
   DEFAULT_ENVIRONMENT_SHADER, ENGINE_SHADER_LIBRARY_XML, validateLensSettings,
   type EnvironmentShaderSettings, type ImageShaderSettings, type LightFilterSettings,
@@ -2443,10 +2444,7 @@ export function toXml(graph: ScriptGraph, library: ScriptLibrary, options: ToXml
   const bodyEnd = source.lastIndexOf('</materialx>');
   const body = source.slice(bodyStart, bodyEnd);
   const prefix = options.filePrefix ? ` fileprefix="${escapeXml(options.filePrefix)}"` : '';
-  const definitions = ENGINE_SHADER_LIBRARY_XML.replace(
-    '<materialx version="1.39">',
-    `<materialx version="1.39"${prefix}>`,
-  ).replace('</materialx>', `${body}</materialx>`);
+  const definitions = `<materialx version="1.39"${prefix}>${ENGINE_PRESET_LIBRARY_XML}${body}</materialx>`;
   return writeXml(fromXml(definitions, library), library, options);
 }
 

@@ -2,7 +2,7 @@ import { evaluateVolumeIr, volumeExpressions, type VolumeMedium } from '../compi
 import type { ShaderIr } from '../compiler/ir.ts';
 import type { Aabb } from '../geometry/bvh.ts';
 import type { Vec3 } from '../scene/transforms.ts';
-import { PT_MATERIAL_RECORD_FLOATS } from './pathtracing/material-record.ts';
+import { PT_MATERIAL_RECORD_FLOATS, PT_VOLUME_EMISSION_WEIGHT } from './pathtracing/material-record.ts';
 
 export const VOLUME_GRID_SIZE = 32;
 export const VOLUME_VOXEL_FLOATS = 10;
@@ -10,6 +10,91 @@ export const VOLUME_VOXEL_FLOATS = 10;
 export interface VolumeField {
   majorant: number;
   sample(position: Vec3): VolumeMedium;
+}
+
+/** Uniform domain sampling, with power-weighted emitter selection. Null samples are not resampled. */
+export function sampleVolumeEmitter(
+  materials: Float32Array, data: Float32Array | undefined, origin: Vec3, rng: () => number,
+) {
+  let total = 0;
+  for (let base = 0; base < materials.length; base += PT_MATERIAL_RECORD_FLOATS) total += materials[base + PT_VOLUME_EMISSION_WEIGHT]!;
+  if (!(total > 0)) return undefined;
+  let remaining = rng() * total;
+  let index = 0;
+  for (let base = 0; base < materials.length; base += PT_MATERIAL_RECORD_FLOATS) {
+    const weight = materials[base + PT_VOLUME_EMISSION_WEIGHT]!;
+    if (weight <= 0) continue;
+    index = base / PT_MATERIAL_RECORD_FLOATS;
+    if (remaining < weight) break;
+    remaining -= weight;
+  }
+  const base = index * PT_MATERIAL_RECORD_FLOATS;
+  const extent = [0, 1, 2].map(axis => 1 / materials[base + 46 + axis]!);
+  const uv = [rng(), rng(), rng()];
+  const domainVolume = extent[0]! * extent[1]! * extent[2]!;
+  let spatialPdf = 1 / domainVolume;
+  const size = materials[base + 41]!;
+  if (size > 0) {
+    if (!data) throw new Error('Volume emitter grid is missing.');
+    const cells = size - 1, count = cells ** 3;
+    const first = materials[base + 42]! + size ** 3 * VOLUME_VOXEL_FLOATS;
+    const u = rng();
+    let low = 0, high = count;
+    while (low < high) {
+      const mid = (low + high) >>> 1;
+      if (data[first + mid]! > u) high = mid;
+      else low = mid + 1;
+    }
+    const cell = Math.min(low, count - 1);
+    const mass = data[first + cell]! - (cell === 0 ? 0 : data[first + cell - 1]!);
+    uv[0] = (cell % cells + uv[0]!) / cells;
+    uv[1] = (Math.floor(cell / cells) % cells + uv[1]!) / cells;
+    uv[2] = (Math.floor(cell / (cells * cells)) + uv[2]!) / cells;
+    spatialPdf = mass * count / domainVolume;
+  }
+  const position: Vec3 = [
+    materials[base + 43]! + extent[0]! * uv[0]!,
+    materials[base + 44]! + extent[1]! * uv[1]!,
+    materials[base + 45]! + extent[2]! * uv[2]!,
+  ];
+  const offset = position.map((value, axis) => value - origin[axis]!);
+  const distance = Math.hypot(...offset);
+  if (distance <= 1e-4) return undefined;
+  const direction: Vec3 = [offset[0]! / distance, offset[1]! / distance, offset[2]! / distance];
+  let emission: Vec3;
+  if (materials[base + 41]! > 0) {
+    if (!data) throw new Error('Volume emitter grid is missing.');
+    emission = sampleVolumeGrid(materials, data, index, position).emission!;
+  } else {
+    emission = [materials[base + 38]!, materials[base + 39]!, materials[base + 40]!];
+  }
+  const pdf = materials[base + PT_VOLUME_EMISSION_WEIGHT]! / total * distance ** 2 * spatialPdf;
+  return { index, position, direction, distance, emission, pdf };
+}
+
+export function volumeTransmittance(field: VolumeField, origin: Vec3, direction: Vec3, distance: number, rng: () => number): Vec3 {
+  if (!Number.isFinite(distance) || distance < 0) throw new Error('Volume transmittance requires a finite nonnegative segment.');
+  if (!(field.majorant >= 0) || !Number.isFinite(field.majorant)) throw new Error('Invalid volume extinction majorant.');
+  const weight: [number, number, number] = [1, 1, 1];
+  if (field.majorant === 0) return weight;
+  let t = 0;
+  for (let step = 0; step < 4096; step++) {
+    t += -Math.log(1 - rng()) / field.majorant;
+    if (t >= distance) return weight;
+    const point: Vec3 = [origin[0] + direction[0] * t, origin[1] + direction[1] * t, origin[2] + direction[2] * t];
+    const medium = field.sample(point);
+    for (let axis = 0; axis < 3; axis++) {
+      const extinction = medium.absorption[axis]! + medium.scattering[axis]!;
+      if (extinction > field.majorant * (1 + 1e-5)) throw new Error('Volume extinction exceeds its majorant.');
+      weight[axis] = weight[axis]! * Math.max(0, 1 - extinction / field.majorant);
+    }
+    const peak = Math.max(...weight);
+    if (peak < 0.1) {
+      if (rng() >= peak) return [0, 0, 0];
+      for (let axis = 0; axis < 3; axis++) weight[axis] = weight[axis]! / peak;
+    }
+  }
+  throw new Error('Volume transmittance exceeded its tracking budget.');
 }
 
 /** Weighted delta tracking, including the unbiased collision estimator for EDF. */
@@ -69,6 +154,7 @@ export function bakeVolumeGrid(
   const fieldNames = [...new Set([...expressions.values()].flatMap(expr => expr.kind === 'primvar' ? [expr.name] : []))];
   const data = new Float32Array(size ** 3 * VOLUME_VOXEL_FLOATS);
   let majorant = 0;
+  let emissionMajorant = 0;
   for (let z = 0; z < size; z++) for (let y = 0; y < size; y++) for (let x = 0; x < size; x++) {
     const position = [x, y, z].map((v, i) => bounds.min[i]! + extent[i]! * v / (size - 1));
     const values = fields?.(position);
@@ -79,9 +165,37 @@ export function bakeVolumeGrid(
     data.set([...medium.absorption, ...medium.scattering, medium.anisotropy, ...medium.emission ?? [0, 0, 0]], offset);
     if (Math.abs(data[offset+6]!) >= 1) throw new Error('Volume anisotropy exceeds the float32 phase-function range.');
     for (let i = 0; i < 3; i++) majorant = Math.max(majorant, data[offset + i]! + data[offset + 3 + i]!);
+    for (let i = 0; i < 3; i++) emissionMajorant = Math.max(emissionMajorant, data[offset + 7 + i]!);
   }
   if (!data.every(Number.isFinite)) throw new Error('Volume field exceeds float32 range.');
-  return { data, size, majorant: majorant * (1 + 1e-6), bounds };
+  let emissionWeight = 0;
+  let emissionCdf: Float32Array | undefined;
+  if (emissionMajorant > 0) {
+    const cells = size - 1, count = cells ** 3;
+    const weights = new Float64Array(count);
+    const cellVolume = extent[0]! * extent[1]! * extent[2]! / count;
+    for (let z = 0; z < cells; z++) for (let y = 0; y < cells; y++) for (let x = 0; x < cells; x++) {
+      let luminance = 0;
+      for (let dz = 0; dz < 2; dz++) for (let dy = 0; dy < 2; dy++) for (let dx = 0; dx < 2; dx++) {
+        const offset = (((z + dz) * size + y + dy) * size + x + dx) * VOLUME_VOXEL_FLOATS + 7;
+        luminance += data[offset]! * 0.2126 + data[offset + 1]! * 0.7152 + data[offset + 2]! * 0.0722;
+      }
+      const weight = luminance / 8 * cellVolume;
+      weights[(z * cells + y) * cells + x] = weight;
+      emissionWeight += weight;
+    }
+    emissionCdf = new Float32Array(count);
+    let cumulative = 0;
+    for (let cell = 0; cell < count; cell++) {
+      // Uniform support prevents quantized CDF plateaus from dropping dim emissive cells.
+      cumulative += 0.95 * weights[cell]! / emissionWeight + 0.05 / count;
+      emissionCdf[cell] = cell === count - 1 ? 1 : cumulative;
+      if (!(emissionCdf[cell]! > (cell === 0 ? 0 : emissionCdf[cell - 1]!))) {
+        throw new Error('Volume emission CDF exceeds float32 probability precision.');
+      }
+    }
+  }
+  return { data, size, majorant: majorant * (1 + 1e-6), emissionMajorant, emissionWeight, emissionCdf, bounds };
 }
 
 export function sampleVolumeGrid(materials: Float32Array, data: Float32Array, index: number, position: Vec3): VolumeMedium {

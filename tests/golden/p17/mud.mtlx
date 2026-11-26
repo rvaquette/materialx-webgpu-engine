@@ -1,0 +1,75 @@
+<?xml version="1.0"?>
+<materialx version="1.39">
+  <position name="position" type="vector3">
+    <input name="space" type="string" value="object" />
+  </position>
+  <multiply name="scaledPosition" type="vector3" nodedef="ND_multiply_vector3FA">
+    <input name="in1" type="vector3" nodename="position" />
+    <input name="in2" type="float" value="5" />
+  </multiply>
+  <noise3d name="moistureNoise" type="float" nodedef="ND_noise3d_float">
+    <input name="position" type="vector3" nodename="scaledPosition" />
+    <input name="amplitude" type="float" value="1" />
+    <input name="pivot" type="float" value="0" />
+  </noise3d>
+  <range name="moistureMask" type="float" nodedef="ND_range_float">
+    <input name="in" type="float" nodename="moistureNoise" />
+    <input name="inlow" type="float" value="-0.5" />
+    <input name="inhigh" type="float" value="0.5" />
+    <input name="outlow" type="float" value="0" />
+    <input name="outhigh" type="float" value="1" />
+    <input name="doclamp" type="boolean" value="true" />
+  </range>
+  <multiply name="wetMask" type="float" nodedef="ND_multiply_float">
+    <input name="in1" type="float" nodename="moistureMask" />
+    <input name="in2" type="float" value="0.6" />
+  </multiply>
+  <mix name="mudColor" type="color3">
+    <input name="fg" type="color3" value="0.07, 0.045, 0.025" />
+    <input name="bg" type="color3" value="0.22, 0.13, 0.07" />
+    <input name="mix" type="float" nodename="wetMask" />
+  </mix>
+  <multiply name="wetRoughness" type="float" nodedef="ND_multiply_float">
+    <input name="in1" type="float" value="0.78" />
+    <input name="in2" type="float" value="0.25" />
+  </multiply>
+  <mix name="mudRoughness" type="float" nodedef="ND_mix_float">
+    <input name="fg" type="float" nodename="wetRoughness" />
+    <input name="bg" type="float" value="0.78" />
+    <input name="mix" type="float" nodename="wetMask" />
+  </mix>
+  <multiply name="grainPosition" type="vector3" nodedef="ND_multiply_vector3FA">
+    <input name="in1" type="vector3" nodename="scaledPosition" />
+    <input name="in2" type="float" value="6" />
+  </multiply>
+  <noise3d name="grains" type="float" nodedef="ND_noise3d_float">
+    <input name="position" type="vector3" nodename="grainPosition" />
+  </noise3d>
+  <multiply name="grainHeight" type="float" nodedef="ND_multiply_float">
+    <input name="in1" type="float" nodename="grains" />
+    <input name="in2" type="float" value="0.16" />
+  </multiply>
+  <add name="mudHeight" type="float" nodedef="ND_add_float">
+    <input name="in1" type="float" nodename="moistureNoise" />
+    <input name="in2" type="float" nodename="grainHeight" />
+  </add>
+  <bump name="mudNormal" type="vector3">
+    <input name="height" type="float" nodename="mudHeight" />
+    <input name="scale" type="float" value="0.07" />
+  </bump>
+  <standard_surface name="mudSurface" type="surfaceshader">
+    <input name="base_color" type="color3" nodename="mudColor" />
+    <input name="specular_roughness" type="float" nodename="mudRoughness" />
+    <input name="normal" type="vector3" nodename="mudNormal" />
+    <input name="coat" type="float" nodename="wetMask" />
+    <input name="coat_roughness" type="float" value="0.12" />
+  </standard_surface>
+  <displacement name="mudDisplacement" type="displacementshader">
+    <input name="displacement" type="float" nodename="mudHeight" />
+    <input name="scale" type="float" value="0.04" />
+  </displacement>
+  <surfacematerial name="material_2" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="mudSurface" />
+    <input name="displacementshader" type="displacementshader" nodename="mudDisplacement" />
+  </surfacematerial>
+</materialx>

@@ -1,0 +1,48 @@
+<?xml version="1.0"?>
+<materialx version="1.39">
+  <position name="position" type="vector3">
+    <input name="space" type="string" value="object" />
+  </position>
+  <multiply name="inclusionPosition" type="vector3" nodedef="ND_multiply_vector3FA">
+    <input name="in1" type="vector3" nodename="position" />
+    <input name="in2" type="float" value="8" />
+  </multiply>
+  <noise3d name="inclusions" type="float" nodedef="ND_noise3d_float">
+    <input name="position" type="vector3" nodename="inclusionPosition" />
+    <input name="amplitude" type="float" value="1" />
+    <input name="pivot" type="float" value="0" />
+  </noise3d>
+  <range name="inclusionMask" type="float" nodedef="ND_range_float">
+    <input name="in" type="float" nodename="inclusions" />
+    <input name="inlow" type="float" value="-0.35" />
+    <input name="inhigh" type="float" value="0.55" />
+    <input name="outlow" type="float" value="0.15" />
+    <input name="outhigh" type="float" value="0.8" />
+    <input name="doclamp" type="boolean" value="true" />
+  </range>
+  <multiply name="iceColor" type="color3" nodedef="ND_multiply_color3FA">
+    <input name="in1" type="color3" value="0.52, 0.78, 0.88" />
+    <input name="in2" type="float" nodename="inclusionMask" />
+  </multiply>
+  <bump name="iceNormal" type="vector3">
+    <input name="height" type="float" nodename="inclusions" />
+    <input name="scale" type="float" value="0.025" />
+  </bump>
+  <standard_surface name="iceSurface" type="surfaceshader">
+    <input name="base_color" type="color3" nodename="iceColor" />
+    <input name="subsurface" type="float" value="0.25" />
+    <input name="subsurface_color" type="color3" value="0.52, 0.78, 0.88" />
+    <input name="transmission" type="float" value="0.72" />
+    <input name="transmission_color" type="color3" value="0.52, 0.78, 0.88" />
+    <input name="transmission_depth" type="float" value="1.5" />
+    <input name="specular_roughness" type="float" value="0.16" />
+    <input name="normal" type="vector3" nodename="iceNormal" />
+  </standard_surface>
+  <displacement name="iceDisplacement" type="displacementshader">
+    <input name="displacement" type="float" value="0" />
+  </displacement>
+  <surfacematerial name="material_2" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="iceSurface" />
+    <input name="displacementshader" type="displacementshader" nodename="iceDisplacement" />
+  </surfacematerial>
+</materialx>

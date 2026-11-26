@@ -910,14 +910,14 @@ type ParameterPolicy = 'editor' | 'uniform';
 
 const UNIFORM_TYPES = new Set(['float', 'color3', 'vector2', 'vector3', 'vector4']);
 
-/** Nodes feeding the surface through connections; unrelated graph nodes (e.g. volume) keep literals. */
+/** Nodes feeding the material terminals; disconnected graph nodes keep literals. */
 function reachableNodes(material: MaterialResource): Set<string> {
   const graph = material.surfaceGraph!;
   const surface = material.resolvedSurface!;
   const pending = [surface.nodeId, ...(surface.backNodeId ? [surface.backNodeId] : [])];
   for (const input of surface.inputs.values()) if (input.source.kind === 'connection') pending.push(input.source.nodeId);
   for (const terminal of graph.terminals) {
-    if (terminal.name === 'displacementshader' && terminal.nodeId) pending.push(terminal.nodeId);
+    if ((terminal.name === 'displacementshader' || terminal.name === 'volumeshader') && terminal.nodeId) pending.push(terminal.nodeId);
   }
   const seen = new Set<string>();
   while (pending.length) {
@@ -929,10 +929,10 @@ function reachableNodes(material: MaterialResource): Set<string> {
   return seen;
 }
 
-function reachableDisplacementNodes(material: MaterialResource): Set<string> {
+function reachableRebuildNodes(material: MaterialResource): Set<string> {
   const graph = material.surfaceGraph!;
   const pending = graph.terminals
-    .filter(terminal => terminal.name === 'displacementshader' && terminal.nodeId)
+    .filter(terminal => (terminal.name === 'displacementshader' || terminal.name === 'volumeshader') && terminal.nodeId)
     .map(terminal => terminal.nodeId!);
   const seen = new Set<string>();
   while (pending.length) {
@@ -951,7 +951,7 @@ export function editableSceneMaterials(resources: SceneResources): SceneResource
   const materials = new Map(resources.materials);
   const instances = resources.instances.map(instance => {
     const material = instance.materialKey ? materials.get(instance.materialKey) : undefined;
-    if (!material?.resolvedSurface || !material.surfaceGraph) return instance;
+    if (!material?.surfaceGraph || (!material.resolvedSurface && !material.volumeIr)) return instance;
     const key = `${instance.materialKey}::editor::${instance.primPath}`;
     materials.set(key, parameterizeMaterial({ ...material, unitKey: key, boundPrims: [instance.primPath] }, 'editor'));
     return { ...instance, materialKey: key };
@@ -966,12 +966,30 @@ export function uniformSceneMaterials(resources: SceneResources): SceneResources
   const materials = new Map(resources.materials);
   for (const key of new Set(resources.instances.map(instance => instance.materialKey))) {
     const material = key ? materials.get(key) : undefined;
-    if (key && material?.resolvedSurface && material.surfaceGraph) materials.set(key, parameterizeMaterial(material, 'uniform'));
+    if (key && material?.surfaceGraph && (material.resolvedSurface || material.volumeIr)) materials.set(key, parameterizeMaterial(material, 'uniform'));
   }
   return { ...resources, materials };
 }
 
 function parameterizeMaterial(material: MaterialResource, policy: ParameterPolicy): MaterialResource {
+  if (!material.resolvedSurface && material.volumeIr && material.surfaceGraph) {
+    const nodes = new Map(material.surfaceGraph.nodes);
+    const parameters: MaterialParameter[] = [];
+    const reachable = reachableRebuildNodes(material);
+    for (const [nodeId, node] of nodes) {
+      if (!CLOCK_CATEGORIES.has(node.category) || !reachable.has(nodeId)) continue;
+      parameters.push({
+        id: `clock:${nodeId}`, label: `${nodeId} / time code`, type: 'float', value: [0], initial: [0],
+        update: 'rebuild', nodeId, input: CLOCK_INPUT, clock: true,
+      });
+      nodes.set(nodeId, { ...node, inputs: [
+        ...node.inputs.filter(input => input.name !== CLOCK_INPUT),
+        { name: CLOCK_INPUT, type: 'float', source: { kind: 'value', type: 'float', value: '0' },
+          provenance: { namePath: `${nodeId}/${CLOCK_INPUT}` } },
+      ] });
+    }
+    return compileEditableMaterial({ ...material, parameters, surfaceGraph: { ...material.surfaceGraph, nodes } });
+  }
   {
     if (!material.resolvedSurface || !material.surfaceGraph) throw new Error('Missing editable material graph.');
     const parameters: MaterialParameter[] = [];
@@ -1070,16 +1088,16 @@ function parameterizeMaterial(material: MaterialResource, policy: ParameterPolic
         }
       }
     }
-    // Scene clock: time/frame nodes drive surface uniforms or displacement rebuilds.
+    // Scene clock: volume grids and displacement must be rebuilt, not just uploaded as uniforms.
     const surfaceNodes = reachableNodes(material);
-    const displacementNodes = reachableDisplacementNodes(material);
+    const rebuildNodes = reachableRebuildNodes(material);
     for (const [nodeId, node] of graphNodes) {
       if (!CLOCK_CATEGORIES.has(node.category) || !surfaceNodes.has(nodeId)
         || node.inputs.some(input => input.name === CLOCK_INPUT)) continue;
       const uniform = `parameter_${parameters.length}`;
       parameters.push({
         id: `clock:${nodeId}`, label: `${nodeId} / time code`, type: 'float', value: [0], initial: [0],
-        update: displacementNodes.has(nodeId) ? 'rebuild' : 'uniform', uniform, nodeId, input: CLOCK_INPUT, clock: true,
+        update: rebuildNodes.has(nodeId) ? 'rebuild' : 'uniform', uniform, nodeId, input: CLOCK_INPUT, clock: true,
       });
       graphNodes.set(nodeId, { ...node, inputs: [...node.inputs, {
         name: CLOCK_INPUT, type: 'float', source: { kind: 'value', type: 'float', value: '0' }, parameter: uniform,
@@ -1103,7 +1121,14 @@ function compileGraphVolume(graph: ResolvedGraph) {
 
 export function compileEditableMaterial(material: MaterialResource): MaterialResource {
   const graph = material.surfaceGraph;
-  if (!graph || !material.resolvedSurface) throw new Error('Missing editable material graph.');
+  if (!graph) throw new Error('Missing editable material graph.');
+  if (!material.resolvedSurface && material.volumeIr) {
+    const volume = compileGraphVolume(graph);
+    if (!volume) throw new Error('Missing volumeshader in edited material.');
+    const { volumeMedium: previousMedium, ...rest } = material;
+    return { ...rest, volumeIr: volume.volumeIr, ...(volume.volumeMedium ? { volumeMedium: volume.volumeMedium } : {}) };
+  }
+  if (!material.resolvedSurface) throw new Error('Missing editable material graph.');
   const displacement = graph.terminals.some(terminal => terminal.name === 'displacementshader')
     ? extractDisplacement(graph) : material.displacement;
   const graphHasVolume = graph.terminals.some(terminal => terminal.type === 'volumeshader');
@@ -1123,9 +1148,9 @@ export function compileEditableMaterial(material: MaterialResource): MaterialRes
 export function changeMaterialParameters(
   material: MaterialResource, changes: ReadonlyMap<string, readonly number[]>,
 ): MaterialResource {
-  if (!material.resolvedSurface || !material.surfaceGraph || !material.parameters) throw new Error('Material has no editable parameters.');
-  const rootNodeId = material.resolvedSurface.nodeId;
-  const inputs = new Map(material.resolvedSurface.inputs);
+  if (!material.surfaceGraph || !material.parameters || (!material.resolvedSurface && !material.volumeIr)) throw new Error('Material has no editable parameters.');
+  const rootNodeId = material.resolvedSurface?.nodeId;
+  const inputs = new Map(material.resolvedSurface?.inputs);
   const nodes = new Map(material.surfaceGraph.nodes);
   for (const id of changes.keys()) if (!material.parameters.some(parameter => parameter.id === id)) throw new Error(`Unknown parameter: ${id}`);
   const parameters = material.parameters.map(parameter => {
@@ -1148,7 +1173,7 @@ export function changeMaterialParameters(
     } else {
       const input = inputs.get(parameter.input)!;
       inputs.set(parameter.input, { ...input, source: { kind: 'value', value } });
-      const root = nodes.get(rootNodeId);
+      const root = rootNodeId ? nodes.get(rootNodeId) : undefined;
       if (root?.inputs.some(candidate => candidate.name === parameter.input)) {
         const source = {
           kind: 'value' as const, type: parameter.type,
@@ -1162,7 +1187,7 @@ export function changeMaterialParameters(
     }
     return { ...parameter, value };
   });
-  const surface = applyFeatureStates({ ...material.resolvedSurface, inputs }, parameters);
+  const surface = material.resolvedSurface ? applyFeatureStates({ ...material.resolvedSurface, inputs }, parameters) : undefined;
   const graph: ResolvedGraph = { ...material.surfaceGraph, nodes };
   // Displacement amplitude lives outside the surface shader.
   const displacement = material.displacement ? extractDisplacement(graph) : undefined;
@@ -1175,7 +1200,7 @@ export function changeMaterialParameters(
     volumeMedium = volume.volumeMedium;
   }
   return {
-    ...material, parameters, resolvedSurface: surface, surfaceGraph: graph,
+    ...material, parameters, ...(surface ? { resolvedSurface: surface } : {}), surfaceGraph: graph,
     ...(volumeIr ? { volumeIr, volumeMedium } : {}),
     ...(displacement ? { displacement } : {}),
   };

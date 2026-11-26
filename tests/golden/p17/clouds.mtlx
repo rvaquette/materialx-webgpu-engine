@@ -1,0 +1,245 @@
+<?xml version="1.0"?>
+<materialx version="1.39">
+  <position name="position" type="vector3">
+    <input name="space" type="string" value="world" />
+  </position>
+  <time name="clock" type="float" />
+  <multiply name="windOffset" type="vector3" nodedef="ND_multiply_vector3FA">
+    <input name="in1" type="vector3" value="1, 0, 0.2" />
+    <input name="in2" type="float" nodename="clock" />
+  </multiply>
+  <multiply name="advection" type="vector3" nodedef="ND_multiply_vector3FA">
+    <input name="in1" type="vector3" nodename="windOffset" />
+    <input name="in2" type="float" value="0.08" />
+  </multiply>
+  <subtract name="advectedPosition" type="vector3" nodedef="ND_subtract_vector3">
+    <input name="in1" type="vector3" nodename="position" />
+    <input name="in2" type="vector3" nodename="advection" />
+  </subtract>
+  <multiply name="isotropicPosition" type="vector3" nodedef="ND_multiply_vector3FA">
+    <input name="in1" type="vector3" nodename="advectedPosition" />
+    <input name="in2" type="float" value="0.65" />
+  </multiply>
+  <multiply name="stratusPosition" type="vector3" nodedef="ND_multiply_vector3">
+    <input name="in1" type="vector3" nodename="isotropicPosition" />
+    <input name="in2" type="vector3" value="0.7, 1.8, 0.7" />
+  </multiply>
+  <multiply name="cirrusPosition" type="vector3" nodedef="ND_multiply_vector3">
+    <input name="in1" type="vector3" nodename="isotropicPosition" />
+    <input name="in2" type="vector3" value="0.12, 2, 1.4" />
+  </multiply>
+  <ifequal name="layerPosition" type="vector3" nodedef="ND_ifequal_vector3I">
+    <input name="value1" type="integer" value="0" />
+    <input name="value2" type="integer" value="1" />
+    <input name="in1" type="vector3" nodename="stratusPosition" />
+    <input name="in2" type="vector3" nodename="cirrusPosition" />
+  </ifequal>
+  <ifequal name="scaledPosition" type="vector3" nodedef="ND_ifequal_vector3I">
+    <input name="value1" type="integer" value="0" />
+    <input name="value2" type="integer" value="0" />
+    <input name="in1" type="vector3" nodename="isotropicPosition" />
+    <input name="in2" type="vector3" nodename="layerPosition" />
+  </ifequal>
+  <separate3 name="cloudCoordinates" type="multioutput" nodedef="ND_separate3_vector3">
+    <input name="in" type="vector3" nodename="position" />
+  </separate3>
+  <separate3 name="cloudCenter" type="multioutput" nodedef="ND_separate3_vector3">
+    <input name="in" type="vector3" value="0, 0, 0" />
+  </separate3>
+  <subtract name="relativeHeight" type="float" nodedef="ND_subtract_float">
+    <input name="in1" type="float" nodename="cloudCoordinates" output="outy" />
+    <input name="in2" type="float" value="3.5" />
+  </subtract>
+  <subtract name="relativeCloudX" type="float" nodedef="ND_subtract_float">
+    <input name="in1" type="float" nodename="cloudCoordinates" output="outx" />
+    <input name="in2" type="float" nodename="cloudCenter" output="outx" />
+  </subtract>
+  <subtract name="relativeCloudZ" type="float" nodedef="ND_subtract_float">
+    <input name="in1" type="float" nodename="cloudCoordinates" output="outz" />
+    <input name="in2" type="float" nodename="cloudCenter" output="outz" />
+  </subtract>
+  <multiply name="cloudX2" type="float" nodedef="ND_multiply_float">
+    <input name="in1" type="float" nodename="relativeCloudX" />
+    <input name="in2" type="float" nodename="relativeCloudX" />
+  </multiply>
+  <multiply name="cloudZ2" type="float" nodedef="ND_multiply_float">
+    <input name="in1" type="float" nodename="relativeCloudZ" />
+    <input name="in2" type="float" nodename="relativeCloudZ" />
+  </multiply>
+  <add name="cloudRadius2" type="float" nodedef="ND_add_float">
+    <input name="in1" type="float" nodename="cloudX2" />
+    <input name="in2" type="float" nodename="cloudZ2" />
+  </add>
+  <sqrt name="cloudRadius" type="float">
+    <input name="in" type="float" nodename="cloudRadius2" />
+  </sqrt>
+  <divide name="normalizedCloudRadius" type="float" nodedef="ND_divide_float">
+    <input name="in1" type="float" nodename="cloudRadius" />
+    <input name="in2" type="float" value="5" />
+  </divide>
+  <subtract name="insideCloud" type="float" nodedef="ND_subtract_float">
+    <input name="in1" type="float" value="1" />
+    <input name="in2" type="float" nodename="normalizedCloudRadius" />
+  </subtract>
+  <smoothstep name="cloudBoundary" type="float" nodedef="ND_smoothstep_float">
+    <input name="in" type="float" nodename="insideCloud" />
+    <input name="low" type="float" value="0.02" />
+    <input name="high" type="float" value="0.45" />
+  </smoothstep>
+  <noise3d name="cloudNoise" type="float" nodedef="ND_noise3d_float">
+    <input name="position" type="vector3" nodename="scaledPosition" />
+    <input name="amplitude" type="float" value="1" />
+    <input name="pivot" type="float" value="0" />
+  </noise3d>
+  <multiply name="detailPosition" type="vector3" nodedef="ND_multiply_vector3FA">
+    <input name="in1" type="vector3" nodename="scaledPosition" />
+    <input name="in2" type="float" value="3.1" />
+  </multiply>
+  <noise3d name="cloudDetail" type="float" nodedef="ND_noise3d_float">
+    <input name="position" type="vector3" nodename="detailPosition" />
+    <input name="amplitude" type="float" value="1" />
+    <input name="pivot" type="float" value="0" />
+  </noise3d>
+  <multiply name="cloudDetailWeighted" type="float" nodedef="ND_multiply_float">
+    <input name="in1" type="float" nodename="cloudDetail" />
+    <input name="in2" type="float" value="0.3" />
+  </multiply>
+  <add name="perlinWorleyBase" type="float" nodedef="ND_add_float">
+    <input name="in1" type="float" nodename="cloudNoise" />
+    <input name="in2" type="float" nodename="cloudDetailWeighted" />
+  </add>
+  <worleynoise3d name="cloudCells" type="float">
+    <input name="position" type="vector3" nodename="scaledPosition" />
+    <input name="style" type="integer" value="0" />
+    <input name="jitter" type="float" value="0.8" />
+  </worleynoise3d>
+  <subtract name="cellErosion" type="float" nodedef="ND_subtract_float">
+    <input name="in1" type="float" value="1" />
+    <input name="in2" type="float" nodename="cloudCells" />
+  </subtract>
+  <multiply name="perlinWeight" type="float" nodedef="ND_multiply_float">
+    <input name="in1" type="float" nodename="perlinWorleyBase" />
+    <input name="in2" type="float" value="0.72" />
+  </multiply>
+  <multiply name="worleyWeight" type="float" nodedef="ND_multiply_float">
+    <input name="in1" type="float" nodename="cellErosion" />
+    <input name="in2" type="float" value="0.28" />
+  </multiply>
+  <add name="cloudFractal" type="float" nodedef="ND_add_float">
+    <input name="in1" type="float" nodename="perlinWeight" />
+    <input name="in2" type="float" nodename="worleyWeight" />
+  </add>
+  <range name="noise01" type="float" nodedef="ND_range_float">
+    <input name="in" type="float" nodename="cloudFractal" />
+    <input name="inlow" type="float" value="-0.5" />
+    <input name="inhigh" type="float" value="0.5" />
+    <input name="outlow" type="float" value="0" />
+    <input name="outhigh" type="float" value="1" />
+    <input name="doclamp" type="boolean" value="true" />
+  </range>
+  <subtract name="coverageThreshold" type="float" nodedef="ND_subtract_float">
+    <input name="in1" type="float" nodename="noise01" />
+    <input name="in2" type="float" value="0.48" />
+  </subtract>
+  <smoothstep name="cloudDensity" type="float" nodedef="ND_smoothstep_float">
+    <input name="in" type="float" nodename="coverageThreshold" />
+    <input name="low" type="float" value="0" />
+    <input name="high" type="float" value="0.22" />
+  </smoothstep>
+  <smoothstep name="cumulusBase" type="float" nodedef="ND_smoothstep_float">
+    <input name="in" type="float" nodename="relativeHeight" />
+    <input name="low" type="float" value="0" />
+    <input name="high" type="float" value="0.8" />
+  </smoothstep>
+  <smoothstep name="cumulusTop" type="float" nodedef="ND_smoothstep_float">
+    <input name="in" type="float" nodename="relativeHeight" />
+    <input name="low" type="float" value="3.4" />
+    <input name="high" type="float" value="4.5" />
+  </smoothstep>
+  <subtract name="cumulusTopFade" type="float" nodedef="ND_subtract_float">
+    <input name="in1" type="float" value="1" />
+    <input name="in2" type="float" nodename="cumulusTop" />
+  </subtract>
+  <multiply name="cumulusProfile" type="float" nodedef="ND_multiply_float">
+    <input name="in1" type="float" nodename="cumulusBase" />
+    <input name="in2" type="float" nodename="cumulusTopFade" />
+  </multiply>
+  <smoothstep name="stratusBase" type="float" nodedef="ND_smoothstep_float">
+    <input name="in" type="float" nodename="relativeHeight" />
+    <input name="low" type="float" value="0" />
+    <input name="high" type="float" value="0.25" />
+  </smoothstep>
+  <smoothstep name="stratusTop" type="float" nodedef="ND_smoothstep_float">
+    <input name="in" type="float" nodename="relativeHeight" />
+    <input name="low" type="float" value="1.3" />
+    <input name="high" type="float" value="1.6" />
+  </smoothstep>
+  <subtract name="stratusTopFade" type="float" nodedef="ND_subtract_float">
+    <input name="in1" type="float" value="1" />
+    <input name="in2" type="float" nodename="stratusTop" />
+  </subtract>
+  <multiply name="stratusProfile" type="float" nodedef="ND_multiply_float">
+    <input name="in1" type="float" nodename="stratusBase" />
+    <input name="in2" type="float" nodename="stratusTopFade" />
+  </multiply>
+  <smoothstep name="cirrusBase" type="float" nodedef="ND_smoothstep_float">
+    <input name="in" type="float" nodename="relativeHeight" />
+    <input name="low" type="float" value="0" />
+    <input name="high" type="float" value="0.8" />
+  </smoothstep>
+  <smoothstep name="cirrusTop" type="float" nodedef="ND_smoothstep_float">
+    <input name="in" type="float" nodename="relativeHeight" />
+    <input name="low" type="float" value="2.8" />
+    <input name="high" type="float" value="3.4" />
+  </smoothstep>
+  <subtract name="cirrusTopFade" type="float" nodedef="ND_subtract_float">
+    <input name="in1" type="float" value="1" />
+    <input name="in2" type="float" nodename="cirrusTop" />
+  </subtract>
+  <multiply name="cirrusProfile" type="float" nodedef="ND_multiply_float">
+    <input name="in1" type="float" nodename="cirrusBase" />
+    <input name="in2" type="float" nodename="cirrusTopFade" />
+  </multiply>
+  <ifequal name="selectStratusOrCirrus" type="float" nodedef="ND_ifequal_floatI">
+    <input name="value1" type="integer" value="0" />
+    <input name="value2" type="integer" value="1" />
+    <input name="in1" type="float" nodename="stratusProfile" />
+    <input name="in2" type="float" nodename="cirrusProfile" />
+  </ifequal>
+  <ifequal name="selectCloudProfile" type="float" nodedef="ND_ifequal_floatI">
+    <input name="value1" type="integer" value="0" />
+    <input name="value2" type="integer" value="0" />
+    <input name="in1" type="float" nodename="cumulusProfile" />
+    <input name="in2" type="float" nodename="selectStratusOrCirrus" />
+  </ifequal>
+  <multiply name="profiledCloudDensity" type="float" nodedef="ND_multiply_float">
+    <input name="in1" type="float" nodename="cloudDensity" />
+    <input name="in2" type="float" nodename="selectCloudProfile" />
+  </multiply>
+  <multiply name="boundedCloudDensity" type="float" nodedef="ND_multiply_float">
+    <input name="in1" type="float" nodename="profiledCloudDensity" />
+    <input name="in2" type="float" nodename="cloudBoundary" />
+  </multiply>
+  <multiply name="densityValue" type="float" nodedef="ND_multiply_float">
+    <input name="in1" type="float" nodename="boundedCloudDensity" />
+    <input name="in2" type="float" value="1.4" />
+  </multiply>
+  <convert name="colorVector" type="vector3" nodedef="ND_convert_color3_vector3">
+    <input name="in" type="color3" value="0.92, 0.95, 1" />
+  </convert>
+  <multiply name="scatteringColor" type="vector3" nodedef="ND_multiply_vector3FA">
+    <input name="in1" type="vector3" nodename="colorVector" />
+    <input name="in2" type="float" nodename="densityValue" />
+  </multiply>
+  <anisotropic_vdf name="vdf" type="VDF">
+    <input name="absorption" type="vector3" value="0, 0, 0" />
+    <input name="scattering" type="vector3" nodename="scatteringColor" />
+    <input name="anisotropy" type="float" value="0.68" />
+  </anisotropic_vdf>
+  <volume name="cloudVolume" type="volumeshader">
+    <input name="vdf" type="VDF" nodename="vdf" />
+  </volume>
+  <surfacematerial name="material_2" type="material" nodedef="ND_engine_volume_material">
+    <input name="volumeshader" type="volumeshader" nodename="cloudVolume" />
+  </surfacematerial>
+</materialx>

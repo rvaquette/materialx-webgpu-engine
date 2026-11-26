@@ -17,7 +17,7 @@ import {
 import { applySceneDisplacement } from '../../src/render/displacement.ts';
 import { buildSceneFrame } from '../../src/render/raster/scene-frame.ts';
 import { resolveVolume } from '../../src/materialx/volume-graph.ts';
-import { appendVolumeIr } from '../../src/compiler/volume-ir.ts';
+import { appendVolumeIr, evaluateVolumeIr } from '../../src/compiler/volume-ir.ts';
 import { surfaceGraphToLayered } from '../../src/compiler/surface-lower.ts';
 
 async function fixture(displacement = false, configure?: (graph: ResolvedGraph) => void, mode: 'editor' | 'uniform' | 'literal' = 'editor') {
@@ -56,7 +56,7 @@ async function fixture(displacement = false, configure?: (graph: ResolvedGraph) 
   const builder = new IrModuleBuilder();
   builder.output({ name: 'color', type: FLOAT, ref: builder.constant(FLOAT, 1) });
   const volume = resolveVolume(graph);
-  if (volume) appendVolumeIr(volume, builder);
+  if (volume) appendVolumeIr(volume, builder, graph);
   const ir = builder.build();
   const scene = await importUsdStage('test.usda', { reader: { read: async () => `#usda 1.0
 def Material "Mat" (prepend references = @mat.mtlx@</Mat>) {}
@@ -422,6 +422,39 @@ describe('dynamic MaterialX parameters', () => {
     expect(changed.volumeMedium?.absorption).toEqual([0.4, 0.5, 0.6]);
     expect(material.volumeMedium?.absorption).toEqual([0.1, 0.2, 0.3]);
     expect(() => changeMaterialParameters(material, new Map([[parameter.id, [-1, 0, 0]]]))).toThrow('Invalid volume coefficient');
+  });
+  it.each(['editor', 'uniform'] as const)('animates pure volume clocks in %s mode without promoting disconnected clocks', async mode => {
+    const built = await fixture(false, graph => {
+      graph.terminals = [...graph.terminals, { name: 'volumeshader', type: 'volumeshader', nodeId: 'volume', provenance: { namePath: '/volume' } }];
+      graph.nodes.set('volume', {
+        id: 'volume', category: 'volume', type: 'volumeshader', provenance: { namePath: '/volume' },
+        inputs: [{ name: 'vdf', type: 'VDF', source: { kind: 'connection', nodeId: 'vdf' }, provenance: { namePath: '/volume/vdf' } }],
+      });
+      graph.nodes.set('vdf', {
+        id: 'vdf', category: 'anisotropic_vdf', type: 'VDF', provenance: { namePath: '/vdf' },
+        inputs: [{ name: 'scattering', type: 'vector3', source: { kind: 'connection', nodeId: 'coefficient' }, provenance: { namePath: '/vdf/scattering' } }],
+      });
+      graph.nodes.set('coefficient', {
+        id: 'coefficient', category: 'convert', type: 'vector3', provenance: { namePath: '/coefficient' },
+        inputs: [{ name: 'in', type: 'float', source: { kind: 'connection', nodeId: 'clock' }, provenance: { namePath: '/coefficient/in' } }],
+      });
+      for (const id of ['clock', 'unconnectedClock']) graph.nodes.set(id, {
+        id, category: 'time', type: 'float', inputs: [], provenance: { namePath: `/${id}` },
+      });
+    }, 'literal');
+    const materials = new Map([...built.materials].map(([key, material]) => {
+      const { resolvedSurface, ...volumeMaterial } = material;
+      return [key, { ...volumeMaterial, volumeBoundary: true }];
+    }));
+    const resources = mode === 'editor' ? editableSceneMaterials({ ...built, materials }) : uniformSceneMaterials({ ...built, materials });
+    const material = [...resources.materials.values()][0]!;
+    expect(material.parameters?.filter(parameter => parameter.clock)).toHaveLength(1);
+    const clock = material.parameters!.find(parameter => parameter.clock)!;
+    expect(clock.update).toBe('rebuild');
+    const changed = changeMaterialParameters(material, new Map([[clock.id, [48]]]));
+    expect(evaluateVolumeIr(changed.volumeIr!).scattering).toEqual([2, 2, 2]);
+    expect(evaluateVolumeIr(material.volumeIr!).scattering).toEqual([0, 0, 0]);
+    expect(evaluateVolumeIr(compileEditableMaterial(changed).volumeIr!).scattering).toEqual([2, 2, 2]);
   });
   it('recompiles volume coefficients when its VDF connection changes', async () => {
     const resources = await fixture(false, graph => {
