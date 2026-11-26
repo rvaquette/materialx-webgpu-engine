@@ -339,13 +339,21 @@ function readNodeDefs(elements: ReadonlyMap<string, XmlElement>): { defs: Script
   }
   const defs: ScriptNodeDef[] = [];
   const versions: ScriptNodeDef[] = [];
+  const nodeDoc = (element: XmlElement, seen = new Set<string>()): string | undefined => {
+    const own = element.attributes.get('doc');
+    if (own) return own;
+    const parentName = element.attributes.get('inherit');
+    if (!parentName || seen.has(parentName)) return undefined;
+    const parent = elements.get(parentName);
+    return parent ? nodeDoc(parent, new Set([...seen, parentName])) : undefined;
+  };
   for (const [name, element] of elements) {
     const category = element.attributes.get('node')!;
     const outputs = [...ports(element, 'output').values()];
     const legacyType = element.attributes.get('type');
     if (!outputs.length && legacyType) outputs.push({ name: 'out', type: legacyType });
     if (!outputs.length) continue;
-    const doc = element.attributes.get('doc');
+    const doc = nodeDoc(element);
     const def: ScriptNodeDef = {
       name, category, className: scriptClassName(category),
       inputs: [...ports(element, 'input').values()], outputs,

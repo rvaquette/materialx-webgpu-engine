@@ -232,6 +232,7 @@ export interface Completion {
   label: string;
   detail: string;
   insert: string;
+  info?: string;
 }
 
 /** Completions at the end of `prefix`: node classes after `new`, variants, or ports after `variable.`. */
@@ -247,8 +248,16 @@ export function scriptCompletions(prefix: string, code: string, library: ScriptL
     const category = library.categoryOf(variant[1]!);
     if (category === undefined) return undefined;
     const variants = library.variants(category);
-    const types = [...new Set(variants.map(nodeType))].map(type => ({ label: type, detail: 'type de sortie', insert: type }));
-    const names = variants.map(def => ({ label: def.name, detail: def.inputs.map(port => `${port.name}: ${port.type}`).join(', '), insert: def.name }));
+    const types = [...new Set(variants.map(nodeType))].map(type => {
+      const doc = variants.find(def => nodeType(def) === type)?.doc;
+      return { label: type, detail: 'type de sortie', insert: type, ...(doc ? { info: doc } : {}) };
+    });
+    const names = variants.map(def => ({
+      label: def.name,
+      detail: def.inputs.map(port => `${port.name}: ${port.type}`).join(', '),
+      insert: def.name,
+      ...(def.doc ? { info: def.doc } : {}),
+    }));
     return { from: prefix.length - variant[3]!.length, items: rank([...types, ...names], variant[3]!) };
   }
   const created = new RegExp(`\\bnew\\s+(${IDENT})?$`).exec(prefix);
@@ -257,7 +266,12 @@ export function scriptCompletions(prefix: string, code: string, library: ScriptL
     const items = library.classNames.map((className) => {
       const variants = library.variants(library.categoryOf(className)!);
       const types = [...new Set(variants.map(nodeType))];
-      return { label: className, detail: `${variants[0]!.category} → ${types.join(' | ')}`, insert: `${className}()` };
+      return {
+        label: className,
+        detail: `${variants[0]!.category} → ${types.join(' | ')}`,
+        insert: `${className}()`,
+        ...(variants[0]!.doc ? { info: variants[0]!.doc } : {}),
+      };
     });
     const primitives = Object.entries(SCRIPT_PRIMITIVES).map(([className, primitive]) => ({
       label: className, detail: `primitive : ${primitive.doc}`, insert: `${className}()`,
@@ -284,6 +298,7 @@ export function scriptCompletions(prefix: string, code: string, library: ScriptL
       label: p.name,
       detail: `${kind} ${p.type}${p.default !== undefined ? ` = ${formatValue(p.default)}` : ''}`,
       insert: p.name,
+      ...(p.doc ? { info: p.doc } : {}),
     });
     const inputs = def.inputs.map(port('entrée'));
     if (isColorspaceAttribute(def, 'colorspace')) inputs.push({ label: 'colorspace', detail: 'attribut string', insert: 'colorspace' });

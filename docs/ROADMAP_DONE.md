@@ -1612,6 +1612,36 @@ mode caméra adaptatif :
 
 ![Terrain animé en path tracing](images/p9/p9-terrain-pathtracing.png)
 
+## Priorité 10 : documentation intégrée des nœuds MaterialX
+
+Le workbench propose un panneau dockable et recherchable, alimenté par les
+NodeDefs réellement chargées : signatures, entrées et valeurs par défaut,
+sorties, variantes et descriptions (y compris les descriptions héritées).
+L'attribution renvoie à la bibliothèque standard MaterialX sous licence
+Apache-2.0. Chaque page indique les statuts raster/path tracing de
+`conformance.md` et l'appartenance au corpus de
+`materialx-node-coverage.md`, sans déclarer non pris en charge un nœud absent
+de ces matrices.
+
+Un exemple JavaScript est généré pour chaque NodeDef, avec des valeurs
+représentatives pour les catégories courantes. Les exemples connectables
+alimentent une sphère de prévisualisation ; les sorties sans connexion de
+surface directe restent exécutables et affichent leur limite. Les vignettes
+sont rendues à la demande dans un viewer temporaire indépendant de la scène
+éditée. « Ouvrir dans l'éditeur » charge l'exemple sans l'exécuter.
+
+F1 sur un nœud sélectionné dans les graphes de script et de matériau ouvre sa
+page. Les complétions CodeMirror exposent les descriptions des NodeDefs et de
+leurs entrées. Le test de référence exécute un exemple généré pour chaque
+NodeDef de la bibliothèque standard installée.
+
+Le script d'illustration est [p10-node-reference.js](../examples/scripts/p10-node-reference.js) ;
+il apparaît automatiquement dans le menu Scripts.
+
+| Matériau en raster | Matériau en path tracing |
+|---|---|
+| ![Matériau procédural de démonstration en raster](images/p10/p10-node-reference-raster.png) | ![Matériau procédural de démonstration en path tracing](images/p10/p10-node-reference-pathtracing.png) |
+
 ## Priorité 21 : étude du chargement des bibliothèques MaterialX sans WASM
 
 L'étude et le prototype d'archive sont documentés dans

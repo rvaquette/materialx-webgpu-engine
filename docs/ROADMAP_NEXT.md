@@ -10,7 +10,8 @@ Les priorités 1 (rendu progressif), 2 (API de bibliothèque), 3 (éditeur de
 matériaux MaterialX), 3bis (scripting), 4 (accélération du path tracer), 5
 (scènes dynamiques), 6 (volumes et effets avancés), 7 (robustesse,
 portabilité et exploitation), 8 (primitives et scènes par script), 9
-(displacement procédural), ainsi que l'étude urgente de la priorité 21
+(displacement procédural), 10 (documentation intégrée des nœuds), ainsi que
+l'étude urgente de la priorité 21
 (chargement des bibliothèques MaterialX sans WASM) et la priorité 22 (build
 minimal du Core WASM) sont traitées ; leur historique est dans
 [ROADMAP_DONE.md](ROADMAP_DONE.md). Les limites connues sont recensées dans
@@ -24,27 +25,6 @@ continuer à optimiser le runtime livré au navigateur.
 ## Reliquats des priorités traitées
 
 Aucun.
-
-## Priorité 10 : documentation intégrée des nœuds MaterialX
-
-Un panneau dockview de référence, généré autant que possible :
-
-- signature de chaque nœud (entrées, types, valeurs par défaut, variantes de
-  type) lue dans les nodedefs chargées ;
-- description tirée de la spécification MaterialX (Apache-2.0, avec
-  attribution) ;
-- statut de support par backend, repris de
-  [materialx-node-coverage.md](materialx-node-coverage.md) ;
-- cas d'usage : un exemple de script exécutable par nœud (« Ouvrir dans
-  l'éditeur »), rédigé à la main pour les 40 à 50 nœuds les plus courants,
-  minimal pour les autres ;
-- vignette rendue du nœud appliqué sur une sphère (priorité 8) ;
-- aide contextuelle : infobulle ou F1 sur un nœud du graphe et dans
-  l'autocomplétion CodeMirror.
-
-**Critère d'aboutissement :** chaque nœud de la bibliothèque standard a une page
-avec signature, statut et exemple exécutable, vérifiée par un test qui exécute
-tous les exemples.
 
 ## Priorité 11 : aperçus par nœud et bibliothèque de matériaux
 

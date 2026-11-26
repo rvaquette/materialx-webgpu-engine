@@ -27,6 +27,7 @@ import {
 import { layoutScriptGraph } from './script-graph-layout.ts';
 import { loadDraft, saveDraft, ScriptStore, shareLink } from './script-store.ts';
 import { SCRIPT_TEMPLATES } from './script-templates.ts';
+import { requestNodeReference } from './node-reference.ts';
 import { downloadBlob } from '../assets/download.ts';
 import {
   controlRemoteJob, describeRemoteProgress, loadRemoteSettings, RemoteRenderView, runRemoteScript, saveRemoteSettings,
@@ -463,6 +464,7 @@ export class MaterialXScriptEditor {
       options: result.items.map((item, index): CmCompletion => ({
         label: item.label,
         detail: item.detail,
+        ...(item.info ? { info: item.info } : {}),
         // Keep scriptCompletions' ranking (inputs before outputs, prefix matches first).
         boost: Math.max(-99, 99 - index),
         apply: (view, _completion, from, to) => {
@@ -1021,6 +1023,10 @@ export class MaterialXScriptEditor {
     if (!this.#graphView) {
       this.#graphView = new NodeGraphView(this.#graph, {
         onActivate: id => this.#goToNode(id),
+        onHelp: id => {
+          const node = this.#graphNodes.find(candidate => candidate.name === id);
+          if (node) requestNodeReference(node.def.category, node.def.name);
+        },
         onValue: (id, input, value) => this.#editInput(id, input, scriptLiteral(value as ScriptValue)),
         onLink: (link) => {
           if (!this.#isVariable(link.from)) {

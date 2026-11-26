@@ -48,6 +48,8 @@ export interface NodeGraphHandlers {
   onSelect?(id: string | undefined): void;
   /** Double click on a node. */
   onActivate?(id: string): void;
+  /** F1 on the focused graph canvas. */
+  onHelp?(id: string): void;
   onValue?(id: string, input: string, value: GraphValue): void;
   /** A link was drawn to `link.to.input` (replacing any previous one). */
   onLink?(link: GraphLink): void;
@@ -137,6 +139,7 @@ export class NodeGraphView {
   #updating = false;
   #pendingInputs = new Set<string>();
   #fitted = false;
+  #selected: string | undefined;
 
   constructor(container: HTMLElement, handlers: NodeGraphHandlers = {}) {
     this.#handlers = handlers;
@@ -154,6 +157,12 @@ export class NodeGraphView {
     this.element.addEventListener('keydown', (event) => {
       if (event.target !== this.#canvas) return;
       const key = event.key.toLowerCase();
+      if (key === 'f1' && this.#selected) {
+        event.preventDefault();
+        event.stopPropagation();
+        this.#handlers.onHelp?.(this.#selected);
+        return;
+      }
       const command = event.ctrlKey || event.metaKey;
       if (key === 'delete' || key === 'backspace' || (command && ['v', 'z', 'y', 'x', 'd'].includes(key))) {
         event.stopPropagation();
@@ -172,7 +181,10 @@ export class NodeGraphView {
     this.#view.show_info = false;
     // litegraph drops all text below 0.6: keep labels readable down to the minimum fit zoom.
     this.#view.low_quality_zoom_threshold = 0.3;
-    this.#view.onNodeSelected = node => this.#handlers.onSelect?.(this.#ids.get(node));
+    this.#view.onNodeSelected = node => {
+      this.#selected = node ? this.#ids.get(node) : undefined;
+      this.#handlers.onSelect?.(this.#selected);
+    };
     this.#view.onNodeDblClicked = (node) => {
       const id = this.#ids.get(node);
       if (id) this.#handlers.onActivate?.(id);

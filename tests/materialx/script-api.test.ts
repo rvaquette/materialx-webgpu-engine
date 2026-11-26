@@ -56,7 +56,7 @@ const LIBRARY = ScriptLibrary.fromXml([`<?xml version="1.0"?>
     <output name="outg" type="float" />
     <output name="outb" type="float" />
   </nodedef>
-  <nodedef name="ND_standard_surface_surfaceshader_100" node="standard_surface" version="1.0.0">
+  <nodedef name="ND_standard_surface_surfaceshader_100" node="standard_surface" version="1.0.0" doc="Inherited surface documentation.">
     <input name="base" type="float" value="1" />
     <input name="base_color" type="color3" value="0.8, 0.8, 0.8" />
     <output name="out" type="surfaceshader" />
@@ -78,6 +78,7 @@ describe('material script library', () => {
     expect(LIBRARY.classNames).toEqual(['Image', 'Mix', 'Noise3d', 'Separate3', 'StandardSurface', 'Surfacematerial']);
     const surface = LIBRARY.resolve('standard_surface');
     expect(surface.name).toBe('ND_standard_surface_surfaceshader');
+    expect(surface.doc).toBe('Inherited surface documentation.');
     expect(surface.inputs.map(input => input.name)).toEqual(['base', 'base_color', 'thin_walled']);
     expect(LIBRARY.variants('standard_surface')).toHaveLength(1);
     expect(LIBRARY.resolve('image').inputs.find(input => input.name === 'filtertype')?.enum).toEqual(['closest', 'linear', 'cubic']);

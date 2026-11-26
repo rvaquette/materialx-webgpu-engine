@@ -4,6 +4,7 @@ import { compareMaterialGraphs } from './materialx/graph-comparison.ts';
 import { makeMaterialExport, type TextureSourceResolver } from './materialx/graph-export.ts';
 import type { ResolvedGraph, ResolvedNodeDefRef } from './materialx/graph.ts';
 import type { SurfaceInputDiagnostic } from './materialx/surface-graph.ts';
+import { requestNodeReference } from './materialx/node-reference.ts';
 import type { BackendKind, InteractiveViewer, MaterialVariantSlot } from './render/viewer.ts';
 import type { MaterialPreviewOptions } from './render/material-preview.ts';
 import type { RgbaCapture } from './gpu/capture.ts';
@@ -754,6 +755,10 @@ export function showMaterialGraph(
     if (!surface.isConnected) return;
     graphView = new View(canvasHost, {
       onSelect: id => { if (id && id !== nodeChooser.value) select(id); },
+      onHelp: id => {
+        const node = nodes.get(id);
+        if (node) requestNodeReference(node.category, node.nodeDef?.name);
+      },
       onMove: (id, [x, y]) => {
         const position = { x: Math.max(PADDING, Math.min(MAX_SAVED_POSITION, x)), y: Math.max(PADDING, Math.min(MAX_SAVED_POSITION, y)) };
         layout.positions.set(id, position);

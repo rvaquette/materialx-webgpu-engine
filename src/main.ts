@@ -9,7 +9,9 @@ import { sceneDeviceDescriptor } from './gpu/device.ts';
 import { startViewerUi, type ViewerUiState, type ViewerUiActions } from './viewer-ui.ts';
 import type { LocalGltfScene } from './scene/local-gltf.ts';
 import { downloadDisplayedAovPng, downloadPathTraceAovPfm, encodePathTraceAovPfm } from './render/aov-export.ts';
-import { attachScriptEditor, type ScriptRunControl } from './materialx/script-editor.ts';
+import { attachScriptEditor, type ScriptEditorAttachment, type ScriptRunControl } from './materialx/script-editor.ts';
+import { NODE_REFERENCE_EVENT, type NodeReferenceRequest } from './materialx/node-reference.ts';
+import { NodeReferencePanel } from './materialx/node-reference-panel.ts';
 import { activityButton } from './ui/layout.ts';
 import { Workbench } from './ui/workbench.ts';
 import { loadScriptLibrary, runScript, ScriptError, toXml, type ScriptHost, type ScriptStats } from './materialx/script-api.ts';
@@ -111,10 +113,22 @@ async function main(): Promise<void> {
     if (!element) throw new Error(`Élément #${id} introuvable.`);
     return element;
   };
+  let scriptEditor: ScriptEditorAttachment | undefined;
+  const nodeReference = new NodeReferencePanel({
+    library: scriptLibrary,
+    async openExample(code) {
+      if (!scriptEditor) throw new Error('L’éditeur de script MaterialX n’est pas prêt.');
+      await scriptEditor.toggle(true);
+      const editor = await scriptEditor.editor;
+      editor.script = code;
+      editor.focus();
+    },
+  });
   const workbench = new Workbench(document.getElementById('workbench')!, [
     { id: 'view', title: 'Vue', create: () => panelContent('canvas-container'), placement: { direction: 'within' }, visible: true },
     { id: 'render', title: 'Rendu interactif', create: () => panelContent('ui'), placement: { direction: 'left', size: 380 }, visible: true },
     { id: 'graph', title: 'Graphe du matériau', create: () => panelContent('material-graph'), placement: { direction: 'below', size: 440 } },
+    { id: 'nodes', title: 'Référence des nœuds', create: () => nodeReference.element, placement: { direction: 'right', size: 420 } },
   ]);
   // The material graph shows in its panel (non-modal); closing either closes the other.
   const materialGraph = panelContent('material-graph') as HTMLDialogElement;
@@ -125,11 +139,13 @@ async function main(): Promise<void> {
   materialGraph.addEventListener('close', () => workbench.hide('graph'));
   workbench.onVisibilityChange((id, visible) => {
     if (id === 'graph' && !visible && materialGraph.open) materialGraph.close();
+    if (id === 'nodes') nodeReference.setVisible(visible);
   });
   // Activity bar: panel toggles and material tools.
   for (const [id, panel, name, label, caption, shortcut] of [
     ['toggle-view-panel', 'view', 'monitor', 'Vue de rendu', 'Vue', undefined],
     ['toggle-render-panel', 'render', 'sliders', 'Rendu interactif : scène, rendu, matériaux (F3)', 'Rendu', 'F3'],
+    ['toggle-node-reference-panel', 'nodes', 'book', 'Référence des nœuds MaterialX', 'Nœuds', undefined],
   ] as const) {
     const button = document.getElementById(id);
     if (!(button instanceof HTMLButtonElement)) continue;
@@ -145,6 +161,11 @@ async function main(): Promise<void> {
       });
     }
   }
+  document.addEventListener(NODE_REFERENCE_EVENT, event => {
+    const request = (event as CustomEvent<NodeReferenceRequest>).detail;
+    nodeReference.open(request.category, request.nodeDef);
+    workbench.show('nodes');
+  });
   for (const [id, name, label, caption] of [
     ['open-material-library', 'book', 'Bibliothèque de matériaux de l’objet sélectionné', 'Matériaux'],
     ['open-material-graph', 'graph', 'Graphe du matériau de l’objet sélectionné', 'Graphe'],
@@ -153,7 +174,7 @@ async function main(): Promise<void> {
     const button = document.getElementById(id);
     if (button instanceof HTMLButtonElement) activityButton(button, name, label, caption);
   }
-  attachScriptEditor(document.getElementById('activity-panels'), {
+  scriptEditor = attachScriptEditor(document.getElementById('activity-panels'), {
     workbench,
     library: scriptLibrary,
     filePrefix: scriptFilePrefix,
@@ -200,6 +221,46 @@ async function main(): Promise<void> {
   // Replaced after a device loss; script operations use the current one.
   let currentGpu = gpu;
   (globalThis as { __mxGpu?: unknown }).__mxGpu = gpu;
+  nodeReference.setPreviewRenderer(async (code, signal) => {
+    const previewViewer = new InteractiveViewer({
+      device: currentGpu.device, width: 256, height: 256, outputFormat: 'rgba8unorm',
+    });
+    const entry = new URL('./__node_reference__/scene.usda', document.baseURI).href;
+    let stageLoad: Promise<void> | undefined;
+    let runFailed = false;
+    const previewHost: ScriptHost = {
+      ...scriptHost,
+      loadStage(stage) {
+        stageLoad = (async () => {
+          signal.throwIfAborted();
+          const { importUsdaLayer } = await import('./render/usd-scene-assets.ts');
+          const imported = await importUsdaLayer(entry, stage.usda, stage.materials);
+          signal.throwIfAborted();
+          await previewViewer.load(entry, new Map(), false, { imported });
+        })();
+        return stageLoad;
+      },
+    };
+    try {
+      await runScript(code, await scriptLibrary, { host: previewHost, signal });
+      return await previewViewer.captureObjectMaterialPreview('/World/previewSphere', {
+        target: 'object', backend: 'raster',
+      }, signal);
+    } catch (error) {
+      runFailed = true;
+      throw error;
+    } finally {
+      let stageFailure: unknown;
+      if (stageLoad) {
+        try { await stageLoad; } catch (error) { stageFailure = error; }
+      }
+      previewViewer.dispose();
+      if (stageFailure !== undefined && !runFailed && !signal.aborted) throw stageFailure;
+      if (stageFailure !== undefined && signal.aborted) {
+        console.warn('Node reference preview stage failed after cancellation.', stageFailure);
+      }
+    }
+  });
   let deviceLost = false;
   const journal = new DiagnosticJournal();
   const reportGpuError = (event: Event): void => {

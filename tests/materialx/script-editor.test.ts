@@ -9,8 +9,8 @@ const LIBRARY = ScriptLibrary.fromXml([`<materialx version="1.39">
     <input name="file" type="filename" value="" />
     <output name="out" type="color3" />
   </nodedef>
-  <nodedef name="ND_mix_color3" node="mix">
-    <input name="fg" type="color3" value="0, 0, 0" />
+  <nodedef name="ND_mix_color3" node="mix" doc="Blends foreground and background colors.">
+    <input name="fg" type="color3" value="0, 0, 0" doc="Foreground color." />
     <input name="mix" type="float" value="0" />
     <output name="out" type="color3" />
   </nodedef>
@@ -57,7 +57,7 @@ describe('script editor language support', () => {
 
   it('completes node classes, variants and ports', () => {
     expect(scriptCompletions('x = new Mi', CODE, LIBRARY)).toEqual({
-      from: 8, items: [{ label: 'Mix', detail: 'mix → color3 | float', insert: 'Mix()' }],
+      from: 8, items: [{ label: 'Mix', detail: 'mix → color3 | float', insert: 'Mix()', info: 'Blends foreground and background colors.' }],
     });
     expect(scriptCompletions('x = new Mix("fl', CODE, LIBRARY)?.items.map(item => item.label)).toEqual(['float', 'ND_mix_float']);
     const ports = scriptCompletions(`${CODE}img.`, CODE, LIBRARY)!;
@@ -66,6 +66,8 @@ describe('script editor language support', () => {
     ]);
     expect(scriptCompletions(`${CODE}m.fg = img.`, CODE, LIBRARY)?.items[0]?.label).toBe('out');
     expect(scriptCompletions(`${CODE}unknown.`, CODE, LIBRARY)).toBeUndefined();
+    const colorCode = 'm = new Mix();\n';
+    expect(scriptCompletions(`${colorCode}m.f`, colorCode, LIBRARY)?.items[0]?.info).toBe('Foreground color.');
   });
 
   it('rewrites node inputs edited in the graph', () => {
