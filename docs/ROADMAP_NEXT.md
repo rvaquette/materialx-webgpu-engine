@@ -12,10 +12,10 @@ matériaux MaterialX), 3bis (scripting), 4 (accélération du path tracer), 5
 portabilité et exploitation), 8 (primitives et scènes par script), 9
 (displacement procédural), 10 (documentation intégrée des nœuds), 11
 (aperçus par nœud et bibliothèque de matériaux), 12 (environnement et
-post-traitement), 13 (baking et export de scènes), 14 (lookdev et projets) et
-15 (opérations booléennes) et 16 (shaders d'extension), ainsi que l'étude urgente de la priorité 21
-(chargement des bibliothèques MaterialX sans WASM) et la priorité 22 (build
-minimal du Core WASM) sont traitées ; leur historique est dans
+post-traitement), 13 (baking et export de scènes), 14 (lookdev et projets),
+15 (opérations booléennes) et 16 (shaders d'extension), ainsi que l'étude
+urgente de la priorité 21 (chargement des bibliothèques MaterialX sans WASM)
+et la priorité 22 (build minimal du Core WASM) sont traitées ; leur historique est dans
 [ROADMAP_DONE.md](ROADMAP_DONE.md). Les limites connues sont recensées dans
 [INTEGRATION.md](INTEGRATION.md#limites-connues).
 

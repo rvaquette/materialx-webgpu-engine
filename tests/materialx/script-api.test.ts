@@ -8,6 +8,7 @@ import {
 import { ENGINE_SHADER_LIBRARY_XML } from '../../src/materialx/engine-shaders.ts';
 import type { ResolvedGraph, ResolvedNode } from '../../src/materialx/graph.ts';
 import { importUsdStage } from '../../src/usd/importer.ts';
+import { importLights } from '../../src/usd/lights.ts';
 import { buildSceneInstances } from '../../src/scene/instances.ts';
 import { resolveSceneMaterials } from '../../src/usd/materials.ts';
 import { animateScene } from '../../src/render/scene-animation.ts';
@@ -97,6 +98,68 @@ const LIBRARY = ScriptLibrary.fromXml([`<?xml version="1.0"?>
   <nodedef name="ND_surfacematerial" node="surfacematerial">
     <input name="surfaceshader" type="surfaceshader" value="" />
     <input name="displacementshader" type="displacementshader" value="" />
+    <input name="volumeshader" type="volumeshader" value="" />
+    <output name="out" type="material" />
+  </nodedef>
+</materialx>`, ENGINE_SHADER_LIBRARY_XML]);
+
+const P17_LIBRARY = ScriptLibrary.fromXml([`<materialx version="1.39">
+  <nodedef name="ND_position_vector3" node="position"><input name="space" type="string" value="object" /><output name="out" type="vector3" /></nodedef>
+  <nodedef name="ND_separate3_vector3" node="separate3"><input name="in" type="vector3" value="0, 0, 0" /><output name="outx" type="float" /><output name="outy" type="float" /><output name="outz" type="float" /></nodedef>
+  <nodedef name="ND_time_float" node="time"><input name="fps" type="float" value="24" /><output name="out" type="float" /></nodedef>
+  <nodedef name="ND_multiply_float" node="multiply"><input name="in1" type="float" value="1" /><input name="in2" type="float" value="1" /><output name="out" type="float" /></nodedef>
+  <nodedef name="ND_multiply_vector3" node="multiply"><input name="in1" type="vector3" value="0, 0, 0" /><input name="in2" type="vector3" value="1, 1, 1" /><output name="out" type="vector3" /></nodedef>
+  <nodedef name="ND_multiply_vector3FA" node="multiply"><input name="in1" type="vector3" value="0, 0, 0" /><input name="in2" type="float" value="1" /><output name="out" type="vector3" /></nodedef>
+  <nodedef name="ND_multiply_color3FA" node="multiply"><input name="in1" type="color3" value="0, 0, 0" /><input name="in2" type="float" value="1" /><output name="out" type="color3" /></nodedef>
+  <nodedef name="ND_add_float" node="add"><input name="in1" type="float" value="0" /><input name="in2" type="float" value="0" /><output name="out" type="float" /></nodedef>
+  <nodedef name="ND_add_vector3" node="add"><input name="in1" type="vector3" value="0, 0, 0" /><input name="in2" type="vector3" value="0, 0, 0" /><output name="out" type="vector3" /></nodedef>
+  <nodedef name="ND_sin_float" node="sin"><input name="in" type="float" value="0" /><output name="out" type="float" /></nodedef>
+  <nodedef name="ND_displacement_float" node="displacement"><input name="displacement" type="float" value="0" /><output name="out" type="displacementshader" /></nodedef>
+  <nodedef name="ND_smoothstep_float" node="smoothstep"><input name="in" type="float" value="0" /><input name="low" type="float" value="0" /><input name="high" type="float" value="1" /><output name="out" type="float" /></nodedef>
+  <nodedef name="ND_mix_color3" node="mix"><input name="fg" type="color3" value="0, 0, 0" /><input name="bg" type="color3" value="0, 0, 0" /><input name="mix" type="float" value="0" /><output name="out" type="color3" /></nodedef>
+  <nodedef name="ND_mix_float" node="mix"><input name="fg" type="float" value="0" /><input name="bg" type="float" value="0" /><input name="mix" type="float" value="0" /><output name="out" type="float" /></nodedef>
+  <nodedef name="ND_noise3d_float" node="noise3d"><input name="amplitude" type="float" value="1" /><input name="pivot" type="float" value="0" /><input name="position" type="vector3" value="0, 0, 0" /><output name="out" type="float" /></nodedef>
+  <nodedef name="ND_bump_vector3" node="bump"><input name="height" type="float" value="0" /><input name="scale" type="float" value="1" /><output name="out" type="vector3" /></nodedef>
+  <nodedef name="ND_standard_surface_surfaceshader" node="standard_surface">
+    <input name="base" type="float" value="1" /><input name="base_color" type="color3" value="0.8, 0.8, 0.8" />
+    <input name="specular_roughness" type="float" value="0.2" /><input name="specular_IOR" type="float" value="1.5" />
+    <input name="transmission" type="float" value="0" /><input name="transmission_color" type="color3" value="1, 1, 1" />
+    <input name="transmission_depth" type="float" value="0" /><input name="subsurface" type="float" value="0" />
+    <input name="subsurface_color" type="color3" value="1, 1, 1" /><input name="normal" type="vector3" value="0, 0, 1" />
+    <input name="emission" type="float" value="0" /><input name="emission_color" type="color3" value="0, 0, 0" />
+    <input name="thin_walled" type="boolean" value="false" /><output name="out" type="surfaceshader" />
+  </nodedef>
+  <nodedef name="ND_range_float" node="range">
+    <input name="in" type="float" value="0" /><input name="inlow" type="float" value="0" /><input name="inhigh" type="float" value="1" />
+    <input name="outlow" type="float" value="0" /><input name="outhigh" type="float" value="1" /><input name="doclamp" type="boolean" value="false" />
+    <output name="out" type="float" />
+  </nodedef>
+  <nodedef name="ND_combine3_vector3" node="combine3">
+    <input name="in1" type="float" value="0" /><input name="in2" type="float" value="0" /><input name="in3" type="float" value="0" /><output name="out" type="vector3" />
+  </nodedef>
+  <nodedef name="ND_worleynoise3d_float" node="worleynoise3d">
+    <input name="position" type="vector3" value="0, 0, 0" /><input name="style" type="integer" value="0" /><input name="jitter" type="float" value="1" /><output name="out" type="float" />
+  </nodedef>
+  <nodedef name="ND_subtract_float" node="subtract"><input name="in1" type="float" value="0" /><input name="in2" type="float" value="0" /><output name="out" type="float" /></nodedef>
+  <nodedef name="ND_divide_float" node="divide"><input name="in1" type="float" value="0" /><input name="in2" type="float" value="1" /><output name="out" type="float" /></nodedef>
+  <nodedef name="ND_sqrt_float" node="sqrt"><input name="in" type="float" value="0" /><output name="out" type="float" /></nodedef>
+  <nodedef name="ND_max_float" node="max"><input name="in1" type="float" value="0" /><input name="in2" type="float" value="0" /><output name="out" type="float" /></nodedef>
+  <nodedef name="ND_ifequal_float" node="ifequal">
+    <input name="value1" type="integer" value="0" /><input name="value2" type="integer" value="0" />
+    <input name="in1" type="float" value="0" /><input name="in2" type="float" value="0" /><output name="out" type="float" />
+  </nodedef>
+  <nodedef name="ND_blackbody" node="blackbody"><input name="temperature" type="float" value="6500" /><output name="out" type="color3" /></nodedef>
+  <nodedef name="ND_convert_color3_vector3" node="convert"><input name="in" type="color3" value="0, 0, 0" /><output name="out" type="vector3" /></nodedef>
+  <nodedef name="ND_uniform_edf" node="uniform_edf"><input name="color" type="color3" value="0, 0, 0" /><output name="out" type="EDF" /></nodedef>
+  <nodedef name="ND_anisotropic_vdf" node="anisotropic_vdf">
+    <input name="absorption" type="vector3" value="0, 0, 0" /><input name="scattering" type="vector3" value="0, 0, 0" />
+    <input name="anisotropy" type="float" value="0" /><output name="out" type="VDF" />
+  </nodedef>
+  <nodedef name="ND_volume_volumeshader" node="volume">
+    <input name="vdf" type="VDF" value="" /><input name="edf" type="EDF" value="" /><output name="out" type="volumeshader" />
+  </nodedef>
+  <nodedef name="ND_surfacematerial" node="surfacematerial">
+    <input name="surfaceshader" type="surfaceshader" value="" /><input name="displacementshader" type="displacementshader" value="" />
     <output name="out" type="material" />
   </nodedef>
 </materialx>`, ENGINE_SHADER_LIBRARY_XML]);
@@ -104,8 +167,9 @@ const LIBRARY = ScriptLibrary.fromXml([`<?xml version="1.0"?>
 describe('material script library', () => {
   it('resolves nodes and their ports from NodeDefs', async () => {
     expect(LIBRARY.classNames).toEqual([
-      'AovShader', 'Clamp', 'CustomAovShader', 'EnvironmentShader', 'Image', 'ImageShader', 'LensShader', 'LightFilterShader', 'Mix', 'Multiply', 'Noise3d', 'Position', 'ScatterShader',
-      'Separate3', 'StandardSurface', 'Surfacematerial',
+      'AovShader', 'Clamp', 'Clouds', 'CustomAovShader', 'EnvironmentShader', 'Fire', 'Ice', 'Image', 'ImageShader', 'Lava',
+      'LensShader', 'LightFilterShader', 'Mix', 'Mud', 'Multiply', 'Noise3d', 'Position', 'ScatterShader', 'Separate3', 'Smoke',
+      'StandardSurface', 'Surfacematerial', 'Water', 'WaterCaustics', 'WetSand',
     ]);
     const surface = LIBRARY.resolve('standard_surface');
     expect(surface.name).toBe('ND_standard_surface_surfaceshader');
@@ -408,6 +472,31 @@ describe('runScript', () => {
     expect(graph.nodes.some(node => node.def.name === 'ND_engine_image_shader')).toBe(true);
   });
 
+  it.each(['water', 'lava', 'fire', 'smoke', 'clouds'])('runs the P17 %s frame-sequence example', async name => {
+    const source = readFileSync(join('examples', 'scripts', `p17-${name}.js`), 'utf8');
+    const graph = await runScript(source, P17_LIBRARY, { host: idleHost() });
+    expect(source).toContain('await setTime(frame)');
+    expect(source).toContain('01-raster/frame-');
+    expect(source).toContain('02-pathtracing/frame-');
+    expect(graph.nodes.some(node => node.def.category === name)).toBe(true);
+  });
+
+  it.each(['surface-presets', 'cloud-profiles'])('runs the P17 %s frame-sequence example', async name => {
+    const source = readFileSync(join('examples', 'scripts', `p17-${name}.js`), 'utf8');
+    const graph = await runScript(source, P17_LIBRARY, { host: idleHost() });
+    expect(source).toContain('await setTime(frame)');
+    expect(source).toContain('01-raster/frame-');
+    expect(source).toContain('02-pathtracing/frame-');
+    if (name === 'surface-presets') {
+      expect(graph.nodes.some(node => node.def.category === 'ice')).toBe(true);
+      expect(graph.nodes.some(node => node.def.category === 'mud')).toBe(true);
+      expect(graph.nodes.some(node => node.def.category === 'wet_sand')).toBe(true);
+    } else {
+      expect(graph.nodes.some(node => node.def.category === 'clouds')).toBe(true);
+      expect(source).toContain('profile = 2');
+    }
+  });
+
   it('keeps JavaScript available for computed values', async () => {
     const graph = await runScript('m = new Mix("float"); for (let i = 0; i < 3; i++) m.mix = Math.min(1, i * 0.4);', LIBRARY);
     expect(graph.nodes[0]!.inputs.get('mix')).toEqual({ value: 0.8 });
@@ -446,6 +535,80 @@ s.thin_walled = true;
     expect(xml).toContain('<input name="thin_walled" type="boolean" value="true" />');
     expect(xml).toContain('<surfacematerial name="material" type="material">');
     expect(xml).toContain('<input name="surfaceshader" type="surfaceshader" nodename="s" />');
+  });
+
+  it('exports reusable P17 surface and volume presets with their shader terminals', async () => {
+    const water = await runScript('water = new Water();', P17_LIBRARY);
+    const waterXml = toXml(water, P17_LIBRARY);
+    expect(waterXml).not.toContain('<water ');
+    expect(waterXml).toContain('<standard_surface');
+    expect(waterXml).toContain('<displacement');
+    expect(waterXml).toContain('<surfacematerial name="material" type="material">');
+    expect(waterXml).toContain('<input name="surfaceshader" type="surfaceshader" nodename="waterSurface" />');
+    expect(waterXml).toContain('<input name="displacementshader" type="displacementshader" nodename="waveDisplacement" />');
+
+    const fire = await runScript('fire = new Fire();', P17_LIBRARY);
+    const fireXml = toXml(fire, P17_LIBRARY);
+    expect(fireXml).not.toContain('<fire ');
+    expect(fireXml).toContain('<volume');
+    expect(fireXml).toContain('<surfacematerial name="material" type="material" nodedef="ND_engine_volume_material">');
+    expect(fireXml).toContain('<input name="volumeshader" type="volumeshader" nodename="fireVolume" />');
+
+    for (const [source, category] of [['new Ice();', 'ice'], ['new Mud();', 'mud'], ['new WetSand();', 'wet_sand']]) {
+      const graph = await runScript(`surface = ${source}`, P17_LIBRARY);
+      expect(graph.nodes.some(node => node.def.category === category)).toBe(true);
+    }
+  });
+
+  it('writes script-created volume bounds and binds a volumetric shader', async () => {
+    const stages: string[] = [];
+    const host: ScriptHost = { ...idleHost(), loadStage: async stage => { stages.push(stage.usda); } };
+    await runScript(`
+      water = new Water();
+      pond = new Plane({ width: 4, length: 4, material: water });
+      fire = new Fire();
+      bounds = new Volume({ width: 2, height: 4, length: 3 });
+      bounds.material = fire;
+      await render();
+    `, P17_LIBRARY, { host });
+    expect(stages).toHaveLength(1);
+    expect(stages[0]).toContain('def Material "water_material"');
+    expect(stages[0]).toContain('def Mesh "bounds"');
+    expect(stages[0]).toContain('custom token engine:primitive = "volume"');
+    const scene = await importUsdStage('p17-fire.usda', { reader: { read: async () => stages[0]! } });
+    const volumePrim = scene.prims.get('/World/bounds')!;
+    expect(volumePrim.typeName).toBe('Mesh');
+    expect(volumePrim.attributes.get('points')?.value).toHaveLength(24);
+    const instances = buildSceneInstances(scene, { materials: resolveSceneMaterials(scene) });
+    expect(instances.instances.find(instance => instance.primPath === '/World/bounds')?.materialPath)
+      .toBe('/World/Looks/fire_material');
+  });
+
+  it('exports script-created point lights for both renderer backends', async () => {
+    const stages: string[] = [];
+    const host: ScriptHost = { ...idleHost(), loadStage: async stage => { stages.push(stage.usda); } };
+    await runScript(`
+      fireLight = new PointLight();
+      fireLight.color = [1, 0.24, 0.04];
+      fireLight.intensity = 36;
+      fireLight.exposure = 1;
+      fireLight.radius = 0.18;
+      fireLight.translate = [0, 1, 0];
+      await render();
+    `, P17_LIBRARY, { host });
+
+    expect(stages).toHaveLength(1);
+    expect(stages[0]).toContain('def PointLight "fireLight"');
+    const scene = await importUsdStage('p17-light.usda', { reader: { read: async () => stages[0]! } });
+    expect(importLights(scene)).toMatchObject([{
+      path: '/World/fireLight', usdType: 'PointLight', type: 'point',
+      color: [1, 0.24, 0.04], intensity: 36, exposure: 1, radius: 0.18,
+    }]);
+  });
+
+  it('rejects invalid point-light color and size', async () => {
+    await expect(runScript('lamp = new PointLight(); lamp.radius = 0;', P17_LIBRARY)).rejects.toThrow(/lamp.radius/);
+    await expect(runScript('lamp = new PointLight(); lamp.color = [1, -1, 0];', P17_LIBRARY)).rejects.toThrow(/lamp.color/);
   });
 
   it('round-trips script → XML → script', async () => {

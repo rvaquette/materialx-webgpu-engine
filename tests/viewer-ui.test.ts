@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { startViewerUi, type ViewerUiState, type ViewerUiActions } from '../src/viewer-ui.ts';
 import { MaterialParameterEditor } from '../src/material-parameter-editor.ts';
-import { ImGui } from '@mori2003/jsimgui';
+import { ImGui, ImGuiImplOpenGL3 } from '@mori2003/jsimgui';
 import type { MaterialParameter } from '../src/render/material-parameters.ts';
 import type { ResolvedGraph, ResolvedNode } from '../src/materialx/graph.ts';
 
@@ -23,6 +23,7 @@ vi.mock('@mori2003/jsimgui', () => ({
   ImGuiComboFlags: { None: 0, HeightLarge: 8 },
   ImGuiConfigFlags: { NavEnableKeyboard: 1 },
   ImGuiMouseSource: { _Mouse: 0, _TouchScreen: 1, _Pen: 2 },
+  ImGuiImplOpenGL3: { Shutdown: vi.fn() },
   ImGuiImplWeb: { Init: vi.fn(async () => {}), BeginRender: vi.fn(), EndRender: vi.fn() },
   ImGui: {
     StyleColorsDark: vi.fn(), GetIO: () => controls.io, GetStyle: () => controls.style, SetNextWindowPos: vi.fn(), SetNextWindowSize: vi.fn(),
@@ -89,6 +90,11 @@ describe('ImGui material parameter editing', () => {
       expect(f.actions.redo).not.toHaveBeenCalled();
       expect(ImGui.SetItemTooltip).toHaveBeenCalledWith('Paramètres du matériau');
       expect(ImGui.BeginDisabled).toHaveBeenCalledWith(true);
+      stop();
+      expect(ImGuiImplOpenGL3.Shutdown).toHaveBeenCalledOnce();
+      expect(ImGui.DestroyContext).toHaveBeenCalledOnce();
+      stop();
+      expect(ImGuiImplOpenGL3.Shutdown).toHaveBeenCalledOnce();
     } finally {
       vi.mocked(ImGui.Button).mockImplementation(() => false);
       stop();

@@ -11,12 +11,12 @@ import type { ScriptNodeDef, ScriptPortDef } from './script-api.ts';
 
 export type PrimitiveParameter =
   | 'radius' | 'minorRadius' | 'size' | 'height' | 'width' | 'length' | 'axis' | 'resolution'
-  | 'maxEdgeLength' | 'maxScreenEdgeLength' | 'vertexBudget';
+  | 'maxEdgeLength' | 'maxScreenEdgeLength' | 'vertexBudget' | 'intensity' | 'exposure';
 
 export interface ScriptPrimitive {
   kind: PrimitiveKind;
   /** USD schema written for it; `Mesh` stores the tessellation itself. */
-  usdType: 'Sphere' | 'Cube' | 'Cylinder' | 'Cone' | 'Capsule' | 'Plane' | 'Mesh';
+  usdType: 'Sphere' | 'Cube' | 'Cylinder' | 'Cone' | 'Capsule' | 'Plane' | 'Mesh' | 'Volume' | 'PointLight';
   doc: string;
   /** Shape parameters and their defaults (lengths in scene units). */
   defaults: Readonly<Partial<Record<PrimitiveParameter, number | PrimitiveAxis>>>;
@@ -38,6 +38,14 @@ export const SCRIPT_PRIMITIVES: Readonly<Record<string, ScriptPrimitive>> = {
     },
   },
   Disk: { kind: 'disk', usdType: 'Mesh', doc: 'Disque de normale axis', defaults: { radius: 0.5, axis: 'Y', resolution: 48 } },
+  Volume: {
+    kind: 'cube', usdType: 'Volume', doc: 'Volume procédural borné par width, height et length',
+    defaults: { width: 1.2, height: 2, length: 1.2 },
+  },
+  PointLight: {
+    kind: 'sphere', usdType: 'PointLight', doc: 'Lumière ponctuelle avec couleur, intensité, exposition et rayon',
+    defaults: { radius: 0.1, intensity: 20, exposure: 0 },
+  },
 };
 
 export type BooleanOperation = 'union' | 'difference' | 'intersection';
@@ -54,6 +62,8 @@ const PARAMETER_DOCS: Readonly<Record<PrimitiveParameter, string>> = {
   maxEdgeLength: 'Longueur maximale d’arête en espace objet ; 0 désactive la subdivision adaptative',
   maxScreenEdgeLength: 'Longueur maximale d’arête projetée en pixels ; 0 désactive la subdivision adaptative caméra',
   vertexBudget: 'Budget maximal de sommets pour la subdivision adaptative',
+  intensity: 'Intensité photométrique de la lumière',
+  exposure: 'Exposition en stops',
 };
 
 /** Properties shared by every primitive. */
@@ -62,7 +72,7 @@ export const OBJECT_PROPERTIES: readonly ScriptPortDef[] = [
   { name: 'rotate', type: 'vector3', default: [0, 0, 0], doc: 'Rotations en degrés autour de X, Y puis Z' },
   { name: 'scale', type: 'vector3', default: [1, 1, 1], doc: 'Échelle (un nombre ou trois)' },
   { name: 'visible', type: 'boolean', default: true, doc: 'Visibilité' },
-  { name: 'material', type: 'material', doc: 'Matériau : surface shader, nœud material ou chemin .mtlx' },
+  { name: 'material', type: 'material', doc: 'Matériau : surface/volume shader, nœud material ou chemin .mtlx' },
   { name: 'deform', type: 'function', doc: 'Déformation : (position, uv, normale) => [x, y, z] appliquée à chaque sommet' },
 ];
 
@@ -74,6 +84,8 @@ export function primitiveScriptDef(className: string): ScriptNodeDef | undefined
   if (!primitive) return undefined;
   const parameters = Object.entries(primitive.defaults).map(([name, value]): ScriptPortDef => {
     const parameter = name as PrimitiveParameter;
+    if (parameter === 'intensity') return { name, type: 'float', default: value, min: 0, doc: PARAMETER_DOCS.intensity };
+    if (parameter === 'exposure') return { name, type: 'float', default: value, doc: PARAMETER_DOCS.exposure };
     if (parameter === 'axis') return { name, type: 'string', default: value, enum: ['X', 'Y', 'Z'], doc: PARAMETER_DOCS.axis };
     if (parameter === 'resolution') {
       return { name, type: 'integer', default: value, min: MIN_RESOLUTION[primitive.kind], max: MAX_RESOLUTION, doc: PARAMETER_DOCS.resolution };
@@ -85,7 +97,11 @@ export function primitiveScriptDef(className: string): ScriptNodeDef | undefined
     if (parameter === 'maxScreenEdgeLength') return { name, type: 'float', default: value, min: 0, doc: PARAMETER_DOCS.maxScreenEdgeLength };
     return { name, type: 'float', default: value, min: 0, doc: PARAMETER_DOCS[parameter] };
   });
-  return { name: `primitive ${className}`, category: className, className, doc: primitive.doc, inputs: [...parameters, ...OBJECT_PROPERTIES], outputs: [] };
+  const properties = primitive.usdType === 'PointLight'
+    ? [...OBJECT_PROPERTIES.filter(property => ['translate', 'rotate', 'visible'].includes(property.name)),
+      { name: 'color', type: 'color3', default: [1, 0.72, 0.42], doc: 'Couleur émise' }]
+    : OBJECT_PROPERTIES;
+  return { name: `primitive ${className}`, category: className, className, doc: primitive.doc, inputs: [...parameters, ...properties], outputs: [] };
 }
 
 export function booleanScriptDef(className: string): ScriptNodeDef | undefined {
@@ -111,6 +127,7 @@ export interface StageObject {
   name: string;
   className: string;
   parameters: Readonly<Partial<Record<PrimitiveParameter, number | PrimitiveAxis>>>;
+  color?: readonly number[];
   translate: readonly number[];
   rotate: readonly number[];
   scale: readonly number[];
@@ -139,6 +156,19 @@ export interface StageInstancer {
   positions: readonly number[];
   orientations: readonly number[];
   scales: readonly number[];
+}
+
+function volumePrimitiveMesh(width: number, height: number, length: number): RawMesh {
+  const min = [-width / 2, -height / 2, -length / 2];
+  const max = [width / 2, height / 2, length / 2];
+  const points: number[] = [];
+  for (let corner = 0; corner < 8; corner++) {
+    points.push(corner & 1 ? max[0]! : min[0]!, corner & 2 ? max[1]! : min[1]!, corner & 4 ? max[2]! : min[2]!);
+  }
+  return {
+    points, faceVertexCounts: [4, 4, 4, 4, 4, 4],
+    faceVertexIndices: [0, 2, 3, 1, 4, 5, 7, 6, 0, 1, 5, 4, 2, 6, 7, 3, 0, 4, 6, 2, 1, 3, 7, 5],
+  };
 }
 
 const number = (value: number): string => {
@@ -191,8 +221,16 @@ export function writeStageUsda(objects: readonly StageObject[], materials: reado
   }
   for (const object of objects) {
     const primitive = SCRIPT_PRIMITIVES[object.className];
-    const shape = primitive ? stageObjectShape(object) : undefined;
-    const mesh = object.mesh ?? (primitive?.usdType === 'Mesh' && shape ? primitiveMesh(shape) : undefined);
+    const volume = primitive?.usdType === 'Volume';
+    const pointLight = primitive?.usdType === 'PointLight';
+    const shape = primitive && !volume && !pointLight ? stageObjectShape(object) : undefined;
+    const mesh = object.mesh ?? (volume
+      ? volumePrimitiveMesh(
+        Number(object.parameters.width ?? primitive.defaults.width),
+        Number(object.parameters.height ?? primitive.defaults.height),
+        Number(object.parameters.length ?? primitive.defaults.length),
+      )
+      : primitive?.usdType === 'Mesh' && shape ? primitiveMesh(shape) : undefined);
     if (!primitive && !object.booleanOperation) throw new Error(`Unknown scripted stage object "${object.className}".`);
     if (object.booleanOperation && !mesh) throw new Error(`Boolean object "${object.name}" has not been evaluated.`);
     const usdType = mesh ? 'Mesh' : primitive!.usdType;
@@ -202,7 +240,7 @@ export function writeStageUsda(objects: readonly StageObject[], materials: reado
     const body: string[] = [];
     if (mesh) {
       body.push(
-        `custom token engine:primitive = "${shape?.kind ?? 'boolean'}"`,
+        `custom token engine:primitive = "${volume ? 'volume' : shape?.kind ?? 'boolean'}"`,
         ...(shape ? Object.entries(shape).filter(([name]) => name !== 'kind')
           .map(([name, value]) => typeof value === 'number'
             ? `custom ${name === 'resolution' || name === 'vertexBudget' ? 'int' : 'double'} engine:primitive:${name} = ${number(value)}`
@@ -216,14 +254,23 @@ export function writeStageUsda(objects: readonly StageObject[], materials: reado
       const st = mesh.primvars?.find(attribute => attribute.name === 'st');
       if (st) body.push(`texCoord2f[] primvars:st = ${tuples(st.values, 2)} (`, '    interpolation = "vertex"', ')');
     } else {
-      for (const [name, value] of Object.entries(shape ?? {})) {
-        if (name === 'kind') continue;
-        if (name === 'axis') body.push(`uniform token axis = "${value}"`);
-        else if (name === 'resolution') body.push(`custom int engine:resolution = ${value}`);
-        else if (name === 'maxEdgeLength') body.push(`custom double engine:maxEdgeLength = ${number(value as number)}`);
-        else if (name === 'maxScreenEdgeLength') body.push(`custom double engine:maxScreenEdgeLength = ${number(value as number)}`);
-        else if (name === 'vertexBudget') body.push(`custom int engine:vertexBudget = ${value}`);
-        else body.push(`double ${name} = ${number(value as number)}`);
+      if (pointLight) {
+        body.push(
+          `color3f inputs:color = ${tuple(object.color ?? [1, 0.72, 0.42])}`,
+          `float inputs:intensity = ${number(Number(object.parameters.intensity ?? primitive.defaults.intensity))}`,
+          `float inputs:exposure = ${number(Number(object.parameters.exposure ?? primitive.defaults.exposure))}`,
+          `float inputs:radius = ${number(Number(object.parameters.radius ?? primitive.defaults.radius))}`,
+        );
+      } else {
+        for (const [name, value] of Object.entries(shape ?? {})) {
+          if (name === 'kind') continue;
+          if (name === 'axis') body.push(`uniform token axis = "${value}"`);
+          else if (name === 'resolution') body.push(`custom int engine:resolution = ${value}`);
+          else if (name === 'maxEdgeLength') body.push(`custom double engine:maxEdgeLength = ${number(value as number)}`);
+          else if (name === 'maxScreenEdgeLength') body.push(`custom double engine:maxScreenEdgeLength = ${number(value as number)}`);
+          else if (name === 'vertexBudget') body.push(`custom int engine:vertexBudget = ${value}`);
+          else body.push(`double ${name} = ${number(value as number)}`);
+        }
       }
     }
     if (transforms) {

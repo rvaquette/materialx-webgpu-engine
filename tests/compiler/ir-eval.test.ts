@@ -541,6 +541,38 @@ describe('evaluateShaderIr (T057i2)', () => {
   });
 
   it.each([
+    { op: 'noise2d', point: [0.25, 0.75], expected: [-0.5117831, -0.5341188, 0.2630683] },
+    { op: 'noise3d', point: [-0.5, 1.25, 2.75], expected: [-0.263695, -0.687346, 0.1682076] },
+  ])('evaluates $op consistently for named and positional inputs', ({ op, point, expected }) => {
+    const results = [];
+    for (const named of [false, true]) {
+      const builder = new IrModuleBuilder();
+      const coordinate = builder.constant(vector(point.length as 2 | 3), point);
+      const amplitude = builder.constant(FLOAT, 1.5);
+      const pivot = builder.constant(FLOAT, -0.25);
+      const ref = builder.add(named
+        ? { kind: 'call', type: COLOR3, op, args: [], namedArgs: {
+          [op === 'noise2d' ? 'texcoord' : 'position']: coordinate, amplitude, pivot,
+        } }
+        : { kind: 'call', type: COLOR3, op, args: [coordinate, amplitude, pivot] });
+      builder.output({ name: 'result', type: COLOR3, ref });
+      const ir = builder.build();
+      results.push(evaluateIrRef(ir, ref));
+      expect(emitWgsl(ir).code).toContain('mx_perlin3');
+    }
+    expect(results[0]).toEqual(results[1]);
+    results[0]!.forEach((value, index) => expect(value).toBeCloseTo(expected[index]!, 6));
+
+    const builder = new IrModuleBuilder();
+    const coordinate = builder.constant(vector(point.length as 2 | 3), point);
+    const ref = builder.add({
+      kind: 'call', type: FLOAT, op, args: [],
+      namedArgs: { [op === 'noise2d' ? 'texcoord' : 'position']: coordinate },
+    });
+    expect(evaluateIrRef(builder.build(), ref)[0]).toBeCloseTo((expected[0]! + 0.25) / 1.5, 6);
+  });
+
+  it.each([
     { inputType: FLOAT, value: 0.125, expected: 0.3100903630256653 },
     { inputType: FLOAT, value: 2, expected: 0.31585249304771423 },
     { inputType: INT, value: 2, expected: 0.611083984375 },

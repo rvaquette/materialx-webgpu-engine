@@ -1,4 +1,4 @@
-import { ImGui, ImGuiImplWeb, ImVec2, ImVec4, ImGuiCol, ImGuiWindowFlags, ImGuiComboFlags, ImGuiConfigFlags, ImGuiMouseSource } from '@mori2003/jsimgui';
+import { ImGui, ImGuiImplOpenGL3, ImGuiImplWeb, ImVec2, ImVec4, ImGuiCol, ImGuiWindowFlags, ImGuiComboFlags, ImGuiConfigFlags, ImGuiMouseSource } from '@mori2003/jsimgui';
 import type { ViewerStatus, BackendKind } from './render/viewer.ts';
 import type { RasterQuality } from './render/raster/ir-forward.ts';
 import type { MaterialParameterEditor } from './material-parameter-editor.ts';
@@ -464,5 +464,17 @@ export async function startViewerUi(
     }
   };
   frame = requestAnimationFrame(render);
-  return () => { stopped = true; cancelAnimationFrame(frame); detachInput(); ImGui.DestroyContext(); };
+  let disposed = false;
+  return () => {
+    if (disposed) return;
+    disposed = true;
+    stopped = true;
+    cancelAnimationFrame(frame);
+    detachInput();
+    try {
+      ImGuiImplOpenGL3.Shutdown();
+    } finally {
+      ImGui.DestroyContext();
+    }
+  };
 }

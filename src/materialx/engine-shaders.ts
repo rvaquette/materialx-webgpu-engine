@@ -1,4 +1,5 @@
 import type { HdrImage } from '../assets/hdr.ts';
+import { ENGINE_PRESET_LIBRARY_XML } from './engine-presets.ts';
 
 export const ENGINE_SHADER_LIBRARY_XML = `<materialx version="1.39">
   <typedef name="engine_environment_shader" semantic="shader" context="environment" />
@@ -72,6 +73,11 @@ export const ENGINE_SHADER_LIBRARY_XML = `<materialx version="1.39">
     <input name="hidePrototype" type="boolean" value="true" />
     <output name="out" type="engine_scatter_shader" />
   </nodedef>
+  <nodedef name="ND_engine_volume_material" node="surfacematerial" doc="MaterialX material terminal for a volumetric shader.">
+    <input name="volumeshader" type="volumeshader" value="" />
+    <output name="out" type="material" />
+  </nodedef>
+${ENGINE_PRESET_LIBRARY_XML}
 </materialx>`;
 
 export type Rgb = readonly [number, number, number];

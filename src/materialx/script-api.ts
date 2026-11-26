@@ -1497,6 +1497,7 @@ export async function runScript(code: string, library: ScriptLibrary, options: R
     base?: ScriptObject;
     tool?: ScriptObject;
     parameters: Partial<Record<PrimitiveParameter, number | PrimitiveAxis>>;
+    color?: number[];
     translate: number[];
     rotate: number[];
     scale: number[];
@@ -1585,7 +1586,14 @@ export async function runScript(code: string, library: ScriptLibrary, options: R
       const nodes = upstream(source.node);
       for (const node of nodes) if (pending.has(node)) nameNode(node, node.def.category);
       let materialNode = source.node;
-      if (nodeType(source.node.def) === 'surfaceshader') {
+      if (['surfaceshader', 'displacementshader', 'volumeshader'].includes(source.output.type)) {
+        const materialCategory = 'surfacematerial';
+        const materialDefinition = library.variants(materialCategory).find(definition =>
+          definition.inputs.some(port => port.name === source.output.type && port.type === source.output.type) &&
+          definition.outputs.some(port => port.type === 'material'));
+        if (!materialDefinition) {
+          throw new ScriptError(`No ${materialCategory} NodeDef can bind a ${source.output.type}.`);
+        }
         let name = shaderMaterials.get(source.node);
         if (!name) {
           name = `${source.node.name}_material`;
@@ -1593,8 +1601,13 @@ export async function runScript(code: string, library: ScriptLibrary, options: R
           used.add(name);
           shaderMaterials.set(source.node, name);
         }
-        materialNode = { name, def: library.resolve('surfacematerial'), inputs: new Map() };
-        connect(materialNode, 'surfaceshader', source.node, source.output);
+        materialNode = { name, def: materialDefinition, inputs: new Map() };
+        for (const type of ['surfaceshader', 'displacementshader', 'volumeshader']) {
+          if (materialDefinition.inputs.some(port => port.name === type && port.type === type)) {
+            const output = source.node.def.outputs.find(port => port.type === type);
+            if (output) connect(materialNode, type, source.node, output);
+          }
+        }
         nodes.push(materialNode);
       }
       const prim = primFor(source.node, materialNode.name);
@@ -1626,6 +1639,7 @@ export async function runScript(code: string, library: ScriptLibrary, options: R
       }
       return {
         name: object.name!, className: object.className, parameters: { ...object.parameters },
+        ...(object.color ? { color: [...object.color] } : {}),
         translate: [...object.translate], rotate: [...object.rotate], scale: [...object.scale], visible: object.visible && !operands.has(object),
         ...(object.operation ? {
           booleanOperation: object.operation,
@@ -1659,7 +1673,10 @@ export async function runScript(code: string, library: ScriptLibrary, options: R
       const pending = (async (): Promise<RawMesh> => {
         try {
           if (!object.booleanOperation) {
-            if (!SCRIPT_PRIMITIVES[object.className]) throw new ScriptError(`Unknown boolean operand "${path}".`);
+            if (!SCRIPT_PRIMITIVES[object.className] ||
+                ['Volume', 'PointLight'].includes(SCRIPT_PRIMITIVES[object.className]!.usdType)) {
+              throw new ScriptError(`Unknown boolean operand "${path}".`);
+            }
             return object.mesh ?? primitiveMesh(stageObjectShape(object));
           }
           const base = object.base ? objectsByPath.get(object.base) : undefined;
@@ -1749,20 +1766,31 @@ export async function runScript(code: string, library: ScriptLibrary, options: R
   const checkMaterial = (value: unknown, label: string): unknown => {
     if (value === undefined || value === null) return undefined;
     if (typeof value === 'string' && value) return new URL(value, baseUrl).href;
+    const node = nodeOf(value);
+    if (node && node.def.outputs.length > 1) {
+      const output = node.def.outputs.find(port => ['surfaceshader', 'volumeshader', 'material'].includes(port.type));
+      if (!output) throw new ScriptError(`${label} expects a surface shader, a volume shader, a material node or a .mtlx path.`);
+      return outputRef(node, output);
+    }
     const source = sourceOf(value);
-    if (!source || (source.output.type !== 'surfaceshader' && source.output.type !== 'material')) {
-      throw new ScriptError(`${label} expects a surface shader, a material node or a .mtlx path.`);
+    if (!source || !['surfaceshader', 'volumeshader', 'material'].includes(source.output.type)) {
+      throw new ScriptError(`${label} expects a surface shader, a volume shader, a material node or a .mtlx path.`);
     }
     return value;
   };
   const objectHandle = (object: ScriptObject): object => {
     const primitive = SCRIPT_PRIMITIVES[object.className];
+    const volume = primitive?.usdType === 'Volume';
+    const pointLight = primitive?.usdType === 'PointLight';
     const parameters = primitive ? Object.keys(primitive.defaults) as PrimitiveParameter[] : [];
-    const objectProperties = OBJECT_PROPERTIES.filter(property => !object.operation || property.name !== 'deform');
+    const objectProperties = pointLight
+      ? OBJECT_PROPERTIES.filter(property => ['translate', 'rotate', 'visible'].includes(property.name))
+      : OBJECT_PROPERTIES.filter(property => (!object.operation && !volume) || property.name !== 'deform');
     const properties = [
       ...(object.operation ? ['base', 'tool'] : []),
       ...parameters,
       ...objectProperties.map(property => property.name),
+      ...(pointLight ? ['color'] : []),
     ];
     const label = (key: string): string => `${object.name ?? object.className}.${key}`;
     const unknown = (key: string): ScriptError =>
@@ -1785,10 +1813,11 @@ export async function runScript(code: string, library: ScriptLibrary, options: R
           return operand ? objectReferences.get(operand) : undefined;
         }
         if (primitive && (parameters as string[]).includes(key)) return object.parameters[key as PrimitiveParameter] ?? primitive.defaults[key as PrimitiveParameter];
+        if (pointLight && key === 'color') return [...(object.color ?? [1, 0.72, 0.42])];
         if (key === 'translate' || key === 'rotate' || key === 'scale') return [...object[key]];
         if (key === 'visible') return object.visible;
         if (key === 'material') return object.material;
-        if (key === 'deform' && !object.operation) return object.deform;
+        if (key === 'deform' && !object.operation && !pointLight) return object.deform;
         throw unknown(key);
       },
       set: (_target, key, value) => {
@@ -1797,9 +1826,32 @@ export async function runScript(code: string, library: ScriptLibrary, options: R
         if ((key === 'base' || key === 'tool') && object.operation) {
           const operand = objectOf(value);
           if (!operand) throw new ScriptError(`${label(key)} expects a scripted scene object.`);
+          if (['Volume', 'PointLight'].includes(SCRIPT_PRIMITIVES[operand.className]?.usdType ?? '')) {
+            throw new ScriptError(`${label(key)} cannot reference a Volume or PointLight.`);
+          }
           object[key] = operand;
         } else if (primitive && (parameters as string[]).includes(key)) {
           const parameter = key as PrimitiveParameter;
+          if (volume) {
+            if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
+              throw new ScriptError(`${label(key)} must be a positive finite number.`);
+            }
+            object.parameters[parameter] = value;
+            stageDirty = true;
+            return true;
+          }
+          if (pointLight) {
+            if (typeof value !== 'number' || !Number.isFinite(value) ||
+                (parameter === 'radius' && value <= 0) ||
+                (parameter === 'intensity' && value < 0)) {
+              const condition = parameter === 'radius' ? 'a positive finite number' :
+                parameter === 'intensity' ? 'a non-negative finite number' : 'a finite number';
+              throw new ScriptError(`${label(key)} must be ${condition}.`);
+            }
+            object.parameters[parameter] = value;
+            stageDirty = true;
+            return true;
+          }
           const shape = { kind: primitive.kind, ...primitive.defaults, ...object.parameters, [parameter]: value } as PrimitiveShape;
           try { checkPrimitiveShape(shape); } catch (error) {
             throw new ScriptError(`${label(key)}: ${error instanceof Error ? error.message : String(error)}`);
@@ -1812,9 +1864,13 @@ export async function runScript(code: string, library: ScriptLibrary, options: R
         } else if (key === 'visible') {
           if (typeof value !== 'boolean') throw new ScriptError(`${label(key)} expects a boolean.`);
           object.visible = value;
+        } else if (pointLight && key === 'color') {
+          const color = finiteNumbers(value, 3, label(key));
+          if (color.some(component => component < 0)) throw new ScriptError(`${label(key)} components must be non-negative.`);
+          object.color = color;
         } else if (key === 'material') {
           object.material = checkMaterial(value, label(key));
-        } else if (key === 'deform' && !object.operation) {
+        } else if (key === 'deform' && !object.operation && !volume && !pointLight) {
           if (value !== undefined && value !== null && typeof value !== 'function') {
             throw new ScriptError(`${label(key)} expects a function (position, uv, normal) => [x, y, z].`);
           }
@@ -1858,7 +1914,9 @@ export async function runScript(code: string, library: ScriptLibrary, options: R
     const prototype = objectAt(settings.prototypePath);
     if (!surface || !prototype) throw new ScriptError('Scatter surfacePath and prototypePath must reference live scripted objects.');
     if (surface === prototype) throw new ScriptError('Scatter requires distinct surface and prototype objects.');
-    if (surface.operation || prototype.operation || !SCRIPT_PRIMITIVES[surface.className] || !SCRIPT_PRIMITIVES[prototype.className]) {
+    if (surface.operation || prototype.operation || !SCRIPT_PRIMITIVES[surface.className] || !SCRIPT_PRIMITIVES[prototype.className] ||
+        ['Volume', 'PointLight'].includes(SCRIPT_PRIMITIVES[surface.className]!.usdType) ||
+        ['Volume', 'PointLight'].includes(SCRIPT_PRIMITIVES[prototype.className]!.usdType)) {
       throw new ScriptError('Scatter currently accepts scripted primitives, not boolean or imported objects.');
     }
 
@@ -1993,7 +2051,7 @@ export async function runScript(code: string, library: ScriptLibrary, options: R
       graph.nodes.push(node);
     }
     const material = nodes.find(node => nodeType(node.def) === 'material') ??
-      [...nodes].reverse().find(node => nodeType(node.def) === 'surfaceshader');
+      [...nodes].reverse().find(node => node.def.outputs.some(port => port.type === 'surfaceshader' || port.type === 'volumeshader'));
     if (!material) throw new ScriptError(`${label} has no surface material.`);
     return handleFor(material);
   };
@@ -2318,13 +2376,26 @@ function formatXmlValue(value: ScriptValue): string {
 /** Nodes with a `surfacematerial` bound to the last surface shader when none exists. */
 function withMaterial(graph: ScriptGraph, library: ScriptLibrary): ScriptNode[] {
   if (graph.nodes.some(node => node.def.outputs.some(port => port.type === 'material'))) return graph.nodes;
-  const shader = [...graph.nodes].reverse().find(node => nodeType(node.def) === 'surfaceshader');
-  if (!shader || !library.variants('surfacematerial').length) return graph.nodes;
+  const shader = [...graph.nodes].reverse().find(node =>
+    node.def.outputs.some(port => port.type === 'surfaceshader' || port.type === 'volumeshader'));
+  if (!shader) return graph.nodes;
+  const shaderType = shader.def.outputs.some(port => port.type === 'surfaceshader' || port.type === 'displacementshader')
+    ? 'surfaceshader' : 'volumeshader';
+  const category = 'surfacematerial';
+  const definition = library.variants(category).find(candidate =>
+    candidate.inputs.some(port => port.name === shaderType && port.type === shaderType) &&
+    candidate.outputs.some(port => port.type === 'material'));
+  if (!definition) return graph.nodes;
   const names = new Set(graph.nodes.map(node => node.name));
   let name = 'material';
   for (let i = 2; names.has(name); i++) name = `material_${i}`;
-  const material: ScriptNode = { name, def: library.resolve('surfacematerial'), inputs: new Map() };
-  connect(material, 'surfaceshader', shader, shader.def.outputs[0]!);
+  const material: ScriptNode = { name, def: definition, inputs: new Map() };
+  for (const type of ['surfaceshader', 'displacementshader', 'volumeshader']) {
+    if (definition.inputs.some(port => port.name === type && port.type === type)) {
+      const output = shader.def.outputs.find(port => port.type === type);
+      if (output) connect(material, type, shader, output);
+    }
+  }
   return [...graph.nodes, material];
 }
 
@@ -2333,7 +2404,7 @@ export interface ToXmlOptions {
   filePrefix?: string;
 }
 
-export function toXml(graph: ScriptGraph, library: ScriptLibrary, options: ToXmlOptions = {}): string {
+function writeXml(graph: ScriptGraph, library: ScriptLibrary, options: ToXmlOptions = {}): string {
   const prefix = options.filePrefix ? ` fileprefix="${escapeXml(options.filePrefix)}"` : '';
   const lines = ['<?xml version="1.0"?>', `<materialx version="1.39"${prefix}>`];
   for (const node of withMaterial(graph, library)) {
@@ -2358,6 +2429,25 @@ export function toXml(graph: ScriptGraph, library: ScriptLibrary, options: ToXml
   }
   lines.push('</materialx>', '');
   return lines.join('\n');
+}
+
+const ENGINE_PRESET_CATEGORIES = new Set([
+  'water', 'water_caustics', 'lava', 'fire', 'smoke', 'clouds', 'ice', 'mud', 'wet_sand',
+]);
+
+export function toXml(graph: ScriptGraph, library: ScriptLibrary, options: ToXmlOptions = {}): string {
+  if (!graph.nodes.some(node => ENGINE_PRESET_CATEGORIES.has(node.def.category))) return writeXml(graph, library, options);
+  const source = writeXml(graph, library, options);
+  const rootStart = source.indexOf('<materialx');
+  const bodyStart = source.indexOf('>', rootStart) + 1;
+  const bodyEnd = source.lastIndexOf('</materialx>');
+  const body = source.slice(bodyStart, bodyEnd);
+  const prefix = options.filePrefix ? ` fileprefix="${escapeXml(options.filePrefix)}"` : '';
+  const definitions = ENGINE_SHADER_LIBRARY_XML.replace(
+    '<materialx version="1.39">',
+    `<materialx version="1.39"${prefix}>`,
+  ).replace('</materialx>', `${body}</materialx>`);
+  return writeXml(fromXml(definitions, library), library, options);
 }
 
 /** NodeDef of a node: its explicit NodeDef when the library has it, else the variant matching its type and inputs. */
@@ -2467,7 +2557,7 @@ export function fromXml(xml: string, library: ScriptLibrary): ScriptGraph {
         const graphScope = newScope(name, scope, prefixOf(child, scope.filePrefix));
         scope.graphs.set(name, graphScope);
         collect(child, graphScope, expanding);
-      } else if (customDef(child)) {
+      } else if (customDef(child) && !customDef(child)!.outputs.some(port => port.type === 'material')) {
         if (scope.nodes.has(name) || scope.graphs.has(name)) throw new ScriptError(`Duplicate node name "${name}".`);
         const def = customDef(child)!;
         if (expanding.includes(def.name)) throw new ScriptError(`NodeDef "${def.name}" is implemented recursively.`);

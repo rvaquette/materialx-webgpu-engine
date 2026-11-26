@@ -275,6 +275,47 @@ function noiseUnit(c: number): number {
   return Math.fround(Math.fround(c) / Math.fround(0xffffffff));
 }
 
+function noiseHashU32(value: number): number {
+  let hash = value >>> 0;
+  hash = (hash ^ (hash >>> 16)) >>> 0;
+  hash = Math.imul(hash, 0x7feb352d) >>> 0;
+  hash = (hash ^ (hash >>> 15)) >>> 0;
+  hash = Math.imul(hash, 0x846ca68b) >>> 0;
+  return (hash ^ (hash >>> 16)) >>> 0;
+}
+
+function noiseHashCell(x: number, y: number, z: number, seed: number): number {
+  return noiseHashU32((x >>> 0) ^ noiseHashU32((y >>> 0) ^ noiseHashU32((z >>> 0) ^ noiseHashU32(seed))));
+}
+
+function noiseGradient3(hash: number, x: number, y: number, z: number): number {
+  const k = hash & 15;
+  const u = k < 8 ? x : y;
+  const v = k < 4 ? y : k === 12 || k === 14 ? x : z;
+  return ((k & 1) === 0 ? u : -u) + ((k & 2) === 0 ? v : -v);
+}
+
+function materialXPerlin3(position: IrValue, seed: number): number {
+  const ix = Math.floor(position[0]!);
+  const iy = Math.floor(position[1]!);
+  const iz = Math.floor(position[2]!);
+  const x = position[0]! - ix;
+  const y = position[1]! - iy;
+  const z = position[2]! - iz;
+  const fade = (value: number): number => value * value * value * (value * (value * 6 - 15) + 10);
+  const u = fade(x);
+  const v = fade(y);
+  const w = fade(z);
+  const grad = (dx: number, dy: number, dz: number): number =>
+    noiseGradient3(noiseHashCell(ix + dx, iy + dy, iz + dz, seed), x - dx, y - dy, z - dz);
+  const mix = (a: number, b: number, t: number): number => a + (b - a) * t;
+  const x00 = mix(grad(0, 0, 0), grad(1, 0, 0), u);
+  const x10 = mix(grad(0, 1, 0), grad(1, 1, 0), u);
+  const x01 = mix(grad(0, 0, 1), grad(1, 0, 1), u);
+  const x11 = mix(grad(0, 1, 1), grad(1, 1, 1), u);
+  return 0.982 * mix(mix(x00, x10, v), mix(x01, x11, v), w);
+}
+
 function materialXCellNoise(x: number, y: number, z?: number): number {
   const seed = (0xdeadbeef + (z === undefined ? 2 : 3) * 4 + 13) >>> 0;
   return noiseUnit(noiseFinal((seed + (x >>> 0)) >>> 0, (seed + (y >>> 0)) >>> 0, (seed + ((z ?? 0) >>> 0)) >>> 0));
@@ -582,6 +623,25 @@ function evalCall(op: string, args: IrValue[], env: IrEvalVaryings, type: IrType
     if (op.endsWith('_id')) return [result.id];
     if (op.endsWith('_rand')) return [result.rand];
     return [result.presence];
+  }
+  if (op === 'noise2d' || op === 'noise3d') {
+    const coordinate = op === 'noise2d'
+      ? input('texcoord', 0, [...(env.texcoord ?? [0, 0])])
+      : input('position', 0, [...(env.position ?? [0, 0, 0])]);
+    const point = op === 'noise2d' ? [coordinate[0]!, coordinate[1]!, 0] : coordinate;
+    if (point.length !== 3 || point.some(value => !Number.isFinite(value))) {
+      throw new IrEvalError(`${op} requires finite ${op === 'noise2d' ? '2D' : '3D'} coordinates`);
+    }
+    const amplitude = input('amplitude', 1, [1])[0]!;
+    const pivot = input('pivot', 2, [0])[0]!;
+    const channels = type.kind === 'scalar' && type.scalar === 'float'
+      ? 1
+      : type.kind === 'vector' && type.scalar === 'float' ? type.size : 0;
+    if (channels < 1 || channels > 3) {
+      throw new IrEvalError(`${op} requires a float, vector2, or vector3 output`);
+    }
+    return Array.from({ length: channels }, (_, channel) =>
+      materialXPerlin3(point, channel) * amplitude + pivot);
   }
   if (op === 'worleynoise2d' || op === 'worleynoise3d') {
     if ((type.kind !== 'scalar' && type.kind !== 'vector') || type.scalar !== 'float' ||

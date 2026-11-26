@@ -47,6 +47,31 @@ l'erreur `xxx is not defined.`
 - Sans `Surfacematerial`, l'export ajoute un `surfacematerial` nommé `material` relié au dernier
   shader de surface.
 
+### Préréglages de surfaces complexes
+
+Les NodeDefs fournis par le moteur sont aussi instanciables par leur classe PascalCase :
+`Water`, `WaterCaustics`, `Lava`, `Fire`, `Smoke`, `Clouds`, `Ice`, `Mud` et `WetSand`.
+Leurs entrées sont validées et complétées automatiquement, comme celles des autres nœuds.
+
+| Classe | Entrées principales |
+|---|---|
+| `Water` | `speed`, `scale`, `waveHeight`, `color`, `foamColor`, `absorptionColor`, `depth`, `roughness`, `ior` |
+| `WaterCaustics` | `color`, `scale`, `speed`, `intensity` |
+| `Lava` | `speed`, `scale`, `crustColor`, `temperature`, `emission`, `relief` |
+| `Fire` | `density`, `scale`, `speed`, `temperature`, `emission`, `radius`, `centerHeight`, `center` |
+| `Smoke` | `density`, `scale`, `speed`, `wind`, `spread`, `albedo`, `color`, `anisotropy`, `center` |
+| `Clouds` | `coverage`, `density`, `scale`, `speed`, `profile`, `baseHeight`, `center`, `wind`, `color`, `anisotropy` |
+| `Ice` | `color`, `roughness`, `depth`, `inclusionScale` |
+| `Mud`, `WetSand` | `color`, `wetColor`, `wetness`, `scale`, `roughness` |
+
+`Water` et `Lava` sont des matériaux de surface ; `Fire`, `Smoke` et `Clouds` sont des
+matériaux de volume à affecter à une primitive `Volume`. Pour ces derniers, `center` donne
+le centre mondial XZ de la forme ; `Clouds.baseHeight` est l'altitude mondiale du bas de
+la couche et `Fire.centerHeight` celle du centre de la flamme. Aligner ces valeurs sur la
+primitive lorsque la scène est déplacée. `Clouds.profile` vaut `0` (cumulus), `1` (stratus)
+ou `2` (cirrus). `WaterCaustics` projette un motif émissif animé : c'est une approximation,
+pas le calcul physique de caustiques réfractées.
+
 ## Valeurs et types
 
 | Type d'entrée | Valeurs acceptées |
@@ -134,6 +159,7 @@ s'exécutent à la construction du graphe : une condition sur une sortie de nœu
 | Classe | Propriétés (valeurs par défaut) |
 |---|---|
 | `Sphere` | `radius` (0,5), `resolution` (48) |
+| `PointLight` | `color` (ambre), `intensity` (20), `exposure` (0), `radius` (0,1), `translate` |
 | `Cube` | `size` (1), `resolution` (1) |
 | `Cylinder`, `Cone` | `radius` (0,5), `height` (1), `axis` (`"Y"`), `resolution` (48) ; sommet du cône vers +`axis` |
 | `Capsule` | `radius` (0,25), `height` (0,5 : partie cylindrique), `axis`, `resolution` (48) |
@@ -141,8 +167,11 @@ s'exécutent à la construction du graphe : une condition sur une sortie de nœu
 | `Plane` | `width` (1), `length` (1), `axis` (normale), `resolution` (1), `maxEdgeLength` (0 : désactivé), `maxScreenEdgeLength` (0 : désactivé), `vertexBudget` (65 536) |
 | `Disk` | `radius` (0,5), `axis` (normale), `resolution` (48) |
 
-Propriétés communes : `translate` (`[0, 0, 0]`), `rotate` (degrés autour de X, puis Y, puis Z),
-`scale` (nombre ou `[x, y, z]`), `visible` (`true`), `material`, `deform`.
+Propriétés communes des primitives géométriques : `translate` (`[0, 0, 0]`), `rotate` (degrés
+autour de X, puis Y, puis Z), `scale` (nombre ou `[x, y, z]`), `visible` (`true`), `material`,
+`deform`. `PointLight` expose `translate`, `rotate`, `visible`, `color` (trois composantes
+non négatives), `intensity` (finie et positive ou nulle), `exposure` (stops) et `radius` (strictement
+positif) ; elle est exportée comme un prim USD `PointLight` et éclaire en raster comme en path tracing.
 
 - `resolution` : segments autour de l'axe (minimum 3) pour les formes rondes, subdivisions par
   côté (minimum 1) pour `Cube` et `Plane` ; au plus 1024. Les longueurs sont strictement positives
@@ -381,7 +410,7 @@ await postprocess(grade.out);
 | `await save("aov.pfm")` | AOV sélectionnée par `render.view` (PFM 32 bits ; path tracing, `view` ≠ `"beauty"`) |
 | `await save("diagnostics.json")` | journal des diagnostics |
 | `await save("materiau.mtlx", m)` | document MaterialX du matériau `m` du script |
-| `await save("scene.usda")` | scène des primitives du script : couche USD (gprims `Sphere`, `Cube`, `Cylinder`, `Cone`, `Capsule`, `Plane` ; tore, disque et objets déformés en `Mesh`) et un `<matériau>.mtlx` par matériau, écrits dans le même dossier |
+| `await save("scene.usda")` | scène des primitives du script : couche USD (gprims `Sphere`, `Cube`, `Cylinder`, `Cone`, `Capsule`, `Plane`, `PointLight` ; tore, disque et objets déformés en `Mesh`) et un `<matériau>.mtlx` par matériau, écrits dans le même dossier |
 | `await capture("x.png", { … })` | voir [Rendu](#rendu) |
 
 Les noms peuvent contenir des sous-dossiers (`"seq/frame-01.png"`), pas `..`. Destination :
@@ -443,7 +472,7 @@ pour un [rendu distant](REMOTE_RENDER.md).
   `stats`, `converge`, `diagnostics`, `capabilities`, `timeline`, `setTime`, `setTransform`,
   `setVisibility`, `lights`, `setLight`, `setCamera`, `variants`, `setVariant`,
   `materialParameters`, `setMaterialParameters`, `Math`, les classes de nœuds et les classes de
-  primitives (`Sphere`, `Cube`, `Cylinder`, `Cone`, `Capsule`, `Torus`, `Plane`, `Disk`) ne
+  primitives (`Sphere`, `Cube`, `Cylinder`, `Cone`, `Capsule`, `Torus`, `Plane`, `Disk`, `PointLight`) ne
   peuvent pas être réaffectés. `material`, `node`, `time`, `transform` et `capture` peuvent servir
   de noms de nœuds (la variable masque alors la fonction). `window`, `document`… restent ceux du
   navigateur : ne pas les utiliser comme noms de variables.

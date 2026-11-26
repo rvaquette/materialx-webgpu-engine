@@ -39,6 +39,31 @@ export async function loadSceneVolumes(
     if (prim.typeName !== 'Volume') continue;
     const fields = new Map<string, (position: readonly number[]) => number>();
     let bounds: Aabb | undefined;
+    const minValue = prim.attributes.get('engine:boundsMin')?.value;
+    const maxValue = prim.attributes.get('engine:boundsMax')?.value;
+    const extentValue = prim.attributes.get('extent')?.value;
+    if (Array.isArray(minValue) && minValue.length === 3 && Array.isArray(maxValue) && maxValue.length === 3) {
+      const min = minValue.map(Number) as [number, number, number];
+      const max = maxValue.map(Number) as [number, number, number];
+      if (min.every(Number.isFinite) && max.every(Number.isFinite) && min.every((value, axis) => value < max[axis]!)) {
+        bounds = { min, max };
+      } else {
+        sink({ level: 'error', message: `Volume ${prim.path} has invalid engine bounds.` });
+      }
+    } else if (minValue !== undefined || maxValue !== undefined) {
+      sink({ level: 'error', message: `Volume ${prim.path} must define both engine:boundsMin and engine:boundsMax.` });
+    }
+    if (!bounds && Array.isArray(extentValue) && extentValue.length === 6) {
+      const min = extentValue.slice(0, 3).map(Number) as [number, number, number];
+      const max = extentValue.slice(3, 6).map(Number) as [number, number, number];
+      if (min.every(Number.isFinite) && max.every(Number.isFinite) && min.every((value, axis) => value < max[axis]!)) {
+        bounds = { min, max };
+      } else {
+        sink({ level: 'error', message: `Volume ${prim.path} has invalid extent.` });
+      }
+    } else if (!bounds && extentValue !== undefined) {
+      sink({ level: 'error', message: `Volume ${prim.path} extent must contain its minimum and maximum points.` });
+    }
     for (const [relationship, rel] of prim.relationships) {
       if (!relationship.startsWith('field:')) continue;
       const fieldPrim = scene.prims.get(rel.targets[0] ?? '');

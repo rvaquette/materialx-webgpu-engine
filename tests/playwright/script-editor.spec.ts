@@ -197,17 +197,18 @@ test('affiche les shaders d’extension P16 dans le graphe', async ({ page }) =>
   const e = await openEditor(page);
   await setScript(e, `
     lens = new LensShader(); lens.projection = "fisheye";
-    filter = new LightFilterShader(); filter.lightPath = "/World/Spot";
+    filter = new LightFilterShader(); filter.lightPath = "/World/Spot"; filter.pattern = "grid";
     ground = new Plane(); prototype = new Sphere();
     scatterSettings = new ScatterShader();
     scatterSettings.surfacePath = ground.path; scatterSettings.prototypePath = prototype.path;
+    scatterSettings.density = 4;
     p = new Position(); p.space = "world";
     split = new Separate3("ND_separate3_vector3"); split.in = p.out;
     height = new CustomAovShader(); height.source = "scalar"; height.scalar = split.outy;
   `);
   await expect(e.status).toContainText('Script valide');
   await e.panel.getByTestId('script-tab-graph').click();
-  await expect(e.panel.getByTestId('script-graph-summary')).toHaveText('Graphe : 8 nœuds, 2 liens.');
+  await expect(e.panel.getByTestId('script-graph-summary')).toHaveText('Graphe : 6 nœuds, 2 liens.');
 
   const graph = e.panel.locator('.mx-node-graph');
   const widgets = await graph.evaluate(element => {

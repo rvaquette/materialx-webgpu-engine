@@ -351,6 +351,8 @@ convergence, réduction des textures, repli raster...) :
 | `p7-robustness.js` | Capacités, erreurs prévisibles, scène précompilée figée, budget mémoire jusqu'au repli raster puis retour, journal |
 | `p8-primitives.js` | Scène de primitives matérialisées sans fichier USD : raster et path tracing, déplacement sans rechargement, forme et matériau modifiés, export USD, suppression |
 | `p8-parchemin.js` | Feuille enroulée par `deform` et matériau procédural de vieux parchemin aux bords abîmés |
+| `p17-water.js`, `p17-lava.js`, `p17-fire.js`, `p17-smoke.js`, `p17-clouds.js` | Matériaux procéduraux animés en raster et path tracing ; feu et lave éclairent aussi la scène par `PointLight` |
+| `p17-cloud-profiles.js`, `p17-surface-presets.js` | Profils cumulus/stratus/cirrus et presets glace/boue/sable mouillé |
 
 ```bash
 npm run script -- examples/scripts --out renders/validation --timeout 7200000

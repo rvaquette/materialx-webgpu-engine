@@ -1833,3 +1833,53 @@ présente les trois opérations et apparaît automatiquement dans le menu Script
 | Union, différence et intersection en raster | Opérations booléennes en path tracing |
 |---|---|
 | ![Union, différence et intersection en raster](images/p15/p15-boolean-operations-raster.png) | ![Union, différence et intersection en path tracing](images/p15/p15-boolean-operations-pathtracing.png) |
+
+## Priorité 16 : shaders d'extension
+
+Quatre shaders d'extension sont accessibles depuis les scripts et le graphe du
+Script Editor, avec validation explicite des entrées et sérialisation en
+MaterialX :
+
+- **Light filter / gobo** : motifs procéduraux cercle, rayures et grille attachés
+  par chemin USD à une lumière spot.
+- **Camera / lens** : distorsion radiale et aberration chromatique, profondeur
+  de champ avec bokeh circulaire ou polygonal, projections fisheye équidistante
+  et équirectangulaire.
+- **AOV** : vues intégrées et sorties personnalisées nommées pour les positions
+  monde, scalaires, identifiants de matériau et masques d'identifiant.
+- **Scatter** : instanciation déterministe avec prototype partagé, densité
+  uniforme ou graphe spatial MaterialX validé.
+
+| Fonction | Raster | Path tracing MaterialX | Disney |
+|---|---|---|---|
+| Étalonnage écran, distorsion et aberration chromatique | Oui | Oui | Oui |
+| Ouverture, bokeh et projections angulaires | Non | Oui | Non |
+| Gobo procédural | Non | Oui, lumière spot | Non |
+| AOV intégré et personnalisé | Non | Oui | Non |
+| Scatter d'instances | Oui | Oui | Oui |
+
+Les limites sont explicites : pas de textures de gobo ni de profils IES ; les
+réglages de rayon caméra et les AOV exigent le path tracer MaterialX ; les AOV
+personnalisés n'acceptent qu'un ensemble borné de sources et le scatter qu'un
+sous-ensemble de graphes de densité CPU. Les détails et les erreurs de backend
+sont documentés dans [SCRIPT_REFERENCE.md](SCRIPT_REFERENCE.md).
+
+Exemples exécutables :
+
+- `npm run script -- examples/scripts/p16-light-filter.js --out docs/images/p16`
+- `npm run script -- examples/scripts/p16-extension-shaders.js --out docs/images/p16/p16-extension-shaders`
+
+Le premier montre le gobo sur une scène USD ; le second couvre lentille, scatter,
+AOV intégré et AOV personnalisé.
+
+![Gobo procédural sur une lumière spot](images/p16/p16-light-filter.png)
+
+![Scatter scriptable](images/p16/p16-extension-shaders/p16-extension-shaders-beauty.png)
+
+![Scatter raster](images/p16/p16-extension-shaders/p16-extension-shaders-raster.png)
+
+![Projection équirectangulaire](images/p16/p16-extension-shaders/p16-extension-shaders-panorama.png)
+
+![AOV albedo intégré](images/p16/p16-extension-shaders/p16-extension-shaders-albedo.png)
+
+![AOV personnalisé de hauteur en espace monde](images/p16/p16-extension-shaders/p16-extension-shaders-height.png)
