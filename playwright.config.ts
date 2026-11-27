@@ -1,5 +1,8 @@
 import { defineConfig, devices } from '@playwright/test';
 
+const preview = process.env['PLAYWRIGHT_PREVIEW'] === '1';
+const baseURL = preview ? 'http://localhost:4173' : 'http://localhost:5173';
+
 // `chromium` runs the end-to-end tests quickly; `demo` opens a visible browser
 // and slows every action down so the script editor can be watched. `firefox` and
 // `webkit` run the cross-browser engine smoke test (npm run test:playwright:browsers).
@@ -10,7 +13,7 @@ export default defineConfig({
   reporter: [['list'], ['html', { open: 'never' }]],
   timeout: 120_000,
   use: {
-    baseURL: 'http://localhost:5173',
+    baseURL,
     trace: 'retain-on-failure',
     screenshot: 'only-on-failure',
   },
@@ -37,9 +40,9 @@ export default defineConfig({
     },
   ],
   webServer: {
-    command: 'npm run dev',
-    url: 'http://localhost:5173',
-    reuseExistingServer: true,
+    command: preview ? 'npm run preview' : 'npm run dev',
+    url: baseURL,
+    reuseExistingServer: !preview,
     timeout: 120_000,
   },
 });

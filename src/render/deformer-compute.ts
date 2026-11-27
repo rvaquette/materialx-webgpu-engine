@@ -285,7 +285,11 @@ export async function computeDeformerPositions(
     }
   }
   const source = new Float32Array(points.length / 3 * 4);
-  for (let i = 0; i < points.length / 3; i++) source.set(points.slice(i * 3, i * 3 + 3), i * 4);
+  for (let i = 0; i < points.length / 3; i++) {
+    source[i * 4] = points[i * 3]!;
+    source[i * 4 + 1] = points[i * 3 + 1]!;
+    source[i * 4 + 2] = points[i * 3 + 2]!;
+  }
   const controls = new Float32Array(controlPoints.length ? controlPoints : [0, 0, 0, 0]);
   for (const [bytes, role] of [[source.byteLength, 'deformer positions'], [parameters.byteLength, 'deformer stack'],
     [controls.byteLength, 'deformer control points'], [gridData.byteLength, 'deformer grids']] as const) assertSceneStorageSize(device, bytes, role);
@@ -329,7 +333,12 @@ export async function computeDeformerPositions(
     });
     await readback.mapAsync(GPUMapMode.READ);
     const result = new Float32Array(readback.getMappedRange());
-    const positions = Array.from({ length: points.length }, (_, i) => result[Math.floor(i / 3) * 4 + i % 3]!);
+    const positions = new Array<number>(points.length);
+    for (let i = 0; i < points.length / 3; i++) {
+      positions[i * 3] = result[i * 4]!;
+      positions[i * 3 + 1] = result[i * 4 + 1]!;
+      positions[i * 3 + 2] = result[i * 4 + 2]!;
+    }
     readback.unmap();
     if (!positions.every(Number.isFinite)) throw new Error('Deformer compute produced non-finite positions.');
     performance.measure('deformer:compute', {

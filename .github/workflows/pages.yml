@@ -49,6 +49,14 @@ jobs:
         env:
           MX_SOURCE_DIR: ${{ github.workspace }}/materialx
 
+      - name: Install Chromium for production smoke test
+        run: npx playwright install --with-deps chromium
+
+      - name: Test built site
+        run: npm run test:playwright -- node-reference.spec.ts
+        env:
+          PLAYWRIGHT_PREVIEW: '1'
+
       - name: Configure Pages
         uses: actions/configure-pages@v6
 

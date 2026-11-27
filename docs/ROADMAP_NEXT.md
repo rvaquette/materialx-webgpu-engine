@@ -95,14 +95,21 @@ Pour les normales USD animées par sommet, la mise à jour réutilise la
 topologie préparée ; les normales face-varying restent traitées par une
 préparation complète afin de préserver les coutures.
 
-Sur un adaptateur NVIDIA Turing, `node scripts/bench-p18.mjs` mesure 24 mises à
-jour des USD régénérés à 512 × 512 : `setTime`, rendu raster hors écran et attente
-de l'achèvement GPU. Il vérifie un calcul GPU à chaque étape et que les images
-aux temps 0 et 12 diffèrent. Les 95e percentiles observés sont 51,6 ms pour le
-drapeau (résolution 40), 34,6 ms pour le ruban et 26,0 ms pour le treillis
-importé. Cette mesure courte, sans présentation à l'écran, dépend fortement de
-la charge et ne démontre pas une cadence soutenue de 30 images/s. La lecture des
-positions et le recalcul CPU des normales et tangentes restent à optimiser.
+Sur un adaptateur NVIDIA Turing, `node scripts/bench-p18.mjs` mesure 240 mises à
+jour après 24 étapes d'échauffement à 512 × 512 : `setTime`, rendu raster hors
+écran et attente de l'achèvement GPU. Il vérifie un calcul GPU à chaque étape
+et que les images aux temps 0 et 12 diffèrent. Les 95e percentiles observés
+sont respectivement 14,4 ms pour le drapeau (résolution 40), 13,4 ms pour le
+ruban et 13,1 ms pour le treillis importé.
+
+Le même benchmark active ensuite la timeline de l'interface Chrome headless
+pendant huit secondes par scène et vérifie que le canvas change. Il observe
+22,1, 30,5 et 52,7 calculs de déformation par seconde respectivement ; ce sont
+des mises à jour, pas une mesure de la fréquence de présentation à l'écran.
+Ces résultats dépendent du matériel et de sa charge. Ils ne démontrent pas
+encore une cadence soutenue de 30 images/s dans l'interface pour les trois
+scènes : la lecture des positions et le recalcul CPU des normales et tangentes
+restent à optimiser.
 
 ![Ruban tordu et sphère déformée par treillis](images/p18/p18-deformers.png)
 

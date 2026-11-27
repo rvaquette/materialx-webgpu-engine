@@ -424,22 +424,24 @@ export function meshWithDeformedPoints(mesh: RawMesh, points: readonly number[],
     ? [...mesh.points.slice(i * 3, i * 3 + 3), ...normals.slice(i * 3, i * 3 + 3)].map(value => value.toFixed(6)).join(',')
     : `${points[i * 3]!.toFixed(6)},${points[i * 3 + 1]!.toFixed(6)},${points[i * 3 + 2]!.toFixed(6)}`;
   const welded = new Map<string, number>();
-  const group = Array.from({ length: count }, (_, i) => {
+  const group = new Uint32Array(count);
+  for (let i = 0; i < count; i++) {
     const k = key(i);
-    if (!welded.has(k)) welded.set(k, welded.size);
-    return welded.get(k)!;
-  });
+    let index = welded.get(k);
+    if (index === undefined) { index = welded.size; welded.set(k, index); }
+    group[i] = index;
+  }
   const sums = new Float64Array(welded.size * 3);
   const indices = mesh.faceVertexIndices;
   for (let t = 0; t < indices.length; t += 3) {
-    const [a, b, c] = [indices[t]!, indices[t + 1]!, indices[t + 2]!];
+    const a = indices[t]!, b = indices[t + 1]!, c = indices[t + 2]!;
     const e1x = points[b * 3]! - points[a * 3]!, e1y = points[b * 3 + 1]! - points[a * 3 + 1]!, e1z = points[b * 3 + 2]! - points[a * 3 + 2]!;
     const e2x = points[c * 3]! - points[a * 3]!, e2y = points[c * 3 + 1]! - points[a * 3 + 1]!, e2z = points[c * 3 + 2]! - points[a * 3 + 2]!;
     const x = e1y * e2z - e1z * e2y, y = e1z * e2x - e1x * e2z, z = e1x * e2y - e1y * e2x;
-    for (const vertex of [a, b, c]) {
-      const offset = group[vertex]! * 3;
-      sums[offset]! += x; sums[offset + 1]! += y; sums[offset + 2]! += z;
-    }
+    const ai = group[a]! * 3, bi = group[b]! * 3, ci = group[c]! * 3;
+    sums[ai]! += x; sums[ai + 1]! += y; sums[ai + 2]! += z;
+    sums[bi]! += x; sums[bi + 1]! += y; sums[bi + 2]! += z;
+    sums[ci]! += x; sums[ci + 1]! += y; sums[ci + 2]! += z;
   }
   const smooth: number[] = [];
   for (let i = 0; i < count; i++) {

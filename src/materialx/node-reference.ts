@@ -106,16 +106,19 @@ function parseConformance(): Map<string, { raster: string; pathTracing: string }
   return result;
 }
 
-const coverage = parseCoverage();
-const conformance = parseConformance();
+let coverage: ReturnType<typeof parseCoverage> | undefined;
+let conformance: ReturnType<typeof parseConformance> | undefined;
 
 export function nodeReferenceEntries(library: ScriptLibrary): NodeReferenceEntry[] {
+  // Raw Markdown can be initialized by a different production chunk after this module.
+  const coverageIndex = coverage ??= parseCoverage();
+  const conformanceIndex = conformance ??= parseConformance();
   const entries = library.classNames.flatMap(className => {
     const category = library.categoryOf(className);
     if (!category) return [];
     return library.variants(category).map(definition => {
-      const source = coverage.get(definition.category);
-      const support = conformance.get(definition.category);
+      const source = coverageIndex.get(definition.category);
+      const support = conformanceIndex.get(definition.category);
       const coverageKind: NodeReferenceSupport['coverage'] = source?.coverage ?? 'not-in-corpus';
       return {
         id: definition.name,
