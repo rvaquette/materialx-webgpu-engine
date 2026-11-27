@@ -304,11 +304,11 @@ function computeSmoothNormals(
   return accum;
 }
 
-function computeTangents(
+export function computeTangents(
   positions: Float32Array,
   normals: Float32Array,
   uvs: Float32Array,
-  indices: readonly number[],
+  indices: ArrayLike<number>,
   vertexCount: number,
 ): Float32Array {
   const tan = new Float32Array(vertexCount * 3);

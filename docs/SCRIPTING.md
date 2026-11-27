@@ -306,6 +306,7 @@ Rendu progressif, scènes dynamiques et exploitation :
 | `await capture("x.png", { samples, shutter: [ouverture, fermeture], steps })` | Rendu path tracing de `samples` échantillons enregistré ; avec `shutter`, flou de mouvement sur l'intervalle |
 | `await video("x.mp4", { start, end, fps, samples, shutter, steps })` | Vidéo MP4 ou WebM d'un intervalle ; `shutter` donne des décalages relatifs à chaque image en path tracing |
 | `await importMesh("x.usda", "/World/Mesh")` | Importe la géométrie locale d'un maillage USD pour lui affecter matériau et déformeurs ; voir les limites dans la [référence](SCRIPT_REFERENCE.md#animation-et-transformations) |
+| `await loadVelocityField("x.nvdb", "vitesse")` | Charge une grille vectorielle NanoVDB pour un déformeur `Field` ; voir les limites dans la [référence](SCRIPT_REFERENCE.md#déformeurs-spatiaux-première-étape-p18) |
 | `timeline()`, `time()`, `await setTime(t)` | Intervalle `{ start, end, fps }` d'une scène animée ; instant courant ; évaluation à un instant |
 | `transform({ translate, rotate, scale })` | Matrice 4×4 (rotations X, Y puis Z en degrés) |
 | `setTransform(objet, matrice)`, `setVisibility(objet, visible)` | Déplace, masque ou affiche un objet ; sans valeur, rétablit celle de la scène |
@@ -378,11 +379,23 @@ la [référence](SCRIPT_REFERENCE.md#déformeurs-spatiaux-première-étape-p18).
 La déformation est actuellement calculée sur CPU pour les primitives scriptées
 et les maillages USDA importés avec `importMesh`.
 L'exemple [p18-animated-wind.js](../examples/scripts/p18-animated-wind.js) anime
-un champ de vent 3D et enregistre une [vidéo MP4](images/p18/p18-animated-wind.mp4).
+un champ de vent 3D et enregistre une [vidéo raster](images/p18/p18-animated-wind.mp4),
+une [vidéo path tracing avec flou](images/p18/p18-animated-wind-blur.mp4) et un
+[USD](images/p18/p18-animated-wind.usda).
+Le [ruban animé](../examples/scripts/p18-animated-ribbon.js) produit aussi une
+[vidéo raster](images/p18/p18-animated-ribbon.mp4), une
+[vidéo path tracing avec flou](images/p18/p18-animated-ribbon-blur.mp4) et un
+[USD](images/p18/p18-animated-ribbon.usda).
 L'exemple [p18-imported-lattice.js](../examples/scripts/p18-imported-lattice.js)
 anime un maillage importé et enregistre sa [vidéo](images/p18/p18-imported-lattice.mp4)
 ainsi qu'une [vidéo path tracing avec flou de mouvement](images/p18/p18-imported-lattice-blur.mp4)
 et son [USD](images/p18/p18-imported-lattice.usda).
+L'exemple [p18-materialx-field.js](../examples/scripts/p18-materialx-field.js)
+anime un champ MaterialX et produit une [vidéo](images/p18/p18-materialx-field.mp4)
+et un [USD](images/p18/p18-materialx-field.usda).
+L'exemple [p18-nanovdb-field.js](../examples/scripts/p18-nanovdb-field.js)
+utilise un champ NanoVDB de vitesses intégré sur plusieurs pas et produit une
+[vidéo](images/p18/p18-nanovdb-field.mp4) et un [USD](images/p18/p18-nanovdb-field.usda).
 La barre de temps de la vue apparaît pour une scène ou un matériau animé ;
 elle permet de lire, arrêter et choisir l'instant.
 

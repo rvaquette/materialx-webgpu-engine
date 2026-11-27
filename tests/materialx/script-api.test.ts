@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   fromResolvedGraph, fromXml, inlineIncludes, runScript, ScriptError, ScriptLibrary, SCRIPT_LIBRARY_FILES, toScript,
   toXml, transformScript, type ScriptHost,
@@ -1737,6 +1737,152 @@ describe('scripted primitives', () => {
       .rejects.toThrow(/strictly increasing/);
     await expect(runScript('t = new Twist(); t.keyframes = [{time: 0, angle: 0}, {time: 1, factor: 2}];', LIBRARY))
       .rejects.toThrow(/same properties/);
+  });
+
+  it('integrates shared MaterialX fields and exports their animated graphs', async () => {
+    const calls: Call[] = [];
+    await runScript(`
+      position = new Position(); position.space = "object";
+      split = new Separate3("ND_separate3_vector3"); split.in = position.out;
+      clock = new Time();
+      vector = new Combine3("vector3"); vector.in1 = split.outx; vector.in2 = clock.out;
+      field = new Field({ steps: 2, samples: 3 }); field.field = vector.out;
+      a = new Plane({ resolution: 2 }); b = new Plane({ resolution: 2 });
+      a.deformers = [field]; b.deformers = [field];
+      await render();
+      vector.in1 = 0.25;
+      await render();
+    `, P17_LIBRARY, { host: recorder(calls) });
+    const stages = calls.filter(call => call[0] === 'stage').map(call => call[1] as string);
+    expect(stages).toHaveLength(2);
+    const first = await importUsdStage('field.usda', { reader: { read: async () => stages[0]! } });
+    const second = await importUsdStage('field.usda', { reader: { read: async () => stages[1]! } });
+    expect(sceneTimeline(first)).toMatchObject({ start: 0, end: 24, animated: true });
+    const points = (scene: typeof first, object: string, time: number) =>
+      evaluateSceneAt(scene, time).prims.get(`/World/${object}`)!.attributes.get('points')!.value as number[];
+    expect(points(first, 'a', 0)[0]).toBeCloseTo(-1.125);
+    expect(points(first, 'a', 24)[1]).toBeCloseTo(1);
+    expect(points(first, 'a', 0)).not.toEqual(points(second, 'a', 0));
+    expect(points(first, 'b', 0)).not.toEqual(points(second, 'b', 0));
+    expect(first.prims.get('/World/a')!.attributes.get('engine:deformers')!.value).toContain('"fieldGraph"');
+  });
+
+  it('rejects invalid or unsupported MaterialX field graphs', async () => {
+    await expect(runScript('f = new Field(); f.field = new Time();', P17_LIBRARY)).rejects.toThrow(/vector3/);
+    await expect(runScript('f = new Field(); f.steps = 0;', P17_LIBRARY)).rejects.toThrow(/integration steps/);
+    await expect(runScript('f = new Field(); a = new Plane(); a.deformers = [f];', P17_LIBRARY, { host: idleHost() }))
+      .rejects.toThrow(/Field.field/);
+    await expect(runScript(`
+      position = new Position(); position.space = "world";
+      f = new Field(); f.field = position.out;
+      a = new Plane(); a.deformers = [f]; await render();
+    `, P17_LIBRARY, { host: idleHost() })).rejects.toThrow(/object-space position/);
+    await expect(runScript(`
+      n = new Add("vector3"); n.in1 = n.out;
+      f = new Field(); f.field = n.out;
+      a = new Plane(); a.deformers = [f]; await render();
+    `, P17_LIBRARY, { host: idleHost() })).rejects.toThrow(/cycle/);
+  });
+
+  it('updates exposed field inputs on all bound objects', async () => {
+    const calls: Call[] = [];
+    let revision = 0;
+    const host = recorder(calls);
+    const run = await runScript(`
+      vector = new Combine3("vector3"); vector.in1 = 0.1; expose(vector, "in1");
+      field = new Field(); field.field = vector.out;
+      a = new Plane(); b = new Plane(); a.deformers = [field]; b.deformers = [field];
+      await render();
+    `, P17_LIBRARY, { host: {
+      ...host, sceneRevision: () => revision,
+      loadStage: async stage => { await host.loadStage(stage); revision++; },
+    } });
+    await run.setParameter('0', 0.5);
+    await run.setParameter('0', 0.8);
+    const stages = calls.filter(call => call[0] === 'stage').map(call => call[1] as string);
+    expect(stages).toHaveLength(3);
+    const before = await importUsdStage('field.usda', { reader: { read: async () => stages[0]! } });
+    const after = await importUsdStage('field.usda', { reader: { read: async () => stages[1]! } });
+    for (const object of ['a', 'b']) {
+      expect(after.prims.get(`/World/${object}`)!.attributes.get('points')!.value)
+        .not.toEqual(before.prims.get(`/World/${object}`)!.attributes.get('points')!.value);
+    }
+  });
+
+  it('respects each component of a vector noise amplitude in a field', async () => {
+    const calls: Call[] = [];
+    await runScript(`
+      position = new Position(); position.space = "object";
+      noise = new Noise3d("vector3"); noise.position = position.out; noise.amplitude = [0, 1, 0];
+      field = new Field(); field.field = noise.out;
+      a = new Plane({ resolution: 2 }); a.deformers = [field];
+      b = new Plane({ resolution: 2 }); b.deform = p => p;
+      await render();
+    `, P17_LIBRARY, { host: recorder(calls) });
+    const usda = calls.find(call => call[0] === 'stage')![1] as string;
+    const scene = await importUsdStage('field.usda', { reader: { read: async () => usda } });
+    const a = scene.prims.get('/World/a')!.attributes.get('points')!.value as number[];
+    const b = scene.prims.get('/World/b')!.attributes.get('points')!.value as number[];
+    expect(a.some((value, i) => i % 3 === 1 && value !== b[i])).toBe(true);
+    for (let i = 0; i < a.length; i++) if (i % 3 !== 1) expect(a[i]).toBe(b[i]);
+  });
+
+  it('can retry a field parameter update after the host rejects a reload', async () => {
+    const calls: Call[] = [];
+    const host = recorder(calls);
+    let loads = 0;
+    const run = await runScript(`
+      vector = new Combine3("vector3"); vector.in1 = 0.1; expose(vector, "in1");
+      field = new Field(); field.field = vector.out;
+      a = new Plane(); a.deformers = [field]; await render();
+    `, P17_LIBRARY, { host: {
+      ...host, loadStage: async stage => {
+        if (++loads === 2) throw new Error('reload failed');
+        await host.loadStage(stage);
+      },
+    } });
+    await expect(run.setParameter('0', 0.5)).rejects.toThrow('reload failed');
+    await run.setParameter('0', 0.8);
+    expect(calls.filter(call => call[0] === 'stage')).toHaveLength(2);
+  });
+
+  it('integrates shared NanoVDB velocity fields and exports animated geometry', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async () =>
+      new Response(readFileSync('tests/fixtures/nanovdb/velocity_vec3f.nvdb.gz')));
+    try {
+      const calls: Call[] = [];
+      await runScript(`
+        velocity = await loadVelocityField("velocity.nvdb.gz", "velocity");
+        flow = new Field({ axis: "X", min: 0, max: 2, strength: 0.1, steps: 4 });
+        flow.field = velocity;
+        flow.keyframes = [{ time: 0, strength: 0 }, { time: 24, strength: 0.2 }];
+        a = new Plane({ axis: "Z", resolution: 2 });
+        b = new Plane({ axis: "Z", resolution: 2 });
+        a.deform = p => [p[0] + 1, p[1] - 2, p[2] + 0.5];
+        b.deform = a.deform;
+        a.deformers = [flow]; b.deformers = [flow];
+        await render();
+      `, P17_LIBRARY, { host: recorder(calls) });
+      const usda = calls.find(call => call[0] === 'stage')![1] as string;
+      const scene = await importUsdStage('flow.usda', { reader: { read: async () => usda } });
+      expect(sceneTimeline(scene)).toMatchObject({ start: 0, end: 24, animated: true });
+      const points = (object: string, time: number) =>
+        evaluateSceneAt(scene, time).prims.get(`/World/${object}`)!.attributes.get('points')!.value as number[];
+      for (const object of ['a', 'b']) expect(points(object, 24)).not.toEqual(points(object, 0));
+      expect(scene.prims.get('/World/a')!.attributes.get('engine:deformers')!.value)
+        .toContain('"fieldGrid":{"url":"velocity.nvdb.gz","name":"velocity","type":"vec3f"}');
+      await expect(runScript('f = await loadVelocityField("velocity.nvdb.gz", "missing");', P17_LIBRARY))
+        .rejects.toThrow(/found 0/);
+      const decoded = await new Response(new Blob([readFileSync('tests/fixtures/nanovdb/velocity_vec3f.nvdb.gz')])
+        .stream().pipeThrough(new DecompressionStream('gzip'))).arrayBuffer();
+      fetchMock.mockImplementation(async () => new Response(decoded, { headers: { 'content-encoding': 'gzip' } }));
+      await expect(runScript('f = await loadVelocityField("velocity.nvdb.gz", "velocity");', P17_LIBRARY))
+        .resolves.toBeDefined();
+      await expect(runScript('f = await loadVelocityField("velocity.vdb");', P17_LIBRARY))
+        .rejects.toThrow(/expects a .nvdb/);
+    } finally {
+      fetchMock.mockRestore();
+    }
   });
 
   it('imports a polygonal USDA mesh and exports its animated lattice deformation', async () => {

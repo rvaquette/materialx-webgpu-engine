@@ -62,18 +62,38 @@ temps réel en raster, rendus avec flou de mouvement en path tracing, et
 exportés en USD.
 
 **En cours :** une première pile CPU partageable sur les primitives scriptées
-propose les déformeurs paramétriques, un vent 3D et un treillis de Bézier pour
+propose les déformeurs paramétriques, un vent 3D, des champs MaterialX et NanoVDB et un treillis de Bézier pour
 les primitives et les maillages USDA statiques importés, exportés en USD avec
 leurs paramètres et échantillons temporels. L'exemple
 [p18-deformers.js](../examples/scripts/p18-deformers.js) est disponible dans
 le menu Scripts. [p18-animated-wind.js](../examples/scripts/p18-animated-wind.js)
-produit une [vidéo du drapeau](images/p18/p18-animated-wind.mp4).
+produit la [vidéo raster du drapeau](images/p18/p18-animated-wind.mp4), sa
+[vidéo avec flou](images/p18/p18-animated-wind-blur.mp4) et son
+[USD](images/p18/p18-animated-wind.usda).
+[p18-animated-ribbon.js](../examples/scripts/p18-animated-ribbon.js) produit
+la [vidéo raster du ruban](images/p18/p18-animated-ribbon.mp4), sa
+[vidéo avec flou](images/p18/p18-animated-ribbon-blur.mp4) et son
+[USD](images/p18/p18-animated-ribbon.usda).
 [p18-imported-lattice.js](../examples/scripts/p18-imported-lattice.js) produit
 une [vidéo raster](images/p18/p18-imported-lattice.mp4), une
 [vidéo path tracing avec flou](images/p18/p18-imported-lattice-blur.mp4) et un
-[USD](images/p18/p18-imported-lattice.usda) du maillage importé. Le support
-d'autres formats et des attributs USD complexes, les champs MaterialX/NanoVDB
-et le calcul GPU restent à réaliser.
+[USD](images/p18/p18-imported-lattice.usda) du maillage importé.
+[p18-materialx-field.js](../examples/scripts/p18-materialx-field.js) produit
+une [vidéo](images/p18/p18-materialx-field.mp4) et un
+[USD](images/p18/p18-materialx-field.usda) du champ MaterialX animé.
+L'exemple [p18-nanovdb-field.js](../examples/scripts/p18-nanovdb-field.js)
+produit une [vidéo](images/p18/p18-nanovdb-field.mp4) et un
+[USD](images/p18/p18-nanovdb-field.usda) d'un champ de vitesses NanoVDB.
+Le support d'autres formats et des attributs USD complexes et le calcul GPU
+restent à réaliser.
+
+Sur la machine de développement, `node scripts/bench-p18.mjs` mesure 24 mises à
+jour des USD exportés à 512 × 512 (`setTime`, `render(1)`, puis attente de la
+file GPU déjà soumise). Les temps au 95e percentile observés sont 35,3 ms pour
+le drapeau, 33,5 ms pour le ruban et 20,2 ms pour le treillis importé. Cette
+mesure courte porte sur des géométries précuites, dépend du matériel et de la
+charge, et ne garantit pas que l'image suivant le rappel ait déjà été soumise :
+elle ne démontre ni l'évaluation GPU des piles ni le temps réel.
 
 ![Ruban tordu et sphère déformée par treillis](images/p18/p18-deformers.png)
 

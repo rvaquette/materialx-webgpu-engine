@@ -121,6 +121,8 @@ describe('script editor language support', () => {
     expect(scriptCompletions(`${code}twist.an`, code, LIBRARY)?.items.map(item => item.label)).toEqual(['angle']);
     expect(scriptHover(code, code.indexOf('Twist') + 1, LIBRARY)).toMatchObject({ title: 'new Twist() : déformeur' });
     expect(scriptHover(code, code.indexOf('angle') + 1, LIBRARY)?.lines).toContain('Déformeur : Twist');
+    const field = 'flow = new Field();\nflow.field = velocity;\n';
+    expect(scriptCompletions('flow.fi', field, LIBRARY)?.items.map(item => item.label)).toContain('field');
   });
 
   it('knows boolean operators: completions, operand properties and documentation', () => {

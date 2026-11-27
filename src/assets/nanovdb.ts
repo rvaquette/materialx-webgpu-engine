@@ -142,8 +142,8 @@ async function inflate(bytes: Uint8Array): Promise<Uint8Array> {
   return new Uint8Array(await new Response(stream).arrayBuffer());
 }
 
-/** All grids of a .nvdb file or raw NanoVDB buffer. */
-export async function readNanoVdb(input: ArrayBuffer | Uint8Array): Promise<NanoVdbGrid[]> {
+/** Decode grid buffers shared by the scalar and vector readers. */
+async function readGridBuffers(input: ArrayBuffer | Uint8Array): Promise<DataView[]> {
   const bytes = input instanceof Uint8Array ? input : new Uint8Array(input);
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   const kind = magicKind(view, 0);
@@ -155,11 +155,15 @@ export async function readNanoVdb(input: ArrayBuffer | Uint8Array): Promise<Nano
   const looksLikeFile = kind !== '1' && view.byteLength >= 16 + 176 && view.getUint32(8, true) >>> 21 === 32
     && view.getUint16(12, true) > 0 && view.getUint16(14, true) <= 2
     && Number(view.getBigUint64(16, true)) >= GRID_SIZE + TREE_SIZE && view.getUint32(16 + 136, true) <= 257;
-  const grids: NanoVdbGrid[] = [];
+  const grids: DataView[] = [];
   if (!looksLikeFile) {
     for (let offset = 0; offset < view.byteLength;) {
-      grids.push(parseGrid(view, offset));
-      offset += Number(view.getBigUint64(offset + 32, true));
+      const size = Number(view.getBigUint64(offset + 32, true));
+      if (!Number.isSafeInteger(size) || size < GRID_SIZE + TREE_SIZE || offset + size > view.byteLength) {
+        throw new NanoVdbError('Invalid or truncated NanoVDB grid buffer.');
+      }
+      grids.push(new DataView(bytes.buffer, bytes.byteOffset + offset, size));
+      offset += size;
     }
     return grids;
   }
@@ -182,11 +186,137 @@ export async function readNanoVdb(input: ArrayBuffer | Uint8Array): Promise<Nano
         buffer = bytes.slice(offset, offset + grid);
       }
       if (buffer.byteLength !== grid) throw new NanoVdbError('Truncated NanoVDB grid.');
-      grids.push(parseGrid(new DataView(buffer.buffer, buffer.byteOffset, buffer.byteLength), 0));
+      grids.push(new DataView(buffer.buffer, buffer.byteOffset, buffer.byteLength));
       offset += file;
     }
   }
   return grids;
+}
+
+/** All scalar grids of a .nvdb file or raw NanoVDB buffer. */
+export async function readNanoVdb(input: ArrayBuffer | Uint8Array): Promise<NanoVdbGrid[]> {
+  return (await readGridBuffers(input)).map(view => parseGrid(view, 0));
+}
+
+export interface NanoVdbVectorGrid {
+  name: string;
+  valueType: 'vec3f' | 'vec3d';
+  gridClass: number;
+  background: readonly [number, number, number];
+  /** Trilinear interpolation in grid world space, including background outside the tree. */
+  sample(position: readonly number[]): [number, number, number];
+}
+
+/** Reads vector velocity grids without downsampling their sparse values. */
+export async function readNanoVdbVectors(input: ArrayBuffer | Uint8Array): Promise<NanoVdbVectorGrid[]> {
+  const views = await readGridBuffers(input);
+  for (const view of views) {
+    const kind = magicKind(view, 0);
+    if (kind !== '0' && kind !== '1') throw new NanoVdbError('Not a NanoVDB grid buffer.');
+    const major = view.getUint32(16, true) >>> 21;
+    if (major !== 32) throw new NanoVdbError(`Unsupported NanoVDB version ${major}; this reader expects major version 32.`);
+  }
+  const vectorViews = views.filter(view => [6, 7].includes(view.getUint32(636, true)));
+  if (!vectorViews.length) throw new NanoVdbError('No vector velocity grid found; expected Vec3f or Vec3d.');
+  return vectorViews.map(view => {
+    const type = view.getUint32(636, true);
+    const isDouble = type === 7;
+    const layout = isDouble
+      ? { width: 8, leafSize: 12448, leafValues: 160, rootSize: 128, rootBackground: 32, tileSize: 64, tileValue: 24,
+        lowerSize: 99424, lowerTable: 1120, upperSize: 794720, upperTable: 8288, stride: 24 }
+      : { width: 4, leafSize: 6272, leafValues: 128, rootSize: 96, rootBackground: 28, tileSize: 32, tileValue: 20,
+        lowerSize: 66624, lowerTable: 1088, upperSize: 532544, upperTable: 8256, stride: 16 };
+    const vector = (offset: number): [number, number, number] => [0, 1, 2].map(i =>
+      isDouble ? view.getFloat64(offset + i * layout.width, true) : view.getFloat32(offset + i * layout.width, true)) as [number, number, number];
+    let name = '';
+    for (let i = 0; i < 256; i++) {
+      const c = view.getUint8(40 + i);
+      if (!c) break;
+      name += String.fromCharCode(c);
+    }
+    const doubles = (offset: number, count: number) => Array.from({ length: count }, (_, i) => view.getFloat64(offset + i * 8, true));
+    const inverse = doubles(456, 9), translation = doubles(528, 3);
+    const determinant = inverse[0]! * (inverse[4]! * inverse[8]! - inverse[5]! * inverse[7]!)
+      - inverse[1]! * (inverse[3]! * inverse[8]! - inverse[5]! * inverse[6]!)
+      + inverse[2]! * (inverse[3]! * inverse[7]! - inverse[4]! * inverse[6]!);
+    if (![...inverse, ...translation, determinant].every(Number.isFinite) || determinant === 0) {
+      throw new NanoVdbError(`Grid '${name}' has an invalid index-to-world transform.`);
+    }
+    const gridClass = view.getUint32(632, true);
+    const tree = GRID_SIZE;
+    const nodeOffset = (level: number) => Number(view.getBigInt64(tree + level * 8, true));
+    const nodeCount = (level: number) => view.getUint32(tree + 32 + level * 4, true);
+    const int3 = (offset: number) => [view.getInt32(offset, true), view.getInt32(offset + 4, true), view.getInt32(offset + 8, true)];
+    const key = (p: readonly number[], total: number) => p.map(v => v & ~((1 << total) - 1)).join(',');
+    const nodes = (level: number, size: number, total: number): Map<string, number> => {
+      const result = new Map<string, number>();
+      const first = tree + nodeOffset(level);
+      for (let i = 0; i < nodeCount(level); i++) {
+        const offset = first + i * size;
+        result.set(key(int3(offset), total), offset);
+      }
+      return result;
+    };
+    const leaves = nodes(0, layout.leafSize, 3);
+    const lowers = nodes(1, layout.lowerSize, 7);
+    const uppers = nodes(2, layout.upperSize, 12);
+    const root = tree + nodeOffset(3);
+    const background = vector(root + layout.rootBackground);
+    const roots = new Map<string, number>();
+    for (let i = 0; i < view.getUint32(root + 24, true); i++) {
+      const offset = root + layout.rootSize + i * layout.tileSize;
+      const bits = view.getBigUint64(offset, true);
+      const origin = [bits >> 42n, (bits >> 21n) & 0x1fffffn, bits & 0x1fffffn].map(v => (Number(v) << 12) | 0);
+      roots.set(origin.join(','), offset);
+    }
+    const lookup = (p: readonly number[]): [number, number, number] => {
+      const leaf = leaves.get(key(p, 3));
+      if (leaf !== undefined) {
+        const index = ((p[0]! & 7) << 6) | ((p[1]! & 7) << 3) | (p[2]! & 7);
+        return vector(leaf + layout.leafValues + index * 3 * layout.width);
+      }
+      const tile = (node: number, log2: number, childBits: number, table: number): [number, number, number] => {
+        const mask = (1 << log2) - 1;
+        const index = (((p[0]! >> childBits) & mask) << (2 * log2))
+          | (((p[1]! >> childBits) & mask) << log2) | ((p[2]! >> childBits) & mask);
+        const childMask = node + 32 + (1 << (3 * log2)) / 8;
+        if (bitOn(view, childMask, index)) throw new NanoVdbError(`Grid '${name}' has an invalid child node.`);
+        return vector(node + table + index * layout.stride);
+      };
+      const lower = lowers.get(key(p, 7));
+      if (lower !== undefined) return tile(lower, 4, 3, layout.lowerTable);
+      const upper = uppers.get(key(p, 12));
+      if (upper !== undefined) return tile(upper, 5, 7, layout.upperTable);
+      const rootTile = roots.get(key(p, 12));
+      if (rootTile === undefined) return [...background];
+      if (view.getBigInt64(rootTile + 8, true) !== 0n) throw new NanoVdbError(`Grid '${name}' has an invalid root child.`);
+      return vector(rootTile + layout.tileValue);
+    };
+    const sampleIndex = (coord: readonly number[]): [number, number, number] => {
+      if (coord.some(value => !Number.isFinite(value))) throw new NanoVdbError(`Grid '${name}' produced invalid index coordinates.`);
+      if (coord.some(value => value < -2147483648 || value >= 2147483647)) {
+        return [...background];
+      }
+      const lower = coord.map(Math.floor), fraction = coord.map((v, i) => v - lower[i]!);
+      const result: [number, number, number] = [0, 0, 0];
+      for (let c = 0; c < 8; c++) {
+        const point = lower.map((value, i) => value + ((c >> i) & 1));
+        const weight = fraction.reduce((w, value, i) => w * ((c >> i) & 1 ? value : 1 - value), 1);
+        const value = lookup(point);
+        for (let i = 0; i < 3; i++) result[i]! += weight * value[i]!;
+      }
+      return result;
+    };
+    const sample = (position: readonly number[]): [number, number, number] => {
+      if (position.length !== 3 || !position.every(Number.isFinite)) throw new NanoVdbError('NanoVDB sample position must be a finite vector3.');
+      const d = position.map((value, i) => value - translation[i]!);
+      const coord = [0, 1, 2].map(r => inverse[r * 3]! * d[0]! + inverse[r * 3 + 1]! * d[1]! + inverse[r * 3 + 2]! * d[2]!);
+      if (gridClass !== 3) return sampleIndex(coord);
+      return [0, 1, 2].map(axis =>
+        sampleIndex(coord.map((value, i) => value + (i === axis ? 0.5 : 0)))[axis]!) as [number, number, number];
+    };
+    return { name, valueType: isDouble ? 'vec3d' : 'vec3f', gridClass, background, sample };
+  });
 }
 
 export interface DenseField {

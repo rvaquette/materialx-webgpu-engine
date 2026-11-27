@@ -59,6 +59,35 @@ describe('scene animation', () => {
     expect(deformGeometry(geometry, [0, 0, 0])).toBeUndefined();
   });
 
+  it('updates tangents for deformed meshes with and without sampled normals', async () => {
+    for (const sampledNormals of [false, true]) {
+      const source = `#usda 1.0
+def Mesh "Quad" {
+  uniform token subdivisionScheme = "none"
+  int[] faceVertexCounts = [4]
+  int[] faceVertexIndices = [0, 1, 2, 3]
+  texCoord2f[] primvars:st = [(0, 0), (1, 0), (1, 1), (0, 1)] (interpolation = "vertex")
+  point3f[] points.timeSamples = {
+    0: [(0, 0, 0), (1, 0, 0), (1, 1, 0), (0, 1, 0)],
+    10: [(0, 0, 0), (1, 0, 1), (1, 1, 1), (0, 1, 0)],
+  }
+  ${sampledNormals ? `normal3f[] normals = [(0, 0, 1), (0, 0, 1), (0, 0, 1), (0, 0, 1)] (interpolation = "vertex")
+  normal3f[] normals.timeSamples = {
+    0: [(0, 0, 1), (0, 0, 1), (0, 0, 1), (0, 0, 1)],
+    10: [(-0.7071068, 0, 0.7071068), (-0.7071068, 0, 0.7071068), (-0.7071068, 0, 0.7071068), (-0.7071068, 0, 0.7071068)],
+  }` : ''}
+}`;
+      const scene = await importUsdStage('tangent.usda', { reader: { read: async () => source } });
+      const meshFor = (at: typeof scene, path: string) => meshSourceFromScene(at).meshFor(path);
+      const geometry = buildGeometry('/Quad', '/Quad', prepareMesh(meshFor(evaluateSceneAt(scene, 0), '/Quad')!));
+      const resources = { geometries: new Map([['/Quad', geometry]]), instances: [] } as unknown as SceneResources;
+      const result = animateScene(scene, 10, resources, { meshFor }).deformed.get('/Quad')!;
+      expect(result.tangents).toBeDefined();
+      expect(result.tangents![0]).toBeCloseTo(Math.SQRT1_2);
+      expect(result.tangents![2]).toBeCloseTo(Math.SQRT1_2);
+    }
+  });
+
   it('reads visibility from ancestors', async () => {
     const { scene } = await setup();
     expect(isInvisible(scene, '/World/Quad')).toBe(false);

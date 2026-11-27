@@ -8,7 +8,7 @@
 // an unchanged triangulation becomes a deformation, a new one is reported in
 // `retopologized` so the caller rebuilds the affected render resources.
 import type { DiagnosticSink } from '../core/diagnostics.ts';
-import { prepareMesh, type PrepareMeshOptions, type PreparedMesh, type RawMesh } from '../geometry/prepare.ts';
+import { computeTangents, prepareMesh, type PrepareMeshOptions, type PreparedMesh, type RawMesh } from '../geometry/prepare.ts';
 import { evaluateSceneAt } from '../scene/time.ts';
 import { computeWorldTransforms, IDENTITY4, multiply4, type Mat4 } from '../scene/transforms.ts';
 import { pointInstancerMatrices } from '../scene/instances.ts';
@@ -23,6 +23,7 @@ export type LightChanges = Partial<Pick<SceneLight, 'intensity' | 'exposure' | '
 export interface DeformedGeometry {
   positions: Float32Array;
   normals: Float32Array;
+  tangents?: Float32Array;
 }
 
 export interface SceneAnimationState {
@@ -87,7 +88,11 @@ export function deformGeometry(geometry: GeometryResource, points: readonly numb
     const length = Math.hypot(accumulated[p]!, accumulated[p + 1]!, accumulated[p + 2]!);
     normals.set(length > 0 ? [accumulated[p]! / length, accumulated[p + 1]! / length, accumulated[p + 2]! / length] : [0, 0, 1], v * 3);
   }
-  return { positions, normals };
+  const uv = geometry.streams.find(stream => stream.name === 'uv');
+  const tangent = geometry.streams.find(stream => stream.name === 'tangent');
+  const tangents = uv && uv.components === 2 && tangent?.components === 4
+    ? computeTangents(positions, normals, uv.data, geometry.indices, geometry.vertexCount) : undefined;
+  return { positions, normals, ...(tangents ? { tangents } : {}) };
 }
 
 /** The animation state of `scene` (composed, with time samples) at `time`. */
@@ -139,7 +144,11 @@ export function animateScene(
     const uv = geometry.streams.find(stream => stream.name === 'uv')?.data;
     if (prepared.positions.length === geometry.vertexCount * 3 && sameArray(prepared.indices, geometry.indices)
         && (uv === undefined) === (prepared.uvs === undefined) && (!uv || sameArray(uv, prepared.uvs!))) {
-      deformed.set(id, { positions: prepared.positions, normals: prepared.normals });
+      deformed.set(id, {
+        positions: prepared.positions, normals: prepared.normals,
+        ...(prepared.tangents && geometry.streams.some(stream => stream.name === 'tangent' && stream.components === 4)
+          ? { tangents: prepared.tangents } : {}),
+      });
     } else {
       retopologized.set(id, prepared);
     }

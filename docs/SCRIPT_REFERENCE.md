@@ -272,7 +272,7 @@ await save("primitives.usda");   // scène USD + ses documents MaterialX
 
 ### Déformeurs spatiaux (première étape P18)
 
-`new Bend()`, `Twist`, `Taper`, `Shear`, `Wave`, `Wind`, `Spherize` et `Lattice`
+`new Bend()`, `Twist`, `Taper`, `Shear`, `Wave`, `Wind`, `Spherize`, `Lattice` et `Field`
 créent des déformeurs partageables. Chacun agit en espace objet selon `axis`
 (`"X"`, `"Y"` ou `"Z"`), entre `min` et `max` (−1 et 1 par défaut).
 `falloff` est la largeur d'atténuation à chaque extrémité, de 0 à la moitié
@@ -286,6 +286,38 @@ de l'intervalle. Les points hors intervalle ne bougent pas.
 | `Wind` | `amplitude` (0), `frequency` (1), `phase` (0), `seed` entier non signé (0) ; bruit 3D vectoriel, nul au début de l'intervalle |
 | `Spherize` | `radius` (1), `strength` de 0 à 1 (0), centrée sur l'origine |
 | `Lattice` | `boundsMin`, `boundsMax` (−1 et 1 sur chaque axe), `dimensions` (2, 2, 2), `offsets` |
+| `Field` | `field` : sortie MaterialX `vector3` ou grille NanoVDB ; `strength` (1), `steps` (1 à 64, défaut 1), `start` (0), `end` (24), `samples` (2 à 256, défaut 25) |
+
+`Field` intègre le vecteur en espace objet par pas d'Euler : à chaque pas, il
+réévalue le graphe à la position déplacée et avance de `strength / steps` fois
+le vecteur. Un pas correspond à un déplacement direct. Le graphe peut utiliser
+`Position` en espace `"object"` ou `"model"` et les nœuds `Time`/`Frame`.
+Les textures et les autres données géométriques ne sont pas prises en charge ;
+les nœuds sans évaluation CPU sont refusés. Les modifications de nœuds partagés
+reconstruisent les objets concernés. L'export inclut le graphe dans
+`engine:deformers` ainsi que la géométrie résultante.
+
+```js
+position = new Position(); position.space = "object";
+noise = new Noise3d("vector3"); noise.position = position.out;
+flow = new Field({ strength: 0.3, steps: 4 }); flow.field = noise.out;
+ball = new Sphere(); ball.deformers = [flow];
+```
+
+Une grille de vitesses peut être chargée avec
+`velocity = await loadVelocityField("velocity.nvdb", "velocity"); flow.field = velocity;`.
+Le nom est facultatif si le fichier contient une seule grille vectorielle ;
+sinon il est obligatoire. Les types Vec3f et Vec3d, les fichiers `.nvdb` ou
+`.nvdb.gz` et les grilles MAC décalées sont acceptés. Les valeurs sont
+interpolées trilinéairement dans l'espace monde de la grille, interprété ici
+comme l'espace objet ; hors de l'arbre, sa valeur de fond est utilisée.
+Le fichier doit rester accessible pour réutiliser les paramètres : l'USD
+exporté contient son URL et son nom dans `engine:deformers`, mais incorpore
+uniquement la géométrie déformée, pas le fichier de grille.
+
+Un graphe contenant `Time` ou `Frame` est échantillonné entre `start` et `end`
+en `samples` points, en codes temporels USD. Ces temps s'ajoutent aux clés des
+autres déformeurs ; entre les échantillons, USD interpole les positions.
 
 Le treillis interpole les déplacements en Bézier. Chaque dimension contient 2 à
 6 points ; `offsets` est vide ou contient trois nombres par point, X variant le
@@ -297,7 +329,7 @@ du script ; l'export USD contient le maillage résultant et `engine:deformers`.
 Animer les valeurs numériques ou les tableaux de longueur fixe avec
 `wind.keyframes = [{ time: 0, phase: 0 }, { time: 24, phase: 3 }]`. Toutes les
 clés doivent comporter les mêmes propriétés, et leurs temps être croissants ;
-`axis`, `dimensions` et `seed` ne sont pas animables. De 2 à 256 clés sont
+`axis`, `dimensions`, `seed`, `steps`, `start`, `end` et `samples` ne sont pas animables. De 2 à 256 clés sont
 acceptées. L'union des temps de toutes les clés de la pile est évaluée sur CPU,
 dans la limite de 4 000 000 de couples sommet-temps par objet. Le résultat est
 exporté en échantillons USD de positions et normales ; entre deux clés, USD
@@ -305,8 +337,7 @@ interpole les positions, pas les paramètres. Ajouter des clés intermédiaires
 pour mieux approcher une trajectoire non linéaire. `setTime` et la capture
 path tracing avec obturateur exploitent ces échantillons.
 
-Cette étape reste calculée sur CPU et ne couvre pas les champs MaterialX ou
-NanoVDB de la priorité 18. L'import de maillages est limité comme indiqué dans
+Cette étape reste calculée sur CPU. L'import de maillages est limité comme indiqué dans
 [Animation et transformations](#animation-et-transformations).
 
 ## Opérations booléennes

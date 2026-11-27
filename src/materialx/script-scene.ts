@@ -138,9 +138,10 @@ export function deformerScriptDef(className: string): ScriptNodeDef | undefined 
     name: `deformer ${className}`, category: className, className,
     doc: 'Déformeur spatial en espace objet.',
     inputs: [...Object.entries(defaults).map(([name, value]): ScriptPortDef => ({
-      name, type: name === 'axis' ? 'string' : name === 'seed' ? 'integer' : Array.isArray(value) ? 'array' : 'float',
+      name, type: name === 'axis' ? 'string' : ['seed', 'steps', 'samples'].includes(name) ? 'integer' : Array.isArray(value) ? 'array' : 'float',
       default: value, ...(name === 'axis' ? { enum: ['X', 'Y', 'Z'] } : {}),
-    })), { name: 'keyframes', type: 'array', doc: 'Images clés : [{ time, propriété: valeur }, ...]' }],
+    })), ...(className === 'Field' ? [{ name: 'field', type: 'object', doc: 'Sortie MaterialX vector3 ou grille NanoVDB de vitesses' }] : []),
+    { name: 'keyframes', type: 'array', doc: 'Images clés : [{ time, propriété: valeur }, ...]' }],
     outputs: [],
   };
 }

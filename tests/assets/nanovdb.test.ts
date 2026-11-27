@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { readNanoVdb, resampleNanoVdb, writeNanoVdb, type NanoVdbGrid } from '../../src/assets/nanovdb.ts';
+import { readNanoVdb, readNanoVdbVectors, resampleNanoVdb, writeNanoVdb, type NanoVdbGrid } from '../../src/assets/nanovdb.ts';
 
 // Fixtures written by the official NanoVDB headers (tools::createNanoGrid, io::writeGrid,
 // tools::createFogVolumeSphere); the .txt files list values read with the official accessor.
@@ -20,6 +20,54 @@ function valueMap(grid: NanoVdbGrid): (i: number, j: number, k: number) => numbe
 }
 
 describe('NanoVDB', () => {
+  for (const type of ['vec3f', 'vec3d'] as const) {
+    it(`samples official ${type} velocity grids across leaves and background`, async () => {
+      const [grid] = await readNanoVdbVectors(await fixture(`velocity_${type}`));
+      expect(grid).toMatchObject({ name: 'velocity', valueType: type });
+      const close = (position: number[], expected: number[]) =>
+        grid!.sample(position).forEach((value, i) => expect(value).toBeCloseTo(expected[i]!, 5));
+      close([1, -2, 0.5], [1, -0.5, 2]);
+      close([1.25, -1.75, 0.75], [1.05, -0.4, 2.15]);
+      close([0.75, -2, 0.5], [0.95, -0.5, 2]);
+      close([2.25, -2, 0.5], [0.7, -0.1, 1.2]);
+      close([9, -2, 0.5], [1, 2, 3]);
+      close([129, -2, 0.5], [4, 5, 6]);
+      close([4097, -2, 0.5], [7, 8, 9]);
+      close([10000, 0, 0], [0.2, 0.3, 0.4]);
+      expect(() => grid!.sample([NaN, 0, 0])).toThrow(/finite vector3/);
+    });
+  }
+
+  it('rejects scalar grids when a vector velocity field is requested', async () => {
+    await expect(readNanoVdbVectors(await fixture('function_float'))).rejects.toThrow(/expected Vec3f or Vec3d/);
+  });
+
+  it('selects vector grids from mixed raw buffers', async () => {
+    const scalarFile = writeNanoVdb('density', [1, 1, 1], new Float32Array([1]));
+    const header = 16 + 176 + new DataView(scalarFile.buffer).getUint32(16 + 136, true);
+    const scalar = scalarFile.subarray(header);
+    const vector = await fixture('velocity_vec3f');
+    const combined = new Uint8Array(scalar.length + vector.length);
+    combined.set(scalar);
+    combined.set(vector, scalar.length);
+    const grids = await readNanoVdbVectors(combined);
+    expect(grids).toHaveLength(1);
+    expect(grids[0]!.sample([1, -2, 0.5])[0]).toBeCloseTo(1);
+  });
+
+  it('samples staggered MAC velocities at their component-centered locations', async () => {
+    const [grid] = await readNanoVdbVectors(await fixture('velocity_staggered'));
+    expect(grid!.gridClass).toBe(3);
+    grid!.sample([1, -2, 0.5]).forEach((value, i) =>
+      expect(value).toBeCloseTo([1.05, -0.4, 2.15][i]!, 5));
+  });
+
+  it('rejects invalid vector-grid transforms rather than sampling bogus coordinates', async () => {
+    const bytes = await fixture('velocity_vec3f');
+    new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength).setFloat64(456, NaN, true);
+    await expect(readNanoVdbVectors(bytes)).rejects.toThrow(/invalid index-to-world transform/);
+  });
+
   for (const type of ['float', 'double'] as const) {
     it(`reads ${type} grids written by the official library`, async () => {
       const [grid] = await readNanoVdb(await fixture(`function_${type}`));

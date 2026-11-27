@@ -3409,12 +3409,14 @@ export class InteractiveViewer {
         },
         setQuality: (quality: RasterQuality) => serializeRaster(() => buildRasterQuality(quality)),
         updateTopology: updateRasterTopology,
-        updateGeometry: (prototypeId: string, positions: Float32Array, normals: Float32Array): void => {
+        updateGeometry: (prototypeId: string, positions: Float32Array, normals: Float32Array, tangents?: Float32Array): void => {
           const buffers = uploaded.get(prototypeId);
           const position = buffers?.vertexBuffers.get('position');
           const normal = buffers?.vertexBuffers.get('normal');
+          const tangent = buffers?.vertexBuffers.get('tangent');
           if (position) device.queue.writeBuffer(position, 0, positions);
           if (normal) device.queue.writeBuffer(normal, 0, normals);
+          if (tangent && tangents) device.queue.writeBuffer(tangent, 0, tangents);
         },
         updateLights: (data: Float32Array): void => {
           if (rasterLights && rasterLights.size === data.byteLength) device.queue.writeBuffer(rasterLights, 0, data);
@@ -4684,8 +4686,9 @@ export class InteractiveViewer {
         if (!geometry || deformed.positions.length !== geometry.vertexCount * 3) continue;
         (geometry as { streams: GeometryResource['streams'] }).streams = geometry.streams.map(stream =>
           stream.name === 'position' ? { ...stream, data: deformed.positions }
-            : stream.name === 'normal' ? { ...stream, data: deformed.normals } : stream);
-        raster?.updateGeometry(prototypeId, deformed.positions, deformed.normals);
+            : stream.name === 'normal' ? { ...stream, data: deformed.normals }
+              : stream.name === 'tangent' && deformed.tangents ? { ...stream, data: deformed.tangents } : stream);
+        raster?.updateGeometry(prototypeId, deformed.positions, deformed.normals, deformed.tangents);
         disneyDirtyPrototypes.add(prototypeId);
         for (const instance of resources.instances) if (instance.prototypeId === prototypeId) changed.add(instance.id);
       }

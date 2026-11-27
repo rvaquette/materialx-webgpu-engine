@@ -632,8 +632,8 @@ function evalCall(op: string, args: IrValue[], env: IrEvalVaryings, type: IrType
     if (point.length !== 3 || point.some(value => !Number.isFinite(value))) {
       throw new IrEvalError(`${op} requires finite ${op === 'noise2d' ? '2D' : '3D'} coordinates`);
     }
-    const amplitude = input('amplitude', 1, [1])[0]!;
-    const pivot = input('pivot', 2, [0])[0]!;
+    const amplitude = input('amplitude', 1, [1]);
+    const pivot = input('pivot', 2, [0]);
     const channels = type.kind === 'scalar' && type.scalar === 'float'
       ? 1
       : type.kind === 'vector' && type.scalar === 'float' ? type.size : 0;
@@ -641,7 +641,8 @@ function evalCall(op: string, args: IrValue[], env: IrEvalVaryings, type: IrType
       throw new IrEvalError(`${op} requires a float, vector2, or vector3 output`);
     }
     return Array.from({ length: channels }, (_, channel) =>
-      materialXPerlin3(point, channel) * amplitude + pivot);
+      materialXPerlin3(point, channel) * (amplitude[channel] ?? amplitude[0]!)
+        + (pivot[channel] ?? pivot[0]!));
   }
   if (op === 'worleynoise2d' || op === 'worleynoise3d') {
     if ((type.kind !== 'scalar' && type.kind !== 'vector') || type.scalar !== 'float' ||

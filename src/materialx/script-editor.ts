@@ -350,6 +350,7 @@ export const SCRIPT_FUNCTIONS: Readonly<Record<string, { detail: string; insert:
   capture: { detail: 'await capture("flou.png", { samples: 64, shutter: [0, 4] }) : rendu path tracing enregistré', insert: 'await capture("' },
   video: { detail: 'await video("animation.mp4", { start: 0, end: 24, fps: 24 }) : rendu vidéo', insert: 'await video("' },
   importMesh: { detail: 'await importMesh("objet.usda", "/World/Mesh") : géométrie USD en espace objet', insert: 'await importMesh("' },
+  loadVelocityField: { detail: 'await loadVelocityField("champ.nvdb", "vitesse") : grille vectorielle NanoVDB', insert: 'await loadVelocityField("' },
   diagnostics: { detail: 'diagnostics() : journal des diagnostics { level, code, message }', insert: 'diagnostics()' },
   capabilities: { detail: 'capabilities() : adaptateur, limites et backends pris en charge', insert: 'capabilities()' },
   timeline: { detail: 'timeline() : { start, end, fps } d’une scène animée', insert: 'timeline()' },

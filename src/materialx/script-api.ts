@@ -20,6 +20,8 @@ import {
   type EnvironmentShaderSettings, type ImageShaderSettings, type LightFilterSettings,
 } from './engine-shaders.ts';
 import { MATERIALX_CLOCK_INPUT, type ResolvedGraph } from './graph.ts';
+import { compileDeformerField, type FieldSource } from './deformer-field.ts';
+import { readNanoVdbVectors, type NanoVdbVectorGrid } from '../assets/nanovdb.ts';
 import { customAovView, type CustomAovKind, type PathTraceView } from '../render/pathtracing/display.ts';
 import {
   OBJECT_PROPERTIES, SCRIPT_BOOLEAN_OPERATIONS, SCRIPT_PRIMITIVES, isScriptLight, stageObjectShape, writeStageUsda,
@@ -937,7 +939,7 @@ export interface ScriptExposedParameter {
 }
 
 const SCRIPT_GLOBALS = new Set(['__mx', 'Math', 'scene', 'objects', 'render', 'assign', 'load', 'save', 'log', 'check', 'node', 'material',
-  'stats', 'converge', 'capture', 'video', 'importMesh', 'diagnostics', 'capabilities', 'timeline', 'time', 'setTime', 'transform', 'setTransform',
+  'stats', 'converge', 'capture', 'video', 'importMesh', 'loadVelocityField', 'diagnostics', 'capabilities', 'timeline', 'time', 'setTime', 'transform', 'setTransform',
   'setVisibility', 'lights', 'setLight', 'setCamera', 'variants', 'setVariant', 'materialParameters', 'setMaterialParameters',
   'environment', 'postprocess', 'aov', 'lightFilter', 'scatter', 'expose']);
 /** Globals that are also natural node names: assigning them shadows the function. */
@@ -1054,6 +1056,8 @@ export async function runScript(code: string, library: ScriptLibrary, options: R
           throw new ScriptError(`${node.name}.${key} is an output and cannot be assigned.`);
         }
         assign(node, key, value);
+        if ([...fieldSources].some(([handle, source]) =>
+          liveObjects().some(object => object.deformers?.includes(handle)) && upstream(source.node).includes(node))) stageDirty = true;
         return true;
       },
     });
@@ -1566,6 +1570,19 @@ export async function runScript(code: string, library: ScriptLibrary, options: R
         await updateMaterialInput(target, path, object.material, entry, next, current);
         applied++;
       }
+      if ([...fieldSources].some(([handle, source]) =>
+        liveObjects().some(object => object.deformers?.includes(handle)) && upstream(source.node).includes(entry.node))) {
+        stageDirty = true;
+        flushStage();
+        try {
+          await queue;
+        } catch (error) {
+          queue = Promise.resolve();
+          throw error;
+        }
+        boundSceneRevision = target.sceneRevision();
+        applied++;
+      }
       if (!applied && graph.viewerCommands) throw new ScriptError(`${entry.node.name}.${entry.port.name} is not bound to an active shader.`);
     } catch (error) {
       if (current) entry.node.inputs.set(entry.port.name, current);
@@ -1692,6 +1709,9 @@ export async function runScript(code: string, library: ScriptLibrary, options: R
   const objectHandles = new WeakMap<object, ScriptObject>();
   const objectReferences = new WeakMap<ScriptObject, object>();
   const deformers = new WeakMap<object, Deformer>();
+  const fieldSources = new Map<object, FieldSource>();
+  const velocityFields = new WeakMap<object, { handle: object; grid: NanoVdbVectorGrid; url: string }>();
+  const velocitySources = new Map<object, { handle: object; grid: NanoVdbVectorGrid; url: string }>();
   const objectNames = new Set<string>(['Looks']);
   /** `surfacematerial` names given to surface shaders bound to primitives (stable across syncs). */
   const shaderMaterials = new Map<ScriptNode, string>();
@@ -1714,12 +1734,24 @@ export async function runScript(code: string, library: ScriptLibrary, options: R
   };
   const deformScriptMesh = (object: ScriptObject, mesh: RawMesh, time?: number): RawMesh => {
     if (!object.deform && !object.deformers?.length) return mesh;
+    const fields = new Map<Deformer, (position: readonly number[]) => readonly number[]>();
     const stack = (object.deformers ?? []).map(handle => {
       const settings = deformers.get(handle)!;
-      return time === undefined ? settings : deformerAtTime(settings, time);
+      const evaluated = time === undefined ? settings : deformerAtTime(settings, time);
+      if (settings.kind === 'Field') {
+        const source = fieldSources.get(handle);
+        const velocity = velocitySources.get(handle);
+        if (source) {
+          const field = compileDeformerField(source);
+          fields.set(evaluated, point => field.sample(point, time ?? 0));
+        } else if (velocity) fields.set(evaluated, point => velocity.grid.sample(point));
+        else throw new ScriptError('Field.field must reference a MaterialX vector3 output or a NanoVDB velocity field.');
+      }
+      return evaluated;
     });
     return deformMesh(mesh, (position, uv, normal) =>
-      deformPosition(object.deform ? object.deform(position, uv, normal) : position, stack), object.baseMesh !== undefined);
+      deformPosition(object.deform ? object.deform(position, uv, normal) : position, stack,
+        (deformer, point) => fields.get(deformer)!(point)), object.baseMesh !== undefined);
   };
   const urlDocument = (url: string): Promise<{ name: string; text: string }> => {
     let document = urlDocuments.get(url);
@@ -1815,8 +1847,17 @@ export async function runScript(code: string, library: ScriptLibrary, options: R
             name: object.name!, className: object.className, parameters: object.parameters,
             translate: [], rotate: [], scale: [], visible: true,
           }));
-          const times = [...new Set((object.deformers ?? []).flatMap(handle =>
-            (deformers.get(handle)!.keyframes ?? []).map(frame => frame.time)))].sort((a, b) => a - b);
+          const times = [...new Set((object.deformers ?? []).flatMap(handle => {
+            const settings = deformers.get(handle)!;
+            const keys = (settings.keyframes ?? []).map(frame => frame.time);
+            if (settings.kind !== 'Field') return keys;
+            const source = fieldSources.get(handle);
+            if (!source && velocitySources.has(handle)) return keys;
+            if (!source) throw new ScriptError('Field.field must reference a MaterialX vector3 output or a NanoVDB velocity field.');
+            if (!compileDeformerField(source).animated) return keys;
+            return [...keys, ...Array.from({ length: settings.samples! }, (_, i) =>
+              settings.start! + (settings.end! - settings.start!) * i / (settings.samples! - 1))];
+          }))].sort((a, b) => a - b);
           if (times.length && base.points.length / 3 * times.length > 4_000_000) {
             throw new RangeError('Animated deformation exceeds the 4,000,000 vertex-sample limit.');
           }
@@ -1839,7 +1880,14 @@ export async function runScript(code: string, library: ScriptLibrary, options: R
         } : {}),
         ...(material ? { material } : {}), ...(mesh ? { mesh } : {}),
         ...(meshSamples ? { meshSamples } : {}),
-        ...(object.deformers?.length ? { deformers: object.deformers.map(handle => ({ ...deformers.get(handle)! })) } : {}),
+        ...(object.deformers?.length ? { deformers: object.deformers.map(handle => ({
+          ...deformers.get(handle)!,
+          ...(fieldSources.has(handle) ? { fieldGraph: compileDeformerField(fieldSources.get(handle)!).metadata } : {}),
+          ...(velocitySources.has(handle) ? { fieldGrid: {
+            url: velocitySources.get(handle)!.url, name: velocitySources.get(handle)!.grid.name,
+            type: velocitySources.get(handle)!.grid.valueType,
+          } } : {}),
+        })) } : {}),
       };
     });
     const byObject = new Map(activeObjects.map((object, index) => [object, objects[index]!]));
@@ -2301,6 +2349,35 @@ export async function runScript(code: string, library: ScriptLibrary, options: R
     return handleFor(material);
   };
   const viewer: Record<string, unknown> = {
+    loadVelocityField: async (url: unknown, gridName?: unknown): Promise<object> => {
+      if (typeof url !== 'string' || !url || !/\.nvdb(?:\.gz)?(?:[?#]|$)/i.test(url)) {
+        throw new ScriptError('loadVelocityField(url, gridName?) expects a .nvdb or .nvdb.gz URL.');
+      }
+      if (gridName !== undefined && (typeof gridName !== 'string' || !gridName)) {
+        throw new ScriptError('loadVelocityField gridName must be a non-empty string.');
+      }
+      let grid: NanoVdbVectorGrid;
+      if (options.dryRun) {
+        grid = { name: gridName ?? '', valueType: 'vec3f', gridClass: 0, background: [0, 0, 0], sample: () => [0, 0, 0] };
+      } else {
+        const resolved = new URL(url, baseUrl).href;
+        const response = await fetch(resolved, signal ? { signal } : undefined);
+        if (!response.ok) throw new ScriptError(`loadVelocityField: HTTP ${response.status}: ${resolved}`);
+        let bytes = await response.arrayBuffer();
+        const header = new Uint8Array(bytes, 0, Math.min(2, bytes.byteLength));
+        if (/\.gz(?:[?#]|$)/i.test(url) && header[0] === 0x1f && header[1] === 0x8b) {
+          bytes = await new Response(new Blob([bytes]).stream().pipeThrough(new DecompressionStream('gzip'))).arrayBuffer();
+        }
+        const grids = await readNanoVdbVectors(bytes);
+        const matches = gridName === undefined ? grids : grids.filter(candidate => candidate.name === gridName);
+        if (matches.length !== 1) throw new ScriptError(`loadVelocityField: expected one matching vector grid, found ${matches.length}.`);
+        grid = matches[0]!;
+      }
+      signal?.throwIfAborted();
+      const handle = Object.freeze({});
+      velocityFields.set(handle, { handle, grid, url });
+      return handle;
+    },
     importMesh: async (url: unknown, primPath: unknown): Promise<object> => {
       if (typeof url !== 'string' || !url || !/\.usda(?:[?#]|$)/i.test(url)) {
         throw new ScriptError('importMesh(url, primPath) expects a .usda URL.');
@@ -2681,6 +2758,10 @@ export async function runScript(code: string, library: ScriptLibrary, options: R
         const handle = new Proxy(Object.create(null) as object, {
           get: (_target, key) => {
             if (typeof key !== 'string') return undefined;
+            if (kind === 'Field' && key === 'field') {
+              const source = fieldSources.get(handle);
+              return source ? outputRef(source.node, source.output) : velocitySources.get(handle)?.handle;
+            }
             if (key === 'keyframes') return settings.keyframes?.map(frame => ({
               time: frame.time,
               ...Object.fromEntries(Object.entries(frame.values).map(([name, value]) => [name, Array.isArray(value) ? [...value] : value])),
@@ -2690,6 +2771,19 @@ export async function runScript(code: string, library: ScriptLibrary, options: R
             return Array.isArray(value) ? [...value] : value;
           },
           set: (_target, key, value) => {
+            if (kind === 'Field' && key === 'field') {
+              const velocity = typeof value === 'object' && value !== null ? velocityFields.get(value) : undefined;
+              const source = sourceOf(value);
+              if (!velocity && (!source || source.output.type !== 'vector3')) {
+                throw new ScriptError('Field.field expects a MaterialX vector3 output or a NanoVDB velocity field.');
+              }
+              fieldSources.delete(handle);
+              velocitySources.delete(handle);
+              if (velocity) velocitySources.set(handle, velocity);
+              else fieldSources.set(handle, source!);
+              if (stageObjects.some(object => object.deformers?.includes(handle) && !object.removed)) stageDirty = true;
+              return true;
+            }
             if (typeof key !== 'string' || key === 'kind' || (key !== 'keyframes' && !Object.hasOwn(DEFORMER_DEFAULTS[kind], key))) {
               throw new ScriptError(`${kind} has no editable property "${String(key)}".`);
             }

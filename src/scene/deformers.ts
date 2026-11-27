@@ -9,6 +9,7 @@ export const DEFORMER_DEFAULTS = {
   Wave: { axis: 'Y', min: -1, max: 1, falloff: 0, amplitude: 0, frequency: 1, phase: 0 },
   Wind: { axis: 'Y', min: -1, max: 1, falloff: 0, amplitude: 0, frequency: 1, phase: 0, seed: 0 },
   Spherize: { axis: 'Y', min: -1, max: 1, falloff: 0, radius: 1, strength: 0 },
+  Field: { axis: 'Y', min: -1, max: 1, falloff: 0, strength: 1, steps: 1, start: 0, end: 24, samples: 25 },
   Lattice: {
     axis: 'Y', min: -1, max: 1, falloff: 0,
     boundsMin: [-1, -1, -1], boundsMax: [1, 1, 1], dimensions: [2, 2, 2], offsets: [],
@@ -36,6 +37,10 @@ export interface Deformer {
   seed?: number;
   radius?: number;
   strength?: number;
+  steps?: number;
+  start?: number;
+  end?: number;
+  samples?: number;
   boundsMin?: readonly number[];
   boundsMax?: readonly number[];
   dimensions?: readonly number[];
@@ -66,7 +71,7 @@ export function deformerKeyframes(deformer: Deformer, input: unknown): DeformerK
     names = keys;
     const values: Record<string, number | readonly number[]> = {};
     for (const name of keys) {
-      if (!Object.hasOwn(DEFORMER_DEFAULTS[deformer.kind], name) || ['axis', 'dimensions', 'seed'].includes(name)) {
+      if (!Object.hasOwn(DEFORMER_DEFAULTS[deformer.kind], name) || ['axis', 'dimensions', 'seed', 'steps', 'start', 'end', 'samples'].includes(name)) {
         throw new RangeError(`${deformer.kind}.${name} cannot be animated.`);
       }
       const current = deformer[name as keyof Deformer];
@@ -126,6 +131,11 @@ export function validateDeformer(deformer: Deformer): void {
   if (deformer.kind === 'Wind' && (!Number.isInteger(deformer.seed) || deformer.seed! < 0 || deformer.seed! > 0xffffffff)) {
     throw new RangeError('Wind.seed must be an unsigned 32-bit integer.');
   }
+  if (deformer.kind === 'Field' && (!Number.isInteger(deformer.steps) || deformer.steps! < 1 || deformer.steps! > 64
+      || !Number.isInteger(deformer.samples) || deformer.samples! < 2 || deformer.samples! > 256
+      || !(deformer.end! > deformer.start!))) {
+    throw new RangeError('Field requires 1 to 64 integration steps, 2 to 256 samples, and end greater than start.');
+  }
   if (deformer.kind === 'Lattice') {
     const min = deformer.boundsMin!, max = deformer.boundsMax!, dims = deformer.dimensions!, offsets = deformer.offsets!;
     if (min.length !== 3 || max.length !== 3 || min.some((value, i) => value >= max[i]!)) {
@@ -152,7 +162,11 @@ function bernstein(count: number, t: number): number[] {
 }
 
 /** Evaluates an ordered stack in object space without modifying the input position. */
-export function deformPosition(position: readonly number[], stack: readonly Deformer[]): [number, number, number] {
+export function deformPosition(
+  position: readonly number[],
+  stack: readonly Deformer[],
+  sampleField?: (deformer: Deformer, position: readonly number[]) => readonly number[],
+): [number, number, number] {
   let point: [number, number, number] = [position[0]!, position[1]!, position[2]!];
   for (const deformer of stack) {
     const axis = deformer.axis === 'X' ? 0 : deformer.axis === 'Y' ? 1 : 2;
@@ -194,6 +208,17 @@ export function deformPosition(position: readonly number[], stack: readonly Defo
       if (length > 1e-12) {
         const scale = 1 + deformer.strength! * (deformer.radius! / length - 1);
         next = point.map(value => value * scale) as [number, number, number];
+      }
+    } else if (deformer.kind === 'Field') {
+      if (!sampleField) throw new RangeError('Field requires a MaterialX vector3 graph.');
+      for (let step = 0; step < deformer.steps!; step++) {
+        const velocity = sampleField(deformer, next);
+        if (velocity.length !== 3 || !velocity.every(Number.isFinite)) {
+          throw new RangeError('Field must evaluate to a finite vector3.');
+        }
+        for (let component = 0; component < 3; component++) {
+          next[component]! += velocity[component]! * deformer.strength! / deformer.steps!;
+        }
       }
     } else {
       const min = deformer.boundsMin!, max = deformer.boundsMax!, dims = deformer.dimensions!, offsets = deformer.offsets!;
