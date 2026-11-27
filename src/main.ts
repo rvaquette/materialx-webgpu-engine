@@ -193,6 +193,7 @@ async function main(): Promise<void> {
     examples: validationScripts,
     runControl: scriptControl,
     remoteView: document.getElementById('canvas-container'),
+    selectedObject: () => state.objectPath,
     onApply: (xml) => {
       if (!applyScriptMaterial) throw new Error('Le viewer WebGPU n’est pas prêt.');
       return applyScriptMaterial(xml);

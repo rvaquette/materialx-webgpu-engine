@@ -29,6 +29,8 @@ export interface ScriptEditorOptions {
   onApply?: (xml: string) => Promise<void> | void;
   /** Material of the selected object, as resolved by the engine. */
   currentMaterial?: () => Promise<{ graph: ResolvedGraph; name: string }> | { graph: ResolvedGraph; name: string };
+  /** Object receiving a material-only script, captured when the script is applied. */
+  selectedObject?: () => string;
   /** Viewer operations for `scene`, `render`, `assign` in scripts run with « Appliquer ». */
   host?: ScriptHost;
   /** `fileprefix` used for relative texture paths in applied documents. */
@@ -325,6 +327,7 @@ export function scriptCompletions(prefix: string, code: string, library: ScriptL
 
 /** Viewer functions available in scripts, with their completion text. */
 export const SCRIPT_FUNCTIONS: Readonly<Record<string, { detail: string; insert: string }>> = {
+  expose: { detail: 'expose(noeud, "entrée", "libellé") : paramètre éditable', insert: 'expose(' },
   scene: { detail: 'await scene("scenes/….usda") : charge une scène', insert: 'await scene("' },
   objects: { detail: 'objects() : chemins des objets de la scène', insert: 'objects()' },
   render: { detail: 'render.backend = … ; await render(64) : relance le rendu', insert: 'render' },

@@ -241,6 +241,64 @@ test('sépare le graphe MaterialX du graphe scène et génère sans exécuter', 
   await expect(e.panel.getByTestId('scene-graph-summary')).toHaveText('Prototype valide : 7 nœuds, 7 liens.');
 });
 
+test.describe('paramètres de shaders déclarés', () => {
+  test.use({ channel: 'chrome', launchOptions: { args: ['--enable-unsafe-webgpu', '--enable-features=Vulkan', '--ignore-gpu-blocklist', '--force_high_performance_gpu'] } });
+
+  test('modifie surface et image dans le rendu sans réexécuter', async ({ page }) => {
+    test.setTimeout(300_000);
+    await page.goto('/');
+    const webgpu = await page.evaluate(async () => Boolean(await navigator.gpu?.requestAdapter()));
+    test.skip(!webgpu, 'WebGPU indisponible dans Chrome.');
+    await expect(page.locator('#app')).toHaveClass(/ui-ready/, { timeout: 120_000 });
+    await expect(page.locator('#busy-indicator')).toBeHidden({ timeout: 120_000 });
+    await page.locator('#open-script-editor').click();
+    const e = editor(page);
+    await setScript(e, `
+surface = new StandardSurface();
+surface.base_color = [0.1, 0.1, 0.9];
+surface.specular_roughness = 0.5;
+expose(surface, "base_color", "Couleur");
+ball = new Sphere({ radius: 0.8, material: surface });
+image = new ImageShader();
+image.exposure = 0;
+expose(image, "exposure", "Exposition image");
+await postprocess(image.out);
+render.resolution = 256;
+render.backend = "raster";
+setCamera({ eye: [0, 0, 4], target: [0, 0, 0], fov: 38 });
+log("exécution unique");
+await render(1);`);
+    await expect(e.status).toContainText('Script valide', { timeout: 30_000 });
+    await e.panel.getByTestId('script-apply').click();
+    await expect(e.status).toHaveText('Script exécuté.', { timeout: 180_000 });
+    await e.panel.getByTestId('script-tab-parameters').click();
+    const parameters = e.panel.getByTestId('script-parameters');
+    await expect(parameters.locator('label')).toHaveCount(2);
+    await expect(parameters).not.toContainText('specular_roughness');
+    const canvas = page.locator('#view');
+    await page.waitForTimeout(1000);
+    const before = await canvas.screenshot();
+    const red = parameters.getByLabel('Couleur 1');
+    await red.fill('0.9');
+    await red.press('Tab');
+    await expect(parameters.locator('fieldset')).toBeEnabled({ timeout: 120_000 });
+    await expect(parameters.getByRole('alert')).toHaveCount(0);
+    await page.waitForTimeout(1000);
+    const afterSurface = await canvas.screenshot();
+    expect((await imageDifference(page, before, afterSurface)).mean).toBeGreaterThan(0.1);
+    const exposure = parameters.getByLabel('Exposition image');
+    await exposure.fill('-2');
+    await exposure.press('Tab');
+    await expect(parameters.locator('fieldset')).toBeEnabled({ timeout: 120_000 });
+    await expect(parameters.getByRole('alert')).toHaveCount(0);
+    await page.waitForTimeout(1000);
+    const afterImage = await canvas.screenshot();
+    expect((await imageDifference(page, afterSurface, afterImage)).mean).toBeGreaterThan(1);
+    await expect(e.panel.getByTestId('script-console').getByText('exécution unique')).toHaveCount(1);
+    await expectCode(e, 'surface.base_color = [0.1, 0.1, 0.9];');
+  });
+});
+
 test('convertit le script en graphe de scène puis conserve les modifications MaterialX', async ({ page }) => {
   const e = await openEditor(page);
   await e.panel.getByTestId('script-tab-scene-graph').click();

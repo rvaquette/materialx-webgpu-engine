@@ -91,6 +91,11 @@ ${ICON_BUTTON_STYLE}
 .mx-variables td { border-bottom: 1px solid #333; padding: 2px 6px; vertical-align: top; overflow-wrap: anywhere; }
 .mx-variables td:first-child { color: #9cdcfe; white-space: nowrap; }
 .mx-empty { color: #888; padding: 6px; }
+.mx-parameters { padding: 6px; }
+.mx-parameters label { display: block; padding: 5px 0; border-bottom: 1px solid #333; }
+.mx-parameters label > span { display: block; margin-bottom: 3px; }
+.mx-parameters input[type="number"] { width: 80px; margin-right: 4px; }
+.mx-parameters input, .mx-parameters select { background: #252526; color: #eee; border: 1px solid #555; padding: 4px; }
 .mx-graph { display: flex; flex-direction: column; overflow: hidden; }
 .mx-graph[hidden] { display: none; }
 .mx-graph-help { margin: 0; padding: 3px 6px; color: #888; font-size: 11px; }
@@ -183,7 +188,7 @@ function breakpointLines(state: EditorState): Set<number> {
 // --- Editor -----------------------------------------------------------------------
 
 type RunState = 'idle' | 'running' | 'paused';
-type Tab = 'console' | 'variables' | 'graph' | 'scene-graph' | 'xml';
+type Tab = 'console' | 'variables' | 'parameters' | 'graph' | 'scene-graph' | 'xml';
 
 interface LocalRun {
   controller: AbortController;
@@ -216,6 +221,10 @@ export class MaterialXScriptEditor {
   readonly #xml: HTMLTextAreaElement;
   readonly #console: HTMLOListElement;
   readonly #variables: HTMLElement;
+  readonly #parameters: HTMLElement;
+  #parameterRun: ScriptRun | undefined;
+  #parameterObject: string | undefined;
+  #parameterBusy = false;
   readonly #graph: HTMLElement;
   readonly #graphSummary: HTMLElement;
   #graphView: NodeGraphView | undefined;
@@ -301,6 +310,7 @@ export class MaterialXScriptEditor {
       <div class="mx-tabs" role="tablist" aria-label="Résultats du script">
         <button type="button" role="tab" data-tab="console" aria-selected="true" data-testid="script-tab-console">Console</button>
         <button type="button" role="tab" data-tab="variables" aria-selected="false" data-testid="script-tab-variables">Variables</button>
+        <button type="button" role="tab" data-tab="parameters" aria-selected="false" data-testid="script-tab-parameters">Paramètres</button>
         <button type="button" role="tab" data-tab="graph" aria-selected="false" data-testid="script-tab-graph">Graphe</button>
         <button type="button" role="tab" data-tab="scene-graph" aria-selected="false" data-testid="script-tab-scene-graph">Scène</button>
         <button type="button" role="tab" data-tab="xml" aria-selected="false" data-testid="script-tab-xml">XML</button>
@@ -308,6 +318,7 @@ export class MaterialXScriptEditor {
       </div>
       <div class="mx-tab-panel" role="tabpanel" data-panel="console"><ol class="mx-console" data-testid="script-console" aria-live="polite"></ol></div>
       <div class="mx-tab-panel" role="tabpanel" data-panel="variables" data-testid="script-variables" hidden></div>
+      <div class="mx-tab-panel mx-parameters" role="tabpanel" data-panel="parameters" data-testid="script-parameters" hidden></div>
       <div class="mx-tab-panel mx-graph" role="tabpanel" data-panel="graph" hidden>
         <p class="mx-graph-help">Glisser d’une sortie vers une entrée pour connecter, modifier les valeurs dans les nœuds ; double-clic : ligne du script. Clic droit : ajouter une entrée.</p>
         <div class="mx-graph-canvas" data-testid="script-graph"></div>
@@ -335,6 +346,8 @@ export class MaterialXScriptEditor {
     this.#xml = $('script-xml');
     this.#console = $('script-console');
     this.#variables = $('script-variables');
+    this.#parameters = $('script-parameters');
+    this.#showParameters();
     this.#graph = $('script-graph');
     this.#graphSummary = $('script-graph-summary');
     this.#sceneGraphCanvas = $('scene-graph');
@@ -599,7 +612,9 @@ export class MaterialXScriptEditor {
   }
 
   async #runLocal(debug: boolean): Promise<void> {
-    if (this.#state() !== 'idle') return;
+    if (this.#state() !== 'idle' || this.#parameterBusy) return;
+    this.#parameterRun = undefined;
+    this.#showParameters();
     const run: LocalRun = { controller: new AbortController(), debug, stepping: false, userPaused: false };
     this.#local = run;
     this.#refreshButtons();
@@ -630,8 +645,13 @@ export class MaterialXScriptEditor {
         this.#xml.value = toXml(result, library);
         this.#showGraph(result.nodes);
         const output = !host && result.logs.length ? `\n${result.logs.join('\n')}` : '';
+        if (!result.viewerCommands) {
+          this.#parameterObject = this.#options.selectedObject?.();
+          await this.#options.onApply?.(toXml(result, library, prefix ? { filePrefix: prefix } : {}));
+        }
+        this.#parameterRun = result;
+        this.#showParameters();
         if (result.viewerCommands) return `Script exécuté.${output}`;
-        await this.#options.onApply?.(toXml(result, library, prefix ? { filePrefix: prefix } : {}));
         return `Matériau appliqué.${output}`;
       } catch (error) {
         if (run.controller.signal.aborted) {
@@ -963,6 +983,87 @@ export class MaterialXScriptEditor {
   }
 
   // --- Panels -------------------------------------------------------------------------
+
+  #showParameters(error?: string): void {
+    this.#parameters.replaceChildren();
+    if (error) {
+      const message = document.createElement('p');
+      message.className = 'mx-status error';
+      message.setAttribute('role', 'alert');
+      message.textContent = error;
+      this.#parameters.append(message);
+    }
+    const run = this.#parameterRun;
+    if (!run?.parameters().length) {
+      const empty = document.createElement('p');
+      empty.className = 'mx-empty';
+      empty.textContent = 'Aucun paramètre déclaré par le dernier script exécuté.';
+      this.#parameters.append(empty);
+      return;
+    }
+    const fields = document.createElement('fieldset');
+    fields.disabled = this.#parameterBusy;
+    for (const parameter of run.parameters()) {
+      const label = document.createElement('label');
+      const title = document.createElement('span');
+      title.textContent = `${parameter.label} (${parameter.type})`;
+      label.append(title);
+      const inputs: Array<HTMLInputElement | HTMLSelectElement> = [];
+      const values = Array.isArray(parameter.value) ? parameter.value : [parameter.value];
+      for (const value of values) {
+        let input: HTMLInputElement | HTMLSelectElement;
+        if (parameter.enum) {
+          const select = document.createElement('select');
+          for (const option of parameter.enum) select.add(new Option(option, option));
+          select.value = String(value);
+          input = select;
+        } else {
+          const element = document.createElement('input');
+          element.type = typeof value === 'boolean' ? 'checkbox' : typeof value === 'number' ? 'number' : 'text';
+          if (element.type === 'checkbox') element.checked = Boolean(value);
+          else element.value = String(value);
+          if (element.type === 'number') element.step = parameter.type === 'integer' ? '1' : 'any';
+          input = element;
+        }
+        input.setAttribute('aria-label', parameter.label + (values.length > 1 ? ` ${inputs.length + 1}` : ''));
+        input.dataset['parameterId'] = parameter.id;
+        inputs.push(input);
+        input.addEventListener('change', () => {
+          const parsed = inputs.map(item => item instanceof HTMLSelectElement ? item.value
+            : item.type === 'checkbox' ? item.checked : item.type === 'number' ? item.valueAsNumber : item.value);
+          const next = Array.isArray(parameter.value) ? parsed : parsed[0];
+          void this.#changeParameter(run, parameter.id, next);
+        });
+        label.append(input);
+      }
+      fields.append(label);
+    }
+    this.#parameters.append(fields);
+  }
+
+  async #changeParameter(run: ScriptRun, id: string, value: unknown): Promise<void> {
+    if (this.#parameterBusy || run !== this.#parameterRun || this.#state() !== 'idle') return;
+    this.#parameterBusy = true;
+    this.#showParameters();
+    try {
+      await run.setParameter(id, value);
+      const library = this.#library ?? await this.#options.library;
+      const xml = toXml(run, library, this.#options.filePrefix ? { filePrefix: this.#options.filePrefix } : {});
+      if (!run.viewerCommands) {
+        if (this.#parameterObject && this.#options.host) {
+          await this.#options.host.assignMaterial(this.#parameterObject, { xml });
+        } else {
+          await this.#options.onApply?.(xml);
+        }
+      }
+      this.#xml.value = toXml(run, library);
+      this.#parameterBusy = false;
+      this.#showParameters();
+    } catch (error) {
+      this.#parameterBusy = false;
+      this.#showParameters(this.#describe(error));
+    }
+  }
 
   #selectTab(tab: Tab): void {
     for (const button of this.element.querySelectorAll<HTMLButtonElement>('[role="tab"]')) {

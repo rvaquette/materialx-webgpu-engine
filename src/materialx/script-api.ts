@@ -901,12 +901,28 @@ export interface ScriptRun extends ScriptGraph {
   viewerCommands: number;
   /** Messages written with `log(...)`. */
   logs: string[];
+  /** Inputs explicitly declared by the script, in declaration order. */
+  parameters(): readonly ScriptExposedParameter[];
+  /** Apply one declared input without executing the script again. */
+  setParameter(id: string, value: unknown): Promise<void>;
+}
+
+export interface ScriptExposedParameter {
+  id: string;
+  label: string;
+  node: string;
+  input: string;
+  type: string;
+  value: ScriptValue;
+  enum?: readonly string[];
+  min?: number;
+  max?: number;
 }
 
 const SCRIPT_GLOBALS = new Set(['__mx', 'Math', 'scene', 'objects', 'render', 'assign', 'load', 'save', 'log', 'check', 'node', 'material',
   'stats', 'converge', 'capture', 'diagnostics', 'capabilities', 'timeline', 'time', 'setTime', 'transform', 'setTransform',
   'setVisibility', 'lights', 'setLight', 'setCamera', 'variants', 'setVariant', 'materialParameters', 'setMaterialParameters',
-  'environment', 'postprocess', 'aov', 'lightFilter', 'scatter']);
+  'environment', 'postprocess', 'aov', 'lightFilter', 'scatter', 'expose']);
 /** Globals that are also natural node names: assigning them shadows the function. */
 const SHADOWABLE_GLOBALS = new Set(['material', 'node', 'time', 'transform', 'capture']);
 // eslint-disable-next-line @typescript-eslint/no-empty-function
@@ -918,7 +934,8 @@ const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor as
  * the viewer through `options.host`.
  */
 export async function runScript(code: string, library: ScriptLibrary, options: RunScriptOptions = {}): Promise<ScriptRun> {
-  const graph: ScriptRun = { nodes: [], viewerCommands: 0, logs: [] };
+  const graph: ScriptRun = { nodes: [], viewerCommands: 0, logs: [],
+    parameters: () => exposedParameters(), setParameter: (id, value) => updateExposedParameter(id, value) };
   const { signal, hooks } = options;
   let currentLine = 0;
   let steps = 0;
@@ -956,6 +973,8 @@ export async function runScript(code: string, library: ScriptLibrary, options: R
     typeof value === 'object' && value !== null ? handles.get(value) : undefined;
   const pending = new Set<ScriptNode>();
   const used = new Set<string>();
+  const exposed: Array<{ node: ScriptNode; port: ScriptPortDef; label?: string }> = [];
+  const bindings = new Map<string, { root: ScriptNode; apply: (target: ScriptHost) => Promise<void> }>();
 
   const nameNode = (node: ScriptNode, name: string): void => {
     let unique = name;
@@ -1479,11 +1498,60 @@ export async function runScript(code: string, library: ScriptLibrary, options: R
     visit(root);
     return graph.nodes.filter(node => seen.has(node));
   };
+  const exposedParameters = (): ScriptExposedParameter[] => exposed.map(({ node, port, label }, index) => {
+    const assigned = node.inputs.get(port.name);
+    if (assigned && 'node' in assigned) throw new ScriptError(`${node.name}.${port.name} is connected and cannot be exposed.`);
+    const value = assigned?.value ?? port.default;
+    if (value === undefined) throw new ScriptError(`${node.name}.${port.name} has no literal value or default.`);
+    return {
+      id: String(index), label: label ?? `${node.name}.${port.name}`, node: node.name, input: port.name,
+      type: port.type, value: Array.isArray(value) ? [...value] : value,
+      ...(port.enum ? { enum: port.enum } : {}), ...(port.min !== undefined ? { min: port.min } : {}),
+      ...(port.max !== undefined ? { max: port.max } : {}),
+    };
+  });
+  const updateExposedParameter = async (id: string, value: unknown): Promise<void> => {
+    const index = Number(id);
+    if (!Number.isInteger(index) || String(index) !== id || !exposed[index]) throw new ScriptError(`Unknown exposed parameter: ${id}.`);
+    const entry = exposed[index]!;
+    const current = entry.node.inputs.get(entry.port.name);
+    if (current && 'node' in current) throw new ScriptError(`${entry.node.name}.${entry.port.name} is connected and cannot be edited.`);
+    const next = coerceValue(value, entry.port.type, `${entry.node.name}.${entry.port.name}`);
+    if (entry.port.enum && (typeof next !== 'string' || !entry.port.enum.includes(next))) {
+      throw new ScriptError(`${entry.node.name}.${entry.port.name} expects one of: ${entry.port.enum.join(', ')}.`);
+    }
+    if (scatterRoots.some(root => upstream(root).includes(entry.node))) {
+      throw new ScriptError(`${entry.node.name}.${entry.port.name}: editing scatter shaders is not supported yet.`);
+    }
+    entry.node.inputs.set(entry.port.name, { value: next });
+    try {
+      const target = options.dryRun ? undefined : options.host;
+      if (!target) return;
+      const paths = new Set(target.objects());
+      const actions = [...bindings.values()].filter(binding => upstream(binding.root).includes(entry.node));
+      let applied = actions.length;
+      for (const binding of actions) await binding.apply(target);
+      for (const object of liveObjects()) {
+        if (!object.material || typeof object.material === 'string') continue;
+        const source = sourceOf(object.material);
+        const path = pathOf(object);
+        if (!source || !upstream(source.node).includes(entry.node) || bindings.has(`material:${path}`)) continue;
+        if (!paths.has(path)) throw new ScriptError(`Object ${path} is no longer available for the exposed parameter.`);
+        await target.assignMaterial(path, materialDocument(object.material));
+        applied++;
+      }
+      if (!applied && graph.viewerCommands) throw new ScriptError(`${entry.node.name}.${entry.port.name} is not bound to an active shader.`);
+    } catch (error) {
+      if (current) entry.node.inputs.set(entry.port.name, current);
+      else entry.node.inputs.delete(entry.port.name);
+      throw error;
+    }
+  };
   const materialDocument = (material: unknown): { xml: string } | { url: string } => {
     if (typeof material === 'string') return { url: new URL(material, baseUrl).href };
     const source = sourceOf(material);
-    if (!source || (source.output.type !== 'surfaceshader' && source.output.type !== 'material')) {
-      throw new ScriptError('assign(object, material) expects a surface shader, a material node or a .mtlx path.');
+    if (!source || !['surfaceshader', 'volumeshader', 'material'].includes(source.output.type)) {
+      throw new ScriptError('assign(object, material) expects a surface shader, a volume shader, a material node or a .mtlx path.');
     }
     const nodes = upstream(source.node);
     for (const node of nodes) if (pending.has(node)) nameNode(node, node.def.category);
@@ -1521,6 +1589,7 @@ export async function runScript(code: string, library: ScriptLibrary, options: R
   }
   const stageObjects: ScriptObject[] = [];
   const stageInstancers: Array<{ name: string; prototype: ScriptObject; positions: number[]; orientations: number[]; scales: number[] }> = [];
+  const scatterRoots: ScriptNode[] = [];
   const objectHandles = new WeakMap<object, ScriptObject>();
   const objectReferences = new WeakMap<ScriptObject, object>();
   const objectNames = new Set<string>(['Looks']);
@@ -1752,6 +1821,7 @@ export async function runScript(code: string, library: ScriptLibrary, options: R
         }
       } else {
         await target.loadStage({ usda: built.usda, materials: built.materials });
+        for (const key of bindings.keys()) if (key.startsWith('material:')) bindings.delete(key);
       }
       synced = built;
     });
@@ -1763,6 +1833,8 @@ export async function runScript(code: string, library: ScriptLibrary, options: R
     stageInstancers.length = 0;
     stageDirty = false;
     synced = undefined;
+    scatterRoots.length = 0;
+    for (const key of bindings.keys()) if (key.startsWith('material:')) bindings.delete(key);
   };
   const checkMaterial = (value: unknown, label: string): unknown => {
     if (value === undefined || value === null) return undefined;
@@ -2057,25 +2129,61 @@ export async function runScript(code: string, library: ScriptLibrary, options: R
     return handleFor(material);
   };
   const viewer: Record<string, unknown> = {
+    expose: (value: unknown, name: unknown, label?: unknown): void => {
+      const node = nodeOf(value);
+      if (!node || typeof name !== 'string' || (label !== undefined && typeof label !== 'string')) {
+        throw new ScriptError('expose(node, input, label?) expects a node, an input name and an optional label.');
+      }
+      const port = inputDef(node, name);
+      if (!acceptsValue(port.type)) throw new ScriptError(`${node.name}.${port.name} cannot hold a literal value.`);
+      if (exposed.some(entry => entry.node === node && entry.port.name === port.name)) {
+        throw new ScriptError(`${node.name}.${port.name} is already exposed.`);
+      }
+      const input = node.inputs.get(port.name);
+      if (input && 'node' in input) throw new ScriptError(`${node.name}.${port.name} is connected and cannot be exposed.`);
+      if (!input && port.default === undefined) throw new ScriptError(`${node.name}.${port.name} has no literal value or default.`);
+      exposed.push({ node, port, ...(typeof label === 'string' ? { label } : {}) });
+    },
     environment: (shader: unknown): PromiseLike<void> => {
       const settings = environmentShaderSettings(shader);
-      return action(target => target.setEnvironmentShader(settings));
+      const root = terminalNode(shader, 'engine_environment_shader', 'environment(shader)');
+      return action(async target => {
+        await target.setEnvironmentShader(settings);
+        bindings.set('environment', { root, apply: t => t.setEnvironmentShader(environmentShaderSettings(shader)) });
+      });
     },
     postprocess: (shader: unknown): PromiseLike<void> => {
       const settings = imageShaderSettings(shader);
-      return action(target => target.setImageShader(settings));
+      const root = terminalNode(shader, 'engine_image_shader', 'postprocess(shader)');
+      return action(async target => {
+        await target.setImageShader(settings);
+        bindings.set('postprocess', { root, apply: t => t.setImageShader(imageShaderSettings(shader)) });
+      });
     },
     aov: (shader: unknown): PromiseLike<void> => {
       const view = aovView(shader);
-      return action(target => target.setPathTracingView(view));
+      const root = terminalNode(shader, 'engine_aov_shader', 'aov(shader)');
+      return action(async target => {
+        await target.setPathTracingView(view);
+        bindings.set('aov', { root, apply: t => t.setPathTracingView(aovView(shader)) });
+      });
     },
     lightFilter: (shader: unknown): PromiseLike<void> => {
       const { lightPath, settings } = lightFilterShader(shader);
-      return action(target => target.setLight(lightPath, { filter: settings }));
+      const root = terminalNode(shader, 'engine_light_filter_shader', 'lightFilter(shader)');
+      return action(async target => {
+        await target.setLight(lightPath, { filter: settings });
+        bindings.set(`filter:${lightPath}`, { root, apply: t => {
+          const next = lightFilterShader(shader);
+          if (next.lightPath !== lightPath) throw new ScriptError('Changing a light filter path is not supported.');
+          return t.setLight(lightPath, { filter: next.settings });
+        } });
+      });
     },
     scatter: (shader: unknown): number => {
       const settings = scatterShaderSettings(shader);
       const count = scatterScriptObjects(settings);
+      scatterRoots.push(terminalNode(shader, 'engine_scatter_shader', 'scatter(shader)'));
       command();
       return count;
     },
@@ -2087,6 +2195,7 @@ export async function runScript(code: string, library: ScriptLibrary, options: R
       scriptedTime = undefined;
       await queue;
       await host?.loadScene(entry);
+      for (const key of bindings.keys()) if (key.startsWith('material:')) bindings.delete(key);
     },
     objects: (): string[] => {
       const live = liveObjects();
@@ -2099,6 +2208,11 @@ export async function runScript(code: string, library: ScriptLibrary, options: R
       command();
       await queue;
       await host?.assignMaterial(object, document);
+      const source = sourceOf(material);
+      if (source && host) bindings.set(`material:${object}`, {
+        root: source.node, apply: target => target.assignMaterial(object, materialDocument(material)),
+      });
+      else bindings.delete(`material:${object}`);
     },
     load: async (path: unknown): Promise<object> => {
       if (typeof path !== 'string' || !path) throw new ScriptError('load(path) expects a .mtlx path.');
@@ -2360,6 +2474,7 @@ export async function runScript(code: string, library: ScriptLibrary, options: R
     throw new ScriptError(error instanceof Error ? error.message : String(error), errorLine(error) ?? (currentLine || undefined));
   }
   for (const node of [...pending]) nameNode(node, node.def.category);
+  exposedParameters();
   return graph;
 }
 

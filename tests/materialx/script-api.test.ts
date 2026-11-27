@@ -200,6 +200,73 @@ describe('material script library', () => {
 });
 
 describe('runScript', () => {
+  it('updates explicitly exposed surface and image inputs without running the script again', async () => {
+    const materials: string[] = [];
+    const exposures: number[] = [];
+    const logs: string[] = [];
+    const host: ScriptHost = {
+      ...idleHost(),
+      objects: () => ['/World/ball'],
+      assignMaterial: async (_path, document) => { if ('xml' in document) materials.push(document.xml); },
+      setImageShader: async settings => { exposures.push(settings.exposure); },
+      log: message => logs.push(message),
+    };
+    const run = await runScript(`
+      surface = new StandardSurface();
+      surface.base_color = [0.2, 0.3, 0.4];
+      surface.base = 0.7;
+      expose(surface, "base_color", "Couleur");
+      ball = new Sphere({ material: surface });
+      image = new ImageShader();
+      image.exposure = 1;
+      expose(image, "exposure");
+      await postprocess(image.out);
+      log("once");
+    `, LIBRARY, { host });
+    expect(run.parameters().map(parameter => [parameter.label, parameter.type, parameter.value])).toEqual([
+      ['Couleur', 'color3', [0.2, 0.3, 0.4]], ['image.exposure', 'float', 1],
+    ]);
+    await run.setParameter('0', [0.8, 0.1, 0.2]);
+    await run.setParameter('1', 2);
+    expect(materials).toHaveLength(1);
+    expect(materials[0]).toContain('value="0.8, 0.1, 0.2"');
+    expect(exposures).toEqual([1, 2]);
+    expect(logs).toEqual(['once']);
+    expect(run.parameters()[0]!.value).toEqual([0.8, 0.1, 0.2]);
+    await expect(run.setParameter('0', [1, 2])).rejects.toThrow(/expects color3/);
+    expect(run.parameters()[0]!.value).toEqual([0.8, 0.1, 0.2]);
+    await expect(run.setParameter('9', 1)).rejects.toThrow(/Unknown exposed parameter/);
+  });
+
+  it('rejects duplicate, connected and subsequently connected exposed inputs', async () => {
+    await expect(runScript('s = new StandardSurface(); expose(s, "base"); expose(s, "base");', LIBRARY))
+      .rejects.toThrow(/already exposed/);
+    await expect(runScript('n = new Mix(); s = new StandardSurface(); s.base_color = n.out; expose(s, "base_color");', LIBRARY))
+      .rejects.toThrow(/connected/);
+    await expect(runScript('n = new Mix(); s = new StandardSurface(); expose(s, "base_color"); s.base_color = n.out;', LIBRARY))
+      .rejects.toThrow(/connected/);
+  });
+
+  it('updates only the currently bound shader and rejects invalid or unbound values', async () => {
+    const calls: string[] = [];
+    const host: ScriptHost = {
+      ...idleHost(),
+      setEnvironmentShader: async settings => { calls.push(`${settings.model}:${settings.sunIntensity}`); },
+    };
+    const run = await runScript(`
+      oldSky = new EnvironmentShader(); expose(oldSky, "sunIntensity");
+      await environment(oldSky.out);
+      sky = new EnvironmentShader(); expose(sky, "model"); expose(sky, "sunIntensity");
+      await environment(sky.out);
+    `, LIBRARY, { host });
+    await expect(run.setParameter('0', 2)).rejects.toThrow(/not bound/);
+    await expect(run.setParameter('1', 'invalid')).rejects.toThrow(/expects one of/);
+    await run.setParameter('1', 'studio');
+    await run.setParameter('2', 4);
+    expect(calls).toEqual(['sky:8', 'sky:8', 'studio:8', 'studio:4']);
+    expect(run.parameters()[0]!.value).toBe(8);
+  });
+
   it('names nodes after variables and records values and connections', async () => {
     const graph = await runScript(`
       img = new Image();
@@ -1069,7 +1136,7 @@ samples = await render(16);`;
     await expect(runScript('render.backend = "vulkan";', EXPRESSIONS)).rejects.toThrow(/render.backend expects "raster", "pathtracing", "disney"/);
     await expect(runScript('render.speed = 1;', EXPRESSIONS)).rejects.toThrow(/Unknown render setting "speed"/);
     await expect(runScript('await render(0);', EXPRESSIONS)).rejects.toThrow(/positive integer/);
-    await expect(runScript('await assign("/x", 3);', EXPRESSIONS)).rejects.toThrow(/surface shader, a material node or a .mtlx path/);
+    await expect(runScript('await assign("/x", 3);', EXPRESSIONS)).rejects.toThrow(/surface shader, a volume shader, a material node or a .mtlx path/);
     await expect(runScript('scene = 1;', EXPRESSIONS)).rejects.toThrow(/reserved/);
   });
 
