@@ -75,7 +75,7 @@ la [vidéo raster du ruban](images/p18/p18-animated-ribbon.mp4), sa
 [vidéo avec flou](images/p18/p18-animated-ribbon-blur.mp4) et son
 [USD](images/p18/p18-animated-ribbon.usda).
 [p18-imported-lattice.js](../examples/scripts/p18-imported-lattice.js) produit
-une [vidéo raster](images/p18/p18-imported-lattice.mp4), une
+une [vidéo raster](images/p18/p18-imported-f lattice.mp4), une
 [vidéo path tracing avec flou](images/p18/p18-imported-lattice-blur.mp4) et un
 [USD](images/p18/p18-imported-lattice.usda) du maillage importé.
 [p18-materialx-field.js](../examples/scripts/p18-materialx-field.js) produit
@@ -86,55 +86,19 @@ produit une [vidéo](images/p18/p18-nanovdb-field.mp4) et un
 [USD](images/p18/p18-nanovdb-field.usda) d'un champ de vitesses NanoVDB.
 Le support d'autres formats et des attributs USD complexes et le calcul GPU
 restent à réaliser.
+Pour les normales USD animées par sommet, la mise à jour réutilise la
+topologie préparée ; les normales face-varying restent traitées par une
+préparation complète afin de préserver les coutures.
 
-Sur la machine de développement, `node scripts/bench-p18.mjs` mesure 24 mises à
-jour des USD exportés à 512 × 512 (`setTime`, `render(1)`, puis attente de la
-file GPU déjà soumise). Les temps au 95e percentile observés sont 35,3 ms pour
-le drapeau, 33,5 ms pour le ruban et 20,2 ms pour le treillis importé. Cette
-mesure courte porte sur des géométries précuites, dépend du matériel et de la
-charge, et ne garantit pas que l'image suivant le rappel ait déjà été soumise :
-elle ne démontre ni l'évaluation GPU des piles ni le temps réel.
+Sur un adaptateur NVIDIA Turing, `node scripts/bench-p18.mjs` mesure 24 mises à
+jour des USD exportés à 512 × 512 : `setTime`, rendu raster hors écran et attente
+de l'achèvement GPU. Il vérifie aussi que les images aux temps 0 et 12 diffèrent.
+Les 95e percentiles observés sont 15,1 ms pour le drapeau, 9,0 ms pour le ruban
+et 11,2 ms pour le treillis importé. Cette mesure courte, sans présentation à
+l'écran, porte sur des géométries précuites et dépend du matériel et de la
+charge ; elle ne démontre ni l'évaluation GPU des piles ni le temps réel.
 
 ![Ruban tordu et sphère déformée par treillis](images/p18/p18-deformers.png)
-
-## Priorité 19 : rendu distribué multi-serveur et multi-GPU
-
-WebGPU n'expose qu'un adaptateur par page : le multi-GPU passe par un processus
-par GPU. Le serveur de rendu distant ([REMOTE_RENDER.md](REMOTE_RENDER.md)) lance
-déjà Chrome headless sur un GPU choisi ; un coordinateur répartit le travail
-entre plusieurs de ces nœuds, sur une ou plusieurs machines :
-
-- **coordinateur** : liste de nœuds (URL, jeton, GPU), découverte de leurs
-  capacités (`capabilities()`), mesure de leur débit, retrait d'un nœud
-  défaillant sans perdre le rendu ;
-- **path tracing par échantillons** : chaque nœud accumule la même image avec
-  une graine différente ; le coordinateur somme les accumulations pondérées par
-  leur nombre d'échantillons. Robuste à des GPU de vitesses différentes (une
-  T500 et un iGPU contribuent chacun à leur rythme) et compatible avec la
-  convergence et l'arrêt sur cible de bruit (variance combinée) ;
-- **répartition par tuiles** en option pour les très hautes résolutions
-  (mémoire par nœud), avec rééquilibrage des tuiles selon le débit mesuré ;
-- **animations par images** : chaque nœud rend des images entières de la
-  timeline, le coordinateur assemble la séquence ;
-- **transfert en flottant** : accumulations HDR (somme des radiances, moments
-  pour la variance, nombre d'échantillons) au lieu des images WebP actuelles,
-  compressées ; débruitage et tonemapping faits une seule fois sur l'image
-  combinée ;
-- **même scène partout** : le script et ses ressources sont envoyés à chaque
-  nœud ; empreinte de scène vérifiée pour refuser un nœud qui n'a pas les mêmes
-  assets ou la même version du moteur ;
-- **multi-GPU local** : plusieurs nœuds sur une même machine, chacun forcé sur
-  un adaptateur (`--gpu high-performance|low-power`) ;
-- viewer : progression par nœud (échantillons, débit, état), image combinée
-  affichée au fil de l'eau ; script : `render.nodes = ["https://…", …]` ou
-  configuration du coordinateur ;
-- banc de mesure : accélération obtenue avec 1, 2 et 4 nœuds, et surcoût de
-  transfert.
-
-**Critère d'aboutissement :** une image path tracée converge plus vite avec deux
-nœuds qu'avec un seul (gain mesuré, hétérogénéité des GPU comprise), sans biais
-par rapport au rendu d'un nœud unique (`--bias-check`), et une séquence animée
-est répartie image par image.
 
 ## Priorité 20 : systèmes de particules animés
 
@@ -194,45 +158,6 @@ raster et en path tracing, sans explosion du nombre d'objets de scène.
 **Critère d'aboutissement :** enregistrer deux vues, passer de l'une à l'autre,
 créer et relire un mouvement de caméra, puis annuler/rétablir et sauvegarder/
 rouvrir le projet sans dérive de cadrage entre les backends.
-
-## Priorité 27 : déploiement Azure du rendu distribué
-
-Déployer le rendu multi-serveur de la priorité 19 sur Azure, en distinguant
-l'aperçu interactif des rendus hors ligne :
-
-- **validation GPU** : tester Chrome headless et WebGPU sur une VM GPU Azure,
-  vérifier l'adaptateur effectivement utilisé, les pilotes, la mémoire et le
-  rendu ; comparer Windows et Linux avant de choisir une image de worker ;
-- **prototype interactif** : démarrer avec une puis deux VM GPU Spot et un
-  coordinateur sans GPU, hébergé indépendamment des workers ; mesurer le temps
-  de démarrage, la progression et le gain par rapport à un seul nœud ;
-- **montée en charge** : étudier Azure Virtual Machine Scale Sets pour gérer
-  les workers interactifs et leur disponibilité ; ajouter une capacité à la
-  demande si une progression plus prévisible est nécessaire, sous réserve de
-  disponibilité et de quota ;
-- **rendu hors ligne** : évaluer Azure Batch avec un pool de VM GPU Spot pour
-  les images d'animation et les blocs de rendu indépendants ; prévoir si
-  nécessaire un socle de VM dédiées et le redimensionnement du pool ;
-- **reprise et stockage** : conserver scènes, ressources, résultats et
-  checkpoints dans un stockage durable ; reprendre les tâches interrompues
-  sans compter deux fois leurs contributions. Les VM Spot peuvent être
-  évincées ou indisponibles et le checkpoint reste à la charge de l'application ;
-- **sécurité et exploitation** : authentifier les utilisateurs, isoler les
-  workers et leurs accès réseau, limiter les ressources des scripts, protéger
-  les secrets, superviser les jobs et prévoir l'arrêt des ressources inutilisées ;
-- **coûts et capacité** : comparer le coût par image terminée et les délais
-  avec Spot et à la demande, en incluant démarrage, compilation, stockage et
-  travail perdu ; vérifier les quotas GPU et la capacité par région et SKU.
-
-Le coordinateur, les accumulations HDR, la fusion et la distribution du rendu
-relèvent de la priorité 19 ; ce chantier valide leur déploiement et leur
-exploitation sur Azure, sans supposer que Batch remplace le coordinateur.
-
-**Critère d'aboutissement :** un rendu interactif progresse sur deux workers
-GPU Azure et une courte séquence est distribuée sur Azure Batch ; une
-interruption Spot est reprise sans résultat perdu ni contribution comptée deux
-fois. Les mesures documentent le gain, le coût par image, les délais de
-démarrage et la fidélité par rapport au rendu sur un seul nœud.
 
 ## Priorité 28 : écarts avec l'implémentation officielle de MaterialX
 

@@ -2,13 +2,13 @@
 // computed from the composed (time-sampled) stage and compared with what is on the
 // GPU, so only instances, lights, cameras and meshes that actually change are
 // updated. Point deformation keeps the prepared topology: positions come from the
-// sampled USD points through each vertex's source point, and normals are
-// recomputed as area-weighted point normals. Meshes whose topology attributes are
-// time-sampled (or that were subdivided) are prepared again at the time code:
+// sampled USD points through each vertex's source point; sampled vertex normals
+// follow the same mapping, otherwise normals are recomputed. Meshes whose topology
+// attributes are time-sampled (or that were subdivided) are prepared again:
 // an unchanged triangulation becomes a deformation, a new one is reported in
 // `retopologized` so the caller rebuilds the affected render resources.
 import type { DiagnosticSink } from '../core/diagnostics.ts';
-import { computeTangents, prepareMesh, type PrepareMeshOptions, type PreparedMesh, type RawMesh } from '../geometry/prepare.ts';
+import { computeTangents, prepareMesh, type PrepareMeshOptions, type PreparedMesh, type Primvar, type RawMesh } from '../geometry/prepare.ts';
 import { evaluateSceneAt } from '../scene/time.ts';
 import { computeWorldTransforms, IDENTITY4, multiply4, type Mat4 } from '../scene/transforms.ts';
 import { pointInstancerMatrices } from '../scene/instances.ts';
@@ -66,27 +66,44 @@ export function isInvisible(scene: SceneAsset, path: string): boolean {
 }
 
 /** Deformed vertex streams, or undefined when the topology cannot be followed. */
-export function deformGeometry(geometry: GeometryResource, points: readonly number[]): DeformedGeometry | undefined {
+export function deformGeometry(geometry: GeometryResource, points: readonly number[], sampledNormals?: Primvar): DeformedGeometry | undefined {
   const source = geometry.sourcePoints;
   if (!source || geometry.subdivision.applied || source.length !== geometry.vertexCount) return undefined;
   const pointCount = Math.floor(points.length / 3);
   if (source.some(point => point >= pointCount)) return undefined;
+  if (sampledNormals && (sampledNormals.elementSize !== 3
+      || !['vertex', 'varying'].includes(sampledNormals.interpolation)
+      || source.some(point => {
+        const index = sampledNormals.indices ? sampledNormals.indices[point] : point;
+        return index === undefined || !Number.isInteger(index) || index < 0 || index * 3 + 2 >= sampledNormals.values.length;
+      }))) return undefined;
   const positions = new Float32Array(geometry.vertexCount * 3);
-  for (let v = 0; v < geometry.vertexCount; v++) positions.set(points.slice(source[v]! * 3, source[v]! * 3 + 3), v * 3);
-  const accumulated = new Float64Array(pointCount * 3);
-  const { indices } = geometry;
-  for (let t = 0; t + 2 < indices.length; t += 3) {
-    const [a, b, c] = [indices[t]!, indices[t + 1]!, indices[t + 2]!];
-    const e1 = [0, 1, 2].map(k => positions[b * 3 + k]! - positions[a * 3 + k]!);
-    const e2 = [0, 1, 2].map(k => positions[c * 3 + k]! - positions[a * 3 + k]!);
-    const n = [e1[1]! * e2[2]! - e1[2]! * e2[1]!, e1[2]! * e2[0]! - e1[0]! * e2[2]!, e1[0]! * e2[1]! - e1[1]! * e2[0]!];
-    for (const vertex of [a, b, c]) for (let k = 0; k < 3; k++) accumulated[source[vertex]! * 3 + k]! += n[k]!;
+  for (let v = 0; v < geometry.vertexCount; v++) {
+    const point = source[v]! * 3;
+    for (let component = 0; component < 3; component++) positions[v * 3 + component] = points[point + component]!;
   }
   const normals = new Float32Array(geometry.vertexCount * 3);
-  for (let v = 0; v < geometry.vertexCount; v++) {
-    const p = source[v]! * 3;
-    const length = Math.hypot(accumulated[p]!, accumulated[p + 1]!, accumulated[p + 2]!);
-    normals.set(length > 0 ? [accumulated[p]! / length, accumulated[p + 1]! / length, accumulated[p + 2]! / length] : [0, 0, 1], v * 3);
+  if (sampledNormals) {
+    for (let v = 0; v < geometry.vertexCount; v++) {
+      const point = source[v]!;
+      const index = sampledNormals.indices ? sampledNormals.indices[point]! : point;
+      for (let component = 0; component < 3; component++) normals[v * 3 + component] = sampledNormals.values[index * 3 + component]!;
+    }
+  } else {
+    const accumulated = new Float64Array(pointCount * 3);
+    const { indices } = geometry;
+    for (let t = 0; t + 2 < indices.length; t += 3) {
+      const [a, b, c] = [indices[t]!, indices[t + 1]!, indices[t + 2]!];
+      const e1 = [0, 1, 2].map(k => positions[b * 3 + k]! - positions[a * 3 + k]!);
+      const e2 = [0, 1, 2].map(k => positions[c * 3 + k]! - positions[a * 3 + k]!);
+      const n = [e1[1]! * e2[2]! - e1[2]! * e2[1]!, e1[2]! * e2[0]! - e1[0]! * e2[2]!, e1[0]! * e2[1]! - e1[1]! * e2[0]!];
+      for (const vertex of [a, b, c]) for (let k = 0; k < 3; k++) accumulated[source[vertex]! * 3 + k]! += n[k]!;
+    }
+    for (let v = 0; v < geometry.vertexCount; v++) {
+      const p = source[v]! * 3;
+      const length = Math.hypot(accumulated[p]!, accumulated[p + 1]!, accumulated[p + 2]!);
+      normals.set(length > 0 ? [accumulated[p]! / length, accumulated[p + 1]! / length, accumulated[p + 2]! / length] : [0, 0, 1], v * 3);
+    }
   }
   const uv = geometry.streams.find(stream => stream.name === 'uv');
   const tangent = geometry.streams.find(stream => stream.name === 'tangent');
@@ -123,12 +140,16 @@ export function animateScene(
   for (const [id, geometry] of resources.geometries) {
     const prim = scene.prims.get(geometry.primPath);
     const pointsSampled = (prim?.attributes.get('points')?.timeSamples?.length ?? 0) > 0;
-    const topologySampled = TOPOLOGY_ATTRIBUTES.some(name => (prim?.attributes.get(name)?.timeSamples?.length ?? 0) > 0);
-    if (!pointsSampled && !topologySampled) continue;
+    const topologySampled = TOPOLOGY_ATTRIBUTES.some(name => name !== 'normals'
+      && (prim?.attributes.get(name)?.timeSamples?.length ?? 0) > 0);
+    const normalsSampled = (prim?.attributes.get('normals')?.timeSamples?.length ?? 0) > 0;
+    if (!pointsSampled && !topologySampled && !normalsSampled) continue;
     // Swept curves and points have no point-to-vertex mapping: always prepared again.
     if (!topologySampled && (prim?.typeName ?? 'Mesh') === 'Mesh') {
       const value = at.prims.get(geometry.primPath)?.attributes.get('points')?.value;
-      const streams = Array.isArray(value) && value.every(v => typeof v === 'number') ? deformGeometry(geometry, value as number[]) : undefined;
+      const sampledNormals = normalsSampled ? options.meshFor?.(at, geometry.primPath)?.normals : undefined;
+      const streams = Array.isArray(value) && value.every(v => typeof v === 'number') && (!normalsSampled || sampledNormals)
+        ? deformGeometry(geometry, value as number[], sampledNormals) : undefined;
       if (streams) {
         deformed.set(id, streams);
         continue;

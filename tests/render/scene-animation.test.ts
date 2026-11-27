@@ -59,6 +59,64 @@ describe('scene animation', () => {
     expect(deformGeometry(geometry, [0, 0, 0])).toBeUndefined();
   });
 
+  it('maps indexed animated vertex normals through the source points', async () => {
+    const { geometry } = await setup();
+    const points = [0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0];
+    const normals = {
+      name: 'normals', interpolation: 'vertex' as const, elementSize: 3,
+      values: [0, 0, 1, 0, 1, 0], indices: [1, 0, 1, 0],
+    };
+    const result = deformGeometry(geometry, points, normals)!;
+    for (let vertex = 0; vertex < geometry.vertexCount; vertex++) {
+      const index = normals.indices[geometry.sourcePoints![vertex]!]!;
+      expect([...result.normals.slice(vertex * 3, vertex * 3 + 3)]).toEqual(normals.values.slice(index * 3, index * 3 + 3));
+    }
+    expect(deformGeometry(geometry, points, { ...normals, indices: [9] })).toBeUndefined();
+    expect(deformGeometry(geometry, points, { ...normals, interpolation: 'faceVarying' })).toBeUndefined();
+  });
+
+  it('updates normals even when only normals are time-sampled', async () => {
+    const scene = await importUsdStage('normals.usda', { reader: { read: async () => `#usda 1.0
+def Mesh "Quad" {
+  uniform token subdivisionScheme = "none"
+  int[] faceVertexCounts = [4]
+  int[] faceVertexIndices = [0, 1, 2, 3]
+  point3f[] points = [(0, 0, 0), (1, 0, 0), (1, 1, 0), (0, 1, 0)]
+  normal3f[] normals = [(0, 0, 1), (0, 0, 1), (0, 0, 1), (0, 0, 1)] (interpolation = "vertex")
+  normal3f[] normals.timeSamples = {
+    0: [(0, 0, 1), (0, 0, 1), (0, 0, 1), (0, 0, 1)],
+    10: [(0, 1, 0), (0, 1, 0), (0, 1, 0), (0, 1, 0)],
+  }
+}` } });
+    const meshFor = (at: typeof scene, path: string) => meshSourceFromScene(at).meshFor(path);
+    const geometry = buildGeometry('/Quad', '/Quad', prepareMesh(meshFor(evaluateSceneAt(scene, 0), '/Quad')!));
+    const resources = { geometries: new Map([['/Quad', geometry]]), instances: [] } as unknown as SceneResources;
+    const result = animateScene(scene, 10, resources, { meshFor }).deformed.get('/Quad')!;
+    expect([...result.normals.slice(0, 3)]).toEqual([0, 1, 0]);
+    expect(result.positions).toEqual(geometry.streams.find(stream => stream.name === 'position')!.data);
+  });
+
+  it('reprepares sampled face-varying normals when they split vertices', async () => {
+    const scene = await importUsdStage('seams.usda', { reader: { read: async () => `#usda 1.0
+def Mesh "Quad" {
+  uniform token subdivisionScheme = "none"
+  int[] faceVertexCounts = [3, 3]
+  int[] faceVertexIndices = [0, 1, 2, 0, 2, 3]
+  point3f[] points = [(0, 0, 0), (1, 0, 0), (1, 1, 0), (0, 1, 0)]
+  normal3f[] normals = [(0, 0, 1), (0, 0, 1), (0, 0, 1), (0, 0, 1), (0, 0, 1), (0, 0, 1)] (interpolation = "faceVarying")
+  normal3f[] normals.timeSamples = {
+    0: [(0, 0, 1), (0, 0, 1), (0, 0, 1), (0, 0, 1), (0, 0, 1), (0, 0, 1)],
+    10: [(0, 0, 1), (0, 0, 1), (0, 0, 1), (0, 1, 0), (0, 1, 0), (0, 1, 0)],
+  }
+}` } });
+    const meshFor = (at: typeof scene, path: string) => meshSourceFromScene(at).meshFor(path);
+    const geometry = buildGeometry('/Quad', '/Quad', prepareMesh(meshFor(evaluateSceneAt(scene, 0), '/Quad')!));
+    const resources = { geometries: new Map([['/Quad', geometry]]), instances: [] } as unknown as SceneResources;
+    const result = animateScene(scene, 10, resources, { meshFor });
+    expect(geometry.vertexCount).toBe(4);
+    expect(result.retopologized.get('/Quad')!.positions.length / 3).toBe(6);
+  });
+
   it('updates tangents for deformed meshes with and without sampled normals', async () => {
     for (const sampledNormals of [false, true]) {
       const source = `#usda 1.0
