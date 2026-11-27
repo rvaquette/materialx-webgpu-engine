@@ -725,7 +725,10 @@ function aabbHit(scene: PathTraceScene, node: number, ray: Ray, invDir: V3, tMax
   return true;
 }
 
-function traverse(scene: PathTraceScene, ray: Ray, tMax: number, anyHit: boolean): TriHit | null {
+function traverse(
+  scene: PathTraceScene, ray: Ray, tMax: number, anyHit: boolean,
+  filter?: { materialIndex: number; range?: { firstTriangle: number; triangleCount: number } },
+): TriHit | null {
   if (scene.nodeCount === 0) return null;
   const invDir: V3 = [
     1 / (ray.direction[0] || 1e-20),
@@ -746,6 +749,8 @@ function traverse(scene: PathTraceScene, ray: Ray, tMax: number, anyHit: boolean
       const start = scene.nodes[b + 8]!;
       for (let i = 0; i < count; i++) {
         const tri = order[start + i]!;
+        if (filter && (scene.triangles[tri * PT_TRIANGLE_FLOATS + 18] !== filter.materialIndex
+          || (filter.range && (tri < filter.range.firstTriangle || tri >= filter.range.firstTriangle + filter.range.triangleCount)))) continue;
         const hit = triIntersect(scene, tri, ray);
         if (hit && hit.t < closest) {
           if (anyHit) return { t: hit.t, triangle: tri, u: hit.u, v: hit.v };
@@ -1053,6 +1058,11 @@ export function createSceneSampler(scene: PathTraceScene): SceneSampler {
       const medium = interiorMediumFor(surface as PtHit);
       const subsurface = closureFor(surface).lobes.find(lobe => lobe.kind === 'subsurface');
       const field = fieldFor(surface);
+      const boundary = isVolumeBoundary(scene.materials, surface.materialIndex);
+      const domainId = boundary && scene.transformRanges
+        ? scene.transformRanges.findIndex(range => hit.triangle >= range.firstTriangle && hit.triangle < range.firstTriangle + range.triangleCount)
+        : surface.materialIndex;
+      if (boundary && domainId < 0) throw new Error('Volume boundary has no instance range.');
       return {
         ...surface,
         ...(medium ? { interiorMedium: medium } : {}),
@@ -1065,7 +1075,7 @@ export function createSceneSampler(scene: PathTraceScene): SceneSampler {
         ...(medium && subsurface?.subsurfaceRadius?.some(value => value > 0)
           && (subsurface.subsurfaceTransport ?? 1) < 2 ? { subsurfaceInterior: true } : {}),
         ...(field ? { interiorField: field } : {}),
-        ...(isVolumeBoundary(scene.materials, surface.materialIndex) ? { volumeBoundary: true } : {}),
+        ...(boundary ? { volumeBoundary: true, volumeBoundaryId: domainId } : {}),
       };
     },
     sampleBsdf(hit: SurfaceHit, wo: Vec3, rng: Rng): BsdfSample | null {
@@ -1108,49 +1118,41 @@ export function createSceneSampler(scene: PathTraceScene): SceneSampler {
     },
   };
 
-  const insideVolume = (index: number, point: Vec3): boolean => {
+  const volumeDomains = scene.transformRanges
+    ? scene.transformRanges.map((range, id) => ({ id, materialIndex: range.materialIndex, range }))
+      .filter(domain => scene.materials[domain.materialIndex * PT_MATERIAL_FLOATS + 29])
+    : Array.from({ length: scene.materialCount }, (_, materialIndex) => ({ id: materialIndex, materialIndex }))
+      .filter(domain => scene.materials[domain.materialIndex * PT_MATERIAL_FLOATS + 29]);
+  const volumeContainment = (domain: { materialIndex: number; range?: { firstTriangle: number; triangleCount: number } }, point: Vec3): number => {
     const direction: Vec3 = normalize3([0.739, 0.521, 0.427]);
     let origin = point;
+    let count = 0;
     for (let crossing = 0; crossing <= scene.triangleCount; crossing++) {
-      const hit = traverse(scene, { origin, direction }, Infinity, false);
-      if (!hit) return false;
-      const surface = hitSurface(scene, hit, { origin, direction });
-      if (surface.materialIndex === index) {
-        const base = hit.triangle * PT_TRIANGLE_FLOATS;
-        const vertices = scene.triangles.subarray(base, base + 9);
-        const normal = cross3(sub3(readVec3(vertices, 1), readVec3(vertices, 0)), sub3(readVec3(vertices, 2), readVec3(vertices, 0)));
-        return dot3(direction, normal) > 0;
-      }
+      // The point is already off any surface: a ray epsilon here would miss a face just ahead of it.
+      const hit = traverse(scene, { origin, direction, minDistance: 0 }, Infinity, false, domain);
+      if (!hit) return count;
+      const base = hit.triangle * PT_TRIANGLE_FLOATS;
+      const vertices = scene.triangles.subarray(base, base + 9);
+      const normal = cross3(sub3(readVec3(vertices, 1), readVec3(vertices, 0)), sub3(readVec3(vertices, 2), readVec3(vertices, 0)));
+      count += dot3(direction, normal) > 0 ? 1 : -1;
       origin = add3(origin, scale3(direction, hit.t + RAY_EPS));
     }
     throw new Error('Volume containment traversal exceeded the scene boundary count.');
   };
   const shadowRng = createPcg32(0);
+  sampler.initialVolumeFields = origin => volumeDomains.flatMap(domain =>
+    isVolumeBoundary(scene.materials, domain.materialIndex) && volumeContainment(domain, origin) > 0
+      ? [{ id: domain.id, field: fieldFor({ materialIndex: domain.materialIndex })! }] : []);
   sampler.transmittance = (from, direction, distance, rng = shadowRng) => {
     let origin = add3(from, scale3(direction, RAY_EPS));
     let remaining = Number.isFinite(distance) ? distance - 2 * RAY_EPS : Infinity;
-    let active: number | undefined;
-    for (let index = 0; index < scene.materialCount; index++) {
-      if (scene.materials[index * PT_MATERIAL_FLOATS + 29] && insideVolume(index, origin)) { active = index; break; }
-    }
     let tr: V3 = [1, 1, 1];
     for (let crossing = 0; crossing <= scene.triangleCount; crossing++) {
-      if (remaining <= 0) return tr;
+      if (remaining <= 0) break;
       const hit = traverse(scene, { origin, direction }, remaining, false);
-      const length = hit?.t ?? remaining;
-      if (active !== undefined) {
-        const field = fieldFor({ materialIndex: active })!;
-        const attenuation = volumeTransmittance(field, origin, direction, length, rng);
-        tr = [tr[0] * attenuation[0], tr[1] * attenuation[1], tr[2] * attenuation[2]];
-      }
-      if (!hit) return tr;
+      if (!hit) break;
       const surface = hitSurface(scene, hit, { origin, direction });
-      if (isVolumeBoundary(scene.materials, surface.materialIndex)) {
-        const base = hit.triangle * PT_TRIANGLE_FLOATS;
-        const vertices = scene.triangles.subarray(base, base + 9);
-        const normal = cross3(sub3(readVec3(vertices, 1), readVec3(vertices, 0)), sub3(readVec3(vertices, 2), readVec3(vertices, 0)));
-        active = dot3(direction, normal) < 0 ? surface.materialIndex : undefined;
-      } else {
+      if (!isVolumeBoundary(scene.materials, surface.materialIndex)) {
         const coverage = 1 - closureFor(surface).opacity;
         tr = scale3(tr, coverage);
         if (coverage <= 0) return [0, 0, 0];
@@ -1158,14 +1160,51 @@ export function createSceneSampler(scene: PathTraceScene): SceneSampler {
       const step = hit.t + RAY_EPS;
       origin = add3(origin, scale3(direction, step));
       remaining -= step;
+      if (crossing === scene.triangleCount) throw new Error('Volume transmittance traversal exceeded the scene boundary count.');
     }
-    throw new Error('Volume transmittance traversal exceeded the scene boundary count.');
+    for (const domain of volumeDomains) {
+      origin = add3(from, scale3(direction, RAY_EPS));
+      remaining = Number.isFinite(distance) ? distance - 2 * RAY_EPS : Infinity;
+      let count = volumeContainment(domain, origin);
+      const field = fieldFor({ materialIndex: domain.materialIndex })!;
+      if (!isVolumeBoundary(scene.materials, domain.materialIndex)) {
+        if (count > 0) {
+          const hit = traverse(scene, { origin, direction, minDistance: 0 }, remaining, false, domain);
+          for (let instance = 0; instance < count; instance++) {
+            const attenuation = volumeTransmittance(field, origin, direction, hit?.t ?? remaining, rng);
+            tr = [tr[0] * attenuation[0], tr[1] * attenuation[1], tr[2] * attenuation[2]];
+          }
+        }
+        continue;
+      }
+      for (let crossing = 0; crossing <= scene.triangleCount && remaining > 0; crossing++) {
+        const hit = traverse(scene, { origin, direction, minDistance: 0 }, remaining, false, domain);
+        const length = hit?.t ?? remaining;
+        for (let instance = 0; instance < count; instance++) {
+          const attenuation = volumeTransmittance(field, origin, direction, length, rng);
+          tr = [tr[0] * attenuation[0], tr[1] * attenuation[1], tr[2] * attenuation[2]];
+        }
+        if (!hit) break;
+        const base = hit.triangle * PT_TRIANGLE_FLOATS;
+        const vertices = scene.triangles.subarray(base, base + 9);
+        const normal = cross3(sub3(readVec3(vertices, 1), readVec3(vertices, 0)), sub3(readVec3(vertices, 2), readVec3(vertices, 0)));
+        count += dot3(direction, normal) < 0 ? 1 : -1;
+        const step = hit.t + RAY_EPS;
+        origin = add3(origin, scale3(direction, step));
+        remaining -= step;
+        if (crossing === scene.triangleCount) throw new Error('Volume transmittance traversal exceeded the scene boundary count.');
+      }
+    }
+    return tr;
   };
   if (scene.materials.some((weight, index) => index % PT_MATERIAL_FLOATS === 50 && weight > 0)) {
     sampler.sampleVolumeLight = (hit, rng) => {
       const light = sampleVolumeEmitter(scene.materials, scene.volumeData, hit.position, rng);
-      if (!light || !insideVolume(light.index, light.position)) return null;
-      return { direction: light.direction, distance: light.distance, pdf: light.pdf, radiance: light.emission };
+      if (!light) return null;
+      const count = volumeDomains.filter(domain => domain.materialIndex === light.index)
+        .reduce((sum, domain) => sum + Math.max(0, volumeContainment(domain, light.position)), 0);
+      if (count === 0) return null;
+      return { direction: light.direction, distance: light.distance, pdf: light.pdf, radiance: scale3(light.emission, count) };
     };
   }
   if (hasEnv) {

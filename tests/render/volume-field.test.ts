@@ -3,7 +3,7 @@ import { FLOAT, IrModuleBuilder, OBJECT_TO_WORLD_INPUT, matrix, shaderType, vect
 import { appendVolumeIr, isSpatialVolumeIr, lowerVolumeInputsToIr } from '../../src/compiler/volume-ir.ts';
 import type { ResolvedGraph, ResolvedNode } from '../../src/materialx/graph.ts';
 import type { ResolvedVolume } from '../../src/materialx/volume-graph.ts';
-import { bakeVolumeGrid, sampleVolumeGrid, sampleVolumeTransport, sampleVolumeEmitter, volumeTransmittance } from '../../src/render/volume-field.ts';
+import { bakeVolumeGrid, sampleVolumeGrid, sampleVolumeTransport, sampleVolumeMixture, sampleVolumeEmitter, volumeTransmittance } from '../../src/render/volume-field.ts';
 import { createPcg32, integratePath, type SceneSampler } from '../../src/render/pathtracing/integrator.ts';
 import { PT_MATERIAL_RECORD_FLOATS } from '../../src/render/pathtracing/material-record.ts';
 import { pathTraceComputeWgsl } from '../../src/render/pathtracing/compute.ts';
@@ -41,6 +41,39 @@ it('ratio tracking agrees with Beer-Lambert extinction', () => {
   }
   for (let axis = 0; axis < 3; axis++) expect(sum[axis]! / 20000).toBeCloseTo(Math.exp(-field.sample().absorption[axis]!), 2);
   expect(() => volumeTransmittance({ ...field, majorant: 0.1 }, [0, 0, 0], [0, 0, 1], 1, () => 0.01)).toThrow('majorant');
+});
+
+it('samples overlapping colored scattering phases and emission without bias', () => {
+  const media = [
+    { absorption: [0.2, 0.2, 0.2] as const, scattering: [0.4, 0.1, 0] as const, anisotropy: 0.7, emission: [0.2, 0.1, 0.05] as const },
+    { absorption: [0.1, 0.1, 0.1] as const, scattering: [0.1, 0.2, 0.4] as const, anisotropy: -0.5, emission: [0.1, 0.05, 0.15] as const },
+  ];
+  const fields = media.map(medium => ({
+    majorant: Math.max(...medium.absorption.map((value, i) => value + medium.scattering[i]!)) * 1.000001,
+    sample: () => medium,
+  }));
+  const rng = createPcg32(297);
+  const transmitted = [0, 0, 0], emitted = [0, 0, 0], scattered = [[0, 0, 0], [0, 0, 0]];
+  const samples = 80000;
+  for (let i = 0; i < samples; i++) {
+    const result = sampleVolumeMixture(fields, [0, 0, 0], [0, 0, 1], 1, rng);
+    for (let c = 0; c < 3; c++) {
+      emitted[c] = emitted[c]! + result.emission[c]! / samples;
+      if (result.scattered) {
+        const index = result.anisotropy === media[0]!.anisotropy ? 0 : 1;
+        scattered[index]![c] = scattered[index]![c]! + result.weight[c]! / samples;
+      } else transmitted[c] = transmitted[c]! + result.weight[c]! / samples;
+    }
+  }
+  for (let c = 0; c < 3; c++) {
+    const extinction = media.reduce((sum, medium) => sum + medium.absorption[c]! + medium.scattering[c]!, 0);
+    const integral = (1 - Math.exp(-extinction)) / extinction;
+    expect(Math.abs(transmitted[c]! - Math.exp(-extinction))).toBeLessThan(0.012);
+    expect(Math.abs(emitted[c]! - media.reduce((sum, medium) => sum + medium.emission[c]!, 0) * integral)).toBeLessThan(0.012);
+    for (let i = 0; i < media.length; i++) {
+      expect(Math.abs(scattered[i]![c]! - media[i]!.scattering[c]! * integral)).toBeLessThan(0.012);
+    }
+  }
 });
 
 it('importance sampling preserves the integrated emission of a nonuniform reconstructed grid', () => {
@@ -89,11 +122,41 @@ it('attenuates surface illumination from an emissive volume without a proxy ligh
   expect(value[2]).toBe(0);
 });
 
+it('lights a volume scattering event from an emissive volume without double counting its emission', () => {
+  const field = {
+    majorant: 1,
+    sample: () => ({ absorption: [0, 0, 0] as const, scattering: [1, 1, 1] as const,
+      anisotropy: 0, emission: [1, 1, 1] as const }),
+  };
+  const scene: SceneSampler = {
+    intersect: ray => ({
+      position: [ray.origin[0] + ray.direction[0] * 10, ray.origin[1] + ray.direction[1] * 10,
+        ray.origin[2] + ray.direction[2] * 10],
+      normal: [0, 0, 1], volumeBoundary: true, interiorField: field,
+    }),
+    sampleBsdf: () => null,
+    evalBsdf: () => ({ value: [0, 0, 0], pdf: 0 }),
+    sampleLight: () => null,
+    sampleVolumeLight: () => ({ direction: [0, 0, 1], radiance: [4, 4, 4], pdf: 2, distance: 1 }),
+    transmittance: () => [0.25, 0.5, 1],
+    occluded: () => false,
+    lightPdf: () => 0,
+  };
+  const value = integratePath(scene, { origin: [0, 0, 0], direction: [0, 0, 1] }, () => 0.1, { maxBounces: 1 });
+  for (const [axis, tr] of [0.25, 0.5, 1].entries()) {
+    expect(value[axis]).toBeCloseTo(1 + 2 * tr / (4 * Math.PI), 10);
+  }
+});
+
 it('samples emissive volume domains without duplicating the BSDF evaluation or double counting direct EDF', () => {
   const shader = pathTraceComputeWgsl({ volumeGrid: true, media: true, volumeEmission: true });
   const integrate = shader.slice(shader.indexOf('fn integrate('));
   expect(integrate.match(/mx_closure_eval_parts\(/g)).toHaveLength(1);
   expect(integrate).toContain('if (!volumeEmissionNee)');
+  expect(integrate).toContain('let light = mx_sample_volume_light(sp, state)');
+  expect(integrate).toContain('volumeEmissionNee = volumeNee');
+  const volumeNee = integrate.slice(integrate.indexOf('if (volumeNee)'), integrate.indexOf('let wiM = mx_sample_hg'));
+  expect(volumeNee.match(/mx_transmittance\(/g)).toHaveLength(1);
   expect(shader).toContain('mx_volume_point_inside(index,position)');
   expect(() => pathTraceComputeWgsl({ volumeEmission: true })).toThrow('medium-aware visibility');
 });

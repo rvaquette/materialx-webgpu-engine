@@ -29,7 +29,7 @@ import {
 } from './pathtracing/scene-buffers.ts';
 import { PathTraceDynamics, type DynamicInstanceSource, type DynamicUpload } from './pathtracing/dynamic-geometry.ts';
 import { rebuildBvhInBackground } from './pathtracing/bvh-rebuild.ts';
-import { buildPathTraceUniform, pathTraceComputeWgsl, pathTraceHasMedia, pathTraceHasVolumeEmission, pathTraceClosureDispatch, pathTraceOpaqueScene, PathTraceBackend, pathTraceTileCount, PT_UNIFORM_SIZE } from './pathtracing/compute.ts';
+import { buildPathTraceUniform, pathTraceComputeWgsl, pathTraceHasMedia, pathTraceHasVolumeEmission, pathTraceVolumeDomains, pathTraceClosureDispatch, pathTraceOpaqueScene, PathTraceBackend, pathTraceTileCount, PT_UNIFORM_SIZE } from './pathtracing/compute.ts';
 import { pathTraceSettings } from './pathtracing/scene-settings.ts';
 import { cameraFovY } from '../usd/cameras.ts';
 import { buildMaterialDispatch, type PtMaterialVariantCache } from './pathtracing/material-variant.ts';
@@ -2447,8 +2447,8 @@ export class InteractiveViewer {
   }
 
   renderRasterTo(targetView: GPUTextureView): void {
-    if (!this.#current || this.#backend !== 'raster' || this.#context) {
-      throw new Error('A loaded headless raster scene is required.');
+    if (!this.#current || this.#backend !== 'raster' || this.#disposed) {
+      throw new Error('A loaded raster scene is required.');
     }
     this.#current.renderRaster(targetView);
   }
@@ -3158,9 +3158,11 @@ export class InteractiveViewer {
           environment: frame.environment, settings: pathTraceSettings(loaded.scene),
         });
         const hasVolumeGrid = volumeScene.volumeData !== undefined;
+        const volumeDomains = pathTraceVolumeDomains(volumeScene);
         const [compiled] = await compileShaderBatch(device, [{
           label: 'Raster volume',
-          code: () => rasterVolumeWgsl(hasVolumeGrid, rasterLights !== undefined),
+          code: () => rasterVolumeWgsl(hasVolumeGrid, rasterLights !== undefined,
+            volumeDomains.length > 0 ? volumeDomains : undefined),
         }]);
         if (!compiled) throw new Error('Raster volume shader compilation produced no result.');
         rasterErrors = compiled.errors;
@@ -3520,6 +3522,9 @@ export class InteractiveViewer {
           maxRecordLobes(ptScene.materials, new Set(dispatch.variants.map((variant) => variant.index))),
         ),
       );
+      const volumeDomains = pathTraceVolumeDomains(ptScene);
+      const ptOpaque = pathTraceOpaqueScene(dispatch, ptScene.materials);
+      const ptMedia = pathTraceHasMedia(ptScene.materials);
       const [ptCompilation, displayCompilation, convergenceCompilation] = await compileShaderBatch(device, [
         {
           label: 'Path tracing',
@@ -3528,9 +3533,10 @@ export class InteractiveViewer {
             volumeEmission: pathTraceHasVolumeEmission(ptScene.materials),
             dispatch, environment: hasEnvironmentImage(), maxLobes, displayAovs: true,
             closureDispatch: pathTraceClosureDispatch(dispatch, ptScene.materials),
-            opaque: pathTraceOpaqueScene(dispatch, ptScene.materials),
+            opaque: ptOpaque,
             analyticLights: ptScene.analyticLights !== undefined,
-            media: pathTraceHasMedia(ptScene.materials),
+            media: ptMedia,
+            ...(ptMedia && !ptOpaque && volumeDomains.length > 0 ? { volumeDomains } : {}),
             pruneUnusedFunctions: true,
             rouletteDepth: ptOptions.settings.rouletteDepth,
           }),

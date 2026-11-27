@@ -311,7 +311,14 @@ ${WATER_WAVES_XML}
     <subtract name="advectedPosition" type="vector3"><input name="in1" type="vector3" nodename="position" /><input name="in2" type="vector3" nodename="advection" /></subtract>
     <multiply name="isotropicPosition" type="vector3"><input name="in1" type="vector3" nodename="advectedPosition" /><input name="in2" type="float" interfacename="scale" /></multiply>
     <multiply name="stratusPosition" type="vector3"><input name="in1" type="vector3" nodename="isotropicPosition" /><input name="in2" type="vector3" value="0.7, 1.8, 0.7" /></multiply>
-    <multiply name="cirrusPosition" type="vector3"><input name="in1" type="vector3" nodename="isotropicPosition" /><input name="in2" type="vector3" value="0.12, 2, 1.4" /></multiply>
+    <!-- Cirrus: thin fibrous streaks sheared along the wind (x), finely separated across it (z),
+         with little vertical structure; a low-frequency warp bends the fibres into hooks. -->
+    <multiply name="cirrusWarpPosition" type="vector3"><input name="in1" type="vector3" nodename="isotropicPosition" /><input name="in2" type="float" value="0.35" /></multiply>
+    <noise3d name="cirrusWarpNoise" type="float" nodedef="ND_noise3d_float"><input name="position" type="vector3" nodename="cirrusWarpPosition" /><input name="amplitude" type="float" value="1" /><input name="pivot" type="float" value="0" /></noise3d>
+    <multiply name="cirrusWarpAmount" type="float"><input name="in1" type="float" nodename="cirrusWarpNoise" /><input name="in2" type="float" value="2.5" /></multiply>
+    <combine3 name="cirrusWarp" type="vector3"><input name="in1" type="float" value="0" /><input name="in2" type="float" value="0" /><input name="in3" type="float" nodename="cirrusWarpAmount" /></combine3>
+    <multiply name="cirrusStretched" type="vector3"><input name="in1" type="vector3" nodename="isotropicPosition" /><input name="in2" type="vector3" value="0.15, 0.6, 2.6" /></multiply>
+    <add name="cirrusPosition" type="vector3"><input name="in1" type="vector3" nodename="cirrusStretched" /><input name="in2" type="vector3" nodename="cirrusWarp" /></add>
     <ifequal name="layerPosition" type="vector3"><input name="value1" type="integer" interfacename="profile" /><input name="value2" type="integer" value="1" /><input name="in1" type="vector3" nodename="stratusPosition" /><input name="in2" type="vector3" nodename="cirrusPosition" /></ifequal>
     <ifequal name="scaledPosition" type="vector3"><input name="value1" type="integer" interfacename="profile" /><input name="value2" type="integer" value="0" /><input name="in1" type="vector3" nodename="isotropicPosition" /><input name="in2" type="vector3" nodename="layerPosition" /></ifequal>
     <separate3 name="cloudCoordinates" type="multioutput" nodedef="ND_separate3_vector3"><input name="in" type="vector3" nodename="position" /></separate3>

@@ -13,7 +13,7 @@
 // uploads and dispatch run in the browser (src/main.ts) and are device-only.
 
 import { PT_OBJECT_VERTEX_FLOATS, type PathTraceScene } from './scene-buffers.ts';
-import { BVH_TRI_STRIDE, BVH_TRAVERSAL_WGSL } from './bvh-wgsl.ts';
+import { BVH_TRI_STRIDE, BVH_TRAVERSAL_WGSL, bvhTraversalWgsl } from './bvh-wgsl.ts';
 import { LAYERED_CLOSURE_PRELUDE } from '../../compiler/surface-wgsl.ts';
 import { closureLibraryPrelude, type ClosureDispatchSpec } from '../../compiler/closure-library.ts';
 import { emitVaryingsStruct, textureWgslType } from '../../compiler/wgsl.ts';
@@ -22,7 +22,7 @@ import {
   OBJECT_NORMAL_INPUT, OBJECT_TANGENT_INPUT, OBJECT_BITANGENT_INPUT, type IrType,
 } from '../../compiler/ir.ts';
 import { materialClosureReaderWgsl, PT_MAX_LOBES, PT_MATERIAL_RECORD_FLOATS, PT_MATERIAL_HEADER_FLOATS, PT_LOBE_FLOATS } from './material-record.ts';
-import { volumeFieldWgsl, VOLUME_TRANSPORT_WGSL } from '../volume-field.ts';
+import { volumeDomainsWgsl, volumeFieldWgsl, volumeMixtureWgsl, VOLUME_TRANSPORT_WGSL, type VolumeDomain } from '../volume-field.ts';
 import { dispersionWgsl } from './spectrum.ts';
 import {
   PT_MATERIAL_DISPATCH_ENTRY,
@@ -595,6 +595,7 @@ ${assigns.join('\n')}
 function wgslIntegrator(
   textures: boolean, dispatch: PtMaterialDispatch | undefined, environment: boolean,
   displayAovs: boolean, opaque: boolean, analyticLights: boolean, rouletteDepth?: number, media = false, volumeEmission = false, volumeGrid = false,
+  volumeDomains = 0,
 ): string {
   const envMiss = environment ? 'env_radiance(rd)' : 'U.env.xyz';
   const envNee = environment ? 'env_radiance(wiW)' : 'U.env.xyz';
@@ -834,28 +835,43 @@ fn mx_alpha_visibility(origin: vec3f, direction: vec3f) -> f32 {
   return mx_visibility(origin, direction, 1.0e30);
 }
 ${media ? `
+${volumeDomains ? `// Per-instance volume counts of the current path vertex; shadow rays start from them.
+var<private> mx_active_volumes: array<u32, ${volumeDomains}>;` : ''}
 // Shadow-ray transmittance through volume boundaries (entered or left by the
 // geometric normal) and alpha coverage; startVolume is the medium at the origin.
 fn mx_transmittance(origin: vec3f, direction: vec3f, distance: f32, startVolume: u32, state: ptr<function, u32>) -> vec3f {
 ${analyticLights ? '  if (mx_intersect_lights(origin, direction).distance < distance) { return vec3f(0.0); }' : ''}
   var transmittance = vec3f(1.0);
   var volume = startVolume;
+${volumeDomains ? `  if (volume != 0xffffffffu && mx_material_volume_boundary(volume)) { volume = 0xffffffffu; }
+  var shadowDomains = mx_active_volumes;
+  var updateShadowDomains = false;` : ''}
   var ro = origin;
   var travelled = 0.0;
   for (var layer = 0u; layer < 128u; layer++) {
+${volumeDomains ? `    if (updateShadowDomains) {
+      _ = mx_update_volume_domains(ro, &shadowDomains);
+      updateShadowDomains = false;
+    }` : ''}
     let remaining = distance - travelled;
     if (remaining <= 0.0) { return transmittance; }
-    let hit = traverse(ro, direction, remaining, false);
+    let hit = ${volumeDomains ? 'traverse_min(ro, direction, remaining, false, select(RAY_EPS, 1e-7, layer > 0u))' : 'traverse(ro, direction, remaining, false)'};
     let segment = select(remaining, hit.t, hit.hitAny);
     if (volume != 0xffffffffu) {
       transmittance *= volume_transmittance(volume, ro, direction, segment, state);
       if (all(transmittance <= vec3f(0.0))) { return vec3f(0.0); }
     }
+${volumeDomains ? `    for (var domain = 0u; domain < MX_VOLUME_DOMAIN_COUNT; domain++) {
+      for (var instance = 0u; instance < shadowDomains[domain]; instance++) {
+        transmittance *= volume_transmittance(mx_volume_domains[domain].x, ro, direction, segment, state);
+      }
+    }
+    if (all(transmittance <= vec3f(0.0))) { return vec3f(0.0); }` : ''}
     if (!hit.hitAny) { return transmittance; }
     let pos = ro + direction * hit.t;
     let material = tri_material(hit.tri);
     if (mx_material_volume_boundary(material)) {
-      volume = select(0xffffffffu, material, dot(direction, surface_hit_geometric_normal(hit)) < 0.0);
+${volumeDomains ? '      updateShadowDomains = true;' : '      volume = select(0xffffffffu, material, dot(direction, surface_hit_geometric_normal(hit)) < 0.0);'}
     } else {
       transmittance *= 1.0 - mx_hit_opacity(hit, pos, direction);
       if (all(transmittance <= vec3f(0.0))) { return vec3f(0.0); }
@@ -926,10 +942,16 @@ ${volumeGrid ? `  let size = u32(materials[b+41u]);
   let position = vec3f(materials[b+43u],materials[b+44u],materials[b+45u]) + extent*uv;
   let offset = position-point;
   let distance = length(offset);
-  if (distance <= RAY_EPS || !mx_volume_point_inside(index,position)) { return result; }
+${volumeDomains ? `  var multiplicity = 0u;
+  for (var domain = 0u; domain < MX_VOLUME_DOMAIN_COUNT; domain++) {
+    if (mx_volume_domains[domain].x == index) { multiplicity += mx_volume_domain_inside(mx_volume_domains[domain], position); }
+  }
+  if (!mx_material_volume_boundary(index) && mx_volume_point_inside(index, position)) { multiplicity = 1u; }
+  if (distance <= RAY_EPS || multiplicity == 0u) { return result; }`
+    : '  if (distance <= RAY_EPS || !mx_volume_point_inside(index,position)) { return result; }'}
   result.direction = offset/distance;
   result.distance = distance;
-  result.emission = volume_field(index,position).emission;
+  result.emission = volume_field(index,position).emission${volumeDomains ? ' * f32(multiplicity)' : ''};
   // Volume measure converted to direction/radius measure; this is not a solid-angle MIS pdf.
   result.pdf = materials[b+50u]/total * distance*distance*spatialPdf;
   return result;
@@ -966,6 +988,11 @@ fn integrate(ro0 : vec3<f32>, rd0 : vec3<f32>, backgroundDirection : vec3<f32>, 
   var bounce = 0;
   var medium : MxMedium;
   var volumeIndex = 0xffffffffu;
+${volumeDomains ? `  var activeVolumes: array<u32, ${volumeDomains}>;
+  var activeVolumeCount = 0u;
+  var updateActiveVolumes = true;
+  // A crossed volume face lies RAY_EPS behind; the next face may be nearer than RAY_EPS.
+  var afterVolumeBoundary = false;` : ''}
   // The last bounce sampled a volume phase function (MIS against volume NEE).
   var phaseBounce = false;
 ${volumeEmission ? '  var volumeEmissionNee = false;' : ''}
@@ -978,20 +1005,28 @@ ${analyticLights ? '  var analyticNee = false;' : ''}
 
   for (var pathStep = 0u; pathStep < 65536u; pathStep++) {
     if (subsurfaceWalk && subsurfaceEvents >= ${MAX_SSS_WALK_EVENTS}) { break; }
+${volumeDomains ? `    if (updateActiveVolumes) {
+      activeVolumeCount = mx_update_volume_domains(ro, &activeVolumes);
+      // Element-wise: a whole-array copy into this private was miscompiled on D3D (stale counts).
+      for (var domain = 0u; domain < MX_VOLUME_DOMAIN_COUNT; domain++) { mx_active_volumes[domain] = activeVolumes[domain]; }
+      updateActiveVolumes = false;
+${displayAovs ? '      if (activeVolumeCount > 0u && cameraSegment) { *coverage = 1.0; cameraSegment = false; }' : ''}
+    }` : ''}
     // Homogeneous media draw the collision distance first and trace only up to it.
-    let preFlight = inMedium && volumeIndex == 0xffffffffu;
+    let preFlight = inMedium && volumeIndex == 0xffffffffu${volumeDomains ? ' && activeVolumeCount == 0u' : ''};
     var flight = 1.0e30;
     if (preFlight) { flight = mx_homogeneous_free_flight(medium, state); }
 ${analyticLights ? `    let emitter = mx_intersect_lights(ro, rd);
     let traceLimit = min(emitter.distance, flight);` : '    let traceLimit = flight;'}
-    var hit = traverse_min(ro, rd, traceLimit, false,select(RAY_EPS,1e-7,inMedium));
+    var hit = traverse_min(ro, rd, traceLimit, false,select(RAY_EPS,1e-7,inMedium${volumeDomains ? ' || activeVolumeCount > 0u || afterVolumeBoundary' : ''}));
+${volumeDomains ? '    afterVolumeBoundary = false;' : ''}
     if (inMedium && subsurfaceWalk && subsurfaceSelective) {
       var exhausted = true;
       for (var crossing = 0u; crossing <= 128u; crossing++) {
         if (!hit.hitAny) { exhausted = false; break; }
         let matches = select(tri_material(hit.tri) == subsurfaceMaterial,
           ${dispatch ? 'mx_eval_material_sss_subset' : 'mx_material_sss_subset'}(tri_material(hit.tri)) == subsurfaceSubset, subsurfaceSubset > 0u);
-        if (matches) { exhausted = false; break; }
+        if (matches${volumeDomains ? ' || mx_material_volume_boundary(tri_material(hit.tri))' : ''}) { exhausted = false; break; }
         if (crossing == 128u) { break; }
         hit = traverse_min(ro, rd, traceLimit, false, hit.t + 1e-6);
       }
@@ -1003,16 +1038,21 @@ ${analyticLights ? `    let emitter = mx_intersect_lights(ro, rd);
     let tMax = select(${analyticLights ? 'emitter.distance' : '1.0e30'}, hit.t, hit.hitAny);
     // A camera inside a volume (fog around the scene) starts in its medium: the first
     // boundary hit from inside is the one the ray leaves through (geometric normal).
-    if (pathStep == 0u && hit.hitAny && mx_material_volume_boundary(tri_material(hit.tri)) &&
+${volumeDomains ? '' : `    if (pathStep == 0u && hit.hitAny && mx_material_volume_boundary(tri_material(hit.tri)) &&
         dot(rd,surface_hit_geometric_normal(hit)) > 0.0) {
       inMedium = true;
       volumeIndex = tri_material(hit.tri);
 ${displayAovs ? '      *coverage = 1.0; cameraSegment = false;' : ''}
-    }
-    if (inMedium) {
+    }`}
+    if (inMedium${volumeDomains ? ' || activeVolumeCount > 0u' : ''}) {
       var ms: MxMediumSample;
       var g = medium.g;
-      if (volumeIndex != 0xffffffffu) {
+${volumeDomains ? `      if (activeVolumeCount > 0u) {
+        let vs = volume_sample_mixture(&activeVolumes, inMedium, volumeIndex, medium, ro, rd, tMax, state);
+${volumeEmission ? '        if (!volumeEmissionNee) { radiance += beta*vs.emission; }' : '        radiance += beta*vs.emission;'}
+        ms = MxMediumSample(vs.scattered, vs.t, vs.weight);
+        g = vs.g;
+      } else` : ''}      if (volumeIndex != 0xffffffffu) {
         let vs = volume_sample(volumeIndex,ro,rd,tMax,state);
 ${volumeEmission ? '        if (!volumeEmissionNee) { radiance += beta*vs.emission; }' : '        radiance += beta*vs.emission;'}
         ms = MxMediumSample(vs.scattered,vs.t,vs.weight);
@@ -1029,25 +1069,40 @@ ${volumeEmission ? '        if (!volumeEmissionNee) { radiance += beta*vs.emissi
         let sp = ro + rd * ms.t;
 ${media ? `        // Volume next-event estimation: one light and the environment, MIS against
         // the phase function, attenuated by the transmittance to the emitter.
-        let volumeNee = !subsurfaceWalk && volumeIndex != 0xffffffffu;
+        let volumeNee = !subsurfaceWalk && (volumeIndex != 0xffffffffu${volumeDomains ? ' || activeVolumeCount > 0u' : ''});
         if (volumeNee) {
           let woM = -rd;
-${analyticLights ? `          if (mx_light_count() > 0u) {
+          for (var strategy = 0u; strategy < ${volumeEmission ? '3' : '2'}u; strategy++) {
+            var neeDirection = vec3f(0.0, 1.0, 0.0);
+            var neeRadiance = vec3f(0.0);
+            var neeDistance = 1.0e30;
+            var neePdf = 0.0;
+            var neeMis = false;
+            var neeDelta = false;
+${volumeEmission ? `            if (strategy == 0u) {
+              let light = mx_sample_volume_light(sp, state);
+              neeDirection = light.direction;
+              neeRadiance = light.emission;
+              neeDistance = light.distance - 2.0 * RAY_EPS;
+              neePdf = light.pdf;
+            } else` : ''}            if (strategy == ${volumeEmission ? '1' : '0'}u) {
+${analyticLights ? `              if (mx_light_count() > 0u) {
             let lightU = vec3f(rng_next(state), rng_next(state), rng_next(state));
             let index = mx_select_light(lightU.x);
             let light = mx_sample_light_at(index, sp, lightU.yz);
-            let sourcePdf = light.pdf * mx_light_selection_pmf(index);
-            if (sourcePdf > 0.0 && sourcePdf < 3.0e38) {
-              let phase = volume_phase(dot(woM, light.direction), g);
-              let tr = mx_transmittance(sp, light.direction, light.distance - 2.0 * RAY_EPS, volumeIndex, state);
-              let w = select(power_heuristic(1.0, sourcePdf, 1.0, phase), 1.0, light.delta);
-              radiance += beta * light.radiance * tr * (phase * w / sourcePdf);
-            }
-          }` : `          if (dot(lightRadiance, lightRadiance) > 0.0) {
-            let tr = mx_transmittance(sp, toLight, 1.0e30, volumeIndex, state);
-            radiance += beta * lightRadiance * tr * volume_phase(dot(woM, toLight), g);
-          }`}
-          if (hasEnv) {
+                neeDirection = light.direction;
+                neeRadiance = light.radiance;
+                neeDistance = light.distance - 2.0 * RAY_EPS;
+                let sourcePdf = light.pdf * mx_light_selection_pmf(index);
+                neePdf = select(0.0, sourcePdf, sourcePdf < 3.0e38);
+                neeMis = true;
+                neeDelta = light.delta;
+              }` : `              if (dot(lightRadiance, lightRadiance) > 0.0) {
+                neeDirection = toLight;
+                neeRadiance = lightRadiance;
+                neePdf = 1.0;
+              }`}
+            } else if (hasEnv) {
             var envDirection = vec3f(0.0, 1.0, 0.0);
             var envPdf = 1.0 / (4.0 * PI);
             var envColor = vec3f(0.0);
@@ -1067,15 +1122,21 @@ ${environment ? `            if (U.envExtra.w > 0.5) {
             let phi = 2.0 * PI * rng_next(state);
             envDirection = vec3f(r * cos(phi), r * sin(phi), z);
             envColor = U.env.xyz;`}
-            if (envPdf > 0.0) {
-              let phase = volume_phase(dot(woM, envDirection), g);
-              let tr = mx_transmittance(sp, envDirection, 1.0e30, volumeIndex, state);
-              radiance += beta * envColor * tr * (phase * power_heuristic(1.0, envPdf, 1.0, phase) / envPdf);
+              neeDirection = envDirection;
+              neeRadiance = envColor;
+              neePdf = envPdf;
+              neeMis = true;
+            }
+            if (neePdf > 0.0) {
+              let phase = volume_phase(dot(woM, neeDirection), g);
+              let tr = mx_transmittance(sp, neeDirection, neeDistance, volumeIndex, state);
+              let weight = select(1.0, power_heuristic(1.0, neePdf, 1.0, phase), neeMis && !neeDelta);
+              radiance += beta * neeRadiance * tr * (phase * weight / neePdf);
             }
           }
         }` : ''}
         let wiM = mx_sample_hg(-rd, g, rng_next(state), rng_next(state));
-${volumeEmission ? '        volumeEmissionNee = false;' : ''}
+${volumeEmission ? `        volumeEmissionNee = ${media ? 'volumeNee' : 'false'};` : ''}
         specularBounce = false;
         diffuseBounce = false;
         splitFuzzEnvironment = false;
@@ -1147,7 +1208,7 @@ ${
     var n = surface_hit_normal(hit);
 ${closureBuild}
     let subsurfaceExit = inMedium && subsurfaceWalk && dot(rd, geometricNormal) > 0.0;
-    if (inMedium && dot(rd, geometricNormal) > 0.0) {
+    if (inMedium${volumeDomains ? ' && !mx_material_volume_boundary(tri_material(hit.tri))' : ''} && dot(rd, geometricNormal) > 0.0) {
       let cosine = dot(rd, geometricNormal);
       let totalInternal = interiorIor > 1.0 && interiorIor * interiorIor * max(0.0, 1.0 - cosine * cosine) >= 1.0;
       let topologyProbability = select(0.0, clamp(subsurfaceTopology, 0.0, 1.0)
@@ -1169,6 +1230,10 @@ ${closureBuild}
       }
     }
     if (mx_material_volume_boundary(tri_material(hit.tri))) {
+${volumeDomains ? `      ro = pos + rd * RAY_EPS;
+      updateActiveVolumes = true;
+      afterVolumeBoundary = true;
+      continue;` : `
       subsurfaceWalk = false;
       subsurfaceEvents = 0;
       inMedium = dot(rd, geometricNormal) < 0.0;
@@ -1176,7 +1241,7 @@ ${closureBuild}
       medium = MxMedium(c.interiorSigmaA, c.interiorSigmaS, c.interiorG);
 ${displayAovs ? '      if (inMedium && cameraSegment) { *coverage = 1.0; cameraSegment = false; }' : ''}
       ro = pos + rd * RAY_EPS;
-      continue;
+      continue;`}
     }
     let opacity = clamp(c.opacity, 0.0, 1.0);
     // Null events preserve throughput, MIS state and direction; alpha is
@@ -1763,6 +1828,8 @@ ${displayAovs ? `  let oldCoverage = accum[outputPixel + 1u].x;
 }
 
 export interface PathTraceComputeOptions {
+    /** Per-instance ranges of pure volumes for overlapping-domain transport. */
+    volumeDomains?: readonly VolumeDomain[];
     volumeGrid?: boolean;
     volumeEmission?: boolean;
     textures?: boolean;
@@ -1799,9 +1866,22 @@ export function pathTraceHasVolumeEmission(materials: Float32Array): boolean {
   return false;
 }
 
+export function pathTraceVolumeDomains(scene: PathTraceScene): VolumeDomain[] {
+  const ranges = scene.transformRanges;
+  if (!ranges) {
+    if (pathTraceHasMedia(scene.materials)) throw new Error('Volume rendering requires instance ranges; rebuild the compiled scene.');
+    return [];
+  }
+  return ranges.filter(range => scene.materials[range.materialIndex * PT_MATERIAL_RECORD_FLOATS + 37] !== 0)
+    .map(({ materialIndex, firstTriangle, triangleCount }) => ({ materialIndex, firstTriangle, triangleCount }));
+}
+
 /** Full WGSL source of the compute path tracer. */
 export function pathTraceComputeWgsl(options: PathTraceComputeOptions = {}): string {
   if (options.volumeEmission && (!options.media || options.opaque)) throw new Error('Volume emission sampling requires medium-aware visibility.');
+  if (options.volumeDomains && (options.volumeDomains.length === 0 || !options.media || options.opaque)) {
+    throw new Error('Volume transport requires domains and medium-aware visibility.');
+  }
   if (options.rouletteDepth !== undefined &&
       (!Number.isSafeInteger(options.rouletteDepth) || options.rouletteDepth < 0 || options.rouletteDepth > 0x7fffffff)) {
     throw new Error('Path-tracing roulette depth specialization must be a non-negative 32-bit integer.');
@@ -1818,10 +1898,11 @@ export function pathTraceComputeWgsl(options: PathTraceComputeOptions = {}): str
   const code = [
     wgslStructsAndBindings(textures, varyings !== undefined, environment),
     wgslRng(),
-    BVH_TRAVERSAL_WGSL,
+    options.volumeDomains ? bvhTraversalWgsl(true) : BVH_TRAVERSAL_WGSL,
     wgslClosureSurface(textures, maxLobes, options.closureDispatch),
     volumeFieldWgsl(options.volumeGrid ?? false),
     VOLUME_TRANSPORT_WGSL,
+    ...(options.volumeDomains ? [volumeDomainsWgsl(options.volumeDomains), volumeMixtureWgsl(options.volumeDomains.length)] : []),
     dispersionWgsl(),
     `fn mx_closure_spectral_wavelength(c: LayeredClosure, wavelength: f32) -> LayeredClosure {
   var result = c;
@@ -1837,7 +1918,7 @@ export function pathTraceComputeWgsl(options: PathTraceComputeOptions = {}): str
     ...(varyings !== undefined ? [wgslVaryings(varyings)] : []),
     ...(dispatch !== undefined ? [wgslDispatch(dispatch)] : []),
     wgslIntegrator(textures, dispatch, environment, options.displayAovs ?? false, options.opaque ?? false,
-      options.analyticLights ?? false, options.rouletteDepth, (options.media ?? false) && !(options.opaque ?? false), options.volumeEmission ?? false, options.volumeGrid ?? false),
+      options.analyticLights ?? false, options.rouletteDepth, (options.media ?? false) && !(options.opaque ?? false), options.volumeEmission ?? false, options.volumeGrid ?? false, options.volumeDomains?.length ?? 0),
     wgslEntry(options.displayAovs ?? false, options.analyticLights ?? false),
   ].join('\n');
   return options.pruneUnusedFunctions ? pruneWgslFunctions(code, [PT_COMPUTE_ENTRY]) : code;

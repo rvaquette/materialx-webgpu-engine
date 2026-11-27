@@ -1883,3 +1883,88 @@ AOV intégré et AOV personnalisé.
 ![AOV albedo intégré](images/p16/p16-extension-shaders/p16-extension-shaders-albedo.png)
 
 ![AOV personnalisé de hauteur en espace monde](images/p16/p16-extension-shaders/p16-extension-shaders-height.png)
+
+## Priorité 17 : surfaces complexes (eau, lave, feu, fumée, nuages, …)
+
+Huit préréglages procéduraux animés, sans texture externe, exposés en
+`nodegraph` MaterialX réutilisables et en classes de script (`Water`, `Lava`,
+`Fire`, `Smoke`, `Clouds`, `Ice`, `Mud`, `WetSand`) à quelques paramètres de
+haut niveau : `water = new Water(); water.speed = 0.5; pool.material = water;`.
+
+**Critère d'aboutissement atteint :** plan d'eau, coulée de lave, feu de camp,
+panache de fumée et ciel de cumulus s'obtiennent en quelques lignes de script,
+animés ; le feu éclaire la scène et sa fumée par sa seule émission volumique, la
+fumée et les nuages projettent des ombres en path tracing. Chaque préréglage a
+un rendu golden raster et path tracing (`npm run test:golden`, `-- --gpu`).
+
+- **Eau** : cinq vagues de Gerstner dispersives déplacées, normales de détail,
+  transmission et IOR, absorption par profondeur, écume de crête rompue par un
+  bruit. Les **caustiques sont physiques** en path tracing : sous un soleil de
+  taille angulaire non nulle, la lumière focalisée par la houle atteint le fond
+  par l'estimation directe à travers la transmission rugueuse de l'interface.
+  La convergence a été mesurée : l'écart à 4 096 échantillons décroît dans le
+  rapport 2,24 entre 256 et 1 024 échantillons, exactement celui d'un
+  estimateur Monte-Carlo sans biais (images emboîtées). `WaterCaustics` reste un
+  motif décoratif pour le raster ; une source ponctuelle ou sans taille ne peut
+  pas produire de caustiques réfractées dans un path tracer unidirectionnel.
+- **Lave** : croûte Worley fissurée, corps noir décroissant du cœur des fissures
+  vers leurs bords, écoulement animé ; en path tracing elle éclaire la scène par
+  sa seule émission (lumière ponctuelle réservée au raster).
+- **Feu** : volume émissif à corps noir advecté, éclairage des surfaces et de la
+  fumée par échantillonnage de l'émission volumique (grilles importance-sampled),
+  sans double comptage ; braises en sphères émissives sur trajectoires
+  déterministes. Les braises en `Points` simulés relèvent des particules de la
+  priorité 20. La flamme est une flamme de suie, sans cœur bleu chimique.
+- **Fumée et nuages** : diffusion HG multiple en path tracing ; profils cumulus,
+  stratus et cirrus (filaments cisaillés par le vent et recourbés par une
+  déformation basse fréquence).
+- **Volumes superposés et imbriqués**, y compris plusieurs instances d'un même
+  matériau ou des frontières coïncidentes, dans les deux moteurs : chaque
+  instance est suivie par comptage d'enroulement restreint à sa plage de
+  triangles ; extinction et émission s'additionnent (delta tracking pondéré
+  sur la somme des majorants) et la collision conserve l'anisotropie du volume
+  qui l'a produite. Le transport GPU est vérifié contre une intégration
+  numérique indépendante de la diffusion simple (0,02427 contre 0,02429), contre
+  la référence CPU en diffusion multiple et contre l'ancien transport par
+  frontières (0,06326 contre 0,06325).
+- **Raster** : diffusion multiple approchée par octaves (anisotropie et épaisseur
+  optique d'ombre divisées par deux à chaque ordre, poids proportionnel à
+  l'albédo), qui ne restitue que la lumière atténuée sur le chemin d'ombre :
+  nulle en milieu mince ou absorbant, elle atteint la limite de diffusion au
+  cœur d'un nuage. Les nuages raster sont à 2–6 % du path tracer au lieu
+  d'apparaître gris foncé ; l'écart raster–PT des références golden passe de
+  12,8 à 6,2 (nuages) et de 10,2 à 9,9 (fumée).
+- **Glace, boue, sable mouillé** : diélectrique clair à inclusions, masques
+  d'humidité et couche réfléchissante.
+
+Corrections de robustesse apportées en chemin : test d'appartenance exact pour
+un point à moins d'un epsilon d'une face (le volume était rogné aux incidences
+rasantes), segment de mélange borné par les domaines actifs (boucle non bornée
+sur une frontière manquée), copie élément par élément de l'état des volumes
+vers une variable `private` (copie de tableau entier mal compilée sous D3D),
+captures raster par script rendues hors écran, baking GPU 64³ des volumes
+procéduraux.
+
+Limites : le raster n'a ni caustiques ni ombres de volumes sur les surfaces ; sa
+passe volumique est un seul draw plein écran, qu'une géométrie très dense autour
+des volumes (≈ 100 000 triangles traversés par les rayons d'ombre) peut faire
+dépasser le délai du pilote. Les volumes déplacés gardent en raster les
+domaines de grille chargés.
+
+Exemples (`npm run script -- examples/scripts/<nom> --out docs/images/<dossier>`) :
+`p17-water.js`, `p17-caustics.js`, `p17-lava.js`, `p17-fire.js`,
+`p17-fire-smoke-light.js`, `p17-smoke.js`, `p17-clouds.js`,
+`p17-cloud-profiles.js`, `p17-surface-presets.js`.
+
+| Caustiques physiques (4 096 éch.) | Fumée enveloppant la flamme, éclairée par elle seule |
+|---|---|
+| ![Caustiques](images/p17-caustics/caustics-4096.png) | ![Feu et fumée superposés](images/p17-fire-smoke-light/fire-smoke.png) |
+
+| Raster : diffusion multiple approchée | Path tracing |
+|---|---|
+| ![Profils raster](images/p17-cloud-profiles/01-raster/frame-000.png) | ![Profils PT](images/p17-cloud-profiles/02-pathtracing/frame-000.png) |
+| ![Feu raster](images/p17-fire/01-raster/frame-012.png) | ![Feu PT](images/p17-fire/02-pathtracing/frame-012.png) |
+
+| Eau | Lave | Glace, boue, sable mouillé |
+|---|---|---|
+| ![Eau PT](images/p17-water/02-pathtracing/frame-012.png) | ![Lave PT](images/p17-lava/02-pathtracing/frame-012.png) | ![Surfaces PT](images/p17-surface-presets/02-pathtracing/frame-012.png) |

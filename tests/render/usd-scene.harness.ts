@@ -49,7 +49,7 @@ import {
   GBUFFER_POSITION_FORMAT,
   GBUFFER_NORMAL_FORMAT,
 } from '../../src/render/hybrid/trace-pass.ts';
-import { buildPathTraceUniform, pathTraceComputeWgsl, pathTraceClosureDispatch, pathTraceOpaqueScene, PathTraceBackend, pathTraceTileCount, PT_UNIFORM_SIZE, PT_WORKGROUP_SIZE } from '../../src/render/pathtracing/compute.ts';
+import { buildPathTraceUniform, pathTraceComputeWgsl, pathTraceClosureDispatch, pathTraceOpaqueScene, pathTraceVolumeDomains, PathTraceBackend, pathTraceTileCount, PT_UNIFORM_SIZE, PT_WORKGROUP_SIZE } from '../../src/render/pathtracing/compute.ts';
 import { pathTraceSettings } from '../../src/render/pathtracing/scene-settings.ts';
 import { pathTraceDisplacementWgsl } from '../../src/render/pathtracing/displacement-wgsl.ts';
 import { cameraFovY } from '../../src/usd/cameras.ts';
@@ -944,7 +944,9 @@ async function renderUsdRasterOnDevice(
     const volumeScene = compiled?.pathTrace ?? buildPathTraceScene(resources,{
       lights,surfaceFor,frameCamera,environment:frame.environment,settings:pathTraceSettings(scene),
     });
-    const module = device.createShaderModule({ code:rasterVolumeWgsl(volumeScene.volumeData !== undefined,rasterLights !== undefined) });
+    const volumeDomains = pathTraceVolumeDomains(volumeScene);
+    const module = device.createShaderModule({ code:rasterVolumeWgsl(volumeScene.volumeData !== undefined,rasterLights !== undefined,
+      volumeDomains.length > 0 ? volumeDomains : undefined) });
     const info = await module.getCompilationInfo();
     const errors = info.messages.filter(message => message.type === 'error');
     if (errors.length) throw new Error(`Raster volume WGSL: ${errors.map(message => message.message).join('; ')}`);

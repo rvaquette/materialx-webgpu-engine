@@ -1263,7 +1263,22 @@ async function main(): Promise<void> {
       finally { setBusy(false); }
     },
     async saveImage(name) {
-      if (viewer.backend === 'raster') await viewer.prepareRaster();
+      if (viewer.backend === 'raster') {
+        if (outputFormat !== 'rgba8unorm' && outputFormat !== 'bgra8unorm') throw new Error(`Format de sortie non pris en charge : ${outputFormat}.`);
+        const target = viewer;
+        await target.prepareRaster();
+        const image = await captureRgba(currentGpu.device, canvas!.width, canvas!.height, {
+          raster: view => target.renderRasterTo(view),
+        }, () => {
+          if (deviceLost || viewer !== target || target.backend !== 'raster') {
+            throw new Error('La scène ou le moteur a changé pendant la capture raster.');
+          }
+        }, outputFormat);
+        const offscreen = new OffscreenCanvas(image.width, image.height);
+        offscreen.getContext('2d')!.putImageData(new ImageData(new Uint8ClampedArray(image.rgba), image.width, image.height), 0, 0);
+        await saveScriptFile(name, await offscreen.convertToBlob({ type: 'image/png' }));
+        return;
+      }
       // Settings applied just before (exposure, view...) are drawn by the next frame.
       await nextFrame();
       await currentGpu.device.queue.onSubmittedWorkDone();

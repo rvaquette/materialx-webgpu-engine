@@ -420,6 +420,17 @@ describe('interactive viewer resource lifecycle', () => {
     expect(requestFrame).not.toHaveBeenCalled();
   });
 
+  it('can render a prepared interactive raster scene to a separate capture target', async () => {
+    const { viewer, device, pass } = await setup();
+    await viewer.prepareRaster();
+    device.queue.submit.mockClear();
+    pass.drawIndexed.mockClear();
+    const target = device.createTexture({ size: [512, 512], format: 'bgra8unorm', usage: GPUTextureUsage.RENDER_ATTACHMENT });
+    viewer.renderRasterTo(target.createView() as GPUTextureView);
+    expect(device.queue.submit).toHaveBeenCalledOnce();
+    expect(pass.drawIndexed).toHaveBeenCalled();
+  });
+
   it('captures exactly the requested full-resolution path-tracing sweeps from scratch', async () => {
     const actual = await vi.importActual<typeof import('../../src/render/pathtracing/scene-buffers.ts')>(
       '../../src/render/pathtracing/scene-buffers.ts');

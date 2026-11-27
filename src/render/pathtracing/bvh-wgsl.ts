@@ -20,7 +20,7 @@ export const BVH_TRI_STRIDE = 19;
 /** Traversal + Moller-Trumbore triangle test over the packed buffers. `anyHit`
  *  returns at the first intersection (shadow/occlusion rays); otherwise the
  *  closest hit is kept. */
-export function bvhTraversalWgsl(): string {
+export function bvhTraversalWgsl(ranges = false): string {
   return /* wgsl */ `
 struct Hit { t : f32, tri : u32, u : f32, v : f32, hitAny : bool };
 
@@ -82,7 +82,14 @@ fn aabb_hit_min(node : u32, ro : vec3<f32>, invDir : vec3<f32>, tMax : f32, tMin
 fn traverse(ro : vec3<f32>, rd : vec3<f32>, tMax : f32, anyHit : bool) -> Hit {
   return traverse_min(ro,rd,tMax,anyHit,RAY_EPS);
 }
-fn traverse_min(ro : vec3<f32>, rd : vec3<f32>, tMax : f32, anyHit : bool, tMin: f32) -> Hit {
+${bvhTraverseFunction(false)}
+${ranges ? bvhTraverseFunction(true) : ''}
+`;
+}
+
+function bvhTraverseFunction(range: boolean): string {
+  return /* wgsl */ `
+fn ${range ? 'traverse_range' : 'traverse_min'}(ro : vec3<f32>, rd : vec3<f32>, tMax : f32, anyHit : bool, tMin: f32${range ? ', firstTri: u32, endTri: u32' : ''}) -> Hit {
   var result : Hit;
   result.t = tMax;
   result.hitAny = false;
@@ -101,6 +108,7 @@ fn traverse_min(ro : vec3<f32>, rd : vec3<f32>, tMax : f32, anyHit : bool, tMin:
       let start = u32(nodes[b + 8u]);
       for (var i = 0u; i < count; i = i + 1u) {
         let tri = triOrder[start + i];
+${range ? '        if (tri < firstTri || tri >= endTri) { continue; }' : ''}
         let h = intersect_tri_min(tri, ro, rd, closest,tMin);
         if (h.w > 0.5) {
           if (anyHit) {

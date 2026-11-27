@@ -69,8 +69,8 @@ matériaux de volume à affecter à une primitive `Volume`. Pour ces derniers, `
 le centre mondial XZ de la forme ; `Clouds.baseHeight` est l'altitude mondiale du bas de
 la couche et `Fire.centerHeight` celle du centre de la flamme. Aligner ces valeurs sur la
 primitive lorsque la scène est déplacée. `Clouds.profile` vaut `0` (cumulus), `1` (stratus)
-ou `2` (cirrus). `WaterCaustics` projette un motif émissif animé : c'est une approximation,
-pas le calcul physique de caustiques réfractées.
+ou `2` (cirrus). `WaterCaustics` projette un motif émissif animé, décoratif et destiné
+au raster ; le path tracer calcule les caustiques physiques (voir plus bas).
 
 Les horloges `time`/`frame` des volumes sont mises à jour par `setTime()` :
 le champ de coefficients est réévalué et la grille volumique reconstruite,
@@ -81,7 +81,13 @@ la différence des deux distances Worley les plus proches, et non une couleur
 aléatoire par cellule. Boue et sable mouillé combinent masque d'humidité,
 normales de détail et couche réfléchissante.
 
-Le raster reste une approximation de diffusion simple : l'éclairage ambiant
+Le raster marche les volumes avec une diffusion multiple approchée : à la
+diffusion simple s'ajoutent trois octaves (anisotropie et épaisseur optique
+d'ombre divisées par deux à chaque ordre, poids proportionnel à l'albédo). Elles
+ne restituent que la lumière atténuée sur le chemin d'ombre : nulles dans un
+milieu mince ou absorbant, elles atteignent la limite de diffusion (trois fois la
+diffusion simple) au cœur d'un nuage. Les nuages raster sont ainsi à quelques
+pourcents du path tracer, au lieu d'apparaître gris foncé. L'éclairage ambiant
 est atténué selon deux directions ciel/sol, sans intégration complète du ciel.
 Le path tracer utilise la diffusion multiple Henyey-Greenstein, sans multiplier
 artificiellement la densité des nuages pour simuler un effet « powder ».
@@ -101,13 +107,28 @@ décroissance en distance ; le ciel fournit l'éclairage diffus, sans second
 soleil émissif. Le PT des exemples utilise 1 024 échantillons et une profondeur
 de 24 sur ordinateur (128 échantillons sur mobile), sans changer l'exposition.
 Lors d'un retour du PT au raster, `save()` attend aussi la préparation des
-pipelines raster avant de capturer l'image.
+pipelines raster, puis rend dans une texture hors écran avant de capturer
+l'image : la capture ne dépend pas de la conservation du tampon du canvas.
 
-Éviter les volumes superposés : le transport ne maintient actuellement qu'un
-milieu actif. Le rendu physique des caustiques demande encore une validation
-de convergence ; l'exemple d'eau remplace sa projection raster émissive par
-un fond diffus en path tracing. Le feu représente une flamme lumineuse de suie
-(corps noir orange/jaune), pas une simulation chimique de flamme bleue.
+Les volumes peuvent se superposer ou s'imbriquer, y compris plusieurs instances
+du même matériau, sur les deux moteurs : chaque instance est suivie séparément,
+extinction et émission s'additionnent, et une collision de diffusion conserve
+l'anisotropie du volume qui l'a produite. Le raster additionne de même les
+coefficients le long de sa marche et de ses rayons d'ombre.
+`p17-fire-smoke-light.js` fait ainsi envelopper la pointe de la flamme par la
+fumée.
+
+Les caustiques de l'eau sont calculées physiquement par le path tracer : sous
+un soleil de taille angulaire non nulle (`sunAngularDiameter`), la lumière
+focalisée par la houle atteint le fond par l'estimation directe à travers la
+transmission rugueuse de l'interface. `p17-caustics.js` les montre à 256,
+1 024 et 4 096 échantillons ; l'écart à l'image de référence décroît en
+1/√N. Les houles longues ou très rugueuses focalisent loin sous la surface et
+produisent peu de contraste sur un fond proche. Une source ponctuelle ou un
+`DistantLight` sans taille ne donne pas de caustiques réfractées : aucun chemin
+échantillonné ne peut l'atteindre à travers une interface lisse. `WaterCaustics`
+reste un motif décoratif pour le raster. Le feu représente une flamme lumineuse
+de suie (corps noir orange/jaune), pas une simulation chimique de flamme bleue.
 
 ## Valeurs et types
 

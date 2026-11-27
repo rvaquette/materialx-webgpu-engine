@@ -28,6 +28,9 @@ import { evaluateSurfaceToLayered } from '../../../src/compiler/surface-eval.ts'
 import { IDENTITY4, inverse4, multiply4, rotationAxis4, scaling4, transformPoint, translation4 } from '../../../src/scene/transforms.ts';
 import { resolveSurface, type ResolvedSurface } from '../../../src/materialx/surface-graph.ts';
 import type { ResolvedGraph, ResolvedNode } from '../../../src/materialx/graph.ts';
+import { primitiveMesh } from '../../../src/scene/primitives.ts';
+import { prepareMesh } from '../../../src/geometry/prepare.ts';
+import { pathTraceVolumeDomains } from '../../../src/render/pathtracing/compute.ts';
 
 // A 2x2 quad in the z=0 plane facing +Z, split into two triangles.
 function quadGeometry(prototypeId: string): GeometryResource {
@@ -86,6 +89,82 @@ function build(surface?: RasterSurface): PathTraceScene {
 }
 
 describe('buildPathTraceScene packing', () => {
+  it('transports camera and shadow rays through overlapping volumes, including shared materials', () => {
+    const mesh = prepareMesh(primitiveMesh({ kind: 'cube', size: 2, resolution: 1 }));
+    const cube = {
+      ...quadGeometry('/cube'),
+      streams: [{ name: 'position', data: mesh.positions, components: 3 }, { name: 'normal', data: mesh.normals, components: 3 }],
+      indices: mesh.indices, vertexCount: mesh.positions.length / 3, triangleCount: mesh.indices.length / 3,
+      bounds: { min: [-1, -1, -1], max: [1, 1, 1] },
+    } as GeometryResource;
+    const { resources } = sceneWith();
+    const medium = (sigma: number): Partial<MaterialResource> => ({
+      volumeBoundary: true, volumeMedium: { absorption: [sigma, sigma, sigma], scattering: [0, 0, 0], anisotropy: 0 },
+    });
+    const material = resources.materials.get('mat')!;
+    const make = (shared: boolean, nested: boolean, coincident = false) => buildPathTraceScene({
+      ...resources,
+      geometries: new Map([['/cube', cube]]),
+      materials: new Map([
+        ['a', { ...material, ...medium(0.3) }],
+        ['b', { ...material, ...medium(0.8) }],
+      ]),
+      instances: [
+        { id: '/a', primPath: '/a', prototypeId: '/cube', transform: IDENTITY4, hasGeometry: true, materialKey: 'a' },
+        { id: '/b', primPath: '/b', prototypeId: '/cube', transform: nested ? scaling4(0.5, 0.5, 0.5)
+          : coincident ? IDENTITY4 : translation4(0, 0, 1),
+          hasGeometry: true, materialKey: shared ? 'a' : 'b' },
+      ],
+    });
+    const interior = make(false, false);
+    interior.materials[37] = 0;
+    // Just inside the +x face, nearer than the ray epsilon along the fixed containment direction.
+    expect(createSceneSampler(make(false, false)).initialVolumeFields!([0.99995, 0.121, -0.173]).map(volume => volume.id))
+      .toEqual([0]);
+    const shared = make(true, false, true);
+    expect(pathTraceVolumeDomains(shared)).toEqual([
+      { materialIndex: 0, firstTriangle: 0, triangleCount: 12 },
+      { materialIndex: 0, firstTriangle: 12, triangleCount: 12 },
+    ]);
+    const legacy = { ...shared };
+    delete legacy.transformRanges;
+    expect(() => pathTraceVolumeDomains(legacy)).toThrow(/instance ranges/);
+    const cases = [
+      { scene: make(false, false), start: -2, distance: 5, opticalDepth: 2 * 0.3 + 2 * 0.8 },
+      { scene: make(false, false), start: 0.5, distance: 3, opticalDepth: 0.5 * 0.3 + 1.5 * 0.8 },
+      { scene: make(true, false), start: -2, distance: 5, opticalDepth: 4 * 0.3 },
+      { scene: make(true, false, true), start: -2, distance: 5, opticalDepth: 4 * 0.3 },
+      { scene: make(false, true), start: 0, distance: 3, opticalDepth: 0.3 + 0.5 * 0.8 },
+      { scene: interior, start: -0.5, distance: 0.4, opticalDepth: 0.4 * 0.3 },
+    ];
+    for (const { scene, start, distance, opticalDepth } of cases) {
+      const sampler = createSceneSampler(scene);
+      const rng = createPcg32(316);
+      let sum = 0;
+      const samples = 10000;
+      for (let i = 0; i < samples; i++) sum += sampler.transmittance!([0.173, 0.121, start], [0, 0, 1], distance, rng)[0];
+      expect(Math.abs(sum / samples - Math.exp(-opticalDepth)), `start=${start}, depth=${opticalDepth}, mean=${sum / samples}`).toBeLessThan(0.02);
+    }
+    for (const { scene, start, opticalDepth } of cases.slice(0, 5)) {
+      const sampler = createSceneSampler(scene);
+      sampler.environment = () => [1, 1, 1];
+      const rng = createPcg32(316);
+      let sum = 0;
+      const samples = 10000;
+      for (let i = 0; i < samples; i++) {
+        sum += integratePath(sampler, { origin: [0.173, 0.121, start], direction: [0, 0, 1] }, rng)[0];
+      }
+      expect(Math.abs(sum / samples - Math.exp(-opticalDepth)), `path start=${start}, depth=${opticalDepth}`).toBeLessThan(0.02);
+    }
+    const emitters = make(true, false, true);
+    emitters.materials.set([1, 2, 3], 38);
+    emitters.materials.set([-1, -1, -1], 43);
+    emitters.materials.set([0.5, 0.5, 0.5], 46);
+    emitters.materials[50] = 1;
+    expect(createSceneSampler(emitters).sampleVolumeLight!({ position: [0, 0, 3], normal: [0, 0, 1] }, () => 0.5)?.radiance)
+      .toEqual([2, 4, 6]);
+  }, 30000);
+
   it('keeps coated Burley entry angles and local reflection in separate compensated branches', () => {
     const closure: LayeredClosure = { opacity: 1, lobes: [{
       kind: 'subsurface', weight: 1, color: [0.6, 0.6, 0.6], subsurfaceRadius: [0.02, 0.02, 0.02], subsurfaceTransport: 2,

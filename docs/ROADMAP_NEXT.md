@@ -13,7 +13,7 @@ portabilité et exploitation), 8 (primitives et scènes par script), 9
 (displacement procédural), 10 (documentation intégrée des nœuds), 11
 (aperçus par nœud et bibliothèque de matériaux), 12 (environnement et
 post-traitement), 13 (baking et export de scènes), 14 (lookdev et projets),
-15 (opérations booléennes) et 16 (shaders d'extension), ainsi que l'étude
+15 (opérations booléennes), 16 (shaders d'extension) et 17 (surfaces complexes), ainsi que l'étude
 urgente de la priorité 21 (chargement des bibliothèques MaterialX sans WASM)
 et la priorité 22 (build minimal du Core WASM) sont traitées ; leur historique est dans
 [ROADMAP_DONE.md](ROADMAP_DONE.md). Les limites connues sont recensées dans
@@ -23,115 +23,6 @@ Les priorités suivantes visent à passer d'un moteur de rendu MaterialX à un
 outil de création : construire des scènes, explorer et documenter les nœuds,
 étendre MaterialX à de nouveaux types de shaders, exporter le résultat et
 continuer à optimiser le runtime livré au navigateur.
-
-## Priorité 17 : surfaces complexes (eau, lave, feu, fumée, nuages, …)
-
-Des surfaces « vivantes » prêtes à l'emploi, construites uniquement avec les
-briques précédentes (primitives 2D, displacement procédural animé, volumes,
-émission) et livrées comme matériaux MaterialX paramétrables :
-
-- **eau** : houle et vagues procédurales (somme d'ondes de Gerstner ou spectre
-  de bruit) en displacement animé, normales de détail, transmission et IOR,
-  absorption volumique par profondeur, écume selon la pente ou la crête ;
-- **lave** : croûte sombre fissurée (Worley/Voronoi), émission par température
-  (corps noir) dans les fissures, écoulement animé par advection de bruit,
-  displacement de la croûte ;
-- **feu** : flammes en volume émissif borné par une primitive (cône ou
-  capsule), densité et température tirées d'un bruit 3D advecté vers le haut et
-  atténué avec la hauteur, émission par corps noir (cœur bleu-blanc, pointes
-  orangées), surmontées de fumée (ci-dessous) ; éclairage de la scène par
-  le feu en path tracing (volume émissif échantillonné, scintillement animé) et
-  repli raster en lumière ponctuelle teintée ; braises en particules (`Points`)
-  émissives optionnelles ;
-- **fumée** : volume diffusant et absorbant (albédo élevé, fumée claire de bois ;
-  albédo faible, fumée noire d'incendie) borné par une primitive ou un panache ;
-  densité tirée d'un bruit fractal 3D advecté vers le haut, qui s'élargit, se
-  dilue et se disperse avec la hauteur et le vent ; anisotropie de diffusion
-  (Henyey-Greenstein) pour le contre-jour ; variante colorée (fumigène) ;
-  ombres portées et diffusion multiple en path tracing, passe volume en raster ;
-  source libre ou attachée à un feu, à une cheminée ou à de la lave ;
-- **nuages** : volumes à très forte diffusion (albédo proche de 1) en couche
-  d'altitude ou en nuages isolés bornés par des primitives ; forme par bruit de
-  Perlin-Worley à plusieurs échelles érodé sur les bords, profil vertical par
-  type (cumulus à base plate et sommet bourgeonnant, stratus en nappe, cirrus
-  fibreux), couverture et densité réglables ; diffusion multiple
-  approchée (lobes avant/arrière, assombrissement « powder » sur les bords) et
-  liseré argenté en contre-jour ; ombres portées sur le sol, éclairage par le
-  ciel de la priorité 12 ; dérive animée par le vent ; repli raster par
-  marche de rayons à pas réduit ;
-- autres préréglages : glace (diffusion sous-surfacique, inclusions), boue ou
-  sable mouillé (mélange selon un masque d'humidité) ;
-- chaque surface expose quelques paramètres de haut niveau (vitesse, échelle,
-  couleur, intensité) plutôt que tout le graphe, en `nodegraph` réutilisable ;
-- script : `water = new Water(); water.speed = 0.5; pool.material = water;` ;
-- éclairage cohérent : la lave éclaire la scène en path tracing (émission
-  échantillonnée), l'eau réfracte et caustiques au path tracer ;
-- vérification raster/path tracing et rendus golden pour chaque préréglage.
-
-**Critère d'aboutissement :** une scène « plan d'eau », une scène « coulée de
-lave », un « feu de camp », un panache de fumée et un ciel de cumulus
-s'obtiennent en quelques lignes de script, animés et sans texture externe ; le
-feu éclaire la scène, sa fumée et les nuages projettent des ombres en path
-tracing.
-
-**Avancement et choix de précision :** les huit préréglages disposent de graphes
-procéduraux, d'exemples et d'animations ; les horloges des volumes reconstruisent
-effectivement leurs champs. Le feu éclaire maintenant les surfaces par
-échantillonnage de sa véritable émission volumique, sans lumière ponctuelle en
-path tracing. L'estimateur est vérifié contre l'atténuation Beer-Lambert et la
-décroissance géométrique ; les grilles émissives sont échantillonnées par
-importance. Les nuages utilisent la diffusion multiple HG plutôt qu'un
-assombrissement artificiel de leur densité. La flamme actuelle est une flamme
-de suie orange/jaune ; le cœur bleu chimique n'est pas simulé.
-
-La comparaison des nuages a aussi révélé un éclairage inadapté au PT : une
-lumière ponctuelle proche servait de soleil et blanchissait la diffusion
-multiple. Les exemples utilisent maintenant un `DistantLight` à rayons
-parallèles, un ciel diffus sans second soleil, 1 024 échantillons et une
-profondeur de 24 sur ordinateur. L'exposition n'est pas modifiée.
-
-| Raster : diffusion simple | PT : diffusion multiple et ombre volumique sur le sol |
-|---|---|
-| ![Nuages raster](images/p17-clouds/01-raster/frame-000.png) | ![Nuages PT](images/p17-clouds/02-pathtracing/frame-000.png) |
-
-**Passe de réalisme (path tracing) :** les rendus les plus visibles ont été
-revus à 512 px avec 256 à 768 échantillons.
-
-- **Eau** : cinq vagues directionnelles dispersives (les longues vont plus vite)
-  à crêtes aiguisées remplacent la somme de deux sinus ; l'écume est la crête
-  rompue par un bruit animé (traînées plutôt que taches blanches). L'exemple est
-  une mer au large : grand plan, caméra rasante, soleil latéral, fond
-  absorbant. Le reflet de Fresnel du ciel et les éclats solaires viennent du
-  path tracer.
-- **Lave** : la température du corps noir et l'émission décroissent du centre
-  des fissures (jaune-orangé) vers leurs bords (rouge sombre) avec une
-  modulation de bruit animée ; fissures plus fines, plaques plus grandes et
-  relief réduit.
-- **Glace** : la double comptabilisation sous-surface + transmission, source du
-  bruit chromatique, est supprimée. La glace est un diélectrique clair
-  (IOR 1,31) avec des inclusions blanchâtres diffuses.
-- **Boue et sable** : seule la lumière de l'exemple était trop forte pour les
-  unités actuelles (intensité 45 au lieu de 6) ; les matériaux sont inchangés.
-
-| Eau | Lave | Glace, boue, sable mouillé |
-|---|---|---|
-| ![Eau PT](images/p17-water/02-pathtracing/frame-012.png) | ![Lave PT](images/p17-lava/02-pathtracing/frame-012.png) | ![Surfaces PT](images/p17-surface-presets/02-pathtracing/frame-012.png) |
-
-**Baking des volumes procéduraux :** le path tracer évalue maintenant les
-grilles 64³ avec un compute shader WGSL généré depuis l'IR MaterialX, puis
-rapatrie les coefficients pour calculer le majorant et la CDF d'émission. Cela
-évite les plus de 100 s mesurées pour un baking 64³ par l'interpréteur CPU.
-L'évaluation CPU reste la référence et le repli pour les volumes alimentés par
-des champs USD ; les rendus P17 devront encore être régénérés et vérifiés
-visuellement avec cette résolution accrue.
-
-La priorité reste **en cours** : la superposition de milieux, la convergence
-des caustiques physiques de l'eau, la finesse des volumes (ci-dessus) et
-l'acceptation visuelle de tous les profils de nuages restent à résoudre ou à
-vérifier. Les captures de documentation ne
-remplacent pas les tests golden. Les petites scènes de régression P17 sont
-régénérables avec `npx vite-node scripts/build-p17-golden-fixtures.ts` et
-utilisent uniquement les graphes exportés, sans texture externe.
 
 ## Priorité 18 : déformation volumique de surfaces complexes
 

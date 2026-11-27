@@ -30,6 +30,51 @@ export interface VolumeField {
   sample(position: Vec3): VolumeMedium;
 }
 
+export interface VolumeDomain {
+  materialIndex: number;
+  firstTriangle: number;
+  triangleCount: number;
+}
+
+/** Per-instance winding counts, using triangle ranges to distinguish shared materials. */
+export function volumeDomainsWgsl(domains: readonly VolumeDomain[]): string {
+  if (domains.length === 0) throw new Error('Volume transport requires at least one domain.');
+  for (const domain of domains) {
+    if (![domain.materialIndex, domain.firstTriangle, domain.triangleCount].every(Number.isSafeInteger)
+      || domain.materialIndex < 0 || domain.materialIndex > 0xffffffff || domain.firstTriangle < 0 || domain.triangleCount <= 0
+      || domain.firstTriangle + domain.triangleCount > 0xffffffff) throw new Error('Invalid volume domain.');
+  }
+  const count = domains.length;
+  return `
+const MX_VOLUME_DOMAIN_COUNT = ${count}u;
+const mx_volume_domains: array<vec3u, ${count}> = array<vec3u, ${count}>(
+  ${domains.map(domain => `vec3u(${domain.materialIndex}u, ${domain.firstTriangle}u, ${domain.firstTriangle + domain.triangleCount}u)`).join(',\n  ')}
+);
+fn mx_volume_domain_inside(domain: vec3u, point: vec3f) -> u32 {
+  let direction = normalize(vec3f(0.739, 0.521, 0.427));
+  var origin = point;
+  var count = 0i;
+  for (var crossing = 0u; crossing <= domain.z - domain.y; crossing++) {
+    // The point is already off any surface: a ray epsilon here would miss a face just ahead of it.
+    let hit = traverse_range(origin, direction, 1e30, false, 0.0, domain.y, domain.z);
+    if (!hit.hitAny) { return u32(max(count, 0)); }
+    let normal = cross(tri_vertex(hit.tri, 1u) - tri_vertex(hit.tri, 0u), tri_vertex(hit.tri, 2u) - tri_vertex(hit.tri, 0u));
+    count += select(-1i, 1i, dot(direction, normal) > 0.0);
+    origin += direction * (hit.t + RAY_EPS);
+  }
+  return u32(max(count, 0));
+}
+fn mx_update_volume_domains(point: vec3f, counts: ptr<function, array<u32, ${count}>>) -> u32 {
+  var total = 0u;
+  for (var i = 0u; i < MX_VOLUME_DOMAIN_COUNT; i++) {
+    (*counts)[i] = mx_volume_domain_inside(mx_volume_domains[i], point);
+    total += (*counts)[i];
+  }
+  return total;
+}
+`;
+}
+
 /** Uniform domain sampling, with power-weighted emitter selection. Null samples are not resampled. */
 export function sampleVolumeEmitter(
   materials: Float32Array, data: Float32Array | undefined, origin: Vec3, rng: () => number,
@@ -144,6 +189,63 @@ export function sampleVolumeTransport(
       return { scattered: true, t, weight, emission, anisotropy: m.anisotropy };
     }
     for (let i = 0; i < 3; i++) weight[i] = weight[i]! * Math.max(0, 1 - sigmaT[i]! / field.majorant) / (1 - p);
+    if (Math.max(...weight) === 0) return { scattered: false, t: tMax, weight: [0, 0, 0], emission, anisotropy: 0 };
+  }
+}
+
+/** Weighted delta tracking for overlapping fields, retaining each component's phase function. */
+export function sampleVolumeMixture(
+  fields: readonly VolumeField[], origin: Vec3, direction: Vec3, tMax: number, rng: () => number,
+): { scattered: boolean; t: number; weight: Vec3; emission: Vec3; anisotropy: number } {
+  if (fields.length === 1) return sampleVolumeTransport(fields[0]!, origin, direction, tMax, rng);
+  if (!Number.isFinite(tMax) || tMax < 0) throw new Error('Explicit volumes require a closed finite boundary.');
+  if (fields.some(field => !(field.majorant >= 0) || !Number.isFinite(field.majorant))) throw new Error('Invalid volume majorant.');
+  const majorant = fields.reduce((sum, field) => sum + field.majorant, 0);
+  if (!Number.isFinite(majorant)) throw new Error('Invalid volume mixture majorant.');
+  const weight: [number, number, number] = [1, 1, 1];
+  const emission: [number, number, number] = [0, 0, 0];
+  const position = (t: number): Vec3 => [origin[0] + direction[0] * t, origin[1] + direction[1] * t, origin[2] + direction[2] * t];
+  if (majorant === 0) {
+    const point = position(rng() * tMax);
+    for (const field of fields) {
+      const source = field.sample(point).emission;
+      for (let c = 0; c < 3; c++) emission[c] = emission[c]! + (source?.[c] ?? 0) * tMax;
+    }
+    return { scattered: false, t: tMax, weight, emission, anisotropy: 0 };
+  }
+  let t = 0;
+  for (;;) {
+    t += -Math.log(1 - rng()) / majorant;
+    if (t >= tMax) return { scattered: false, t: tMax, weight, emission, anisotropy: 0 };
+    const point = position(t);
+    const media = fields.map(field => field.sample(point));
+    const sigmaT = [0, 0, 0];
+    const peaks: number[] = [];
+    for (const [index, medium] of media.entries()) {
+      const peak = Math.max(...medium.scattering);
+      peaks.push(peak);
+      for (let c = 0; c < 3; c++) {
+        const extinction = medium.absorption[c]! + medium.scattering[c]!;
+        if (extinction > fields[index]!.majorant * (1 + 1e-5)) throw new Error('Volume extinction exceeds its majorant.');
+        sigmaT[c] = sigmaT[c]! + extinction;
+        emission[c] = emission[c]! + weight[c]! * (medium.emission?.[c] ?? 0) / majorant;
+      }
+    }
+    const scatter = peaks.reduce((sum, peak) => sum + peak, 0);
+    let choice = rng() * majorant;
+    if (choice < scatter) {
+      for (const [index, peak] of peaks.entries()) {
+        if (choice < peak) {
+          const medium = media[index]!;
+          for (let c = 0; c < 3; c++) weight[c] = weight[c]! * medium.scattering[c]! / peak;
+          return { scattered: true, t, weight, emission, anisotropy: medium.anisotropy };
+        }
+        choice -= peak;
+      }
+      throw new Error('Invalid volume mixture scattering probabilities.');
+    }
+    const nullProbability = 1 - scatter / majorant;
+    for (let c = 0; c < 3; c++) weight[c] = weight[c]! * Math.max(0, 1 - sigmaT[c]! / majorant) / nullProbability;
     if (Math.max(...weight) === 0) return { scattered: false, t: tMax, weight: [0, 0, 0], emission, anisotropy: 0 };
   }
 }
@@ -463,7 +565,8 @@ ${grid ? `
   return m;
 }
 fn volume_phase(cosine: f32, g: f32) -> f32 {
-  return (1.0-g*g)/(12.566370614359 * pow(max(1.0+g*g+2.0*g*cosine,1e-6),1.5));
+  let gg = clamp(g, -0.99, 0.99);
+  return (1.0-gg*gg)/(12.566370614359 * pow(max(1.0+gg*gg+2.0*gg*clamp(cosine,-1.0,1.0),1e-6),1.5));
 }
 `;
 }
@@ -521,3 +624,95 @@ fn volume_sample(index: u32, ro: vec3f, rd: vec3f, tMax: f32, state: ptr<functio
   }
 }
 `;
+
+export function volumeMixtureWgsl(count: number): string {
+  if (!Number.isSafeInteger(count) || count < 1) throw new Error('Volume transport requires at least one domain.');
+  return `
+fn volume_sample_mixture(counts: ptr<function, array<u32, ${count}>>, interior: bool,
+  interiorIndex: u32, medium: MxMedium, ro: vec3f, rd: vec3f, tMax: f32, state: ptr<function, u32>) -> VolumePathSample {
+  var majorant = 0.0;
+  for (var i = 0u; i < MX_VOLUME_DOMAIN_COUNT; i++) {
+    majorant += f32((*counts)[i]) * volume_majorant(mx_volume_domains[i].x);
+  }
+  if (interior) {
+    if (interiorIndex != 0xffffffffu) { majorant += volume_majorant(interiorIndex); }
+    else {
+      let extinction = medium.sigmaA + medium.sigmaS;
+      majorant += max(extinction.x, max(extinction.y, extinction.z)) * 1.000001;
+    }
+  }
+  var result = VolumePathSample(false, tMax, vec3f(1.0), vec3f(0.0), 0.0);
+  // A missed boundary (watertightness) must not march an unbounded ray: like volume_sample,
+  // clamp to the bounds of the active fields. Each bound contains its mesh, so this is tMax otherwise.
+  var segment = 0.0;
+  for (var i = 0u; i < MX_VOLUME_DOMAIN_COUNT; i++) {
+    if ((*counts)[i] > 0u) { segment = max(segment, volume_segment_distance(mx_volume_domains[i].x, ro, rd, tMax)); }
+  }
+  if (interior) {
+    if (interiorIndex != 0xffffffffu) { segment = max(segment, volume_segment_distance(interiorIndex, ro, rd, tMax)); }
+    else { segment = tMax; }
+  }
+  result.t = segment;
+  if (majorant == 0.0) {
+    let point = ro + rd * (rng_next(state) * segment);
+    for (var i = 0u; i < MX_VOLUME_DOMAIN_COUNT; i++) {
+      if ((*counts)[i] > 0u) {
+        result.emission += f32((*counts)[i]) * volume_field(mx_volume_domains[i].x, point).emission * segment;
+      }
+    }
+    if (interior && interiorIndex != 0xffffffffu) { result.emission += volume_field(interiorIndex, point).emission * segment; }
+    return result;
+  }
+  var t = 0.0;
+  loop {
+    t += -log(1.0 - rng_next(state)) / majorant;
+    if (t >= segment) { return result; }
+    let point = ro + rd * t;
+    var sigmaT = vec3f(0.0);
+    var emission = vec3f(0.0);
+    var scatter = 0.0;
+    var choice = rng_next(state) * majorant;
+    var selected = false;
+    var selectedScattering = vec3f(0.0);
+    var selectedPeak = 0.0;
+    var selectedG = 0.0;
+    for (var i = 0u; i < MX_VOLUME_DOMAIN_COUNT + 1u; i++) {
+      var multiplicity = 0u;
+      var m: VolumeField;
+      if (i < MX_VOLUME_DOMAIN_COUNT) {
+        multiplicity = (*counts)[i];
+        if (multiplicity > 0u) { m = volume_field(mx_volume_domains[i].x, point); }
+      } else if (interior) {
+        multiplicity = 1u;
+        if (interiorIndex != 0xffffffffu) { m = volume_field(interiorIndex, point); }
+        else { m = VolumeField(medium.sigmaA, medium.sigmaS, medium.g, vec3f(0.0)); }
+      }
+      if (multiplicity == 0u) { continue; }
+      let peak = max(m.scattering.x, max(m.scattering.y, m.scattering.z));
+      let component = f32(multiplicity) * peak;
+      sigmaT += f32(multiplicity) * (m.absorption + m.scattering);
+      emission += f32(multiplicity) * m.emission;
+      scatter += component;
+      if (!selected) {
+        if (choice < component) {
+          selected = true;
+          selectedScattering = m.scattering;
+          selectedPeak = peak;
+          selectedG = m.anisotropy;
+        } else { choice -= component; }
+      }
+    }
+    result.emission += result.weight * emission / majorant;
+    if (selected) {
+      result.scattered = true;
+      result.t = t;
+      result.g = selectedG;
+      result.weight *= selectedScattering / selectedPeak;
+      return result;
+    }
+    result.weight *= max(vec3f(0.0), vec3f(1.0) - sigmaT / majorant) / (1.0 - scatter / majorant);
+    if (max(result.weight.x, max(result.weight.y, result.weight.z)) == 0.0) { return result; }
+  }
+}
+`;
+}

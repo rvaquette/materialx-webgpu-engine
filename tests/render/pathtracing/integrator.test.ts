@@ -335,6 +335,33 @@ describe('SSS walk event budget', () => {
   const scattering = { absorption: [0, 0, 0], scattering: [1, 1, 1], anisotropy: 0 } as const;
   const vacuum = { absorption: [0, 0, 0], scattering: [0, 0, 0], anisotropy: 0 } as const;
 
+  it('updates overlapping volume boundaries during a selective subsurface walk', () => {
+    let queries = 0;
+    let containmentQueries = 0;
+    const field = { majorant: 0, sample: () => ({ ...vacuum, emission: [1, 1, 1] as const }) };
+    const scene = makeScene({
+      initialVolumeFields() {
+        containmentQueries++;
+        return containmentQueries === 1 ? [] : [{ id: 8, field }];
+      },
+      intersect() {
+        queries++;
+        if (queries === 1) return {
+          position: [0, 0, 0], normal: [0, 0, 1], interiorMedium: vacuum,
+          subsurfaceInterior: true, subsurfaceSelective: true, subsurfaceDomain: 7,
+        };
+        if (queries === 2) return {
+          position: [0, 0, -1], normal: [0, 0, 1], volumeBoundary: true, volumeBoundaryId: 8, interiorField: field,
+        };
+        return { position: [0, 0, -2], normal: [0, 0, 1], subsurfaceDomain: 7 };
+      },
+      sampleBsdf: () => ({ direction: [0, 0, -1], value: [1, 1, 1], pdf: 1, transmission: true }),
+    });
+    const radiance = integratePath(scene, cameraRay, () => 0.5, { maxBounces: 1 });
+    expect(containmentQueries).toBe(2);
+    expect(radiance[0]).toBeCloseTo(1, 3);
+  });
+
   it.each(['collision', 'reflection', 'mixed'] as const)(
     'allows 255 %s events to exit but truncates at 256 before the next traversal',
     (eventKind) => {

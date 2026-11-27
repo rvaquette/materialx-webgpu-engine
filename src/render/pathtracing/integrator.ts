@@ -8,7 +8,7 @@
 import type { Vec3 } from '../../scene/transforms.ts';
 import type { HomogeneousMedium } from './media.ts';
 import { phaseHG, sampleHenyeyGreenstein, sampleHomogeneous } from './media.ts';
-import { sampleVolumeTransport, type VolumeField } from '../volume-field.ts';
+import { sampleVolumeMixture, sampleVolumeTransport, type VolumeField } from '../volume-field.ts';
 import { MAX_SSS_WALK_EVENTS, sampleDavisDensity, topologyReflectionProbability } from './subsurface.ts';
 
 export type Rng = () => number;
@@ -122,6 +122,7 @@ export interface SurfaceHit {
   /** Invisible closed boundary of a pure volumeshader (no BSDF event). */
   volumeBoundary?: boolean;
   interiorField?: VolumeField;
+  volumeBoundaryId?: number;
 }
 
 export interface BsdfSample {
@@ -150,6 +151,7 @@ export interface LightSample {
 
 export interface SceneSampler {
   intersect(ray: Ray): SurfaceHit | null;
+  initialVolumeFields?(origin: Vec3): readonly { id: number; field: VolumeField }[];
   sampleSubsurface?(hit: SurfaceHit, rng: Rng, outgoing?: Vec3): { hit: SurfaceHit; weight: Vec3; outgoing?: Vec3; directLighting?: boolean } | null | undefined;
   sampleBsdf(hit: SurfaceHit, wo: Vec3, rng: Rng): BsdfSample | null;
   evalBsdf(hit: SurfaceHit, wo: Vec3, wi: Vec3): { value: Vec3; pdf: number };
@@ -201,6 +203,8 @@ export function integratePath(
   let prevHit: SurfaceHit | null = null;
   let medium: HomogeneousMedium | null = options.initialMedium ?? null;
   let field: VolumeField | undefined;
+  const volumes = new Map<number | VolumeField | HomogeneousMedium, { field?: VolumeField; medium?: HomogeneousMedium }>();
+  for (const volume of scene.initialVolumeFields?.(cameraRay.origin) ?? []) volumes.set(volume.id, { field: volume.field });
   let volumeEmissionNee = false;
   let interiorIor = 1;
   let subsurfaceWalk = false;
@@ -217,27 +221,48 @@ export function integratePath(
     if (subsurfaceWalk && subsurfaceEvents >= MAX_SSS_WALK_EVENTS) break;
     let hit = scene.intersect(ray);
     if (subsurfaceWalk && medium && subsurfaceSelective && subsurfaceDomain !== undefined) {
-      for (let crossing = 0; hit && hit.subsurfaceDomain !== subsurfaceDomain && crossing < 128; crossing++) {
+      for (let crossing = 0; hit && !hit.volumeBoundary && hit.subsurfaceDomain !== subsurfaceDomain && crossing < 128; crossing++) {
         hit = scene.intersect({ ...ray, minDistance: distanceBetween(ray.origin, hit.position) + 1e-6 });
       }
-      if (hit && hit.subsurfaceDomain !== subsurfaceDomain) break;
+      if (hit && !hit.volumeBoundary && hit.subsurfaceDomain !== subsurfaceDomain) break;
     }
     const tMax = hit ? distanceBetween(ray.origin, hit.position) : Infinity;
-    if (pathStep === 0 && hit?.volumeBoundary && dot(ray.direction,hit.normal) > 0) {
-      field = hit.interiorField;
-      medium = hit.interiorMedium ?? null;
+    if (pathStep === 0 && !scene.initialVolumeFields && hit?.volumeBoundary && dot(ray.direction,hit.normal) > 0) {
+      const key = hit.volumeBoundaryId ?? hit.interiorField ?? hit.interiorMedium;
+      if (key !== undefined) volumes.set(key, {
+        ...(hit.interiorField ? { field: hit.interiorField } : {}),
+        ...(hit.interiorMedium ? { medium: hit.interiorMedium } : {}),
+      });
     }
 
-    if (medium || field) {
-      const volumeSample = field ? sampleVolumeTransport(field,ray.origin,ray.direction,tMax,rng) : undefined;
-      const mi = volumeSample ?? sampleHomogeneous(medium!, tMax, rng);
+    if (medium || field || volumes.size) {
+      const active = [...volumes.values()];
+      if (field) active.push({ field });
+      else if (medium) active.push({ medium });
+      const fields = active.map(entry => entry.field ?? {
+        majorant: Math.max(...entry.medium!.absorption.map((value, i) => value + entry.medium!.scattering[i]!)) * (1 + 1e-6),
+        sample: () => entry.medium!,
+      });
+      const volumeSample = active.length > 1 ? sampleVolumeMixture(fields, ray.origin, ray.direction, tMax, rng)
+        : active[0]!.field ? sampleVolumeTransport(active[0]!.field, ray.origin, ray.direction, tMax, rng) : undefined;
+      const mi = volumeSample ?? sampleHomogeneous(active[0]!.medium!, tMax, rng);
       if (volumeSample && !volumeEmissionNee) radiance = add(radiance, mul(beta,volumeSample.emission));
       beta = mul(beta, mi.weight);
-      const g = volumeSample?.anisotropy ?? medium!.anisotropy;
+      const g = volumeSample?.anisotropy ?? active[0]!.medium!.anisotropy;
       if (mi.scattered) {
         if (!subsurfaceWalk && bounces >= maxBounces) break;
         const point: V = add(ray.origin, scale(ray.direction, mi.t));
         const wo = neg(ray.direction);
+        const volumeNee = active.some(entry => entry.field) && !subsurfaceWalk && scene.sampleVolumeLight !== undefined;
+        if (volumeNee) {
+          const emitter = scene.sampleVolumeLight!({ position: point, normal: wo }, rng);
+          if (emitter && emitter.pdf > 0) {
+            const tr = scene.transmittance?.(point, emitter.direction, emitter.distance, rng)
+              ?? (scene.occluded(point, emitter.direction, emitter.distance) ? [0, 0, 0] : [1, 1, 1]);
+            const phase = phaseHG(dot(wo, emitter.direction), g);
+            radiance = add(radiance, scale(mul(beta, mul(tr, emitter.radiance)), phase / emitter.pdf));
+          }
+        }
         if (scene.transmittance) {
           const ls = scene.sampleLight({ position: point, normal: wo }, rng);
           if (ls && ls.pdf > 0) {
@@ -253,9 +278,9 @@ export function integratePath(
         const ps = sampleHenyeyGreenstein(wo, g, rng(), rng());
         bsdfPdf = ps.pdf;
         specularBounce = false;
-        volumeEmissionNee = false;
+        volumeEmissionNee = volumeNee;
         prevHit = null;
-        ray = { origin: point, direction: ps.wi, ...(field ? { minDistance:1e-7 } : {}) };
+        ray = { origin: point, direction: ps.wi, ...(active.some(entry => entry.field) ? { minDistance:1e-7 } : {}) };
         const rouletteDepth = subsurfaceWalk ? subsurfaceEvents : bounces;
         if (rouletteDepth >= minBounces && (!subsurfaceWalk || (subsurfaceEvents - minBounces) % 32 === 0)) {
           const rr = russianRoulette(beta, rng());
@@ -283,11 +308,23 @@ export function integratePath(
     }
 
     if (hit.volumeBoundary) {
-      medium = dot(ray.direction, hit.normal) < 0 ? hit.interiorMedium ?? null : null;
-      field = dot(ray.direction,hit.normal) < 0 ? hit.interiorField : undefined;
-      subsurfaceWalk = false;
-      subsurfaceEvents = 0;
-      ray = { origin: add(hit.position, scale(ray.direction, 1e-4)), direction: ray.direction };
+      const origin = add(hit.position, scale(ray.direction, 1e-4));
+      if (scene.initialVolumeFields) {
+        volumes.clear();
+        for (const volume of scene.initialVolumeFields(origin)) volumes.set(volume.id, { field: volume.field });
+      } else {
+        const key = hit.volumeBoundaryId ?? hit.interiorField ?? hit.interiorMedium;
+        if (key !== undefined) {
+          if (dot(ray.direction, hit.geometricNormal ?? hit.normal) < 0) {
+            volumes.set(key, {
+              ...(hit.interiorField ? { field: hit.interiorField } : {}),
+              ...(hit.interiorMedium ? { medium: hit.interiorMedium } : {}),
+            });
+          } else volumes.delete(key);
+        }
+      }
+      // The crossed face is RAY_EPS behind: a face just ahead must not be skipped.
+      ray = { origin, direction: ray.direction, minDistance: 1e-7 };
       continue;
     }
     const boundaryNormal = hit.geometricNormal ?? hit.normal;

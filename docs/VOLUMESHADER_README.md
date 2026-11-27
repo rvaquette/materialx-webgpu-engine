@@ -8,9 +8,10 @@
   y compris lorsque l'extinction est nulle.
 - Path tracer CPU/GPU : transport RGB par delta tracking pondere pour les
   milieux explicites. Les anciennes voies verre/SSS restent disponibles.
-- Raster GPU : integration Beer-Lambert, emission et diffusion simple avec
-  ombres, sur les frontieres reelles du maillage, puis composition en HDR avant
-  le tonemapping. Les frontieres des volumes purs ne sont pas dessinees opaques.
+- Raster GPU : integration Beer-Lambert, emission et diffusion multiple
+  approchee avec ombres, sur les frontieres reelles du maillage, puis
+  composition en HDR avant le tonemapping. Les frontieres des volumes purs ne
+  sont pas dessinees opaques.
 - Champs proceduraux : echantillonnage en coordonnees monde sur une grille
   32 x 32 x 32 par materiau, interpolation trilineaire commune aux deux backends,
   majorant calculé sur le champ reconstruit. Les changements des parametres
@@ -35,9 +36,12 @@ Les geometries sont des `Mesh`/OBJ, avec de vraies references MaterialX.
 
 ## Limites explicites
 
-- Maillages fermes et correctement orientes ; pas de pile de milieux imbriques.
-- Raster : diffusion simple, sans trajet refracte pour le verre + volume ni
-  diffusion multiple. 64 pas par segment camera, 12 pour l'attenuation lumineuse.
+- Maillages fermes et correctement orientes. Les volumes purs superposes ou
+  imbriques (y compris plusieurs instances d'un meme materiau) sont suivis
+  instance par instance ; un volume pur dans le milieu interieur d'un verre
+  ou d'un objet SSS est melange avec ce milieu.
+- Raster : diffusion multiple approchee par octaves, sans trajet refracte pour
+  le verre + volume. 64 pas par segment camera, 12 pour l'attenuation lumineuse.
 - Le champ rendu est la grille reconstruite, pas le procede continu exact :
   les details plus fins que la grille peuvent etre perdus.
 - Seul `uniform_edf` est accepte ; le constructeur demande encore un VDF
