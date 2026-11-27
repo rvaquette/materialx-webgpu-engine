@@ -6,7 +6,7 @@
     "device": ""
   },
   "sources": {
-    "docs/generated/materialx-nodedefs.json": "a88ebd81b9205f3ed4ca285ebb6a18bc3e5fc050fdc322fe86d081d470ceb3fa",
+    "docs/generated/materialx-nodedefs.json": "613e642160f7924aa6b354eaedb3958950c861cc350e3eb5a0ea26354b37e9c0",
     "scripts/materialx-compatibility-cpu.ts": "d04bc249db880a58da2ecb0240bfd8bfcca14450c82b8c8af1356cadf415f5cd",
     "scripts/materialx-compatibility-gpu.mjs": "9d60dd078a7b2515f20fad4a6b3e437839a0b4c4566812e64706a12ca5921d78",
     "src/compiler/cache.ts": "80e1de67feafce519b63d79ec1c1dd92f87bd253450b8e5157b2bbb7707818af",

@@ -160,15 +160,30 @@ export const COMPATIBILITY_CASES = {
     condition: 'A single unconnected value node evaluated by the CPU IR interpreter using script-recognized literal defaults and fixed varyings. Not a reference comparison or a guarantee of bakeable output; other inputs and graphs may fail.',
     evidence: ['scripts/materialx-compatibility-cpu.ts', 'tests/materialx/materialx-compatibility.test.ts', 'src/compiler/ir-eval.ts'],
   },
+  cpuProbeDisneyRejected: {
+    backends: { raster: 'unknown', materialxPathTracing: 'unknown', disney: 'unsupported', cpuBake: 'partial' },
+    condition: 'CPU: one unconnected value node with recorded literal defaults and fixed varyings; not a reference comparison or baking guarantee. Disney: a synthetic node with recorded NodeDef defaults and no authored inputs, connected directly to standard_surface base (float) or base_color (color3), without editor parameters, is rejected; other graphs and constant-folded parameters may differ.',
+    evidence: ['scripts/materialx-compatibility-cpu.ts', 'scripts/materialx-compatibility-disney.ts', 'src/render/pathtracing/disney-standard-material.ts', 'tests/materialx/materialx-compatibility.test.ts'],
+  },
   cpuUnimplemented: {
     backends: { raster: 'unknown', materialxPathTracing: 'unknown', disney: 'unknown', cpuBake: 'unsupported' },
     condition: 'An unflattened value node reached the CPU IR interpreter and its operator had no evaluator. An expanded nodegraph or other context may differ.',
     evidence: ['scripts/materialx-compatibility-cpu.ts', 'src/compiler/ir-eval.ts'],
   },
+  cpuUnimplementedDisneyRejected: {
+    backends: { raster: 'unknown', materialxPathTracing: 'unknown', disney: 'unsupported', cpuBake: 'unsupported' },
+    condition: 'The exact unconnected CPU value probe reached an operator without an evaluator. A synthetic node with recorded NodeDef defaults and no authored inputs, connected directly to standard_surface base (float) or base_color (color3) without editor parameters, is rejected by Disney. Expanded graphs and other contexts may differ.',
+    evidence: ['scripts/materialx-compatibility-cpu.ts', 'scripts/materialx-compatibility-disney.ts', 'src/compiler/ir-eval.ts', 'src/render/pathtracing/disney-standard-material.ts'],
+  },
   cpuProbeFailure: {
     backends: { raster: 'unknown', materialxPathTracing: 'unknown', disney: 'unknown', cpuBake: 'unsupported' },
     condition: 'The exact unconnected CPU probe using the recorded defaults and fixed varyings failed or produced an invalid shape or non-finite value; inspect cpuProbe.message. Other input values and contexts may behave differently.',
     evidence: ['scripts/materialx-compatibility-cpu.ts', 'src/compiler/ir-eval.ts'],
+  },
+  cpuProbeFailureDisneyRejected: {
+    backends: { raster: 'unknown', materialxPathTracing: 'unknown', disney: 'unsupported', cpuBake: 'unsupported' },
+    condition: 'The exact unconnected CPU probe using the recorded defaults and fixed varyings failed or produced an invalid shape or non-finite value; inspect cpuProbe.message. A synthetic node with recorded NodeDef defaults and no authored inputs, connected directly to standard_surface base (float) or base_color (color3) without editor parameters, is rejected by Disney. Other contexts may differ.',
+    evidence: ['scripts/materialx-compatibility-cpu.ts', 'scripts/materialx-compatibility-disney.ts', 'src/compiler/ir-eval.ts', 'src/render/pathtracing/disney-standard-material.ts'],
   },
   nonNumericOutput: {
     backends: { raster: 'unknown', materialxPathTracing: 'unknown', disney: 'unknown', cpuBake: 'unsupported' },
@@ -183,6 +198,7 @@ export function compatibilityCase(
   definition: Pick<ScriptNodeDef, 'category' | 'outputs'>,
   origin: string,
   cpuProbe?: { status: string; message?: string },
+  disneyProbe?: { status: string },
 ): CompatibilityCaseId {
   if (origin === 'engine') {
     switch (definition.category) {
@@ -238,8 +254,10 @@ export function compatibilityCase(
     if (['sqrt', 'ln', 'exp', 'power', 'safepower'].includes(definition.category)) return 'floatMath';
   }
   if (type !== undefined && ['string', 'filename', 'BSDF', 'EDF', 'VDF', 'surfaceshader', 'volumeshader', 'displacementshader', 'lightshader', 'material'].includes(type)) return 'nonNumericOutput';
-  if (cpuProbe?.status === 'evaluated') return 'cpuProbe';
-  if (cpuProbe?.status === 'error' && cpuProbe.message?.startsWith('IrEvalError: no CPU evaluation for node ')) return 'cpuUnimplemented';
-  if (cpuProbe?.status === 'error') return 'cpuProbeFailure';
+  if (cpuProbe?.status === 'evaluated') return disneyProbe?.status === 'rejected' ? 'cpuProbeDisneyRejected' : 'cpuProbe';
+  if (cpuProbe?.status === 'error' && cpuProbe.message?.startsWith('IrEvalError: no CPU evaluation for node ')) {
+    return disneyProbe?.status === 'rejected' ? 'cpuUnimplementedDisneyRejected' : 'cpuUnimplemented';
+  }
+  if (cpuProbe?.status === 'error') return disneyProbe?.status === 'rejected' ? 'cpuProbeFailureDisneyRejected' : 'cpuProbeFailure';
   return 'unknown';
 }

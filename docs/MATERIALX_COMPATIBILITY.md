@@ -99,12 +99,35 @@ prouve pas que tous les graphes utilisant le nœud échouent.
 À la référence épinglée, 823 NodeDefs sont listées, dont 17 extensions et
 deux anciennes versions accessibles par nom. Parmi elles, 610 variantes
 disposent d'une sonde CPU réussie sans autre règle particulière. Pour
-ces variantes, les statuts raster, PT et Disney restent non établis : la sonde ne démontre ni la
-fidélité à MaterialX ni le comportement GPU. Les autres cas sont qualifiés
+ces variantes, les statuts raster et PT restent non établis : la sonde ne démontre
+ni la fidélité à MaterialX ni le comportement GPU. Certaines disposent aussi
+d'une qualification Disney dans le seul contexte décrit ci-dessous. Les autres cas sont qualifiés
 uniquement dans les conditions indiquées. Ces inconnues ne sont
 pas des rejets avérés, et les tableaux par famille ci-dessous ne suffisent pas
 à déduire leur statut individuel. La liste n'est donc pas encore une qualification
 exhaustive de chaque variante sur chaque backend.
+Dans l'inventaire actuel, le statut reste `unknown` pour 726 NodeDefs en
+raster, 726 en PT MaterialX, 596 en Disney et une en CPU/baking. Ces comptes
+incluent les cas dont seule une condition particulière est documentée.
+
+### Sonde de connexion Disney
+
+Pour chaque variante officielle à sortie unique `float` ou `color3`, le champ
+`disneyProbe` indique le résultat réel de la conversion d'un graphe synthétique :
+un nœud avec les valeurs de NodeDef reconnues, sans entrée renseignée, est connecté
+directement à `standard_surface.base` ou `base_color`, sans paramètre d'éditeur.
+Les 225 essais éligibles sont rejetés ; le message exact et les diagnostics
+de résolution sont conservés. Pour
+202 variantes dont le seul autre résultat concerne la sonde CPU, ce rejet
+qualifie aussi la colonne Disney de la matrice. Les autres règles conservent
+leur contexte propre ; consulter le champ `disneyProbe` séparément.
+
+Ce résultat ne signifie pas que tous les graphes utilisant ces catégories sont
+rejetés : certaines formes de textures sont acceptées et les paramètres
+d'éditeur peuvent remplacer une connexion par une constante. Les autres types,
+sorties multiples et extensions ne sont pas testés par cette sonde. Elle est
+exécutée par [materialx-compatibility-disney.ts](../scripts/materialx-compatibility-disney.ts)
+et contrôlée par [materialx-compatibility.test.ts](../tests/materialx/materialx-compatibility.test.ts).
 
 ### Sondes GPU isolées
 
@@ -128,7 +151,7 @@ algorithmes à coordonnées égales.
 
 La sélection exclut les sorties multiples, textures, booléens, entiers et matrices
 ainsi que les sondes CPU non évaluées. Les 547 cas comprennent 542 des 610 cas
-classés `cpuProbe`. Une correspondance ne démontre ni l'équivalence à MaterialX,
+classés selon leur sonde CPU réussie. Une correspondance ne démontre ni l'équivalence à MaterialX,
 ni le fonctionnement dans les pipelines raster, PT ou Disney. Elle ne modifie
 donc pas leurs statuts `unknown`.
 
@@ -300,9 +323,10 @@ npx vite-node scripts\materialx-compatibility-inventory.ts <chemin-vers-librarie
 
 Le script refuse un autre commit ou des bibliothèques modifiées. Il reflète les
 NodeDefs sélectionnables du script, pas la couverture de rendu. Les règles
-conditionnelles sont dans [materialx-compatibility-status.ts](../scripts/materialx-compatibility-status.ts)
-et la sonde CPU dans [materialx-compatibility-cpu.ts](../scripts/materialx-compatibility-cpu.ts) ;
-et leur cohérence avec l'inventaire est vérifiée par
+conditionnelles sont dans [materialx-compatibility-status.ts](../scripts/materialx-compatibility-status.ts),
+la sonde CPU dans [materialx-compatibility-cpu.ts](../scripts/materialx-compatibility-cpu.ts)
+et la sonde Disney dans [materialx-compatibility-disney.ts](../scripts/materialx-compatibility-disney.ts) ;
+leur cohérence avec l'inventaire est vérifiée par
 [materialx-compatibility.test.ts](../tests/materialx/materialx-compatibility.test.ts).
 Modifier une règle seulement avec une preuve applicable à sa variante et son
 contexte ; ne pas déduire la fidélité d'un registre de catégories. Lors d'une mise

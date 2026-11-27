@@ -98,6 +98,8 @@ d'un statut étayé pour chaque backend. La priorité reste ouverte jusqu'à cet
 qualification ; une compilation ou une validation structurelle ne la remplace pas.
 Un relevé compute WebGPU compare également 547 cas numériques avec le CPU,
 sans démontrer leur comportement dans les trois pipelines de rendu.
+Une sonde qualifie aussi le rejet Disney d'une connexion directe pour 225
+variantes numériques, sans généraliser aux autres formes de graphes.
 
 Documenter précisément ce que le moteur conserve, étend, approxime ou ne prend
 pas en charge par rapport à MaterialX officiel, pour éviter de confondre un

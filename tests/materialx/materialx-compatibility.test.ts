@@ -4,19 +4,32 @@ import gpuProbes from '../../docs/generated/materialx-gpu-probes.json';
 import { COMPATIBILITY_CASES, compatibilityCase } from '../../scripts/materialx-compatibility-status.ts';
 import { SURFACE_IR_UPSTREAM } from '../../src/compiler/surface-ir.ts';
 import { probeCpuValue } from '../../scripts/materialx-compatibility-cpu.ts';
+import { probeDisneyDirect } from '../../scripts/materialx-compatibility-disney.ts';
 
 describe('MaterialX compatibility inventory', () => {
   it('classifies every listed variant using the current rules without duplicate NodeDefs', () => {
     const names = inventory.definitions.map(definition => definition.nodedef);
     expect(new Set(names).size).toBe(names.length);
     for (const definition of inventory.definitions) {
-      expect(definition.compatibility, definition.nodedef).toBe(compatibilityCase(definition, definition.origin, definition.cpuProbe));
+      expect(definition.compatibility, definition.nodedef).toBe(compatibilityCase(definition, definition.origin, definition.cpuProbe, definition.disneyProbe));
       expect(definition.surfaceValueCategoryRegistered, definition.nodedef).toBe(SURFACE_IR_UPSTREAM.has(definition.category));
       if (definition.origin === 'library') {
         expect(probeCpuValue(definition), definition.nodedef).toEqual(definition.cpuProbe);
+        expect(probeDisneyDirect(definition), definition.nodedef).toEqual(definition.disneyProbe);
       }
     }
     expect(inventory.compatibilityCases).toEqual(COMPATIBILITY_CASES);
+  });
+
+  it('distinguishes a direct Disney rejection from an untested output', () => {
+    const color = { category: 'constant', outputs: [{ type: 'color3', name: 'out' }] };
+    expect(probeDisneyDirect(color)).toMatchObject({ status: 'rejected', message: expect.stringContaining('Unsupported Disney texture graph') });
+    expect(compatibilityCase(color, 'library', { status: 'evaluated' }, probeDisneyDirect(color))).toBe('cpuProbeDisneyRejected');
+    const scalar = { category: 'constant', outputs: [{ type: 'float', name: 'out' }] };
+    expect(probeDisneyDirect(scalar)).toMatchObject({ status: 'rejected', message: expect.stringContaining('Unsupported connected standard_surface input base') });
+    const multiply = { category: 'multiply', outputs: [{ type: 'color3', name: 'out' }] };
+    expect(probeDisneyDirect(multiply)).toMatchObject({ status: 'rejected', message: expect.stringContaining('missing or editable input') });
+    expect(probeDisneyDirect({ category: 'constant', outputs: [{ type: 'vector2' }] })).toMatchObject({ status: 'not-tested' });
   });
 
   it('exercises a real literal numeric case and reports an unsupported node', () => {

@@ -6,6 +6,7 @@ import { SCRIPT_LIBRARY_FILES, ScriptLibrary } from '../src/materialx/script-api
 import { SURFACE_IR_UPSTREAM } from '../src/compiler/surface-ir.ts';
 import { COMPATIBILITY_CASES, compatibilityCase } from './materialx-compatibility-status.ts';
 import { probeCpuValue } from './materialx-compatibility-cpu.ts';
+import { probeDisneyDirect } from './materialx-compatibility-disney.ts';
 
 const root = process.argv[2] ?? process.env['MX_LIB_ROOT'];
 if (!root) throw new Error('Provide the MaterialX libraries directory as an argument or MX_LIB_ROOT.');
@@ -29,6 +30,9 @@ const definitions = library.namedDefinitions
     const probe = origin === 'engine'
       ? { status: 'not-tested', reason: 'engine extension' } as const
       : probeCpuValue({ ...def, nodedef: def.name });
+    const disneyProbe = origin === 'engine'
+      ? { status: 'not-tested', reason: 'engine extension' } as const
+      : probeDisneyDirect(def);
     return {
       origin, category, class: className, nodedef: def.name,
       selectableBy: library.variants(category).some(variant => variant.name === def.name) ? 'variant' : 'name',
@@ -42,8 +46,9 @@ const definitions = library.namedDefinitions
         ...(input.enum !== undefined ? { enum: input.enum } : {}),
       })),
       outputs: def.outputs.map(output => ({ name: output.name, type: output.type })),
-      compatibility: compatibilityCase(def, origin, probe),
+      compatibility: compatibilityCase(def, origin, probe, disneyProbe),
       cpuProbe: probe,
+      disneyProbe,
       surfaceValueCategoryRegistered: SURFACE_IR_UPSTREAM.has(category),
     };
   });
