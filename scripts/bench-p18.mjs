@@ -150,20 +150,48 @@ try {
     }, [before.toString('base64'), after.toString('base64')]);
     if (difference <= 0.1) throw new Error(`${name}: playback did not change the displayed canvas.`);
     const playback = await ui.evaluate(async () => {
-      const started = performance.now();
-      await new Promise(resolve => setTimeout(resolve, 8000));
-      const ended = performance.now();
-      const entries = performance.getEntriesByName('deformer:compute')
-        .filter(entry => entry.startTime >= started && entry.startTime + entry.duration <= ended);
-      const times = entries.map(entry => entry.startTime + entry.duration);
-      const intervals = times.slice(1).map((time, index) => time - times[index]).sort((a, b) => a - b);
-      if (!intervals.length) throw new Error('No GPU deformation updates during playback.');
-      return {
-        seconds: (ended - started) / 1000, updates: times.length,
-        updatesPerSecond: times.length * 1000 / (ended - started),
-        p95IntervalMs: intervals[Math.ceil(intervals.length * 0.95) - 1],
-        maxIntervalMs: intervals.at(-1),
+      const canvas = document.querySelector('#view');
+      const stream = canvas.captureStream();
+      const video = document.createElement('video');
+      video.muted = true;
+      video.playsInline = true;
+      video.style.cssText = 'position:fixed;width:1px;height:1px;opacity:0;pointer-events:none';
+      video.srcObject = stream;
+      document.body.append(video);
+      let callback;
+      const presented = [];
+      const observe = (_now, metadata) => {
+        presented.push({ time: metadata.presentationTime, frames: metadata.presentedFrames });
+        callback = video.requestVideoFrameCallback(observe);
       };
+      try {
+        await video.play();
+        callback = video.requestVideoFrameCallback(observe);
+        const started = performance.now();
+        await new Promise(resolve => setTimeout(resolve, 8000));
+        const ended = performance.now();
+        const entries = performance.getEntriesByName('deformer:compute')
+          .filter(entry => entry.startTime >= started && entry.startTime + entry.duration <= ended);
+        const times = entries.map(entry => entry.startTime + entry.duration);
+        const intervals = times.slice(1).map((time, index) => time - times[index]).sort((a, b) => a - b);
+        if (!intervals.length) throw new Error('No GPU deformation updates during playback.');
+        if (presented.length < 2) throw new Error('No canvas frames were presented during playback.');
+        const first = presented[0], last = presented.at(-1);
+        return {
+          seconds: (ended - started) / 1000, updates: times.length,
+          updatesPerSecond: times.length * 1000 / (ended - started),
+          p95IntervalMs: intervals[Math.ceil(intervals.length * 0.95) - 1],
+          maxIntervalMs: intervals.at(-1),
+          canvasFramesPerSecond: (last.frames - first.frames) * 1000 / (last.time - first.time),
+          observedCanvasFrames: presented.length,
+        };
+      } finally {
+        if (callback !== undefined) video.cancelVideoFrameCallback(callback);
+        video.pause();
+        video.srcObject = null;
+        stream.getTracks().forEach(track => track.stop());
+        video.remove();
+      }
     });
     if (await ui.locator('#view-timeline-play').textContent() !== 'Arrêter') throw new Error(`${name}: playback stopped.`);
     console.log(JSON.stringify({ scene: name, mode: 'ui-headless', resolution: 512, ...playback, meanPixelDifference: difference }));

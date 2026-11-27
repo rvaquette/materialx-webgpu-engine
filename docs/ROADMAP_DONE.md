@@ -3,6 +3,57 @@
 Historique des priorités traitées de la feuille de route. Les travaux non
 encore réalisés sont suivis dans [ROADMAP_NEXT.md](ROADMAP_NEXT.md).
 
+## Priorité 18 : déformation volumique de surfaces complexes
+
+Les primitives, surfaces complexes et maillages USDA statiques importés acceptent
+une pile non destructive et partageable de déformeurs : courbure, torsion,
+effilement, cisaillement, vague, vent, sphérisation, treillis de Bézier et
+champs MaterialX ou NanoVDB. Les champs peuvent intégrer un écoulement sur
+plusieurs pas. Les paramètres et le temps sont animables ; le viewer réévalue
+les piles compatibles sur GPU et recalcule les normales et tangentes ainsi que
+les structures de rendu. La timeline permet la lecture, la pause et la sélection
+du temps. Le path tracing peut accumuler des instants de l'obturateur pour le
+flou de mouvement. L'export USD conserve la géométrie et ses échantillons
+temporels ainsi que les paramètres `engine:` des déformeurs.
+
+L'exemple [p18-deformers.js](../examples/scripts/p18-deformers.js) est
+accessible dans le menu Scripts. Les animations sont fournies sous forme de
+vidéos et d'USD :
+
+- [Drapeau](../examples/scripts/p18-animated-wind.js) :
+  [raster](images/p18/p18-animated-wind.mp4),
+  [flou path tracing](images/p18/p18-animated-wind-blur.mp4),
+  [USD](images/p18/p18-animated-wind.usda).
+- [Ruban](../examples/scripts/p18-animated-ribbon.js) :
+  [raster](images/p18/p18-animated-ribbon.mp4),
+  [flou path tracing](images/p18/p18-animated-ribbon-blur.mp4),
+  [USD](images/p18/p18-animated-ribbon.usda).
+- [Treillis sur maillage importé](../examples/scripts/p18-imported-lattice.js) :
+  [raster](images/p18/p18-imported-lattice.mp4),
+  [flou path tracing](images/p18/p18-imported-lattice-blur.mp4),
+  [USD](images/p18/p18-imported-lattice.usda).
+- [Champ MaterialX](../examples/scripts/p18-materialx-field.js) :
+  [vidéo](images/p18/p18-materialx-field.mp4), [USD](images/p18/p18-materialx-field.usda).
+- [Champ NanoVDB](../examples/scripts/p18-nanovdb-field.js) :
+  [vidéo](images/p18/p18-nanovdb-field.mp4), [USD](images/p18/p18-nanovdb-field.usda).
+
+Les positions GPU sont relues sur CPU pour recalculer les flux et actualiser les
+structures de rendu. Les USD sans positions de base ou avec callback `deform`
+utilisent les échantillons précuits. Une grille NanoVDB indisponible ou trop
+volumineuse déclenche un avertissement et le recours aux échantillons USD ;
+Vec3d est converti en flottants 32 bits pour le GPU. L'import de maillage est
+limité aux couches USDA statiques explicites, sans import des transformations,
+matériaux et attributs USD complexes.
+
+`node scripts/bench-p18.mjs` vérifie les calculs GPU et les changements d'image
+des trois scènes, hors écran et dans la timeline Chrome headless. À titre
+indicatif, sur NVIDIA Turing à 512 × 512, les images du canvas capturées sur
+huit secondes étaient en moyenne à 55,3, 59,3 et 56,4 images/s pour le drapeau,
+le ruban et le treillis. Cette mesure dépend du matériel et de la charge ; elle
+ne constitue ni une cadence imposée ni une mesure d'affichage sur un écran physique.
+
+![Ruban tordu et sphère déformée par treillis](images/p18/p18-deformers.png)
+
 ## Priorité 23 : paramètres de shaders déclarés par script
 
 `expose(nœud, "entrée", "libellé"?)` déclare une entrée littérale modifiable

@@ -1,4 +1,4 @@
-// Priorité 18 en cours : champ de vitesse NanoVDB et intégration multipas.
+// Priorité 18 : champ de vitesse NanoVDB et intégration multipas.
 // npm run script -- examples/scripts/p18-nanovdb-field.js --out docs/images/p18
 
 flowSurface = new StandardSurface();

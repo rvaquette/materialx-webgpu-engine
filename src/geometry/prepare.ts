@@ -317,53 +317,51 @@ export function computeTangents(
     const i0 = indices[t]!;
     const i1 = indices[t + 1]!;
     const i2 = indices[t + 2]!;
-    const p0 = vec3(positions, i0);
-    const p1 = vec3(positions, i1);
-    const p2 = vec3(positions, i2);
-    const uv0 = vec2(uvs, i0);
-    const uv1 = vec2(uvs, i1);
-    const uv2 = vec2(uvs, i2);
-    const e1 = sub(p1, p0);
-    const e2 = sub(p2, p0);
-    const du1 = uv1[0] - uv0[0];
-    const dv1 = uv1[1] - uv0[1];
-    const du2 = uv2[0] - uv0[0];
-    const dv2 = uv2[1] - uv0[1];
+    const p0 = i0 * 3, p1 = i1 * 3, p2 = i2 * 3;
+    const uv0 = i0 * 2, uv1 = i1 * 2, uv2 = i2 * 2;
+    const e1x = positions[p1]! - positions[p0]!;
+    const e1y = positions[p1 + 1]! - positions[p0 + 1]!;
+    const e1z = positions[p1 + 2]! - positions[p0 + 2]!;
+    const e2x = positions[p2]! - positions[p0]!;
+    const e2y = positions[p2 + 1]! - positions[p0 + 1]!;
+    const e2z = positions[p2 + 2]! - positions[p0 + 2]!;
+    const du1 = uvs[uv1]! - uvs[uv0]!;
+    const dv1 = uvs[uv1 + 1]! - uvs[uv0 + 1]!;
+    const du2 = uvs[uv2]! - uvs[uv0]!;
+    const dv2 = uvs[uv2 + 1]! - uvs[uv0 + 1]!;
     const denom = du1 * dv2 - du2 * dv1;
     const r = denom === 0 ? 0 : 1 / denom;
-    const sdir: [number, number, number] = [
-      (dv2 * e1[0] - dv1 * e2[0]) * r,
-      (dv2 * e1[1] - dv1 * e2[1]) * r,
-      (dv2 * e1[2] - dv1 * e2[2]) * r,
-    ];
-    const tdir: [number, number, number] = [
-      (du1 * e2[0] - du2 * e1[0]) * r,
-      (du1 * e2[1] - du2 * e1[1]) * r,
-      (du1 * e2[2] - du2 * e1[2]) * r,
-    ];
-    for (const i of [i0, i1, i2]) {
-      tan[i * 3]! += sdir[0];
-      tan[i * 3 + 1]! += sdir[1];
-      tan[i * 3 + 2]! += sdir[2];
-      bitan[i * 3]! += tdir[0];
-      bitan[i * 3 + 1]! += tdir[1];
-      bitan[i * 3 + 2]! += tdir[2];
+    const sx = (dv2 * e1x - dv1 * e2x) * r;
+    const sy = (dv2 * e1y - dv1 * e2y) * r;
+    const sz = (dv2 * e1z - dv1 * e2z) * r;
+    const tx = (du1 * e2x - du2 * e1x) * r;
+    const ty = (du1 * e2y - du2 * e1y) * r;
+    const tz = (du1 * e2z - du2 * e1z) * r;
+    for (let corner = 0; corner < 3; corner++) {
+      const p = indices[t + corner]! * 3;
+      tan[p]! += sx;
+      tan[p + 1]! += sy;
+      tan[p + 2]! += sz;
+      bitan[p]! += tx;
+      bitan[p + 1]! += ty;
+      bitan[p + 2]! += tz;
     }
   }
 
   const out = new Float32Array(vertexCount * 4);
   for (let i = 0; i < vertexCount; i++) {
-    const n = vec3(normals, i);
-    const t = vec3(tan, i);
-    // Gram-Schmidt orthonormalize against the normal.
-    const ndt = dot(n, t);
-    let ortho: [number, number, number] = [t[0] - n[0] * ndt, t[1] - n[1] * ndt, t[2] - n[2] * ndt];
-    ortho = normalize(ortho);
-    const bt = vec3(bitan, i);
-    const handed = dot(cross(n, ortho), bt) < 0 ? -1 : 1;
-    out[i * 4] = ortho[0];
-    out[i * 4 + 1] = ortho[1];
-    out[i * 4 + 2] = ortho[2];
+    const p = i * 3;
+    const nx = normals[p]!, ny = normals[p + 1]!, nz = normals[p + 2]!;
+    const ndt = nx * tan[p]! + ny * tan[p + 1]! + nz * tan[p + 2]!;
+    let x = tan[p]! - nx * ndt, y = tan[p + 1]! - ny * ndt, z = tan[p + 2]! - nz * ndt;
+    const length = Math.hypot(x, y, z);
+    if (length === 0) { x = 0; y = 0; z = 1; }
+    else { x /= length; y /= length; z /= length; }
+    const handed = (ny * z - nz * y) * bitan[p]! + (nz * x - nx * z) * bitan[p + 1]!
+      + (nx * y - ny * x) * bitan[p + 2]! < 0 ? -1 : 1;
+    out[i * 4] = x;
+    out[i * 4 + 1] = y;
+    out[i * 4 + 2] = z;
     out[i * 4 + 3] = handed;
   }
   return out;
@@ -428,14 +426,6 @@ function sliceVec(flat: readonly number[], index: number, size: number): number[
   return out;
 }
 
-function vec3(a: Float32Array, i: number): [number, number, number] {
-  return [a[i * 3]!, a[i * 3 + 1]!, a[i * 3 + 2]!];
-}
-
-function vec2(a: Float32Array, i: number): [number, number] {
-  return [a[i * 2]!, a[i * 2 + 1]!];
-}
-
 function sub(a: readonly number[], b: readonly number[]): [number, number, number] {
   return [a[0]! - b[0]!, a[1]! - b[1]!, a[2]! - b[2]!];
 }
@@ -446,10 +436,6 @@ function cross(a: readonly number[], b: readonly number[]): [number, number, num
     a[2]! * b[0]! - a[0]! * b[2]!,
     a[0]! * b[1]! - a[1]! * b[0]!,
   ];
-}
-
-function dot(a: readonly number[], b: readonly number[]): number {
-  return a[0]! * b[0]! + a[1]! * b[1]! + a[2]! * b[2]!;
 }
 
 function normalize(v: readonly number[]): [number, number, number] {

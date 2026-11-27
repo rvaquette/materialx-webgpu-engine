@@ -1,4 +1,4 @@
-// Priorité 18 en cours : maillage USD importé et treillis animé.
+// Priorité 18 : maillage USD importé et treillis animé.
 // npm run script -- examples/scripts/p18-imported-lattice.js --out docs/images/p18
 
 surface = new StandardSurface();

@@ -1,4 +1,4 @@
-// Priorité 18 en cours : drapeau animé par un champ de vent 3D.
+// Priorité 18 : drapeau animé par un champ de vent 3D.
 // npm run script -- examples/scripts/p18-animated-wind.js --out docs/images/p18
 
 cloth = new StandardSurface();

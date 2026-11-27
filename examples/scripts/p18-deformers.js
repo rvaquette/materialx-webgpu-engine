@@ -1,4 +1,4 @@
-// Priorité 18 en cours : pile de déformeurs sur des primitives.
+// Priorité 18 : pile de déformeurs sur des primitives.
 // npm run script -- examples/scripts/p18-deformers.js --out docs/images/p18
 
 surface = new StandardSurface();

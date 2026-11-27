@@ -13,7 +13,8 @@ portabilité et exploitation), 8 (primitives et scènes par script), 9
 (displacement procédural), 10 (documentation intégrée des nœuds), 11
 (aperçus par nœud et bibliothèque de matériaux), 12 (environnement et
 post-traitement), 13 (baking et export de scènes), 14 (lookdev et projets),
-15 (opérations booléennes), 16 (shaders d'extension) et 17 (surfaces complexes),
+15 (opérations booléennes), 16 (shaders d'extension), 17 (surfaces complexes)
+et 18 (déformation volumique),
 ainsi que l'étude urgente de la priorité 21 (chargement des bibliothèques
 MaterialX sans WASM), la priorité 22 (build minimal du Core WASM) et l'étude de
 la priorité 25 (graphe de scène équivalent au script) et la priorité 23
@@ -28,90 +29,6 @@ outil de création : construire des scènes, explorer et documenter les nœuds,
 continuer à optimiser le runtime livré au navigateur.
 
 Pour les animations restituer un fichier vidéo et non pas une série d'images.
-
-## Priorité 18 : déformation volumique de surfaces complexes
-
-Déformer une surface (primitive, maillage importé, surface complexe de la
-priorité 17) par un champ défini dans l'espace plutôt que sommet par sommet,
-pour plier, tordre ou faire onduler des objets entiers et les animer :
-
-- **déformeurs paramétriques** : courbure (bend), torsion (twist), effilement
-  (taper), cisaillement, vague, sphérisation, chacun avec son axe, sa zone
-  d'influence et une atténuation ;
-- **déformation par treillis (FFD)** : une grille de points de contrôle
-  englobe l'objet ; déplacer ces points déforme tout ce qui est à l'intérieur
-  (interpolation de Bézier ou B-spline) ;
-- **champs volumiques** : déplacement lu dans un bruit 3D, un graphe MaterialX
-  évalué en 3D (`vector3` en fonction de la position) ou une grille NanoVDB de
-  vitesses, avec intégration sur plusieurs pas pour suivre un écoulement ;
-- **pile de déformeurs** non destructive, appliquée dans l'ordre, partagée par
-  plusieurs objets (un même champ de vent courbe tous les brins d'herbe) ;
-- évaluation sur GPU (passe compute, comme le displacement procédural de la
-  priorité 9), normales et tangentes recalculées, BVH reconstruit ou réajusté
-  à chaque image ;
-- animation par l'entrée `time` et par les paramètres des déformeurs, avec flou
-  de mouvement (positions aux bornes de l'obturateur) ;
-- script dans le style objet :
-  `bend = new Bend(); bend.angle = 90; bend.axis = "Y"; flag.deformers = [bend, wind];` ;
-- export USD : géométrie déformée écrite en `Mesh` (avec échantillons
-  temporels si animée), paramètres des déformeurs en attributs `engine:`.
-
-**Critère d'aboutissement :** un drapeau ondulant au vent (champ de bruit), un
-ruban tordu (twist) et un objet importé déformé par treillis sont animés en
-temps réel en raster, rendus avec flou de mouvement en path tracing, et
-exportés en USD.
-
-**En cours :** une pile partageable sur les primitives scriptées
-propose les déformeurs paramétriques, un vent 3D, des champs MaterialX et NanoVDB et un treillis de Bézier pour
-les primitives et les maillages USDA statiques importés, exportés en USD avec
-leurs paramètres et échantillons temporels. L'exemple
-[p18-deformers.js](../examples/scripts/p18-deformers.js) est disponible dans
-le menu Scripts. [p18-animated-wind.js](../examples/scripts/p18-animated-wind.js)
-produit la [vidéo raster du drapeau](images/p18/p18-animated-wind.mp4), sa
-[vidéo avec flou](images/p18/p18-animated-wind-blur.mp4) et son
-[USD](images/p18/p18-animated-wind.usda).
-[p18-animated-ribbon.js](../examples/scripts/p18-animated-ribbon.js) produit
-la [vidéo raster du ruban](images/p18/p18-animated-ribbon.mp4), sa
-[vidéo avec flou](images/p18/p18-animated-ribbon-blur.mp4) et son
-[USD](images/p18/p18-animated-ribbon.usda).
-[p18-imported-lattice.js](../examples/scripts/p18-imported-lattice.js) produit
-une [vidéo raster](images/p18/p18-imported-lattice.mp4), une
-[vidéo path tracing avec flou](images/p18/p18-imported-lattice-blur.mp4) et un
-[USD](images/p18/p18-imported-lattice.usda) du maillage importé.
-[p18-materialx-field.js](../examples/scripts/p18-materialx-field.js) produit
-une [vidéo](images/p18/p18-materialx-field.mp4) et un
-[USD](images/p18/p18-materialx-field.usda) du champ MaterialX animé.
-L'exemple [p18-nanovdb-field.js](../examples/scripts/p18-nanovdb-field.js)
-produit une [vidéo](images/p18/p18-nanovdb-field.mp4) et un
-[USD](images/p18/p18-nanovdb-field.usda) d'un champ de vitesses NanoVDB.
-Le viewer réévalue les piles compatibles sur GPU, y compris les champs MaterialX
-et NanoVDB ; les positions sont relues sur CPU pour les normales, les tangentes
-et l'actualisation des structures de rendu. Les USD sans positions de base ou
-avec callback `deform` utilisent les échantillons précuits. Une grille NanoVDB
-indisponible ou trop volumineuse déclenche un avertissement et le recours aux
-échantillons USD ; Vec3d est converti en flottants 32 bits pour le GPU.
-Le support d'autres formats et des attributs USD complexes reste à réaliser.
-Pour les normales USD animées par sommet, la mise à jour réutilise la
-topologie préparée ; les normales face-varying restent traitées par une
-préparation complète afin de préserver les coutures.
-
-Sur un adaptateur NVIDIA Turing, `node scripts/bench-p18.mjs` mesure 240 mises à
-jour après 24 étapes d'échauffement à 512 × 512 : `setTime`, rendu raster hors
-écran et attente de l'achèvement GPU. Il vérifie un calcul GPU à chaque étape
-et que les images aux temps 0 et 12 diffèrent. Les 95e percentiles observés
-sont respectivement 14,4 ms pour le drapeau (résolution 40), 13,4 ms pour le
-ruban et 13,1 ms pour le treillis importé.
-
-Le même benchmark active ensuite la timeline de l'interface Chrome headless
-pendant huit secondes par scène et vérifie que le canvas change. Il observe
-22,1, 30,5 et 52,7 calculs de déformation par seconde respectivement ; ce sont
-des mises à jour, pas une mesure de la fréquence de présentation à l'écran.
-Ces résultats dépendent du matériel et de sa charge. Ils ne démontrent pas
-encore une cadence soutenue de 30 images/s dans l'interface pour les trois
-scènes : la lecture des positions et le recalcul CPU des normales et tangentes
-restent à optimiser.
-
-![Ruban tordu et sphère déformée par treillis](images/p18/p18-deformers.png)
 
 ## Priorité 20 : systèmes de particules animés
 

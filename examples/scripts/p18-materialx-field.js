@@ -1,4 +1,4 @@
-// Priorité 18 en cours : champ MaterialX animé en espace objet.
+// Priorité 18 : champ MaterialX animé en espace objet.
 // npm run script -- examples/scripts/p18-materialx-field.js --out docs/images/p18
 
 fieldSurface = new StandardSurface();

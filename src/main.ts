@@ -29,6 +29,7 @@ import { captureTurntable } from './render/turntable.ts';
 import { decodeProject, encodeProject, projectCamera, restoreCamera, type Project } from './project.ts';
 import type { ScriptStage } from './materialx/script-api.ts';
 import { History } from './history.ts';
+import { schedulePlaybackFrames } from './ui/playback.ts';
 
 /** In-memory entry of the scene built by a script's primitives (never fetched). */
 const scriptStageEntry = (): string => new URL('./__script_stage__/scene.usda', document.baseURI).href;
@@ -567,12 +568,13 @@ async function main(): Promise<void> {
     parameterEditor.refresh();
   }
 
-  let playbackFrame = 0;
+  let cancelPlaybackFrames: (() => void) | undefined;
   let playbackVersion = 0;
   let timeSeekVersion = 0;
   function cancelPlayback(): void {
     playbackVersion++;
-    cancelAnimationFrame(playbackFrame);
+    cancelPlaybackFrames?.();
+    cancelPlaybackFrames = undefined;
   }
   const pendingTimeUpdates = new Set<Promise<void>>();
   function updateTime(target: InteractiveViewer, time: number): Promise<void> {
@@ -595,27 +597,27 @@ async function main(): Promise<void> {
   }
 
   function play(previous: number, target: InteractiveViewer, version = playbackVersion): void {
-    playbackFrame = requestAnimationFrame(now => {
+    cancelPlaybackFrames = schedulePlaybackFrames(async now => {
       const animation = state.animation;
       const timeline = animation?.timeline;
-      if (!animation?.playing || !timeline || viewer !== target || deviceLost || version !== playbackVersion) return;
+      if (!animation?.playing || !timeline || viewer !== target || deviceLost || version !== playbackVersion) return false;
       if (!operationBusy) {
         let time = animation.time + Math.min(0.25, (now - previous) / 1000) * timeline.timeCodesPerSecond;
         if (time > timeline.end) time = timeline.start;
         animation.time = time;
         syncTimeline();
-        void updateTime(target, time).then(() => {
-          if (animation.playing && version === playbackVersion) play(now, target, version);
-        }, (error: unknown) => {
-          if (version === playbackVersion) {
-            animation.playing = false;
-            syncTimeline();
-          }
-          setStatus(`Echec de l'animation : ${error instanceof Error ? error.message : String(error)}`);
-        });
-        return;
+        previous = now;
+        await updateTime(target, time);
+      } else {
+        previous = now;
       }
-      play(now, target, version);
+      return true;
+    }, (error: unknown) => {
+      if (version === playbackVersion && state.animation) {
+        state.animation.playing = false;
+        syncTimeline();
+      }
+      setStatus(`Echec de l'animation : ${error instanceof Error ? error.message : String(error)}`);
     });
   }
 

@@ -1,4 +1,4 @@
-// Priorité 18 en cours : ruban tordu et animé.
+// Priorité 18 : ruban tordu et animé.
 // npm run script -- examples/scripts/p18-animated-ribbon.js --out docs/images/p18
 
 ribbonSurface = new StandardSurface();

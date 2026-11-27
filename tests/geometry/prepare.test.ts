@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import type { Diagnostic } from '../../src/core/diagnostics.ts';
-import { prepareMesh, type RawMesh, type Subdivider } from '../../src/geometry/prepare.ts';
+import { computeTangents, prepareMesh, type RawMesh, type Subdivider } from '../../src/geometry/prepare.ts';
 
 function collect(): { sink: (d: Diagnostic) => void; messages: Diagnostic[] } {
   const messages: Diagnostic[] = [];
@@ -102,11 +102,19 @@ describe('prepareMesh', () => {
         { name: 'st', interpolation: 'vertex', elementSize: 2, values: [0, 0, 1, 0, 1, 1, 0, 1] },
       ],
     });
+
     expect(mesh.tangents).toBeDefined();
     expect(mesh.tangents!.length / 4).toBe(4);
     // Tangent follows +U (world +X) for this planar quad.
     expect(mesh.tangents![0]).toBeCloseTo(1);
     expect(Math.abs(mesh.tangents![3]!)).toBe(1); // handedness sign
+  });
+
+  it('handles degenerate UVs without changing tangent fallback or handedness', () => {
+    const positions = new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]);
+    const normals = new Float32Array([0, 0, 1, 0, 0, 1, 0, 0, 1]);
+    const tangent = computeTangents(positions, normals, new Float32Array(6), [0, 1, 2], 3);
+    expect(Array.from(tangent)).toEqual([0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 1]);
   });
 
   it('reports subdivision as pending without a subdivider', () => {
