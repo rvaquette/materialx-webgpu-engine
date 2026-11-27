@@ -39,6 +39,10 @@ export interface ScriptPortDef {
   name: string;
   type: string;
   default?: ScriptValue;
+  defaultGeomProp?: string;
+  unit?: string;
+  unitType?: string;
+  colorSpace?: string;
   doc?: string;
   /** Allowed values of string inputs. */
   enum?: readonly string[];
@@ -344,6 +348,11 @@ export class ScriptLibrary {
     return [...this.#byClass.keys()].sort((a, b) => a.localeCompare(b));
   }
 
+  /** All NodeDefs addressable by name, including older versions. */
+  get namedDefinitions(): readonly ScriptNodeDef[] {
+    return [...this.#byName.values()].sort((a, b) => a.name.localeCompare(b.name));
+  }
+
   /** Category for a script class name (`Mix`). */
   categoryOf(className: string): string | undefined {
     return this.#byClass.get(className);
@@ -401,6 +410,14 @@ function readNodeDefs(elements: ReadonlyMap<string, XmlElement>): { defs: Script
       const type = child.attributes.get('type');
       if (child.tag !== tag || !name || !type) continue;
       const port: ScriptPortDef = { name, type };
+      const defaultGeomProp = child.attributes.get('defaultgeomprop');
+      const unit = child.attributes.get('unit');
+      const unitType = child.attributes.get('unittype');
+      const colorSpace = child.attributes.get('colorspace');
+      if (defaultGeomProp !== undefined) port.defaultGeomProp = defaultGeomProp;
+      if (unit !== undefined) port.unit = unit;
+      if (unitType !== undefined) port.unitType = unitType;
+      if (colorSpace !== undefined) port.colorSpace = colorSpace;
       const value = child.attributes.get(tag === 'input' ? 'value' : 'default');
       if (value !== undefined && acceptsValue(type)) {
         try { port.default = parseValue(value, type, name); } catch { /* keep the port without a default */ }

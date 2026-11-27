@@ -1,0 +1,2264 @@
+{
+  "browser": "158.0.8127.37",
+  "adapter": {
+    "vendor": "nvidia",
+    "architecture": "turing",
+    "device": ""
+  },
+  "sources": {
+    "docs/generated/materialx-nodedefs.json": "a88ebd81b9205f3ed4ca285ebb6a18bc3e5fc050fdc322fe86d081d470ceb3fa",
+    "scripts/materialx-compatibility-cpu.ts": "d04bc249db880a58da2ecb0240bfd8bfcca14450c82b8c8af1356cadf415f5cd",
+    "scripts/materialx-compatibility-gpu.mjs": "9d60dd078a7b2515f20fad4a6b3e437839a0b4c4566812e64706a12ca5921d78",
+    "src/compiler/cache.ts": "80e1de67feafce519b63d79ec1c1dd92f87bd253450b8e5157b2bbb7707818af",
+    "src/compiler/closure-library.ts": "d0bb118fa37175d6a91fb5c947af594ae3942595cef0d98c8f4aff201b1a1677",
+    "src/compiler/color-transforms.ts": "98639f7a94a762b61cabb8cb29092c04fa7093710898df3d22b1318f73f90244",
+    "src/compiler/features.ts": "727b942be28f4a0925ecd91cdf3d7d94c10091eeddda6e0053498bf03e19f773",
+    "src/compiler/hextile.ts": "1038f8b30476f359a580c92b9a2458cb81c523eb56f44e4d10797cf328e74a3e",
+    "src/compiler/ir-eval.ts": "67ce67fe2d267f4249ed79e72ed649a05d73b5d5b8d9d2eb351d53423b004581",
+    "src/compiler/ir.ts": "527c327b9b39ac2aaf9869c299d6537534fa989713d362f2736040feabb8f622",
+    "src/compiler/lama-sss.ts": "b248e896bd4e3bb378f9929e1aee6d4ea0685e2e1f459406201ea34cb247c18b",
+    "src/compiler/layered-serialize.ts": "b47da133a78d4e298eaeaf257ae75830a501aa33fa2abe5a9e7fea452c1fe102",
+    "src/compiler/nodes.ts": "0780690ab4d12a6d6bc9e978ad5b1610d43774c44b424d9bff7f681f2e786f6a",
+    "src/compiler/optimize.ts": "8171721ba6c323c63b05ded34828bb805b61023f793fd9aa4bd84a26fcddfcad",
+    "src/compiler/surface-eval.ts": "61b9dedb508a8d60e1d0d252073297d23cf2d3b15287b6445981c7bafa9c1ae0",
+    "src/compiler/surface-ir.ts": "92dcffc8c64ae5b2c8b8e429b8754109311b7cd78a322ac83ca352c21d279083",
+    "src/compiler/surface-lower.ts": "a1fec8c0d8eac76ef6b22d4bec4b0308d4c5059970d3ca79d7089f9aac172dce",
+    "src/compiler/surface-wgsl.ts": "4fc661e02d2315444eea2ea1cf58dcef7604f2e95c88b86a27cf3120a3ab7861",
+    "src/compiler/volume-ir.ts": "56b377cddfa8de25bc6e9c421f1b30e2c83f59adcdd6e4bd5bbe6b2d8ea4f90b",
+    "src/compiler/volume-wgsl.ts": "ac20ed6294d12a55120cde779cdc0ad9d34a064ebaa1dbcb407eb179ab8bd554",
+    "src/compiler/wgsl-reachability.ts": "2727e653881648cf620d81c4b66d9db5c9807ca368460158ba1565197ab4543a",
+    "src/compiler/wgsl.ts": "bda1e21446adf028dec4762f6c0d5d0aa9070bcaff0baa50e11065e687accf87",
+    "src/gpu/capabilities.ts": "7afbc93ea515db46b0ea1ea7121f655ea935468cfc7068ea6c0064193d34e601",
+    "src/gpu/capture.ts": "9845ae1354ca2bc041ef02f1d4fc6188e177bdaf5c7d75f8ed6ae1febb3d0980",
+    "src/gpu/device.ts": "ac2a9cfbf55c32dcc1c9441c625832910b3d15f540814d4011c54aec383d5ebb",
+    "src/gpu/exec.ts": "48845666cd9d6ec905fb1f50d41cd694749ec91dff6f98b4700d7b060e32327e",
+    "src/gpu/intercept.ts": "4c5f612a10fbeb85a5ed1a9941dc787fffcedb82efef6dab0a67caea91b69c96",
+    "src/gpu/material-texture.ts": "27ec6331edc702cdf22c3b018c899d87d171b9cb2953587baef509f130763401",
+    "src/gpu/memory.ts": "be48f7f3b00c4560a0844284307eafdbb921737f21d271e508003967f8eecb83",
+    "src/gpu/pipelines.ts": "b18805b90c814d60e38be2097a89fd5672f22ad4c473836f212d5bf261f56898",
+    "src/gpu/shader-diagnostics.ts": "fd941b43dab5be0bc44c4db67304d4d6974b28608854b48b5e77e644d15f3e2a",
+    "src/gpu/timing.ts": "513c3c21bdbbd37f91b85dc2ec193f0f29fde92b4bbf4f4db23d77b56cd86741",
+    "tests/fixtures/materialx-compatibility-gpu.ts": "0e51a88db92e0fe3d9a55e75cd720066569a1f693bebcfcb3aadfa49f4d2fd4a"
+  },
+  "results": [
+    {
+      "nodedef": "ND_absval_color3",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_absval_color4",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_absval_float",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_absval_vector2",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_absval_vector3",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_absval_vector4",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_acescg_to_lin_rec709_color3",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_acescg_to_lin_rec709_color4",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_acos_float",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_acos_vector2",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_acos_vector3",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_acos_vector4",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_add_color3",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_add_color3FA",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_add_color4",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_add_color4FA",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_add_float",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_add_vector2",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_add_vector2FA",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_add_vector3",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_add_vector3FA",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_add_vector4",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_add_vector4FA",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_adobergb_to_lin_rec709_color3",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_adobergb_to_lin_rec709_color4",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_asin_float",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_asin_vector2",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_asin_vector3",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_asin_vector4",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_atan2_float",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_atan2_vector2",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_atan2_vector3",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_atan2_vector4",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_bitangent_vector3",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_blackbody",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_blur_color3",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_blur_color4",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_blur_float",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_blur_vector2",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_blur_vector3",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_blur_vector4",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_burn_color3",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_burn_color4",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_burn_float",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_ceil_color3",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_ceil_color4",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_ceil_float",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_ceil_vector2",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_ceil_vector3",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_ceil_vector4",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_cellnoise2d_float",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_cellnoise3d_float",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_checkerboard_color3",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_chiang_hair_absorption_from_color",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_circle_float",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_clamp_color3",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_clamp_color3FA",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_clamp_color4",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_clamp_color4FA",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_clamp_float",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_clamp_vector2",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_clamp_vector2FA",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_clamp_vector3",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_clamp_vector3FA",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_clamp_vector4",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_clamp_vector4FA",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_cloverleaf_float",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_colorcorrect_color3",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_colorcorrect_color4",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_combine2_color4CF",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_combine2_vector2",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_combine2_vector4VF",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_combine2_vector4VV",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_combine3_color3",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_combine3_vector3",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_combine4_color4",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_combine4_vector4",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_constant_color3",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_constant_color4",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_constant_float",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_constant_vector2",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_constant_vector3",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_constant_vector4",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_contrast_color3",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_contrast_color3FA",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_contrast_color4",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_contrast_color4FA",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_contrast_float",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_contrast_vector2",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_contrast_vector2FA",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_contrast_vector3",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_contrast_vector3FA",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_contrast_vector4",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_contrast_vector4FA",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_convert_boolean_color3",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_convert_boolean_color4",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_convert_boolean_float",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_convert_boolean_vector2",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_convert_boolean_vector3",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_convert_boolean_vector4",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_convert_color3_color4",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_convert_color3_vector2",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_convert_color3_vector3",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_convert_color3_vector4",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_convert_color4_color3",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_convert_color4_vector2",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_convert_color4_vector3",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_convert_color4_vector4",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_convert_float_color3",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_convert_float_color4",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_convert_float_vector2",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_convert_float_vector3",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_convert_float_vector4",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_convert_integer_color3",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_convert_integer_color4",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_convert_integer_float",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_convert_integer_vector2",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_convert_integer_vector3",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_convert_integer_vector4",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_convert_vector2_color3",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_convert_vector2_color4",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_convert_vector2_vector3",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_convert_vector2_vector4",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_convert_vector3_color3",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_convert_vector3_color4",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_convert_vector3_vector2",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_convert_vector3_vector4",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_convert_vector4_color3",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_convert_vector4_color4",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_convert_vector4_vector2",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_convert_vector4_vector3",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_cos_float",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_cos_vector2",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_cos_vector3",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_cos_vector4",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_crosshatch_color3",
+      "status": "different",
+      "actual": [
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "nodedef": "ND_crossproduct_vector3",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_deon_hair_absorption_from_melanin",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_determinant_matrix33",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_determinant_matrix44",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_difference_color3",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_difference_color4",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_difference_float",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_disjointover_color4",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_distance_vector2",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_distance_vector3",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_distance_vector4",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_divide_color3",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_divide_color3FA",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_divide_color4",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_divide_color4FA",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_divide_float",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_divide_vector2",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_divide_vector2FA",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_divide_vector3",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_divide_vector3FA",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_divide_vector4",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_divide_vector4FA",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_dodge_color3",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_dodge_color4",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_dodge_float",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_dot_color3",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_dot_color4",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_dot_float",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_dot_vector2",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_dot_vector3",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_dot_vector4",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_dotproduct_vector2",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_dotproduct_vector3",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_dotproduct_vector4",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_exp_float",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_exp_vector2",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_exp_vector3",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_exp_vector4",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_extract_color3",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_extract_color4",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_extract_matrix33",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_extract_matrix44",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_extract_vector2",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_extract_vector3",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_extract_vector4",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_floor_color3",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_floor_color4",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_floor_float",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_floor_vector2",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_floor_vector3",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_floor_vector4",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_fract_color3",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_fract_color4",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_fract_float",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_fract_vector2",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_fract_vector3",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_fract_vector4",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_fractal3d_float",
+      "status": "different",
+      "actual": [
+        0.08634137362241745
+      ]
+    },
+    {
+      "nodedef": "ND_frame_float",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_g18_rec709_to_lin_rec709_color3",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_g18_rec709_to_lin_rec709_color4",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_g22_ap1_to_lin_rec709_color3",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_g22_ap1_to_lin_rec709_color4",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_g22_rec709_to_lin_rec709_color3",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_g22_rec709_to_lin_rec709_color4",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_grid_color3",
+      "status": "different",
+      "actual": [
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "nodedef": "ND_hexagon_float",
+      "status": "different",
+      "actual": [
+        0
+      ]
+    },
+    {
+      "nodedef": "ND_hsvadjust_color3",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_hsvadjust_color4",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_hsvtorgb_color3",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_hsvtorgb_color4",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_ifequal_color3",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_ifequal_color3B",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_ifequal_color3I",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_ifequal_color4",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_ifequal_color4B",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_ifequal_color4I",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_ifequal_float",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_ifequal_floatB",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_ifequal_floatI",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_ifequal_vector2",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_ifequal_vector2B",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_ifequal_vector2I",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_ifequal_vector3",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_ifequal_vector3B",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_ifequal_vector3I",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_ifequal_vector4",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_ifequal_vector4B",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_ifequal_vector4I",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_ifgreater_color3",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_ifgreater_color3I",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_ifgreater_color4",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_ifgreater_color4I",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_ifgreater_float",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_ifgreater_floatI",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_ifgreater_vector2",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_ifgreater_vector2I",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_ifgreater_vector3",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_ifgreater_vector3I",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_ifgreater_vector4",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_ifgreater_vector4I",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_ifgreatereq_color3",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_ifgreatereq_color3I",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_ifgreatereq_color4",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_ifgreatereq_color4I",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_ifgreatereq_float",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_ifgreatereq_floatI",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_ifgreatereq_vector2",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_ifgreatereq_vector2I",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_ifgreatereq_vector3",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_ifgreatereq_vector3I",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_ifgreatereq_vector4",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_ifgreatereq_vector4I",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_in_color4",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_inside_color3",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_inside_color4",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_inside_float",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_invert_color3",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_invert_color3FA",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_invert_color4",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_invert_color4FA",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_invert_float",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_invert_vector2",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_invert_vector2FA",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_invert_vector3",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_invert_vector3FA",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_invert_vector4",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_invert_vector4FA",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_lin_adobergb_to_lin_rec709_color3",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_lin_adobergb_to_lin_rec709_color4",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_lin_displayp3_to_lin_rec709_color3",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_lin_displayp3_to_lin_rec709_color4",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_line_float",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_ln_float",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_ln_vector2",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_ln_vector3",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_ln_vector4",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_luminance_color3",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_luminance_color4",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_magnitude_vector2",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_magnitude_vector3",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_magnitude_vector4",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_mask_color4",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_matte_color4",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_max_color3",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_max_color3FA",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_max_color4",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_max_color4FA",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_max_float",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_max_vector2",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_max_vector2FA",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_max_vector3",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_max_vector3FA",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_max_vector4",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_max_vector4FA",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_maxcomponent_color3",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_maxcomponent_color4",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_maxcomponent_vector2",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_maxcomponent_vector3",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_maxcomponent_vector4",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_min_color3",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_min_color3FA",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_min_color4",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_min_color4FA",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_min_float",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_min_vector2",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_min_vector2FA",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_min_vector3",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_min_vector3FA",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_min_vector4",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_min_vector4FA",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_mincomponent_color3",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_mincomponent_color4",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_mincomponent_vector2",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_mincomponent_vector3",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_mincomponent_vector4",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_minus_color3",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_minus_color4",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_minus_float",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_mix_color3",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_mix_color3_color3",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_mix_color4",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_mix_color4_color4",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_mix_float",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_mix_vector2",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_mix_vector2_vector2",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_mix_vector3",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_mix_vector3_vector3",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_mix_vector4",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_mix_vector4_vector4",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_modulo_color3",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_modulo_color3FA",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_modulo_color4",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_modulo_color4FA",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_modulo_float",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_modulo_vector2",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_modulo_vector2FA",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_modulo_vector3",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_modulo_vector3FA",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_modulo_vector4",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_modulo_vector4FA",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_multiply_color3",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_multiply_color3FA",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_multiply_color4",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_multiply_color4FA",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_multiply_float",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_multiply_vector2",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_multiply_vector2FA",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_multiply_vector3",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_multiply_vector3FA",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_multiply_vector4",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_multiply_vector4FA",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_noise2d_color3",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_noise2d_color3FA",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_noise2d_float",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_noise2d_vector2",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_noise2d_vector2FA",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_noise2d_vector3",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_noise2d_vector3FA",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_noise3d_color3",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_noise3d_color3FA",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_noise3d_float",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_noise3d_vector2",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_noise3d_vector2FA",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_noise3d_vector3",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_noise3d_vector3FA",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_normal_vector3",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_normalize_vector2",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_normalize_vector3",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_normalize_vector4",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_normalmap_float",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_normalmap_vector2",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_open_pbr_anisotropy",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_out_color4",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_outside_color3",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_outside_color4",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_outside_float",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_over_color4",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_overlay_color3",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_overlay_color4",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_overlay_float",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_place2d_vector2",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_plus_color3",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_plus_color4",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_plus_float",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_position_vector3",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_power_color3",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_power_color3FA",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_power_color4",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_power_color4FA",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_power_float",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_power_vector2",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_power_vector2FA",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_power_vector3",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_power_vector3FA",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_power_vector4",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_power_vector4FA",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_premult_color4",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_ramp4_color3",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_ramp4_color4",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_ramp4_float",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_ramp4_vector2",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_ramp4_vector3",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_ramp4_vector4",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_ramplr_color3",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_ramplr_color4",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_ramplr_float",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_ramplr_vector2",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_ramplr_vector3",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_ramplr_vector4",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_ramptb_color3",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_ramptb_color4",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_ramptb_float",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_ramptb_vector2",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_ramptb_vector3",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_ramptb_vector4",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_randomcolor_float",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_randomcolor_integer",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_randomfloat_float",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_randomfloat_integer",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_range_color3",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_range_color3FA",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_range_color4",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_range_color4FA",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_range_float",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_range_vector2",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_range_vector2FA",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_range_vector3",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_range_vector3FA",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_range_vector4",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_range_vector4FA",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_rec709_display_to_lin_rec709_color3",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_rec709_display_to_lin_rec709_color4",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_reflect_vector3",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_refract_vector3",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_remap_color3",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_remap_color3FA",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_remap_color4",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_remap_color4FA",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_remap_float",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_remap_vector2",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_remap_vector2FA",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_remap_vector3",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_remap_vector3FA",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_remap_vector4",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_remap_vector4FA",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_rgbtohsv_color3",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_rgbtohsv_color4",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_rotate2d_vector2",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_rotate3d_vector3",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_roughness_anisotropy",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_roughness_dual",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_round_color3",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_round_color4",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_round_float",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_round_vector2",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_round_vector3",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_round_vector4",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_safepower_color3",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_safepower_color3FA",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_safepower_color4",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_safepower_color4FA",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_safepower_float",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_safepower_vector2",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_safepower_vector2FA",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_safepower_vector3",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_safepower_vector3FA",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_safepower_vector4",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_safepower_vector4FA",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_saturate_color3",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_saturate_color4",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_screen_color3",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_screen_color4",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_screen_float",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_sign_color3",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_sign_color4",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_sign_float",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_sign_vector2",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_sign_vector3",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_sign_vector4",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_sin_float",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_sin_vector2",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_sin_vector3",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_sin_vector4",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_smoothstep_color3",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_smoothstep_color3FA",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_smoothstep_color4",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_smoothstep_color4FA",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_smoothstep_float",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_smoothstep_vector2",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_smoothstep_vector2FA",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_smoothstep_vector3",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_smoothstep_vector3FA",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_smoothstep_vector4",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_smoothstep_vector4FA",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_sqrt_float",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_sqrt_vector2",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_sqrt_vector3",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_sqrt_vector4",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_srgb_displayp3_to_lin_rec709_color3",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_srgb_displayp3_to_lin_rec709_color4",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_srgb_texture_to_lin_rec709_color3",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_srgb_texture_to_lin_rec709_color4",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_subtract_color3",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_subtract_color3FA",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_subtract_color4",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_subtract_color4FA",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_subtract_float",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_subtract_vector2",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_subtract_vector2FA",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_subtract_vector3",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_subtract_vector3FA",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_subtract_vector4",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_subtract_vector4FA",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_switch_color3",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_switch_color3I",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_switch_color4",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_switch_color4I",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_switch_float",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_switch_floatI",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_switch_vector2",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_switch_vector2I",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_switch_vector3",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_switch_vector3I",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_switch_vector4",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_switch_vector4I",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_tan_float",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_tan_vector2",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_tan_vector3",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_tan_vector4",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_tangent_vector3",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_texcoord_vector2",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_tiledcircles_color3",
+      "status": "different",
+      "actual": [
+        1,
+        1,
+        1
+      ]
+    },
+    {
+      "nodedef": "ND_tiledcloverleafs_color3",
+      "status": "different",
+      "actual": [
+        1,
+        1,
+        1
+      ]
+    },
+    {
+      "nodedef": "ND_tiledhexagons_color3",
+      "status": "different",
+      "actual": [
+        1,
+        1,
+        1
+      ]
+    },
+    {
+      "nodedef": "ND_time_float",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_transformmatrix_vector2M3",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_transformmatrix_vector3",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_transformmatrix_vector3M4",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_transformmatrix_vector4",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_transformnormal_vector3",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_transformpoint_vector3",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_transformvector_vector3",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_trianglewave_float",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_unpremult_color4",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_worleynoise2d_float",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_worleynoise2d_vector2",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_worleynoise2d_vector3",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_worleynoise3d_float",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_worleynoise3d_vector2",
+      "status": "matched"
+    },
+    {
+      "nodedef": "ND_worleynoise3d_vector3",
+      "status": "matched"
+    }
+  ]
+}

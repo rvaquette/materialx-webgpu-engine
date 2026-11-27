@@ -96,6 +96,8 @@ NodeDefs et un exemple exportable sont disponibles. La matrice reste partielle :
 les variantes et combinaisons non vérifiées ne disposent pas encore toutes
 d'un statut étayé pour chaque backend. La priorité reste ouverte jusqu'à cette
 qualification ; une compilation ou une validation structurelle ne la remplace pas.
+Un relevé compute WebGPU compare également 547 cas numériques avec le CPU,
+sans démontrer leur comportement dans les trois pipelines de rendu.
 
 Documenter précisément ce que le moteur conserve, étend, approxime ou ne prend
 pas en charge par rapport à MaterialX officiel, pour éviter de confondre un

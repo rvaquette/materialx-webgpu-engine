@@ -32,12 +32,13 @@ nœuds par un backend, ni la fidélité des pixels.
    les sorties, espaces, unités, couleurs et chemins de textures. L'interface
    **Documentation des nœuds** donne les variantes et entrées des bibliothèques
    chargées ; l'[inventaire consultable](generated/materialx-nodedefs.json)
-   contient les NodeDefs sélectionnables par le script, leurs types, entrées,
-   valeurs littérales par défaut reconnues et sorties. `library` désigne les
+   contient les NodeDefs sélectionnables par le script, y compris les anciennes
+   versions accessibles par nom, leurs types, entrées, valeurs littérales et
+   propriétés géométriques par défaut, unités, couleurs et énumérations
+   reconnues, ainsi que leurs sorties. `library` désigne les
    fichiers officiels chargés ; `engine`, les définitions du moteur. Une valeur
-   absente de l'inventaire ne prouve pas l'absence de `defaultgeomprop`, de
-   valeur héritée ou de sémantique dans la bibliothèque officielle. Les anciennes
-   versions résolubles par nom explicite ne sont pas toutes listées.
+   absente de l'inventaire ne prouve pas l'absence d'une valeur non reconnue
+   ou d'une sémantique dans la bibliothèque officielle.
 2. Identifier les éventuelles catégories et types `engine` dans la
    [matrice](#matrice-par-famille-et-backend), et consulter les diagnostics du
    graphe et du backend. Une entrée non renseignée hérite de sa NodeDef
@@ -57,6 +58,92 @@ pris en charge pour ce cas ; `E` : extension moteur ; `?` : équivalence non
 établie. `P` ne signifie pas conforme pour toutes les variantes. Raster et
 PT désignent les deux backends MaterialX ; Disney est le backend Disney séparé.
 CPU désigne l'évaluation de valeurs et la cuisson, pas un renderer complet.
+
+### Matrice par NodeDef
+
+Dans l'[inventaire JSON](generated/materialx-nodedefs.json), rechercher le nom
+`nodedef` puis suivre sa clé `compatibility` dans `compatibilityCases`. Celle-ci
+indique un statut pour chacun des quatre backends, une condition et les sources
+de preuve. Les statuts sont `partial` (P), `approximated` (A), `unsupported`
+(N), `extension` (E) et `unknown` (?). `origin: engine` identifie une extension,
+dont les statuts par backend sont distincts ; `extension` seul ne signifie pas
+qu'elle fonctionne sur un backend. Le statut s'applique uniquement
+au contexte décrit par `condition`, pas à toutes les connexions possibles.
+`selectableBy: name` indique une ancienne version sélectionnable uniquement
+par son nom explicite ; `variant` indique une variante courante, qui peut
+également nécessiter son nom lorsque plusieurs variantes ont le même type.
+
+Le champ `surfaceValueCategoryRegistered` indique seulement que la **catégorie**
+figure dans le registre d'abaissement des graphes de valeurs de surface. Il ne
+vérifie ni la variante, ni les entrées, ni le résultat. Il reste pertinent
+d'examiner les avertissements de compilation même lorsqu'il vaut `true`.
+
+Par exemple, depuis la racine du dépôt en PowerShell :
+
+```powershell
+$matrix = Get-Content docs\generated\materialx-nodedefs.json -Raw | ConvertFrom-Json
+$node = $matrix.definitions | Where-Object nodedef -eq 'ND_standard_surface_surfaceshader'
+$node.inputs | Format-Table
+$matrix.compatibilityCases.($node.compatibility) | ConvertTo-Json -Depth 5
+```
+
+Le champ `cpuProbe` précise le résultat d'une sonde numérique : une seule
+instance non connectée, abaissée comme valeur de surface avec les valeurs
+littérales reconnues par l'API de script et des coordonnées fixées. Cette
+sonde ne développe pas l'implémentation officielle, ne reproduit pas tous
+les défauts géométriques, et ne compare pas avec un générateur officiel.
+Les textures sont laissées non testées plutôt que remplacées par une valeur
+neutre. Un diagnostic ou une erreur est conservé dans la matrice ; il ne
+prouve pas que tous les graphes utilisant le nœud échouent.
+
+À la référence épinglée, 823 NodeDefs sont listées, dont 17 extensions et
+deux anciennes versions accessibles par nom. Parmi elles, 610 variantes
+disposent d'une sonde CPU réussie sans autre règle particulière. Pour
+ces variantes, les statuts raster, PT et Disney restent non établis : la sonde ne démontre ni la
+fidélité à MaterialX ni le comportement GPU. Les autres cas sont qualifiés
+uniquement dans les conditions indiquées. Ces inconnues ne sont
+pas des rejets avérés, et les tableaux par famille ci-dessous ne suffisent pas
+à déduire leur statut individuel. La liste n'est donc pas encore une qualification
+exhaustive de chaque variante sur chaque backend.
+
+### Sondes GPU isolées
+
+Le [relevé WebGPU](generated/materialx-gpu-probes.json) complète la sonde CPU :
+il exécute le même IR dans un shader **compute** sur Chrome, avec les mêmes
+coordonnées fixées, puis compare les composantes avec une tolérance de
+`1e-4 * max(1, abs(valeur CPU))`. Il contient la version du navigateur,
+l'adaptateur et les empreintes SHA-256 des principales sources utilisées. Vérifier ces
+empreintes avant de réutiliser le relevé après une modification du moteur.
+
+Sur l'adaptateur NVIDIA Turing utilisé pour ce relevé, 547 variantes numériques
+éligibles ont été exécutées : 540 correspondent au CPU, sept diffèrent, aucune
+ne rapporte d'erreur. Les sept différences sont `ND_crosshatch_color3`,
+`ND_fractal3d_float`, `ND_grid_color3`, `ND_hexagon_float`,
+`ND_tiledcircles_color3`, `ND_tiledcloverleafs_color3` et
+`ND_tiledhexagons_color3` ; le JSON fournit les valeurs GPU et l'inventaire les
+valeurs CPU. Pour six motifs 2D, le chemin CPU utilise ici une coordonnée
+de repli `[0, 0]` lorsque l'entrée n'est pas renseignée, alors que le WGSL
+utilise les coordonnées de la sonde : ce résultat ne compare donc pas les deux
+algorithmes à coordonnées égales.
+
+La sélection exclut les sorties multiples, textures, booléens, entiers et matrices
+ainsi que les sondes CPU non évaluées. Les 547 cas comprennent 542 des 610 cas
+classés `cpuProbe`. Une correspondance ne démontre ni l'équivalence à MaterialX,
+ni le fonctionnement dans les pipelines raster, PT ou Disney. Elle ne modifie
+donc pas leurs statuts `unknown`.
+
+Pour reproduire le relevé avec Chrome et WebGPU disponibles :
+
+```powershell
+node scripts\materialx-compatibility-gpu.mjs
+```
+
+Le script lance son propre serveur Vite sur un port local attribué par le
+système. Il remplace le relevé versionné ; `MX_CHROME` peut désigner un
+exécutable Chrome spécifique. Le résultat dépend de l'adaptateur et du pilote ;
+une erreur ou un résultat non fini est enregistré comme tel, jamais comme succès.
+
+### Vue d'ensemble par famille
 
 | Cas / types et entrées concernés | Raster | PT | Disney | CPU / cuisson | Détails et preuves |
 | --- | --- | --- | --- | --- | --- |
@@ -85,6 +172,18 @@ conforme. Les catégories exactes, signatures et défauts se recherchent dans
 l'inventaire, l'interface et les définitions officielles : ils ne sont pas
 indépendamment certifiés par cette matrice.
 
+### Conditions détaillées
+
+| Domaine | Condition et limite vérifiable | Sources et tests |
+| --- | --- | --- |
+| Géométrie | Pour une géométrie utilisée sous `transformpoint`, `transformvector` ou `transformnormal`, `object`/`model` et `world` utilisent les matrices d'instance ; autre espace ou espace dynamique : avertissement et repli. La tangente et la bitangente ne prennent en compte que l'index 0 dans ce chemin. | [surface-ir.ts](../src/compiler/surface-ir.ts), [surface-ir.test.ts](../tests/compiler/surface-ir.test.ts) |
+| Transformations | `model` est assimilé à `object` ; espaces identiques ou vides : identité. Espace dynamique ou non pris en charge : avertissement et identité. | [surface-ir.ts](../src/compiler/surface-ir.ts), [surface-ir.test.ts](../tests/compiler/surface-ir.test.ts) |
+| Propriétés | `geompropvalue` accepte `st` et `UV0` en `vector2` et les champs scalaires nommés dans le contexte volume ; autre cas : avertissement et valeur par défaut. | [surface-ir.ts](../src/compiler/surface-ir.ts), [surface-ir.test.ts](../tests/compiler/surface-ir.test.ts) |
+| Unités | `unit` et `unittype` sont conservés dans le graphe et l'export ; aucune conversion générale n'est établie. Normaliser explicitement les valeurs pour l'application cible. | [graph.ts](../src/materialx/graph.ts), [graph-export.ts](../src/materialx/graph-export.ts) |
+| Couleurs | Les conversions explicites de [color-transforms.ts](../src/compiler/color-transforms.ts) couvrent notamment sRGB, ACEScg, Adobe RGB et Display P3 vers lin_rec709 ; une étiquette quelconque ne prouve pas une conversion OCIO. | [color-transforms.ts](../src/compiler/color-transforms.ts), [ir-eval.test.ts](../tests/compiler/ir-eval.test.ts) |
+| Textures | Résolution du fichier, décodage, adressage, filtrage, UDIM et espace couleur doivent être vérifiés ensemble. La cuisson refuse un fichier absent ou indécodable ; Disney limite la forme des graphes et approxime le filtrage. | [bake.ts](../src/materialx/bake.ts), [disney-texture-graphs.ts](../src/render/pathtracing/disney-texture-graphs.ts), [surface-ir.test.ts](../tests/compiler/surface-ir.test.ts) |
+| Valeurs et closures | Les aperçus CPU acceptent les sorties `float`, `integer`, `boolean`, `color3`, `vector3` lorsque le graphe est évaluable ; les closures ne sont pas des valeurs numériques à cuire. Les autres sorties peuvent avoir un aperçu raster sans être cuisibles en CPU. | [BAKING_EXPORT.md](BAKING_EXPORT.md), [ir-eval.ts](../src/compiler/ir-eval.ts) |
+
 Pour `standard_surface` dans Disney, `base` est multiplié dans `base_color`,
 `diffuse_roughness` est remplacé par le carré de `specular_roughness`, et la
 couleur de transmission par la couleur de base. La sous-surface, le sheen et
@@ -108,10 +207,17 @@ et [disney-texture-graphs.test.ts](../tests/render/pathtracing/disney-texture-gr
 | Une texture nécessaire non résolue ou non décodée est refusée par la cuisson ; l'interpréteur IR bas niveau peut lui utiliser une valeur neutre si aucun sampler n'est fourni. | [nœuds de texture](https://github.com/AcademySoftwareFoundation/MaterialX/blob/bea1e9251d8f936a73930ad19a6f3b37265d46f5/documents/Specification/MaterialX.StandardNodes.md#texture-nodes) | [bake.ts](../src/materialx/bake.ts), [ir-eval.ts](../src/compiler/ir-eval.ts) | [ir-eval.test.ts](../tests/compiler/ir-eval.test.ts) |
 | Nœud amont sans abaissement WGSL : avertissement et constante neutre ; la contribution peut disparaître. | [nœuds standard](https://github.com/AcademySoftwareFoundation/MaterialX/blob/bea1e9251d8f936a73930ad19a6f3b37265d46f5/documents/Specification/MaterialX.StandardNodes.md) | [surface-ir.ts](../src/compiler/surface-ir.ts) | [surface-ir.test.ts](../tests/compiler/surface-ir.test.ts) |
 | Volume spatial discrétisé : les détails plus fins que la grille peuvent disparaître. | [VDF PBR](https://github.com/AcademySoftwareFoundation/MaterialX/blob/bea1e9251d8f936a73930ad19a6f3b37265d46f5/documents/Specification/MaterialX.PBRSpec.md) | [volume-field.ts](../src/render/volume-field.ts) | [volume-field.test.ts](../tests/render/volume-field.test.ts) |
+| `chiang_hair_roughness` : le chemin CPU direct utilise la même paire simplifiée pour les trois sorties et ignore `scale_TT` et `scale_TRT` ; les lobes de cheveux peuvent différer. Le comportement GPU n'est pas établi par ce test. | [mx_chiang_hair_bsdf.glsl](https://github.com/AcademySoftwareFoundation/MaterialX/blob/bea1e9251d8f936a73930ad19a6f3b37265d46f5/libraries/pbrlib/genglsl/mx_chiang_hair_bsdf.glsl) | [surface-ir.ts](../src/compiler/surface-ir.ts), [ir-eval.ts](../src/compiler/ir-eval.ts) | [surface-ir.test.ts](../tests/compiler/surface-ir.test.ts) |
 
 Les limites GPU et les replis du viewer sont décrits dans
 [INTEGRATION.md](INTEGRATION.md#politiques-de-repli). Les captures peuvent
 rejeter une erreur au lieu de changer de backend.
+
+En particulier, les variantes numériques `UsdPrimvarReader`,
+`UsdTransform2d` et `glossiness_anisotropy` reçoivent ce repli lorsqu'elles
+atteignent directement le lowering de valeurs sans développement préalable.
+Cela ne préjuge pas du résultat si un nodegraph d'implémentation est d'abord
+résolu et développé.
 
 ## Extensions du moteur
 
@@ -124,6 +230,16 @@ rejeter une erreur au lieu de changer de backend.
 fournir la NodeDef seule ne fournit pas son implémentation dans un autre outil.
 La lentille, les AOV, gobos et scatter ont des restrictions de backend et
 d'entrées précisées dans [SCRIPT_REFERENCE.md](SCRIPT_REFERENCE.md).
+
+| Extension | Raster | PT MaterialX | Disney | CPU et export |
+| --- | --- | --- | --- | --- |
+| Environnement procédural | Environnement et éclairage | Environnement et éclairage | À vérifier selon la scène | Pré-cuit en carte HDR ; réglages non portables comme shader MaterialX standard. |
+| Image, effets écran de lentille | Oui | Oui | Oui | Post-traitement de l'image, hors export du matériau. |
+| Projection et ouverture de lentille | Rejet | Oui | Rejet | Paramètres de caméra moteur, pas une surface exportable. |
+| AOV intégrés et personnalisés | Non | Oui, sources limitées | Non | Données de rendu moteur ; pas une closure portable. |
+| Filtre de lumière / gobo | Non | Lumière spot, motifs limités | Non | Sémantique moteur, sans implémentation externe automatique. |
+| Scatter | Instances rendues | Instances rendues | Instances rendues | Placement évalué sur CPU, graphe de densité limité ; instancer de scène, pas shader de surface standard. |
+| Préréglages de surface et de volume | Selon le graphe | Selon le graphe | Selon conversion ; volume rejeté | Certains graphes se développent en standard ; le terminal volume moteur reste une dépendance. |
 
 [engine-presets.ts](../src/materialx/engine-presets.ts) ajoute `water`,
 `water_caustics`, `lava`, `fire`, `smoke`, `clouds`, `ice`, `mud` et
@@ -183,7 +299,13 @@ npx vite-node scripts\materialx-compatibility-inventory.ts <chemin-vers-librarie
 ```
 
 Le script refuse un autre commit ou des bibliothèques modifiées. Il reflète les
-NodeDefs sélectionnables du script, pas la couverture de rendu. Lors d'une mise
+NodeDefs sélectionnables du script, pas la couverture de rendu. Les règles
+conditionnelles sont dans [materialx-compatibility-status.ts](../scripts/materialx-compatibility-status.ts)
+et la sonde CPU dans [materialx-compatibility-cpu.ts](../scripts/materialx-compatibility-cpu.ts) ;
+et leur cohérence avec l'inventaire est vérifiée par
+[materialx-compatibility.test.ts](../tests/materialx/materialx-compatibility.test.ts).
+Modifier une règle seulement avec une preuve applicable à sa variante et son
+contexte ; ne pas déduire la fidélité d'un registre de catégories. Lors d'une mise
 à jour MaterialX, changer explicitement la référence épinglée, relancer les
 tests de résolution et de rendu pertinents, et conserver les cas non vérifiés
 comme tels. Les pistes futures ne sont pas des capacités actuelles.

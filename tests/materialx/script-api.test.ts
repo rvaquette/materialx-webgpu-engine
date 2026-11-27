@@ -200,6 +200,31 @@ describe('material script library', () => {
     expect(LIBRARY.resolve('mix', 'ND_mix_color3_color3').name).toBe('ND_mix_color3_color3');
     expect(() => LIBRARY.resolve('mix', 'vector4')).toThrow(/Types: color3, float/);
   });
+
+  it('enumerates NodeDefs addressable by name, including older versions', () => {
+    const names = LIBRARY.namedDefinitions.map(def => def.name);
+    expect(names).toContain('ND_standard_surface_surfaceshader');
+    expect(names).toContain('ND_standard_surface_surfaceshader_100');
+    expect(LIBRARY.variants('standard_surface').map(def => def.name)).not.toContain('ND_standard_surface_surfaceshader_100');
+    expect(LIBRARY.resolve('standard_surface', 'ND_standard_surface_surfaceshader_100').name).toBe('ND_standard_surface_surfaceshader_100');
+  });
+
+  it('retains inherited geometric and unit metadata from NodeDefs', () => {
+    const library = ScriptLibrary.fromXml([`<materialx>
+      <nodedef name="ND_parent" node="example" version="1.0">
+        <input name="position" type="vector3" defaultgeomprop="Pobject" />
+        <input name="distance" type="float" value="1" unit="meter" unittype="distance" />
+        <input name="color" type="color3" value="1, 1, 1" colorspace="lin_rec709" />
+        <output name="out" type="float" />
+      </nodedef>
+      <nodedef name="ND_child" node="example" version="2.0" isdefaultversion="true" inherit="ND_parent" />
+    </materialx>`]);
+    expect(library.resolve('example').inputs).toEqual([
+      expect.objectContaining({ name: 'position', defaultGeomProp: 'Pobject' }),
+      expect.objectContaining({ name: 'distance', unit: 'meter', unitType: 'distance' }),
+      expect.objectContaining({ name: 'color', colorSpace: 'lin_rec709' }),
+    ]);
+  });
 });
 
 describe('runScript', () => {

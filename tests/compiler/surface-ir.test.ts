@@ -202,6 +202,32 @@ describe('lowerSurfaceInputsToIr (T055c)', () => {
     }
   });
 
+  it.each(['gltf_anisotropy_image', 'UsdUVTexture'])(
+  'diagnoses an unflattened named output of %s', category => {
+    const graph = surfaceGraph([conn('base', 'float', 'unlowered', 'outx')], [
+      upstream('unlowered', category, 'multioutput', []),
+    ]);
+    const diagnostics: Diagnostic[] = [];
+    const { ir } = lowerAndEmit(graph, [{ name: 'base', type: FLOAT }], diagnostic => diagnostics.push(diagnostic));
+    expect(evaluateShaderIr(ir).get('base')).toEqual([0]);
+    expect(diagnostics.some(d => d.message.includes(`Upstream node '${category}'`) && d.message.includes('neutral constant'))).toBe(true);
+  },
+  );
+
+  it('uses the same simplified CPU roughness for distinct Chiang outputs', () => {
+  const graph = surfaceGraph([
+    conn('base_color', 'color3', 'hair', 'roughness_TT'),
+    conn('specular_color', 'color3', 'hair', 'roughness_TRT'),
+  ], [upstream('hair', 'chiang_hair_roughness', 'multioutput', [
+    value('longitudinal', 'float', '0.2'), value('azimuthal', 'float', '0.3'),
+    value('scale_TT', 'float', '0.5'), value('scale_TRT', 'float', '2'),
+  ])]);
+  const { ir } = lowerAndEmit(graph, [{ name: 'base_color', type: COLOR3 }, { name: 'specular_color', type: COLOR3 }]);
+  const outputs = evaluateShaderIr(ir);
+  expect(outputs.get('base_color')).toEqual([0.04000000000000001, 0.09]);
+  expect(outputs.get('specular_color')).toEqual(outputs.get('base_color'));
+  });
+
   it.each([
     [-1, [[0.6, 0.7], [0.6, 0.8], [-0.3, 0.8]]],
     [0, [[0.6, 0.7], [0.6, 0.8], [-0.3, 0.8]]],
@@ -668,6 +694,20 @@ describe('lowerSurfaceInputsToIr (T055c)', () => {
     resolveSurface(graph, { onDiagnostic: d => diagnostics.push(d) });
     expect(diagnostics.some(d => d.message.includes("unsupported node 'swizzle'"))).toBe(true);
   });
+
+  it.each([
+    ['UsdPrimvarReader', 'float'],
+    ['UsdTransform2d', 'vector2'],
+    ['glossiness_anisotropy', 'vector2'],
+  ])('diagnoses an unflattened %s value instead of claiming support', (category, type) => {
+      const graph = surfaceGraph([conn('base', 'float', 'unlowered')], [
+        upstream('unlowered', category, type, []),
+      ]);
+      const diagnostics: Diagnostic[] = [];
+      const { ir } = lowerAndEmit(graph, [{ name: 'base', type: FLOAT }], diagnostic => diagnostics.push(diagnostic));
+      expect(evaluateShaderIr(ir).get('base')).toEqual([0]);
+      expect(diagnostics.some(d => d.message.includes(`Upstream node '${category}'`) && d.message.includes('neutral constant'))).toBe(true);
+    });
 
   it.each([
     { op: 'splitlr', names: ['valuel', 'valuer'], uv: '0.55, 0.8', expected: 0.2 },
