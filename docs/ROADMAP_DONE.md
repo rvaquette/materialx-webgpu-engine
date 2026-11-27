@@ -1968,3 +1968,94 @@ Exemples (`npm run script -- examples/scripts/<nom> --out docs/images/<dossier>`
 | Eau | Lave | Glace, boue, sable mouillé |
 |---|---|---|
 | ![Eau PT](images/p17-water/02-pathtracing/frame-012.png) | ![Lave PT](images/p17-lava/02-pathtracing/frame-012.png) | ![Surfaces PT](images/p17-surface-presets/02-pathtracing/frame-012.png) |
+
+## Priorité 24 : étude du format vidéo pour le transport des rendus
+
+L'étude compare des images WebP indépendantes, du WebM/VP9 et du MP4/H.264
+réellement muxés et lus dans Chrome 158 sous Windows. Les images proviennent
+de `scenes/bench/animated.usda` : séquences raster de 13 images à 24 i/s en
+512² et 256², plus trois images de path tracing à 32 spp aux timecodes 0, 6 et
+12. Le muxage utilise Mediabunny (dépendance de développement uniquement),
+WebCodecs, des timestamps à cadence fixe et des keyframes vidéo toutes les
+0,25 s.
+
+| Séquence | PNG source | WebP q. 0,92 | WebM/VP9, 1 Mbit/s | MP4/H.264 fMP4, 1 Mbit/s |
+|---|---:|---:|---:|---:|
+| Raster 512², 13 images | 1 739 935 o | 117 764 o, 42,29 dB | 60 018 o, 41,31 dB | 84 989 o, 41,01 dB |
+| Raster 256², 13 images | 591 532 o | 54 574 o, 41,30 dB | 50 160 o, 41,29 dB | 63 348 o, 40,90 dB |
+| Path tracing 512², 3 images | 1 182 760 o | 215 912 o, 40,22 dB | 142 626 o, 35,92 dB | 134 209 o, 35,87 dB |
+
+Tailles vidéo finales, conteneur inclus ; WebP désigne ici les octets image
+binaires, avant l'encodage Base64 du serveur SSE. Les data URLs WebP mesurées
+font respectivement 157 335, 73 087 et 287 957 octets. Le PSNR est calculé sur
+les images décodées ; il ne décrit ni les artefacts temporels ni la qualité
+perçue. L'encodage muxé prend environ 0,4–0,8 s pour ces clips de 0,54 s ; la
+lecture séquentielle complète prend environ 0,56–0,61 s. Les débits sont des
+cibles, pas des limites de taille.
+
+Le MP4 fMP4 a aussi été fourni progressivement à `MediaSource` : Chrome a pu
+afficher la première image après le segment d'initialisation et le premier
+fragment (44 427 octets sur 84 989 en 512² ; latence locale mesurée 552 ms).
+Après omission du fragment intermédiaire, la lecture a pu reprendre au
+keyframe suivant à 0,5 s. C'est une simulation locale sans latence réseau ; les
+frames perdues ne sont pas récupérées et il faut demander un segment de
+keyframe. Le WebM final a été lu et ses images décodées, mais son apport
+progressif via MediaSource n'a pas été testé.
+
+**Recommandation :** conserver les instantanés WebP indépendants pour l'aperçu
+interactif/path tracing et le protocole distant SSE actuel : chaque frame est
+autonome, immédiatement affichable et récupérable sans état temporel. Pour un
+export animé ou un flux continu, préférer MP4/H.264 fragmenté avec MediaSource,
+segments adressables, timestamps et keyframe toutes les 0,25–0,5 s ; il est
+progressif et reprend après perte au prochain keyframe dans le test. WebM/VP9
+est un bon choix d'export hors ligne lorsque la taille prime (−49 % face au
+WebP brut pour la séquence raster 512²), mais à 256² le gain tombe à 8 % et le
+MP4 devient plus volumineux que le WebP. Le path tracing perd environ 4,3 dB à
+1 Mbit/s. Une séquence WebP avec manifeste reste préférable à la vidéo pour
+accès aléatoire, qualité path tracing et reprise exacte.
+
+La commande `npm run video:frames -- --input <dossier>` convertit chaque
+séquence `frame-NNN.png` trouvée récursivement en une vidéo distincte. Elle
+préserve l'ordre numérique et les écarts de numéro comme timestamps, produit
+du MP4/H.264 par défaut (ou du WebM/VP9 avec `--format webm`) et refuse
+d'écraser les vidéos existantes sauf avec `--overwrite`. Le serveur distant
+conserve ses WebP en data URL SSE, échantillonnées par défaut à 1 s
+(`--frame-interval 1000`) ; son protocole réseau n'a pas été changé. Les
+mesures se limitent à Chrome sur Windows et ne remplacent pas un essai réseau
+de bout en bout ni une matrice de compatibilité inter-navigateurs.
+
+Exemple pour convertir les séquences de rendu de cette priorité, une par
+dossier, dans `transport/exports/` :
+
+```powershell
+npm run video:frames -- --input docs/images/p24 --output docs/images/p24/transport/exports --fps 24 --format mp4
+```
+
+Reproduction :
+
+```powershell
+npm run script -- examples/scripts/p24-render-transport-frames.js --out docs/images/p24 --timeout 3600000
+node scripts/study-animation-transport.mjs
+$env:MX_P24_PROFILE='03-raster-256'; node scripts/study-animation-transport.mjs
+$env:MX_P24_PROFILE='02-pathtracing'; node scripts/study-animation-transport.mjs
+```
+
+Le rapport complet, les mesures des payloads WebCodecs et les clips vidéo
+reproductibles sont disponibles pour [512²](images/p24/transport/codec-report.json)
+([WebM](images/p24/transport/sequence-01-raster.webm),
+[MP4](images/p24/transport/sequence-01-raster.mp4)),
+[256²](images/p24/transport/codec-report-03-raster-256.json)
+([WebM](images/p24/transport/sequence-03-raster-256.webm),
+[MP4](images/p24/transport/sequence-03-raster-256.mp4)) et le
+[path tracing](images/p24/transport/codec-report-02-pathtracing.json)
+([WebM](images/p24/transport/sequence-02-pathtracing.webm),
+[MP4](images/p24/transport/sequence-02-pathtracing.mp4)). Les images PNG source
+et le manifeste de l'expérience sont générés par
+[p24-render-transport-frames.js](../examples/scripts/p24-render-transport-frames.js) ;
+la sonde est [study-animation-transport.mjs](../scripts/study-animation-transport.mjs).
+
+**Critère d'aboutissement atteint pour l'étude locale :** WebM et MP4 muxés
+lisibles, taille/qualité/encodage mesurés sur trois profils, capacités réelles
+de Chrome vérifiées, et flux fMP4 progressif avec perte/reprise testé. Le
+protocole distant et sa compatibilité multi-navigateurs restent des travaux
+distincts.

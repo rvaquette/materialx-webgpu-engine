@@ -13,9 +13,10 @@ portabilité et exploitation), 8 (primitives et scènes par script), 9
 (displacement procédural), 10 (documentation intégrée des nœuds), 11
 (aperçus par nœud et bibliothèque de matériaux), 12 (environnement et
 post-traitement), 13 (baking et export de scènes), 14 (lookdev et projets),
-15 (opérations booléennes), 16 (shaders d'extension) et 17 (surfaces complexes), ainsi que l'étude
-urgente de la priorité 21 (chargement des bibliothèques MaterialX sans WASM)
-et la priorité 22 (build minimal du Core WASM) sont traitées ; leur historique est dans
+15 (opérations booléennes), 16 (shaders d'extension) et 17 (surfaces complexes),
+ainsi que l'étude urgente de la priorité 21 (chargement des bibliothèques
+MaterialX sans WASM) et la priorité 22 (build minimal du Core WASM) sont
+traitées ; leur historique est dans
 [ROADMAP_DONE.md](ROADMAP_DONE.md). Les limites connues sont recensées dans
 [INTEGRATION.md](INTEGRATION.md#limites-connues).
 
@@ -145,21 +146,6 @@ matériau sans réexécuter le script entier.
 **Critère d'aboutissement :** un même script expose des paramètres d'un shader
 de surface et d'un autre type de shader ; seuls les paramètres marqués apparaissent
 dans l'UI et leurs modifications sont visibles dans le rendu.
-
-## Priorité 24 : étude de l'enregistrement des animations
-
-Étudier l'export d'une animation rendue à partir de la timeline de scène, en
-comparant une séquence d'images et un fichier vidéo. Examiner la capture en temps
-réel et le rendu hors ligne, la cadence et la plage temporelle, la résolution,
-la stabilité du path tracing, ainsi que l'export de la caméra et des changements
-de matériaux/transforms. Recommander un format et un flux d'utilisation adaptés
-au navigateur et au script API ; cette priorité est une étude, sans imposer
-d'avance un format de sortie.
-
-**Critère d'aboutissement :** un prototype capture une courte animation
-reproductible ; les mesures et la recommandation justifient le format retenu,
-les compromis de qualité/performance et les commandes nécessaires à une future
-intégration UI/script.
 
 ## Priorité 25 : étude d'un graphe de scène équivalent au script
 
@@ -319,14 +305,14 @@ non démontrée.
    tracing trop long sur un seul GPU.
 9. Paramètres de shaders déclarés par script (23), en prolongement de l'API de
    scripting (3bis) et de l'édition de paramètres.
-10. Étude de l'enregistrement des animations (24), après les scènes dynamiques
-   (5) et l'export des rendus (13).
+10. Étude du format vidéo de transport des rendus (24), après les scènes
+    dynamiques (5) et l'export des rendus (13).
 11. Étude du graphe de scène équivalent au script (25), en prolongement du
     scripting (3bis), des primitives (8) et des paramètres de shaders (23).
 12. Sélection, édition et mouvements de caméra (26), après le lookdev et les
-    projets (14), les scènes dynamiques (5) et l'étude d'enregistrement (24).
-12. Déploiement Azure du rendu distribué (27), après le socle multi-serveur
+    projets (14), les scènes dynamiques (5) et l'étude de format vidéo (24).
+13. Déploiement Azure du rendu distribué (27), après le socle multi-serveur
     (19) ; la validation d'une VM GPU peut commencer dès maintenant.
-13. Écarts avec MaterialX officiel (28), à mener en parallèle des shaders
+14. Écarts avec MaterialX officiel (28), à mener en parallèle des shaders
     d'extension (16) et des surfaces complexes (17), puis à maintenir avec
     chaque évolution du compilateur et des exports.

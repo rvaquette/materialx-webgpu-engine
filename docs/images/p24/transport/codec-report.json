@@ -1,0 +1,306 @@
+{
+  "source": {
+    "frames": 13,
+    "frameIndices": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12
+    ],
+    "profile": "01-raster",
+    "fps": 24,
+    "resolution": "512x512",
+    "pngBytes": 1739935
+  },
+  "encoder": {
+    "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/158.0.0.0 Safari/537.36",
+    "secureContext": true,
+    "targetBitrates": [
+      500000,
+      1000000,
+      4000000
+    ]
+  },
+  "webpBaseline": {
+    "codec": "WebP still image per frame",
+    "quality": 0.92,
+    "encodedBytes": 117764,
+    "base64DataUrlBytes": 157335,
+    "averagePsnrDb": 42.29,
+    "minFramePsnrDb": 40.78,
+    "frameBytes": [
+      6060,
+      7330,
+      7482,
+      7896,
+      8300,
+      8712,
+      9416,
+      9824,
+      10114,
+      10516,
+      10564,
+      10522,
+      11028
+    ],
+    "compressionRatio": 14.77
+  },
+  "formats": [
+    {
+      "label": "VP9 500 kbit/s",
+      "codec": "vp09.00.10.08",
+      "targetBitrate": 500000,
+      "supported": true,
+      "encodedFrames": 13,
+      "keyframes": 1,
+      "encodedBytes": 31758,
+      "encodeMs": 718,
+      "decodeMs": 92,
+      "averagePsnrDb": 39.99,
+      "minFramePsnrDb": 38.64,
+      "chunkBytes": [
+        3585,
+        1769,
+        1325,
+        1779,
+        1670,
+        2179,
+        3001,
+        3361,
+        2745,
+        2652,
+        2571,
+        2645,
+        2476
+      ],
+      "container": "none; raw EncodedVideoChunk payloads only",
+      "compressionRatio": 54.79
+    },
+    {
+      "label": "VP9 1 Mbit/s",
+      "codec": "vp09.00.10.08",
+      "targetBitrate": 1000000,
+      "supported": true,
+      "encodedFrames": 13,
+      "keyframes": 1,
+      "encodedBytes": 50563,
+      "encodeMs": 719,
+      "decodeMs": 80,
+      "averagePsnrDb": 41.37,
+      "minFramePsnrDb": 40.16,
+      "chunkBytes": [
+        4356,
+        2393,
+        2151,
+        2708,
+        2660,
+        3524,
+        4644,
+        5064,
+        4557,
+        4752,
+        4513,
+        4639,
+        4602
+      ],
+      "container": "none; raw EncodedVideoChunk payloads only",
+      "compressionRatio": 34.41
+    },
+    {
+      "label": "VP9 4 Mbit/s",
+      "codec": "vp09.00.10.08",
+      "targetBitrate": 4000000,
+      "supported": true,
+      "encodedFrames": 13,
+      "keyframes": 1,
+      "encodedBytes": 180719,
+      "encodeMs": 721,
+      "decodeMs": 108,
+      "averagePsnrDb": 42.34,
+      "minFramePsnrDb": 40.96,
+      "chunkBytes": [
+        6693,
+        4372,
+        3661,
+        4937,
+        6246,
+        10362,
+        15605,
+        15884,
+        15350,
+        17597,
+        34671,
+        9885,
+        35456
+      ],
+      "container": "none; raw EncodedVideoChunk payloads only",
+      "compressionRatio": 9.63
+    },
+    {
+      "label": "H.264 500 kbit/s",
+      "codec": "avc1.42001e",
+      "targetBitrate": 500000,
+      "supported": true,
+      "encodedFrames": 13,
+      "keyframes": 1,
+      "encodedBytes": 83399,
+      "encodeMs": 501,
+      "decodeMs": 47,
+      "averagePsnrDb": 41.28,
+      "minFramePsnrDb": 39.68,
+      "chunkBytes": [
+        9168,
+        8024,
+        7194,
+        6614,
+        6353,
+        6684,
+        6730,
+        6718,
+        6013,
+        5685,
+        5144,
+        4732,
+        4340
+      ],
+      "container": "none; raw EncodedVideoChunk payloads only",
+      "compressionRatio": 20.86
+    },
+    {
+      "label": "H.264 1 Mbit/s",
+      "codec": "avc1.42001e",
+      "targetBitrate": 1000000,
+      "supported": true,
+      "encodedFrames": 13,
+      "keyframes": 1,
+      "encodedBytes": 88957,
+      "encodeMs": 515,
+      "decodeMs": 24,
+      "averagePsnrDb": 41.34,
+      "minFramePsnrDb": 39.77,
+      "chunkBytes": [
+        9200,
+        8022,
+        7883,
+        7285,
+        6713,
+        7088,
+        7588,
+        7310,
+        6302,
+        6168,
+        5669,
+        4999,
+        4730
+      ],
+      "container": "none; raw EncodedVideoChunk payloads only",
+      "compressionRatio": 19.56
+    },
+    {
+      "label": "H.264 4 Mbit/s",
+      "codec": "avc1.42001e",
+      "targetBitrate": 4000000,
+      "supported": true,
+      "encodedFrames": 13,
+      "keyframes": 1,
+      "encodedBytes": 129327,
+      "encodeMs": 558,
+      "decodeMs": 33,
+      "averagePsnrDb": 41.6,
+      "minFramePsnrDb": 40.27,
+      "chunkBytes": [
+        7580,
+        6648,
+        7472,
+        7483,
+        7705,
+        8759,
+        10490,
+        12794,
+        12066,
+        12453,
+        12054,
+        11834,
+        11989
+      ],
+      "container": "none; raw EncodedVideoChunk payloads only",
+      "compressionRatio": 13.45
+    }
+  ],
+  "muxedFormats": [
+    {
+      "label": "WebM / VP9",
+      "extension": "webm",
+      "mimeType": "video/webm; codecs=\"vp09.00.30.08.01.02.02.02.00\"",
+      "frameCount": 13,
+      "durationSeconds": 0.542,
+      "keyframes": [
+        0,
+        0.25,
+        0.5
+      ],
+      "keyFrameIntervalSeconds": 0.25,
+      "encodedBytes": 60018,
+      "encodeMs": 835,
+      "playbackDecodeMs": 567,
+      "averagePsnrDb": 41.31,
+      "minFramePsnrDb": 40.1,
+      "progressive": "WebM; this file is finalized before publication. Progressive cluster delivery and late-join behavior are not tested by this offline export.",
+      "compressionRatio": 28.99
+    },
+    {
+      "label": "MP4 / H.264 fragmented",
+      "extension": "mp4",
+      "mimeType": "video/mp4; codecs=\"avc1.64001e\"",
+      "frameCount": 13,
+      "durationSeconds": 0.5417,
+      "keyframes": [
+        0,
+        0.25,
+        0.5
+      ],
+      "keyFrameIntervalSeconds": 0.25,
+      "encodedBytes": 84989,
+      "encodeMs": 513,
+      "playbackDecodeMs": 559,
+      "averagePsnrDb": 41.01,
+      "minFramePsnrDb": 39.24,
+      "progressive": {
+        "container": "fragmented MP4 with init segment followed by MediaSource fragments",
+        "fragmentCount": 3,
+        "firstFrameMs": 553,
+        "firstFrameBytes": 44427,
+        "totalBytes": 84989,
+        "dropRecovery": {
+          "succeeded": true,
+          "droppedFragmentIndex": 1,
+          "targetFrameIndex": 12,
+          "decodedFrameIndex": 12,
+          "currentTime": 0.5134,
+          "bufferedRanges": [
+            [
+              0,
+              0.25
+            ],
+            [
+              0.5,
+              0.5417
+            ]
+          ]
+        },
+        "firstFrameTimestamp": 0
+      },
+      "compressionRatio": 20.47
+    }
+  ],
+  "limitations": "WebP and container sizes exclude protocol framing. The fMP4 MediaSource test appends in-memory fragments locally; it does not measure network latency or packet loss. Progressive WebM and cross-browser compatibility are not tested."
+}
