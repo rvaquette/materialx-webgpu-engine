@@ -12,18 +12,21 @@ import { importLights } from '../../src/usd/lights.ts';
 import { buildSceneInstances } from '../../src/scene/instances.ts';
 import { resolveSceneMaterials } from '../../src/usd/materials.ts';
 import { animateScene } from '../../src/render/scene-animation.ts';
+import { evaluateSceneAt, sceneTimeline } from '../../src/scene/time.ts';
 import type { SceneResources } from '../../src/render/scene-resources.ts';
 
 /** A host whose operations do nothing; tests override what they observe. */
 function idleHost(): ScriptHost {
   const idle = async (): Promise<void> => {};
   return {
-    loadScene: idle, loadStage: idle, objects: () => [], renderSettings: () => ({}), setRenderSetting: idle,
+    loadScene: idle, loadStage: idle, updateStage: idle, sceneRevision: () => 0,
+    objects: () => [], renderSettings: () => ({}), setRenderSetting: idle,
     setEnvironmentShader: idle, setImageShader: idle, setPathTracingView: idle, assignMaterial: idle,
     render: async () => 0, saveImage: idle, saveText: idle, objectMaterial: () => undefined, stats: () => undefined,
-    waitForStop: idle, capture: idle, saveAov: idle, saveDiagnostics: idle, diagnostics: () => [], capabilities: () => undefined,
+    waitForStop: idle, capture: idle, video: idle, saveAov: idle, saveDiagnostics: idle, diagnostics: () => [], capabilities: () => undefined,
     timeline: () => undefined, time: () => 0, setTime: idle, setTransform: idle, setVisibility: idle, lights: () => [],
-    setLight: idle, setCamera: idle, variants: () => [], setVariant: idle, materialParameters: () => [], setMaterialParameters: idle,
+    setLight: idle, moveLightFilter: idle, setCamera: idle, variants: () => [], setVariant: idle,
+    materialParameters: () => [], setMaterialParameters: idle,
   };
 }
 
@@ -238,6 +241,66 @@ describe('runScript', () => {
     await expect(run.setParameter('9', 1)).rejects.toThrow(/Unknown exposed parameter/);
   });
 
+  it('updates existing material parameters without replacing other material edits', async () => {
+    const calls: unknown[][] = [];
+    const host: ScriptHost = {
+      ...idleHost(),
+      objects: () => ['/World/ball'],
+      materialParameters: () => [{ id: 'surface:base', label: 'base', type: 'float', value: [0.7] }],
+      setMaterialParameters: async (path, values) => { calls.push([path, [...values]]); },
+      assignMaterial: async () => { throw new Error('material should not be replaced'); },
+    };
+    const run = await runScript(`
+      surface = new StandardSurface(); surface.base = 0.7; expose(surface, "base");
+      ball = new Sphere({ material: surface }); await render(1);
+    `, LIBRARY, { host });
+    await run.setParameter('0', 0.4);
+    expect(calls).toEqual([['/World/ball', [['surface:base', [0.4]]]]]);
+  });
+
+  it('updates a preset input without discarding independent edits to its expanded graph', async () => {
+    const preset = await runScript('fire = new Fire(); fire.emission = 1;', P17_LIBRARY);
+    const expanded = fromXml(toXml(preset, P17_LIBRARY), P17_LIBRARY);
+    const provenance = { namePath: '/' };
+    const nodes = new Map<string, ResolvedNode>();
+    for (const node of expanded.nodes.filter(candidate => candidate.def.category !== 'surfacematerial')) {
+      nodes.set(node.name, {
+        id: node.name, category: node.def.category,
+        type: node.def.outputs.length > 1 ? 'multioutput' : node.def.outputs[0]!.type,
+        provenance,
+        inputs: [...node.inputs].map(([name, input]) => {
+          const type = node.def.inputs.find(port => port.name === name)!.type;
+          return {
+            name, type, provenance,
+            source: 'node' in input
+              ? { kind: 'connection' as const, nodeId: input.node.name, output: input.output }
+              : { kind: 'value' as const, type, value: Array.isArray(input.value) ? input.value.join(', ') : String(input.value) },
+          };
+        }),
+      });
+    }
+    const noise = nodes.get('noise01')!;
+    nodes.set('noise01', { ...noise, inputs: noise.inputs.map(input => input.name === 'outlow'
+      ? { ...input, source: { kind: 'value', type: 'float', value: '0.25' } } : input) });
+    const graph: ResolvedGraph = {
+      nodes, terminals: [{ name: 'volumeshader', type: 'volumeshader', nodeId: 'fireVolume', provenance }],
+    };
+    let updated = '';
+    const host: ScriptHost = {
+      ...idleHost(), objects: () => ['/World/flame'],
+      objectMaterial: () => ({ graph, name: 'fireMaterial' }),
+      assignMaterial: async (_path, document) => { if ('xml' in document) updated = document.xml; },
+    };
+    const run = await runScript(`
+      fire = new Fire(); fire.emission = 1; expose(fire, "emission");
+      flame = new Volume({ material: fire }); await render(1);
+    `, P17_LIBRARY, { host });
+    await run.setParameter('0', 10);
+    const result = fromXml(updated, P17_LIBRARY);
+    expect(result.nodes.find(node => node.name === 'noise01')?.inputs.get('outlow')).toEqual({ value: 0.25 });
+    expect(result.nodes.find(node => node.name === 'emissionValue')?.inputs.get('in2')).toEqual({ value: 10 });
+  });
+
   it('rejects duplicate, connected and subsequently connected exposed inputs', async () => {
     await expect(runScript('s = new StandardSurface(); expose(s, "base"); expose(s, "base");', LIBRARY))
       .rejects.toThrow(/already exposed/);
@@ -265,6 +328,81 @@ describe('runScript', () => {
     await run.setParameter('2', 4);
     expect(calls).toEqual(['sky:8', 'sky:8', 'studio:8', 'studio:4']);
     expect(run.parameters()[0]!.value).toBe(8);
+  });
+
+  it('rebuilds exposed scatter parameters without duplicating instances or rerunning the script', async () => {
+    const stages: string[] = [];
+    const host: ScriptHost = {
+      ...idleHost(),
+      loadStage: async stage => { stages.push(stage.usda); },
+      updateStage: async stage => { stages.push(stage.usda); },
+    };
+    const run = await runScript(`
+      ground = new Plane({ width: 2, length: 2 });
+      prototype = new Sphere();
+      other = new Sphere();
+      scatterSettings = new ScatterShader();
+      scatterSettings.surfacePath = ground.path;
+      scatterSettings.prototypePath = prototype.path;
+      scatterSettings.density = 0.5;
+      expose(scatterSettings, "density");
+      expose(scatterSettings, "hidePrototype");
+      expose(scatterSettings, "prototypePath");
+      scatter(scatterSettings.out);
+      log("once");
+    `, LIBRARY, { host });
+    await run.setParameter('0', 1);
+    await run.setParameter('1', false);
+    await run.setParameter('2', '/World/other');
+    expect(run.logs).toEqual(['once']);
+    const scene = await importUsdStage('scatter.usda', { reader: { read: async () => stages.at(-1)! } });
+    const instances = buildSceneInstances(scene).instances.filter(instance => instance.primPath === '/World/scatter');
+    expect(instances).toHaveLength(4);
+    expect(stages.at(-1)!.match(/def PointInstancer/g)).toHaveLength(1);
+    expect(scene.prims.get('/World/prototype')?.attributes.get('visibility')?.value).not.toBe('invisible');
+    expect(scene.prims.get('/World/other')?.attributes.get('visibility')?.value).not.toBe('invisible');
+    await expect(run.setParameter('2', '/World/missing')).rejects.toThrow(/prototypePath/);
+    expect(run.parameters()[2]!.value).toBe('/World/other');
+    await run.setParameter('1', true);
+    const hidden = await importUsdStage('scatter.usda', { reader: { read: async () => stages.at(-1)! } });
+    expect(hidden.prims.get('/World/other')?.attributes.get('visibility')?.value).toBe('invisible');
+  });
+
+  it('moves an exposed light filter and applies subsequent edits to its new target', async () => {
+    const calls: unknown[][] = [];
+    const host: ScriptHost = {
+      ...idleHost(),
+      setLight: async (path, changes) => { calls.push(['set', path, changes?.filter?.scale]); },
+      moveLightFilter: async (from, to, settings) => { calls.push(['move', from, to, settings.scale]); },
+    };
+    const run = await runScript(`
+      filter = new LightFilterShader();
+      filter.lightPath = "/World/SpotA";
+      expose(filter, "lightPath");
+      expose(filter, "scale");
+      await lightFilter(filter.out);
+    `, LIBRARY, { host });
+    await run.setParameter('0', '/World/SpotB');
+    await run.setParameter('1', 7);
+    expect(calls).toEqual([
+      ['set', '/World/SpotA', 4],
+      ['move', '/World/SpotA', '/World/SpotB', 4],
+      ['set', '/World/SpotB', 7],
+    ]);
+  });
+
+  it('refuses to edit a parameter after the viewer replaces the scene', async () => {
+    let revision = 1;
+    const calls: number[] = [];
+    const host: ScriptHost = {
+      ...idleHost(), sceneRevision: () => revision,
+      setImageShader: async settings => { calls.push(settings.exposure); },
+    };
+    const run = await runScript('image = new ImageShader(); expose(image, "exposure"); await postprocess(image.out);', LIBRARY, { host });
+    revision++;
+    await expect(run.setParameter('0', 2)).rejects.toThrow(/scene changed/);
+    expect(calls).toEqual([0]);
+    expect(run.parameters()[0]!.value).toBe(0);
   });
 
   it('names nodes after variables and records values and connections', async () => {
@@ -1136,7 +1274,7 @@ samples = await render(16);`;
     await expect(runScript('render.backend = "vulkan";', EXPRESSIONS)).rejects.toThrow(/render.backend expects "raster", "pathtracing", "disney"/);
     await expect(runScript('render.speed = 1;', EXPRESSIONS)).rejects.toThrow(/Unknown render setting "speed"/);
     await expect(runScript('await render(0);', EXPRESSIONS)).rejects.toThrow(/positive integer/);
-    await expect(runScript('await assign("/x", 3);', EXPRESSIONS)).rejects.toThrow(/surface shader, a volume shader, a material node or a .mtlx path/);
+    await expect(runScript('await assign("/x", 3);', EXPRESSIONS)).rejects.toThrow(/surface shader, a material node or a .mtlx path/);
     await expect(runScript('scene = 1;', EXPRESSIONS)).rejects.toThrow(/reserved/);
   });
 
@@ -1197,6 +1335,23 @@ await capture("blur.png", { samples: 32, shutter: [0, 4], steps: 8 });`, EXPRESS
     await expect(runScript('setTransform("/A", [1, 2]);', EXPRESSIONS)).rejects.toThrow(/16 finite numbers/);
     await expect(runScript('await save("x.exr");', EXPRESSIONS)).rejects.toThrow(/\.png.*\.pfm.*\.json/);
     await expect(runScript('stats = 1;', EXPRESSIONS)).rejects.toThrow(/reserved/);
+  });
+
+  it('validates and queues encoded animation video requests', async () => {
+    const calls: unknown[][] = [];
+    const host = { ...idleHost(), video: async (...args: unknown[]) => { calls.push(args); } };
+    const run = await runScript('await video("animation.mp4", { start: 0, end: 24, fps: 12, samples: 8, shutter: [-0.5, 0.5], steps: 4 });', EXPRESSIONS, { host });
+    expect(run.viewerCommands).toBe(1);
+    expect(calls).toEqual([['animation.mp4', { start: 0, end: 24, fps: 12, samples: 8, shutter: { open: -0.5, close: 0.5, steps: 4 } }, undefined]]);
+    for (const script of [
+      'await video("x.png", { start: 0, end: 24 });',
+      'await video("../x.mp4", { start: 0, end: 24 });',
+      'await video("x.mp4", { start: 24, end: 0 });',
+      'await video("x.mp4", { start: 0, end: 24, fps: 0 });',
+      'await video("x.mp4", { start: 0, end: 24, steps: 4 });',
+      'await video("x.mp4", { start: 0, end: 24, shutter: [1, -1] });',
+      'await video("x.mp4", { start: 0, end: 24, extra: true });',
+    ]) await expect(runScript(script, EXPRESSIONS)).rejects.toThrow();
   });
 
   it('checks conditions outside validation runs and keeps the queue going after a handled failure', async () => {
@@ -1287,6 +1442,16 @@ Wood.surfaceshader = s.out;
 
   it('rejects LamaSurface wrappers', async () => {
     expect(() => fromResolvedGraph({ ...resolved, lamaSurface: {} }, LIBRARY)).toThrow(/LamaSurface/);
+  });
+
+  it('omits the engine-only clock when importing an animated material graph', () => {
+    const time: ResolvedNode = {
+      id: 'clock', category: 'time', type: 'float', provenance,
+      inputs: [{ name: 'mx_frame', type: 'float', source: { kind: 'value', type: 'float', value: '12' }, provenance }],
+    };
+    const surface = { ...resolved.nodes.get('s')!, inputs: resolved.nodes.get('s')!.inputs.filter(input => input.name === 'base') };
+    const graph = fromResolvedGraph({ ...resolved, nodes: new Map([['s', surface], ['clock', time]]) }, P17_LIBRARY);
+    expect(graph.nodes.find(node => node.name === 'clock')?.inputs.has('mx_frame')).toBe(false);
   });
 });
 
@@ -1516,5 +1681,107 @@ describe('scripted primitives', () => {
     await expect(runScript('s = new Plane(); s.deform = 3;', LIBRARY)).rejects.toThrow(/deform expects a function/);
     await expect(runScript('s = new Plane(); s.deform = p => [0, 0]; await render();', LIBRARY, { host: idleHost() }))
       .rejects.toThrow(/s\.deform: deform\(position, uv, normal\) must return \[x, y, z\]/);
+  });
+
+  it('rebuilds primitives sharing an ordered deformer stack when a deformer changes', async () => {
+    const calls: Call[] = [];
+    await runScript(`
+      twist = new Twist(); twist.axis = "X"; twist.angle = 45;
+      wave = new Wave(); wave.axis = "X"; wave.amplitude = 0.2;
+      a = new Plane({ resolution: 2 }); b = new Plane({ resolution: 2 });
+      a.deformers = [twist, wave]; b.deformers = [twist];
+      await render();
+      twist.angle = 90;
+      await render();
+      twist.angle = 45;
+      await render();
+    `, LIBRARY, { host: recorder(calls) });
+    const stages = calls.filter(call => call[0] === 'stage').map(call => call[1] as string);
+    expect(stages).toHaveLength(3);
+    expect(stages[0]).toContain('def Mesh "a"');
+    expect(stages[0]).toContain('engine:deformers');
+    expect(stages[1]).not.toEqual(stages[0]);
+    expect(stages[2]).toEqual(stages[0]);
+    const first = await importUsdStage('deformers.usda', { reader: { read: async () => stages[0]! } });
+    const scene = await importUsdStage('deformers.usda', { reader: { read: async () => stages[1]! } });
+    expect(scene.prims.get('/World/a')?.attributes.get('engine:deformers')?.value).toContain('"angle":90');
+    expect(scene.prims.get('/World/b')?.typeName).toBe('Mesh');
+    expect(scene.prims.get('/World/b')?.attributes.get('points')?.value)
+      .not.toEqual(first.prims.get('/World/b')?.attributes.get('points')?.value);
+    await expect(runScript('s = new Sphere(); s.deformers = [3];', LIBRARY)).rejects.toThrow(/array of deformers/);
+    await expect(runScript('t = new Twist(); t.axis = "Q";', LIBRARY)).rejects.toThrow(/axis must be X, Y or Z/);
+    await expect(runScript('t = new Twist(); t.angle = [];', LIBRARY)).rejects.toThrow(/angle must be a finite number/);
+  });
+
+  it('exports animated deformation samples that follow the USD timeline', async () => {
+    const calls: Call[] = [];
+    const saved = new Map<string, string>();
+    await runScript(`
+      twist = new Twist(); twist.axis = "X";
+      twist.keyframes = [{ time: 0, angle: 0 }, { time: 2, angle: 90 }, { time: 4, angle: 180 }];
+      ribbon = new Plane({ axis: "Z", resolution: 2 });
+      ribbon.deformers = [twist];
+      await render();
+      await save("animated.usda");
+    `, LIBRARY, { host: recorder(calls, saved) });
+    const source = saved.get('animated.usda')!;
+    expect(source).toContain('points.timeSamples');
+    expect(source).toContain('normals.timeSamples');
+    const scene = await importUsdStage('animated.usda', { reader: { read: async () => source } });
+    expect(sceneTimeline(scene)).toMatchObject({ start: 0, end: 4, animated: true });
+    const points = (time: number) => evaluateSceneAt(scene, time).prims.get('/World/ribbon')!.attributes.get('points')!.value;
+    expect(points(0)).not.toEqual(points(2));
+    expect(points(1)).not.toEqual(points(0));
+    expect(points(1)).not.toEqual(points(2));
+    await expect(runScript('t = new Twist(); t.keyframes = [{time: 1, angle: 0}, {time: 1, angle: 2}];', LIBRARY))
+      .rejects.toThrow(/strictly increasing/);
+    await expect(runScript('t = new Twist(); t.keyframes = [{time: 0, angle: 0}, {time: 1, factor: 2}];', LIBRARY))
+      .rejects.toThrow(/same properties/);
+  });
+
+  it('imports a polygonal USDA mesh and exports its animated lattice deformation', async () => {
+    const source = `#usda 1.0
+def Xform "Source" {
+  def Mesh "Quad" {
+    uniform token subdivisionScheme = "none"
+    point3f[] points = [(-1, -1, 0), (1, -1, 0), (1, 1, 0), (-1, 1, 0)]
+    int[] faceVertexCounts = [4]
+    int[] faceVertexIndices = [0, 1, 2, 3]
+    texCoord2f[] primvars:st = [(0, 0), (1, 0), (1, 1), (0, 1)] (interpolation = "faceVarying")
+  }
+}`;
+    const saved = new Map<string, string>();
+    await runScript(`
+      model = await importMesh("source.usda", "/Source/Quad");
+      lattice = new Lattice(); lattice.min = -1; lattice.max = 1;
+      lattice.offsets = Array(24).fill(0);
+      end = Array(24).fill(0); end[17] = 1;
+      lattice.keyframes = [{ time: 0, offsets: lattice.offsets }, { time: 24, offsets: end }];
+      model.deformers = [lattice];
+      await save("imported.usda");
+    `, LIBRARY, { host: recorder([], saved), fetchText: async () => source });
+    const result = await importUsdStage('result.usda', { reader: { read: async () => saved.get('imported.usda')! } });
+    const prim = result.prims.get('/World/model')!;
+    expect(prim.typeName).toBe('Mesh');
+    expect(prim.attributes.get('faceVertexCounts')?.value).toEqual([3, 3]);
+    expect(prim.attributes.get('primvars:st')?.value).toBeDefined();
+    expect(prim.attributes.get('points')?.timeSamples).toHaveLength(2);
+    expect(evaluateSceneAt(result, 0).prims.get('/World/model')!.attributes.get('points')?.value)
+      .not.toEqual(evaluateSceneAt(result, 24).prims.get('/World/model')!.attributes.get('points')?.value);
+    await expect(runScript('m = await importMesh("source.usda", "/Source/Missing");', LIBRARY, {
+      fetchText: async () => source,
+    })).rejects.toThrow(/not a USD Mesh/);
+    await expect(runScript('m = await importMesh("source.usda", "/Source/Quad");', LIBRARY, {
+      fetchText: async () => source.replace('"none"', '"catmullClark"'),
+    })).rejects.toThrow(/subdivisionScheme/);
+    await expect(runScript('m = await importMesh("source.usda", "/Source/Quad");', LIBRARY, {
+      fetchText: async () => source.replace('int[] faceVertexCounts', 'int[] holeIndices = [0]\n    int[] faceVertexCounts'),
+    })).rejects.toThrow(/holes or GeomSubsets/);
+    await expect(runScript('m = await importMesh("source.usda", "/Source/Quad");', LIBRARY, {
+      fetchText: async () => source.replace('int[] faceVertexCounts', 'float[] primvars:custom = [1]\n    int[] faceVertexCounts'),
+    })).rejects.toThrow(/does not support primvars: custom/);
+    await expect(runScript('m = await importMesh("source.usda", "/Source/Quad"); await render();', LIBRARY, {
+      dryRun: true, host: idleHost(), fetchText: async () => { throw new Error('validation must not fetch'); },
+    })).resolves.toBeDefined();
   });
 });

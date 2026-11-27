@@ -2,6 +2,7 @@ import { emitLayeredSurface } from '../compiler/surface-wgsl.ts';
 import { hashString } from '../compiler/cache.ts';
 import type { WgslUniformField } from '../compiler/wgsl.ts';
 import { resolveSurface } from '../materialx/surface-graph.ts';
+import { MATERIALX_CLOCK_INPUT } from '../materialx/graph.ts';
 import type {
   ResolvedGraph, ResolvedInput, ResolvedNode, ResolvedNodeDefRef, ResolvedValueSource,
 } from '../materialx/graph.ts';
@@ -40,7 +41,7 @@ export interface MaterialParameter {
 }
 
 /** Hidden input carrying the scene clock into `time` / `frame` nodes (compiler/nodes.ts). */
-export const CLOCK_INPUT = 'mx_frame';
+export const CLOCK_INPUT = MATERIALX_CLOCK_INPUT;
 const CLOCK_CATEGORIES = new Set(['time', 'frame']);
 
 export interface MaterialGraphOutput {

@@ -105,7 +105,7 @@ describe('script editor language support', () => {
     const code = 'ball = new Sphere({ radius: 1 });\nball.radius = 0.5;\n';
     expect(scriptCompletions('x = new Sph', code, LIBRARY)?.items[0]).toMatchObject({ label: 'Sphere', insert: 'Sphere()' });
     expect(scriptVariables(code, LIBRARY).get('ball')?.inputs.map(port => port.name)).toEqual([
-      'radius', 'resolution', 'translate', 'rotate', 'scale', 'visible', 'material', 'deform',
+      'radius', 'resolution', 'translate', 'rotate', 'scale', 'visible', 'material', 'deform', 'deformers',
     ]);
     expect(scriptCompletions(`${code}ball.re`, code, LIBRARY)?.items.map(item => item.label)).toEqual(['resolution']);
     const at = (text: string, offset = 1) => scriptHover(code, code.indexOf(text) + offset, LIBRARY);
@@ -113,6 +113,14 @@ describe('script editor language support', () => {
     expect(at('radius =')).toMatchObject({ title: 'ball.radius : propriété float', lines: ['Rayon', 'Défaut : 0.5', 'Plage : 0 … +∞', 'Primitive : Sphere'] });
     expect(at('ball =', 0)).toMatchObject({ title: 'ball : Sphere' });
     expect(highlightScript(code, LIBRARY)).toContain('<span class="tok-node">Sphere</span>');
+  });
+
+  it('documents spatial deformer classes and their properties', () => {
+    const code = 'twist = new Twist();\ntwist.angle = 45;\n';
+    expect(scriptCompletions('x = new Twi', code, LIBRARY)?.items[0]).toMatchObject({ label: 'Twist', insert: 'Twist()' });
+    expect(scriptCompletions(`${code}twist.an`, code, LIBRARY)?.items.map(item => item.label)).toEqual(['angle']);
+    expect(scriptHover(code, code.indexOf('Twist') + 1, LIBRARY)).toMatchObject({ title: 'new Twist() : déformeur' });
+    expect(scriptHover(code, code.indexOf('angle') + 1, LIBRARY)?.lines).toContain('Déformeur : Twist');
   });
 
   it('knows boolean operators: completions, operand properties and documentation', () => {

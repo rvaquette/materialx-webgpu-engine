@@ -12,6 +12,9 @@
 import { defaultDiagnosticSink, type DiagnosticSink } from '../core/diagnostics.ts';
 import type { MxDocument, MxElement } from './wasm.ts';
 
+/** Engine-only time input, not an authored MaterialX NodeDef input. */
+export const MATERIALX_CLOCK_INPUT = 'mx_frame';
+
 /** Embind vector surface (`size`/`get`). */
 export interface MxVector<T> {
   size(): number;

@@ -16,7 +16,8 @@ post-traitement), 13 (baking et export de scènes), 14 (lookdev et projets),
 15 (opérations booléennes), 16 (shaders d'extension) et 17 (surfaces complexes),
 ainsi que l'étude urgente de la priorité 21 (chargement des bibliothèques
 MaterialX sans WASM), la priorité 22 (build minimal du Core WASM) et l'étude de
-la priorité 25 (graphe de scène équivalent au script) sont traitées ; leur
+la priorité 25 (graphe de scène équivalent au script) et la priorité 23
+(paramètres de shaders déclarés par script) sont traitées ; leur
 historique est dans
 [ROADMAP_DONE.md](ROADMAP_DONE.md). Les limites connues sont recensées dans
 [INTEGRATION.md](INTEGRATION.md#limites-connues).
@@ -25,6 +26,8 @@ Les priorités suivantes visent à passer d'un moteur de rendu MaterialX à un
 outil de création : construire des scènes, explorer et documenter les nœuds,
 étendre MaterialX à de nouveaux types de shaders, exporter le résultat et
 continuer à optimiser le runtime livré au navigateur.
+
+Pour les animations restituer un fichier vidéo et non pas une série d'images.
 
 ## Priorité 18 : déformation volumique de surfaces complexes
 
@@ -57,6 +60,22 @@ pour plier, tordre ou faire onduler des objets entiers et les animer :
 ruban tordu (twist) et un objet importé déformé par treillis sont animés en
 temps réel en raster, rendus avec flou de mouvement en path tracing, et
 exportés en USD.
+
+**En cours :** une première pile CPU partageable sur les primitives scriptées
+propose les déformeurs paramétriques, un vent 3D et un treillis de Bézier pour
+les primitives et les maillages USDA statiques importés, exportés en USD avec
+leurs paramètres et échantillons temporels. L'exemple
+[p18-deformers.js](../examples/scripts/p18-deformers.js) est disponible dans
+le menu Scripts. [p18-animated-wind.js](../examples/scripts/p18-animated-wind.js)
+produit une [vidéo du drapeau](images/p18/p18-animated-wind.mp4).
+[p18-imported-lattice.js](../examples/scripts/p18-imported-lattice.js) produit
+une [vidéo raster](images/p18/p18-imported-lattice.mp4), une
+[vidéo path tracing avec flou](images/p18/p18-imported-lattice-blur.mp4) et un
+[USD](images/p18/p18-imported-lattice.usda) du maillage importé. Le support
+d'autres formats et des attributs USD complexes, les champs MaterialX/NanoVDB
+et le calcul GPU restent à réaliser.
+
+![Ruban tordu et sphère déformée par treillis](images/p18/p18-deformers.png)
 
 ## Priorité 19 : rendu distribué multi-serveur et multi-GPU
 
@@ -136,17 +155,6 @@ aux cheveux :
 **Critère d'aboutissement :** un script et un graphe produisent un pelage et une
 coiffure reproductibles à graine fixée ; les deux se rendent avec ombres en
 raster et en path tracing, sans explosion du nombre d'objets de scène.
-
-## Priorité 23 : paramètres de shaders déclarés par script
-
-Permettre à un script de marquer explicitement les entrées de n'importe quel
-shader comme modifiables depuis l'UI. L'éditeur expose uniquement les entrées
-déclarées, conserve leurs types et valeurs et applique les modifications au
-matériau sans réexécuter le script entier.
-
-**Critère d'aboutissement :** un même script expose des paramètres d'un shader
-de surface et d'un autre type de shader ; seuls les paramètres marqués apparaissent
-dans l'UI et leurs modifications sont visibles dans le rendu.
 
 ## Priorité 26 : sélection, édition et mouvements de caméra
 
@@ -275,14 +283,12 @@ non démontrée.
    réutiliser leurs surfaces émettrices, graines et instances.
 8. Rendu distribué (19), dès que les scènes de la priorité 17 rendent le path
    tracing trop long sur un seul GPU.
-9. Paramètres de shaders déclarés par script (23), en prolongement de l'API de
-   scripting (3bis) et de l'édition de paramètres.
-10. Étude du format vidéo de transport des rendus (24), après les scènes
+9. Étude du format vidéo de transport des rendus (24), après les scènes
     dynamiques (5) et l'export des rendus (13).
-11. Sélection, édition et mouvements de caméra (26), après le lookdev et les
+10. Sélection, édition et mouvements de caméra (26), après le lookdev et les
     projets (14), les scènes dynamiques (5) et l'étude de format vidéo (24).
-12. Déploiement Azure du rendu distribué (27), après le socle multi-serveur
+11. Déploiement Azure du rendu distribué (27), après le socle multi-serveur
     (19) ; la validation d'une VM GPU peut commencer dès maintenant.
-13. Écarts avec MaterialX officiel (28), à mener en parallèle des shaders
+12. Écarts avec MaterialX officiel (28), à mener en parallèle des shaders
     d'extension (16) et des surfaces complexes (17), puis à maintenir avec
     chaque évolution du compilateur et des exports.

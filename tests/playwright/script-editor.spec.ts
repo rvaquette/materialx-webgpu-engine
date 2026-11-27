@@ -1,4 +1,5 @@
-import { expect, test, type Locator, type Page, type TestInfo } from '@playwright/test';
+import { chromium, expect, test, type Locator, type Page, type TestInfo } from '@playwright/test';
+import { readFile } from 'node:fs/promises';
 
 // Run `npm run test:playwright:demo` to watch these tests in a slowed-down browser.
 
@@ -242,18 +243,22 @@ test('sépare le graphe MaterialX du graphe scène et génère sans exécuter', 
 });
 
 test.describe('paramètres de shaders déclarés', () => {
-  test.use({ channel: 'chrome', launchOptions: { args: ['--enable-unsafe-webgpu', '--enable-features=Vulkan', '--ignore-gpu-blocklist', '--force_high_performance_gpu'] } });
-
-  test('modifie surface et image dans le rendu sans réexécuter', async ({ page }) => {
+  test('modifie surface et image dans le rendu sans réexécuter', async ({ baseURL }) => {
     test.setTimeout(300_000);
-    await page.goto('/');
-    const webgpu = await page.evaluate(async () => Boolean(await navigator.gpu?.requestAdapter()));
-    test.skip(!webgpu, 'WebGPU indisponible dans Chrome.');
-    await expect(page.locator('#app')).toHaveClass(/ui-ready/, { timeout: 120_000 });
-    await expect(page.locator('#busy-indicator')).toBeHidden({ timeout: 120_000 });
-    await page.locator('#open-script-editor').click();
-    const e = editor(page);
-    await setScript(e, `
+    const browser = await chromium.launch({
+      channel: 'chrome',
+      args: ['--enable-unsafe-webgpu', '--enable-features=Vulkan', '--ignore-gpu-blocklist', '--force_high_performance_gpu'],
+    });
+    const page = await browser.newPage();
+    try {
+      await page.goto(baseURL!);
+      const webgpu = await page.evaluate(async () => Boolean(await navigator.gpu?.requestAdapter()));
+      test.skip(!webgpu, 'WebGPU indisponible dans Chrome.');
+      await expect(page.locator('#app')).toHaveClass(/ui-ready/, { timeout: 120_000 });
+      await expect(page.locator('#busy-indicator')).toBeHidden({ timeout: 120_000 });
+      await page.locator('#open-script-editor').click();
+      const e = editor(page);
+      await setScript(e, `
 surface = new StandardSurface();
 surface.base_color = [0.1, 0.1, 0.9];
 surface.specular_roughness = 0.5;
@@ -268,35 +273,500 @@ render.backend = "raster";
 setCamera({ eye: [0, 0, 4], target: [0, 0, 0], fov: 38 });
 log("exécution unique");
 await render(1);`);
+      await expect(e.status).toContainText('Script valide', { timeout: 30_000 });
+      await e.panel.getByTestId('script-apply').click();
+      await expect(e.status).toHaveText('Script exécuté.', { timeout: 180_000 });
+      await e.panel.getByTestId('script-tab-parameters').click();
+      const parameters = e.panel.getByTestId('script-parameters');
+      await expect(parameters.locator('label')).toHaveCount(2);
+      await expect(parameters).not.toContainText('specular_roughness');
+      const canvas = page.locator('#view');
+      await page.waitForTimeout(1000);
+      const before = await canvas.screenshot();
+      const red = parameters.getByLabel('Couleur 1');
+      await red.fill('0.9');
+      await red.press('Tab');
+      await expect(parameters.locator('fieldset')).toBeEnabled({ timeout: 120_000 });
+      await expect(parameters.getByRole('alert')).toHaveCount(0);
+      await page.waitForTimeout(1000);
+      const afterSurface = await canvas.screenshot();
+      expect((await imageDifference(page, before, afterSurface)).mean).toBeGreaterThan(0.1);
+      const exposure = parameters.getByLabel('Exposition image');
+      await exposure.fill('-2');
+      await exposure.press('Tab');
+      await expect(parameters.locator('fieldset')).toBeEnabled({ timeout: 120_000 });
+      await expect(parameters.getByRole('alert')).toHaveCount(0);
+      await page.waitForTimeout(1000);
+      const afterImage = await canvas.screenshot();
+      expect((await imageDifference(page, afterSurface, afterImage)).mean).toBeGreaterThan(1);
+      await expect(e.panel.getByTestId('script-console').getByText('exécution unique')).toHaveCount(1);
+      await expectCode(e, 'surface.base_color = [0.1, 0.1, 0.9];');
+    } finally {
+      await browser.close();
+    }
+  });
+
+  test('reconstruit la dispersion tout en conservant la scène interactive', async ({ baseURL }) => {
+    test.setTimeout(300_000);
+    const browser = await chromium.launch({
+      channel: 'chrome',
+      args: ['--enable-unsafe-webgpu', '--enable-features=Vulkan', '--ignore-gpu-blocklist', '--force_high_performance_gpu'],
+    });
+    const page = await browser.newPage();
+    try {
+      await page.goto(baseURL!);
+      test.skip(!await page.evaluate(async () => Boolean(await navigator.gpu?.requestAdapter())), 'WebGPU indisponible dans Chrome.');
+      await expect(page.locator('#app')).toHaveClass(/ui-ready/, { timeout: 120_000 });
+      await expect(page.locator('#busy-indicator')).toBeHidden({ timeout: 120_000 });
+      await page.locator('#open-script-editor').click();
+      const e = editor(page);
+      await setScript(e, `
+ground = new Plane({ width: 3, length: 3 });
+anchor = new Sphere({ radius: 0.3 });
+fire = new Fire(); fire.emission = 1; expose(fire, "emission", "Émission du volume");
+flame = new Volume({ width: 1, height: 1, length: 1, translate: [2, 0, 0], material: fire });
+surface = new StandardSurface(); surface.base_color = [0.8, 0.1, 0.1];
+expose(surface, "base_color", "Couleur des instances");
+prototype = new Sphere({ radius: 0.25, material: surface });
+scattering = new ScatterShader();
+scattering.surfacePath = ground.path;
+scattering.prototypePath = prototype.path;
+scattering.density = 0;
+expose(scattering, "density", "Densité");
+await scatter(scattering.out);
+render.resolution = 256; render.backend = "raster";
+setCamera({ eye: [3, 4, 5], target: [0, 0, 0], fov: 38 });
+setTransform(anchor.path, transform({ translate: [2, 0.5, 0] }));
+log("dispersion unique"); await render(1);`);
+      await expect(e.status).toContainText('Script valide', { timeout: 30_000 });
+      await e.panel.getByTestId('script-apply').click();
+      await expect(e.status).toHaveText('Script exécuté.', { timeout: 180_000 });
+      await e.panel.getByTestId('script-tab-parameters').click();
+      const parameters = e.panel.getByTestId('script-parameters');
+      const canvas = page.locator('#view');
+      await parameters.getByLabel('Émission du volume').fill('10');
+      await parameters.getByLabel('Émission du volume').press('Tab');
+      await expect(parameters.locator('fieldset')).toBeEnabled({ timeout: 120_000 });
+      expect(await parameters.getByRole('alert').allTextContents()).toEqual([]);
+      await page.waitForTimeout(1000);
+      const before = await canvas.screenshot();
+      const density = parameters.getByLabel('Densité');
+      await density.fill('1');
+      await density.press('Tab');
+      await expect(parameters.locator('fieldset')).toBeEnabled({ timeout: 120_000 });
+      await expect(parameters.getByRole('alert')).toHaveCount(0);
+      await page.waitForTimeout(1000);
+      const after = await canvas.screenshot();
+      expect((await imageDifference(page, before, after)).mean).toBeGreaterThan(0.1);
+      const color = parameters.getByLabel('Couleur des instances 1');
+      await color.fill('0.05');
+      await color.press('Tab');
+      await expect(parameters.locator('fieldset')).toBeEnabled({ timeout: 120_000 });
+      await expect(parameters.getByRole('alert')).toHaveCount(0);
+      await page.waitForTimeout(1000);
+      const recolored = await canvas.screenshot();
+      expect((await imageDifference(page, after, recolored)).mean).toBeGreaterThan(0.1);
+      await parameters.getByLabel('Densité').fill('0');
+      await parameters.getByLabel('Densité').press('Tab');
+      await expect(parameters.locator('fieldset')).toBeEnabled({ timeout: 120_000 });
+      await expect(parameters.getByRole('alert')).toHaveCount(0);
+      await page.waitForTimeout(1000);
+      expect((await imageDifference(page, before, await canvas.screenshot())).mean).toBeLessThan(0.3);
+      await expect(e.panel.getByTestId('script-console').getByText('dispersion unique')).toHaveCount(1);
+    } finally {
+      await browser.close();
+    }
+  });
+
+  test('modifie un shader de volume procédural déclaré', async ({ baseURL }) => {
+    test.setTimeout(300_000);
+    const browser = await chromium.launch({
+      channel: 'chrome',
+      args: ['--enable-unsafe-webgpu', '--enable-features=Vulkan', '--ignore-gpu-blocklist', '--force_high_performance_gpu'],
+    });
+    const page = await browser.newPage();
+    try {
+      await page.goto(baseURL!);
+      test.skip(!await page.evaluate(async () => Boolean(await navigator.gpu?.requestAdapter())), 'WebGPU indisponible dans Chrome.');
+      await expect(page.locator('#app')).toHaveClass(/ui-ready/, { timeout: 120_000 });
+      await expect(page.locator('#busy-indicator')).toBeHidden({ timeout: 120_000 });
+      await page.locator('#open-script-editor').click();
+      const e = editor(page);
+      await setScript(e, `
+fire = new Fire();
+fire.emission = 1;
+expose(fire, "emission", "Émission");
+bounds = new Volume({ width: 2, height: 3, length: 2, material: fire });
+render.resolution = 256; render.backend = "raster";
+setCamera({ eye: [3, 2, 5], target: [0, 0, 0], fov: 38 });
+await render(1);`);
+      await expect(e.status).toContainText('Script valide', { timeout: 30_000 });
+      await e.panel.getByTestId('script-apply').click();
+      await expect(e.status).toHaveText('Script exécuté.', { timeout: 180_000 });
+      await e.panel.getByTestId('script-tab-parameters').click();
+      const parameters = e.panel.getByTestId('script-parameters');
+      const canvas = page.locator('#view');
+      await page.waitForTimeout(1000);
+      const before = await canvas.screenshot();
+      const emission = parameters.getByLabel('Émission');
+      await emission.fill('10');
+      await emission.press('Tab');
+      await expect(parameters.locator('fieldset')).toBeEnabled({ timeout: 180_000 });
+      expect(await parameters.getByRole('alert').allTextContents()).toEqual([]);
+      await page.waitForTimeout(1000);
+      expect((await imageDifference(page, before, await canvas.screenshot())).mean).toBeGreaterThan(0.1);
+    } finally {
+      await browser.close();
+    }
+  });
+
+  test('déplace un filtre entre deux spots sans réexécuter le script', async ({ baseURL }) => {
+    test.setTimeout(300_000);
+    const browser = await chromium.launch({
+      channel: 'chrome',
+      args: ['--enable-unsafe-webgpu', '--enable-features=Vulkan', '--ignore-gpu-blocklist', '--force_high_performance_gpu'],
+    });
+    const page = await browser.newPage();
+    try {
+      await page.route('**/examples/scenes/p16-extension-light.usda', async route => {
+        const response = await route.fetch();
+        const source = await response.text();
+        const secondSpot = `
+    def SpotLight "SpotB"
+    {
+        float inputs:intensity = 24
+        float inputs:shaping:cone:innerAngle = 22
+        float inputs:shaping:cone:outerAngle = 42
+        float3 xformOp:translate = (2, 4, 4)
+        float3 xformOp:rotateXYZ = (-40, 0, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
+    }
+`;
+        await route.fulfill({ response, body: source.replace(/\}\s*$/, `${secondSpot}}`) });
+      });
+      await page.goto(baseURL!);
+      test.skip(!await page.evaluate(async () => Boolean(await navigator.gpu?.requestAdapter())), 'WebGPU indisponible dans Chrome.');
+      await expect(page.locator('#app')).toHaveClass(/ui-ready/, { timeout: 120_000 });
+      await expect(page.locator('#busy-indicator')).toBeHidden({ timeout: 120_000 });
+      await page.locator('#open-script-editor').click();
+      const e = editor(page);
+      await setScript(e, `
+await scene("./examples/scenes/p16-extension-light.usda");
+render.backend = "pathtracing"; render.resolution = 256;
+await setLight("/World/Spot", { intensity: 30 });
+filter = new LightFilterShader(); filter.lightPath = "/World/Spot";
+expose(filter, "lightPath", "Lumière"); expose(filter, "scale", "Échelle");
+await lightFilter(filter.out);
+log("filtre unique"); await render(1);`);
+      await expect(e.status).toContainText('Script valide', { timeout: 30_000 });
+      await e.panel.getByTestId('script-apply').click();
+      await expect(e.status).toHaveText('Script exécuté.', { timeout: 180_000 });
+      await e.panel.getByTestId('script-tab-parameters').click();
+      const parameters = e.panel.getByTestId('script-parameters');
+      await parameters.getByLabel('Lumière').fill('/World/SpotB');
+      await parameters.getByLabel('Lumière').press('Tab');
+      await expect(parameters.locator('fieldset')).toBeEnabled({ timeout: 120_000 });
+      expect(await parameters.getByRole('alert').allTextContents()).toEqual([]);
+      await parameters.getByLabel('Échelle').fill('7');
+      await parameters.getByLabel('Échelle').press('Tab');
+      await expect(parameters.locator('fieldset')).toBeEnabled({ timeout: 120_000 });
+      expect(await parameters.getByRole('alert').allTextContents()).toEqual([]);
+      await parameters.getByLabel('Lumière').fill('/World/Absent');
+      await parameters.getByLabel('Lumière').press('Tab');
+      await expect(parameters.getByRole('alert')).toContainText('Unknown light');
+      await expect(e.panel.getByTestId('script-console').getByText('filtre unique')).toHaveCount(1);
+    } finally {
+      await browser.close();
+    }
+  });
+});
+
+test('anime les déformeurs par les échantillons USD dans le viewer', async ({ baseURL }) => {
+  test.setTimeout(300_000);
+  const browser = await chromium.launch({
+    channel: 'chrome',
+    args: ['--enable-unsafe-webgpu', '--enable-features=Vulkan', '--ignore-gpu-blocklist', '--force_high_performance_gpu'],
+  });
+  const page = await browser.newPage();
+  try {
+    await page.goto(baseURL!);
+    test.skip(!await page.evaluate(async () => Boolean(await navigator.gpu?.requestAdapter())), 'WebGPU indisponible dans Chrome.');
+    await expect(page.locator('#app')).toHaveClass(/ui-ready/, { timeout: 120_000 });
+    await expect(page.locator('#busy-indicator')).toBeHidden({ timeout: 120_000 });
+    await page.locator('#open-script-editor').click();
+    const e = editor(page);
+    await setScript(e, `
+surface = new StandardSurface(); surface.base_color = [0.2, 0.4, 0.8];
+twist = new Twist(); twist.axis = "X";
+twist.keyframes = [{ time: 0, angle: 0 }, { time: 24, angle: 150 }];
+ribbon = new Plane({ width: 2, length: 1, axis: "Z", resolution: 24, material: surface });
+ribbon.deformers = [twist];
+render.resolution = 256; render.backend = "raster";
+setCamera({ eye: [2, 2, 5], target: [0, 0, 0], fov: 38 });
+await render(1); await setTime(0);`);
     await expect(e.status).toContainText('Script valide', { timeout: 30_000 });
     await e.panel.getByTestId('script-apply').click();
     await expect(e.status).toHaveText('Script exécuté.', { timeout: 180_000 });
-    await e.panel.getByTestId('script-tab-parameters').click();
-    const parameters = e.panel.getByTestId('script-parameters');
-    await expect(parameters.locator('label')).toHaveCount(2);
-    await expect(parameters).not.toContainText('specular_roughness');
+    await expect(page.locator('#view-timeline')).toBeVisible();
+    await expect(page.locator('#view-timeline-time')).toHaveAttribute('max', '24');
     const canvas = page.locator('#view');
     await page.waitForTimeout(1000);
     const before = await canvas.screenshot();
-    const red = parameters.getByLabel('Couleur 1');
-    await red.fill('0.9');
-    await red.press('Tab');
-    await expect(parameters.locator('fieldset')).toBeEnabled({ timeout: 120_000 });
-    await expect(parameters.getByRole('alert')).toHaveCount(0);
+    await setScript(e, 'await setTime(24); await render(1);');
+    await expect(e.status).toContainText('Script valide', { timeout: 30_000 });
+    await e.panel.getByTestId('script-apply').click();
+    await expect(e.status).toHaveText('Script exécuté.', { timeout: 180_000 });
     await page.waitForTimeout(1000);
-    const afterSurface = await canvas.screenshot();
-    expect((await imageDifference(page, before, afterSurface)).mean).toBeGreaterThan(0.1);
-    const exposure = parameters.getByLabel('Exposition image');
-    await exposure.fill('-2');
-    await exposure.press('Tab');
-    await expect(parameters.locator('fieldset')).toBeEnabled({ timeout: 120_000 });
-    await expect(parameters.getByRole('alert')).toHaveCount(0);
-    await page.waitForTimeout(1000);
-    const afterImage = await canvas.screenshot();
-    expect((await imageDifference(page, afterSurface, afterImage)).mean).toBeGreaterThan(1);
-    await expect(e.panel.getByTestId('script-console').getByText('exécution unique')).toHaveCount(1);
-    await expectCode(e, 'surface.base_color = [0.1, 0.1, 0.9];');
+    expect((await imageDifference(page, before, await canvas.screenshot())).mean).toBeGreaterThan(0.1);
+  } finally {
+    await browser.close();
+  }
+});
+
+test('affiche et commande la barre de temps pour un matériau animé', async ({ baseURL }) => {
+  test.setTimeout(240_000);
+  const browser = await chromium.launch({
+    channel: 'chrome',
+    args: ['--enable-unsafe-webgpu', '--enable-features=Vulkan', '--ignore-gpu-blocklist', '--force_high_performance_gpu'],
   });
+  const page = await browser.newPage();
+  try {
+    await page.goto(baseURL!);
+    test.skip(!await page.evaluate(async () => Boolean(await navigator.gpu?.requestAdapter())), 'WebGPU indisponible dans Chrome.');
+    await expect(page.locator('#app')).toHaveClass(/ui-ready/, { timeout: 120_000 });
+    await expect(page.locator('#busy-indicator')).toBeHidden({ timeout: 120_000 });
+    await page.locator('#open-script-editor').click();
+    const e = editor(page);
+    const apply = async (script: string) => {
+      await setScript(e, script);
+      await expect(e.status).toContainText('Script valide', { timeout: 30_000 });
+      await e.panel.getByTestId('script-apply').click();
+      await expect(e.status).toHaveText('Script exécuté.', { timeout: 180_000 });
+    };
+    const scene = 'new Sphere({ material: surface }); render.resolution = 256; render.backend = "raster"; await render(1);';
+    await apply(`surface = new StandardSurface(); ${scene}`);
+    const bar = page.locator('#view-timeline');
+    await expect(bar).toBeHidden();
+    await apply(`clock = new Time(); surface = new StandardSurface(); surface.emission = clock.out; ${scene}`);
+    await expect(bar).toBeVisible();
+    const slider = page.locator('#view-timeline-time');
+    const value = page.locator('#view-timeline-value');
+    const button = page.locator('#view-timeline-play');
+    await expect(slider).toHaveAttribute('max', '240');
+    await slider.evaluate((element: HTMLInputElement) => {
+      element.value = '120';
+      element.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await expect(value).toContainText('120.0');
+    await button.click();
+    await expect(button).toHaveText('Arrêter');
+    await expect.poll(async () => Number(await slider.inputValue())).toBeGreaterThan(120);
+    await button.click();
+    await expect(button).toHaveText('Lire');
+    const stopped = await slider.inputValue();
+    await page.waitForTimeout(300);
+    await expect(slider).toHaveValue(stopped);
+    await apply(`surface = new StandardSurface(); ${scene}`);
+    await expect(bar).toBeHidden();
+  } finally {
+    await browser.close();
+  }
+});
+
+test('anime un maillage USD importé par treillis dans la vue', async ({ baseURL }) => {
+  test.setTimeout(240_000);
+  const browser = await chromium.launch({
+    channel: 'chrome',
+    args: ['--enable-unsafe-webgpu', '--enable-features=Vulkan', '--ignore-gpu-blocklist', '--force_high_performance_gpu'],
+  });
+  const page = await browser.newPage();
+  try {
+    await page.goto(baseURL!);
+    test.skip(!await page.evaluate(async () => Boolean(await navigator.gpu?.requestAdapter())), 'WebGPU indisponible dans Chrome.');
+    await expect(page.locator('#app')).toHaveClass(/ui-ready/, { timeout: 120_000 });
+    await expect(page.locator('#busy-indicator')).toBeHidden({ timeout: 120_000 });
+    await page.locator('#open-script-editor').click();
+    const e = editor(page);
+    await setScript(e, `
+surface = new StandardSurface(); surface.base_color = [0.1, 0.4, 0.8];
+gem = await importMesh("./scenes/bench/p18-gem.usda", "/Gem");
+gem.material = surface;
+lattice = new Lattice(); lattice.offsets = Array(24).fill(0);
+end = Array(24).fill(0);
+for (const index of [2, 3, 6, 7]) end[index * 3] = 0.8;
+lattice.keyframes = [{ time: 0, offsets: lattice.offsets }, { time: 24, offsets: end }];
+gem.deformers = [lattice];
+render.resolution = 256; render.backend = "raster";
+setCamera({ eye: [3, 2, 5], target: [0, 0, 0], fov: 36 });
+await render(1); await setTime(0);`);
+    await expect(e.status).toContainText('Script valide', { timeout: 30_000 });
+    await e.panel.getByTestId('script-apply').click();
+    await expect(e.status).toHaveText('Script exécuté.', { timeout: 180_000 });
+    const canvas = page.locator('#view');
+    await page.waitForTimeout(1000);
+    const before = await canvas.screenshot();
+    await setScript(e, 'await setTime(24); await render(1);');
+    await expect(e.status).toContainText('Script valide', { timeout: 30_000 });
+    await e.panel.getByTestId('script-apply').click();
+    await expect(e.status).toHaveText('Script exécuté.', { timeout: 180_000 });
+    await page.waitForTimeout(1000);
+    expect((await imageDifference(page, before, await canvas.screenshot())).mean).toBeGreaterThan(0.1);
+  } finally {
+    await browser.close();
+  }
+});
+
+test('initialise le viewer avec les panneaux de rendu regroupés en onglets', async ({ baseURL }) => {
+  test.setTimeout(240_000);
+  const browser = await chromium.launch({
+    channel: 'chrome',
+    args: ['--enable-unsafe-webgpu', '--enable-features=Vulkan', '--ignore-gpu-blocklist', '--force_high_performance_gpu'],
+  });
+  try {
+    for (const activeView of ['view', 'render']) {
+      const page = await browser.newPage();
+      const layout = {
+        grid: { root: { type: 'branch', data: [{ type: 'leaf', data: { views: ['render', 'view'], activeView, id: '2' }, size: 800 }], size: 800 }, width: 800, height: 800, orientation: 'HORIZONTAL' },
+        panels: {
+          render: { id: 'render', contentComponent: 'render', title: 'Rendu interactif' },
+          view: { id: 'view', contentComponent: 'view', title: 'Vue' },
+        },
+        activeGroup: '2',
+      };
+      await page.addInitScript(value => localStorage.setItem('materialx-webgpu-engine.workbench.v1', JSON.stringify(value)), layout);
+      await page.goto(baseURL!);
+      test.skip(!await page.evaluate(async () => Boolean(await navigator.gpu?.requestAdapter())), 'WebGPU indisponible dans Chrome.');
+      await expect(page.locator('#app')).toHaveClass(/ui-ready/, { timeout: 120_000 });
+      await expect(page.locator('#status')).toBeHidden();
+      await page.close();
+    }
+  } finally {
+    await browser.close();
+  }
+});
+
+test('capture une déformation animée avec obturateur en path tracing', async ({ baseURL }) => {
+  test.setTimeout(480_000);
+  const browser = await chromium.launch({
+    channel: 'chrome',
+    args: ['--enable-unsafe-webgpu', '--enable-features=Vulkan', '--ignore-gpu-blocklist', '--force_high_performance_gpu'],
+  });
+  const page = await browser.newPage({ acceptDownloads: true });
+  const downloads: import('@playwright/test').Download[] = [];
+  page.on('download', download => downloads.push(download));
+  try {
+    await page.goto(baseURL!);
+    test.skip(!await page.evaluate(async () => Boolean(await navigator.gpu?.requestAdapter())), 'WebGPU indisponible dans Chrome.');
+    await expect(page.locator('#app')).toHaveClass(/ui-ready/, { timeout: 120_000 });
+    await expect(page.locator('#busy-indicator')).toBeHidden({ timeout: 120_000 });
+    await page.locator('#open-script-editor').click();
+    const e = editor(page);
+    await setScript(e, `
+surface = new StandardSurface(); surface.base_color = [0.2, 0.4, 0.8];
+twist = new Twist(); twist.axis = "X";
+twist.keyframes = [{ time: 0, angle: -120 }, { time: 12, angle: 0 }, { time: 24, angle: 120 }];
+ribbon = new Plane({ width: 2, length: 1, axis: "Z", resolution: 16, material: surface });
+ribbon.deformers = [twist];
+render.resolution = 256; render.backend = "pathtracing"; render.depth = 2;
+setCamera({ eye: [2, 2, 5], target: [0, 0, 0], fov: 38 });
+await render(1); await setTime(0);
+await capture("deformation-still.png", { samples: 32 });
+await capture("deformation-blur.png", { samples: 32, shutter: [0, 24], steps: 8 });
+await video("deformation-blur.webm", { start: 0, end: 24, fps: 2, samples: 4, shutter: [0, 2], steps: 2 });`);
+    await expect(e.status).toContainText('Script valide', { timeout: 30_000 });
+    await e.panel.getByTestId('script-apply').click();
+    await expect(e.status).toHaveText('Script exécuté.', { timeout: 360_000 });
+    await expect.poll(() => downloads.length, { timeout: 30_000 }).toBe(3);
+    const still = downloads.find(download => download.suggestedFilename() === 'deformation-still.png')!;
+    const blur = downloads.find(download => download.suggestedFilename() === 'deformation-blur.png')!;
+    const [stillPath, blurPath] = await Promise.all([still.path(), blur.path()]);
+    expect(stillPath).not.toBeNull();
+    expect(blurPath).not.toBeNull();
+    const [first, second] = await Promise.all([readFile(stillPath!), readFile(blurPath!)]);
+    expect((await imageDifference(page, first, second)).mean).toBeGreaterThan(0.1);
+    const video = downloads.find(download => download.suggestedFilename() === 'deformation-blur.webm');
+    expect(video).toBeDefined();
+    expect((await readFile((await video!.path())!)).length).toBeGreaterThan(100);
+  } finally {
+    await browser.close();
+  }
+});
+
+test('exporte une animation en vidéo lisible avec des images différentes', async ({ baseURL }) => {
+  test.setTimeout(240_000);
+  const browser = await chromium.launch({
+    channel: 'chrome',
+    args: ['--enable-unsafe-webgpu', '--enable-features=Vulkan', '--ignore-gpu-blocklist', '--force_high_performance_gpu'],
+  });
+  const page = await browser.newPage({ acceptDownloads: true });
+  try {
+    await page.goto(baseURL!);
+    test.skip(!await page.evaluate(async () => Boolean(await navigator.gpu?.requestAdapter())), 'WebGPU indisponible dans Chrome.');
+    await expect(page.locator('#app')).toHaveClass(/ui-ready/, { timeout: 120_000 });
+    await expect(page.locator('#busy-indicator')).toBeHidden({ timeout: 120_000 });
+    await page.locator('#open-script-editor').click();
+    const e = editor(page);
+    await setScript(e, `
+surface = new StandardSurface(); surface.base_color = [0.2, 0.4, 0.8];
+twist = new Twist(); twist.axis = "X";
+twist.keyframes = [{ time: 0, angle: -120 }, { time: 24, angle: 120 }];
+ribbon = new Plane({ width: 2, length: 1, axis: "Z", resolution: 16, material: surface });
+ribbon.deformers = [twist];
+render.resolution = 256; render.backend = "raster";
+setCamera({ eye: [2, 2, 5], target: [0, 0, 0], fov: 38 });
+await render(1); await setTime(12);
+await video("animation.mp4", { start: 0, end: 24, fps: 8 });`);
+    await expect(e.status).toContainText('Script valide', { timeout: 30_000 });
+    const downloadPromise = page.waitForEvent('download', { timeout: 180_000 });
+    await e.panel.getByTestId('script-apply').click();
+    const download = await downloadPromise;
+    await expect(e.status).toHaveText('Script exécuté.', { timeout: 180_000 });
+    expect(download.suggestedFilename()).toBe('animation.mp4');
+    const path = await download.path();
+    expect(path).not.toBeNull();
+    const data = await readFile(path!);
+    const result = await page.evaluate(async bytes => {
+      const url = URL.createObjectURL(new Blob([new Uint8Array(bytes)], { type: 'video/mp4' }));
+      try {
+        const video = document.createElement('video');
+        video.muted = true;
+        video.src = url;
+        await new Promise<void>((resolve, reject) => {
+          video.onloadeddata = () => resolve();
+          video.onerror = () => reject(new Error('Cannot decode exported video.'));
+        });
+        video.currentTime = Math.min(0.01, video.duration / 2);
+        await new Promise<void>((resolve, reject) => {
+          video.onseeked = () => resolve();
+          video.onerror = () => reject(new Error('Cannot seek exported video.'));
+        });
+        const canvas = document.createElement('canvas');
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+        const context = canvas.getContext('2d')!;
+        context.drawImage(video, 0, 0);
+        const first = context.getImageData(0, 0, canvas.width, canvas.height).data;
+        video.currentTime = video.duration * 0.75;
+        await new Promise<void>((resolve, reject) => {
+          video.onseeked = () => resolve();
+          video.onerror = () => reject(new Error('Cannot seek exported video.'));
+        });
+        context.drawImage(video, 0, 0);
+        const last = context.getImageData(0, 0, canvas.width, canvas.height).data;
+        let difference = 0;
+        for (let i = 0; i < first.length; i++) difference += Math.abs(first[i]! - last[i]!);
+        return { duration: video.duration, width: canvas.width, height: canvas.height, difference: difference / first.length };
+      } finally {
+        URL.revokeObjectURL(url);
+      }
+    }, [...data]);
+    expect(result.duration).toBeCloseTo(1, 1);
+    expect(result.width).toBeGreaterThan(0);
+    expect(result.height).toBeGreaterThan(0);
+    expect(result.difference).toBeGreaterThan(0.1);
+  } finally {
+    await browser.close();
+  }
 });
 
 test('convertit le script en graphe de scène puis conserve les modifications MaterialX', async ({ page }) => {

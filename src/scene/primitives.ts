@@ -394,7 +394,7 @@ export type VertexDeformer = (position: [number, number, number], uv: [number, n
  * `mesh` with every vertex moved by `deform`, and smooth normals recomputed from the moved
  * triangles (vertices sharing a position share their normal, so seams stay smooth).
  */
-export function deformMesh(mesh: RawMesh, deform: VertexDeformer): RawMesh {
+export function deformMesh(mesh: RawMesh, deform: VertexDeformer, preserveNormalSeams = false): RawMesh {
   const count = mesh.points.length / 3;
   const st = mesh.primvars?.find(primvar => primvar.name === 'st')?.values ?? [];
   const normals = mesh.normals?.values ?? [];
@@ -410,7 +410,9 @@ export function deformMesh(mesh: RawMesh, deform: VertexDeformer): RawMesh {
     }
     points[i * 3] = moved[0]; points[i * 3 + 1] = moved[1]; points[i * 3 + 2] = moved[2];
   }
-  const key = (i: number): string => `${points[i * 3]!.toFixed(6)},${points[i * 3 + 1]!.toFixed(6)},${points[i * 3 + 2]!.toFixed(6)}`;
+  const key = (i: number): string => preserveNormalSeams
+    ? [...mesh.points.slice(i * 3, i * 3 + 3), ...normals.slice(i * 3, i * 3 + 3)].map(value => value.toFixed(6)).join(',')
+    : `${points[i * 3]!.toFixed(6)},${points[i * 3 + 1]!.toFixed(6)},${points[i * 3 + 2]!.toFixed(6)}`;
   const welded = new Map<string, number>();
   const group = Array.from({ length: count }, (_, i) => {
     const k = key(i);

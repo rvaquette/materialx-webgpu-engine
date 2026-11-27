@@ -3,6 +3,22 @@
 Historique des priorités traitées de la feuille de route. Les travaux non
 encore réalisés sont suivis dans [ROADMAP_NEXT.md](ROADMAP_NEXT.md).
 
+## Priorité 23 : paramètres de shaders déclarés par script
+
+`expose(nœud, "entrée", "libellé"?)` déclare une entrée littérale modifiable
+dans l'onglet **Paramètres**. Les types et valeurs sont conservés et seuls les
+paramètres déclarés sont affichés. Leur modification actualise les shaders
+concernés sans réexécuter le script, y compris les matériaux, les volumes, la
+dispersion et les shaders d'environnement, de post-traitement, d'AOV et de
+filtre de lumière.
+
+L'exemple [p23-shader-parameters.js](../examples/scripts/p23-shader-parameters.js),
+accessible dans le menu Scripts, expose un matériau de surface et un shader d'image.
+La [référence](SCRIPT_REFERENCE.md#variantes-usd-et-paramètres-de-matériau)
+précise le cycle de vie des contrôles et les limites de réapplication.
+
+![Paramètres de surface et de post-traitement](images/p23/p23-shader-parameters.png)
+
 ## Priorité 1 : rendu progressif intelligent
 
 Faire de l'accumulation path tracing un processus pilotable par une cible de

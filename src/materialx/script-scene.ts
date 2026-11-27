@@ -8,6 +8,7 @@ import {
 } from '../scene/primitives.ts';
 import type { RawMesh } from '../geometry/prepare.ts';
 import type { ScriptNodeDef, ScriptPortDef } from './script-api.ts';
+import { DEFORMER_DEFAULTS, type DeformerKind } from '../scene/deformers.ts';
 
 export type PrimitiveParameter =
   | 'radius' | 'minorRadius' | 'size' | 'height' | 'width' | 'length' | 'axis' | 'resolution'
@@ -82,9 +83,10 @@ export const OBJECT_PROPERTIES: readonly ScriptPortDef[] = [
   { name: 'visible', type: 'boolean', default: true, doc: 'Visibilité' },
   { name: 'material', type: 'material', doc: 'Matériau : surface/volume shader, nœud material ou chemin .mtlx' },
   { name: 'deform', type: 'function', doc: 'Déformation : (position, uv, normale) => [x, y, z] appliquée à chaque sommet' },
+  { name: 'deformers', type: 'array', doc: 'Pile ordonnée de déformeurs en espace objet' },
 ];
 
-const BOOLEAN_OBJECT_PROPERTIES = OBJECT_PROPERTIES.filter(property => property.name !== 'deform');
+const BOOLEAN_OBJECT_PROPERTIES = OBJECT_PROPERTIES.filter(property => !['deform', 'deformers'].includes(property.name));
 
 /** Script NodeDef-like description of a primitive class, for the editor (completions, hover, value helpers). */
 export function primitiveScriptDef(className: string): ScriptNodeDef | undefined {
@@ -108,7 +110,7 @@ export function primitiveScriptDef(className: string): ScriptNodeDef | undefined
   const properties = isScriptLight(primitive)
     ? [...OBJECT_PROPERTIES.filter(property => ['translate', 'rotate', 'visible'].includes(property.name)),
       { name: 'color', type: 'color3', default: primitive.usdType === 'DistantLight' ? [1, 1, 1] : [1, 0.72, 0.42], doc: 'Couleur émise' }]
-    : OBJECT_PROPERTIES;
+    : primitive.usdType === 'Volume' ? BOOLEAN_OBJECT_PROPERTIES : OBJECT_PROPERTIES;
   return { name: `primitive ${className}`, category: className, className, doc: primitive.doc, inputs: [...parameters, ...properties], outputs: [] };
 }
 
@@ -129,6 +131,20 @@ export function booleanScriptDef(className: string): ScriptNodeDef | undefined {
   };
 }
 
+export function deformerScriptDef(className: string): ScriptNodeDef | undefined {
+  if (!Object.hasOwn(DEFORMER_DEFAULTS, className)) return undefined;
+  const defaults = DEFORMER_DEFAULTS[className as DeformerKind];
+  return {
+    name: `deformer ${className}`, category: className, className,
+    doc: 'Déformeur spatial en espace objet.',
+    inputs: [...Object.entries(defaults).map(([name, value]): ScriptPortDef => ({
+      name, type: name === 'axis' ? 'string' : name === 'seed' ? 'integer' : Array.isArray(value) ? 'array' : 'float',
+      default: value, ...(name === 'axis' ? { enum: ['X', 'Y', 'Z'] } : {}),
+    })), { name: 'keyframes', type: 'array', doc: 'Images clés : [{ time, propriété: valeur }, ...]' }],
+    outputs: [],
+  };
+}
+
 /** One primitive of the stage, as written to USD. */
 export interface StageObject {
   /** Prim name under /World. */
@@ -144,6 +160,8 @@ export interface StageObject {
   material?: string;
   /** Tessellation replacing the shape (a deformed primitive): written as a Mesh. */
   mesh?: RawMesh;
+  meshSamples?: readonly { time: number; mesh: RawMesh }[];
+  deformers?: readonly import('../scene/deformers.ts').Deformer[];
   booleanOperation?: BooleanOperation;
   base?: string;
   tool?: string;
@@ -239,7 +257,7 @@ export function writeStageUsda(objects: readonly StageObject[], materials: reado
         Number(object.parameters.length ?? primitive.defaults.length),
       )
       : primitive?.usdType === 'Mesh' && shape ? primitiveMesh(shape) : undefined);
-    if (!primitive && !object.booleanOperation) throw new Error(`Unknown scripted stage object "${object.className}".`);
+    if (!primitive && !object.booleanOperation && !(object.className === 'ImportedMesh' && mesh)) throw new Error(`Unknown scripted stage object "${object.className}".`);
     if (object.booleanOperation && !mesh) throw new Error(`Boolean object "${object.name}" has not been evaluated.`);
     const usdType = mesh ? 'Mesh' : primitive!.usdType;
     lines.push('', `    def ${usdType} "${object.name}"${object.material ? ' (' : ''}`);
@@ -248,7 +266,7 @@ export function writeStageUsda(objects: readonly StageObject[], materials: reado
     const body: string[] = [];
     if (mesh) {
       body.push(
-        `custom token engine:primitive = "${volume ? 'volume' : shape?.kind ?? 'boolean'}"`,
+        `custom token engine:primitive = "${volume ? 'volume' : shape?.kind ?? (object.booleanOperation ? 'boolean' : 'importedMesh')}"`,
         ...(shape ? Object.entries(shape).filter(([name]) => name !== 'kind')
           .map(([name, value]) => typeof value === 'number'
             ? `custom ${name === 'resolution' || name === 'vertexBudget' ? 'int' : 'double'} engine:primitive:${name} = ${number(value)}`
@@ -258,6 +276,16 @@ export function writeStageUsda(objects: readonly StageObject[], materials: reado
         `int[] faceVertexIndices = [${mesh.faceVertexIndices.join(', ')}]`,
         `point3f[] points = ${tuples(mesh.points, 3)}`,
       );
+      if (object.deformers?.length) body.push(`custom string engine:deformers = ${JSON.stringify(JSON.stringify(object.deformers))}`);
+      if (object.meshSamples?.length) {
+        body.push('point3f[] points.timeSamples = {',
+          ...object.meshSamples.map(sample => `    ${String(sample.time)}: ${tuples(sample.mesh.points, 3)},`), '}');
+        body.push('normal3f[] normals.timeSamples = {',
+          ...object.meshSamples.map(sample => {
+            if (!sample.mesh.normals) throw new Error(`Missing animated normals on ${object.name}.`);
+            return `    ${String(sample.time)}: ${tuples(sample.mesh.normals.values, 3)},`;
+          }), '}');
+      }
       if (mesh.normals) body.push(`normal3f[] normals = ${tuples(mesh.normals.values, 3)} (`, '    interpolation = "vertex"', ')');
       const st = mesh.primvars?.find(attribute => attribute.name === 'st');
       if (st) body.push(`texCoord2f[] primvars:st = ${tuples(st.values, 2)} (`, '    interpolation = "vertex"', ')');

@@ -584,18 +584,19 @@ export class MaterialXScriptEditor {
 
   #refreshButtons(): void {
     const state = this.#state();
-    const busy = state !== 'idle';
+    const running = state !== 'idle';
+    const busy = running || this.#parameterBusy;
     for (const action of ['apply', 'debug', 'run-example', 'remote', 'from-material', 'from-xml']) {
       const button = this.#buttons[action];
       if (button) button.disabled = busy;
     }
     const pause = this.#buttons['pause']!;
-    pause.disabled = !busy || (this.#remote !== undefined && this.#remote.id === undefined);
+    pause.disabled = !running || (this.#remote !== undefined && this.#remote.id === undefined);
     const paused = state === 'paused';
     setIconButton(pause, paused ? 'play' : 'pause', paused ? 'Reprendre (F6, F8)' : 'Mettre en pause le script et le rendu (F6)', paused ? 'Reprendre' : 'Pause');
     pause.dataset['testid'] = 'script-pause';
     this.#buttons['step']!.disabled = !(this.#local?.debug && paused);
-    this.#buttons['stop']!.disabled = !busy;
+    this.#buttons['stop']!.disabled = !running;
   }
 
   /**
@@ -1043,24 +1044,30 @@ export class MaterialXScriptEditor {
 
   async #changeParameter(run: ScriptRun, id: string, value: unknown): Promise<void> {
     if (this.#parameterBusy || run !== this.#parameterRun || this.#state() !== 'idle') return;
+    const previous = run.parameters().find(parameter => parameter.id === id)?.value;
+    let updated = false;
     this.#parameterBusy = true;
+    this.#refreshButtons();
     this.#showParameters();
     try {
       await run.setParameter(id, value);
+      updated = true;
       const library = this.#library ?? await this.#options.library;
       const xml = toXml(run, library, this.#options.filePrefix ? { filePrefix: this.#options.filePrefix } : {});
       if (!run.viewerCommands) {
         if (this.#parameterObject && this.#options.host) {
           await this.#options.host.assignMaterial(this.#parameterObject, { xml });
-        } else {
-          await this.#options.onApply?.(xml);
-        }
+        } else if (this.#options.onApply) await this.#options.onApply(xml);
+        else throw new ScriptError('Aucune cible disponible pour appliquer le matériau.');
       }
       this.#xml.value = toXml(run, library);
       this.#parameterBusy = false;
+      this.#refreshButtons();
       this.#showParameters();
     } catch (error) {
+      if (updated && !run.viewerCommands && previous !== undefined) await run.setParameter(id, previous);
       this.#parameterBusy = false;
+      this.#refreshButtons();
       this.#showParameters(this.#describe(error));
     }
   }

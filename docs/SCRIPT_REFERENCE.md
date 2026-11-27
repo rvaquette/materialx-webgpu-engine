@@ -211,6 +211,7 @@ s'exécutent à la construction du graphe : une condition sur une sortie de nœu
 | `x.radius = 0.5` | Modifie une propriété ; la lecture retourne la valeur courante (ou la valeur par défaut). |
 | `x.material = m` | Matériau : shader de surface ou `surfacematerial` du script (avec ses nœuds en amont), ou chemin `.mtlx` ; `undefined` le retire. |
 | `x.deform = (p, uv, n) => [x, y, z]` | Déplace chaque sommet (position, coordonnées de texture, normale) ; les normales sont recalculées. |
+| `x.deformers = [twist, wave]` | Applique une pile ordonnée de déformeurs spatiaux aux primitives ou maillages importés, après `deform`. |
 | `x.path` | Chemin de l'objet dans la scène. |
 | `x.remove()` | Supprime l'objet ; le modifier ensuite est une erreur. |
 
@@ -228,7 +229,7 @@ s'exécutent à la construction du graphe : une condition sur une sortie de nœu
 
 Propriétés communes des primitives géométriques : `translate` (`[0, 0, 0]`), `rotate` (degrés
 autour de X, puis Y, puis Z), `scale` (nombre ou `[x, y, z]`), `visible` (`true`), `material`,
-`deform`. `PointLight` expose `translate`, `rotate`, `visible`, `color` (trois composantes
+`deform` et `deformers`. `PointLight` expose `translate`, `rotate`, `visible`, `color` (trois composantes
 non négatives), `intensity` (finie et positive ou nulle), `exposure` (stops) et `radius` (strictement
 positif) ; elle est exportée comme un prim USD `PointLight` et éclaire en raster comme en path tracing.
 
@@ -268,6 +269,45 @@ setCamera({ eye: [3, 2, 4], target: [0, 0.3, 0], fov: 40 });
 await render(64);
 await save("primitives.usda");   // scène USD + ses documents MaterialX
 ```
+
+### Déformeurs spatiaux (première étape P18)
+
+`new Bend()`, `Twist`, `Taper`, `Shear`, `Wave`, `Wind`, `Spherize` et `Lattice`
+créent des déformeurs partageables. Chacun agit en espace objet selon `axis`
+(`"X"`, `"Y"` ou `"Z"`), entre `min` et `max` (−1 et 1 par défaut).
+`falloff` est la largeur d'atténuation à chaque extrémité, de 0 à la moitié
+de l'intervalle. Les points hors intervalle ne bougent pas.
+
+| Classe | Propriétés supplémentaires |
+|---|---|
+| `Bend`, `Twist` | `angle` en degrés (0) ; 0 au début et angle complet en fin d'intervalle |
+| `Taper`, `Shear` | `factor` (0) : variation d'échelle ou cisaillement le long de l'axe |
+| `Wave` | `amplitude` (0), `frequency` (1), `phase` en radians (0) |
+| `Wind` | `amplitude` (0), `frequency` (1), `phase` (0), `seed` entier non signé (0) ; bruit 3D vectoriel, nul au début de l'intervalle |
+| `Spherize` | `radius` (1), `strength` de 0 à 1 (0), centrée sur l'origine |
+| `Lattice` | `boundsMin`, `boundsMax` (−1 et 1 sur chaque axe), `dimensions` (2, 2, 2), `offsets` |
+
+Le treillis interpole les déplacements en Bézier. Chaque dimension contient 2 à
+6 points ; `offsets` est vide ou contient trois nombres par point, X variant le
+plus vite, puis Y et Z. Pour modifier un tableau, réassigner la propriété entière.
+Les modifications d'un déformeur partagé reconstruisent les objets concernés à la
+prochaine commande du viewer. Le maillage de départ est conservé pendant l'exécution
+du script ; l'export USD contient le maillage résultant et `engine:deformers`.
+
+Animer les valeurs numériques ou les tableaux de longueur fixe avec
+`wind.keyframes = [{ time: 0, phase: 0 }, { time: 24, phase: 3 }]`. Toutes les
+clés doivent comporter les mêmes propriétés, et leurs temps être croissants ;
+`axis`, `dimensions` et `seed` ne sont pas animables. De 2 à 256 clés sont
+acceptées. L'union des temps de toutes les clés de la pile est évaluée sur CPU,
+dans la limite de 4 000 000 de couples sommet-temps par objet. Le résultat est
+exporté en échantillons USD de positions et normales ; entre deux clés, USD
+interpole les positions, pas les paramètres. Ajouter des clés intermédiaires
+pour mieux approcher une trajectoire non linéaire. `setTime` et la capture
+path tracing avec obturateur exploitent ces échantillons.
+
+Cette étape reste calculée sur CPU et ne couvre pas les champs MaterialX ou
+NanoVDB de la priorité 18. L'import de maillages est limité comme indiqué dans
+[Animation et transformations](#animation-et-transformations).
 
 ## Opérations booléennes
 
@@ -422,7 +462,18 @@ await postprocess(grade.out);
 | `await converge(secondes = 600)` | `stats()` | Attend l'arrêt du path tracer ; demande `render.backend = "pathtracing"` et `render.stopOnConvergence = true` ou un `render.timeBudget`. |
 | `await capture("x.png", { samples })` | — | Rendu path tracing de `samples` échantillons enregistré en PNG (indépendant de l'accumulation affichée). |
 | `await capture("x.png", { samples, shutter: [t0, t1], steps })` | — | Idem avec flou de mouvement sur l'intervalle de temps `[t0, t1]`, réparti sur `steps` sous-images (16 par défaut). |
+| `await video("x.mp4", { start, end, fps, samples, shutter, steps })` | — | Rend l'intervalle animé dans une vidéo MP4 ou WebM. |
 | `stats()` | objet | État du rendu (ci-dessous). |
+
+`video` capture `[start, end[` en codes temporels USD. `fps` est la cadence de
+la vidéo (24 par défaut, au plus 120) ; la cadence USD sert à convertir les
+codes temporels en secondes (24 si la scène n'en définit pas). Au plus 3 600
+images sont encodées. En path tracing, `samples` (1 par défaut) donne les
+échantillons par image et `shutter: [ouverture, fermeture]` donne des décalages
+relatifs à chaque image, en codes temporels ; `steps` règle les sous-images.
+L'obturateur n'est pas disponible en raster et le moteur Disney n'est pas pris
+en charge. L'instant initial est restauré après l'export ; la lecture est mise
+en pause. L'encodage nécessite WebCodecs et le codec du format choisi.
 
 `stats()` retourne :
 
@@ -471,6 +522,7 @@ await postprocess(grade.out);
 | `await save("materiau.mtlx", m)` | document MaterialX du matériau `m` du script |
 | `await save("scene.usda")` | scène des primitives du script : couche USD (gprims `Sphere`, `Cube`, `Cylinder`, `Cone`, `Capsule`, `Plane`, `PointLight` ; tore, disque et objets déformés en `Mesh`) et un `<matériau>.mtlx` par matériau, écrits dans le même dossier |
 | `await capture("x.png", { … })` | voir [Rendu](#rendu) |
+| `await video("animation.mp4", { start: 0, end: 24 })` | vidéo MP4 (ou WebM) ; voir [Rendu](#rendu) |
 
 Les noms peuvent contenir des sous-dossiers (`"seq/frame-01.png"`), pas `..`. Destination :
 téléchargement dans le viewer, dossier `--out` avec `npm run script`, téléchargement côté client
@@ -478,12 +530,28 @@ pour un [rendu distant](REMOTE_RENDER.md).
 
 ## Animation et transformations
 
+`await importMesh("objet.usda", "/Chemin/Mesh")` importe la géométrie locale
+d'un prim USD `Mesh` comme objet scriptable. On peut lui affecter `material`,
+`translate`, `rotate`, `scale` et une pile `deformers` ; la géométrie triangulée
+et ses échantillons de déformation sont incorporés à l'export USD. Seuls les
+points, normales et coordonnées `primvars:st` sont conservés : les
+transformations et matériaux USD d'origine ne sont pas importés et doivent
+être définis sur l'objet du script. Les couches doivent être en USDA et la
+géométrie source statique, sans trous ni GeomSubsets, avec
+`subdivisionScheme = "none"` et sans autres primvars. Ces cas non pris en
+charge sont signalés par une erreur.
+
 | Fonction | Retour | Effet |
 |---|---|---|
 | `timeline()` | `{ start, end, fps }` ou `undefined` | Intervalle d'une scène animée. |
 | `time()` | nombre | Instant courant (code temporel). |
 | `await setTime(t)` | — | Évalue la scène à l'instant `t`. |
 | `transform({ translate, rotate, scale })` | `number[16]` | Matrice : échelle (nombre ou `[x, y, z]`), puis rotations X, Y, Z en degrés, puis translation. |
+
+La vue affiche une barre de temps pour les scènes animées et les matériaux
+utilisant `time` ou `frame`. Elle permet de lire, arrêter et choisir l'instant ;
+déplacer le curseur met la lecture en pause. Sans intervalle USD, elle utilise
+par défaut les codes 0 à 240 à 24 codes par seconde.
 
 ## Lumières et caméra
 
@@ -497,10 +565,31 @@ pour un [rendu distant](REMOTE_RENDER.md).
 
 | Fonction | Retour | Effet |
 |---|---|---|
+| `expose(nœud, "entrée", "libellé"?)` | — | Déclare une entrée littérale modifiable dans l'onglet **Paramètres** du script exécuté. |
 | `variants()` | `{ path, set, variants, selection }[]` | Variant sets de la scène. |
 | `await setVariant("/prim", "set", "variante")` | — | Sélectionne une variante (recomposition). |
 | `materialParameters("/objet")` | `{ id, label, type, value, min, max }[]` | Paramètres exposés en uniformes. |
 | `await setMaterialParameters("/objet", { id: valeur })` | — | Modifie des paramètres sans recompilation ; valeur : nombre, booléen ou tableau. |
+
+`expose` accepte une entrée littérale ou son défaut du NodeDef, pas une connexion.
+Une entrée ne peut être déclarée qu'une fois. L'onglet conserve les types numériques,
+booléens, chaînes, énumérations, couleurs, vecteurs et matrices ; il ne liste que les
+entrées déclarées par le dernier script exécuté. Les modifications ne changent pas le
+texte du script et ne réexécutent pas ses commandes. Elles réappliquent les matériaux
+et les shaders d'environnement, d'image, d'AOV ou de filtre de lumière concernés ;
+la dispersion est reconstruite sans réexécuter le script. La réapplication d'un
+matériau peut nécessiter une recompilation. Pour les presets développés en graphes,
+les autres modifications sont conservées ; si une entrée nécessaire a été reconnectée
+ou que son nœud ne peut plus être identifié, la modification est refusée.
+Les entrées non liées à un shader actif sont refusées. Une erreur pendant une
+modification touchant plusieurs cibles peut laisser certaines cibles déjà modifiées :
+vérifier le rendu.
+
+Les contrôles appartiennent à l'exécution courante : ils deviennent périmés si la
+scène est remplacée et ne sont pas restaurés à l'ouverture d'un projet. Relancer le
+script les recrée avec les valeurs du script. Le panneau général des paramètres de
+matériau reste indépendant de cet onglet. La reconstruction de la dispersion et le
+déplacement d'un filtre de lumière effacent l'historique d'annulation.
 
 ## Messages, vérifications et diagnostic
 
@@ -528,9 +617,9 @@ pour un [rendu distant](REMOTE_RENDER.md).
 - **Script seul** : sans `scene`, `render`, `assign`… (aucune commande du viewer), **Appliquer**
   affecte le matériau du script à l'objet sélectionné.
 - **Noms réservés** : `scene`, `objects`, `render`, `assign`, `load`, `save`, `log`, `check`,
-  `stats`, `converge`, `diagnostics`, `capabilities`, `timeline`, `setTime`, `setTransform`,
+  `stats`, `converge`, `video`, `importMesh`, `diagnostics`, `capabilities`, `timeline`, `setTime`, `setTransform`,
   `setVisibility`, `lights`, `setLight`, `setCamera`, `variants`, `setVariant`,
-  `materialParameters`, `setMaterialParameters`, `Math`, les classes de nœuds et les classes de
+  `materialParameters`, `setMaterialParameters`, `expose`, `Math`, les classes de nœuds et les classes de
   primitives (`Sphere`, `Cube`, `Cylinder`, `Cone`, `Capsule`, `Torus`, `Plane`, `Disk`, `PointLight`) ne
   peuvent pas être réaffectés. `material`, `node`, `time`, `transform` et `capture` peuvent servir
   de noms de nœuds (la variable masque alors la fonction). `window`, `document`… restent ceux du

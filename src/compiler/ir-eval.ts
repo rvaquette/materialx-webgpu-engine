@@ -295,7 +295,7 @@ function noiseGradient3(hash: number, x: number, y: number, z: number): number {
   return ((k & 1) === 0 ? u : -u) + ((k & 2) === 0 ? v : -v);
 }
 
-function materialXPerlin3(position: IrValue, seed: number): number {
+export function materialXPerlin3(position: IrValue, seed: number): number {
   const ix = Math.floor(position[0]!);
   const iy = Math.floor(position[1]!);
   const iz = Math.floor(position[2]!);

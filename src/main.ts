@@ -69,6 +69,7 @@ async function main(): Promise<void> {
   let applyScriptMaterial: ((xml: string) => Promise<void>) | undefined;
   let selectedMaterial: (() => { graph: ResolvedGraph; name: string }) | undefined;
   let viewerHost: ScriptHost | undefined;
+  let sceneRevision = 0;
   let turntableController: AbortController | undefined;
   const readyHost = (): ScriptHost => {
     if (!viewerHost) throw new Error('Le viewer WebGPU n’est pas prêt.');
@@ -81,6 +82,8 @@ async function main(): Promise<void> {
   const scriptHost: ScriptHost = {
     loadScene: entry => readyHost().loadScene(entry),
     loadStage: stage => readyHost().loadStage(stage),
+    updateStage: stage => readyHost().updateStage(stage),
+    sceneRevision: () => sceneRevision,
     objects: () => viewerHost?.objects() ?? [],
     renderSettings: () => viewerHost?.renderSettings() ?? {},
     setRenderSetting: (name, value) => readyHost().setRenderSetting(name, value),
@@ -95,6 +98,7 @@ async function main(): Promise<void> {
     stats: () => viewerHost?.stats(),
     waitForStop: timeout => readyHost().waitForStop(timeout),
     capture: (name, options) => readyHost().capture(name, options),
+    video: (name, options, signal) => readyHost().video(name, options, signal),
     saveAov: name => readyHost().saveAov(name),
     saveDiagnostics: name => readyHost().saveDiagnostics(name),
     diagnostics: () => viewerHost?.diagnostics() ?? [],
@@ -106,6 +110,7 @@ async function main(): Promise<void> {
     setVisibility: (object, visible) => readyHost().setVisibility(object, visible),
     lights: () => viewerHost?.lights() ?? [],
     setLight: (light, changes) => readyHost().setLight(light, changes),
+    moveLightFilter: (from, to, settings) => readyHost().moveLightFilter(from, to, settings),
     setCamera: camera => readyHost().setCamera(camera),
     variants: () => viewerHost?.variants() ?? [],
     setVariant: (path, set, variant) => readyHost().setVariant(path, set, variant),
@@ -119,6 +124,18 @@ async function main(): Promise<void> {
   const validationScripts = Object.entries(import.meta.glob<string>('../examples/scripts/*.js', { query: '?raw', import: 'default', eager: true }))
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([path, code]) => ({ label: /^\/\/\s*(.+?)\s*(?:\(|$)/m.exec(code)?.[1] ?? path.split('/').at(-1)!, code }));
+  // Dockview can detach inactive tabs from the document while restoring a saved layout.
+  function required<T>(element: T | null): T {
+    if (!element) throw new Error('Viewer controls are missing.');
+    return element;
+  }
+  const viewContainer = required(document.querySelector<HTMLElement>('#canvas-container'));
+  const canvas = required(viewContainer.querySelector<HTMLCanvasElement>('#view'));
+  const uiCanvas = required(document.querySelector<HTMLCanvasElement>('#ui'));
+  const timelineBar = required(viewContainer.querySelector<HTMLElement>('#view-timeline'));
+  const timelinePlay = required(viewContainer.querySelector<HTMLButtonElement>('#view-timeline-play'));
+  const timelineTime = required(viewContainer.querySelector<HTMLInputElement>('#view-timeline-time'));
+  const timelineValue = required(viewContainer.querySelector<HTMLOutputElement>('#view-timeline-value'));
   // Dockable workbench: render view, interactive controls (F3), material graph and script editor (F2).
   const panelContent = (id: string): HTMLElement => {
     const element = document.getElementById(id);
@@ -192,7 +209,7 @@ async function main(): Promise<void> {
     filePrefix: scriptFilePrefix,
     examples: validationScripts,
     runControl: scriptControl,
-    remoteView: document.getElementById('canvas-container'),
+    remoteView: viewContainer,
     selectedObject: () => state.objectPath,
     onApply: (xml) => {
       if (!applyScriptMaterial) throw new Error('Le viewer WebGPU n’est pas prêt.');
@@ -297,9 +314,6 @@ async function main(): Promise<void> {
     setStatus(`WebGPU : ${message}`);
   };
   device.addEventListener('uncapturederror', reportGpuError);
-  const canvas = document.getElementById('view') as HTMLCanvasElement | null;
-  const uiCanvas = document.getElementById('ui') as HTMLCanvasElement | null;
-  if (!canvas || !uiCanvas) throw new Error('Viewer canvases are missing.');
   canvas.width = initialResolution === '1024x768' ? 1024 : initialResolution;
   canvas.height = initialResolution === '1024x768' ? 768 : initialResolution;
   const context = canvas.getContext('webgpu');
@@ -320,6 +334,19 @@ async function main(): Promise<void> {
     objectPath: '', objects: [], materialFolderPath: [], materialTree: buildMaterialTree(MATERIAL_CATALOG), materialPath: '',
     turntable: { lights: [], running: false, message: '' },
   };
+  function syncTimeline(): void {
+    const animation = state.animation;
+    const timeline = animation?.timeline;
+    timelineBar.hidden = !timeline;
+    timelinePlay.disabled = state.busy;
+    timelineTime.disabled = state.busy;
+    if (!animation || !timeline) return;
+    timelinePlay.textContent = animation.playing ? 'Arrêter' : 'Lire';
+    timelineTime.min = String(timeline.start);
+    timelineTime.max = String(timeline.end);
+    timelineTime.value = String(animation.time);
+    timelineValue.value = `${animation.time.toFixed(1)} / ${timeline.end}`;
+  }
   ui = state;
   if (!state.scenes.some(scene => scene.entry === initialEntry)) state.scenes.push({ entry: initialEntry, label: initialEntry });
   let operationBusy = false;
@@ -395,7 +422,8 @@ async function main(): Promise<void> {
   async function stopPlayback(): Promise<void> {
     if (state.animation?.playing) {
       state.animation.playing = false;
-      cancelAnimationFrame(playbackFrame);
+      cancelPlayback();
+      syncTimeline();
     }
     await Promise.all([...pendingTimeUpdates]);
   }
@@ -408,6 +436,7 @@ async function main(): Promise<void> {
     await recordHistory(label, () => materialSnapshot(path), async material => {
       await viewer.restoreProjectMaterials([[path, material]]);
     }, edit);
+    refreshAnimation();
   }
   const exportDiagnostics = document.querySelector<HTMLButtonElement>('#export-diagnostics');
   const diagnosticsJson = (): string =>
@@ -514,6 +543,7 @@ async function main(): Promise<void> {
   function setBusy(busy: boolean, message?: string): void {
     operationBusy = busy;
     state.busy = busy;
+    syncTimeline();
     if (graphButton) graphButton.disabled = busy;
     if (libraryButton) libraryButton.disabled = busy;
     if (busy) setStatus('', false);
@@ -538,6 +568,12 @@ async function main(): Promise<void> {
   }
 
   let playbackFrame = 0;
+  let playbackVersion = 0;
+  let timeSeekVersion = 0;
+  function cancelPlayback(): void {
+    playbackVersion++;
+    cancelAnimationFrame(playbackFrame);
+  }
   const pendingTimeUpdates = new Set<Promise<void>>();
   function updateTime(target: InteractiveViewer, time: number): Promise<void> {
     const update = target.setTime(time);
@@ -546,30 +582,40 @@ async function main(): Promise<void> {
     return update;
   }
   function refreshAnimation(): void {
-    cancelAnimationFrame(playbackFrame);
+    cancelPlayback();
     const timeline = viewer.timeline;
     const variantSets = viewer.variantSets;
-    state.animation = timeline?.animated || variantSets.length ? {
-      ...(timeline?.animated ? { timeline: { start: timeline.start, end: timeline.end, timeCodesPerSecond: timeline.timeCodesPerSecond } } : {}),
+    const range = timeline?.animated ? { start: timeline.start, end: timeline.end, timeCodesPerSecond: timeline.timeCodesPerSecond }
+      : viewer.hasTimeDependentMaterial ? { start: Math.min(0, viewer.time), end: Math.max(240, viewer.time + 24), timeCodesPerSecond: 24 } : undefined;
+    state.animation = range || variantSets.length ? {
+      ...(range ? { timeline: range } : {}),
       time: viewer.time, playing: false, temporalHistory: viewer.pathTracingTemporalHistory, variantSets,
     } : undefined;
+    syncTimeline();
   }
 
-  function play(previous: number, target: InteractiveViewer): void {
+  function play(previous: number, target: InteractiveViewer, version = playbackVersion): void {
     playbackFrame = requestAnimationFrame(now => {
       const animation = state.animation;
       const timeline = animation?.timeline;
-      if (!animation?.playing || !timeline || viewer !== target || deviceLost) return;
+      if (!animation?.playing || !timeline || viewer !== target || deviceLost || version !== playbackVersion) return;
       if (!operationBusy) {
         let time = animation.time + Math.min(0.25, (now - previous) / 1000) * timeline.timeCodesPerSecond;
         if (time > timeline.end) time = timeline.start;
         animation.time = time;
-        void updateTime(target, time).catch((error: unknown) => {
-          animation.playing = false;
+        syncTimeline();
+        void updateTime(target, time).then(() => {
+          if (animation.playing && version === playbackVersion) play(now, target, version);
+        }, (error: unknown) => {
+          if (version === playbackVersion) {
+            animation.playing = false;
+            syncTimeline();
+          }
           setStatus(`Echec de l'animation : ${error instanceof Error ? error.message : String(error)}`);
         });
+        return;
       }
-      play(now, target);
+      play(now, target, version);
     });
   }
 
@@ -597,6 +643,7 @@ async function main(): Promise<void> {
     try { await viewer.setObjectMaterial(state.objectPath, url); }
     finally {
       refreshObjects();
+      refreshAnimation();
       setBusy(false);
     }
   };
@@ -625,6 +672,7 @@ async function main(): Promise<void> {
         ...(scriptStage && entry === scriptStageEntry() ? scriptStage : {}),
         ...(config?.textureRoot ? { textureRoot: new URL(config.textureRoot, document.baseURI).href } : {}),
       });
+      sceneRevision++;
       state.entry = entry;
       state.pathTracingDepth = viewer.pathTracingDepth;
       refreshObjects();
@@ -719,6 +767,7 @@ async function main(): Promise<void> {
         await viewer.setEnvironmentShader(value.shader);
         viewer.setEnvironmentEnabled(value.enabled);
         state.environmentEnabled = value.enabled;
+        refreshAnimation();
       };
       recordUi('Éclairage', read, apply, { shader: preset === 'scene' ? undefined : lightingPreset(preset),
         enabled: preset === 'scene' ? state.environmentEnabled : true });
@@ -733,7 +782,7 @@ async function main(): Promise<void> {
       panel.message = 'Préparation de la capture…';
       if (state.animation?.playing) {
         state.animation.playing = false;
-        cancelAnimationFrame(playbackFrame);
+        cancelPlayback();
       }
       const pointerEvents = canvas.style.pointerEvents;
       canvas.style.pointerEvents = 'none';
@@ -829,15 +878,35 @@ async function main(): Promise<void> {
     time: time => {
       if (!state.animation) return;
       forgetHistory();
+      actions.play?.(false);
       state.animation.time = time;
-      void updateTime(viewer, time).catch((error: unknown) => setStatus(`Echec de l'animation : ${error instanceof Error ? error.message : String(error)}`));
+      syncTimeline();
+      const target = viewer;
+      const version = ++timeSeekVersion;
+      void (async () => {
+        await Promise.all([...pendingTimeUpdates]);
+        if (version === timeSeekVersion && viewer === target) await updateTime(target, time);
+      })().catch((error: unknown) => setStatus(`Echec de l'animation : ${error instanceof Error ? error.message : String(error)}`));
     },
     play: playing => {
       if (!state.animation?.timeline) return;
       if (playing) forgetHistory();
       state.animation.playing = playing;
-      cancelAnimationFrame(playbackFrame);
-      if (playing) play(performance.now(), viewer);
+      syncTimeline();
+      cancelPlayback();
+      if (playing) {
+        const target = viewer;
+        const version = playbackVersion;
+        void Promise.all([...pendingTimeUpdates]).then(() => {
+          if (state.animation?.playing && viewer === target && version === playbackVersion) play(performance.now(), target, version);
+        }, (error: unknown) => {
+          if (version === playbackVersion && state.animation) {
+            state.animation.playing = false;
+            syncTimeline();
+          }
+          setStatus(`Echec de l'animation : ${error instanceof Error ? error.message : String(error)}`);
+        });
+      }
     },
     temporalHistory: samples => recordUi('Historique temporel', () => viewer.pathTracingTemporalHistory, value => {
       viewer.setPathTracingTemporalHistory(value);
@@ -863,9 +932,11 @@ async function main(): Promise<void> {
           compiled ? new URL(compiled, document.baseURI).href : undefined,
         );
       }
-      finally { refreshObjects(); }
+      finally { refreshObjects(); refreshAnimation(); }
     }); },
   };
+  timelinePlay.addEventListener('click', () => actions.play?.(!state.animation?.playing));
+  timelineTime.addEventListener('input', () => actions.time?.(Number(timelineTime.value)));
   /**
    * Pause requested by the remote render server (__mxControl): the path tracer stops accumulating
    * and the running script waits before its next statement. Waits do not time out meanwhile.
@@ -994,7 +1065,7 @@ async function main(): Promise<void> {
             forgetHistory();
             if (state.animation?.playing) {
               state.animation.playing = false;
-              cancelAnimationFrame(playbackFrame);
+              cancelPlayback();
             }
             await Promise.all([...pendingTimeUpdates]);
             const entry = scriptStageEntry();
@@ -1008,6 +1079,7 @@ async function main(): Promise<void> {
               assetPath: URL.createObjectURL(new Blob([material.xml], { type: 'application/xml' })), materialName: material.materialName,
             }]));
             const size = project.resolution;
+            sceneRevision++;
             await viewer.resize(size === '1024x768' ? 1024 : size, size === '1024x768' ? 768 : size);
             await viewer.setMemoryBudget(project.memoryBudget ?? undefined);
             await viewer.setEnvironmentShader(project.shaders.environment);
@@ -1043,6 +1115,31 @@ async function main(): Promise<void> {
       }
   viewerHost = {
     ...projectHostBase,
+    sceneRevision: () => sceneRevision,
+    async updateStage(stage) {
+      if (operationBusy || deviceLost) throw new Error('Une opération du viewer est en cours.');
+      await stopPlayback();
+      const snapshot = viewer.snapshotState();
+      if (!snapshot.scene || state.entry !== scriptStageEntry() || snapshot.scene.entry !== scriptStageEntry()) {
+        throw new Error('La scène du script n’est plus active.');
+      }
+      const materials = viewer.snapshotEditableMaterials();
+      const entry = scriptStageEntry();
+      setBusy(true, 'Mise à jour de la dispersion...');
+      try {
+        const { importUsdaLayer } = await import('./render/usd-scene-assets.ts');
+        const options = { ...snapshot.scene.options, imported: await importUsdaLayer(entry, stage.usda, stage.materials) };
+        forgetHistory();
+        await viewer.restoreState({ ...snapshot, scene: { ...snapshot.scene, options } });
+        await viewer.restoreEditableMaterials(materials);
+        scriptStage = options;
+        projectStage = { usda: stage.usda, materials: new Map(stage.materials) };
+        refreshObjects();
+        refreshAnimation();
+      } finally {
+        setBusy(false);
+      }
+    },
     // Values are validated by the script runtime (RENDER_SETTINGS) before reaching the viewer.
     async setRenderSetting(name, value) {
       forgetHistory();
@@ -1088,6 +1185,7 @@ async function main(): Promise<void> {
     async setEnvironmentShader(settings) {
       forgetHistory();
       await viewer.setEnvironmentShader(settings);
+      refreshAnimation();
     },
     async setImageShader(settings) {
       forgetHistory();
@@ -1110,6 +1208,7 @@ async function main(): Promise<void> {
       try { await viewer.setObjectMaterial(object, url, compiled ? new URL(compiled, document.baseURI).href : undefined); }
       finally {
         refreshObjects();
+        refreshAnimation();
         setBusy(false);
       }
     },
@@ -1192,6 +1291,81 @@ async function main(): Promise<void> {
         setBusy(false);
       }
     },
+    async video(name, options, signal) {
+      if (operationBusy || deviceLost) throw new Error('Une opération du viewer est en cours.');
+      if (viewer.backend !== 'raster' && viewer.backend !== 'pathtracing') throw new Error('La vidéo demande le moteur raster ou path tracing.');
+      if (viewer.backend !== 'pathtracing' && options.shutter) throw new Error('Le flou de mouvement vidéo demande le path tracing.');
+      if (outputFormat !== 'rgba8unorm' && outputFormat !== 'bgra8unorm') throw new Error(`Format de sortie non pris en charge : ${outputFormat}.`);
+      const target = viewer;
+      const backend = target.backend;
+      const timeCodesPerSecond = target.timeline?.timeCodesPerSecond ?? 24;
+      const count = Math.ceil((options.end - options.start) * options.fps / timeCodesPerSecond);
+      if (!Number.isSafeInteger(count) || count < 1 || count > 3600) throw new Error('La vidéo doit contenir entre 1 et 3600 images.');
+      if (state.animation?.playing) {
+        state.animation.playing = false;
+        cancelPlayback();
+      }
+      setBusy(true, 'Préparation de la vidéo...');
+      let originalTime: number | undefined;
+      try {
+        await Promise.all([...pendingTimeUpdates]);
+        const check = () => {
+          signal?.throwIfAborted();
+          if (deviceLost || viewer !== target || target.backend !== backend) throw new Error('Périphérique, scène ou moteur changé pendant la vidéo.');
+        };
+        check();
+        originalTime = target.time;
+        const { Output, Mp4OutputFormat, WebMOutputFormat, BufferTarget, CanvasSource } = await import('mediabunny');
+        const canvas2d = new OffscreenCanvas(canvas.width, canvas.height);
+        const context = canvas2d.getContext('2d');
+        if (!context) throw new Error('Encodage vidéo indisponible : canvas 2D.');
+        const mp4 = /\.mp4$/i.test(name);
+        const buffer = new BufferTarget();
+        const output = new Output({ format: mp4 ? new Mp4OutputFormat({ fastStart: 'in-memory' }) : new WebMOutputFormat(), target: buffer });
+        const source = new CanvasSource(canvas2d, { codec: mp4 ? 'avc' : 'vp9', bitrate: 8_000_000, keyFrameInterval: 2, latencyMode: 'quality' });
+        output.addVideoTrack(source, { frameRate: options.fps, maximumPacketCount: count });
+        let finalized = false;
+        try {
+          await output.start();
+          for (let frame = 0; frame < count; frame++) {
+            check();
+            setBusyMessage(`Vidéo : image ${frame + 1} / ${count}...`);
+            const time = options.start + frame * timeCodesPerSecond / options.fps;
+            await updateTime(target, time);
+            check();
+            if (backend === 'raster') await target.prepareRaster();
+            const shutter = options.shutter && {
+              open: time + options.shutter.open, close: time + options.shutter.close,
+              ...(options.shutter.steps !== undefined ? { steps: options.shutter.steps } : {}),
+            };
+            const image = await captureRgba(currentGpu.device, canvas.width, canvas.height, backend === 'raster'
+              ? { raster: view => target.renderRasterTo(view) }
+              : { pathTrace: view => target.renderPathTraceTo(view, options.samples, shutter, check) }, check, outputFormat);
+            context.putImageData(new ImageData(new Uint8ClampedArray(image.rgba), image.width, image.height), 0, 0);
+            await source.add(frame / options.fps, 1 / options.fps);
+          }
+          check();
+          source.close();
+          await output.finalize();
+          finalized = true;
+          check();
+          if (!buffer.buffer) throw new Error('La vidéo encodée est vide.');
+          await saveScriptFile(name, new Blob([buffer.buffer], { type: mp4 ? 'video/mp4' : 'video/webm' }));
+        } finally {
+          if (!finalized) await output.cancel();
+        }
+      } finally {
+        try {
+          if (originalTime !== undefined && !deviceLost && viewer === target) {
+            await updateTime(target, originalTime);
+            if (state.animation) state.animation.time = originalTime;
+            syncTimeline();
+          }
+        } finally {
+          if (!deviceLost && viewer === target) setBusy(false);
+        }
+      }
+    },
     async saveAov(name) {
       const view = viewer.pathTracingView;
       if (viewer.backend !== 'pathtracing' || view === 'beauty' || !state.status?.samples) {
@@ -1212,6 +1386,7 @@ async function main(): Promise<void> {
       forgetHistory();
       await updateTime(viewer, time);
       if (state.animation) state.animation.time = time;
+      syncTimeline();
     },
     async setTransform(object, matrix) {
       await recordHistory('Transformation de l’objet', () => viewer.snapshotState().scene?.transforms.get(object),
@@ -1233,6 +1408,22 @@ async function main(): Promise<void> {
       await recordHistory('Lumière', () => viewer.snapshotState().scene?.lights.get(light),
         value => { viewer.setLight(light); if (value) viewer.setLight(light, value); },
         () => viewer.setLight(light, next));
+    },
+    async moveLightFilter(from, to, settings) {
+      if (from === to) throw new Error('Les deux chemins de lumière doivent être distincts.');
+      if (!viewer.lights.some(light => light.path === from)) throw new Error(`Lumière inconnue : ${from}.`);
+      const read = () => {
+        const lights = viewer.snapshotState().scene?.lights;
+        return [lights?.get(from), lights?.get(to)] as const;
+      };
+      const previous = read()[0];
+      viewer.setLight(to, { filter: settings });
+      forgetHistory();
+      viewer.setLight(from);
+      if (previous) {
+        const { filter: _filter, ...rest } = previous;
+        if (Object.keys(rest).length) viewer.setLight(from, rest);
+      }
     },
     async setCamera(camera) {
       forgetHistory();

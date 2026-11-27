@@ -31,6 +31,11 @@
       .mx-workbench-content > #material-graph #material-graph-diagram { flex: 1 1 320px; height: auto; }
       #canvas-container { position: relative; flex: 1; min-width: 0; min-height: 0; display: flex; align-items: center; justify-content: center; overflow: hidden; }
       #view { width: min(100%, 100%); max-height: 100%; aspect-ratio: auto; object-fit: contain; touch-action: none; user-select: none; }
+      #view-timeline { position: absolute; z-index: 2; bottom: 8px; left: 8px; right: 8px; display: flex; align-items: center; gap: 8px; padding: 8px; border-radius: 6px; background: #17171fed; font-size: 12px; }
+      #view-timeline[hidden] { display: none; }
+      #view-timeline input { flex: 1; min-width: 0; }
+      #view-timeline button { cursor: pointer; }
+      #view-timeline output { min-width: 5em; text-align: right; font-variant-numeric: tabular-nums; }
       #messages { position: absolute; top: 8px; left: 8px; right: 8px; z-index: 1; max-height: calc(100% - 16px); overflow: auto; pointer-events: none; }
       #messages > :not([hidden]) { display: block; margin: 0 0 6px; padding: 8px; background: #17171fed; border-radius: 4px; white-space: pre-wrap; overflow-wrap: anywhere; pointer-events: auto; }
       #messages #status, #messages #shader-diagnostics { background: #331818ed; }
@@ -126,6 +131,12 @@
       <canvas id="ui" aria-label="Contrôles Dear ImGui" tabindex="0"></canvas>
       <div id="canvas-container">
         <canvas id="view" width="512" height="512" aria-label="Rendu de la scène" aria-busy="true"></canvas>
+        <div id="view-timeline" role="group" aria-label="Animation" hidden>
+          <button id="view-timeline-play" type="button">Lire</button>
+          <label for="view-timeline-time">Temps</label>
+          <input id="view-timeline-time" type="range" step="any" />
+          <output id="view-timeline-value" for="view-timeline-time"></output>
+        </div>
         <div id="messages" aria-label="Messages du viewer">
           <div id="status" role="alert" hidden></div>
           <div id="busy-indicator" role="status" aria-live="polite">Initialisation de WebGPU...</div>

@@ -7,7 +7,8 @@ import {
   type ScriptHost, type ScriptLibrary, type ScriptNodeDef, type ScriptPortDef, type ScriptValue,
 } from './script-api.ts';
 import type { ResolvedGraph } from './graph.ts';
-import { booleanScriptDef, primitiveScriptDef, SCRIPT_BOOLEAN_OPERATIONS, SCRIPT_PRIMITIVES } from './script-scene.ts';
+import { booleanScriptDef, deformerScriptDef, primitiveScriptDef, SCRIPT_BOOLEAN_OPERATIONS, SCRIPT_PRIMITIVES } from './script-scene.ts';
+import { DEFORMER_DEFAULTS } from '../scene/deformers.ts';
 import type { MaterialXScriptEditor } from './script-editor-view.ts';
 import { sharedScriptOf } from './script-store.ts';
 import { activityButton, panelVisible, rememberPanel } from '../ui/layout.ts';
@@ -81,7 +82,7 @@ export const escapeHtml = (text: string): string => text.replace(/&/g, '&amp;').
 export function scriptVariables(code: string, library: ScriptLibrary): Map<string, ScriptNodeDef> {
   const variables = new Map<string, ScriptNodeDef>();
   for (const match of code.matchAll(DECLARED_NODE)) {
-    const stageObject = primitiveScriptDef(match[2]!) ?? booleanScriptDef(match[2]!);
+    const stageObject = primitiveScriptDef(match[2]!) ?? booleanScriptDef(match[2]!) ?? deformerScriptDef(match[2]!);
     if (stageObject) {
       variables.set(match[1]!, stageObject);
       continue;
@@ -110,7 +111,7 @@ export function scriptTokens(code: string, library: ScriptLibrary | undefined): 
   const identifierKind = (name: string): string | undefined => {
     if (variables.has(name)) return 'var';
     if (library?.categoryOf(name) !== undefined || Object.hasOwn(SCRIPT_PRIMITIVES, name) ||
-        Object.hasOwn(SCRIPT_BOOLEAN_OPERATIONS, name)) return 'node';
+        Object.hasOwn(SCRIPT_BOOLEAN_OPERATIONS, name) || Object.hasOwn(DEFORMER_DEFAULTS, name)) return 'node';
     if (SCRIPT_FUNCTIONS[name]) return 'builtin';
     return undefined;
   };
@@ -192,7 +193,8 @@ export function scriptHover(code: string, position: number, library: ScriptLibra
     if (input) {
       const kind = def.outputs.length ? 'entrée' : 'propriété';
       const source = def.outputs.length ? `NodeDef : ${def.name}`
-        : Object.hasOwn(SCRIPT_BOOLEAN_OPERATIONS, def.className) ? `Opération booléenne : ${def.className}` : `Primitive : ${def.className}`;
+        : Object.hasOwn(SCRIPT_BOOLEAN_OPERATIONS, def.className) ? `Opération booléenne : ${def.className}`
+          : Object.hasOwn(DEFORMER_DEFAULTS, def.className) ? `Déformeur : ${def.className}` : `Primitive : ${def.className}`;
       return { from, to, title: `${owner}.${word} : ${kind} ${input.type}`, lines: [...portLines(input), source] };
     }
     const output = def.outputs.find(port => port.name === word);
@@ -202,7 +204,8 @@ export function scriptHover(code: string, position: number, library: ScriptLibra
   const def = variables.get(word);
   if (def && !def.outputs.length) {
     return { from, to, title: `${word} : ${def.className}`, lines: [
-      ...(def.doc ? [def.doc] : []), `Propriétés : ${def.inputs.map(port => port.name).join(', ')}`, 'path : chemin dans la scène ; remove() : supprime',
+      ...(def.doc ? [def.doc] : []), `Propriétés : ${def.inputs.map(port => port.name).join(', ')}`,
+      ...(!Object.hasOwn(DEFORMER_DEFAULTS, def.className) ? ['path : chemin dans la scène ; remove() : supprime'] : []),
     ] };
   }
   if (def) {
@@ -212,9 +215,10 @@ export function scriptHover(code: string, position: number, library: ScriptLibra
       `Sorties : ${def.outputs.map(port => `${port.name} (${port.type})`).join(', ')}`,
     ] };
   }
-  const stageObject = primitiveScriptDef(word) ?? booleanScriptDef(word);
+  const stageObject = primitiveScriptDef(word) ?? booleanScriptDef(word) ?? deformerScriptDef(word);
   if (stageObject) {
-    const kind = Object.hasOwn(SCRIPT_BOOLEAN_OPERATIONS, word) ? 'opération booléenne' : 'primitive';
+    const kind = Object.hasOwn(SCRIPT_BOOLEAN_OPERATIONS, word) ? 'opération booléenne'
+      : Object.hasOwn(DEFORMER_DEFAULTS, word) ? 'déformeur' : 'primitive';
     return { from, to, title: `new ${word}() : ${kind}`, lines: [
       ...(stageObject.doc ? [stageObject.doc] : []),
       `Propriétés : ${stageObject.inputs.map(port => `${port.name}${port.default !== undefined ? ` = ${formatValue(port.default)}` : ''}`).join(', ')}`,
@@ -285,7 +289,10 @@ export function scriptCompletions(prefix: string, code: string, library: ScriptL
     const booleanOperations = Object.entries(SCRIPT_BOOLEAN_OPERATIONS).map(([className, operation]) => ({
       label: className, detail: `opération booléenne : ${operation}`, insert: `${className}()`,
     }));
-    return { from: prefix.length - word.length, items: rank([...primitives, ...booleanOperations, ...items], word).slice(0, 200) };
+    const deformers = Object.keys(DEFORMER_DEFAULTS).map(className => ({
+      label: className, detail: 'déformeur spatial', insert: `${className}()`,
+    }));
+    return { from: prefix.length - word.length, items: rank([...primitives, ...booleanOperations, ...deformers, ...items], word).slice(0, 200) };
   }
   const member = new RegExp(`(${IDENT})\\.([\\w$]*)$`).exec(prefix);
   if (member?.[1] === 'render' && !scriptVariables(code, library).has('render')) {
@@ -341,6 +348,8 @@ export const SCRIPT_FUNCTIONS: Readonly<Record<string, { detail: string; insert:
   stats: { detail: 'stats() : échantillons, bruit, débit, arrêt, repli, mémoire GPU', insert: 'stats()' },
   converge: { detail: 'await converge(600) : attend l’arrêt (convergence ou budget de temps)', insert: 'await converge(' },
   capture: { detail: 'await capture("flou.png", { samples: 64, shutter: [0, 4] }) : rendu path tracing enregistré', insert: 'await capture("' },
+  video: { detail: 'await video("animation.mp4", { start: 0, end: 24, fps: 24 }) : rendu vidéo', insert: 'await video("' },
+  importMesh: { detail: 'await importMesh("objet.usda", "/World/Mesh") : géométrie USD en espace objet', insert: 'await importMesh("' },
   diagnostics: { detail: 'diagnostics() : journal des diagnostics { level, code, message }', insert: 'diagnostics()' },
   capabilities: { detail: 'capabilities() : adaptateur, limites et backends pris en charge', insert: 'capabilities()' },
   timeline: { detail: 'timeline() : { start, end, fps } d’une scène animée', insert: 'timeline()' },

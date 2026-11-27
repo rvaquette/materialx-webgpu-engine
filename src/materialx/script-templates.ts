@@ -77,11 +77,7 @@ render.view = "beauty";
     label: 'Séquence animée',
     code: `const range = timeline() ?? { start: 0, end: 24, fps: 24 };
 render.backend = "pathtracing";
-for (let t = range.start; t <= range.end; t += 4) {
-  await setTime(t);
-  await render(64);
-  await save(\`frame-\${String(t).padStart(3, "0")}.png\`);
-}
+await video("animation.mp4", { start: range.start, end: range.end, fps: range.fps, samples: 64 });
 `,
   },
 ];

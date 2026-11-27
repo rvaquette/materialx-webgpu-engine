@@ -655,6 +655,27 @@ export class InteractiveViewer {
     };
   }
 
+  /** In-memory editable materials, including volume-only graphs, for a scene rebuild. */
+  snapshotEditableMaterials(): Array<[string, MaterialResource]> {
+    return this.#objects.flatMap(({ path }) => {
+      const material = this.#editableObjectMaterial(path);
+      return material?.surfaceGraph ? [[path, material]] : [];
+    });
+  }
+
+  async restoreEditableMaterials(materials: ReadonlyArray<[string, MaterialResource]>): Promise<void> {
+    for (const [path, saved] of materials) {
+      const graph = saved.surfaceGraph;
+      if (!graph) throw new Error(`Missing editable material graph: ${path}`);
+      await this.#editObjectGraph(path, material => compileEditableMaterial({
+        ...material,
+        surfaceGraph: graph,
+        ...(saved.resolvedSurface ? { resolvedSurface: saved.resolvedSurface } : {}),
+        ...(saved.parameters ? { parameters: saved.parameters } : {}),
+      }));
+    }
+  }
+
   /** Editable, GPU-independent material graphs for project persistence. */
   projectMaterials(): Array<[string, StoredMaterialVariant]> {
     return this.#objects.flatMap(({ path }) => {
@@ -2089,6 +2110,15 @@ export class InteractiveViewer {
   get timeline(): SceneTimeline | undefined {
     const source = this.#loaded?.animation?.source;
     return source ? sceneTimeline(source) : undefined;
+  }
+
+  /** Whether visible scene materials or the environment use the scene clock. */
+  get hasTimeDependentMaterial(): boolean {
+    const resources = this.#loaded?.parameterResources;
+    return !!resources?.instances.some(instance => {
+      const material = instance.materialKey && resources.materials.get(instance.materialKey);
+      return material && material.parameters?.some(parameter => parameter.clock);
+    }) || !!this.#environmentShader?.animationSpeed;
   }
 
   get time(): number { return this.#time; }

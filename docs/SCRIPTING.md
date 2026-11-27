@@ -11,6 +11,26 @@ l'agrandissent. La disposition est conservée d'une visite à l'autre.
 La liste complète des commandes, avec leurs arguments et valeurs de retour, est dans
 [SCRIPT_REFERENCE.md](SCRIPT_REFERENCE.md).
 
+## Paramètres déclarés par le script
+
+Après exécution, l'onglet **Paramètres** affiche les seules entrées déclarées :
+
+```js
+surface = new StandardSurface();
+surface.base_color = [0.12, 0.45, 0.8];
+expose(surface, "base_color", "Couleur");
+ball = new Sphere({ material: surface });
+image = new ImageShader();
+expose(image, "exposure", "Exposition de l'image");
+await postprocess(image.out);
+```
+
+Modifier un contrôle réapplique le shader concerné sans relancer le script.
+Les modifications ne réécrivent pas le code. L'exemple complet
+[p23-shader-parameters.js](../examples/scripts/p23-shader-parameters.js) est
+disponible dans le menu **Scripts**. La référence décrit les types et les
+limites et le cycle de vie des contrôles.
+
 ## Conversion entre script et graphe de scène
 
 L'onglet **Graphe** reste dédié aux shaders MaterialX. Dans l'onglet **Scène**,
@@ -284,6 +304,8 @@ Rendu progressif, scènes dynamiques et exploitation :
 | `stats()` | `{ backend, drawnBy, fallback, pathTracer, samples, adaptive, paused, elapsed, stopReason, samplesPerSecond, noise, maxNoise, variance, remaining, budgetRemaining, time, warnings, gpuMemory }` |
 | `await converge(secondes)` | Attend l'arrêt du path tracer (`stopOnConvergence` ou `timeBudget` requis) |
 | `await capture("x.png", { samples, shutter: [ouverture, fermeture], steps })` | Rendu path tracing de `samples` échantillons enregistré ; avec `shutter`, flou de mouvement sur l'intervalle |
+| `await video("x.mp4", { start, end, fps, samples, shutter, steps })` | Vidéo MP4 ou WebM d'un intervalle ; `shutter` donne des décalages relatifs à chaque image en path tracing |
+| `await importMesh("x.usda", "/World/Mesh")` | Importe la géométrie locale d'un maillage USD pour lui affecter matériau et déformeurs ; voir les limites dans la [référence](SCRIPT_REFERENCE.md#animation-et-transformations) |
 | `timeline()`, `time()`, `await setTime(t)` | Intervalle `{ start, end, fps }` d'une scène animée ; instant courant ; évaluation à un instant |
 | `transform({ translate, rotate, scale })` | Matrice 4×4 (rotations X, Y puis Z en degrés) |
 | `setTransform(objet, matrice)`, `setVisibility(objet, visible)` | Déplace, masque ou affiche un objet ; sans valeur, rétablit celle de la scène |
@@ -299,7 +321,7 @@ synchronisation. `check` est ignorée par la validation en direct de l'éditeur,
 pas les scènes ; les requêtes de scène (`objects()`, `lights()`...) y répondent comme pour une
 scène vide après un `scene()`.
 
-Dans le viewer, `save` télécharge le fichier. En ligne de commande, il l'écrit
+Dans le viewer, `save` et `video` téléchargent le fichier. En ligne de commande, ils l'écrivent
 dans le dossier `--out` :
 
 ```bash
@@ -349,6 +371,20 @@ ordinaire. La [référence](SCRIPT_REFERENCE.md#primitives-scène-par-script) li
 leurs propriétés.
 
 ![Parchemin : feuille déformée et matériau procédural](images/p8/parchemin.png)
+
+Une première étape de la priorité 18 ajoute les piles de déformeurs spatiaux
+partageables : voir [p18-deformers.js](../examples/scripts/p18-deformers.js) et
+la [référence](SCRIPT_REFERENCE.md#déformeurs-spatiaux-première-étape-p18).
+La déformation est actuellement calculée sur CPU pour les primitives scriptées
+et les maillages USDA importés avec `importMesh`.
+L'exemple [p18-animated-wind.js](../examples/scripts/p18-animated-wind.js) anime
+un champ de vent 3D et enregistre une [vidéo MP4](images/p18/p18-animated-wind.mp4).
+L'exemple [p18-imported-lattice.js](../examples/scripts/p18-imported-lattice.js)
+anime un maillage importé et enregistre sa [vidéo](images/p18/p18-imported-lattice.mp4)
+ainsi qu'une [vidéo path tracing avec flou de mouvement](images/p18/p18-imported-lattice-blur.mp4)
+et son [USD](images/p18/p18-imported-lattice.usda).
+La barre de temps de la vue apparaît pour une scène ou un matériau animé ;
+elle permet de lire, arrêter et choisir l'instant.
 
 ## Scripts de validation des priorités
 

@@ -19,13 +19,14 @@ import {
   DEFAULT_ENVIRONMENT_SHADER, ENGINE_SHADER_LIBRARY_XML, validateLensSettings,
   type EnvironmentShaderSettings, type ImageShaderSettings, type LightFilterSettings,
 } from './engine-shaders.ts';
-import type { ResolvedGraph } from './graph.ts';
+import { MATERIALX_CLOCK_INPUT, type ResolvedGraph } from './graph.ts';
 import { customAovView, type CustomAovKind, type PathTraceView } from '../render/pathtracing/display.ts';
 import {
   OBJECT_PROPERTIES, SCRIPT_BOOLEAN_OPERATIONS, SCRIPT_PRIMITIVES, isScriptLight, stageObjectShape, writeStageUsda,
   type BooleanOperation, type PrimitiveParameter, type StageInstancer, type StageMaterial, type StageObject,
 } from './script-scene.ts';
 import { checkPrimitiveShape, deformMesh, primitiveMesh, type PrimitiveAxis, type PrimitiveShape, type VertexDeformer } from '../scene/primitives.ts';
+import { DEFORMER_DEFAULTS, deformerAtTime, deformerKeyframes, deformPosition, validateDeformer, type Deformer, type DeformerKind } from '../scene/deformers.ts';
 import type { RawMesh } from '../geometry/prepare.ts';
 import { booleanMesh, transformRawMesh } from '../scene/boolean.ts';
 import { transformPoint } from '../scene/transforms.ts';
@@ -811,6 +812,14 @@ export interface ScriptStage {
   materials: ReadonlyMap<string, string>;
 }
 
+export interface ScriptVideoOptions {
+  start: number;
+  end: number;
+  fps: number;
+  samples: number;
+  shutter?: { open: number; close: number; steps?: number };
+}
+
 /** Viewer operations available to scripts; without a host, `runScript` only validates them. */
 export interface ScriptHost {
   loadScene(entry: string): Promise<void>;
@@ -819,6 +828,10 @@ export interface ScriptHost {
    * references, by asset path (documents referenced by URL may be absent and are then fetched).
    */
   loadStage(stage: ScriptStage): Promise<void>;
+  /** Replace the current scripted stage while preserving interactive viewer state. */
+  updateStage(stage: ScriptStage): Promise<void>;
+  /** Changes whenever the viewer replaces its scene independently of a parameter edit. */
+  sceneRevision(): number;
   objects(): readonly string[];
   renderSettings(): Readonly<Record<string, unknown>>;
   setRenderSetting(name: string, value: unknown): Promise<void>;
@@ -841,6 +854,8 @@ export interface ScriptHost {
   waitForStop(timeoutSeconds: number): Promise<void>;
   /** Render `samples` path-traced samples, spread over a shutter interval when given, and save them as a PNG. */
   capture(name: string, options: { samples: number; shutter?: { open: number; close: number; steps?: number } }): Promise<void>;
+  /** Render a time interval to a single encoded video. */
+  video(name: string, options: ScriptVideoOptions, signal?: AbortSignal): Promise<void>;
   /** Save the selected path-tracing AOV as a 32-bit float PFM. */
   saveAov(name: string): Promise<void>;
   /** Save the diagnostics journal as JSON. */
@@ -854,6 +869,8 @@ export interface ScriptHost {
   setVisibility(objectPath: string, visible?: boolean): Promise<void>;
   lights(): readonly { path: string; type: string }[];
   setLight(lightPath: string, changes?: ScriptLightChanges): Promise<void>;
+  /** Move a procedural filter between lights without resetting their other edits. */
+  moveLightFilter(from: string, to: string, settings: LightFilterSettings): Promise<void>;
   /** Field of view in degrees (vertical). */
   setCamera(camera: { eye: readonly number[]; target: readonly number[]; fov?: number }): Promise<void>;
   variants(): readonly { path: string; set: string; variants: readonly string[]; selection?: string }[];
@@ -920,7 +937,7 @@ export interface ScriptExposedParameter {
 }
 
 const SCRIPT_GLOBALS = new Set(['__mx', 'Math', 'scene', 'objects', 'render', 'assign', 'load', 'save', 'log', 'check', 'node', 'material',
-  'stats', 'converge', 'capture', 'diagnostics', 'capabilities', 'timeline', 'time', 'setTime', 'transform', 'setTransform',
+  'stats', 'converge', 'capture', 'video', 'importMesh', 'diagnostics', 'capabilities', 'timeline', 'time', 'setTime', 'transform', 'setTransform',
   'setVisibility', 'lights', 'setLight', 'setCamera', 'variants', 'setVariant', 'materialParameters', 'setMaterialParameters',
   'environment', 'postprocess', 'aov', 'lightFilter', 'scatter', 'expose']);
 /** Globals that are also natural node names: assigning them shadows the function. */
@@ -973,8 +990,12 @@ export async function runScript(code: string, library: ScriptLibrary, options: R
     typeof value === 'object' && value !== null ? handles.get(value) : undefined;
   const pending = new Set<ScriptNode>();
   const used = new Set<string>();
-  const exposed: Array<{ node: ScriptNode; port: ScriptPortDef; label?: string }> = [];
-  const bindings = new Map<string, { root: ScriptNode; apply: (target: ScriptHost) => Promise<void> }>();
+  type ExposedEntry = { node: ScriptNode; port: ScriptPortDef; label?: string };
+  const exposed: ExposedEntry[] = [];
+  const bindings = new Map<string, {
+    root: ScriptNode; apply: (target: ScriptHost, entry: ExposedEntry, value: ScriptValue, previous?: ScriptInput) => Promise<void>;
+  }>();
+  let boundSceneRevision: number | undefined;
 
   const nameNode = (node: ScriptNode, name: string): void => {
     let unique = name;
@@ -1520,24 +1541,29 @@ export async function runScript(code: string, library: ScriptLibrary, options: R
     if (entry.port.enum && (typeof next !== 'string' || !entry.port.enum.includes(next))) {
       throw new ScriptError(`${entry.node.name}.${entry.port.name} expects one of: ${entry.port.enum.join(', ')}.`);
     }
-    if (scatterRoots.some(root => upstream(root).includes(entry.node))) {
-      throw new ScriptError(`${entry.node.name}.${entry.port.name}: editing scatter shaders is not supported yet.`);
-    }
     entry.node.inputs.set(entry.port.name, { value: next });
     try {
       const target = options.dryRun ? undefined : options.host;
       if (!target) return;
+      if (boundSceneRevision !== target.sceneRevision()) {
+        throw new ScriptError('The scene changed since the script ran; execute it again before editing its parameters.');
+      }
       const paths = new Set(target.objects());
       const actions = [...bindings.values()].filter(binding => upstream(binding.root).includes(entry.node));
       let applied = actions.length;
-      for (const binding of actions) await binding.apply(target);
+      const scatters = scatterBindings.filter(binding => upstream(binding.root).includes(entry.node));
+      if (scatters.length) {
+        await updateScatters(target, scatters);
+        applied += scatters.length;
+      }
+      for (const binding of actions) await binding.apply(target, entry, next, current);
       for (const object of liveObjects()) {
         if (!object.material || typeof object.material === 'string') continue;
         const source = sourceOf(object.material);
         const path = pathOf(object);
         if (!source || !upstream(source.node).includes(entry.node) || bindings.has(`material:${path}`)) continue;
         if (!paths.has(path)) throw new ScriptError(`Object ${path} is no longer available for the exposed parameter.`);
-        await target.assignMaterial(path, materialDocument(object.material));
+        await updateMaterialInput(target, path, object.material, entry, next, current);
         applied++;
       }
       if (!applied && graph.viewerCommands) throw new ScriptError(`${entry.node.name}.${entry.port.name} is not bound to an active shader.`);
@@ -1547,15 +1573,78 @@ export async function runScript(code: string, library: ScriptLibrary, options: R
       throw error;
     }
   };
-  const materialDocument = (material: unknown): { xml: string } | { url: string } => {
+  const materialDocument = (material: unknown, allowVolume = false): { xml: string } | { url: string } => {
     if (typeof material === 'string') return { url: new URL(material, baseUrl).href };
     const source = sourceOf(material);
-    if (!source || !['surfaceshader', 'volumeshader', 'material'].includes(source.output.type)) {
-      throw new ScriptError('assign(object, material) expects a surface shader, a volume shader, a material node or a .mtlx path.');
+    if (!source || !['surfaceshader', 'material', ...(allowVolume ? ['volumeshader'] : [])].includes(source.output.type)) {
+      throw new ScriptError('assign(object, material) expects a surface shader, a material node or a .mtlx path.');
     }
     const nodes = upstream(source.node);
     for (const node of nodes) if (pending.has(node)) nameNode(node, node.def.category);
     return { xml: toXml({ nodes }, library, options.filePrefix ? { filePrefix: options.filePrefix } : {}) };
+  };
+  const updateMaterialInput = async (
+    target: ScriptHost, path: string, material: unknown, entry: ExposedEntry, value: ScriptValue,
+    previous?: ScriptInput,
+  ): Promise<void> => {
+    const source = sourceOf(material);
+    if (!source) throw new ScriptError(`No material bound to ${path}.`);
+    const surfaceInput = source.node.inputs.get('surfaceshader');
+    const surface = source.output.type === 'surfaceshader' ? source.node
+      : surfaceInput && 'node' in surfaceInput ? surfaceInput.node : undefined;
+    const id = surface === entry.node ? `surface:${entry.port.name}` : JSON.stringify([entry.node.name, entry.port.name]);
+    const numeric = typeof value === 'boolean' ? [value ? 1 : 0]
+      : typeof value === 'number' ? [value] : Array.isArray(value) ? [...value] : undefined;
+    const parameter = numeric && target.materialParameters(path).find(candidate => candidate.id === id && candidate.type === entry.port.type);
+    if (parameter && numeric) {
+      await target.setMaterialParameters(path, new Map([[id, numeric]]));
+      return;
+    }
+    const current = target.objectMaterial(path);
+    if (!current) {
+      await target.assignMaterial(path, materialDocument(material, true));
+      return;
+    }
+    const graph = fromResolvedGraph(current.graph, library, current.name);
+    if (ENGINE_PRESET_CATEGORIES.has(entry.node.def.category)) {
+      const nextDocument = materialDocument(material, true);
+      if (!('xml' in nextDocument)) throw new ScriptError(`No editable preset document for ${path}.`);
+      if (previous) entry.node.inputs.set(entry.port.name, previous);
+      else entry.node.inputs.delete(entry.port.name);
+      let oldDocument: { xml: string } | { url: string };
+      try { oldDocument = materialDocument(material, true); }
+      finally { entry.node.inputs.set(entry.port.name, { value }); }
+      if (!('xml' in oldDocument)) throw new ScriptError(`No editable preset document for ${path}.`);
+      const before = fromXml(oldDocument.xml, library);
+      const after = fromXml(nextDocument.xml, library);
+      for (const updated of after.nodes) {
+        const old = before.nodes.find(node => node.name === updated.name && node.def.name === updated.def.name);
+        if (!old) throw new ScriptError(`Preset graph changed unexpectedly on ${path}.`);
+        for (const [name, input] of updated.inputs) {
+          const prior = old.inputs.get(name);
+          if (!prior || 'node' in prior || 'node' in input) {
+            if (prior && 'node' in prior && 'node' in input
+              && prior.node.name === input.node.name && prior.output === input.output) continue;
+            throw new ScriptError(`Preset input ${updated.name}.${name} cannot be updated safely on ${path}.`);
+          }
+          if (JSON.stringify(prior.value) === JSON.stringify(input.value)) continue;
+          const matches = graph.nodes.filter(node => node.name === updated.name && node.def.name === updated.def.name);
+          if (matches.length !== 1) throw new ScriptError(`Preset node ${updated.name} no longer identifies a node on ${path}.`);
+          const existing = matches[0]!.inputs.get(name);
+          if (existing && 'node' in existing) throw new ScriptError(`Preset input ${updated.name}.${name} is now connected on ${path}.`);
+          matches[0]!.inputs.set(name, { value: input.value });
+        }
+      }
+      await target.assignMaterial(path, { xml: toXml(graph, library, options.filePrefix ? { filePrefix: options.filePrefix } : {}) });
+      return;
+    }
+    const matches = graph.nodes.filter(node => node.name === entry.node.name && node.def.name === entry.node.def.name);
+    if (matches.length !== 1) throw new ScriptError(`${entry.node.name}.${entry.port.name} no longer identifies a node on ${path}.`);
+    const node = matches[0]!;
+    const input = node.inputs.get(entry.port.name);
+    if (input && 'node' in input) throw new ScriptError(`${entry.node.name}.${entry.port.name} is now connected on ${path}.`);
+    node.inputs.set(entry.port.name, { value });
+    await target.assignMaterial(path, { xml: toXml(graph, library, options.filePrefix ? { filePrefix: options.filePrefix } : {}) });
   };
 
   // --- Scripted stage: primitives -----------------------------------------------
@@ -1572,7 +1661,9 @@ export async function runScript(code: string, library: ScriptLibrary, options: R
     scale: number[];
     visible: boolean;
     material?: unknown;
+    baseMesh?: RawMesh;
     deform?: VertexDeformer;
+    deformers?: object[];
     removed: boolean;
   }
   interface StageSnapshot {
@@ -1589,9 +1680,18 @@ export async function runScript(code: string, library: ScriptLibrary, options: R
   }
   const stageObjects: ScriptObject[] = [];
   const stageInstancers: Array<{ name: string; prototype: ScriptObject; positions: number[]; orientations: number[]; scales: number[] }> = [];
-  const scatterRoots: ScriptNode[] = [];
+  interface ScatterBinding {
+    root: ScriptNode;
+    shader: unknown;
+    index: number;
+    prototype: ScriptObject;
+    hidePrototype: boolean;
+  }
+  const scatterBindings: ScatterBinding[] = [];
+  const scatterVisibility = new Map<ScriptObject, boolean>();
   const objectHandles = new WeakMap<object, ScriptObject>();
   const objectReferences = new WeakMap<ScriptObject, object>();
+  const deformers = new WeakMap<object, Deformer>();
   const objectNames = new Set<string>(['Looks']);
   /** `surfacematerial` names given to surface shaders bound to primitives (stable across syncs). */
   const shaderMaterials = new Map<ScriptNode, string>();
@@ -1611,6 +1711,15 @@ export async function runScript(code: string, library: ScriptLibrary, options: R
   const pathOf = (object: ScriptObject): string => {
     if (object.name === undefined) nameObject(object, object.className.toLowerCase());
     return `/World/${object.name!}`;
+  };
+  const deformScriptMesh = (object: ScriptObject, mesh: RawMesh, time?: number): RawMesh => {
+    if (!object.deform && !object.deformers?.length) return mesh;
+    const stack = (object.deformers ?? []).map(handle => {
+      const settings = deformers.get(handle)!;
+      return time === undefined ? settings : deformerAtTime(settings, time);
+    });
+    return deformMesh(mesh, (position, uv, normal) =>
+      deformPosition(object.deform ? object.deform(position, uv, normal) : position, stack), object.baseMesh !== undefined);
   };
   const urlDocument = (url: string): Promise<{ name: string; text: string }> => {
     let document = urlDocuments.get(url);
@@ -1698,11 +1807,23 @@ export async function runScript(code: string, library: ScriptLibrary, options: R
     const objects = activeObjects.map((object): StageObject => {
       pathOf(object);
       const material = operands.has(object) ? undefined : materialOf(object.material);
-      let mesh: RawMesh | undefined;
-      if (object.deform) {
+      let mesh: RawMesh | undefined = object.baseMesh;
+      let meshSamples: StageObject['meshSamples'];
+      if (object.deform || object.deformers?.length) {
         try {
-          mesh = deformMesh(primitiveMesh(stageObjectShape({ name: object.name!, className: object.className, parameters: object.parameters,
-            translate: [], rotate: [], scale: [], visible: true })), object.deform);
+          const base = object.baseMesh ?? primitiveMesh(stageObjectShape({
+            name: object.name!, className: object.className, parameters: object.parameters,
+            translate: [], rotate: [], scale: [], visible: true,
+          }));
+          const times = [...new Set((object.deformers ?? []).flatMap(handle =>
+            (deformers.get(handle)!.keyframes ?? []).map(frame => frame.time)))].sort((a, b) => a - b);
+          if (times.length && base.points.length / 3 * times.length > 4_000_000) {
+            throw new RangeError('Animated deformation exceeds the 4,000,000 vertex-sample limit.');
+          }
+          if (times.length) {
+            meshSamples = times.map(time => ({ time, mesh: deformScriptMesh(object, base, time) }));
+            mesh = meshSamples[0]!.mesh;
+          } else mesh = deformScriptMesh(object, base);
         } catch (error) {
           throw new ScriptError(`${object.name!}.deform: ${error instanceof Error ? error.message : String(error)}`);
         }
@@ -1717,6 +1838,8 @@ export async function runScript(code: string, library: ScriptLibrary, options: R
           tool: pathOf(object.tool!),
         } : {}),
         ...(material ? { material } : {}), ...(mesh ? { mesh } : {}),
+        ...(meshSamples ? { meshSamples } : {}),
+        ...(object.deformers?.length ? { deformers: object.deformers.map(handle => ({ ...deformers.get(handle)! })) } : {}),
       };
     });
     const byObject = new Map(activeObjects.map((object, index) => [object, objects[index]!]));
@@ -1743,7 +1866,7 @@ export async function runScript(code: string, library: ScriptLibrary, options: R
       const pending = (async (): Promise<RawMesh> => {
         try {
           if (!object.booleanOperation) {
-            if (!SCRIPT_PRIMITIVES[object.className] ||
+            if ((!SCRIPT_PRIMITIVES[object.className] && !object.mesh) ||
                 SCRIPT_PRIMITIVES[object.className]!.usdType === 'Volume' || isScriptLight(SCRIPT_PRIMITIVES[object.className])) {
               throw new ScriptError(`Unknown boolean operand "${path}".`);
             }
@@ -1833,7 +1956,8 @@ export async function runScript(code: string, library: ScriptLibrary, options: R
     stageInstancers.length = 0;
     stageDirty = false;
     synced = undefined;
-    scatterRoots.length = 0;
+    scatterBindings.length = 0;
+    scatterVisibility.clear();
     for (const key of bindings.keys()) if (key.startsWith('material:')) bindings.delete(key);
   };
   const checkMaterial = (value: unknown, label: string): unknown => {
@@ -1858,7 +1982,7 @@ export async function runScript(code: string, library: ScriptLibrary, options: R
     const parameters = primitive ? Object.keys(primitive.defaults) as PrimitiveParameter[] : [];
     const objectProperties = light
       ? OBJECT_PROPERTIES.filter(property => ['translate', 'rotate', 'visible'].includes(property.name))
-      : OBJECT_PROPERTIES.filter(property => (!object.operation && !volume) || property.name !== 'deform');
+      : OBJECT_PROPERTIES.filter(property => (!object.operation && !volume) || !['deform', 'deformers'].includes(property.name));
     const properties = [
       ...(object.operation ? ['base', 'tool'] : []),
       ...parameters,
@@ -1890,7 +2014,8 @@ export async function runScript(code: string, library: ScriptLibrary, options: R
         if (key === 'translate' || key === 'rotate' || key === 'scale') return [...object[key]];
         if (key === 'visible') return object.visible;
         if (key === 'material') return object.material;
-        if (key === 'deform' && !object.operation && !light) return object.deform;
+        if (key === 'deform' && !object.operation && !volume && !light) return object.deform;
+        if (key === 'deformers' && !object.operation && !volume && !light) return [...object.deformers ?? []];
         throw unknown(key);
       },
       set: (_target, key, value) => {
@@ -1937,6 +2062,7 @@ export async function runScript(code: string, library: ScriptLibrary, options: R
         } else if (key === 'visible') {
           if (typeof value !== 'boolean') throw new ScriptError(`${label(key)} expects a boolean.`);
           object.visible = value;
+          if (scatterVisibility.has(object)) scatterVisibility.set(object, value);
         } else if (light && key === 'color') {
           const color = finiteNumbers(value, 3, label(key));
           if (color.some(component => component < 0)) throw new ScriptError(`${label(key)} components must be non-negative.`);
@@ -1949,6 +2075,11 @@ export async function runScript(code: string, library: ScriptLibrary, options: R
           }
           if (typeof value === 'function') object.deform = value as VertexDeformer;
           else delete object.deform;
+        } else if (key === 'deformers' && !object.operation && !volume && !light) {
+          if (!Array.isArray(value) || value.some(item => typeof item !== 'object' || item === null || !deformers.has(item))) {
+            throw new ScriptError(`${label(key)} expects an array of deformers.`);
+          }
+          object.deformers = [...value];
         } else if (key === 'path' || key === 'remove') {
           throw new ScriptError(`${label(key)} cannot be assigned.`);
         } else {
@@ -1980,7 +2111,7 @@ export async function runScript(code: string, library: ScriptLibrary, options: R
   };
   const scatterScriptObjects = (settings: {
     surfacePath: string; prototypePath: string; density: number | DensityFunction; seed: number; scale: number; hidePrototype: boolean;
-  }): number => {
+  }, replaceIndex?: number): number => {
     const objectAt = (path: string): ScriptObject | undefined =>
       liveObjects().find(object => pathOf(object) === path);
     const surface = objectAt(settings.surfacePath);
@@ -1997,7 +2128,7 @@ export async function runScript(code: string, library: ScriptLibrary, options: R
       name: surface.name ?? surface.className, className: surface.className, parameters: surface.parameters,
       translate: surface.translate, rotate: surface.rotate, scale: surface.scale, visible: surface.visible,
     }));
-    const mesh = surface.deform ? deformMesh(surfaceMesh, surface.deform) : surfaceMesh;
+    const mesh = deformScriptMesh(surface, surfaceMesh);
     const matrix = transformMatrix({ translate: surface.translate, rotate: surface.rotate, scale: surface.scale });
     const vertices = Array.from({ length: mesh.points.length / 3 }, (_, index) =>
       transformPoint(matrix, [mesh.points[index * 3]!, mesh.points[index * 3 + 1]!, mesh.points[index * 3 + 2]!]));
@@ -2066,16 +2197,57 @@ export async function runScript(code: string, library: ScriptLibrary, options: R
       scales.push(...prototype.scale.map(component => component * settings.scale));
       if (positions.length / 3 > 5_000) throw new ScriptError('Scatter would create more than 5000 instances.');
     }
-    let name = 'scatter';
-    for (let i = 2; objectNames.has(name); i++) name = `scatter_${i}`;
-    objectNames.add(name);
-    stageInstancers.push({ name, prototype, positions, orientations, scales });
+    let name = replaceIndex === undefined ? 'scatter' : stageInstancers[replaceIndex]?.name;
+    if (!name) throw new ScriptError('The scatter instance is no longer available.');
+    if (replaceIndex === undefined) {
+      for (let i = 2; objectNames.has(name); i++) name = `scatter_${i}`;
+      objectNames.add(name);
+      stageInstancers.push({ name, prototype, positions, orientations, scales });
+    } else {
+      stageInstancers[replaceIndex] = { name, prototype, positions, orientations, scales };
+    }
     stageDirty = true;
-    if (settings.hidePrototype) {
+    if (replaceIndex === undefined && settings.hidePrototype) {
       prototype.visible = false;
       stageDirty = true;
     }
     return positions.length / 3;
+  };
+  const updateScatters = async (target: ScriptHost, affected: readonly ScatterBinding[]): Promise<void> => {
+    const previousInstancers = [...stageInstancers];
+    const previousVisibility = new Map(stageObjects.map(object => [object, object.visible]));
+    const previousBases = new Map(scatterVisibility);
+    const previousBindings = affected.map(binding => ({ binding, prototype: binding.prototype, hidePrototype: binding.hidePrototype }));
+    const previousDirty = stageDirty;
+    try {
+      for (const binding of affected) {
+        const settings = scatterShaderSettings(binding.shader);
+        const prototype = liveObjects().find(object => pathOf(object) === settings.prototypePath);
+        if (!prototype) throw new ScriptError('Scatter prototypePath must reference a live scripted object.');
+        if (!scatterVisibility.has(prototype)) scatterVisibility.set(prototype, prototype.visible);
+        scatterScriptObjects(settings, binding.index);
+        binding.prototype = prototype;
+        binding.hidePrototype = settings.hidePrototype;
+      }
+      for (const [object, visible] of scatterVisibility) {
+        object.visible = visible && !scatterBindings.some(binding => binding.prototype === object && binding.hidePrototype);
+      }
+      const built = await buildStage(snapshotStage());
+      await target.updateStage({ usda: built.usda, materials: built.materials });
+      synced = built;
+      stageDirty = false;
+    } catch (error) {
+      stageInstancers.splice(0, stageInstancers.length, ...previousInstancers);
+      for (const [object, visible] of previousVisibility) object.visible = visible;
+      scatterVisibility.clear();
+      for (const [object, visible] of previousBases) scatterVisibility.set(object, visible);
+      for (const previous of previousBindings) {
+        previous.binding.prototype = previous.prototype;
+        previous.binding.hidePrototype = previous.hidePrototype;
+      }
+      stageDirty = previousDirty;
+      throw error;
+    }
   };
   const createBooleanOperation = (className: string, init: unknown): object => {
     const operation = SCRIPT_BOOLEAN_OPERATIONS[className]!;
@@ -2129,6 +2301,68 @@ export async function runScript(code: string, library: ScriptLibrary, options: R
     return handleFor(material);
   };
   const viewer: Record<string, unknown> = {
+    importMesh: async (url: unknown, primPath: unknown): Promise<object> => {
+      if (typeof url !== 'string' || !url || !/\.usda(?:[?#]|$)/i.test(url)) {
+        throw new ScriptError('importMesh(url, primPath) expects a .usda URL.');
+      }
+      if (typeof primPath !== 'string' || !primPath.startsWith('/') || primPath === '/') {
+        throw new ScriptError('importMesh(url, primPath) expects an absolute USD mesh prim path.');
+      }
+      let mesh: RawMesh;
+      if (options.dryRun) {
+        mesh = { points: [0, 0, 0, 1, 0, 0, 0, 1, 0], faceVertexCounts: [3], faceVertexIndices: [0, 1, 2] };
+      } else {
+        const [{ importUsdStage }, { meshSourceFromScene }, { prepareMesh }] = await Promise.all([
+          import('../usd/importer.ts'), import('../render/usd-scene-assets.ts'), import('../geometry/prepare.ts'),
+        ]);
+        const entry = new URL(url, baseUrl).href;
+        const failures: string[] = [];
+        const scene = await importUsdStage(entry, {
+          reader: { read: async uri => {
+            if (!/\.usda(?:[?#]|$)/i.test(uri)) throw new ScriptError(`importMesh requires USDA text layers: ${uri}.`);
+            return fetchText(uri);
+          } },
+          resolveArcs: true,
+          sink: diagnostic => {
+            if (diagnostic.level !== 'info') failures.push(diagnostic.message);
+          },
+        });
+        if (failures.length) throw new ScriptError(`importMesh: ${failures.join('; ')}`);
+        const prim = scene.prims.get(primPath);
+        if (!prim || prim.typeName !== 'Mesh') throw new ScriptError(`importMesh: ${primPath} is not a USD Mesh.`);
+        const scheme = prim.mesh?.subdivisionScheme ?? prim.attributes.get('subdivisionScheme')?.value;
+        if (scheme !== 'none') throw new ScriptError('importMesh requires subdivisionScheme = "none"; subdivided cages are not supported.');
+        const holes = prim.attributes.get('holeIndices')?.value;
+        if ((Array.isArray(holes) && holes.length > 0) || prim.children.some(path => scene.prims.get(path)?.typeName === 'GeomSubset')) {
+          throw new ScriptError('importMesh does not support holes or GeomSubsets.');
+        }
+        const unsupported = prim.mesh?.primvars.filter(primvar => !['st', 'st:indices'].includes(primvar.name)) ?? [];
+        if (unsupported.length) throw new ScriptError(`importMesh does not support primvars: ${unsupported.map(primvar => primvar.name).join(', ')}.`);
+        if (['points', 'normals', 'normals:indices', 'holeIndices', 'faceVertexCounts', 'faceVertexIndices', 'primvars:st', 'primvars:st:indices']
+          .some(name => prim.attributes.get(name)?.timeSamples?.length)) {
+          throw new ScriptError('importMesh requires static source geometry.');
+        }
+        const source = meshSourceFromScene(scene).meshFor(primPath);
+        if (!source) throw new ScriptError(`importMesh: ${primPath} has no mesh geometry.`);
+        const prepared = prepareMesh(source, { sink: diagnostic => {
+          if (diagnostic.level !== 'info') failures.push(diagnostic.message);
+        } });
+        if (failures.length) throw new ScriptError(`importMesh: ${failures.join('; ')}`);
+        const indices = Array.from(prepared.indices);
+        if (!indices.length) throw new ScriptError(`importMesh: ${primPath} has no triangles.`);
+        mesh = {
+          points: Array.from(prepared.positions), faceVertexCounts: Array(indices.length / 3).fill(3), faceVertexIndices: indices,
+          normals: { name: 'normals', interpolation: 'vertex', values: Array.from(prepared.normals), elementSize: 3 },
+          ...(prepared.uvs ? { primvars: [{ name: 'st', interpolation: 'vertex', values: Array.from(prepared.uvs), elementSize: 2 }] } : {}),
+        };
+      }
+      signal?.throwIfAborted();
+      const object: ScriptObject = { className: 'ImportedMesh', baseMesh: mesh, parameters: {}, translate: [0, 0, 0],
+        rotate: [0, 0, 0], scale: [1, 1, 1], visible: true, removed: false };
+      stageObjects.push(object);
+      stageDirty = true;
+      return objectHandle(object);
+    },
     expose: (value: unknown, name: unknown, label?: unknown): void => {
       const node = nodeOf(value);
       if (!node || typeof name !== 'string' || (label !== undefined && typeof label !== 'string')) {
@@ -2173,17 +2407,33 @@ export async function runScript(code: string, library: ScriptLibrary, options: R
       const root = terminalNode(shader, 'engine_light_filter_shader', 'lightFilter(shader)');
       return action(async target => {
         await target.setLight(lightPath, { filter: settings });
-        bindings.set(`filter:${lightPath}`, { root, apply: t => {
+        let currentPath = lightPath;
+        const binding = { root, apply: async (t: ScriptHost): Promise<void> => {
           const next = lightFilterShader(shader);
-          if (next.lightPath !== lightPath) throw new ScriptError('Changing a light filter path is not supported.');
-          return t.setLight(lightPath, { filter: next.settings });
-        } });
+          if (next.lightPath === currentPath) {
+            await t.setLight(currentPath, { filter: next.settings });
+            return;
+          }
+          const occupied = bindings.get(`filter:${next.lightPath}`);
+          if (occupied && occupied !== binding) throw new ScriptError(`A scripted light filter already targets ${next.lightPath}.`);
+          await t.moveLightFilter(currentPath, next.lightPath, next.settings);
+          bindings.delete(`filter:${currentPath}`);
+          currentPath = next.lightPath;
+          bindings.set(`filter:${currentPath}`, binding);
+        } };
+        bindings.set(`filter:${currentPath}`, binding);
       });
     },
     scatter: (shader: unknown): number => {
       const settings = scatterShaderSettings(shader);
+      const prototype = liveObjects().find(object => pathOf(object) === settings.prototypePath);
+      const visible = prototype?.visible;
+      const index = stageInstancers.length;
       const count = scatterScriptObjects(settings);
-      scatterRoots.push(terminalNode(shader, 'engine_scatter_shader', 'scatter(shader)'));
+      const actual = stageInstancers[index]!.prototype;
+      if (!scatterVisibility.has(actual)) scatterVisibility.set(actual, visible ?? actual.visible);
+      scatterBindings.push({ root: terminalNode(shader, 'engine_scatter_shader', 'scatter(shader)'), shader, index,
+        prototype: actual, hidePrototype: settings.hidePrototype });
       command();
       return count;
     },
@@ -2210,7 +2460,7 @@ export async function runScript(code: string, library: ScriptLibrary, options: R
       await host?.assignMaterial(object, document);
       const source = sourceOf(material);
       if (source && host) bindings.set(`material:${object}`, {
-        root: source.node, apply: target => target.assignMaterial(object, materialDocument(material)),
+        root: source.node, apply: (target, entry, value, previous) => updateMaterialInput(target, object, material, entry, value, previous),
       });
       else bindings.delete(`material:${object}`);
     },
@@ -2315,6 +2565,31 @@ export async function runScript(code: string, library: ScriptLibrary, options: R
       await queue;
       await host?.capture(name, { samples: samples as number, ...(interval ? { shutter: interval } : {}) });
     },
+    video: async (name: unknown, options: unknown): Promise<void> => {
+      if (typeof name !== 'string' || !/\.(mp4|webm)$/i.test(name) || /(^|[\\/])\.\.([\\/]|$)/.test(name)) {
+        throw new ScriptError('video(name, options) expects an .mp4 or .webm file name.');
+      }
+      if (typeof options !== 'object' || options === null || Array.isArray(options)) {
+        throw new ScriptError('video(name, options) expects an options object with start and end.');
+      }
+      const { start, end, fps = 24, samples = 1, shutter, steps, ...extra } = options as Record<string, unknown>;
+      if (Object.keys(extra).length) throw new ScriptError(`video: unknown options ${Object.keys(extra).join(', ')}.`);
+      if (typeof start !== 'number' || typeof end !== 'number' || !Number.isFinite(start) || !Number.isFinite(end) || end <= start) {
+        throw new ScriptError('video start and end must be finite time codes with start < end.');
+      }
+      if (typeof fps !== 'number' || !Number.isFinite(fps) || fps <= 0 || fps > 120) throw new ScriptError('video fps must be greater than 0 and at most 120.');
+      if (typeof samples !== 'number' || !Number.isSafeInteger(samples) || samples < 1) throw new ScriptError('video samples must be a positive integer.');
+      let interval: ScriptVideoOptions['shutter'];
+      if (shutter !== undefined) {
+        const [open, close] = finiteNumbers(shutter, 2, 'video shutter');
+        if (close! < open!) throw new ScriptError('video shutter expects [open, close] with open <= close.');
+        if (steps !== undefined && !(Number.isSafeInteger(steps) && (steps as number) > 0)) throw new ScriptError('video steps expects a positive integer.');
+        interval = { open: open!, close: close!, ...(steps !== undefined ? { steps: steps as number } : {}) };
+      } else if (steps !== undefined) throw new ScriptError('video steps needs a shutter.');
+      command();
+      await queue;
+      await host?.video(name, { start, end, fps, samples, ...(interval ? { shutter: interval } : {}) }, signal);
+    },
     diagnostics: (): { level: string; code?: string; message: string }[] =>
       (queries?.diagnostics() ?? []).map(record => ({ ...record })),
     capabilities: (): unknown => queries?.capabilities(),
@@ -2394,6 +2669,54 @@ export async function runScript(code: string, library: ScriptLibrary, options: R
   const classes = new Map<string, unknown>();
   const classFor = (identifier: string): unknown => {
     if (classes.has(identifier)) return classes.get(identifier);
+    if (Object.hasOwn(DEFORMER_DEFAULTS, identifier)) {
+      const kind = identifier as DeformerKind;
+      const create = function (this: unknown, init?: unknown): object {
+        if (!new.target) throw new ScriptError(`Use "new ${identifier}()".`);
+        if (library.categoryOf(identifier) !== undefined && !shadowed.has(identifier)) {
+          shadowed.add(identifier);
+          (viewer['log'] as (text: string) => void)(`Warning: the ${identifier} deformer hides the MaterialX node of the same class name.`);
+        }
+        const settings: Deformer = { kind, ...DEFORMER_DEFAULTS[kind] };
+        const handle = new Proxy(Object.create(null) as object, {
+          get: (_target, key) => {
+            if (typeof key !== 'string') return undefined;
+            if (key === 'keyframes') return settings.keyframes?.map(frame => ({
+              time: frame.time,
+              ...Object.fromEntries(Object.entries(frame.values).map(([name, value]) => [name, Array.isArray(value) ? [...value] : value])),
+            })) ?? [];
+            if (!(key in settings)) return undefined;
+            const value = settings[key as keyof Deformer];
+            return Array.isArray(value) ? [...value] : value;
+          },
+          set: (_target, key, value) => {
+            if (typeof key !== 'string' || key === 'kind' || (key !== 'keyframes' && !Object.hasOwn(DEFORMER_DEFAULTS[kind], key))) {
+              throw new ScriptError(`${kind} has no editable property "${String(key)}".`);
+            }
+            try {
+              if (key === 'keyframes') settings.keyframes = deformerKeyframes(settings, value);
+              else {
+                const candidate = { ...settings, [key]: Array.isArray(value) ? [...value] : value };
+                validateDeformer(candidate);
+                Object.assign(settings, candidate);
+              }
+            } catch (error) {
+              throw new ScriptError(error instanceof Error ? error.message : String(error));
+            }
+            if (stageObjects.some(object => object.deformers?.includes(handle) && !object.removed)) stageDirty = true;
+            return true;
+          },
+        });
+        deformers.set(handle, settings);
+        if (init !== undefined) {
+          if (typeof init !== 'object' || init === null || Array.isArray(init)) throw new ScriptError(`new ${kind}(properties) expects an object.`);
+          for (const [key, value] of Object.entries(init)) (handle as Record<string, unknown>)[key] = value;
+        }
+        return handle;
+      };
+      classes.set(identifier, create);
+      return create;
+    }
     if (Object.hasOwn(SCRIPT_PRIMITIVES, identifier)) {
       const primitive = function (this: unknown, properties?: unknown): object {
         if (!new.target) throw new ScriptError(`Use "new ${identifier}()".`);
@@ -2441,7 +2764,8 @@ export async function runScript(code: string, library: ScriptLibrary, options: R
       if (SCRIPT_GLOBALS.has(key) && !SHADOWABLE_GLOBALS.has(key)) throw new ScriptError(`${key} is reserved by material scripts.`);
       if (classFor(key)) {
         const type = Object.hasOwn(SCRIPT_PRIMITIVES, key) ? 'primitive'
-          : Object.hasOwn(SCRIPT_BOOLEAN_OPERATIONS, key) ? 'boolean operator' : 'node';
+          : Object.hasOwn(SCRIPT_BOOLEAN_OPERATIONS, key) ? 'boolean operator'
+            : Object.hasOwn(DEFORMER_DEFAULTS, key) ? 'deformer' : 'node';
         throw new ScriptError(`${key} is a ${type} type and cannot be reassigned.`);
       }
       variables.set(key, value);
@@ -2475,6 +2799,7 @@ export async function runScript(code: string, library: ScriptLibrary, options: R
   }
   for (const node of [...pending]) nameNode(node, node.def.category);
   exposedParameters();
+  boundSceneRevision = host?.sceneRevision();
   return graph;
 }
 
@@ -2811,7 +3136,8 @@ export function fromResolvedGraph(resolved: ResolvedGraph, library: ScriptLibrar
   };
   for (const [id, node] of resolved.nodes) {
     // Engine-materialized defaults do not identify the authored NodeDef variant.
-    const authored = node.inputs.filter(input => !input.defaulted && (input.source.kind === 'value' || input.source.kind === 'connection'));
+    const authored = node.inputs.filter(input => !(input.name === MATERIALX_CLOCK_INPUT && ['time', 'frame'].includes(node.category))
+      && !input.defaulted && (input.source.kind === 'value' || input.source.kind === 'connection'));
     const def = matchNodeDef(library, node.category, node.type,
       authored.map(input => ({ name: input.name, type: input.type })), node.nodeDef?.name, id);
     const name = unique(leafCounts.get(leaf(id))! > 1 ? id.replace(/^\/+/, '') : leaf(id));
@@ -2822,6 +3148,7 @@ export function fromResolvedGraph(resolved: ResolvedGraph, library: ScriptLibrar
   for (const [id, node] of resolved.nodes) {
     const scriptNode = byId.get(id)!;
     for (const input of node.inputs) {
+      if (input.name === MATERIALX_CLOCK_INPUT && ['time', 'frame'].includes(node.category)) continue;
       const label = `${scriptNode.name}.${input.name}`;
       const source = input.source;
       if (source.kind === 'connection') {
@@ -2840,7 +3167,10 @@ export function fromResolvedGraph(resolved: ResolvedGraph, library: ScriptLibrar
   }
   const terminals = resolved.terminals.filter(terminal => terminal.nodeId);
   if (terminals.length && library.variants('surfacematerial').length) {
-    const material: ScriptNode = { name: unique(materialName), def: library.resolve('surfacematerial'), inputs: new Map() };
+    const def = library.variants('surfacematerial').find(candidate =>
+      terminals.every(terminal => candidate.inputs.some(port => port.name === terminal.name)));
+    if (!def) throw new ScriptError('Material terminals cannot be bound by a surfacematerial.');
+    const material: ScriptNode = { name: unique(materialName), def, inputs: new Map() };
     for (const terminal of terminals) {
       const upstream = byId.get(terminal.nodeId!);
       if (!upstream) throw new ScriptError(`Material terminal ${terminal.name} references unknown node "${terminal.nodeId}".`);
@@ -2877,7 +3207,7 @@ export function toScriptProgram(
     let name = node.name.replace(/[^\w$]/g, '_').replace(/^(?=\d)/, '_');
     if (RESERVED.has(name) || (SCRIPT_GLOBALS.has(name) && !SHADOWABLE_GLOBALS.has(name)) ||
         library.categoryOf(name) !== undefined || Object.hasOwn(SCRIPT_PRIMITIVES, name) ||
-        Object.hasOwn(SCRIPT_BOOLEAN_OPERATIONS, name)) name = `${name}_`;
+        Object.hasOwn(SCRIPT_BOOLEAN_OPERATIONS, name) || Object.hasOwn(DEFORMER_DEFAULTS, name)) name = `${name}_`;
     const base = name;
     for (let i = 2; used.has(name); i++) name = `${base}_${i}`;
     used.add(name);
