@@ -25,6 +25,27 @@ const playgroundRoot = process.env['MX_PLAYGROUND_ROOT']
 const coreFile = join(coreRoot, 'JsMaterialXCore.js');
 
 describe.skipIf(!existsSync(coreFile) || !existsSync(libraryRoot))('installed MaterialX Core resolution', () => {
+  it('validates the P28 standard and expanded preset documents with the official libraries', async () => {
+    const module = await import(/* @vite-ignore */ pathToFileURL(coreFile).href) as { default: MaterialXModuleFactory };
+    const core = new MaterialXCore(await module.default());
+    const libraries = new MaterialXLibraries(core);
+    await libraries.load({ sources: defaultLibrarySources(libraryRoot), fetchText: async path => readFileSync(path, 'utf8') });
+    try {
+      for (const name of ['p28-standard.mtlx', 'p28-water.mtlx']) {
+        const doc = core.createDocument();
+        try {
+          await core.readXmlString(doc, readFileSync(join('docs', 'images', 'p28', name), 'utf8'));
+          libraries.importInto(doc);
+          expect(core.validate(doc), name).toBe(true);
+        } finally {
+          doc.delete();
+        }
+      }
+    } finally {
+      libraries.delete();
+    }
+  }, 30000);
+
   it('compiles P17 surface detail and preserves spatial and temporal volume variation with the installed library', async () => {
     const module = await import(/* @vite-ignore */ pathToFileURL(coreFile).href) as { default: MaterialXModuleFactory };
     const core = new MaterialXCore(await module.default());

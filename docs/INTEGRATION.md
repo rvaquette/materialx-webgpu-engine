@@ -7,6 +7,10 @@ une limite ou un échec prévisible produit un diagnostic avec un `code` stable,
 ou rejette la promesse de l'opération ; il n'est jamais converti silencieusement
 en image incomplète.
 
+Pour la comparaison avec MaterialX officiel, les limites par backend et
+l'export vers d'autres outils, voir
+[MATERIALX_COMPATIBILITY.md](MATERIALX_COMPATIBILITY.md).
+
 ## Intégrer le moteur
 
 ```ts

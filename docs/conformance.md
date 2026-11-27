@@ -1,5 +1,11 @@
 # Matrice de conformité MaterialX
 
+> Les termes historiques `supported` et `reference` ci-dessous décrivent ce
+> corpus et ses critères de test, et ne prouvent pas une équivalence générale
+> avec les générateurs ou rendus officiels. Pour les limites par backend,
+> extensions, sources et stratégies d'export, voir
+> [MATERIALX_COMPATIBILITY.md](MATERIALX_COMPATIBILITY.md).
+
 Cette matrice recense **tous les nœuds MaterialX** utilisés par le corpus de
 référence (`MaterialX-rva/resources/Materials/Examples`) et leur niveau de prise
 en charge par chaque backend. Elle est la contrepartie lisible des fixtures

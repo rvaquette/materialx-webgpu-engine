@@ -3,6 +3,8 @@
 Liste complète de ce qu'un script de matériau peut utiliser. Le guide d'ensemble
 (syntaxe, éditeur, exemples) est dans [SCRIPTING.md](SCRIPTING.md) ; le code est
 dans [src/materialx/script-api.ts](../src/materialx/script-api.ts).
+Pour distinguer les nœuds standard, les extensions et leur portabilité, voir
+[MATERIALX_COMPATIBILITY.md](MATERIALX_COMPATIBILITY.md).
 
 Un script est du JavaScript (boucles, fonctions, `await`, objets). Les noms
 ci-dessous sont fournis par le moteur ; tout autre nom non déclaré produit

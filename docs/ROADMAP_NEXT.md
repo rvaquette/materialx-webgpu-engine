@@ -91,6 +91,12 @@ rouvrir le projet sans dérive de cadrage entre les backends.
 
 ## Priorité 28 : écarts avec l'implémentation officielle de MaterialX
 
+Un premier [guide comparatif](MATERIALX_COMPATIBILITY.md), un inventaire des
+NodeDefs et un exemple exportable sont disponibles. La matrice reste partielle :
+les variantes et combinaisons non vérifiées ne disposent pas encore toutes
+d'un statut étayé pour chaque backend. La priorité reste ouverte jusqu'à cette
+qualification ; une compilation ou une validation structurelle ne la remplace pas.
+
 Documenter précisément ce que le moteur conserve, étend, approxime ou ne prend
 pas en charge par rapport à MaterialX officiel, pour éviter de confondre un
 document `.mtlx` valide avec un matériau portable et un rendu fidèle :
