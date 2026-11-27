@@ -2059,3 +2059,42 @@ lisibles, taille/qualité/encodage mesurés sur trois profils, capacités réell
 de Chrome vérifiées, et flux fMP4 progressif avec perte/reprise testé. Le
 protocole distant et sa compatibilité multi-navigateurs restent des travaux
 distincts.
+
+## Priorité 25 : étude d'un graphe de scène équivalent au script
+
+**Recommandation :** un DAG typé de scène, séparé du graphe MaterialX, avec
+références d'objets partagées et workflow explicite pour les effets de bord.
+Le graphe de matériau conserve ses terminaux et le script reste disponible
+pour les expressions et constructions dynamiques. La conversion du graphe vers
+script est déterministe pour un sous-ensemble déclaré ; la conversion inverse
+doit refuser les constructions JavaScript non représentables au lieu de perdre
+de l'information.
+
+Le prototype conserve deux graphes distincts : **Graphe** reste dédié aux
+nœuds MaterialX ; l'onglet **Scène** montre une référence au matériau partagé
+par deux sphères, la scène, la caméra, le rendu et la capture. Les liens et
+valeurs de scène sont éditables ; les ports sont typés et les entrées requises
+vérifiées. **Script → scène** importe le sous-ensemble déclaratif du script ;
+**Générer le script** conserve le matériau MaterialX et génère le workflow
+de scène dans l'éditeur, sans lancer le rendu. Le script autonome de l'exemple,
+listé dans les scripts de l'UI, est généré par le même modèle et sert de témoin
+reproductible :
+
+| Graphe et script équivalents | Rendu path tracing |
+|---|---|
+| [p25-scene-graph.js](../examples/scripts/p25-scene-graph.js) · un matériau et un déplacement partagés par deux objets | ![Prototype du graphe de scène P25](images/p25/p25-scene-graph.png) |
+
+```powershell
+npm run script -- examples\scripts\p25-scene-graph.js --out docs\images\p25
+```
+
+Le modèle, son compilateur, les cas de validation, le contrat de conversion,
+les options étudiées et les limites du prototype sont décrits dans
+[SCENE_GRAPH_STUDY.md](SCENE_GRAPH_STUDY.md). Le prototype ne prétend pas
+convertir le JavaScript général, ni fournir un éditeur de scène complet.
+
+**Critère d'aboutissement atteint pour l'étude :** recommandation argumentée,
+prototype interactif minimal et exemple de script produisent le même rendu avec
+une surface et un déplacement partagés entre deux objets. La conversion
+bidirectionnelle du JavaScript général, l'animation et la généralisation des
+nœuds restent des travaux ultérieurs.

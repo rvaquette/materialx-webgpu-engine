@@ -11,6 +11,23 @@ l'agrandissent. La disposition est conservée d'une visite à l'autre.
 La liste complète des commandes, avec leurs arguments et valeurs de retour, est dans
 [SCRIPT_REFERENCE.md](SCRIPT_REFERENCE.md).
 
+## Conversion entre script et graphe de scène
+
+L'onglet **Graphe** reste dédié aux shaders MaterialX. Dans l'onglet **Scène**,
+**Script → scène** analyse le script courant sans l'exécuter, puis
+**Générer le script** convertit les modifications du graphe en script en
+conservant les instructions MaterialX. Le prototype accepte le sous-ensemble
+de l'exemple [p25-scene-graph.js](../examples/scripts/p25-scene-graph.js) :
+deux sphères partageant un matériau, une caméra, des réglages de rendu, un rendu
+et une sauvegarde PNG. Les expressions calculées, boucles et autres commandes
+de scène ne sont pas converties ; une erreur est affichée sans modifier le
+script ni le graphe. Les commentaires de scène ne sont pas conservés.
+
+Si le script de scène change après son import, il faut le reconvertir avant de
+générer ; les changements MaterialX seuls sont conservés. Le prototype initial
+demande confirmation avant de remplacer le script courant. Les détails et
+limites sont dans [SCENE_GRAPH_STUDY.md](SCENE_GRAPH_STUDY.md).
+
 ## Enregistrer et rouvrir un projet
 
 Après exécution d'un script qui crée des primitives, **Enregistrer projet**

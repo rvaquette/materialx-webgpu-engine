@@ -25,6 +25,11 @@ import {
   scriptVariables, setScriptInput, addScriptDownstream, addScriptUpstream, toHex, type ScriptEditorOptions,
 } from './script-editor.ts';
 import { layoutScriptGraph } from './script-graph-layout.ts';
+import {
+  compileSceneGraph, P25_MATERIAL_GRAPH_SCRIPT, P25_SCENE_GRAPH, P25_SCENE_GRAPH_LAYOUT, removeSceneGraphLink, sceneGraphViewNodes,
+  setSceneGraphLink, setSceneGraphValue, type SceneGraph,
+} from './scene-graph.ts';
+import { scriptToSceneGraph } from './scene-graph-script.ts';
 import { loadDraft, saveDraft, ScriptStore, shareLink } from './script-store.ts';
 import { SCRIPT_TEMPLATES } from './script-templates.ts';
 import { requestNodeReference } from './node-reference.ts';
@@ -90,6 +95,11 @@ ${ICON_BUTTON_STYLE}
 .mx-graph[hidden] { display: none; }
 .mx-graph-help { margin: 0; padding: 3px 6px; color: #888; font-size: 11px; }
 .mx-graph-canvas { flex: 1; min-height: 160px; }
+.mx-scene-graph { display: flex; flex-direction: column; overflow: hidden; }
+.mx-scene-graph[hidden] { display: none; }
+.mx-scene-graph-toolbar { display: flex; gap: 6px; align-items: center; padding: 4px 6px; }
+.mx-scene-graph-toolbar p { margin: 0 auto 0 0; color: #888; font-size: 11px; }
+.mx-scene-graph-canvas { flex: 1; min-height: 160px; }
 .mx-sr-only { position: absolute; width: 1px; height: 1px; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 .mx-xml { width: 100%; height: 100%; min-height: 100px; box-sizing: border-box; resize: none; padding: 8px; border: 0;
   background: #1a1a1a; color: #ce9178; font: 12px/16px Consolas, monospace; white-space: pre; }
@@ -173,7 +183,7 @@ function breakpointLines(state: EditorState): Set<number> {
 // --- Editor -----------------------------------------------------------------------
 
 type RunState = 'idle' | 'running' | 'paused';
-type Tab = 'console' | 'variables' | 'graph' | 'xml';
+type Tab = 'console' | 'variables' | 'graph' | 'scene-graph' | 'xml';
 
 interface LocalRun {
   controller: AbortController;
@@ -210,6 +220,13 @@ export class MaterialXScriptEditor {
   readonly #graphSummary: HTMLElement;
   #graphView: NodeGraphView | undefined;
   #graphNodes: readonly ScriptNode[] = [];
+  readonly #sceneGraphCanvas: HTMLElement;
+  readonly #sceneGraphSummary: HTMLElement;
+  readonly #sceneGraphError: HTMLElement;
+  #sceneGraphView: NodeGraphView | undefined;
+  #sceneGraphModel: SceneGraph = P25_SCENE_GRAPH;
+  #sceneGraphMaterial = P25_MATERIAL_GRAPH_SCRIPT;
+  #sceneGraphSource: { script: string; scene: string } | undefined;
   readonly #examples: HTMLSelectElement;
   readonly #library_: HTMLSelectElement;
   readonly #scriptName: HTMLInputElement;
@@ -285,6 +302,7 @@ export class MaterialXScriptEditor {
         <button type="button" role="tab" data-tab="console" aria-selected="true" data-testid="script-tab-console">Console</button>
         <button type="button" role="tab" data-tab="variables" aria-selected="false" data-testid="script-tab-variables">Variables</button>
         <button type="button" role="tab" data-tab="graph" aria-selected="false" data-testid="script-tab-graph">Graphe</button>
+        <button type="button" role="tab" data-tab="scene-graph" aria-selected="false" data-testid="script-tab-scene-graph">Scène</button>
         <button type="button" role="tab" data-tab="xml" aria-selected="false" data-testid="script-tab-xml">XML</button>
         ${iconButton('trash', 'Vider la console', { 'data-action': 'clear-console', 'data-testid': 'script-clear-console', style: 'margin-left:auto' })}
       </div>
@@ -294,6 +312,17 @@ export class MaterialXScriptEditor {
         <p class="mx-graph-help">Glisser d’une sortie vers une entrée pour connecter, modifier les valeurs dans les nœuds ; double-clic : ligne du script. Clic droit : ajouter une entrée.</p>
         <div class="mx-graph-canvas" data-testid="script-graph"></div>
         <p class="mx-sr-only" role="status" data-testid="script-graph-summary"></p>
+      </div>
+      <div class="mx-tab-panel mx-scene-graph" role="tabpanel" data-panel="scene-graph" hidden>
+        <div class="mx-scene-graph-toolbar">
+          <p>Prototype P25 · MaterialX reste dans « Graphe » ; modifier ici la scène sans lancer le rendu.</p>
+          ${iconButton('graph', 'Convertir le script courant en graphe de scène sans l’exécuter', { 'data-action': 'script-to-scene-graph', 'data-testid': 'script-to-scene-graph' }, 'Script → scène')}
+          ${iconButton('file', 'Remplacer le script par le graphe sans l’exécuter', { 'data-action': 'scene-graph-to-script', 'data-testid': 'scene-graph-to-script' }, 'Générer le script')}
+          ${iconButton('restore', 'Réinitialiser le prototype', { 'data-action': 'scene-graph-reset', 'data-testid': 'scene-graph-reset' }, 'Réinitialiser')}
+        </div>
+        <div class="mx-scene-graph-canvas" data-testid="scene-graph"></div>
+        <p class="mx-graph-help" role="status" data-testid="scene-graph-summary"></p>
+        <p class="mx-status error" role="alert" data-testid="scene-graph-error" hidden></p>
       </div>
       <div class="mx-tab-panel" role="tabpanel" data-panel="xml" hidden>
         <textarea class="mx-xml" spellcheck="false" aria-label="Document MaterialX" data-testid="script-xml"
@@ -308,6 +337,9 @@ export class MaterialXScriptEditor {
     this.#variables = $('script-variables');
     this.#graph = $('script-graph');
     this.#graphSummary = $('script-graph-summary');
+    this.#sceneGraphCanvas = $('scene-graph');
+    this.#sceneGraphSummary = $('scene-graph-summary');
+    this.#sceneGraphError = $('scene-graph-error');
     this.#examples = $('script-examples');
     this.#library_ = $('script-library');
     this.#scriptName = $('script-name');
@@ -937,6 +969,106 @@ export class MaterialXScriptEditor {
       button.setAttribute('aria-selected', String(button.dataset['tab'] === tab));
     }
     for (const panel of this.element.querySelectorAll<HTMLElement>('[role="tabpanel"]')) panel.hidden = panel.dataset['panel'] !== tab;
+    if (tab === 'scene-graph') this.#showSceneGraph();
+  }
+
+  #showSceneGraph(): void {
+    if (!this.#sceneGraphView) {
+      this.#sceneGraphView = new NodeGraphView(this.#sceneGraphCanvas, {
+        onValue: (id, input, value) => this.#updateSceneGraph(() => {
+          this.#sceneGraphModel = setSceneGraphValue(this.#sceneGraphModel, id, input, value);
+        }),
+        onLink: link => this.#updateSceneGraph(() => {
+          this.#sceneGraphModel = setSceneGraphLink(this.#sceneGraphModel, link);
+        }),
+        onUnlink: (id, input) => this.#updateSceneGraph(() => {
+          this.#sceneGraphModel = removeSceneGraphLink(this.#sceneGraphModel, id, input);
+        }),
+      });
+    }
+    const layout = new Map<string, readonly [number, number]>();
+    let sphereIndex = 0;
+    for (const node of this.#sceneGraphModel.nodes) {
+      const prototypeId = node.kind === 'sphere' ? (sphereIndex++ === 0 ? 'sphereA' : 'sphereB') : node.kind;
+      const position = P25_SCENE_GRAPH_LAYOUT.get(prototypeId);
+      if (position) layout.set(node.id, position);
+    }
+    this.#sceneGraphView.set(
+      sceneGraphViewNodes(this.#sceneGraphModel),
+      this.#sceneGraphModel.links,
+      layout,
+    );
+    try {
+      compileSceneGraph(this.#sceneGraphModel);
+      this.#sceneGraphSummary.textContent =
+        `Prototype valide : ${this.#sceneGraphModel.nodes.length} nœuds, ${this.#sceneGraphModel.links.length} liens.`;
+    } catch (error) {
+      this.#sceneGraphSummary.textContent = `Graphe incomplet : ${this.#describe(error)}`;
+    }
+  }
+
+  #updateSceneGraph(update: () => void): void {
+    try {
+      update();
+      this.#sceneGraphError.hidden = true;
+      this.#showSceneGraph();
+    } catch (error) {
+      this.#reportSceneGraphError(error);
+      this.#showSceneGraph();
+    }
+  }
+
+  #reportSceneGraphError(error: unknown): void {
+    const message = this.#describe(error);
+    this.#sceneGraphError.textContent = message;
+    this.#sceneGraphError.hidden = false;
+    this.#setStatus(message, true);
+    this.#log('error', message);
+  }
+
+  #sceneGraphToScript(): void {
+    try {
+      if (this.#state() !== 'idle') throw new Error('Conversion impossible pendant une exécution.');
+      let material = this.#sceneGraphMaterial;
+      if (this.#sceneGraphSource && this.script !== this.#sceneGraphSource.script) {
+        if (!this.#library) throw new Error('La bibliothèque MaterialX n’est pas encore chargée.');
+        const current = scriptToSceneGraph(this.script, this.#library);
+        if (compileSceneGraph(current.graph) !== this.#sceneGraphSource.scene) {
+          throw new Error('Le script de scène a changé depuis sa conversion. Convertissez-le à nouveau avant de générer.');
+        }
+        material = current.materialScript;
+      }
+      const scene = compileSceneGraph(this.#sceneGraphModel);
+      if (!this.#sceneGraphSource && this.script.trim() &&
+          !confirm('Remplacer le script courant par le prototype de graphe de scène ?')) return;
+      this.script = `${material.trimEnd()}\n\n${scene}`;
+      this.#sceneGraphMaterial = material;
+      this.#sceneGraphSource = { script: this.script, scene };
+      this.#sceneGraphError.hidden = true;
+      this.#notice = 'Script généré depuis le graphe ; il n’a pas été exécuté.';
+      this.#setStatus(this.#notice);
+      this.#log('info', 'Graphe de scène converti en script. Relire le code puis cliquer sur Exécuter.');
+    } catch (error) {
+      this.#reportSceneGraphError(error);
+    }
+  }
+
+  #scriptToSceneGraph(): void {
+    try {
+      if (this.#state() !== 'idle') throw new Error('Conversion impossible pendant une exécution.');
+      if (!this.#library) throw new Error('La bibliothèque MaterialX n’est pas encore chargée.');
+      const imported = scriptToSceneGraph(this.script, this.#library);
+      this.#sceneGraphModel = imported.graph;
+      this.#sceneGraphMaterial = imported.materialScript;
+      this.#sceneGraphSource = { script: this.script, scene: compileSceneGraph(imported.graph) };
+      this.#sceneGraphError.hidden = true;
+      this.#sceneGraphView?.resetPositions();
+      this.#showSceneGraph();
+      this.#setStatus('Script converti en graphe de scène sans exécution.');
+      this.#log('info', 'Script converti en graphe de scène ; le graphe MaterialX reste séparé.');
+    } catch (error) {
+      this.#reportSceneGraphError(error);
+    }
   }
 
   #log(level: 'log' | 'info' | 'error', message: string, line?: number): void {
@@ -1208,6 +1340,16 @@ export class MaterialXScriptEditor {
       else if (action === 'share') void this.share();
       else if (action === 'delete') void this.#deleteStored();
       else if (action === 'run-example') void this.runExample();
+      else if (action === 'script-to-scene-graph') this.#scriptToSceneGraph();
+      else if (action === 'scene-graph-to-script') this.#sceneGraphToScript();
+      else if (action === 'scene-graph-reset') {
+        this.#sceneGraphModel = P25_SCENE_GRAPH;
+        this.#sceneGraphMaterial = P25_MATERIAL_GRAPH_SCRIPT;
+        this.#sceneGraphSource = undefined;
+        this.#sceneGraphError.hidden = true;
+        this.#sceneGraphView?.resetPositions();
+        this.#showSceneGraph();
+      }
       else if (action === 'remote') void this.renderRemote();
       else if (action === 'clear-console') this.#console.replaceChildren();
       else if (action === 'close') this.element.dispatchEvent(new CustomEvent('script-editor-close', { bubbles: true }));

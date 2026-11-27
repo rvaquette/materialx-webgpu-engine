@@ -15,8 +15,9 @@ portabilité et exploitation), 8 (primitives et scènes par script), 9
 post-traitement), 13 (baking et export de scènes), 14 (lookdev et projets),
 15 (opérations booléennes), 16 (shaders d'extension) et 17 (surfaces complexes),
 ainsi que l'étude urgente de la priorité 21 (chargement des bibliothèques
-MaterialX sans WASM) et la priorité 22 (build minimal du Core WASM) sont
-traitées ; leur historique est dans
+MaterialX sans WASM), la priorité 22 (build minimal du Core WASM) et l'étude de
+la priorité 25 (graphe de scène équivalent au script) sont traitées ; leur
+historique est dans
 [ROADMAP_DONE.md](ROADMAP_DONE.md). Les limites connues sont recensées dans
 [INTEGRATION.md](INTEGRATION.md#limites-connues).
 
@@ -146,35 +147,6 @@ matériau sans réexécuter le script entier.
 **Critère d'aboutissement :** un même script expose des paramètres d'un shader
 de surface et d'un autre type de shader ; seuls les paramètres marqués apparaissent
 dans l'UI et leurs modifications sont visibles dans le rendu.
-
-## Priorité 25 : étude d'un graphe de scène équivalent au script
-
-Étudier un graphe visuel représentant les mêmes opérations que l'API de script,
-sans réduire la scène à un graphe de matériaux :
-
-- **rendu** : nœuds pour le backend, la résolution, la qualité, le rendu, la
-  capture et l'enregistrement, avec des entrées/sorties explicites ;
-- **objets** : nœuds de géométrie et de scène (création ou référence d'objet,
-  transformation, visibilité), comportant des sous-nœuds `surface`,
-  `displacement` et, à terme, les autres terminaux de shader ;
-- **partage** : un même nœud de surface, déplacement ou autre shader peut être
-  connecté à plusieurs objets ; modifier le nœud partagé met à jour tous ses
-  utilisateurs sans dupliquer le graphe ;
-- **équivalence avec les scripts** : comparer la création et l'exécution des
-  graphes avec l'API existante, et étudier la conversion dans les deux sens,
-  les expressions/structures difficiles à représenter, l'animation et le
-  diagnostic des erreurs ;
-- **architecture et UX** : préciser les types de ports, les références aux
-  objets et matériaux, la gestion des cycles et des dépendances, le regroupement
-  des sous-graphes, ainsi que l'intégration aux éditeurs de script et de
-  matériaux existants.
-
-Cette priorité est une étude : choisir un modèle de graphe et un flux de travail
-avant de généraliser l'interface ou de remplacer le script.
-
-**Critère d'aboutissement :** une recommandation argumentée et un prototype
-minimal montrent le même rendu obtenu par script et par graphe, avec une surface
-et un déplacement partagés entre au moins deux objets.
 
 ## Priorité 26 : sélection, édition et mouvements de caméra
 
@@ -307,12 +279,10 @@ non démontrée.
    scripting (3bis) et de l'édition de paramètres.
 10. Étude du format vidéo de transport des rendus (24), après les scènes
     dynamiques (5) et l'export des rendus (13).
-11. Étude du graphe de scène équivalent au script (25), en prolongement du
-    scripting (3bis), des primitives (8) et des paramètres de shaders (23).
-12. Sélection, édition et mouvements de caméra (26), après le lookdev et les
+11. Sélection, édition et mouvements de caméra (26), après le lookdev et les
     projets (14), les scènes dynamiques (5) et l'étude de format vidéo (24).
-13. Déploiement Azure du rendu distribué (27), après le socle multi-serveur
+12. Déploiement Azure du rendu distribué (27), après le socle multi-serveur
     (19) ; la validation d'une VM GPU peut commencer dès maintenant.
-14. Écarts avec MaterialX officiel (28), à mener en parallèle des shaders
+13. Écarts avec MaterialX officiel (28), à mener en parallèle des shaders
     d'extension (16) et des surfaces complexes (17), puis à maintenir avec
     chaque évolution du compilateur et des exports.

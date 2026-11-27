@@ -223,6 +223,67 @@ test('affiche les shaders d’extension P16 dans le graphe', async ({ page }) =>
   expect(widgets.every(Boolean)).toBe(true);
 });
 
+test('sépare le graphe MaterialX du graphe scène et génère sans exécuter', async ({ page }) => {
+  const e = await openEditor(page);
+  await e.panel.getByTestId('script-tab-scene-graph').click();
+  await expect(e.panel.getByTestId('scene-graph-summary')).toHaveText('Prototype valide : 7 nœuds, 7 liens.');
+
+  page.once('dialog', dialog => dialog.accept());
+  await e.panel.getByTestId('scene-graph-to-script').click();
+  await expectCode(e, 'material.displacementshader = displacement;');
+  await expectCode(e, 'sphereA.material = material;');
+  await expectCode(e, 'sphereB.material = material;');
+  await expect(e.status).toContainText('il n’a pas été exécuté');
+
+  await e.panel.getByTestId('script-tab-graph').click();
+  await expect(e.panel.getByTestId('script-graph-summary')).toHaveText('Graphe : 3 nœuds, 2 liens.');
+  await e.panel.getByTestId('script-tab-scene-graph').click();
+  await expect(e.panel.getByTestId('scene-graph-summary')).toHaveText('Prototype valide : 7 nœuds, 7 liens.');
+});
+
+test('convertit le script en graphe de scène puis conserve les modifications MaterialX', async ({ page }) => {
+  const e = await openEditor(page);
+  await e.panel.getByTestId('script-tab-scene-graph').click();
+  page.once('dialog', dialog => dialog.accept());
+  await e.panel.getByTestId('scene-graph-to-script').click();
+  const example = await scriptOf(e);
+  await setScript(e, example.replace('[0.12, 0.42, 0.72]', '[0.8, 0.2, 0.1]'));
+  await expect(e.status).toContainText('Script valide');
+  await e.panel.getByTestId('script-to-scene-graph').click();
+  await expect(e.status).toContainText('converti en graphe de scène');
+  await expect(e.panel.getByTestId('scene-graph-summary')).toHaveText('Prototype valide : 7 nœuds, 7 liens.');
+  await setScript(e, (await scriptOf(e)).replace('[0.8, 0.2, 0.1]', '[0.1, 0.7, 0.2]'));
+
+  const graph = e.panel.getByTestId('scene-graph').locator('.mx-node-graph');
+  const point = await graph.evaluate(element => {
+    const view = (element as HTMLElement & { mxGraph: {
+      select(id: string, center: boolean): void;
+      point(id: string, kind: string, name: string): { x: number; y: number } | undefined;
+    } }).mxGraph;
+    view.select('camera', true);
+    return view.point('camera', 'widget', 'fov');
+  });
+  expect(point).toBeDefined();
+  await page.mouse.click(point!.x, point!.y);
+  await e.panel.getByTestId('scene-graph-to-script').click();
+  await expectCode(e, 'surface.base_color = [0.1, 0.7, 0.2];');
+  await expectCode(e, 'sphereB.material = material;');
+  expect(await scriptOf(e)).not.toContain('fov: 42');
+
+  const changedScene = (await scriptOf(e)).replace('render.depth = 4;', 'render.depth = 5;');
+  await setScript(e, changedScene);
+  await e.panel.getByTestId('scene-graph-to-script').click();
+  await expect(e.panel.getByTestId('scene-graph-error')).toContainText('Le script de scène a changé');
+  expect(await scriptOf(e)).toBe(changedScene);
+
+  const unsupported = changedScene.replace('await render(16);', 'if (true) { log("non converti"); }');
+  await setScript(e, unsupported);
+  await e.panel.getByTestId('script-to-scene-graph').click();
+  await expect(e.panel.getByTestId('scene-graph-error')).toContainText('structure JavaScript non convertible');
+  expect(await scriptOf(e)).toBe(unsupported);
+  await expect(e.panel.getByTestId('scene-graph-summary')).toHaveText('Prototype valide : 7 nœuds, 7 liens.');
+});
+
 test('IntelliSense propose les nœuds et leurs entrées/sorties issues des NodeDefs', async ({ page }, info) => {
   const e = await openEditor(page);
   await e.code.click();
