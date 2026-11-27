@@ -24,7 +24,8 @@ import { buildGeometry, createSceneBindGroups, uploadGeometry, type SceneDrawBuf
 import { prepareMesh, type PreparedMesh } from '../geometry/prepare.ts';
 import { buildEnvCdf } from '../assets/environment-cdf.ts';
 import {
-  buildCachedPathTraceScene, buildPathTraceScene, PT_NODE_FLOATS, PT_TRIANGLE_FLOATS, type PathTraceScene, type PathTraceTransformRange,
+  bakePathTraceVolumeGridsGpu, buildCachedPathTraceScene, buildPathTraceScene,
+  PT_NODE_FLOATS, PT_TRIANGLE_FLOATS, type PathTraceScene, type PathTraceTransformRange,
 } from './pathtracing/scene-buffers.ts';
 import { PathTraceDynamics, type DynamicInstanceSource, type DynamicUpload } from './pathtracing/dynamic-geometry.ts';
 import { rebuildBvhInBackground } from './pathtracing/bvh-rebuild.ts';
@@ -3466,6 +3467,10 @@ export class InteractiveViewer {
         environment: frame.environment,
         settings: pathTraceSettings(loaded.scene),
       };
+      const volumeGridOverrides = loaded.compiled
+        ? undefined
+        : await bakePathTraceVolumeGridsGpu(device, resources, ptOptions);
+      checkBuild();
       const ptScene: PathTraceScene = loaded.compiled
         ? {
           ...loaded.compiled.pathTrace,
@@ -3473,9 +3478,11 @@ export class InteractiveViewer {
           environment: frame.environment,
         }
         : preparedPathTraceScene
-          ? buildPathTraceScene(resources, ptOptions, undefined, undefined, preparedPathTraceScene)
+          ? buildPathTraceScene(resources, ptOptions, undefined, undefined, preparedPathTraceScene, volumeGridOverrides)
           // Partial streaming scenes stay out of the persistent BVH cache.
-          : preview ? buildPathTraceScene(resources, ptOptions) : await buildCachedPathTraceScene(resources, ptOptions);
+          : preview
+            ? buildPathTraceScene(resources, ptOptions, undefined, undefined, undefined, volumeGridOverrides)
+            : await buildCachedPathTraceScene(resources, ptOptions, undefined, volumeGridOverrides);
       checkBuild();
       performance.measure('pathtracing:scene-build', {
         start: pathTraceBuildStarted,

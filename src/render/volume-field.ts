@@ -1,11 +1,29 @@
 import { evaluateVolumeIr, volumeExpressions, type VolumeMedium } from '../compiler/volume-ir.ts';
 import type { ShaderIr } from '../compiler/ir.ts';
+import { emitWgsl } from '../compiler/wgsl.ts';
 import type { Aabb } from '../geometry/bvh.ts';
 import type { Vec3 } from '../scene/transforms.ts';
+import { packParameterUniforms } from './material-parameters.ts';
 import { PT_MATERIAL_RECORD_FLOATS, PT_VOLUME_EMISSION_WEIGHT } from './pathtracing/material-record.ts';
 
 export const VOLUME_GRID_SIZE = 32;
 export const VOLUME_VOXEL_FLOATS = 10;
+export const VOLUME_GPU_GRID_SIZE = 64;
+
+export interface BakedVolumeGrid {
+  data: Float32Array;
+  size: number;
+  majorant: number;
+  emissionMajorant: number;
+  emissionWeight: number;
+  emissionCdf?: Float32Array;
+  bounds: Aabb;
+}
+
+interface VolumeGridParameter {
+  uniform?: string;
+  value: readonly number[];
+}
 
 export interface VolumeField {
   majorant: number;
@@ -141,9 +159,7 @@ export function bakeVolumeGrid(
   ir: ShaderIr, bounds: Aabb, size = VOLUME_GRID_SIZE,
   fields?: (position: readonly number[]) => Readonly<Record<string, number>>,
 ) {
-  if (!Number.isInteger(size) || size < 2) throw new Error('Volume grid resolution must be at least two.');
-  const extent = bounds.max.map((v, i) => v - bounds.min[i]!);
-  if (extent.some(v => !(v > 0) || !Number.isFinite(v))) throw new Error('Volume bounds must have positive finite extent.');
+  const extent = validateVolumeGridDomain(bounds, size);
   const expressions = [...volumeExpressions(ir).values()];
   if (expressions.some(expr => expr.kind === 'texture')) {
     throw new Error('Volume image inputs require a 3D image sampler; only procedural spatial fields are currently supported.');
@@ -153,8 +169,6 @@ export function bakeVolumeGrid(
   }
   const fieldNames = [...new Set([...expressions.values()].flatMap(expr => expr.kind === 'primvar' ? [expr.name] : []))];
   const data = new Float32Array(size ** 3 * VOLUME_VOXEL_FLOATS);
-  let majorant = 0;
-  let emissionMajorant = 0;
   for (let z = 0; z < size; z++) for (let y = 0; y < size; y++) for (let x = 0; x < size; x++) {
     const position = [x, y, z].map((v, i) => bounds.min[i]! + extent[i]! * v / (size - 1));
     const values = fields?.(position);
@@ -164,10 +178,189 @@ export function bakeVolumeGrid(
     const offset = ((z * size + y) * size + x) * VOLUME_VOXEL_FLOATS;
     data.set([...medium.absorption, ...medium.scattering, medium.anisotropy, ...medium.emission ?? [0, 0, 0]], offset);
     if (Math.abs(data[offset+6]!) >= 1) throw new Error('Volume anisotropy exceeds the float32 phase-function range.');
-    for (let i = 0; i < 3; i++) majorant = Math.max(majorant, data[offset + i]! + data[offset + 3 + i]!);
-    for (let i = 0; i < 3; i++) emissionMajorant = Math.max(emissionMajorant, data[offset + 7 + i]!);
   }
-  if (!data.every(Number.isFinite)) throw new Error('Volume field exceeds float32 range.');
+  return finishVolumeGrid(data, size, bounds, extent);
+}
+
+/** Bake procedural volume expressions with the same IR used by raster and CPU reference paths. */
+export async function bakeVolumeGridGpu(
+  device: GPUDevice,
+  ir: ShaderIr,
+  bounds: Aabb,
+  parameters: readonly VolumeGridParameter[] = [],
+  size = VOLUME_GPU_GRID_SIZE,
+): Promise<BakedVolumeGrid | undefined> {
+  const extent = validateVolumeGridDomain(bounds, size);
+  const expressions = [...volumeExpressions(ir).values()];
+  if (expressions.some(expr => expr.kind === 'texture' || expr.kind === 'primvar'
+    || (expr.kind === 'input' && expr.name !== 'position'))) return undefined;
+  const output = ir.outputs.find(candidate => candidate.name === 'volumeshader');
+  const closure = output ? ir.exprs.get(output.ref) : undefined;
+  if (closure?.kind !== 'closure' || closure.closure !== 'vdf') {
+    throw new Error('Missing volume closure in compiled IR.');
+  }
+  const refs = ['absorption', 'scattering', 'anisotropy', 'emission']
+    .flatMap(name => closure.params[name] ? [{ name, ref: closure.params[name]! }] : []);
+  if (!closure.params.absorption || !closure.params.scattering || !closure.params.anisotropy) {
+    throw new Error('Compiled volume is missing a required coefficient.');
+  }
+  const valueIr: ShaderIr = {
+    ...ir,
+    outputs: refs.map(({ name, ref }) => {
+      const expression = ir.exprs.get(ref);
+      if (!expression) throw new Error(`Missing compiled volume input '${name}'.`);
+      return { name, type: expression.type, ref };
+    }),
+  };
+  const module = emitWgsl(valueIr, true);
+  if (module.textures.length || module.samplers.length || ir.requirements.needsDerivatives
+      || ir.requirements.needsTextureFootprint) return undefined;
+  const expectedTypes: Record<string, string> = {
+    absorption: 'vec3f', scattering: 'vec3f', anisotropy: 'f32', emission: 'vec3f',
+  };
+  if (module.outputs.some(outputField => expectedTypes[outputField.name] !== outputField.wgslType)) {
+    throw new Error('Compiled volume has an invalid coefficient type.');
+  }
+
+  const parameterValues = new Map(parameters.flatMap(parameter =>
+    parameter.uniform ? [[parameter.uniform, parameter.value] as const] : []));
+  const irParameters = new Map(ir.params.map(parameter => [parameter.name, parameter.defaultValue]));
+  const uniformData = module.uniforms.length
+    ? packParameterUniforms(module.uniforms, field => {
+      const value = parameterValues.get(field.name) ?? irParameters.get(field.name);
+      if (typeof value === 'number') return [value];
+      if (typeof value === 'boolean') return [value ? 1 : 0];
+      if (Array.isArray(value)) return value;
+      throw new Error(`Missing volume parameter value: ${field.name}`);
+    })
+    : undefined;
+  const voxelCount = size ** 3;
+  const byteLength = voxelCount * VOLUME_VOXEL_FLOATS * Float32Array.BYTES_PER_ELEMENT;
+  if (byteLength > device.limits.maxStorageBufferBindingSize || byteLength > device.limits.maxBufferSize) {
+    return undefined;
+  }
+
+  const outputBinding = module.uniforms.length ? 1 : 0;
+  const coefficient = (name: string, fallback: string): string => {
+    const field = module.outputs.find(candidate => candidate.name === name)?.field;
+    return field ? `result.${field}` : fallback;
+  };
+  const literal = (value: number): string => Number.isInteger(value) ? `${value}.0` : `${value}`;
+  const pos = (axis: number): string =>
+    `${literal(bounds.min[axis]!)} + ${literal(extent[axis]!)} * f32(coord.${'xyz'[axis]}) / ${size - 1}.0`;
+  const shader = `${module.code}
+@group(0) @binding(${outputBinding}) var<storage, read_write> mx_volume_data: array<f32>;
+@compute @workgroup_size(64)
+fn mx_bake(@builtin(global_invocation_id) global_id: vec3u) {
+  let index = global_id.x;
+  if (index >= ${voxelCount}u) { return; }
+  let coord = vec3u(index % ${size}u, (index / ${size}u) % ${size}u, index / ${size * size}u);
+  let position = vec3f(${pos(0)}, ${pos(1)}, ${pos(2)});
+  var vary: MxVaryings;
+  vary.position = position;
+  vary.normal = vec3f(0.0);
+  vary.tangent = vec3f(0.0);
+  vary.bitangent = vec3f(0.0);
+  vary.texcoord = vec2f(0.0);
+  vary.viewDir = vec3f(0.0, 0.0, 1.0);
+  vary.frontFacing = 1.0;
+  let result = mx_shade(vary);
+  let base = index * ${VOLUME_VOXEL_FLOATS}u;
+  let absorption = ${coefficient('absorption', 'vec3f(0.0)')};
+  let scattering = ${coefficient('scattering', 'vec3f(0.0)')};
+  let anisotropy = ${coefficient('anisotropy', '0.0')};
+  let emission = ${coefficient('emission', 'vec3f(0.0)')};
+  mx_volume_data[base] = absorption.x;
+  mx_volume_data[base + 1u] = absorption.y;
+  mx_volume_data[base + 2u] = absorption.z;
+  mx_volume_data[base + 3u] = scattering.x;
+  mx_volume_data[base + 4u] = scattering.y;
+  mx_volume_data[base + 5u] = scattering.z;
+  mx_volume_data[base + 6u] = anisotropy;
+  mx_volume_data[base + 7u] = emission.x;
+  mx_volume_data[base + 8u] = emission.y;
+  mx_volume_data[base + 9u] = emission.z;
+}`;
+
+  let storage: GPUBuffer | undefined;
+  let readback: GPUBuffer | undefined;
+  let uniform: GPUBuffer | undefined;
+  let mapped = false;
+  try {
+    storage = device.createBuffer({
+      size: byteLength,
+      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
+    });
+    readback = device.createBuffer({
+      size: byteLength,
+      usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST,
+    });
+    if (uniformData) uniform = device.createBuffer({
+      size: uniformData.byteLength,
+      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+    });
+    if (uniform && uniformData) device.queue.writeBuffer(uniform, 0, uniformData);
+    const pipeline = device.createComputePipeline({
+      layout: 'auto',
+      compute: { module: device.createShaderModule({ code: shader }), entryPoint: 'mx_bake' },
+    });
+    const entries: GPUBindGroupEntry[] = [{ binding: outputBinding, resource: { buffer: storage } }];
+    if (uniform) entries.push({ binding: 0, resource: { buffer: uniform } });
+    const bindGroup = device.createBindGroup({
+      layout: pipeline.getBindGroupLayout(0),
+      entries,
+    });
+    const encoder = device.createCommandEncoder();
+    const pass = encoder.beginComputePass();
+    pass.setPipeline(pipeline);
+    pass.setBindGroup(0, bindGroup);
+    pass.dispatchWorkgroups(Math.ceil(voxelCount / 64));
+    pass.end();
+    encoder.copyBufferToBuffer(storage, 0, readback, 0, byteLength);
+    device.queue.submit([encoder.finish()]);
+    await readback.mapAsync(GPUMapMode.READ);
+    mapped = true;
+    const data = new Float32Array(readback.getMappedRange().slice(0));
+    readback.unmap();
+    mapped = false;
+    return finishVolumeGrid(data, size, bounds, extent);
+  } finally {
+    if (mapped) readback?.unmap();
+    storage?.destroy();
+    readback?.destroy();
+    uniform?.destroy();
+  }
+}
+
+function validateVolumeGridDomain(bounds: Aabb, size: number): Vec3 {
+  if (!Number.isInteger(size) || size < 2) throw new Error('Volume grid resolution must be at least two.');
+  const extent: Vec3 = [
+    bounds.max[0] - bounds.min[0],
+    bounds.max[1] - bounds.min[1],
+    bounds.max[2] - bounds.min[2],
+  ];
+  if (extent.some(v => !(v > 0) || !Number.isFinite(v))) throw new Error('Volume bounds must have positive finite extent.');
+  return extent;
+}
+
+function finishVolumeGrid(data: Float32Array, size: number, bounds: Aabb, extent: Vec3): BakedVolumeGrid {
+  let majorant = 0;
+  let emissionMajorant = 0;
+  for (let offset = 0; offset < data.length; offset += VOLUME_VOXEL_FLOATS) {
+    for (let i = 0; i < VOLUME_VOXEL_FLOATS; i++) {
+      if (!Number.isFinite(data[offset + i]!)) throw new Error('Volume field exceeds float32 range.');
+    }
+    if (data[offset + 6]! <= -1 || data[offset + 6]! >= 1) {
+      throw new Error('Volume anisotropy exceeds the float32 phase-function range.');
+    }
+    for (let i = 0; i < 3; i++) {
+      if (data[offset + i]! < 0 || data[offset + 3 + i]! < 0 || data[offset + 7 + i]! < 0) {
+        throw new Error('Invalid compiled volume input.');
+      }
+      majorant = Math.max(majorant, data[offset + i]! + data[offset + 3 + i]!);
+      emissionMajorant = Math.max(emissionMajorant, data[offset + 7 + i]!);
+    }
+  }
   let emissionWeight = 0;
   let emissionCdf: Float32Array | undefined;
   if (emissionMajorant > 0) {
@@ -195,7 +388,11 @@ export function bakeVolumeGrid(
       }
     }
   }
-  return { data, size, majorant: majorant * (1 + 1e-6), emissionMajorant, emissionWeight, emissionCdf, bounds };
+  return {
+    data, size, majorant: majorant * (1 + 1e-6), emissionMajorant, emissionWeight,
+    ...(emissionCdf ? { emissionCdf } : {}),
+    bounds,
+  };
 }
 
 export function sampleVolumeGrid(materials: Float32Array, data: Float32Array, index: number, position: Vec3): VolumeMedium {

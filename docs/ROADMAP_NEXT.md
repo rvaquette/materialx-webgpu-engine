@@ -94,9 +94,41 @@ profondeur de 24 sur ordinateur. L'exposition n'est pas modifiée.
 |---|---|
 | ![Nuages raster](images/p17-clouds/01-raster/frame-000.png) | ![Nuages PT](images/p17-clouds/02-pathtracing/frame-000.png) |
 
+**Passe de réalisme (path tracing) :** les rendus les plus visibles ont été
+revus à 512 px avec 256 à 768 échantillons.
+
+- **Eau** : cinq vagues directionnelles dispersives (les longues vont plus vite)
+  à crêtes aiguisées remplacent la somme de deux sinus ; l'écume est la crête
+  rompue par un bruit animé (traînées plutôt que taches blanches). L'exemple est
+  une mer au large : grand plan, caméra rasante, soleil latéral, fond
+  absorbant. Le reflet de Fresnel du ciel et les éclats solaires viennent du
+  path tracer.
+- **Lave** : la température du corps noir et l'émission décroissent du centre
+  des fissures (jaune-orangé) vers leurs bords (rouge sombre) avec une
+  modulation de bruit animée ; fissures plus fines, plaques plus grandes et
+  relief réduit.
+- **Glace** : la double comptabilisation sous-surface + transmission, source du
+  bruit chromatique, est supprimée. La glace est un diélectrique clair
+  (IOR 1,31) avec des inclusions blanchâtres diffuses.
+- **Boue et sable** : seule la lumière de l'exemple était trop forte pour les
+  unités actuelles (intensité 45 au lieu de 6) ; les matériaux sont inchangés.
+
+| Eau | Lave | Glace, boue, sable mouillé |
+|---|---|---|
+| ![Eau PT](images/p17-water/02-pathtracing/frame-012.png) | ![Lave PT](images/p17-lava/02-pathtracing/frame-012.png) | ![Surfaces PT](images/p17-surface-presets/02-pathtracing/frame-012.png) |
+
+**Baking des volumes procéduraux :** le path tracer évalue maintenant les
+grilles 64³ avec un compute shader WGSL généré depuis l'IR MaterialX, puis
+rapatrie les coefficients pour calculer le majorant et la CDF d'émission. Cela
+évite les plus de 100 s mesurées pour un baking 64³ par l'interpréteur CPU.
+L'évaluation CPU reste la référence et le repli pour les volumes alimentés par
+des champs USD ; les rendus P17 devront encore être régénérés et vérifiés
+visuellement avec cette résolution accrue.
+
 La priorité reste **en cours** : la superposition de milieux, la convergence
-des caustiques physiques de l'eau et l'acceptation visuelle de tous les profils
-de nuages restent à résoudre ou à vérifier. Les captures de documentation ne
+des caustiques physiques de l'eau, la finesse des volumes (ci-dessus) et
+l'acceptation visuelle de tous les profils de nuages restent à résoudre ou à
+vérifier. Les captures de documentation ne
 remplacent pas les tests golden. Les petites scènes de régression P17 sont
 régénérables avec `npx vite-node scripts/build-p17-golden-fixtures.ts` et
 utilisent uniquement les graphes exportés, sans texture externe.

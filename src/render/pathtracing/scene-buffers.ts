@@ -19,7 +19,10 @@ import { preparedGeometryMemory, sceneBufferCacheKey } from './scene-buffer-cach
 import { inverse4, transformDirection, transformPoint, type Mat4, type Vec3 } from '../../scene/transforms.ts';
 import type { SceneResources } from '../scene-resources.ts';
 import type { VolumeMedium } from '../../compiler/volume-ir.ts';
-import { bakeVolumeGrid, sampleVolumeGrid, sampleVolumeEmitter, volumeTransmittance, VOLUME_FIELD_GRID_SIZE, type VolumeField } from '../volume-field.ts';
+import {
+  bakeVolumeGrid, bakeVolumeGridGpu, sampleVolumeGrid, sampleVolumeEmitter, volumeTransmittance,
+  VOLUME_FIELD_GRID_SIZE, type BakedVolumeGrid, type VolumeField,
+} from '../volume-field.ts';
 import {
   buildSceneFrame,
   NEUTRAL_SURFACE,
@@ -150,6 +153,57 @@ function normalize3(v: Vec3): V3 {
   return len > 0 ? [v[0] / len, v[1] / len, v[2] / len] : [v[0], v[1], v[2]];
 }
 
+type VolumeGridSource = {
+  volume: NonNullable<ReturnType<NonNullable<SceneResources['volumes']>['get']>>;
+  inverse: Mat4;
+};
+
+interface VolumeBakeDomain {
+  bounds: Aabb;
+  sources: VolumeGridSource[];
+}
+
+function collectVolumeBakeDomains(
+  resources: SceneResources, options: BuildPathTraceSceneOptions,
+  frame = buildSceneFrame(resources, options),
+): Map<string, VolumeBakeDomain> {
+  const domains = new Map<string, VolumeBakeDomain>();
+  for (const draw of frame.draws) {
+    if (!draw.materialKey || !resources.materials.get(draw.materialKey)?.volumeIr) continue;
+    const geom = resources.geometries.get(draw.prototypeId);
+    if (!geom) continue;
+    const domain = domains.get(draw.materialKey) ?? {
+      bounds: { min: [Infinity, Infinity, Infinity], max: [-Infinity, -Infinity, -Infinity] },
+      sources: [],
+    };
+    const volume = resources.volumes?.get(draw.prototypeId);
+    if (volume) domain.sources.push({ volume, inverse: inverse4(draw.model) });
+    for (let corner = 0; corner < 8; corner++) {
+      const p = transformPoint(draw.model, [0, 1, 2].map(i =>
+        (corner & (1 << i)) ? geom.bounds.max[i]! : geom.bounds.min[i]!) as V3);
+      domain.bounds.min = [Math.min(domain.bounds.min[0], p[0]), Math.min(domain.bounds.min[1], p[1]), Math.min(domain.bounds.min[2], p[2])];
+      domain.bounds.max = [Math.max(domain.bounds.max[0], p[0]), Math.max(domain.bounds.max[1], p[1]), Math.max(domain.bounds.max[2], p[2])];
+    }
+    domains.set(draw.materialKey, domain);
+  }
+  return domains;
+}
+
+/** Bake supported procedural volumes on the active device; unsupported fields stay on the CPU reference path. */
+export async function bakePathTraceVolumeGridsGpu(
+  device: GPUDevice, resources: SceneResources, options: BuildPathTraceSceneOptions = {},
+): Promise<Map<string, BakedVolumeGrid>> {
+  const grids = new Map<string, BakedVolumeGrid>();
+  const domains = collectVolumeBakeDomains(resources, options);
+  for (const [materialKey, domain] of domains) {
+    const material = resources.materials.get(materialKey);
+    if (!material?.volumeIr || material.volumeMedium || domain.sources.length) continue;
+    const grid = await bakeVolumeGridGpu(device, material.volumeIr, domain.bounds, material.parameters ?? []);
+    if (grid) grids.set(materialKey, grid);
+  }
+  return grids;
+}
+
 // --- packing -----------------------------------------------------------------
 
 function materialKeyOf(materialKey: string | undefined): string {
@@ -167,6 +221,7 @@ export function buildPathTraceScene(
   cachedBvh?: Bvh,
   cachedPositions?: Float32Array,
   preparedGeometry?: PreparedPathTraceGeometry,
+  volumeGridOverrides?: ReadonlyMap<string, BakedVolumeGrid>,
 ): PathTraceScene {
   const frame = buildSceneFrame(resources, options);
 
@@ -175,23 +230,7 @@ export function buildPathTraceScene(
   const surfaces: RasterSurface[] = [];
   const media: (VolumeMedium | undefined)[] = [];
   const volumeBoundaries: boolean[] = [];
-  const volumeBounds = new Map<string, Aabb>();
-  // USD Volume fields per volume material: each instance contributes its fields at T^-1 p.
-  const volumeFields = new Map<string, Array<{ volume: NonNullable<ReturnType<NonNullable<SceneResources['volumes']>['get']>>; inverse: Mat4 }>>();
-  for (const draw of frame.draws) {
-    if (!draw.materialKey || !resources.materials.get(draw.materialKey)?.volumeIr) continue;
-    const geom = resources.geometries.get(draw.prototypeId);
-    if (!geom) continue;
-    const volume = resources.volumes?.get(draw.prototypeId);
-    if (volume) volumeFields.set(draw.materialKey, [...volumeFields.get(draw.materialKey) ?? [], { volume, inverse: inverse4(draw.model) }]);
-    const bounds = volumeBounds.get(draw.materialKey) ?? { min: [Infinity, Infinity, Infinity], max: [-Infinity, -Infinity, -Infinity] };
-    for (let corner = 0; corner < 8; corner++) {
-      const p = transformPoint(draw.model, [0, 1, 2].map(i => (corner & (1 << i)) ? geom.bounds.max[i]! : geom.bounds.min[i]!) as V3);
-      bounds.min = [Math.min(bounds.min[0], p[0]), Math.min(bounds.min[1], p[1]), Math.min(bounds.min[2], p[2])];
-      bounds.max = [Math.max(bounds.max[0], p[0]), Math.max(bounds.max[1], p[1]), Math.max(bounds.max[2], p[2])];
-    }
-    volumeBounds.set(draw.materialKey, bounds);
-  }
+  const volumeDomains = collectVolumeBakeDomains(resources, options, frame);
   const materialKeys: string[] = [];
   const variantSources: PtVariantSource[] = [];
   const displaceScales: number[] = [];
@@ -391,7 +430,8 @@ export function buildPathTraceScene(
   for (let i = 0; i < materialKeys.length; i++) {
     const material = resources.materials.get(materialKeys[i]!);
     if (!material?.volumeIr) continue;
-    const bounds = volumeBounds.get(materialKeys[i]!);
+    const domain = volumeDomains.get(materialKeys[i]!);
+    const bounds = domain?.bounds;
     if (!bounds) throw new Error(`Missing volume domain for ${materialKeys[i]}`);
     const base = i * PT_MATERIAL_FLOATS;
     materials.set(bounds.min, base + 43);
@@ -402,15 +442,17 @@ export function buildPathTraceScene(
       if (!Number.isFinite(materials[base + 50])) throw new Error('Volume emission sampling weight exceeds float32 range.');
       continue;
     }
-    const sources = volumeFields.get(materialKeys[i]!);
-    const grid = bakeVolumeGrid(material.volumeIr, bounds, sources ? VOLUME_FIELD_GRID_SIZE : undefined, sources && (position => {
+    const sources = domain.sources;
+    let grid = volumeGridOverrides?.get(materialKeys[i]!);
+    if (grid && gridLength + grid.data.length + (grid.emissionCdf?.length ?? 0) > 2 ** 24) grid = undefined;
+    grid ??= bakeVolumeGrid(material.volumeIr, bounds, sources.length ? VOLUME_FIELD_GRID_SIZE : undefined, sources.length ? (position => {
       const values: Record<string, number> = {};
       for (const { volume, inverse } of sources) {
         const local = transformPoint(inverse, position as V3);
         for (const [name, sample] of volume.fields) values[name] = (values[name] ?? 0) + sample(local);
       }
       return values;
-    }));
+    }) : undefined);
     materials[base + 29] = 1;
     materials[base + 37] = material.volumeBoundary ? 1 : 0;
     materials[base + 1] = material.volumeBoundary ? 0 : materials[base + 1]!;
@@ -491,19 +533,22 @@ export async function buildCachedPathTraceScene(
   resources: SceneResources,
   options: BuildPathTraceSceneOptions = {},
   suppliedCache?: PathTraceBvhCache,
+  volumeGridOverrides?: ReadonlyMap<string, BakedVolumeGrid>,
 ): Promise<PathTraceScene> {
-  if (suppliedCache || !globalThis.crypto?.subtle) return buildPersistentPathTraceScene(resources, options, suppliedCache);
+  if (suppliedCache || !globalThis.crypto?.subtle) {
+    return buildPersistentPathTraceScene(resources, options, suppliedCache, volumeGridOverrides);
+  }
   const started = performance.now();
   const key = await sceneBufferCacheKey(resources, options);
   const prepared = preparedGeometryMemory.get(key);
   if (prepared) {
-    const scene = buildPathTraceScene(resources, options, undefined, undefined, prepared);
+    const scene = buildPathTraceScene(resources, options, undefined, undefined, prepared, volumeGridOverrides);
     performance.measure('pathtracing:geometry-memory', {
       start: started, end: performance.now(), detail: { hit: true, triangles: prepared.triangleCount },
     });
     return scene;
   }
-  const scene = await buildPersistentPathTraceScene(resources, options);
+  const scene = await buildPersistentPathTraceScene(resources, options, undefined, volumeGridOverrides);
   preparedGeometryMemory.set(key, scene);
   return scene;
 }
@@ -512,6 +557,7 @@ async function buildPersistentPathTraceScene(
   resources: SceneResources,
   options: BuildPathTraceSceneOptions,
   suppliedCache?: PathTraceBvhCache,
+  volumeGridOverrides?: ReadonlyMap<string, BakedVolumeGrid>,
 ): Promise<PathTraceScene> {
   const cacheStarted = performance.now();
   let cache = suppliedCache;
@@ -522,7 +568,7 @@ async function buildPersistentPathTraceScene(
       console.warn('Path-tracing BVH cache unavailable; building the BVH without persistent caching.', error);
     }
   }
-  if (!cache) return buildPathTraceScene(resources, options);
+  if (!cache) return buildPathTraceScene(resources, options, undefined, undefined, undefined, volumeGridOverrides);
 
   const frame = buildSceneFrame(resources, options);
   const soup: number[] = [];
@@ -540,7 +586,7 @@ async function buildPersistentPathTraceScene(
   const key = await pathTraceBvhCacheKey(positions);
   if (!key) {
     console.warn('Web Crypto unavailable; path-tracing BVH will not be cached.');
-    return buildPathTraceScene(resources, options);
+    return buildPathTraceScene(resources, options, undefined, undefined, undefined, volumeGridOverrides);
   }
 
   let bvh: Bvh | undefined;
@@ -571,7 +617,7 @@ async function buildPersistentPathTraceScene(
     end: performance.now(),
     detail: { hit: cacheHit, triangles: positions.length / 9 },
   });
-  return buildPathTraceScene(resources, options, bvh, positions);
+  return buildPathTraceScene(resources, options, bvh, positions, undefined, volumeGridOverrides);
 }
 
 function readVec3(data: Float32Array, vertex: number): V3 {

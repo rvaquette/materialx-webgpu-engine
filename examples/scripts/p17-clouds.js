@@ -7,6 +7,7 @@ const sky = new EnvironmentShader();
 sky.model = "sky";
 sky.zenithColor = [0.08, 0.22, 0.5];
 sky.horizonColor = [0.38, 0.58, 0.82];
+sky.groundColor = [0.38, 0.52, 0.72];
 sky.sunIntensity = 0;
 sky.sunDirection = [-0.45, 0.7, 0.35];
 
@@ -22,7 +23,7 @@ clouds.baseHeight = 3.5;
 const cloudLayer = new Volume({ width: 12, height: 4.5, length: 10, material: clouds });
 cloudLayer.translate = [0, 5.75, 0];
 const ground = new StandardSurface();
-ground.base_color = [0.2, 0.28, 0.12];
+ground.base_color = [0.07, 0.13, 0.04];
 new Plane({ width: 20, length: 20, material: ground });
 
 const sun = new DistantLight();

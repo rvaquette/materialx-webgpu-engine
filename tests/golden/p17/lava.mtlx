@@ -35,23 +35,62 @@
   </subtract>
   <smoothstep name="crackEdge" type="float" nodedef="ND_smoothstep_float">
     <input name="in" type="float" nodename="cells" />
-    <input name="low" type="float" value="0.04" />
-    <input name="high" type="float" value="0.16" />
+    <input name="low" type="float" value="0.02" />
+    <input name="high" type="float" value="0.12" />
   </smoothstep>
   <subtract name="crackMask" type="float" nodedef="ND_subtract_float">
     <input name="in1" type="float" value="1" />
     <input name="in2" type="float" nodename="crackEdge" />
   </subtract>
+  <multiply name="heat" type="float" nodedef="ND_multiply_float">
+    <input name="in1" type="float" nodename="crackMask" />
+    <input name="in2" type="float" nodename="crackMask" />
+  </multiply>
+  <multiply name="heatPosition" type="vector3" nodedef="ND_multiply_vector3FA">
+    <input name="in1" type="vector3" nodename="advectedPosition" />
+    <input name="in2" type="float" value="2.3" />
+  </multiply>
+  <noise3d name="heatNoise" type="float" nodedef="ND_noise3d_float">
+    <input name="position" type="vector3" nodename="heatPosition" />
+  </noise3d>
+  <multiply name="heatVariation" type="float" nodedef="ND_multiply_float">
+    <input name="in1" type="float" nodename="heatNoise" />
+    <input name="in2" type="float" value="0.9" />
+  </multiply>
+  <add name="heatScale" type="float" nodedef="ND_add_float">
+    <input name="in1" type="float" nodename="heatVariation" />
+    <input name="in2" type="float" value="0.8" />
+  </add>
+  <subtract name="temperatureRange" type="float" nodedef="ND_subtract_float">
+    <input name="in1" type="float" value="1800" />
+    <input name="in2" type="float" value="900" />
+  </subtract>
+  <multiply name="heatRange" type="float" nodedef="ND_multiply_float">
+    <input name="in1" type="float" nodename="heat" />
+    <input name="in2" type="float" nodename="temperatureRange" />
+  </multiply>
+  <add name="kelvin" type="float" nodedef="ND_add_float">
+    <input name="in1" type="float" nodename="heatRange" />
+    <input name="in2" type="float" value="900" />
+  </add>
   <blackbody name="hotColor" type="color3">
-    <input name="temperature" type="float" value="1800" />
+    <input name="temperature" type="float" nodename="kelvin" />
   </blackbody>
   <mix name="surfaceColor" type="color3">
     <input name="fg" type="color3" nodename="hotColor" />
     <input name="bg" type="color3" value="0.035, 0.018, 0.012" />
     <input name="mix" type="float" nodename="crackMask" />
   </mix>
+  <multiply name="liveHeat" type="float" nodedef="ND_multiply_float">
+    <input name="in1" type="float" nodename="heat" />
+    <input name="in2" type="float" nodename="heatScale" />
+  </multiply>
+  <add name="glowMask" type="float" nodedef="ND_add_float">
+    <input name="in1" type="float" nodename="liveHeat" />
+    <input name="in2" type="float" value="0.03" />
+  </add>
   <multiply name="glow" type="float" nodedef="ND_multiply_float">
-    <input name="in1" type="float" nodename="crackMask" />
+    <input name="in1" type="float" nodename="glowMask" />
     <input name="in2" type="float" value="4" />
   </multiply>
   <multiply name="crustRelief" type="float" nodedef="ND_multiply_float">

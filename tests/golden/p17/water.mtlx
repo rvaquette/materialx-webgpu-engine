@@ -19,67 +19,225 @@
     <input name="in1" type="float" nodename="coordinates" output="outz" />
     <input name="in2" type="float" value="1.5" />
   </multiply>
-  <add name="xPhase" type="float" nodedef="ND_add_float">
-    <input name="in1" type="float" nodename="xScaled" />
-    <input name="in2" type="float" nodename="phase" />
-  </add>
-  <multiply name="zFrequency" type="float" nodedef="ND_multiply_float">
-    <input name="in1" type="float" nodename="zScaled" />
-    <input name="in2" type="float" value="1.7" />
-  </multiply>
-  <multiply name="zTime" type="float" nodedef="ND_multiply_float">
-    <input name="in1" type="float" nodename="phase" />
-    <input name="in2" type="float" value="1.3" />
-  </multiply>
-  <add name="zPhase" type="float" nodedef="ND_add_float">
-    <input name="in1" type="float" nodename="zFrequency" />
-    <input name="in2" type="float" nodename="zTime" />
-  </add>
-  <sin name="xWave" type="float">
-    <input name="in" type="float" nodename="xPhase" />
-  </sin>
-  <sin name="zWave" type="float">
-    <input name="in" type="float" nodename="zPhase" />
-  </sin>
-  <multiply name="smallWave" type="float" nodedef="ND_multiply_float">
-    <input name="in1" type="float" nodename="zWave" />
-    <input name="in2" type="float" value="0.45" />
-  </multiply>
-  <add name="largeWaves" type="float" nodedef="ND_add_float">
-    <input name="in1" type="float" nodename="xWave" />
-    <input name="in2" type="float" nodename="smallWave" />
-  </add>
-  <multiply name="crossX" type="float" nodedef="ND_multiply_float">
-    <input name="in1" type="float" nodename="xScaled" />
-    <input name="in2" type="float" value="2.3" />
-  </multiply>
-  <multiply name="crossZ" type="float" nodedef="ND_multiply_float">
-    <input name="in1" type="float" nodename="zScaled" />
-    <input name="in2" type="float" value="-1.7" />
-  </multiply>
-  <add name="crossPosition" type="float" nodedef="ND_add_float">
-    <input name="in1" type="float" nodename="crossX" />
-    <input name="in2" type="float" nodename="crossZ" />
-  </add>
   <multiply name="crossTime" type="float" nodedef="ND_multiply_float">
     <input name="in1" type="float" nodename="phase" />
     <input name="in2" type="float" value="1.9" />
   </multiply>
-  <add name="crossPhase" type="float" nodedef="ND_add_float">
-    <input name="in1" type="float" nodename="crossPosition" />
-    <input name="in2" type="float" nodename="crossTime" />
-  </add>
-  <sin name="crossWave" type="float">
-    <input name="in" type="float" nodename="crossPhase" />
-  </sin>
-  <multiply name="crossAmplitude" type="float" nodedef="ND_multiply_float">
-    <input name="in1" type="float" nodename="crossWave" />
-    <input name="in2" type="float" value="0.18" />
+  <multiply name="waveX0" type="float" nodedef="ND_multiply_float">
+    <input name="in1" type="float" nodename="xScaled" />
+    <input name="in2" type="float" value="1" />
   </multiply>
-  <add name="waveSum" type="float" nodedef="ND_add_float">
-    <input name="in1" type="float" nodename="largeWaves" />
-    <input name="in2" type="float" nodename="crossAmplitude" />
+  <multiply name="waveZ0" type="float" nodedef="ND_multiply_float">
+    <input name="in1" type="float" nodename="zScaled" />
+    <input name="in2" type="float" value="0" />
+  </multiply>
+  <add name="waveSpace0" type="float" nodedef="ND_add_float">
+    <input name="in1" type="float" nodename="waveX0" />
+    <input name="in2" type="float" nodename="waveZ0" />
   </add>
+  <multiply name="waveTime0" type="float" nodedef="ND_multiply_float">
+    <input name="in1" type="float" nodename="phase" />
+    <input name="in2" type="float" value="1.4" />
+  </multiply>
+  <add name="wavePhase0" type="float" nodedef="ND_add_float">
+    <input name="in1" type="float" nodename="waveSpace0" />
+    <input name="in2" type="float" nodename="waveTime0" />
+  </add>
+  <sin name="waveSine0" type="float">
+    <input name="in" type="float" nodename="wavePhase0" />
+  </sin>
+  <add name="waveRaised0" type="float" nodedef="ND_add_float">
+    <input name="in1" type="float" nodename="waveSine0" />
+    <input name="in2" type="float" value="1" />
+  </add>
+  <multiply name="waveHalf0" type="float" nodedef="ND_multiply_float">
+    <input name="in1" type="float" nodename="waveRaised0" />
+    <input name="in2" type="float" value="0.5" />
+  </multiply>
+  <multiply name="waveSquare0" type="float" nodedef="ND_multiply_float">
+    <input name="in1" type="float" nodename="waveHalf0" />
+    <input name="in2" type="float" nodename="waveHalf0" />
+  </multiply>
+  <multiply name="waveHeight0" type="float" nodedef="ND_multiply_float">
+    <input name="in1" type="float" nodename="waveSquare0" />
+    <input name="in2" type="float" value="0.8" />
+  </multiply>
+  <multiply name="waveX1" type="float" nodedef="ND_multiply_float">
+    <input name="in1" type="float" nodename="xScaled" />
+    <input name="in2" type="float" value="1.4031" />
+  </multiply>
+  <multiply name="waveZ1" type="float" nodedef="ND_multiply_float">
+    <input name="in1" type="float" nodename="zScaled" />
+    <input name="in2" type="float" value="0.9599" />
+  </multiply>
+  <add name="waveSpace1" type="float" nodedef="ND_add_float">
+    <input name="in1" type="float" nodename="waveX1" />
+    <input name="in2" type="float" nodename="waveZ1" />
+  </add>
+  <multiply name="waveTime1" type="float" nodedef="ND_multiply_float">
+    <input name="in1" type="float" nodename="phase" />
+    <input name="in2" type="float" value="1.8254" />
+  </multiply>
+  <add name="wavePhase1" type="float" nodedef="ND_add_float">
+    <input name="in1" type="float" nodename="waveSpace1" />
+    <input name="in2" type="float" nodename="waveTime1" />
+  </add>
+  <sin name="waveSine1" type="float">
+    <input name="in" type="float" nodename="wavePhase1" />
+  </sin>
+  <add name="waveRaised1" type="float" nodedef="ND_add_float">
+    <input name="in1" type="float" nodename="waveSine1" />
+    <input name="in2" type="float" value="1" />
+  </add>
+  <multiply name="waveHalf1" type="float" nodedef="ND_multiply_float">
+    <input name="in1" type="float" nodename="waveRaised1" />
+    <input name="in2" type="float" value="0.5" />
+  </multiply>
+  <multiply name="waveSquare1" type="float" nodedef="ND_multiply_float">
+    <input name="in1" type="float" nodename="waveHalf1" />
+    <input name="in2" type="float" nodename="waveHalf1" />
+  </multiply>
+  <multiply name="waveHeight1" type="float" nodedef="ND_multiply_float">
+    <input name="in1" type="float" nodename="waveSquare1" />
+    <input name="in2" type="float" value="0.52" />
+  </multiply>
+  <multiply name="waveX2" type="float" nodedef="ND_multiply_float">
+    <input name="in1" type="float" nodename="xScaled" />
+    <input name="in2" type="float" value="1.8027" />
+  </multiply>
+  <multiply name="waveZ2" type="float" nodedef="ND_multiply_float">
+    <input name="in1" type="float" nodename="zScaled" />
+    <input name="in2" type="float" value="-2.2716" />
+  </multiply>
+  <add name="waveSpace2" type="float" nodedef="ND_add_float">
+    <input name="in1" type="float" nodename="waveX2" />
+    <input name="in2" type="float" nodename="waveZ2" />
+  </add>
+  <multiply name="waveTime2" type="float" nodedef="ND_multiply_float">
+    <input name="in1" type="float" nodename="phase" />
+    <input name="in2" type="float" value="2.3841" />
+  </multiply>
+  <add name="wavePhase2" type="float" nodedef="ND_add_float">
+    <input name="in1" type="float" nodename="waveSpace2" />
+    <input name="in2" type="float" nodename="waveTime2" />
+  </add>
+  <sin name="waveSine2" type="float">
+    <input name="in" type="float" nodename="wavePhase2" />
+  </sin>
+  <add name="waveRaised2" type="float" nodedef="ND_add_float">
+    <input name="in1" type="float" nodename="waveSine2" />
+    <input name="in2" type="float" value="1" />
+  </add>
+  <multiply name="waveHalf2" type="float" nodedef="ND_multiply_float">
+    <input name="in1" type="float" nodename="waveRaised2" />
+    <input name="in2" type="float" value="0.5" />
+  </multiply>
+  <multiply name="waveSquare2" type="float" nodedef="ND_multiply_float">
+    <input name="in1" type="float" nodename="waveHalf2" />
+    <input name="in2" type="float" nodename="waveHalf2" />
+  </multiply>
+  <multiply name="waveHeight2" type="float" nodedef="ND_multiply_float">
+    <input name="in1" type="float" nodename="waveSquare2" />
+    <input name="in2" type="float" value="0.32" />
+  </multiply>
+  <multiply name="waveX3" type="float" nodedef="ND_multiply_float">
+    <input name="in1" type="float" nodename="xScaled" />
+    <input name="in2" type="float" value="-1.5195" />
+  </multiply>
+  <multiply name="waveZ3" type="float" nodedef="ND_multiply_float">
+    <input name="in1" type="float" nodename="zScaled" />
+    <input name="in2" type="float" value="4.4476" />
+  </multiply>
+  <add name="waveSpace3" type="float" nodedef="ND_add_float">
+    <input name="in1" type="float" nodename="waveX3" />
+    <input name="in2" type="float" nodename="waveZ3" />
+  </add>
+  <multiply name="waveTime3" type="float" nodedef="ND_multiply_float">
+    <input name="in1" type="float" nodename="phase" />
+    <input name="in2" type="float" value="3.0351" />
+  </multiply>
+  <add name="wavePhase3" type="float" nodedef="ND_add_float">
+    <input name="in1" type="float" nodename="waveSpace3" />
+    <input name="in2" type="float" nodename="waveTime3" />
+  </add>
+  <sin name="waveSine3" type="float">
+    <input name="in" type="float" nodename="wavePhase3" />
+  </sin>
+  <add name="waveRaised3" type="float" nodedef="ND_add_float">
+    <input name="in1" type="float" nodename="waveSine3" />
+    <input name="in2" type="float" value="1" />
+  </add>
+  <multiply name="waveHalf3" type="float" nodedef="ND_multiply_float">
+    <input name="in1" type="float" nodename="waveRaised3" />
+    <input name="in2" type="float" value="0.5" />
+  </multiply>
+  <multiply name="waveSquare3" type="float" nodedef="ND_multiply_float">
+    <input name="in1" type="float" nodename="waveHalf3" />
+    <input name="in2" type="float" nodename="waveHalf3" />
+  </multiply>
+  <multiply name="waveHeight3" type="float" nodedef="ND_multiply_float">
+    <input name="in1" type="float" nodename="waveSquare3" />
+    <input name="in2" type="float" value="0.22" />
+  </multiply>
+  <multiply name="waveX4" type="float" nodedef="ND_multiply_float">
+    <input name="in1" type="float" nodename="xScaled" />
+    <input name="in2" type="float" value="-5.383" />
+  </multiply>
+  <multiply name="waveZ4" type="float" nodedef="ND_multiply_float">
+    <input name="in1" type="float" nodename="zScaled" />
+    <input name="in2" type="float" value="-4.9309" />
+  </multiply>
+  <add name="waveSpace4" type="float" nodedef="ND_add_float">
+    <input name="in1" type="float" nodename="waveX4" />
+    <input name="in2" type="float" nodename="waveZ4" />
+  </add>
+  <multiply name="waveTime4" type="float" nodedef="ND_multiply_float">
+    <input name="in1" type="float" nodename="phase" />
+    <input name="in2" type="float" value="3.7826" />
+  </multiply>
+  <add name="wavePhase4" type="float" nodedef="ND_add_float">
+    <input name="in1" type="float" nodename="waveSpace4" />
+    <input name="in2" type="float" nodename="waveTime4" />
+  </add>
+  <sin name="waveSine4" type="float">
+    <input name="in" type="float" nodename="wavePhase4" />
+  </sin>
+  <add name="waveRaised4" type="float" nodedef="ND_add_float">
+    <input name="in1" type="float" nodename="waveSine4" />
+    <input name="in2" type="float" value="1" />
+  </add>
+  <multiply name="waveHalf4" type="float" nodedef="ND_multiply_float">
+    <input name="in1" type="float" nodename="waveRaised4" />
+    <input name="in2" type="float" value="0.5" />
+  </multiply>
+  <multiply name="waveSquare4" type="float" nodedef="ND_multiply_float">
+    <input name="in1" type="float" nodename="waveHalf4" />
+    <input name="in2" type="float" nodename="waveHalf4" />
+  </multiply>
+  <multiply name="waveHeight4" type="float" nodedef="ND_multiply_float">
+    <input name="in1" type="float" nodename="waveSquare4" />
+    <input name="in2" type="float" value="0.14" />
+  </multiply>
+  <add name="waveAccumulated0" type="float" nodedef="ND_add_float">
+    <input name="in1" type="float" nodename="waveHeight0" />
+    <input name="in2" type="float" nodename="waveHeight1" />
+  </add>
+  <add name="waveAccumulated1" type="float" nodedef="ND_add_float">
+    <input name="in1" type="float" nodename="waveAccumulated0" />
+    <input name="in2" type="float" nodename="waveHeight2" />
+  </add>
+  <add name="waveAccumulated2" type="float" nodedef="ND_add_float">
+    <input name="in1" type="float" nodename="waveAccumulated1" />
+    <input name="in2" type="float" nodename="waveHeight3" />
+  </add>
+  <add name="waveAccumulated3" type="float" nodedef="ND_add_float">
+    <input name="in1" type="float" nodename="waveAccumulated2" />
+    <input name="in2" type="float" nodename="waveHeight4" />
+  </add>
+  <subtract name="waveSum" type="float" nodedef="ND_subtract_float">
+    <input name="in1" type="float" nodename="waveAccumulated3" />
+    <input name="in2" type="float" value="0.75" />
+  </subtract>
   <multiply name="waveHeightValue" type="float" nodedef="ND_multiply_float">
     <input name="in1" type="float" nodename="waveSum" />
     <input name="in2" type="float" value="0.12" />
@@ -87,9 +245,17 @@
   <displacement name="waveDisplacement" type="displacementshader">
     <input name="displacement" type="float" nodename="waveHeightValue" />
   </displacement>
+  <multiply name="foamBreakup" type="float" nodedef="ND_multiply_float">
+    <input name="in1" type="float" nodename="detailNoise" />
+    <input name="in2" type="float" value="0.5" />
+  </multiply>
+  <add name="foamInput" type="float" nodedef="ND_add_float">
+    <input name="in1" type="float" nodename="waveSum" />
+    <input name="in2" type="float" nodename="foamBreakup" />
+  </add>
   <smoothstep name="foamMask" type="float" nodedef="ND_smoothstep_float">
-    <input name="in" type="float" nodename="waveSum" />
-    <input name="low" type="float" value="0.7" />
+    <input name="in" type="float" nodename="foamInput" />
+    <input name="low" type="float" value="0.82" />
     <input name="high" type="float" value="1.1" />
   </smoothstep>
   <mix name="surfaceColor" type="color3">
