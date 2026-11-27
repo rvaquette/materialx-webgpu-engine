@@ -412,7 +412,7 @@ fn mx_fractal3d(p: vec3f, amplitude: f32, octaves: f32) -> f32 {
 // Hash-based gradient (Perlin-style) noise shared by the noise2d/3d and fractal
 // lowerings. Integer hashing keeps results
 // stable across GPUs (no fract(sin) precision drift on mobile).
-const NOISE_PRELUDE = `fn mx_hash_u32(x: u32) -> u32 {
+export const NOISE_PRELUDE = `fn mx_hash_u32(x: u32) -> u32 {
   var h = x;
   h = h ^ (h >> 16u);
   h = h * 0x7feb352du;

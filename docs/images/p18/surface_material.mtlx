@@ -1,5 +1,5 @@
 <?xml version="1.0"?>
-<materialx version="1.39" fileprefix="http://127.0.0.1:51796/">
+<materialx version="1.39">
   <standard_surface name="surface" type="surfaceshader">
     <input name="base_color" type="color3" value="0.05, 0.45, 0.75" />
     <input name="metalness" type="float" value="0.35" />

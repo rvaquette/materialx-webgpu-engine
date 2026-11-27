@@ -41,6 +41,8 @@ export interface SceneAnimationState {
 
 export interface AnimateSceneOptions {
   sink?: DiagnosticSink;
+  /** Prepared geometry IDs whose point and normal streams are supplied separately. */
+  geometryOverrides?: ReadonlyMap<string, DeformedGeometry>;
   /** Raw mesh of a prim in the evaluated stage (inline USD geometry). */
   meshFor?: (scene: SceneAsset, primPath: string) => RawMesh | undefined;
   /** Same preparation options as at load (subdivider...). */
@@ -117,7 +119,17 @@ export function animateScene(
   scene: SceneAsset, time: number, resources: SceneResources, options: AnimateSceneOptions = {},
 ): SceneAnimationState {
   const { sink } = options;
-  const at = evaluateSceneAt(scene, time);
+  const skippedPaths = new Set<string>();
+  const unskippedPaths = new Set<string>();
+  for (const [id, geometry] of resources.geometries) {
+    const prim = scene.prims.get(geometry.primPath);
+    const topologySampled = TOPOLOGY_ATTRIBUTES.some(name => name !== 'normals'
+      && (prim?.attributes.get(name)?.timeSamples?.length ?? 0) > 0);
+    if (options.geometryOverrides?.has(id) && !topologySampled) skippedPaths.add(geometry.primPath);
+    else unskippedPaths.add(geometry.primPath);
+  }
+  for (const path of unskippedPaths) skippedPaths.delete(path);
+  const at = evaluateSceneAt(scene, time, skippedPaths);
   const world = computeWorldTransforms(at, sink);
   const transforms = new Map<string, Mat4>();
   const hidden = new Set<string>();
@@ -138,6 +150,7 @@ export function animateScene(
   const deformed = new Map<string, DeformedGeometry>();
   const retopologized = new Map<string, PreparedMesh>();
   for (const [id, geometry] of resources.geometries) {
+    if (skippedPaths.has(geometry.primPath)) continue;
     const prim = scene.prims.get(geometry.primPath);
     const pointsSampled = (prim?.attributes.get('points')?.timeSamples?.length ?? 0) > 0;
     const topologySampled = TOPOLOGY_ATTRIBUTES.some(name => name !== 'normals'

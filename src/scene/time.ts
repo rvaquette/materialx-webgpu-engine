@@ -100,8 +100,8 @@ function resolved<T extends PrimAttribute | XformOp>(entry: T, time: number): T 
   return (value === null || value === undefined ? rest : { ...rest, value }) as T;
 }
 
-/** The scene with every time-sampled attribute and transform op resolved at `time`. */
-export function evaluateSceneAt(scene: SceneAsset, time: number): SceneAsset {
+/** Resolves time samples, optionally leaving point and normal samples to another geometry evaluator. */
+export function evaluateSceneAt(scene: SceneAsset, time: number, skipGeometry?: ReadonlySet<string>): SceneAsset {
   const paths = animatedPrimPaths(scene);
   if (paths.length === 0) return scene;
   const prims = new Map(scene.prims);
@@ -109,7 +109,8 @@ export function evaluateSceneAt(scene: SceneAsset, time: number): SceneAsset {
     const prim = scene.prims.get(path)!;
     prims.set(path, {
       ...prim,
-      attributes: new Map([...prim.attributes].map(([name, attr]) => [name, resolved(attr, time)])),
+      attributes: new Map([...prim.attributes].map(([name, attr]) =>
+        [name, skipGeometry?.has(path) && (name === 'points' || name === 'normals') ? attr : resolved(attr, time)])),
       xformOps: prim.xformOps.map(op => resolved(op, time)),
     });
   }

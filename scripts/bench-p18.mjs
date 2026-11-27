@@ -1,4 +1,4 @@
-// Measures CPU animation and completed offscreen raster frames on the exported P18 scenes.
+// Measures GPU deformation and completed offscreen raster frames on the exported P18 scenes.
 import { chromium } from '@playwright/test';
 import { createServer } from 'vite';
 import { root } from './export-browser-session.mjs';
@@ -56,13 +56,22 @@ try {
         viewer.renderRasterTo(view);
         await device.queue.onSubmittedWorkDone();
         const measurements = [];
+        const timeMeasurements = [];
+        const renderMeasurements = [];
+        const dispatchesBefore = performance.getEntriesByName('deformer:compute').length;
         for (let frame = 0; frame < 24; frame++) {
           const started = performance.now();
           await viewer.setTime(frame * step);
+          const timeDone = performance.now();
           viewer.renderRasterTo(view);
           await device.queue.onSubmittedWorkDone();
-          measurements.push(performance.now() - started);
+          const finished = performance.now();
+          measurements.push(finished - started);
+          timeMeasurements.push(timeDone - started);
+          renderMeasurements.push(finished - timeDone);
         }
+        const dispatches = performance.getEntriesByName('deformer:compute').length - dispatchesBefore;
+        if (dispatches < measurements.length) throw new Error('The benchmark did not evaluate a GPU deformer at every time step.');
         await viewer.setTime(0);
         const first = await captureRgba(device, 512, 512, { raster: target => viewer.renderRasterTo(target) }, () => {});
         await viewer.setTime(12);
@@ -72,7 +81,9 @@ try {
         const meanPixelDifference = difference / first.rgba.length;
         if (meanPixelDifference <= 0.1) throw new Error('The rendered frames at time codes 0 and 12 are indistinguishable.');
         if (failures.length) throw new Error(failures.join('; '));
-        return { measurements, meanPixelDifference };
+        const computeMeasurements = performance.getEntriesByName('deformer:compute')
+          .slice(dispatchesBefore, dispatchesBefore + dispatches).map(entry => entry.duration);
+        return { measurements, timeMeasurements, renderMeasurements, computeMeasurements, meanPixelDifference, dispatches };
       } finally {
         const validation = await device.popErrorScope();
         const memory = await device.popErrorScope();
@@ -87,7 +98,10 @@ try {
       scene: name, adapter, resolution: 512, frames: values.length,
       meanMs: values.reduce((sum, value) => sum + value, 0) / values.length,
       p95Ms: values[Math.ceil(values.length * 0.95) - 1], maxMs: values.at(-1),
-      meanPixelDifference: result.meanPixelDifference,
+      meanSetTimeMs: result.timeMeasurements.reduce((sum, value) => sum + value, 0) / values.length,
+      meanRenderMs: result.renderMeasurements.reduce((sum, value) => sum + value, 0) / values.length,
+      meanComputeMs: result.computeMeasurements.reduce((sum, value) => sum + value, 0) / result.computeMeasurements.length,
+      meanPixelDifference: result.meanPixelDifference, dispatches: result.dispatches,
     }));
   }
   await page.evaluate(() => globalThis.__p18Device.destroy());

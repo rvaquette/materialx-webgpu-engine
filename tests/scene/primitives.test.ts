@@ -187,7 +187,7 @@ def Xform "World"
 
 describe('primitive deformation and default materials', () => {
   it('moves vertices and recomputes smooth normals', async () => {
-    const { deformMesh } = await import('../../src/scene/primitives.ts');
+    const { deformMesh, meshWithDeformedPoints } = await import('../../src/scene/primitives.ts');
     const plane = primitiveMesh({ kind: 'plane', width: 2, length: 2, axis: 'Y', resolution: 8 });
     // Bend the sheet into a half cylinder of radius 2/π around Z: normals point away from its axis.
     const radius = 2 / Math.PI;
@@ -199,6 +199,8 @@ describe('primitive deformation and default materials', () => {
       expect(nx * x + ny * y).toBeGreaterThan(0.95 * radius);
     }
     expect(() => deformMesh(plane, () => [0, Number.NaN, 0])).toThrow(/finite numbers/);
+    expect(meshWithDeformedPoints(plane, bent.points).normals).toEqual(bent.normals);
+    expect(() => meshWithDeformedPoints(plane, [0, 0, 0])).toThrow(/match the mesh/);
   });
 
   it('binds unbound implicit gprims to a standard_surface colored by displayColor', async () => {

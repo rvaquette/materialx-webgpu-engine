@@ -314,10 +314,19 @@ comme l'espace objet ; hors de l'arbre, sa valeur de fond est utilisée.
 Le fichier doit rester accessible pour réutiliser les paramètres : l'USD
 exporté contient son URL et son nom dans `engine:deformers`, mais incorpore
 uniquement la géométrie déformée, pas le fichier de grille.
+Les URL relatives sont résolues par rapport à l'URL de base de l'application.
+Si la grille est inaccessible ou dépasse les limites GPU, un avertissement est
+émis et le viewer utilise les échantillons USD précuits. Le calcul GPU utilise
+des flottants 32 bits, y compris pour les grilles Vec3d : il peut donc différer
+du calcul CPU en double précision.
 
 Un graphe contenant `Time` ou `Frame` est échantillonné entre `start` et `end`
 en `samples` points, en codes temporels USD. Ces temps s'ajoutent aux clés des
-autres déformeurs ; entre les échantillons, USD interpole les positions.
+autres déformeurs ; les lecteurs USD interpolent les positions entre les
+échantillons. Le viewer recalcule les piles compatibles sur GPU au temps demandé
+à partir des positions de base stockées dans l'USD. Les anciens USD sans ces
+positions et les objets ayant un callback `deform` restent précuits. Si le
+matériau comporte un déplacement, celui-ci est réévalué après la déformation.
 
 Le treillis interpole les déplacements en Bézier. Chaque dimension contient 2 à
 6 points ; `offsets` est vide ou contient trois nombres par point, X variant le

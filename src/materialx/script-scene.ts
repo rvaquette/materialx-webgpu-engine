@@ -163,6 +163,8 @@ export interface StageObject {
   mesh?: RawMesh;
   meshSamples?: readonly { time: number; mesh: RawMesh }[];
   deformers?: readonly import('../scene/deformers.ts').Deformer[];
+  deformerBasePoints?: readonly number[];
+  deformerBaseNormals?: readonly number[];
   booleanOperation?: BooleanOperation;
   base?: string;
   tool?: string;
@@ -278,6 +280,8 @@ export function writeStageUsda(objects: readonly StageObject[], materials: reado
         `point3f[] points = ${tuples(mesh.points, 3)}`,
       );
       if (object.deformers?.length) body.push(`custom string engine:deformers = ${JSON.stringify(JSON.stringify(object.deformers))}`);
+      if (object.deformerBasePoints) body.push(`custom point3f[] engine:deformerBasePoints = ${tuples(object.deformerBasePoints, 3)}`);
+      if (object.deformerBaseNormals) body.push(`custom normal3f[] engine:deformerBaseNormals = ${tuples(object.deformerBaseNormals, 3)}`);
       if (object.meshSamples?.length) {
         body.push('point3f[] points.timeSamples = {',
           ...object.meshSamples.map(sample => `    ${String(sample.time)}: ${tuples(sample.mesh.points, 3)},`), '}');

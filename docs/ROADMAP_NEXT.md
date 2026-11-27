@@ -61,7 +61,7 @@ ruban tordu (twist) et un objet importé déformé par treillis sont animés en
 temps réel en raster, rendus avec flou de mouvement en path tracing, et
 exportés en USD.
 
-**En cours :** une première pile CPU partageable sur les primitives scriptées
+**En cours :** une pile partageable sur les primitives scriptées
 propose les déformeurs paramétriques, un vent 3D, des champs MaterialX et NanoVDB et un treillis de Bézier pour
 les primitives et les maillages USDA statiques importés, exportés en USD avec
 leurs paramètres et échantillons temporels. L'exemple
@@ -75,7 +75,7 @@ la [vidéo raster du ruban](images/p18/p18-animated-ribbon.mp4), sa
 [vidéo avec flou](images/p18/p18-animated-ribbon-blur.mp4) et son
 [USD](images/p18/p18-animated-ribbon.usda).
 [p18-imported-lattice.js](../examples/scripts/p18-imported-lattice.js) produit
-une [vidéo raster](images/p18/p18-imported-f lattice.mp4), une
+une [vidéo raster](images/p18/p18-imported-lattice.mp4), une
 [vidéo path tracing avec flou](images/p18/p18-imported-lattice-blur.mp4) et un
 [USD](images/p18/p18-imported-lattice.usda) du maillage importé.
 [p18-materialx-field.js](../examples/scripts/p18-materialx-field.js) produit
@@ -84,19 +84,25 @@ une [vidéo](images/p18/p18-materialx-field.mp4) et un
 L'exemple [p18-nanovdb-field.js](../examples/scripts/p18-nanovdb-field.js)
 produit une [vidéo](images/p18/p18-nanovdb-field.mp4) et un
 [USD](images/p18/p18-nanovdb-field.usda) d'un champ de vitesses NanoVDB.
-Le support d'autres formats et des attributs USD complexes et le calcul GPU
-restent à réaliser.
+Le viewer réévalue les piles compatibles sur GPU, y compris les champs MaterialX
+et NanoVDB ; les positions sont relues sur CPU pour les normales, les tangentes
+et l'actualisation des structures de rendu. Les USD sans positions de base ou
+avec callback `deform` utilisent les échantillons précuits. Une grille NanoVDB
+indisponible ou trop volumineuse déclenche un avertissement et le recours aux
+échantillons USD ; Vec3d est converti en flottants 32 bits pour le GPU.
+Le support d'autres formats et des attributs USD complexes reste à réaliser.
 Pour les normales USD animées par sommet, la mise à jour réutilise la
 topologie préparée ; les normales face-varying restent traitées par une
 préparation complète afin de préserver les coutures.
 
 Sur un adaptateur NVIDIA Turing, `node scripts/bench-p18.mjs` mesure 24 mises à
-jour des USD exportés à 512 × 512 : `setTime`, rendu raster hors écran et attente
-de l'achèvement GPU. Il vérifie aussi que les images aux temps 0 et 12 diffèrent.
-Les 95e percentiles observés sont 15,1 ms pour le drapeau, 9,0 ms pour le ruban
-et 11,2 ms pour le treillis importé. Cette mesure courte, sans présentation à
-l'écran, porte sur des géométries précuites et dépend du matériel et de la
-charge ; elle ne démontre ni l'évaluation GPU des piles ni le temps réel.
+jour des USD régénérés à 512 × 512 : `setTime`, rendu raster hors écran et attente
+de l'achèvement GPU. Il vérifie un calcul GPU à chaque étape et que les images
+aux temps 0 et 12 diffèrent. Les 95e percentiles observés sont 51,6 ms pour le
+drapeau (résolution 40), 34,6 ms pour le ruban et 26,0 ms pour le treillis
+importé. Cette mesure courte, sans présentation à l'écran, dépend fortement de
+la charge et ne démontre pas une cadence soutenue de 30 images/s. La lecture des
+positions et le recalcul CPU des normales et tangentes restent à optimiser.
 
 ![Ruban tordu et sphère déformée par treillis](images/p18/p18-deformers.png)
 

@@ -92,6 +92,7 @@ import { applySceneDisplacement } from './displacement.ts';
 import { extractDisplacement } from './graph-material-compiler.ts';
 import type { GeometryResource, InstanceResource, MaterialResource, SceneResources } from './scene-resources.ts';
 import { animateScene, isInvisible, type DeformedGeometry, type LightChanges } from './scene-animation.ts';
+import { evaluateGpuDeformations, gpuDeformations } from './deformer-animation.ts';
 import { turntableTransform, type TurntableTarget } from './turntable.ts';
 import { sampleAt, sceneTimeline, type SceneTimeline } from '../scene/time.ts';
 import type { PrimAttribute, SceneAsset } from '../scene/types.ts';
@@ -447,6 +448,10 @@ export class InteractiveViewer {
   #streaming: boolean;
   // Dynamic scene state: the USD-driven state at #time, then the API overrides.
   #time = 0;
+  #gpuDeformerSources: Awaited<ReturnType<typeof gpuDeformations>> = [];
+  #gpuDeformerGeometry = new Map<string, DeformedGeometry>();
+  #gpuDeformerTime: number | undefined;
+  #gpuDeformerGeneration = 0;
   #baseTransforms = new Map<string, Mat4>();
   #transformOverrides = new Map<string, Mat4>();
   #visibilityOverrides = new Map<string, boolean>();
@@ -1432,6 +1437,7 @@ export class InteractiveViewer {
     this.#current = render;
     if (this.#pathTracingDepthOverride !== undefined) render.setPathTracingDepth(this.#pathTracingDepthOverride);
     this.#loaded = candidate;
+    await this.#updateGpuDeformations(this.#time);
     this.#applyDynamicState(false);
     this.#onCameraChanged();
     this.#emitStatus();
@@ -1783,7 +1789,11 @@ export class InteractiveViewer {
     const exposure = loaded.cameras[0]?.exposure ?? 0;
     let frame: SceneFramePlan;
     let render: SceneRender;
+    let gpuSources: Awaited<ReturnType<typeof gpuDeformations>>;
     try {
+      if (this.#disposed) throw new Error('Viewer disposed during load.');
+      gpuSources = await gpuDeformations(loaded.animation?.source ?? loaded.scene, this.#device,
+        typeof document === 'undefined' ? entry : document.baseURI, sink);
       if (this.#disposed) throw new Error('Viewer disposed during load.');
       if (overrides.size > 0 && loaded.resources.pendingMaterials.length > 0) {
         throw new Error('MaterialX compilation failed.');
@@ -1820,6 +1830,10 @@ export class InteractiveViewer {
     this.#firstFrameStart = loadStarted;
     this.#loaded?.mtlx.documents?.delete();
     this.#loaded = loaded;
+    this.#gpuDeformerGeneration++;
+    this.#gpuDeformerSources = gpuSources;
+    this.#gpuDeformerGeometry.clear();
+    this.#gpuDeformerTime = undefined;
     this.#materialVariants.clear();
     this.#loadOptions = options;
     this.#sceneEntry = entry;
@@ -1841,6 +1855,7 @@ export class InteractiveViewer {
     }
     this.#time = loaded.animation?.time ?? 0;
     await render.setEnvironmentShader(this.#environmentShader, this.#time);
+    await this.#updateGpuDeformations(this.#time);
     this.#sceneCameraKey = loaded.cameras[0] ? sceneCameraKey(loaded.cameras[0]) : undefined;
     this.#applyDynamicState(false);
     this.#onCameraChanged();
@@ -2126,12 +2141,16 @@ export class InteractiveViewer {
   /** Resolves every time-sampled transform, visibility, light, camera and point at `time`. */
   async setTime(time: number, options: { keepAccumulation?: boolean } = {}): Promise<void> {
     if (!Number.isFinite(time)) throw new RangeError('The time code must be finite.');
-    if (!this.#loaded) throw new Error('No scene loaded.');
+    const loaded = this.#loaded;
+    if (!loaded) throw new Error('No scene loaded.');
+    const source = loaded.animation?.source ?? loaded.scene;
     this.#time = time;
     const materialsChanged = await this.#applyMaterialAnimation();
-    if (this.#time !== time) return;
+    if ((this.#loaded?.animation?.source ?? this.#loaded?.scene) !== source || this.#time !== time) return;
     await this.#current?.setEnvironmentShader(this.#environmentShader, time);
-    if (this.#time !== time) return;
+    if ((this.#loaded?.animation?.source ?? this.#loaded?.scene) !== source || this.#time !== time) return;
+    await this.#updateGpuDeformations(time);
+    if ((this.#loaded?.animation?.source ?? this.#loaded?.scene) !== source || this.#time !== time) return;
     this.#applyDynamicState(options.keepAccumulation ?? false, materialsChanged);
     await this.#applyTopologyChanges();
     await this.#updateCameraAdaptiveSubdivision();
@@ -2373,6 +2392,56 @@ export class InteractiveViewer {
     if (!this.#baseTransforms.has(path)) throw new Error(`Unknown object: ${path}`);
   }
 
+  async #updateGpuDeformations(time: number): Promise<void> {
+    const loaded = this.#loaded;
+    const generation = ++this.#gpuDeformerGeneration;
+    if (!loaded || !this.#gpuDeformerSources.length) {
+      this.#gpuDeformerGeometry.clear();
+      this.#gpuDeformerTime = undefined;
+      return;
+    }
+    const base = loaded.parameterResources;
+    const paths = new Set(this.#gpuDeformerSources.map(source => source.path));
+    const displaced = base?.instances.some(instance =>
+      paths.has(base.geometries.get(instance.prototypeId)?.primPath ?? '')
+      && !!(instance.materialKey && base.materials.get(instance.materialKey)?.displacement));
+    let geometry: Map<string, DeformedGeometry>;
+    if (base && displaced) {
+      const deformed = await evaluateGpuDeformations(this.#device, this.#gpuDeformerSources, base, time);
+      const geometries = new Map(base.geometries);
+      for (const [id, streams] of deformed) {
+        const original = geometries.get(id)!;
+        geometries.set(id, { ...original, streams: original.streams.map(stream => ({
+          ...stream,
+          data: stream.name === 'position' ? streams.positions : stream.name === 'normal' ? streams.normals
+            : stream.name === 'tangent' && streams.tangents ? streams.tangents : stream.data,
+        })) });
+      }
+      const displacementStarted = performance.now();
+      const updated = await applySceneDisplacement({ ...base, geometries }, loaded.mtlx.imageProvider, this.#device);
+      performance.measure('deformer:displacement', { start: displacementStarted, end: performance.now() });
+      geometry = new Map();
+      for (const [id, target] of loaded.resources.geometries) {
+        if (!paths.has(target.primPath)) continue;
+        const source = updated.geometries.get(id);
+        const positions = source?.streams.find(stream => stream.name === 'position')?.data;
+        const normals = source?.streams.find(stream => stream.name === 'normal')?.data;
+        const tangents = source?.streams.find(stream => stream.name === 'tangent')?.data;
+        if (!source || !positions || !normals || source.vertexCount !== target.vertexCount
+            || source.indices.length !== target.indices.length
+            || source.indices.some((value, index) => value !== target.indices[index])) {
+          throw new Error(`${target.primPath}: displaced GPU deformer topology changed.`);
+        }
+        geometry.set(id, { positions, normals, ...(tangents ? { tangents } : {}) });
+      }
+    } else {
+      geometry = await evaluateGpuDeformations(this.#device, this.#gpuDeformerSources, loaded.resources, time);
+    }
+    if (this.#disposed || this.#loaded !== loaded || this.#time !== time || this.#gpuDeformerGeneration !== generation) return;
+    this.#gpuDeformerGeometry = geometry;
+    this.#gpuDeformerTime = time;
+  }
+
   #applyDynamicState(keepAccumulation: boolean, materialsChanged = false): void {
     const loaded = this.#loaded;
     const render = this.#current;
@@ -2381,6 +2450,7 @@ export class InteractiveViewer {
     const state = loaded.animation
       ? animateScene(loaded.animation.source, this.#time, loaded.resources, {
         sink, meshFor: (scene, primPath) => meshSourceFromScene(scene).meshFor(primPath),
+        ...(this.#gpuDeformerTime === this.#time ? { geometryOverrides: this.#gpuDeformerGeometry } : {}),
       })
       : undefined;
     this.#pendingTopology = state?.retopologized.size ? state.retopologized : undefined;
@@ -2399,7 +2469,11 @@ export class InteractiveViewer {
     const camera = state?.camera;
     const cameraKey = camera ? sceneCameraKey(camera) : undefined;
     const cameraChanged = camera !== undefined && cameraKey !== this.#sceneCameraKey;
-    render.applyDynamics({ transforms, hidden, lights, geometry: state?.deformed ?? new Map(), keepAccumulation, cameraChanged, materialsChanged });
+    const geometry = new Map(state?.deformed);
+    if (this.#gpuDeformerTime === this.#time) {
+      for (const [id, streams] of this.#gpuDeformerGeometry) geometry.set(id, streams);
+    }
+    render.applyDynamics({ transforms, hidden, lights, geometry, keepAccumulation, cameraChanged, materialsChanged });
     if (!keepAccumulation) this.#lastCameraChange = performance.now();
     if (cameraChanged) {
       this.#sceneCameraKey = cameraKey;
@@ -2525,6 +2599,7 @@ export class InteractiveViewer {
         this.#time = shutter.open + (step + Math.random()) / steps * (shutter.close - shutter.open);
         await this.#applyMaterialAnimation();
         await current.setEnvironmentShader(this.#environmentShader, this.#time, false);
+        await this.#updateGpuDeformations(this.#time);
         this.#applyDynamicState(step > 0);
         if (share > 0) await current.capturePathTrace(step === steps - 1 ? targetView : undefined, share, undefined, { reset: step === 0 });
       }
@@ -2532,6 +2607,7 @@ export class InteractiveViewer {
       this.#time = time;
       await this.#applyMaterialAnimation();
       await current.setEnvironmentShader(this.#environmentShader, time, false);
+      await this.#updateGpuDeformations(time);
       this.#applyDynamicState(true);
       await this.#applyTopologyChanges();
     }

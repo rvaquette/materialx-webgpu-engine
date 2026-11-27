@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { readNanoVdb, readNanoVdbVectors, resampleNanoVdb, writeNanoVdb, type NanoVdbGrid } from '../../src/assets/nanovdb.ts';
+import { nanoVdbVectorGpuData, readNanoVdb, readNanoVdbVectors, resampleNanoVdb, writeNanoVdb, type NanoVdbGrid } from '../../src/assets/nanovdb.ts';
 
 // Fixtures written by the official NanoVDB headers (tools::createNanoGrid, io::writeGrid,
 // tools::createFogVolumeSphere); the .txt files list values read with the official accessor.
@@ -66,6 +66,14 @@ describe('NanoVDB', () => {
     const bytes = await fixture('velocity_vec3f');
     new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength).setFloat64(456, NaN, true);
     await expect(readNanoVdbVectors(bytes)).rejects.toThrow(/invalid index-to-world transform/);
+  });
+
+  it('rejects vector-grid transforms that cannot be represented on the GPU', async () => {
+    const bytes = await fixture('velocity_vec3d');
+    new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength).setFloat64(456, 1e100, true);
+    const [grid] = await readNanoVdbVectors(bytes);
+    expect(() => nanoVdbVectorGpuData(grid!, 100_000_000)).toThrow(/outside GPU float32 range/);
+    expect(() => nanoVdbVectorGpuData(grid!, 4)).toThrow(/GPU bytes/);
   });
 
   for (const type of ['float', 'double'] as const) {

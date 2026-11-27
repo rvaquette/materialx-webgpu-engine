@@ -376,8 +376,9 @@ leurs propriétés.
 Une première étape de la priorité 18 ajoute les piles de déformeurs spatiaux
 partageables : voir [p18-deformers.js](../examples/scripts/p18-deformers.js) et
 la [référence](SCRIPT_REFERENCE.md#déformeurs-spatiaux-première-étape-p18).
-La déformation est actuellement calculée sur CPU pour les primitives scriptées
-et les maillages USDA importés avec `importMesh`.
+Le viewer évalue les piles compatibles sur GPU ; les positions sont relues pour
+recalculer les normales et tangentes et actualiser les géométries de rendu.
+L'export USD conserve aussi des échantillons calculés sur CPU.
 L'exemple [p18-animated-wind.js](../examples/scripts/p18-animated-wind.js) anime
 un champ de vent 3D et enregistre une [vidéo raster](images/p18/p18-animated-wind.mp4),
 une [vidéo path tracing avec flou](images/p18/p18-animated-wind-blur.mp4) et un

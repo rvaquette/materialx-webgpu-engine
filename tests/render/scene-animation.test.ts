@@ -1,5 +1,6 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { animateScene, deformGeometry, isInvisible } from '../../src/render/scene-animation.ts';
+import { gpuDeformations } from '../../src/render/deformer-animation.ts';
 import { buildGeometry, type SceneResources } from '../../src/render/scene-resources.ts';
 import { prepareMesh } from '../../src/geometry/prepare.ts';
 import { importUsdStage } from '../../src/usd/importer.ts';
@@ -37,6 +38,34 @@ async function setup() {
 }
 
 describe('scene animation', () => {
+  it('warns and uses USD samples when a NanoVDB deformer resource is unavailable', async () => {
+    const { scene } = await setup();
+    const prim = scene.prims.get('/World/Quad')!;
+    const attributes = new Map(prim.attributes);
+    attributes.set('engine:deformerBasePoints', {
+      name: 'engine:deformerBasePoints', typeName: 'point3f[]', value: [0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0],
+    });
+    attributes.set('engine:deformers', {
+      name: 'engine:deformers', typeName: 'string',
+      value: JSON.stringify([{ kind: 'Field', fieldGrid: { url: 'missing.nvdb', name: 'velocity', type: 'vec3f' } }]),
+    });
+    const prims = new Map(scene.prims);
+    prims.set(prim.path, { ...prim, attributes });
+    const diagnostics: string[] = [];
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('', { status: 404 }));
+    try {
+      const device = { limits: { maxStorageBufferBindingSize: 1_000_000, maxBufferSize: 1_000_000 } } as GPUDevice;
+      const sources = await gpuDeformations({ ...scene, prims }, device, 'https://example.test/',
+        diagnostic => diagnostics.push(`${diagnostic.message} ${diagnostic.detail ?? ''}`));
+      expect(sources).toHaveLength(0);
+      expect(diagnostics).toHaveLength(1);
+      expect(diagnostics[0]).toMatch(/using baked USD samples.*HTTP 404/);
+      expect(fetchMock).toHaveBeenCalledWith('https://example.test/missing.nvdb', undefined);
+    } finally {
+      fetchMock.mockRestore();
+    }
+  });
+
   it('samples transforms, inherited visibility and deforming points', async () => {
     const { scene, resources } = await setup();
     const early = animateScene(scene, 2, resources);
@@ -50,6 +79,17 @@ describe('scene animation', () => {
     const n = [...deformed.normals.subarray(0, 3)];
     expect(n[1]).toBeCloseTo(-2 / Math.sqrt(5));
     expect(n[2]).toBeCloseTo(1 / Math.sqrt(5));
+  });
+
+  it('skips baked mesh samples only when all geometry for the prim is overridden', async () => {
+    const { scene, geometry, resources } = await setup();
+    const override = { positions: new Float32Array(geometry.vertexCount * 3), normals: new Float32Array(geometry.vertexCount * 3) };
+    const overrides = new Map([['/World/Quad', override]]);
+    const result = animateScene(scene, 2, resources, { geometryOverrides: overrides });
+    expect(result.deformed.size).toBe(0);
+    expect(result.transforms.get('/World/Quad')![12]).toBeCloseTo(2);
+    const shared = { ...resources, geometries: new Map([...resources.geometries, ['other', geometry]]) };
+    expect(animateScene(scene, 2, shared, { geometryOverrides: overrides }).deformed.size).toBe(2);
   });
 
   it('keeps the prepared vertex order and refuses a different point count', async () => {

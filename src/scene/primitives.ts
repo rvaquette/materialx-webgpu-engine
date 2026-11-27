@@ -410,6 +410,16 @@ export function deformMesh(mesh: RawMesh, deform: VertexDeformer, preserveNormal
     }
     points[i * 3] = moved[0]; points[i * 3 + 1] = moved[1]; points[i * 3 + 2] = moved[2];
   }
+  return meshWithDeformedPoints(mesh, points, preserveNormalSeams);
+}
+
+/** Recalculates vertex normals for already-deformed points using the mesh's original topology. */
+export function meshWithDeformedPoints(mesh: RawMesh, points: readonly number[], preserveNormalSeams = false): RawMesh {
+  if (points.length !== mesh.points.length || !points.every(Number.isFinite)) {
+    throw new RangeError('Deformed points must match the mesh and contain finite numbers.');
+  }
+  const count = mesh.points.length / 3;
+  const normals = mesh.normals?.values ?? [];
   const key = (i: number): string => preserveNormalSeams
     ? [...mesh.points.slice(i * 3, i * 3 + 3), ...normals.slice(i * 3, i * 3 + 3)].map(value => value.toFixed(6)).join(',')
     : `${points[i * 3]!.toFixed(6)},${points[i * 3 + 1]!.toFixed(6)},${points[i * 3 + 2]!.toFixed(6)}`;
@@ -423,11 +433,13 @@ export function deformMesh(mesh: RawMesh, deform: VertexDeformer, preserveNormal
   const indices = mesh.faceVertexIndices;
   for (let t = 0; t < indices.length; t += 3) {
     const [a, b, c] = [indices[t]!, indices[t + 1]!, indices[t + 2]!];
-    const e1 = [0, 1, 2].map(k => points[b * 3 + k]! - points[a * 3 + k]!);
-    const e2 = [0, 1, 2].map(k => points[c * 3 + k]! - points[a * 3 + k]!);
-    // Unnormalized: larger triangles weigh more.
-    const face = [e1[1]! * e2[2]! - e1[2]! * e2[1]!, e1[2]! * e2[0]! - e1[0]! * e2[2]!, e1[0]! * e2[1]! - e1[1]! * e2[0]!];
-    for (const vertex of [a, b, c]) for (let k = 0; k < 3; k++) sums[group[vertex]! * 3 + k]! += face[k]!;
+    const e1x = points[b * 3]! - points[a * 3]!, e1y = points[b * 3 + 1]! - points[a * 3 + 1]!, e1z = points[b * 3 + 2]! - points[a * 3 + 2]!;
+    const e2x = points[c * 3]! - points[a * 3]!, e2y = points[c * 3 + 1]! - points[a * 3 + 1]!, e2z = points[c * 3 + 2]! - points[a * 3 + 2]!;
+    const x = e1y * e2z - e1z * e2y, y = e1z * e2x - e1x * e2z, z = e1x * e2y - e1y * e2x;
+    for (const vertex of [a, b, c]) {
+      const offset = group[vertex]! * 3;
+      sums[offset]! += x; sums[offset + 1]! += y; sums[offset + 2]! += z;
+    }
   }
   const smooth: number[] = [];
   for (let i = 0; i < count; i++) {
@@ -436,7 +448,7 @@ export function deformMesh(mesh: RawMesh, deform: VertexDeformer, preserveNormal
     if (length > 0) smooth.push(sums[g * 3]! / length, sums[g * 3 + 1]! / length, sums[g * 3 + 2]! / length);
     else smooth.push(normals[i * 3] ?? 0, normals[i * 3 + 1] ?? 1, normals[i * 3 + 2] ?? 0);
   }
-  return { ...mesh, points, normals: { name: 'normals', interpolation: 'vertex', values: smooth, elementSize: 3 } };
+  return { ...mesh, points: [...points], normals: { name: 'normals', interpolation: 'vertex', values: smooth, elementSize: 3 } };
 }
 
 /** Shape of an implicit gprim, with the UsdGeom fallback values; `engine:resolution` sets the tessellation. */

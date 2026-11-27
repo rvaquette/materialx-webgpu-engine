@@ -100,12 +100,14 @@ export function compileDeformerField(source: FieldSource) {
     evaluateIrRef(ir, ref, { position, inputs: { [OBJECT_POSITION_INPUT]: position }, params: { [CLOCK_PARAMETER]: [time] } });
   return {
     sample,
+    ir,
+    ref,
     animated: nodes.some(node => node.def.category === 'time' || node.def.category === 'frame'),
     nodes: seen,
     metadata: {
       output: { node: ids.get(source.node)!, output: source.output.name },
       nodes: nodes.map(node => ({
-        id: ids.get(node)!, nodeDef: node.def.name,
+        id: ids.get(node)!, nodeDef: node.def.name, definition: node.def,
         inputs: Object.fromEntries([...node.inputs].map(([name, value]) => [
           name, 'node' in value ? { node: ids.get(value.node)!, output: value.output }
             : { value: Array.isArray(value.value) ? [...value.value] : value.value },
@@ -113,4 +115,57 @@ export function compileDeformerField(source: FieldSource) {
       })),
     },
   };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/** Rebuilds the graph embedded in USD without loading a separate MaterialX library. */
+export function compileSerializedDeformerField(metadata: unknown): ReturnType<typeof compileDeformerField> {
+  if (!isRecord(metadata) || !Array.isArray(metadata.nodes) || !isRecord(metadata.output)
+      || typeof metadata.output.node !== 'string' || typeof metadata.output.output !== 'string') {
+    throw new Error('Invalid MaterialX field graph metadata.');
+  }
+  const nodes = new Map<string, ScriptNode>();
+  const records = new Map<string, Record<string, unknown>>();
+  for (const record of metadata.nodes) {
+    if (!isRecord(record) || typeof record.id !== 'string' || nodes.has(record.id)
+        || !isRecord(record.definition) || !isRecord(record.inputs)) {
+      throw new Error('Invalid MaterialX field graph node.');
+    }
+    const def = record.definition;
+    const ports = (value: unknown): value is ScriptPortDef[] => Array.isArray(value) && value.every(port =>
+      isRecord(port) && typeof port.name === 'string' && typeof port.type === 'string');
+    if (typeof def.name !== 'string' || typeof def.category !== 'string' || typeof def.className !== 'string'
+        || !ports(def.inputs) || !ports(def.outputs) || record.nodeDef !== def.name) {
+      throw new Error('Invalid MaterialX field NodeDef metadata.');
+    }
+    nodes.set(record.id, { name: record.id, def: { name: def.name, category: def.category, className: def.className,
+      inputs: def.inputs, outputs: def.outputs }, inputs: new Map() });
+    records.set(record.id, record);
+  }
+  for (const [id, record] of records) {
+    const node = nodes.get(id)!;
+    for (const [name, input] of Object.entries(record.inputs as Record<string, unknown>)) {
+      if (!isRecord(input)) throw new Error('Invalid MaterialX field input.');
+      if (typeof input.node === 'string' && typeof input.output === 'string') {
+        const upstream = nodes.get(input.node);
+        if (!upstream || !upstream.def.outputs.some(port => port.name === input.output)) throw new Error('Invalid MaterialX field connection.');
+        node.inputs.set(name, { node: upstream, output: input.output });
+      } else {
+        const value = input.value;
+        if (!(typeof value === 'number' && Number.isFinite(value)) && typeof value !== 'boolean'
+            && typeof value !== 'string' && !(Array.isArray(value) && value.every(item => typeof item === 'number' && Number.isFinite(item)))) {
+          throw new Error('Invalid MaterialX field value.');
+        }
+        node.inputs.set(name, { value: value as ScriptValue });
+      }
+    }
+  }
+  const outputName = metadata.output.output;
+  const node = nodes.get(metadata.output.node);
+  const output = node?.def.outputs.find(port => port.name === outputName);
+  if (!node || !output) throw new Error('Invalid MaterialX field output.');
+  return compileDeformerField({ node, output });
 }

@@ -21,7 +21,7 @@ import {
 } from './engine-shaders.ts';
 import { MATERIALX_CLOCK_INPUT, type ResolvedGraph } from './graph.ts';
 import { compileDeformerField, type FieldSource } from './deformer-field.ts';
-import { readNanoVdbVectors, type NanoVdbVectorGrid } from '../assets/nanovdb.ts';
+import { loadNanoVdbVector, type NanoVdbVectorGrid } from '../assets/nanovdb.ts';
 import { customAovView, type CustomAovKind, type PathTraceView } from '../render/pathtracing/display.ts';
 import {
   OBJECT_PROPERTIES, SCRIPT_BOOLEAN_OPERATIONS, SCRIPT_PRIMITIVES, isScriptLight, stageObjectShape, writeStageUsda,
@@ -1841,12 +1841,18 @@ export async function runScript(code: string, library: ScriptLibrary, options: R
       const material = operands.has(object) ? undefined : materialOf(object.material);
       let mesh: RawMesh | undefined = object.baseMesh;
       let meshSamples: StageObject['meshSamples'];
+      let deformerBasePoints: StageObject['deformerBasePoints'];
+      let deformerBaseNormals: StageObject['deformerBaseNormals'];
       if (object.deform || object.deformers?.length) {
         try {
           const base = object.baseMesh ?? primitiveMesh(stageObjectShape({
             name: object.name!, className: object.className, parameters: object.parameters,
             translate: [], rotate: [], scale: [], visible: true,
           }));
+          if (!object.deform && object.deformers?.length) {
+            deformerBasePoints = base.points;
+            deformerBaseNormals = base.normals?.values;
+          }
           const times = [...new Set((object.deformers ?? []).flatMap(handle => {
             const settings = deformers.get(handle)!;
             const keys = (settings.keyframes ?? []).map(frame => frame.time);
@@ -1880,6 +1886,8 @@ export async function runScript(code: string, library: ScriptLibrary, options: R
         } : {}),
         ...(material ? { material } : {}), ...(mesh ? { mesh } : {}),
         ...(meshSamples ? { meshSamples } : {}),
+        ...(deformerBasePoints ? { deformerBasePoints } : {}),
+        ...(deformerBaseNormals ? { deformerBaseNormals } : {}),
         ...(object.deformers?.length ? { deformers: object.deformers.map(handle => ({
           ...deformers.get(handle)!,
           ...(fieldSources.has(handle) ? { fieldGraph: compileDeformerField(fieldSources.get(handle)!).metadata } : {}),
@@ -2360,18 +2368,7 @@ export async function runScript(code: string, library: ScriptLibrary, options: R
       if (options.dryRun) {
         grid = { name: gridName ?? '', valueType: 'vec3f', gridClass: 0, background: [0, 0, 0], sample: () => [0, 0, 0] };
       } else {
-        const resolved = new URL(url, baseUrl).href;
-        const response = await fetch(resolved, signal ? { signal } : undefined);
-        if (!response.ok) throw new ScriptError(`loadVelocityField: HTTP ${response.status}: ${resolved}`);
-        let bytes = await response.arrayBuffer();
-        const header = new Uint8Array(bytes, 0, Math.min(2, bytes.byteLength));
-        if (/\.gz(?:[?#]|$)/i.test(url) && header[0] === 0x1f && header[1] === 0x8b) {
-          bytes = await new Response(new Blob([bytes]).stream().pipeThrough(new DecompressionStream('gzip'))).arrayBuffer();
-        }
-        const grids = await readNanoVdbVectors(bytes);
-        const matches = gridName === undefined ? grids : grids.filter(candidate => candidate.name === gridName);
-        if (matches.length !== 1) throw new ScriptError(`loadVelocityField: expected one matching vector grid, found ${matches.length}.`);
-        grid = matches[0]!;
+        grid = await loadNanoVdbVector(new URL(url, baseUrl).href, gridName, signal);
       }
       signal?.throwIfAborted();
       const handle = Object.freeze({});

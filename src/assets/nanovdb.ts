@@ -207,6 +207,30 @@ export interface NanoVdbVectorGrid {
   sample(position: readonly number[]): [number, number, number];
 }
 
+/** Fetches a named velocity grid, accepting both compressed and already-decoded gzip responses. */
+export async function loadNanoVdbVector(url: string, name?: string, signal?: AbortSignal): Promise<NanoVdbVectorGrid> {
+  const response = await fetch(url, signal ? { signal } : undefined);
+  if (!response.ok) throw new NanoVdbError(`HTTP ${response.status}: ${url}`);
+  let bytes = await response.arrayBuffer();
+  const header = new Uint8Array(bytes, 0, Math.min(2, bytes.byteLength));
+  if (header[0] === 0x1f && header[1] === 0x8b) {
+    bytes = await new Response(new Blob([bytes]).stream().pipeThrough(new DecompressionStream('gzip'))).arrayBuffer();
+  }
+  const grids = await readNanoVdbVectors(bytes);
+  const matches = name === undefined ? grids : grids.filter(candidate => candidate.name === name);
+  if (matches.length !== 1) throw new NanoVdbError(`Expected one matching vector grid, found ${matches.length}.`);
+  return matches[0]!;
+}
+
+const vectorGpuEncoders = new WeakMap<NanoVdbVectorGrid, (maxBytes: number) => Uint32Array>();
+
+/** Packs sparse vector values and index-space transforms for the WebGPU field sampler. */
+export function nanoVdbVectorGpuData(grid: NanoVdbVectorGrid, maxBytes: number): Uint32Array {
+  const encode = vectorGpuEncoders.get(grid);
+  if (!encode) throw new NanoVdbError(`Grid '${grid.name}' has no NanoVDB GPU representation.`);
+  return encode(maxBytes);
+}
+
 /** Reads vector velocity grids without downsampling their sparse values. */
 export async function readNanoVdbVectors(input: ArrayBuffer | Uint8Array): Promise<NanoVdbVectorGrid[]> {
   const views = await readGridBuffers(input);
@@ -315,7 +339,82 @@ export async function readNanoVdbVectors(input: ArrayBuffer | Uint8Array): Promi
       return [0, 1, 2].map(axis =>
         sampleIndex(coord.map((value, i) => value + (i === axis ? 0.5 : 0)))[axis]!) as [number, number, number];
     };
-    return { name, valueType: isDouble ? 'vec3d' : 'vec3f', gridClass, background, sample };
+    const grid: NanoVdbVectorGrid = { name, valueType: isDouble ? 'vec3d' : 'vec3f', gridClass, background, sample };
+    vectorGpuEncoders.set(grid, maxBytes => {
+      const levels = [leaves, lowers, uppers, roots];
+      const capacities = levels.map(level => {
+        let capacity = 1;
+        while (capacity < level.size * 2) capacity *= 2;
+        return capacity;
+      });
+      const tableWords = capacities.reduce((sum, capacity) => sum + capacity * 4, 0);
+      const valueWords = (leaves.size * 512 + lowers.size * 4096 + uppers.size * 32768 + roots.size) * 4;
+      const words = 32 + tableWords + valueWords;
+      if (!Number.isSafeInteger(words) || words * 4 > maxBytes) {
+        throw new NanoVdbError(`Grid '${name}' needs ${words * 4} GPU bytes, exceeding the ${maxBytes}-byte limit.`);
+      }
+      const data = new Uint32Array(words);
+      const floats = new Float32Array(data.buffer);
+      data.set(capacities, 0);
+      data[8] = gridClass;
+      floats.set(inverse, 9);
+      floats.set(translation, 18);
+      floats.set(background, 21);
+      if (!floats.subarray(9, 24).every(Number.isFinite)) {
+        throw new NanoVdbError(`Grid '${name}' has transform or background values outside GPU float32 range.`);
+      }
+      const m = floats.subarray(9, 18);
+      const gpuDeterminant = m[0]! * (m[4]! * m[8]! - m[5]! * m[7]!)
+        - m[1]! * (m[3]! * m[8]! - m[5]! * m[6]!)
+        + m[2]! * (m[3]! * m[7]! - m[4]! * m[6]!);
+      if (!Number.isFinite(gpuDeterminant) || gpuDeterminant === 0) {
+        throw new NanoVdbError(`Grid '${name}' has a singular GPU float32 transform.`);
+      }
+      let table = 32;
+      let values = 32 + tableWords;
+      const hash = (x: number): number => {
+        let h = x >>> 0;
+        h = Math.imul(h ^ (h >>> 16), 0x7feb352d) >>> 0;
+        h = Math.imul(h ^ (h >>> 15), 0x846ca68b) >>> 0;
+        return (h ^ (h >>> 16)) >>> 0;
+      };
+      for (let level = 0; level < levels.length; level++) {
+        const capacity = capacities[level]!;
+        data[4 + level] = table;
+        const count = [512, 4096, 32768, 1][level]!;
+        for (const [origin, node] of levels[level]!) {
+          const [x, y, z] = origin.split(',').map(Number) as [number, number, number];
+          let slot = hash(x ^ hash(y ^ hash(z ^ hash(0)))) & (capacity - 1);
+          while (data[table + slot * 4 + 3] !== 0) slot = (slot + 1) & (capacity - 1);
+          data.set([x >>> 0, y >>> 0, z >>> 0, values], table + slot * 4);
+          for (let i = 0; i < count; i++) {
+            let address: number;
+            let child = false;
+            if (level === 0) address = node + layout.leafValues + i * 3 * layout.width;
+            else if (level === 1 || level === 2) {
+              const log2 = level === 1 ? 4 : 5;
+              child = bitOn(view, node + 32 + (1 << (3 * log2)) / 8, i);
+              address = node + (level === 1 ? layout.lowerTable : layout.upperTable) + i * layout.stride;
+            } else {
+              child = view.getBigInt64(node + 8, true) !== 0n;
+              address = node + layout.tileValue;
+            }
+            if (child) data[values + 3] = 1;
+            else {
+              floats.set(vector(address), values);
+              if (!Number.isFinite(floats[values]) || !Number.isFinite(floats[values + 1])
+                  || !Number.isFinite(floats[values + 2])) {
+                throw new NanoVdbError(`Grid '${name}' has values outside GPU float32 range.`);
+              }
+            }
+            values += 4;
+          }
+        }
+        table += capacity * 4;
+      }
+      return data;
+    });
+    return grid;
   });
 }
 

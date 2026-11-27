@@ -14,7 +14,7 @@ wind.frequency = 1.4;
 wind.seed = 7;
 wind.keyframes = Array.from({ length: 25 }, (_, frame) => ({ time: frame, phase: frame * 0.14 }));
 
-flag = new Plane({ width: 3, length: 2, axis: "Z", resolution: 48, material: cloth });
+flag = new Plane({ width: 3, length: 2, axis: "Z", resolution: 40, material: cloth });
 flag.deformers = [wind];
 
 render.resolution = 512;

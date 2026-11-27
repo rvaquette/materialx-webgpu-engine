@@ -508,6 +508,8 @@ await render(1); await setTime(0);`);
     await e.panel.getByTestId('script-apply').click();
     await expect(e.status).toHaveText('Script exécuté.', { timeout: 180_000 });
     await expect(page.locator('#view-timeline')).toBeVisible();
+    const gpuUpdates = await page.evaluate(() => performance.getEntriesByName('deformer:compute').length);
+    expect(gpuUpdates).toBeGreaterThan(0);
     await expect(page.locator('#view-timeline-time')).toHaveAttribute('max', '24');
     const canvas = page.locator('#view');
     await page.waitForTimeout(1000);
@@ -516,6 +518,7 @@ await render(1); await setTime(0);`);
     await expect(e.status).toContainText('Script valide', { timeout: 30_000 });
     await e.panel.getByTestId('script-apply').click();
     await expect(e.status).toHaveText('Script exécuté.', { timeout: 180_000 });
+    expect(await page.evaluate(() => performance.getEntriesByName('deformer:compute').length)).toBeGreaterThan(gpuUpdates);
     await page.waitForTimeout(1000);
     expect((await imageDifference(page, before, await canvas.screenshot())).mean).toBeGreaterThan(0.1);
   } finally {
